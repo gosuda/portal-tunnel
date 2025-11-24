@@ -1,0 +1,25 @@
+relays:
+  - name: thumbgo
+    urls:
+      - wss://portal.thumbgo.kr/relay
+  - name: gosuda
+    urls:
+      - wss://portal.gosuda.org/relay
+
+services:
+  - name: test-thumbgo
+    relayPreference:
+      - thumbgo
+      - gosuda
+    target: localhost:1013
+    protocols:
+      - http/1.1
+      - h2
+  - name: test-thumbgo2
+    relayPreference:
+      - thumbgo
+      - gosuda
+    target: localhost:1014
+    protocols:
+      - http/1.1
+      - h2        
