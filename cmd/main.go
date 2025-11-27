@@ -228,7 +228,13 @@ func runServiceTunnel(ctx context.Context, relayDir *RelayDirectory, service *Se
 	}
 	defer client.Close()
 
-	listener, err := client.Listen(cred, serviceName, service.Protocols)
+	listener, err := client.Listen(cred, serviceName, service.Protocols,
+		sdk.WithDescription(service.Metadata.Description),
+		sdk.WithTags(service.Metadata.Tags),
+		sdk.WithOwner(service.Metadata.Owner),
+		sdk.WithThumbnail(service.Metadata.Thumbnail),
+		sdk.WithHide(service.Metadata.Hide),
+	)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to register service: %w", serviceName, err)
 	}

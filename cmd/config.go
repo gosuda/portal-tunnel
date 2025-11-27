@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"gosuda.org/portal/sdk"
 )
 
 var defaultProtocols = []string{"http/1.1", "h2"}
@@ -18,10 +19,11 @@ type RelayConfig struct {
 
 // ServiceConfig describes a local service exposed through the tunnel.
 type ServiceConfig struct {
-	Name            string   `yaml:"name"`
-	RelayPreference []string `yaml:"relayPreference"`
-	Target          string   `yaml:"target"`
-	Protocols       []string `yaml:"protocols"`
+	Name            string       `yaml:"name"`
+	RelayPreference []string     `yaml:"relayPreference"`
+	Target          string       `yaml:"target"`
+	Protocols       []string     `yaml:"protocols"`
+	Metadata        sdk.Metadata `yaml:"metadata,omitempty"`
 }
 
 // TunnelConfig represents the YAML configuration schema for portal-tunnel.
