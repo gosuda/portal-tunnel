@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,8 +24,30 @@ var (
 	flagHost       string
 	flagPort       string
 	flagName       string
-	flagMetadata   string
+	flagDesc       string
+	flagTags       string
+	flagThumbnail  string
+	flagOwner      string
+	flagHide       boolFlag
 )
+
+type boolFlag struct {
+	set   bool
+	value bool
+}
+
+func (b *boolFlag) Set(s string) error {
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return err
+	}
+	b.set = true
+	b.value = v
+	return nil
+}
+
+func (b *boolFlag) String() string   { return strconv.FormatBool(b.value) }
+func (b *boolFlag) IsBoolFlag() bool { return true }
 
 func main() {
 	if len(os.Args) < 2 {
@@ -41,7 +63,11 @@ func main() {
 		fs.StringVar(&flagHost, "host", "localhost", "Local host to proxy to when config is not provided")
 		fs.StringVar(&flagPort, "port", "4018", "Local port to proxy to when config is not provided")
 		fs.StringVar(&flagName, "name", "", "Service name when config is not provided (auto-generated if empty)")
-		fs.StringVar(&flagMetadata, "metadata", "", "Service metadata in JSON format when config is not provided")
+		fs.StringVar(&flagDesc, "description", "", "Service description metadata")
+		fs.StringVar(&flagTags, "tags", "", "Service tags metadata (comma-separated)")
+		fs.StringVar(&flagThumbnail, "thumbnail", "", "Service thumbnail URL metadata")
+		fs.StringVar(&flagOwner, "owner", "", "Service owner metadata")
+		fs.Var(&flagHide, "hide", "Hide service from discovery (metadata)")
 		_ = fs.Parse(os.Args[2:])
 
 		if err := runExpose(); err != nil {
@@ -61,7 +87,8 @@ func printTunnelUsage() {
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  portal-tunnel expose --config <file>")
-	fmt.Println("  portal-tunnel expose [--relay URL1,URL2] [--host HOST] [--port PORT] [--name NAME] [--metadata {JSON}]")
+	fmt.Println("  portal-tunnel expose [--relay URL1,URL2] [--host HOST] [--port PORT] [--name NAME]")
+	fmt.Println("                        [--description TEXT] [--tags tag1,tag2] [--thumbnail URL] [--owner NAME] [--hide]")
 }
 
 func runExpose() error {
@@ -131,8 +158,30 @@ func runExposeWithFlags() error {
 	}
 
 	var metadata sdk.Metadata
-	if strings.TrimSpace(flagMetadata) != "" {
-		json.Unmarshal([]byte(flagMetadata), &metadata)
+	if strings.TrimSpace(flagDesc) != "" {
+		metadata.Description = flagDesc
+	}
+	if strings.TrimSpace(flagTags) != "" {
+		tags := strings.Split(flagTags, ",")
+		for i := range tags {
+			tags[i] = strings.TrimSpace(tags[i])
+		}
+		filtered := tags[:0]
+		for _, t := range tags {
+			if t != "" {
+				filtered = append(filtered, t)
+			}
+		}
+		metadata.Tags = filtered
+	}
+	if strings.TrimSpace(flagThumbnail) != "" {
+		metadata.Thumbnail = flagThumbnail
+	}
+	if strings.TrimSpace(flagOwner) != "" {
+		metadata.Owner = flagOwner
+	}
+	if flagHide.set {
+		metadata.Hide = flagHide.value
 	}
 
 	target := net.JoinHostPort(flagHost, flagPort)
