@@ -20,7 +20,7 @@ services:
       tags:
       - tag1
       - tag2
-      thumbnail: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTQL0ZRzgDL1NAK14VjGsxNHpP2nPniGo4igF7wmgVI-nq8zyndYAjqob5xVvsgTfPbRnFD5sINjnepMxMef-ivbVYoB2l9A2kLWrd2OA3z&s=10"
+      thumbnail: "https://example.com/image.png"
       owner: "owner-name"
       hide: false
   - name: test-thumbgo2
