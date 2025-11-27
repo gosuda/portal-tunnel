@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ var (
 	flagHost       string
 	flagPort       string
 	flagName       string
+	flagMetadata   string
 )
 
 func main() {
@@ -39,6 +41,7 @@ func main() {
 		fs.StringVar(&flagHost, "host", "localhost", "Local host to proxy to when config is not provided")
 		fs.StringVar(&flagPort, "port", "4018", "Local port to proxy to when config is not provided")
 		fs.StringVar(&flagName, "name", "", "Service name when config is not provided (auto-generated if empty)")
+		fs.StringVar(&flagMetadata, "metadata", "", "Service metadata in JSON format when config is not provided")
 		_ = fs.Parse(os.Args[2:])
 
 		if err := runExpose(); err != nil {
@@ -58,7 +61,7 @@ func printTunnelUsage() {
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  portal-tunnel expose --config <file>")
-	fmt.Println("  portal-tunnel expose [--relay URL1,URL2] [--host HOST] [--port PORT] [--name NAME]")
+	fmt.Println("  portal-tunnel expose [--relay URL1,URL2] [--host HOST] [--port PORT] [--name NAME] [--metadata {JSON}]")
 }
 
 func runExpose() error {
@@ -127,11 +130,17 @@ func runExposeWithFlags() error {
 		return fmt.Errorf("--relay must include at least one non-empty URL when --config is not provided")
 	}
 
+	var metadata sdk.Metadata
+	if strings.TrimSpace(flagMetadata) != "" {
+		json.Unmarshal([]byte(flagMetadata), &metadata)
+	}
+
 	target := net.JoinHostPort(flagHost, flagPort)
 	service := &ServiceConfig{
 		Name:            strings.TrimSpace(flagName),
 		Target:          target,
 		RelayPreference: []string{"flags"},
+		Metadata:        metadata,
 	}
 	applyServiceDefaults(service)
 
