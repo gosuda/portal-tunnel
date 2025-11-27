@@ -15,6 +15,14 @@ services:
     protocols:
       - http/1.1
       - h2
+    metadata:
+      description: "Service description"
+      tags:
+      - tag1
+      - tag2
+      thumbnail: "https://example.com/image.png"
+      owner: "owner-name"
+      hide: false
   - name: test-thumbgo2
     relayPreference:
       - thumbgo
@@ -23,3 +31,4 @@ services:
     protocols:
       - http/1.1
       - h2        
+
