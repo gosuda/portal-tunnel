@@ -13,7 +13,7 @@
 - **One-command setup**: Start relays and tunnels with minimal setup
 - **Self-hosted relays**: Connect to public relays or run your own
 - **Relay discovery and pools**: Use discovered relays as a pool, with multi-relay access and failover
-- **Load-aware discovery ordering**: Discovery polling uses a non-linear OLS-based order (inverse-load pre-distortion), not simple rotation
+- **Deterministic discovery ordering**: Discovery polling uses a non-linear OLS-based order instead of simple rotation
 - **Reverse Siamese grid routing**: Portal's policy manager fills paired Siamese squares (forward + mirrored/complemented reverse) so per-client routing stays deterministic while balancing load with mirrored partners
 - **Bounded discovery routing**: `--max-routing` limits discovery routing attempts per refresh to keep bootstrap traversal predictable
 - **No login, no API keys**: Authenticate ownership using SIWE, with ENS-based identity support
