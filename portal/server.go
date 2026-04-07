@@ -152,14 +152,21 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		portMax = cfg.MaxPort
 	}
 
-	identity, err := utils.LoadOrCreateIdentity(cfg.IdentityPath, types.Identity{Name: rootHost})
+	identity, created, err := utils.LoadOrCreateIdentity(cfg.IdentityPath, types.Identity{Name: rootHost})
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
-	log.Warn().
-		Str("identity_path", cfg.IdentityPath).
-		Str("address", identity.Address).
-		Msg("generated relay identity and saved it to disk")
+	if created {
+		log.Warn().
+			Str("identity_path", cfg.IdentityPath).
+			Str("address", identity.Address).
+			Msg("generated relay identity and saved it to disk")
+	} else {
+		log.Info().
+			Str("identity_path", cfg.IdentityPath).
+			Str("address", identity.Address).
+			Msg("loaded relay identity from disk")
+	}
 
 	tcpPortMin, tcpPortMax := 0, 0
 	if cfg.TCPEnabled {

@@ -146,10 +146,14 @@ func ParseIdentityJSON(raw string) (types.Identity, error) {
 	})
 }
 
-func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity, error) {
+// LoadOrCreateIdentity loads an existing identity from path, or creates and
+// saves a new one if the file does not exist. The returned bool is true only
+// when a new identity was generated; callers can use it to emit a one-time
+// creation log without misleading operators on subsequent starts.
+func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity, bool, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return types.Identity{}, errors.New("identity path is required")
+		return types.Identity{}, false, errors.New("identity path is required")
 	}
 
 	stored, err := LoadIdentity(path)
@@ -168,24 +172,24 @@ func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 			stored.PrivateKey = privateKey
 		}
 		if strings.TrimSpace(stored.PrivateKey) == "" {
-			return types.Identity{}, errors.New("stored identity private key is required")
+			return types.Identity{}, false, errors.New("stored identity private key is required")
 		}
 		if err := SaveIdentity(path, stored); err != nil {
-			return types.Identity{}, fmt.Errorf("persist identity: %w", err)
+			return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
 		}
 		loaded, err := LoadIdentity(path)
 		if err != nil {
-			return types.Identity{}, fmt.Errorf("load identity: %w", err)
+			return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
 		}
-		return loaded, nil
+		return loaded, false, nil
 	case !errors.Is(err, os.ErrNotExist):
-		return types.Identity{}, fmt.Errorf("load identity: %w", err)
+		return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
 	}
 
 	created := identity.Copy()
 	generated, err := ResolveSecp256k1Identity(created.PrivateKey)
 	if err != nil {
-		return types.Identity{}, fmt.Errorf("generate identity: %w", err)
+		return types.Identity{}, false, fmt.Errorf("generate identity: %w", err)
 	}
 	if strings.TrimSpace(created.Address) == "" {
 		created.Address = generated.Address
@@ -195,13 +199,13 @@ func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 	}
 	created.PrivateKey = generated.PrivateKey
 	if err := SaveIdentity(path, created); err != nil {
-		return types.Identity{}, fmt.Errorf("persist identity: %w", err)
+		return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
 	}
 	loaded, err := LoadIdentity(path)
 	if err != nil {
-		return types.Identity{}, fmt.Errorf("load identity: %w", err)
+		return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
 	}
-	return loaded, nil
+	return loaded, true, nil
 }
 
 func ResolveListenerIdentity(identity types.Identity, target, identityPath, identityJSON string) (types.Identity, error) {
@@ -235,7 +239,7 @@ func ResolveListenerIdentity(identity types.Identity, target, identityPath, iden
 		return resolved, err
 	}
 
-	loaded, err := LoadOrCreateIdentity(identityPath, identity)
+	loaded, _, err := LoadOrCreateIdentity(identityPath, identity)
 	if err != nil {
 		return types.Identity{}, err
 	}
