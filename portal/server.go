@@ -92,6 +92,8 @@ type Server struct {
 	overlayPolicy     *overlay.RoutePolicy
 	overlayRoute      []uint32
 	overlayRouteMu    sync.RWMutex
+	pepperTie         *overlay.PepperTie
+	pepperFlood       *overlay.PepperFlood
 	thumbnails        *thumbnail.Service
 	shutdownOnce      sync.Once
 }
@@ -243,6 +245,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	if cfg.OverlayEnabled {
 		s.overlayPolicy = overlay.NewRoutePolicy()
+		s.pepperTie = overlay.NewPepperTie(0)
+		s.pepperFlood = overlay.NewPepperFlood(s.pepperTie)
 	}
 	if cfg.DiscoveryEnabled {
 		manager, err := discovery.NewManager(discovery.ManagerConfig{
@@ -654,8 +658,7 @@ func (s *Server) pollOverlayHealth(ctx context.Context) {
 	}
 	descs := s.discoveryMgr.ActiveRelayDescriptors()
 	for _, desc := range descs {
-		nodeKey := relayNodeKey(desc)
-		if nodeKey == "" || nodeKey == strings.TrimSpace(s.cfg.PortalURL) {
+		if desc.Key() == "" || desc.Key() == s.identity.Key() {
 			continue
 		}
 		if !desc.SupportsOverlayPeer || strings.TrimSpace(desc.OverlayIPv4) == "" {

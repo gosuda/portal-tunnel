@@ -64,6 +64,17 @@ func (p *RoutePolicy) UpdateNodeHealth(nodeID uint32, h policy.RelayHealth) {
 	p.nodes[nodeID] = h
 }
 
+// HealthSnapshot returns a copy of the current relay health map.
+func (p *RoutePolicy) HealthSnapshot() map[uint32]policy.RelayHealth {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make(map[uint32]policy.RelayHealth, len(p.nodes))
+	for id, h := range p.nodes {
+		out[id] = h
+	}
+	return out
+}
+
 // ActiveNodeCount returns the number of nodes currently not marked as fallback.
 func (p *RoutePolicy) ActiveNodeCount() int {
 	p.mu.RLock()

@@ -70,6 +70,19 @@ func BuildOnionPayload(route []uint32, hopKeys [][]byte, payload []byte, ttl uin
 	return layer, nil
 }
 
+// BuildPepperedOnionPayload seals payload bytes using onion routing and then
+// applies the Pepper tie layer so downstream hops only observe uniform chunks.
+func BuildPepperedOnionPayload(route []uint32, hopKeys [][]byte, payload []byte, ttl uint8, tie *PepperTie) ([][]byte, error) {
+	onion, err := BuildOnionPayload(route, hopKeys, payload, ttl)
+	if err != nil {
+		return nil, err
+	}
+	if tie == nil {
+		tie = NewPepperTie(0)
+	}
+	return tie.Wrap(onion), nil
+}
+
 // DeriveOnionKeys deterministically expands a secret seed into hop keys using
 // HKDF-SHA256. This keeps the implementation self-contained without external
 // key agreement plumbing.

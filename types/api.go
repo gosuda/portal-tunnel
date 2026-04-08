@@ -97,9 +97,11 @@ type DiscoveryResponse struct {
 }
 
 type OverlayHealthResponse struct {
-	NodeID uint32               `json:"node_id"`
-	Health OverlayHealthMetrics `json:"health"`
-	Route  []uint32             `json:"route,omitempty"`
+	NodeID      uint32               `json:"node_id"`
+	Health      OverlayHealthMetrics `json:"health"`
+	Route       []uint32             `json:"route,omitempty"`
+	PepperTie   PepperTieState       `json:"pepper_tie"`
+	PepperFlood PepperFloodPlan      `json:"pepper_flood"`
 }
 
 type OverlayHealthMetrics struct {
@@ -108,6 +110,16 @@ type OverlayHealthMetrics struct {
 	Healthy     bool    `json:"healthy"`
 	ErrorPct    float64 `json:"error_pct"`
 	Fallback    bool    `json:"fallback"`
+}
+
+type PepperTieState struct {
+	ChunkSize  int `json:"chunk_size"`
+	StackDepth int `json:"stack_depth"`
+}
+
+type PepperFloodPlan struct {
+	Targets   []uint32 `json:"targets,omitempty"`
+	BurstSize int      `json:"burst_size"`
 }
 
 type QUICControlMessage struct {
