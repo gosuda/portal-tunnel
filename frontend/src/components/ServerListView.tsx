@@ -40,7 +40,7 @@ interface OfficialRegistryDocument {
 }
 
 const OFFICIAL_REGISTRY_SOURCE_URL =
-  "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
+  "https://raw.githubusercontent.com/gosuda/portal-tunnel/feature/tor-vpn-relay/registry.json";
 const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
 
 async function loadOfficialRegistryRelay(

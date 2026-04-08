@@ -6,63 +6,34 @@ services:
   #   restart: unless-stopped
 
   portal:
+    build: .
     image: ghcr.io/gosuda/portal:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-    # depends_on:
-    #   - headless-shell
-    stop_grace_period: 30s
-    ports:
-      - "${API_PORT:-4017}:${API_PORT:-4017}"
-      - "${SNI_PORT:-443}:${SNI_PORT:-443}"
-      # Uncomment for UDP backhaul, public UDP lease ports, and raw TCP lease ports as needed.
-      # - "${SNI_PORT:-443}:${SNI_PORT:-443}/udp"
-      # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
-      # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}"
-    environment:
-      # Public routing, discovery, and relay identity persistence
-      PORTAL_URL: ${PORTAL_URL:-https://localhost:${API_PORT:-4017}}
-      BOOTSTRAPS: ${BOOTSTRAPS:-}
-      DISCOVERY: ${DISCOVERY:-true}
-      IDENTITY_PATH: ${IDENTITY_PATH:-/portal-certs/identity.json}
-
-      # Listener ports (published to the host below)
-      API_PORT: ${API_PORT:-4017}
-      SNI_PORT: ${SNI_PORT:-443}
-
-      # Shared lease port range.
-      MIN_PORT: ${MIN_PORT:-40000}
-      MAX_PORT: ${MAX_PORT:-40009}
-      UDP_ENABLED: ${UDP_ENABLED:-false}
-      TCP_ENABLED: ${TCP_ENABLED:-false}
-
-      # Admin/auth configuration
-      ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
-      LANDING_PAGE_ENABLED: ${LANDING_PAGE_ENABLED:-false}
-      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
-      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
-
-      # Optional: auto-generated thumbnails (requires headless-shell sidecar above)
-      # HEADLESS_SHELL_URL: ${HEADLESS_SHELL_URL:-ws://headless-shell:9222}
-
-      # TLS/ACME and keyless materials
-      KEYLESS_DIR: ${KEYLESS_DIR:-/portal-certs}
-      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-}
-      ENS_GASLESS_ENABLED: ${ENS_GASLESS_ENABLED:-false}
-      CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
-      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
-      GCP_MANAGED_ZONE: ${GCP_MANAGED_ZONE:-}
-      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-      AWS_REGION: ${AWS_REGION:-}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
-      AWS_HOSTED_ZONE_ID: ${AWS_HOSTED_ZONE_ID:-}
-      AWS_DNSSEC_KMS_KEY_ARN: ${AWS_DNSSEC_KMS_KEY_ARN:-}
-    volumes:
-      - ./.portal-certs:${KEYLESS_DIR:-/portal-certs}
-      # Uncomment when using a Google Cloud service account file for gcloud automation.
-      # - ./gcp-dns.json:/run/secrets/gcp-dns.json:ro
     restart: unless-stopped
+    ports:
+      - "4017:4017"
+      - "443:443"
+    environment:
+      PORTAL_URL: ${PORTAL_URL}
+      BOOTSTRAPS: ${BOOTSTRAPS}
+      DISCOVERY: ${DISCOVERY}
+      IDENTITY_PATH: /portal-certs/identity.json
+
+      API_PORT: ${API_PORT}
+      SNI_PORT: ${SNI_PORT}
+
+      MIN_PORT: ${MIN_PORT}
+      MAX_PORT: ${MAX_PORT}
+      UDP_ENABLED: ${UDP_ENABLED}
+      TCP_ENABLED: ${TCP_ENABLED}
+
+      KEYLESS_DIR: ${KEYLESS_DIR}
+      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER}
+      CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN}
+
+      ENS_GASLESS_ENABLED: ${ENS_GASLESS_ENABLED}
+
+      ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY}
+      LANDING_PAGE_ENABLED: ${LANDING_PAGE_ENABLED}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS}
+    volumes:
+      - /portal-certs:/portal-certs
