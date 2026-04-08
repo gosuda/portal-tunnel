@@ -10,4 +10,7 @@ type NodeLoad struct {
 	BytesOut     int64
 	ConnRate     float64
 	AvgLatencyMs float64
+	// JitterMs is the mean delay variance across all registered contributors.
+	// A high JitterMs relative to AvgLatencyMs indicates non-linear bursty load.
+	JitterMs float64
 }

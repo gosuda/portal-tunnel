@@ -149,6 +149,7 @@ func (m *WeightManager) Collect() NodeLoad {
 		}
 	}
 
+	// len(fns) > 0 is guaranteed by the early-return above; n is safe to divide by.
 	n := float64(len(fns))
 
 	// 1. Base latency from network-level delay observations.
@@ -171,7 +172,7 @@ func (m *WeightManager) Collect() NodeLoad {
 	// 5. Burst penalty: up to 50 ms extra for a fully saturated path.
 	base += burstMax * 50
 
-	return NodeLoad{AvgLatencyMs: base}
+	return NodeLoad{AvgLatencyMs: base, JitterMs: jitterSum / n}
 }
 
 // ---------------------------------------------------------------------------
