@@ -72,6 +72,11 @@ See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 See [docs/architecture.md](docs/architecture.md).
 For architecture decisions, see [docs/adr/README.md](docs/adr/README.md).
 
+## Testing
+
+- [Onion transport simulation](docs/onion_testing.md)
+- [Live relay testing](docs/live_relay_testing.md)
+
 ## Examples
 
 | Example | Description |

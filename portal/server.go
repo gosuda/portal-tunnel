@@ -82,6 +82,7 @@ type Server struct {
 	overlayPolicy     *overlay.RoutePolicy
 	overlayRoute      []uint32
 	overlayRouteMu    sync.RWMutex
+	thumbnails        *thumbnail.Service
 	shutdownOnce      sync.Once
 }
 

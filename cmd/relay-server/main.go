@@ -51,6 +51,7 @@ type relayServerConfig struct {
 	TrustedProxyCIDRs  string
 	AdminSettingsPath  string
 	KeylessDir         string
+	HeadlessShellURL   string
 	ACMEDNSProvider    string
 	ENSGaslessEnabled  bool
 	CloudflareToken    string
