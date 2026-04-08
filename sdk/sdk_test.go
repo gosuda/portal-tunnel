@@ -403,7 +403,15 @@ func mustSDKTestSIWEMessage(t *testing.T, r *http.Request, address, challengeID 
 func writeSDKTestEnvelope[T any](w http.ResponseWriter, status int, envelope types.APIEnvelope[T]) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(envelope)
+	if envelope.OK {
+		_ = json.NewEncoder(w).Encode(envelope.Data)
+		return
+	}
+	if envelope.Error != nil {
+		_ = json.NewEncoder(w).Encode(envelope.Error)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{})
 }
 
 func waitForSDKTest(t *testing.T, fn func() bool) {

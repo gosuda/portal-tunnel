@@ -291,20 +291,6 @@ func (r *leaseRegistry) countTCPPortLeases() int {
 	return count
 }
 
-func (r *leaseRegistry) activeAdminSnapshots() []types.AdminLease {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	now := time.Now()
-	out := make([]types.AdminLease, 0, len(r.leasesByKey))
-	for _, record := range r.leasesByKey {
-		if !now.After(record.ExpiresAt) {
-			out = append(out, r.AdminSnapshot(record))
-		}
-	}
-	return out
-}
-
 func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 	snapshot := types.Lease{
 		Name:        record.Name,

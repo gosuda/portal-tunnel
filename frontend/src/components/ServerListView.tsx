@@ -40,7 +40,7 @@ interface OfficialRegistryDocument {
 }
 
 const OFFICIAL_REGISTRY_SOURCE_URL =
-  "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
+  "https://raw.githubusercontent.com/gosuda/portal-tunnel/feature/tor-vpn-relay/registry.json";
 const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
 
 async function loadOfficialRegistryRelay(
@@ -139,12 +139,12 @@ interface ServerListViewProps {
   selectedTags: string[];
   availableTags: string[];
   filteredServers: ClientServer[] | AdminServer[];
-  favorites: string[];
+  favorites: number[];
   onSearchChange: (value: string) => void;
   onStatusChange: (value: StatusFilter) => void;
   onSortByChange: (value: SortOption) => void;
   onTagToggle: (tag: string) => void;
-  onToggleFavorite: (serverId: string) => void;
+  onToggleFavorite: (serverId: number) => void;
   isAdmin?: boolean;
   banFilter?: BanFilter;
   approvalMode?: ApprovalMode;

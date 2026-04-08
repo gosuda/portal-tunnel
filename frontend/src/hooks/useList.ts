@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SortOption, StatusFilter } from "@/types/filters";
 
 export interface BaseServer {
-  id: string;
+  id: number;
   name: string;
   description: string;
   tags: string[];
@@ -26,17 +26,17 @@ export interface UseListReturn<T extends BaseServer> {
   status: StatusFilter;
   sortBy: SortOption;
   selectedTags: string[];
-  favorites: string[];
+  favorites: number[];
   availableTags: string[];
   filteredServers: T[];
   handleSearchChange: (value: string) => void;
   handleStatusChange: (value: StatusFilter) => void;
   handleSortByChange: (value: SortOption) => void;
   handleTagToggle: (tag: string) => void;
-  handleToggleFavorite: (serverId: string) => void;
+  handleToggleFavorite: (serverId: number) => void;
 }
 
-function readStoredFavorites(storageKey: string): string[] {
+function readStoredFavorites(storageKey: string): number[] {
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(storageKey);
@@ -55,7 +55,7 @@ function readStoredFavorites(storageKey: string): string[] {
     }
     return [...new Set(
       parsed.filter(
-        (value): value is string => typeof value === "string" && value.length > 0
+        (value): value is number => Number.isInteger(value) && value > 0
       )
     )];
   } catch {
@@ -92,10 +92,9 @@ export function useList<T extends BaseServer>({
   const [status, setStatus] = useState<StatusFilter>("all");
   const [sortBy, setSortBy] = useState<SortOption>("duration");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [favorites, setFavorites] = useState<string[]>(() =>
+  const [favorites, setFavorites] = useState<number[]>(() =>
     readStoredFavorites(storageKey)
   );
-  const [dataLoaded, setDataLoaded] = useState(false);
 
   useEffect(() => {
     setFavorites(readStoredFavorites(storageKey));
@@ -127,18 +126,12 @@ export function useList<T extends BaseServer>({
   }, [servers]);
 
   useEffect(() => {
-    if (servers.length > 0) {
-      setDataLoaded(true);
-    }
-    if (!dataLoaded && servers.length === 0) {
-      return;
-    }
     const validIDs = new Set(servers.map((server) => server.id));
     setFavorites((prev) => {
       const next = prev.filter((id) => validIDs.has(id));
       return next.length === prev.length ? prev : next;
     });
-  }, [servers, dataLoaded]);
+  }, [servers]);
 
   useEffect(() => {
     const availableTagSet = new Set(availableTags);
@@ -204,9 +197,9 @@ export function useList<T extends BaseServer>({
         case "owner":
           return (a: T, b: T) => a.owner.localeCompare(b.owner);
         case "default":
-          return (a: T, b: T) => a.id.localeCompare(b.id);
+          return (a: T, b: T) => a.id - b.id;
         default:
-          return (a: T, b: T) => a.id.localeCompare(b.id);
+          return (a: T, b: T) => a.id - b.id;
       }
     };
 
@@ -247,7 +240,7 @@ export function useList<T extends BaseServer>({
     );
   }, []);
 
-  const handleToggleFavorite = useCallback((serverId: string) => {
+  const handleToggleFavorite = useCallback((serverId: number) => {
     setFavorites((prev) =>
       prev.includes(serverId)
         ? prev.filter((id) => id !== serverId)

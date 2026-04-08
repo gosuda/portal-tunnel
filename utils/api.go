@@ -26,16 +26,16 @@ func (resp APIErrorResponse) Write(w http.ResponseWriter) {
 func WriteAPIData(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(types.APIEnvelope[any]{OK: true, Data: data})
+	if data == nil {
+		data = map[string]any{}
+	}
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(types.APIEnvelope[any]{
-		OK:    false,
-		Error: &types.APIError{Code: code, Message: message},
-	})
+	_ = json.NewEncoder(w).Encode(types.APIError{Code: code, Message: message})
 }
 
 func MethodNotAllowedError() APIErrorResponse {
@@ -120,44 +120,23 @@ func HTTPDoAPIPath(ctx context.Context, client *http.Client, baseURL *url.URL, m
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return DecodeAPIRequestError(resp)
 	}
-
-	var envelope types.APIEnvelope[json.RawMessage]
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	if !envelope.OK {
-		if envelope.Error == nil {
-			return &types.APIRequestError{
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("api request failed with status %d", resp.StatusCode),
-			}
-		}
-		return &types.APIRequestError{
-			StatusCode: resp.StatusCode,
-			Code:       envelope.Error.Code,
-			Message:    envelope.Error.Message,
-		}
-	}
 	if out == nil {
 		return nil
 	}
-	return json.Unmarshal(envelope.Data, out)
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	return nil
 }
 
 func DecodeAPIRequestError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-	var envelope types.APIEnvelope[json.RawMessage]
-	if err := json.Unmarshal(body, &envelope); err == nil && !envelope.OK {
-		if envelope.Error == nil {
-			return &types.APIRequestError{
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("api request failed with status %d", resp.StatusCode),
-			}
-		}
+	var apiErr types.APIError
+	if err := json.Unmarshal(body, &apiErr); err == nil && strings.TrimSpace(apiErr.Code) != "" {
 		return &types.APIRequestError{
 			StatusCode: resp.StatusCode,
-			Code:       envelope.Error.Code,
-			Message:    envelope.Error.Message,
+			Code:       apiErr.Code,
+			Message:    apiErr.Message,
 		}
 	}
 

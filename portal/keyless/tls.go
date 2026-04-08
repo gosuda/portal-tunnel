@@ -17,7 +17,7 @@ import (
 func RelayRootCAs(ctx context.Context, endpoint, serverName string, rootCAPEM []byte) (*x509.CertPool, error) {
 	resolvedRootCAPEM := append([]byte(nil), rootCAPEM...)
 	if len(resolvedRootCAPEM) == 0 && utils.IsLocalRelayHost(serverName) {
-		_, fetchedRootCAPEM, err := ResolveMaterials(ctx, endpoint, serverName)
+		_, fetchedRootCAPEM, err := ResolveMaterials(ctx, endpoint, serverName, nil)
 		if err != nil {
 			return nil, fmt.Errorf("bootstrap localhost relay trust: %w", err)
 		}

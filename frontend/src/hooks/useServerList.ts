@@ -7,13 +7,13 @@ import { parseLeaseMetadata } from "@/lib/metadata";
 export type ClientServer = BaseServer;
 
 function convertSSRDataToServers(ssrData: PublicLeaseData[]): ClientServer[] {
-  return ssrData.map((row) => {
+  return ssrData.map((row, index) => {
     const metadata = parseLeaseMetadata(row.Metadata);
     const hostname = row.Hostname || "";
     const serviceName = row.name || "";
 
     return {
-      id: hostname,
+      id: index + 1,
       name: serviceName || hostname || "(unnamed)",
       description: metadata.description || "",
       tags: metadata.tags,

@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// APIEnvelope remains for backward compatibility with older clients/tests.
 type APIEnvelope[T any] struct {
 	Data  T         `json:"data,omitempty"`
 	Error *APIError `json:"error,omitempty"`
@@ -93,6 +94,20 @@ type DiscoveryResponse struct {
 	GeneratedAt     time.Time         `json:"generated_at"`
 	Self            RelayDescriptor   `json:"self"`
 	Relays          []RelayDescriptor `json:"relays,omitempty"`
+}
+
+type OverlayHealthResponse struct {
+	NodeID uint32               `json:"node_id"`
+	Health OverlayHealthMetrics `json:"health"`
+	Route  []uint32             `json:"route,omitempty"`
+}
+
+type OverlayHealthMetrics struct {
+	RTTMs       float64 `json:"rtt_ms"`
+	PingLatency float64 `json:"ping_latency_ms"`
+	Healthy     bool    `json:"healthy"`
+	ErrorPct    float64 `json:"error_pct"`
+	Fallback    bool    `json:"fallback"`
 }
 
 type QUICControlMessage struct {

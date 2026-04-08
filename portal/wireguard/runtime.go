@@ -141,6 +141,14 @@ func (r *Runtime) Discover(ctx context.Context, overlayIPv4 string, port int) (t
 	return resp, nil
 }
 
+func (r *Runtime) FetchOverlayHealth(ctx context.Context, overlayIPv4 string, port int) (types.OverlayHealthResponse, error) {
+	var resp types.OverlayHealthResponse
+	if err := r.getPeerJSON(ctx, overlayIPv4, port, types.PathOverlayHealth, &resp); err != nil {
+		return types.OverlayHealthResponse{}, err
+	}
+	return resp, nil
+}
+
 func (r *Runtime) getPeerJSON(ctx context.Context, overlayIPv4 string, port int, path string, out any) error {
 	if r == nil {
 		return errors.New("wireguard runtime not initialized")

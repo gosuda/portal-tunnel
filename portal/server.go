@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -567,6 +568,7 @@ func (s *Server) peerAPIHandler() http.Handler {
 	if s.cfg.DiscoveryEnabled {
 		mux.HandleFunc(types.PathDiscovery, s.handleRelayDiscovery)
 	}
+	mux.HandleFunc(types.PathOverlayHealth, s.handleOverlayHealth)
 	return mux
 }
 
@@ -592,6 +594,7 @@ func (s *Server) runWireGuardSyncLoop(ctx context.Context) error {
 		if err := s.syncWireGuardPeers(); err != nil {
 			log.Warn().Err(err).Msg("sync wireguard peers failed")
 		}
+		s.pollOverlayHealth(ctx)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -643,6 +646,58 @@ func (s *Server) syncWireGuardPeers() error {
 	}
 	peers := s.desiredWireGuardPeers()
 	return s.wgRuntime.ApplyPeers(peers)
+}
+
+func (s *Server) pollOverlayHealth(ctx context.Context) {
+	if s.wgRuntime == nil || s.overlayPolicy == nil || s.discoveryMgr == nil {
+		return
+	}
+	descs := s.discoveryMgr.ActiveRelayDescriptors()
+	for _, desc := range descs {
+		nodeKey := relayNodeKey(desc)
+		if nodeKey == "" || nodeKey == strings.TrimSpace(s.cfg.PortalURL) {
+			continue
+		}
+		if !desc.SupportsOverlayPeer || strings.TrimSpace(desc.OverlayIPv4) == "" {
+			continue
+		}
+		peerCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		resp, err := s.wgRuntime.FetchOverlayHealth(peerCtx, desc.OverlayIPv4, wireguard.DefaultPeerAPIHTTPPort)
+		cancel()
+		if err != nil {
+			log.Debug().
+				Err(err).
+				Str("peer", desc.Name).
+				Msg("overlay health fetch failed")
+			continue
+		}
+		s.overlayPolicy.UpdateNodeHealth(resp.NodeID, policy.RelayHealth{
+			RTTMs:         resp.Health.RTTMs,
+			PingLatencyMs: resp.Health.PingLatency,
+			Healthy:       resp.Health.Healthy,
+			ErrorPct:      resp.Health.ErrorPct,
+			Fallback:      resp.Health.Fallback,
+		})
+	}
+}
+
+func (s *Server) localRelayHealth() policy.RelayHealth {
+	if s == nil || s.weightMgr == nil {
+		return policy.RelayHealth{RTTMs: 1, PingLatencyMs: 1, Healthy: true}
+	}
+	load := s.weightMgr.Collect()
+	latency := load.AvgLatencyMs
+	if latency <= 0 {
+		latency = 1
+	}
+	jitter := load.JitterMs
+	errorPct := math.Max(0, math.Min(1, jitter/500))
+	return policy.RelayHealth{
+		RTTMs:         latency + jitter*0.5,
+		PingLatencyMs: latency,
+		Healthy:       true,
+		ErrorPct:      errorPct,
+	}
 }
 
 func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, *acme.Manager, error) {

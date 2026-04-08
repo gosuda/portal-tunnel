@@ -17,6 +17,7 @@ import (
 
 type CommandFunc func([]string) error
 type IntEnvParser func(string, int) int
+type FloatEnvParser func(string, float64) float64
 type boolFlagValue interface{ IsBoolFlag() bool }
 
 func trimmedEnv(name string) string {
@@ -53,6 +54,26 @@ func resolveIntEnv(fallback int, parse IntEnvParser, envNames ...string) int {
 	if parse == nil {
 		parse = func(raw string, fallback int) int {
 			v, err := strconv.Atoi(strings.TrimSpace(raw))
+			if err != nil {
+				return fallback
+			}
+			return v
+		}
+	}
+	for _, envName := range envNames {
+		raw := trimmedEnv(envName)
+		if raw == "" {
+			continue
+		}
+		return parse(raw, fallback)
+	}
+	return fallback
+}
+
+func resolveFloatEnv(fallback float64, parse FloatEnvParser, envNames ...string) float64 {
+	if parse == nil {
+		parse = func(raw string, fallback float64) float64 {
+			v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
 			if err != nil {
 				return fallback
 			}
@@ -131,6 +152,10 @@ func BoolFlagEnv(fs *flag.FlagSet, target *bool, name string, fallback bool, usa
 
 func IntFlagEnv(fs *flag.FlagSet, target *int, name string, fallback int, parse IntEnvParser, usage string, envNames ...string) {
 	ensureFlagSet(fs).IntVar(target, name, resolveIntEnv(fallback, parse, envNames...), flagUsage(usage, envNames...))
+}
+
+func Float64FlagEnv(fs *flag.FlagSet, target *float64, name string, fallback float64, parse FloatEnvParser, usage string, envNames ...string) {
+	ensureFlagSet(fs).Float64Var(target, name, resolveFloatEnv(fallback, parse, envNames...), flagUsage(usage, envNames...))
 }
 
 func RepeatedStringFlag(fs *flag.FlagSet, target *[]string, name, usage string) {

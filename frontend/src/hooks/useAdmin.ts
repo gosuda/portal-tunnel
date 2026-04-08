@@ -107,6 +107,7 @@ function resolveLeaseIdentity(
 
 function toAdminServer(
   row: AdminLeaseData,
+  index: number
 ): AdminServer {
   const metadata = parseLeaseMetadata(row.Metadata);
   const hostname = row.Hostname || "";
@@ -114,7 +115,7 @@ function toAdminServer(
   const address = row.address.trim();
 
   return {
-    id: hostname,
+    id: index + 1,
     name: serviceName || hostname || "(unnamed)",
     description: metadata.description,
     tags: metadata.tags,
@@ -227,7 +228,7 @@ export function useAdmin() {
   }, []);
 
   const servers: AdminServer[] = useMemo(() => {
-    return serverData.map((row) => toAdminServer(row));
+    return serverData.map((row, index) => toAdminServer(row, index));
   }, [serverData]);
 
   const additionalFilter = (server: AdminServer) => {

@@ -54,18 +54,13 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	return os.Chmod(path, mode)
 }
 
-func ReadJSONFile(path string, out any) error {
-	raw, err := os.ReadFile(strings.TrimSpace(path))
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(raw, out)
-}
-
 func ReadJSONFileIfExists(path string, out any) (bool, error) {
-	err := ReadJSONFile(path, out)
+	raw, err := os.ReadFile(strings.TrimSpace(path))
 	switch {
 	case err == nil:
+		if err := json.Unmarshal(raw, out); err != nil {
+			return false, err
+		}
 		return true, nil
 	case os.IsNotExist(err):
 		return false, nil

@@ -134,6 +134,7 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 		Name:         cfg.name,
 		BanMITM:      cfg.banMITM,
 		Discovery:    cfg.discovery,
+		MaxRouting:   types.MinDiscoveryRoutingAttempts,
 		Metadata: types.LeaseMetadata{
 			Description: cfg.desc,
 			Tags:        utils.SplitCSV(cfg.tags),
@@ -177,6 +178,7 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 		UDPEnabled:   true,
 		BanMITM:      cfg.banMITM,
 		Discovery:    cfg.discovery,
+		MaxRouting:   types.MinDiscoveryRoutingAttempts,
 		Metadata: types.LeaseMetadata{
 			Description: cfg.desc,
 			Tags:        utils.SplitCSV(cfg.tags),

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"net"
 	"net/http"
@@ -120,6 +121,8 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 				return
 			}
 			s.handleRelayDiscovery(w, r)
+		case types.PathOverlayHealth:
+			s.handleOverlayHealth(w, r)
 		case types.PathV1Sign:
 			if keylessSignerHandler == nil {
 				http.NotFound(w, r)
@@ -223,6 +226,32 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.discoveryMgr != nil {
 		resp.Relays = s.discoveryMgr.ActiveRelayDescriptors()
+	}
+	utils.WriteAPIData(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleOverlayHealth(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	if !s.wireGuardPeerPlaneEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+	nodeKey := strings.TrimSpace(s.cfg.PortalURL)
+	if nodeKey == "" {
+		nodeKey = strings.TrimSpace(s.identity.Key())
+	}
+	if nodeKey == "" {
+		http.NotFound(w, r)
+		return
+	}
+	nodeID := crc32.ChecksumIEEE([]byte(nodeKey))
+	health := s.localRelayHealth()
+	resp := types.OverlayHealthResponse{
+		NodeID: nodeID,
+		Health: overlayMetricsFromPolicy(health),
+		Route:  s.OverlayRoute(),
 	}
 	utils.WriteAPIData(w, http.StatusOK, resp)
 }
@@ -417,6 +446,16 @@ func overlayCIDRsField(enabled bool, cidrs []string) []string {
 	out := make([]string, len(cidrs))
 	copy(out, cidrs)
 	return out
+}
+
+func overlayMetricsFromPolicy(h policy.RelayHealth) types.OverlayHealthMetrics {
+	return types.OverlayHealthMetrics{
+		RTTMs:       h.RTTMs,
+		PingLatency: h.PingLatencyMs,
+		Healthy:     h.Healthy,
+		ErrorPct:    h.ErrorPct,
+		Fallback:    h.Fallback,
+	}
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {

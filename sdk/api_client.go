@@ -56,7 +56,6 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	baseURL, err := url.Parse(normalizedRelayURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse relay url: %w", err)
@@ -244,16 +243,11 @@ func (a *apiClient) openReverseSession(ctx context.Context) (net.Conn, error) {
 	if err := a.ensureHTTPClient(ctx); err != nil {
 		return nil, err
 	}
-
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: a.dialTimeout},
-		Config:    a.rawTLSConfig.Clone(),
-	}
-
-	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(a.baseURL.Host))
+	tlsConn, err := a.dialTLS(ctx)
 	if err != nil {
 		return nil, err
 	}
+	conn := tlsConn
 
 	req := &http.Request{
 		Method: http.MethodGet,
@@ -287,6 +281,29 @@ func (a *apiClient) openReverseSession(ctx context.Context) (net.Conn, error) {
 	}
 
 	return wrapBufferedConn(conn, reader), nil
+}
+
+func (a *apiClient) dialTLS(ctx context.Context) (net.Conn, error) {
+	rawConn, err := a.dialRelayConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tlsConf := a.rawTLSConfig.Clone()
+	conn := tls.Client(rawConn, tlsConf)
+	if err := conn.HandshakeContext(ctx); err != nil {
+		closeErr := conn.Close()
+		if closeErr != nil {
+			return nil, errors.Join(fmt.Errorf("tls handshake failed: %w", err), fmt.Errorf("close tls conn: %w", closeErr))
+		}
+		return nil, fmt.Errorf("tls handshake failed: %w", err)
+	}
+	return conn, nil
+}
+
+func (a *apiClient) dialRelayConn(ctx context.Context) (net.Conn, error) {
+	targetAddr := utils.EnsurePort(a.baseURL.Host)
+	dialer := &net.Dialer{Timeout: a.dialTimeout}
+	return dialer.DialContext(ctx, "tcp", targetAddr)
 }
 
 type bufferedConn struct {

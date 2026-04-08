@@ -113,7 +113,11 @@ func LoadIdentity(path string) (types.Identity, error) {
 		return types.Identity{}, errors.New("identity path is required")
 	}
 	var payload storedIdentity
-	if err := ReadJSONFile(path, &payload); err != nil {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
 		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
 	}
 	return NormalizeStoredIdentity(types.Identity{
@@ -142,6 +146,10 @@ func ParseIdentityJSON(raw string) (types.Identity, error) {
 	})
 }
 
+// LoadOrCreateIdentity loads an existing identity from path, or creates and
+// saves a new one if the file does not exist. The returned bool is true only
+// when a new identity was generated; callers can use it to emit a one-time
+// creation log without misleading operators on subsequent starts.
 func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity, bool, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -200,46 +208,46 @@ func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 	return loaded, true, nil
 }
 
-func ResolveListenerIdentity(identity types.Identity, target, identityPath, identityJSON string) (types.Identity, bool, error) {
+func ResolveListenerIdentity(identity types.Identity, target, identityPath, identityJSON string) (types.Identity, error) {
 	identityPath = strings.TrimSpace(identityPath)
 	identityJSON = strings.TrimSpace(identityJSON)
 	resolvedName, err := resolveExposeName(identity.Name, target, identityPath, identityJSON)
 	if err != nil {
-		return types.Identity{}, false, err
+		return types.Identity{}, err
 	}
 	identity.Name = resolvedName
 	if identityJSON != "" {
 		provided, err := ParseIdentityJSON(identityJSON)
 		if err != nil {
-			return types.Identity{}, false, err
+			return types.Identity{}, err
 		}
 		provided.Name = identity.Name
 		if identityPath != "" {
 			if err := SaveIdentity(identityPath, provided); err != nil {
-				return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
+				return types.Identity{}, fmt.Errorf("persist identity: %w", err)
 			}
 			provided, err = LoadIdentity(identityPath)
 			if err != nil {
-				return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
+				return types.Identity{}, fmt.Errorf("load identity: %w", err)
 			}
 		}
 		resolved, err := ResolveLeaseIdentity(provided)
-		return resolved, false, err
+		return resolved, err
 	}
 	if identityPath == "" {
 		resolved, err := ResolveLeaseIdentity(identity)
-		return resolved, false, err
+		return resolved, err
 	}
 
-	loaded, created, err := LoadOrCreateIdentity(identityPath, identity)
+	loaded, _, err := LoadOrCreateIdentity(identityPath, identity)
 	if err != nil {
-		return types.Identity{}, false, err
+		return types.Identity{}, err
 	}
 	resolved, err := ResolveLeaseIdentity(loaded)
 	if err != nil {
-		return types.Identity{}, false, err
+		return types.Identity{}, err
 	}
-	return resolved, created, nil
+	return resolved, nil
 }
 
 func NormalizeIdentityKey(raw string) string {

@@ -17,9 +17,9 @@ describe("apiClient", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   });
 
-  it("returns data when API envelope is ok", async () => {
+  it("returns data when API response is JSON", async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse({ ok: true, data: { value: 42 } }),
+      jsonResponse({ value: 42 }),
     );
 
     const data = await apiClient.get<{ value: number }>("/api/test");
@@ -31,20 +31,10 @@ describe("apiClient", () => {
     expect(init.headers).toEqual({ Accept: "application/json" });
   });
 
-  it("rejects successful non-envelope JSON payloads", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ direct: true }));
-
-    await expect(apiClient.get<{ direct: boolean }>("/api/test")).rejects.toMatchObject({
-      name: "APIClientError",
-      status: 200,
-      code: "invalid_envelope",
-    } satisfies Partial<APIClientError>);
-  });
-
-  it("throws APIClientError for server-side envelope failures", async () => {
+  it("throws APIClientError for server-side errors", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(
-        { ok: false, error: { code: "forbidden", message: "Denied" } },
+        { code: "forbidden", message: "Denied" },
         { status: 403, statusText: "Forbidden" },
       ),
     );
@@ -57,7 +47,7 @@ describe("apiClient", () => {
     } satisfies Partial<APIClientError>);
   });
 
-  it("rejects structured non-envelope errors as invalid envelopes", async () => {
+  it("accepts direct JSON error payloads", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(
         { code: "lease_rejected", message: "failed to register lease" },
@@ -68,11 +58,11 @@ describe("apiClient", () => {
     await expect(apiClient.get("/api/test")).rejects.toMatchObject({
       name: "APIClientError",
       status: 409,
-      code: "invalid_envelope",
+      code: "lease_rejected",
     } satisfies Partial<APIClientError>);
   });
 
-  it("throws invalid_envelope when a failed response has no parseable error payload", async () => {
+  it("uses fallback code when a failed response has no typed error payload", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ detail: "not wrapped" }, { status: 400 }),
     );
@@ -80,17 +70,17 @@ describe("apiClient", () => {
     await expect(apiClient.get("/api/test")).rejects.toMatchObject({
       name: "APIClientError",
       status: 400,
-      code: "invalid_envelope",
+      code: "request_failed",
     } satisfies Partial<APIClientError>);
   });
 
-  it("treats empty responses as invalid envelopes", async () => {
+  it("treats empty responses as invalid_json", async () => {
     fetchMock.mockResolvedValueOnce(new Response("", { status: 200 }));
 
     await expect(apiClient.get("/api/test")).rejects.toMatchObject({
       name: "APIClientError",
       status: 200,
-      code: "invalid_envelope",
+      code: "invalid_json",
     } satisfies Partial<APIClientError>);
   });
 
@@ -132,7 +122,7 @@ describe("apiClient", () => {
   });
 
   it("sends JSON bodies for post and omits content-type for delete without body", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true, data: {} }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({}));
     await apiClient.post("/api/post", { id: 1 });
 
     const postInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
@@ -143,7 +133,7 @@ describe("apiClient", () => {
       "Content-Type": "application/json",
     });
 
-    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true, data: {} }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({}));
     await apiClient.delete("/api/post");
 
     const deleteInit = fetchMock.mock.calls[1]?.[1] as RequestInit;

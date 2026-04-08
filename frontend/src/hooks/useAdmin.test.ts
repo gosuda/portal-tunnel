@@ -231,7 +231,9 @@ describe("useAdmin", () => {
         "relay-1:0x00000000000000000000000000000000000000a1",
         2048
       );
-      await Promise.resolve();
+      await waitFor(() => {
+        expect(resolveRefresh).toBeDefined();
+      });
       expect(result.current.loading).toBe(false);
       resolveRefresh?.({
         leases: [{ ...buildLease("0x00000000000000000000000000000000000000A1"), BPS: 2048 }],

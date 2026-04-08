@@ -22,12 +22,12 @@ func TestWriteAPIDataAndDecodeEnvelope(t *testing.T) {
 		t.Fatalf("WriteAPIData() status = %d, want %d", rec.Code, http.StatusCreated)
 	}
 
-	var envelope types.APIEnvelope[map[string]string]
-	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+	var payload map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("json.Decode() error = %v", err)
 	}
-	if !envelope.OK || envelope.Data["status"] != "ok" {
-		t.Fatalf("decoded envelope = %+v, want ok envelope", envelope)
+	if payload["status"] != "ok" {
+		t.Fatalf("decoded payload = %+v, want status=ok", payload)
 	}
 }
 
@@ -36,7 +36,7 @@ func TestDecodeAPIRequestError(t *testing.T) {
 
 	resp := &http.Response{
 		StatusCode: http.StatusForbidden,
-		Body:       io.NopCloser(strings.NewReader(`{"ok":false,"error":{"code":"unauthorized","message":"denied"}}`)),
+		Body:       io.NopCloser(strings.NewReader(`{"code":"unauthorized","message":"denied"}`)),
 	}
 
 	err := DecodeAPIRequestError(resp)

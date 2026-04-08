@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 interface ServerCardProps {
-  serverId: string;
+  serverId: number;
   name: string;
   description: string;
   tags: string[];
@@ -24,7 +24,7 @@ interface ServerCardProps {
   navigationPath: string;
   navigationState: any;
   isFavorite?: boolean;
-  onToggleFavorite?: (serverId: string) => void;
+  onToggleFavorite?: (serverId: number) => void;
   showAdminControls?: boolean;
   identityKey?: string;
   address?: string;

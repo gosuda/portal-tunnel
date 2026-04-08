@@ -16,7 +16,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioCloser, error) {
+// DialContextFunc allows callers to override how keyless materials are fetched.
+type DialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+func BuildClientTLSConfig(relayURL string, domains []string, dial DialContextFunc) (*tls.Config, ioCloser, error) {
 	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return nil, nil, err
@@ -31,7 +34,7 @@ func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioClo
 		return nil, nil, errors.New("relay hostname is required")
 	}
 
-	certPEM, rootCAPEM, err := ResolveMaterials(context.Background(), normalizedRelayURL, serverName)
+	certPEM, rootCAPEM, err := ResolveMaterials(context.Background(), normalizedRelayURL, serverName, dial)
 	if err != nil {
 		return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
 	}
@@ -73,8 +76,8 @@ type ioCloser interface {
 	Close() error
 }
 
-func ResolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte, []byte, error) {
-	chainPEM, err := FetchEndpointCertificateChain(ctx, endpoint, serverName)
+func ResolveMaterials(ctx context.Context, endpoint, serverName string, dial DialContextFunc) ([]byte, []byte, error) {
+	chainPEM, err := FetchEndpointCertificateChain(ctx, endpoint, serverName, dial)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch signer certificate chain: %w", err)
 	}
@@ -92,7 +95,7 @@ func VerifyCertificateHostname(certPEM []byte, hostname string) error {
 	return leaf.VerifyHostname(hostname)
 }
 
-func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
+func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName string, dial DialContextFunc) ([]byte, error) {
 	raw := strings.TrimSpace(endpoint)
 	if raw == "" {
 		return nil, errors.New("endpoint is required")
@@ -121,8 +124,13 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 		serverName = host
 	}
 
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	rawConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	var rawConn net.Conn
+	if dial != nil {
+		rawConn, err = dial(ctx, "tcp", net.JoinHostPort(host, port))
+	} else {
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		rawConn, err = dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dial signer endpoint: %w", err)
 	}

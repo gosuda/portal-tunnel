@@ -453,7 +453,7 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 			Message: "relay did not enable required udp support",
 		}
 	}
-	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
+	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname}, nil)
 	if err != nil {
 		_ = l.api.unregisterLease(context.Background())
 		return err

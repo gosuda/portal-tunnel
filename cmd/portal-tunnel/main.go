@@ -49,6 +49,7 @@ type exposeFlags struct {
 	udp          bool
 	udpAddr      string
 	tcp          bool
+	maxRouting   int
 }
 
 func runExposeCommand(args []string) error {
@@ -70,6 +71,7 @@ func runExposeCommand(args []string) error {
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
+	utils.IntFlagEnv(fs, &flags.maxRouting, "max-routing", 1, nil, "Maximum number of discovery routing attempts per refresh", "PORTAL_MAX_ROUTING")
 
 	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -95,9 +97,11 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return errors.New("--udp cannot be combined with --http-route")
 	}
+	if err := utils.ValidateMaxRouting(flags.maxRouting); err != nil {
+		return err
+	}
 	ctx, stop := utils.SignalContext()
 	defer stop()
-
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:    utils.SplitCSV(flags.relayCSV),
 		IdentityPath: flags.identityPath,
@@ -109,6 +113,7 @@ func runExposeCommand(args []string) error {
 		TCPEnabled:   flags.tcp,
 		BanMITM:      flags.banMITM,
 		Discovery:    flags.discovery,
+		MaxRouting:   flags.maxRouting,
 		Metadata: types.LeaseMetadata{
 			Description: flags.desc,
 			Tags:        utils.SplitCSV(flags.tags),

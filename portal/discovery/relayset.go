@@ -262,6 +262,14 @@ func (s *RelaySet) bootstrapDescriptors() []types.RelayDescriptor {
 	return out
 }
 
+func (s *RelaySet) BootstrapDescriptors() []types.RelayDescriptor {
+	descs := s.bootstrapDescriptors()
+	if len(descs) == 0 {
+		return nil
+	}
+	return append([]types.RelayDescriptor(nil), descs...)
+}
+
 func (s *RelaySet) ActiveRelayDescriptors() []types.RelayDescriptor {
 	if s == nil {
 		return nil
@@ -272,6 +280,35 @@ func (s *RelaySet) ActiveRelayDescriptors() []types.RelayDescriptor {
 		return nil
 	}
 	return append([]types.RelayDescriptor(nil), s.activeRelays...)
+}
+
+func (s *RelaySet) Snapshot() map[string]types.RelayState {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.relays) == 0 {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	snapshot := make(map[string]types.RelayState, len(s.relays))
+	for identityKey, desc := range s.relays {
+		state := s.localByURL[desc.APIHTTPSAddr]
+		local := state
+		if local == nil {
+			local = &RelayLocalState{}
+		}
+		snapshot[identityKey] = types.RelayState{
+			Descriptor:          desc,
+			Advertised:          local.Advertised,
+			Expired:             relayExpiredAt(desc, local, now),
+			Banned:              local.Banned,
+			ConsecutiveFailures: local.ConsecutiveFailures,
+		}
+	}
+	return snapshot
 }
 
 func (s *RelaySet) confirmableDescriptors() []types.RelayDescriptor {

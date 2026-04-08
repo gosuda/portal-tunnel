@@ -39,7 +39,7 @@
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "description": "Relay server URLs (https only, e.g. https://my-relay.example.com). Leave empty to use the public registry at https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json."
+          "description": "Relay server URLs (https only, e.g. https://my-relay.example.com). Leave empty to use the public registry at https://raw.githubusercontent.com/gosuda/portal-tunnel/feature/tor-vpn-relay/registry.json."
         },
         "portal.defaultHost": {
           "type": "string",

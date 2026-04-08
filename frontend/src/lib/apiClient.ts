@@ -1,14 +1,3 @@
-type APIErrorPayload = {
-  code?: string;
-  message?: string;
-};
-
-type APIEnvelope<T> = {
-  ok?: boolean;
-  data?: T;
-  error?: APIErrorPayload;
-};
-
 export class APIClientError extends Error {
   readonly code: string;
   readonly details: unknown;
@@ -40,40 +29,14 @@ function headersToObject(headers?: HeadersInit): Record<string, string> {
   return { ...headers };
 }
 
-function ensureJsonEnvelope<T>(raw: unknown, path: string, status: number): APIEnvelope<T> {
-  if (!isRecord(raw) || typeof raw.ok !== "boolean") {
-    throw new APIClientError(`Invalid API response for ${path}`, status, "invalid_envelope", raw);
-  }
-  if (raw.error !== undefined && !isRecord(raw.error)) {
-    throw new APIClientError(`Invalid error payload for ${path}`, status, "invalid_envelope", raw.error);
-  }
-  const errorValue = raw.error;
-  return {
-    ok: raw.ok,
-    data: (raw as { data?: T }).data,
-    error: errorValue
-      ? {
-          code: typeof errorValue.code === "string" ? errorValue.code : "request_failed",
-          message: typeof errorValue.message === "string" ? errorValue.message : "Request failed",
-        }
-      : undefined,
-  };
-}
-
-async function decodeEnvelope<T>(path: string, response: Response): Promise<APIEnvelope<T>> {
+async function decodeJSON(path: string, response: Response): Promise<unknown> {
   const text = await response.text();
   if (!text.trim()) {
-    throw new APIClientError(
-      `Empty API response from ${path}`,
-      response.status,
-      "invalid_envelope",
-      text
-    );
+    throw new APIClientError(`Empty API response from ${path}`, response.status, "invalid_json", text);
   }
 
-  let payload: unknown;
   try {
-    payload = JSON.parse(text);
+    return JSON.parse(text);
   } catch {
     throw new APIClientError(
       `API response from ${path} was not valid JSON`,
@@ -82,8 +45,6 @@ async function decodeEnvelope<T>(path: string, response: Response): Promise<APIE
       text
     );
   }
-
-  return ensureJsonEnvelope<T>(payload, path, response.status);
 }
 
 async function request<T>(path: string, init: RequestInit): Promise<T> {
@@ -109,15 +70,27 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
     );
   }
 
-  const envelope = await decodeEnvelope<T>(path, response);
-  if (envelope.ok) {
-    return envelope.data as T;
+  const payload = await decodeJSON(path, response);
+  if (response.ok) {
+    return payload as T;
   }
-
-  const message =
-    envelope.error?.message?.trim() || response.statusText || "Request failed";
-  const code = envelope.error?.code?.trim() || "request_failed";
-  throw new APIClientError(message, response.status, code, envelope.data);
+  if (isRecord(payload)) {
+    const message =
+      typeof payload.message === "string" && payload.message.trim()
+        ? payload.message.trim()
+        : response.statusText || "Request failed";
+    const code =
+      typeof payload.code === "string" && payload.code.trim()
+        ? payload.code.trim()
+        : "request_failed";
+    throw new APIClientError(message, response.status, code, payload);
+  }
+  throw new APIClientError(
+    response.statusText || "Request failed",
+    response.status,
+    "request_failed",
+    payload
+  );
 }
 
 function jsonRequestInit(method: "POST" | "DELETE", body?: unknown): RequestInit {

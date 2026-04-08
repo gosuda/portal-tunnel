@@ -13,6 +13,9 @@
 - **One-command setup**: Start relays and tunnels with minimal setup
 - **Self-hosted relays**: Connect to public relays or run your own
 - **Relay discovery and pools**: Use discovered relays as a pool, with multi-relay access and failover
+- **Deterministic discovery ordering**: Discovery polling uses a non-linear OLS-based order instead of simple rotation
+- **Reverse Siamese grid routing**: Portal's policy manager fills paired Siamese squares (forward + mirrored/complemented reverse) so per-client routing stays deterministic while balancing load with mirrored partners
+- **Bounded discovery routing**: `--max-routing` limits discovery routing attempts per refresh to keep bootstrap traversal predictable
 - **No login, no API keys**: Authenticate ownership using SIWE, with ENS-based identity support
 - **Raw TCP/UDP + TCP port routing**: Native TCP reverse sessions, optional UDP, and dedicated TCP ports for non-TLS services
 - **Auto-generated thumbnails**: Optional headless screenshot sidecar generates dashboard card previews for tunnel apps
@@ -68,6 +71,11 @@ See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 
 See [docs/architecture.md](docs/architecture.md).
 For architecture decisions, see [docs/adr/README.md](docs/adr/README.md).
+
+## Testing
+
+- [Onion transport simulation](docs/onion_testing.md)
+- [Live relay testing](docs/live_relay_testing.md)
 
 ## Examples
 
