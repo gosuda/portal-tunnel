@@ -127,9 +127,36 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 			}
 			keylessSignerHandler.ServeHTTP(w, r)
 		default:
+			if strings.HasPrefix(r.URL.Path, types.PathThumbnailPrefix) {
+				s.serveThumbnail(w, r)
+				return
+			}
 			base.ServeHTTP(w, r)
 		}
 	})
+}
+
+func (s *Server) serveThumbnail(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	hostname := strings.TrimPrefix(r.URL.Path, types.PathThumbnailPrefix)
+	hostname = strings.TrimSpace(strings.ToLower(hostname))
+	if hostname == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	data, contentType, ok := s.thumbnails.Get(hostname)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
@@ -608,6 +635,11 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		_, _ = s.registry.Unregister(record.Copy())
 		record.Close()
 		return types.RegisterResponse{}, err
+	}
+
+	// Trigger thumbnail generation for apps that don't provide one
+	if record.Metadata.Thumbnail == "" && s.thumbnails != nil {
+		s.thumbnails.TriggerAsync(hostname)
 	}
 
 	resp := types.RegisterResponse{

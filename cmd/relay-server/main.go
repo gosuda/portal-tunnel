@@ -87,6 +87,8 @@ func runServeCommand(args []string) error {
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
 	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "trusted proxy CIDR allowlist for forwarded headers, comma-separated; defaults to private/loopback proxy ranges when trust-proxy-headers is enabled", "TRUSTED_PROXY_CIDRS")
 
+	utils.StringFlagEnv(fs, &cfg.HeadlessShellURL, "headless-shell-url", "", "headless Chrome CDP WebSocket URL for thumbnail generation (e.g. ws://headless-shell:9222)", "HEADLESS_SHELL_URL")
+
 	utils.StringFlagEnv(fs, &cfg.KeylessDir, "keyless-dir", "./.portal-certs", "directory path for relay keyless materials", "KEYLESS_DIR")
 	utils.StringFlagEnv(fs, &cfg.AdminSettingsPath, "admin-settings-path", "admin_settings.json", "admin settings file path", "ADMIN_SETTINGS_PATH")
 	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "", "ACME DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (cloudflare|gcloud|route53); leave empty to use manual fullchain.pem/privatekey.pem from KEYLESS_DIR", "ACME_DNS_PROVIDER")
@@ -176,6 +178,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		MaxPort:           cfg.MaxPort,
 		UDPEnabled:        cfg.UDPEnabled,
 		TCPEnabled:        cfg.TCPEnabled,
+		HeadlessShellURL:  cfg.HeadlessShellURL,
 	})
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)

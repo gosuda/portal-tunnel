@@ -1,9 +1,17 @@
 services:
+  # Optional: uncomment to enable auto-generated thumbnails for tunnel apps.
+  # See docs/deployment.md section 8 for details.
+  # headless-shell:
+  #   image: chromedp/headless-shell:stable
+  #   restart: unless-stopped
+
   portal:
     image: ghcr.io/gosuda/portal:latest
     build:
       context: .
       dockerfile: Dockerfile
+    # depends_on:
+    #   - headless-shell
     stop_grace_period: 30s
     ports:
       - "${API_PORT:-4017}:${API_PORT:-4017}"
@@ -34,6 +42,9 @@ services:
       LANDING_PAGE_ENABLED: ${LANDING_PAGE_ENABLED:-false}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+
+      # Optional: auto-generated thumbnails (requires headless-shell sidecar above)
+      # HEADLESS_SHELL_URL: ${HEADLESS_SHELL_URL:-ws://headless-shell:9222}
 
       # TLS/ACME and keyless materials
       KEYLESS_DIR: ${KEYLESS_DIR:-/portal-certs}

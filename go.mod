@@ -12,6 +12,7 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.1.0
 	github.com/go-acme/lego/v4 v4.32.0
 	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/go-rod/rod v0.116.2
 	github.com/gosuda/keyless_tls v0.0.1-0.20260304212324-7733f8366abc
 	github.com/quic-go/quic-go v0.59.0
 	github.com/rs/zerolog v1.34.0
@@ -54,6 +55,11 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/relvacode/iso8601 v1.1.1-0.20210511065120-b30b151cc433 // indirect
+	github.com/ysmood/fetchup v0.2.3 // indirect
+	github.com/ysmood/goob v0.4.0 // indirect
+	github.com/ysmood/got v0.40.0 // indirect
+	github.com/ysmood/gson v0.7.3 // indirect
+	github.com/ysmood/leakless v0.9.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
 	go.opentelemetry.io/otel v1.39.0 // indirect

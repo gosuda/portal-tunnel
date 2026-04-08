@@ -403,11 +403,98 @@ sudo sysctl -w net.core.wmem_max=7500000
 
 To persist this across reboots, add the values to `/etc/sysctl.conf` or a file in `/etc/sysctl.d/`.
 
-## 6. Auto-Update
+## 6. Optional Thumbnail Screenshots
+
+Portal can automatically generate thumbnail screenshots for tunnel apps that don't provide their own. When a tunnel app registers without a `thumbnail` in its metadata, the relay captures a screenshot of the app's public page and serves it as a card background on the dashboard.
+
+This feature is **disabled by default** and entirely optional. Without it, apps without a thumbnail simply show a gradient background.
+
+### 6.1 When to enable
+
+Enable this feature when:
+
+- You want richer visual previews on the relay dashboard
+- Most of your tunnel apps don't set a custom thumbnail in their metadata
+
+Skip this feature when:
+
+- You want the smallest possible deployment footprint
+- Tunnel apps already provide their own thumbnails
+- You're running on resource-constrained servers
+
+### 6.2 How it works
+
+The relay uses a headless Chromium sidecar (`chromedp/headless-shell`, ~200 MB) to render tunnel app pages and capture screenshots. When a tunnel app registers:
+
+1. If the app has no thumbnail and `HEADLESS_SHELL_URL` is configured, the relay queues a screenshot job.
+2. A single background worker connects to the headless Chromium via Chrome DevTools Protocol (CDP).
+3. The worker navigates to the app's public HTTPS URL, waits for the page to load, and captures a 1280×720 screenshot.
+4. The screenshot is JPEG-encoded and cached in memory (max 256 KB per image).
+5. On the next dashboard page load, the cached thumbnail is injected into the app's card.
+
+Screenshots are evicted when the lease expires or the app disconnects.
+
+### 6.3 Enable thumbnail screenshots
+
+**Step 1**: Uncomment the headless-shell service in `docker-compose.yml`:
+
+```yaml
+services:
+  headless-shell:
+    image: chromedp/headless-shell:stable
+    restart: unless-stopped
+```
+
+**Step 2**: Uncomment the `depends_on` in the portal service:
+
+```yaml
+  portal:
+    depends_on:
+      - headless-shell
+```
+
+**Step 3**: Uncomment and set `HEADLESS_SHELL_URL` in the portal environment:
+
+```yaml
+    environment:
+      HEADLESS_SHELL_URL: ${HEADLESS_SHELL_URL:-ws://headless-shell:9222}
+```
+
+Or set it in `.env`:
+
+```bash
+HEADLESS_SHELL_URL=ws://headless-shell:9222
+```
+
+**Step 4**: Restart the stack:
+
+```bash
+docker compose up -d
+```
+
+### 6.4 Verify
+
+After a tunnel app connects, check the relay logs for:
+
+```
+INF thumbnail captured hostname=myapp.portal.example.com size=36209
+```
+
+The thumbnail is then served at `/thumbnail/<hostname>` and displayed on the dashboard card.
+
+### 6.5 Disable
+
+Remove or comment out `HEADLESS_SHELL_URL` from `.env` or the docker-compose environment. The headless-shell container can also be removed. Without this variable, the feature is completely inactive with zero overhead.
+
+| Variable | Default | Description |
+|---|---|---|
+| `HEADLESS_SHELL_URL` | _(empty, disabled)_ | CDP WebSocket URL for headless Chromium sidecar (e.g. `ws://headless-shell:9222`) |
+
+## 7. Auto-Update
 
 Automatically redeploy when a new `ghcr.io/gosuda/portal:latest` image is pushed.
 
-### 6.1 Deploy script
+### 7.1 Deploy script
 
 Create `deploy_portal.sh` in your project directory:
 
@@ -421,7 +508,7 @@ docker compose pull
 docker compose up -d
 ```
 
-### 6.2 Watcher script
+### 7.2 Watcher script
 
 The repository includes `watch_and_deploy.sh`, which polls the remote image digest and runs the deploy script on change.
 
@@ -433,7 +520,7 @@ Environment variables:
 | `DEPLOY_SCRIPT` | `deploy_portal.sh` | Path to deploy script |
 | `DIGEST_FILE` | `.portal_image_digest` | File storing the last known digest |
 
-### 6.3 Register as systemd service
+### 7.3 Register as systemd service
 
 Set `WorkingDirectory` and `ExecStart` to the directory where `watch_and_deploy.sh` and `deploy_portal.sh` are located:
 
@@ -469,7 +556,7 @@ Adjust `User` to match your environment. Ensure the user belongs to the `docker`
 sudo usermod -aG docker opc
 ```
 
-### 6.4 Verify and monitor
+### 7.4 Verify and monitor
 
 ```bash
 sudo systemctl status portal-watcher
@@ -477,9 +564,9 @@ sudo journalctl -u portal-watcher -f
 sudo journalctl -u portal-watcher --since today
 ```
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
-### 7.1 Ports blocked
+### 8.1 Ports blocked
 
 Required inbound ports:
 
@@ -502,11 +589,11 @@ sudo ufw allow 40000:40009/tcp
 sudo ufw status
 ```
 
-### 7.2 QUIC UDP buffer warnings
+### 8.2 QUIC UDP buffer warnings
 
 If relay logs show `failed to sufficiently increase receive buffer size`, apply the sysctl settings from section 5.5.
 
-### 7.3 Docker DNS resolution fails
+### 8.3 Docker DNS resolution fails
 
 If logs show `discover bootstraps failed`, `sync dns records`, or `lookup <host> on 127.0.0.11:53: write: operation not permitted`, Docker is usually using the wrong host resolver config.
 

@@ -43,6 +43,13 @@ services:
       - portal
     restart: unless-stopped
 
+  # ─── headless-shell (optional thumbnail screenshot sidecar) ─────────────────
+  # Uncomment to enable auto-generated thumbnails for tunnel apps.
+  # See docs/deployment.md section 8 for details.
+  # headless-shell:
+  #   image: chromedp/headless-shell:stable
+  #   restart: unless-stopped
+
   # ─── portal relay ───────────────────────────────────────────────────────────
   # NAT-traversal relay server.
   # TCP (4017, 4443) is reached by nginx via 127.0.0.1.
@@ -52,6 +59,8 @@ services:
   portal:
     image: ghcr.io/gosuda/portal:latest
     container_name: portal
+    # depends_on:
+    #   - headless-shell
     ports:
       - "${API_PORT:-4017}:${API_PORT:-4017}/tcp"
       - "${SNI_PORT:-4443}:${SNI_PORT:-4443}/tcp"
@@ -79,6 +88,7 @@ services:
 
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
       LANDING_PAGE_ENABLED: ${LANDING_PAGE_ENABLED:-false}
+      # HEADLESS_SHELL_URL: ${HEADLESS_SHELL_URL:-ws://headless-shell:9222}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-127.0.0.0/8}
 
