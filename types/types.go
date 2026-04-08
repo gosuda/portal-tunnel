@@ -2,7 +2,7 @@ package types
 
 const (
 	ReleaseVersion              = "v2.1.4"
-	ProtocolVersion             = "5"
+	ProtocolVersion             = "6"
 	PortalRelayRegistryURL      = "https://raw.githubusercontent.com/gosuda/portal-tunnel/feature/tor-vpn-relay/registry.json"
 	MinDiscoveryRoutingAttempts = 1
 	MaxDiscoveryRoutingAttempts = 32
