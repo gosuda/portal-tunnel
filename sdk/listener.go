@@ -378,12 +378,10 @@ func (l *Listener) currentDatagramState() (transport.ClientDatagramState, bool) 
 		return transport.ClientDatagramState{}, false
 	}
 	l.api.mu.RLock()
-	accessToken := l.api.accessToken
-	l.api.mu.RUnlock()
 
 	return transport.ClientDatagramState{
 		Identity:    l.identity.Copy(),
-		AccessToken: accessToken,
+		AccessToken: l.api.accessToken,
 	}, true
 }
 
