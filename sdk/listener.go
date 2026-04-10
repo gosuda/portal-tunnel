@@ -111,7 +111,21 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 				Msg("quic datagram plane disconnected; waiting to reconnect")
 		})
 		go l.datagram.RunLoop(listenerCtx, l.currentDatagramState, func(ctx context.Context, state transport.ClientDatagramState) (*quic.Conn, error) {
-			return l.api.openQUICSession(ctx, state.AccessToken)
+			conn, err := l.api.openQUICSession(ctx, state.AccessToken)
+			if err == nil ||
+				(!errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) &&
+					!errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUnauthorized})) {
+				return conn, err
+			}
+
+			requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if state.AccessToken != "" && l.api.accessToken == state.AccessToken {
+				if err := l.registerAndConfigure(requestCtx); err != nil {
+					return nil, err
+				}
+			}
+			return l.api.openQUICSession(ctx, l.api.accessToken)
 		})
 	}
 
@@ -130,6 +144,21 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 				go l.stream.RunLoop(
 					ctx,
 					func(ctx context.Context) (net.Conn, error) {
+						attemptedToken := l.api.accessToken
+						conn, err := l.api.openReverseSession(ctx)
+						if err == nil ||
+							(!errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) &&
+								!errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUnauthorized})) {
+							return conn, err
+						}
+
+						requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+						defer cancel()
+						if attemptedToken != "" && l.api.accessToken == attemptedToken {
+							if err := l.registerAndConfigure(requestCtx); err != nil {
+								return nil, err
+							}
+						}
 						return l.api.openReverseSession(ctx)
 					},
 					func() *tls.Config {
@@ -377,13 +406,10 @@ func (l *Listener) currentDatagramState() (transport.ClientDatagramState, bool) 
 	if l.api == nil || l.identity.Key() == "" || l.udpAddr == "" {
 		return transport.ClientDatagramState{}, false
 	}
-	l.api.mu.RLock()
-	accessToken := l.api.accessToken
-	l.api.mu.RUnlock()
 
 	return transport.ClientDatagramState{
 		Identity:    l.identity.Copy(),
-		AccessToken: accessToken,
+		AccessToken: l.api.accessToken,
 	}, true
 }
 
@@ -423,20 +449,24 @@ func (l *Listener) runRenewLoop(ctx context.Context) {
 }
 
 func (l *Listener) renewLease(ctx context.Context) error {
+	attemptedToken := l.api.accessToken
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	err := l.api.renewLease(requestCtx, l.leaseTTL)
 	cancel()
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
+	if !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) &&
+		!errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUnauthorized}) {
 		return err
 	}
 
 	requestCtx, cancel = context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := l.registerAndConfigure(requestCtx); err != nil {
-		return err
+	if attemptedToken != "" && l.api.accessToken == attemptedToken {
+		if err := l.registerAndConfigure(requestCtx); err != nil {
+			return err
+		}
 	}
 	return nil
 }

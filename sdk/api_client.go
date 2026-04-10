@@ -136,8 +136,8 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEna
 		sniPort = resp.SNIPort
 	}
 
-	a.mu.Lock()
 	a.accessToken = resp.AccessToken
+	a.mu.Lock()
 	a.sniPort = sniPort
 	a.mu.Unlock()
 	return resp, nil
@@ -203,9 +203,7 @@ func (a *apiClient) renewLease(ctx context.Context, ttl time.Duration) error {
 		return err
 	}
 
-	a.mu.RLock()
 	accessToken := a.accessToken
-	a.mu.RUnlock()
 	if strings.TrimSpace(accessToken) == "" {
 		return errors.New("access token is not available")
 	}
@@ -223,18 +221,14 @@ func (a *apiClient) renewLease(ctx context.Context, ttl time.Duration) error {
 		return errors.New("relay did not return renewed access token")
 	}
 
-	a.mu.Lock()
 	if a.accessToken == accessToken {
 		a.accessToken = resp.AccessToken
 	}
-	a.mu.Unlock()
 	return nil
 }
 
 func (a *apiClient) unregisterLease(ctx context.Context) error {
-	a.mu.RLock()
 	accessToken := a.accessToken
-	a.mu.RUnlock()
 	return utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
 		AccessToken: accessToken,
 	}, nil, nil)
@@ -261,9 +255,7 @@ func (a *apiClient) openReverseSession(ctx context.Context) (net.Conn, error) {
 		Host:   a.baseURL.Host,
 		Header: make(http.Header),
 	}
-	a.mu.RLock()
 	accessToken := a.accessToken
-	a.mu.RUnlock()
 	req.Header.Set(types.HeaderAccessToken, accessToken)
 	req.Header.Set("Connection", "keep-alive")
 
@@ -366,7 +358,10 @@ func (a *apiClient) openQUICSession(ctx context.Context, accessToken string) (*q
 	}
 	if !resp.OK {
 		_ = conn.CloseWithError(1, resp.Error)
-		return nil, fmt.Errorf("quic connect rejected: %s", resp.Error)
+		return nil, &types.APIRequestError{
+			Code:    strings.TrimSpace(resp.Error),
+			Message: "quic connect rejected",
+		}
 	}
 
 	return conn, nil
