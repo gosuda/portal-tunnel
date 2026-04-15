@@ -35,4 +35,5 @@ const (
 	PathSDKUnregister        = "/sdk/unregister"
 	PathSDKConnect           = "/sdk/connect"
 	PathDiscovery            = "/discovery"
+	PathDiscoveryAnnounce    = "/discovery/announce"
 )

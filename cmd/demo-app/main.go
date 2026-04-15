@@ -131,12 +131,12 @@ func runUDPCommand(args []string) error {
 func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
+		Discovery:       cfg.discovery,
 		IdentityPath:    cfg.identityPath,
 		IdentityJSON:    cfg.identityJSON,
 		Name:            cfg.name,
 		BanMITM:         cfg.banMITM,
 		MaxActiveRelays: cfg.maxActiveRelays,
-		Discovery:       cfg.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: cfg.desc,
 			Tags:        utils.SplitCSV(cfg.tags),
@@ -174,13 +174,13 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
+		Discovery:       cfg.discovery,
 		IdentityPath:    cfg.identityPath,
 		IdentityJSON:    cfg.identityJSON,
 		Name:            cfg.name,
 		UDPEnabled:      true,
 		BanMITM:         cfg.banMITM,
 		MaxActiveRelays: cfg.maxActiveRelays,
-		Discovery:       cfg.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: cfg.desc,
 			Tags:        utils.SplitCSV(cfg.tags),

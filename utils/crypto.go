@@ -21,6 +21,19 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+const (
+	// CompactSecp256k1SignatureSize is the byte length of a compact
+	// recoverable secp256k1 ECDSA signature.
+	CompactSecp256k1SignatureSize = 65
+	// RawSecp256k1SignatureSize is the byte length of the JOSE ES256K
+	// signature form, r || s with no recovery header.
+	RawSecp256k1SignatureSize = 64
+)
+
+// ErrSecp256k1SignatureInvalid marks a well-formed signature that does not
+// verify for the payload and public key.
+var ErrSecp256k1SignatureInvalid = errors.New("signature is invalid")
+
 func NormalizeEVMAddress(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -152,6 +165,73 @@ func SignSHA256Secp256k1DER(payload []byte, privateKeyHex string) (string, error
 	return hex.EncodeToString(signature.Serialize()), nil
 }
 
+// SignSHA256Secp256k1Compact signs the SHA-256 digest of payload and returns
+// the compact recoverable secp256k1 ECDSA signature.
+func SignSHA256Secp256k1Compact(payload []byte, privateKey *secp256k1.PrivateKey, compressed bool) ([]byte, error) {
+	if privateKey == nil {
+		return nil, errors.New("signing key is required")
+	}
+	hash := sha256.Sum256(payload)
+	signature := ecdsa.SignCompact(privateKey, hash[:], compressed)
+	if len(signature) != CompactSecp256k1SignatureSize {
+		return nil, errors.New("invalid compact signature length")
+	}
+	return signature, nil
+}
+
+// SignSHA256Secp256k1Raw64 signs the SHA-256 digest of payload and returns
+// the raw r || s signature form used by ES256K.
+func SignSHA256Secp256k1Raw64(payload []byte, privateKey *secp256k1.PrivateKey) ([]byte, error) {
+	compact, err := SignSHA256Secp256k1Compact(payload, privateKey, false)
+	if err != nil {
+		return nil, err
+	}
+
+	signature := make([]byte, RawSecp256k1SignatureSize)
+	copy(signature[:32], compact[1:33])
+	copy(signature[32:], compact[33:65])
+	return signature, nil
+}
+
+// RecoverSHA256Secp256k1Compact recovers the public key from a compact
+// recoverable signature over the SHA-256 digest of payload.
+func RecoverSHA256Secp256k1Compact(payload, signature []byte) (*secp256k1.PublicKey, error) {
+	if len(signature) != CompactSecp256k1SignatureSize {
+		return nil, errors.New("invalid compact signature length")
+	}
+
+	hash := sha256.Sum256(payload)
+	publicKey, _, err := ecdsa.RecoverCompact(signature, hash[:])
+	if err != nil {
+		return nil, err
+	}
+	if publicKey == nil {
+		return nil, ErrSecp256k1SignatureInvalid
+	}
+	return publicKey, nil
+}
+
+// VerifySHA256Secp256k1Raw64 verifies an ES256K raw r || s signature over the
+// SHA-256 digest of payload.
+func VerifySHA256Secp256k1Raw64(payload, signature []byte, publicKey *secp256k1.PublicKey) error {
+	if publicKey == nil {
+		return errors.New("verification key is required")
+	}
+	if len(signature) != RawSecp256k1SignatureSize {
+		return errors.New("invalid es256k signature length")
+	}
+
+	var r, s secp256k1.ModNScalar
+	if overflow := r.SetByteSlice(signature[:32]); overflow || r.IsZero() {
+		return errors.New("invalid es256k signature r")
+	}
+	if overflow := s.SetByteSlice(signature[32:]); overflow || s.IsZero() {
+		return errors.New("invalid es256k signature s")
+	}
+
+	return verifySHA256Secp256k1Signature(payload, ecdsa.NewSignature(&r, &s), publicKey)
+}
+
 func VerifySHA256Secp256k1DER(payload []byte, publicKeyHex, signatureHex string) error {
 	pubKey, err := ParseSecp256k1PublicKeyHex(publicKeyHex)
 	if err != nil {
@@ -173,9 +253,19 @@ func VerifySHA256Secp256k1DER(payload []byte, publicKeyHex, signatureHex string)
 		return fmt.Errorf("parse signature: %w", err)
 	}
 
+	return verifySHA256Secp256k1Signature(payload, signature, pubKey)
+}
+
+func verifySHA256Secp256k1Signature(payload []byte, signature *ecdsa.Signature, publicKey *secp256k1.PublicKey) error {
+	if signature == nil {
+		return errors.New("signature is required")
+	}
+	if publicKey == nil {
+		return errors.New("verification key is required")
+	}
 	hash := sha256.Sum256(payload)
-	if !signature.Verify(hash[:], pubKey) {
-		return errors.New("signature is invalid")
+	if !signature.Verify(hash[:], publicKey) {
+		return ErrSecp256k1SignatureInvalid
 	}
 	return nil
 }

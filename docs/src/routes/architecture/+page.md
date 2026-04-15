@@ -166,6 +166,7 @@ UDP client
 
 - Relay terminates admin/API TLS on the root host and exposes `/v1/sign` for tenant-side keyless signing.
 - Control-plane HTTP (`/sdk/*`), reverse-session establishment (`/sdk/connect`), and tenant TLS are separate connections with different trust boundaries.
+- Relay API TLS, SDK relay-client TLS, SDK tenant-server TLS, and QUIC tunnel TLS are distinct configs even when they reuse the same relay certificate material.
 - Relay does not terminate tenant TLS. It peeks ClientHello for SNI and bridges raw encrypted bytes after routing.
 - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
 - In keyless TLS, the relay performs certificate private-key signing through `/v1/sign`, but the SDK/tunnel endpoint still runs the TLS server handshake and derives tenant TLS session keys locally.
@@ -292,8 +293,10 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 ## WireGuard Overlay and Discovery
 
-- Discovery bootstraps from public HTTPS relay URLs, then optionally synchronizes over WireGuard overlay.
-- Discovery descriptors are transport-authenticated by the queried relay endpoint, not by embedded signatures. Independent `domain -> address` verification comes from optional ENS/DNSSEC evidence, not from the discovery payload itself.
+- Discovery bootstraps from public HTTPS relay URLs, then expands through relay-to-relay `/discovery` polling and periodic self-announces to bootstrap relays through `/discovery/announce`.
+- SDK exposures consume relay discovery results to choose relays, but they do not announce themselves and do not serve `/discovery`.
+- Discovery descriptors carry secp256k1 signatures that bind relay routing metadata to the relay identity. Lease access tokens remain separate and authorize tenant lease operations only.
+- `/discovery/announce` accepts only signed relay descriptors. Loopback or localhost relay descriptors are rejected because they cannot join the public discovery mesh.
 - The overlay peer API is plain HTTP on the WireGuard network, not public Internet HTTP. It serves the same discovery payload shape used by public `/discovery`.
 - Overlay failure affects inter-relay discovery and mesh synchronization only. Tenant stream routing, keyless TLS, register/renew/connect, and public UDP ingress do not depend on the WireGuard transport path.
 

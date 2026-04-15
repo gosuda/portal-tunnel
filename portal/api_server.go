@@ -119,6 +119,12 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 				return
 			}
 			s.handleRelayDiscovery(w, r)
+		case types.PathDiscoveryAnnounce:
+			if !s.cfg.DiscoveryEnabled {
+				base.ServeHTTP(w, r)
+				return
+			}
+			s.handleRelayDiscoveryAnnounce(w, r)
 		case types.PathV1Sign:
 			if keylessSignerHandler == nil {
 				http.NotFound(w, r)
@@ -151,14 +157,14 @@ func (s *Server) extractAllowedClientIP(w http.ResponseWriter, r *http.Request) 
 	return "", false
 }
 
-func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
-	if !utils.RequireMethod(w, r, http.MethodGet) {
-		return
+func (s *Server) signedRelayDescriptor(now time.Time) (types.RelayDescriptor, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
 	}
-
-	now := time.Now().UTC()
-	activeConns := float64(s.proxy.ActiveConns())
-	tcpTrafficBPS := s.proxy.CurrentTCPBPS(now)
+	activeConns := float64(s.proxy.activeConnectionCount())
+	tcpTrafficBPS := s.proxy.currentTCPBPS(now)
 	ingressAddr := s.identity.Name
 	if s.cfg.SNIPort != 0 && s.cfg.SNIPort != 443 {
 		ingressAddr = fmt.Sprintf("%s:%d", ingressAddr, s.cfg.SNIPort)
@@ -174,14 +180,15 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		overlayCIDRs = append([]string(nil), cfg.OverlayCIDRs...)
 	}
 
-	self, err := utils.NormalizeDescriptor(types.RelayDescriptor{
+	self := types.RelayDescriptor{
 		Identity:            s.identity.Base(),
 		RelayID:             s.cfg.PortalURL,
 		OwnerAddress:        s.identity.Address,
 		Version:             1,
 		IssuedAt:            now,
-		ExpiresAt:           now.Add(2 * discovery.DiscoveryPollInterval),
+		ExpiresAt:           now.Add(discovery.DiscoveryDescriptorTTL),
 		APIHTTPSAddr:        s.cfg.PortalURL,
+		Discovery:           s.cfg.DiscoveryEnabled,
 		IngressTLSAddr:      ingressAddr,
 		WireGuardPublicKey:  wireGuardPublicKey,
 		WireGuardEndpoint:   wireGuardEndpoint,
@@ -193,22 +200,106 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		Load:                activeConns,
 		LoadScore:           tcpTrafficBPS,
 		LastUpdated:         now.UnixMilli(),
-	})
+	}
+
+	signedSelf, err := auth.SignRelayDescriptor(self, s.identity.PrivateKey)
+	if err != nil {
+		return types.RelayDescriptor{}, err
+	}
+	return signedSelf, nil
+}
+
+func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	if s.relaySet == nil {
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay discovery disabled")
+		return
+	}
+
+	now := time.Now().UTC()
+	self, err := s.signedRelayDescriptor(now)
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
 		return
 	}
 
-	resp := types.DiscoveryResponse{
-		ProtocolVersion: types.ProtocolVersion,
+	utils.WriteAPIData(w, http.StatusOK, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now,
-		Self:            self,
-		Relays:          nil,
+		Relays:          s.relaySet.Descriptors(self),
+	})
+}
+
+func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodPost) {
+		return
 	}
-	if s.relaySet != nil {
-		resp.Relays = s.relaySet.ConfirmedDescriptors()
+	if s.relaySet == nil {
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay discovery disabled")
+		return
 	}
-	utils.WriteAPIData(w, http.StatusOK, resp)
+	clientIP, ok := s.extractAllowedClientIP(w, r)
+	if !ok {
+		return
+	}
+	if !s.announceLimiter.Allow(clientIP) {
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "announce rate limit exceeded")
+		return
+	}
+
+	req, ok := utils.DecodeJSONRequest[types.DiscoveryAnnounceRequest](w, r, defaultControlBodyLimit)
+	if !ok {
+		return
+	}
+	if req.ProtocolVersion != "" && req.ProtocolVersion != types.DiscoveryVersion {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
+			fmt.Sprintf("announce protocol mismatch: relay=%q client=%q", types.DiscoveryVersion, req.ProtocolVersion))
+		return
+	}
+
+	desc := req.Descriptor
+	// Self-announce guard: the relay's own URL is established locally, not
+	// gossiped through the announce endpoint. Reject loopback / own-host
+	// announces to prevent self-amplification or misconfiguration loops.
+	announceURL, err := url.Parse(strings.TrimSpace(desc.APIHTTPSAddr))
+	if err == nil && announceURL != nil {
+		host := utils.NormalizeHostname(announceURL.Hostname())
+		if utils.IsLocalRelayHost(host) {
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
+				fmt.Sprintf("self-announce rejected: host %q is local-only", host))
+			return
+		}
+		if selfURL, err := utils.NormalizeRelayURL(s.cfg.PortalURL); err == nil {
+			if announceRelayURL, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr); err == nil && announceRelayURL == selfURL {
+				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
+					fmt.Sprintf("self-announce rejected: %q matches receiving relay url", announceRelayURL))
+				return
+			}
+		}
+		if host != "" && host == utils.NormalizeHostname(s.identity.Name) {
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
+				fmt.Sprintf("self-announce rejected: host %q matches receiving relay host", host))
+			return
+		}
+	}
+
+	now := time.Now().UTC()
+	if err := s.relaySet.InsertAnnounced(desc, now); err != nil {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
+		return
+	}
+
+	log.Info().
+		Str("relay", desc.APIHTTPSAddr).
+		Str("source_ip", clientIP).
+		Msg("relay discovery announce accepted")
+
+	utils.WriteAPIData(w, http.StatusAccepted, types.DiscoveryAnnounceResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Accepted:        true,
+	})
 }
 
 func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
@@ -219,7 +310,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
-		ProtocolVersion: types.ProtocolVersion,
+		ProtocolVersion: types.SDKVersion,
 		ReleaseVersion:  types.ReleaseVersion,
 	})
 }
@@ -242,7 +333,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	challenge, err := s.registry.consumeVerifiedRegisterChallenge(req)
 	if err != nil {
 		switch {
-		case errors.Is(err, auth.ErrInvalidSignature):
+		case errors.Is(err, auth.ErrRegisterChallengeInvalidSignature):
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
 		default:
 			utils.InvalidRequestError(err).Write(w)
@@ -607,7 +698,9 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 			}
 			return types.RegisterResponse{}, err
 		}
-		record.tcpPort = transport.NewRelayTCPPort(identityKey, port, stream)
+		record.tcpPort = transport.NewRelayTCPPort(identityKey, port, stream, func(left, right net.Conn) {
+			s.proxy.bridge(left, right, identityKey, s.registry.policy.BPSManager())
+		})
 		record.tcpPorts = s.tcpPorts
 	}
 

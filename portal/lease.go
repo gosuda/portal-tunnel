@@ -204,7 +204,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterRequest) (*auth.RegisterChallenge, error) {
 	challengeID := strings.TrimSpace(req.ChallengeID)
 	if challengeID == "" {
-		return nil, auth.ErrChallengeNotFound
+		return nil, auth.ErrRegisterChallengeNotFound
 	}
 
 	now := time.Now().UTC()
@@ -213,11 +213,11 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 
 	challenge := r.registerChallenges[challengeID]
 	if challenge == nil {
-		return nil, auth.ErrChallengeNotFound
+		return nil, auth.ErrRegisterChallengeNotFound
 	}
 	if challenge.Expired(now) {
 		delete(r.registerChallenges, challengeID)
-		return nil, auth.ErrChallengeExpired
+		return nil, auth.ErrRegisterChallengeExpired
 	}
 	if err := challenge.Verify(req, now); err != nil {
 		return nil, err
@@ -227,20 +227,19 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 	return challenge, nil
 }
 
-func (r *leaseRegistry) Touch(identity types.Identity, clientIP string, now time.Time) *leaseRecord {
+func (r *leaseRegistry) Touch(identity types.Identity, clientIP string, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	record, ok := r.leasesByKey[identity.Key()]
 	if !ok {
-		return nil
+		return
 	}
 	record.LastSeenAt = now
 	if strings.TrimSpace(clientIP) != "" {
 		record.ClientIP = clientIP
 	}
 	r.policy.IPFilter().RegisterIdentityIP(record.Key(), clientIP)
-	return record
 }
 
 func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
@@ -257,7 +256,7 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 		}
 	}
 	for challengeID, challenge := range r.registerChallenges {
-		if challenge == nil || challenge.Expired(now) {
+		if challenge.Expired(now) {
 			delete(r.registerChallenges, challengeID)
 		}
 	}
@@ -290,6 +289,45 @@ func (r *leaseRegistry) countTCPPortLeases() int {
 		}
 	}
 	return count
+}
+
+func (r *leaseRegistry) LeaseSnapshots(now time.Time) []types.Lease {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	snapshots := make([]types.Lease, 0, len(r.leasesByKey))
+	for _, record := range r.leasesByKey {
+		if record == nil || now.After(record.ExpiresAt) {
+			continue
+		}
+		adminSnapshot := r.AdminSnapshot(record)
+		since := time.Duration(0)
+		if !adminSnapshot.LastSeenAt.IsZero() {
+			since = max(now.Sub(adminSnapshot.LastSeenAt), 0)
+		}
+		if adminSnapshot.IsBanned || adminSnapshot.IsDenied || !adminSnapshot.IsApproved || adminSnapshot.Metadata.Hide {
+			continue
+		}
+		if adminSnapshot.Ready == 0 && since >= 3*time.Minute {
+			continue
+		}
+		snapshots = append(snapshots, adminSnapshot.Lease)
+	}
+	return snapshots
+}
+
+func (r *leaseRegistry) AdminLeaseSnapshots(now time.Time) []types.AdminLease {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	snapshots := make([]types.AdminLease, 0, len(r.leasesByKey))
+	for _, record := range r.leasesByKey {
+		if now.After(record.ExpiresAt) {
+			continue
+		}
+		snapshots = append(snapshots, r.AdminSnapshot(record))
+	}
+	return snapshots
 }
 
 func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {

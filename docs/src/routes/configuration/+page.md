@@ -16,8 +16,10 @@ The relay server (`relay-server`) reads configuration from environment variables
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `PORTAL_URL` | `https://localhost:4017` | string | Public base URL of this relay server |
+| `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, admin state, and TLS materials |
 | `API_PORT` | `4017` | int | Admin/API server listen port |
 | `SNI_PORT` | `443` | int | TCP SNI router listen port |
+| `WIREGUARD_PORT` | `51820` | int | Public and listen UDP port for relay discovery overlay |
 
 ### Transport
 
@@ -36,13 +38,6 @@ The relay server (`relay-server`) reads configuration from environment variables
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
 
-### Identity
-
-| Variable | Default | Type | Description |
-|----------|---------|------|-------------|
-| `IDENTITY_PATH` | `identity.json` | string | Relay identity JSON file path |
-| `ADMIN_SECRET_KEY` | `""` | string | Admin authentication secret. When empty, the server auto-generates a random key at startup and logs it. |
-
 ### Proxy
 
 | Variable | Default | Type | Description |
@@ -54,15 +49,13 @@ The relay server (`relay-server`) reads configuration from environment variables
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `KEYLESS_DIR` | `./.portal-certs` | string | Directory path for relay keyless TLS materials |
-| `ACME_DNS_PROVIDER` | `""` | string | ACME DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (`cloudflare` \| `gcloud` \| `route53`); leave empty to use manual `fullchain.pem`/`privatekey.pem` from `KEYLESS_DIR` |
+| `ACME_DNS_PROVIDER` | `""` | string | ACME DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (`cloudflare` \| `gcloud` \| `route53`); leave empty to use manual `fullchain.pem`/`privatekey.pem` from `IDENTITY_PATH` |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames |
 
 ### Admin
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ADMIN_SETTINGS_PATH` | `admin_settings.json` | string | Admin settings file path for persisted admin state |
 | `HEADLESS_SHELL_URL` | `""` | string | Headless Chrome CDP WebSocket URL for thumbnail generation (e.g. `ws://headless-shell:9222`) |
 
 ### Cloudflare
@@ -102,6 +95,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 |------|---------|------|---------|-------------|
 | `--relays` | | string | _(registry)_ | Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https) |
 | `--discovery` | | bool | `true` | Include public registry relays and discover additional relay bootstraps |
+| `--max-active-relays` | `MAX_ACTIVE_RELAYS` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
 | `--ban-mitm` | `BAN_MITM` | bool | `true` | Ban relay when the MITM self-probe detects TLS termination |
 
 ### Identity
@@ -132,7 +126,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
-| `--udp` | `UDP_ENABLED` | bool | `false` | Enable public UDP relay in addition to the default TCP relay |
+| `--udp` | `UDP_ENABLED` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--udp-addr` | `UDP_ADDR` | string | | Local UDP target address for relayed datagrams (`host:port` or port only); defaults to the target when `--udp` is enabled |
 | `--tcp` | `TCP_ENABLED` | bool | `false` | Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers) |
 
@@ -149,22 +143,25 @@ The `portal list` subcommand accepts the following flags:
 
 ### `identity.json`
 
-Stores the cryptographic identity used to sign tunnel sessions. Created automatically by both `relay-server` and `portal expose` on first run.
+Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors. `portal expose` treats `--identity-path` as a direct JSON file path. `relay-server` treats `IDENTITY_PATH` as a state directory and stores this file at `IDENTITY_PATH/identity.json`.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Human-readable label for this identity |
-| `address` | string | Derived public address (used as the tunnel subdomain seed) |
-| `public_key` | string | Ed25519 public key (base64) |
-| `private_key` | string | Ed25519 private key (base64); keep secret |
+| `address` | string | Derived EVM address used for SIWE and identity ownership |
+| `public_key` | string | Compressed secp256k1 public key hex |
+| `private_key` | string | secp256k1 private key hex; keep secret |
+| `admin_secret_key` | string | Relay-only admin login secret, generated automatically when missing |
+| `wireguard_public_key` | string | Relay-only WireGuard overlay public key when discovery is enabled |
+| `wireguard_private_key` | string | Relay-only WireGuard overlay private key when discovery is enabled |
 
-The file path is controlled by `IDENTITY_PATH` / `--identity-path`. The same file can be shared across restarts to keep a stable address.
+The same identity file or state directory can be reused across restarts to keep a stable address.
 
 ### `admin_settings.json`
 
 Persists admin-panel state for the relay server. Managed automatically by the relay on write; do not edit manually while the server is running.
 
-The file path is controlled by `ADMIN_SETTINGS_PATH` / `--admin-settings-path`.
+Relay admin settings are stored at `IDENTITY_PATH/admin_settings.json`.
 
 ---
 
@@ -172,7 +169,7 @@ The file path is controlled by `ADMIN_SETTINGS_PATH` / `--admin-settings-path`.
 
 Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable automated TLS certificate issuance via DNS-01 challenges.
 
-When this variable is empty the relay server falls back to manually supplied `fullchain.pem` and `privatekey.pem` files in `KEYLESS_DIR`.
+When this variable is empty the relay server falls back to manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH`.
 
 ### Cloudflare (`cloudflare`)
 

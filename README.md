@@ -58,7 +58,7 @@ cd portal-tunnel && cp .env.example .env
 docker compose up
 ```
 
-For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
+For deployment to a public domain, see [Deployment](docs/src/routes/deployment/+page.md).
 
 ### Run native app (Advanced)
 
@@ -66,15 +66,14 @@ See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md).
-For architecture decisions, see [docs/adr/README.md](docs/adr/README.md).
+See [Architecture](docs/src/routes/architecture/+page.md).
 
 ## Examples
 
 | Example | Description |
 |---------|-------------|
-| [nginx reverse proxy](docs/examples/nginx-proxy/) | Deploy Portal behind nginx with L4 SNI routing and TLS termination |
-| [nginx + multi-service](docs/examples/nginx-proxy-multi-service/) | Run Portal alongside other web services behind a single nginx instance |
+| [nginx reverse proxy](docs/static/examples/nginx-proxy/) | Deploy Portal behind nginx with L4 SNI routing and TLS termination |
+| [nginx + multi-service](docs/static/examples/nginx-proxy-multi-service/) | Run Portal alongside other web services behind a single nginx instance |
 
 ## Public Relay Registry
 

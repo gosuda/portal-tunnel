@@ -108,8 +108,10 @@ func proxyRelayConnections(ctx context.Context, exposure *sdk.Exposure, localAdd
 		relayConn, err := exposure.Accept()
 		if err != nil {
 			switch {
-			case ctx.Err() != nil || errors.Is(err, context.Canceled):
+			case errors.Is(err, context.Canceled):
 				return nil
+			case ctx.Err() != nil:
+				return ctx.Err()
 			case errors.Is(err, net.ErrClosed):
 				return errors.New("all relay listeners stopped")
 			default:

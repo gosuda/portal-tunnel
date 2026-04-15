@@ -5,18 +5,17 @@ import (
 	"math/rand"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 type RelayPolicy interface {
-	SelectActive([]RelayState) []RelayState
+	SelectAggregate([]RelayState) []RelayState
 	SelectConfirmed([]RelayState) []RelayState
 	SelectPriority([]RelayState, ClientState) []string
 	OnConfirmed(RelayState) RelayState
-	OnHinted(RelayState) RelayState
+	OnUnconfirmed(RelayState) RelayState
 	OnFailure(RelayState, error, int) (RelayState, bool, string)
 	OnBanned(RelayState) RelayState
 }
@@ -25,14 +24,13 @@ type DefaultRelayPolicy struct{}
 
 const highDiscoveryRTTThreshold = 1 * time.Second
 
-func (p DefaultRelayPolicy) selectStates(states []RelayState, keep func(RelayState) bool) []RelayState {
-	now := time.Now().UTC()
+func (p DefaultRelayPolicy) SelectAggregate(states []RelayState) []RelayState {
 	out := make([]RelayState, 0, len(states))
 	for _, state := range states {
-		if !state.discoverable(now) {
+		if state.Banned {
 			continue
 		}
-		if !keep(state) {
+		if !state.Bootstrap && !state.hasObservedDescriptor() {
 			continue
 		}
 		out = append(out, state)
@@ -43,20 +41,23 @@ func (p DefaultRelayPolicy) selectStates(states []RelayState, keep func(RelaySta
 	return out
 }
 
-func (p DefaultRelayPolicy) SelectActive(states []RelayState) []RelayState {
-	return p.selectStates(states, func(state RelayState) bool {
-		return state.Bootstrap || state.Confirmed
-	})
-}
-
 func (p DefaultRelayPolicy) SelectConfirmed(states []RelayState) []RelayState {
-	return p.selectStates(states, func(state RelayState) bool {
-		return state.Confirmed
-	})
+	selected := p.SelectAggregate(states)
+	out := make([]RelayState, 0, len(selected))
+	for _, state := range selected {
+		if !state.Confirmed {
+			continue
+		}
+		out = append(out, state)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (p DefaultRelayPolicy) SelectPriority(states []RelayState, clientState ClientState) []string {
-	selected := p.SelectActive(states)
+	selected := p.SelectAggregate(states)
 	if len(selected) == 0 {
 		return nil
 	}
@@ -64,13 +65,13 @@ func (p DefaultRelayPolicy) SelectPriority(states []RelayState, clientState Clie
 	explicit := make([]string, 0, len(clientState.ExplicitRelayURLs))
 	autoPool := make([]RelayState, 0, len(selected))
 	for _, state := range selected {
-		if clientState.RequireUDP && state.hasDescriptor() && !state.Descriptor.SupportsUDP {
+		if clientState.RequireUDP && state.hasObservedDescriptor() && !state.Descriptor.SupportsUDP {
 			continue
 		}
-		if clientState.RequireTCP && state.hasDescriptor() && !state.Descriptor.SupportsTCP {
+		if clientState.RequireTCP && state.hasObservedDescriptor() && !state.Descriptor.SupportsTCP {
 			continue
 		}
-		relayURL := strings.TrimSpace(state.Descriptor.APIHTTPSAddr)
+		relayURL := state.Descriptor.APIHTTPSAddr
 		if slices.Contains(clientState.ExplicitRelayURLs, relayURL) {
 			explicit = append(explicit, relayURL)
 			continue
@@ -82,33 +83,33 @@ func (p DefaultRelayPolicy) SelectPriority(states []RelayState, clientState Clie
 	}
 
 	currentAuto := make([]string, 0, len(autoPool))
-	remainingAuto := make([]string, 0, len(autoPool))
+	confirmedAuto := make([]string, 0, len(autoPool))
 	highRTTAuto := make([]string, 0, len(autoPool))
-	penalizedAuto := make([]string, 0, len(autoPool))
+	remainingAuto := make([]string, 0, len(autoPool))
 	for _, state := range autoPool {
-		relayURL := strings.TrimSpace(state.Descriptor.APIHTTPSAddr)
-		statePenalized := state.consecutiveFailures > 0 && !state.Reachable
+		relayURL := state.Descriptor.APIHTTPSAddr
 		switch {
-		case slices.Contains(clientState.ActiveRelayURLs, relayURL) && !statePenalized:
+		case slices.Contains(clientState.ActiveRelayURLs, relayURL):
 			currentAuto = append(currentAuto, relayURL)
-		case statePenalized:
-			penalizedAuto = append(penalizedAuto, relayURL)
-		case !state.DiscoveryRTTAt.IsZero() && state.DiscoveryRTT > highDiscoveryRTTThreshold:
+		case state.Confirmed && !state.DiscoveryRTTAt.IsZero() && state.DiscoveryRTT > highDiscoveryRTTThreshold:
 			highRTTAuto = append(highRTTAuto, relayURL)
+		case state.Confirmed:
+			confirmedAuto = append(confirmedAuto, relayURL)
 		default:
 			remainingAuto = append(remainingAuto, relayURL)
 		}
 	}
 
+	if len(confirmedAuto) > 1 {
+		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+		rng.Shuffle(len(confirmedAuto), func(i, j int) {
+			confirmedAuto[i], confirmedAuto[j] = confirmedAuto[j], confirmedAuto[i]
+		})
+	}
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	if len(remainingAuto) > 1 {
 		rng.Shuffle(len(remainingAuto), func(i, j int) {
 			remainingAuto[i], remainingAuto[j] = remainingAuto[j], remainingAuto[i]
-		})
-	}
-	if len(penalizedAuto) > 1 {
-		rng.Shuffle(len(penalizedAuto), func(i, j int) {
-			penalizedAuto[i], penalizedAuto[j] = penalizedAuto[j], penalizedAuto[i]
 		})
 	}
 	if len(highRTTAuto) > 1 {
@@ -117,11 +118,11 @@ func (p DefaultRelayPolicy) SelectPriority(states []RelayState, clientState Clie
 		})
 	}
 
-	autoURLs := make([]string, 0, len(currentAuto)+len(remainingAuto)+len(highRTTAuto)+len(penalizedAuto))
+	autoURLs := make([]string, 0, len(currentAuto)+len(confirmedAuto)+len(highRTTAuto)+len(remainingAuto))
 	autoURLs = append(autoURLs, currentAuto...)
-	autoURLs = append(autoURLs, remainingAuto...)
+	autoURLs = append(autoURLs, confirmedAuto...)
 	autoURLs = append(autoURLs, highRTTAuto...)
-	autoURLs = append(autoURLs, penalizedAuto...)
+	autoURLs = append(autoURLs, remainingAuto...)
 	if clientState.MaxActiveRelays > 0 && len(autoURLs) > clientState.MaxActiveRelays {
 		autoURLs = autoURLs[:clientState.MaxActiveRelays]
 	}
@@ -139,20 +140,12 @@ func (DefaultRelayPolicy) OnConfirmed(state RelayState) RelayState {
 	if state.Banned {
 		return state
 	}
-	state.Reachable = true
 	state.Confirmed = true
-	state.consecutiveFailures = 0
 	return state
 }
 
-func (DefaultRelayPolicy) OnHinted(state RelayState) RelayState {
-	if state.Banned {
-		return state
-	}
-	state.Reachable = true
-	if !state.Confirmed {
-		state.consecutiveFailures = 0
-	}
+func (DefaultRelayPolicy) OnUnconfirmed(state RelayState) RelayState {
+	state.Confirmed = false
 	return state
 }
 
@@ -161,12 +154,16 @@ func (DefaultRelayPolicy) OnFailure(state RelayState, err error, recoveryFailure
 		return state, false, ""
 	}
 	state.consecutiveFailures++
-	expire := func(reason string) (RelayState, bool, string) {
-		if !state.Reachable {
-			return state, false, ""
+	backOff := func(reason string) (RelayState, bool, string) {
+		backoff := defaultDirectRecoveryBackoff
+		for extra := state.consecutiveFailures - recoveryFailures; extra > 0; extra-- {
+			if backoff >= maxDirectRecoveryBackoff/2 {
+				backoff = maxDirectRecoveryBackoff
+				break
+			}
+			backoff *= 2
 		}
-		state.Reachable = false
-		state.Confirmed = false
+		state.nextDirectRefreshAt = time.Now().UTC().Add(backoff)
 		return state, true, reason
 	}
 	var apiErr *types.APIRequestError
@@ -174,15 +171,16 @@ func (DefaultRelayPolicy) OnFailure(state RelayState, err error, recoveryFailure
 		(apiErr.StatusCode == http.StatusForbidden ||
 			apiErr.StatusCode == http.StatusNotFound ||
 			apiErr.StatusCode == http.StatusGone) {
-		return expire("status")
+		return backOff("status")
 	}
 	if state.consecutiveFailures >= recoveryFailures {
-		return expire("recovery")
+		return backOff("recovery")
 	}
 	return state, false, ""
 }
 
 func (DefaultRelayPolicy) OnBanned(state RelayState) RelayState {
 	state.Banned = true
+	state.Confirmed = false
 	return state
 }

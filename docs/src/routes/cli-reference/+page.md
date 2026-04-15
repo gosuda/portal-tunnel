@@ -58,8 +58,10 @@ Instead of a positional target, you can use `--http-route` for multi-service rou
 |------|------|---------|-------------|
 | `--relays` | string | _(registry)_ | Portal relay API URLs (comma-separated, https only) |
 | `--discovery` | bool | `true` | Include public registry relays and discover additional bootstraps |
+| `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
 | `--ban-mitm` | bool | `true` | Ban relay when the MITM self-probe detects TLS termination |
 | `--identity-path` | string | `./identity.json` | Identity JSON file path; created automatically when missing |
+| `--identity-json` | string | | Identity JSON payload; overrides `--identity-path` contents and is persisted there when both are set |
 | `--name` | string | _(auto)_ | Public hostname prefix (single DNS label); auto-generated when omitted |
 | `--description` | string | | Service description metadata |
 | `--tags` | string | | Service tags metadata (comma-separated) |
@@ -67,6 +69,8 @@ Instead of a positional target, you can use `--http-route` for multi-service rou
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
 | `--tcp` | bool | `false` | Request a dedicated TCP port for raw TCP services (no TLS) |
+| `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
+| `--udp-addr` | string | | Local UDP target address; defaults to the primary target when `--udp` is enabled |
 | `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM` form; repeat for multiple routes |
 
 **Examples:**
@@ -134,18 +138,19 @@ Unlike `portal expose`, `portal list` does not run the relay discovery expansion
 
 ## Behavior Notes
 
-- **Identity persistence** — `portal expose` loads or creates a signing identity at `identity.json` (or `--identity-path`). Reusing the same path keeps the same address across runs.
-- **Multiple relays** — Multiple relay URLs are registered independently. Each relay gets its own lease. A relay going down does not stop healthy relays from serving.
-- **Retry semantics** — Relay startup and reconnect failures are retried in the background. The tunnel starts as soon as relay URLs pass local validation.
-- **Discovery expansion** — With discovery enabled, the relay list can grow beyond the initial registry + `--relays` values through relay-to-relay synchronization.
-- **MITM enforcement** — Enabled by default. The TLS self-probe runs asynchronously after real connections begin, with a 30-second cooldown between probes.
-- **503 on unreachable local service** — When the local target is unreachable, the tunnel returns an HTTP 503 page to the client.
-- **HTTP route mode** — Cannot be combined with `--udp`. Routes are HTTP-only.
-- **TCP port requirements** — `--tcp` requires the relay to have `TCP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and TCP port enabled in the admin panel.
-- **Legacy CLI removed** — Bare `portal [flags]` is no longer accepted; use `portal expose` explicitly. `APP_*`, `RELAYS`, and `DEFAULT_RELAYS` environment variables are no longer used.
+- **Identity persistence** - `portal expose` loads or creates a signing identity at `identity.json` (or `--identity-path`). Reusing the same path keeps the same address across runs.
+- **Multiple relays** - Multiple relay URLs are registered independently. Each relay gets its own lease. A relay going down does not stop healthy relays from serving.
+- **Retry semantics** - Relay startup and reconnect failures are retried in the background. The tunnel starts as soon as relay URLs pass local validation.
+- **Discovery expansion** - With discovery enabled, the tunnel consumes relay `/discovery` results and reconciles its relay pool. The SDK does not announce itself and does not serve discovery endpoints.
+- **MITM enforcement** - Enabled by default. The TLS self-probe runs asynchronously after real connections begin, with a 30-second cooldown between probes.
+- **503 on unreachable local service** - When the local target is unreachable, the tunnel returns an HTTP 503 page to the client.
+- **HTTP route mode** - Cannot be combined with `--udp`. Routes are HTTP-only.
+- **TCP port requirements** - `--tcp` requires the relay to have `TCP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and TCP port enabled in the admin panel.
+- **UDP requirements** - `--udp` requires the relay to have `UDP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, UDP enabled in the admin panel, and `SNI_PORT/udp` reachable for the QUIC backhaul.
+- **Legacy CLI removed** - Bare `portal [flags]` is no longer accepted; use `portal expose` explicitly. `APP_*`, `RELAYS`, and `DEFAULT_RELAYS` environment variables are no longer used.
 
 ## Next Steps
 
-- **[Getting Started](/getting-started)** — Quick tutorial for your first tunnel
-- **[Concepts](/concepts)** — How Portal's encryption and relay model works
-- **[Deployment](/deployment)** — Run your own relay server
+- **[Getting Started](/getting-started)** - Quick tutorial for your first tunnel
+- **[Concepts](/concepts)** - How Portal's encryption and relay model works
+- **[Deployment](/deployment)** - Run your own relay server

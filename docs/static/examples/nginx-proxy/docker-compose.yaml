@@ -45,7 +45,7 @@ services:
 
   # ─── headless-shell (optional thumbnail screenshot sidecar) ─────────────────
   # Uncomment to enable auto-generated thumbnails for tunnel apps.
-  # See docs/deployment.md section 8 for details.
+  # See docs/src/routes/deployment/+page.md for details.
   # headless-shell:
   #   image: chromedp/headless-shell:stable
   #   restart: unless-stopped

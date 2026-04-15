@@ -346,6 +346,7 @@ function FullTunnelCommandForm({
     currentOrigin,
   ]);
   const [discoveryEnabled, setDiscoveryEnabled] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [enableUDP, setEnableUDP] = useState(false);
   const [udpPort, setUDPPort] = useState("");
@@ -366,6 +367,7 @@ function FullTunnelCommandForm({
   const {
     target,
     setTarget,
+    name,
     copied,
     os,
     setOs,
@@ -374,7 +376,6 @@ function FullTunnelCommandForm({
     runBlock,
     handleCopy,
     handleNameChange,
-    handleShuffleName,
   } = useTunnelCommand({
     relayUrls,
     discovery: discoveryEnabled,
@@ -416,150 +417,109 @@ function FullTunnelCommandForm({
       setRelayUrls((prev) => prev.slice(0, -1));
     }
   };
-
-  const shuffleButtonClass = cn(
-    "inline-flex h-12 shrink-0 items-center justify-center rounded-lg border px-3 text-xs font-semibold transition-colors",
-    isTerminal
-      ? "border-white/10 bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white"
-      : "border-border bg-white text-text-muted hover:text-foreground"
-  );
+  const sectionLabelClass = isTerminal
+    ? "text-sm font-medium text-slate-200"
+    : "text-sm font-medium text-foreground dark:text-zinc-100";
+  const helpTextClass = isTerminal
+    ? "text-xs text-slate-400"
+    : "text-xs leading-5 text-muted-foreground dark:text-zinc-500";
+  const inlineFieldClass = isTerminal
+    ? "flex items-center overflow-hidden rounded-xl border border-white/10 bg-white/5"
+    : "flex items-center overflow-hidden rounded-md border border-border/80 bg-secondary/55 focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30 dark:border-white/10 dark:bg-[#272727]";
+  const inlinePrefixClass = isTerminal
+    ? "shrink-0 border-r border-white/10 px-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-400"
+    : "shrink-0 border-r border-border px-3 text-[0.82rem] font-medium uppercase tracking-[0.08em] text-text-muted dark:border-black/25 dark:text-zinc-400";
+  const inlineInputClass = isTerminal
+    ? "h-10 border-0 bg-transparent px-3 text-sm text-white placeholder:text-slate-500 shadow-none focus-visible:ring-0"
+    : "h-9 border-0 bg-transparent px-3 text-sm font-semibold text-foreground placeholder:text-text-muted shadow-none focus-visible:ring-0 dark:text-zinc-100 dark:placeholder:text-zinc-500";
+  const relayFieldClass = isTerminal
+    ? "flex min-h-12 flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2.5 py-2"
+    : "flex min-h-10 flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-2 shadow-sm focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/25 dark:border-white/10 dark:bg-transparent";
+  const relayChipClass = isTerminal
+    ? "inline-flex items-center gap-1 rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium text-slate-100"
+    : "inline-flex items-center gap-1 rounded-md bg-secondary px-2.5 py-1 text-xs font-semibold text-secondary-foreground dark:bg-[#22312c] dark:text-[#dceee4]";
+  const relayChipRemoveClass = isTerminal
+    ? "hover:bg-white/10"
+    : "text-text-muted hover:bg-background/80 dark:text-[#cfe3d8] dark:hover:bg-black/20";
+  const advancedInputClass = isTerminal
+    ? "h-10 rounded-lg border-white/10 bg-white/5 text-white placeholder:text-slate-500"
+    : "h-10 rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground shadow-sm dark:border-white/10 dark:bg-[#171717] dark:text-zinc-100 dark:placeholder:text-zinc-500";
+  const osGroupClass = isTerminal
+    ? "flex rounded-xl bg-white/8 p-1"
+    : "flex rounded-md bg-border p-1 dark:bg-[#272727]";
+  const osButtonClass = (selected: boolean) =>
+    cn(
+      "flex-1 rounded-sm px-3 py-2 text-sm font-semibold transition-colors",
+      isTerminal
+        ? selected
+          ? "bg-white/8 text-slate-200"
+          : "text-slate-400 hover:text-slate-300"
+        : selected
+          ? "bg-card text-foreground shadow-sm ring-1 ring-border/80 dark:bg-[#0b0b0b] dark:text-zinc-100 dark:ring-transparent"
+          : "text-muted-foreground hover:text-foreground dark:text-zinc-500 dark:hover:text-zinc-300"
+    );
+  const commandPanelClass = isTerminal
+    ? "relative rounded-xl border border-white/10 bg-black/30"
+    : "relative rounded-md bg-secondary/55 shadow-sm ring-1 ring-border/70 dark:bg-[#272727] dark:ring-transparent";
+  const commandPreClass = isTerminal
+    ? "overflow-x-auto whitespace-pre-wrap break-all p-4 pr-12 font-mono text-sm leading-7 text-white"
+    : "overflow-x-auto whitespace-pre-wrap break-all p-3 pr-12 font-mono text-sm leading-7 text-foreground dark:text-zinc-100";
 
   return (
-    <div className={cn("space-y-5", className)}>
+    <div className={cn("space-y-4 py-1", className)}>
       <div className="space-y-2">
-        <p
-          className={cn(
-            "text-sm leading-6",
-            isTerminal ? "text-slate-300" : "text-text-muted"
-          )}
-        >
-          Start your local app, then point Portal at it with a port like
-          <span className={cn("mx-1 font-mono", isTerminal ? "text-white" : "text-foreground")}>
-            3000
-          </span>
-          or an address like
-          <span className={cn("mx-1 font-mono", isTerminal ? "text-white" : "text-foreground")}>
-            localhost:3000
-          </span>
-          .
-        </p>
         <label
           htmlFor={`${inputId}-host`}
-          className={cn(
-            "text-sm font-medium",
-            isTerminal ? "text-slate-200" : "text-foreground"
-          )}
+          className={sectionLabelClass}
         >
-          Local App
+          Host
         </label>
-        <Input
-          id={`${inputId}-host`}
-          type="text"
-          value={target}
-          onChange={(event) => setTarget(event.target.value)}
-          placeholder={DEFAULT_HOST}
-          className={cn(
-            "h-12 rounded-xl",
-            isTerminal
-              ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
-              : "border-border bg-white"
-          )}
-        />
-        <p
-          className={cn(
-            "text-xs",
-            isTerminal ? "text-slate-400" : "text-muted-foreground"
-          )}
-        >
-          Use a local port or address that is already running.
+        <div className={inlineFieldClass}>
+          <span className={inlinePrefixClass}>HOST=</span>
+          <Input
+            id={`${inputId}-host`}
+            type="text"
+            value={target}
+            onChange={(event) => setTarget(event.target.value)}
+            placeholder={DEFAULT_HOST}
+            className={inlineInputClass}
+          />
+        </div>
+        <p className={helpTextClass}>
+          The hostname or IP:Port where your service is running
         </p>
       </div>
 
       <div className="space-y-2">
         <label
           htmlFor={`${inputId}-name`}
-          className={cn(
-            "text-sm font-medium",
-            isTerminal ? "text-slate-200" : "text-foreground"
-          )}
+          className={sectionLabelClass}
         >
           Service Name
         </label>
-        <div className="flex items-center gap-2">
+        <div className={inlineFieldClass}>
+          <span className={inlinePrefixClass}>NAME=</span>
           <Input
             id={`${inputId}-name`}
             type="text"
+            value={name}
             onChange={handleNameChange}
             placeholder={generatedName}
-            className={cn(
-              "h-12 flex-1 rounded-xl",
-              isTerminal
-                ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
-                : "border-border bg-white"
-            )}
+            className={inlineInputClass}
           />
-          <button
-            type="button"
-            onClick={handleShuffleName}
-            className={shuffleButtonClass}
-            aria-label="Shuffle public name"
-            title="Shuffle public name"
-          >
-            <RefreshCw className="h-4 w-4" aria-hidden="true" />
-          </button>
         </div>
+        <p className={helpTextClass}>A unique identifier for your tunnel</p>
       </div>
 
       <div className="space-y-2">
-        <label
-          className={cn(
-            "text-sm font-medium",
-            isTerminal ? "text-slate-200" : "text-foreground"
-          )}
-        >
+        <label className={sectionLabelClass}>
           Relay URLs
         </label>
-
-        <div className="flex items-center justify-between gap-3">
-          <label
-            className={cn(
-              "ml-auto flex items-center gap-2 text-xs",
-              isTerminal ? "text-slate-400" : "text-text-muted"
-            )}
-          >
-            <input
-              type="checkbox"
-              checked={discoveryEnabled}
-              onChange={(event) => {
-                const nextEnabled = event.target.checked;
-                setDiscoveryEnabled(nextEnabled);
-                if (!nextEnabled && relayUrls.length === 0) {
-                  setRelayUrls([currentOrigin]);
-                }
-              }}
-              className="h-4 w-4"
-            />
-            <span>Enable relay discovery</span>
-          </label>
-        </div>
-
-        <div
-          className={cn(
-            "flex min-h-12 flex-wrap items-center gap-2 rounded-xl px-2.5 py-2",
-            isTerminal
-              ? "border border-white/10 bg-white/5"
-              : "border border-border bg-white"
-          )}
-        >
+        <div className={relayFieldClass}>
           {relayUrls.map((url) => (
             <span
               key={url}
-              className={cn(
-                "inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium",
-                isTerminal
-                  ? "bg-white/10 text-slate-100"
-                  : "bg-secondary text-secondary-foreground"
-              )}
+              className={relayChipClass}
             >
               {url}
               <button
@@ -569,9 +529,7 @@ function FullTunnelCommandForm({
                   "ml-1 rounded-sm p-0.5",
                   !discoveryEnabled && relayUrls.length <= 1
                     ? "cursor-not-allowed opacity-40"
-                    : isTerminal
-                      ? "hover:bg-white/10"
-                      : "hover:bg-destructive/15"
+                    : relayChipRemoveClass
                 )}
                 aria-label={`Remove ${url}`}
                 disabled={!discoveryEnabled && relayUrls.length <= 1}
@@ -588,150 +546,32 @@ function FullTunnelCommandForm({
             onKeyDown={handleURLKeyDown}
             placeholder="Add relay URL..."
             className={cn(
-              "min-w-35 flex-1 bg-transparent text-sm outline-none",
+              "min-w-[140px] flex-1 bg-transparent text-sm outline-none",
               isTerminal
                 ? "text-white placeholder:text-slate-500"
-                : "text-foreground placeholder:text-muted-foreground"
+                : "text-foreground placeholder:text-muted-foreground dark:text-zinc-100 dark:placeholder:text-zinc-500"
             )}
           />
         </div>
+        <p className={helpTextClass}>
+          Press Enter to add. Multiple relay servers for redundancy.
+        </p>
       </div>
 
       <div className="space-y-2">
-        <label
-          className={cn(
-            "text-sm font-medium",
-            isTerminal ? "text-slate-200" : "text-foreground"
-          )}
-        >
-          UDP Transport
-        </label>
-        <label
-          className={cn(
-            "flex items-center gap-2 text-sm",
-            isTerminal ? "text-slate-300" : "text-muted-foreground"
-          )}
-        >
-          <input
-            type="checkbox"
-            checked={enableUDP}
-            onChange={(event) => {
-              const nextEnabled = event.target.checked;
-              setEnableUDP(nextEnabled);
-              if (!nextEnabled) {
-                setUDPPort("");
-              }
-            }}
-            className="h-4 w-4"
-          />
-          <span>Enable UDP transport</span>
-        </label>
-
-        {enableUDP && (
-          <div className="space-y-1.5">
-            <Input
-              id={`${inputId}-udp-port`}
-              type="text"
-              value={udpPort}
-              onChange={(event) => setUDPPort(event.target.value)}
-              placeholder={target.trim() || DEFAULT_HOST}
-              className={cn(
-                "h-12 rounded-xl",
-                isTerminal
-                  ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
-                  : "border-border bg-white"
-              )}
-            />
-            <p
-              className={cn(
-                "text-xs",
-                isTerminal ? "text-slate-400" : "text-muted-foreground"
-              )}
-            >
-              Local UDP port to forward. Defaults to the same as Host.
-            </p>
-          </div>
-        )}
-      </div>
-
-      <div className="space-y-2">
-        <label
-          htmlFor={`${inputId}-thumbnail`}
-          className={cn(
-            "text-sm font-medium",
-            isTerminal ? "text-slate-200" : "text-foreground"
-          )}
-        >
-          Thumbnail URL
-        </label>
-        <Input
-          id={`${inputId}-thumbnail`}
-          type="url"
-          value={thumbnailURL}
-          onChange={(event) => setThumbnailURL(event.target.value)}
-          placeholder="https://cdn.example.com/thumb.png"
-          className={cn(
-            "h-12 rounded-xl",
-            isTerminal
-              ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
-              : "border-border bg-white"
-          )}
-        />
-        {normalizedThumbnailURL && (
-          <div
-            className={cn(
-              "flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border",
-              isTerminal
-                ? "border-white/10 bg-white/5"
-                : "border-border bg-background"
-            )}
-          >
-            <img
-              src={normalizedThumbnailURL}
-              alt="Thumbnail preview"
-              className="h-full w-full object-cover"
-            />
-          </div>
-        )}
-        {thumbnailError && <p className="text-xs text-destructive">{thumbnailError}</p>}
-      </div>
-
-      <div className="space-y-2">
-        <div
-          className={cn(
-            "flex rounded-xl p-1",
-            isTerminal ? "bg-white/8" : "bg-border"
-          )}
-        >
+        <label className={sectionLabelClass}>Operating System</label>
+        <div className={osGroupClass}>
           <button
             type="button"
             onClick={() => setOs("unix")}
-            className={cn(
-              "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              os === "unix"
-                ? isTerminal
-                  ? "bg-white/8 text-slate-200"
-                  : "bg-background text-foreground/85"
-                : isTerminal
-                  ? "text-slate-400 hover:text-slate-300"
-                  : "text-text-muted hover:text-foreground"
-            )}
+            className={osButtonClass(os === "unix")}
           >
             Linux / macOS
           </button>
           <button
             type="button"
             onClick={() => setOs("windows")}
-            className={cn(
-              "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              os === "windows"
-                ? isTerminal
-                  ? "bg-white/8 text-slate-200"
-                  : "bg-background text-foreground/85"
-                : isTerminal
-                  ? "text-slate-400 hover:text-slate-300"
-                  : "text-text-muted hover:text-foreground"
-            )}
+            className={osButtonClass(os === "windows")}
           >
             Windows (PowerShell)
           </button>
@@ -739,23 +579,11 @@ function FullTunnelCommandForm({
       </div>
 
       <div className="space-y-2">
-        <label
-          className={cn(
-            "text-sm font-medium",
-            isTerminal ? "text-slate-200" : "text-foreground"
-          )}
-        >
+        <label className={sectionLabelClass}>
           Generated Command
         </label>
-        <div className="relative">
-          <pre
-            className={cn(
-              "overflow-x-auto whitespace-pre-wrap break-all rounded-xl p-4 pr-12 font-mono text-sm leading-7",
-              isTerminal
-                ? "border border-white/10 bg-black/30 text-white"
-                : "bg-border text-foreground"
-            )}
-          >
+        <div className={commandPanelClass}>
+          <pre className={commandPreClass}>
             <span className="block">{installBlock}</span>
             <span className="mt-2 block">{runBlock}</span>
           </pre>
@@ -763,19 +591,112 @@ function FullTunnelCommandForm({
             type="button"
             onClick={handleCopy}
             className={cn(
-              "absolute right-2 top-2 rounded-md p-2 transition-colors",
-              isTerminal ? "hover:bg-white/10" : "hover:bg-background/70"
+              "absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-2 transition-colors",
+              isTerminal ? "hover:bg-white/10" : "hover:bg-background/70 dark:hover:bg-black/20"
             )}
             aria-label="Copy command"
           >
             {copied ? (
-              <Check className="h-4 w-4 text-green-600" />
+              <Check className={cn("h-4 w-4", isTerminal ? "text-green-400" : "text-emerald-400")} />
             ) : (
-              <Copy className="h-4 w-4 text-text-muted" />
+              <Copy className={cn("h-4 w-4", isTerminal ? "text-slate-400" : "text-text-muted dark:text-zinc-500")} />
             )}
           </button>
         </div>
       </div>
+
+      {!isTerminal && (
+        <div className="pt-1">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((current) => !current)}
+            className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground dark:text-zinc-500 dark:hover:text-zinc-300"
+          >
+            {showAdvanced ? "Hide advanced options" : "Advanced options"}
+          </button>
+          {showAdvanced && (
+            <div className="mt-3 space-y-4 rounded-md border border-border bg-muted/45 px-4 py-4 dark:border-white/8 dark:bg-[#101010]">
+              <label className="flex items-center gap-2 text-sm text-foreground dark:text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={discoveryEnabled}
+                  onChange={(event) => {
+                    const nextEnabled = event.target.checked;
+                    setDiscoveryEnabled(nextEnabled);
+                    if (!nextEnabled && relayUrls.length === 0) {
+                      setRelayUrls([currentOrigin]);
+                    }
+                  }}
+                  className="h-4 w-4"
+                />
+                <span>Enable relay discovery</span>
+              </label>
+
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm text-foreground dark:text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={enableUDP}
+                    onChange={(event) => {
+                      const nextEnabled = event.target.checked;
+                      setEnableUDP(nextEnabled);
+                      if (!nextEnabled) {
+                        setUDPPort("");
+                      }
+                    }}
+                    className="h-4 w-4"
+                  />
+                  <span>Enable UDP transport</span>
+                </label>
+                {enableUDP && (
+                  <div className="space-y-1.5">
+                    <Input
+                      id={`${inputId}-udp-port`}
+                      type="text"
+                      value={udpPort}
+                      onChange={(event) => setUDPPort(event.target.value)}
+                      placeholder={target.trim() || DEFAULT_HOST}
+                      className={advancedInputClass}
+                    />
+                    <p className={helpTextClass}>
+                      Local UDP port to forward. Defaults to the same as Host.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <label
+                  htmlFor={`${inputId}-thumbnail`}
+                  className="text-sm font-medium text-foreground dark:text-zinc-300"
+                >
+                  Thumbnail URL
+                </label>
+                <Input
+                  id={`${inputId}-thumbnail`}
+                  type="url"
+                  value={thumbnailURL}
+                  onChange={(event) => setThumbnailURL(event.target.value)}
+                  placeholder="https://cdn.example.com/thumb.png"
+                  className={advancedInputClass}
+                />
+                {normalizedThumbnailURL && (
+                  <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border border-border bg-background dark:border-white/10 dark:bg-[#171717]">
+                    <img
+                      src={normalizedThumbnailURL}
+                      alt="Thumbnail preview"
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                )}
+                {thumbnailError && (
+                  <p className="text-xs text-destructive">{thumbnailError}</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

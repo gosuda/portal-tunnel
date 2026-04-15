@@ -99,7 +99,7 @@ This is a complete walkthrough for exposing a Minecraft Java Edition server (`lo
 ```yaml
 services:
   relay:
-    image: ghcr.io/gosuda/portal-tunnel/relay-server:latest
+    image: ghcr.io/gosuda/portal:latest
     environment:
       TCP_ENABLED: "true"
       MIN_PORT: "10000"

@@ -5,17 +5,11 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func mustRelaySet(t *testing.T, relayURLs ...string) *discovery.RelaySet {
 	t.Helper()
-
-	set, err := discovery.NewRelaySet(types.Identity{}, "", relayURLs)
-	if err != nil {
-		t.Fatalf("NewRelaySet() error = %v", err)
-	}
-	return set
+	return discovery.NewRelaySet(relayURLs)
 }
 
 func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {
@@ -34,19 +28,18 @@ func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {
 	}
 
 	exposure := &Exposure{
-		relaySet:        mustRelaySet(t, relayA, relayB),
-		relayListeners:  make(map[string]*Listener, 2),
-		activeRelayURLs: []string{relayA, relayB},
+		relaySet:       mustRelaySet(t, relayA, relayB),
+		relayListeners: make(map[string]*listener, 2),
 	}
 	relayAClosed := make(chan struct{})
-	exposure.relayListeners = map[string]*Listener{
+	exposure.relayListeners = map[string]*listener{
 		relayA: {
-			api:    &apiClient{baseURL: relayURL},
-			cancel: func() { close(relayAClosed) },
-			doneCh: relayAClosed,
+			relayURL: relayURL,
+			cancel:   func() { close(relayAClosed) },
+			doneCh:   relayAClosed,
 		},
 		relayB: {
-			api: &apiClient{baseURL: relayBURL},
+			relayURL: relayBURL,
 		},
 	}
 
@@ -73,42 +66,6 @@ func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {
 	}
 }
 
-func TestExposureReconcileSkipsBannedRelay(t *testing.T) {
-	const (
-		relayA = "https://relay-a.example"
-		relayB = "https://relay-b.example"
-	)
-
-	exposure := &Exposure{
-		relaySet:       mustRelaySet(t),
-		relayListeners: make(map[string]*Listener, 1),
-	}
-	exposure.relaySet.BanRelayURL(relayB)
-	exposure.relayListeners = map[string]*Listener{
-		relayA: {},
-	}
-
-	if err := exposure.relaySet.SetBootstrapRelayURLs([]string{relayA, relayB}); err != nil {
-		t.Fatalf("SetBootstrapRelayURLs() error = %v", err)
-	}
-	if err := exposure.reconcileRelayListeners(false); err != nil {
-		t.Fatalf("reconcileRelayListeners() error = %v", err)
-	}
-	if got := exposure.ActiveRelayURLs(); len(got) != 1 || got[0] != relayA {
-		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", got, relayA)
-	}
-	exposure.listenerMu.RLock()
-	_, relayAExists := exposure.relayListeners[relayA]
-	_, relayBExists := exposure.relayListeners[relayB]
-	exposure.listenerMu.RUnlock()
-	if !relayAExists {
-		t.Fatal("active relay listener missing from exposure.listeners")
-	}
-	if relayBExists {
-		t.Fatal("banned relay listener should not be added to exposure.listeners")
-	}
-}
-
 func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -127,22 +84,20 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	relayAClosed := make(chan struct{})
 	exposure := &Exposure{
 		relaySet:       mustRelaySet(t, relayA, relayB),
-		relayListeners: make(map[string]*Listener, 2),
+		relayListeners: make(map[string]*listener, 2),
 	}
-	exposure.relayListeners = map[string]*Listener{
+	exposure.relayListeners = map[string]*listener{
 		relayA: {
-			api:    &apiClient{baseURL: relayAURL},
-			cancel: func() { close(relayAClosed) },
-			doneCh: relayAClosed,
+			relayURL: relayAURL,
+			cancel:   func() { close(relayAClosed) },
+			doneCh:   relayAClosed,
 		},
 		relayB: {
-			api: &apiClient{baseURL: relayBURL},
+			relayURL: relayBURL,
 		},
 	}
 
-	if err := exposure.relaySet.SetBootstrapRelayURLs([]string{relayB}); err != nil {
-		t.Fatalf("SetBootstrapRelayURLs() error = %v", err)
-	}
+	exposure.relaySet.SetBootstrapRelayURLs([]string{relayB})
 	if err := exposure.reconcileRelayListeners(false); err != nil {
 		t.Fatalf("reconcileRelayListeners() error = %v", err)
 	}

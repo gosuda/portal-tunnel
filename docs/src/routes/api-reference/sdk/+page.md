@@ -33,10 +33,11 @@ const reverseConnectDiagram = `sequenceDiagram
 
     Browser->>Relay: TLS ClientHello (SNI: app.relay.example.com)
     Relay->>Relay: Match SNI to lease
-    Relay->>SDK: Forward traffic over hijacked conn
+    Relay->>SDK: 0x02 marker, then encrypted tenant bytes
+    Note over SDK: Tenant TLS terminates locally via keyless signer
     SDK->>Relay: Response traffic
     Relay->>Browser: Forward response
-    Note over SDK,Browser: Bidirectional bridge established`
+    Note over SDK,Browser: Relay bridges ciphertext only`
 </script>
 
 # SDK API
@@ -78,8 +79,8 @@ curl https://relay.example.com/sdk/domain
 {
   "ok": true,
   "data": {
-    "protocol_version": "2.0",
-    "release_version": "v2.1.0"
+    "protocol_version": "5",
+    "release_version": "v2.1.5"
   }
 }
 ```
@@ -121,6 +122,10 @@ Request a SIWE (Sign-In with Ethereum) challenge message for tunnel registration
 |------|--------|-------------|
 | `ip_banned` | 403 | Source IP is banned |
 | `feature_unavailable` | 503 | UDP or TCP transport not available |
+| `udp_disabled` | 403 | UDP transport disabled by admin policy |
+| `udp_capacity_exceeded` | 503 | UDP lease capacity reached |
+| `tcp_port_disabled` | 403 | TCP port transport disabled by admin policy |
+| `tcp_port_capacity_exceeded` | 503 | TCP port lease capacity reached |
 
 **Example:**
 
@@ -176,7 +181,7 @@ Complete tunnel registration by submitting the signed SIWE challenge. Returns an
 | `identity` | `object` | Normalized identity (name + address) |
 | `expires_at` | `string` | ISO 8601 lease expiration |
 | `hostname` | `string` | Assigned tunnel hostname (e.g. `my-app.relay.example.com`) |
-| `access_token` | `string` | JWT access token for subsequent API calls |
+| `access_token` | `string` | ES256K JWT access token for subsequent API calls |
 | `sni_port` | `int` | SNI port for QUIC transport (omitted if UDP not enabled) |
 | `udp_addr` | `string` | UDP address for QUIC transport (e.g. `relay.example.com:4443`) |
 | `udp_enabled` | `bool` | Whether UDP transport is active |
@@ -191,6 +196,11 @@ Complete tunnel registration by submitting the signed SIWE challenge. Returns an
 | `hostname_conflict` | 409 | Hostname already registered |
 | `ip_banned` | 403 | Source IP is banned |
 | `udp_port_exhausted` | 503 | No UDP ports available |
+| `tcp_port_exhausted` | 503 | No TCP ports available |
+| `udp_disabled` | 403 | UDP transport disabled by admin policy |
+| `udp_capacity_exceeded` | 503 | UDP lease capacity reached |
+| `tcp_port_disabled` | 403 | TCP port transport disabled by admin policy |
+| `tcp_port_capacity_exceeded` | 503 | TCP port lease capacity reached |
 | `feature_unavailable` | 503 | Requested transport not available |
 
 **Example:**
@@ -217,7 +227,7 @@ curl -X POST https://relay.example.com/sdk/register \
     },
     "expires_at": "2025-01-01T00:01:00Z",
     "hostname": "my-app.relay.example.com",
-    "access_token": "eyJhbGciOiJFZDI1NTE5...",
+    "access_token": "eyJhbGciOiJFUzI1Nksi...",
     "udp_enabled": false,
     "tcp_enabled": false
   }
@@ -261,7 +271,7 @@ Renew an existing lease to extend its TTL. Returns a new access token that shoul
 curl -X POST https://relay.example.com/sdk/renew \
   -H "Content-Type: application/json" \
   -d '{
-    "access_token": "eyJhbGciOiJFZDI1NTE5...",
+    "access_token": "eyJhbGciOiJFUzI1Nksi...",
     "ttl": 60
   }'
 ```
@@ -273,7 +283,7 @@ curl -X POST https://relay.example.com/sdk/renew \
   "ok": true,
   "data": {
     "expires_at": "2025-01-01T00:02:00Z",
-    "access_token": "eyJhbGciOiJFZDI1NTE5...new"
+    "access_token": "eyJhbGciOiJFUzI1Nksi...new"
   }
 }
 ```
@@ -309,7 +319,7 @@ Empty data object on success.
 curl -X POST https://relay.example.com/sdk/unregister \
   -H "Content-Type: application/json" \
   -d '{
-    "access_token": "eyJhbGciOiJFZDI1NTE5..."
+    "access_token": "eyJhbGciOiJFUzI1Nksi..."
   }'
 ```
 
@@ -361,7 +371,7 @@ On success, the server responds with `HTTP/1.1 200 OK` and hijacks the underlyin
 
 ```bash
 curl -X GET https://relay.example.com/sdk/connect \
-  -H "X-Portal-Access-Token: eyJhbGciOiJFZDI1NTE5..." \
+  -H "X-Portal-Access-Token: eyJhbGciOiJFUzI1Nksi..." \
   -H "Connection: keep-alive" \
   --http1.1
 ```

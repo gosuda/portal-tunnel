@@ -44,13 +44,13 @@ func (s *ClientStream) Accept(done <-chan struct{}) (net.Conn, error) {
 
 func (s *ClientStream) RunSession(
 	ctx context.Context,
-	open func(context.Context) (net.Conn, error),
-	currentTLSConfig func() *tls.Config,
+	conn net.Conn,
+	tlsConfig *tls.Config,
 ) (bool, error) {
 	if s == nil {
 		return false, net.ErrClosed
 	}
-	return s.runSession(ctx, open, currentTLSConfig)
+	return s.runSession(ctx, conn, tlsConfig)
 }
 
 func (s *ClientStream) ActiveSessions() int {
@@ -81,12 +81,11 @@ func (s *ClientStream) Drain() {
 
 func (s *ClientStream) runSession(
 	ctx context.Context,
-	open func(context.Context) (net.Conn, error),
-	currentTLSConfig func() *tls.Config,
+	conn net.Conn,
+	tlsConfig *tls.Config,
 ) (bool, error) {
-	conn, err := open(ctx)
-	if err != nil {
-		return false, err
+	if conn == nil {
+		return false, net.ErrClosed
 	}
 	s.sessionOpened()
 	defer s.sessionClosed()
@@ -104,7 +103,7 @@ func (s *ClientStream) runSession(
 		case types.MarkerKeepalive:
 			continue
 		case types.MarkerTLSStart:
-			if err := s.activate(ctx, conn, currentTLSConfig); err != nil {
+			if err := s.activate(ctx, conn, tlsConfig); err != nil {
 				_ = conn.Close()
 				return true, err
 			}
@@ -122,16 +121,12 @@ func (s *ClientStream) runSession(
 	}
 }
 
-func (s *ClientStream) activate(ctx context.Context, conn net.Conn, currentTLSConfig func() *tls.Config) error {
-	var tlsCfg *tls.Config
-	if currentTLSConfig != nil {
-		tlsCfg = currentTLSConfig()
-	}
-	if tlsCfg == nil {
+func (s *ClientStream) activate(ctx context.Context, conn net.Conn, tlsConfig *tls.Config) error {
+	if tlsConfig == nil {
 		return errors.New("tls config is unavailable")
 	}
 
-	tlsConn := tls.Server(conn, tlsCfg)
+	tlsConn := tls.Server(conn, tlsConfig)
 	handshakeCtx, cancel := context.WithTimeout(ctx, s.handshakeTimeout)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {

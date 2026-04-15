@@ -26,8 +26,8 @@ func TestMITMProbeConnMatchesExporter(t *testing.T) {
 	defer closeMITMProbeTLSConn(clientConn)
 	defer closeMITMProbeTLSConn(serverConn)
 
-	listener := &Listener{}
-	listener.mitmManager = newMITMManager(context.Background(), listener)
+	listener := &listener{}
+	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
@@ -66,9 +66,9 @@ func TestMITMProbeConnMatchesExporter(t *testing.T) {
 	_ = clientConn.Close()
 
 	select {
-	case result := <-resultCh:
-		if !result.matched {
-			t.Fatalf("probe matched = false, reason = %q", result.reason)
+	case reason := <-resultCh:
+		if reason != "" {
+			t.Fatalf("probe reason = %q, want empty", reason)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for probe result")
@@ -86,8 +86,8 @@ func TestMITMProbeConnDetectsExporterMismatch(t *testing.T) {
 	defer closeMITMProbeTLSConn(clientConn)
 	defer closeMITMProbeTLSConn(serverConn)
 
-	listener := &Listener{}
-	listener.mitmManager = newMITMManager(context.Background(), listener)
+	listener := &listener{}
+	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
@@ -121,12 +121,9 @@ func TestMITMProbeConnDetectsExporterMismatch(t *testing.T) {
 	_ = clientConn.Close()
 
 	select {
-	case result := <-resultCh:
-		if result.matched {
-			t.Fatal("probe matched = true, want false")
-		}
-		if result.reason != types.MITMProbeReasonExporterMismatch {
-			t.Fatalf("probe reason = %q, want %q", result.reason, types.MITMProbeReasonExporterMismatch)
+	case reason := <-resultCh:
+		if reason != types.MITMProbeReasonExporterMismatch {
+			t.Fatalf("probe reason = %q, want %q", reason, types.MITMProbeReasonExporterMismatch)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for probe result")
@@ -144,8 +141,8 @@ func TestMITMProbeConnPassesThroughNormalTraffic(t *testing.T) {
 	defer closeMITMProbeTLSConn(clientConn)
 	defer closeMITMProbeTLSConn(serverConn)
 
-	listener := &Listener{}
-	listener.mitmManager = newMITMManager(context.Background(), listener)
+	listener := &listener{}
+	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
 	type handleResult struct {
 		conn    net.Conn
@@ -206,8 +203,8 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 		t.Fatalf("url.Parse() error = %v", err)
 	}
 
-	listener := &Listener{
-		api:      &apiClient{baseURL: relayURL},
+	listener := &listener{
+		relayURL: relayURL,
 		relaySet: mustRelaySet(t, relayURL.String()),
 		cancel: func() {
 			select {
@@ -216,11 +213,9 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 				close(doneCh)
 			}
 		},
-		doneCh:     doneCh,
-		registered: make(chan struct{}),
-		banMITM:    true,
+		doneCh: doneCh,
 	}
-	listener.mitmManager = newMITMManager(context.Background(), listener)
+	listener.mitmManager = newMITMManager(context.Background(), listener, true)
 
 	listener.mitmManager.logResult(MITMProbeReport{
 		RelayURL: relayURL.String(),
@@ -228,13 +223,15 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 		Reason:   types.MITMProbeReasonExporterMismatch,
 	}, nil)
 
-	for _, state := range listener.relaySet.ActiveRelays() {
+	for _, state := range listener.relaySet.AggregateRelays() {
 		if state.Descriptor.APIHTTPSAddr == relayURL.String() {
 			t.Fatal("relay still active after mitm detection")
 		}
 	}
-	if !listener.closed() {
-		t.Fatal("listener.closed() = false, want true")
+	select {
+	case <-listener.doneCh:
+	default:
+		t.Fatal("listener.doneCh is open, want closed")
 	}
 }
 
@@ -245,14 +242,12 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 		t.Fatalf("url.Parse() error = %v", err)
 	}
 
-	listener := &Listener{
-		api:        &apiClient{baseURL: relayURL},
-		relaySet:   mustRelaySet(t, relayURL.String()),
-		doneCh:     doneCh,
-		registered: make(chan struct{}),
-		banMITM:    false,
+	listener := &listener{
+		relayURL: relayURL,
+		relaySet: mustRelaySet(t, relayURL.String()),
+		doneCh:   doneCh,
 	}
-	listener.mitmManager = newMITMManager(context.Background(), listener)
+	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
 	listener.mitmManager.logResult(MITMProbeReport{
 		RelayURL: relayURL.String(),
@@ -261,14 +256,16 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 	}, nil)
 
 	activeRelayURLs := make([]string, 0)
-	for _, state := range listener.relaySet.ActiveRelays() {
+	for _, state := range listener.relaySet.AggregateRelays() {
 		activeRelayURLs = append(activeRelayURLs, state.Descriptor.APIHTTPSAddr)
 	}
 	if len(activeRelayURLs) != 1 || activeRelayURLs[0] != relayURL.String() {
 		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", activeRelayURLs, relayURL.String())
 	}
-	if listener.closed() {
-		t.Fatal("listener.closed() = true, want false")
+	select {
+	case <-listener.doneCh:
+		t.Fatal("listener.doneCh is closed, want open")
+	default:
 	}
 }
 
@@ -278,10 +275,10 @@ func TestMITMProbeDialAddressUsesRelayHostForLocalRelay(t *testing.T) {
 		t.Fatalf("url.Parse() error = %v", err)
 	}
 
-	listener := &Listener{
-		api: &apiClient{baseURL: relayURL},
+	listener := &listener{
+		relayURL: relayURL,
 	}
-	listener.mitmManager = newMITMManager(context.Background(), listener)
+	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
 	got, err := listener.mitmManager.probeDialAddress("https://bravo-gecko-disco.localhost:4017")
 	if err != nil {
@@ -298,10 +295,10 @@ func TestMITMProbeDialAddressUsesPublicURLForRemoteRelay(t *testing.T) {
 		t.Fatalf("url.Parse() error = %v", err)
 	}
 
-	listener := &Listener{
-		api: &apiClient{baseURL: relayURL},
+	listener := &listener{
+		relayURL: relayURL,
 	}
-	listener.mitmManager = newMITMManager(context.Background(), listener)
+	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
 	got, err := listener.mitmManager.probeDialAddress("https://bravo-gecko-disco.example")
 	if err != nil {

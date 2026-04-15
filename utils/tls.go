@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, rootCAPEM []byte, timeout time.Duration) (*tls.Config, *http.Client, error) {
+func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Duration) (*tls.Config, *http.Client, error) {
 	if relayURL == nil {
 		return nil, nil, errors.New("relay url is required")
 	}
@@ -27,19 +27,14 @@ func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, rootCAPEM []byte, 
 		return nil, nil, errors.New("relay hostname is required")
 	}
 
-	resolvedRootCAPEM := append([]byte(nil), rootCAPEM...)
-	if len(resolvedRootCAPEM) == 0 && IsLocalRelayHost(serverName) {
-		fetchedRootCAPEM, err := FetchEndpointCertificateChain(ctx, relayURL.String(), serverName)
+	var rootCAs *x509.CertPool
+	if IsLocalRelayHost(serverName) {
+		rootCAPEM, err := FetchEndpointCertificateChain(ctx, relayURL.String(), serverName)
 		if err != nil {
 			return nil, nil, fmt.Errorf("bootstrap localhost relay trust: %w", err)
 		}
-		resolvedRootCAPEM = fetchedRootCAPEM
-	}
-
-	var rootCAs *x509.CertPool
-	if len(resolvedRootCAPEM) > 0 {
 		rootCAs = x509.NewCertPool()
-		if !rootCAs.AppendCertsFromPEM(resolvedRootCAPEM) {
+		if !rootCAs.AppendCertsFromPEM(rootCAPEM) {
 			return nil, nil, errors.New("failed to parse relay root ca")
 		}
 	}

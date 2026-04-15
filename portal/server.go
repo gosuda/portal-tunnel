@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"net"
 	"net/http"
@@ -41,6 +42,8 @@ type ServerConfig struct {
 	IdentityPath      string
 	Bootstraps        []string
 	DiscoveryEnabled  bool
+	OverlayMaxPeers   int
+	OverlayCongestion float64
 	WireGuardPort     int
 	APIPort           int
 	SNIPort           int
@@ -82,6 +85,12 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
 	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
+	if cfg.OverlayMaxPeers <= 0 {
+		cfg.OverlayMaxPeers = 4
+	}
+	if cfg.OverlayCongestion <= 0 {
+		cfg.OverlayCongestion = 200
+	}
 
 	hasPortRange := cfg.MinPort > 0 && cfg.MaxPort > 0
 	if cfg.UDPEnabled || cfg.TCPEnabled {
@@ -109,6 +118,8 @@ type Server struct {
 	identity    types.RelayIdentity
 	acmeManager *acme.Manager
 	proxy       proxy
+	loadMgr     *policy.LoadManager
+	routePolicy *policy.RoutePolicy
 
 	apiListener net.Listener
 	sniListener net.Listener
@@ -116,11 +127,13 @@ type Server struct {
 	apiTLSClose io.Closer
 	quicTunnel  *quic.Listener
 
-	overlay  *overlay.Overlay
-	relaySet *discovery.RelaySet
-	registry *leaseRegistry
-	udpPorts *transport.PortAllocator
-	tcpPorts *transport.PortAllocator
+	overlay         *overlay.Overlay
+	overlayRuntime  discovery.OverlayRuntime
+  announceLimiter *discovery.AnnounceLimiter
+	relaySet        *discovery.RelaySet
+	registry        *leaseRegistry
+	udpPorts        *transport.PortAllocator
+	tcpPorts        *transport.PortAllocator
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -139,20 +152,30 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	var relaySet *discovery.RelaySet
 	if cfg.DiscoveryEnabled {
-		relaySet, err = discovery.NewRelaySet(identity.Base(), cfg.PortalURL, cfg.Bootstraps)
+		cfg.Bootstraps, err = utils.ResolvePortalRelayURLs(context.Background(), cfg.Bootstraps, true)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("resolve discovery bootstraps: %w", err)
 		}
+		cfg.Bootstraps = utils.RemoveRelayURL(cfg.Bootstraps, cfg.PortalURL)
+		relaySet = discovery.NewRelaySet(cfg.Bootstraps)
 	}
 
-	return &Server{
+	loadMgr := policy.NewLoadManager()
+	server := &Server{
 		cfg:      cfg,
 		identity: identity,
 		registry: registry,
 		relaySet: relaySet,
+    announceLimiter: discovery.NewAnnounceLimiter(0, 0),
 		udpPorts: transport.NewPortAllocator(cfg.MinPort, cfg.MaxPort, 5*time.Minute),
 		tcpPorts: transport.NewPortAllocator(cfg.MinPort, cfg.MaxPort, 5*time.Minute),
-	}, nil
+		loadMgr:  loadMgr,
+	}
+	if relaySet != nil {
+		server.routePolicy = policy.NewRoutePolicy()
+	}
+	server.proxy.load = loadMgr
+	return server, nil
 }
 
 func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
@@ -360,52 +383,17 @@ func (s *Server) PortalURL() string {
 }
 
 func (s *Server) LeaseSnapshots() []types.Lease {
-	s.registry.mu.RLock()
-	defer s.registry.mu.RUnlock()
-
-	now := time.Now()
-	records := make([]*leaseRecord, 0, len(s.registry.leasesByKey))
-	for _, record := range s.registry.leasesByKey {
-		records = append(records, record)
+	if s == nil || s.registry == nil {
+		return nil
 	}
-	snapshots := make([]types.Lease, 0, len(records))
-	for _, record := range records {
-		if now.After(record.ExpiresAt) {
-			continue
-		}
-		adminSnapshot := s.registry.AdminSnapshot(record)
-		since := time.Duration(0)
-		if !adminSnapshot.LastSeenAt.IsZero() {
-			since = max(now.Sub(adminSnapshot.LastSeenAt), 0)
-		}
-		if adminSnapshot.IsBanned || adminSnapshot.IsDenied || !adminSnapshot.IsApproved || adminSnapshot.Metadata.Hide {
-			continue
-		}
-		if adminSnapshot.Ready == 0 && since >= 3*time.Minute {
-			continue
-		}
-		snapshots = append(snapshots, adminSnapshot.Lease)
-	}
-	return snapshots
+	return s.registry.LeaseSnapshots(time.Now())
 }
 
 func (s *Server) AdminLeaseSnapshots() []types.AdminLease {
-	s.registry.mu.RLock()
-	defer s.registry.mu.RUnlock()
-
-	now := time.Now()
-	records := make([]*leaseRecord, 0, len(s.registry.leasesByKey))
-	for _, record := range s.registry.leasesByKey {
-		records = append(records, record)
+	if s == nil || s.registry == nil {
+		return nil
 	}
-	snapshots := make([]types.AdminLease, 0, len(records))
-	for _, record := range records {
-		if now.After(record.ExpiresAt) {
-			continue
-		}
-		snapshots = append(snapshots, s.registry.AdminSnapshot(record))
-	}
-	return snapshots
+	return s.registry.AdminLeaseSnapshots(time.Now())
 }
 
 func (s *Server) LeaseSnapshotByHostname(hostname string) (types.Lease, bool) {
@@ -490,12 +478,12 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 						_ = wrappedConn.Close()
 						return
 					}
-					s.proxy.Bridge(wrappedConn, upstream)
+					s.proxy.bridge(wrappedConn, upstream, "", nil)
 					return
 				}
 
 				record, ok := s.registry.Lookup(serverName)
-				if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsIdentityRoutable(record.Key()) || record.stream == nil {
+				if !ok || record == nil || time.Now().After(record.ExpiresAt) || record.stream == nil || !s.registry.policy.IsIdentityRoutable(record.Key()) {
 					_ = wrappedConn.Close()
 					return
 				}
@@ -509,7 +497,7 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 					return
 				}
 
-				s.proxy.Bridge(wrappedConn, session)
+				s.proxy.bridge(wrappedConn, session, record.Key(), s.registry.policy.BPSManager())
 			}(conn)
 		case errors.Is(err, net.ErrClosed):
 			return nil
@@ -604,7 +592,7 @@ func (s *Server) startOverlay() (*overlay.Overlay, error) {
 		peerMux.HandleFunc(types.PathDiscovery, s.handleRelayDiscovery)
 	}
 
-	overlay, err := overlay.NewOverlay(s.identity.Name, overlay.Config{
+	ov, err := overlay.NewOverlay(s.identity.Name, overlay.Config{
 		PrivateKey: s.identity.WireGuardPrivateKey,
 		PublicKey:  s.identity.WireGuardPublicKey,
 		Endpoint:   net.JoinHostPort(s.identity.Name, fmt.Sprintf("%d", utils.IntOrDefault(s.cfg.WireGuardPort, overlay.DefaultListenPort))),
@@ -613,12 +601,14 @@ func (s *Server) startOverlay() (*overlay.Overlay, error) {
 		return nil, fmt.Errorf("start wireguard overlay: %w", err)
 	}
 
-	if err := overlay.Sync(s.relaySet.OverlayPeerStates()); err != nil {
-		_ = overlay.Shutdown(context.Background())
+	planner := &overlayPlanner{server: s, runtime: ov}
+	if err := planner.Sync(s.relaySet.OverlayPeerStates()); err != nil {
+		_ = ov.Shutdown(context.Background())
 		return nil, fmt.Errorf("sync wireguard peers: %w", err)
 	}
 
-	return overlay, nil
+	s.overlayRuntime = planner
+	return ov, nil
 }
 
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
@@ -626,15 +616,17 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 		<-ctx.Done()
 		return nil
 	}
-	refresher, err := discovery.NewRefresher(s.relaySet, nil, s.overlay)
-	if err != nil {
-		return err
-	}
+	refresher := discovery.NewRefresher(s.relaySet, s.overlayRuntime)
 	ticker := time.NewTicker(discovery.DiscoveryPollInterval)
 	defer ticker.Stop()
 
 	for {
-		if err := refresher.Refresh(ctx); err != nil {
+		now := time.Now().UTC()
+		self, err := s.signedRelayDescriptor(now)
+		if err != nil {
+			return fmt.Errorf("build relay discovery descriptor: %w", err)
+		}
+		if err := refresher.Refresh(ctx, &self); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -650,4 +642,109 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Server) planOverlayStates(states []discovery.RelayState) []discovery.RelayState {
+	if s.routePolicy == nil || s.cfg.OverlayMaxPeers <= 0 {
+		return states
+	}
+	ingressKey := s.identity.Base().Key()
+	ingressID := s.overlayNodeID(ingressKey)
+	if ingressID == 0 {
+		return states
+	}
+	candidates := make([]uint32, 0, len(states))
+	stateByID := make(map[uint32]discovery.RelayState, len(states))
+	for _, st := range states {
+		key := st.Descriptor.Key()
+		if key == "" {
+			continue
+		}
+		nodeID := s.overlayNodeID(key)
+		if nodeID == ingressID {
+			continue
+		}
+		candidates = append(candidates, nodeID)
+		stateByID[nodeID] = st
+
+		ping := float64(st.DiscoveryRTT.Milliseconds())
+		if ping < 0 {
+			ping = 0
+		}
+		s.routePolicy.UpdateNodeHealth(nodeID, policy.RelayHealth{
+			RTTMs:         ping,
+			PingLatencyMs: ping,
+			Healthy:       !st.Banned,
+			Fallback:      st.Banned,
+		})
+	}
+	if len(candidates) == 0 {
+		return states
+	}
+	maxHops := s.cfg.OverlayMaxPeers
+	if maxHops > len(candidates) {
+		maxHops = len(candidates)
+	}
+	route, err := s.routePolicy.BuildRouteWithLoad(ingressID, candidates, maxHops, s.nodeLoadSnapshot(), s.cfg.OverlayCongestion)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Msg("plan overlay route failed; using full peer set")
+		return states
+	}
+	if len(route) <= 1 {
+		return states
+	}
+
+	selected := make([]discovery.RelayState, 0, len(route)-1)
+	for _, nodeID := range route {
+		if nodeID == ingressID {
+			continue
+		}
+		if st, ok := stateByID[nodeID]; ok {
+			selected = append(selected, st)
+		}
+	}
+	if len(selected) == 0 {
+		return states
+	}
+	return selected
+}
+
+func (s *Server) overlayNodeID(key string) uint32 {
+	key = strings.TrimSpace(strings.ToLower(key))
+	if key == "" {
+		return 0
+	}
+	return crc32.ChecksumIEEE([]byte(key))
+}
+
+func (s *Server) nodeLoadSnapshot() policy.NodeLoad {
+	if s.loadMgr == nil {
+		return policy.NodeLoad{}
+	}
+	return s.loadMgr.Snapshot()
+}
+
+type overlayPlanner struct {
+	server  *Server
+	runtime *overlay.Overlay
+}
+
+func (p *overlayPlanner) DiscoverRelay(ctx context.Context, desc types.RelayDescriptor) (types.DiscoveryResponse, error) {
+	if p.runtime == nil {
+		return types.DiscoveryResponse{}, errors.New("overlay runtime unavailable")
+	}
+	return p.runtime.DiscoverRelay(ctx, desc)
+}
+
+func (p *overlayPlanner) Sync(states []discovery.RelayState) error {
+	if p.runtime == nil {
+		return errors.New("overlay runtime unavailable")
+	}
+	planned := states
+	if p.server != nil {
+		planned = p.server.planOverlayStates(states)
+	}
+	return p.runtime.Sync(planned)
 }

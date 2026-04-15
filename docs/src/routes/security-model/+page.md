@@ -1,60 +1,59 @@
 ---
 title: Security Model
-description: How Portal ensures end-to-end encryption and prevents relay-level eavesdropping.
+description: How Portal keeps tenant traffic opaque to relay operators.
 ---
 
 # Security Model
 
-Portal's security model is designed so that relay operators **cannot read tunnel traffic**, even though all data passes through their servers.
+Portal is designed so relay operators do not receive tenant traffic plaintext.
 
-## End-to-End TLS
+## Tenant TLS
 
-Tunnel traffic is encrypted with TLS between the client (browser) and your local service. The relay only sees opaque TCP bytes.
+For the default stream path, the relay only peeks at the TLS ClientHello long enough to read SNI and choose a lease. After that it bridges encrypted bytes over a reverse session.
 
+```text
+Client browser
+  -> Relay SNI router
+  -> Reverse session
+  -> SDK tenant TLS terminator
+  -> Local service
 ```
-Client (browser)  <-- TLS -->  Your local app
-        |                           ^
-        |     opaque TCP bytes      |
-        v                           |
-   Relay server  --- forwards ----->
-```
 
-The relay performs **TCP passthrough** — it connects raw TCP streams without terminating TLS.
+Tenant TLS terminates on the SDK side. The local service receives the decrypted stream from the tunnel process, while the relay only handles routing metadata and ciphertext.
 
-## MITM Detection
+## Keyless Signing
 
-Portal includes built-in MITM detection:
+For relay-hosted names, the SDK builds a tenant-facing TLS server config backed by the relay's `/v1/sign` endpoint. The relay signs handshake digests with its certificate key, but it does not receive the negotiated tenant TLS session keys.
 
-1. The tunnel client generates a TLS certificate locally
-2. The certificate fingerprint is embedded in the public URL
-3. Connecting clients verify the fingerprint matches the server certificate
-4. Any relay-level interception would present a different certificate, triggering a mismatch
+Relay API TLS is separate from tenant TLS:
 
-## Relay Trust Model
+- Relay API HTTPS protects `/sdk/*`, `/discovery`, `/admin`, installers, and `/v1/sign`.
+- Tenant TLS protects end-user traffic for lease hostnames.
+- The internal QUIC datagram backhaul uses `SNI_PORT/udp` with ALPN `portal-tunnel`.
 
-| What relays CAN see | What relays CANNOT see |
-|---------------------|----------------------|
-| Connection metadata (IP, timing) | Request/response content |
-| Tunnel name and domain | HTTP headers or body |
-| Traffic volume (bytes) | TLS-encrypted payload |
-| Connection duration | Application-layer data |
+## MITM Self-Probe
 
-## SIWE Authentication
+`portal expose` runs an asynchronous TLS passthrough self-probe after real tenant traffic starts. The SDK connects to its own public hostname, exports TLS keying material from the client side, recognizes the returning probe after SDK-side TLS termination, and compares exporter values.
 
-Portal supports Sign-In with Ethereum (SIWE) for identity:
+Matching exporter values mean the sampled connection preserved passthrough. A mismatch is treated as suspected relay-side TLS termination. By default, `portal expose` bans that relay; use `--ban-mitm=false` for warning-only behavior.
 
-- Proves ownership of a tunnel name without a centralized auth server
-- ENS names provide portable, human-readable identity
-- No passwords or API keys stored anywhere
+## Relay Visibility
 
-## Best Practices
+| Relays can see | Relays cannot see |
+|---|---|
+| Source IP and timing metadata | HTTP headers or body |
+| Tunnel hostname/SNI | Tenant TLS session keys |
+| Traffic volume and connection duration | Application payload on the stream path |
+| Requested TCP/UDP transport metadata | Local service plaintext on the tenant TLS stream path |
+| Raw TCP/UDP payloads when the application protocol is unencrypted | Application-level encrypted raw TCP/UDP payloads |
 
-1. **Always use HTTPS** — Portal provisions TLS certificates automatically
-2. **Verify certificate fingerprints** for sensitive applications
-3. **Run your own relay** if you need full control over the infrastructure
-4. **Rotate tunnel names** for temporary or throwaway use cases
+Raw TCP and UDP port transports do not add tenant TLS. Use application-level encryption for those modes when confidentiality matters.
+
+## Identity
+
+Registration uses a SIWE challenge signed by the SDK's secp256k1 identity key. The relay then issues a lease-scoped ES256K access token used by renew, unregister, reverse connect, and QUIC datagram authentication.
 
 ## Next Steps
 
-- [Architecture](/architecture) — deep dive into Portal's internal design
-- [Self-Hosting](/self-hosting) — run your own relay server
+- [Architecture](/architecture) - deep dive into Portal's internal design
+- [Self-Hosting](/self-hosting) - run your own relay server

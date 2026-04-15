@@ -4,42 +4,28 @@
 
 <p align="center"><img width="800" alt="Portal Demo" src="./portal.gif" /></p>
 
-<p align="center">将本地应用暴露到公网，无需端口转发、NAT 配置或 DNS 设置。<br />Portal 是一个无需信任的中继网络，中继无法访问你的流量。你可以连接任意中继，也可以自行部署自己的中继。</p><br />
+Portal 可以把本地服务发布到公网，不需要端口转发、NAT 配置或手动 DNS 配置。Portal 是一个可自托管的中继网络，默认让租户 TLS 在你的机器上终止，中继无法读取明文流量。
 
-## 功能特性
+## 功能
 
-- **为 localhost 提供公网 HTTPS**：通过 TCP 透传实现 NAT 友好的发布方式（无需端口转发）
-- **端到端 TLS**：TLS 在你这一侧终止，并内置 MITM 检测，因此中继无法访问明文
-- **一条命令即可启动**：以最少配置启动中继和隧道
-- **自托管中继**：既可以连接公共中继，也可以运行你自己的中继
-- **中继发现与中继池**：将发现到的中继作为中继池使用，支持多中继访问与故障切换
-- **无需登录、无需 API Key**：使用 SIWE 验证所有权，并支持基于 ENS 的身份
-- **原生 TCP 与 UDP 传输**：原生 TCP 反向会话，并可选支持 UDP（不依赖 SSH 或 WebSocket）
-- **TCP 端口路由**：为非 TLS 服务（如 Minecraft、游戏服务器）分配专用 TCP 端口，无需基于 SNI 的路由
-
-## 对比
-
-| | Portal | ngrok | Cloudflare Tunnel | frp |
-|---|---|---|---|---|
-| 端到端加密 | **是** | 可选 | 否 | 否 |
-| TLS 终止位置 | 客户端 | 边缘（默认） | 边缘（始终） | 服务器端 |
-| MITM 检测 | **内置** | 否 | 否 | 否 |
-| 可自托管 | **是** | 仅企业版 | 否 | 是 |
-| 多中继故障切换 | **是** | 托管 | 内置多数据中心 | 否 |
-| 自定义域名 | **是** | 付费方案 | 是 | 是 |
-| 传输协议 | 原生 TCP / UDP | HTTP/S, TCP, TLS | HTTP/S, TCP, UDP | HTTP/S, TCP, UDP |
-| 非 TLS TCP 端口路由 | **是** | 付费方案 | 否 | 是 |
-| 开源 | **MIT** | 否 | 仅客户端（Apache 2.0） | Apache 2.0 |
-| 需要账号 | **否**（SIWE） | 是 | 是 | 否 |
+- **本地服务公网 HTTPS**：通过反向连接发布 localhost 服务。
+- **端到端租户 TLS**：TLS 在 SDK/客户端侧终止，中继只做 SNI 路由和字节转发。
+- **MITM 自探测**：`portal expose` 默认在检测到疑似 TLS 终止时禁用该中继。
+- **中继发现和池化**：可以使用公共 registry、显式中继和运行时 discovery 结果。
+- **自托管中继**：可以连接公共中继，也可以运行自己的 relay server。
+- **Raw TCP/UDP**：支持专用 TCP 端口和 UDP/QUIC datagram backhaul。
+- **无需账号/API key**：注册使用 SIWE 身份签名。
 
 ## 快速开始
 
-### 公开你的本地应用：
+### 暴露本地服务
 
 ```bash
 curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/install.sh | bash
 portal expose 3000
 ```
+
+Windows PowerShell:
 
 ```powershell
 $ProgressPreference = 'SilentlyContinue'
@@ -47,10 +33,9 @@ irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1
 portal expose 3000
 ```
 
-然后你就可以通过一个公网 HTTPS URL 访问你的应用。
-安装细节请参见 [cmd/portal-tunnel/README.md](cmd/portal-tunnel/README.md)。
+安装细节见 [cmd/portal-tunnel/README.md](cmd/portal-tunnel/README.md)。
 
-### 运行你自己的中继
+### 运行自己的中继
 
 ```bash
 git clone https://github.com/gosuda/portal-tunnel
@@ -58,57 +43,29 @@ cd portal-tunnel && cp .env.example .env
 docker compose up
 ```
 
-部署到公网域名时，请参见 [docs/deployment.md](docs/deployment.md)。
-
-### 运行原生应用（高级）
-
-更多示例请参见 [portal-toys](https://github.com/gosuda/portal-toys)。
-
-## 架构
-
-请参见 [docs/architecture.md](docs/architecture.md)。
-架构决策请参见 [docs/adr/README.md](docs/adr/README.md)。
+公网部署请看 [Deployment](docs/src/routes/deployment/+page.md)，架构说明请看 [Architecture](docs/src/routes/architecture/+page.md)。
 
 ## 示例
 
 | 示例 | 说明 |
-|---------|-------------|
-| [nginx reverse proxy](docs/examples/nginx-proxy/) | 在 nginx 后部署 Portal，并使用 L4 SNI 路由和 TLS 终止 |
-| [nginx + multi-service](docs/examples/nginx-proxy-multi-service/) | 在同一个 nginx 实例后，将 Portal 与其他 Web 服务一起运行 |
+|---|---|
+| [nginx reverse proxy](docs/static/examples/nginx-proxy/) | 在 nginx 后部署 Portal，使用 L4 SNI 路由 |
+| [nginx + multi-service](docs/static/examples/nginx-proxy-multi-service/) | 在同一个 nginx 实例后运行 Portal 和其他服务 |
 
-## 公共中继注册表
+## 公共中继 Registry
 
-Portal 官方公共中继注册表为：
+官方公共中继 registry:
 
 `https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json`
 
-Portal 隧道客户端可以默认包含这个注册表，Relay UI 也会从同一路径读取官方中继列表。
+如果你运行公共 Portal 中继，可以提交 Pull Request 把中继 URL 加入 `registry.json`。
 
-如果你正在运营公共 Portal 中继，请提交一个 Pull Request，将你的中继 URL 添加到 `registry.json`。持续维护这个注册表可以让社区更容易发现公共中继。
+## 安全模型
 
-## Portal 如何提供端到端加密
+Portal 的默认 stream 路径中，relay 只读取 TLS ClientHello 中的 SNI 来选择 lease，然后转发加密字节。SDK/客户端侧通过 relay 的 `/v1/sign` keyless signer 完成租户 TLS 握手，但会在本地派生 session key。relay API TLS、租户 TLS、QUIC datagram backhaul TLS 是不同的信任边界。
 
-Portal 的设计目标是让租户 TLS 在你这一侧终止，而不是在中继侧终止。在正常数据路径中，中继只转发加密流量，无法访问租户 TLS 明文。
+Raw TCP 和 UDP 端口模式不自动增加租户 TLS。如果这些模式需要保密性，请使用应用层加密。
 
-1. 中继接收公网连接，并且只读取基于 SNI 路由所需的 TLS ClientHello。
-2. 它通过反向会话将租户连接作为原始加密字节转发，而不会终止租户 TLS。
-3. 你这一侧的 Portal 客户端充当 TLS 服务器，并在本地完成租户握手。
-4. 对于由中继托管的域名，Portal 客户端通过 `/v1/sign` 获取证书签名，此时中继只作为无密钥签名预言机使用。
-5. 会话密钥完全在你这一侧派生。中继只提供证书签名，不会接收租户流量密钥。
-6. 握手完成后，中继继续转发密文，无需租户 TLS 明文即可保持流量路由。
+## License
 
-Portal 还会检查中继是否真的保持了 TLS 透传。Portal 客户端会连接到自己的公网端点，并比较由客户端控制的两端观察到的 TLS exporter 值。如果两者不一致，`portal expose` 默认会拒绝该中继。
-
-## 贡献
-
-欢迎社区贡献！
-
-1. Fork 此仓库
-2. 创建功能分支（`git checkout -b feature/amazing-feature`）
-3. 提交你的修改（`git commit -m 'Add amazing feature'`）
-4. 推送到分支（`git push origin feature/amazing-feature`）
-5. 创建 Pull Request
-
-## 许可证
-
-MIT License，详见 [LICENSE](LICENSE)
+MIT License - see [LICENSE](LICENSE)

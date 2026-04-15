@@ -26,28 +26,31 @@ import {
 export type BanFilter = "all" | "banned" | "active";
 type ListServer = ClientServer | AdminServer;
 
-interface OfficialRegistryRelay {
-  url: string;
-  status: "online" | "disconnected" | "checking";
-  releaseVersion?: string;
-}
-
 interface RelayDomainResponse {
   release_version?: string;
 }
 
-interface OfficialRegistryDocument {
-  relays?: string[];
+interface RelayDiscoveryDescriptor {
+  api_https_addr?: string;
+}
+
+interface RelayDiscoveryResponse {
+  relays?: RelayDiscoveryDescriptor[];
+}
+
+interface KnownRelay {
+  relayURL: string;
+  isCurrent: boolean;
 }
 
 const OFFICIAL_REGISTRY_SOURCE_URL =
   "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
 const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
 
-async function loadOfficialRegistryRelay(
+async function loadRelayReleaseVersion(
   relayURL: string,
   timeoutMs: number = 5000
-): Promise<OfficialRegistryRelay> {
+): Promise<string> {
   const domainURL = new URL(API_PATHS.sdk.domain, relayURL).toString();
 
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -59,77 +62,53 @@ async function loadOfficialRegistryRelay(
       apiClient.get<RelayDomainResponse>(domainURL),
       timeoutPromise,
     ]);
-    return {
-      url: relayURL,
-      status: "online",
-      releaseVersion:
-        typeof domain?.release_version === "string"
-          ? domain.release_version.trim()
-          : "",
-    };
+    return typeof domain?.release_version === "string"
+      ? domain.release_version.trim()
+      : "";
   } catch {
-    return {
-      url: relayURL,
-      status: "disconnected",
-      releaseVersion: "",
-    };
+    return "";
   }
 }
 
-async function loadOfficialRegistryRelayURLs(sourceURL: string): Promise<string[]> {
-  const response = await fetch(sourceURL, {
-    headers: { Accept: "application/json" },
+function normalizeRelayURL(relayURL: string | undefined): string {
+  return typeof relayURL === "string" ? relayURL.trim() : "";
+}
+
+function normalizeKnownRelays(
+  relays: RelayDiscoveryDescriptor[] | undefined,
+  currentRelayURL: string
+): KnownRelay[] {
+  const seen = new Set<string>();
+  const knownRelays: KnownRelay[] = [];
+
+  relays?.forEach((relay) => {
+    const relayURL = normalizeRelayURL(relay.api_https_addr);
+    if (relayURL === "" || seen.has(relayURL)) {
+      return;
+    }
+
+    seen.add(relayURL);
+    knownRelays.push({
+      relayURL,
+      isCurrent: relayURL === currentRelayURL,
+    });
   });
-  if (!response.ok) {
-    throw new Error(`registry request failed with status ${response.status}`);
+
+  if (currentRelayURL !== "" && !seen.has(currentRelayURL)) {
+    knownRelays.push({
+      relayURL: currentRelayURL,
+      isCurrent: true,
+    });
   }
 
-  const document = (await response.json()) as OfficialRegistryDocument;
-  const relayURLs = Array.isArray(document.relays)
-    ? document.relays.filter(
-        (relay): relay is string =>
-          typeof relay === "string" && relay.trim().length > 0
-      )
-    : [];
+  knownRelays.sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) {
+      return a.isCurrent ? -1 : 1;
+    }
+    return a.relayURL.localeCompare(b.relayURL);
+  });
 
-  return relayURLs.map((relayURL) => relayURL.trim());
-}
-
-function replaceOfficialRegistryRelay(
-  currentRelays: OfficialRegistryRelay[] | null,
-  nextRelay: OfficialRegistryRelay
-): OfficialRegistryRelay[] | null {
-  if (!currentRelays) {
-    return currentRelays;
-  }
-
-  return currentRelays.map((relay) =>
-    relay.url === nextRelay.url ? nextRelay : relay
-  );
-}
-
-async function retryDisconnectedRelays(
-  currentRelays: OfficialRegistryRelay[]
-): Promise<OfficialRegistryRelay[]> {
-  const disconnectedRelays = currentRelays.filter(
-    (relay) => relay.status === "disconnected"
-  );
-
-  if (disconnectedRelays.length === 0) {
-    return currentRelays;
-  }
-
-  const retriedResults = await Promise.all(
-    disconnectedRelays.map((relay) =>
-      loadOfficialRegistryRelay(relay.url, 5000)
-    )
-  );
-
-  const resultMap = new Map<string, OfficialRegistryRelay>();
-  currentRelays.forEach((relay) => resultMap.set(relay.url, relay));
-  retriedResults.forEach((relay) => resultMap.set(relay.url, relay));
-
-  return Array.from(resultMap.values());
+  return knownRelays;
 }
 
 interface ServerListViewProps {
@@ -221,16 +200,21 @@ export function ServerListView({
   onLogout,
 }: ServerListViewProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
-  const [officialRegistryRelays, setOfficialRegistryRelays] = useState<
-    OfficialRegistryRelay[] | null
-  >(null);
+  const [relayReleaseVersions, setRelayReleaseVersions] = useState<
+    Record<string, string>
+  >({});
+  const [knownRelays, setKnownRelays] = useState<KnownRelay[]>([]);
+  const [relayDiscoveryLoading, setRelayDiscoveryLoading] = useState(
+    () => !isAdmin
+  );
+  const [relayDiscoveryMessage, setRelayDiscoveryMessage] = useState("");
   const [selectedIdentityKeys, setSelectedIdentityKeys] = useState<Set<string>>(
     new Set()
   );
   const serverItems = filteredServers as ListServer[];
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
   const showLandingHero = !isAdmin && landingPageEnabled;
-  const connectedRelayURL = useMemo(() => readCurrentOrigin(), []);
+  const currentRelayURL = useMemo(() => readCurrentOrigin(), []);
 
   const handleToggleSelect = (identityKey: string) => {
     setSelectedIdentityKeys((prev) => {
@@ -304,80 +288,53 @@ export function ServerListView({
     if (isAdmin) {
       return;
     }
-
     let cancelled = false;
-    setOfficialRegistryRelays(null);
+    setRelayDiscoveryLoading(true);
+    setRelayReleaseVersions({});
+    setKnownRelays([]);
+    setRelayDiscoveryMessage("");
 
-    void loadOfficialRegistryRelayURLs(OFFICIAL_REGISTRY_SOURCE_URL)
-      .then((relayURLs) => {
-        if (!cancelled) {
-          setOfficialRegistryRelays(
-            relayURLs.map((relayURL) => ({
-              url: relayURL,
-              status: "checking",
-              releaseVersion: "",
-            }))
-          );
+    void (async () => {
+      let discoveryMessage = "";
+      let nextKnownRelays = normalizeKnownRelays(undefined, currentRelayURL);
 
-          relayURLs.forEach((relayURL) => {
-            void loadOfficialRegistryRelay(relayURL).then((relay) => {
-              if (!cancelled) {
-                setOfficialRegistryRelays((currentRelays) =>
-                  replaceOfficialRegistryRelay(currentRelays, relay)
-                );
-              }
-            });
-          });
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          console.error("Failed to load official registry", error);
-          setOfficialRegistryRelays([]);
-        }
-      });
+      try {
+        const discovery =
+          await apiClient.get<RelayDiscoveryResponse>(API_PATHS.discovery);
+        nextKnownRelays = normalizeKnownRelays(
+          discovery?.relays,
+          currentRelayURL
+        );
+      } catch {
+        discoveryMessage = "Known relay data is unavailable on this relay.";
+      }
+
+      const relayURLs = nextKnownRelays.map((relay) => relay.relayURL);
+      const uniqueRelayURLs = [...new Set(relayURLs)];
+      const versions = await Promise.all(
+        uniqueRelayURLs.map(async (relayURL) => [
+          relayURL,
+          await loadRelayReleaseVersion(relayURL),
+        ] as const)
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      setRelayReleaseVersions(Object.fromEntries(versions));
+      setKnownRelays(nextKnownRelays);
+      setRelayDiscoveryLoading(false);
+      setRelayDiscoveryMessage(discoveryMessage);
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (isAdmin || !officialRegistryRelays) {
-      return;
-    }
-
-    const hasDisconnected = officialRegistryRelays.some(
-      (relay) => relay.status === "disconnected"
-    );
-
-    if (!hasDisconnected) {
-      return;
-    }
-
-    const intervalId = setInterval(() => {
-      void retryDisconnectedRelays(officialRegistryRelays)
-        .then((updatedRelays) => {
-          setOfficialRegistryRelays(updatedRelays);
-        })
-        .catch((error) => {
-          console.error("Failed to retry disconnected relays", error);
-        });
-    }, 30000);
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [isAdmin, officialRegistryRelays]);
-
-  const officialRegistryList = officialRegistryRelays ?? [];
-  const connectedOfficialRegistryRelay = officialRegistryList.find(
-    (relay) => relay.url === connectedRelayURL
-  );
+  }, [currentRelayURL, isAdmin]);
   const isAllSelected =
     allIdentityKeys.length > 0 &&
     allIdentityKeys.every((identityKey) => selectedIdentityKeys.has(identityKey));
-  const officialRegistryAvailable = officialRegistryList.length > 0;
 
   const handleSelectAll = () => {
     if (isAllSelected) {
@@ -878,94 +835,54 @@ export function ServerListView({
                         Public relays
                       </h2>
                     </div>
+                    <a
+                      href={OFFICIAL_REGISTRY_SOURCE_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex h-10 items-center justify-center rounded-full bg-primary/12 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
+                    >
+                      Open registry.json
+                    </a>
                   </div>
 
-                  <div className="mt-6 flex flex-col gap-6">
-                    <div className="rounded-xl border border-border/80 bg-secondary/35 p-5 sm:p-6">
-                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="space-y-1">
-                          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-text-muted">
-                            Official registry
-                          </p>
-                        </div>
-                        <a
-                          href={OFFICIAL_REGISTRY_SOURCE_URL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex h-10 items-center justify-center rounded-full bg-primary/12 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
-                        >
-                          Open registry.json
-                        </a>
+                  <div className="mt-6 rounded-xl border border-border/80 bg-secondary/35 p-5 sm:p-6">
+                    {relayDiscoveryLoading ? (
+                      <div className="rounded-2xl border border-border/70 bg-background/90 px-4 py-3 text-sm text-text-muted">
+                        Loading known relays...
                       </div>
-                      <div className="mt-5">
-                        {officialRegistryAvailable ? (
-                          <div className="grid gap-3 md:grid-cols-2">
-                            {officialRegistryList.map((relay) => {
-                              return (
-                                <div
-                                  key={relay.url}
-                                  className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-background/90 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-                                >
-                                  <a
-                                    href={relay.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[13px] text-foreground underline-offset-4 hover:underline sm:text-sm"
-                                  >
-                                    {relay.url}
-                                  </a>
-                                  <div className="flex shrink-0 flex-wrap items-center gap-2">
-                                    {relay.status === "checking" ? (
-                                      <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
-                                        Checking
-                                      </span>
-                                    ) : relay.status === "disconnected" ? (
-                                      <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
-                                        Disconnected
-                                      </span>
-                                    ) : relay.releaseVersion ? (
-                                      <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
-                                        {relay.releaseVersion}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                </div>
-                              );
-                            })}
+                    ) : knownRelays.length === 0 ? (
+                      <div className="rounded-2xl border border-border/70 bg-background/90 px-4 py-3 text-sm text-text-muted">
+                        No known relays discovered from this relay.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {knownRelays.map((relay) => (
+                          <div
+                            key={relay.relayURL}
+                            className="flex min-w-0 items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/90 px-4 py-3"
+                          >
+                            <a
+                              href={relay.relayURL}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[13px] text-foreground underline-offset-4 hover:underline sm:text-sm"
+                            >
+                              {relay.relayURL}
+                            </a>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span className="rounded-full bg-background px-2.5 py-1 font-mono text-[11px] font-medium text-text-muted ring-1 ring-border">
+                                {relayReleaseVersions[relay.relayURL] || "offline"}
+                              </span>
+                            </div>
                           </div>
-                        ) : officialRegistryRelays !== null ? (
-                          <p className="text-sm text-text-muted">
-                            Registry entries are unavailable right now.
-                          </p>
-                        ) : null}
+                        ))}
                       </div>
-                    </div>
-
-                    <div className="rounded-xl border border-border/80 bg-secondary/35 p-5 sm:p-6">
-                      <p className="text-sm font-semibold uppercase tracking-[0.18em] text-text-muted">
-                        Connected relay
-                      </p>
-                      <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-border/70 bg-background/90 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                        <a
-                          href={connectedRelayURL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[13px] text-foreground underline-offset-4 hover:underline sm:text-sm"
-                        >
-                          {connectedRelayURL}
-                        </a>
-                        <div className="flex shrink-0 flex-wrap items-center gap-2">
-                          <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
-                            Connected
-                          </span>
-                          {connectedOfficialRegistryRelay?.releaseVersion ? (
-                            <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
-                              {connectedOfficialRegistryRelay.releaseVersion}
-                            </span>
-                          ) : null}
-                        </div>
+                    )}
+                    {relayDiscoveryMessage ? (
+                      <div className="mt-3 text-sm text-text-muted">
+                        {relayDiscoveryMessage}
                       </div>
-                    </div>
+                    ) : null}
                   </div>
                 </section>
               </main>

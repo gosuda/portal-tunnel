@@ -3,8 +3,6 @@ package discovery
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
-	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -18,7 +16,7 @@ import (
 const (
 	defaultRequestTimeout   = 15 * time.Second
 	DiscoveryPollInterval   = 30 * time.Second
-	defaultRecoveryFailures = 3
+	defaultRecoveryFailures = 5
 )
 
 type OverlayRuntime interface {
@@ -33,24 +31,13 @@ type Refresher struct {
 	directRecoveryFailures int
 }
 
-func NewRefresher(relaySet *RelaySet, rootCAPEM []byte, overlay OverlayRuntime) (*Refresher, error) {
-	if relaySet == nil {
-		return nil, errors.New("relay set is required")
-	}
-	var rootCAs *x509.CertPool
-	if len(rootCAPEM) > 0 {
-		rootCAs = x509.NewCertPool()
-		if !rootCAs.AppendCertsFromPEM(rootCAPEM) {
-			return nil, errors.New("failed to parse relay root ca")
-		}
-	}
+func NewRefresher(relaySet *RelaySet, overlay OverlayRuntime) *Refresher {
 	return &Refresher{
 		relaySet: relaySet,
 		httpClient: &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
 					MinVersion: tls.VersionTLS12,
-					RootCAs:    rootCAs,
 					NextProtos: []string{"http/1.1"},
 				},
 				ForceAttemptHTTP2: false,
@@ -59,10 +46,10 @@ func NewRefresher(relaySet *RelaySet, rootCAPEM []byte, overlay OverlayRuntime) 
 		},
 		overlay:                overlay,
 		directRecoveryFailures: defaultRecoveryFailures,
-	}, nil
+	}
 }
 
-func (r *Refresher) Refresh(ctx context.Context) error {
+func (r *Refresher) Refresh(ctx context.Context, self *types.RelayDescriptor) error {
 	if r.overlay != nil {
 		if err := r.refreshOverlay(ctx); err != nil && ctx.Err() == nil {
 			log.Warn().
@@ -73,28 +60,105 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
-	return r.refreshHTTPS(ctx)
+	if err := r.refreshHTTPS(ctx); err != nil {
+		return err
+	}
+	if self != nil {
+		if err := r.announceSelf(ctx, *self); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDescriptor) error {
+	req := types.DiscoveryAnnounceRequest{
+		ProtocolVersion: types.DiscoveryVersion,
+		Descriptor:      descriptor,
+	}
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				NextProtos: []string{"http/1.1"},
+			},
+			ForceAttemptHTTP2: false,
+		},
+		Timeout: defaultRequestTimeout,
+	}
+	defer httpClient.CloseIdleConnections()
+
+	for _, relayURL := range r.relaySet.BootstrapRelayURLs() {
+		if relayURL == descriptor.APIHTTPSAddr {
+			continue
+		}
+		baseURL, err := url.Parse(relayURL)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("relay", relayURL).
+				Msg("relay discovery announce target skipped")
+			continue
+		}
+
+		if err := utils.HTTPDoAPIPath(ctx, httpClient, baseURL, http.MethodPost, types.PathDiscoveryAnnounce, req, nil, nil); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Warn().
+				Err(err).
+				Str("relay", relayURL).
+				Msg("relay discovery announce failed")
+			continue
+		}
+		log.Info().
+			Str("relay", relayURL).
+			Msg("relay discovery announce succeeded")
+	}
+	return nil
 }
 
 func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 	r.relaySet.mu.RLock()
-	states := r.relaySet.relayStatesLocked()
+	states := make([]RelayState, 0, len(r.relaySet.relays))
+	for _, state := range r.relaySet.relays {
+		states = append(states, state)
+	}
 	r.relaySet.mu.RUnlock()
 
 	now := time.Now().UTC()
 	for _, state := range states {
-		if !state.discoverable(now) || !state.Bootstrap {
+		if state.Banned {
 			continue
 		}
-		relay := state.Descriptor
-		baseURL, err := url.Parse(relay.APIHTTPSAddr)
+		if !state.hasObservedDescriptor() {
+			if !state.Bootstrap {
+				continue
+			}
+		} else if !state.Bootstrap {
+			if !state.nextDirectRefreshAt.IsZero() && state.nextDirectRefreshAt.After(now) {
+				continue
+			}
+		}
+		if state.hasObservedDescriptor() && !state.Descriptor.Discovery {
+			continue
+		}
+
+		relayURL := state.Descriptor.APIHTTPSAddr
+		if relayURL == "" {
+			continue
+		}
+
+		recoveryFailures := r.directRecoveryFailures
+		if state.Bootstrap {
+			recoveryFailures = 0
+		}
+
+		baseURL, err := url.Parse(relayURL)
 		if err != nil {
-			continue
-		}
-		if utils.IsLocalRelayHost(baseURL.Hostname()) {
-			log.Info().
-				Str("relay", relay.APIHTTPSAddr).
-				Msg("skip loopback relay as discovery source")
+			if recoveryFailures > 0 {
+				r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
+			}
 			continue
 		}
 
@@ -104,57 +168,20 @@ func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			continue
-		}
-
-		measuredAt := time.Now().UTC()
-		if _, err := r.relaySet.ApplyRelayDiscoveryResponse(relay.Identity, relay.APIHTTPSAddr, resp, measuredAt); err != nil {
-			continue
-		}
-		r.relaySet.RecordDiscoveryRTT(relay.APIHTTPSAddr, time.Since(startedAt), measuredAt)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	r.relaySet.mu.RLock()
-	states = r.relaySet.relayStatesLocked()
-	r.relaySet.mu.RUnlock()
-
-	now = time.Now().UTC()
-	for _, state := range states {
-		if !state.discoverable(now) || state.Bootstrap {
-			continue
-		}
-		relay := state.Descriptor
-		baseURL, err := url.Parse(relay.APIHTTPSAddr)
-		if err != nil {
-			r.logDirectDiscoveryFailure(relay, err, r.directRecoveryFailures)
-			continue
-		}
-		if utils.IsLocalRelayHost(baseURL.Hostname()) {
-			log.Info().
-				Str("relay", relay.APIHTTPSAddr).
-				Msg("skip loopback relay as discovery source")
-			continue
-		}
-
-		startedAt := time.Now()
-		var resp types.DiscoveryResponse
-		if err := utils.HTTPDoAPIPath(ctx, r.httpClient, baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+			if recoveryFailures > 0 {
+				r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
 			}
-			r.logDirectDiscoveryFailure(relay, err, r.directRecoveryFailures)
 			continue
 		}
-
 		measuredAt := time.Now().UTC()
-		if _, err := r.relaySet.ApplyRelayDiscoveryResponse(relay.Identity, relay.APIHTTPSAddr, resp, measuredAt); err != nil {
-			r.logDirectDiscoveryFailure(relay, err, r.directRecoveryFailures)
+
+		if _, err := r.relaySet.ApplyRelayDiscoveryResponse(relayURL, resp, measuredAt); err != nil {
+			if recoveryFailures > 0 {
+				r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
+			}
 			continue
 		}
-		r.relaySet.RecordDiscoveryRTT(relay.APIHTTPSAddr, time.Since(startedAt), measuredAt)
+		r.relaySet.RecordDiscoveryRTT(relayURL, time.Since(startedAt), measuredAt)
 	}
 	return nil
 }
@@ -167,40 +194,60 @@ func (r *Refresher) refreshOverlay(ctx context.Context) error {
 	if err := r.overlay.Sync(states); err != nil {
 		return err
 	}
+	relaySetChanged := false
 	for _, state := range states {
 		relay := state.Descriptor
+		recoveryFailures := r.directRecoveryFailures
+		if state.Bootstrap {
+			recoveryFailures = 0
+		}
+		startedAt := time.Now()
 		resp, err := r.overlay.DiscoverRelay(ctx, relay)
 		if err != nil {
-			return err
-		}
-
-		relaySetChanged, err := r.relaySet.ApplyRelayDiscoveryResponse(relay.Identity, relay.APIHTTPSAddr, resp, time.Now().UTC())
-		if err != nil {
-			return err
-		}
-		if !relaySetChanged {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if recoveryFailures > 0 {
+				r.logDiscoveryFailure(relay.APIHTTPSAddr, relay.APIHTTPSAddr, recoveryFailures, err)
+			}
 			continue
 		}
-		if err := r.overlay.Sync(r.relaySet.OverlayPeerStates()); err != nil {
-			return err
+
+		measuredAt := time.Now().UTC()
+		changed, err := r.relaySet.ApplyRelayDiscoveryResponse(relay.APIHTTPSAddr, resp, measuredAt)
+		if err != nil {
+			if recoveryFailures > 0 {
+				r.logDiscoveryFailure(relay.APIHTTPSAddr, relay.APIHTTPSAddr, recoveryFailures, err)
+			}
+			continue
 		}
+		r.relaySet.RecordDiscoveryRTT(relay.APIHTTPSAddr, time.Since(startedAt), measuredAt)
+		if changed {
+			relaySetChanged = true
+		}
+	}
+	if !relaySetChanged {
+		return nil
+	}
+	if err := r.overlay.Sync(r.relaySet.OverlayPeerStates()); err != nil {
+		return err
 	}
 	return nil
 }
 
-func (r *Refresher) logDirectDiscoveryFailure(relay types.RelayDescriptor, err error, recoveryFailures int) {
-	expired, expireReason, consecutiveFailures := r.relaySet.RecordDiscoveryFailure(relay.Identity, relay.APIHTTPSAddr, err, recoveryFailures)
-	if !expired {
+func (r *Refresher) logDiscoveryFailure(targetRelayURL, sourceURL string, recoveryFailures int, err error) {
+	backedOff, backoffReason, consecutiveFailures := r.relaySet.RecordRelayFailure(targetRelayURL, err, recoveryFailures)
+	if !backedOff {
 		return
 	}
 
 	event := log.Warn().
 		Err(err).
-		Str("relay", relay.APIHTTPSAddr).
-		Bool("expired", true).
-		Str("reason", expireReason)
+		Str("relay", sourceURL).
+		Bool("backed_off", true).
+		Str("reason", backoffReason)
 	if consecutiveFailures > 0 {
 		event = event.Int("consecutive_failures", consecutiveFailures)
 	}
-	event.Msg("direct relay discovery expired")
+	event.Msg("discovery source retry delayed")
 }

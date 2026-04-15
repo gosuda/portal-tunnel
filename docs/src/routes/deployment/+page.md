@@ -630,3 +630,9 @@ Verify from the container:
 ```bash
 docker exec -it portal-1 nslookup api4.ipify.org
 ```
+
+### 8.4 Discovery announce warnings
+
+If logs show `relay discovery announce failed` with `404 page not found`, the target bootstrap relay is running an older release or does not serve `/discovery/announce`. This is warning-only: direct `/discovery` polling and explicit relay URLs can still work. The warnings stop once bootstrap relays are upgraded or removed from `BOOTSTRAPS`.
+
+Discovery announce is relay-to-relay only. A relay whose `PORTAL_URL` host is `localhost`, `127.0.0.1`, `::1`, or another loopback/local host is rejected by `/discovery/announce` because other relays and users cannot route to it. To join public discovery, set `PORTAL_URL` to a publicly reachable HTTPS hostname and expose the required TCP/UDP ports.

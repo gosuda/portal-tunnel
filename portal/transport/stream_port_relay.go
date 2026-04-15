@@ -20,16 +20,18 @@ type RelayTCPPort struct {
 	port        int
 	listener    net.Listener
 	stream      *RelayStream
+	bridge      func(net.Conn, net.Conn)
 
 	cancel    context.CancelFunc
 	closeOnce sync.Once
 }
 
-func NewRelayTCPPort(identityKey string, port int, stream *RelayStream) *RelayTCPPort {
+func NewRelayTCPPort(identityKey string, port int, stream *RelayStream, bridge func(net.Conn, net.Conn)) *RelayTCPPort {
 	return &RelayTCPPort{
 		identityKey: identityKey,
 		port:        port,
 		stream:      stream,
+		bridge:      bridge,
 	}
 }
 
@@ -123,40 +125,10 @@ func (t *RelayTCPPort) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	bridgeConns(conn, session)
-}
-
-// bridgeConns copies data bidirectionally between two connections.
-func bridgeConns(left, right net.Conn) {
-	defer left.Close()
-	defer right.Close()
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		copyAndCloseWrite(right, left)
-	}()
-	copyAndCloseWrite(left, right)
-	<-done
-}
-
-func copyAndCloseWrite(dst, src net.Conn) {
-	buf := make([]byte, 32*1024)
-	for {
-		nr, readErr := src.Read(buf)
-		if nr > 0 {
-			if _, writeErr := dst.Write(buf[:nr]); writeErr != nil {
-				break
-			}
-		}
-		if readErr != nil {
-			break
-		}
+	if t.bridge == nil {
+		_ = conn.Close()
+		_ = session.Close()
+		return
 	}
-	type closeWriter interface {
-		CloseWrite() error
-	}
-	if cw, ok := dst.(closeWriter); ok {
-		_ = cw.CloseWrite()
-	}
+	t.bridge(conn, session)
 }

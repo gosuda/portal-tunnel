@@ -23,18 +23,20 @@ You should have a relay running and accepting tunnel connections in about 10 min
 Run the relay with a single Docker command:
 
 ```bash
+mkdir -p ./relay-data
+# Put fullchain.pem and privatekey.pem in ./relay-data first, or configure ACME below.
 docker run -d \
   --name portal-relay \
   --restart unless-stopped \
   -p 443:443 \
   -p 4017:4017 \
   -e PORTAL_URL=https://relay.example.com:4017 \
-  -e ADMIN_SECRET_KEY=changeme \
-  -v $(pwd)/relay-data:/data \
-  ghcr.io/gosuda/portal-tunnel/relay-server:latest
+  -e IDENTITY_PATH=/portal-certs \
+  -v $(pwd)/relay-data:/portal-certs \
+  ghcr.io/gosuda/portal:latest
 ```
 
-Replace `relay.example.com` with your domain and set a strong `ADMIN_SECRET_KEY`.
+Replace `relay.example.com` with your domain. The admin secret is generated on first start and stored in `IDENTITY_PATH/identity.json`.
 
 ## Docker Compose Setup
 
@@ -44,7 +46,7 @@ For a more maintainable setup, use Docker Compose:
 # compose.yml
 services:
   relay:
-    image: ghcr.io/gosuda/portal-tunnel/relay-server:latest
+    image: ghcr.io/gosuda/portal:latest
     restart: unless-stopped
     ports:
       - "443:443"
@@ -53,10 +55,9 @@ services:
       PORTAL_URL: https://relay.example.com:4017
       API_PORT: "4017"
       SNI_PORT: "443"
-      ADMIN_SECRET_KEY: changeme
-      IDENTITY_PATH: /data/identity.json
+      IDENTITY_PATH: /portal-certs
     volumes:
-      - ./relay-data:/data
+      - ./relay-data:/portal-certs
 ```
 
 Start it:
@@ -72,15 +73,14 @@ docker compose up -d
 | `PORTAL_URL` | `https://localhost:4017` | Public base URL of your relay. Tunnels use this to register. |
 | `API_PORT` | `4017` | Admin/API server port. |
 | `SNI_PORT` | `443` | TCP SNI router port for tunnel traffic. |
-| `ADMIN_SECRET_KEY` | _(empty)_ | Secret for admin API access. Set this. |
-| `IDENTITY_PATH` | `identity.json` | Path to the relay's identity file (auto-created on first run). |
+| `IDENTITY_PATH` | `./.portal-certs` | Relay state directory containing `identity.json`, `admin_settings.json`, and TLS materials. |
 
 ## Connecting Your Tunnel
 
 Point `portal-tunnel` at your relay with the `--relays` flag:
 
 ```bash
-portal expose --relays https://relay.example.com:4017 localhost:3000
+portal expose --relays https://relay.example.com:4017 --discovery=false localhost:3000
 ```
 
 The `--relays` flag accepts a comma-separated list of relay API URLs. If you omit the scheme, `https` is assumed.
@@ -88,7 +88,7 @@ The `--relays` flag accepts a comma-separated list of relay API URLs. If you omi
 To avoid typing `--relays` every time, use a shell alias:
 
 ```bash
-alias portal-relay='portal expose --relays https://relay.example.com:4017'
+alias portal-relay='portal expose --relays https://relay.example.com:4017 --discovery=false'
 portal-relay localhost:3000
 ```
 
@@ -105,7 +105,7 @@ DNS propagation typically takes a few minutes but can take up to 48 hours depend
 
 ## Optional: TLS with ACME
 
-By default the relay expects you to place `fullchain.pem` and `privatekey.pem` in the `KEYLESS_DIR` directory (`.portal-certs` by default). For automatic certificate management via DNS-01 challenges, set `ACME_DNS_PROVIDER`:
+By default the relay expects you to place `fullchain.pem` and `privatekey.pem` in the `IDENTITY_PATH` directory (`.portal-certs` by default). For automatic certificate management via DNS-01 challenges, set `ACME_DNS_PROVIDER`:
 
 ```yaml
 environment:
@@ -166,7 +166,7 @@ sudo ufw allow 4017/tcp
 
 **Certificate errors**
 
-If you see TLS errors on the client side, confirm your certificate files are present in `KEYLESS_DIR` and that `fullchain.pem` includes the full chain (leaf + intermediates). If using ACME, check the relay logs for DNS provider authentication errors:
+If you see TLS errors on the client side, confirm your certificate files are present in `IDENTITY_PATH` and that `fullchain.pem` includes the full chain (leaf + intermediates). If using ACME, check the relay logs for DNS provider authentication errors:
 
 ```bash
 docker compose logs relay --tail 50

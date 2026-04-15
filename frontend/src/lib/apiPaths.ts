@@ -23,6 +23,7 @@ export const API_PATHS = {
   tunnel: {
     status: "/tunnel/status",
   },
+  discovery: "/discovery",
   healthz: "/healthz",
   install: {
     shell: "/install.sh",
