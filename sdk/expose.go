@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"net"
 	"net/http"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -39,6 +41,7 @@ type Exposure struct {
 	datagrams chan types.DatagramFrame
 
 	relaySet       *discovery.RelaySet
+	routePolicy    *policy.RoutePolicy
 	listenerMu     sync.RWMutex
 	relayListeners map[string]*listener
 
@@ -115,6 +118,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		accepted:        make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
 		datagrams:       make(chan types.DatagramFrame, max(len(relayURLs)*32, 1)),
 		relaySet:        discovery.NewRelaySet(relayURLs),
+		routePolicy:     policy.NewRoutePolicy(),
 		relayListeners:  make(map[string]*listener, len(relayURLs)),
 	}
 
@@ -365,6 +369,102 @@ func (e *Exposure) runDiscoveryLoop(ctx context.Context) {
 	}
 }
 
+func (e *Exposure) overlayNodeID(key string) uint32 {
+	key = strings.TrimSpace(strings.ToLower(key))
+	if key == "" {
+		return 0
+	}
+	return crc32.ChecksumIEEE([]byte(key))
+}
+
+func (e *Exposure) findMolsPath(ingressURL string, allRelays []discovery.RelayState) []discovery.RelayState {
+	ingressState, ok := e.relaySet.RelayState(ingressURL)
+	if !ok {
+		return nil
+	}
+
+	// We want to find a path: SDK -> Entry -> Mid -> Ingress
+	// Ingress is our target.
+	// But BuildRoute gives neighbors for an INGRESS node.
+	// So we need to find Entry such that Mid is a neighbor of Entry,
+	// and Ingress is a neighbor of Mid.
+	// AND Entry must be a neighbor of the SDK.
+
+	// SDK identity key
+	sdkKey := e.identity.Key()
+	sdkID := e.overlayNodeID(sdkKey)
+
+	// Prepare candidates
+	candidateIDs := make([]uint32, 0, len(allRelays))
+	stateByID := make(map[uint32]discovery.RelayState, len(allRelays))
+	for _, st := range allRelays {
+		if !st.Descriptor.SupportsOverlayPeer {
+			continue
+		}
+		id := e.overlayNodeID(st.Descriptor.Key())
+		candidateIDs = append(candidateIDs, id)
+		stateByID[id] = st
+
+		// Update health for route policy
+		ping := float64(st.DiscoveryRTT.Milliseconds())
+		if ping < 0 {
+			ping = 0
+		}
+		e.routePolicy.UpdateNodeHealth(id, policy.RelayHealth{
+			RTTMs:         ping,
+			PingLatencyMs: ping,
+			Healthy:       !st.Banned,
+			Fallback:      st.Banned,
+		})
+	}
+
+	ingressID := e.overlayNodeID(ingressState.Descriptor.Key())
+
+	// Step 1: SDK -> Entry
+	// Get neighbors of SDK
+	entries, err := e.routePolicy.BuildRoute(sdkID, candidateIDs, types.DefaultOverlayMaxPeers, false)
+	if err != nil {
+		return nil
+	}
+
+	for _, entryID := range entries {
+		if entryID == sdkID || entryID == ingressID {
+			continue
+		}
+		entryState := stateByID[entryID]
+
+		// Step 2: Entry -> Mid
+		// Get neighbors of Entry
+		mids, err := e.routePolicy.BuildRoute(entryID, candidateIDs, types.DefaultOverlayMaxPeers, false)
+		if err != nil {
+			continue
+		}
+
+		for _, midID := range mids {
+			if midID == entryID || midID == sdkID || midID == ingressID {
+				continue
+			}
+			midState := stateByID[midID]
+
+			// Step 3: Mid -> Ingress
+			// Get neighbors of Mid
+			targets, err := e.routePolicy.BuildRoute(midID, candidateIDs, types.DefaultOverlayMaxPeers, false)
+			if err != nil {
+				continue
+			}
+
+			for _, targetID := range targets {
+				if targetID == ingressID {
+					// Found a 3-hop path: SDK -> Entry -> Mid -> Ingress
+					return []discovery.RelayState{ingressState, midState, entryState}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	clientState := discovery.ClientState{
 		ActiveRelayURLs:   e.ActiveRelayURLs(),
@@ -409,11 +509,24 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			log.Warn().Err(err).Str("relay_url", relayURL).Msg("close stale relay listener")
 		}
 	}
+
+	allRelays := e.relaySet.OverlayPeerStates()
+
 	for _, relayURL := range missingRelayURLs {
 		retryCount := 10
 		if slices.Contains(e.explicitRelays, relayURL) {
 			retryCount = 0
 		}
+
+		path := e.findMolsPath(relayURL, allRelays)
+		if len(path) < 3 {
+			if failOnError {
+				return fmt.Errorf("could not find a valid 3-hop mols path for %q", relayURL)
+			}
+			log.Warn().Str("relay_url", relayURL).Msg("no valid 3-hop mols path found; skipping")
+			continue
+		}
+
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
 			Identity:   e.identity,
 			UDPEnabled: e.udpEnabled,
@@ -422,6 +535,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			RetryCount: retryCount,
 			Metadata:   e.metadata,
 			relaySet:   e.relaySet,
+			Path:       path,
 		})
 		if err != nil {
 			if failOnError {

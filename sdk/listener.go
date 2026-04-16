@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ type listenerConfig struct {
 	RetryCount       int
 	RetryWait        time.Duration
 	relaySet         *discovery.RelaySet
+	Path             []discovery.RelayState
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -54,6 +56,7 @@ type listener struct {
 	identity       types.Identity
 	metadata       types.LeaseMetadata
 	relaySet       *discovery.RelaySet
+	path           []discovery.RelayState
 	udpEnabled     bool
 	tcpEnabled     bool
 	dialTimeout    time.Duration
@@ -105,6 +108,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		identity:       cfg.Identity,
 		metadata:       cfg.Metadata,
 		relaySet:       cfg.relaySet,
+		path:           cfg.Path,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
 		dialTimeout:    dialTimeout,
@@ -537,23 +541,46 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 		return nil, errors.New("relay tls config is unavailable")
 	}
 
+	// For multi-hop, we connect to the LAST relay in the path (Entry)
+	// and send an onion packet to reach the FIRST relay (Ingress).
+	if len(l.path) < 3 {
+		return nil, errors.New("multi-hop path must have at least 3 nodes")
+	}
+
+	entryRelay := l.path[len(l.path)-1]
+	entryURL, err := url.Parse(entryRelay.Descriptor.APIHTTPSAddr)
+	if err != nil {
+		return nil, fmt.Errorf("parse entry relay url: %w", err)
+	}
+
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: l.dialTimeout},
 		Config:    l.tlsConfig.Clone(),
 	}
 
-	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(l.relayURL.Host))
+	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(entryURL.Host))
 	if err != nil {
 		return nil, err
 	}
 
+	// Construct onion packet
+	// Path: SDK -> R[n-1] -> R[n-2] -> ... -> R[0] (Ingress)
+	// We are connecting to R[n-1].
+	// Payload for R[n-1] should contain info to hop to R[n-2].
+
+	onionData, err := l.buildOnion(lease.accessToken)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("build onion: %w", err)
+	}
+
 	req := &http.Request{
 		Method: http.MethodGet,
-		URL:    utils.ResolveAPIURL(l.relayURL, types.PathSDKConnect),
-		Host:   l.relayURL.Host,
+		URL:    utils.ResolveAPIURL(entryURL, types.PathSDKHop),
+		Host:   entryURL.Host,
 		Header: make(http.Header),
 	}
-	req.Header.Set(types.HeaderAccessToken, lease.accessToken)
+	req.Header.Set("X-Portal-Onion-Layer", base64.StdEncoding.EncodeToString(onionData))
 	req.Header.Set("Connection", "keep-alive")
 
 	if writeErr := req.Write(conn); writeErr != nil {
@@ -576,6 +603,114 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 	}
 
 	return wrapBufferedConn(conn, reader), nil
+}
+
+func (l *listener) buildOnion(accessToken string) ([]byte, error) {
+	// Path: [Ingress, Mid, Entry]
+	// Reverse for onion construction: [Entry, Mid, Ingress]
+	// Wait, we connect to Entry. Entry needs to know about Mid.
+	// Mid needs to know about Ingress. Ingress needs to know about AccessToken.
+
+	// Final layer for Ingress
+	finalLayer := types.FinalLayer{AccessToken: accessToken}
+	finalData, _ := json.Marshal(finalLayer)
+
+	currentData := struct {
+		NextHop string `json:"next"`
+		Data    []byte `json:"data"`
+		Final   bool   `json:"final"`
+	}{
+		NextHop: "",
+		Data:    finalData,
+		Final:   true,
+	}
+
+	// Wrap for Ingress
+	// Wait, Ingress is l.path[0].
+	// Ingress doesn't need to hop, so it's the final hop.
+
+	// We wrap layers from Ingress back to Entry.
+	// Layer for Ingress is already handled by 'Final: true'.
+
+	// Now wrap for Mid (l.path[1])
+	ingressOverlayIP := l.path[0].Descriptor.OverlayIPv4
+	ingressPubKey := l.path[0].Descriptor.WireGuardPublicKey
+	layerData, err := l.wrapLayer(ingressOverlayIP, ingressPubKey, currentData)
+	if err != nil {
+		return nil, err
+	}
+
+	// Now currentData is for Mid. Mid needs to hop to Ingress.
+	currentData = struct {
+		NextHop string `json:"next"`
+		Data    []byte `json:"data"`
+		Final   bool   `json:"final"`
+	}{
+		NextHop: ingressOverlayIP,
+		Data:    layerData,
+		Final:   false,
+	}
+
+	// Wrap for Mid
+	midOverlayIP := l.path[1].Descriptor.OverlayIPv4
+	midPubKey := l.path[1].Descriptor.WireGuardPublicKey
+	layerData, err = l.wrapLayer(midOverlayIP, midPubKey, currentData)
+	if err != nil {
+		return nil, err
+	}
+
+	// If there are more hops, we continue wrapping.
+	// For 3 hops [A, B, C], we have R3=C, R2=B, R1=A.
+	// We connect to C. C needs to hop to B.
+	// So we need one more layer for Entry (C).
+
+	currentData = struct {
+		NextHop string `json:"next"`
+		Data    []byte `json:"data"`
+		Final   bool   `json:"final"`
+	}{
+		NextHop: midOverlayIP,
+		Data:    layerData,
+		Final:   false,
+	}
+
+	// Wrap for Entry (l.path[2])
+	entryPubKey := l.path[2].Descriptor.WireGuardPublicKey
+	return l.wrapLayer(l.path[2].Descriptor.OverlayIPv4, entryPubKey, currentData)
+}
+
+func (l *listener) wrapLayer(nextHopIP, pubKey string, data any) ([]byte, error) {
+	plaintext, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate ephemeral key for this layer
+	ephemeralPriv, err := utils.GenerateWireGuardPrivateKey()
+	if err != nil {
+		return nil, err
+	}
+	ephemeralPub, err := utils.WireGuardPublicKeyFromPrivate(ephemeralPriv)
+	if err != nil {
+		return nil, err
+	}
+
+	sharedSecret, err := utils.DeriveSharedSecret(ephemeralPriv, pubKey)
+	if err != nil {
+		return nil, err
+	}
+
+	ciphertext, err := utils.AESGCMEncrypt(sharedSecret, plaintext)
+	if err != nil {
+		return nil, err
+	}
+
+	onionLayer := types.OnionLayer{
+		EphemeralPublicKey: ephemeralPub,
+		NextHopOverlayIP:   nextHopIP,
+		Payload:            ciphertext,
+	}
+	return json.Marshal(onionLayer)
 }
 
 func (l *listener) openQUICSession(ctx context.Context) (*quic.Conn, error) {

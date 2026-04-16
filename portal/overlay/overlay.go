@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,7 +115,7 @@ func NewOverlay(rootHost string, cfg Config, handler http.Handler) (*Overlay, er
 		return nil, err
 	}
 
-	listener, err := stack.ListenTCP(DefaultPeerAPIHTTPPort)
+	listener, err := stack.ListenTCP(types.DefaultPeerAPIHTTPPort)
 	if err != nil {
 		_ = stack.Close()
 		return nil, err
@@ -190,6 +191,13 @@ func (o *Overlay) Client() *http.Client {
 	}
 }
 
+func (o *Overlay) Dial(ctx context.Context, overlayIP string, port int) (net.Conn, error) {
+	if o == nil || o.stack == nil {
+		return nil, errors.New("overlay is not initialized")
+	}
+	return o.stack.DialContext(ctx, "tcp", net.JoinHostPort(overlayIP, strconv.Itoa(port)))
+}
+
 func (o *Overlay) DiscoverRelay(ctx context.Context, relay types.RelayDescriptor) (types.DiscoveryResponse, error) {
 	if o == nil || o.stack == nil {
 		return types.DiscoveryResponse{}, errors.New("overlay is not initialized")
@@ -201,7 +209,7 @@ func (o *Overlay) DiscoverRelay(ctx context.Context, relay types.RelayDescriptor
 	var resp types.DiscoveryResponse
 	baseURL := &url.URL{
 		Scheme: "http",
-		Host:   net.JoinHostPort(relay.OverlayIPv4, fmt.Sprintf("%d", DefaultPeerAPIHTTPPort)),
+		Host:   net.JoinHostPort(relay.OverlayIPv4, fmt.Sprintf("%d", types.DefaultPeerAPIHTTPPort)),
 	}
 	if err := utils.HTTPDoAPIPath(ctx, o.Client(), baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
 		return types.DiscoveryResponse{}, err

@@ -10,4 +10,8 @@ const (
 	MarkerKeepalive   = byte(0x00)
 	MarkerRawStart    = byte(0x01)
 	MarkerTLSStart    = byte(0x02)
+	MarkerHop         = byte(0x03)
+
+	DefaultPeerAPIHTTPPort = 7777
+	DefaultOverlayMaxPeers = 4
 )

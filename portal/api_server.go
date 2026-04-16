@@ -1,8 +1,10 @@
 package portal
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,6 +115,8 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 			s.handleUnregister(w, r)
 		case types.PathSDKConnect:
 			s.handleConnect(w, r)
+		case types.PathSDKHop:
+			s.handleHop(w, r)
 		case types.PathDiscovery:
 			if !s.cfg.DiscoveryEnabled {
 				base.ServeHTTP(w, r)
@@ -740,10 +744,138 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 	return resp, nil
 }
 
-func (s *Server) runAPIServer() error {
-	err := s.apiServer.Serve(s.apiListener)
-	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
-		return nil
+func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodGet) {
+		return
 	}
-	return err
+	if r.ProtoMajor != 1 {
+		utils.WriteAPIError(w, http.StatusHTTPVersionNotSupported, types.APIErrorCodeHTTP11Only, "hop requires HTTP/1.1")
+		return
+	}
+
+	onionB64 := strings.TrimSpace(r.Header.Get("X-Portal-Onion-Layer"))
+	if onionB64 == "" {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "missing onion layer")
+		return
+	}
+
+	onionBytes, err := base64.StdEncoding.DecodeString(onionB64)
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid onion layer encoding")
+		return
+	}
+
+	var layer types.OnionLayer
+	if err := json.Unmarshal(onionBytes, &layer); err != nil {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid onion layer format")
+		return
+	}
+
+	sharedSecret, err := utils.DeriveSharedSecret(s.identity.WireGuardPrivateKey, layer.EphemeralPublicKey)
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "failed to derive shared secret")
+		return
+	}
+
+	plaintext, err := utils.AESGCMDecrypt(sharedSecret, layer.Payload)
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "failed to decrypt onion layer")
+		return
+	}
+
+	var decrypted struct {
+		NextHop string `json:"next"`
+		Data    []byte `json:"data"`
+		Final   bool   `json:"final"`
+	}
+	if err := json.Unmarshal(plaintext, &decrypted); err != nil {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid decrypted layer format")
+		return
+	}
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeHijackUnsupported, "hijacking is not supported")
+		return
+	}
+	conn, rw, err := hijacker.Hijack()
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeHijackFailed, err.Error())
+		return
+	}
+	if _, err := rw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"); err != nil {
+		_ = conn.Close()
+		return
+	}
+	_ = rw.Flush()
+
+	go s.proxyHop(conn, decrypted.NextHop, decrypted.Data, decrypted.Final)
+}
+
+func (s *Server) proxyHop(left net.Conn, nextHop string, nextData []byte, final bool) {
+	defer left.Close()
+
+	var right net.Conn
+	var err error
+
+	if final {
+		// Final hop connects to local /sdk/connect
+		var finalLayer types.FinalLayer
+		if err := json.Unmarshal(nextData, &finalLayer); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal final onion layer")
+			return
+		}
+		// We dial ourselves (loopback) to use the existing handleConnect logic
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		right, err = dialer.Dial("tcp", utils.HostPortOrLoopback(s.apiListener.Addr().String()))
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to dial local api for final hop")
+			return
+		}
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, types.PathSDKConnect, nil)
+		req.Header.Set(types.HeaderAccessToken, finalLayer.AccessToken)
+		req.Header.Set("Connection", "keep-alive")
+		if err := req.Write(right); err != nil {
+			_ = right.Close()
+			return
+		}
+		// Expect 200 OK
+		resp, err := http.ReadResponse(bufio.NewReader(right), req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			_ = right.Close()
+			return
+		}
+		_ = resp.Body.Close()
+	} else {
+		// Intermediate hop connects to next hop's /sdk/hop over overlay
+		if s.overlay == nil {
+			log.Warn().Msg("overlay not available for intermediate hop")
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		// nextHop is the overlay IP
+		right, err = s.overlay.Dial(ctx, nextHop, types.DefaultPeerAPIHTTPPort)
+		if err != nil {
+			log.Warn().Err(err).Str("next_hop", nextHop).Msg("failed to dial next hop")
+			return
+		}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, types.PathSDKHop, nil)
+		req.Header.Set("X-Portal-Onion-Layer", base64.StdEncoding.EncodeToString(nextData))
+		req.Header.Set("Connection", "keep-alive")
+		if err := req.Write(right); err != nil {
+			_ = right.Close()
+			return
+		}
+		// Expect 200 OK
+		resp, err := http.ReadResponse(bufio.NewReader(right), req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			_ = right.Close()
+			return
+		}
+		_ = resp.Body.Close()
+	}
+
+	// Bridge the connections
+	s.proxy.bridge(left, right, "", nil)
 }

@@ -129,7 +129,7 @@ type Server struct {
 
 	overlay         *overlay.Overlay
 	overlayRuntime  discovery.OverlayRuntime
-  announceLimiter *discovery.AnnounceLimiter
+	announceLimiter *discovery.AnnounceLimiter
 	relaySet        *discovery.RelaySet
 	registry        *leaseRegistry
 	udpPorts        *transport.PortAllocator
@@ -162,14 +162,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	loadMgr := policy.NewLoadManager()
 	server := &Server{
-		cfg:      cfg,
-		identity: identity,
-		registry: registry,
-		relaySet: relaySet,
-    announceLimiter: discovery.NewAnnounceLimiter(0, 0),
-		udpPorts: transport.NewPortAllocator(cfg.MinPort, cfg.MaxPort, 5*time.Minute),
-		tcpPorts: transport.NewPortAllocator(cfg.MinPort, cfg.MaxPort, 5*time.Minute),
-		loadMgr:  loadMgr,
+		cfg:             cfg,
+		identity:        identity,
+		registry:        registry,
+		relaySet:        relaySet,
+		announceLimiter: discovery.NewAnnounceLimiter(0, 0),
+		udpPorts:        transport.NewPortAllocator(cfg.MinPort, cfg.MaxPort, 5*time.Minute),
+		tcpPorts:        transport.NewPortAllocator(cfg.MinPort, cfg.MaxPort, 5*time.Minute),
+		loadMgr:         loadMgr,
 	}
 	if relaySet != nil {
 		server.routePolicy = policy.NewRoutePolicy()
@@ -298,7 +298,16 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	return nil
 }
 
+func (s *Server) runAPIServer() error {
+	err := s.apiServer.Serve(s.apiListener)
+	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
 func (s *Server) Wait() error {
+
 	if s.group == nil {
 		return nil
 	}

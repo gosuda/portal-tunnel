@@ -21,7 +21,6 @@ import (
 const (
 	DefaultMTU                 = 1420
 	DefaultListenPort          = 51820
-	DefaultPeerAPIHTTPPort     = 7777
 	DefaultPersistentKeepalive = 25
 	defaultEndpointResolveTTL  = 3 * time.Second
 )

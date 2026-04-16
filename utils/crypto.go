@@ -1,12 +1,15 @@
 package utils
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"sort"
@@ -29,6 +32,67 @@ const (
 	// signature form, r || s with no recovery header.
 	RawSecp256k1SignatureSize = 64
 )
+
+// AESGCMEncrypt encrypts data using AES-GCM with a 256-bit key.
+// It returns [nonce (12 bytes)] + [ciphertext] + [tag (16 bytes)].
+func AESGCMEncrypt(key, plaintext []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, errors.New("aes-gcm key must be 32 bytes")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+// AESGCMDecrypt decrypts data encrypted by AESGCMEncrypt.
+func AESGCMDecrypt(key, ciphertext []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, errors.New("aes-gcm key must be 32 bytes")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil, errors.New("ciphertext too short")
+	}
+	nonce, encrypted := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	return gcm.Open(nil, nonce, encrypted, nil)
+}
+
+// DeriveSharedSecret creates a 32-byte shared secret using X25519.
+func DeriveSharedSecret(privateKey, publicKey string) ([]byte, error) {
+	priv, err := decodeWireGuardKey(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("decode private key: %w", err)
+	}
+	pub, err := decodeWireGuardKey(publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("decode public key: %w", err)
+	}
+	clampWireGuardPrivateKey(&priv)
+	shared, err := curve25519.X25519(priv[:], pub[:])
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(shared)
+	return hash[:], nil
+}
 
 // ErrSecp256k1SignatureInvalid marks a well-formed signature that does not
 // verify for the payload and public key.

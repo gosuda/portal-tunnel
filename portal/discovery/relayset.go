@@ -230,6 +230,13 @@ func (s *RelaySet) PriorityRelays(clientState ClientState) []string {
 	return policy.SelectPriority(states, clientState)
 }
 
+func (s *RelaySet) RelayState(relayURL string) (RelayState, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	state, ok := s.relays[relayURL]
+	return state, ok
+}
+
 func (s *RelaySet) OverlayPeerStates() []RelayState {
 	now := time.Now().UTC()
 	s.mu.RLock()
