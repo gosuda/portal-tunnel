@@ -76,7 +76,7 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 	return provider, nil
 }
 
-func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain string, publicIPs utils.PublicIPs) error {
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
@@ -84,7 +84,8 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if baseDomain == "" {
 		return errors.New("base domain is required")
 	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	publicIPs, err := utils.NormalizePublicIPs(publicIPs)
+	if err != nil {
 		return err
 	}
 
@@ -99,14 +100,14 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	}
 
 	for _, recordName := range []string{baseDomain, "*." + baseDomain} {
-		if err := upsertARecord(ctx, client, hostedZoneID, recordName, publicIPv4); err != nil {
-			return fmt.Errorf("upsert route53 A record %s: %w", recordName, err)
+		if err := syncAddressRecords(ctx, client, hostedZoneID, recordName, publicIPs); err != nil {
+			return fmt.Errorf("sync route53 A/AAAA record %s: %w", recordName, err)
 		}
 	}
 	return nil
 }
 
-func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecord(ctx context.Context, name string, publicIPs utils.PublicIPs) error {
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
@@ -114,7 +115,8 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 	if name == "" {
 		return errors.New("record name is required")
 	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	publicIPs, err := utils.NormalizePublicIPs(publicIPs)
+	if err != nil {
 		return err
 	}
 
@@ -127,13 +129,13 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 	if err != nil {
 		return err
 	}
-	if err := upsertARecord(ctx, client, hostedZoneID, name, publicIPv4); err != nil {
-		return fmt.Errorf("upsert route53 A record %s: %w", name, err)
+	if err := syncAddressRecords(ctx, client, hostedZoneID, name, publicIPs); err != nil {
+		return fmt.Errorf("sync route53 A/AAAA record %s: %w", name, err)
 	}
 	return nil
 }
 
-func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
+func (p *Provider) DeleteAddressRecord(ctx context.Context, name string) error {
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
@@ -151,15 +153,8 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	recordSet, err := getRecordSet(ctx, client, hostedZoneID, name, route53types.RRTypeA)
-	if err != nil {
-		return err
-	}
-	if recordSet == nil {
-		return nil
-	}
-	if err := deleteRecordSet(ctx, client, hostedZoneID, recordSet, "Managed by Portal ENS cleanup"); err != nil {
-		return fmt.Errorf("delete route53 A record %s: %w", name, err)
+	if err := deleteAddressRecords(ctx, client, hostedZoneID, name); err != nil {
+		return fmt.Errorf("delete route53 A/AAAA record %s: %w", name, err)
 	}
 	return nil
 }
@@ -342,8 +337,57 @@ func upsertARecord(ctx context.Context, client *awsroute53.Client, hostedZoneID,
 	return upsertRecord(ctx, client, hostedZoneID, name, route53types.RRTypeA, []string{strings.TrimSpace(ip)}, "Managed by Portal ACME")
 }
 
+func upsertAAAARecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, name, ip string) error {
+	return upsertRecord(ctx, client, hostedZoneID, name, route53types.RRTypeAaaa, []string{strings.TrimSpace(ip)}, "Managed by Portal ACME")
+}
+
 func upsertTXTRecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, name, value string) error {
 	return upsertRecord(ctx, client, hostedZoneID, name, route53types.RRTypeTxt, []string{route53TXTValue(value)}, "Managed by Portal ENS")
+}
+
+func syncAddressRecords(ctx context.Context, client *awsroute53.Client, hostedZoneID, name string, publicIPs utils.PublicIPs) error {
+	if publicIPs.IPv4 != "" {
+		if err := upsertARecord(ctx, client, hostedZoneID, name, publicIPs.IPv4); err != nil {
+			return err
+		}
+	} else {
+		recordSet, err := getRecordSet(ctx, client, hostedZoneID, name, route53types.RRTypeA)
+		if err != nil {
+			return err
+		}
+		if err := deleteRecordSet(ctx, client, hostedZoneID, recordSet, "Managed by Portal ACME cleanup"); err != nil {
+			return err
+		}
+	}
+
+	if publicIPs.IPv6 != "" {
+		if err := upsertAAAARecord(ctx, client, hostedZoneID, name, publicIPs.IPv6); err != nil {
+			return err
+		}
+	} else {
+		recordSet, err := getRecordSet(ctx, client, hostedZoneID, name, route53types.RRTypeAaaa)
+		if err != nil {
+			return err
+		}
+		if err := deleteRecordSet(ctx, client, hostedZoneID, recordSet, "Managed by Portal ACME cleanup"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func deleteAddressRecords(ctx context.Context, client *awsroute53.Client, hostedZoneID, name string) error {
+	for _, recordType := range []route53types.RRType{route53types.RRTypeA, route53types.RRTypeAaaa} {
+		recordSet, err := getRecordSet(ctx, client, hostedZoneID, name, recordType)
+		if err != nil {
+			return err
+		}
+		if err := deleteRecordSet(ctx, client, hostedZoneID, recordSet, "Managed by Portal ENS cleanup"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureTXTRecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, name, value string) error {

@@ -61,4 +61,6 @@ type ClientState struct {
 	MaxActiveRelays   int
 	RequireUDP        bool
 	RequireTCP        bool
+	HasPublicIPv4     bool
+	HasPublicIPv6     bool
 }

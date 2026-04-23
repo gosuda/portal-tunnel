@@ -75,7 +75,7 @@ func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, e
 	return provider, nil
 }
 
-func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain string, publicIPs utils.PublicIPs) error {
 	if p == nil {
 		return errors.New("gcloud provider is nil")
 	}
@@ -83,7 +83,8 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if baseDomain == "" {
 		return errors.New("base domain is required")
 	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	publicIPs, err := utils.NormalizePublicIPs(publicIPs)
+	if err != nil {
 		return err
 	}
 
@@ -93,19 +94,14 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	}
 
 	for _, recordName := range []string{baseDomain, "*." + baseDomain} {
-		if err := ensureRecordSet(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.ResourceRecordSet{
-			Name:    fqdn(recordName),
-			Type:    "A",
-			Ttl:     defaultRecordTTL,
-			Rrdatas: []string{strings.TrimSpace(publicIPv4)},
-		}); err != nil {
-			return fmt.Errorf("upsert gcloud A record %s: %w", recordName, err)
+		if err := syncAddressRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, recordName, publicIPs); err != nil {
+			return fmt.Errorf("sync gcloud A/AAAA record %s: %w", recordName, err)
 		}
 	}
 	return nil
 }
 
-func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecord(ctx context.Context, name string, publicIPs utils.PublicIPs) error {
 	if p == nil {
 		return errors.New("gcloud provider is nil")
 	}
@@ -113,7 +109,8 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 	if name == "" {
 		return errors.New("record name is required")
 	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	publicIPs, err := utils.NormalizePublicIPs(publicIPs)
+	if err != nil {
 		return err
 	}
 
@@ -122,18 +119,13 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 		return err
 	}
 
-	if err := ensureRecordSet(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.ResourceRecordSet{
-		Name:    fqdn(name),
-		Type:    "A",
-		Ttl:     defaultRecordTTL,
-		Rrdatas: []string{strings.TrimSpace(publicIPv4)},
-	}); err != nil {
-		return fmt.Errorf("upsert gcloud A record %s: %w", name, err)
+	if err := syncAddressRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, name, publicIPs); err != nil {
+		return fmt.Errorf("sync gcloud A/AAAA record %s: %w", name, err)
 	}
 	return nil
 }
 
-func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
+func (p *Provider) DeleteAddressRecord(ctx context.Context, name string) error {
 	if p == nil {
 		return errors.New("gcloud provider is nil")
 	}
@@ -146,18 +138,8 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-
-	existing, err := listRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, name, "A")
-	if err != nil {
-		return fmt.Errorf("list gcloud A records %s: %w", name, err)
-	}
-	if len(existing) == 0 {
-		return nil
-	}
-	if err := applyChange(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.Change{
-		Deletions: existing,
-	}); err != nil {
-		return fmt.Errorf("delete gcloud A record %s: %w", name, err)
+	if err := deleteAddressRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, name); err != nil {
+		return fmt.Errorf("delete gcloud A/AAAA record %s: %w", name, err)
 	}
 	return nil
 }
@@ -405,6 +387,68 @@ func validateManagedZone(zone *dns.ManagedZone, domain, explicit string) error {
 	}
 	if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain == "" || !utils.HostnameMatchesBaseDomain(domain, zoneDomain) {
 		return fmt.Errorf("gcloud managed zone %q does not cover %s", explicit, domain)
+	}
+	return nil
+}
+
+func syncAddressRecordSets(ctx context.Context, service *dns.Service, projectID, managedZone, name string, publicIPs utils.PublicIPs) error {
+	if publicIPs.IPv4 != "" {
+		if err := ensureRecordSet(ctx, service, projectID, managedZone, &dns.ResourceRecordSet{
+			Name:    fqdn(name),
+			Type:    "A",
+			Ttl:     defaultRecordTTL,
+			Rrdatas: []string{strings.TrimSpace(publicIPs.IPv4)},
+		}); err != nil {
+			return err
+		}
+	} else {
+		existing, err := listRecordSets(ctx, service, projectID, managedZone, name, "A")
+		if err != nil {
+			return err
+		}
+		if len(existing) > 0 {
+			if err := applyChange(ctx, service, projectID, managedZone, &dns.Change{Deletions: existing}); err != nil {
+				return err
+			}
+		}
+	}
+
+	if publicIPs.IPv6 != "" {
+		if err := ensureRecordSet(ctx, service, projectID, managedZone, &dns.ResourceRecordSet{
+			Name:    fqdn(name),
+			Type:    "AAAA",
+			Ttl:     defaultRecordTTL,
+			Rrdatas: []string{strings.TrimSpace(publicIPs.IPv6)},
+		}); err != nil {
+			return err
+		}
+	} else {
+		existing, err := listRecordSets(ctx, service, projectID, managedZone, name, "AAAA")
+		if err != nil {
+			return err
+		}
+		if len(existing) > 0 {
+			if err := applyChange(ctx, service, projectID, managedZone, &dns.Change{Deletions: existing}); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func deleteAddressRecordSets(ctx context.Context, service *dns.Service, projectID, managedZone, name string) error {
+	for _, recordType := range []string{"A", "AAAA"} {
+		existing, err := listRecordSets(ctx, service, projectID, managedZone, name, recordType)
+		if err != nil {
+			return err
+		}
+		if len(existing) == 0 {
+			continue
+		}
+		if err := applyChange(ctx, service, projectID, managedZone, &dns.Change{Deletions: existing}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

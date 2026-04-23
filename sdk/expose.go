@@ -412,12 +412,17 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		listenerRelayURLs = []string{e.multiHop[len(e.multiHop)-1]}
 		multiHop = append([]string(nil), e.multiHop...)
 	} else {
+		resolveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		publicIPs, _ := utils.ResolvePublicIPs(resolveCtx)
+		cancel()
 		listenerRelayURLs = e.relaySet.PriorityRelays(discovery.ClientState{
 			ActiveRelayURLs:   e.ActiveRelayURLs(),
 			ExplicitRelayURLs: append([]string(nil), e.explicitRelays...),
 			MaxActiveRelays:   e.maxActiveRelays,
 			RequireUDP:        e.udpEnabled,
 			RequireTCP:        e.tcpEnabled,
+			HasPublicIPv4:     publicIPs.IPv4 != "",
+			HasPublicIPv6:     publicIPs.IPv6 != "",
 		})
 	}
 

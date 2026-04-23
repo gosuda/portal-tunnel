@@ -162,12 +162,15 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		return types.RegisterResponse{}, nil, err
 	}
 
+	reportedIPs, _ := utils.ResolvePublicIPs(ctx)
 	var resp types.RegisterResponse
 	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		ChallengeID:   challenge.ChallengeID,
 		SIWEMessage:   challenge.SIWEMessage,
 		SIWESignature: signature,
-		ReportedIP:    utils.ResolvePublicIP(ctx),
+		ReportedIP:    reportedIPs.PreferredIP(),
+		ReportedIPv4:  reportedIPs.IPv4,
+		ReportedIPv6:  reportedIPs.IPv6,
 	}, nil, &resp); err != nil {
 		return types.RegisterResponse{}, nil, err
 	}
@@ -183,11 +186,14 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 }
 
 func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, accessToken string, hopRoutes []types.HopRoute) (types.RenewResponse, error) {
+	reportedIPs, _ := utils.ResolvePublicIPs(ctx)
 	var resp types.RenewResponse
 	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
-		AccessToken: accessToken,
-		TTL:         int(ttl / time.Second),
-		ReportedIP:  utils.ResolvePublicIP(ctx),
+		AccessToken:  accessToken,
+		TTL:          int(ttl / time.Second),
+		ReportedIP:   reportedIPs.PreferredIP(),
+		ReportedIPv4: reportedIPs.IPv4,
+		ReportedIPv6: reportedIPs.IPv6,
 	}, nil, &resp); err != nil {
 		return types.RenewResponse{}, err
 	}

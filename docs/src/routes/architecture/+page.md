@@ -200,7 +200,7 @@ UDP client
 - When managed ACME is enabled, supported DNS providers are `cloudflare`, `gcloud`, and `route53`.
 - ENS gasless automation reuses `ACME_DNS_PROVIDER` for DNSSEC and ENS TXT sync.
 - Relay stores its state under `IDENTITY_PATH`, including `identity.json`, `admin_settings.json`, and certificate material. Tunnel and demo-app identities still use `IDENTITY_PATH` / `--identity-path` as a direct JSON file path.
-- Managed non-localhost ACME keeps both root and wildcard DNS A records in sync.
+- Managed non-localhost ACME keeps both root and wildcard DNS A/AAAA records in sync.
 - Relay certificate material lives under `IDENTITY_PATH` as `fullchain.pem` and `privatekey.pem`.
 - Localhost uses the development certificate path instead of public managed/manual certificate setup.
 

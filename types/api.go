@@ -61,6 +61,8 @@ type RegisterRequest struct {
 	SIWEMessage   string `json:"siwe_message"`
 	SIWESignature string `json:"siwe_signature"`
 	ReportedIP    string `json:"reported_ip,omitempty"`
+	ReportedIPv4  string `json:"reported_ipv4,omitempty"`
+	ReportedIPv6  string `json:"reported_ipv6,omitempty"`
 }
 
 type RegisterChallengeRequest struct {
@@ -117,9 +119,11 @@ type QUICControlResponse struct {
 }
 
 type RenewRequest struct {
-	AccessToken string `json:"access_token"`
-	TTL         int    `json:"ttl,omitempty"`
-	ReportedIP  string `json:"reported_ip,omitempty"`
+	AccessToken  string `json:"access_token"`
+	TTL          int    `json:"ttl,omitempty"`
+	ReportedIP   string `json:"reported_ip,omitempty"`
+	ReportedIPv4 string `json:"reported_ipv4,omitempty"`
+	ReportedIPv6 string `json:"reported_ipv6,omitempty"`
 }
 
 type RenewResponse struct {

@@ -112,6 +112,11 @@ type Server struct {
 	acmeManager *acme.Manager
 	proxy       proxy
 
+	descriptorIPFamiliesMu sync.RWMutex
+	descriptorSupportsIPv4 bool
+	descriptorSupportsIPv6 bool
+	descriptorIPFamiliesAt time.Time
+
 	apiListener net.Listener
 	sniListener net.Listener
 	apiServer   *http.Server

@@ -10,6 +10,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func newTestRegistry(t *testing.T) *leaseRegistry {
@@ -45,7 +46,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 		t.Fatalf("Lookup() = %v, %v, want registered lease", lookedUp, ok)
 	}
 
-	renewed, err := registry.Renew(record.Key(), time.Minute, "203.0.113.10", "")
+	renewed, err := registry.Renew(record.Key(), time.Minute, "203.0.113.10", utils.PublicIPs{})
 	if err != nil {
 		t.Fatalf("Renew() error = %v", err)
 	}

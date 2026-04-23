@@ -149,6 +149,17 @@ func TestValidateIPv4(t *testing.T) {
 	}
 }
 
+func TestValidateIPv6(t *testing.T) {
+	t.Parallel()
+
+	if err := ValidateIPv6("2001:db8::10"); err != nil {
+		t.Fatalf("ValidateIPv6() error = %v", err)
+	}
+	if err := ValidateIPv6("203.0.113.10"); err == nil {
+		t.Fatal("ValidateIPv6() error = nil, want invalid ip error")
+	}
+}
+
 func TestNormalizeDNSLabel(t *testing.T) {
 	t.Parallel()
 

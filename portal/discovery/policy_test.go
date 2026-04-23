@@ -59,6 +59,15 @@ func confirmedPolicyRelayStateWithRTT(t *testing.T, relayURL string, rtt time.Du
 	return state
 }
 
+func confirmedPolicyRelayStateWithFamilies(t *testing.T, relayURL string, supportsIPv4, supportsIPv6 bool) RelayState {
+	t.Helper()
+
+	state := confirmedPolicyRelayState(t, relayURL)
+	state.Descriptor.SupportsIPv4 = supportsIPv4
+	state.Descriptor.SupportsIPv6 = supportsIPv6
+	return state
+}
+
 func TestSelectPriorityKeepsExplicitRelaysOutsideAutoLimit(t *testing.T) {
 	policy := DefaultRelayPolicy{}
 	explicitRelay := "https://relay-explicit.example"
@@ -225,6 +234,95 @@ func TestSelectPriorityPushesHighRTTRelayBehindNormalRelay(t *testing.T) {
 	}
 	if got := selected[0]; got != normalRelay.Descriptor.APIHTTPSAddr {
 		t.Fatalf("selected[0] = %q, want normal RTT relay %q", got, normalRelay.Descriptor.APIHTTPSAddr)
+	}
+}
+
+func TestSelectPriorityPrefersIPv4CompatibleRelayForIPv4OnlyClient(t *testing.T) {
+	policy := DefaultRelayPolicy{}
+	ipv4Relay := confirmedPolicyRelayStateWithFamilies(t, "https://relay-ipv4.example", true, false)
+	ipv6Relay := confirmedPolicyRelayStateWithFamilies(t, "https://relay-ipv6.example", false, true)
+
+	selected := policy.SelectPriority([]RelayState{
+		ipv6Relay,
+		ipv4Relay,
+	}, ClientState{
+		MaxActiveRelays: 1,
+		HasPublicIPv4:   true,
+	})
+
+	if len(selected) != 1 {
+		t.Fatalf("len(selected) = %d, want 1", len(selected))
+	}
+	if got := selected[0]; got != ipv4Relay.Descriptor.APIHTTPSAddr {
+		t.Fatalf("selected[0] = %q, want ipv4 relay %q", got, ipv4Relay.Descriptor.APIHTTPSAddr)
+	}
+}
+
+func TestSelectPriorityPrefersIPv6CompatibleRelayForIPv6OnlyClient(t *testing.T) {
+	policy := DefaultRelayPolicy{}
+	ipv4Relay := confirmedPolicyRelayStateWithFamilies(t, "https://relay-ipv4.example", true, false)
+	ipv6Relay := confirmedPolicyRelayStateWithFamilies(t, "https://relay-ipv6.example", false, true)
+
+	selected := policy.SelectPriority([]RelayState{
+		ipv4Relay,
+		ipv6Relay,
+	}, ClientState{
+		MaxActiveRelays: 1,
+		HasPublicIPv6:   true,
+	})
+
+	if len(selected) != 1 {
+		t.Fatalf("len(selected) = %d, want 1", len(selected))
+	}
+	if got := selected[0]; got != ipv6Relay.Descriptor.APIHTTPSAddr {
+		t.Fatalf("selected[0] = %q, want ipv6 relay %q", got, ipv6Relay.Descriptor.APIHTTPSAddr)
+	}
+}
+
+func TestSelectPriorityFallsBackWhenNoCompatibleRelayExists(t *testing.T) {
+	policy := DefaultRelayPolicy{}
+	currentRelay := confirmedPolicyRelayStateWithFamilies(t, "https://relay-current.example", false, true)
+	newRelay := confirmedPolicyRelayStateWithFamilies(t, "https://relay-new.example", false, true)
+
+	selected := policy.SelectPriority([]RelayState{
+		currentRelay,
+		newRelay,
+	}, ClientState{
+		ActiveRelayURLs: []string{currentRelay.Descriptor.APIHTTPSAddr},
+		MaxActiveRelays: 1,
+		HasPublicIPv4:   true,
+	})
+
+	if len(selected) != 1 {
+		t.Fatalf("len(selected) = %d, want 1", len(selected))
+	}
+	if got := selected[0]; got != currentRelay.Descriptor.APIHTTPSAddr {
+		t.Fatalf("selected[0] = %q, want fallback current relay %q", got, currentRelay.Descriptor.APIHTTPSAddr)
+	}
+}
+
+func TestSelectPriorityKeepsExplicitRelayEvenWhenFamilyMismatched(t *testing.T) {
+	policy := DefaultRelayPolicy{}
+	explicitRelay := "https://relay-explicit.example"
+	ipv6Relay := confirmedPolicyRelayStateWithFamilies(t, "https://relay-ipv6.example", false, true)
+
+	selected := policy.SelectPriority([]RelayState{
+		bootstrapPolicyRelayState(explicitRelay),
+		ipv6Relay,
+	}, ClientState{
+		ExplicitRelayURLs: []string{explicitRelay},
+		MaxActiveRelays:   1,
+		HasPublicIPv6:     true,
+	})
+
+	if len(selected) != 2 {
+		t.Fatalf("len(selected) = %d, want 2", len(selected))
+	}
+	if got := selected[0]; got != explicitRelay {
+		t.Fatalf("selected[0] = %q, want explicit relay %q", got, explicitRelay)
+	}
+	if got := selected[1]; got != ipv6Relay.Descriptor.APIHTTPSAddr {
+		t.Fatalf("selected[1] = %q, want ipv6 relay %q", got, ipv6Relay.Descriptor.APIHTTPSAddr)
 	}
 }
 

@@ -82,6 +82,29 @@ func (p DefaultRelayPolicy) SelectPriority(states []RelayState, clientState Clie
 		return nil
 	}
 
+	switch {
+	case clientState.HasPublicIPv4 && !clientState.HasPublicIPv6:
+		compatible := make([]RelayState, 0, len(autoPool))
+		for _, state := range autoPool {
+			if state.hasObservedDescriptor() && state.Descriptor.SupportsIPv4 {
+				compatible = append(compatible, state)
+			}
+		}
+		if len(compatible) > 0 {
+			autoPool = compatible
+		}
+	case clientState.HasPublicIPv6 && !clientState.HasPublicIPv4:
+		compatible := make([]RelayState, 0, len(autoPool))
+		for _, state := range autoPool {
+			if state.hasObservedDescriptor() && state.Descriptor.SupportsIPv6 {
+				compatible = append(compatible, state)
+			}
+		}
+		if len(compatible) > 0 {
+			autoPool = compatible
+		}
+	}
+
 	currentAuto := make([]string, 0, len(autoPool))
 	confirmedAuto := make([]string, 0, len(autoPool))
 	highRTTAuto := make([]string, 0, len(autoPool))

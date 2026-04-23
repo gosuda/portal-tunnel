@@ -153,6 +153,8 @@ Returns signed relay discovery descriptors for this relay and any known peer rel
 | `wireguard_public_key` | `string` | WireGuard overlay public key, present when overlay is enabled |
 | `wireguard_port` | `number` | Public WireGuard UDP port on the `api_https_addr` host, present when overlay is enabled |
 | `supports_overlay` | `boolean` | Relay can participate in WireGuard multi-hop overlay routing |
+| `supports_ipv4` | `boolean` | Relay host currently resolves to at least one public IPv4 address |
+| `supports_ipv6` | `boolean` | Relay host currently resolves to at least one public IPv6 address |
 | `supports_udp` | `boolean` | Relay can allocate public UDP leases |
 | `supports_tcp` | `boolean` | Relay can allocate raw TCP port leases |
 | `active_connections` | `number` | Current proxied connection count reported by the relay |

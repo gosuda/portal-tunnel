@@ -365,12 +365,12 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 		return nil
 	}
 
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	publicIPs, err := utils.ResolvePublicIPs(ctx)
 	if err != nil {
 		return fmt.Errorf("detect public ip: %w", err)
 	}
 
-	return m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP)
+	return m.dns.EnsureAddressRecords(ctx, m.cfg.BaseDomain, publicIPs)
 }
 
 func (m *Manager) syncENSGasless(ctx context.Context) error {
@@ -402,7 +402,7 @@ func (m *Manager) syncENSGasless(ctx context.Context) error {
 	if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
 		return fmt.Errorf("ensure ens gasless txt: %w", err)
 	}
-	if err := m.syncTrackedENSGaslessHostARecords(ctx); err != nil {
+	if err := m.syncTrackedENSGaslessHostAddressRecords(ctx); err != nil {
 		return err
 	}
 	m.ensLogOnce.Do(func() {
@@ -435,7 +435,7 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 	if err != nil {
 		return fmt.Errorf("normalize ens gasless address: %w", err)
 	}
-	if err := m.syncENSGaslessHostnameARecord(ctx, hostname); err != nil {
+	if err := m.syncENSGaslessHostnameAddressRecord(ctx, hostname); err != nil {
 		return err
 	}
 	if err := m.dns.EnsureTXTRecord(ctx, hostname, gaslessENSTXTPrefix+defaultENSGaslessResolver+" "+strings.TrimSpace(address)); err != nil {
@@ -467,7 +467,7 @@ func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string)
 	if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
 		return err
 	}
-	if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
+	if err := m.dns.DeleteAddressRecord(ctx, hostname); err != nil {
 		return err
 	}
 	return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
@@ -496,9 +496,9 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err))
 				continue
 			}
-			if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
+			if err := m.dns.DeleteAddressRecord(ctx, hostname); err != nil {
 				remaining = append(remaining, hostname)
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless A record for %s: %w", hostname, err))
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless A/AAAA record for %s: %w", hostname, err))
 			}
 		}
 		return remaining
@@ -508,36 +508,36 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 	return cleanupErr
 }
 
-func (m *Manager) syncTrackedENSGaslessHostARecords(ctx context.Context) error {
+func (m *Manager) syncTrackedENSGaslessHostAddressRecords(ctx context.Context) error {
 	hostnames, err := m.trackedENSGaslessHostnames()
 	if err != nil || len(hostnames) == 0 {
 		return err
 	}
 
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	publicIPs, err := utils.ResolvePublicIPs(ctx)
 	if err != nil {
 		return fmt.Errorf("detect public ip: %w", err)
 	}
 	for _, hostname := range hostnames {
-		if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-			return fmt.Errorf("ensure ens gasless A record for %s: %w", hostname, err)
+		if err := m.dns.EnsureAddressRecord(ctx, hostname, publicIPs); err != nil {
+			return fmt.Errorf("ensure ens gasless A/AAAA record for %s: %w", hostname, err)
 		}
 	}
 	return nil
 }
 
-func (m *Manager) syncENSGaslessHostnameARecord(ctx context.Context, hostname string) error {
+func (m *Manager) syncENSGaslessHostnameAddressRecord(ctx context.Context, hostname string) error {
 	hostname = utils.NormalizeHostname(hostname)
 	if hostname == "" || hostname == m.cfg.BaseDomain {
 		return nil
 	}
 
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	publicIPs, err := utils.ResolvePublicIPs(ctx)
 	if err != nil {
 		return fmt.Errorf("detect public ip: %w", err)
 	}
-	if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-		return fmt.Errorf("ensure ens gasless A record for %s: %w", hostname, err)
+	if err := m.dns.EnsureAddressRecord(ctx, hostname, publicIPs); err != nil {
+		return fmt.Errorf("ensure ens gasless A/AAAA record for %s: %w", hostname, err)
 	}
 	return nil
 }

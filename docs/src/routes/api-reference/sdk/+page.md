@@ -172,7 +172,9 @@ Complete tunnel registration by submitting the signed SIWE challenge. Returns an
 | `challenge_id` | `string` | Yes | Challenge ID from `/sdk/register/challenge` |
 | `siwe_message` | `string` | Yes | The SIWE message that was signed |
 | `siwe_signature` | `string` | Yes | Ethereum personal sign signature (hex) |
-| `reported_ip` | `string` | No | Client-reported public IP address |
+| `reported_ip` | `string` | No | Legacy summary public IP address for compatibility |
+| `reported_ipv4` | `string` | No | Client-reported public IPv4 address |
+| `reported_ipv6` | `string` | No | Client-reported public IPv6 address |
 
 **Response fields:**
 
@@ -248,7 +250,9 @@ Renew an existing lease to extend its TTL. Returns a new access token that shoul
 |-------|------|----------|-------------|
 | `access_token` | `string` | Yes | Current JWT access token |
 | `ttl` | `int` | No | Requested TTL in seconds |
-| `reported_ip` | `string` | No | Client-reported public IP address |
+| `reported_ip` | `string` | No | Legacy summary public IP address for compatibility |
+| `reported_ipv4` | `string` | No | Client-reported public IPv4 address |
+| `reported_ipv6` | `string` | No | Client-reported public IPv6 address |
 
 **Response fields:**
 

@@ -10,6 +10,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/cloudflare"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/gcloud"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/route53"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
@@ -21,9 +22,9 @@ const (
 type DNSProvider interface {
 	Name() string
 	ChallengeProvider(ctx context.Context) (challenge.Provider, error)
-	EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error
-	EnsureARecord(ctx context.Context, name, publicIPv4 string) error
-	DeleteARecord(ctx context.Context, name string) error
+	EnsureAddressRecords(ctx context.Context, baseDomain string, publicIPs utils.PublicIPs) error
+	EnsureAddressRecord(ctx context.Context, name string, publicIPs utils.PublicIPs) error
+	DeleteAddressRecord(ctx context.Context, name string) error
 	EnsureTXTRecord(ctx context.Context, name, value string) error
 	DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error
 	EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error)

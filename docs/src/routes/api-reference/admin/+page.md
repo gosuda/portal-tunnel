@@ -179,7 +179,9 @@ Get a full snapshot of the relay's current state including all active leases, ap
 | `first_seen_at` | `string` | ISO 8601 first registration time |
 | `last_seen_at` | `string` | ISO 8601 last activity time |
 | `client_ip` | `string` | Client IP address |
-| `reported_ip` | `string` | Client-reported public IP |
+| `reported_ip` | `string` | Legacy summary public IP |
+| `reported_ipv4` | `string` | Client-reported public IPv4 |
+| `reported_ipv6` | `string` | Client-reported public IPv6 |
 | `udp_addr` | `string` | UDP transport address |
 | `tcp_addr` | `string` | TCP transport address |
 | `metadata` | `object` | Lease metadata (description, tags, thumbnail) |

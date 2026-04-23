@@ -171,7 +171,7 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 	return nil
 }
 
-func (r *leaseRegistry) Renew(key string, ttl time.Duration, clientIP, reportedIP string) (*leaseRecord, error) {
+func (r *leaseRegistry) Renew(key string, ttl time.Duration, clientIP string, reportedIPs utils.PublicIPs) (*leaseRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -187,8 +187,10 @@ func (r *leaseRegistry) Renew(key string, ttl time.Duration, clientIP, reportedI
 	if strings.TrimSpace(clientIP) != "" {
 		record.ClientIP = clientIP
 	}
-	if strings.TrimSpace(reportedIP) != "" {
-		record.ReportedIP = reportedIP
+	if reportedIPs.Any() {
+		record.ReportedIP = reportedIPs.PreferredIP()
+		record.ReportedIPv4 = reportedIPs.IPv4
+		record.ReportedIPv6 = reportedIPs.IPv6
 	}
 	r.policy.IPFilter().RegisterIdentityIP(record.Key(), clientIP)
 	return record, nil
@@ -544,16 +546,18 @@ func (r *leaseRegistry) AdminLeases(now time.Time) []types.AdminLease {
 		clientIP := record.ClientIP
 		identityKey := record.Key()
 		leases = append(leases, types.AdminLease{
-			Lease:       r.publicLease(record),
-			IdentityKey: identityKey,
-			Address:     record.Address,
-			BPS:         r.policy.BPSManager().IdentityBPS(identityKey),
-			ClientIP:    clientIP,
-			ReportedIP:  record.ReportedIP,
-			IsApproved:  r.policy.EffectiveApproval(identityKey),
-			IsBanned:    r.policy.IsIdentityBanned(identityKey),
-			IsDenied:    r.policy.IsIdentityDenied(identityKey),
-			IsIPBanned:  r.policy.IPFilter().IsIPBanned(clientIP),
+			Lease:        r.publicLease(record),
+			IdentityKey:  identityKey,
+			Address:      record.Address,
+			BPS:          r.policy.BPSManager().IdentityBPS(identityKey),
+			ClientIP:     clientIP,
+			ReportedIP:   record.ReportedIP,
+			ReportedIPv4: record.ReportedIPv4,
+			ReportedIPv6: record.ReportedIPv6,
+			IsApproved:   r.policy.EffectiveApproval(identityKey),
+			IsBanned:     r.policy.IsIdentityBanned(identityKey),
+			IsDenied:     r.policy.IsIdentityDenied(identityKey),
+			IsIPBanned:   r.policy.IPFilter().IsIPBanned(clientIP),
 		})
 	}
 	return leases
@@ -594,13 +598,15 @@ func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 
 type leaseRecord struct {
 	types.Identity
-	ExpiresAt   time.Time
-	FirstSeenAt time.Time
-	LastSeenAt  time.Time
-	ClientIP    string
-	ReportedIP  string
-	Hostname    string
-	Metadata    types.LeaseMetadata
+	ExpiresAt    time.Time
+	FirstSeenAt  time.Time
+	LastSeenAt   time.Time
+	ClientIP     string
+	ReportedIP   string
+	ReportedIPv4 string
+	ReportedIPv6 string
+	Hostname     string
+	Metadata     types.LeaseMetadata
 
 	hopToken           string
 	hopNextOverlayIPv4 string

@@ -132,7 +132,7 @@ function toAdminServer(
     isApproved: row.IsApproved,
     isDenied: row.IsDenied,
     ip: row.ClientIP,
-    displayIP: row.ReportedIP || row.ClientIP,
+    displayIP: row.ReportedIP || row.ReportedIPv4 || row.ReportedIPv6 || row.ClientIP,
     isIPBanned: row.IsIPBanned,
   };
 }

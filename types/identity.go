@@ -116,15 +116,17 @@ type Lease struct {
 
 type AdminLease struct {
 	Lease
-	IdentityKey string `json:"identity_key,omitempty"`
-	Address     string `json:"address,omitempty"`
-	BPS         int64
-	ClientIP    string
-	ReportedIP  string
-	IsApproved  bool
-	IsBanned    bool
-	IsDenied    bool
-	IsIPBanned  bool
+	IdentityKey  string `json:"identity_key,omitempty"`
+	Address      string `json:"address,omitempty"`
+	BPS          int64
+	ClientIP     string
+	ReportedIP   string
+	ReportedIPv4 string
+	ReportedIPv6 string
+	IsApproved   bool
+	IsBanned     bool
+	IsDenied     bool
+	IsIPBanned   bool
 }
 
 type RelayDescriptor struct {
@@ -136,6 +138,8 @@ type RelayDescriptor struct {
 	WireGuardPublicKey string    `json:"wireguard_public_key,omitempty"`
 	WireGuardPort      int       `json:"wireguard_port,omitempty"`
 	SupportsOverlay    bool      `json:"supports_overlay,omitempty"`
+	SupportsIPv4       bool      `json:"supports_ipv4,omitempty"`
+	SupportsIPv6       bool      `json:"supports_ipv6,omitempty"`
 	SupportsUDP        bool      `json:"supports_udp,omitempty"`
 	SupportsTCP        bool      `json:"supports_tcp,omitempty"`
 	ActiveConnections  int64     `json:"active_connections,omitempty"`
@@ -165,6 +169,8 @@ func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
 		WireGuardPublicKey string  `json:"wireguard_public_key"`
 		WireGuardPort      int     `json:"wireguard_port"`
 		SupportsOverlay    bool    `json:"supports_overlay"`
+		SupportsIPv4       bool    `json:"supports_ipv4"`
+		SupportsIPv6       bool    `json:"supports_ipv6"`
 		SupportsUDP        bool    `json:"supports_udp"`
 		SupportsTCP        bool    `json:"supports_tcp"`
 		ActiveConnections  int64   `json:"active_connections"`
@@ -178,6 +184,8 @@ func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
 		WireGuardPublicKey: desc.WireGuardPublicKey,
 		WireGuardPort:      desc.WireGuardPort,
 		SupportsOverlay:    desc.SupportsOverlay,
+		SupportsIPv4:       desc.SupportsIPv4,
+		SupportsIPv6:       desc.SupportsIPv6,
 		SupportsUDP:        desc.SupportsUDP,
 		SupportsTCP:        desc.SupportsTCP,
 		ActiveConnections:  desc.ActiveConnections,

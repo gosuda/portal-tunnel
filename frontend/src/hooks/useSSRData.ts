@@ -24,6 +24,8 @@ export interface AdminLeaseData extends PublicLeaseData {
   BPS: number;
   ClientIP: string;
   ReportedIP: string;
+  ReportedIPv4?: string;
+  ReportedIPv6?: string;
   IsApproved: boolean;
   IsBanned: boolean;
   IsDenied: boolean;

@@ -234,7 +234,7 @@ func TestRegisterLeaseOmitsSNIPortWithoutUDP(t *testing.T) {
 			Address: server.identity.Address,
 		},
 		TCPEnabled: true,
-	}, "203.0.113.10", "")
+	}, "203.0.113.10", utils.PublicIPs{})
 	if err != nil {
 		t.Fatalf("registerLease() error = %v", err)
 	}
@@ -331,7 +331,7 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 			Name:    "Demo-App",
 			Address: server.identity.Address,
 		},
-	}, "203.0.113.10", "")
+	}, "203.0.113.10", utils.PublicIPs{})
 	if err != nil {
 		t.Fatalf("registerLease() error = %v", err)
 	}
@@ -375,7 +375,7 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 			Address: server.identity.Address,
 		},
 		UDPEnabled: true,
-	}, "203.0.113.10", "")
+	}, "203.0.113.10", utils.PublicIPs{})
 	if err != nil {
 		t.Fatalf("registerLease() error = %v", err)
 	}

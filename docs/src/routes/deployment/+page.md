@@ -17,7 +17,7 @@ This guide covers the production steps for running Portal Relay on a public doma
 You need:
 
 - A public domain, for example `example.com`
-- A public Linux server with a static public IPv4
+- A public Linux server with a static public IPv4, IPv6, or both
 - Docker and Docker Compose
 - Optional for managed ACME DNS-01 automation or Portal-managed ENS TXT sync: a supported DNS provider account for `cloudflare`, `gcloud`, or `route53`
 - Open inbound ports:
@@ -43,7 +43,7 @@ Choose one of these modes:
   - Portal keeps the manual certificate files, skips ACME certificate issuance, and still uses the provider for DNSSEC + ENS TXT automation.
 - Managed ACME mode
   - Set `ACME_DNS_PROVIDER` to `cloudflare`, `gcloud`, or `route53`.
-  - Portal manages root/wildcard A records and certificate renewal.
+  - Portal manages root/wildcard A/AAAA records and certificate renewal.
   - If ENS gasless is enabled, Portal also manages DNSSEC.
 
 If you only need a relay and do not need Portal-managed DNS or automatic renewal, manual certificate mode is the simplest option.
@@ -69,19 +69,22 @@ Set `ACME_DNS_PROVIDER` to one of:
 
 #### Create DNS records
 
-If `PORTAL_URL=https://example.com`, create:
+If `PORTAL_URL=https://example.com`, create root and wildcard address records for every public IP family you expose:
 
-- `example.com -> <server-ip>`
-- `*.example.com -> <server-ip>`
+- `example.com -> <server-ipv4>` as `A` when IPv4 is available
+- `example.com -> <server-ipv6>` as `AAAA` when IPv6 is available
+- `*.example.com -> <server-ipv4>` as `A` when IPv4 is available
+- `*.example.com -> <server-ipv6>` as `AAAA` when IPv6 is available
 
-If you deploy on a non-apex host such as `PORTAL_URL=https://portal.example.com:8443`, create:
+If you deploy on a non-apex host such as `PORTAL_URL=https://portal.example.com:8443`, create matching address records for that host prefix:
 
-- `portal.example.com -> <server-ip>`
-- `*.portal.example.com -> <server-ip>`
+- `portal.example.com -> <server-ipv4>` as `A` when IPv4 is available
+- `portal.example.com -> <server-ipv6>` as `AAAA` when IPv6 is available
+- `*.portal.example.com -> <server-ipv4>` as `A` when IPv4 is available
+- `*.portal.example.com -> <server-ipv6>` as `AAAA` when IPv6 is available
 
-Set both records as:
+Set all address records as:
 
-- Type: `A`
 - Proxy status: `DNS only`
 
 #### Create Cloudflare API token

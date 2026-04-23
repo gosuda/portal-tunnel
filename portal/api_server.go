@@ -173,6 +173,7 @@ func (s *Server) signedRelayDescriptor(now time.Time) (types.RelayDescriptor, er
 		wireGuardPublicKey = cfg.PublicKey
 		wireGuardPort = cfg.ListenPort
 	}
+	supportsIPv4, supportsIPv6 := s.descriptorIPFamilies()
 
 	self := types.RelayDescriptor{
 		Address:            s.identity.Address,
@@ -183,6 +184,8 @@ func (s *Server) signedRelayDescriptor(now time.Time) (types.RelayDescriptor, er
 		WireGuardPublicKey: wireGuardPublicKey,
 		WireGuardPort:      wireGuardPort,
 		SupportsOverlay:    s.overlay != nil,
+		SupportsIPv4:       supportsIPv4,
+		SupportsIPv6:       supportsIPv6,
 		SupportsUDP:        s.cfg.UDPEnabled && s.quicTunnel != nil,
 		SupportsTCP:        s.cfg.TCPEnabled,
 		ActiveConnections:  s.proxy.activeConnectionCount(),
@@ -194,6 +197,38 @@ func (s *Server) signedRelayDescriptor(now time.Time) (types.RelayDescriptor, er
 		return types.RelayDescriptor{}, err
 	}
 	return signedSelf, nil
+}
+
+func (s *Server) descriptorIPFamilies() (bool, bool) {
+	s.descriptorIPFamiliesMu.RLock()
+	if !s.descriptorIPFamiliesAt.IsZero() && time.Since(s.descriptorIPFamiliesAt) < discovery.DiscoveryPollInterval {
+		supportsIPv4 := s.descriptorSupportsIPv4
+		supportsIPv6 := s.descriptorSupportsIPv6
+		s.descriptorIPFamiliesMu.RUnlock()
+		return supportsIPv4, supportsIPv6
+	}
+	cachedIPv4 := s.descriptorSupportsIPv4
+	cachedIPv6 := s.descriptorSupportsIPv6
+	hasCached := !s.descriptorIPFamiliesAt.IsZero()
+	s.descriptorIPFamiliesMu.RUnlock()
+
+	resolveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	supportsIPv4, supportsIPv6, err := utils.ResolveHostIPFamilies(resolveCtx, utils.PortalRootHost(s.cfg.PortalURL))
+	cancel()
+	if err != nil {
+		if hasCached {
+			return cachedIPv4, cachedIPv6
+		}
+		log.Debug().Err(err).Str("portal_url", s.cfg.PortalURL).Msg("resolve relay public ip families")
+		return false, false
+	}
+
+	s.descriptorIPFamiliesMu.Lock()
+	s.descriptorSupportsIPv4 = supportsIPv4
+	s.descriptorSupportsIPv6 = supportsIPv6
+	s.descriptorIPFamiliesAt = time.Now().UTC()
+	s.descriptorIPFamiliesMu.Unlock()
+	return supportsIPv4, supportsIPv6
 }
 
 func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
@@ -328,7 +363,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.registerLease(challenge.Request, clientIP, req.ReportedIP)
+	reportedIPs := utils.SanitizeReportedPublicIPs(req.ReportedIP, req.ReportedIPv4, req.ReportedIPv6)
+	resp, err := s.registerLease(challenge.Request, clientIP, reportedIPs)
 	if err != nil {
 		if errors.Is(err, transport.ErrPortExhausted) {
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPPortExhausted, err.Error())
@@ -417,7 +453,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	record, err := s.registry.Renew(claims.Identity.Key(), ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
+	record, err := s.registry.Renew(claims.Identity.Key(), ttl, clientIP, utils.SanitizeReportedPublicIPs(req.ReportedIP, req.ReportedIPv4, req.ReportedIPv6))
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return
@@ -699,7 +735,7 @@ func (s *Server) admitLeaseByToken(token string, requireDatagram bool) (*leaseRe
 	return lease, nil
 }
 
-func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, reportedIP string) (types.RegisterResponse, error) {
+func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP string, reportedIPs utils.PublicIPs) (types.RegisterResponse, error) {
 	identity, err := utils.NormalizeIdentity(req.Identity)
 	if err != nil {
 		return types.RegisterResponse{}, err
@@ -752,16 +788,18 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 	identityKey := identity.Key()
 	stream := transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit)
 	record := &leaseRecord{
-		Identity:    identity,
-		Hostname:    hostname,
-		Metadata:    req.Metadata,
-		ExpiresAt:   expiresAt,
-		FirstSeenAt: issuedAt,
-		LastSeenAt:  issuedAt,
-		ClientIP:    clientIP,
-		ReportedIP:  utils.SanitizeReportedIP(reportedIP),
-		hopToken:    req.HopToken,
-		stream:      stream,
+		Identity:     identity,
+		Hostname:     hostname,
+		Metadata:     req.Metadata,
+		ExpiresAt:    expiresAt,
+		FirstSeenAt:  issuedAt,
+		LastSeenAt:   issuedAt,
+		ClientIP:     clientIP,
+		ReportedIP:   reportedIPs.PreferredIP(),
+		ReportedIPv4: reportedIPs.IPv4,
+		ReportedIPv6: reportedIPs.IPv6,
+		hopToken:     req.HopToken,
+		stream:       stream,
 	}
 	if req.UDPEnabled {
 		if s.udpPorts == nil {

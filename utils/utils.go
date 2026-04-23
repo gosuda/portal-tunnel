@@ -489,6 +489,14 @@ func ValidateIPv4(raw string) error {
 	return nil
 }
 
+func ValidateIPv6(raw string) error {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil || ip.To4() != nil {
+		return fmt.Errorf("invalid ipv6 address: %q", raw)
+	}
+	return nil
+}
+
 func RandomHex(size int) (string, error) {
 	buf := make([]byte, size)
 	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
