@@ -33,6 +33,7 @@ type Exposure struct {
 	tcpEnabled      bool
 	multiHop        []string
 	multiHopDepth   int
+	pepperMode      string
 	banMITM         bool
 	maxActiveRelays int
 	metadata        types.LeaseMetadata
@@ -65,14 +66,35 @@ type ExposeConfig struct {
 	// MultiHopDepth selects one automatic multi-hop route when >= 2. Values 0
 	// and 1 keep the automatic route selector in single-hop relay pool mode.
 	MultiHopDepth   int
+	PepperMode      string
 	BanMITM         bool
 	MaxActiveRelays int
 	Metadata        types.LeaseMetadata
 }
 
+const (
+	PepperModeDisabled = ""
+	PepperModePassive  = "passive"
+	PepperModeActive   = "active"
+)
+
+func ValidatePepperMode(mode string) error {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case PepperModeDisabled, PepperModePassive, PepperModeActive:
+		return nil
+	default:
+		return fmt.Errorf("unsupported pepper mode %q: want active or passive", mode)
+	}
+}
+
 // Expose creates relay listeners for the selected relay pool and exposes a
 // dynamic listener hub for accepting traffic from all of them.
 func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
+	cfg.PepperMode = strings.TrimSpace(strings.ToLower(cfg.PepperMode))
+	if err := ValidatePepperMode(cfg.PepperMode); err != nil {
+		return nil, err
+	}
+
 	explicitRelayURLs, err := utils.NormalizeRelayURLs(cfg.RelayURLs...)
 	if err != nil {
 		return nil, err
@@ -99,6 +121,12 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	}
 	if (len(multiHop) > 0 || cfg.MultiHopDepth > 1) && (cfg.UDPEnabled || cfg.TCPEnabled) {
 		return nil, errors.New("multi-hop currently supports only the default SNI TLS stream transport")
+	}
+	if cfg.PepperMode != PepperModeDisabled && len(multiHop) == 0 && cfg.MultiHopDepth <= 1 {
+		return nil, errors.New("pepper requires --multi-hop or --multi-hop-depth 2+")
+	}
+	if cfg.PepperMode == PepperModeActive {
+		return nil, errors.New("pepper active mode is not implemented yet")
 	}
 
 	var listenerRelayURLs []string
@@ -157,6 +185,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		tcpEnabled:      cfg.TCPEnabled,
 		multiHop:        multiHop,
 		multiHopDepth:   cfg.MultiHopDepth,
+		pepperMode:      cfg.PepperMode,
 		banMITM:         cfg.BanMITM,
 		maxActiveRelays: cfg.MaxActiveRelays,
 		metadata:        cfg.Metadata,
@@ -505,6 +534,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			UDPEnabled: e.udpEnabled,
 			TCPEnabled: e.tcpEnabled,
 			MultiHop:   multiHop,
+			PepperMode: e.pepperMode,
 			BanMITM:    e.banMITM,
 			RetryCount: retryCount,
 			Metadata:   e.metadata,

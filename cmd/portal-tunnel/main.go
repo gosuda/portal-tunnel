@@ -45,6 +45,7 @@ func main() {
 type exposeFlags struct {
 	relayCSV        string
 	multiHopCSV     string
+	pepperMode      string
 	discovery       bool
 	banMITM         bool
 	identityPath    string
@@ -72,6 +73,7 @@ func runExposeCommand(args []string) error {
 
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	utils.StringFlagEnv(fs, &flags.multiHopCSV, "multi-hop", "", "Ordered multi-hop relay API URLs, comma-separated", "MULTI_HOP")
+	utils.StringFlag(fs, &flags.pepperMode, "pepper", "", "Optional pepper mode: active or passive; omitted disables the pepper layer")
 	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include public registry relays and discover additional relay bootstraps")
 	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", true, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
@@ -102,6 +104,11 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return err
 	}
+	flags.pepperMode = strings.TrimSpace(strings.ToLower(flags.pepperMode))
+	if err := sdk.ValidatePepperMode(flags.pepperMode); err != nil {
+		printExposeUsage(os.Stderr)
+		return err
+	}
 	switch {
 	case flags.targetAddr == "" && len(flags.httpRoutes) == 0:
 		printExposeUsage(os.Stderr)
@@ -112,6 +119,9 @@ func runExposeCommand(args []string) error {
 	case len(flags.httpRoutes) > 0 && flags.udp:
 		printExposeUsage(os.Stderr)
 		return errors.New("--udp cannot be combined with --http-route")
+	case flags.pepperMode != "" && len(flags.httpRoutes) > 0:
+		printExposeUsage(os.Stderr)
+		return errors.New("--pepper cannot be combined with --http-route")
 	}
 
 	ctx, stop := utils.SignalContext()
@@ -129,6 +139,7 @@ func runExposeCommand(args []string) error {
 		TCPEnabled:      flags.tcp,
 		MultiHop:        utils.SplitCSV(flags.multiHopCSV),
 		MultiHopDepth:   flags.multiHopDepth,
+		PepperMode:      flags.pepperMode,
 		BanMITM:         flags.banMITM,
 		MaxActiveRelays: flags.maxActiveRelays,
 		Metadata: types.LeaseMetadata{
@@ -282,6 +293,7 @@ func printExposeUsage(w io.Writer) {
 			"portal expose 3000 --ban-mitm",
 			"portal expose 3000 --relays https://portal.example.com --discovery=false",
 			"portal expose 3000 --multi-hop https://entry.example.com,https://transit.example.com,https://exit.example.com",
+			"portal expose 3000 --multi-hop-depth 3 --pepper passive",
 			"portal expose 3000 --multi-hop-depth 3",
 		},
 	)

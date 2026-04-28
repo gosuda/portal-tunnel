@@ -1,7 +1,9 @@
 package sdk
 
 import (
+	"context"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
@@ -123,5 +125,50 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	}
 	if !relayBExists {
 		t.Fatal("active relay listener missing from exposure.listeners")
+	}
+}
+
+func TestValidatePepperMode(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"", "passive", "active"} {
+		if err := ValidatePepperMode(mode); err != nil {
+			t.Fatalf("ValidatePepperMode(%q) error = %v", mode, err)
+		}
+	}
+
+	if err := ValidatePepperMode("invalid"); err == nil {
+		t.Fatal("expected invalid pepper mode to fail")
+	}
+}
+
+func TestExposeRejectsPepperWithoutMultiHop(t *testing.T) {
+	t.Parallel()
+
+	_, err := Expose(context.Background(), ExposeConfig{
+		RelayURLs:    []string{"https://relay.example"},
+		TargetAddr:   "127.0.0.1:3000",
+		Name:         "app",
+		PepperMode:   PepperModePassive,
+		IdentityJSON: `{"private_key":"0x59c6995e998f97a5a004497e5d7f4b04d7f1fa1d2d9ff6d72663218b8ba11b58","address":"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf","name":"app"}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "pepper requires --multi-hop or --multi-hop-depth 2+") {
+		t.Fatalf("Expose() error = %v, want pepper multi-hop validation", err)
+	}
+}
+
+func TestExposeRejectsPepperActiveMode(t *testing.T) {
+	t.Parallel()
+
+	_, err := Expose(context.Background(), ExposeConfig{
+		RelayURLs:    []string{"https://relay-a.example"},
+		TargetAddr:   "127.0.0.1:3000",
+		Name:         "app",
+		MultiHop:     []string{"https://relay-a.example", "https://relay-b.example"},
+		PepperMode:   PepperModeActive,
+		IdentityJSON: `{"private_key":"0x59c6995e998f97a5a004497e5d7f4b04d7f1fa1d2d9ff6d72663218b8ba11b58","address":"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf","name":"app"}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "pepper active mode is not implemented yet") {
+		t.Fatalf("Expose() error = %v, want active mode validation", err)
 	}
 }

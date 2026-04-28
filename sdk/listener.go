@@ -41,6 +41,7 @@ type listenerConfig struct {
 	RetryCount       int
 	RetryWait        time.Duration
 	MultiHop         []string
+	PepperMode       string
 	relaySet         *discovery.RelaySet
 }
 
@@ -56,6 +57,7 @@ type listener struct {
 	metadata       types.LeaseMetadata
 	relaySet       *discovery.RelaySet
 	multiHop       []string
+	pepperMode     string
 	udpEnabled     bool
 	tcpEnabled     bool
 	dialTimeout    time.Duration
@@ -107,6 +109,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		metadata:       cfg.Metadata,
 		relaySet:       cfg.relaySet,
 		multiHop:       cfg.MultiHop,
+		pepperMode:     cfg.PepperMode,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
 		dialTimeout:    dialTimeout,
