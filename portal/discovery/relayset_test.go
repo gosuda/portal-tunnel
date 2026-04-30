@@ -8,7 +8,7 @@ import (
 )
 
 func TestApplyRelayDiscoveryResponsePreservesBootstrapFlag(t *testing.T) {
-	set := NewRelaySet([]string{"https://relay-a.example"})
+	set := newTestRelaySet([]string{"https://relay-a.example"})
 
 	desc := mustPolicyRelayDescriptor(t, "https://relay-a.example")
 	if _, err := set.ApplyRelayDiscoveryResponse(desc.APIHTTPSAddr, types.DiscoveryResponse{
@@ -28,7 +28,7 @@ func TestApplyRelayDiscoveryResponsePreservesBootstrapFlag(t *testing.T) {
 }
 
 func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 
 	now := time.Now().UTC()
 	relayURL := "https://relay-stale.example"
@@ -49,7 +49,7 @@ func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
 }
 
 func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 
 	desc := mustPolicyRelayDescriptor(t, "https://relay-mismatch.example")
 	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
@@ -76,7 +76,7 @@ func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *tes
 }
 
 func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 
 	hinted := mustPolicyRelayDescriptor(t, "https://relay-hinted.example")
 	changed, err := set.ApplyRelayDiscoveryResponse("https://relay-source.example", types.DiscoveryResponse{
@@ -103,7 +103,7 @@ func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t
 }
 
 func TestApplyRelayDiscoveryResponseClearsDiscoveryRetryOnAuthoritativeSuccess(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 
 	relayURL := "https://relay-source.example"
 	desc := mustPolicyRelayDescriptor(t, relayURL)
@@ -144,7 +144,7 @@ func TestApplyRelayDiscoveryResponseClearsDiscoveryRetryOnAuthoritativeSuccess(t
 }
 
 func TestApplyRelayDiscoveryResponsePreservesDiscoveryRetryOnHint(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 
 	relayURL := "https://relay-hinted.example"
 	desc := mustPolicyRelayDescriptor(t, relayURL)
@@ -174,7 +174,7 @@ func TestApplyRelayDiscoveryResponsePreservesDiscoveryRetryOnHint(t *testing.T) 
 }
 
 func TestConfirmRelayURLMarksRelayConfirmedWithoutChangingAggregateDescriptor(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 
 	relayURL := "https://relay-confirmed.example"
 	state := RelayState{
@@ -200,7 +200,7 @@ func TestConfirmRelayURLMarksRelayConfirmedWithoutChangingAggregateDescriptor(t 
 }
 
 func TestUnconfirmRelayURLClearsLocalConfirmationOnly(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 
 	relayURL := "https://relay-confirmed.example"
 	state := confirmedPolicyRelayState(t, relayURL)

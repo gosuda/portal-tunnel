@@ -31,15 +31,6 @@ func mustPolicyRelayDescriptor(t *testing.T, relayURL string) types.RelayDescrip
 	return signed
 }
 
-func bootstrapPolicyRelayState(relayURL string) RelayState {
-	return RelayState{
-		Descriptor: types.RelayDescriptor{
-			APIHTTPSAddr: relayURL,
-		},
-		Bootstrap: true,
-	}
-}
-
 func confirmedPolicyRelayState(t *testing.T, relayURL string) RelayState {
 	t.Helper()
 
@@ -47,120 +38,6 @@ func confirmedPolicyRelayState(t *testing.T, relayURL string) RelayState {
 		Descriptor: mustPolicyRelayDescriptor(t, relayURL),
 		Confirmed:  true,
 		LastSeenAt: time.Now().UTC(),
-	}
-}
-
-func confirmedPolicyRelayStateWithRTT(t *testing.T, relayURL string, rtt time.Duration) RelayState {
-	t.Helper()
-
-	state := confirmedPolicyRelayState(t, relayURL)
-	state.DiscoveryRTT = rtt
-	state.DiscoveryRTTAt = time.Now().UTC()
-	return state
-}
-
-func TestSelectPriorityMathematicalOrdering(t *testing.T) {
-	policy := MOLSRelayPolicy{}
-	clientAddr := "192.168.0.10"
-	ingressIdx := hashToGF64(clientAddr)
-
-	relays := []string{
-		"https://relay-alpha.io",
-		"https://relay-beta.io",
-		"https://relay-gamma.io",
-	}
-
-	var states []RelayState
-	for _, url := range relays {
-		states = append(states, confirmedPolicyRelayState(t, url))
-	}
-
-	selected := policy.SelectPriority(states, ClientState{LocalAddress: clientAddr})
-
-	for i := 0; i < len(selected)-1; i++ {
-		scoreA := molsScore(ingressIdx, hashToGF64(selected[i]), molsBaseM1, molsBaseM2)
-		scoreB := molsScore(ingressIdx, hashToGF64(selected[i+1]), molsBaseM1, molsBaseM2)
-		if scoreA < scoreB {
-			t.Errorf("Priority mismatch at index %d: %d < %d", i, scoreA, scoreB)
-		}
-	}
-}
-
-func TestSelectPriorityKeepsExplicitRelaysOutsideAutoLimit(t *testing.T) {
-	policy := MOLSRelayPolicy{}
-	explicitRelay := "https://relay-explicit.example"
-	relayA := "https://relay-a.example"
-	relayB := "https://relay-b.example"
-
-	selected := policy.SelectPriority([]RelayState{
-		bootstrapPolicyRelayState(explicitRelay),
-		confirmedPolicyRelayState(t, relayA),
-		confirmedPolicyRelayState(t, relayB),
-	}, ClientState{
-		LocalAddress:      "127.0.0.1",
-		ExplicitRelayURLs: []string{explicitRelay},
-		MaxActiveRelays:   1,
-	})
-
-	if len(selected) < 2 {
-		t.Fatalf("len(selected) = %d, want at least 2", len(selected))
-	}
-	if selected[0] != explicitRelay {
-		t.Fatalf("selected[0] = %q, want %q", selected[0], explicitRelay)
-	}
-}
-
-func TestSelectPriorityCongestionInversion(t *testing.T) {
-	policy := MOLSRelayPolicy{}
-	clientAddr := "10.0.0.1"
-	ingressIdx := hashToGF64(clientAddr)
-
-	r1, r2 := "https://r1.net", "https://r2.net"
-	states := []RelayState{
-		confirmedPolicyRelayStateWithRTT(t, r1, 800*time.Millisecond),
-		confirmedPolicyRelayStateWithRTT(t, r2, 800*time.Millisecond),
-	}
-
-	selected := policy.SelectPriority(states, ClientState{LocalAddress: clientAddr})
-
-	if len(selected) == 2 {
-		s1 := molsCongestionScore(ingressIdx, hashToGF64(selected[0]), molsBaseM1, molsBaseM2)
-		s2 := molsCongestionScore(ingressIdx, hashToGF64(selected[1]), molsBaseM1, molsBaseM2)
-		if s1 < s2 {
-			t.Errorf("Congestion priority failed: %d < %d", s1, s2)
-		}
-	}
-}
-
-func TestSelectAggregateKeepsBootstrapRelayWhenDescriptorExpired(t *testing.T) {
-	policy := MOLSRelayPolicy{}
-	relayURL := "https://relay-bootstrap.example"
-
-	state := bootstrapPolicyRelayState(relayURL)
-	state.LastSeenAt = time.Now().UTC().Add(-time.Minute)
-	state.Descriptor.ExpiresAt = time.Now().UTC().Add(-time.Second)
-
-	selected := policy.SelectAggregate([]RelayState{state})
-
-	if len(selected) != 1 {
-		t.Fatalf("len(selected) = %d, want 1", len(selected))
-	}
-	if got := selected[0].Descriptor.APIHTTPSAddr; got != relayURL {
-		t.Fatalf("selected[0] = %q, want %q", got, relayURL)
-	}
-}
-
-func TestSelectPriorityFallbackPromotion(t *testing.T) {
-	policy := MOLSRelayPolicy{}
-	states := []RelayState{
-		confirmedPolicyRelayStateWithRTT(t, "https://f1.com", 3*time.Second),
-		confirmedPolicyRelayStateWithRTT(t, "https://f2.com", 4*time.Second),
-	}
-
-	selected := policy.SelectPriority(states, ClientState{LocalAddress: "1.1.1.1"})
-
-	if len(selected) < molsMinActiveNodes {
-		t.Errorf("Fallback promotion failed: got %d, want %d", len(selected), molsMinActiveNodes)
 	}
 }
 

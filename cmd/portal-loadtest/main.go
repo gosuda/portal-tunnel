@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/mols"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -44,7 +45,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "portal-loadtest: -relays must be > 0")
 		os.Exit(1)
 	}
-	// MultiHopDepth ≤ 1 causes SelectMultiHop to return nil (see mols.go).
+	// MultiHopDepth ≤ 1 causes SelectMultiHop to return nil.
 	// Reject 1 explicitly; 0 means priority mode.
 	if *multiHop == 1 {
 		fmt.Fprintln(os.Stderr, "portal-loadtest: -multi-hop=1 is not valid; use 0 for priority or ≥2 for multi-hop")
@@ -58,8 +59,8 @@ func main() {
 
 	// Build K synthetic relay states. We construct discovery.RelayState values
 	// directly (not via RelaySet.InsertAnnounced) because the public announce
-	// path requires real EVM-signed descriptors. MOLSRelayPolicy is called
-	// directly so that no signature gate runs.
+	// path requires real EVM-signed descriptors. mols.MOLS is called directly
+	// so that no signature gate runs.
 	//
 	// For priority mode: states without an observed descriptor (LastSeenAt zero)
 	// are accepted into the auto pool by SelectPriorityWithTrace — the
@@ -96,7 +97,7 @@ func main() {
 	// Generate N synthetic client states with UNIQUE LocalAddress values.
 	// MOLS is deterministic on (LocalAddress, relayURL): duplicate addresses
 	// would make all clients pick identically, falsely appearing as 100% imbalance.
-	policy := discovery.MOLSRelayPolicy{}
+	policy := mols.New()
 	picks := make(map[string]int, *relays) // relay URL → count of clients that picked it first
 	for i := 0; i < *clients; i++ {
 		cs := discovery.ClientState{

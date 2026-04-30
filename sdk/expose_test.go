@@ -5,11 +5,12 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/mols"
 )
 
 func mustRelaySet(t *testing.T, relayURLs ...string) *discovery.RelaySet {
 	t.Helper()
-	return discovery.NewRelaySet(relayURLs)
+	return discovery.NewRelaySet(relayURLs, mols.New())
 }
 
 func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {

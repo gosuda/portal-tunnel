@@ -2,8 +2,8 @@ package discovery
 
 // SelectionTrace records observability data for a single relay-selection
 // invocation. The struct is populated by SelectPriorityWithTrace /
-// SelectMultiHopWithTrace on MOLSRelayPolicy and by the matching siblings on
-// RelaySet, and consumed by:
+// SelectMultiHopWithTrace on the relay selector (e.g. *mols.MOLS) and by the
+// matching siblings on RelaySet, and consumed by:
 //
 //   - portal/discovery/metrics.go — emits low-cardinality fields to Prometheus
 //     (no per-client labels: ClientHash never becomes a metric label).

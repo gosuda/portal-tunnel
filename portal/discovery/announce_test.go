@@ -46,7 +46,7 @@ func mustSignedDescriptor(t *testing.T, signing types.Identity, relayURL string,
 }
 
 func TestInsertAnnouncedAcceptsValidDescriptor(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	desc := mustSignedDescriptor(t, signing, "https://relay-ann.example", now)
@@ -59,7 +59,7 @@ func TestInsertAnnouncedAcceptsValidDescriptor(t *testing.T) {
 }
 
 func TestInsertAnnouncedRejectsUnsigned(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	desc := mustUnsignedDescriptor(t, signing, "https://relay-unsigned.example")
@@ -69,7 +69,7 @@ func TestInsertAnnouncedRejectsUnsigned(t *testing.T) {
 }
 
 func TestInsertAnnouncedIgnoresSupersededRollback(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	relayURL := "https://relay-roll.example"
@@ -92,7 +92,7 @@ func TestInsertAnnouncedIgnoresSupersededRollback(t *testing.T) {
 }
 
 func TestInsertAnnouncedRejectsRollbackAcrossRelayURL(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	newer := mustSignedDescriptor(t, signing, "https://relay-roll-new.example", now)
@@ -106,7 +106,7 @@ func TestInsertAnnouncedRejectsRollbackAcrossRelayURL(t *testing.T) {
 }
 
 func TestInsertAnnouncedBlocksCrossIdentityTakeover(t *testing.T) {
-	set := NewRelaySet(nil)
+	set := newTestRelaySet(nil)
 	owner := mustSigningIdentity(t)
 	attacker := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)

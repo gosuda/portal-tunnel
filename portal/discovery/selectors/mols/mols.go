@@ -1,6 +1,6 @@
-package discovery
+package mols
 
-// MOLSRelayPolicy uses a GF(64) MOLS-derived score as the primary
+// MOLS uses a GF(64) MOLS-derived score as the primary
 // deterministic ordering for eligible relays. Health and freshness gates decide
 // eligibility before the MOLS score is applied.
 
@@ -39,11 +39,14 @@ package discovery
 // candidate.
 
 import (
+	"context"
 	"hash/fnv"
 	"math"
 	"slices"
 	"sort"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 )
 
 const (
@@ -61,6 +64,33 @@ const (
 	molsMinActiveNodes         = 2
 	defaultMaxActiveRelays     = 3
 )
+
+// Compile-time assertion: *MOLS must satisfy discovery.Selector.
+var _ discovery.Selector = (*MOLS)(nil)
+
+// MOLS is the pluggable relay-selection policy that implements
+// discovery.Selector using a GF(64) MOLS-derived score.
+type MOLS struct{}
+
+// New returns a new MOLS selector.
+func New() *MOLS {
+	return &MOLS{}
+}
+
+// Name returns the canonical name of this selector.
+func (p *MOLS) Name() string { return "mols" }
+
+// SelectPriority implements discovery.Selector. It delegates to
+// SelectPriorityWithTrace. ctx is accepted but currently unused.
+func (p *MOLS) SelectPriority(ctx context.Context, pool []discovery.RelayState, client discovery.ClientState) ([]string, discovery.SelectionTrace) {
+	return p.SelectPriorityWithTrace(pool, client)
+}
+
+// SelectMultiHop implements discovery.Selector. It delegates to
+// SelectMultiHopWithTrace. ctx is accepted but currently unused.
+func (p *MOLS) SelectMultiHop(ctx context.Context, pool []discovery.RelayState, client discovery.ClientState) ([]string, discovery.SelectionTrace) {
+	return p.SelectMultiHopWithTrace(pool, client)
+}
 
 // gf64Mul performs multiplication in GF(2^6) with primitive polynomial x^6 + x + 1 (0x43).
 func gf64Mul(a, b uint8) uint8 {
@@ -100,7 +130,7 @@ func hashToGF64(s string) uint8 {
 	return uint8(h.Sum32() & 0x3f)
 }
 
-func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
+func molsRTTStats(states []discovery.RelayState) (mean time.Duration, cv float64) {
 	var samples []float64
 	for _, s := range states {
 		if s.DiscoveryRTTAt.IsZero() {
@@ -131,14 +161,12 @@ func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
 	return time.Duration(avg), cv
 }
 
-func isRelayFallback(state RelayState) bool {
+func isRelayFallback(state discovery.RelayState) bool {
 	return !state.DiscoveryRTTAt.IsZero() && state.DiscoveryRTT > molsFallbackRTTThreshold
 }
 
-type MOLSRelayPolicy struct{}
-
-func (p MOLSRelayPolicy) SelectAggregate(states []RelayState) []RelayState {
-	out := make([]RelayState, 0, len(states))
+func (p *MOLS) SelectAggregate(states []discovery.RelayState) []discovery.RelayState {
+	out := make([]discovery.RelayState, 0, len(states))
 	for _, s := range states {
 		if !s.Banned {
 			out = append(out, s)
@@ -147,8 +175,8 @@ func (p MOLSRelayPolicy) SelectAggregate(states []RelayState) []RelayState {
 	return out
 }
 
-func (p MOLSRelayPolicy) SelectConfirmed(states []RelayState) []RelayState {
-	out := make([]RelayState, 0)
+func (p *MOLS) SelectConfirmed(states []discovery.RelayState) []discovery.RelayState {
+	out := make([]discovery.RelayState, 0)
 	for _, s := range states {
 		if s.Confirmed {
 			out = append(out, s)
@@ -157,7 +185,7 @@ func (p MOLSRelayPolicy) SelectConfirmed(states []RelayState) []RelayState {
 	return out
 }
 
-func (p MOLSRelayPolicy) rankRelayPool(autoPool []RelayState, localAddress string) []string {
+func (p *MOLS) rankRelayPool(autoPool []discovery.RelayState, localAddress string) []string {
 	if len(autoPool) == 0 {
 		return nil
 	}
@@ -172,8 +200,8 @@ func (p MOLSRelayPolicy) rankRelayPool(autoPool []RelayState, localAddress strin
 		m1, m2 = molsVariantM1, molsVariantM2
 	}
 
-	active := make([]RelayState, 0, len(autoPool))
-	fallbacks := make([]RelayState, 0)
+	active := make([]discovery.RelayState, 0, len(autoPool))
+	fallbacks := make([]discovery.RelayState, 0)
 	for _, state := range autoPool {
 		if isRelayFallback(state) {
 			fallbacks = append(fallbacks, state)
@@ -188,7 +216,7 @@ func (p MOLSRelayPolicy) rankRelayPool(autoPool []RelayState, localAddress strin
 		fallbacks = fallbacks[promote:]
 	}
 
-	scoreFor := func(state RelayState) int {
+	scoreFor := func(state discovery.RelayState) int {
 		candidateIdx := hashToGF64(state.Descriptor.APIHTTPSAddr)
 		if congested {
 			return molsCongestionScore(ingressIdx, candidateIdx, m1, m2)
@@ -196,7 +224,7 @@ func (p MOLSRelayPolicy) rankRelayPool(autoPool []RelayState, localAddress strin
 		return molsScore(ingressIdx, candidateIdx, m1, m2)
 	}
 
-	rank := func(pool []RelayState) []string {
+	rank := func(pool []discovery.RelayState) []string {
 		type item struct {
 			url   string
 			conf  bool
@@ -244,22 +272,22 @@ func (p MOLSRelayPolicy) rankRelayPool(autoPool []RelayState, localAddress strin
 	return autoURLs
 }
 
-// SelectPriorityWithTrace is the telemetry-instrumented sibling of
+// SelectPriorityWithTrace is the telemetry-instrumented sibling of the legacy
 // SelectPriority. It returns the same ordered relay list plus a SelectionTrace
 // that captures pool statistics, eligibility classification, and the scoring
 // parameters used for this specific call. The returned OutputURLs slice is
-// byte-identical to what SelectPriority returns for the same inputs.
+// byte-identical to what SelectPriority (no-trace) returns for the same inputs.
 //
 // Banned relays are recorded in SelectionTrace.Suppressed / Reasons with
 // reason "banned" even though SelectAggregate removes them before further
 // processing. Explicit relays are not included in Ranked (they bypass MOLS
 // scoring entirely). PoolFallback reflects the fallback count before the
 // minimum-active-node promotion step.
-func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace) {
+func (p *MOLS) SelectPriorityWithTrace(states []discovery.RelayState, cs discovery.ClientState) ([]string, discovery.SelectionTrace) {
 	start := time.Now()
 	now := start.UTC()
 
-	trace := SelectionTrace{
+	trace := discovery.SelectionTrace{
 		Timestamp:  start,
 		ClientHash: hashToGF64(cs.LocalAddress),
 		Mode:       "priority",
@@ -283,11 +311,11 @@ func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientS
 	}
 
 	explicit := make([]string, 0)
-	autoPool := make([]RelayState, 0, len(selected))
+	autoPool := make([]discovery.RelayState, 0, len(selected))
 	for _, state := range selected {
 		relayURL := state.Descriptor.APIHTTPSAddr
 		if slices.Contains(cs.ExplicitRelayURLs, relayURL) {
-			if state.hasObservedDescriptor() && state.Descriptor.ExpiresAt.After(now) {
+			if state.HasObservedDescriptor() && state.Descriptor.ExpiresAt.After(now) {
 				if cs.RequireUDP && !state.Descriptor.SupportsUDP {
 					trace.Suppressed = append(trace.Suppressed, relayURL)
 					trace.Reasons[relayURL] = "require_udp"
@@ -303,7 +331,7 @@ func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientS
 			continue
 		}
 
-		if state.hasObservedDescriptor() {
+		if state.HasObservedDescriptor() {
 			if !state.Descriptor.ExpiresAt.After(now) {
 				trace.Suppressed = append(trace.Suppressed, relayURL)
 				trace.Reasons[relayURL] = "expired"
@@ -320,7 +348,7 @@ func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientS
 				continue
 			}
 		}
-		if !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now) {
+		if state.IsSuppressedActive(now) {
 			trace.Suppressed = append(trace.Suppressed, relayURL)
 			trace.Reasons[relayURL] = "suppressed"
 			continue
@@ -347,8 +375,8 @@ func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientS
 	// which relays remain as fallbacks after the minimum-active-node promotion
 	// step. Demoted=true only for relays that stay in the fallback section after
 	// promotion (i.e., were not promoted to meet molsMinActiveNodes).
-	trActive := make([]RelayState, 0, len(autoPool))
-	trFallbacks := make([]RelayState, 0)
+	trActive := make([]discovery.RelayState, 0, len(autoPool))
+	trFallbacks := make([]discovery.RelayState, 0)
 	for _, state := range autoPool {
 		if isRelayFallback(state) {
 			trFallbacks = append(trFallbacks, state)
@@ -380,7 +408,7 @@ func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientS
 		} else {
 			score = molsScore(ingressIdx, candidateIdx, m1, m2)
 		}
-		trace.Ranked = append(trace.Ranked, TraceEntry{
+		trace.Ranked = append(trace.Ranked, discovery.TraceEntry{
 			URL:       state.Descriptor.APIHTTPSAddr,
 			Score:     score,
 			Confirmed: state.Confirmed,
@@ -403,13 +431,6 @@ func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientS
 	return result, trace
 }
 
-// SelectPriority returns the ordered list of relay URLs for a client using the
-// MOLS policy. It delegates to SelectPriorityWithTrace and discards the trace.
-func (p MOLSRelayPolicy) SelectPriority(states []RelayState, clientState ClientState) []string {
-	out, _ := p.SelectPriorityWithTrace(states, clientState)
-	return out
-}
-
 // SelectMultiHopWithTrace is the telemetry-instrumented sibling of
 // SelectMultiHop. It returns the same ordered relay list plus a SelectionTrace.
 // The returned OutputURLs slice is byte-identical to what SelectMultiHop
@@ -419,11 +440,11 @@ func (p MOLSRelayPolicy) SelectPriority(states []RelayState, clientState ClientS
 // peer, UDP/TCP mismatch, suppressed, banned) are recorded in
 // SelectionTrace.Suppressed / Reasons. PoolFallback reflects the fallback count
 // before the minimum-active-node promotion step.
-func (p MOLSRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace) {
+func (p *MOLS) SelectMultiHopWithTrace(states []discovery.RelayState, cs discovery.ClientState) ([]string, discovery.SelectionTrace) {
 	start := time.Now()
 	now := start.UTC()
 
-	trace := SelectionTrace{
+	trace := discovery.SelectionTrace{
 		Timestamp:  start,
 		ClientHash: hashToGF64(cs.LocalAddress),
 		Mode:       "multihop",
@@ -451,20 +472,20 @@ func (p MOLSRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientS
 		return nil, trace
 	}
 
-	autoPool := make([]RelayState, 0, len(selected))
+	autoPool := make([]discovery.RelayState, 0, len(selected))
 	for _, state := range selected {
 		relayURL := state.Descriptor.APIHTTPSAddr
-		if cs.RequireUDP && state.hasObservedDescriptor() && !state.Descriptor.SupportsUDP {
+		if cs.RequireUDP && state.HasObservedDescriptor() && !state.Descriptor.SupportsUDP {
 			trace.Suppressed = append(trace.Suppressed, relayURL)
 			trace.Reasons[relayURL] = "require_udp"
 			continue
 		}
-		if cs.RequireTCP && state.hasObservedDescriptor() && !state.Descriptor.SupportsTCP {
+		if cs.RequireTCP && state.HasObservedDescriptor() && !state.Descriptor.SupportsTCP {
 			trace.Suppressed = append(trace.Suppressed, relayURL)
 			trace.Reasons[relayURL] = "require_tcp"
 			continue
 		}
-		if !state.hasObservedDescriptor() {
+		if !state.HasObservedDescriptor() {
 			trace.Suppressed = append(trace.Suppressed, relayURL)
 			trace.Reasons[relayURL] = "no_descriptor"
 			continue
@@ -479,7 +500,7 @@ func (p MOLSRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientS
 			trace.Reasons[relayURL] = "no_overlay_peer"
 			continue
 		}
-		if !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now) {
+		if state.IsSuppressedActive(now) {
 			trace.Suppressed = append(trace.Suppressed, relayURL)
 			trace.Reasons[relayURL] = "suppressed"
 			continue
@@ -506,8 +527,8 @@ func (p MOLSRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientS
 	// which relays remain as fallbacks after the minimum-active-node promotion
 	// step. Demoted=true only for relays that stay in the fallback section after
 	// promotion (i.e., were not promoted to meet molsMinActiveNodes).
-	mhActive := make([]RelayState, 0, len(autoPool))
-	mhFallbacks := make([]RelayState, 0)
+	mhActive := make([]discovery.RelayState, 0, len(autoPool))
+	mhFallbacks := make([]discovery.RelayState, 0)
 	for _, state := range autoPool {
 		if isRelayFallback(state) {
 			mhFallbacks = append(mhFallbacks, state)
@@ -539,7 +560,7 @@ func (p MOLSRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientS
 		} else {
 			score = molsScore(ingressIdx, candidateIdx, m1, m2)
 		}
-		trace.Ranked = append(trace.Ranked, TraceEntry{
+		trace.Ranked = append(trace.Ranked, discovery.TraceEntry{
 			URL:       state.Descriptor.APIHTTPSAddr,
 			Score:     score,
 			Confirmed: state.Confirmed,
@@ -555,11 +576,4 @@ func (p MOLSRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientS
 	trace.OutputURLs = multiHop
 	trace.SelectionTook = time.Since(start)
 	return multiHop, trace
-}
-
-// SelectMultiHop returns the ordered list of relay URLs for multi-hop routing.
-// It delegates to SelectMultiHopWithTrace and discards the trace.
-func (p MOLSRelayPolicy) SelectMultiHop(states []RelayState, clientState ClientState) []string {
-	out, _ := p.SelectMultiHopWithTrace(states, clientState)
-	return out
 }

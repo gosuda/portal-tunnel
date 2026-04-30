@@ -148,7 +148,7 @@ func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 		if state.Banned {
 			continue
 		}
-		if !state.hasObservedDescriptor() {
+		if !state.HasObservedDescriptor() {
 			if !state.Bootstrap {
 				continue
 			}

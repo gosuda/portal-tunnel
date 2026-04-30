@@ -44,11 +44,24 @@ import (
 // acquire it themselves. This convention prevents nested-locking deadlocks
 // (notably from ApplyRelayDiscoveryResponse, which holds the write lock for
 // the entire batch).
+
+// relayPolicy is the local unexported interface that RelaySet uses for relay
+// selection. Any concrete type that implements these four methods satisfies it;
+// *mols.MOLS is the only production implementation. The interface lives here
+// (not in selectors/mols) to avoid an import cycle between portal/discovery and
+// portal/discovery/selectors/mols.
+type relayPolicy interface {
+	SelectAggregate(states []RelayState) []RelayState
+	SelectConfirmed(states []RelayState) []RelayState
+	SelectPriorityWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace)
+	SelectMultiHopWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace)
+}
+
 type RelaySet struct {
 	mu        sync.RWMutex
 	relays    map[string]RelayState
 	keyIndex  map[string]keyIndexEntry
-	policy    MOLSRelayPolicy
+	policy    relayPolicy
 	lifecycle *Lifecycle
 }
 
@@ -70,11 +83,31 @@ const (
 	upsertIgnored
 )
 
-func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
+// isNilableAndNil reports whether v, which must already have passed a plain
+// nil-interface check, holds a typed nil (e.g. (*mols.MOLS)(nil)). It only
+// calls IsNil on kinds for which IsNil is well-defined (chan, func, interface,
+// map, pointer, slice) to avoid a reflect panic on value-type implementations.
+func isNilableAndNil(v any) bool {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface,
+		reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	}
+	return false
+}
+
+// NewRelaySet creates a RelaySet seeded with the given bootstrap URLs. The
+// policy parameter determines the relay-selection algorithm; callers MUST pass
+// a non-nil relayPolicy (e.g. mols.New()). Passing nil or a typed-nil panics.
+func NewRelaySet(bootstrapRelayURLs []string, policy relayPolicy) *RelaySet {
+	if policy == nil || isNilableAndNil(policy) {
+		panic("discovery.NewRelaySet: policy must not be nil")
+	}
 	set := &RelaySet{
 		relays:    make(map[string]RelayState),
 		keyIndex:  make(map[string]keyIndexEntry),
-		policy:    MOLSRelayPolicy{},
+		policy:    policy,
 		lifecycle: NewLifecycle(),
 	}
 	set.SetBootstrapRelayURLs(bootstrapRelayURLs)
@@ -158,9 +191,11 @@ func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allo
 	return upsertAccepted
 }
 
-func (s *RelaySet) SetRelayPolicy(policy MOLSRelayPolicy) {
-	if policy == (MOLSRelayPolicy{}) {
-		policy = MOLSRelayPolicy{}
+// SetRelayPolicy replaces the current relay-selection policy. Passing nil or a
+// typed-nil panics; callers must supply a concrete non-nil relayPolicy (e.g. mols.New()).
+func (s *RelaySet) SetRelayPolicy(policy relayPolicy) {
+	if policy == nil || isNilableAndNil(policy) {
+		panic("discovery.SetRelayPolicy: policy must not be nil")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -179,7 +214,7 @@ func (s *RelaySet) SetBootstrapRelayURLs(inputs []string) {
 	for key, state := range s.relays {
 		_, bootstrap := keep[key]
 		state.Bootstrap = bootstrap
-		if !state.Bootstrap && !state.hasObservedDescriptor() && !state.Banned &&
+		if !state.Bootstrap && !state.HasObservedDescriptor() && !state.Banned &&
 			state.discoveryFailures == 0 && state.activeFailures == 0 &&
 			state.nextDiscoveryRefreshAt.IsZero() && state.suppressActiveUntil.IsZero() {
 			delete(s.relays, key)
@@ -308,7 +343,7 @@ func (s *RelaySet) OverlayPeerStates() []RelayState {
 	s.mu.RLock()
 	out := make([]RelayState, 0, len(s.relays))
 	for _, state := range s.relays {
-		if state.Banned || !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) || !state.Descriptor.HasOverlayPeer() {
+		if state.Banned || !state.HasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) || !state.Descriptor.HasOverlayPeer() {
 			continue
 		}
 		out = append(out, state)
@@ -331,7 +366,7 @@ func (s *RelaySet) OverlayRelayDescriptor(relayURL string, now time.Time) (types
 	s.mu.RLock()
 	state := s.relays[relayURL]
 	s.mu.RUnlock()
-	if state.Banned || !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) || !state.Descriptor.HasOverlayPeer() {
+	if state.Banned || !state.HasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) || !state.Descriptor.HasOverlayPeer() {
 		return types.RelayDescriptor{}, false
 	}
 	return state.Descriptor, true
@@ -383,7 +418,7 @@ func (s *RelaySet) Descriptors(self types.RelayDescriptor) []types.RelayDescript
 	}
 	s.mu.RLock()
 	for _, state := range s.relays {
-		if state.Banned || !state.hasObservedDescriptor() {
+		if state.Banned || !state.HasObservedDescriptor() {
 			continue
 		}
 		add(state.Descriptor)

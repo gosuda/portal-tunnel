@@ -20,6 +20,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/mols"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
@@ -144,7 +145,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			return nil, fmt.Errorf("resolve discovery bootstraps: %w", err)
 		}
 		cfg.Bootstraps = utils.RemoveRelayURL(cfg.Bootstraps, cfg.PortalURL)
-		relaySet = discovery.NewRelaySet(cfg.Bootstraps)
+		relaySet = discovery.NewRelaySet(cfg.Bootstraps, mols.New())
 	}
 
 	server := &Server{

@@ -53,8 +53,16 @@ func newRelayState(relayURL string) RelayState {
 	}
 }
 
-func (state RelayState) hasObservedDescriptor() bool {
+// HasObservedDescriptor reports whether the relay has ever been directly
+// observed (i.e. LastSeenAt is non-zero).
+func (state RelayState) HasObservedDescriptor() bool {
 	return !state.LastSeenAt.IsZero()
+}
+
+// IsSuppressedActive reports whether the relay is currently in active
+// suppression (back-off) at the given time.
+func (state RelayState) IsSuppressedActive(now time.Time) bool {
+	return !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now)
 }
 
 type ClientState struct {
@@ -65,7 +73,7 @@ type ClientState struct {
 	MultiHopDepth   int
 	RequireUDP      bool
 	RequireTCP      bool
-	// LocalAddress is the ingress identity address used by MOLSRelayPolicy to
+	// LocalAddress is the ingress identity address used by the relay selector to
 	// derive a deterministic row index into the GF(64) MOLS grid.
 	LocalAddress string
 }
