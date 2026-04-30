@@ -24,24 +24,26 @@ func relayIdentityForTest(t *testing.T) (privKey, address string) {
 }
 
 // postReserve performs a POST to handleAdminReserve and returns the response.
-func postReserve(t *testing.T, privKey, address, body string, budget *atomic.Int64, max int64) *httptest.ResponseRecorder {
+func postReserve(t *testing.T, privKey, address, apiURL, body string, budget *atomic.Int64, max int64) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/admin/reserve", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
-	handleAdminReserve(rr, req, privKey, address, budget, max)
+	handleAdminReserve(rr, req, privKey, address, apiURL, budget, max)
 	return rr
 }
 
 // TestAdminReserveReturnsValidVoucher verifies that a well-formed POST returns
 // 200 with a parseable signed voucher, and that the voucher verifies against
-// the relay's address.
+// the relay's address. It also checks that RelayURL is set to the API URL (not
+// the secp256k1 address).
 func TestAdminReserveReturnsValidVoucher(t *testing.T) {
 	privKey, address := relayIdentityForTest(t)
 	var budgetUsed atomic.Int64
 
+	const expectedAPIURL = "https://relay.example.test"
 	body := `{"client_address":"test-client","requested_duration_seconds":60}`
-	rr := postReserve(t, privKey, address, body, &budgetUsed, 100)
+	rr := postReserve(t, privKey, address, expectedAPIURL, body, &budgetUsed, 100)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", rr.Code, http.StatusOK, rr.Body.String())
@@ -58,6 +60,9 @@ func TestAdminReserveReturnsValidVoucher(t *testing.T) {
 	if len(voucher.Signature) == 0 {
 		t.Fatal("voucher.Signature is empty; want a signed voucher")
 	}
+	if voucher.RelayURL != expectedAPIURL {
+		t.Fatalf("voucher.RelayURL = %q, want %q", voucher.RelayURL, expectedAPIURL)
+	}
 
 	if err := auth.VerifyReservationVoucher(voucher, address); err != nil {
 		t.Fatalf("VerifyReservationVoucher() error = %v", err)
@@ -72,18 +77,19 @@ func TestAdminReserveCapacityExhausted(t *testing.T) {
 	const budget = 2
 
 	body := `{"client_address":"test-client","requested_duration_seconds":60}`
+	const apiURL = "https://relay.example.test"
 
-	rr1 := postReserve(t, privKey, address, body, &budgetUsed, budget)
+	rr1 := postReserve(t, privKey, address, apiURL, body, &budgetUsed, budget)
 	if rr1.Code != http.StatusOK {
 		t.Fatalf("request 1: status = %d, want %d", rr1.Code, http.StatusOK)
 	}
 
-	rr2 := postReserve(t, privKey, address, body, &budgetUsed, budget)
+	rr2 := postReserve(t, privKey, address, apiURL, body, &budgetUsed, budget)
 	if rr2.Code != http.StatusOK {
 		t.Fatalf("request 2: status = %d, want %d", rr2.Code, http.StatusOK)
 	}
 
-	rr3 := postReserve(t, privKey, address, body, &budgetUsed, budget)
+	rr3 := postReserve(t, privKey, address, apiURL, body, &budgetUsed, budget)
 	if rr3.Code != http.StatusServiceUnavailable {
 		t.Fatalf("request 3: status = %d, want %d (capacity exhausted)", rr3.Code, http.StatusServiceUnavailable)
 	}

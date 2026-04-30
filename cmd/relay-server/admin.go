@@ -34,12 +34,17 @@ type adminReserveRequest struct {
 // It signs a fresh ReservationVoucher for the requesting client and returns it
 // as JSON (200). Returns 503 when the in-process capacity budget is exhausted.
 //
+// relayAPIURL must be the relay's APIHTTPSAddr (i.e. the URL clients use to
+// reach this relay's API, not the secp256k1 address). It is stored verbatim in
+// the issued voucher so that the client-side cache can key on it correctly.
+//
 // WARNING: EXPERIMENTAL — see types.ReservationVoucher documentation.
 func handleAdminReserve(
 	w http.ResponseWriter,
 	r *http.Request,
 	signingPrivKey string,
 	relayAddress string,
+	relayAPIURL string,
 	budgetUsed *atomic.Int64,
 	budgetMax int64,
 ) {
@@ -82,7 +87,7 @@ func handleAdminReserve(
 	now := time.Now().UTC()
 	voucher := types.ReservationVoucher{
 		ClientAddress: req.ClientAddress,
-		RelayURL:      relayAddress,
+		RelayURL:      relayAPIURL,
 		IssuedAt:      now,
 		ExpiresAt:     now.Add(duration),
 	}
@@ -255,7 +260,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/admin/reserve":
 		identity := f.server.RelayIdentity()
-		handleAdminReserve(w, r, identity.PrivateKey, identity.Address, &f.reserveBudgetUsed, reserveBudgetDefault)
+		handleAdminReserve(w, r, identity.PrivateKey, identity.Address, f.server.PortalURL(), &f.reserveBudgetUsed, reserveBudgetDefault)
 		return
 	case types.PathAdminSnapshot:
 		if !utils.RequireMethod(w, r, http.MethodGet) {
