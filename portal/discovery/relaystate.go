@@ -83,4 +83,22 @@ type ClientState struct {
 	// LocalAddress is the ingress identity address used by the relay selector to
 	// derive a deterministic row index into the GF(64) MOLS grid.
 	LocalAddress string
+
+	// DisableDiversityRoles opts out of role separation in multi-hop paths.
+	// Default false (i.e. role separation is ENABLED by default). When false,
+	// the diversity selector enforces URL-uniqueness across hops so that entry,
+	// transit, and exit relays are always distinct. Set to true only when you
+	// explicitly want to allow duplicate relays in a path (e.g. load tests that
+	// intentionally exhaust the relay pool below MultiHopDepth). This inverted
+	// field name is used to make the zero value of ClientState the safe default
+	// (role separation on).
+	DisableDiversityRoles bool
+
+	// AnonymityGrade opts in to /16-prefix + operator-family diversity on
+	// multi-hop paths. Default false (disabled). When true, the diversity
+	// selector additionally enforces that no two selected relays share the same
+	// Subnet16 or Family value (ignoring empty values, which contribute no
+	// constraint). A shortfall caused by this constraint triggers relaxation
+	// and increments portal_discovery_diversity_relaxed_total{reason="anonymity_grade"}.
+	AnonymityGrade bool
 }
