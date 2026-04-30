@@ -137,6 +137,20 @@ var CongestionMode = promauto.NewGauge(
 	},
 )
 
+// DiversityRelaxedTotal counts diversity-constraint relaxations during
+// multi-hop selection. reason has exactly 2 values:
+//   - "anonymity_grade": AnonymityGrade constraint (Subnet16 + Family dedup)
+//     was relaxed due to pool shortfall.
+//   - "role_separation": URL-uniqueness (role-separation) constraint was
+//     relaxed due to pool shortfall; inner result returned unchanged.
+var DiversityRelaxedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "portal_discovery_diversity_relaxed_total",
+		Help: "Diversity-constraint relaxations during multi-hop selection.",
+	},
+	[]string{"reason"},
+)
+
 // --------------------------------------------------------------------------
 // EmitFromTrace
 // --------------------------------------------------------------------------
