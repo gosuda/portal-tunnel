@@ -141,6 +141,25 @@ type RelayDescriptor struct {
 	ActiveConnections  int64     `json:"active_connections,omitempty"`
 	TCPBPS             float64   `json:"tcp_bps,omitempty"`
 	Signature          string    `json:"signature,omitempty"`
+
+	// Family is an operator-controlled identifier grouping relays under a
+	// single administrative domain (e.g. "operator-a"). Used by the diversity
+	// selector to avoid selecting multiple relays from the same operator family
+	// on a single multi-hop path when AnonymityGrade is enabled.
+	// Empty = no family-diversity constraint. Set by the relay at registration
+	// time; advisory only — NOT included in CanonicalBytes and therefore not
+	// covered by the descriptor signature. Adversarial relays can forge these
+	// values; the only consequence is self-degradation of their own diversity
+	// contribution.
+	Family string `json:"family,omitempty"`
+
+	// Subnet16 is the /16 bucket key for this relay (e.g. "10.0", "192.168").
+	// Computed by the relay when registering from its primary IP address.
+	// Used by the diversity selector to avoid selecting multiple relays from
+	// the same /16 prefix on a single multi-hop path when AnonymityGrade is
+	// enabled. Empty = no subnet-diversity constraint. Same advisory caveat as
+	// Family: not in CanonicalBytes, not signed.
+	Subnet16 string `json:"subnet16,omitempty"`
 }
 
 func (desc RelayDescriptor) HasOverlayPeer() bool {
