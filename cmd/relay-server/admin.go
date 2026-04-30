@@ -43,7 +43,6 @@ func handleAdminReserve(
 	w http.ResponseWriter,
 	r *http.Request,
 	signingPrivKey string,
-	relayAddress string,
 	relayAPIURL string,
 	budgetUsed *atomic.Int64,
 	budgetMax int64,
@@ -260,7 +259,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/admin/reserve":
 		identity := f.server.RelayIdentity()
-		handleAdminReserve(w, r, identity.PrivateKey, identity.Address, f.server.PortalURL(), &f.reserveBudgetUsed, reserveBudgetDefault)
+		handleAdminReserve(w, r, identity.PrivateKey, f.server.PortalURL(), &f.reserveBudgetUsed, reserveBudgetDefault)
 		return
 	case types.PathAdminSnapshot:
 		if !utils.RequireMethod(w, r, http.MethodGet) {

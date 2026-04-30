@@ -90,7 +90,7 @@ func TestCacheConcurrent(t *testing.T) {
 			if i%2 == 0 {
 				c.Put(makeVoucher(url, time.Hour))
 			} else {
-				c.Get(url) //nolint:errcheck // return value intentionally discarded
+				_, _ = c.Get(url) // return values intentionally discarded
 			}
 		}(i)
 	}
