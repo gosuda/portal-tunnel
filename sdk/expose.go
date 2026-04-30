@@ -163,7 +163,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		metadata:        cfg.Metadata,
 		accepted:        make(chan net.Conn, max(initialRouteCapacity(listenerRelayURLs, cfg.MultiHopDepth)*defaultReadyTarget*2, 1)),
 		datagrams:       make(chan types.DatagramFrame, max(initialRouteCapacity(listenerRelayURLs, cfg.MultiHopDepth)*32, 1)),
-		relaySet:        discovery.NewRelaySet(relaySetURLs, mols.New()),
+		relaySet:        discovery.NewRelaySet(relaySetURLs, discovery.WithSelector(mols.New())),
 		relayListeners:  make(map[string]*listener, initialRouteCapacity(listenerRelayURLs, cfg.MultiHopDepth)),
 	}
 

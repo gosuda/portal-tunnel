@@ -10,7 +10,7 @@ import (
 
 func mustRelaySet(t *testing.T, relayURLs ...string) *discovery.RelaySet {
 	t.Helper()
-	return discovery.NewRelaySet(relayURLs, mols.New())
+	return discovery.NewRelaySet(relayURLs, discovery.WithSelector(mols.New()))
 }
 
 func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {

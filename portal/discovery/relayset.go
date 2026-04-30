@@ -110,18 +110,31 @@ func isNilableAndNil(v any) bool {
 	return false
 }
 
-// NewRelaySet creates a RelaySet seeded with the given bootstrap URLs. The
-// policy parameter determines the relay-selection algorithm; callers MUST pass
-// a non-nil Selector (e.g. mols.New()). Passing nil or a typed-nil panics.
-func NewRelaySet(bootstrapRelayURLs []string, policy Selector) *RelaySet {
-	if policy == nil || isNilableAndNil(policy) {
-		panic("discovery.NewRelaySet: policy must not be nil")
-	}
+// Option is a functional option for NewRelaySet.
+type Option func(*RelaySet)
+
+// WithSelector sets the relay-selection policy. Callers MUST provide this
+// option; there is no default selector (discovery cannot import selectors/mols
+// without creating an import cycle). Passing nil or a typed-nil will cause
+// NewRelaySet to panic.
+func WithSelector(s Selector) Option {
+	return func(rs *RelaySet) { rs.policy = s }
+}
+
+// NewRelaySet creates a RelaySet seeded with the given bootstrap URLs.
+// Callers MUST supply WithSelector(s) in opts; omitting it or passing a
+// nil/typed-nil Selector panics.
+func NewRelaySet(bootstrapRelayURLs []string, opts ...Option) *RelaySet {
 	set := &RelaySet{
 		relays:    make(map[string]RelayState),
 		keyIndex:  make(map[string]keyIndexEntry),
-		policy:    policy,
 		lifecycle: NewLifecycle(),
+	}
+	for _, opt := range opts {
+		opt(set)
+	}
+	if set.policy == nil || isNilableAndNil(set.policy) {
+		panic("discovery.NewRelaySet: WithSelector option is required and must not be nil")
 	}
 	set.SetBootstrapRelayURLs(bootstrapRelayURLs)
 	return set

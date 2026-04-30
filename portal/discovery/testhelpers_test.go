@@ -60,5 +60,5 @@ func (s stubSelector) SelectMultiHop(_ context.Context, states []RelayState, cs 
 }
 
 func newTestRelaySet(bootstrapRelayURLs []string) *RelaySet {
-	return NewRelaySet(bootstrapRelayURLs, stubSelector{})
+	return NewRelaySet(bootstrapRelayURLs, WithSelector(stubSelector{}))
 }

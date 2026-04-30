@@ -145,7 +145,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			return nil, fmt.Errorf("resolve discovery bootstraps: %w", err)
 		}
 		cfg.Bootstraps = utils.RemoveRelayURL(cfg.Bootstraps, cfg.PortalURL)
-		relaySet = discovery.NewRelaySet(cfg.Bootstraps, mols.New())
+		relaySet = discovery.NewRelaySet(cfg.Bootstraps, discovery.WithSelector(mols.New()))
 	}
 
 	server := &Server{
