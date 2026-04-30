@@ -1,6 +1,7 @@
 package mols
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -701,4 +702,262 @@ func TestMOLSSelectMultiHopSkipsNoOverlayPeer(t *testing.T) {
 			t.Fatalf("no-overlay relay should be excluded from multihop selection")
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 acceptance criterion #1, restated for Phase 2 — byte-equal contract
+// between the two MOLS call paths (relayPolicy.SelectPriorityWithTrace and
+// Selector.SelectPriority(ctx,...)). Both paths share the same internal
+// scoring; the test asserts they produce identical OutputURLs across the
+// scenario table. Restored after the discovery -> selectors/mols extraction.
+// Originally lived at portal/discovery/mols_test.go.
+// ---------------------------------------------------------------------------
+
+// selectionCase is a shared table row for TestMOLSWithTraceByteEqualToLegacy.
+type selectionCase struct {
+	name   string
+	states []discovery.RelayState
+	cs     discovery.ClientState
+}
+
+// assertByteEqual verifies that legacy and withTrace slices are identical and
+// that trace.OutputURLs matches legacy. It also checks mode and PoolTotal.
+func assertByteEqual(t *testing.T, mode string, states []discovery.RelayState, legacy []string, withTrace []string, trace discovery.SelectionTrace) {
+	t.Helper()
+	if len(legacy) != len(withTrace) {
+		t.Fatalf("return-value length mismatch: legacy=%d withTrace=%d", len(legacy), len(withTrace))
+	}
+	for i := range legacy {
+		if legacy[i] != withTrace[i] {
+			t.Fatalf("return-value[%d]: legacy=%q withTrace=%q", i, legacy[i], withTrace[i])
+		}
+	}
+	if len(legacy) != len(trace.OutputURLs) {
+		t.Fatalf("OutputURLs length mismatch: legacy=%d trace=%d", len(legacy), len(trace.OutputURLs))
+	}
+	for i := range legacy {
+		if legacy[i] != trace.OutputURLs[i] {
+			t.Fatalf("OutputURLs[%d]: legacy=%q trace=%q", i, legacy[i], trace.OutputURLs[i])
+		}
+	}
+	if trace.Mode != mode {
+		t.Fatalf("Mode = %q, want %q", trace.Mode, mode)
+	}
+	if trace.PoolTotal != len(states) {
+		t.Fatalf("PoolTotal = %d, want %d", trace.PoolTotal, len(states))
+	}
+}
+
+// driveIntoActiveBackoff drives the relay state into active suppression via
+// repeated Lifecycle.OnActiveFailure calls until the budget is exhausted.
+// Used to construct backoff cases without touching unexported fields.
+func driveIntoActiveBackoff(t *testing.T, state discovery.RelayState) discovery.RelayState {
+	t.Helper()
+	lc := discovery.NewLifecycle()
+	const recoveryBudget = 3
+	for i := 0; i < recoveryBudget+1; i++ {
+		state, _, _ = lc.OnActiveFailure(state, nil, recoveryBudget)
+	}
+	return state
+}
+
+// driveIntoDiscoveryBackoff drives the relay state into discovery-refresh
+// backoff via repeated Lifecycle.OnDiscoveryFailure calls.
+func driveIntoDiscoveryBackoff(t *testing.T, state discovery.RelayState) discovery.RelayState {
+	t.Helper()
+	lc := discovery.NewLifecycle()
+	const recoveryBudget = 3
+	for i := 0; i < recoveryBudget+1; i++ {
+		state, _, _ = lc.OnDiscoveryFailure(state, nil, recoveryBudget)
+	}
+	return state
+}
+
+// TestMOLSWithTraceByteEqualToLegacy asserts that for every test scenario the
+// WithTrace variants produce OutputURLs that are byte-identical to the
+// corresponding legacy methods. Phase 1 acceptance criterion #1
+// ("Golden no-behavior-change").
+//
+// Priority scenarios mirror the existing TestMOLSSelectPriority* inputs.
+// MultiHop scenarios cover the main eligibility branches.
+func TestMOLSWithTraceByteEqualToLegacy(t *testing.T) {
+	policy := New()
+
+	t.Run("priority", func(t *testing.T) {
+		explicitURL := "https://relay-explicit.example"
+		relayA := "https://relay-a.example"
+		relayB := "https://relay-b.example"
+
+		tenRelays := make([]discovery.RelayState, 10)
+		for i := range tenRelays {
+			tenRelays[i] = confirmedPolicyRelayState(t, fmt.Sprintf("https://relay-%d.example", i))
+		}
+
+		healthy1 := confirmedPolicyRelayState(t, "https://relay-healthy-1.example")
+		healthy1.DiscoveryRTT = 100 * time.Millisecond
+		healthy1.DiscoveryRTTAt = time.Now()
+
+		healthy2 := confirmedPolicyRelayState(t, "https://relay-healthy-2.example")
+		healthy2.DiscoveryRTT = 150 * time.Millisecond
+		healthy2.DiscoveryRTTAt = time.Now()
+
+		fallback := confirmedPolicyRelayState(t, "https://relay-fallback.example")
+		fallback.DiscoveryRTT = molsFallbackRTTThreshold + time.Millisecond
+		fallback.DiscoveryRTTAt = time.Now()
+
+		fallback1 := confirmedPolicyRelayState(t, "https://relay-fallback-1.example")
+		fallback1.DiscoveryRTT = molsFallbackRTTThreshold + time.Millisecond
+		fallback1.DiscoveryRTTAt = time.Now()
+		fallback2 := confirmedPolicyRelayState(t, "https://relay-fallback-2.example")
+		fallback2.DiscoveryRTT = molsFallbackRTTThreshold + time.Millisecond
+		fallback2.DiscoveryRTTAt = time.Now()
+
+		r1 := confirmedPolicyRelayState(t, "https://relay-one.example")
+		r2 := confirmedPolicyRelayState(t, "https://relay-two.example")
+		rttHigh := molsCongestionRTTThreshold + 100*time.Millisecond
+		r1c := r1
+		r1c.DiscoveryRTT = rttHigh
+		r1c.DiscoveryRTTAt = time.Now()
+		r2c := r2
+		r2c.DiscoveryRTT = rttHigh
+		r2c.DiscoveryRTTAt = time.Now()
+
+		r1v := confirmedPolicyRelayState(t, "https://relay-one.example")
+		r1v.DiscoveryRTT = 100 * time.Millisecond
+		r1v.DiscoveryRTTAt = time.Now()
+		r2v := confirmedPolicyRelayState(t, "https://relay-two.example")
+		r2v.DiscoveryRTT = 400 * time.Millisecond
+		r2v.DiscoveryRTTAt = time.Now()
+
+		rAlpha := confirmedPolicyRelayState(t, "https://relay-alpha.example")
+		rBeta := confirmedPolicyRelayState(t, "https://relay-beta.example")
+		rGamma := confirmedPolicyRelayState(t, "https://relay-gamma.example")
+
+		expired := confirmedPolicyRelayState(t, "https://relay-expired.example")
+		expired.Descriptor.ExpiresAt = time.Now().UTC().Add(-time.Minute)
+
+		expExplicit := confirmedPolicyRelayState(t, "https://relay-explicit-expired.example")
+		expExplicit.Descriptor.ExpiresAt = time.Now().UTC().Add(-time.Minute)
+
+		// backoff and discBackoff use Lifecycle methods to drive into backoff
+		// state since suppressActiveUntil and nextDiscoveryRefreshAt are
+		// unexported in package discovery.
+		backoff := driveIntoActiveBackoff(t, confirmedPolicyRelayState(t, "https://relay-backoff.example"))
+		discBackoff := driveIntoDiscoveryBackoff(t, confirmedPolicyRelayState(t, "https://relay-discovery-backoff.example"))
+
+		cases := []selectionCase{
+			{name: "nil_pool", states: nil, cs: discovery.ClientState{}},
+			{
+				name: "explicit_outside_auto_limit",
+				states: []discovery.RelayState{
+					bootstrapPolicyRelayState(explicitURL),
+					confirmedPolicyRelayState(t, relayA),
+					confirmedPolicyRelayState(t, relayB),
+				},
+				cs: discovery.ClientState{ExplicitRelayURLs: []string{explicitURL}, MaxActiveRelays: 1},
+			},
+			{
+				name: "deterministic_fixed_address",
+				states: []discovery.RelayState{
+					confirmedPolicyRelayState(t, "https://relay-a.example"),
+					confirmedPolicyRelayState(t, "https://relay-b.example"),
+					confirmedPolicyRelayState(t, "https://relay-c.example"),
+				},
+				cs: discovery.ClientState{LocalAddress: "0x1234abcd"},
+			},
+			{name: "fallback_relays_demoted", states: []discovery.RelayState{fallback, healthy1, healthy2}, cs: discovery.ClientState{}},
+			{name: "min_active_nodes_promotes_fallback", states: []discovery.RelayState{fallback1, fallback2}, cs: discovery.ClientState{}},
+			{name: "congestion_switch", states: []discovery.RelayState{r1c, r2c}, cs: discovery.ClientState{LocalAddress: "ingress-test"}},
+			{name: "variant_grid_high_cv", states: []discovery.RelayState{r1v, r2v}, cs: discovery.ClientState{LocalAddress: "ingress-cv"}},
+			{name: "different_ingress_addresses", states: []discovery.RelayState{rAlpha, rBeta, rGamma}, cs: discovery.ClientState{LocalAddress: "0xabc"}},
+			{name: "max_active_relays_cap", states: tenRelays, cs: discovery.ClientState{MaxActiveRelays: 3}},
+			{name: "zero_max_active_uses_default", states: tenRelays, cs: discovery.ClientState{MaxActiveRelays: 0}},
+			{name: "skip_expired_auto_relay", states: []discovery.RelayState{expired}, cs: discovery.ClientState{}},
+			{
+				name:   "keep_expired_explicit_relay",
+				states: []discovery.RelayState{expExplicit},
+				cs:     discovery.ClientState{ExplicitRelayURLs: []string{expExplicit.Descriptor.APIHTTPSAddr}},
+			},
+			{name: "skip_auto_relay_in_backoff", states: []discovery.RelayState{backoff}, cs: discovery.ClientState{}},
+			{name: "keep_discovery_backoff_relay", states: []discovery.RelayState{discBackoff}, cs: discovery.ClientState{}},
+			{name: "keep_unobserved_seed", states: []discovery.RelayState{bootstrapPolicyRelayState("https://relay-seed.example")}, cs: discovery.ClientState{}},
+			{name: "normal_mode_no_rtt", states: []discovery.RelayState{r1, r2}, cs: discovery.ClientState{LocalAddress: "ingress-test"}},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				legacy, _ := policy.SelectPriority(context.Background(), tc.states, tc.cs)
+				withTrace, trace := policy.SelectPriorityWithTrace(tc.states, tc.cs)
+				assertByteEqual(t, "priority", tc.states, legacy, withTrace, trace)
+				if tc.name == "min_active_nodes_promotes_fallback" {
+					for i, entry := range trace.Ranked {
+						if entry.Demoted {
+							t.Errorf("Ranked[%d] (%q): Demoted=true but relay was promoted to active; want false", i, entry.URL)
+						}
+					}
+				}
+				if tc.name == "fallback_relays_demoted" {
+					const fallbackURL = "https://relay-fallback.example"
+					found := false
+					for i, entry := range trace.Ranked {
+						if entry.URL == fallbackURL {
+							found = true
+							if !entry.Demoted {
+								t.Errorf("Ranked[%d] (%q): Demoted=false but relay stays in fallback section; want true", i, entry.URL)
+							}
+						}
+					}
+					if !found {
+						t.Errorf("fallback relay %q not found in trace.Ranked", fallbackURL)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("multihop", func(t *testing.T) {
+		ovA := overlayPolicyRelayState(t, "https://mh-relay-a.example")
+		ovB := overlayPolicyRelayState(t, "https://mh-relay-b.example")
+		ovC := overlayPolicyRelayState(t, "https://mh-relay-c.example")
+
+		// noDescRelay: HasObservedDescriptor()==false (LastSeenAt zero).
+		noDescRelay := discovery.RelayState{
+			Descriptor: types.RelayDescriptor{APIHTTPSAddr: "https://mh-nodesc.example"},
+		}
+
+		bannedRelay := confirmedPolicyRelayState(t, "https://mh-banned.example")
+		bannedRelay.Banned = true
+
+		// suppressedRelay: drive into active backoff via Lifecycle.
+		suppressedRelay := driveIntoActiveBackoff(t, overlayPolicyRelayState(t, "https://mh-suppressed.example"))
+
+		// noOverlayRelay: HasObservedDescriptor()==true but HasOverlayPeer()==false.
+		noOverlayRelay := confirmedPolicyRelayState(t, "https://mh-no-overlay.example")
+
+		expiredRelay := overlayPolicyRelayState(t, "https://mh-expired.example")
+		expiredRelay.Descriptor.ExpiresAt = time.Now().UTC().Add(-time.Minute)
+
+		cases := []selectionCase{
+			{name: "depth_zero_returns_nil", states: []discovery.RelayState{ovA, ovB}, cs: discovery.ClientState{MultiHopDepth: 0}},
+			{name: "depth_one_returns_nil", states: []discovery.RelayState{ovA, ovB}, cs: discovery.ClientState{MultiHopDepth: 1}},
+			{name: "nil_pool", states: nil, cs: discovery.ClientState{MultiHopDepth: 2}},
+			{name: "empty_pool_after_aggregate", states: []discovery.RelayState{bannedRelay}, cs: discovery.ClientState{MultiHopDepth: 2}},
+			{name: "eligible_pool_depth_2", states: []discovery.RelayState{ovA, ovB, ovC}, cs: discovery.ClientState{MultiHopDepth: 2, LocalAddress: "client-1"}},
+			{name: "eligible_pool_depth_3", states: []discovery.RelayState{ovA, ovB, ovC}, cs: discovery.ClientState{MultiHopDepth: 3, LocalAddress: "client-2"}},
+			{name: "depth_exceeds_pool_size", states: []discovery.RelayState{ovA, ovB}, cs: discovery.ClientState{MultiHopDepth: 5, LocalAddress: "client-3"}},
+			{name: "skip_no_descriptor", states: []discovery.RelayState{noDescRelay, ovA}, cs: discovery.ClientState{MultiHopDepth: 2, LocalAddress: "client-4"}},
+			{name: "skip_expired", states: []discovery.RelayState{expiredRelay, ovB}, cs: discovery.ClientState{MultiHopDepth: 2, LocalAddress: "client-5"}},
+			{name: "skip_no_overlay_peer", states: []discovery.RelayState{noOverlayRelay, ovC}, cs: discovery.ClientState{MultiHopDepth: 2, LocalAddress: "client-6"}},
+			{name: "skip_suppressed", states: []discovery.RelayState{suppressedRelay, ovA}, cs: discovery.ClientState{MultiHopDepth: 2, LocalAddress: "client-7"}},
+			{name: "all_ineligible_returns_nil", states: []discovery.RelayState{expiredRelay, noDescRelay, noOverlayRelay}, cs: discovery.ClientState{MultiHopDepth: 2}},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				legacy, _ := policy.SelectMultiHop(context.Background(), tc.states, tc.cs)
+				withTrace, trace := policy.SelectMultiHopWithTrace(tc.states, tc.cs)
+				assertByteEqual(t, "multihop", tc.states, legacy, withTrace, trace)
+			})
+		}
+	})
 }
