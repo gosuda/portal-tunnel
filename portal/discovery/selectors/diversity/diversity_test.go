@@ -265,6 +265,64 @@ func TestDiversitySubnet16ForcesRelaxation(t *testing.T) {
 	}
 }
 
+// TestDiversityBannedRelayExcludedFromExtras verifies that a banned relay with
+// a distinct Subnet16 is never included as a diversity "extra" to satisfy
+// AnonymityGrade depth. The bug this catches: if buildCandidates pulled from
+// the raw pool instead of trace.Ranked, a banned relay with a unique /16
+// would satisfy the third hop even though it must not be selected.
+//
+// Pool: relay-a and relay-b share Subnet16 "10.1"; relay-banned has Subnet16
+// "10.2" but Banned=true. With AnonymityGrade=true and MultiHopDepth=3, there
+// are only 2 distinct eligible subnets → depth cannot be satisfied; the
+// selector must relax (AnonymityGrade counter increments) and return 2 URLs
+// that do NOT include relay-banned.
+func TestDiversityBannedRelayExcludedFromExtras(t *testing.T) {
+	d := diversity.New(mols.New())
+	ctx := context.Background()
+
+	bannedState := overlayStateWith("https://relay-banned.example", "op-banned", "10.2")
+	bannedState.Banned = true
+
+	pool := []discovery.RelayState{
+		overlayStateWith("https://relay-a.example", "op-a", "10.1"),
+		overlayStateWith("https://relay-b.example", "op-b", "10.1"),
+		bannedState,
+	}
+	client := discovery.ClientState{
+		LocalAddress:   "banned-extras-test",
+		MultiHopDepth:  3,
+		AnonymityGrade: true,
+	}
+
+	counterBefore := testutil.ToFloat64(
+		discovery.DiversityRelaxedTotal.WithLabelValues("anonymity_grade"),
+	)
+
+	urls, _ := d.SelectMultiHop(ctx, pool, client)
+
+	// Must not include the banned relay's URL.
+	for _, u := range urls {
+		if u == "https://relay-banned.example" {
+			t.Fatalf("banned relay appeared in output %v; eligibility leak in buildCandidates", urls)
+		}
+	}
+
+	// After relaxation the selector must return 2 eligible URLs (relay-a and
+	// relay-b are the only non-banned relays in the pool).
+	if len(urls) != 2 {
+		t.Fatalf("want 2 eligible URLs after AnonymityGrade relaxation, got %d: %v", len(urls), urls)
+	}
+
+	// AnonymityGrade relaxation counter must have incremented (depth unsatisfiable
+	// without the banned relay, so the selector must relax).
+	counterAfter := testutil.ToFloat64(
+		discovery.DiversityRelaxedTotal.WithLabelValues("anonymity_grade"),
+	)
+	if delta := counterAfter - counterBefore; delta != 1.0 {
+		t.Fatalf("portal_discovery_diversity_relaxed_total{reason=anonymity_grade} delta = %.0f, want 1 (banned relay must not satisfy depth)", delta)
+	}
+}
+
 // TestDiversityFamilyDedup verifies that with AnonymityGrade=true and a pool
 // containing relays with various Family values, no two selected relays share
 // the same Family.

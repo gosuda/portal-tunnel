@@ -105,8 +105,12 @@ func (d *Diversity) SelectMultiHop(ctx context.Context, pool []discovery.RelaySt
 
 	// Build the full candidate ordering:
 	// 1. innerURLs in the order the inner selector returned them.
-	// 2. Remaining pool entries (sorted by URL for determinism) not in innerURLs.
-	candidates := buildCandidates(innerURLs, pool)
+	// 2. Remaining trace.Ranked entries (sorted by URL for determinism) not in
+	//    innerURLs. Ranked contains only the eligible relays that the inner
+	//    selector actually evaluated (banned/expired/suppressed entries are
+	//    excluded before ranking), so this avoids leaking ineligible relays into
+	//    the diversity candidate set.
+	candidates := buildCandidates(innerURLs, trace.Ranked)
 
 	// Attempt 1: full constraints (role-separation + AnonymityGrade if set).
 	out, ok := walk(candidates, stateByURL, client)
@@ -144,17 +148,19 @@ func (d *Diversity) SelectMultiHop(ctx context.Context, pool []discovery.RelaySt
 }
 
 // buildCandidates returns an ordered candidate slice: innerURLs first, then
-// any pool entries not in innerURLs sorted by URL for determinism.
-func buildCandidates(innerURLs []string, pool []discovery.RelayState) []string {
+// any entries from ranked not in innerURLs sorted by URL for determinism.
+// ranked must contain only eligible relays (the inner selector's evaluated
+// candidates), so that banned/expired/suppressed relays are never added.
+func buildCandidates(innerURLs []string, ranked []discovery.TraceEntry) []string {
 	inInner := make(map[string]struct{}, len(innerURLs))
 	for _, u := range innerURLs {
 		inInner[u] = struct{}{}
 	}
 
 	// Collect extras in sorted order for determinism.
-	extras := make([]string, 0, len(pool))
-	for _, rs := range pool {
-		u := rs.Descriptor.APIHTTPSAddr
+	extras := make([]string, 0, len(ranked))
+	for _, entry := range ranked {
+		u := entry.URL
 		if _, seen := inInner[u]; !seen {
 			extras = append(extras, u)
 		}
