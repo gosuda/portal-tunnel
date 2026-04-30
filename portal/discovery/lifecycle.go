@@ -8,6 +8,11 @@ import "time"
 //
 // The struct is intentionally kept extensible for Stage 2B, which will add
 // EWMA load fields; callers should always construct via NewLifecycle.
+//
+// Concurrency: Lifecycle methods are not internally synchronized. All On*
+// methods must be called with the owning RelaySet.mu write lock already held.
+// Stage 2B EWMA fields must follow this same discipline; do NOT add an
+// internal mutex to Lifecycle. Single owner = no nested-lock hazard.
 type Lifecycle struct{}
 
 // NewLifecycle returns a ready-to-use Lifecycle. Stage 2B will accept
@@ -49,6 +54,10 @@ func (lc *Lifecycle) OnDiscoveryConfirmed(state RelayState) RelayState {
 // is exhausted, schedules an exponential-backoff refresh delay. It returns the
 // updated state, a bool indicating whether a backoff was scheduled, and the
 // reason string ("retry" or "discovery").
+//
+// The err parameter is accepted for interface compatibility and future use
+// (e.g., error-type-specific backoff or telemetry); it is not inspected in
+// this implementation.
 func (lc *Lifecycle) OnDiscoveryFailure(state RelayState, err error, recoveryFailures int) (RelayState, bool, string) {
 	state.discoveryFailures++
 
@@ -68,6 +77,10 @@ func (lc *Lifecycle) OnDiscoveryFailure(state RelayState, err error, recoveryFai
 // budget is exhausted, schedules an exponential-backoff active suppression.
 // It returns the updated state, a bool indicating whether a backoff was
 // scheduled, and the reason string ("retry" or "active").
+//
+// The err parameter is accepted for interface compatibility and future use
+// (e.g., error-type-specific backoff or telemetry); it is not inspected in
+// this implementation.
 func (lc *Lifecycle) OnActiveFailure(state RelayState, err error, recoveryFailures int) (RelayState, bool, string) {
 	state.activeFailures++
 
