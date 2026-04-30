@@ -359,13 +359,32 @@ func TestMOLSSelectPriorityFallbackRelaysDemoted(t *testing.T) {
 	fallback.DiscoveryRTT = molsFallbackRTTThreshold + time.Millisecond
 	fallback.DiscoveryRTTAt = time.Now()
 
-	selected, _ := policy.SelectPriorityWithTrace([]discovery.RelayState{fallback, healthy1, healthy2}, discovery.ClientState{})
+	selected, trace := policy.SelectPriorityWithTrace([]discovery.RelayState{fallback, healthy1, healthy2}, discovery.ClientState{})
 
 	if len(selected) != 3 {
 		t.Fatalf("len(selected) = %d, want 3", len(selected))
 	}
 	if selected[len(selected)-1] != fallback.Descriptor.APIHTTPSAddr {
 		t.Fatalf("last selected = %q, want fallback relay %q", selected[len(selected)-1], fallback.Descriptor.APIHTTPSAddr)
+	}
+
+	if len(trace.Ranked) != 3 {
+		t.Fatalf("len(trace.Ranked) = %d, want 3", len(trace.Ranked))
+	}
+	fallbackURL := fallback.Descriptor.APIHTTPSAddr
+	foundFallback := false
+	for _, entry := range trace.Ranked {
+		if entry.URL == fallbackURL {
+			foundFallback = true
+			if !entry.Demoted {
+				t.Errorf("trace.Ranked entry for fallback URL %q has Demoted=false, want true", fallbackURL)
+			}
+		} else if entry.Demoted {
+			t.Errorf("trace.Ranked entry for non-fallback URL %q has Demoted=true, want false", entry.URL)
+		}
+	}
+	if !foundFallback {
+		t.Errorf("fallback URL %q not found in trace.Ranked", fallbackURL)
 	}
 }
 
@@ -379,10 +398,32 @@ func TestMOLSSelectPriorityMinActiveNodesPromotesFallback(t *testing.T) {
 	fallback2.DiscoveryRTT = molsFallbackRTTThreshold + time.Millisecond
 	fallback2.DiscoveryRTTAt = time.Now()
 
-	selected, _ := policy.SelectPriorityWithTrace([]discovery.RelayState{fallback1, fallback2}, discovery.ClientState{})
+	selected, trace := policy.SelectPriorityWithTrace([]discovery.RelayState{fallback1, fallback2}, discovery.ClientState{})
 
 	if len(selected) != 2 {
 		t.Fatalf("len(selected) = %d, want 2 (both fallbacks promoted)", len(selected))
+	}
+
+	if len(trace.Ranked) != 2 {
+		t.Fatalf("len(trace.Ranked) = %d, want 2", len(trace.Ranked))
+	}
+	rankedURLs := map[string]bool{
+		fallback1.Descriptor.APIHTTPSAddr: false,
+		fallback2.Descriptor.APIHTTPSAddr: false,
+	}
+	for _, entry := range trace.Ranked {
+		if _, ok := rankedURLs[entry.URL]; !ok {
+			t.Errorf("unexpected URL %q in trace.Ranked", entry.URL)
+		}
+		rankedURLs[entry.URL] = true
+		if entry.Demoted {
+			t.Errorf("trace.Ranked entry for URL %q has Demoted=true, want false (all fallbacks promoted)", entry.URL)
+		}
+	}
+	for url, seen := range rankedURLs {
+		if !seen {
+			t.Errorf("expected URL %q missing from trace.Ranked", url)
+		}
 	}
 }
 
