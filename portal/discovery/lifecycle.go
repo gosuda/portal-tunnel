@@ -136,23 +136,36 @@ func (lc *Lifecycle) decayBoth(state RelayState, now time.Time) RelayState {
 //
 // Both LoadFactor and FailureRate are decayed from LastUpdated before the
 // sample is applied, so that neither field's decay is corrupted by the
-// other's update path. After decay, the composed LoadFactor update is:
+// other's update path. The LoadFactor update is:
 //
-//	state.LoadFactor = state.LoadFactor*loadDecay + sample + state.FailureRate*beta
+//	state.LoadFactor = state.LoadFactor*loadDecay + sample
 //
-// where state.FailureRate is already the post-decay value. If
-// state.LastUpdated is zero (first sample) no decay is applied.
+// FailureBeta is NOT folded into the stored LoadFactor here. Selectors and
+// other read-time consumers that want the composed value should evaluate
+//
+//	state.LoadFactor + state.FailureRate*lc.FailureBeta()
+//
+// at the time of use. This keeps the stored EWMA fields independent and
+// avoids compounding failure contributions across updates.
+//
+// If state.LastUpdated is zero (first sample) no decay is applied.
 //
 // The caller must hold RelaySet.mu as a write lock.
 //
 // Returns the updated state.
 func (lc *Lifecycle) SampleLoad(state RelayState, sample float64, now time.Time) RelayState {
 	state = lc.decayBoth(state, now)
-	// Compose: decayed LoadFactor already incorporates prior state;
-	// add new load sample and current (post-decay) failure contribution.
-	state.LoadFactor += sample + state.FailureRate*lc.failureBeta
+	state.LoadFactor += sample
 	state.LastUpdated = now
 	return state
+}
+
+// FailureBeta returns the configured multiplier for composing FailureRate into
+// an effective load score at read time:
+//
+//	effectiveLoad = state.LoadFactor + state.FailureRate*lc.FailureBeta()
+func (lc *Lifecycle) FailureBeta() float64 {
+	return lc.failureBeta
 }
 
 // OnSuccess decays both FailureRate and LoadFactor toward zero and refreshes

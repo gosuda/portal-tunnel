@@ -533,6 +533,10 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 			record.DiscoveryRTT = existingAtURL.DiscoveryRTT
 			record.DiscoveryRTTAt = existingAtURL.DiscoveryRTTAt
 		}
+		// Preserve EWMA load surface so discovery cycles do not zero it out.
+		record.LoadFactor = existingAtURL.LoadFactor
+		record.FailureRate = existingAtURL.FailureRate
+		record.LastUpdated = existingAtURL.LastUpdated
 
 		isAuthoritativeTarget := !protocolMismatch && !missingTarget && authoritative && relayURL == targetURL
 		if isAuthoritativeTarget {
@@ -647,6 +651,10 @@ func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) er
 			record.DiscoveryRTT = existing.DiscoveryRTT
 			record.DiscoveryRTTAt = existing.DiscoveryRTTAt
 		}
+		// Preserve EWMA load surface so announce ingestion does not zero it out.
+		record.LoadFactor = existing.LoadFactor
+		record.FailureRate = existing.FailureRate
+		record.LastUpdated = existing.LastUpdated
 	}
 
 	switch s.upsertDescriptorLocked(record, now, false) {
@@ -752,4 +760,41 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, err error, recoveryFailu
 	state, backedOff, backoffReason = s.lifecycle.OnActiveFailure(state, err, recoveryFailures)
 	s.relays[relayURL] = state
 	return backedOff, backoffReason, state.activeFailures
+}
+
+// RecordTunnelOpened records that a new tunnel has been opened on the relay at
+// relayURL. The caller supplies the load sample directly as a plain float64 so
+// that no closure is held under s.mu.
+//
+// Sample contract: the SDK passes 1.0 per tunnel-open event, so LoadFactor
+// accumulates as a decayed event rate. Callers with a normalised ratio
+// (active_tunnels / pool_avg) may pass that instead. No-op if relayURL is not
+// tracked.
+func (s *RelaySet) RecordTunnelOpened(relayURL string, sample float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.relays[relayURL]
+	if !ok {
+		return
+	}
+	state = s.lifecycle.SampleLoad(state, sample, time.Now().UTC())
+	s.relays[relayURL] = state
+}
+
+// RecordTunnelClosed records that a tunnel has been closed on the relay at
+// relayURL. The caller supplies the post-close load sample directly. The SDK
+// passes 0.0 so that the EWMA decays toward zero rather than being bumped.
+// Callers with a normalised post-close ratio may pass that instead. No-op if
+// relayURL is not tracked.
+func (s *RelaySet) RecordTunnelClosed(relayURL string, sample float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.relays[relayURL]
+	if !ok {
+		return
+	}
+	state = s.lifecycle.SampleLoad(state, sample, time.Now().UTC())
+	s.relays[relayURL] = state
 }

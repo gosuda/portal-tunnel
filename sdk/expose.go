@@ -626,10 +626,16 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 		}
 
 		discovery.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Inc()
+		if e.relaySet != nil {
+			e.relaySet.RecordTunnelOpened(relayURL, 1.0)
+		}
 		wrappedConn := &tunnelCounterConn{
 			Conn: conn,
 			decr: func() {
 				discovery.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Dec()
+				if e.relaySet != nil {
+					e.relaySet.RecordTunnelClosed(relayURL, 0.0)
+				}
 			},
 		}
 
