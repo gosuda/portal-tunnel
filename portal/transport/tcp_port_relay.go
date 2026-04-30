@@ -13,8 +13,6 @@ import (
 const defaultTCPPortClaimTimeout = 10 * time.Second
 
 // RelayTCPPort owns a TCP listener on an allocated port for one lease.
-// Incoming connections are bridged to reverse sessions claimed from the
-// associated RelayStream using raw TCP (no TLS).
 type RelayTCPPort struct {
 	identityKey string
 	port        int
@@ -114,7 +112,7 @@ func (t *RelayTCPPort) handleConn(ctx context.Context, conn net.Conn) {
 	claimCtx, cancel := context.WithTimeout(ctx, defaultTCPPortClaimTimeout)
 	defer cancel()
 
-	session, err := t.stream.ClaimRaw(claimCtx)
+	session, err := t.stream.claimRaw(claimCtx)
 	if err != nil {
 		_ = conn.Close()
 		log.Warn().

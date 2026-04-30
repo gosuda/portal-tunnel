@@ -69,7 +69,7 @@ func (b *RelayStream) Claim(ctx context.Context) (net.Conn, error) {
 	return b.claimWithMarker(ctx, types.MarkerTLSStart)
 }
 
-func (b *RelayStream) ClaimRaw(ctx context.Context) (net.Conn, error) {
+func (b *RelayStream) claimRaw(ctx context.Context) (net.Conn, error) {
 	return b.claimWithMarker(ctx, types.MarkerRawStart)
 }
 

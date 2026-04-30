@@ -5,11 +5,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { SortOption } from "@/types/filters";
+import type { SortOption } from "@/types/filters";
 import clsx from "clsx";
 
 interface SortbySelectProps {
-  sortBy: string;
+  sortBy: SortOption;
   onSortByChange: (value: SortOption) => void;
   hideFiltersOnMobile?: boolean;
   className?: string;
@@ -21,7 +21,10 @@ export const SortbySelect = ({
   hideFiltersOnMobile,
   className,
 }: SortbySelectProps) => (
-  <Select value={sortBy} onValueChange={onSortByChange}>
+  <Select
+    value={sortBy}
+    onValueChange={(value) => onSortByChange(value as SortOption)}
+  >
     <SelectTrigger
       className={clsx(
         "w-37.5 h-10 border-border!",

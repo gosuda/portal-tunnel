@@ -4,9 +4,7 @@ import type { PublicLeaseData } from "@/hooks/useSSRData";
 import { useList, type BaseServer } from "@/hooks/useList";
 import { parseLeaseMetadata } from "@/lib/metadata";
 
-export type ClientServer = BaseServer;
-
-function convertSSRDataToServers(ssrData: PublicLeaseData[]): ClientServer[] {
+function convertSSRDataToServers(ssrData: PublicLeaseData[]): BaseServer[] {
   return ssrData.map((row) => {
     const metadata = parseLeaseMetadata(row.Metadata);
     const hostname = row.Hostname || "";
@@ -31,7 +29,7 @@ function convertSSRDataToServers(ssrData: PublicLeaseData[]): ClientServer[] {
 export function useServerList() {
   const ssrData = useSSRData();
 
-  const servers: ClientServer[] = useMemo(
+  const servers: BaseServer[] = useMemo(
     () => convertSSRDataToServers(ssrData),
     [ssrData]
   );

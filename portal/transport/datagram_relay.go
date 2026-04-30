@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sort"
 	"sync"
 	"time"
 
@@ -16,117 +15,18 @@ import (
 )
 
 const (
-	DefaultMaxPacketSize       = 1350
+	defaultMaxPacketSize       = 1350
 	defaultFlowIdleTimeout     = 30 * time.Second
 	defaultFlowCleanupInterval = 30 * time.Second
 )
 
-var ErrPortExhausted = errors.New("no ports available")
-
-type flowReplyFunc func([]byte) error
-
 type flowState struct {
 	key      string
 	lastSeen time.Time
-	reply    flowReplyFunc
+	reply    func([]byte) error
 }
 
-type portReservation struct {
-	port      int
-	expiresAt time.Time
-}
-
-// PortAllocator manages a pool of ports for dynamic per-lease allocation.
-type PortAllocator struct {
-	available []int
-	inUse     map[int]string
-	reserved  map[string]portReservation
-	grace     time.Duration
-	mu        sync.Mutex
-}
-
-func NewPortAllocator(min, max int, grace time.Duration) *PortAllocator {
-	if min <= 0 || max <= 0 || min > max {
-		return &PortAllocator{
-			available: nil,
-			inUse:     make(map[int]string),
-			reserved:  make(map[string]portReservation),
-			grace:     grace,
-		}
-	}
-	available := make([]int, 0, max-min+1)
-	for p := min; p <= max; p++ {
-		available = append(available, p)
-	}
-	return &PortAllocator{
-		available: available,
-		inUse:     make(map[int]string),
-		reserved:  make(map[string]portReservation),
-		grace:     grace,
-	}
-}
-
-func (a *PortAllocator) Allocate(name string) (int, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	a.cleanupExpiredLocked(time.Now())
-
-	if res, ok := a.reserved[name]; ok {
-		delete(a.reserved, name)
-		a.inUse[res.port] = name
-		return res.port, nil
-	}
-
-	if len(a.available) == 0 {
-		return 0, ErrPortExhausted
-	}
-
-	port := a.available[0]
-	a.available = a.available[1:]
-	a.inUse[port] = name
-	return port, nil
-}
-
-func (a *PortAllocator) Release(port int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	name, ok := a.inUse[port]
-	if !ok {
-		return
-	}
-	delete(a.inUse, port)
-
-	if prev, exists := a.reserved[name]; exists {
-		a.sortedInsertLocked(prev.port)
-	}
-
-	a.reserved[name] = portReservation{
-		port:      port,
-		expiresAt: time.Now().Add(a.grace),
-	}
-
-	a.cleanupExpiredLocked(time.Now())
-}
-
-func (a *PortAllocator) cleanupExpiredLocked(now time.Time) {
-	for name, res := range a.reserved {
-		if now.After(res.expiresAt) {
-			delete(a.reserved, name)
-			a.sortedInsertLocked(res.port)
-		}
-	}
-}
-
-func (a *PortAllocator) sortedInsertLocked(port int) {
-	i := sort.SearchInts(a.available, port)
-	a.available = append(a.available, 0)
-	copy(a.available[i+1:], a.available[i:])
-	a.available[i] = port
-}
-
-// Datagram owns the UDP and QUIC datagram runtime for one lease.
+// RelayDatagram owns UDP ingress and QUIC backhaul binding for one lease.
 type RelayDatagram struct {
 	identityKey string
 	port        int
@@ -149,9 +49,9 @@ func NewRelayDatagram(identityKey string, port int) *RelayDatagram {
 		session: newDatagramSession(256, true, func(err error) {
 			log.Warn().
 				Err(err).
-				Str("component", "quic-flow-mux").
+				Str("component", "quic-backhaul").
 				Str("identity_key", identityKey).
-				Msg("quic receive loop ended")
+				Msg("quic backhaul receive loop ended")
 		}),
 		flowTable: make(map[uint32]*flowState),
 		addrIndex: make(map[string]uint32),
@@ -208,27 +108,27 @@ func (d *RelayDatagram) Close() {
 	})
 }
 
-func (d *RelayDatagram) Register(conn *quic.Conn) error {
+func (d *RelayDatagram) BindBackhaul(conn *quic.Conn) error {
 	if _, err := d.session.Bind(conn); err != nil {
 		return err
 	}
 
 	log.Info().
-		Str("component", "quic-flow-mux").
+		Str("component", "quic-backhaul").
 		Str("identity_key", d.identityKey).
 		Str("remote_addr", conn.RemoteAddr().String()).
-		Msg("quic tunnel connection registered")
+		Msg("quic backhaul connection registered")
 	return nil
 }
 
-func (d *RelayDatagram) SendDatagram(flowID uint32, payload []byte) error {
+func (d *RelayDatagram) sendDatagram(flowID uint32, payload []byte) error {
 	if d == nil {
 		return net.ErrClosed
 	}
 	return d.session.Send(flowID, payload)
 }
 
-func (d *RelayDatagram) TouchFlow(key string, reply func([]byte) error) uint32 {
+func (d *RelayDatagram) touchFlow(key string, reply func([]byte) error) uint32 {
 	now := time.Now()
 
 	d.mu.Lock()
@@ -289,7 +189,7 @@ func (d *RelayDatagram) dispatch(frame types.DatagramFrame) {
 	if err := reply(frame.Payload); err != nil {
 		log.Warn().
 			Err(err).
-			Str("component", "quic-flow-mux").
+			Str("component", "udp-relay").
 			Str("identity_key", d.identityKey).
 			Uint32("flow_id", frame.FlowID).
 			Msg("flow writeback failed")
@@ -340,7 +240,7 @@ func (d *RelayDatagram) forgetFlow(flowID uint32) {
 }
 
 func (d *RelayDatagram) readLoop(ctx context.Context) {
-	buf := make([]byte, DefaultMaxPacketSize)
+	buf := make([]byte, defaultMaxPacketSize)
 	for {
 		select {
 		case <-ctx.Done():
@@ -366,21 +266,21 @@ func (d *RelayDatagram) readLoop(ctx context.Context) {
 			return
 		}
 
-		flowID := d.TouchFlow("udp:"+clientAddr.String(), func(payload []byte) error {
+		flowID := d.touchFlow("udp:"+clientAddr.String(), func(payload []byte) error {
 			_, err := d.conn.WriteToUDP(payload, clientAddr)
 			return err
 		})
 		payload := make([]byte, n)
 		copy(payload, buf[:n])
 
-		if err := d.SendDatagram(flowID, payload); err != nil {
+		if err := d.sendDatagram(flowID, payload); err != nil {
 			log.Warn().
 				Str("component", "udp-relay").
 				Str("identity_key", d.identityKey).
 				Err(err).
 				Uint32("flow_id", flowID).
 				Int("bytes", n).
-				Msg("send datagram to tunnel failed, dropping packet")
+				Msg("send datagram to quic backhaul failed, dropping packet")
 			continue
 		}
 	}

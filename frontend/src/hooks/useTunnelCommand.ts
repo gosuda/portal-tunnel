@@ -56,16 +56,6 @@ function nextTunnelNameShuffleKey(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
 }
 
-function splitDisplayCommand(command: string, os: TunnelCommandOS) {
-  const lines = command.split("\n");
-  const installLineCount = os === "windows" ? 2 : 1;
-
-  return {
-    installBlock: lines.slice(0, installLineCount).join("\n"),
-    runBlock: lines.slice(installLineCount).join("\n"),
-  };
-}
-
 interface TunnelCommandExtras {
   relayUrls?: string[];
   discovery?: boolean;
@@ -123,7 +113,15 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
     [commandOptions]
   );
   const { installBlock, runBlock } = useMemo(
-    () => splitDisplayCommand(displayCommand, os),
+    () => {
+      const lines = displayCommand.split("\n");
+      const installLineCount = os === "windows" ? 2 : 1;
+
+      return {
+        installBlock: lines.slice(0, installLineCount).join("\n"),
+        runBlock: lines.slice(installLineCount).join("\n"),
+      };
+    },
     [displayCommand, os]
   );
 

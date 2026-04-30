@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -126,9 +125,9 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		l.datagram = transport.NewClientDatagram(func(err error) {
 			log.Info().
 				Err(err).
-				Str("component", "sdk-datagram-plane").
+				Str("component", "sdk-quic-backhaul").
 				Str("address", l.identity.Address).
-				Msg("quic datagram plane disconnected; waiting to reconnect")
+				Msg("quic backhaul disconnected; waiting to reconnect")
 		})
 	}
 
@@ -485,13 +484,13 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 		default:
 		}
 
-		conn, err := l.openQUICSession(ctx)
+		conn, err := l.openQUICBackhaulSession(ctx)
 		if err != nil {
 			log.Info().
 				Err(err).
-				Str("component", "sdk-datagram-plane").
+				Str("component", "sdk-quic-backhaul").
 				Str("address", l.identity.Address).
-				Msg("quic datagram plane unavailable; retrying")
+				Msg("quic backhaul unavailable; retrying")
 			if !utils.SleepOrDone(ctx, 2*time.Second) {
 				l.datagram.Clear("lease stopped")
 				return
@@ -500,21 +499,21 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 		}
 
 		log.Info().
-			Str("component", "sdk-datagram-plane").
+			Str("component", "sdk-quic-backhaul").
 			Str("address", l.identity.Address).
 			Str("remote_addr", conn.RemoteAddr().String()).
-			Msg("quic tunnel connected")
+			Msg("quic backhaul connected")
 
-		recvDone, err := l.datagram.Bind(conn)
+		recvDone, err := l.datagram.BindBackhaul(conn)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			log.Info().
 				Err(err).
-				Str("component", "sdk-datagram-plane").
+				Str("component", "sdk-quic-backhaul").
 				Str("address", l.identity.Address).
-				Msg("quic datagram plane did not bind cleanly; retrying")
+				Msg("quic backhaul did not bind cleanly; retrying")
 			if !utils.SleepOrDone(ctx, time.Second) {
 				return
 			}
@@ -584,7 +583,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 	return wrapBufferedConn(conn, reader), nil
 }
 
-func (l *listener) openQUICSession(ctx context.Context) (*quic.Conn, error) {
+func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, error) {
 	lease, ok := l.leaseSnapshot()
 	if !ok || lease.accessToken == "" {
 		return nil, errors.New("access token is not available")
@@ -595,51 +594,12 @@ func (l *listener) openQUICSession(ctx context.Context) (*quic.Conn, error) {
 	if l.tlsConfig == nil {
 		return nil, errors.New("relay tls config is unavailable")
 	}
-	tlsConf := l.tlsConfig.Clone()
-	tlsConf.NextProtos = []string{"portal-tunnel"}
-
-	quicConf := &quic.Config{
-		EnableDatagrams: true,
-		KeepAlivePeriod: 15 * time.Second,
-		MaxIdleTimeout:  60 * time.Second,
-	}
-
 	host := strings.TrimSpace(l.relayURL.Hostname())
 	if host == "" {
 		host = strings.TrimSpace(l.relayURL.Host)
 	}
 	dialAddr := net.JoinHostPort(host, fmt.Sprintf("%d", lease.sniPort))
-	conn, err := quic.DialAddr(ctx, dialAddr, tlsConf, quicConf)
-	if err != nil {
-		return nil, fmt.Errorf("quic dial: %w", err)
-	}
-
-	stream, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		_ = conn.CloseWithError(1, "stream open failed")
-		return nil, fmt.Errorf("open control stream: %w", err)
-	}
-
-	controlMsg := types.QUICControlMessage{
-		AccessToken: lease.accessToken,
-	}
-	if err := json.NewEncoder(stream).Encode(controlMsg); err != nil {
-		_ = conn.CloseWithError(1, "control write failed")
-		return nil, fmt.Errorf("write control: %w", err)
-	}
-
-	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp types.QUICControlResponse
-	if err := json.NewDecoder(io.LimitReader(stream, 4096)).Decode(&resp); err != nil {
-		_ = conn.CloseWithError(1, "control read failed")
-		return nil, fmt.Errorf("read control response: %w", err)
-	}
-	if !resp.OK {
-		_ = conn.CloseWithError(1, resp.Error)
-		return nil, fmt.Errorf("quic connect rejected: %s", resp.Error)
-	}
-
-	return conn, nil
+	return transport.DialQUICBackhaul(ctx, dialAddr, l.tlsConfig, lease.accessToken)
 }
 
 func (l *listener) runRenewLoop(ctx context.Context) error {

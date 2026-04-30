@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -15,9 +14,7 @@ import (
 
 type ClientStream struct {
 	accepted         chan net.Conn
-	activeSessions   int
 	handshakeTimeout time.Duration
-	mu               sync.Mutex
 }
 
 func NewClientStream(readyTarget int, handshakeTimeout time.Duration) *ClientStream {
@@ -53,16 +50,6 @@ func (s *ClientStream) RunSession(
 	return s.runSession(ctx, conn, tlsConfig)
 }
 
-func (s *ClientStream) ActiveSessions() int {
-	if s == nil {
-		return 0
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.activeSessions
-}
-
 func (s *ClientStream) Drain() {
 	if s == nil {
 		return
@@ -87,8 +74,6 @@ func (s *ClientStream) runSession(
 	if conn == nil {
 		return false, net.ErrClosed
 	}
-	s.sessionOpened()
-	defer s.sessionClosed()
 
 	var marker [1]byte
 	for {
@@ -150,26 +135,4 @@ func (s *ClientStream) activateRaw(ctx context.Context, conn net.Conn) error {
 	case s.accepted <- conn:
 		return nil
 	}
-}
-
-func (s *ClientStream) sessionOpened() {
-	if s == nil {
-		return
-	}
-
-	s.mu.Lock()
-	s.activeSessions++
-	s.mu.Unlock()
-}
-
-func (s *ClientStream) sessionClosed() {
-	if s == nil {
-		return
-	}
-
-	s.mu.Lock()
-	if s.activeSessions > 0 {
-		s.activeSessions--
-	}
-	s.mu.Unlock()
 }

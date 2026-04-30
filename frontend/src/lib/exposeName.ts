@@ -106,7 +106,11 @@ function normalizeExposeTarget(raw: string): string {
     if (parsed.hostname === "") {
       return candidate;
     }
-    return formatHostPort(parsed.hostname, parsed.port || "80");
+    const port = parsed.port || "80";
+    if (parsed.hostname.includes(":")) {
+      return `[${parsed.hostname}]:${port}`;
+    }
+    return `${parsed.hostname}:${port}`;
   } catch {
     return candidate;
   }
@@ -187,11 +191,4 @@ function fnv1a32(bytes: Uint8Array, seed: number): number {
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return hash >>> 0;
-}
-
-function formatHostPort(hostname: string, port: string): string {
-  if (hostname.includes(":")) {
-    return `[${hostname}]:${port}`;
-  }
-  return `${hostname}:${port}`;
 }

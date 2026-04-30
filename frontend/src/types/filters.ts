@@ -1,4 +1,5 @@
 export type StatusFilter = "all" | "online" | "offline";
+export type BanFilter = "all" | "banned" | "active";
 
 export type SortOption =
   | "default"

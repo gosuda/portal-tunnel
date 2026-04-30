@@ -233,6 +233,7 @@ func (l *listener) syncHopRoutes(ctx context.Context, method string, expiresAt t
 
 	var syncErr error
 	for _, unsignedRoute := range orderedRoutes {
+		unsignedRoute.FirstSeenAt = expiresAt.Add(-30 * time.Second)
 		route, err := auth.SignHopRoute(method, unsignedRoute, l.identity, expiresAt)
 		if err != nil {
 			if method == http.MethodDelete {

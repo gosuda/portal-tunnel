@@ -5,11 +5,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { StatusFilter } from "@/types/filters";
+import type { StatusFilter } from "@/types/filters";
 import clsx from "clsx";
 
 interface StatusSelectProps {
-  status: string;
+  status: StatusFilter;
   onStatusChange: (value: StatusFilter) => void;
   hideFiltersOnMobile?: boolean;
   className?: string;
@@ -21,7 +21,10 @@ export const StatusSelect = ({
   hideFiltersOnMobile,
   className,
 }: StatusSelectProps) => (
-  <Select value={status} onValueChange={onStatusChange}>
+  <Select
+    value={status}
+    onValueChange={(value) => onStatusChange(value as StatusFilter)}
+  >
     <SelectTrigger
       className={clsx(
         "w-32.5 h-10 border-border!",

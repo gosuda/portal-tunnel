@@ -154,5 +154,5 @@ Both ports are drawn from the same `MIN_PORT`–`MAX_PORT` range on the relay.
 
 - **Port range capacity** — the relay can serve at most `MAX_PORT - MIN_PORT + 1` concurrent TCP+UDP leases. Plan the range accordingly.
 - **No TLS on raw TCP** — the raw TCP path has no TLS wrapping. Traffic between the relay and connecting clients is unencrypted. Use application-level encryption (e.g. SSH, WireGuard) if the service requires confidentiality.
-- **UDP max packet size** — datagrams are capped at **1350 bytes** (`DefaultMaxPacketSize`). Packets larger than this are dropped. Most game protocols fit within this limit, but verify if you use a custom protocol.
+- **UDP max packet size** — datagrams are capped at **1350 bytes**. Packets larger than this are dropped. Most game protocols fit within this limit, but verify if you use a custom protocol.
 - **Flow idle timeout** — UDP flows that have seen no traffic for **30 seconds** are cleaned up on the relay. Long-lived connections should send keepalive packets if they may be idle.

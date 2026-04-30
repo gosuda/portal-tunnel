@@ -13,6 +13,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,7 +89,7 @@ func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) {
 	}
 }
 
-func TestNewServerInitializesRelaySetWhenDiscoveryEnabled(t *testing.T) {
+func TestRelayDiscoveryEnabledServesDiscoveryEnvelope(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
@@ -99,8 +100,20 @@ func TestNewServerInitializesRelaySetWhenDiscoveryEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
-	if server.relaySet == nil {
-		t.Fatal("relaySet = nil, want discovery relay set")
+
+	req := httptest.NewRequest(http.MethodGet, types.PathDiscovery, nil)
+	rec := httptest.NewRecorder()
+	server.handleRelayDiscovery(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET relay discovery status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var envelope types.APIEnvelope[types.DiscoveryResponse]
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("json.Decode() error = %v", err)
+	}
+	if !envelope.OK || envelope.Data.ProtocolVersion != types.DiscoveryVersion {
+		t.Fatalf("discovery envelope = %+v, want ok discovery response", envelope)
 	}
 }
 
@@ -228,7 +241,7 @@ func TestRegisterLeaseOmitsSNIPortWithoutUDP(t *testing.T) {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	resp, err := server.registerLease(types.RegisterChallengeRequest{
+	record, resp, err := server.registry.Register(types.RegisterChallengeRequest{
 		Identity: types.Identity{
 			Name:    "demo-tcp",
 			Address: server.identity.Address,
@@ -236,12 +249,10 @@ func TestRegisterLeaseOmitsSNIPortWithoutUDP(t *testing.T) {
 		TCPEnabled: true,
 	}, "203.0.113.10", "")
 	if err != nil {
-		t.Fatalf("registerLease() error = %v", err)
+		t.Fatalf("registry.Register() error = %v", err)
 	}
 	t.Cleanup(func() {
-		if record, ok := server.registry.RecordByKey(resp.Identity.Key(), time.Now()); ok {
-			record.Close()
-		}
+		record.Close()
 	})
 
 	if resp.SNIPort != 0 {
@@ -326,25 +337,21 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	resp, err := server.registerLease(types.RegisterChallengeRequest{
+	record, resp, err := server.registry.Register(types.RegisterChallengeRequest{
 		Identity: types.Identity{
 			Name:    "Demo-App",
 			Address: server.identity.Address,
 		},
 	}, "203.0.113.10", "")
 	if err != nil {
-		t.Fatalf("registerLease() error = %v", err)
+		t.Fatalf("registry.Register() error = %v", err)
 	}
 
 	wantHostname := "demo-app.portal.example.com"
 	if resp.Hostname != wantHostname {
-		t.Fatalf("registerLease() hostname = %q, want %q", resp.Hostname, wantHostname)
+		t.Fatalf("registry.Register() hostname = %q, want %q", resp.Hostname, wantHostname)
 	}
 
-	record, ok := server.registry.RecordByKey(resp.Identity.Key(), time.Now())
-	if !ok {
-		t.Fatal("registry.RecordByKey() = false, want registered lease")
-	}
 	lease := server.registry.publicLease(record)
 	if lease.Name != "demo-app" {
 		t.Fatalf("publicLease().Name = %q, want %q", lease.Name, "demo-app")
@@ -369,7 +376,7 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	}
 	server.registry.policy.SetUDPPolicy(true, 0)
 
-	resp, err := server.registerLease(types.RegisterChallengeRequest{
+	record, resp, err := server.registry.Register(types.RegisterChallengeRequest{
 		Identity: types.Identity{
 			Name:    "demo-udp",
 			Address: server.identity.Address,
@@ -377,18 +384,12 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 		UDPEnabled: true,
 	}, "203.0.113.10", "")
 	if err != nil {
-		t.Fatalf("registerLease() error = %v", err)
+		t.Fatalf("registry.Register() error = %v", err)
 	}
 	t.Cleanup(func() {
-		if record, ok := server.registry.RecordByKey(resp.Identity.Key(), time.Now()); ok {
-			record.Close()
-		}
+		record.Close()
 	})
 
-	record, ok := server.registry.RecordByKey(resp.Identity.Key(), time.Now())
-	if !ok {
-		t.Fatal("registry.RecordByKey() = false, want registered lease")
-	}
 	if record.stream == nil {
 		t.Fatal("stream = nil, want stream runtime")
 	}

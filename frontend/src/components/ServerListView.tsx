@@ -5,9 +5,9 @@ import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
 import { TagCombobox } from "@/components/TagCombobox";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
-import type { ClientServer } from "@/hooks/useServerList";
+import type { BaseServer } from "@/hooks/useList";
 import type { AdminServer, ApprovalMode, UDPSettings, TCPPortSettings } from "@/hooks/useAdmin";
-import type { SortOption, StatusFilter } from "@/types/filters";
+import type { BanFilter, SortOption, StatusFilter } from "@/types/filters";
 import { StatusSelect } from "@/components/select/StatusSelect";
 import { BanStatusButtons } from "@/components/button/BanStatusButtons";
 import { SortbySelect } from "@/components/select/SortbySelect";
@@ -23,8 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-export type BanFilter = "all" | "banned" | "active";
-type ListServer = ClientServer | AdminServer;
+type ListServer = BaseServer | AdminServer;
 
 interface RelayDomainResponse {
   release_version?: string;
@@ -131,7 +130,7 @@ interface ServerListViewProps {
   sortBy: SortOption;
   selectedTags: string[];
   availableTags: string[];
-  filteredServers: ClientServer[] | AdminServer[];
+  filteredServers: BaseServer[] | AdminServer[];
   favorites: string[];
   onSearchChange: (value: string) => void;
   onStatusChange: (value: StatusFilter) => void;

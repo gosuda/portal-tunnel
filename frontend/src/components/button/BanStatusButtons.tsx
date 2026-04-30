@@ -1,8 +1,8 @@
-import { BanFilter } from "@/components/ServerListView";
+import type { BanFilter } from "@/types/filters";
 import clsx from "clsx";
 
 interface BanStatusButtonsProps {
-  banFilter: string;
+  banFilter: BanFilter;
   onBanFilterChange: (value: BanFilter) => void;
   className?: string;
 }

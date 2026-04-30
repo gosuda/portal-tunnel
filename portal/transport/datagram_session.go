@@ -11,7 +11,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-var errNoConnection = errors.New("no quic connection registered")
+var errNoConnection = errors.New("no quic backhaul connection registered")
 
 // datagramSession owns one active QUIC DATAGRAM connection and exposes decoded frames.
 type datagramSession struct {
@@ -38,11 +38,11 @@ func newDatagramSession(bufferSize int, dropIncoming bool, onReceiveError func(e
 	}
 }
 
-// Bind installs a new active QUIC connection and starts the receive loop.
+// Bind installs a new active backhaul connection and starts the receive loop.
 // Any previously active connection is replaced and closed.
 func (s *datagramSession) Bind(conn *quic.Conn) (<-chan struct{}, error) {
 	if conn == nil {
-		return nil, errors.New("quic connection is required")
+		return nil, errors.New("quic backhaul connection is required")
 	}
 
 	s.mu.Lock()

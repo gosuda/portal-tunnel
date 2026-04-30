@@ -168,13 +168,13 @@ func assetURLs(version string) (binURL, checksumURL string, ok bool) {
 		return "", "", false
 	}
 
-	baseURL := types.OfficialReleaseBaseURL
+	baseURL := types.OfficialReleaseBaseURL + "/latest/download"
 	version = strings.TrimSpace(version)
 	if version != "" {
 		if !strings.HasPrefix(version, "v") {
 			version = "v" + version
 		}
-		baseURL = types.OfficialReleaseDownloadURL + "/" + version
+		baseURL = types.OfficialReleaseBaseURL + "/download/" + version
 	}
 
 	binURL = baseURL + "/" + filename

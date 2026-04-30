@@ -328,8 +328,8 @@ func TestMOLSSelectPriorityCongestionSwitchChangesOrder(t *testing.T) {
 }
 
 // TestMOLSSelectPriorityVariantGridActivatesOnHighCV confirms that a high
-// coefficient of variation triggers the variant multipliers (7, 11) rather than
-// the base (3, 5), producing a different relay ordering from the base grid.
+// coefficient of variation triggers the variant multipliers (7, 11) while the
+// mean RTT stays below the congestion threshold.
 func TestMOLSSelectPriorityVariantGridActivatesOnHighCV(t *testing.T) {
 	policy := MOLSRelayPolicy{}
 
@@ -341,18 +341,22 @@ func TestMOLSSelectPriorityVariantGridActivatesOnHighCV(t *testing.T) {
 		LocalAddress: "ingress-cv",
 	})
 
-	// High-CV mode: very different RTTs that push CV well above 0.5.
+	// High-CV mode: very different RTTs push CV above 0.5 while the mean stays
+	// below the congestion threshold, isolating the variant-grid branch.
 	r1v := r1
-	r1v.DiscoveryRTT = 10 * time.Millisecond
+	r1v.DiscoveryRTT = 100 * time.Millisecond
 	r1v.DiscoveryRTTAt = time.Now()
 	r2v := r2
-	r2v.DiscoveryRTT = 5000 * time.Millisecond
+	r2v.DiscoveryRTT = 400 * time.Millisecond
 	r2v.DiscoveryRTTAt = time.Now()
 
 	// Verify high-CV state is actually detected.
-	_, cv := molsRTTStats([]RelayState{r1v, r2v})
+	avgRTT, cv := molsRTTStats([]RelayState{r1v, r2v})
 	if cv <= molsCVThreshold {
 		t.Fatalf("test precondition: cv = %v, want > %v", cv, molsCVThreshold)
+	}
+	if avgRTT > molsCongestionRTTThreshold {
+		t.Fatalf("test precondition: avgRTT = %v, want <= %v", avgRTT, molsCongestionRTTThreshold)
 	}
 
 	variantOrder := policy.SelectPriority([]RelayState{r1v, r2v}, ClientState{
@@ -363,27 +367,12 @@ func TestMOLSSelectPriorityVariantGridActivatesOnHighCV(t *testing.T) {
 		t.Fatalf("expected 2 relays in both modes: normal=%d variant=%d", len(normalOrder), len(variantOrder))
 	}
 
-	// Check internally that the variant grid would produce different scores.
-	ingressIdx := hashToGF64("ingress-cv")
-	j1 := hashToGF64("https://relay-one.example")
-	j2 := hashToGF64("https://relay-two.example")
-	base1 := molsScore(ingressIdx, j1, molsBaseM1, molsBaseM2)
-	base2 := molsScore(ingressIdx, j2, molsBaseM1, molsBaseM2)
-	var1 := molsScore(ingressIdx, j1, molsVariantM1, molsVariantM2)
-	var2 := molsScore(ingressIdx, j2, molsVariantM1, molsVariantM2)
-
-	// Verify that the base and variant grids actually produce different relative
-	// orderings for at least this pair of relays.  If the orderings happen to be
-	// identical the two multiplier sets produce the same ranking for these inputs,
-	// which is not a bug (it depends on the hash collision distribution).
-	baseFirst := base1 > base2
-	varFirst := var1 > var2
-	if baseFirst != varFirst {
-		// Orderings differ: variant grid has the expected effect.
-		return
+	if normalOrder[0] != "https://relay-one.example" {
+		t.Fatalf("normal order first relay = %q, want relay-one", normalOrder[0])
 	}
-	// Orderings are the same: acceptable but worth noting.
-	t.Logf("base and variant grids produce same ranking for this relay pair (ingress %d, j1=%d, j2=%d)", ingressIdx, j1, j2)
+	if variantOrder[0] != "https://relay-two.example" {
+		t.Fatalf("variant order first relay = %q, want relay-two", variantOrder[0])
+	}
 }
 
 // TestMOLSSelectPriorityDifferentIngressDifferentOrder verifies that two
@@ -558,27 +547,6 @@ func TestMOLSMagicColumnSum(t *testing.T) {
 		if colSum != magicSum {
 			t.Fatalf("column j=%d sum = %d, want %d", j, colSum, magicSum)
 		}
-	}
-}
-
-// TestMOLSMagicMainDiagonalSum verifies that the main diagonal sums to the
-// magic constant (magic square property).
-func TestMOLSMagicMainDiagonalSum(t *testing.T) {
-	const magicSum = molsOrder * (molsOrder*molsOrder + 1) / 2
-
-	var diagSum int
-	for k := range uint8(64) {
-		diagSum += molsScore(k, k, molsBaseM1, molsBaseM2)
-	}
-	// Allow ±1 rounding for floating-point-free integer arithmetic.
-	diff := diagSum - magicSum
-	if diff < 0 {
-		diff = -diff
-	}
-	if diff > 1 {
-		t.Logf("main diagonal sum = %d, magic constant = %d (diff %d)", diagSum, magicSum, diff)
-		// The diagonal magic property requires the specific construction used.
-		// Log rather than fail so the test documents the observed behaviour.
 	}
 }
 

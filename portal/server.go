@@ -18,6 +18,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
@@ -28,10 +29,7 @@ import (
 )
 
 const (
-	defaultLeaseTTL         = 30 * time.Second
 	defaultClaimTimeout     = 10 * time.Second
-	defaultIdleKeepalive    = 15 * time.Second
-	defaultReadyQueueLimit  = 8
 	defaultClientHelloWait  = 2 * time.Second
 	defaultControlBodyLimit = 4 << 20
 	defaultHopOpenRetryWait = 250 * time.Millisecond
@@ -112,19 +110,17 @@ type Server struct {
 	acmeManager *acme.Manager
 	proxy       proxy
 
-	apiListener net.Listener
-	sniListener net.Listener
-	apiServer   *http.Server
-	apiTLSClose io.Closer
-	quicTunnel  *quic.Listener
+	apiListener  net.Listener
+	sniListener  net.Listener
+	apiServer    *http.Server
+	apiTLSClose  io.Closer
+	quicBackhaul *quic.Listener
 
 	overlay         *overlay.Overlay
 	hopMux          *overlay.HopMux
 	relaySet        *discovery.RelaySet
 	announceLimiter *discovery.AnnounceLimiter
 	registry        *leaseRegistry
-	udpPorts        *transport.PortAllocator
-	tcpPorts        *transport.PortAllocator
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -137,7 +133,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
-	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, identity.Name, cfg.SNIPort, identity.PrivateKey, identity.PublicKey, identity.Address, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return nil, err
 	}
@@ -151,15 +147,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		relaySet = discovery.NewRelaySet(cfg.Bootstraps)
 	}
 
-	return &Server{
+	server := &Server{
 		cfg:             cfg,
 		identity:        identity,
 		registry:        registry,
 		relaySet:        relaySet,
 		announceLimiter: discovery.NewAnnounceLimiter(0, 0),
-		udpPorts:        transport.NewPortAllocator(cfg.MinPort, cfg.MaxPort, 5*time.Minute),
-		tcpPorts:        transport.NewPortAllocator(cfg.MinPort, cfg.MaxPort, 5*time.Minute),
-	}, nil
+	}
+	server.registry.proxy = &server.proxy
+	return server, nil
 }
 
 func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
@@ -179,7 +175,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	var apiCloser io.Closer
 	var hopMux *overlay.HopMux
 	var ov *overlay.Overlay
-	var quicTunnel *quic.Listener
+	var quicBackhaul *quic.Listener
 	defer func() {
 		if started {
 			return
@@ -233,10 +229,10 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		}
 	}
 	if s.cfg.UDPEnabled {
-		quicTunnel, err = s.newQUICTunnelListener(apiTLS)
+		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
 		if err != nil {
-			log.Warn().Err(err).Msg("quic tunnel listener disabled")
-			quicTunnel = nil
+			log.Warn().Err(err).Msg("quic backhaul listener disabled")
+			quicBackhaul = nil
 		}
 	}
 
@@ -249,7 +245,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.group = group
 	s.overlay = ov
 	s.hopMux = hopMux
-	s.quicTunnel = quicTunnel
+	s.quicBackhaul = quicBackhaul
 	started = true
 
 	group.Go(s.runAPIServer)
@@ -260,8 +256,8 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 			group.Go(func() error { return s.runOverlayIngress(groupCtx) })
 		}
 	}
-	if s.quicTunnel != nil {
-		group.Go(s.runQUICTunnelListener)
+	if s.quicBackhaul != nil {
+		group.Go(s.runQUICBackhaulListener)
 	}
 	group.Go(func() error { return s.runRegistryJanitor(groupCtx, 5*time.Second) })
 	if s.cfg.DiscoveryEnabled {
@@ -285,10 +281,10 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		Bool("discovery_enabled", s.cfg.DiscoveryEnabled).
 		Bool("wireguard_enabled", s.overlay != nil).
 		Bool("multihop_enabled", s.hopMux != nil).
-		Bool("udp_enabled", s.quicTunnel != nil).
+		Bool("udp_enabled", s.quicBackhaul != nil).
 		Bool("tcp_enabled", s.cfg.TCPEnabled)
-	if s.quicTunnel != nil {
-		logEvent = logEvent.Str("internal_quic_tunnel_addr", s.quicTunnel.Addr().String())
+	if s.quicBackhaul != nil {
+		logEvent = logEvent.Str("internal_quic_backhaul_addr", s.quicBackhaul.Addr().String())
 	}
 	logEvent.Msg("relay server started")
 
@@ -349,11 +345,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 
 		for _, lease := range s.registry.CloseAll() {
-			s.cleanupRemovedRecord(ctx, lease, "delete lease remote state during shutdown")
+			s.deleteENSGaslessHostname(ctx, lease, "delete lease ens gasless hostname during shutdown")
 		}
 
-		if s.quicTunnel != nil {
-			_ = s.quicTunnel.Close()
+		if s.quicBackhaul != nil {
+			_ = s.quicBackhaul.Close()
 		}
 		if s.sniListener != nil {
 			if err := s.sniListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -410,16 +406,16 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
 	}
-	if len(apiTLS.CertPEM) == 0 {
-		manager.Stop()
-		return keyless.TLSMaterialConfig{}, nil, errors.New("api tls certificate is required")
-	}
-	if len(apiTLS.KeyPEM) == 0 && apiTLS.Keyless == nil {
-		manager.Stop()
-		return keyless.TLSMaterialConfig{}, nil, errors.New("api tls key or keyless signer is required")
-	}
 
 	return apiTLS, manager, nil
+}
+
+func (s *Server) runAPIServer() error {
+	err := s.apiServer.Serve(s.apiListener)
+	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 func (s *Server) runPublicIngress(ctx context.Context) error {
@@ -494,8 +490,10 @@ func (s *Server) runOverlayIngress(ctx context.Context) error {
 				return err
 			}
 			go func(stream overlay.HopStream) {
-				record, ok := s.registry.RecordByHopToken(stream.Token, time.Now())
-				if !ok {
+				s.registry.mu.RLock()
+				record := s.registry.recordByHopToken(stream.Token, time.Now())
+				s.registry.mu.RUnlock()
+				if record == nil {
 					log.Warn().Str("remote_addr", stream.RemoteAddr).Msg("hop stream rejected")
 					_ = stream.Conn.Close()
 					return
@@ -579,54 +577,76 @@ func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration)
 			return nil
 		case <-ticker.C:
 			for _, lease := range s.registry.cleanupExpired(time.Now()) {
-				s.cleanupRemovedRecord(context.Background(), lease, "delete expired lease remote state")
+				s.deleteENSGaslessHostname(context.Background(), lease, "delete expired lease ens gasless hostname")
 			}
 		}
 	}
 }
 
-func (s *Server) newQUICTunnelListener(apiTLS keyless.TLSMaterialConfig) (*quic.Listener, error) {
+func (s *Server) newQUICBackhaulListener(apiTLS keyless.TLSMaterialConfig) (*quic.Listener, error) {
 	if len(apiTLS.KeyPEM) == 0 {
-		return nil, fmt.Errorf("quic tunnel requires api tls key")
+		return nil, fmt.Errorf("quic backhaul requires api tls key")
 	}
 	tlsCert, err := tls.X509KeyPair(apiTLS.CertPEM, apiTLS.KeyPEM)
 	if err != nil {
-		return nil, fmt.Errorf("parse quic tls keypair: %w", err)
+		return nil, fmt.Errorf("parse quic backhaul tls keypair: %w", err)
 	}
-
-	tlsConf := &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-		NextProtos:   []string{"portal-tunnel"},
-		MinVersion:   tls.VersionTLS13,
-	}
-	quicConf := &quic.Config{
-		EnableDatagrams:    true,
-		KeepAlivePeriod:    15 * time.Second,
-		MaxIdleTimeout:     60 * time.Second,
-		MaxIncomingStreams: 16,
-	}
-
-	listener, err := quic.ListenAddr(s.cfg.SNIListenAddr, tlsConf, quicConf)
-	if err != nil {
-		return nil, fmt.Errorf("listen quic: %w", err)
-	}
-	return listener, nil
+	return transport.ListenQUICBackhaul(s.cfg.SNIListenAddr, tlsCert)
 }
 
-func (s *Server) runQUICTunnelListener() error {
-	if s.quicTunnel == nil {
+func (s *Server) runQUICBackhaulListener() error {
+	if s.quicBackhaul == nil {
 		return nil
 	}
 	for {
-		conn, err := s.quicTunnel.Accept(context.Background())
+		conn, err := s.quicBackhaul.Accept(context.Background())
 		if err != nil {
 			if errors.Is(err, quic.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
 			return err
 		}
-		go s.handleQUICTunnelConn(conn)
+		go s.handleQUICBackhaulConn(conn)
 	}
+}
+
+func (s *Server) handleQUICBackhaulConn(conn *quic.Conn) {
+	control, err := transport.AcceptQUICBackhaulControl(context.Background(), conn)
+	if err != nil {
+		_ = conn.CloseWithError(1, "control read failed")
+		return
+	}
+
+	lease, err := s.registry.admitLeaseByToken(control.AccessToken, true)
+	if err != nil {
+		code, reason := types.APIErrorCodeInvalidRequest, "invalid control message"
+		switch {
+		case errors.Is(err, errLeaseNotFound):
+			code, reason = types.APIErrorCodeLeaseNotFound, "lease not found"
+		case errors.Is(err, errLeaseRejected):
+			code, reason = types.APIErrorCodeLeaseRejected, "lease rejected"
+		case errors.Is(err, errUnauthorized):
+			code, reason = types.APIErrorCodeUnauthorized, "unauthorized"
+		case errors.Is(err, errTransportMismatch):
+			code, reason = types.APIErrorCodeTransportMismatch, "transport mismatch"
+		}
+		_ = control.Reject(code, reason)
+		return
+	}
+
+	if err := lease.datagram.BindBackhaul(conn); err != nil {
+		_ = control.Reject("broker_closed", "broker closed")
+		return
+	}
+
+	_ = control.Accept()
+	s.registry.Touch(lease.Key(), conn.RemoteAddr().String(), time.Now())
+	log.Info().
+		Str("component", "quic-backhaul-listener").
+		Str("address", lease.Address).
+		Str("lease_name", lease.Name).
+		Str("remote_addr", conn.RemoteAddr().String()).
+		Msg("quic backhaul connected")
 }
 
 func (s *Server) startOverlay() (*overlay.Overlay, error) {
@@ -665,7 +685,7 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 
 	for {
 		now := time.Now().UTC()
-		self, err := s.signedRelayDescriptor(now)
+		self, err := s.newSelfDescriptor(now)
 		if err != nil {
 			return fmt.Errorf("build relay discovery descriptor: %w", err)
 		}
@@ -684,5 +704,61 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 		}
+	}
+}
+
+func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+
+	var wireGuardPublicKey string
+	var wireGuardPort int
+	if s.overlay != nil {
+		cfg := s.overlay.Config()
+		wireGuardPublicKey = cfg.PublicKey
+		wireGuardPort = cfg.ListenPort
+	}
+
+	return auth.SignRelayDescriptor(types.RelayDescriptor{
+		Address:            s.identity.Address,
+		Version:            types.DiscoveryVersion,
+		IssuedAt:           now,
+		ExpiresAt:          now.Add(discovery.DiscoveryDescriptorTTL),
+		APIHTTPSAddr:       s.cfg.PortalURL,
+		WireGuardPublicKey: wireGuardPublicKey,
+		WireGuardPort:      wireGuardPort,
+		SupportsOverlay:    s.overlay != nil,
+		SupportsUDP:        s.cfg.UDPEnabled && s.quicBackhaul != nil,
+		SupportsTCP:        s.cfg.TCPEnabled,
+		ActiveConnections:  s.proxy.activeConnectionCount(),
+		TCPBPS:             s.proxy.currentTCPBPS(now),
+	}, s.identity.PrivateKey)
+}
+
+func (s *Server) syncENSGaslessHostname(ctx context.Context, record *leaseRecord) error {
+	if record == nil || !record.isPublicEntry() || s.acmeManager == nil {
+		return nil
+	}
+	syncCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
+	defer cancel()
+	return s.acmeManager.SyncENSGaslessHostname(syncCtx, record.Hostname, record.Address)
+}
+
+func (s *Server) deleteENSGaslessHostname(ctx context.Context, record *leaseRecord, logMessage string) {
+	if record == nil || !record.isPublicEntry() || s.acmeManager == nil {
+		return
+	}
+	deleteCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
+	err := s.acmeManager.DeleteENSGaslessHostname(deleteCtx, record.Hostname)
+	cancel()
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("hostname", record.Hostname).
+			Str("address", record.Address).
+			Msg(logMessage)
 	}
 }

@@ -180,10 +180,8 @@ func DecodeAPIRequestError(resp *http.Response) error {
 }
 
 func DecodeJSONRequest[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (T, bool) {
-	var dst T
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(&dst); err != nil {
+	dst, err := decodeJSONRequestBody[T](w, r, maxBytes)
+	if err != nil {
 		WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return dst, false
 	}
@@ -191,14 +189,22 @@ func DecodeJSONRequest[T any](w http.ResponseWriter, r *http.Request, maxBytes i
 }
 
 func DecodeJSONRequestAs[T any](w http.ResponseWriter, r *http.Request, maxBytes int64, invalid APIErrorResponse) (T, bool) {
-	var dst T
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(&dst); err != nil {
+	dst, err := decodeJSONRequestBody[T](w, r, maxBytes)
+	if err != nil {
 		invalid.Write(w)
 		return dst, false
 	}
 	return dst, true
+}
+
+func decodeJSONRequestBody[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (T, error) {
+	var dst T
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	defer r.Body.Close()
+	if err := json.NewDecoder(r.Body).Decode(&dst); err != nil {
+		return dst, err
+	}
+	return dst, nil
 }
 
 func httpJSONRequest(payload any, headers http.Header) (io.Reader, http.Header, error) {
