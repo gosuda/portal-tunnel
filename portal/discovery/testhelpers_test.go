@@ -1,14 +1,19 @@
 package discovery
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
-// stubRelayPolicy is a minimal relayPolicy for tests in package discovery that
+// stubSelector is a minimal Selector for tests in package discovery that
 // cannot import portal/discovery/selectors/mols (import cycle). It implements
-// the two interface methods with simple non-scoring logic sufficient for
+// the Selector interface with simple non-scoring logic sufficient for
 // RelaySet lifecycle and announce tests.
-type stubRelayPolicy struct{}
+type stubSelector struct{}
 
-func (s stubRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace) {
+func (s stubSelector) Name() string { return "stub" }
+
+func (s stubSelector) SelectPriority(_ context.Context, states []RelayState, cs ClientState) ([]string, SelectionTrace) {
 	now := time.Now().UTC()
 	trace := SelectionTrace{
 		Mode:      "priority",
@@ -32,7 +37,7 @@ func (s stubRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientS
 	return urls, trace
 }
 
-func (s stubRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace) {
+func (s stubSelector) SelectMultiHop(_ context.Context, states []RelayState, cs ClientState) ([]string, SelectionTrace) {
 	trace := SelectionTrace{
 		Mode:      "multihop",
 		PoolTotal: len(states),
@@ -43,6 +48,9 @@ func (s stubRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientS
 	}
 	var urls []string
 	for _, st := range states {
+		if len(urls) >= cs.MultiHopDepth {
+			break
+		}
 		if !st.Banned && st.HasObservedDescriptor() && st.Descriptor.HasOverlayPeer() {
 			urls = append(urls, st.Descriptor.APIHTTPSAddr)
 		}
@@ -52,5 +60,5 @@ func (s stubRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientS
 }
 
 func newTestRelaySet(bootstrapRelayURLs []string) *RelaySet {
-	return NewRelaySet(bootstrapRelayURLs, stubRelayPolicy{})
+	return NewRelaySet(bootstrapRelayURLs, stubSelector{})
 }

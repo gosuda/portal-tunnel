@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -44,17 +45,6 @@ import (
 // acquire it themselves. This convention prevents nested-locking deadlocks
 // (notably from ApplyRelayDiscoveryResponse, which holds the write lock for
 // the entire batch).
-
-// relayPolicy is the local unexported interface that RelaySet uses for relay
-// selection. Any concrete type that implements these two methods satisfies it;
-// *mols.MOLS is the only production implementation. The interface lives here
-// (not in selectors/mols) to avoid an import cycle between portal/discovery and
-// portal/discovery/selectors/mols.
-type relayPolicy interface {
-	SelectPriorityWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace)
-	SelectMultiHopWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace)
-}
-
 // FilterUnbanned returns all states that are not banned. It is a pure,
 // policy-agnostic filter used by RelaySet.AggregateRelays and SelectionTrace
 // instrumentation.
@@ -84,7 +74,7 @@ type RelaySet struct {
 	mu        sync.RWMutex
 	relays    map[string]RelayState
 	keyIndex  map[string]keyIndexEntry
-	policy    relayPolicy
+	policy    Selector
 	lifecycle *Lifecycle
 }
 
@@ -122,8 +112,8 @@ func isNilableAndNil(v any) bool {
 
 // NewRelaySet creates a RelaySet seeded with the given bootstrap URLs. The
 // policy parameter determines the relay-selection algorithm; callers MUST pass
-// a non-nil relayPolicy (e.g. mols.New()). Passing nil or a typed-nil panics.
-func NewRelaySet(bootstrapRelayURLs []string, policy relayPolicy) *RelaySet {
+// a non-nil Selector (e.g. mols.New()). Passing nil or a typed-nil panics.
+func NewRelaySet(bootstrapRelayURLs []string, policy Selector) *RelaySet {
 	if policy == nil || isNilableAndNil(policy) {
 		panic("discovery.NewRelaySet: policy must not be nil")
 	}
@@ -215,8 +205,8 @@ func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allo
 }
 
 // SetRelayPolicy replaces the current relay-selection policy. Passing nil or a
-// typed-nil panics; callers must supply a concrete non-nil relayPolicy (e.g. mols.New()).
-func (s *RelaySet) SetRelayPolicy(policy relayPolicy) {
+// typed-nil panics; callers must supply a concrete non-nil Selector (e.g. mols.New()).
+func (s *RelaySet) SetRelayPolicy(policy Selector) {
 	if policy == nil || isNilableAndNil(policy) {
 		panic("discovery.SetRelayPolicy: policy must not be nil")
 	}
@@ -294,7 +284,7 @@ func (s *RelaySet) PriorityRelaysWithTrace(clientState ClientState) ([]string, S
 	policy := s.policy
 	s.mu.RUnlock()
 
-	result, trace := policy.SelectPriorityWithTrace(states, clientState)
+	result, trace := policy.SelectPriority(context.Background(), states, clientState)
 	EmitFromTrace(trace)
 	log.Debug().
 		Uint8("client_hash", trace.ClientHash).
@@ -329,7 +319,7 @@ func (s *RelaySet) PriorityMultiHopWithTrace(clientState ClientState) ([]string,
 	policy := s.policy
 	s.mu.RUnlock()
 
-	result, trace := policy.SelectMultiHopWithTrace(states, clientState)
+	result, trace := policy.SelectMultiHop(context.Background(), states, clientState)
 	EmitFromTrace(trace)
 	log.Debug().
 		Uint8("client_hash", trace.ClientHash).

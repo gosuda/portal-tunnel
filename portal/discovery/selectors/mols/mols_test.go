@@ -706,7 +706,7 @@ func TestMOLSSelectMultiHopSkipsNoOverlayPeer(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Phase 1 acceptance criterion #1, restated for Phase 2 — byte-equal contract
-// between the two MOLS call paths (relayPolicy.SelectPriorityWithTrace and
+// between the two MOLS call paths (SelectPriorityWithTrace and
 // Selector.SelectPriority(ctx,...)). Both paths share the same internal
 // scoring; the test asserts they produce identical OutputURLs across the
 // scenario table. Restored after the discovery -> selectors/mols extraction.

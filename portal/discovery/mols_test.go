@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -13,9 +14,9 @@ func TestMOLSSelectPrioritySkipsAutoRelayInBackoff(t *testing.T) {
 	backingOff := confirmedPolicyRelayState(t, "https://relay-backoff.example")
 	backingOff.suppressActiveUntil = time.Now().UTC().Add(time.Minute)
 
-	selected, _ := stubRelayPolicy{}.SelectPriorityWithTrace([]RelayState{backingOff}, ClientState{})
+	selected, _ := stubSelector{}.SelectPriority(context.Background(), []RelayState{backingOff}, ClientState{})
 	if len(selected) != 0 {
-		t.Fatalf("SelectPriorityWithTrace(backing off auto) = %v, want empty", selected)
+		t.Fatalf("SelectPriority(backing off auto) = %v, want empty", selected)
 	}
 }
 
@@ -28,8 +29,8 @@ func TestMOLSSelectPriorityKeepsDiscoveryBackoffRelay(t *testing.T) {
 	backingOff := confirmedPolicyRelayState(t, relayURL)
 	backingOff.nextDiscoveryRefreshAt = time.Now().UTC().Add(time.Minute)
 
-	selected, _ := stubRelayPolicy{}.SelectPriorityWithTrace([]RelayState{backingOff}, ClientState{})
+	selected, _ := stubSelector{}.SelectPriority(context.Background(), []RelayState{backingOff}, ClientState{})
 	if len(selected) != 1 || selected[0] != relayURL {
-		t.Fatalf("SelectPriorityWithTrace(discovery backoff) = %v, want [%q]", selected, relayURL)
+		t.Fatalf("SelectPriority(discovery backoff) = %v, want [%q]", selected, relayURL)
 	}
 }
