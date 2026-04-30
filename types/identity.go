@@ -160,6 +160,17 @@ type RelayDescriptor struct {
 	// enabled. Empty = no subnet-diversity constraint. Same advisory caveat as
 	// Family: not in CanonicalBytes, not signed.
 	Subnet16 string `json:"subnet16,omitempty"`
+
+	// SupportsReservation advertises that this relay implements the /admin/reserve
+	// voucher-issuance endpoint. Clients holding a valid ReservationVoucher for
+	// this relay are preferred by the voucher selector over uncached candidates.
+	//
+	// WARNING: EXPERIMENTAL — the voucher mechanism ships ahead of production
+	// telemetry. Do not enable in production until oversubscription data
+	// justifies it. Empty/false means legacy (no voucher required or supported).
+	// Advisory only — NOT included in CanonicalBytes and therefore not covered
+	// by the descriptor signature.
+	SupportsReservation bool `json:"supports_reservation,omitempty"`
 }
 
 func (desc RelayDescriptor) HasOverlayPeer() bool {
