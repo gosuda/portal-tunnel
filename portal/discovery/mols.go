@@ -157,59 +157,6 @@ func (p MOLSRelayPolicy) SelectConfirmed(states []RelayState) []RelayState {
 	return out
 }
 
-func (p MOLSRelayPolicy) OnActiveConfirmed(state RelayState) RelayState {
-	state.Confirmed = true
-	state.activeFailures = 0
-	state.suppressActiveUntil = time.Time{}
-	return state
-}
-
-func (p MOLSRelayPolicy) OnUnconfirmed(state RelayState) RelayState {
-	state.Confirmed = false
-	return state
-}
-
-func (p MOLSRelayPolicy) OnDiscoveryConfirmed(state RelayState) RelayState {
-	state.discoveryFailures = 0
-	state.nextDiscoveryRefreshAt = time.Time{}
-	return state
-}
-
-func (p MOLSRelayPolicy) OnDiscoveryFailure(state RelayState, err error, recoveryFailures int) (RelayState, bool, string) {
-	state.discoveryFailures++
-
-	if recoveryFailures <= 0 || state.discoveryFailures < recoveryFailures {
-		return state, false, "retry"
-	}
-	failuresOverBudget := state.discoveryFailures - recoveryFailures
-	backoff := defaultDirectRecoveryBackoff << min(failuresOverBudget, 3)
-	if backoff > maxDirectRecoveryBackoff {
-		backoff = maxDirectRecoveryBackoff
-	}
-	state.nextDiscoveryRefreshAt = time.Now().Add(backoff)
-	return state, true, "discovery"
-}
-
-func (p MOLSRelayPolicy) OnActiveFailure(state RelayState, err error, recoveryFailures int) (RelayState, bool, string) {
-	state.activeFailures++
-
-	if recoveryFailures <= 0 || state.activeFailures < recoveryFailures {
-		return state, false, "retry"
-	}
-	failuresOverBudget := state.activeFailures - recoveryFailures
-	backoff := defaultDirectRecoveryBackoff << min(failuresOverBudget, 3)
-	if backoff > maxDirectRecoveryBackoff {
-		backoff = maxDirectRecoveryBackoff
-	}
-	state.suppressActiveUntil = time.Now().Add(backoff)
-	return state, true, "active"
-}
-
-func (p MOLSRelayPolicy) OnBanned(state RelayState) RelayState {
-	state.Banned = true
-	return state
-}
-
 func (p MOLSRelayPolicy) rankRelayPool(autoPool []RelayState, localAddress string) []string {
 	if len(autoPool) == 0 {
 		return nil

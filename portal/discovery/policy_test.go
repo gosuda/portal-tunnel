@@ -165,14 +165,14 @@ func TestSelectPriorityFallbackPromotion(t *testing.T) {
 }
 
 func TestOnActiveConfirmedResetsActiveFailures(t *testing.T) {
-	policy := MOLSRelayPolicy{}
+	lc := NewLifecycle()
 	state := RelayState{
 		activeFailures:      5,
 		suppressActiveUntil: time.Now().UTC().Add(time.Minute),
 		Confirmed:           false,
 	}
 
-	state = policy.OnActiveConfirmed(state)
+	state = lc.OnActiveConfirmed(state)
 
 	if !state.Confirmed {
 		t.Fatal("Confirmed should be true")
@@ -186,14 +186,14 @@ func TestOnActiveConfirmedResetsActiveFailures(t *testing.T) {
 }
 
 func TestOnDiscoveryFailureBackoff(t *testing.T) {
-	policy := MOLSRelayPolicy{}
+	lc := NewLifecycle()
 	state := confirmedPolicyRelayState(t, "https://error.io")
 	budget := 3
 
 	start := time.Now()
 	for i := 0; i < budget; i++ {
 		var backed bool
-		state, backed, _ = policy.OnDiscoveryFailure(state, errors.New("err"), budget)
+		state, backed, _ = lc.OnDiscoveryFailure(state, errors.New("err"), budget)
 		if i < budget-1 && backed {
 			t.Fatal("Premature backoff")
 		}
@@ -208,12 +208,12 @@ func TestOnDiscoveryFailureBackoff(t *testing.T) {
 }
 
 func TestOnActiveFailureBackoff(t *testing.T) {
-	policy := MOLSRelayPolicy{}
+	lc := NewLifecycle()
 	state := confirmedPolicyRelayState(t, "https://error.io")
 	start := time.Now()
 
 	var backed bool
-	state, backed, _ = policy.OnActiveFailure(state, errors.New("err"), 1)
+	state, backed, _ = lc.OnActiveFailure(state, errors.New("err"), 1)
 	if !backed {
 		t.Fatal("active failure should back off at budget")
 	}

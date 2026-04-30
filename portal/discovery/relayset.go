@@ -45,10 +45,11 @@ import (
 // (notably from ApplyRelayDiscoveryResponse, which holds the write lock for
 // the entire batch).
 type RelaySet struct {
-	mu       sync.RWMutex
-	relays   map[string]RelayState
-	keyIndex map[string]keyIndexEntry
-	policy   MOLSRelayPolicy
+	mu        sync.RWMutex
+	relays    map[string]RelayState
+	keyIndex  map[string]keyIndexEntry
+	policy    MOLSRelayPolicy
+	lifecycle *Lifecycle
 }
 
 // keyIndexEntry records the rollback anchor for a signing identity.
@@ -71,9 +72,10 @@ const (
 
 func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 	set := &RelaySet{
-		relays:   make(map[string]RelayState),
-		keyIndex: make(map[string]keyIndexEntry),
-		policy:   MOLSRelayPolicy{},
+		relays:    make(map[string]RelayState),
+		keyIndex:  make(map[string]keyIndexEntry),
+		policy:    MOLSRelayPolicy{},
+		lifecycle: NewLifecycle(),
 	}
 	set.SetBootstrapRelayURLs(bootstrapRelayURLs)
 	return set
@@ -401,7 +403,7 @@ func (s *RelaySet) BanRelayURL(relayURL string) {
 	if !ok {
 		state = newRelayState(relayURL)
 	}
-	state = s.policy.OnBanned(state)
+	state = s.lifecycle.OnBanned(state)
 	s.relays[relayURL] = state
 }
 
@@ -413,7 +415,7 @@ func (s *RelaySet) ConfirmRelayURL(relayURL string) {
 	if !ok {
 		state = newRelayState(relayURL)
 	}
-	state = s.policy.OnActiveConfirmed(state)
+	state = s.lifecycle.OnActiveConfirmed(state)
 	s.relays[relayURL] = state
 }
 
@@ -425,7 +427,7 @@ func (s *RelaySet) UnconfirmRelayURL(relayURL string) {
 	if !ok {
 		return
 	}
-	state = s.policy.OnUnconfirmed(state)
+	state = s.lifecycle.OnUnconfirmed(state)
 	s.relays[relayURL] = state
 }
 
@@ -499,7 +501,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 
 		isAuthoritativeTarget := !protocolMismatch && !missingTarget && authoritative && relayURL == targetURL
 		if isAuthoritativeTarget {
-			record = s.policy.OnDiscoveryConfirmed(record)
+			record = s.lifecycle.OnDiscoveryConfirmed(record)
 		}
 
 		if upsert := s.upsertDescriptorLocked(record, now, isAuthoritativeTarget); upsert != upsertAccepted {
@@ -511,7 +513,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 			// existing URL slot.
 			if isAuthoritativeTarget && hasExistingAtURL {
 				if existingAtURL.discoveryFailures != 0 || !existingAtURL.nextDiscoveryRefreshAt.IsZero() {
-					existingAtURL = s.policy.OnDiscoveryConfirmed(existingAtURL)
+					existingAtURL = s.lifecycle.OnDiscoveryConfirmed(existingAtURL)
 					s.relays[relayURL] = existingAtURL
 					relaySetChanged = true
 				}
@@ -699,7 +701,7 @@ func (s *RelaySet) RecordDiscoveryFailure(relayURL string, err error, recoveryFa
 	if !ok {
 		return false, "", 0
 	}
-	state, backedOff, backoffReason = s.policy.OnDiscoveryFailure(state, err, recoveryFailures)
+	state, backedOff, backoffReason = s.lifecycle.OnDiscoveryFailure(state, err, recoveryFailures)
 	s.relays[relayURL] = state
 	return backedOff, backoffReason, state.discoveryFailures
 }
@@ -712,7 +714,7 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, err error, recoveryFailu
 	if !ok {
 		return false, "", 0
 	}
-	state, backedOff, backoffReason = s.policy.OnActiveFailure(state, err, recoveryFailures)
+	state, backedOff, backoffReason = s.lifecycle.OnActiveFailure(state, err, recoveryFailures)
 	s.relays[relayURL] = state
 	return backedOff, backoffReason, state.activeFailures
 }
