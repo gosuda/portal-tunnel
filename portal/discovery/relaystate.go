@@ -39,6 +39,13 @@ type RelayState struct {
 	DiscoveryRTT   time.Duration
 	DiscoveryRTTAt time.Time
 
+	// EWMA load surface (Phase 2). Owned by Lifecycle; selectors read but
+	// never mutate. Protection comes from RelaySet.mu via the Lifecycle
+	// concurrency contract documented at portal/discovery/lifecycle.go.
+	LoadFactor  float64   // EWMA of (active_tunnels / pool_avg) + (failure_rate * beta)
+	FailureRate float64   // EWMA of failure events per discovery + active path
+	LastUpdated time.Time // wall clock for tau-based decay
+
 	discoveryFailures      int
 	activeFailures         int
 	nextDiscoveryRefreshAt time.Time
