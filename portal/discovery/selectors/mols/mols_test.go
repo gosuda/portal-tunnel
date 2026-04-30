@@ -8,9 +8,14 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectortest"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
+
+func TestMOLSContract(t *testing.T) {
+	selectortest.Contract(t, "mols", func() discovery.Selector { return New() })
+}
 
 // ---------------------------------------------------------------------------
 // Test helpers

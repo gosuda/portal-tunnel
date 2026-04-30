@@ -7,8 +7,17 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/mols"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectortest"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+// TestWeightedContract runs the parameterized Selector invariant suite against
+// weighted.Composite (wrapping mols.New()).
+func TestWeightedContract(t *testing.T) {
+	selectortest.Contract(t, "weighted", func() discovery.Selector {
+		return New(mols.New())
+	})
+}
 
 // ---------------------------------------------------------------------------
 // Test helpers
