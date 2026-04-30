@@ -4,29 +4,9 @@ import "time"
 
 // stubRelayPolicy is a minimal relayPolicy for tests in package discovery that
 // cannot import portal/discovery/selectors/mols (import cycle). It implements
-// the four interface methods with simple non-scoring logic sufficient for
+// the two interface methods with simple non-scoring logic sufficient for
 // RelaySet lifecycle and announce tests.
 type stubRelayPolicy struct{}
-
-func (s stubRelayPolicy) SelectAggregate(states []RelayState) []RelayState {
-	out := make([]RelayState, 0, len(states))
-	for _, st := range states {
-		if !st.Banned {
-			out = append(out, st)
-		}
-	}
-	return out
-}
-
-func (s stubRelayPolicy) SelectConfirmed(states []RelayState) []RelayState {
-	out := make([]RelayState, 0)
-	for _, st := range states {
-		if st.Confirmed {
-			out = append(out, st)
-		}
-	}
-	return out
-}
 
 func (s stubRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace) {
 	now := time.Now().UTC()

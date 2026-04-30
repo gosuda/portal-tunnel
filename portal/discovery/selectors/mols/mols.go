@@ -165,24 +165,16 @@ func isRelayFallback(state discovery.RelayState) bool {
 	return !state.DiscoveryRTTAt.IsZero() && state.DiscoveryRTT > molsFallbackRTTThreshold
 }
 
+// SelectAggregate is a thin wrapper around discovery.FilterUnbanned retained
+// only for test call sites. It is not part of any interface.
 func (p *MOLS) SelectAggregate(states []discovery.RelayState) []discovery.RelayState {
-	out := make([]discovery.RelayState, 0, len(states))
-	for _, s := range states {
-		if !s.Banned {
-			out = append(out, s)
-		}
-	}
-	return out
+	return discovery.FilterUnbanned(states)
 }
 
+// SelectConfirmed is a thin wrapper around discovery.FilterConfirmed retained
+// only for test call sites. It is not part of any interface.
 func (p *MOLS) SelectConfirmed(states []discovery.RelayState) []discovery.RelayState {
-	out := make([]discovery.RelayState, 0)
-	for _, s := range states {
-		if s.Confirmed {
-			out = append(out, s)
-		}
-	}
-	return out
+	return discovery.FilterConfirmed(states)
 }
 
 func (p *MOLS) rankRelayPool(autoPool []discovery.RelayState, localAddress string) []string {
@@ -304,7 +296,7 @@ func (p *MOLS) SelectPriorityWithTrace(states []discovery.RelayState, cs discove
 		}
 	}
 
-	selected := p.SelectAggregate(states)
+	selected := discovery.FilterUnbanned(states)
 	if len(selected) == 0 {
 		trace.SelectionTook = time.Since(start)
 		return nil, trace
@@ -466,7 +458,7 @@ func (p *MOLS) SelectMultiHopWithTrace(states []discovery.RelayState, cs discove
 		}
 	}
 
-	selected := p.SelectAggregate(states)
+	selected := discovery.FilterUnbanned(states)
 	if len(selected) == 0 {
 		trace.SelectionTook = time.Since(start)
 		return nil, trace

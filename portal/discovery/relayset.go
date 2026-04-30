@@ -46,15 +46,38 @@ import (
 // the entire batch).
 
 // relayPolicy is the local unexported interface that RelaySet uses for relay
-// selection. Any concrete type that implements these four methods satisfies it;
+// selection. Any concrete type that implements these two methods satisfies it;
 // *mols.MOLS is the only production implementation. The interface lives here
 // (not in selectors/mols) to avoid an import cycle between portal/discovery and
 // portal/discovery/selectors/mols.
 type relayPolicy interface {
-	SelectAggregate(states []RelayState) []RelayState
-	SelectConfirmed(states []RelayState) []RelayState
 	SelectPriorityWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace)
 	SelectMultiHopWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace)
+}
+
+// FilterUnbanned returns all states that are not banned. It is a pure,
+// policy-agnostic filter used by RelaySet.AggregateRelays and SelectionTrace
+// instrumentation.
+func FilterUnbanned(states []RelayState) []RelayState {
+	out := make([]RelayState, 0, len(states))
+	for _, s := range states {
+		if !s.Banned {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// FilterConfirmed returns all states that are locally confirmed. It is a pure,
+// policy-agnostic filter used by RelaySet.ConfirmedRelays.
+func FilterConfirmed(states []RelayState) []RelayState {
+	out := make([]RelayState, 0)
+	for _, s := range states {
+		if s.Confirmed {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 type RelaySet struct {
@@ -241,10 +264,9 @@ func (s *RelaySet) AggregateRelays() []RelayState {
 	for _, state := range s.relays {
 		states = append(states, state)
 	}
-	policy := s.policy
 	s.mu.RUnlock()
 
-	return policy.SelectAggregate(states)
+	return FilterUnbanned(states)
 }
 
 func (s *RelaySet) ConfirmedRelays() []RelayState {
@@ -253,10 +275,9 @@ func (s *RelaySet) ConfirmedRelays() []RelayState {
 	for _, state := range s.relays {
 		states = append(states, state)
 	}
-	policy := s.policy
 	s.mu.RUnlock()
 
-	return policy.SelectConfirmed(states)
+	return FilterConfirmed(states)
 }
 
 // PriorityRelaysWithTrace returns the same ordered relay-URL list as
