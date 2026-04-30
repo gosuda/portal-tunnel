@@ -38,6 +38,13 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// lambdaSeedConstant is the multiplier applied to the saturation-distance
+// signal when pre-seeding RelayState.LoadFactor for the weighted selector.
+// A value of 5.0 means a relay with 90% capacity gap gets LoadFactor=4.5,
+// which (with lambda=1.0) adds 4.5 to its final score — exceeding the
+// maximum MOLS position spread of K-1=4 for K=5 relays.
+const lambdaSeedConstant = 5.0
+
 func main() {
 	clients := flag.Int("clients", 100, "number of synthetic clients")
 	relays := flag.Int("relays", 5, "number of synthetic relays")
@@ -139,6 +146,32 @@ func main() {
 		relayStates[i] = rs
 	}
 
+	// Pre-seed LoadFactor for weighted selector when non-uniform capacities are
+	// provided. High-capacity relays get LoadFactor=0; lower-capacity relays get
+	// a proportional penalty so the weighted selector steers traffic toward the
+	// most capable relays.
+	//
+	// Pre-seeding only applies when BOTH conditions hold:
+	//   1. -selector=weighted
+	//   2. -capacities was explicitly provided (unequal weights intended)
+	// When -capacities is omitted, all LoadFactor values stay 0 and weighted
+	// degenerates to pure MOLS — matching the mols selector result exactly.
+	if *selectorName == "weighted" && capacitiesProvided {
+		maxCap := 0.0
+		for _, c := range capacities {
+			if c > maxCap {
+				maxCap = c
+			}
+		}
+		for i := range relayStates {
+			// loadSeed ∈ [0, 1]: 0 for the highest-capacity relay, approaching 1
+			// for relays furthest from max capacity.
+			loadSeed := (maxCap - capacities[i]) / maxCap
+			relayStates[i].LoadFactor = lambdaSeedConstant * loadSeed
+			relayStates[i].LastUpdated = now
+		}
+	}
+
 	// Build the selector.
 	var policy discovery.Selector
 	switch *selectorName {
@@ -162,6 +195,11 @@ func main() {
 		cs := discovery.ClientState{
 			LocalAddress:  fmt.Sprintf("synthetic-client-%d", i),
 			MultiHopDepth: *multiHop,
+			// Set MaxActiveRelays to K so all relays are ranked and returned.
+			// This is required for the weighted selector to reorder across the full
+			// pool — without it MOLS caps output at 3, hiding low-position relays
+			// from the weighted penalty step.
+			MaxActiveRelays: *relays,
 		}
 		var outputURLs []string
 		if mode == "multihop" {
