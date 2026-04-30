@@ -217,11 +217,11 @@ func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allo
 	return upsertAccepted
 }
 
-// SetRelayPolicy replaces the current relay-selection policy. Passing nil or a
+// SetSelector replaces the current relay-selection policy. Passing nil or a
 // typed-nil panics; callers must supply a concrete non-nil Selector (e.g. mols.New()).
-func (s *RelaySet) SetRelayPolicy(policy Selector) {
+func (s *RelaySet) SetSelector(policy Selector) {
 	if policy == nil || isNilableAndNil(policy) {
-		panic("discovery.SetRelayPolicy: policy must not be nil")
+		panic("discovery.SetSelector: policy must not be nil")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
