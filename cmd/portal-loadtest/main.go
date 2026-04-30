@@ -1,4 +1,4 @@
-// Command portal-loadtest is a Phase 1/2/3 uniformity probe that measures
+// Command portal-loadtest is a Phase 1/2/3/4 uniformity probe that measures
 // how evenly a relay-selection policy distributes N synthetic clients
 // across K synthetic relays. It runs entirely in-process — no running
 // portal-tunnel server is required.
@@ -13,6 +13,7 @@
 //	-lambda <float>       lambda for weighted selector (default 1.0)
 //	-anonymity            enable AnonymityGrade on synthetic clients (opt-in /16+family diversity)
 //	-anonymity-collide    put all relays in the same /16 (forces anonymity_grade relaxation)
+//	-reservation          pre-seed a voucher cache; wrap selector with voucher.New
 //
 // When -multi-hop > 0, the selector is automatically wrapped in
 // diversity.New(selector) so hop-path diversity constraints apply.
@@ -40,11 +41,14 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/diversity"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/mols"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/weighted"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery/voucher"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // lambdaSeedConstant is the multiplier applied to the saturation-distance
@@ -63,6 +67,7 @@ func main() {
 	lambdaVal := flag.Float64("lambda", 1.0, "lambda weight for weighted selector (ignored for mols)")
 	anonymity := flag.Bool("anonymity", false, "enable AnonymityGrade on synthetic clients (opt-in /16+family diversity)")
 	anonymityCollide := flag.Bool("anonymity-collide", false, "put all relays in the same /16 (forces anonymity_grade relaxation; implies -anonymity)")
+	reservation := flag.Bool("reservation", false, "pre-seed a synthetic voucher cache; wrap selector with voucher.New(diversity.New(inner), cache)")
 	flag.Parse()
 
 	if *clients <= 0 {
@@ -200,6 +205,59 @@ func main() {
 		}
 	}
 
+	// When -reservation is set: mint a synthetic signing identity, set every
+	// relay's SupportsReservation=true, sign all descriptors, and pre-populate
+	// a shared voucher cache with one fresh voucher per relay.
+	// SupportsReservation and Address are advisory fields (not in CanonicalBytes)
+	// so they are set after auth.SignRelayDescriptor returns.
+	var voucherCache *voucher.Cache
+	vouchersGranted := 0
+	if *reservation {
+		synthID, err := utils.ResolveSecp256k1Identity("")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "portal-loadtest: -reservation: mint identity: %v\n", err)
+			os.Exit(1)
+		}
+		voucherCache = voucher.NewCache()
+		for i := range relayStates {
+			relayURL := relayStates[i].Descriptor.APIHTTPSAddr
+			// Build a minimal descriptor that can be signed (requires Address).
+			desc := types.RelayDescriptor{
+				Address:      synthID.Address,
+				Version:      types.DiscoveryVersion,
+				IssuedAt:     now,
+				ExpiresAt:    now.Add(24 * time.Hour),
+				APIHTTPSAddr: relayURL,
+			}
+			signed, err := auth.SignRelayDescriptor(desc, synthID.PrivateKey)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "portal-loadtest: -reservation: sign descriptor %d: %v\n", i, err)
+				os.Exit(1)
+			}
+			// Advisory fields — set after signing (not in CanonicalBytes).
+			signed.SupportsReservation = true
+			relayStates[i].Descriptor = signed
+			relayStates[i].Confirmed = true
+			if relayStates[i].LastSeenAt.IsZero() {
+				relayStates[i].LastSeenAt = now
+			}
+			// Pre-populate the cache with one fresh voucher per relay.
+			v := types.ReservationVoucher{
+				ClientAddress: "loadtest-synthetic",
+				RelayURL:      relayURL,
+				IssuedAt:      now,
+				ExpiresAt:     now.Add(24 * time.Hour),
+			}
+			signedV, err := auth.SignReservationVoucher(v, synthID.PrivateKey)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "portal-loadtest: -reservation: sign voucher %d: %v\n", i, err)
+				os.Exit(1)
+			}
+			voucherCache.Put(signedV)
+			vouchersGranted++
+		}
+	}
+
 	// Build the selector.
 	var policy discovery.Selector
 	switch *selectorName {
@@ -217,6 +275,16 @@ func main() {
 	// constraints are applied. Priority mode is passed through unchanged.
 	if mode == "multihop" {
 		policy = diversity.New(policy)
+	}
+	// When -reservation is set, wrap with the voucher selector so that the
+	// three-bucket partition (legacy-bypass / cached / uncached) is exercised.
+	// If diversity was not already applied (priority mode), add it now so the
+	// chain matches the documented voucher.New(diversity.New(inner), cache) form.
+	if *reservation {
+		if mode != "multihop" {
+			policy = diversity.New(policy)
+		}
+		policy = voucher.New(policy, voucherCache)
 	}
 
 	// -anonymity-collide implies -anonymity (sets AnonymityGrade on clients).
@@ -398,6 +466,23 @@ func main() {
 		}
 		fmt.Printf("relaxation event metric: anonymity_grade=%d  role_separation=%d\n",
 			int(relaxedAnonymity), int(relaxedRoleSep))
+	}
+
+	// Reservation summary line (printed when -reservation is set).
+	// legacy-bypass: relays with SupportsReservation=false (none, since we set
+	// all to true in the pre-seeding step).
+	// capacity-exhausted: relays for which Put failed — impossible in this
+	// synthetic path where signing always succeeds.
+	if *reservation {
+		legacyBypass := 0
+		for _, rs := range relayStates {
+			if !rs.Descriptor.SupportsReservation {
+				legacyBypass++
+			}
+		}
+		capacityExhausted := *relays - vouchersGranted
+		fmt.Printf("\nvouchers granted: %d  capacity-exhausted: %d  legacy-bypass: %d\n",
+			vouchersGranted, capacityExhausted, legacyBypass)
 	}
 }
 
