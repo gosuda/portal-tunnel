@@ -1,16 +1,19 @@
-// Command portal-loadtest is a Phase 1 uniformity probe that measures
-// how evenly the MOLS relay-selection policy distributes N synthetic clients
+// Command portal-loadtest is a Phase 1/2 uniformity probe that measures
+// how evenly a relay-selection policy distributes N synthetic clients
 // across K synthetic relays. It runs entirely in-process — no running
 // portal-tunnel server is required.
 //
-// Flags (Phase 1 only — -capacities and -selector are Phase 2):
+// Flags:
 //
-//	-clients N      number of synthetic clients (default 100)
-//	-relays  K      number of synthetic relays (default 5)
-//	-multi-hop D    multi-hop depth (0 = priority/single-hop; ≥2 = multi-hop)
+//	-clients N            number of synthetic clients (default 100)
+//	-relays  K            number of synthetic relays (default 5)
+//	-multi-hop D          multi-hop depth (0 = priority/single-hop; ≥2 = multi-hop)
+//	-selector mols|weighted  selector to test (default mols)
+//	-capacities w1,...,wK per-relay capacity weights (default: all 1.0)
+//	-lambda <float>       lambda for weighted selector (default 1.0)
 //
 // Output: per-relay top-pick histogram, chi-square statistic against the
-// uniform expected distribution N/K, and a p-value.
+// capacity-weighted expected distribution, and a p-value.
 //
 // P-value method: regularized upper incomplete gamma function Q(k/2, x/2),
 // implemented via the series expansion (|x| < s+1) and continued-fraction
@@ -19,15 +22,19 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"math"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/mols"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/weighted"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -35,20 +42,58 @@ func main() {
 	clients := flag.Int("clients", 100, "number of synthetic clients")
 	relays := flag.Int("relays", 5, "number of synthetic relays")
 	multiHop := flag.Int("multi-hop", 0, "multi-hop depth (0 = priority; ≥2 = multi-hop)")
+	selectorName := flag.String("selector", "mols", "selector to test: mols or weighted")
+	capacitiesStr := flag.String("capacities", "", "comma-separated per-relay capacity weights (default: all 1.0)")
+	lambdaVal := flag.Float64("lambda", 1.0, "lambda weight for weighted selector (ignored for mols)")
 	flag.Parse()
 
 	if *clients <= 0 {
 		fmt.Fprintln(os.Stderr, "portal-loadtest: -clients must be > 0")
 		os.Exit(1)
 	}
-	if *relays <= 0 {
-		fmt.Fprintln(os.Stderr, "portal-loadtest: -relays must be > 0")
+	if *relays < 2 {
+		fmt.Fprintln(os.Stderr, "portal-loadtest: -relays must be >= 2 (chi-square requires at least 1 degree of freedom)")
 		os.Exit(1)
 	}
 	// MultiHopDepth ≤ 1 causes SelectMultiHop to return nil.
 	// Reject 1 explicitly; 0 means priority mode.
 	if *multiHop == 1 {
 		fmt.Fprintln(os.Stderr, "portal-loadtest: -multi-hop=1 is not valid; use 0 for priority or ≥2 for multi-hop")
+		os.Exit(1)
+	}
+
+	// Parse and validate capacities.
+	// capacitiesProvided tracks whether the user explicitly supplied -capacities.
+	capacities := make([]float64, *relays)
+	capacitiesProvided := *capacitiesStr != ""
+
+	if capacitiesProvided {
+		parts := strings.Split(*capacitiesStr, ",")
+		if len(parts) != *relays {
+			fmt.Fprintf(os.Stderr, "portal-loadtest: -capacities has %d values but -relays=%d; counts must match\n", len(parts), *relays)
+			os.Exit(1)
+		}
+		for i, p := range parts {
+			v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
+			if err != nil || v <= 0 {
+				fmt.Fprintf(os.Stderr, "portal-loadtest: -capacities[%d]=%q is not a valid positive number\n", i, p)
+				os.Exit(1)
+			}
+			capacities[i] = v
+		}
+	} else {
+		// Default: all-equal weights → uniform expected distribution.
+		for i := range capacities {
+			capacities[i] = 1.0
+		}
+	}
+
+	// Validate selector name.
+	switch *selectorName {
+	case "mols", "weighted":
+		// valid
+	default:
+		fmt.Fprintf(os.Stderr, "portal-loadtest: -selector=%q is not valid; use mols or weighted\n", *selectorName)
 		os.Exit(1)
 	}
 
@@ -59,7 +104,7 @@ func main() {
 
 	// Build K synthetic relay states. We construct discovery.RelayState values
 	// directly (not via RelaySet.InsertAnnounced) because the public announce
-	// path requires real EVM-signed descriptors. mols.MOLS is called directly
+	// path requires real EVM-signed descriptors. The selector is called directly
 	// so that no signature gate runs.
 	//
 	// For priority mode: states without an observed descriptor (LastSeenAt zero)
@@ -94,10 +139,24 @@ func main() {
 		relayStates[i] = rs
 	}
 
+	// Build the selector.
+	var policy discovery.Selector
+	switch *selectorName {
+	case "weighted":
+		policy = weighted.New(
+			mols.New(),
+			weighted.WithLambda(*lambdaVal),
+			weighted.WithEpsilon(0.1),
+			weighted.WithBeta(1.0),
+		)
+	default: // "mols"
+		policy = mols.New()
+	}
+
 	// Generate N synthetic client states with UNIQUE LocalAddress values.
 	// MOLS is deterministic on (LocalAddress, relayURL): duplicate addresses
 	// would make all clients pick identically, falsely appearing as 100% imbalance.
-	policy := mols.New()
+	ctx := context.Background()
 	picks := make(map[string]int, *relays) // relay URL → count of clients that picked it first
 	for i := 0; i < *clients; i++ {
 		cs := discovery.ClientState{
@@ -106,9 +165,9 @@ func main() {
 		}
 		var outputURLs []string
 		if mode == "multihop" {
-			outputURLs, _ = policy.SelectMultiHopWithTrace(relayStates, cs)
+			outputURLs, _ = policy.SelectMultiHop(ctx, relayStates, cs)
 		} else {
-			outputURLs, _ = policy.SelectPriorityWithTrace(relayStates, cs)
+			outputURLs, _ = policy.SelectPriority(ctx, relayStates, cs)
 		}
 		if len(outputURLs) == 0 {
 			// All relays were filtered; skip this client.
@@ -124,14 +183,31 @@ func main() {
 	}
 	sort.Strings(relayURLs)
 
-	expected := float64(*clients) / float64(*relays)
+	// Build per-relay expected distribution based on capacities.
+	// The capacities slice is positional (relay i in relayStates), but the
+	// output is sorted by URL. Build a URL→capacity map to look up by sorted URL.
+	urlToCapacity := make(map[string]float64, *relays)
+	for i := range relayStates {
+		urlToCapacity[relayStates[i].Descriptor.APIHTTPSAddr] = capacities[i]
+	}
+
+	sumCapacity := 0.0
+	for _, w := range capacities {
+		sumCapacity += w
+	}
+
+	expectedByURL := make(map[string]float64, *relays)
+	for _, url := range relayURLs {
+		expectedByURL[url] = float64(*clients) * urlToCapacity[url] / sumCapacity
+	}
 
 	// Chi-square statistic: Σ (observed - expected)^2 / expected
 	var chi2 float64
 	for _, url := range relayURLs {
 		obs := float64(picks[url])
-		diff := obs - expected
-		chi2 += diff * diff / expected
+		exp := expectedByURL[url]
+		diff := obs - exp
+		chi2 += diff * diff / exp
 	}
 
 	df := *relays - 1
@@ -141,16 +217,19 @@ func main() {
 	pval := igamc(float64(df)/2.0, chi2/2.0)
 
 	// Print results.
-	header := fmt.Sprintf("portal-loadtest: N=%d clients, K=%d relays, mode=%s", *clients, *relays, mode)
-	fmt.Println(header)
+	if *selectorName == "weighted" {
+		fmt.Printf("selector: weighted (lambda=%.1f, epsilon=0.1, beta=1.0)\n", *lambdaVal)
+	} else {
+		fmt.Printf("selector: %s\n", *selectorName)
+	}
+	fmt.Printf("clients: %d  relays: %d  mode: %s\n\n", *clients, *relays, mode)
+
 	fmt.Printf("%-45s %6s  %8s\n", "relay", "picks", "expected")
 	fmt.Println("---------------------------------------------------------------")
 	for _, url := range relayURLs {
-		fmt.Printf("%-45s %6d  %8.1f\n", url, picks[url], expected)
+		fmt.Printf("%-45s %6d  %8.1f\n", url, picks[url], expectedByURL[url])
 	}
-	fmt.Printf("\nchi-square: %.4f\n", chi2)
-	fmt.Printf("df: %d\n", df)
-	fmt.Printf("p-value: %.4f\n", pval)
+	fmt.Printf("\nchi-square: %.4f  df: %d  p-value: %.4f\n", chi2, df, pval)
 }
 
 // igamc returns the regularized upper incomplete gamma function Q(s, x),
