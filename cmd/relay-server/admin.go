@@ -7,13 +7,94 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// reserveBudgetDefault is the per-process in-memory capacity budget for
+// /admin/reserve. Once this many reservations have been issued the endpoint
+// returns 503. Not durable across restarts.
+//
+// WARNING: EXPERIMENTAL — see types.ReservationVoucher documentation.
+const reserveBudgetDefault int64 = 100
+
+// adminReserveRequest is the POST body for /admin/reserve.
+type adminReserveRequest struct {
+	ClientAddress            string `json:"client_address"`
+	RequestedDurationSeconds int    `json:"requested_duration_seconds"`
+}
+
+// handleAdminReserve is the testable core of the /admin/reserve endpoint.
+// It signs a fresh ReservationVoucher for the requesting client and returns it
+// as JSON (200). Returns 503 when the in-process capacity budget is exhausted.
+//
+// WARNING: EXPERIMENTAL — see types.ReservationVoucher documentation.
+func handleAdminReserve(
+	w http.ResponseWriter,
+	r *http.Request,
+	signingPrivKey string,
+	relayAddress string,
+	budgetUsed *atomic.Int64,
+	budgetMax int64,
+) {
+	if !utils.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	req, ok := utils.DecodeJSONRequestAs[adminReserveRequest](
+		w, r, adminBodyLimit,
+		utils.InvalidRequestError(errors.New("invalid request body")),
+	)
+	if !ok {
+		return
+	}
+
+	if strings.TrimSpace(req.ClientAddress) == "" {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "client_address is required")
+		return
+	}
+
+	const (
+		reserveDefaultDuration = 60 * time.Second
+		reserveMaxDuration     = 24 * time.Hour
+	)
+	duration := time.Duration(req.RequestedDurationSeconds) * time.Second
+	if duration <= 0 {
+		duration = reserveDefaultDuration
+	} else if duration > reserveMaxDuration {
+		duration = reserveMaxDuration
+	}
+
+	// Attempt to claim one slot from the in-process budget.
+	used := budgetUsed.Add(1)
+	if used > budgetMax {
+		budgetUsed.Add(-1) // release the over-claim
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, "capacity_exhausted", "capacity exhausted")
+		return
+	}
+
+	now := time.Now().UTC()
+	voucher := types.ReservationVoucher{
+		ClientAddress: req.ClientAddress,
+		RelayURL:      relayAddress,
+		IssuedAt:      now,
+		ExpiresAt:     now.Add(duration),
+	}
+	signed, err := auth.SignReservationVoucher(voucher, signingPrivKey)
+	if err != nil {
+		budgetUsed.Add(-1) // release on signing failure
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "failed to sign voucher")
+		return
+	}
+
+	utils.WriteAPIData(w, http.StatusOK, signed)
+}
 
 const (
 	cookieName     = "portal_admin"
@@ -171,6 +252,10 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	switch path {
 	case "/admin/metrics":
 		promhttp.Handler().ServeHTTP(w, r)
+		return
+	case "/admin/reserve":
+		identity := f.server.RelayIdentity()
+		handleAdminReserve(w, r, identity.PrivateKey, identity.Address, &f.reserveBudgetUsed, reserveBudgetDefault)
 		return
 	case types.PathAdminSnapshot:
 		if !utils.RequireMethod(w, r, http.MethodGet) {

@@ -41,6 +41,7 @@ type Frontend struct {
 	cachedPortalHTML     []byte
 	cachedPortalHTMLOnce sync.Once
 	landingPageEnabled   atomic.Bool
+	reserveBudgetUsed    atomic.Int64
 }
 
 func NewFrontend(server *portal.Server, identityPath string, defaultLandingPageEnabled bool, headlessShellURL string) (*Frontend, error) {
