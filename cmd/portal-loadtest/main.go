@@ -1,4 +1,4 @@
-// Command portal-loadtest is a Phase 1/2 uniformity probe that measures
+// Command portal-loadtest is a Phase 1/2/3 uniformity probe that measures
 // how evenly a relay-selection policy distributes N synthetic clients
 // across K synthetic relays. It runs entirely in-process — no running
 // portal-tunnel server is required.
@@ -11,9 +11,15 @@
 //	-selector mols|weighted  selector to test (default mols)
 //	-capacities w1,...,wK per-relay capacity weights (default: all 1.0)
 //	-lambda <float>       lambda for weighted selector (default 1.0)
+//	-anonymity            enable AnonymityGrade on synthetic clients (opt-in /16+family diversity)
+//	-anonymity-collide    put all relays in the same /16 (forces anonymity_grade relaxation)
+//
+// When -multi-hop > 0, the selector is automatically wrapped in
+// diversity.New(selector) so hop-path diversity constraints apply.
 //
 // Output: per-relay top-pick histogram, chi-square statistic against the
-// capacity-weighted expected distribution, and a p-value.
+// capacity-weighted expected distribution, p-value, and (when -multi-hop > 0)
+// diversity acceptance lines.
 //
 // P-value method: regularized upper incomplete gamma function Q(k/2, x/2),
 // implemented via the series expansion (|x| < s+1) and continued-fraction
@@ -32,7 +38,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/diversity"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/mols"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery/selectors/weighted"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -52,6 +61,8 @@ func main() {
 	selectorName := flag.String("selector", "mols", "selector to test: mols or weighted")
 	capacitiesStr := flag.String("capacities", "", "comma-separated per-relay capacity weights (default: all 1.0)")
 	lambdaVal := flag.Float64("lambda", 1.0, "lambda weight for weighted selector (ignored for mols)")
+	anonymity := flag.Bool("anonymity", false, "enable AnonymityGrade on synthetic clients (opt-in /16+family diversity)")
+	anonymityCollide := flag.Bool("anonymity-collide", false, "put all relays in the same /16 (forces anonymity_grade relaxation; implies -anonymity)")
 	flag.Parse()
 
 	if *clients <= 0 {
@@ -66,6 +77,13 @@ func main() {
 	// Reject 1 explicitly; 0 means priority mode.
 	if *multiHop == 1 {
 		fmt.Fprintln(os.Stderr, "portal-loadtest: -multi-hop=1 is not valid; use 0 for priority or ≥2 for multi-hop")
+		os.Exit(1)
+	}
+	// -anonymity (without -anonymity-collide) assigns each relay a unique /16
+	// in 10.0/16 … 10.255/16, giving 256 distinct buckets. Reject counts above
+	// that to avoid silent collisions in the Subnet16 assignment.
+	if *anonymity && !*anonymityCollide && *relays > 256 {
+		fmt.Fprintln(os.Stderr, "portal-loadtest: -anonymity without -anonymity-collide supports at most 256 relays (unique /16 budget)")
 		os.Exit(1)
 	}
 
@@ -143,6 +161,16 @@ func main() {
 			rs.Descriptor.WireGuardPublicKey = fmt.Sprintf("synthetic-wg-key-%d", i+1)
 			rs.Descriptor.WireGuardPort = 51820
 		}
+		// Assign Subnet16 for anonymity diversity testing.
+		// -anonymity-collide: all relays in the same /16 (forces relaxation).
+		// -anonymity: each relay in its own /16 (enables clean diversity).
+		// Valid second octets are 0–255, so at most 256 unique /16 slots in 10.x.
+		// The relay-count guard above already rejects -relays > 256 for this mode.
+		if *anonymityCollide {
+			rs.Descriptor.Subnet16 = "10.0"
+		} else if *anonymity {
+			rs.Descriptor.Subnet16 = "10." + strconv.Itoa(i)
+		}
 		relayStates[i] = rs
 	}
 
@@ -185,12 +213,29 @@ func main() {
 	default: // "mols"
 		policy = mols.New()
 	}
+	// Wrap in diversity selector for multi-hop mode so hop-path diversity
+	// constraints are applied. Priority mode is passed through unchanged.
+	if mode == "multihop" {
+		policy = diversity.New(policy)
+	}
+
+	// -anonymity-collide implies -anonymity (sets AnonymityGrade on clients).
+	effectiveAnonymity := *anonymity || *anonymityCollide
 
 	// Generate N synthetic client states with UNIQUE LocalAddress values.
 	// MOLS is deterministic on (LocalAddress, relayURL): duplicate addresses
 	// would make all clients pick identically, falsely appearing as 100% imbalance.
 	ctx := context.Background()
 	picks := make(map[string]int, *relays) // relay URL → count of clients that picked it first
+
+	// Per-client path tracking for diversity acceptance checks (multi-hop only).
+	dupPathClients := 0       // clients whose path contained a duplicate URL
+	subnet16CollidePaths := 0 // clients whose path contained a Subnet16 collision
+	stateByURL := make(map[string]discovery.RelayState, *relays)
+	for _, rs := range relayStates {
+		stateByURL[rs.Descriptor.APIHTTPSAddr] = rs
+	}
+
 	for i := 0; i < *clients; i++ {
 		cs := discovery.ClientState{
 			LocalAddress:  fmt.Sprintf("synthetic-client-%d", i),
@@ -200,6 +245,7 @@ func main() {
 			// pool — without it MOLS caps output at 3, hiding low-position relays
 			// from the weighted penalty step.
 			MaxActiveRelays: *relays,
+			AnonymityGrade:  effectiveAnonymity,
 		}
 		var outputURLs []string
 		if mode == "multihop" {
@@ -212,6 +258,34 @@ func main() {
 			continue
 		}
 		picks[outputURLs[0]]++
+
+		// Diversity acceptance checks (multi-hop only).
+		if mode == "multihop" {
+			seenURLs := make(map[string]struct{}, len(outputURLs))
+			seenSubnets := make(map[string]struct{}, len(outputURLs))
+			hasDup := false
+			hasSubnetCollide := false
+			for _, u := range outputURLs {
+				if _, dup := seenURLs[u]; dup {
+					hasDup = true
+				}
+				seenURLs[u] = struct{}{}
+				if rs, ok := stateByURL[u]; ok {
+					if s := rs.Descriptor.Subnet16; s != "" {
+						if _, dup := seenSubnets[s]; dup {
+							hasSubnetCollide = true
+						}
+						seenSubnets[s] = struct{}{}
+					}
+				}
+			}
+			if hasDup {
+				dupPathClients++
+			}
+			if hasSubnetCollide {
+				subnet16CollidePaths++
+			}
+		}
 	}
 
 	// Collect and sort relay URLs for deterministic output.
@@ -255,12 +329,28 @@ func main() {
 	pval := igamc(float64(df)/2.0, chi2/2.0)
 
 	// Print results.
-	if *selectorName == "weighted" {
-		fmt.Printf("selector: weighted (lambda=%.1f, epsilon=0.1, beta=1.0)\n", *lambdaVal)
+	if mode == "multihop" {
+		if *selectorName == "weighted" {
+			fmt.Printf("selector: weighted+diversity (lambda=%.1f, epsilon=0.1, beta=1.0)\n", *lambdaVal)
+		} else {
+			fmt.Printf("selector: %s+diversity\n", *selectorName)
+		}
 	} else {
-		fmt.Printf("selector: %s\n", *selectorName)
+		if *selectorName == "weighted" {
+			fmt.Printf("selector: weighted (lambda=%.1f, epsilon=0.1, beta=1.0)\n", *lambdaVal)
+		} else {
+			fmt.Printf("selector: %s\n", *selectorName)
+		}
 	}
-	fmt.Printf("clients: %d  relays: %d  mode: %s\n\n", *clients, *relays, mode)
+	fmt.Printf("clients: %d  relays: %d  mode: %s\n", *clients, *relays, mode)
+	if effectiveAnonymity {
+		collideNote := ""
+		if *anonymityCollide {
+			collideNote = " (collide mode: all same /16)"
+		}
+		fmt.Printf("anonymity-grade: enabled%s\n", collideNote)
+	}
+	fmt.Println()
 
 	fmt.Printf("%-45s %6s  %8s\n", "relay", "picks", "expected")
 	fmt.Println("---------------------------------------------------------------")
@@ -268,6 +358,47 @@ func main() {
 		fmt.Printf("%-45s %6d  %8.1f\n", url, picks[url], expectedByURL[url])
 	}
 	fmt.Printf("\nchi-square: %.4f  df: %d  p-value: %.4f\n", chi2, df, pval)
+
+	// Diversity acceptance lines (multi-hop only).
+	if mode == "multihop" {
+		fmt.Println()
+		if dupPathClients == 0 {
+			fmt.Println("zero duplicate-relay paths: PASS")
+		} else {
+			fmt.Printf("zero duplicate-relay paths: FAIL (%d/%d clients had duplicate hops)\n", dupPathClients, *clients)
+		}
+		if effectiveAnonymity {
+			if subnet16CollidePaths == 0 {
+				fmt.Println("zero /16 collisions: PASS")
+			} else {
+				fmt.Printf("zero /16 collisions: FAIL (%d/%d clients had /16 collisions)\n", subnet16CollidePaths, *clients)
+			}
+		}
+		// Print final relaxation event counter values from the Prometheus registry.
+		var relaxedAnonymity, relaxedRoleSep float64
+		if mfs, err := prometheus.DefaultGatherer.Gather(); err == nil {
+			for _, mf := range mfs {
+				if mf.GetName() != "portal_discovery_diversity_relaxed_total" {
+					continue
+				}
+				for _, m := range mf.GetMetric() {
+					for _, lp := range m.GetLabel() {
+						if lp.GetName() != "reason" {
+							continue
+						}
+						switch lp.GetValue() {
+						case "anonymity_grade":
+							relaxedAnonymity = m.GetCounter().GetValue()
+						case "role_separation":
+							relaxedRoleSep = m.GetCounter().GetValue()
+						}
+					}
+				}
+			}
+		}
+		fmt.Printf("relaxation event metric: anonymity_grade=%d  role_separation=%d\n",
+			int(relaxedAnonymity), int(relaxedRoleSep))
+	}
 }
 
 // igamc returns the regularized upper incomplete gamma function Q(s, x),
