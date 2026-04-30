@@ -83,4 +83,8 @@ type ClientState struct {
 	// LocalAddress is the ingress identity address used by the relay selector to
 	// derive a deterministic row index into the GF(64) MOLS grid.
 	LocalAddress string
+	// SelectorOverride pins per-client policy by name (matching Selector.Name()).
+	// Empty string means use the process default. Phase 2 introduces the field;
+	// Phase 3 will use it. Currently no-op at the selection layer.
+	SelectorOverride string
 }
