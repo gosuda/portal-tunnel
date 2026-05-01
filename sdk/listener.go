@@ -20,6 +20,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/pepper"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -155,11 +156,17 @@ func (l *listener) run(ctx context.Context) {
 					l.relaySet.UnconfirmRelayURL(relayURL)
 					l.relaySet.RecordActiveFailure(relayURL, err, 1)
 				}
-				log.Error().
-					Err(err).
-					Str("relay_url", relayURL).
-					Str("address", l.identity.Address).
-					Msg("lease registration failed; closing listener")
+				if l.pepperMode == PepperModeActive {
+					log.Error().
+						Str("error_code", pepper.ErrPFSHandshakeFailed).
+						Msg("pepper active circuit failed closed")
+				} else {
+					log.Error().
+						Err(err).
+						Str("relay_url", relayURL).
+						Str("address", l.identity.Address).
+						Msg("lease registration failed; closing listener")
+				}
 				_ = l.Close()
 				return
 			}
@@ -195,11 +202,17 @@ func (l *listener) run(ctx context.Context) {
 			}
 			l.resetTransport()
 			relayURL := l.relayURL.String()
-			log.Debug().
-				Err(err).
-				Str("relay_url", relayURL).
-				Str("address", l.identity.Address).
-				Msg("lease refresh required; re-registering")
+			if l.pepperMode == PepperModeActive {
+				log.Debug().
+					Str("error_code", pepper.ErrPFSHandshakeFailed).
+					Msg("pepper active lease refresh required")
+			} else {
+				log.Debug().
+					Err(err).
+					Str("relay_url", relayURL).
+					Str("address", l.identity.Address).
+					Msg("lease refresh required; re-registering")
+			}
 			continue
 		}
 
@@ -292,11 +305,17 @@ func (l *listener) Accept() (net.Conn, error) {
 
 		nextConn, handled, handleErr := l.mitmManager.maybeHandleConn(conn)
 		if handleErr != nil {
-			log.Debug().
-				Err(handleErr).
-				Str("relay_url", l.relayURL.String()).
-				Str("address", l.identity.Address).
-				Msg("mitm self-probe handling failed")
+			if l.pepperMode == PepperModeActive {
+				log.Debug().
+					Str("error_code", pepper.ErrPFSHandshakeFailed).
+					Msg("pepper active self-probe handling failed")
+			} else {
+				log.Debug().
+					Err(handleErr).
+					Str("relay_url", l.relayURL.String()).
+					Str("address", l.identity.Address).
+					Msg("mitm self-probe handling failed")
+			}
 		}
 		if handled {
 			continue
@@ -783,6 +802,14 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 
 func (l *listener) waitRetry(ctx context.Context, operation string, err error, retries, reverseSessionSlot int) bool {
 	if ctx.Err() != nil {
+		return false
+	}
+
+	if l.pepperMode == PepperModeActive {
+		log.Debug().
+			Str("error_code", pepper.ErrPFSHandshakeFailed).
+			Str("operation", operation).
+			Msg("pepper active operation failed; tearing down circuit")
 		return false
 	}
 

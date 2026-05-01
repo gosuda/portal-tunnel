@@ -39,8 +39,10 @@ package discovery
 // candidate.
 
 import (
+	"crypto/rand"
 	"hash/fnv"
 	"math"
+	"math/big"
 	"slices"
 	"sort"
 	"time"
@@ -382,4 +384,52 @@ func (p MOLSRelayPolicy) SelectMultiHop(states []RelayState, clientState ClientS
 		multiHop = multiHop[:clientState.MultiHopDepth]
 	}
 	return multiHop
+}
+
+func (p MOLSRelayPolicy) SelectRandomMultiHop(states []RelayState, clientState ClientState) []string {
+	if clientState.MultiHopDepth <= 1 {
+		return nil
+	}
+
+	selected := p.SelectAggregate(states)
+	if len(selected) == 0 {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	autoPool := make([]RelayState, 0, len(selected))
+	for _, state := range selected {
+		if !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) || !state.Descriptor.HasOverlayPeer() {
+			continue
+		}
+		if !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now) {
+			continue
+		}
+		autoPool = append(autoPool, state)
+	}
+
+	for i := len(autoPool) - 1; i > 0; i-- {
+		j, err := cryptoIndex(i + 1)
+		if err != nil {
+			return nil
+		}
+		autoPool[i], autoPool[j] = autoPool[j], autoPool[i]
+	}
+
+	if len(autoPool) > clientState.MultiHopDepth {
+		autoPool = autoPool[:clientState.MultiHopDepth]
+	}
+	out := make([]string, 0, len(autoPool))
+	for _, state := range autoPool {
+		out = append(out, state.Descriptor.APIHTTPSAddr)
+	}
+	return out
+}
+
+func cryptoIndex(limit int) (int, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(limit)))
+	if err != nil {
+		return 0, err
+	}
+	return int(n.Int64()), nil
 }

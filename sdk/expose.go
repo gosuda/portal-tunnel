@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/pepper"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -126,7 +127,14 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		return nil, errors.New("pepper requires --multi-hop or --multi-hop-depth 2+")
 	}
 	if cfg.PepperMode == PepperModeActive {
-		return nil, errors.New("pepper active mode is not implemented yet")
+		if err := (pepper.ActivePolicy{
+			MultiHopDepth: cfg.MultiHopDepth,
+			ExplicitPath:  multiHop,
+			Discovery:     cfg.Discovery,
+			IdentityJSON:  cfg.IdentityJSON,
+		}).Validate(); err != nil {
+			return nil, err
+		}
 	}
 
 	var listenerRelayURLs []string
@@ -147,11 +155,17 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		listenerRelayURLs = append([]string(nil), explicitRelayURLs...)
 	}
 
+	identityPath := cfg.IdentityPath
+	identityJSON := cfg.IdentityJSON
+	if cfg.PepperMode == PepperModeActive {
+		identityPath = ""
+		identityJSON = ""
+	}
 	identity, createdIdentity, err := utils.ResolveListenerIdentity(
 		types.Identity{Name: cfg.Name},
 		cfg.TargetAddr,
-		cfg.IdentityPath,
-		cfg.IdentityJSON,
+		identityPath,
+		identityJSON,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
@@ -473,10 +487,15 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		listenerRelayURLs = []string{e.multiHop[len(e.multiHop)-1]}
 		multiHop = append([]string(nil), e.multiHop...)
 	} else if e.multiHopDepth > 1 {
-		multiHop = e.relaySet.PriorityMultiHop(discovery.ClientState{
+		clientState := discovery.ClientState{
 			MultiHopDepth: e.multiHopDepth,
 			LocalAddress:  e.identity.Address,
-		})
+		}
+		if e.pepperMode == PepperModeActive {
+			multiHop = e.relaySet.RandomMultiHop(clientState)
+		} else {
+			multiHop = e.relaySet.PriorityMultiHop(clientState)
+		}
 		if len(multiHop) < e.multiHopDepth {
 			return fmt.Errorf("multi-hop-depth %d requires %d overlay relay candidates, got %d", e.multiHopDepth, e.multiHopDepth, len(multiHop))
 		}
@@ -528,6 +547,9 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		retryCount := 10
 		if len(multiHop) > 0 || slices.Contains(e.explicitRelays, relayURL) {
 			retryCount = 0
+		}
+		if e.pepperMode == PepperModeActive {
+			retryCount = -1
 		}
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
 			Identity:   e.identity,
@@ -622,6 +644,9 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 			delete(e.relayListeners, relayURL)
 		}
 		e.listenerMu.Unlock()
+		if e.pepperMode == PepperModeActive {
+			_ = e.Close()
+		}
 	}()
 
 	for {
@@ -635,7 +660,11 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			log.Warn().Err(err).Str("relay_url", relayURL).Msg("exposure listener accept failed")
+			if e.pepperMode == PepperModeActive {
+				log.Warn().Str("error_code", pepper.ErrOnionIntegrityVoid).Msg("pepper active circuit accept failed")
+			} else {
+				log.Warn().Err(err).Str("relay_url", relayURL).Msg("exposure listener accept failed")
+			}
 			return
 		}
 

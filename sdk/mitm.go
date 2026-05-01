@@ -17,6 +17,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/pepper"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -245,18 +246,37 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 		if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
 			return
 		}
+		if l.pepperMode == PepperModeActive {
+			log.Warn().
+				Str("error_code", pepper.ErrPFSHandshakeFailed).
+				Msg("pepper active self-probe failed")
+			return
+		}
 		log.Warn().
 			Err(err).
 			Str("relay_url", relayURL).
 			Str("address", l.identity.Address).
 			Msg("tls passthrough self-probe failed")
 	case report.Reason == types.MITMProbeReasonProbeTimeout:
+		if l.pepperMode == PepperModeActive {
+			log.Warn().
+				Str("error_code", pepper.ErrPFSHandshakeFailed).
+				Msg("pepper active self-probe timed out")
+			return
+		}
 		log.Warn().
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
 			Str("address", report.Address).
 			Msg("tls self-probe timed out before passthrough could be verified")
 	case report.Detected:
+		if l.pepperMode == PepperModeActive {
+			log.Warn().
+				Str("error_code", pepper.ErrPFSHandshakeFailed).
+				Msg("pepper active self-probe detected tls termination")
+			_ = l.Close()
+			return
+		}
 		event := log.Warn().
 			Bool("ban_mitm", m.ban).
 			Str("reason", report.Reason).
@@ -274,6 +294,9 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 		}
 		event.Msg("tls termination suspected by self-probe")
 	default:
+		if l.pepperMode == PepperModeActive {
+			return
+		}
 		log.Debug().
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).

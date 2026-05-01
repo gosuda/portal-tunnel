@@ -244,6 +244,18 @@ func (s *RelaySet) PriorityMultiHop(clientState ClientState) []string {
 	return policy.SelectMultiHop(states, clientState)
 }
 
+func (s *RelaySet) RandomMultiHop(clientState ClientState) []string {
+	s.mu.RLock()
+	states := make([]RelayState, 0, len(s.relays))
+	for _, state := range s.relays {
+		states = append(states, state)
+	}
+	policy := s.policy
+	s.mu.RUnlock()
+
+	return policy.SelectRandomMultiHop(states, clientState)
+}
+
 func (s *RelaySet) OverlayPeerStates() []RelayState {
 	now := time.Now().UTC()
 	s.mu.RLock()

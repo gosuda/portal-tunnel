@@ -74,7 +74,7 @@ portal expose --name myapp \
 - `--relays` adds explicit relay API URLs for that run. Explicit relays are always kept connected and are not counted against `--max-active-relays`.
 - `--multi-hop` sets one ordered multi-hop relay path for that run.
 - `--multi-hop-depth` automatically selects one multi-hop relay path with that hop count.
-- `--pepper` opts into the optional pepper layer for multi-hop runs. Omit it to keep pepper disabled. `passive` preserves current behavior; `active` is reserved for the future PFS path and currently fails closed.
+- `--pepper` opts into the optional pepper layer for multi-hop runs. Omit it to keep pepper disabled. `passive` preserves current behavior. `active` is fail-closed and only starts with automatic `--multi-hop-depth 2+`, discovery enabled, an ephemeral per-run identity, sufficient system entropy, and randomized bridge entry selection; explicit `--multi-hop` paths and supplied identity JSON are rejected.
 - `--discovery=false` disables the public registry seed list and the runtime relay discovery expansion loop for that run. With `--discovery=false`, only the explicit `--relays` values are used.
 - `--ban-mitm` enables strict rejection when the TLS self-probe detects termination in the path.
 - `--tcp` requests a dedicated TCP port on the relay for raw TCP services that do not use TLS (e.g., Minecraft, game servers).

@@ -10,15 +10,20 @@ This first implementation slice provides:
 
 - fixed-size Pepper cells
 - fail-closed configuration validation
+- active-mode startup gates for entropy, ephemeral identity, and randomized
+  automatic bridge entry selection
 - versioned suite definitions
 - HKDF-based cryptographic domain separation
 - end-to-end AEAD scaffolding
+- X25519 ephemeral key material helpers with mlocked key buffers
 - Reed-Solomon erasure coding
 - receiver-side replay cache
 - paced batch emission
 
-This slice does not yet wire Pepper into the SDK, relay ingress, or existing
-proxy paths.
+This slice does not yet carry Pepper cells through relay ingress or existing
+proxy paths. `--pepper active` therefore enforces admission and teardown policy
+at SDK startup and circuit ownership boundaries, but the full onion cell data
+path remains future work.
 
 ## Hard Invariants
 
@@ -28,6 +33,10 @@ proxy paths.
 4. Bundle and shard metadata are not visible in the outer cell.
 5. Replay protection is receiver-side.
 6. Downgrade behavior must fail closed unless the caller explicitly opted out.
+7. Active mode must not accept explicit static multi-hop paths or supplied
+   identity JSON.
+8. Active mode must block startup when the local entropy pool is below the
+   configured minimum.
 
 ## Outer Wire Format
 
