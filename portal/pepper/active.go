@@ -62,11 +62,11 @@ func RequireEntropy(minBits int) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("%w: read entropy pool: %v", ErrEntropyLow, err)
+		return fmt.Errorf("%w: read entropy pool: %w", ErrEntropyLow, err)
 	}
 	available, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		return fmt.Errorf("%w: parse entropy pool: %v", ErrEntropyLow, err)
+		return fmt.Errorf("%w: parse entropy pool: %w", ErrEntropyLow, err)
 	}
 	if available < minBits {
 		return fmt.Errorf("%w: available=%d required=%d", ErrEntropyLow, available, minBits)
@@ -121,7 +121,7 @@ type EphemeralX25519 struct {
 func NewEphemeralX25519() (*EphemeralX25519, error) {
 	var private [32]byte
 	if _, err := io.ReadFull(rand.Reader, private[:]); err != nil {
-		return nil, fmt.Errorf("%w: generate x25519 key: %v", ErrStaticKeyMaterial, err)
+		return nil, fmt.Errorf("%w: generate x25519 key: %w", ErrStaticKeyMaterial, err)
 	}
 	private[0] &= 248
 	private[31] &= 127
@@ -130,7 +130,7 @@ func NewEphemeralX25519() (*EphemeralX25519, error) {
 	locked, err := NewLockedKey(private[:])
 	Zero(private[:])
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrStaticKeyMaterial, err)
+		return nil, fmt.Errorf("%w: %w", ErrStaticKeyMaterial, err)
 	}
 
 	var public [32]byte
@@ -144,7 +144,7 @@ func NewEphemeralX25519() (*EphemeralX25519, error) {
 		return nil
 	}); err != nil {
 		_ = locked.Close()
-		return nil, fmt.Errorf("%w: derive x25519 public key: %v", ErrStaticKeyMaterial, err)
+		return nil, fmt.Errorf("%w: derive x25519 public key: %w", ErrStaticKeyMaterial, err)
 	}
 	return &EphemeralX25519{private: locked, Public: public}, nil
 }
@@ -164,12 +164,12 @@ func (e *EphemeralX25519) Shared(peerPublic [32]byte, forbiddenPeerPublicKeys ..
 		shared, err = curve25519.X25519(key, peerPublic[:])
 		return err
 	}); err != nil {
-		return nil, fmt.Errorf("%w: derive x25519 shared secret: %v", ErrStaticKeyMaterial, err)
+		return nil, fmt.Errorf("%w: derive x25519 shared secret: %w", ErrStaticKeyMaterial, err)
 	}
 	locked, err := NewLockedKey(shared)
 	Zero(shared)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrStaticKeyMaterial, err)
+		return nil, fmt.Errorf("%w: %w", ErrStaticKeyMaterial, err)
 	}
 	return locked, nil
 }
