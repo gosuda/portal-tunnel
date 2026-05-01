@@ -2,11 +2,14 @@ package sdk
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/pepper"
 )
 
 func mustRelaySet(t *testing.T, relayURLs ...string) *discovery.RelaySet {
@@ -187,5 +190,88 @@ func TestExposeRejectsPepperActiveStaticIdentity(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "ERR_PEPPER_STATIC_IDENTITY") {
 		t.Fatalf("Expose() error = %v, want active static identity validation", err)
+	}
+}
+
+func TestActiveCircuitResetRotatesCircuitWithoutClosingExposure(t *testing.T) {
+	exposure := &Exposure{
+		done:           make(chan struct{}),
+		pepperMode:     PepperModeActive,
+		multiHopDepth:  2,
+		relaySet:       mustRelaySet(t, "https://relay-a.example", "https://relay-b.example"),
+		relayListeners: make(map[string]*listener),
+	}
+	if err := exposure.establishActiveCircuit(false); err != nil {
+		t.Fatalf("establish active circuit: %v", err)
+	}
+	firstID, firstKey, firstPublic, ok := exposure.activeCircuitSnapshot()
+	if !ok {
+		t.Fatal("active circuit missing")
+	}
+	defer pepper.Zero(firstKey)
+
+	exposure.resetActiveCircuit(nil)
+	secondID, secondKey, secondPublic, ok := exposure.activeCircuitSnapshot()
+	if !ok {
+		t.Fatal("active circuit missing after reset")
+	}
+	defer pepper.Zero(secondKey)
+
+	if firstID == secondID {
+		t.Fatal("circuit id did not rotate")
+	}
+	if firstPublic == secondPublic {
+		t.Fatal("x25519 public key did not rotate")
+	}
+	if string(firstKey) == string(secondKey) {
+		t.Fatal("session key did not rotate")
+	}
+	select {
+	case <-exposure.done:
+		t.Fatal("active reset closed exposure")
+	default:
+	}
+
+	if err := exposure.Close(); err != nil {
+		t.Fatalf("close exposure: %v", err)
+	}
+}
+
+func TestActiveBlocksAcceptDuringReset(t *testing.T) {
+	done := make(chan struct{})
+	exposure := &Exposure{
+		done:           done,
+		pepperMode:     PepperModeActive,
+		accepted:       make(chan net.Conn, 1),
+		relayListeners: make(map[string]*listener),
+	}
+	exposure.activeMu.Lock()
+	exposure.activeResetting = true
+	exposure.activeMu.Unlock()
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	exposure.accepted <- left
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := exposure.Accept()
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Accept returned while active circuit was resetting: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(done)
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("Accept returned nil error after close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Accept did not unblock after exposure close")
 	}
 }

@@ -46,6 +46,10 @@ type Exposure struct {
 	listenerMu     sync.RWMutex
 	relayListeners map[string]*listener
 
+	activeMu        sync.RWMutex
+	activeCircuit   *pepper.ActiveCircuit
+	activeResetting bool
+
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
 }
@@ -214,6 +218,13 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		if err := refresher.Refresh(ctx, nil); err != nil {
 			_ = exposure.Close()
 			return nil, fmt.Errorf("discover relays: %w", err)
+		}
+	}
+
+	if cfg.PepperMode == PepperModeActive {
+		if err := exposure.establishActiveCircuit(false); err != nil {
+			_ = exposure.Close()
+			return nil, err
 		}
 	}
 
@@ -401,27 +412,42 @@ func (c *exposureConn) Close() error {
 }
 
 func (e *Exposure) Accept() (net.Conn, error) {
-	select {
-	case <-e.done:
-		return nil, net.ErrClosed
-	case conn := <-e.accepted:
-		if conn == nil {
-			return nil, net.ErrClosed
+	for {
+		if !e.activeCircuitAvailable() {
+			select {
+			case <-e.done:
+				return nil, net.ErrClosed
+			case <-time.After(50 * time.Millisecond):
+				continue
+			}
 		}
 
-		connID := e.connSeq.Add(1)
-		log.Info().
-			Uint64("conn_id", connID).
-			Str("local_addr", conn.LocalAddr().String()).
-			Str("remote_addr", conn.RemoteAddr().String()).
-			Msg("exposure connection accepted")
+		select {
+		case <-e.done:
+			return nil, net.ErrClosed
+		case conn := <-e.accepted:
+			if conn == nil {
+				return nil, net.ErrClosed
+			}
+			if !e.activeCircuitAvailable() {
+				_ = conn.Close()
+				continue
+			}
 
-		return &exposureConn{
-			Conn:       conn,
-			id:         connID,
-			localAddr:  conn.LocalAddr().String(),
-			remoteAddr: conn.RemoteAddr().String(),
-		}, nil
+			connID := e.connSeq.Add(1)
+			log.Info().
+				Uint64("conn_id", connID).
+				Str("local_addr", conn.LocalAddr().String()).
+				Str("remote_addr", conn.RemoteAddr().String()).
+				Msg("exposure connection accepted")
+
+			return &exposureConn{
+				Conn:       conn,
+				id:         connID,
+				localAddr:  conn.LocalAddr().String(),
+				remoteAddr: conn.RemoteAddr().String(),
+			}, nil
+		}
 	}
 }
 
@@ -444,6 +470,12 @@ func (e *Exposure) Close() error {
 				closeErr = errors.Join(closeErr, listener.Close())
 			}
 		}
+		e.activeMu.Lock()
+		activeCircuit := e.activeCircuit
+		e.activeCircuit = nil
+		e.activeResetting = false
+		e.activeMu.Unlock()
+		closeErr = errors.Join(closeErr, activeCircuit.Close())
 
 		event := log.Info().
 			Int("relay_count", len(relayListeners)).
@@ -457,6 +489,106 @@ func (e *Exposure) Close() error {
 		event.Msg("exposure closed")
 	})
 	return closeErr
+}
+
+func (e *Exposure) establishActiveCircuit(reset bool) error {
+	if e.pepperMode != PepperModeActive {
+		return nil
+	}
+	if err := pepper.RequireEntropy(pepper.DefaultMinEntropyBits); err != nil {
+		return err
+	}
+	circuit, err := pepper.NewActiveCircuit()
+	if err != nil {
+		return err
+	}
+
+	e.activeMu.Lock()
+	previous := e.activeCircuit
+	e.activeCircuit = circuit
+	e.activeResetting = false
+	e.activeMu.Unlock()
+	if previous != nil {
+		_ = previous.Close()
+	}
+	if reset {
+		log.Debug().
+			Str("error_code", pepper.ErrCircuitResetIntegrityVoid).
+			Msg("pepper active circuit reset")
+	}
+	return nil
+}
+
+func (e *Exposure) activeCircuitSnapshot() (uint64, []byte, [32]byte, bool) {
+	e.activeMu.RLock()
+	defer e.activeMu.RUnlock()
+	if e.activeCircuit == nil {
+		return 0, nil, [32]byte{}, false
+	}
+	return e.activeCircuit.ID(), e.activeCircuit.SessionKey(), e.activeCircuit.PublicKey(), true
+}
+
+func (e *Exposure) activeCircuitAvailable() bool {
+	if e.pepperMode != PepperModeActive {
+		return true
+	}
+	e.activeMu.RLock()
+	defer e.activeMu.RUnlock()
+	return e.activeCircuit != nil && !e.activeResetting
+}
+
+func (e *Exposure) resetActiveCircuit(failed *listener) {
+	if e.pepperMode != PepperModeActive {
+		return
+	}
+
+	e.activeMu.Lock()
+	if e.activeResetting {
+		e.activeMu.Unlock()
+		return
+	}
+	e.activeResetting = true
+	oldCircuit := e.activeCircuit
+	e.activeCircuit = nil
+	e.activeMu.Unlock()
+
+	log.Warn().
+		Str("error_code", pepper.ErrCircuitResetIntegrityVoid).
+		Msg("pepper active circuit reset required")
+
+	e.listenerMu.Lock()
+	staleListeners := e.relayListeners
+	e.relayListeners = make(map[string]*listener)
+	e.listenerMu.Unlock()
+
+	for relayURL, stale := range staleListeners {
+		if stale == nil {
+			continue
+		}
+		if e.relaySet != nil {
+			e.relaySet.UnconfirmRelayURL(relayURL)
+			e.relaySet.RecordActiveFailure(relayURL, errors.New(pepper.ErrCircuitResetIntegrityVoid), 1)
+		}
+		if err := stale.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Warn().Str("error_code", pepper.ErrCircuitResetIntegrityVoid).Msg("pepper active stale circuit close failed")
+		}
+	}
+	if failed != nil {
+		_ = failed.Close()
+	}
+	_ = oldCircuit.Close()
+
+	if err := e.establishActiveCircuit(true); err != nil {
+		log.Error().
+			Str("error_code", pepper.ErrPFSHandshakeFailed).
+			Msg("pepper active circuit re-handshake failed")
+		return
+	}
+	if err := e.reconcileRelayListeners(false); err != nil {
+		log.Error().
+			Str("error_code", pepper.ErrPFSHandshakeFailed).
+			Msg("pepper active circuit route selection failed")
+	}
 }
 
 func (e *Exposure) runDiscoveryLoop(ctx context.Context) {
@@ -645,11 +777,20 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 		}
 		e.listenerMu.Unlock()
 		if e.pepperMode == PepperModeActive {
-			_ = e.Close()
+			go e.resetActiveCircuit(listener)
 		}
 	}()
 
 	for {
+		if !e.activeCircuitAvailable() {
+			select {
+			case <-e.done:
+				return
+			case <-time.After(50 * time.Millisecond):
+				continue
+			}
+		}
+
 		conn, err := listener.Accept()
 		if err != nil {
 			select {

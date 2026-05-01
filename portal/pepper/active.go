@@ -2,6 +2,7 @@ package pepper
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -15,11 +16,12 @@ import (
 const (
 	DefaultMinEntropyBits = 256
 
-	ErrPFSHandshakeFailed   = "ERR_PFS_HANDSHAKE_FAILED"
-	ErrOnionIntegrityVoid   = "ERR_ONION_INTEGRITY_VOID"
-	ErrPepperEntropyLow     = "ERR_PEPPER_ENTROPY_LOW"
-	ErrPepperStaticEntry    = "ERR_PEPPER_STATIC_ENTRY"
-	ErrPepperStaticIdentity = "ERR_PEPPER_STATIC_IDENTITY"
+	ErrPFSHandshakeFailed        = "ERR_PFS_HANDSHAKE_FAILED"
+	ErrOnionIntegrityVoid        = "ERR_ONION_INTEGRITY_VOID"
+	ErrPepperEntropyLow          = "ERR_PEPPER_ENTROPY_LOW"
+	ErrPepperStaticEntry         = "ERR_PEPPER_STATIC_ENTRY"
+	ErrPepperStaticIdentity      = "ERR_PEPPER_STATIC_IDENTITY"
+	ErrCircuitResetIntegrityVoid = "ERR_CIRCUIT_RESET_INTEGRITY_VOID"
 )
 
 var (
@@ -179,4 +181,95 @@ func (e *EphemeralX25519) Close() error {
 		return nil
 	}
 	return e.private.Close()
+}
+
+type ActiveCircuit struct {
+	id         uint64
+	local      *EphemeralX25519
+	sessionKey *LockedKey
+}
+
+func NewActiveCircuit() (*ActiveCircuit, error) {
+	local, err := NewEphemeralX25519()
+	if err != nil {
+		return nil, err
+	}
+	peer, err := NewEphemeralX25519()
+	if err != nil {
+		_ = local.Close()
+		return nil, err
+	}
+	defer peer.Close()
+
+	shared, err := local.Shared(peer.Public, local.Public)
+	if err != nil {
+		_ = local.Close()
+		return nil, err
+	}
+	defer shared.Close()
+
+	var idBytes [8]byte
+	if _, err := io.ReadFull(rand.Reader, idBytes[:]); err != nil {
+		_ = local.Close()
+		return nil, fmt.Errorf("%w: generate circuit id: %w", ErrStaticKeyMaterial, err)
+	}
+	id := binary.BigEndian.Uint64(idBytes[:])
+	if id == 0 {
+		id = 1
+	}
+
+	var sessionKey *LockedKey
+	if err := shared.WithBytes(func(secret []byte) error {
+		salt := append([]byte(nil), idBytes[:]...)
+		defer Zero(salt)
+		key, err := DeriveKey(secret, salt, LabelOnionHop, 32)
+		if err != nil {
+			return err
+		}
+		defer Zero(key)
+		sessionKey, err = NewLockedKey(key)
+		return err
+	}); err != nil {
+		_ = local.Close()
+		return nil, fmt.Errorf("%w: derive circuit session key: %w", ErrStaticKeyMaterial, err)
+	}
+
+	return &ActiveCircuit{id: id, local: local, sessionKey: sessionKey}, nil
+}
+
+func (c *ActiveCircuit) ID() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.id
+}
+
+func (c *ActiveCircuit) PublicKey() [32]byte {
+	if c == nil || c.local == nil {
+		return [32]byte{}
+	}
+	return c.local.Public
+}
+
+func (c *ActiveCircuit) SessionKey() []byte {
+	if c == nil || c.sessionKey == nil {
+		return nil
+	}
+	var out []byte
+	_ = c.sessionKey.WithBytes(func(key []byte) error {
+		out = append([]byte(nil), key...)
+		return nil
+	})
+	return out
+}
+
+func (c *ActiveCircuit) Close() error {
+	if c == nil {
+		return nil
+	}
+	err := errors.Join(c.sessionKey.Close(), c.local.Close())
+	c.sessionKey = nil
+	c.local = nil
+	c.id = 0
+	return err
 }
