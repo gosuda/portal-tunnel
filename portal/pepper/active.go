@@ -41,10 +41,10 @@ func (p ActivePolicy) Validate() error {
 		minEntropyBits = DefaultMinEntropyBits
 	}
 	switch {
-	case strings.TrimSpace(p.IdentityJSON) != "":
-		return errors.New(ErrPepperStaticIdentity)
 	case len(p.ExplicitPath) > 0:
 		return errors.New(ErrPepperStaticEntry)
+	case strings.TrimSpace(p.IdentityJSON) != "":
+		return errors.New(ErrPepperStaticIdentity)
 	case p.MultiHopDepth < 2:
 		return errors.New("pepper active requires automatic --multi-hop-depth 2+")
 	case !p.Discovery:
