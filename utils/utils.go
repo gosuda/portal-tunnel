@@ -7,9 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/netip"
 	"net/url"
 	"path"
 	"strings"
@@ -474,27 +472,12 @@ func IsLocalRelayHost(host string) bool {
 	return strings.HasSuffix(host, ".localhost")
 }
 
-func AddrString(addr net.Addr) string {
-	if addr == nil {
-		return ""
-	}
-	return addr.String()
-}
-
 func ValidateIPv4(raw string) error {
 	ip := net.ParseIP(strings.TrimSpace(raw))
 	if ip == nil || ip.To4() == nil {
 		return fmt.Errorf("invalid ipv4 address: %q", raw)
 	}
 	return nil
-}
-
-func RandomHex(size int) (string, error) {
-	buf := make([]byte, size)
-	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
-		return "", fmt.Errorf("read random bytes: %w", err)
-	}
-	return hex.EncodeToString(buf), nil
 }
 
 func SleepOrDone(ctx context.Context, d time.Duration) bool {
@@ -514,20 +497,6 @@ func RandomID(prefix string) string {
 		panic(err)
 	}
 	return prefix + hex.EncodeToString(buf)
-}
-
-func NormalizeIPPrefixes(inputs []string) []string {
-	return normalizeUniqueStrings(inputs, func(input string) string {
-		input = strings.TrimSpace(input)
-		if input == "" {
-			return ""
-		}
-		prefix, err := netip.ParsePrefix(input)
-		if err != nil {
-			return ""
-		}
-		return prefix.String()
-	})
 }
 
 func normalizeUniqueStrings(inputs []string, normalize func(string) string) []string {

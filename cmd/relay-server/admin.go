@@ -49,10 +49,7 @@ func (a *adminAuth) ValidateKey(key string) bool {
 }
 
 func (a *adminAuth) CreateSession() (string, error) {
-	token, err := utils.RandomHex(32)
-	if err != nil {
-		return "", err
-	}
+	token := utils.RandomID("")
 
 	a.mu.Lock()
 	defer a.mu.Unlock()

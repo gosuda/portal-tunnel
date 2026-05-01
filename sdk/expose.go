@@ -398,15 +398,15 @@ func (e *Exposure) Accept() (net.Conn, error) {
 		connID := e.connSeq.Add(1)
 		log.Info().
 			Uint64("conn_id", connID).
-			Str("local_addr", utils.AddrString(conn.LocalAddr())).
-			Str("remote_addr", utils.AddrString(conn.RemoteAddr())).
+			Str("local_addr", conn.LocalAddr().String()).
+			Str("remote_addr", conn.RemoteAddr().String()).
 			Msg("exposure connection accepted")
 
 		return &exposureConn{
 			Conn:       conn,
 			id:         connID,
-			localAddr:  utils.AddrString(conn.LocalAddr()),
-			remoteAddr: utils.AddrString(conn.RemoteAddr()),
+			localAddr:  conn.LocalAddr().String(),
+			remoteAddr: conn.RemoteAddr().String(),
 		}, nil
 	}
 }

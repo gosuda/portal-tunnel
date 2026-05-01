@@ -29,19 +29,20 @@ type apiError struct {
 func (e *apiError) Error() string { return e.msg }
 
 var (
-	errFeatureUnavailable      = &apiError{types.APIErrorCodeFeatureUnavailable, "feature unavailable", http.StatusServiceUnavailable}
-	errHostnameConflict        = &apiError{types.APIErrorCodeHostnameConflict, "hostname conflict", http.StatusConflict}
-	errIPBanned                = &apiError{types.APIErrorCodeIPBanned, "request denied because source IP is banned", http.StatusForbidden}
-	errLeaseNotFound           = &apiError{types.APIErrorCodeLeaseNotFound, "lease not found", http.StatusNotFound}
-	errLeaseRejected           = &apiError{types.APIErrorCodeLeaseRejected, "lease is not approved for routing", http.StatusForbidden}
-	errTransportMismatch       = &apiError{types.APIErrorCodeTransportMismatch, "transport mismatch", http.StatusConflict}
-	errUnauthorized            = &apiError{types.APIErrorCodeUnauthorized, "unauthorized", http.StatusForbidden}
-	errUDPDisabled             = &apiError{types.APIErrorCodeUDPDisabled, "udp disabled", http.StatusForbidden}
-	errUDPCapacityExceeded     = &apiError{types.APIErrorCodeUDPCapacityExceeded, "udp capacity exceeded", http.StatusServiceUnavailable}
-	errUDPPortExhausted        = &apiError{types.APIErrorCodeUDPPortExhausted, "no udp ports available", http.StatusServiceUnavailable}
-	errTCPPortDisabled         = &apiError{types.APIErrorCodeTCPPortDisabled, "tcp port disabled", http.StatusForbidden}
-	errTCPPortCapacityExceeded = &apiError{types.APIErrorCodeTCPPortCapacityExceeded, "tcp port capacity exceeded", http.StatusServiceUnavailable}
-	errTCPPortExhausted        = &apiError{types.APIErrorCodeTCPPortExhausted, "no tcp ports available", http.StatusServiceUnavailable}
+	errFeatureUnavailable       = &apiError{types.APIErrorCodeFeatureUnavailable, "feature unavailable", http.StatusServiceUnavailable}
+	errHostnameConflict         = &apiError{types.APIErrorCodeHostnameConflict, "hostname conflict", http.StatusConflict}
+	errIPBanned                 = &apiError{types.APIErrorCodeIPBanned, "request denied because source IP is banned", http.StatusForbidden}
+	errLeaseNotFound            = &apiError{types.APIErrorCodeLeaseNotFound, "lease not found", http.StatusNotFound}
+	errLeaseRejected            = &apiError{types.APIErrorCodeLeaseRejected, "lease is not approved for routing", http.StatusForbidden}
+	errTransportMismatch        = &apiError{types.APIErrorCodeTransportMismatch, "transport mismatch", http.StatusConflict}
+	errUnauthorized             = &apiError{types.APIErrorCodeUnauthorized, "unauthorized", http.StatusForbidden}
+	errUDPDisabled              = &apiError{types.APIErrorCodeUDPDisabled, "udp disabled", http.StatusForbidden}
+	errUDPCapacityExceeded      = &apiError{types.APIErrorCodeUDPCapacityExceeded, "udp capacity exceeded", http.StatusServiceUnavailable}
+	errUDPPortExhausted         = &apiError{types.APIErrorCodeUDPPortExhausted, "no udp ports available", http.StatusServiceUnavailable}
+	errTCPPortDisabled          = &apiError{types.APIErrorCodeTCPPortDisabled, "tcp port disabled", http.StatusForbidden}
+	errTCPPortCapacityExceeded  = &apiError{types.APIErrorCodeTCPPortCapacityExceeded, "tcp port capacity exceeded", http.StatusServiceUnavailable}
+	errTCPPortExhausted         = &apiError{types.APIErrorCodeTCPPortExhausted, "no tcp ports available", http.StatusServiceUnavailable}
+	errRegisterChallengePending = &apiError{types.APIErrorCodeRateLimited, "too many pending register challenges", http.StatusTooManyRequests}
 )
 
 func writeAPIErrorResponse(w http.ResponseWriter, err error) {
@@ -296,7 +297,8 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if _, ok := s.extractAllowedClientIP(w, r); !ok {
+	clientIP, ok := s.extractAllowedClientIP(w, r)
+	if !ok {
 		return
 	}
 
@@ -332,7 +334,7 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resp, err := s.registry.issueRegisterChallenge(req, domain, registerURI)
+	resp, err := s.registry.issueRegisterChallenge(req, domain, registerURI, clientIP)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return

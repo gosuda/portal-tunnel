@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	defaultLeaseTTL             = 30 * time.Second
-	defaultRegisterChallengeTTL = 2 * time.Minute
-	defaultPortReservationGrace = 5 * time.Minute
-	defaultIdleKeepalive        = 15 * time.Second
-	defaultReadyQueueLimit      = 8
+	defaultLeaseTTL                          = 30 * time.Second
+	defaultRegisterChallengeTTL              = 2 * time.Minute
+	defaultRegisterChallengeOutstandingPerIP = 32
+	defaultPortReservationGrace              = 5 * time.Minute
+	defaultIdleKeepalive                     = 15 * time.Second
+	defaultReadyQueueLimit                   = 8
 )
 
 type leaseRegistry struct {
@@ -161,16 +162,10 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		if !r.policy.IsUDPEnabled() {
 			return nil, types.RegisterResponse{}, errUDPDisabled
 		}
-		if max := r.policy.UDPMaxLeases(); max > 0 && r.countDatagramLeases() >= max {
-			return nil, types.RegisterResponse{}, errUDPCapacityExceeded
-		}
 	}
 	if req.TCPEnabled {
 		if !r.policy.IsTCPPortEnabled() {
 			return nil, types.RegisterResponse{}, errTCPPortDisabled
-		}
-		if max := r.policy.TCPPortMaxLeases(); max > 0 && r.countTCPPortLeases() >= max {
-			return nil, types.RegisterResponse{}, errTCPPortCapacityExceeded
 		}
 		if r.proxy == nil {
 			return nil, types.RegisterResponse{}, errors.New("tcp proxy is not available")
@@ -241,21 +236,51 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	replacedIndex := -1
 	r.mu.Lock()
 	now := time.Now()
-	for _, existing := range r.records {
-		if existing == nil || !existing.isPublicEntry() || existing.isExpired(now) {
+	udpLeases := 0
+	tcpLeases := 0
+	for i, existing := range r.records {
+		if existing == nil {
 			continue
 		}
-		if existing.Hostname == hostname && existing.Key() != identityKey {
+		existingKey := existing.Key()
+		if replacedIndex < 0 && existing.stream != nil && existingKey == identityKey {
+			replaced = existing
+			replacedIndex = i
+		}
+		if existing.isExpired(now) {
+			continue
+		}
+		if existingKey != identityKey {
+			if existing.datagram != nil {
+				udpLeases++
+			}
+			if existing.tcpPort != nil {
+				tcpLeases++
+			}
+		}
+		if existing.isPublicEntry() && existing.Hostname == hostname && existingKey != identityKey {
 			r.mu.Unlock()
 			record.Close()
 			return nil, types.RegisterResponse{}, errHostnameConflict
 		}
-	}
-	if hopToken != "" {
-		if existing := r.recordByHopToken(hopToken, now); existing != nil && existing.Key() != identityKey {
+		if hopToken != "" && (existing.isHopMiddle() || existing.isHopExit()) && existing.hopToken == hopToken && existingKey != identityKey {
 			r.mu.Unlock()
 			record.Close()
 			return nil, types.RegisterResponse{}, errors.New("hop token conflict")
+		}
+	}
+	if record.datagram != nil {
+		if max := r.policy.UDPMaxLeases(); max > 0 && udpLeases >= max {
+			r.mu.Unlock()
+			record.Close()
+			return nil, types.RegisterResponse{}, errUDPCapacityExceeded
+		}
+	}
+	if record.tcpPort != nil {
+		if max := r.policy.TCPPortMaxLeases(); max > 0 && tcpLeases >= max {
+			r.mu.Unlock()
+			record.Close()
+			return nil, types.RegisterResponse{}, errTCPPortCapacityExceeded
 		}
 	}
 	for i := 0; i < len(r.records); i++ {
@@ -266,15 +291,8 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			i--
 		}
 	}
-	for i, existing := range r.records {
-		if existing != nil && existing.stream != nil && existing.Key() == identityKey {
-			replaced = existing
-			replacedIndex = i
-			r.policy.ForgetIdentity(identityKey)
-			break
-		}
-	}
 	if replacedIndex >= 0 {
+		r.policy.ForgetIdentity(identityKey)
 		r.records[replacedIndex] = record
 	} else {
 		r.records = append(r.records, record)
@@ -533,7 +551,7 @@ func (r *leaseRegistry) DeleteHopRoute(route *types.HopRoute) *leaseRecord {
 	return deleted
 }
 
-func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string) (types.RegisterChallengeResponse, error) {
+func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeRequest, domain, uri, clientIP string) (types.RegisterChallengeResponse, error) {
 	if strings.TrimSpace(req.HopToken) != "" && (req.UDPEnabled || req.TCPEnabled) {
 		return types.RegisterChallengeResponse{}, errTransportMismatch
 	}
@@ -541,16 +559,10 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 		if !r.policy.IsUDPEnabled() {
 			return types.RegisterChallengeResponse{}, errUDPDisabled
 		}
-		if max := r.policy.UDPMaxLeases(); max > 0 && r.countDatagramLeases() >= max {
-			return types.RegisterChallengeResponse{}, errUDPCapacityExceeded
-		}
 	}
 	if req.TCPEnabled {
 		if !r.policy.IsTCPPortEnabled() {
 			return types.RegisterChallengeResponse{}, errTCPPortDisabled
-		}
-		if max := r.policy.TCPPortMaxLeases(); max > 0 && r.countTCPPortLeases() >= max {
-			return types.RegisterChallengeResponse{}, errTCPPortCapacityExceeded
 		}
 	}
 
@@ -559,13 +571,36 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	if err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}
+	clientIP = strings.ToLower(strings.TrimSpace(clientIP))
+	if clientIP == "" {
+		clientIP = "<unknown>"
+	}
 
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	pending := 0
+	for i := 0; i < len(r.records); {
+		record := r.records[i]
+		if record != nil && record.registerChallenge != nil {
+			if record.isExpired(now) {
+				r.deleteRecord(i)
+				continue
+			}
+			if record.ClientIP == clientIP {
+				pending++
+			}
+		}
+		i++
+	}
+	if pending >= defaultRegisterChallengeOutstandingPerIP {
+		return types.RegisterChallengeResponse{}, errRegisterChallengePending
+	}
 	r.records = append(r.records, &leaseRecord{
 		ExpiresAt:         challenge.ExpiresAt,
+		ClientIP:          clientIP,
 		registerChallenge: challenge,
 	})
-	r.mu.Unlock()
 
 	return types.RegisterChallengeResponse{
 		ChallengeID: challenge.ChallengeID,
@@ -640,34 +675,6 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 		record.Close()
 	}
 	return expired
-}
-
-func (r *leaseRegistry) countDatagramLeases() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	now := time.Now()
-	count := 0
-	for _, record := range r.records {
-		if record != nil && !record.isExpired(now) && record.datagram != nil {
-			count++
-		}
-	}
-	return count
-}
-
-func (r *leaseRegistry) countTCPPortLeases() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	now := time.Now()
-	count := 0
-	for _, record := range r.records {
-		if record != nil && !record.isExpired(now) && record.tcpPort != nil {
-			count++
-		}
-	}
-	return count
 }
 
 func (r *leaseRegistry) PublicLeases(now time.Time) []types.Lease {

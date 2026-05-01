@@ -3,6 +3,7 @@ package portal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -206,6 +207,46 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 	}
 	if _, err := record.stream.Claim(context.Background()); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Claim() after cleanupExpired() error = %v, want %v", err, net.ErrClosed)
+	}
+}
+
+func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	clientIP := "203.0.113.50"
+	for i := 0; i < defaultRegisterChallengeOutstandingPerIP; i++ {
+		_, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{
+			Identity: newTestLeaseIdentity(t, fmt.Sprintf("demo-%d", i)),
+		}, "example.com", "https://example.com/sdk/register", clientIP)
+		if err != nil {
+			t.Fatalf("issueRegisterChallenge(%d) error = %v", i, err)
+		}
+	}
+
+	_, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "overflow"),
+	}, "example.com", "https://example.com/sdk/register", clientIP)
+	if !errors.Is(err, errRegisterChallengePending) {
+		t.Fatalf("issueRegisterChallenge() error = %v, want pending limit", err)
+	}
+
+	expiredAt := time.Now().Add(-time.Second)
+	registry.mu.Lock()
+	for _, record := range registry.records {
+		if record == nil || record.registerChallenge == nil {
+			continue
+		}
+		record.ExpiresAt = expiredAt
+		record.registerChallenge.ExpiresAt = expiredAt
+	}
+	registry.mu.Unlock()
+
+	_, err = registry.issueRegisterChallenge(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "after-cleanup"),
+	}, "example.com", "https://example.com/sdk/register", clientIP)
+	if err != nil {
+		t.Fatalf("issueRegisterChallenge() after expired cleanup error = %v", err)
 	}
 }
 
