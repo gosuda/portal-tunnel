@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -227,7 +228,7 @@ func (s *RelaySet) ConfirmedRelays() []RelayState {
 // eligibility classification, and the scoring parameters used. Prometheus
 // metrics are emitted from the trace before returning, and a sampled zerolog
 // debug entry is written.
-func (s *RelaySet) PriorityRelaysWithTrace(clientState ClientState) ([]string, SelectionTrace) {
+func (s *RelaySet) PriorityRelaysWithTrace(clientState ClientState) ([]string, telemetry.SelectionTrace) {
 	s.mu.RLock()
 	states := make([]RelayState, 0, len(s.relays))
 	for _, state := range s.relays {
@@ -237,7 +238,7 @@ func (s *RelaySet) PriorityRelaysWithTrace(clientState ClientState) ([]string, S
 	s.mu.RUnlock()
 
 	result, trace := policy.SelectPriorityWithTrace(states, clientState)
-	EmitFromTrace(trace)
+	telemetry.EmitFromTrace(trace)
 	log.Debug().
 		Uint8("client_hash", trace.ClientHash).
 		Int("pool_size", trace.PoolTotal).
@@ -262,7 +263,7 @@ func (s *RelaySet) PriorityRelays(clientState ClientState) []string {
 // eligibility classification, and the scoring parameters used. Prometheus
 // metrics are emitted from the trace before returning, and a sampled zerolog
 // debug entry is written.
-func (s *RelaySet) PriorityMultiHopWithTrace(clientState ClientState) ([]string, SelectionTrace) {
+func (s *RelaySet) PriorityMultiHopWithTrace(clientState ClientState) ([]string, telemetry.SelectionTrace) {
 	s.mu.RLock()
 	states := make([]RelayState, 0, len(s.relays))
 	for _, state := range s.relays {
@@ -272,7 +273,7 @@ func (s *RelaySet) PriorityMultiHopWithTrace(clientState ClientState) ([]string,
 	s.mu.RUnlock()
 
 	result, trace := policy.SelectMultiHopWithTrace(states, clientState)
-	EmitFromTrace(trace)
+	telemetry.EmitFromTrace(trace)
 	log.Debug().
 		Uint8("client_hash", trace.ClientHash).
 		Int("pool_size", trace.PoolTotal).

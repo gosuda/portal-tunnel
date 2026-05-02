@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 )
 
 // TestGF64MulIdentity checks that multiplying any element by 1 is the identity.
@@ -624,7 +626,7 @@ type selectionCase struct {
 
 // assertByteEqual verifies that legacy and withTrace slices are identical and
 // that trace.OutputURLs matches legacy.  It also checks mode and PoolTotal.
-func assertByteEqual(t *testing.T, mode string, states []RelayState, legacy []string, withTrace []string, trace SelectionTrace) {
+func assertByteEqual(t *testing.T, mode string, states []RelayState, legacy []string, withTrace []string, trace telemetry.SelectionTrace) {
 	t.Helper()
 	if len(legacy) != len(withTrace) {
 		t.Fatalf("return-value length mismatch: legacy=%d withTrace=%d", len(legacy), len(withTrace))

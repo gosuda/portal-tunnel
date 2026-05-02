@@ -1,4 +1,4 @@
-package discovery
+package telemetry_test
 
 import (
 	"errors"
@@ -9,6 +9,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 )
 
 // metricFamilyByName gathers all metric families and returns the one with the
@@ -91,14 +92,14 @@ func TestMetricsRegistryPresence(t *testing.T) {
 		collector prometheus.Collector
 		typ       dto.MetricType
 	}{
-		{"portal_discovery_relay_selected_total", RelaySelectedTotal, dto.MetricType_COUNTER},
-		{"portal_discovery_relay_pool_size", RelayPoolSize, dto.MetricType_GAUGE},
-		{"portal_discovery_rtt_seconds", RTTSeconds, dto.MetricType_HISTOGRAM},
-		{"portal_discovery_active_tunnels_per_relay", ActiveTunnelsPerRelay, dto.MetricType_GAUGE},
-		{"portal_discovery_selection_duration_seconds", SelectionDurationSeconds, dto.MetricType_HISTOGRAM},
-		{"portal_discovery_selection_skipped_total", SelectionSkippedTotal, dto.MetricType_COUNTER},
-		{"portal_discovery_failures_total", FailuresTotal, dto.MetricType_COUNTER},
-		{"portal_discovery_congestion_mode", CongestionMode, dto.MetricType_GAUGE},
+		{"portal_discovery_relay_selected_total", telemetry.RelaySelectedTotal, dto.MetricType_COUNTER},
+		{"portal_discovery_relay_pool_size", telemetry.RelayPoolSize, dto.MetricType_GAUGE},
+		{"portal_discovery_rtt_seconds", telemetry.RTTSeconds, dto.MetricType_HISTOGRAM},
+		{"portal_discovery_active_tunnels_per_relay", telemetry.ActiveTunnelsPerRelay, dto.MetricType_GAUGE},
+		{"portal_discovery_selection_duration_seconds", telemetry.SelectionDurationSeconds, dto.MetricType_HISTOGRAM},
+		{"portal_discovery_selection_skipped_total", telemetry.SelectionSkippedTotal, dto.MetricType_COUNTER},
+		{"portal_discovery_failures_total", telemetry.FailuresTotal, dto.MetricType_COUNTER},
+		{"portal_discovery_congestion_mode", telemetry.CongestionMode, dto.MetricType_GAUGE},
 	}
 
 	for _, tc := range want {
@@ -163,7 +164,7 @@ func TestEmitFromTrace_CounterIncrement(t *testing.T) {
 	}
 	baseDur := durationSampleCount()
 
-	EmitFromTrace(SelectionTrace{
+	telemetry.EmitFromTrace(telemetry.SelectionTrace{
 		OutputURLs:    []string{r1, r2},
 		SelectionTook: 50 * time.Millisecond,
 		Congested:     false,
@@ -200,7 +201,7 @@ func TestEmitFromTrace_CounterIncrement(t *testing.T) {
 //
 // URLs are namespaced as "t-cap-NNN" to isolate them from other tests.
 func TestEmitFromTrace_CardinalityCap(t *testing.T) {
-	const total = maxRelayLabelCardinality + 1 // 65
+	const total = telemetry.MaxRelayLabelCardinality + 1 // 65
 
 	// Build the set of our namespace URLs.
 	ourURLs := make(map[string]struct{}, total)
@@ -236,7 +237,7 @@ func TestEmitFromTrace_CardinalityCap(t *testing.T) {
 
 	for i := 0; i < total; i++ {
 		url := fmt.Sprintf("t-cap-%03d", i)
-		EmitFromTrace(SelectionTrace{
+		telemetry.EmitFromTrace(telemetry.SelectionTrace{
 			OutputURLs:    []string{url},
 			SelectionTook: time.Millisecond,
 		})
@@ -277,8 +278,8 @@ func TestEmitFromTrace_CardinalityCap(t *testing.T) {
 	}
 
 	// Assert: admitted URL count never exceeds the cap.
-	if len(admittedOurs) > maxRelayLabelCardinality {
-		t.Errorf("admitted our-namespace relays: want <=%d, got %d", maxRelayLabelCardinality, len(admittedOurs))
+	if len(admittedOurs) > telemetry.MaxRelayLabelCardinality {
+		t.Errorf("admitted our-namespace relays: want <=%d, got %d", telemetry.MaxRelayLabelCardinality, len(admittedOurs))
 	}
 }
 

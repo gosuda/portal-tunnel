@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -624,11 +625,11 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 			return
 		}
 
-		discovery.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Inc()
+		telemetry.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Inc()
 		wrappedConn := &tunnelCounterConn{
 			Conn: conn,
 			decr: func() {
-				discovery.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Dec()
+				telemetry.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Dec()
 			},
 		}
 

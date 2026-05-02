@@ -44,6 +44,8 @@ import (
 	"slices"
 	"sort"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 )
 
 const (
@@ -308,11 +310,11 @@ func (p MOLSRelayPolicy) rankRelayPool(autoPool []RelayState, localAddress strin
 // processing. Explicit relays are not included in Ranked (they bypass MOLS
 // scoring entirely). PoolFallback reflects the fallback count before the
 // minimum-active-node promotion step.
-func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace) {
+func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientState) ([]string, telemetry.SelectionTrace) {
 	start := time.Now()
 	now := start.UTC()
 
-	trace := SelectionTrace{
+	trace := telemetry.SelectionTrace{
 		Timestamp:  start,
 		ClientHash: hashToGF64(cs.LocalAddress),
 		Mode:       "priority",
@@ -433,7 +435,7 @@ func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientS
 		} else {
 			score = molsScore(ingressIdx, candidateIdx, m1, m2)
 		}
-		trace.Ranked = append(trace.Ranked, TraceEntry{
+		trace.Ranked = append(trace.Ranked, telemetry.TraceEntry{
 			URL:       state.Descriptor.APIHTTPSAddr,
 			Score:     score,
 			Confirmed: state.Confirmed,
@@ -472,11 +474,11 @@ func (p MOLSRelayPolicy) SelectPriority(states []RelayState, clientState ClientS
 // peer, UDP/TCP mismatch, suppressed, banned) are recorded in
 // SelectionTrace.Suppressed / Reasons. PoolFallback reflects the fallback count
 // before the minimum-active-node promotion step.
-func (p MOLSRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientState) ([]string, SelectionTrace) {
+func (p MOLSRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientState) ([]string, telemetry.SelectionTrace) {
 	start := time.Now()
 	now := start.UTC()
 
-	trace := SelectionTrace{
+	trace := telemetry.SelectionTrace{
 		Timestamp:  start,
 		ClientHash: hashToGF64(cs.LocalAddress),
 		Mode:       "multihop",
@@ -592,7 +594,7 @@ func (p MOLSRelayPolicy) SelectMultiHopWithTrace(states []RelayState, cs ClientS
 		} else {
 			score = molsScore(ingressIdx, candidateIdx, m1, m2)
 		}
-		trace.Ranked = append(trace.Ranked, TraceEntry{
+		trace.Ranked = append(trace.Ranked, telemetry.TraceEntry{
 			URL:       state.Descriptor.APIHTTPSAddr,
 			Score:     score,
 			Confirmed: state.Confirmed,
