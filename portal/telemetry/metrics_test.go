@@ -8,8 +8,8 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // metricFamilyByName gathers all metric families and returns the one with the

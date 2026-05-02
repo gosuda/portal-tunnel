@@ -16,4 +16,3 @@ package discovery
 //
 // See /home/alpha/.claude/plans/sophisticate-and-rationalize-discovery-rosy-parnas.md
 // (Phase 1 — Telemetry only) for the rationale.
-
