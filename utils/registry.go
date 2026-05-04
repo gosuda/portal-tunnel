@@ -58,12 +58,12 @@ func ResolveDiscoveryBootstraps(ctx context.Context, stateDir string, explicit [
 	return bootstraps, nil
 }
 
-func ResolvePortalRelayURLs(ctx context.Context, explicit []string, includeDefaults bool) ([]string, error) {
+func ResolvePortalRelayURLs(ctx context.Context, explicit []string, fetchRegistry bool) ([]string, error) {
 	explicit, err := NormalizeRelayURLs(explicit...)
 	if err != nil {
 		return nil, err
 	}
-	if !includeDefaults {
+	if !fetchRegistry {
 		return explicit, nil
 	}
 
