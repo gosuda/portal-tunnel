@@ -32,11 +32,9 @@ func tempIdentityPath(t *testing.T) string {
 
 func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *http.Client {
 	t.Helper()
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+	client := utils.NewHTTPClient(
+		utils.WithHTTPTLSConfig(&tls.Config{InsecureSkipVerify: true}),
+	)
 	t.Cleanup(func() {
 		client.CloseIdleConnections()
 		cancel()
@@ -169,6 +167,45 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 
 	if signResp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /v1/sign status = %d, want %d", signResp.StatusCode, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestServerStartEnablesPProfOnSeparateHTTPListener(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL:       "https://localhost:4017",
+		IdentityPath:    tempIdentityPath(t),
+		ACME:            acme.Config{KeyDir: t.TempDir()},
+		APIListenAddr:   "127.0.0.1:0",
+		SNIListenAddr:   "127.0.0.1:0",
+		PProfEnabled:    true,
+		PProfListenAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := server.Start(ctx, nil); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	client := newTestClient(t, cancel, server)
+	if server.pprofListener == nil {
+		t.Fatal("pprofListener = nil, want listener")
+	}
+
+	resp, err := client.Get("http://" + utils.HostPortOrLoopback(server.pprofListener.Addr().String()) + "/debug/pprof/")
+	if err != nil {
+		t.Fatalf("GET /debug/pprof/ error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /debug/pprof/ status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
 

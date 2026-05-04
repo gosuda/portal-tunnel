@@ -58,6 +58,13 @@ The relay server (`relay-server`) reads configuration from environment variables
 |----------|---------|------|-------------|
 | `HEADLESS_SHELL_URL` | `""` | string | Headless Chrome CDP WebSocket URL for thumbnail generation (e.g. `ws://headless-shell:9222`) |
 
+### Diagnostics
+
+| Variable | Default | Type | Description |
+|----------|---------|------|-------------|
+| `PPROF_ENABLED` | `false` | bool | Enable the relay pprof diagnostics HTTP server |
+| `PPROF_ADDR` | `127.0.0.1:6060` | string | pprof listen address when enabled; keep it on loopback unless the port is protected |
+
 ### Cloudflare
 
 | Variable | Default | Type | Description |
@@ -142,6 +149,71 @@ The `portal list` subcommand accepts the following flags:
 ---
 
 ## Configuration Files
+
+### `config.toml`
+
+`portal agent run` reads the platform default `config.toml` and starts one managed process for all declared tunnels. Relative paths are resolved from the config file directory.
+If the file is missing, `portal agent run` creates a default config and the agent creates the identity file on first tunnel start.
+
+Default paths:
+
+| OS | Config | Default identity |
+|----|--------|------------------|
+| Linux user | `$XDG_CONFIG_HOME/portal-tunnel/agent/config.toml` or `~/.config/portal-tunnel/agent/config.toml` | `$XDG_DATA_HOME/portal-tunnel/agent/identity.json` or `~/.local/share/portal-tunnel/agent/identity.json` |
+| Linux root | `/etc/portal-tunnel/agent/config.toml` | `/var/lib/portal-tunnel/agent/identity.json` |
+| macOS user | `~/Library/Application Support/Portal Tunnel/Agent/config.toml` | `~/Library/Application Support/Portal Tunnel/Agent/identity.json` |
+| macOS root | `/Library/Application Support/Portal Tunnel/Agent/config.toml` | `/Library/Application Support/Portal Tunnel/Agent/identity.json` |
+| Windows | `%ProgramData%\Portal Tunnel\Agent\config.toml` | `%ProgramData%\Portal Tunnel\Agent\identity.json` |
+
+```toml
+[agent]
+control_addr = "127.0.0.1:4018"
+service_name = "portal-agent"
+
+[[tunnels]]
+id = "web"
+name = "myapp"
+target = "127.0.0.1:3000"
+relays = ["https://portal.example.com"]
+discovery = false
+description = "Managed web tunnel"
+tags = ["web"]
+
+[[tunnels]]
+id = "frontend-api"
+name = "myapp"
+
+[[tunnels.http_routes]]
+prefix = "/api"
+upstream = "http://127.0.0.1:3001"
+
+[[tunnels.http_routes]]
+prefix = "/"
+upstream = "http://127.0.0.1:5173"
+```
+
+Agent fields:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `state_dir` | Platform default state directory | Stores the local control endpoint token and runtime state |
+| `control_addr` | `127.0.0.1:4018` | Loopback-only local control API address |
+| `service_name` | `portal-agent` | OS service name |
+
+Tunnel fields mirror `portal expose` flags:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Stable tunnel ID used by the agent dashboard |
+| `target` | string | Local TCP target, equivalent to the `portal expose <target>` argument |
+| `http_routes` | table array | HTTP route mappings; cannot be combined with `target` or `udp` |
+| `relays` | string array | Explicit relay API URLs |
+| `discovery` | bool | Include registry and relay discovery expansion |
+| `multi_hop` | string array | Ordered multi-hop relay path |
+| `multi_hop_depth` | int | Automatically select one multi-hop route with this depth |
+| `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
+| `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
+| `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
 
 ### `identity.json`
 

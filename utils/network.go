@@ -49,7 +49,7 @@ func resolvePublicIP(ctx context.Context, totalTimeout, attemptTimeout time.Dura
 	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
 	defer cancel()
 
-	client := &http.Client{}
+	client := DefaultHTTPClient
 	headers := http.Header{"User-Agent": []string{"portal-tunnel"}}
 	var lastErr error
 
@@ -125,7 +125,7 @@ func SanitizeReportedIP(raw string) string {
 // FetchRelayVersion calls GET /sdk/domain on a relay and returns its release version.
 // Returns an empty string on any error (timeout, unreachable, bad response).
 func FetchRelayVersion(ctx context.Context, relayURL string) string {
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := NewHTTPClient(WithHTTPTimeout(3 * time.Second))
 	resp, err := httpDo(ctx, client, http.MethodGet, relayURL+types.PathSDKDomain, nil, nil)
 	if err != nil {
 		return ""
@@ -150,7 +150,7 @@ func ResolvePortalRelayURLs(ctx context.Context, explicit []string, includeDefau
 		return explicit, nil
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := NewHTTPClient(WithHTTPTimeout(3 * time.Second))
 	var registry struct {
 		Relays []string `json:"relays"`
 	}

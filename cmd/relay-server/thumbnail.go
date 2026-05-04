@@ -14,7 +14,11 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
+
+var thumbnailHTTPClient = utils.NewHTTPClient(utils.WithHTTPTimeout(5 * time.Second))
 
 const (
 	thumbnailViewportWidth  = 1280
@@ -153,7 +157,7 @@ func (s *thumbnailService) resolveCDPWebSocketURL() (string, error) {
 	}
 	req.Host = "127.0.0.1" // headless-shell rejects non-IP Host headers
 
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := thumbnailHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("query /json/version: %w", err)
 	}

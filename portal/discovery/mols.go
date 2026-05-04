@@ -322,6 +322,9 @@ func (p MOLSRelayPolicy) SelectPriority(states []RelayState, clientState ClientS
 			explicit = append(explicit, relayURL)
 			continue
 		}
+		if slices.Contains(clientState.SuppressedRelayURLs, relayURL) {
+			continue
+		}
 
 		if state.hasObservedDescriptor() {
 			if !state.Descriptor.ExpiresAt.After(now) {
@@ -364,6 +367,9 @@ func (p MOLSRelayPolicy) SelectMultiHop(states []RelayState, clientState ClientS
 	now := time.Now().UTC()
 	autoPool := make([]RelayState, 0, len(selected))
 	for _, state := range selected {
+		if slices.Contains(clientState.SuppressedRelayURLs, state.Descriptor.APIHTTPSAddr) {
+			continue
+		}
 		if clientState.RequireUDP && state.hasObservedDescriptor() && !state.Descriptor.SupportsUDP {
 			continue
 		}

@@ -25,6 +25,7 @@ func main() {
 	log.Logger = log.Output(zerolog.NewConsoleWriter())
 	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
 		"expose": runExposeCommand,
+		"agent":  runAgentCommand,
 		"list":   runListCommand,
 		"update": runUpdateCommand,
 		"version": func(args []string) error {
@@ -33,6 +34,7 @@ func main() {
 		},
 		"help": utils.MakeHelpCommand(printRootUsage, []utils.HelpTopic{
 			{Name: "expose", Usage: printExposeUsage},
+			{Name: "agent", Usage: printAgentUsage},
 			{Name: "list", Usage: printListUsage},
 			{Name: "update", Usage: printUpdateUsage},
 		}),
@@ -169,7 +171,7 @@ func runExposeCommand(args []string) error {
 		defer exposure.Close()
 		return exposure.RunHTTPRoutes(ctx, httpRoutes, "")
 	}
-	return proxyExposure(ctx, exposure)
+	return sdk.ProxyExposure(ctx, exposure)
 }
 
 func runUpdateCommand(args []string) error {
@@ -262,6 +264,9 @@ func printRootUsage(w io.Writer) {
 		[]string{
 			"portal expose [flags] <target>",
 			"portal expose [flags] --http-route PATH=UPSTREAM [--http-route PATH=UPSTREAM]",
+			"portal agent run [flags]",
+			"portal agent dashboard [flags]",
+			"portal agent stop [flags]",
 			"portal list [flags]",
 			"portal update [flags]",
 			"portal version",
@@ -270,6 +275,9 @@ func printRootUsage(w io.Writer) {
 			"portal expose 3000",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
+			"portal agent run",
+			"portal agent dashboard",
+			"portal agent stop",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal list",
 			"portal update",
@@ -318,7 +326,7 @@ func printUpdateUsage(w io.Writer) {
 		},
 		[]string{
 			"portal update",
-			"portal update --version v2.1.7",
+			"portal update --version v2.1.9",
 		},
 	)
 }

@@ -259,6 +259,7 @@ func (l *listener) Close() error {
 type listenerLease struct {
 	hostname      string
 	udpAddr       string
+	tcpAddr       string
 	accessToken   string
 	expiresAt     time.Time
 	sniPort       int
@@ -773,6 +774,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	next := &listenerLease{
 		hostname:      resp.Hostname,
 		udpAddr:       resp.UDPAddr,
+		tcpAddr:       resp.TCPAddr,
 		accessToken:   resp.AccessToken,
 		expiresAt:     resp.ExpiresAt,
 		publicURLBase: publicURLBase,

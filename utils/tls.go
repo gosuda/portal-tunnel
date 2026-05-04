@@ -45,13 +45,11 @@ func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Durat
 		RootCAs:    rootCAs,
 		NextProtos: []string{"http/1.1"},
 	}
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig:   rawTLSConfig.Clone(),
-			ForceAttemptHTTP2: false,
-		},
-		Timeout: timeout,
-	}
+	httpClient := NewHTTPClient(
+		WithHTTPTLSConfig(rawTLSConfig), // will be cloned internally
+		WithoutHTTP2(),
+		WithHTTPTimeout(timeout),
+	)
 	return rawTLSConfig, httpClient, nil
 }
 

@@ -110,6 +110,54 @@ Flags:
 - `--relays` adds explicit relay URLs, and `--default-relays=false` disables the public registry list for the current listing run.
 - Unlike `portal expose`, `portal list` does not run the relay discovery expansion loop. It only resolves the registry seed list plus explicit `--relays` values.
 
+### `portal agent run [flags]`
+
+Runs Portal as a managed long-lived tunnel agent.
+
+- `portal agent run` reads the platform default config path, installs or updates the OS service, and opens the dashboard when run from an interactive terminal.
+- `portal agent run --config config.toml --foreground` runs the agent in the current terminal and opens the dashboard when the terminal is interactive.
+- `portal agent dashboard` attaches to an already running agent.
+- The service process owns multiple tunnel definitions from one `config.toml`.
+- The local control API is bound to loopback and authenticated with a token stored in the agent state directory.
+- `portal agent dashboard` opens the mouse-capable local TUI for tunnel add/delete, per-tunnel relay add/delete/listing, and multi-hop route changes.
+- `portal agent stop` asks the local agent to shut down, then disables/stops the OS service so intentional shutdown is not immediately restarted.
+- If the config file is missing, `portal agent run` creates a default config and the agent creates the identity file on first tunnel start.
+
+Default paths:
+
+| OS | Config | Default identity |
+|----|--------|------------------|
+| Linux user | `$XDG_CONFIG_HOME/portal-tunnel/agent/config.toml` or `~/.config/portal-tunnel/agent/config.toml` | `$XDG_DATA_HOME/portal-tunnel/agent/identity.json` or `~/.local/share/portal-tunnel/agent/identity.json` |
+| Linux root | `/etc/portal-tunnel/agent/config.toml` | `/var/lib/portal-tunnel/agent/identity.json` |
+| macOS user | `~/Library/Application Support/Portal Tunnel/Agent/config.toml` | `~/Library/Application Support/Portal Tunnel/Agent/identity.json` |
+| macOS root | `/Library/Application Support/Portal Tunnel/Agent/config.toml` | `/Library/Application Support/Portal Tunnel/Agent/identity.json` |
+| Windows | `%ProgramData%\Portal Tunnel\Agent\config.toml` | `%ProgramData%\Portal Tunnel\Agent\identity.json` |
+
+Example `config.toml`:
+
+```toml
+[agent]
+control_addr = "127.0.0.1:4018"
+service_name = "portal-agent"
+
+[[tunnels]]
+id = "web"
+name = "myapp"
+target = "127.0.0.1:3000"
+relays = ["https://portal.example.com"]
+discovery = false
+description = "Managed web tunnel"
+tags = ["web"]
+```
+
+Runtime controls:
+
+```text
+portal agent run
+portal agent dashboard
+portal agent stop
+```
+
 Legacy execution compatibility has been removed:
 
 - Use `portal expose ...` explicitly; bare `portal [flags]` is no longer accepted.

@@ -35,16 +35,14 @@ type Refresher struct {
 func NewRefresher(relaySet *RelaySet, overlay OverlayRuntime) *Refresher {
 	return &Refresher{
 		relaySet: relaySet,
-		httpClient: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					MinVersion: tls.VersionTLS12,
-					NextProtos: []string{"http/1.1"},
-				},
-				ForceAttemptHTTP2: false,
-			},
-			Timeout: defaultRequestTimeout,
-		},
+		httpClient: utils.NewHTTPClient(
+			utils.WithHTTPTLSConfig(&tls.Config{
+				MinVersion: tls.VersionTLS12,
+				NextProtos: []string{"http/1.1"},
+			}),
+			utils.WithoutHTTP2(),
+			utils.WithHTTPTimeout(defaultRequestTimeout),
+		),
 		overlay:                overlay,
 		directRecoveryFailures: defaultRecoveryFailures,
 		lastAnnounceSuccess:    make(map[string]bool),
@@ -78,17 +76,6 @@ func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDesc
 		ProtocolVersion: types.DiscoveryVersion,
 		Descriptor:      descriptor,
 	}
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				NextProtos: []string{"http/1.1"},
-			},
-			ForceAttemptHTTP2: false,
-		},
-		Timeout: defaultRequestTimeout,
-	}
-	defer httpClient.CloseIdleConnections()
 
 	for _, relayURL := range r.relaySet.BootstrapRelayURLs() {
 		if relayURL == descriptor.APIHTTPSAddr {
@@ -105,7 +92,7 @@ func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDesc
 			continue
 		}
 
-		if err := utils.HTTPDoAPIPath(ctx, httpClient, baseURL, http.MethodPost, types.PathDiscoveryAnnounce, req, nil, nil); err != nil {
+		if err := utils.HTTPDoAPIPath(ctx, r.httpClient, baseURL, http.MethodPost, types.PathDiscoveryAnnounce, req, nil, nil); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}

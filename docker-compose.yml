@@ -21,6 +21,8 @@ services:
       # - "${SNI_PORT:-443}:${SNI_PORT:-443}/udp"
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}"
+      # Uncomment with PPROF_ENABLED=true and PPROF_ADDR=:6060 to inspect pprof from the host.
+      # - "${PPROF_PORT:-6060}:${PPROF_PORT:-6060}"
     environment:
       # Public routing, discovery, and relay identity persistence
       PORTAL_URL: ${PORTAL_URL:-https://localhost:${API_PORT:-4017}}
@@ -46,6 +48,10 @@ services:
 
       # Optional: auto-generated thumbnails (requires headless-shell sidecar above)
       # HEADLESS_SHELL_URL: ${HEADLESS_SHELL_URL:-ws://headless-shell:9222}
+
+      # Optional diagnostics; keep loopback unless the pprof port is protected.
+      PPROF_ENABLED: ${PPROF_ENABLED:-false}
+      PPROF_ADDR: ${PPROF_ADDR:-127.0.0.1:6060}
 
       # TLS/ACME materials
       ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-}

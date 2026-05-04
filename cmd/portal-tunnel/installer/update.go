@@ -15,9 +15,19 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const updateCheckInterval = 24 * time.Hour
+
+var updateCheckClient = utils.NewHTTPClient(
+	utils.WithHTTPTimeout(10*time.Second),
+	utils.WithHTTPCheckRedirect(func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}),
+)
+
+var updateDownloadClient = utils.NewHTTPClient(utils.WithHTTPTimeout(120 * time.Second))
 
 func StartUpdateCheck(currentVersion string) {
 	binURL, _, ok := assetURLs("")
@@ -27,16 +37,9 @@ func StartUpdateCheck(currentVersion string) {
 
 	go func() {
 		for {
-			client := &http.Client{
-				Timeout: 10 * time.Second,
-				CheckRedirect: func(req *http.Request, via []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
-			}
-
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodHead, binURL, nil)
 			if err == nil {
-				resp, err := client.Do(req)
+				resp, err := updateCheckClient.Do(req)
 				if err == nil {
 					location := resp.Header.Get("Location")
 					_ = resp.Body.Close()
@@ -79,14 +82,12 @@ func UpdateCurrentBinary(version string) error {
 	}
 	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
-	client := &http.Client{Timeout: 120 * time.Second}
-
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, binURL, nil)
 	if err != nil {
 		_ = tmpFile.Close()
 		return fmt.Errorf("failed to build binary request: %w", err)
 	}
-	resp, err := client.Do(req)
+	resp, err := updateDownloadClient.Do(req)
 	if err != nil {
 		_ = tmpFile.Close()
 		return fmt.Errorf("failed to download binary: %w", err)
@@ -115,7 +116,7 @@ func UpdateCurrentBinary(version string) error {
 	if err != nil {
 		return fmt.Errorf("failed to build checksum request: %w", err)
 	}
-	resp, err = client.Do(req)
+	resp, err = updateDownloadClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download checksum: %w", err)
 	}

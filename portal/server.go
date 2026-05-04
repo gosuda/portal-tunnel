@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ const (
 	defaultClientHelloWait  = 2 * time.Second
 	defaultControlBodyLimit = 4 << 20
 	defaultHopOpenRetryWait = 250 * time.Millisecond
+	DefaultPProfListenAddr  = "127.0.0.1:6060"
 )
 
 type ServerConfig struct {
@@ -51,6 +53,8 @@ type ServerConfig struct {
 	TCPEnabled        bool
 	MinPort           int
 	MaxPort           int
+	PProfEnabled      bool
+	PProfListenAddr   string
 	ACME              acme.Config
 }
 
@@ -82,6 +86,9 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.WireGuardPort = utils.IntOrDefault(cfg.WireGuardPort, overlay.DefaultListenPort)
 	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
+	if cfg.PProfEnabled {
+		cfg.PProfListenAddr = utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
+	}
 
 	hasPortRange := cfg.MinPort > 0 && cfg.MaxPort > 0
 	if cfg.UDPEnabled || cfg.TCPEnabled {
@@ -110,11 +117,13 @@ type Server struct {
 	acmeManager *acme.Manager
 	proxy       proxy
 
-	apiListener  net.Listener
-	sniListener  net.Listener
-	apiServer    *http.Server
-	apiTLSClose  io.Closer
-	quicBackhaul *quic.Listener
+	apiListener   net.Listener
+	sniListener   net.Listener
+	apiServer     *http.Server
+	apiTLSClose   io.Closer
+	pprofListener net.Listener
+	pprofServer   *http.Server
+	quicBackhaul  *quic.Listener
 
 	overlay         *overlay.Overlay
 	hopMux          *overlay.HopMux
@@ -173,6 +182,8 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	var sniListener net.Listener
 	var apiServer *http.Server
 	var apiCloser io.Closer
+	var pprofListener net.Listener
+	var pprofServer *http.Server
 	var hopMux *overlay.HopMux
 	var ov *overlay.Overlay
 	var quicBackhaul *quic.Listener
@@ -189,6 +200,12 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		}
 		if apiServer != nil {
 			_ = apiServer.Close()
+		}
+		if pprofServer != nil {
+			_ = pprofServer.Close()
+		}
+		if pprofListener != nil {
+			_ = pprofListener.Close()
 		}
 		if apiCloser != nil {
 			_ = apiCloser.Close()
@@ -217,6 +234,22 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	if err != nil {
 		return err
 	}
+	if s.cfg.PProfEnabled {
+		pprofListener, err = listenConfig.Listen(serverCtx, "tcp", s.cfg.PProfListenAddr)
+		if err != nil {
+			return fmt.Errorf("listen pprof: %w", err)
+		}
+		pprofMux := http.NewServeMux()
+		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		pprofServer = &http.Server{
+			Handler:           pprofMux,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+	}
 
 	if s.relaySet != nil && strings.TrimSpace(s.identity.WireGuardPrivateKey) != "" {
 		ov, err = s.startOverlay()
@@ -240,6 +273,8 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.sniListener = sniListener
 	s.apiServer = apiServer
 	s.apiTLSClose = apiCloser
+	s.pprofListener = pprofListener
+	s.pprofServer = pprofServer
 	s.acmeManager = acmeManager
 	s.cancel = cancel
 	s.group = group
@@ -249,6 +284,9 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	started = true
 
 	group.Go(s.runAPIServer)
+	if s.pprofServer != nil {
+		group.Go(s.runPProfServer)
+	}
 	group.Go(func() error { return s.runPublicIngress(groupCtx) })
 	if s.overlay != nil {
 		group.Go(s.overlay.Serve)
@@ -282,7 +320,11 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		Bool("wireguard_enabled", s.overlay != nil).
 		Bool("multihop_enabled", s.hopMux != nil).
 		Bool("udp_enabled", s.quicBackhaul != nil).
-		Bool("tcp_enabled", s.cfg.TCPEnabled)
+		Bool("tcp_enabled", s.cfg.TCPEnabled).
+		Bool("pprof_enabled", s.pprofServer != nil)
+	if s.pprofListener != nil {
+		logEvent = logEvent.Str("pprof_addr", utils.HostPortOrLoopback(s.pprofListener.Addr().String()))
+	}
 	if s.quicBackhaul != nil {
 		logEvent = logEvent.Str("internal_quic_backhaul_addr", s.quicBackhaul.Addr().String())
 	}
@@ -361,6 +403,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 				shutdownErr = err
 			}
 		}
+		if s.pprofServer != nil {
+			if err := s.pprofServer.Shutdown(ctx); err != nil && shutdownErr == nil {
+				shutdownErr = err
+			}
+		}
 		if s.hopMux != nil {
 			if err := s.hopMux.Close(); err != nil && shutdownErr == nil && !errors.Is(err, net.ErrClosed) {
 				shutdownErr = err
@@ -412,6 +459,14 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 
 func (s *Server) runAPIServer() error {
 	err := s.apiServer.Serve(s.apiListener)
+	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
+func (s *Server) runPProfServer() error {
+	err := s.pprofServer.Serve(s.pprofListener)
 	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 		return nil
 	}

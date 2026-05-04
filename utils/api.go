@@ -73,7 +73,7 @@ func ResolveAPIURL(baseURL *url.URL, path string) *url.URL {
 
 func httpDo(ctx context.Context, client *http.Client, method, rawURL string, body io.Reader, headers http.Header) (*http.Response, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = DefaultHTTPClient
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)

@@ -47,6 +47,8 @@ type relayServerConfig struct {
 	MaxPort            int
 	LandingPageEnabled bool
 	HeadlessShellURL   string
+	PProfEnabled       bool
+	PProfAddr          string
 
 	ACMEDNSProvider    string
 	ENSGaslessEnabled  bool
@@ -83,6 +85,8 @@ func runServeCommand(args []string) error {
 
 	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "enable landing page by default when no admin setting has been saved yet", "LANDING_PAGE_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.HeadlessShellURL, "headless-shell-url", "", "headless Chrome CDP WebSocket URL for thumbnail generation (e.g. ws://headless-shell:9222)", "HEADLESS_SHELL_URL")
+	utils.BoolFlagEnv(fs, &cfg.PProfEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
+	utils.StringFlagEnv(fs, &cfg.PProfAddr, "pprof-addr", portal.DefaultPProfListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
 
 	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "", "ACME DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (cloudflare|gcloud|route53); leave empty to use manual fullchain.pem/privatekey.pem from IDENTITY_PATH", "ACME_DNS_PROVIDER")
 	utils.BoolFlagEnv(fs, &cfg.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
@@ -125,6 +129,8 @@ func runServeCommand(args []string) error {
 		Int("max_port", cfg.MaxPort).
 		Bool("landing_page_enabled", cfg.LandingPageEnabled).
 		Bool("headless_shell_enabled", strings.TrimSpace(cfg.HeadlessShellURL) != "").
+		Bool("pprof_enabled", cfg.PProfEnabled).
+		Str("pprof_addr", cfg.PProfAddr).
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
 		Bool("ens_gasless_enabled", cfg.ENSGaslessEnabled).
 		Msg("configured relay server")
@@ -150,6 +156,8 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		TCPEnabled:        cfg.TCPEnabled,
 		MinPort:           cfg.MinPort,
 		MaxPort:           cfg.MaxPort,
+		PProfEnabled:      cfg.PProfEnabled,
+		PProfListenAddr:   cfg.PProfAddr,
 		ACME: acme.Config{
 			KeyDir:             cfg.IdentityPath,
 			DNSProvider:        cfg.ACMEDNSProvider,

@@ -66,12 +66,11 @@ func NormalizeConfig(cfg Config) (Config, error) {
 }
 
 type Overlay struct {
-	cfg       Config
-	stack     *stack
-	listener  net.Listener
-	server    *http.Server
-	transport *http.Transport
-	client    *http.Client
+	cfg      Config
+	stack    *stack
+	listener net.Listener
+	server   *http.Server
+	client   *http.Client
 }
 
 func NewOverlay(cfg Config, handler http.Handler) (*Overlay, error) {
@@ -100,26 +99,24 @@ func NewOverlay(cfg Config, handler http.Handler) (*Overlay, error) {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	transport := &http.Transport{
-		DialContext:           stack.DialContext,
-		TLSHandshakeTimeout:   10 * time.Second,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ForceAttemptHTTP2:     false,
-	}
-	client := &http.Client{Transport: transport}
+	client := utils.NewHTTPClient(
+		utils.WithHTTPDialContext(stack.DialContext),
+		utils.WithHTTPTLSHandshakeTimeout(10*time.Second),
+		utils.WithHTTPMaxIdleConns(100),
+		utils.WithHTTPIdleConnTimeout(90*time.Second),
+		utils.WithHTTPResponseHeaderTimeout(30*time.Second),
+		utils.WithHTTPExpectContinueTimeout(1*time.Second),
+		utils.WithoutHTTP2(),
+	)
 
 	publicCfg := cfg.Copy()
 	publicCfg.PrivateKey = ""
 	return &Overlay{
-		cfg:       publicCfg,
-		stack:     stack,
-		listener:  listener,
-		server:    server,
-		transport: transport,
-		client:    client,
+		cfg:      publicCfg,
+		stack:    stack,
+		listener: listener,
+		server:   server,
+		client:   client,
 	}, nil
 }
 
@@ -154,8 +151,8 @@ func (o *Overlay) Shutdown(ctx context.Context) error {
 			shutdownErr = errors.Join(shutdownErr, err)
 		}
 	}
-	if o.transport != nil {
-		o.transport.CloseIdleConnections()
+	if o.client != nil {
+		o.client.CloseIdleConnections()
 	}
 	if o.listener != nil {
 		err := o.listener.Close()

@@ -18,6 +18,7 @@ const (
 	APIErrorCodeLeaseNotFound           = "lease_not_found"
 	APIErrorCodeLeaseRejected           = "lease_rejected"
 	APIErrorCodeMethodNotAllowed        = "method_not_allowed"
+	APIErrorCodeNotFound                = "not_found"
 	APIErrorCodeRateLimited             = "rate_limited"
 	APIErrorCodeSessionCreateFailed     = "session_create_failed"
 	APIErrorCodeUnauthorized            = "unauthorized"

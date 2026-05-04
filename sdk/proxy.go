@@ -1,4 +1,4 @@
-package main
+package sdk
 
 import (
 	"context"
@@ -12,11 +12,10 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func proxyExposure(ctx context.Context, exposure *sdk.Exposure) error {
+func ProxyExposure(ctx context.Context, exposure *Exposure) error {
 	defer exposure.Close()
 	if len(exposure.ActiveRelayURLs()) == 0 {
 		return errors.New("no relay URLs provided")
@@ -103,7 +102,7 @@ func proxyExposure(ctx context.Context, exposure *sdk.Exposure) error {
 	return errors.Join(waitErr, udpErr, closeErr)
 }
 
-func proxyRelayConnections(ctx context.Context, exposure *sdk.Exposure, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {
+func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {
 	for {
 		relayConn, err := exposure.Accept()
 		if err != nil {
@@ -218,7 +217,7 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 
 // runUDPProxy waits for the exposure datagram plane and proxies it to the
 // configured local UDP target.
-func runUDPProxy(ctx context.Context, exposure *sdk.Exposure, udpTarget string) error {
+func runUDPProxy(ctx context.Context, exposure *Exposure, udpTarget string) error {
 	udpAddrs, err := exposure.WaitDatagramReady(ctx)
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
@@ -244,7 +243,7 @@ func runUDPProxy(ctx context.Context, exposure *sdk.Exposure, udpTarget string) 
 
 // proxyExposureDatagrams receives datagrams from the exposure datagram plane
 // and forwards them to the local UDP service, relaying responses back.
-func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAddr string) error {
+func proxyExposureDatagrams(ctx context.Context, exposure *Exposure, localAddr string) error {
 	resolvedAddr, err := net.ResolveUDPAddr("udp", localAddr)
 	if err != nil {
 		return fmt.Errorf("resolve udp addr %q: %w", localAddr, err)
@@ -313,12 +312,12 @@ type udpFlowEntry struct {
 
 type udpFlowManager struct {
 	target   *net.UDPAddr
-	exposure *sdk.Exposure
+	exposure *Exposure
 	mu       sync.Mutex
 	flows    map[udpFlowKey]*udpFlowEntry
 }
 
-func newUDPFlowManager(target *net.UDPAddr, exposure *sdk.Exposure) *udpFlowManager {
+func newUDPFlowManager(target *net.UDPAddr, exposure *Exposure) *udpFlowManager {
 	return &udpFlowManager{
 		target:   target,
 		exposure: exposure,

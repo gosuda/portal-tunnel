@@ -24,6 +24,12 @@ const (
 	PathInstallPowerShell = "/install.ps1"
 	PathInstallBinPrefix  = "/install/bin/"
 
+	PathAgentPrefix        = "/v1/agent"
+	PathAgentStatus        = PathAgentPrefix + "/status"
+	PathAgentShutdown      = PathAgentPrefix + "/shutdown"
+	PathAgentTunnels       = PathAgentPrefix + "/tunnels"
+	PathAgentTunnelsPrefix = PathAgentPrefix + "/tunnels/"
+
 	PathTunnelStatus    = "/tunnel/status"
 	PathThumbnailPrefix = "/thumbnail/"
 

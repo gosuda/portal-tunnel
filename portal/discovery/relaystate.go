@@ -59,6 +59,9 @@ func (state RelayState) hasObservedDescriptor() bool {
 
 type ClientState struct {
 	ExplicitRelayURLs []string
+	// SuppressedRelayURLs are discovery seeds that must not be auto-selected
+	// as active relays unless they are also explicit.
+	SuppressedRelayURLs []string
 	// MaxActiveRelays caps auto-selected relays. Zero or negative values use
 	// the policy default of 3.
 	MaxActiveRelays int

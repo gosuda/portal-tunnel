@@ -175,9 +175,7 @@ func (s *RelaySet) SetBootstrapRelayURLs(inputs []string) {
 	for key, state := range s.relays {
 		_, bootstrap := keep[key]
 		state.Bootstrap = bootstrap
-		if !state.Bootstrap && !state.hasObservedDescriptor() && !state.Banned &&
-			state.discoveryFailures == 0 && state.activeFailures == 0 &&
-			state.nextDiscoveryRefreshAt.IsZero() && state.suppressActiveUntil.IsZero() {
+		if disposableRelayState(state) {
 			delete(s.relays, key)
 			continue
 		}
@@ -196,6 +194,40 @@ func (s *RelaySet) SetBootstrapRelayURLs(inputs []string) {
 	}
 }
 
+func (s *RelaySet) AddBootstrapRelayURL(relayURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.relays[relayURL]
+	if !ok {
+		state = newRelayState(relayURL)
+	}
+	state.Bootstrap = true
+	s.relays[relayURL] = state
+}
+
+func (s *RelaySet) RemoveBootstrapRelayURL(relayURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.relays[relayURL]
+	if !ok {
+		return
+	}
+	state.Bootstrap = false
+	if disposableRelayState(state) {
+		delete(s.relays, relayURL)
+		return
+	}
+	s.relays[relayURL] = state
+}
+
+func disposableRelayState(state RelayState) bool {
+	return !state.Bootstrap && !state.hasObservedDescriptor() && !state.Banned &&
+		state.discoveryFailures == 0 && state.activeFailures == 0 &&
+		state.nextDiscoveryRefreshAt.IsZero() && state.suppressActiveUntil.IsZero()
+}
+
 func (s *RelaySet) AggregateRelays() []RelayState {
 	s.mu.RLock()
 	states := make([]RelayState, 0, len(s.relays))
@@ -206,6 +238,16 @@ func (s *RelaySet) AggregateRelays() []RelayState {
 	s.mu.RUnlock()
 
 	return policy.SelectAggregate(states)
+}
+
+func (s *RelaySet) AllRelays() []RelayState {
+	s.mu.RLock()
+	states := make([]RelayState, 0, len(s.relays))
+	for _, state := range s.relays {
+		states = append(states, state)
+	}
+	s.mu.RUnlock()
+	return states
 }
 
 func (s *RelaySet) ConfirmedRelays() []RelayState {
@@ -357,6 +399,18 @@ func (s *RelaySet) BanRelayURL(relayURL string) {
 		state = newRelayState(relayURL)
 	}
 	state = s.policy.OnBanned(state)
+	s.relays[relayURL] = state
+}
+
+func (s *RelaySet) AllowRelayURL(relayURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.relays[relayURL]
+	if !ok {
+		state = newRelayState(relayURL)
+	}
+	state.Banned = false
 	s.relays[relayURL] = state
 }
 
