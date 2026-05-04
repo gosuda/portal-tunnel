@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -148,7 +150,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	var relaySet *discovery.RelaySet
 	if cfg.DiscoveryEnabled {
-		cfg.Bootstraps, err = utils.ResolvePortalRelayURLs(context.Background(), cfg.Bootstraps, true)
+		cfg.Bootstraps, err = resolveDiscoveryBootstraps(context.Background(), cfg.IdentityPath, cfg.Bootstraps)
 		if err != nil {
 			return nil, fmt.Errorf("resolve discovery bootstraps: %w", err)
 		}
@@ -165,6 +167,35 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	server.registry.proxy = &server.proxy
 	return server, nil
+}
+
+func resolveDiscoveryBootstraps(ctx context.Context, stateDir string, explicit []string) ([]string, error) {
+	explicit, err := utils.NormalizeRelayURLs(explicit...)
+	if err != nil {
+		return nil, err
+	}
+
+	bootstraps, err := utils.ResolvePortalRelayURLs(ctx, explicit, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(bootstraps) > len(explicit) {
+		return bootstraps, nil
+	}
+
+	registryPath := filepath.Join(stateDir, types.RelayRegistryFilename)
+	log.Warn().Str("path", registryPath).Msg("relay registry fetch failed; falling back to local registry file")
+	local, err := utils.LoadLocalRelayRegistry(registryPath)
+	switch {
+	case err == nil:
+		log.Info().Str("path", registryPath).Int("relays", len(local)).Msg("loaded relay registry from local fallback")
+		return utils.MergeRelayURLs(local, nil, explicit)
+	case os.IsNotExist(err):
+		log.Warn().Str("path", registryPath).Msg("local relay registry fallback file not found")
+	default:
+		log.Warn().Err(err).Str("path", registryPath).Msg("local relay registry fallback failed")
+	}
+	return bootstraps, nil
 }
 
 func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {

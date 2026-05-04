@@ -10,6 +10,8 @@ const (
 	MarkerKeepalive   = byte(0x00)
 	MarkerRawStart    = byte(0x01)
 	MarkerTLSStart    = byte(0x02)
+
+	RelayRegistryFilename = "registry.json"
 )
 
 func PortalRelayRegistryURLs() []string {
