@@ -11,9 +11,16 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+const RelayRegistryFilename = "registry.json"
+
+func PortalRelayRegistryURLs() []string {
+	return []string{
+		"https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json",
+		"https://object.rly.best/portal-tunnel/registry.json",
+	}
+}
 
 type relayRegistry struct {
 	Relays []string `json:"relays"`
@@ -36,7 +43,7 @@ func ResolveDiscoveryBootstraps(ctx context.Context, stateDir string, explicit [
 		return bootstraps, nil
 	}
 
-	registryPath := filepath.Join(stateDir, types.RelayRegistryFilename)
+	registryPath := filepath.Join(stateDir, RelayRegistryFilename)
 	log.Warn().Str("path", registryPath).Msg("relay registry fetch failed; falling back to local registry file")
 	local, err := LoadLocalRelayRegistry(registryPath)
 	switch {
@@ -62,7 +69,7 @@ func ResolvePortalRelayURLs(ctx context.Context, explicit []string, includeDefau
 
 	// TODO(@oesni): do not create a new client for each call
 	client := NewHTTPClient(WithHTTPTimeout(3 * time.Second))
-	for _, registryURL := range types.PortalRelayRegistryURLs() {
+	for _, registryURL := range PortalRelayRegistryURLs() {
 		defaults, err := fetchRelayRegistry(ctx, client, registryURL)
 		if err != nil {
 			continue

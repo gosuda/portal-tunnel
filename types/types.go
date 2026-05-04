@@ -10,13 +10,4 @@ const (
 	MarkerKeepalive   = byte(0x00)
 	MarkerRawStart    = byte(0x01)
 	MarkerTLSStart    = byte(0x02)
-
-	RelayRegistryFilename = "registry.json"
 )
-
-func PortalRelayRegistryURLs() []string {
-	return []string{
-		"https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json",
-		"https://object.rly.best/portal-tunnel/registry.json",
-	}
-}
