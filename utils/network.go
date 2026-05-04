@@ -150,28 +150,36 @@ func ResolvePortalRelayURLs(ctx context.Context, explicit []string, includeDefau
 		return explicit, nil
 	}
 
+	// TODO(@oesni): do not create a new client for each call
 	client := NewHTTPClient(WithHTTPTimeout(3 * time.Second))
-	var registry struct {
-		Relays []string `json:"relays"`
+	for _, registryURL := range types.PortalRelayRegistryURLs() {
+		defaults, ok := fetchRelayRegistry(ctx, client, registryURL)
+		if !ok {
+			continue
+		}
+		return MergeRelayURLs(defaults, nil, explicit)
 	}
-	resp, err := httpDo(ctx, client, http.MethodGet, types.PortalRelayRegistryURL, nil, nil)
+	return explicit, nil
+}
+
+func fetchRelayRegistry(ctx context.Context, client *http.Client, registryURL string) ([]string, bool) {
+	resp, err := httpDo(ctx, client, http.MethodGet, registryURL, nil, nil)
 	if err != nil {
-		return explicit, nil
+		return nil, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return explicit, nil
+		return nil, false
+	}
+	var registry struct {
+		Relays []string `json:"relays"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&registry); err != nil {
-		return explicit, nil
+		return nil, false
 	}
-
 	defaults, err := NormalizeRelayURLs(registry.Relays...)
-	if err != nil {
-		return explicit, nil
+	if err != nil || len(defaults) == 0 {
+		return nil, false
 	}
-	if len(defaults) == 0 {
-		return explicit, nil
-	}
-	return MergeRelayURLs(defaults, nil, explicit)
+	return defaults, true
 }
