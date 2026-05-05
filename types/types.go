@@ -1,7 +1,7 @@
 package types
 
 const (
-	ReleaseVersion         = "v2.1.9"
+	ReleaseVersion         = "v2.1.10"
 	SDKVersion             = "6"
 	DiscoveryVersion       = "7"
 	OfficialReleaseBaseURL = "https://github.com/gosuda/portal-tunnel/releases"
