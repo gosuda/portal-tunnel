@@ -2,7 +2,6 @@ import * as vscode from "vscode";
 
 import {
   buildCommand,
-  defaultRelayRegistryURL,
   validateRelayUrl,
 } from "./command";
 
@@ -144,8 +143,8 @@ async function resolveRelaySelection(interactive: boolean): Promise<RelaySelecti
 
   const choice = await vscode.window.showQuickPick([
     {
-      label: "Use default public registry",
-      description: defaultRelayRegistryURL,
+      label: "Use default bootstrap relays",
+      description: "Default bootstrap relays bundled with Portal",
     },
     {
       label: "Enter relay URL",
@@ -153,13 +152,13 @@ async function resolveRelaySelection(interactive: boolean): Promise<RelaySelecti
     },
   ], {
     title: "Portal: Relay Source",
-    placeHolder: "Choose a public registry or a specific relay URL",
+    placeHolder: "Choose a bootstrap relay or a specific relay URL",
   });
   if (!choice) {
     return undefined;
   }
-  if (choice.label === "Use default public registry") {
-    vscode.window.showInformationMessage(`Portal will use the default public registry: ${defaultRelayRegistryURL}`);
+  if (choice.label === "Use default bootstrap relays") {
+    vscode.window.showInformationMessage("Portal will use the default bootstrap relays.");
     return { relayUrls: [] };
   }
 
