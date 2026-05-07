@@ -112,7 +112,7 @@ The relay issues a lease-scoped JWT access token after registration, used for al
 Portal maintains a public relay registry at:
 
 ```text
-https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json
+https://raw.githubusercontent.com/gosuda/portal-tunnel/main/config.toml
 ```
 
 When you run `portal expose`, the CLI:

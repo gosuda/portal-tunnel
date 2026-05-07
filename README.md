@@ -79,11 +79,11 @@ See [Architecture](docs/src/routes/architecture/+page.md).
 
 Portal's official public relay registry is:
 
-`https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json`
+`https://raw.githubusercontent.com/gosuda/portal-tunnel/main/config.toml`
 
 Portal tunnel clients can include this registry by default, and the relay UI also reads from the same path to show the official relay list.
 
-If you operate a public Portal relay, open a Pull Request to add your relay URL to `registry.json`. Keeping the registry updated makes public relays easier for the community to discover.
+If you operate a public Portal relay, open a Pull Request to add your relay URL to `config.toml`. Keeping the registry updated makes public relays easier for the community to discover.
 
 ## How Portal Provides End-to-End Encryption
 

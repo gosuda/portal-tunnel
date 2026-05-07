@@ -56,9 +56,9 @@ docker compose up
 
 官方公共中继 registry:
 
-`https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json`
+`https://raw.githubusercontent.com/gosuda/portal-tunnel/main/config.toml`
 
-如果你运行公共 Portal 中继，可以提交 Pull Request 把中继 URL 加入 `registry.json`。
+如果你运行公共 Portal 中继，可以提交 Pull Request 把中继 URL 加入 `config.toml`。
 
 ## 安全模型
 

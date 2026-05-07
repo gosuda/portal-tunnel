@@ -9,7 +9,7 @@ Expose your local service to the internet via a [Portal](https://github.com/gosu
 - `Portal: Stop Tunnel` stops the active tunnel terminal
 - Persisted settings for relay URLs, default local host, and default service name
 - Runs the latest Portal release installer script before starting the tunnel
-- When no relay URL is configured, the extension can use the public registry at `https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json`
+- When no relay URL is configured, the extension can use the default public relays.
 
 ## Requirements
 
@@ -21,7 +21,7 @@ Expose your local service to the internet via a [Portal](https://github.com/gosu
 
 | Setting | Default | Description |
 |---|---|---|
-| `portal.relayUrls` | `[]` | Relay server URLs (`https://` only). If empty, the extension uses `https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json`. |
+| `portal.relayUrls` | `[]` | Relay server URLs (`https://` only). If empty, the extension uses default public relays. |
 | `portal.defaultHost` | `"localhost:3000"` | Default local host:port shown by `Portal: Start Tunnel`. |
 | `portal.defaultName` | `""` | Default tunnel service name suggestion. If empty, the extension omits `--name`. |
 
