@@ -44,8 +44,6 @@ interface KnownRelay {
 
 type RelayReleaseVersions = Record<string, string | null>;
 
-const OFFICIAL_REGISTRY_SOURCE_URL =
-  "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
 const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
 
 async function loadRelayReleaseVersion(
@@ -856,14 +854,6 @@ export function ServerListView({
                         Public relays
                       </h2>
                     </div>
-                    <a
-                      href={OFFICIAL_REGISTRY_SOURCE_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex h-10 items-center justify-center rounded-full bg-primary/12 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
-                    >
-                      Open registry.json
-                    </a>
                   </div>
 
                   <div className="mt-6 rounded-xl border border-border/80 bg-secondary/35 p-5 sm:p-6">
