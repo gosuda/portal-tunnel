@@ -664,6 +664,21 @@ func (c *exposureConn) Close() error {
 	return closeErr
 }
 
+// tunnelCounterConn wraps a net.Conn and calls decr exactly once on the first
+// Close invocation to decrement the active_tunnels_per_relay gauge. Subsequent
+// Close calls are forwarded to the underlying conn but do not double-decrement.
+// Concurrency is guaranteed by sync.Once.
+type tunnelCounterConn struct {
+	net.Conn
+	once sync.Once
+	decr func()
+}
+
+func (c *tunnelCounterConn) Close() error {
+	c.once.Do(c.decr)
+	return c.Conn.Close()
+}
+
 func (e *Exposure) Accept() (net.Conn, error) {
 	for {
 		if !e.activeCircuitAvailable() {
@@ -1084,11 +1099,19 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 			return
 		}
 
+		telemetry.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Inc()
+		wrappedConn := &tunnelCounterConn{
+			Conn: conn,
+			decr: func() {
+				telemetry.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Dec()
+			},
+		}
+
 		select {
 		case <-e.done:
-			_ = conn.Close()
+			_ = wrappedConn.Close()
 			return
-		case e.accepted <- conn:
+		case e.accepted <- wrappedConn:
 		}
 	}
 }

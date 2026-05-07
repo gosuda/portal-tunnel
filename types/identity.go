@@ -35,17 +35,19 @@ func (i Identity) Copy() Identity {
 
 type RelayIdentity struct {
 	Identity
-	AdminSecretKey      string `json:"-"`
-	WireGuardPublicKey  string `json:"-"`
-	WireGuardPrivateKey string `json:"-"`
+	AdminSecretKey           string `json:"-"`
+	WireGuardPublicKey       string `json:"-"`
+	WireGuardPrivateKey      string `json:"-"`
+	EncryptedClientHelloSeed string `json:"-"`
 }
 
 func (i RelayIdentity) Copy() RelayIdentity {
 	return RelayIdentity{
-		Identity:            i.Identity.Copy(),
-		AdminSecretKey:      i.AdminSecretKey,
-		WireGuardPublicKey:  i.WireGuardPublicKey,
-		WireGuardPrivateKey: i.WireGuardPrivateKey,
+		Identity:                 i.Identity.Copy(),
+		AdminSecretKey:           i.AdminSecretKey,
+		WireGuardPublicKey:       i.WireGuardPublicKey,
+		WireGuardPrivateKey:      i.WireGuardPrivateKey,
+		EncryptedClientHelloSeed: i.EncryptedClientHelloSeed,
 	}
 }
 

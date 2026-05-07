@@ -78,8 +78,8 @@ func TestSelectPriorityMathematicalOrdering(t *testing.T) {
 	selected := policy.SelectPriority(states, ClientState{LocalAddress: clientAddr})
 
 	for i := 0; i < len(selected)-1; i++ {
-		scoreA := molsScore(ingressIdx, hashToGF64(selected[i]), molsBaseM1, molsBaseM2)
-		scoreB := molsScore(ingressIdx, hashToGF64(selected[i+1]), molsBaseM1, molsBaseM2)
+		scoreA := molsScore(int(ingressIdx), int(hashToGF64(selected[i])), int(molsBaseM1), int(molsBaseM2), 64)
+		scoreB := molsScore(int(ingressIdx), int(hashToGF64(selected[i+1])), int(molsBaseM1), int(molsBaseM2), 64)
 		if scoreA < scoreB {
 			t.Errorf("Priority mismatch at index %d: %d < %d", i, scoreA, scoreB)
 		}
@@ -124,8 +124,8 @@ func TestSelectPriorityCongestionInversion(t *testing.T) {
 	selected := policy.SelectPriority(states, ClientState{LocalAddress: clientAddr})
 
 	if len(selected) == 2 {
-		s1 := molsCongestionScore(ingressIdx, hashToGF64(selected[0]), molsBaseM1, molsBaseM2)
-		s2 := molsCongestionScore(ingressIdx, hashToGF64(selected[1]), molsBaseM1, molsBaseM2)
+		s1 := molsCongestionScore(int(ingressIdx), int(hashToGF64(selected[0])), int(molsBaseM1), int(molsBaseM2), 64)
+		s2 := molsCongestionScore(int(ingressIdx), int(hashToGF64(selected[1])), int(molsBaseM1), int(molsBaseM2), 64)
 		if s1 < s2 {
 			t.Errorf("Congestion priority failed: %d < %d", s1, s2)
 		}

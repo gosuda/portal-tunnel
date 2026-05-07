@@ -321,6 +321,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		Bool("multihop_enabled", s.hopMux != nil).
 		Bool("udp_enabled", s.quicBackhaul != nil).
 		Bool("tcp_enabled", s.cfg.TCPEnabled).
+		Bool("ech_enabled", len(apiTLS.EncryptedClientHelloKeys) > 0).
 		Bool("pprof_enabled", s.pprofServer != nil)
 	if s.pprofListener != nil {
 		logEvent = logEvent.Str("pprof_addr", utils.HostPortOrLoopback(s.pprofListener.Addr().String()))
@@ -452,6 +453,18 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 	apiTLS := keyless.TLSMaterialConfig{
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
+	}
+	echKeys, err := keyless.EncryptedClientHelloKeys(
+		s.identity.PrivateKey,
+		s.identity.EncryptedClientHelloSeed,
+		s.identity.Name,
+	)
+	if err != nil {
+		manager.Stop()
+		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("prepare ech keys: %w", err)
+	}
+	if len(echKeys) > 0 {
+		apiTLS.EncryptedClientHelloKeys = echKeys
 	}
 
 	return apiTLS, manager, nil

@@ -57,8 +57,8 @@ func TestGF64MulDistributivity(t *testing.T) {
 func TestMOLSScoreRange(t *testing.T) {
 	for i := range uint8(64) {
 		for j := range uint8(64) {
-			s := molsScore(i, j, molsBaseM1, molsBaseM2)
-			if s < 1 || s > molsOrder*molsOrder {
+			s := molsScore(int(i), int(j), int(molsBaseM1), int(molsBaseM2), 64)
+			if s < 1 || s > 64*64 {
 				t.Fatalf("molsScore(%d, %d) = %d, out of range [1, 4096]", i, j, s)
 			}
 		}
@@ -71,14 +71,14 @@ func TestMOLSScoreRowPermutation(t *testing.T) {
 	for i := range uint8(64) {
 		seen := make(map[int]struct{}, 64)
 		for j := range uint8(64) {
-			s := molsScore(i, j, molsBaseM1, molsBaseM2)
+			s := molsScore(int(i), int(j), int(molsBaseM1), int(molsBaseM2), 64)
 			if _, dup := seen[s]; dup {
 				t.Fatalf("duplicate score %d in row i=%d", s, i)
 			}
 			seen[s] = struct{}{}
 		}
-		if len(seen) != molsOrder {
-			t.Fatalf("row i=%d has %d unique scores, want %d", i, len(seen), molsOrder)
+		if len(seen) != 64 {
+			t.Fatalf("row i=%d has %d unique scores, want %d", i, len(seen), 64)
 		}
 	}
 }
@@ -88,12 +88,12 @@ func TestMOLSScoreRowPermutation(t *testing.T) {
 func TestMOLSCongestionScoreRange(t *testing.T) {
 	for i := range uint8(64) {
 		for j := range uint8(64) {
-			s := molsCongestionScore(i, j, molsBaseM1, molsBaseM2)
-			if s < 1 || s > molsOrder*molsOrder {
+			s := molsCongestionScore(int(i), int(j), int(molsBaseM1), int(molsBaseM2), 64)
+			if s < 1 || s > 64*64 {
 				t.Fatalf("molsCongestionScore(%d, %d) = %d, out of range", i, j, s)
 			}
 			// Verify B(i,j) = (n²+1) - A(i, n-1-j)
-			want := molsMagicConstant - molsScore(i, (molsOrder-1)-j, molsBaseM1, molsBaseM2)
+			want := (64*64 + 1) - molsScore(int(i), (64-1)-int(j), int(molsBaseM1), int(molsBaseM2), 64)
 			if s != want {
 				t.Fatalf("molsCongestionScore(%d, %d) = %d, want %d", i, j, s, want)
 			}
@@ -236,14 +236,17 @@ func TestMOLSSelectPriorityFallbackRelaysDemoted(t *testing.T) {
 	healthy1 := confirmedPolicyRelayState(t, "https://relay-healthy-1.example")
 	healthy1.DiscoveryRTT = 100 * time.Millisecond
 	healthy1.DiscoveryRTTAt = time.Now()
+	healthy1.LoadFactor = 0.1 // Explicitly healthy
 
 	healthy2 := confirmedPolicyRelayState(t, "https://relay-healthy-2.example")
 	healthy2.DiscoveryRTT = 150 * time.Millisecond
 	healthy2.DiscoveryRTTAt = time.Now()
+	healthy2.LoadFactor = 0.1 // Explicitly healthy
 
 	fallback := confirmedPolicyRelayState(t, "https://relay-fallback.example")
 	fallback.DiscoveryRTT = molsFallbackRTTThreshold + time.Millisecond
 	fallback.DiscoveryRTTAt = time.Now()
+	fallback.LoadFactor = 0.1 // Explicitly healthy, but will be demoted by high RTT (isRelayFallback)
 
 	selected := policy.SelectPriority([]RelayState{fallback, healthy1, healthy2}, ClientState{})
 
@@ -316,10 +319,10 @@ func TestMOLSSelectPriorityCongestionSwitchChangesOrder(t *testing.T) {
 		ingressIdx := hashToGF64("ingress-test")
 		j1 := hashToGF64("https://relay-one.example")
 		j2 := hashToGF64("https://relay-two.example")
-		normal1 := molsScore(ingressIdx, j1, molsBaseM1, molsBaseM2)
-		normal2 := molsScore(ingressIdx, j2, molsBaseM1, molsBaseM2)
-		cong1 := molsCongestionScore(ingressIdx, j1, molsBaseM1, molsBaseM2)
-		cong2 := molsCongestionScore(ingressIdx, j2, molsBaseM1, molsBaseM2)
+		normal1 := molsScore(int(ingressIdx), int(j1), int(molsBaseM1), int(molsBaseM2), 64)
+		normal2 := molsScore(int(ingressIdx), int(j2), int(molsBaseM1), int(molsBaseM2), 64)
+		cong1 := molsCongestionScore(int(ingressIdx), int(j1), int(molsBaseM1), int(molsBaseM2), 64)
+		cong2 := molsCongestionScore(int(ingressIdx), int(j2), int(molsBaseM1), int(molsBaseM2), 64)
 		if (normal1 > normal2) != (cong1 > cong2) {
 			t.Fatal("expected congestion switch to invert ordering but result matched normal mode")
 		}
@@ -412,9 +415,9 @@ func TestMOLSSelectPriorityDifferentIngressDifferentOrder(t *testing.T) {
 		for _, addr := range addresses {
 			i := hashToGF64(addr)
 			r := row{
-				molsScore(i, j1, molsBaseM1, molsBaseM2),
-				molsScore(i, j2, molsBaseM1, molsBaseM2),
-				molsScore(i, j3, molsBaseM1, molsBaseM2),
+				molsScore(int(i), int(j1), int(molsBaseM1), int(molsBaseM2), 64),
+				molsScore(int(i), int(j2), int(molsBaseM1), int(molsBaseM2), 64),
+				molsScore(int(i), int(j3), int(molsBaseM1), int(molsBaseM2), 64),
 			}
 			rows[r] = struct{}{}
 		}
@@ -527,7 +530,7 @@ func TestMOLSMagicRowSum(t *testing.T) {
 	for i := range uint8(64) {
 		var rowSum int
 		for j := range uint8(64) {
-			rowSum += molsScore(i, j, molsBaseM1, molsBaseM2)
+			rowSum += molsScore(int(i), int(j), int(molsBaseM1), int(molsBaseM2), 64)
 		}
 		if rowSum != magicSum {
 			t.Fatalf("row i=%d sum = %d, want %d", i, rowSum, magicSum)
@@ -537,12 +540,12 @@ func TestMOLSMagicRowSum(t *testing.T) {
 
 // TestMOLSMagicColumnSum verifies that each column sums to the magic constant.
 func TestMOLSMagicColumnSum(t *testing.T) {
-	const magicSum = molsOrder * (molsOrder*molsOrder + 1) / 2
+	const magicSum = 64 * (64*64 + 1) / 2
 
 	for j := range uint8(64) {
 		var colSum int
 		for i := range uint8(64) {
-			colSum += molsScore(i, j, molsBaseM1, molsBaseM2)
+			colSum += molsScore(int(i), int(j), int(molsBaseM1), int(molsBaseM2), 64)
 		}
 		if colSum != magicSum {
 			t.Fatalf("column j=%d sum = %d, want %d", j, colSum, magicSum)
@@ -556,7 +559,7 @@ func TestMOLSGridUniqueness(t *testing.T) {
 	seen := make(map[int]struct{}, 64*64)
 	for i := range uint8(64) {
 		for j := range uint8(64) {
-			s := molsScore(i, j, molsBaseM1, molsBaseM2)
+			s := molsScore(int(i), int(j), int(molsBaseM1), int(molsBaseM2), 64)
 			if _, dup := seen[s]; dup {
 				t.Fatalf("duplicate score %d at (%d, %d)", s, i, j)
 			}
@@ -573,7 +576,7 @@ func TestMOLSVariantGridUniqueness(t *testing.T) {
 	seen := make(map[int]struct{}, 64*64)
 	for i := range uint8(64) {
 		for j := range uint8(64) {
-			s := molsScore(i, j, molsVariantM1, molsVariantM2)
+			s := molsScore(int(i), int(j), int(molsVariantM1), int(molsVariantM2), 64)
 			if _, dup := seen[s]; dup {
 				t.Fatalf("duplicate score %d at (%d, %d) in variant grid", s, i, j)
 			}
@@ -601,5 +604,33 @@ func TestMOLSRTTStatsEmpty(t *testing.T) {
 	mean, cv := molsRTTStats(nil)
 	if mean != 0 || cv != 0 {
 		t.Fatalf("molsRTTStats(nil) = (%v, %v), want (0, 0)", mean, cv)
+	}
+}
+
+// TestMOLSSelectPriorityEWMAStabilityTransposition verifies that relays with
+// high EWMA RTT are demoted relative to stable relays.
+func TestMOLSSelectPriorityEWMAStabilityTransposition(t *testing.T) {
+	policy := MOLSRelayPolicy{}
+
+	relayStable := confirmedPolicyRelayState(t, "https://relay-stable.example")
+	relayStable.EWMARTT = 100 * time.Millisecond
+	relayStable.DiscoveryRTT = 100 * time.Millisecond
+
+	relayUnstable := confirmedPolicyRelayState(t, "https://relay-unstable.example")
+	relayUnstable.EWMARTT = 600 * time.Millisecond
+	relayUnstable.DiscoveryRTT = 600 * time.Millisecond
+
+	states := []RelayState{relayStable, relayUnstable}
+
+	// We force the same ingress so they are ranked together.
+	selected := policy.SelectPriority(states, ClientState{LocalAddress: "test-ingress"})
+
+	if len(selected) != 2 {
+		t.Fatalf("len(selected) = %d, want 2", len(selected))
+	}
+
+	// Stable should be preferred.
+	if selected[0] != "https://relay-stable.example" {
+		t.Errorf("expected stable relay to be first, got %q", selected[0])
 	}
 }

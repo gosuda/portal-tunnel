@@ -6,12 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"text/tabwriter"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -65,6 +67,7 @@ type exposeFlags struct {
 	tcp             bool
 	maxActiveRelays int
 	multiHopDepth   int
+	metricsAddr     string
 }
 
 func runExposeCommand(args []string) error {
@@ -92,6 +95,7 @@ func runExposeCommand(args []string) error {
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
 	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum number of auto-selected relays to keep connected; explicit --relays are always included", "MAX_ACTIVE_RELAYS")
 	utils.IntFlagEnv(fs, &flags.multiHopDepth, "multi-hop-depth", 0, nil, "Automatically select one multi-hop route with this hop count; 0 or 1 disables multi-hop", "MULTI_HOP_DEPTH")
+	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
 
 	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -128,6 +132,22 @@ func runExposeCommand(args []string) error {
 
 	ctx, stop := utils.SignalContext()
 	defer stop()
+
+	if flags.metricsAddr != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		srv := &http.Server{
+			Addr:              flags.metricsAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() {
+			log.Info().Str("metrics_addr", flags.metricsAddr).Msg("metrics server listening")
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("metrics server error")
+			}
+		}()
+	}
 
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(flags.relayCSV),

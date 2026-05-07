@@ -12,6 +12,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
@@ -165,6 +166,9 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	invalidRequestBody := utils.InvalidRequestError(errors.New("invalid request body"))
 
 	switch path {
+	case "/admin/metrics":
+		promhttp.Handler().ServeHTTP(w, r)
+		return
 	case types.PathAdminSnapshot:
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return

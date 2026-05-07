@@ -193,6 +193,7 @@ func NormalizeStoredRelayIdentity(identity types.RelayIdentity) (types.RelayIden
 	normalized.AdminSecretKey = strings.TrimSpace(normalized.AdminSecretKey)
 	normalized.WireGuardPublicKey = strings.TrimSpace(normalized.WireGuardPublicKey)
 	normalized.WireGuardPrivateKey = strings.TrimSpace(normalized.WireGuardPrivateKey)
+	normalized.EncryptedClientHelloSeed = strings.TrimSpace(normalized.EncryptedClientHelloSeed)
 
 	switch {
 	case normalized.WireGuardPrivateKey != "":
@@ -219,6 +220,7 @@ func NormalizeStoredRelayIdentity(identity types.RelayIdentity) (types.RelayIden
 			return types.RelayIdentity{}, err
 		}
 	}
+
 	return normalized, nil
 }
 
@@ -231,9 +233,10 @@ type storedIdentity struct {
 
 type storedRelayIdentity struct {
 	storedIdentity
-	AdminSecretKey      string `json:"admin_secret_key,omitempty"`
-	WireGuardPublicKey  string `json:"wireguard_public_key,omitempty"`
-	WireGuardPrivateKey string `json:"wireguard_private_key,omitempty"`
+	AdminSecretKey           string `json:"admin_secret_key,omitempty"`
+	WireGuardPublicKey       string `json:"wireguard_public_key,omitempty"`
+	WireGuardPrivateKey      string `json:"wireguard_private_key,omitempty"`
+	EncryptedClientHelloSeed string `json:"encrypted_client_hello_seed,omitempty"`
 }
 
 func SaveIdentity(path string, identity types.Identity) error {
@@ -272,9 +275,10 @@ func SaveRelayIdentity(path string, identity types.RelayIdentity) error {
 			PublicKey:  normalized.PublicKey,
 			PrivateKey: normalized.PrivateKey,
 		},
-		AdminSecretKey:      normalized.AdminSecretKey,
-		WireGuardPublicKey:  normalized.WireGuardPublicKey,
-		WireGuardPrivateKey: normalized.WireGuardPrivateKey,
+		AdminSecretKey:           normalized.AdminSecretKey,
+		WireGuardPublicKey:       normalized.WireGuardPublicKey,
+		WireGuardPrivateKey:      normalized.WireGuardPrivateKey,
+		EncryptedClientHelloSeed: normalized.EncryptedClientHelloSeed,
 	}, 0o600); err != nil {
 		return fmt.Errorf("write identity file: %w", err)
 	}
@@ -314,9 +318,10 @@ func LoadRelayIdentity(path string) (types.RelayIdentity, error) {
 			PublicKey:  payload.PublicKey,
 			PrivateKey: payload.PrivateKey,
 		},
-		AdminSecretKey:      payload.AdminSecretKey,
-		WireGuardPublicKey:  payload.WireGuardPublicKey,
-		WireGuardPrivateKey: payload.WireGuardPrivateKey,
+		AdminSecretKey:           payload.AdminSecretKey,
+		WireGuardPublicKey:       payload.WireGuardPublicKey,
+		WireGuardPrivateKey:      payload.WireGuardPrivateKey,
+		EncryptedClientHelloSeed: payload.EncryptedClientHelloSeed,
 	})
 }
 
@@ -478,6 +483,10 @@ func populateRelayIdentity(identity *types.RelayIdentity, discoveryEnabled bool)
 			return fmt.Errorf("generate relay wireguard private key: %w", err)
 		}
 		identity.WireGuardPrivateKey = wireGuardPrivateKey
+	}
+
+	if strings.TrimSpace(identity.EncryptedClientHelloSeed) == "" {
+		identity.EncryptedClientHelloSeed = RandomID("")
 	}
 
 	return nil

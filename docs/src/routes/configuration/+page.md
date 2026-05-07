@@ -228,6 +228,7 @@ Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors
 | `admin_secret_key` | string | Relay-only admin login secret, generated automatically when missing |
 | `wireguard_public_key` | string | Relay-only WireGuard overlay public key when discovery is enabled |
 | `wireguard_private_key` | string | Relay-only WireGuard overlay private key when discovery is enabled |
+| `encrypted_client_hello_seed` | string | Relay-only HKDF salt for deriving the ECH HPKE private key; generated automatically when missing; keep secret |
 
 The same identity file or state directory can be reused across restarts to keep a stable address.
 

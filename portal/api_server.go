@@ -46,7 +46,8 @@ var (
 )
 
 func writeAPIErrorResponse(w http.ResponseWriter, err error) {
-	if ae, ok := errors.AsType[*apiError](err); ok {
+	var ae *apiError
+	if errors.As(err, &ae) {
 		utils.WriteAPIError(w, ae.status, ae.code, ae.msg)
 		return
 	}

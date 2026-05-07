@@ -1,9 +1,11 @@
 package discovery
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/montanaflynn/stats"
 )
 
 const (
@@ -29,6 +31,29 @@ const (
 	AnnounceMaxValidity = 24 * time.Hour
 )
 
+type PercentileTracker struct {
+	samples []float64
+}
+
+func (pt *PercentileTracker) Add(rtt time.Duration) {
+	pt.samples = append(pt.samples, float64(rtt))
+	if len(pt.samples) > 100 { // Keep last 100 samples
+		pt.samples = pt.samples[1:]
+	}
+}
+
+func (pt *PercentileTracker) Get(p float64) time.Duration {
+	if len(pt.samples) == 0 {
+		return 0
+	}
+	// stats.Percentile uses a highly optimized internal implementation
+	val, err := stats.Percentile(pt.samples, p*100)
+	if err != nil {
+		return 0
+	}
+	return time.Duration(val)
+}
+
 type RelayState struct {
 	Descriptor types.RelayDescriptor
 	Bootstrap  bool
@@ -38,11 +63,89 @@ type RelayState struct {
 
 	DiscoveryRTT   time.Duration
 	DiscoveryRTTAt time.Time
+	EWMARTT        time.Duration
+	RTTTracker     PercentileTracker
+
+	// SLIT LoadState
+	LoadFactor  float64
+	FailureRate float64
+	IsSaturated bool
+	loadFixed   uint32
+	saturated   uint32
 
 	discoveryFailures      int
 	activeFailures         int
 	nextDiscoveryRefreshAt time.Time
 	suppressActiveUntil    time.Time
+}
+
+const (
+	relayMetricScale         = 10000
+	relaySaturationEnterLoad = 8000
+	relaySaturationExitLoad  = 6000
+)
+
+func fixedLoad(load float64) uint32 {
+	if load <= 0 {
+		return 0
+	}
+	if load >= 1 {
+		return relayMetricScale
+	}
+	return uint32(load*relayMetricScale + 0.5)
+}
+
+// StoreLoadFactor records load as fixed-point telemetry.
+func (state *RelayState) StoreLoadFactor(loadFixed uint32) {
+	if loadFixed > relayMetricScale {
+		loadFixed = relayMetricScale
+	}
+	atomic.StoreUint32(&state.loadFixed, loadFixed)
+	state.LoadFactor = float64(loadFixed) / relayMetricScale
+}
+
+func (state *RelayState) inheritAdaptiveTelemetry(existing RelayState) {
+	load := atomic.LoadUint32(&existing.loadFixed)
+	if load == 0 && existing.LoadFactor != 0 {
+		load = fixedLoad(existing.LoadFactor)
+	}
+	state.StoreLoadFactor(load)
+	state.IsSaturated = existing.IsSaturated || atomic.LoadUint32(&existing.saturated) == 1
+	if state.IsSaturated {
+		atomic.StoreUint32(&state.saturated, 1)
+	}
+}
+
+// EvaluateSaturation applies load hysteresis:
+// saturated above 0.8, active below 0.6, unchanged in the guard band.
+func (state *RelayState) EvaluateSaturation() {
+	load := atomic.LoadUint32(&state.loadFixed)
+	if load == 0 && state.LoadFactor != 0 {
+		load = fixedLoad(state.LoadFactor)
+		atomic.StoreUint32(&state.loadFixed, load)
+	}
+	if state.IsSaturated {
+		atomic.StoreUint32(&state.saturated, 1)
+	}
+
+	saturated := atomic.LoadUint32(&state.saturated)
+	if load > relaySaturationEnterLoad {
+		saturated = 1
+	} else if load < relaySaturationExitLoad {
+		saturated = 0
+	}
+	atomic.StoreUint32(&state.saturated, saturated)
+	state.IsSaturated = saturated == 1
+}
+
+func (state *RelayState) UpdateEWMARTT(newRTT time.Duration) {
+	const alpha = 0.3
+	if state.EWMARTT == 0 {
+		state.EWMARTT = newRTT
+	} else {
+		state.EWMARTT = time.Duration(float64(state.EWMARTT)*(1-alpha) + float64(newRTT)*alpha)
+	}
+	state.RTTTracker.Add(newRTT)
 }
 
 func newRelayState(relayURL string) RelayState {

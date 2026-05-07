@@ -140,3 +140,6 @@ fabric.properties
 
 # End of https://www.toptal.com/developers/gitignore/api/goland+all
 .gstack/
+
+# Nested workspace (separate keyless_tls project; not part of the portal module)
+keyless_tls/
