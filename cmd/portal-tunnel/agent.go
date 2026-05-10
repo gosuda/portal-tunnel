@@ -25,10 +25,12 @@ func runAgentCommand(args []string) error {
 		"run":       runAgentRunCommand,
 		"dashboard": runAgentDashboardCommand,
 		"stop":      runAgentStopCommand,
+		"restart":   runAgentRestartCommand,
 		"help": utils.MakeHelpCommand(printAgentUsage, []utils.HelpTopic{
 			{Name: "run", Usage: printAgentRunUsage},
 			{Name: "dashboard", Usage: printAgentDashboardUsage},
 			{Name: "stop", Usage: printAgentStopUsage},
+			{Name: "restart", Usage: printAgentRestartUsage},
 		}),
 	})
 }
@@ -52,7 +54,7 @@ func runAgentRunCommand(args []string) error {
 		return err
 	}
 
-	cfg, err := agent.LoadConfig(configPath)
+	cfg, err := agent.LoadExistingConfig(configPath)
 	if err != nil {
 		return err
 	}
@@ -67,17 +69,74 @@ func runAgentRunCommand(args []string) error {
 		return runAgentForeground(configPath, cfg)
 	}
 
-	executable, err := os.Executable()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	status, err := startAgentService(ctx, configPath, cfg)
 	if err != nil {
 		return err
+	}
+
+	fmt.Fprintf(os.Stdout, "Portal agent running at %s with %d tunnel(s).\n", status.ControlAddr, len(status.Tunnels))
+	return nil
+}
+
+func runAgentRestartCommand(args []string) error {
+	var configPath string
+	fs := utils.NewFlagSet("agent restart", printAgentRestartUsage)
+	utils.StringFlag(fs, &configPath, "config", "", "Portal agent TOML config path")
+	if err := utils.ParseFlagSet(fs, args, printAgentRestartUsage); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if err := utils.RequireNoArgs(fs.Args(), "agent restart"); err != nil {
+		printAgentRestartUsage(os.Stderr)
+		return err
+	}
+	if strings.TrimSpace(configPath) == "" {
+		configPath = service.DefaultConfigPath()
+	}
+	cfg, err := agent.LoadExistingConfig(configPath)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	shutdownErr := agent.Shutdown(ctx, cfg.Agent.StateDir)
+	if err := service.Stop(ctx, cfg.Agent.ServiceName); err != nil {
+		if shutdownErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: existing agent stop failed: %v\n", errors.Join(shutdownErr, err))
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: service manager stop failed: %v\n", err)
+		}
+	}
+	if err := waitAgentStopped(ctx, cfg.Agent.StateDir); err != nil {
+		return err
+	}
+	status, err := startAgentService(ctx, configPath, cfg)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stdout, "Portal agent restarted at %s with %d tunnel(s).\n", status.ControlAddr, len(status.Tunnels))
+	return nil
+}
+
+func startAgentService(ctx context.Context, configPath string, cfg agent.Config) (types.AgentStatusResponse, error) {
+	configPath, err := filepath.Abs(strings.TrimSpace(configPath))
+	if err != nil {
+		return types.AgentStatusResponse{}, err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return types.AgentStatusResponse{}, err
 	}
 	executable, err = filepath.Abs(executable)
 	if err != nil {
-		return err
-	}
-	configPath, err = filepath.Abs(strings.TrimSpace(configPath))
-	if err != nil {
-		return err
+		return types.AgentStatusResponse{}, err
 	}
 	def := service.Definition{
 		Name:        strings.TrimSpace(cfg.Agent.ServiceName),
@@ -87,24 +146,13 @@ func runAgentRunCommand(args []string) error {
 		Args:        []string{"agent", "run", "--service", "--config", configPath},
 		WorkingDir:  filepath.Dir(configPath),
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	if err := service.Install(ctx, def); err != nil {
-		return fmt.Errorf("install portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
+		return types.AgentStatusResponse{}, fmt.Errorf("install portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
 	}
 	if err := service.Start(ctx, cfg.Agent.ServiceName); err != nil {
-		return fmt.Errorf("start portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
+		return types.AgentStatusResponse{}, fmt.Errorf("start portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
 	}
-	status, err := waitAgentStatus(ctx, cfg.Agent.StateDir)
-	if err != nil {
-		return err
-	}
-	if agentCLIInteractive() {
-		return agent.RunDashboard(configPath, cfg.Agent.StateDir)
-	}
-
-	fmt.Fprintf(os.Stdout, "Portal agent running at %s with %d tunnel(s).\n", status.ControlAddr, len(status.Tunnels))
-	return nil
+	return waitAgentStatus(ctx, cfg.Agent.StateDir)
 }
 
 func runAgentForeground(configPath string, cfg agent.Config) error {
@@ -178,15 +226,32 @@ func runAgentStopCommand(args []string) error {
 		return err
 	}
 
-	cfg, resolvedStateDir, err := loadAgentCommandConfig(configPath, stateDir)
-	if err != nil {
-		return err
+	configPath = strings.TrimSpace(configPath)
+	stateDir = strings.TrimSpace(stateDir)
+	cfg := agent.Config{Agent: agent.AgentConfig{ServiceName: agent.DefaultServiceName}}
+	if configPath != "" || stateDir == "" {
+		if configPath == "" {
+			configPath = service.DefaultConfigPath()
+		}
+		var err error
+		cfg, err = agent.LoadExistingConfig(configPath)
+		if err != nil {
+			return err
+		}
+	}
+	if stateDir != "" {
+		cfg.Agent.StateDir = stateDir
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	_ = agent.Shutdown(ctx, resolvedStateDir)
+	shutdownErr := agent.Shutdown(ctx, cfg.Agent.StateDir)
 	if err := service.StopDisable(ctx, cfg.Agent.ServiceName); err != nil {
+		if shutdownErr == nil {
+			fmt.Fprintf(os.Stderr, "Warning: agent stopped, but service manager cleanup failed: %v\n", err)
+			fmt.Fprintln(os.Stdout, "Portal agent stopped.")
+			return nil
+		}
 		return fmt.Errorf("stop portal agent service: %w", err)
 	}
 	fmt.Fprintln(os.Stdout, "Portal agent stopped.")
@@ -210,14 +275,25 @@ func runAgentDashboardCommand(args []string) error {
 		return err
 	}
 
-	_, resolvedStateDir, err := loadAgentCommandConfig(configPath, stateDir)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(configPath) == "" {
+	configPath = strings.TrimSpace(configPath)
+	stateDir = strings.TrimSpace(stateDir)
+	if configPath == "" {
 		configPath = service.DefaultConfigPath()
 	}
-	return agent.RunDashboard(configPath, resolvedStateDir)
+	if stateDir == "" {
+		if _, err := os.Stat(configPath); err == nil {
+			cfg, err := agent.LoadExistingConfig(configPath)
+			if err != nil {
+				return err
+			}
+			stateDir = cfg.Agent.StateDir
+		} else if errors.Is(err, os.ErrNotExist) {
+			stateDir = service.DefaultDataDir()
+		} else {
+			return err
+		}
+	}
+	return agent.RunDashboard(configPath, stateDir)
 }
 
 func waitAgentStatus(ctx context.Context, stateDir string) (types.AgentStatusResponse, error) {
@@ -233,6 +309,22 @@ func waitAgentStatus(ctx context.Context, stateDir string) (types.AgentStatusRes
 		select {
 		case <-ctx.Done():
 			return types.AgentStatusResponse{}, fmt.Errorf("wait for portal agent status: %w", lastErr)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitAgentStopped(ctx context.Context, stateDir string) error {
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		_, err := agent.Status(ctx, stateDir)
+		if err != nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("wait for portal agent shutdown: agent is still running")
 		case <-ticker.C:
 		}
 	}
@@ -279,38 +371,20 @@ func agentCLIInteractive() bool {
 	return err == nil && stdout.Mode()&os.ModeCharDevice != 0
 }
 
-func loadAgentCommandConfig(configPath, stateDir string) (agent.Config, string, error) {
-	if stateDir != "" && configPath == "" {
-		cfg := agent.Config{Agent: agent.AgentConfig{StateDir: stateDir, ServiceName: agent.DefaultServiceName}}
-		return cfg, stateDir, nil
-	}
-	if configPath != "" {
-		cfg, err := agent.LoadConfig(configPath)
-		if err != nil {
-			return agent.Config{}, "", err
-		}
-		if stateDir != "" {
-			cfg.Agent.StateDir = stateDir
-		}
-		return cfg, cfg.Agent.StateDir, nil
-	}
-	defaultStateDir := service.DefaultDataDir()
-	cfg := agent.Config{Agent: agent.AgentConfig{StateDir: defaultStateDir, ServiceName: agent.DefaultServiceName}}
-	return cfg, defaultStateDir, nil
-}
-
 func printAgentUsage(w io.Writer) {
 	utils.WriteCommandUsage(w,
 		[]string{
 			"portal agent run [flags]",
 			"portal agent dashboard [flags]",
 			"portal agent stop [flags]",
+			"portal agent restart [flags]",
 		},
 		[]string{
 			"portal agent run",
 			"portal agent run --config config.toml --foreground",
 			"portal agent dashboard",
 			"portal agent stop",
+			"portal agent restart",
 		},
 	)
 }
@@ -341,6 +415,16 @@ func printAgentStopUsage(w io.Writer) {
 		[]string{
 			"portal agent stop",
 			"portal agent stop --config config.toml",
+		},
+	)
+}
+
+func printAgentRestartUsage(w io.Writer) {
+	utils.WriteCommandUsage(w,
+		[]string{"portal agent restart [flags]"},
+		[]string{
+			"portal agent restart",
+			"portal agent restart --config config.toml",
 		},
 	)
 }

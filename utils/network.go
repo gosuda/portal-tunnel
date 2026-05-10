@@ -140,38 +140,3 @@ func FetchRelayVersion(ctx context.Context, relayURL string) string {
 	}
 	return envelope.Data.ReleaseVersion
 }
-
-func ResolvePortalRelayURLs(ctx context.Context, explicit []string, includeDefaults bool) ([]string, error) {
-	explicit, err := NormalizeRelayURLs(explicit...)
-	if err != nil {
-		return nil, err
-	}
-	if !includeDefaults {
-		return explicit, nil
-	}
-
-	client := NewHTTPClient(WithHTTPTimeout(3 * time.Second))
-	var registry struct {
-		Relays []string `json:"relays"`
-	}
-	resp, err := httpDo(ctx, client, http.MethodGet, types.PortalRelayRegistryURL, nil, nil)
-	if err != nil {
-		return explicit, nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return explicit, nil
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&registry); err != nil {
-		return explicit, nil
-	}
-
-	defaults, err := NormalizeRelayURLs(registry.Relays...)
-	if err != nil {
-		return explicit, nil
-	}
-	if len(defaults) == 0 {
-		return explicit, nil
-	}
-	return MergeRelayURLs(defaults, nil, explicit)
-}

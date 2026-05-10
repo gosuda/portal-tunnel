@@ -119,6 +119,10 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 				http.NotFound(w, r)
 				return
 			}
+			if err := s.registry.verifySigningAccessToken(r.Header.Get(types.HeaderAccessToken)); err != nil {
+				writeAPIErrorResponse(w, err)
+				return
+			}
 			keylessSignerHandler.ServeHTTP(w, r)
 		default:
 			base.ServeHTTP(w, r)
@@ -279,16 +283,22 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	if err := s.syncENSGaslessHostname(context.Background(), record); err != nil {
+	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
+	err = record.syncENSGaslessDNS(dnsCtx, s.acmeManager)
+	cancel()
+	if err != nil {
 		removed, _ := s.registry.Unregister(types.UnregisterRequest{AccessToken: resp.AccessToken})
 		if removed == nil {
 			record.Close()
 			removed = record
 		}
-		s.deleteENSGaslessHostname(context.Background(), removed, "delete lease ens gasless hostname after sync failure")
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
+		removed.deleteDNS(cleanupCtx, s.acmeManager, false)
+		cleanupCancel()
 		writeAPIErrorResponse(w, err)
 		return
 	}
+	s.registry.promoteECHDNS(record, s.acmeManager, s.cfg.SNIPort)
 
 	utils.WriteAPIData(w, http.StatusCreated, resp)
 }
@@ -382,7 +392,9 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	s.deleteENSGaslessHostname(context.Background(), record, "delete lease ens gasless hostname")
+	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
+	record.deleteDNS(dnsCtx, s.acmeManager, true)
+	cancel()
 
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 }
@@ -421,7 +433,9 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodDelete {
 		record := s.registry.DeleteHopRoute(&route)
-		s.deleteENSGaslessHostname(context.Background(), record, "delete hop route ens gasless hostname")
+		dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
+		record.deleteDNS(dnsCtx, s.acmeManager, true)
+		cancel()
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		return
 	}
@@ -454,16 +468,33 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	if err := s.syncENSGaslessHostname(context.Background(), record); err != nil {
+	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
+	err = record.syncENSGaslessDNS(dnsCtx, s.acmeManager)
+	cancel()
+	if err != nil {
 		removed := s.registry.DeleteHopRoute(&route)
 		if removed == nil {
 			removed = record
 		}
-		s.deleteENSGaslessHostname(context.Background(), removed, "delete hop route ens gasless hostname after sync failure")
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
+		removed.deleteDNS(cleanupCtx, s.acmeManager, false)
+		cleanupCancel()
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
+	s.registry.promoteECHDNS(record, s.acmeManager, s.cfg.SNIPort)
+	var accessToken string
+	if record.isPublicEntry() {
+		accessToken, err = s.registry.issueLeaseAccessToken(record, now)
+		if err != nil {
+			writeAPIErrorResponse(w, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError})
+			return
+		}
+	}
+	utils.WriteAPIData(w, http.StatusOK, types.HopRouteResponse{
+		AccessToken: accessToken,
+		SNIPort:     s.cfg.SNIPort,
+	})
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {

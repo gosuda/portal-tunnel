@@ -16,6 +16,14 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+const (
+	DefaultMTU                 = 1420
+	DefaultListenPort          = 51820
+	DefaultPeerAPIHTTPPort     = 7777
+	DefaultPeerYamuxPort       = 7778
+	DefaultPersistentKeepalive = 25
+)
+
 type Config struct {
 	PrivateKey string
 	PublicKey  string

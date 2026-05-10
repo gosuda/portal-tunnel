@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -31,7 +32,9 @@ type Config struct {
 }
 
 type Provider struct {
-	cfg Config
+	cfg    Config
+	zoneMu sync.RWMutex
+	zones  map[string]string
 }
 
 type runtimeConfig struct {
@@ -87,7 +90,7 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 		return err
 	}
 
-	service, runtimeCfg, zone, err := newService(ctx, p.cfg, baseDomain)
+	service, runtimeCfg, zone, err := p.newService(ctx, baseDomain)
 	if err != nil {
 		return err
 	}
@@ -117,7 +120,7 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 		return err
 	}
 
-	service, runtimeCfg, zone, err := newService(ctx, p.cfg, name)
+	service, runtimeCfg, zone, err := p.newService(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -142,7 +145,7 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 		return errors.New("record name is required")
 	}
 
-	service, runtimeCfg, zone, err := newService(ctx, p.cfg, name)
+	service, runtimeCfg, zone, err := p.newService(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -175,7 +178,7 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 		return errors.New("txt record value is required")
 	}
 
-	service, runtimeCfg, zone, err := newService(ctx, p.cfg, name)
+	service, runtimeCfg, zone, err := p.newService(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -229,7 +232,7 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 		return errors.New("txt record match prefix is required")
 	}
 
-	service, runtimeCfg, zone, err := newService(ctx, p.cfg, name)
+	service, runtimeCfg, zone, err := p.newService(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -286,6 +289,64 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	return nil
 }
 
+func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, _ uint16, _, _, content string) error {
+	if p == nil {
+		return errors.New("gcloud provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return errors.New("https record content is required")
+	}
+
+	service, runtimeCfg, zone, err := p.newService(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	if err := ensureRecordSet(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.ResourceRecordSet{
+		Name:    fqdn(name),
+		Type:    "HTTPS",
+		Ttl:     defaultRecordTTL,
+		Rrdatas: []string{content},
+	}); err != nil {
+		return fmt.Errorf("upsert gcloud HTTPS record %s: %w", name, err)
+	}
+	return nil
+}
+
+func (p *Provider) DeleteHTTPSRecord(ctx context.Context, name string) error {
+	if p == nil {
+		return errors.New("gcloud provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+
+	service, runtimeCfg, zone, err := p.newService(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	existing, err := listRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, name, "HTTPS")
+	if err != nil {
+		return fmt.Errorf("list gcloud HTTPS records %s: %w", name, err)
+	}
+	if len(existing) == 0 {
+		return nil
+	}
+	if err := applyChange(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.Change{
+		Deletions: existing,
+	}); err != nil {
+		return fmt.Errorf("delete gcloud HTTPS record %s: %w", name, err)
+	}
+	return nil
+}
+
 func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
 		return "", "", "", errors.New("gcloud provider is nil")
@@ -295,11 +356,15 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, 
 		return "", "", "", errors.New("base domain is required")
 	}
 
-	service, runtimeCfg, zone, err := newService(ctx, p.cfg, baseDomain)
+	service, runtimeCfg, zone, err := p.newService(ctx, baseDomain)
 	if err != nil {
 		return "", "", "", err
 	}
 	managedZone := zone.Name
+	zone, err = service.ManagedZones.Get(runtimeCfg.ProjectID, managedZone).Context(ctx).Do()
+	if err != nil {
+		return "", "", "", fmt.Errorf("get gcloud managed zone %s: %w", managedZone, err)
+	}
 
 	currentState := strings.ToLower(strings.TrimSpace(dnssecState(zone)))
 	if currentState != "on" && currentState != "transfer" {
@@ -346,8 +411,8 @@ func newRuntimeConfig(ctx context.Context, cfg Config) (runtimeConfig, error) {
 	}, nil
 }
 
-func newService(ctx context.Context, cfg Config, domain string) (*dns.Service, runtimeConfig, *dns.ManagedZone, error) {
-	runtimeCfg, err := newRuntimeConfig(ctx, cfg)
+func (p *Provider) newService(ctx context.Context, domain string) (*dns.Service, runtimeConfig, *dns.ManagedZone, error) {
+	runtimeCfg, err := newRuntimeConfig(ctx, p.cfg)
 	if err != nil {
 		return nil, runtimeConfig{}, nil, err
 	}
@@ -357,17 +422,28 @@ func newService(ctx context.Context, cfg Config, domain string) (*dns.Service, r
 		return nil, runtimeConfig{}, nil, fmt.Errorf("create gcloud dns service: %w", err)
 	}
 
-	zone, err := findManagedZone(ctx, service, runtimeCfg.ProjectID, domain, runtimeCfg.ManagedZone)
+	zone, err := p.findManagedZone(ctx, service, runtimeCfg.ProjectID, domain, runtimeCfg.ManagedZone)
 	if err != nil {
 		return nil, runtimeConfig{}, nil, err
 	}
 	return service, runtimeCfg, zone, nil
 }
 
-func findManagedZone(ctx context.Context, service *dns.Service, projectID, domain, explicit string) (*dns.ManagedZone, error) {
+func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, projectID, domain, explicit string) (*dns.ManagedZone, error) {
 	if service == nil {
 		return nil, errors.New("gcloud dns service is nil")
 	}
+	domain = utils.NormalizeHostname(domain)
+	candidates := utils.DomainCandidates(domain)
+
+	p.zoneMu.RLock()
+	for _, candidate := range candidates {
+		if zoneName := p.zones[candidate]; zoneName != "" {
+			p.zoneMu.RUnlock()
+			return &dns.ManagedZone{Name: zoneName, DnsName: fqdn(candidate)}, nil
+		}
+	}
+	p.zoneMu.RUnlock()
 
 	if explicit = strings.TrimSpace(explicit); explicit != "" {
 		zone, err := service.ManagedZones.Get(projectID, explicit).Context(ctx).Do()
@@ -377,10 +453,18 @@ func findManagedZone(ctx context.Context, service *dns.Service, projectID, domai
 		if err := validateManagedZone(zone, domain, explicit); err != nil {
 			return nil, err
 		}
+		if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain != "" && zone.Name != "" {
+			p.zoneMu.Lock()
+			if p.zones == nil {
+				p.zones = make(map[string]string)
+			}
+			p.zones[zoneDomain] = zone.Name
+			p.zoneMu.Unlock()
+		}
 		return zone, nil
 	}
 
-	for _, candidate := range utils.DomainCandidates(domain) {
+	for _, candidate := range candidates {
 		out, err := service.ManagedZones.List(projectID).DnsName(fqdn(candidate)).Context(ctx).Do()
 		if err != nil {
 			return nil, fmt.Errorf("list gcloud managed zones: %w", err)
@@ -388,6 +472,14 @@ func findManagedZone(ctx context.Context, service *dns.Service, projectID, domai
 		for _, zone := range out.ManagedZones {
 			if !isPublicZone(zone) || utils.NormalizeHostname(zone.DnsName) != candidate {
 				continue
+			}
+			if zone.Name != "" {
+				p.zoneMu.Lock()
+				if p.zones == nil {
+					p.zones = make(map[string]string)
+				}
+				p.zones[candidate] = zone.Name
+				p.zoneMu.Unlock()
 			}
 			return zone, nil
 		}

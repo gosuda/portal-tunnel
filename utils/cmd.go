@@ -305,6 +305,13 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 		}
 		boolValue, ok := flagDef.Value.(boolFlagValue)
 		if ok && boolValue.IsBoolFlag() {
+			if i+1 < len(args) {
+				next := strings.TrimSpace(args[i+1])
+				if _, err := strconv.ParseBool(next); err == nil {
+					flags[len(flags)-1] = args[i] + "=" + next
+					i++
+				}
+			}
 			continue
 		}
 		if i+1 >= len(args) {

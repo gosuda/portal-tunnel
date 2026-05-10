@@ -496,6 +496,21 @@ func (s *RelaySet) UnconfirmRelayURL(relayURL string) {
 	s.relays[relayURL] = state
 }
 
+// DeactivateRelayURL drops a relay out of active selection while keeping its
+// discovered descriptor as a candidate.
+func (s *RelaySet) DeactivateRelayURL(relayURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.relays[relayURL]
+	if !ok {
+		return
+	}
+	state = s.policy.OnUnconfirmed(state)
+	state.suppressActiveUntil = time.Now().Add(defaultDirectRecoveryBackoff)
+	s.relays[relayURL] = state
+}
+
 func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.DiscoveryResponse, now time.Time) (relaySetChanged bool, err error) {
 	if now.IsZero() {
 		now = time.Now().UTC()

@@ -113,10 +113,8 @@ github.com/googleapis/enterprise-certificate-proxy v0.3.14 h1:yh8ncqsbUY4shRD5dA
 github.com/googleapis/enterprise-certificate-proxy v0.3.14/go.mod h1:vqVt9yG9480NtzREnTlmGSBmFrA+bzb0yl0TxoBQXOg=
 github.com/googleapis/gax-go/v2 v2.21.0 h1:h45NjjzEO3faG9Lg/cFrBh2PgegVVgzqKzuZl/wMbiI=
 github.com/googleapis/gax-go/v2 v2.21.0/go.mod h1:But/NJU6TnZsrLai/xBAQLLz+Hc7fHZJt/hsCz3Fih4=
-github.com/gosuda/keyless_tls v0.0.1-0.20260304212324-7733f8366abc h1:aS9LQ35x6EtrGKCmOWRj6Y9aQ2l5hP8dVva4oxB9VEg=
-github.com/gosuda/keyless_tls v0.0.1-0.20260304212324-7733f8366abc/go.mod h1:BOhUZgiAAQzxKO3QcC4fCXgd/+lqxgIu1OyIYTqtta8=
-github.com/gosuda/keyless_tls v0.0.1 h1:IGuGHxqqxSTJL+7kHPwdoLveXpBbOhBGm/T4gnVTUtU=
-github.com/gosuda/keyless_tls v0.0.1/go.mod h1:BOhUZgiAAQzxKO3QcC4fCXgd/+lqxgIu1OyIYTqtta8=
+github.com/gosuda/keyless_tls v0.0.2-0.20260507061030-5128be6b5008 h1:KuP/5VlPJwqZNyAV5U60C/j8Pc5O8ENkWPTgP7mEvj0=
+github.com/gosuda/keyless_tls v0.0.2-0.20260507061030-5128be6b5008/go.mod h1:BOhUZgiAAQzxKO3QcC4fCXgd/+lqxgIu1OyIYTqtta8=
 github.com/hashicorp/yamux v0.1.2 h1:XtB8kyFOyHXYVFnwT5C3+Bdo8gArse7j2AQ0DA0Uey8=
 github.com/hashicorp/yamux v0.1.2/go.mod h1:C+zze2n6e/7wshOZep2A70/aQU6QBRWJO/G6FT1wIns=
 github.com/holiman/uint256 v1.3.2 h1:a9EgMPSC1AAaj1SZL5zIQD3WbwTuHrMGOerLjGmM/TA=

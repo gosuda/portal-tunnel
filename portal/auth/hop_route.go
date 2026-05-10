@@ -77,7 +77,9 @@ func normalizeHopRoute(route types.HopRoute, requireOwner bool) (types.HopRoute,
 
 	route.OwnerPublicKey = ownerPublicKey
 	route.RelayURL = relayURL
-	route.MatchHostname = utils.NormalizeHostname(route.MatchHostname)
+	route.PublicHostname = utils.NormalizeHostname(route.PublicHostname)
+	route.RouteHostname = utils.NormalizeHostname(route.RouteHostname)
+	route.HostnameHash = strings.TrimSpace(route.HostnameHash)
 	route.MatchToken = strings.TrimSpace(route.MatchToken)
 	route.Metadata = route.Metadata.Copy()
 	route.ForwardToken = strings.TrimSpace(route.ForwardToken)

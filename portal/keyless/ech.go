@@ -20,35 +20,40 @@ const (
 	echKDFHKDFSHA256       = 0x0001
 	echAEADAES128GCM       = 0x0001
 	echMaximumNameLength   = 255
+	echMaxConfigListLength = 4096
 	echX25519PrivateLength = 32
 	echHKDFInfoPrefix      = "portal relay ech v1:"
 )
 
-func EncryptedClientHelloKeys(siwePrivateKey, seed, publicName string) ([]tls.EncryptedClientHelloKey, error) {
+// MinTLSVersion returns the minimum TLS version required when ECH is enabled.
+func MinTLSVersion(echEnabled bool) uint16 {
+	if echEnabled {
+		return tls.VersionTLS13
+	}
+	return tls.VersionTLS12
+}
+
+func EncryptedClientHelloMaterials(seed, publicName string) ([]tls.EncryptedClientHelloKey, []byte, error) {
 	publicName = utils.NormalizeHostname(publicName)
 	if publicName == "" {
-		return nil, errors.New("ech public name is required")
-	}
-	signingKey, _, err := utils.ParseSecp256k1PrivateKeyHex(siwePrivateKey, true)
-	if err != nil {
-		return nil, fmt.Errorf("parse siwe private key: %w", err)
+		return nil, nil, errors.New("ech public name is required")
 	}
 	seed = strings.TrimSpace(seed)
 	if seed == "" {
-		return nil, errors.New("ech seed is required")
+		return nil, nil, errors.New("ech seed is required")
 	}
 
 	if len(publicName) > echMaximumNameLength {
-		return nil, errors.New("ech public name is too long")
+		return nil, nil, errors.New("ech public name is too long")
 	}
 
-	privateKey, err := hkdf.Key(sha256.New, signingKey.Serialize(), []byte(seed), echHKDFInfoPrefix+publicName, echX25519PrivateLength)
+	privateKey, err := hkdf.Key(sha256.New, []byte(seed), nil, echHKDFInfoPrefix+publicName, echX25519PrivateLength)
 	if err != nil {
-		return nil, fmt.Errorf("derive ech private key: %w", err)
+		return nil, nil, fmt.Errorf("derive ech private key: %w", err)
 	}
 	key, err := ecdh.X25519().NewPrivateKey(privateKey)
 	if err != nil {
-		return nil, fmt.Errorf("parse ech private key: %w", err)
+		return nil, nil, fmt.Errorf("parse ech private key: %w", err)
 	}
 	publicKey := key.PublicKey().Bytes()
 	configID := sha256.Sum256(bytes.Join([][]byte{
@@ -86,9 +91,34 @@ func EncryptedClientHelloKeys(siwePrivateKey, seed, publicName string) ([]tls.En
 	writeUint16(&out, echConfigVersion)
 	writeUint16LengthPrefixed(&out, body.Bytes())
 
-	return []tls.EncryptedClientHelloKey{{
+	keys := []tls.EncryptedClientHelloKey{{
 		Config:      out.Bytes(),
 		PrivateKey:  privateKey,
 		SendAsRetry: true,
-	}}, nil
+	}}
+
+	var configList bytes.Buffer
+	var configListLength [2]byte
+	binary.BigEndian.PutUint16(configListLength[:], uint16(len(keys[0].Config)))
+	configList.Write(configListLength[:])
+	configList.Write(keys[0].Config)
+
+	return keys, configList.Bytes(), nil
+}
+
+func NormalizeEncryptedClientHelloConfigList(raw []byte) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("ech config list is required")
+	}
+	if len(raw) > echMaxConfigListLength {
+		return nil, errors.New("ech config list is too large")
+	}
+	if len(raw) < 2 {
+		return nil, errors.New("ech config list is invalid")
+	}
+	listLength := int(binary.BigEndian.Uint16(raw[:2]))
+	if listLength != len(raw)-2 {
+		return nil, errors.New("ech config list length prefix is invalid")
+	}
+	return bytes.Clone(raw), nil
 }

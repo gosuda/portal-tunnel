@@ -33,11 +33,12 @@ const (
 )
 
 type MITMProbeReport struct {
-	RelayURL  string
-	PublicURL string
-	Address   string
-	Detected  bool
-	Reason    string
+	RelayURL    string
+	PublicURL   string
+	Address     string
+	ECHAccepted bool
+	Detected    bool
+	Reason      string
 }
 
 type mitmProbePending struct {
@@ -113,15 +114,10 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 	}
 
 	probeTLSConf := &tls.Config{
-		ServerName:         lease.hostname,
-		InsecureSkipVerify: true,
-	}
-	if lease.tlsConfig != nil {
-		probeTLSConf.MinVersion = lease.tlsConfig.MinVersion
-		probeTLSConf.MaxVersion = lease.tlsConfig.MaxVersion
-		if len(lease.tlsConfig.NextProtos) > 0 {
-			probeTLSConf.NextProtos = append([]string(nil), lease.tlsConfig.NextProtos...)
-		}
+		ServerName:                     lease.hostname,
+		InsecureSkipVerify:             true,
+		MinVersion:                     keyless.MinTLSVersion(len(lease.echConfigList) > 0),
+		EncryptedClientHelloConfigList: bytes.Clone(lease.echConfigList),
 	}
 
 	dialer := &tls.Dialer{
@@ -140,6 +136,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 	}
 
 	clientState := tlsConn.ConnectionState()
+	report.ECHAccepted = clientState.ECHAccepted
 	expected, err := (&clientState).ExportKeyingMaterial(mitmProbeExporterLabel, nil, 32)
 	if err != nil {
 		return report, fmt.Errorf("export client probe keying material: %w", err)
@@ -254,6 +251,7 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 		}
 		log.Warn().
 			Err(err).
+			Bool("ech_accepted", report.ECHAccepted).
 			Str("relay_url", relayURL).
 			Str("address", l.identity.Address).
 			Msg("tls passthrough self-probe failed")
@@ -265,6 +263,7 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 			return
 		}
 		log.Warn().
+			Bool("ech_accepted", report.ECHAccepted).
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
 			Str("address", report.Address).
@@ -279,6 +278,7 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 		}
 		event := log.Warn().
 			Bool("ban_mitm", m.ban).
+			Bool("ech_accepted", report.ECHAccepted).
 			Str("reason", report.Reason).
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
@@ -298,6 +298,7 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 			return
 		}
 		log.Debug().
+			Bool("ech_accepted", report.ECHAccepted).
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
 			Str("address", report.Address).
@@ -359,7 +360,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 func (m *mitmManager) startProbe(nonce string, expected []byte) (<-chan string, func()) {
 	m.mu.Lock()
 	state := &mitmProbePending{
-		expected: append([]byte(nil), expected...),
+		expected: bytes.Clone(expected),
 		resultCh: make(chan string, 1),
 	}
 	m.pending[nonce] = state

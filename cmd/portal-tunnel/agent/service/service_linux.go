@@ -36,6 +36,14 @@ func Start(ctx context.Context, name string) error {
 	return runSystemctl(ctx, userMode, "start", name+".service")
 }
 
+func Stop(ctx context.Context, name string) error {
+	_, userMode, err := linuxUnitPath(name)
+	if err != nil {
+		return err
+	}
+	return runSystemctl(ctx, userMode, "stop", name+".service")
+}
+
 func StopDisable(ctx context.Context, name string) error {
 	_, userMode, err := linuxUnitPath(name)
 	if err != nil {

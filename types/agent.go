@@ -1,6 +1,7 @@
 package types
 
 type AgentStatusResponse struct {
+	ConfigPath  string              `json:"config_path,omitempty"`
 	ControlAddr string              `json:"control_addr"`
 	Tunnels     []AgentTunnelStatus `json:"tunnels,omitempty"`
 }
@@ -18,6 +19,7 @@ type AgentTunnelStatus struct {
 type AgentRelayStatus struct {
 	RelayURL        string `json:"relay_url"`
 	PublicURL       string `json:"public_url,omitempty"`
+	Explicit        bool   `json:"explicit,omitempty"`
 	Connecting      bool   `json:"connecting"`
 	Bootstrap       bool   `json:"bootstrap"`
 	Banned          bool   `json:"banned"`

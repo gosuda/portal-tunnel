@@ -31,6 +31,16 @@ Relay API TLS is separate from tenant TLS:
 - Tenant TLS protects end-user traffic for lease hostnames.
 - The internal QUIC datagram backhaul uses `SNI_PORT/udp` with ALPN `portal-tunnel`.
 
+## Tunnel ECH
+
+For default stream leases, the SDK derives an opaque route hostname from the tunnel identity private key. The relay still receives the lease identity name and can derive the public fallback hostname so it can validate plaintext-SNI fallback routing and manage DNS automation. The relay stores the route hostname for ECH routing and a validated hash of the public fallback hostname. When DNS automation is enabled, the relay also keeps the public hostname needed to publish and delete its HTTPS `ech` record.
+
+ECH-capable clients can use the opaque route hostname as the outer SNI while the real tenant SNI stays inside the ECH-protected ClientHello handled by the SDK. For multi-hop stream routes, the entry relay gets the opaque route hostname for ECH and the public hostname needed to validate the plaintext-SNI fallback hash and manage DNS automation. After the entry relay chooses the route, the remaining hops continue to use hop tokens and passthrough forwarding.
+
+When `ACME_DNS_PROVIDER` is configured, Portal publishes DNS HTTPS records with the `ech` parameter for the relay root and stream lease public hostnames. Without a DNS provider, operators must distribute the logged ECHConfigList through DNS HTTPS/SVCB or another ECH-capable bootstrap. Without that distribution, ordinary clients keep using the public hostname SNI and the relay routes them through the existing plaintext-SNI fallback.
+
+Legacy clients and raw TCP/UDP transports still use the legacy hostname registration path. On those paths the relay control plane receives the lease hostname and can expose it to admin views.
+
 ## MITM Self-Probe
 
 `portal expose` runs an asynchronous TLS passthrough self-probe after real tenant traffic starts. The SDK connects to its own public hostname, exports TLS keying material from the client side, recognizes the returning probe after SDK-side TLS termination, and compares exporter values.
@@ -42,7 +52,8 @@ Matching exporter values mean the sampled connection preserved passthrough. A mi
 | Relays can see | Relays cannot see |
 |---|---|
 | Source IP and timing metadata | HTTP headers or body |
-| Tunnel hostname/SNI | Tenant TLS session keys |
+| Lease identity/public hostname, including SNI on the plaintext-SNI fallback path | Tenant TLS session keys |
+| Opaque route hostnames on the ECH path | ECH-protected inner SNI when clients use the distributed ECHConfigList |
 | Traffic volume and connection duration | Application payload on the stream path |
 | Requested TCP/UDP transport metadata | Local service plaintext on the tenant TLS stream path |
 | Raw TCP/UDP payloads when the application protocol is unencrypted | Application-level encrypted raw TCP/UDP payloads |

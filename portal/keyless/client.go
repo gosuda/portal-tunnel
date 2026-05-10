@@ -1,10 +1,12 @@
 package keyless
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -13,7 +15,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioCloser, error) {
+func BuildClientTLSConfig(relayURL, hostname string, echKeys []tls.EncryptedClientHelloKey, headers func() http.Header) (*tls.Config, ioCloser, error) {
 	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return nil, nil, err
@@ -32,15 +34,12 @@ func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioClo
 	if err != nil {
 		return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
 	}
-	for _, domain := range domains {
-		domain = strings.TrimSpace(domain)
-		if domain == "" {
-			continue
-		}
-		verifyErr := VerifyCertificateHostname(certPEM, domain)
-		if verifyErr != nil {
-			return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", domain, verifyErr)
-		}
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" {
+		return nil, nil, errors.New("keyless hostname is required")
+	}
+	if verifyErr := VerifyCertificateHostname(certPEM, hostname); verifyErr != nil {
+		return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", hostname, verifyErr)
 	}
 
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
@@ -48,16 +47,18 @@ func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioClo
 		ServerName: serverName,
 		KeyID:      RelayKeyID,
 		RootCAPEM:  rootCAPEM,
+		Headers:    headers,
 	}, certPEM)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create keyless remote signer: %w", err)
 	}
 
 	tlsConfig, err := keylesstls.NewServerTLSConfig(keylesstls.ServerTLSConfig{
-		CertPEM:    certPEM,
-		Signer:     remoteSigner,
-		NextProtos: []string{"http/1.1"},
-		MinVersion: tls.VersionTLS12,
+		CertPEM:                  certPEM,
+		Signer:                   remoteSigner,
+		NextProtos:               []string{"http/1.1"},
+		MinVersion:               MinTLSVersion(len(echKeys) > 0),
+		EncryptedClientHelloKeys: echKeys,
 	})
 	if err != nil {
 		_ = remoteSigner.Close()
@@ -78,7 +79,7 @@ func ResolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte,
 	if len(chainPEM) == 0 {
 		return nil, nil, errors.New("keyless certificate chain is required")
 	}
-	return append([]byte(nil), chainPEM...), append([]byte(nil), chainPEM...), nil
+	return bytes.Clone(chainPEM), bytes.Clone(chainPEM), nil
 }
 
 func VerifyCertificateHostname(certPEM []byte, hostname string) error {

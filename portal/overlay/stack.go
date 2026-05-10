@@ -1,3 +1,5 @@
+//go:build linux || darwin || windows || freebsd || openbsd
+
 package overlay
 
 import (
@@ -19,14 +21,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-const (
-	DefaultMTU                 = 1420
-	DefaultListenPort          = 51820
-	DefaultPeerAPIHTTPPort     = 7777
-	DefaultPeerYamuxPort       = 7778
-	DefaultPersistentKeepalive = 25
-	defaultEndpointResolveTTL  = 3 * time.Second
-)
+const defaultEndpointResolveTTL = 3 * time.Second
 
 type stack struct {
 	device    *device.Device

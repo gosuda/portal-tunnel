@@ -19,7 +19,7 @@ You need:
 - A public domain, for example `example.com`
 - A public Linux server with a static public IPv4
 - Docker and Docker Compose
-- Optional for managed ACME DNS-01 automation or Portal-managed ENS TXT sync: a supported DNS provider account for `cloudflare`, `gcloud`, or `route53`
+- Optional for managed ACME DNS-01 automation, Portal-managed ECH HTTPS records, or Portal-managed ENS TXT sync: a supported DNS provider account for `cloudflare`, `gcloud`, or `route53`
 - Open inbound ports:
   - `443/tcp`
   - `4017/tcp`
@@ -40,10 +40,10 @@ Choose one of these modes:
 - Manual certificate + gasless mode
   - Place `fullchain.pem` and `privatekey.pem` in `IDENTITY_PATH`.
   - Set `ACME_DNS_PROVIDER`.
-  - Portal keeps the manual certificate files, skips ACME certificate issuance, and still uses the provider for DNSSEC + ENS TXT automation.
+  - Portal keeps the manual certificate files, skips ACME certificate issuance, and still uses the provider for ECH HTTPS records and DNSSEC + ENS TXT automation.
 - Managed ACME mode
   - Set `ACME_DNS_PROVIDER` to `cloudflare`, `gcloud`, or `route53`.
-  - Portal manages root/wildcard A records and certificate renewal.
+  - Portal manages root/wildcard A records, ECH HTTPS records, and certificate renewal.
   - If ENS gasless is enabled, Portal also manages DNSSEC.
 
 If you only need a relay and do not need Portal-managed DNS or automatic renewal, manual certificate mode is the simplest option.

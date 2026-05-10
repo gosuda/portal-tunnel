@@ -34,6 +34,14 @@ func Start(ctx context.Context, name string) error {
 	return exec.CommandContext(ctx, "launchctl", "kickstart", "-k", domain+"/"+name).Run()
 }
 
+func Stop(ctx context.Context, name string) error {
+	plistPath, domain, err := launchdPlistPath(name)
+	if err != nil {
+		return err
+	}
+	return exec.CommandContext(ctx, "launchctl", "bootout", domain, plistPath).Run()
+}
+
 func StopDisable(ctx context.Context, name string) error {
 	plistPath, domain, err := launchdPlistPath(name)
 	if err != nil {

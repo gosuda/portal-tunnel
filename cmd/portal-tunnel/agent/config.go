@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/knadh/koanf/parsers/toml/v2"
 	"github.com/knadh/koanf/providers/file"
@@ -21,6 +22,7 @@ const (
 
 	defaultIdentityFilename = "identity.json"
 	defaultTargetAddr       = "127.0.0.1:3000"
+	agentPathInvalidChars   = `<>:"/\|?*`
 )
 
 type Config struct {
@@ -63,7 +65,7 @@ type HTTPRouteConfig struct {
 	Upstream string `koanf:"upstream"`
 }
 
-func LoadConfig(path string) (Config, error) {
+func LoadExistingConfig(path string) (Config, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		path = service.DefaultConfigPath()
@@ -72,45 +74,17 @@ func LoadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	configDir := filepath.Dir(absPath)
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		return Config{}, fmt.Errorf("create agent config directory %q: %w", configDir, err)
-	}
 	if _, err := os.Stat(absPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			data := fmt.Sprintf(`[agent]
-state_dir = %q
-control_addr = %q
-service_name = %q
-
-[[tunnels]]
-id = "default"
-name = "default"
-target = %q
-discovery = true
-`, service.DefaultDataDir(), DefaultControlAddr, DefaultServiceName, defaultTargetAddr)
-			if err := os.WriteFile(absPath, []byte(data), 0o644); err != nil {
-				return Config{}, fmt.Errorf("create default agent config %q: %w", absPath, err)
-			}
-		} else {
-			return Config{}, err
+			return Config{}, fmt.Errorf("agent config %q does not exist", absPath)
 		}
-	}
-
-	k := koanf.New(".")
-	if err := k.Load(file.Provider(absPath), toml.Parser()); err != nil {
 		return Config{}, err
 	}
-
-	var cfg Config
-	if err := k.Unmarshal("", &cfg); err != nil {
+	cfg, _, err := readConfigDocument(absPath)
+	if err != nil {
 		return Config{}, err
 	}
-	cfg.sourcePath = absPath
-	if err := cfg.ApplyDefaults(absPath); err != nil {
-		return Config{}, err
-	}
-	return cfg, cfg.Validate()
+	return cfg, nil
 }
 
 func loadConfigDocument(path string) (Config, string, os.FileMode, error) {
@@ -122,40 +96,45 @@ func loadConfigDocument(path string) (Config, string, os.FileMode, error) {
 	if err != nil {
 		return Config{}, "", 0, err
 	}
-	if _, err := os.Stat(absPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			if _, err := LoadConfig(absPath); err != nil {
-				return Config{}, "", 0, err
-			}
-		} else {
-			return Config{}, "", 0, err
-		}
-	}
-	info, err := os.Stat(absPath)
+	cfg, mode, err := readConfigDocument(absPath)
 	if err != nil {
 		return Config{}, "", 0, err
+	}
+	return cfg, absPath, mode, nil
+}
+
+func readConfigDocument(absPath string) (Config, os.FileMode, error) {
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return Config{}, 0, err
 	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
-		return Config{}, "", 0, err
+		return Config{}, 0, err
 	}
 
 	var cfg Config
 	if strings.TrimSpace(string(data)) != "" {
 		k := koanf.New(".")
 		if err := k.Load(file.Provider(absPath), toml.Parser()); err != nil {
-			return Config{}, "", 0, err
+			return Config{}, 0, err
 		}
 		if err := k.Unmarshal("", &cfg); err != nil {
-			return Config{}, "", 0, err
+			return Config{}, 0, err
 		}
 	}
 	cfg.sourcePath = absPath
-	return cfg, absPath, info.Mode().Perm(), nil
+	if err := cfg.ApplyDefaults(absPath); err != nil {
+		return Config{}, 0, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, 0, err
+	}
+	return cfg, info.Mode().Perm(), nil
 }
 
 func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
-	data, err := toml.Parser().Marshal(configDocumentMap(cfg))
+	data, err := toml.Parser().Marshal(configMap(cfg))
 	if err != nil {
 		return err
 	}
@@ -165,25 +144,22 @@ func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
 	return os.WriteFile(path, data, mode)
 }
 
-func configDocumentMap(cfg Config) map[string]any {
-	return map[string]any{
-		"agent":   agentConfigDocumentMap(cfg.Agent),
-		"tunnels": tunnelConfigDocumentMaps(cfg.Tunnels),
+func configMap(cfg Config) map[string]any {
+	agent := make(map[string]any)
+	addStringDocumentField(agent, "state_dir", cfg.Agent.StateDir)
+	addStringDocumentField(agent, "control_addr", cfg.Agent.ControlAddr)
+	addStringDocumentField(agent, "service_name", cfg.Agent.ServiceName)
+
+	tunnels := make([]map[string]any, 0, len(cfg.Tunnels))
+	for _, tunnel := range cfg.Tunnels {
+		tunnels = append(tunnels, tunnelConfigDocumentMap(tunnel))
 	}
-}
 
-func agentConfigDocumentMap(cfg AgentConfig) map[string]any {
-	out := make(map[string]any)
-	addStringDocumentField(out, "state_dir", cfg.StateDir)
-	addStringDocumentField(out, "control_addr", cfg.ControlAddr)
-	addStringDocumentField(out, "service_name", cfg.ServiceName)
-	return out
-}
-
-func tunnelConfigDocumentMaps(tunnels []TunnelConfig) []map[string]any {
-	out := make([]map[string]any, 0, len(tunnels))
-	for _, tunnel := range tunnels {
-		out = append(out, tunnelConfigDocumentMap(tunnel))
+	out := map[string]any{
+		"tunnels": tunnels,
+	}
+	if len(agent) > 0 {
+		out["agent"] = agent
 	}
 	return out
 }
@@ -248,41 +224,15 @@ func addStringSliceDocumentField(out map[string]any, key string, value []string)
 	}
 }
 
-func validateConfigDocument(path string, cfg Config) error {
-	next := cloneConfig(cfg)
-	if err := next.ApplyDefaults(path); err != nil {
-		return err
-	}
-	return next.Validate()
-}
-
-func cloneConfig(cfg Config) Config {
-	next := cfg
-	next.Tunnels = append([]TunnelConfig(nil), cfg.Tunnels...)
-	for i := range next.Tunnels {
-		tunnel := &next.Tunnels[i]
-		tunnel.HTTPRoutes = append([]HTTPRouteConfig(nil), tunnel.HTTPRoutes...)
-		tunnel.RelayURLs = append([]string(nil), tunnel.RelayURLs...)
-		tunnel.MultiHop = append([]string(nil), tunnel.MultiHop...)
-		tunnel.Tags = append([]string(nil), tunnel.Tags...)
-		if tunnel.Discovery != nil {
-			value := *tunnel.Discovery
-			tunnel.Discovery = &value
-		}
-		if tunnel.BanMITM != nil {
-			value := *tunnel.BanMITM
-			tunnel.BanMITM = &value
-		}
-	}
-	return next
-}
-
 func (cfg *Config) ApplyDefaults(configPath string) error {
 	configDir := "."
 	if absConfig, err := filepath.Abs(strings.TrimSpace(configPath)); err == nil {
 		configDir = filepath.Dir(absConfig)
 	}
 
+	cfg.Agent.StateDir = strings.TrimSpace(cfg.Agent.StateDir)
+	cfg.Agent.ControlAddr = strings.TrimSpace(cfg.Agent.ControlAddr)
+	cfg.Agent.ServiceName = strings.TrimSpace(cfg.Agent.ServiceName)
 	if strings.TrimSpace(cfg.Agent.StateDir) == "" {
 		cfg.Agent.StateDir = service.DefaultDataDir()
 	} else if !filepath.IsAbs(cfg.Agent.StateDir) {
@@ -342,10 +292,9 @@ func (cfg Config) Validate() error {
 	if strings.TrimSpace(cfg.Agent.ControlAddr) == "" {
 		return errors.New("agent.control_addr is required")
 	}
-	if len(cfg.Tunnels) == 0 {
-		return errors.New("at least one tunnel is required")
+	if err := validateAgentPathComponent("agent.service_name", cfg.Agent.ServiceName); err != nil {
+		return err
 	}
-
 	seen := make(map[string]struct{}, len(cfg.Tunnels))
 	for _, tunnel := range cfg.Tunnels {
 		if err := tunnel.Validate(); err != nil {
@@ -360,8 +309,8 @@ func (cfg Config) Validate() error {
 }
 
 func (cfg TunnelConfig) Validate() error {
-	if strings.TrimSpace(cfg.ID) == "" {
-		return errors.New("tunnel id is required")
+	if err := validateAgentPathComponent("tunnel id", cfg.ID); err != nil {
+		return err
 	}
 	if strings.TrimSpace(cfg.TargetAddr) == "" && len(cfg.HTTPRoutes) == 0 {
 		return fmt.Errorf("tunnel %q requires target or http_routes", cfg.ID)
@@ -381,10 +330,42 @@ func (cfg TunnelConfig) Validate() error {
 	if len(cfg.MultiHop) > 0 && cfg.MultiHopDepth > 1 {
 		return fmt.Errorf("tunnel %q cannot combine multi_hop and multi_hop_depth", cfg.ID)
 	}
+	if (len(cfg.MultiHop) > 0 || cfg.MultiHopDepth > 1) && (cfg.UDPEnabled || cfg.TCPEnabled) {
+		return fmt.Errorf("tunnel %q multi-hop supports only the default stream transport", cfg.ID)
+	}
+	if len(cfg.MultiHop) > 0 {
+		uniqueMultiHop, err := utils.NormalizeRelayURLs(cfg.MultiHop...)
+		if err != nil {
+			return fmt.Errorf("tunnel %q multi_hop: %w", cfg.ID, err)
+		}
+		if len(uniqueMultiHop) != len(cfg.MultiHop) {
+			return fmt.Errorf("tunnel %q multi_hop relay repeated", cfg.ID)
+		}
+	}
 	for _, route := range cfg.HTTPRoutes {
 		if strings.TrimSpace(route.Prefix) == "" || strings.TrimSpace(route.Upstream) == "" {
 			return fmt.Errorf("tunnel %q http_routes require prefix and upstream", cfg.ID)
 		}
 	}
 	return nil
+}
+
+func validateAgentPathComponent(name, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	if value == "." || value == ".." {
+		return fmt.Errorf("%s cannot be %q", name, value)
+	}
+	for _, r := range value {
+		if invalidAgentPathComponentRune(r) {
+			return fmt.Errorf("%s contains invalid character %q", name, r)
+		}
+	}
+	return nil
+}
+
+func invalidAgentPathComponentRune(r rune) bool {
+	return unicode.IsSpace(r) || r < 0x20 || r == 0x7f || strings.ContainsRune(agentPathInvalidChars, r)
 }

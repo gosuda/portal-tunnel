@@ -8,7 +8,7 @@ import (
 func TestFindHostedZoneIDExplicitOverride(t *testing.T) {
 	t.Parallel()
 
-	got, err := findHostedZoneID(context.Background(), nil, "portal.example.com", "/hostedzone/Z123456789")
+	got, err := New(Config{HostedZoneID: "/hostedzone/Z123456789"}).findHostedZoneID(context.Background(), nil, "portal.example.com")
 	if err != nil {
 		t.Fatalf("findHostedZoneID() error = %v", err)
 	}

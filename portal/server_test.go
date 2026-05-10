@@ -165,8 +165,8 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	}
 	defer signResp.Body.Close()
 
-	if signResp.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("GET /v1/sign status = %d, want %d", signResp.StatusCode, http.StatusMethodNotAllowed)
+	if signResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("GET /v1/sign status = %d, want %d", signResp.StatusCode, http.StatusForbidden)
 	}
 }
 
@@ -263,7 +263,7 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 	}
 }
 
-func TestRegisterLeaseOmitsSNIPortWithoutUDP(t *testing.T) {
+func TestRegisterLeaseIncludesSNIPortForPublicIngress(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
@@ -292,8 +292,8 @@ func TestRegisterLeaseOmitsSNIPortWithoutUDP(t *testing.T) {
 		record.Close()
 	})
 
-	if resp.SNIPort != 0 {
-		t.Fatalf("RegisterResponse.SNIPort = %d, want 0 without udp", resp.SNIPort)
+	if resp.SNIPort != server.cfg.SNIPort {
+		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, server.cfg.SNIPort)
 	}
 }
 
@@ -374,7 +374,7 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	record, resp, err := server.registry.Register(types.RegisterChallengeRequest{
+	record, _, err := server.registry.Register(types.RegisterChallengeRequest{
 		Identity: types.Identity{
 			Name:    "Demo-App",
 			Address: server.identity.Address,
@@ -385,8 +385,8 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	}
 
 	wantHostname := "demo-app.portal.example.com"
-	if resp.Hostname != wantHostname {
-		t.Fatalf("registry.Register() hostname = %q, want %q", resp.Hostname, wantHostname)
+	if record.Hostname != wantHostname {
+		t.Fatalf("registry.Register() route hostname = %q, want %q", record.Hostname, wantHostname)
 	}
 
 	lease := server.registry.publicLease(record)

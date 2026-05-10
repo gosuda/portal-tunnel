@@ -58,7 +58,7 @@ func TestMITMProbeConnMatchesExporter(t *testing.T) {
 		}
 	}()
 
-	frame := append([]byte(nil), nonce...)
+	frame := bytes.Clone(nonce)
 	frame = append(frame, bytes.Repeat([]byte{0xAB}, 128)...)
 	if _, err := clientConn.Write(frame); err != nil {
 		t.Fatalf("clientConn.Write() error = %v", err)
@@ -113,7 +113,7 @@ func TestMITMProbeConnDetectsExporterMismatch(t *testing.T) {
 		}
 	}()
 
-	frame := append([]byte(nil), nonce...)
+	frame := bytes.Clone(nonce)
 	frame = append(frame, bytes.Repeat([]byte{0xCD}, 128)...)
 	if _, err := clientConn.Write(frame); err != nil {
 		t.Fatalf("clientConn.Write() error = %v", err)

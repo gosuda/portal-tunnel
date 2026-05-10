@@ -26,6 +26,8 @@ type DNSProvider interface {
 	DeleteARecord(ctx context.Context, name string) error
 	EnsureTXTRecord(ctx context.Context, name, value string) error
 	DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error
+	EnsureHTTPSRecord(ctx context.Context, name string, priority uint16, target, svcParams, content string) error
+	DeleteHTTPSRecord(ctx context.Context, name string) error
 	EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error)
 }
 

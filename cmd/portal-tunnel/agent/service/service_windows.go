@@ -73,6 +73,24 @@ func Start(ctx context.Context, name string) error {
 	return waitWindowsService(ctx, s, svc.Running)
 }
 
+func Stop(ctx context.Context, name string) error {
+	s, err := openService(name)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return nil
+		}
+		return err
+	}
+	defer s.Close()
+
+	status, err := s.Query()
+	if err == nil && status.State != svc.Stopped {
+		_, _ = s.Control(svc.Stop)
+		return waitWindowsService(ctx, s, svc.Stopped)
+	}
+	return ctx.Err()
+}
+
 func StopDisable(ctx context.Context, name string) error {
 	s, err := openService(name)
 	if err != nil {

@@ -1,9 +1,9 @@
 {
+    "_comment": "The Go binary now reads bootstrap relays from config.toml's [bootstrap].relays. This file is retained because the relay-server frontend (frontend/src/components/ServerListView.tsx) and the VS Code extension (extensions/vscode) still fetch it from raw.githubusercontent.com. Keep this list in sync with config.toml until those consumers migrate.",
     "relays": [
         "https://portal.thumbgo.kr/",
         "https://portal.rabbitson87.dev/",
         "https://s-h.day/",
-        "https://portal.1ncursio.dev/",
         "https://portal.dawnfullstack.com/",
         "https://portal.damn.it.com/",
         "https://kakashit.org"

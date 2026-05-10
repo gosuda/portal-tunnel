@@ -15,6 +15,10 @@ func Start(context.Context, string) error {
 	return errors.New("portal agent service start is not supported on this OS")
 }
 
+func Stop(context.Context, string) error {
+	return errors.New("portal agent service stop is not supported on this OS")
+}
+
 func StopDisable(context.Context, string) error {
 	return errors.New("portal agent service stop is not supported on this OS")
 }

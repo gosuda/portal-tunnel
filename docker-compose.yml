@@ -53,7 +53,7 @@ services:
       PPROF_ENABLED: ${PPROF_ENABLED:-false}
       PPROF_ADDR: ${PPROF_ADDR:-127.0.0.1:6060}
 
-      # TLS/ACME materials
+      # TLS/ACME materials and DNS automation
       ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-}
       ENS_GASLESS_ENABLED: ${ENS_GASLESS_ENABLED:-false}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}

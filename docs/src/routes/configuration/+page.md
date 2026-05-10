@@ -49,7 +49,7 @@ The relay server (`relay-server`) reads configuration from environment variables
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ACME_DNS_PROVIDER` | `""` | string | ACME DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (`cloudflare` \| `gcloud` \| `route53`); leave empty to use manual `fullchain.pem`/`privatekey.pem` from `IDENTITY_PATH` |
+| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (`cloudflare` \| `gcloud` \| `route53`); leave empty to use manual `fullchain.pem`/`privatekey.pem` from `IDENTITY_PATH` |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames |
 
 ### Admin
@@ -152,8 +152,7 @@ The `portal list` subcommand accepts the following flags:
 
 ### `config.toml`
 
-`portal agent run` reads the platform default `config.toml` and starts one managed process for all declared tunnels. Relative paths are resolved from the config file directory.
-If the file is missing, `portal agent run` creates a default config and the agent creates the identity file on first tunnel start.
+`portal agent run` reads the platform default `config.toml` and starts one managed process for all declared tunnels. Relative paths are resolved from the config file directory. The config file must exist before the agent is started.
 
 Default paths:
 
@@ -242,7 +241,7 @@ Relay admin settings are stored at `IDENTITY_PATH/admin_settings.json`.
 
 ## ACME DNS Provider Configuration
 
-Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable automated TLS certificate issuance via DNS-01 challenges.
+Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, ECH HTTPS records, and optional ENS gasless DNS records.
 
 When this variable is empty the relay server falls back to manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH`.
 

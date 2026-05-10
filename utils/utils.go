@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"unicode"
 
 	"golang.org/x/net/idna"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func SplitCSV(raw string) []string {
@@ -226,6 +229,15 @@ func HostnameMatchesPattern(pattern, hostname string) bool {
 	return ok && rest == suffix
 }
 
+func HostnameHash(hostname string) string {
+	hostname = NormalizeHostname(hostname)
+	if hostname == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("portal hostname hash v1\x00" + hostname))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
 func NormalizeChildHostnames(inputs []string, baseDomain string) []string {
 	if len(inputs) == 0 {
 		return nil
@@ -348,6 +360,25 @@ func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
 	}
 
 	return FilterRelayURLs(merged, excluded), nil
+}
+
+func ResolvePortalRelayURLs(explicit []string, includeBootstrap bool) ([]string, error) {
+	explicit, err := NormalizeRelayURLs(explicit...)
+	if err != nil {
+		return nil, err
+	}
+	if !includeBootstrap {
+		return explicit, nil
+	}
+
+	defaults, err := NormalizeRelayURLs(types.BootstrapRelays...)
+	if err != nil {
+		return explicit, nil
+	}
+	if len(defaults) == 0 {
+		return explicit, nil
+	}
+	return MergeRelayURLs(defaults, nil, explicit)
 }
 
 func ExcludeLocalRelayURLs(inputs ...string) ([]string, error) {

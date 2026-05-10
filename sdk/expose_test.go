@@ -274,4 +274,8 @@ func TestActiveBlocksAcceptDuringReset(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Accept did not unblock after exposure close")
 	}
+	relays := exposure.relaySet.AllRelays()
+	if len(relays) != 1 || relays[0].Descriptor.APIHTTPSAddr != relayA || relays[0].Banned {
+		t.Fatalf("AllRelays() = %+v, want unbanned candidate %q", relays, relayA)
+	}
 }

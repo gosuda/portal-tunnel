@@ -230,7 +230,7 @@ func runListCommand(args []string) error {
 	fs := utils.NewFlagSet("list", printListUsage)
 
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
-	utils.BoolFlag(fs, &flags.defaultRelays, "default-relays", true, "Include public registry relays")
+	utils.BoolFlag(fs, &flags.defaultRelays, "default-relays", true, "Include bootstrap relays")
 
 	if err := utils.ParseFlagSet(fs, args, printListUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -248,7 +248,7 @@ func runListCommand(args []string) error {
 
 	relayInputs := utils.SplitCSV(flags.relayCSV)
 
-	relayURLs, err := utils.ResolvePortalRelayURLs(ctx, relayInputs, flags.defaultRelays)
+	relayURLs, err := utils.ResolvePortalRelayURLs(relayInputs, flags.defaultRelays)
 	if err != nil {
 		return fmt.Errorf("resolve relay urls: %w", err)
 	}
@@ -287,6 +287,7 @@ func printRootUsage(w io.Writer) {
 			"portal agent run [flags]",
 			"portal agent dashboard [flags]",
 			"portal agent stop [flags]",
+			"portal agent restart [flags]",
 			"portal list [flags]",
 			"portal update [flags]",
 			"portal version",
@@ -298,6 +299,7 @@ func printRootUsage(w io.Writer) {
 			"portal agent run",
 			"portal agent dashboard",
 			"portal agent stop",
+			"portal agent restart",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal list",
 			"portal update",

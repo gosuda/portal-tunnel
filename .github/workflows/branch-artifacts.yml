@@ -1,0 +1,118 @@
+name: Branch Artifacts
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit SHA to build. Leave empty to build the workflow branch.
+        required: false
+
+env:
+  BUILD_REF: ${{ inputs.ref || github.ref_name }}
+  REGISTRY: ghcr.io
+  IMAGE_NAME: gosuda/portal
+  PLATFORMS: linux/amd64,linux/arm64
+
+concurrency:
+  group: branch-artifacts-${{ inputs.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.BUILD_REF }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Prepare artifact metadata
+        id: meta
+        shell: bash
+        run: |
+          safe_ref="$(printf '%s' "$BUILD_REF" | tr '[:upper:]' '[:lower:]' | tr '/:@' '---' | tr -cd 'a-z0-9._-')"
+          if [ -z "$safe_ref" ]; then
+            safe_ref="selected-ref"
+          fi
+          safe_ref="${safe_ref:0:80}"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          echo "safe_ref=$safe_ref" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          {
+            echo "image_tags<<EOF"
+            echo "${REGISTRY}/${IMAGE_NAME}:branch-${safe_ref}"
+            echo "${REGISTRY}/${IMAGE_NAME}:branch-${safe_ref}-${short_sha}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.image_tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.commit_sha }}
+            org.opencontainers.image.ref.name=${{ env.BUILD_REF }}
+          cache-from: type=gha,mode=max
+          cache-to: type=gha,mode=max
+
+      - name: Build binaries
+        shell: bash
+        run: |
+          mkdir -p release
+
+          make build-tunnel
+          cp cmd/relay-server/dist/tunnel/portal-* release/
+
+          for GOARCH in amd64 arm64; do
+            out="release/relay-server-linux-${GOARCH}"
+            echo " - ${out}"
+            CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH}" go build -trimpath -ldflags "-s -w" -o "${out}" ./cmd/relay-server
+          done
+
+          cp cmd/portal-tunnel/installer/install.sh release/install.sh
+          cp cmd/portal-tunnel/installer/install.ps1 release/install.ps1
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          cd release
+          sha256sum * > checksums.txt
+          while read -r sum file; do
+            printf '%s  %s\n' "$sum" "$file" > "${file}.sha256"
+          done < checksums.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portal-${{ steps.meta.outputs.safe_ref }}-${{ steps.meta.outputs.short_sha }}
+          path: release/*
+          if-no-files-found: error

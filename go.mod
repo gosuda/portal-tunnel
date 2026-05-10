@@ -1,6 +1,6 @@
 module github.com/gosuda/portal-tunnel/v2
 
-go 1.26.2
+go 1.26.3
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0
@@ -16,12 +16,13 @@ require (
 	github.com/go-acme/lego/v4 v4.34.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-rod/rod v0.116.2
-	github.com/gosuda/keyless_tls v0.0.1
+	github.com/gosuda/keyless_tls v0.0.2-0.20260507061030-5128be6b5008
 	github.com/hashicorp/yamux v0.1.2
 	github.com/knadh/koanf/parsers/toml/v2 v2.2.0
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.4
 	github.com/montanaflynn/stats v0.9.0
+	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/quic-go/quic-go v0.59.0
@@ -90,7 +91,6 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/relvacode/iso8601 v1.1.1-0.20210511065120-b30b151cc433 // indirect

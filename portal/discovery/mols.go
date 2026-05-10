@@ -390,10 +390,6 @@ func (p MOLSRelayPolicy) SelectPriorityWithTrace(states []RelayState, cs ClientS
 			explicit = append(explicit, relayURL)
 			continue
 		}
-		if slices.Contains(cs.SuppressedRelayURLs, relayURL) {
-			continue
-		}
-
 		if state.hasObservedDescriptor() {
 			if !state.Descriptor.ExpiresAt.After(now) {
 				trace.Suppressed = append(trace.Suppressed, relayURL)

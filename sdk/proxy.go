@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -424,7 +425,7 @@ func (m *udpFlowManager) readLoop(ctx context.Context, key udpFlowKey, conn *net
 		}
 		entry.lastSeen = time.Now()
 		replyFrame := entry.frame
-		replyFrame.Payload = append([]byte(nil), buf[:n]...)
+		replyFrame.Payload = bytes.Clone(buf[:n])
 		m.mu.Unlock()
 
 		if sendErr := m.exposure.SendDatagram(replyFrame); sendErr != nil {

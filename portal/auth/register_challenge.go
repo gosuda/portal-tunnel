@@ -48,19 +48,13 @@ func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string
 		return nil, fmt.Errorf("build siwe message: %w", err)
 	}
 
-	normalizedRequest := types.RegisterChallengeRequest{
-		Identity:   normalizedIdentity,
-		Metadata:   req.Metadata.Copy(),
-		TTL:        req.TTL,
-		UDPEnabled: req.UDPEnabled,
-		TCPEnabled: req.TCPEnabled,
-		HopToken:   strings.TrimSpace(req.HopToken),
-	}
+	req.Identity = normalizedIdentity
+	req.Metadata = req.Metadata.Copy()
 
 	return &RegisterChallenge{
 		ChallengeID: challengeID,
 		ExpiresAt:   expiresAt,
-		Request:     normalizedRequest,
+		Request:     req,
 		SIWEMessage: message.String(),
 		domain:      strings.TrimSpace(domain),
 		nonce:       nonce,

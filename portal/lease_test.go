@@ -90,6 +90,134 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 }
 
+func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	routeHostname := "ech-auto-ech.example.com"
+	publicHostname := "auto-ech.example.com"
+	record, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:      newTestLeaseIdentity(t, "auto-ech"),
+		RouteHostname: routeHostname,
+		HostnameHash:  utils.HostnameHash(publicHostname),
+	}, "203.0.113.10", "")
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if record.Hostname != routeHostname {
+		t.Fatalf("Register() route hostname = %q, want %q", record.Hostname, routeHostname)
+	}
+	if record.Hostname == publicHostname {
+		t.Fatalf("Register() route hostname = public hostname = %q", record.Hostname)
+	}
+	if lookedUp, ok := registry.Lookup(publicHostname); !ok || lookedUp != record {
+		t.Fatalf("Lookup(public hostname) = %v, %v, want fallback lease", lookedUp, ok)
+	}
+	lookedUp, ok := registry.Lookup(record.Hostname)
+	if !ok || lookedUp != record {
+		t.Fatalf("Lookup(route hostname) = %v, %v, want registered lease", lookedUp, ok)
+	}
+	leases := registry.PublicLeases(time.Now())
+	if len(leases) != 1 {
+		t.Fatalf("PublicLeases() length = %d, want 1", len(leases))
+	}
+	if leases[0].Hostname != publicHostname {
+		t.Fatalf("PublicLeases()[0].Hostname = %q, want %q", leases[0].Hostname, publicHostname)
+	}
+
+	adminLeases := registry.AdminLeases(time.Now())
+	if len(adminLeases) != 1 {
+		t.Fatalf("AdminLeases() length = %d, want 1", len(adminLeases))
+	}
+	if adminLeases[0].Hostname != publicHostname {
+		t.Fatalf("AdminLeases()[0] hostname = %q, want %q", adminLeases[0].Hostname, publicHostname)
+	}
+
+	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:     newTestLeaseIdentity(t, "hash-only"),
+		HostnameHash: utils.HostnameHash("hash-only.example.com"),
+	}, "203.0.113.10", ""); err == nil {
+		t.Fatal("Register(fallback hash only) error = nil, want error")
+	}
+
+	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:      newTestLeaseIdentity(t, "attacker"),
+		RouteHostname: "ech-attacker.example.com",
+		HostnameHash:  utils.HostnameHash("victim.example.com"),
+	}, "203.0.113.10", ""); err == nil {
+		t.Fatal("Register(mismatched hostname hash) error = nil, want error")
+	}
+	if lookedUp, ok := registry.Lookup("victim.example.com"); ok {
+		t.Fatalf("Lookup(victim hostname) = %v, true; mismatched hash must not route", lookedUp)
+	}
+}
+
+func TestLeaseRegistryHopRouteCanExposeECHAndPlainSNIFallback(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	owner := newTestLeaseIdentity(t, "multi-hop-owner")
+	wgPrivate, err := utils.GenerateWireGuardPrivateKey()
+	if err != nil {
+		t.Fatalf("GenerateWireGuardPrivateKey() error = %v", err)
+	}
+	wgPublic, err := utils.WireGuardPublicKeyFromPrivate(wgPrivate)
+	if err != nil {
+		t.Fatalf("WireGuardPublicKeyFromPrivate() error = %v", err)
+	}
+	now := time.Now()
+	baseRoute := types.HopRoute{
+		OwnerPublicKey: owner.PublicKey,
+		ForwardRelay: types.RelayDescriptor{
+			APIHTTPSAddr:       "https://next.example.com",
+			WireGuardPublicKey: wgPublic,
+		},
+		ForwardToken: "hpt_forward",
+		FirstSeenAt:  now,
+		ExpiresAt:    now.Add(time.Minute),
+	}
+	route := baseRoute
+	route.RouteHostname = "ech-demo.example.com"
+	route.PublicHostname = "demo.example.com"
+	route.HostnameHash = utils.HostnameHash("demo.example.com")
+	route.Metadata.Hide = true
+
+	if _, err := registry.RegisterHopRoute(&route, now); err != nil {
+		t.Fatalf("RegisterHopRoute() error = %v", err)
+	}
+	hashOnlyRoute := baseRoute
+	hashOnlyRoute.HostnameHash = utils.HostnameHash("hash-only.example.com")
+	if _, err := registry.RegisterHopRoute(&hashOnlyRoute, now); err == nil {
+		t.Fatal("RegisterHopRoute(hash only) error = nil, want error")
+	}
+	missingPublicRoute := baseRoute
+	missingPublicRoute.RouteHostname = "ech-missing-public.example.com"
+	missingPublicRoute.HostnameHash = utils.HostnameHash("missing-public.example.com")
+	if _, err := registry.RegisterHopRoute(&missingPublicRoute, now); err == nil {
+		t.Fatal("RegisterHopRoute(missing public hostname) error = nil, want error")
+	}
+	mismatchedRoute := baseRoute
+	mismatchedRoute.RouteHostname = "ech-attacker.example.com"
+	mismatchedRoute.PublicHostname = "attacker.example.com"
+	mismatchedRoute.HostnameHash = utils.HostnameHash("victim.example.com")
+	if _, err := registry.RegisterHopRoute(&mismatchedRoute, now); err == nil {
+		t.Fatal("RegisterHopRoute(mismatched hostname hash) error = nil, want error")
+	}
+	if lookedUp, ok := registry.Lookup("victim.example.com"); ok {
+		t.Fatalf("Lookup(victim hostname) = %v, true; mismatched hop hash must not route", lookedUp)
+	}
+	if _, ok := registry.Lookup("demo.example.com"); !ok {
+		t.Fatal("Lookup(plain route) = false, want true")
+	}
+	if _, ok := registry.Lookup(route.RouteHostname); !ok {
+		t.Fatal("Lookup(ech route) = false, want true")
+	}
+	leases := registry.PublicLeases(now)
+	if len(leases) != 0 {
+		t.Fatalf("PublicLeases() length = %d, want 0 for hostname-minimized hop routes", len(leases))
+	}
+}
+
 func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 	t.Parallel()
 

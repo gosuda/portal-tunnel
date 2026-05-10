@@ -38,6 +38,9 @@ profile.cov
 # .idea/
 # .vscode/
 
+# macOS
+.DS_Store
+
 /target
 
 # Docker Compose Override
