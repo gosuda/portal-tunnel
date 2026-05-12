@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery/policy"
+	"github.com/gosuda/portal-tunnel/v2/portal/mols"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -22,7 +24,7 @@ func TestChaosMeshScenario(t *testing.T) {
 		}
 	}
 
-	policy := discovery.MOLSRelayPolicy{}
+	p := policy.NewMOLSRelayPolicy(mols.DefaultConfig(), nil)
 	var history []string
 	var latencies []time.Duration
 	errors := 0
@@ -37,7 +39,7 @@ func TestChaosMeshScenario(t *testing.T) {
 		}
 
 		cs := discovery.ClientState{LocalAddress: "chaos-client"}
-		res, _ := policy.SelectPriorityWithTrace(relayStates, cs)
+		res, _ := p.SelectPriorityWithTrace(relayStates, cs)
 
 		if len(res) == 0 {
 			errors++

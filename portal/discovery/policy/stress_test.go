@@ -1,4 +1,4 @@
-package main
+package policy
 
 import (
 	"fmt"
@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/mols"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -30,7 +29,7 @@ func TestStressScenarioMessyGrid(t *testing.T) {
 		}
 	}
 
-	p := policy.NewMOLSRelayPolicy(mols.DefaultConfig(), nil)
+	p := NewMOLSRelayPolicy(mols.DefaultConfig(), nil)
 	var lastTop string
 	oscillations := 0
 
@@ -75,7 +74,7 @@ func TestStressScenarioMassiveScale(t *testing.T) {
 		}
 	}
 
-	p := policy.NewMOLSRelayPolicy(mols.DefaultConfig(), nil)
+	p := NewMOLSRelayPolicy(mols.DefaultConfig(), nil)
 	start := time.Now()
 
 	for i := 0; i < clients; i++ {

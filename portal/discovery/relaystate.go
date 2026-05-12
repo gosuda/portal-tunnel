@@ -160,6 +160,18 @@ func (state RelayState) hasObservedDescriptor() bool {
 	return !state.LastSeenAt.IsZero()
 }
 
+// HasObservedDescriptor exports the unexported check so that external policy
+// packages (e.g. discovery/policy) can perform the same gate without
+// duplicating the logic.
+func (state RelayState) HasObservedDescriptor() bool {
+	return state.hasObservedDescriptor()
+}
+
+// SuppressActiveUntil returns the active-suppression backoff deadline.
+func (state RelayState) SuppressActiveUntil() time.Time {
+	return state.suppressActiveUntil
+}
+
 type ClientState struct {
 	ExplicitRelayURLs []string
 	// MaxActiveRelays caps auto-selected relays. Zero or negative values use

@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery/policy"
+	"github.com/gosuda/portal-tunnel/v2/portal/mols"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -96,7 +98,7 @@ func main() {
 	// Generate N synthetic client states with UNIQUE LocalAddress values.
 	// MOLS is deterministic on (LocalAddress, relayURL): duplicate addresses
 	// would make all clients pick identically, falsely appearing as 100% imbalance.
-	policy := discovery.MOLSRelayPolicy{}
+	p := policy.NewMOLSRelayPolicy(mols.DefaultConfig(), nil)
 	picks := make(map[string]int, *relays) // relay URL → count of clients that picked it first
 	for i := 0; i < *clients; i++ {
 		cs := discovery.ClientState{
@@ -105,9 +107,9 @@ func main() {
 		}
 		var outputURLs []string
 		if mode == "multihop" {
-			outputURLs, _ = policy.SelectMultiHopWithTrace(relayStates, cs)
+			outputURLs, _ = p.SelectMultiHopWithTrace(relayStates, cs)
 		} else {
-			outputURLs, _ = policy.SelectPriorityWithTrace(relayStates, cs)
+			outputURLs, _ = p.SelectPriorityWithTrace(relayStates, cs)
 		}
 		if len(outputURLs) == 0 {
 			// All relays were filtered; skip this client.

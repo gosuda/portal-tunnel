@@ -1,4 +1,4 @@
-package discovery
+package policy
 
 import (
 	"fmt"
@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/mols"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -15,9 +17,9 @@ func TestQoSConsistency(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	numNodes := 20
 	// 5 stable nodes (100ms), 5 jittery nodes (spikes to 600ms)
-	nodes := make([]RelayState, numNodes)
+	nodes := make([]discovery.RelayState, numNodes)
 	for i := 0; i < numNodes; i++ {
-		nodes[i] = RelayState{Descriptor: types.RelayDescriptor{APIHTTPSAddr: fmt.Sprintf("node-%d", i)}}
+		nodes[i] = discovery.RelayState{Descriptor: types.RelayDescriptor{APIHTTPSAddr: fmt.Sprintf("node-%d", i)}}
 		base := 100.0
 		if i >= 5 {
 			base = 300.0
@@ -31,13 +33,13 @@ func TestQoSConsistency(t *testing.T) {
 		}
 	}
 
-	policy := MOLSRelayPolicy{}
+	p := NewMOLSRelayPolicy(mols.DefaultConfig(), nil)
 	var history []string
 	var latencies []float64
 
 	// Simulate 1000 selection rounds
 	for r := 0; r < 1000; r++ {
-		selected := policy.rankRelayPool(nodes, "client-x")
+		selected := p.SelectPriority(nodes, discovery.ClientState{LocalAddress: "client-x"})
 		top := selected[0]
 		history = append(history, top)
 
