@@ -586,22 +586,24 @@ func wrapBufferedConn(conn net.Conn, reader *bufio.Reader) net.Conn {
 		if n == 0 {
 			return conn
 		}
+		log.Warn().
+			Err(err).
+			Int("buffered_bytes", n).
+			Msg("partial buffered data captured after hijack")
 		buf = buf[:n]
 	}
 	return &bufferedConn{Conn: conn, reader: bytes.NewReader(buf)}
 }
 
 func (c *bufferedConn) Read(p []byte) (int, error) {
-	if c.reader == nil {
-		return c.Conn.Read(p)
+	if c.reader != nil {
+		n, err := c.reader.Read(p)
+		if c.reader.Len() == 0 {
+			c.reader = nil
+		}
+		if n > 0 || err != io.EOF {
+			return n, err
+		}
 	}
-	if c.reader.Len() == 0 {
-		c.reader = nil
-		return c.Conn.Read(p)
-	}
-	n, err := c.reader.Read(p)
-	if c.reader.Len() == 0 {
-		c.reader = nil
-	}
-	return n, err
+	return c.Conn.Read(p)
 }
