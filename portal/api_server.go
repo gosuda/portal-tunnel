@@ -581,15 +581,27 @@ func wrapBufferedConn(conn net.Conn, reader *bufio.Reader) net.Conn {
 		return conn
 	}
 	buf := make([]byte, reader.Buffered())
-	if _, err := io.ReadFull(reader, buf); err != nil {
-		return conn
+	n, err := io.ReadFull(reader, buf)
+	if err != nil {
+		if n == 0 {
+			return conn
+		}
+		buf = buf[:n]
 	}
 	return &bufferedConn{Conn: conn, reader: bytes.NewReader(buf)}
 }
 
 func (c *bufferedConn) Read(p []byte) (int, error) {
-	if c.reader != nil && c.reader.Len() > 0 {
-		return c.reader.Read(p)
+	if c.reader == nil {
+		return c.Conn.Read(p)
 	}
-	return c.Conn.Read(p)
+	if c.reader.Len() == 0 {
+		c.reader = nil
+		return c.Conn.Read(p)
+	}
+	n, err := c.reader.Read(p)
+	if c.reader.Len() == 0 {
+		c.reader = nil
+	}
+	return n, err
 }
