@@ -6,10 +6,10 @@
 </script>
 
 <svelte:head>
-	<title>Portal — Expose Local Apps to the Public Internet</title>
+	<title>Portal - Expose Local Apps to the Public Internet</title>
 	<meta
 		name="description"
-		content="Portal lets you expose local services to the public internet through secure, trustless relay tunnels with end-to-end TLS encryption."
+		content="Portal exposes local services through trustless relay transport with client-side tenant TLS, routed HTTP, raw TCP, UDP, relay pools, and multi-hop routing."
 	/>
 </svelte:head>
 

@@ -332,7 +332,7 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		Path:   types.PathSDKRegister,
 	}).String()
 
-	if strings.TrimSpace(req.HopToken) != "" && s.hopMux == nil {
+	if strings.TrimSpace(req.HopToken) != "" && s.overlay == nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
 		return
 	}
@@ -406,7 +406,7 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		utils.MethodNotAllowedError().Write(w)
 		return
 	}
-	if s.hopMux == nil || s.overlay == nil || s.relaySet == nil {
+	if s.overlay == nil || s.relaySet == nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
 		return
 	}

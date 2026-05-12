@@ -1,13 +1,15 @@
 ---
 title: CLI Reference
-description: Complete reference for the Portal CLI commands, flags, and usage examples.
+description: Complete reference for Portal CLI commands, flags, and usage examples.
 ---
 
 # CLI Reference
 
-The `portal` CLI exposes local services through Portal relay servers. This page documents all commands, flags, and usage patterns.
+The `portal` CLI exposes local services through Portal relay servers. The relay
+provides transport and routing. The tunnel process decides whether a connection
+is handled as the default HTTPS stream, routed HTTP, raw TCP, or UDP.
 
-## Installation
+## Install
 
 ### macOS / Linux
 
@@ -15,14 +17,14 @@ The `portal` CLI exposes local services through Portal relay servers. This page 
 curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/install.sh | bash
 ```
 
-### Windows (PowerShell)
+### Windows PowerShell
 
 ```powershell
 $ProgressPreference = 'SilentlyContinue'
 irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
 ```
 
-### From a relay
+### From A Relay
 
 If your relay publishes its own installer:
 
@@ -30,76 +32,104 @@ If your relay publishes its own installer:
 curl -sSL https://portal.example.com/install.sh | bash
 ```
 
-The installer downloads the `portal` binary and adds it to your PATH. No configuration file is written. Already installed? Run `portal update` to get the latest version.
+The installer writes the `portal` binary only. It does not write a config file.
 
-## Commands
+## Command Overview
 
-### `portal expose`
+| Command | Purpose |
+|---------|---------|
+| `portal expose` | Expose one local service or one routed HTTP bundle |
+| `portal list` | Print relay URLs resolved for this invocation |
+| `portal agent` | Run a durable local multi-tunnel agent |
+| `portal update` | Replace the CLI with the latest release |
+| `portal version` | Print the current version |
 
-Expose a local service to the internet.
+## `portal expose`
+
+Expose a local service:
 
 ```bash
 portal expose [flags] <target>
 ```
 
-**Target formats:**
+Or run routed HTTP mode:
+
+```bash
+portal expose [flags] --http-route PATH=UPSTREAM [--http-route PATH=UPSTREAM]
+```
+
+### Target Formats
 
 | Format | Example | Resolves to |
 |--------|---------|-------------|
 | Bare port | `3000` | `127.0.0.1:3000` |
-| Host:port | `localhost:8080` | `localhost:8080` |
-| URL | `http://127.0.0.1:3000` | `127.0.0.1:3000` |
+| Host and port | `localhost:8080` | `localhost:8080` |
+| URL host | `http://127.0.0.1:3000` | `127.0.0.1:3000` |
 
-Instead of a positional target, you can use `--http-route` for multi-service routing.
+URL inputs are accepted for address parsing. Paths, queries, and fragments are
+not supported.
 
-**Flags:**
+### Mode Selection
+
+| Mode | Example | Notes |
+|------|---------|-------|
+| Default HTTPS stream | `portal expose 3000` | Relay routes by SNI; tunnel process terminates tenant TLS |
+| Routed HTTP | `portal expose --http-route /api=3001 --http-route /=5173` | Tunnel process runs the HTTP reverse proxy |
+| Dedicated raw TCP | `portal expose localhost:25565 --tcp` | Relay allocates a public TCP port |
+| UDP relay | `portal expose 8080 --udp --udp-addr 19132` | Relay allocates a public UDP port |
+
+### Flags
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--relays` | string | _(registry)_ | Portal relay API URLs (comma-separated, https only) |
-| `--discovery` | bool | `true` | Include public registry relays and discover additional bootstraps |
-| `--multi-hop` | string | | Ordered multi-hop relay API URLs, comma-separated |
-| `--multi-hop-depth` | int | `0` | Automatically select one multi-hop route with this hop count; 0 or 1 disables multi-hop |
+| `--relays` | string | registry | Additional relay API URLs, comma-separated |
+| `--discovery` | bool | `true` | Include registry relays and relay discovery expansion |
 | `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
+| `--multi-hop` | string | | Ordered multi-hop relay API URLs, comma-separated |
+| `--multi-hop-depth` | int | `0` | Automatically select one multi-hop route with this hop count; `0` or `1` disables multi-hop |
 | `--ban-mitm` | bool | `true` | Ban relay when the MITM self-probe detects TLS termination |
-| `--identity-path` | string | `./identity.json` | Identity JSON file path; created automatically when missing |
+| `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
 | `--identity-json` | string | | Identity JSON payload; overrides `--identity-path` contents and is persisted there when both are set |
-| `--name` | string | _(auto)_ | Public hostname prefix (single DNS label); auto-generated when omitted |
+| `--name` | string | auto | Public hostname prefix, one DNS label |
 | `--description` | string | | Service description metadata |
-| `--tags` | string | | Service tags metadata (comma-separated) |
+| `--tags` | string | | Service tags metadata, comma-separated |
 | `--thumbnail` | string | | Service thumbnail URL metadata |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
-| `--tcp` | bool | `false` | Request a dedicated TCP port for raw TCP services (no TLS) |
+| `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM` form; repeatable |
+| `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
-| `--udp-addr` | string | | Local UDP target address; defaults to the primary target when `--udp` is enabled |
-| `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM` form; repeat for multiple routes |
+| `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
+| `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
-**Examples:**
+### Constraints
 
-Basic usage:
+- `<target>` cannot be combined with `--http-route`.
+- `--http-route` cannot be combined with `--udp`.
+- Explicit `--multi-hop` cannot be combined with automatic `--multi-hop-depth`.
+- Multi-hop currently supports only the default SNI TLS stream transport.
+- `--tcp` and `--udp` require matching transport support on the relay.
+
+### Examples
+
+Expose a local web app:
 
 ```bash
 portal expose 3000
 ```
 
-With custom name and relay:
+Use a custom name and relay:
 
 ```bash
 portal expose localhost:8080 \
   --name myapp \
   --relays https://portal.example.com \
+  --discovery=false \
   --description "My web application" \
   --tags webapp,demo
 ```
 
-TCP port routing (Minecraft server):
-
-```bash
-portal expose localhost:25565 --name minecraft --tcp
-```
-
-Multi-service HTTP routing:
+Run routed HTTP mode:
 
 ```bash
 portal expose --name myapp \
@@ -107,52 +137,58 @@ portal expose --name myapp \
   --http-route /=http://127.0.0.1:5173
 ```
 
-Route matching is longest-prefix-first. `/api` matches `/api/*` and strips the `/api` prefix before proxying to the upstream. Routed HTTP mode automatically forwards `X-Forwarded-*` headers, rewrites upstream `Location` redirects, and remaps cookie paths.
+Route matching is longest-prefix-first. `/api` matches `/api/*` and strips the
+`/api` prefix before proxying to the upstream.
 
-Disable relay discovery:
-
-```bash
-portal expose 3000 --relays https://portal.example.com --discovery=false
-```
-
-Explicit multi-hop route:
+Expose a Minecraft server:
 
 ```bash
-portal expose 3000 --multi-hop https://entry.example.com,https://transit.example.com,https://exit.example.com
+portal expose localhost:25565 --name minecraft --tcp
 ```
 
-Automatic multi-hop route:
+Enable UDP alongside the default stream target:
+
+```bash
+portal expose localhost:8080 --udp --udp-addr localhost:19132 --name game
+```
+
+Use an explicit multi-hop route:
+
+```bash
+portal expose 3000 --multi-hop https://entry.example.com,https://exit.example.com
+```
+
+Ask Portal to select one three-hop route:
 
 ```bash
 portal expose 3000 --multi-hop-depth 3
 ```
 
-Warning-only MITM mode:
+Keep MITM probe failures warning-only:
 
 ```bash
 portal expose 3000 --ban-mitm=false
 ```
 
-### `portal list`
+## `portal list`
 
-Print the relay URLs that the CLI will use.
+Print relay URLs resolved for the current invocation:
 
 ```bash
 portal list [flags]
 ```
 
-**Flags:**
-
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--relays` | string | _(registry)_ | Additional relay URLs |
+| `--relays` | string | registry | Additional relay URLs |
 | `--default-relays` | bool | `true` | Include public registry relays |
 
-Unlike `portal expose`, `portal list` does not run the relay discovery expansion loop. It only resolves the registry seed list plus explicit `--relays` values.
+`portal list` does not run the runtime relay discovery expansion loop. It only
+resolves the registry seed list plus explicit relay URLs.
 
-### `portal agent`
+## `portal agent`
 
-Run a durable local agent that owns multiple tunnels from one config file.
+Run a durable local agent that owns multiple tunnels from one config file:
 
 ```bash
 portal agent run
@@ -161,77 +197,62 @@ portal agent stop
 portal agent restart
 ```
 
-`portal agent run` reads the platform default `config.toml`, installs or updates the OS-managed service, starts it in the background, and exits after the agent is ready. Use `--foreground` for local debugging without service registration.
-Use `portal agent dashboard` to attach to an already running managed agent. It uses `agent.state_dir` when a config file exists and otherwise falls back to the platform default state directory. With `--foreground` in an interactive terminal, the dashboard attaches in the same process.
-
-**Subcommands:**
-
 | Command | Description |
 |---------|-------------|
-| `portal agent run` | Install/update and start the managed agent service |
+| `portal agent run` | Install or update and start the managed agent service |
 | `portal agent run --config config.toml --foreground` | Run the agent in the current terminal |
-| `portal agent dashboard` | Open the mouse-capable local TUI for tunnels, relay attach/detach, relay lists, and multi-hop route changes |
-| `portal agent stop` | Gracefully stop the agent and disable/stop the OS service |
-| `portal agent restart` | Stop the current agent if present, install/update the service, and start it again |
+| `portal agent dashboard` | Open the local TUI for tunnels, relays, and multi-hop routes |
+| `portal agent stop` | Gracefully stop the agent and disable or stop the OS service |
+| `portal agent restart` | Stop the current agent if present, install or update the service, and start it again |
 
-The local control API binds only to loopback and uses a token in the agent state directory. See [Configuration Reference](/configuration#configtoml) for the `config.toml` format.
+The local control API binds only to loopback and uses a token in the agent state
+directory. See [Configuration Reference](/configuration#configtoml) for the
+`config.toml` format.
 
-### `portal update`
+## `portal update`
 
-Update the CLI binary to the latest release.
+Update the CLI binary:
 
 ```bash
 portal update
 ```
 
-The update flow:
+The updater resolves the latest GitHub release, compares it with the installed
+version, downloads the matching asset, verifies its SHA256 checksum, and
+replaces the current executable.
 
-1. Checks the latest version by resolving the GitHub releases redirect URL
-2. Compares with the currently installed version
-3. If a newer version exists: downloads the binary, verifies its SHA256 checksum, and replaces the current executable
-4. If already up to date: prints a message and exits
-
-No flags. Works on macOS, Linux, and Windows. Requires write access to the directory containing the `portal` binary.
-
-**Examples:**
-
-```bash
-# Update to the latest version
-portal update
-# Already up to date (v2.1.5).
-
-# Or when a new version is available:
-portal update
-# Updating v2.1.5 → v2.2.0 ...
-# Updated v2.1.5 → v2.2.0
-```
-
-### `portal version`
-
-Print the currently installed version.
+## `portal version`
 
 ```bash
 portal version
 ```
 
-No flags. Outputs the version string (e.g., `v2.1.5`) and exits.
+Prints the installed version string and exits.
 
 ## Behavior Notes
 
-- **Update notifications** - `portal expose` and `portal list` check for new releases in the background. The check runs at most once every 24 hours (cached locally) and never blocks command execution. When a newer version is found, a hint is printed to stderr after the command output.
-- **Identity persistence** - `portal expose` loads or creates a signing identity at `identity.json` (or `--identity-path`). Reusing the same path keeps the same address across runs.
-- **Multiple relays** - Multiple relay URLs are registered independently. Each relay gets its own lease. A relay going down does not stop healthy relays from serving.
-- **Retry semantics** - Relay startup and reconnect failures are retried in the background. The tunnel starts as soon as relay URLs pass local validation.
-- **Discovery expansion** - With discovery enabled, the tunnel consumes relay `/discovery` results and reconciles its relay pool. The SDK does not announce itself and does not serve discovery endpoints.
-- **MITM enforcement** - Enabled by default. The TLS self-probe runs asynchronously after real connections begin, with a 30-second cooldown between probes.
-- **503 on unreachable local service** - When the local target is unreachable, the tunnel returns an HTTP 503 page to the client.
-- **HTTP route mode** - Cannot be combined with `--udp`. Routes are HTTP-only.
-- **TCP port requirements** - `--tcp` requires the relay to have `TCP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and TCP port enabled in the admin panel.
-- **UDP requirements** - `--udp` requires the relay to have `UDP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, UDP enabled in the admin panel, and `SNI_PORT/udp` reachable for the QUIC backhaul.
-- **Legacy CLI removed** - Bare `portal [flags]` is no longer accepted; use `portal expose` explicitly. `APP_*`, `RELAYS`, and `DEFAULT_RELAYS` environment variables are no longer used.
+- `portal expose` and `portal list` check for new releases in the background.
+- `portal expose` loads or creates a signing identity at `identity.json` or
+  `--identity-path`.
+- Multiple relay URLs are registered independently. A failed relay does not stop
+  healthy relays from serving.
+- With discovery enabled, the tunnel consumes relay `/discovery` results and
+  reconciles its relay pool.
+- MITM enforcement is enabled by default for the default stream path.
+- When the local stream target is unreachable, the tunnel returns an HTTP 503
+  page to browser-style clients.
+- Routed HTTP mode is HTTP-only and runs inside the tunnel process.
+- `--tcp` requires relay TCP port transport, a valid `MIN_PORT`/`MAX_PORT`
+  range, and TCP port transport enabled in the admin panel.
+- `--udp` requires relay UDP transport, a valid `MIN_PORT`/`MAX_PORT` range, UDP
+  enabled in the admin panel, and `SNI_PORT/udp` reachable for the QUIC backhaul.
+- Bare `portal [flags]` is not accepted; use `portal expose` explicitly.
+- Runtime `APP_*`, `RELAYS`, and `DEFAULT_RELAYS` environment variable fallbacks
+  are not used.
 
 ## Next Steps
 
-- **[Getting Started](/getting-started)** - Quick tutorial for your first tunnel
-- **[Concepts](/concepts)** - How Portal's encryption and relay model works
-- **[Deployment](/deployment)** - Run your own relay server
+- [Getting Started](/getting-started): run your first tunnel
+- [Concepts](/concepts): understand the relay and transport model
+- [TCP and UDP Tunneling](/tcp-udp-tunneling): raw TCP and UDP setup
+- [Deployment](/deployment): run your own relay server

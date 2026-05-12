@@ -2,14 +2,21 @@ package overlay
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/hashicorp/yamux"
+	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -22,6 +29,9 @@ const (
 	DefaultPeerAPIHTTPPort     = 7777
 	DefaultPeerYamuxPort       = 7778
 	DefaultPersistentKeepalive = 25
+
+	maxHopTokenBytes    = 256
+	defaultTokenTimeout = 2 * time.Second
 )
 
 type Config struct {
@@ -73,15 +83,27 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	return cfg, nil
 }
 
+type HopStream struct {
+	Conn       net.Conn
+	Token      string
+	RemoteAddr string
+}
+
+type StreamHandler func(ctx context.Context, stream HopStream)
 type Overlay struct {
 	cfg      Config
 	stack    *stack
 	listener net.Listener
 	server   *http.Server
 	client   *http.Client
+
+	hopListener   net.Listener
+	streamHandler atomic.Pointer[StreamHandler]
+	hopOutbound   sync.Map
+	hopDone       chan struct{}
 }
 
-func NewOverlay(cfg Config, handler http.Handler) (*Overlay, error) {
+func NewOverlay(cfg Config, handler http.Handler, streamHandler StreamHandler) (*Overlay, error) {
 	cfg, err := NormalizeConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -98,6 +120,13 @@ func NewOverlay(cfg Config, handler http.Handler) (*Overlay, error) {
 
 	listener, err := stack.ListenTCP(DefaultPeerAPIHTTPPort)
 	if err != nil {
+		_ = stack.Close()
+		return nil, err
+	}
+
+	hopListener, err := stack.ListenTCP(DefaultPeerYamuxPort)
+	if err != nil {
+		_ = listener.Close()
 		_ = stack.Close()
 		return nil, err
 	}
@@ -119,13 +148,19 @@ func NewOverlay(cfg Config, handler http.Handler) (*Overlay, error) {
 
 	publicCfg := cfg.Copy()
 	publicCfg.PrivateKey = ""
-	return &Overlay{
-		cfg:      publicCfg,
-		stack:    stack,
-		listener: listener,
-		server:   server,
-		client:   client,
-	}, nil
+	ov := &Overlay{
+		cfg:         publicCfg,
+		stack:       stack,
+		listener:    listener,
+		server:      server,
+		client:      client,
+		hopListener: hopListener,
+		hopDone:     make(chan struct{}),
+	}
+	if streamHandler != nil {
+		ov.streamHandler.Store(&streamHandler)
+	}
+	return ov, nil
 }
 
 func (o *Overlay) Config() Config {
@@ -135,21 +170,252 @@ func (o *Overlay) Config() Config {
 	return o.cfg.Copy()
 }
 
-func (o *Overlay) Serve() error {
-	if o == nil || o.server == nil || o.listener == nil {
+func (o *Overlay) Serve(ctx context.Context) error {
+	if o == nil {
 		return nil
 	}
 
-	err := o.server.Serve(o.listener)
-	if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
-		return nil
+	if o.server != nil && o.listener != nil {
+		go func() {
+			err := o.server.Serve(o.listener)
+			if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				log.Error().Err(err).Msg("overlay peer api server exited")
+			}
+		}()
 	}
-	return err
+
+	if o.hopListener != nil {
+		go func() {
+			<-ctx.Done()
+			_ = o.hopListener.Close()
+		}()
+
+		for {
+			conn, err := o.hopListener.Accept()
+			if err != nil {
+				if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+					return err
+				}
+				return fmt.Errorf("accept hop mux connection: %w", err)
+			}
+			go o.serveHopSession(ctx, conn)
+		}
+	}
+
+	<-ctx.Done()
+	return nil
+}
+
+func (o *Overlay) SetStreamHandler(handler StreamHandler) {
+	if handler != nil {
+		o.streamHandler.Store(&handler)
+	} else {
+		o.streamHandler.Store(nil)
+	}
+}
+
+func (o *Overlay) OpenHopStream(ctx context.Context, overlayIPv4, token string) (net.Conn, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, errors.New("next hop token is required")
+	}
+	overlayIPv4 = strings.TrimSpace(overlayIPv4)
+	if overlayIPv4 == "" {
+		return nil, errors.New("next hop overlay ipv4 is required")
+	}
+
+	var next *yamux.Stream
+	var lastErr error
+	for {
+		session, err := o.getHopSession(ctx, overlayIPv4)
+		if err != nil {
+			return nil, err
+		}
+
+		type openResult struct {
+			stream *yamux.Stream
+			err    error
+		}
+		resCh := make(chan openResult, 1)
+		go func() {
+			s, openErr := session.OpenStream()
+			resCh <- openResult{s, openErr}
+		}()
+
+		select {
+		case res := <-resCh:
+			if res.err != nil {
+				_ = session.Close()
+				lastErr = res.err
+			} else {
+				next = res.stream
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		if next != nil {
+			break
+		}
+		if errors.Is(lastErr, net.ErrClosed) {
+			return nil, fmt.Errorf("open next hop stream: %w", lastErr)
+		}
+		if !utils.SleepOrDone(ctx, 250*time.Millisecond) {
+			return nil, fmt.Errorf("open next hop stream within timeout: %w", errors.Join(lastErr, ctx.Err()))
+		}
+	}
+
+	payload := []byte(token)
+	if len(payload) > maxHopTokenBytes {
+		_ = next.Close()
+		return nil, errors.New("next hop token is too large")
+	}
+	frame := make([]byte, 4+len(payload))
+	binary.BigEndian.PutUint32(frame[:4], uint32(len(payload)))
+	copy(frame[4:], payload)
+	if _, err := next.Write(frame); err != nil {
+		_ = next.Close()
+		return nil, err
+	}
+	return next, nil
+}
+
+func (o *Overlay) getHopSession(ctx context.Context, overlayIPv4 string) (*yamux.Session, error) {
+	select {
+	case <-o.hopDone:
+		return nil, net.ErrClosed
+	default:
+	}
+
+	if val, ok := o.hopOutbound.Load(overlayIPv4); ok {
+		session := val.(*yamux.Session)
+		if !session.IsClosed() {
+			return session, nil
+		}
+		o.hopOutbound.Delete(overlayIPv4)
+	}
+
+	addr := net.JoinHostPort(overlayIPv4, fmt.Sprintf("%d", DefaultPeerYamuxPort))
+	conn, err := o.stack.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	session, err := yamux.Client(conn, hopYamuxConfig())
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	select {
+	case <-o.hopDone:
+		_ = session.Close()
+		return nil, net.ErrClosed
+	default:
+	}
+
+	if actual, loaded := o.hopOutbound.LoadOrStore(overlayIPv4, session); loaded {
+		current := actual.(*yamux.Session)
+		if !current.IsClosed() {
+			_ = session.Close()
+			return current, nil
+		}
+		// the existing one is closed, replace it
+		o.hopOutbound.Store(overlayIPv4, session)
+	}
+
+	// Background cleanup to prevent memory leaks for dead sessions.
+	go func(ip string, s *yamux.Session) {
+		select {
+		case <-s.CloseChan():
+		case <-o.hopDone:
+			return
+		}
+		o.hopOutbound.CompareAndDelete(ip, s)
+	}(overlayIPv4, session)
+
+	return session, nil
+}
+
+func (o *Overlay) serveHopSession(ctx context.Context, conn net.Conn) {
+	session, err := yamux.Server(conn, hopYamuxConfig())
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+
+	select {
+	case <-o.hopDone:
+		_ = session.Close()
+		return
+	default:
+	}
+
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-o.hopDone:
+		}
+		_ = session.Close()
+	}()
+
+	for {
+		stream, err := session.AcceptStream()
+		if err != nil {
+			return
+		}
+		go func(stream *yamux.Stream) {
+			_ = stream.SetReadDeadline(time.Now().Add(defaultTokenTimeout))
+			var size [4]byte
+			if _, err := io.ReadFull(stream, size[:]); err != nil {
+				_ = stream.Close()
+				return
+			}
+			n := binary.BigEndian.Uint32(size[:])
+			if n == 0 || n > uint32(maxHopTokenBytes) {
+				_ = stream.Close()
+				return
+			}
+			payload := make([]byte, n)
+			if _, err := io.ReadFull(stream, payload); err != nil {
+				_ = stream.Close()
+				return
+			}
+			_ = stream.SetReadDeadline(time.Time{})
+
+			token := strings.TrimSpace(string(payload))
+			if token == "" {
+				_ = stream.Close()
+				return
+			}
+			remoteAddr := ""
+			if stream.RemoteAddr() != nil {
+				remoteAddr = stream.RemoteAddr().String()
+			}
+			hopStream := HopStream{
+				Conn:       stream,
+				Token:      token,
+				RemoteAddr: remoteAddr,
+			}
+			handlerPtr := o.streamHandler.Load()
+			if handlerPtr != nil && *handlerPtr != nil {
+				(*handlerPtr)(ctx, hopStream)
+			} else {
+				_ = stream.Close()
+			}
+		}(stream)
+	}
 }
 
 func (o *Overlay) Shutdown(ctx context.Context) error {
 	if o == nil {
 		return nil
+	}
+
+	select {
+	case <-o.hopDone:
+	default:
+		close(o.hopDone)
 	}
 
 	var shutdownErr error
@@ -168,6 +434,20 @@ func (o *Overlay) Shutdown(ctx context.Context) error {
 			shutdownErr = errors.Join(shutdownErr, err)
 		}
 	}
+	if o.hopListener != nil {
+		err := o.hopListener.Close()
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			shutdownErr = errors.Join(shutdownErr, err)
+		}
+	}
+
+	o.hopOutbound.Range(func(key, value any) bool {
+		session := value.(*yamux.Session)
+		shutdownErr = errors.Join(shutdownErr, session.Close())
+		o.hopOutbound.Delete(key)
+		return true
+	})
+
 	if o.stack != nil {
 		shutdownErr = errors.Join(shutdownErr, o.stack.Close())
 	}
@@ -224,4 +504,11 @@ func (o *Overlay) Sync(relays []discovery.RelayState) error {
 		return peers[i].WireGuardPublicKey < peers[j].WireGuardPublicKey
 	})
 	return o.stack.ApplyPeers(peers)
+}
+
+func hopYamuxConfig() *yamux.Config {
+	cfg := yamux.DefaultConfig()
+	cfg.Logger = nil
+	cfg.MaxStreamWindowSize = 16 * 1024 * 1024
+	return cfg
 }

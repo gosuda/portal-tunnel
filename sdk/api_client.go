@@ -83,6 +83,45 @@ func (l *listener) initHTTPTransport(ctx context.Context) error {
 	return nil
 }
 
+func (l *listener) buildHopRoutes(hopPath []types.RelayDescriptor, publicHostname, routeHostname string, echConfigList []byte) ([]types.HopRoute, string, error) {
+	if len(hopPath) < 2 {
+		return nil, "", errors.New("multi-hop requires at least entry and exit relay urls")
+	}
+	hopRoutes := make([]types.HopRoute, 0, len(hopPath)-1)
+	var previousHopToken string
+	for i := 0; i < len(hopPath)-1; i++ {
+		token, err := l.identity.DeriveToken(
+			"hop-token",
+			publicHostname,
+			strconv.Itoa(i),
+			hopPath[i].APIHTTPSAddr,
+			hopPath[i+1].APIHTTPSAddr,
+		)
+		if err != nil {
+			return nil, "", err
+		}
+		forwardToken := "hpt_" + token
+		route := types.HopRoute{
+			RelayURL:     hopPath[i].APIHTTPSAddr,
+			ForwardRelay: hopPath[i+1],
+			ForwardToken: forwardToken,
+		}
+		if i == 0 {
+			route.PublicHostname = publicHostname
+			route.RouteHostname = routeHostname
+			route.HostnameHash = utils.HostnameHash(publicHostname)
+			route.ECHConfigList = bytes.Clone(echConfigList)
+			route.Metadata = l.metadata.Copy()
+			route.Metadata.Hide = true
+		} else {
+			route.MatchToken = previousHopToken
+		}
+		hopRoutes = append(hopRoutes, route)
+		previousHopToken = forwardToken
+	}
+	return hopRoutes, previousHopToken, nil
+}
+
 func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnabled, tcpEnabled bool) (types.RegisterResponse, []types.HopRoute, string, string, error) {
 	var exitHopToken string
 	var publicHostname string
@@ -144,40 +183,11 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	}
 
 	if len(l.multiHop) > 0 {
-		hopRoutes = make([]types.HopRoute, 0, len(hopPath)-1)
-		var previousHopToken string
-		for i := 0; i < len(hopPath)-1; i++ {
-			token, err := l.identity.DeriveToken(
-				"hop-token",
-				publicHostname,
-				strconv.Itoa(i),
-				hopPath[i].APIHTTPSAddr,
-				hopPath[i+1].APIHTTPSAddr,
-			)
-			if err != nil {
-				return types.RegisterResponse{}, nil, "", "", err
-			}
-			forwardToken := "hpt_" + token
-			route := types.HopRoute{
-				RelayURL:     hopPath[i].APIHTTPSAddr,
-				ForwardRelay: hopPath[i+1],
-				ForwardToken: forwardToken,
-			}
-			if i == 0 {
-				route.PublicHostname = publicHostname
-				route.RouteHostname = routeHostname
-				route.HostnameHash = utils.HostnameHash(publicHostname)
-				route.ECHConfigList = bytes.Clone(echConfigList)
-				route.Metadata = l.metadata.Copy()
-				route.Metadata.Hide = true
-				hopRoutes = append(hopRoutes, route)
-			} else {
-				route.MatchToken = previousHopToken
-				hopRoutes = append(hopRoutes, route)
-			}
-			previousHopToken = forwardToken
+		var err error
+		hopRoutes, exitHopToken, err = l.buildHopRoutes(hopPath, publicHostname, routeHostname, echConfigList)
+		if err != nil {
+			return types.RegisterResponse{}, nil, "", "", err
 		}
-		exitHopToken = previousHopToken
 	}
 
 	registerReq := types.RegisterChallengeRequest{

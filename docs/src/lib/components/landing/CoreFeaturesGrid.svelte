@@ -1,40 +1,40 @@
 <script lang="ts">
 	const features = [
 		{
-			eyebrow: 'HTTPS',
-			title: 'Public HTTPS for localhost',
+			eyebrow: 'Relay',
+			title: 'Trustless relay transport',
 			description:
-				'Publish local apps through TCP passthrough without opening inbound ports.'
+				'Relays own routing and transport, while the tunnel process owns endpoint behavior.'
 		},
 		{
 			eyebrow: 'TLS',
-			title: 'End-to-end TLS on your side',
+			title: 'Client-side tenant TLS',
 			description:
-				'Tenant TLS terminates locally with MITM detection, so relays cannot access plaintext.'
+				'Tenant TLS terminates locally with MITM detection, so relays cannot read plaintext.'
 		},
 		{
-			eyebrow: 'Setup',
-			title: 'One-command setup',
+			eyebrow: 'HTTP',
+			title: 'Tunnel-controlled HTTP routing',
 			description:
-				'Start relays and tunnels with minimal setup and a short copy-paste path.'
+				'Mount frontend, API, and other local HTTP services behind one public URL.'
 		},
 		{
-			eyebrow: 'Relay',
-			title: 'Self-hosted relays and pools',
+			eyebrow: 'Ports',
+			title: 'Raw TCP and UDP leases',
 			description:
-				'Connect to public relays, use discovered relays as a pool with failover, or run your own.'
+				'Expose game servers, custom TCP protocols, and datagram services through relay ports.'
 		},
 		{
-			eyebrow: 'Transport',
-			title: 'Raw TCP with optional UDP',
+			eyebrow: 'Mesh',
+			title: 'Relay pools and multi-hop',
 			description:
-				'Carry web traffic and arbitrary protocols without SSH or WebSocket overlays.'
+				'Use discovered relays for failover or chain relays to split path visibility.'
 		},
 		{
-			eyebrow: 'Identity',
-			title: 'SIWE ownership with ENS support',
+			eyebrow: 'Ops',
+			title: 'Self-hosted or public relays',
 			description:
-				'Authenticate ownership with SIWE and keep identity portable with ENS-based naming support.'
+				'Run your own relay, attach explicit relays, or use the public relay registry.'
 		}
 	] as const;
 </script>

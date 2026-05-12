@@ -126,7 +126,6 @@ type Server struct {
 	quicBackhaul  *quic.Listener
 
 	overlay         *overlay.Overlay
-	hopMux          *overlay.HopMux
 	relaySet        *discovery.RelaySet
 	announceLimiter *discovery.AnnounceLimiter
 	registry        *leaseRegistry
@@ -184,7 +183,6 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	var apiCloser io.Closer
 	var pprofListener net.Listener
 	var pprofServer *http.Server
-	var hopMux *overlay.HopMux
 	var ov *overlay.Overlay
 	var quicBackhaul *quic.Listener
 	defer func() {
@@ -192,9 +190,6 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 			return
 		}
 		acmeManager.Stop()
-		if hopMux != nil {
-			_ = hopMux.Close()
-		}
 		if ov != nil {
 			_ = ov.Shutdown(context.Background())
 		}
@@ -256,10 +251,6 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		if err != nil {
 			return err
 		}
-		hopMux, err = overlay.NewHopMux(ov)
-		if err != nil {
-			return err
-		}
 	}
 	if s.cfg.UDPEnabled {
 		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
@@ -279,7 +270,6 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.cancel = cancel
 	s.group = group
 	s.overlay = ov
-	s.hopMux = hopMux
 	s.quicBackhaul = quicBackhaul
 	started = true
 
@@ -289,10 +279,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	}
 	group.Go(func() error { return s.runPublicIngress(groupCtx) })
 	if s.overlay != nil {
-		group.Go(s.overlay.Serve)
-		if s.hopMux != nil {
-			group.Go(func() error { return s.runOverlayIngress(groupCtx) })
-		}
+		group.Go(func() error { return s.overlay.Serve(groupCtx) })
 	}
 	if s.quicBackhaul != nil {
 		group.Go(s.runQUICBackhaulListener)
@@ -318,7 +305,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		Int("max_port", s.cfg.MaxPort).
 		Bool("discovery_enabled", s.cfg.DiscoveryEnabled).
 		Bool("wireguard_enabled", s.overlay != nil).
-		Bool("multihop_enabled", s.hopMux != nil).
+		Bool("multihop_enabled", s.overlay != nil).
 		Bool("udp_enabled", s.quicBackhaul != nil).
 		Bool("tcp_enabled", s.cfg.TCPEnabled).
 		Bool("api_ech_enabled", len(apiTLS.EncryptedClientHelloKeys) > 0).
@@ -407,11 +394,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 		if s.pprofServer != nil {
 			if err := s.pprofServer.Shutdown(ctx); err != nil && shutdownErr == nil {
-				shutdownErr = err
-			}
-		}
-		if s.hopMux != nil {
-			if err := s.hopMux.Close(); err != nil && shutdownErr == nil && !errors.Is(err, net.ErrClosed) {
 				shutdownErr = err
 			}
 		}
@@ -557,43 +539,6 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 	}
 }
 
-func (s *Server) runOverlayIngress(ctx context.Context) error {
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.Go(func() error { return s.hopMux.Serve(groupCtx) })
-	group.Go(func() error {
-		for {
-			stream, err := s.hopMux.Accept(groupCtx)
-			if err != nil {
-				if ctxErr := groupCtx.Err(); ctxErr != nil {
-					return ctxErr
-				}
-				return err
-			}
-			go func(stream overlay.HopStream) {
-				s.registry.mu.RLock()
-				record := s.registry.recordByHopToken(stream.Token, time.Now())
-				s.registry.mu.RUnlock()
-				if record == nil {
-					log.Warn().Str("remote_addr", stream.RemoteAddr).Msg("hop stream rejected")
-					_ = stream.Conn.Close()
-					return
-				}
-				hopRole := "exit"
-				if record.isHopMiddle() {
-					hopRole = "middle"
-				}
-				log.Info().Str("remote_addr", stream.RemoteAddr).Str("hop_role", hopRole).Msg("hop stream received")
-
-				if err := s.bridgeLeaseConn(groupCtx, stream.Conn, record); err != nil {
-					log.Warn().Err(err).Str("remote_addr", stream.RemoteAddr).Msg("hop stream bridge failed")
-					_ = stream.Conn.Close()
-				}
-			}(stream)
-		}
-	})
-	return group.Wait()
-}
-
 func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord) error {
 	if record.isExpired(time.Now()) {
 		return errLeaseNotFound
@@ -608,21 +553,9 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 
 		openCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
 		defer cancel()
-		var next net.Conn
-		var lastErr error
-		for {
-			var err error
-			next, err = s.hopMux.OpenStream(openCtx, overlayIPv4, forwardToken)
-			if err == nil {
-				break
-			}
-			lastErr = err
-			if errors.Is(err, net.ErrClosed) {
-				return fmt.Errorf("open next hop stream: %w", err)
-			}
-			if !utils.SleepOrDone(openCtx, defaultHopOpenRetryWait) {
-				return fmt.Errorf("open next hop stream within %s: %w", defaultClaimTimeout, errors.Join(lastErr, openCtx.Err()))
-			}
+		next, err := s.overlay.OpenHopStream(openCtx, overlayIPv4, forwardToken)
+		if err != nil {
+			return fmt.Errorf("open next hop stream: %w", err)
 		}
 		s.proxy.bridge(conn, next, "", nil)
 		return nil
@@ -738,21 +671,42 @@ func (s *Server) startOverlay() (*overlay.Overlay, error) {
 		peerMux.HandleFunc(types.PathDiscovery, s.handleRelayDiscovery)
 	}
 
-	overlay, err := overlay.NewOverlay(overlay.Config{
+	ov, err := overlay.NewOverlay(overlay.Config{
 		PrivateKey: s.identity.WireGuardPrivateKey,
 		PublicKey:  s.identity.WireGuardPublicKey,
 		ListenPort: s.cfg.WireGuardPort,
-	}, peerMux)
+	}, peerMux, nil)
 	if err != nil {
 		return nil, fmt.Errorf("start wireguard overlay: %w", err)
 	}
 
-	if err := overlay.Sync(s.relaySet.OverlayPeerStates()); err != nil {
-		_ = overlay.Shutdown(context.Background())
+	ov.SetStreamHandler(func(ctx context.Context, stream overlay.HopStream) {
+		s.registry.mu.RLock()
+		record := s.registry.recordByHopToken(stream.Token, time.Now())
+		s.registry.mu.RUnlock()
+		if record == nil {
+			log.Warn().Str("remote_addr", stream.RemoteAddr).Msg("hop stream rejected")
+			_ = stream.Conn.Close()
+			return
+		}
+		hopRole := "exit"
+		if record.isHopMiddle() {
+			hopRole = "middle"
+		}
+		log.Info().Str("remote_addr", stream.RemoteAddr).Str("hop_role", hopRole).Msg("hop stream received")
+
+		if err := s.bridgeLeaseConn(ctx, stream.Conn, record); err != nil {
+			log.Warn().Err(err).Str("remote_addr", stream.RemoteAddr).Msg("hop stream bridge failed")
+			_ = stream.Conn.Close()
+		}
+	})
+
+	if err := ov.Sync(s.relaySet.OverlayPeerStates()); err != nil {
+		_ = ov.Shutdown(context.Background())
 		return nil, fmt.Errorf("sync wireguard peers: %w", err)
 	}
 
-	return overlay, nil
+	return ov, nil
 }
 
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {

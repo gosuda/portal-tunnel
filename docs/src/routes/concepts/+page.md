@@ -1,129 +1,174 @@
 ---
 title: Concepts
-description: Understand how Portal provides trustless, end-to-end encrypted tunnels.
+description: Understand Portal's relay model, transport modes, and end-to-end TLS design.
 ---
 
 # Concepts
 
-Portal publishes local services on public HTTPS URLs through relay servers. Unlike most tunnel solutions, **the relay never sees your plaintext traffic**. This page explains how.
+Portal publishes local services through relay servers. The important design
+choice is that the relay is a transport and routing component, not the owner of
+your application traffic.
 
-## What is Portal?
+## Relay And Tunnel Responsibilities
 
-Portal is a reverse tunnel that exposes your local applications to the internet. It differs from alternatives like ngrok or Cloudflare Tunnel in one key way: **relays are trustless**. You don't need to trust the relay operator because they can't read your traffic.
+The relay owns:
 
-This means you can:
-- Use any public relay without security concerns
-- Run your own relay for full control
-- Switch between relays freely — your security model doesn't depend on the relay operator
+- lease registration and renewal
+- public hostname and port routing
+- SNI route lookup for the default stream path
+- relay discovery and relay-to-relay forwarding
+- admin policy such as approval, bans, and transport limits
 
-## The Trustless Relay Model
+The tunnel process owns:
 
-In a traditional tunnel, the relay terminates TLS and has full access to your plaintext:
+- tenant TLS termination for the default HTTPS stream path
+- local target proxying
+- routed HTTP reverse proxy behavior
+- UDP target forwarding
+- identity keys and lease signing
+- MITM self-probe validation
 
-```text
-Client → [TLS] → Relay (decrypts, re-encrypts) → [TLS] → Your App
-                  ↑ Relay sees plaintext
+This split is why Portal can use public relays without giving relay operators
+tenant plaintext.
+
+## Default Stream Path
+
+The default command is:
+
+```bash
+portal expose 3000
 ```
 
-Portal works differently. The relay only routes encrypted traffic:
+The public URL is HTTPS, but the relay does not terminate tenant TLS.
 
 ```text
-Client → [TLS] ────────────────────────────── → Your App
-                    ↑ Relay forwards raw bytes
-                    (cannot decrypt)
+Browser
+  -> Relay :443
+  -> reverse session
+  -> tunnel process TLS server
+  -> 127.0.0.1:3000
 ```
 
-The relay reads only the TLS ClientHello (the initial unencrypted handshake message) to extract the SNI hostname for routing. After that, it bridges raw encrypted bytes between the client and your local TLS server.
+Flow:
 
-## End-to-End TLS
+1. A browser connects to the relay and sends a TLS ClientHello.
+2. The relay reads the SNI hostname and finds the matching lease.
+3. The relay claims a waiting reverse session from the tunnel process.
+4. The tunnel process performs the tenant TLS handshake locally.
+5. The relay may sign handshake digests through `/v1/sign`, but it does not
+   receive tenant TLS session keys.
+6. After the handshake, the relay forwards encrypted bytes.
 
-Here's the detailed flow:
+## Routed HTTP Mode
 
-1. **SNI routing** — A client connects to the relay on port 443. The relay peeks at the TLS ClientHello to read the SNI hostname (e.g., `myapp.relay.example.com`).
+Routed HTTP mode mounts one or more local HTTP upstreams behind one public URL:
 
-2. **Reverse session claim** — The relay looks up which tunnel owns that hostname and claims one of its waiting reverse sessions.
-
-3. **Local TLS termination** — Your Portal client receives the connection and performs the TLS handshake locally. Session keys are derived on your machine — the relay never receives them.
-
-4. **Keyless signing** — For relay-hosted domains, Portal uses the relay's `/v1/sign` endpoint to get certificate signatures. The relay acts as a "keyless" signing oracle — it signs handshake digests but never receives the resulting session keys.
-
-5. **Encrypted data flow** — After the handshake, all traffic flows as encrypted bytes through the relay. The relay continues forwarding without needing plaintext.
-
-**Result:** TLS terminates on your side. The relay provides routing and certificate signing only.
-
-## MITM Detection
-
-How do you know the relay is actually forwarding encrypted bytes and not terminating TLS itself? Portal includes a built-in self-probe mechanism:
-
-1. After a real connection is established, Portal opens a separate TLS connection to its own public URL
-2. The probe exports TLS keying material on both the client side and the server side
-3. If the exported values match, the connection was passed through without relay-side termination
-4. A mismatch indicates the relay may be terminating TLS (suspected MITM)
-
-By default, `portal expose` enables strict enforcement — if the probe detects TLS termination, the relay is banned. You can use `--ban-mitm=false` for warning-only mode.
-
-> **Note:** The self-probe is a detect-only signal. It raises the cost of relay-side TLS termination but cannot prove passthrough for every user connection.
-
-## Transport Models
-
-Portal supports three transport modes:
-
-### TLS Passthrough (default)
-
-Standard HTTPS tunneling. Client connects to port 443, relay routes by SNI, your app terminates TLS locally.
-
-```text
-Client → Relay :443 (SNI routing) → Reverse Session → Your App (TLS termination)
+```bash
+portal expose --name myapp \
+  --http-route /api=http://127.0.0.1:3001 \
+  --http-route /=http://127.0.0.1:5173
 ```
 
-### Raw TCP Port Routing
+This is not relay-side HTTP proxying. The relay still transports the connection.
+The tunnel process receives the stream, parses HTTP, and runs the reverse proxy.
 
-For non-TLS services like Minecraft servers or database connections. The relay allocates a dedicated TCP port and bridges raw TCP without any TLS wrapping.
+Routed HTTP mode can:
 
-```text
-Client → Relay :40001 (dedicated TCP port) → Reverse Session → Your App (raw TCP)
+- match routes longest-prefix-first
+- strip the mounted prefix before proxying
+- forward `X-Forwarded-*`
+- rewrite matching upstream `Location` redirects
+- strip loopback cookie domains
+- remap cookie paths to route prefixes
+
+Because HTTP is parsed in the tunnel process, this is the right place for
+cooperative HTTP policy such as response headers. It is not a relay-enforced
+policy boundary.
+
+## Dedicated Raw TCP
+
+Use raw TCP when clients need a public TCP port instead of a public HTTPS
+hostname:
+
+```bash
+portal expose localhost:25565 --name minecraft --tcp
 ```
 
-Enable with `portal expose --tcp`. Requires the relay to have TCP port transport enabled.
+The relay allocates a port from its configured range and bridges raw TCP to the
+tunnel process. This is useful for Minecraft, game servers, and custom TCP
+protocols. The raw TCP path does not add TLS; use protocol-level encryption when
+needed.
 
-### UDP via QUIC
+## UDP Relay
 
-For UDP services. The relay allocates a UDP port and uses an internal QUIC tunnel to carry datagrams between the client and your app.
+Use UDP mode for datagram protocols:
 
-```text
-UDP Client → Relay :40002 (UDP) → QUIC Tunnel → Your App (raw UDP)
+```bash
+portal expose localhost:8080 --udp --udp-addr localhost:19132
 ```
 
-UDP and TCP port allocations are independent — the same numeric range can serve both.
+The relay allocates a UDP port and carries datagrams over the tunnel backhaul to
+the local UDP target. The positional target is still used for stream traffic;
+`--udp-addr` selects the local UDP service.
 
-## Identity and Authentication
+## Multi-Relay And Multi-Hop
 
-Portal uses **SIWE (Sign-In with Ethereum)** for identity:
+With discovery enabled, Portal starts from the public registry plus explicit
+relays, then expands through relay discovery. Explicit relays are always kept
+connected separately from the auto-selected relay pool.
 
-- On first run, Portal generates a secp256k1 key pair stored as `identity.json`
-- Registration uses a challenge/response flow — you sign a message proving key ownership
-- No accounts, no API keys, no email required
-- Reuse the same `--identity-path` across runs to maintain your identity
+Use a fixed ordered route:
 
-The relay issues a lease-scoped JWT access token after registration, used for all subsequent operations (renew, connect, unregister).
-
-## Relay Discovery
-
-Portal maintains a public relay registry at:
-
-```text
-https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json
+```bash
+portal expose 3000 --multi-hop https://entry.example.com,https://exit.example.com
 ```
 
-When you run `portal expose`, the CLI:
-1. Loads the registry seed list
-2. Adds any explicit `--relays` URLs
-3. Optionally discovers additional relays through relay-to-relay synchronization
+Or ask Portal to choose one route of a given depth:
 
-Use `--discovery=false` to limit connections to only explicitly specified relays.
+```bash
+portal expose 3000 --multi-hop-depth 3
+```
+
+Multi-hop currently applies to the default SNI TLS stream transport. It is not
+combined with UDP or dedicated raw TCP port mode.
+
+## MITM Self-Probe
+
+Portal runs a TLS passthrough self-probe after real stream traffic starts:
+
+1. The tunnel opens a client connection to its own public URL.
+2. The tunnel also receives that connection as the tenant TLS server.
+3. Both controlled ends export TLS keying material.
+4. Matching exporter values indicate passthrough for that sampled connection.
+5. A mismatch is treated as suspected relay-side TLS termination.
+
+By default, `portal expose` bans a relay when the self-probe detects
+termination. Use `--ban-mitm=false` for warning-only behavior.
+
+The probe is a detection signal, not a mathematical proof for every future
+connection. It raises the cost of relay-side termination while preserving the
+transport model.
+
+## Identity And Lease Authentication
+
+On first run, Portal creates a local secp256k1 identity at `identity.json` unless
+you pass another `--identity-path`.
+
+Lease registration uses challenge signing. After registration, the relay issues
+a lease-scoped access token used for renew, unregister, reverse connect, and
+datagram authentication.
+
+Reusing the same identity path keeps the same tunnel identity across runs.
+
+## Domain Boundary
+
+The default stream path prevents the relay from safely injecting `robots.txt`,
+`noindex`, or arbitrary HTTP headers into user responses. That is a feature of
+the trust model, but it also means public multi-tenant relays should use a
+separate wildcard tunnel domain instead of a brand or docs domain.
 
 ## Next Steps
 
-- **[CLI Reference](/cli-reference)** — Full command and flag documentation
-- **[Architecture](/architecture)** — Deep dive into system design and protocol details
-- **[Getting Started](/getting-started)** — Quick install and first tunnel setup
+- [Getting Started](/getting-started): run your first tunnel
+- [CLI Reference](/cli-reference): command and flag details
+- [Architecture](/architecture): protocol-level design notes
