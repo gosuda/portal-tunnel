@@ -115,6 +115,7 @@ func (s *ClientStream) activate(ctx context.Context, conn net.Conn, tlsConfig *t
 	handshakeCtx, cancel := context.WithTimeout(ctx, s.handshakeTimeout)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+		_ = tlsConn.Close()
 		return err
 	}
 

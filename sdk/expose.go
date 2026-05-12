@@ -578,6 +578,29 @@ func (e *Exposure) Accept() (net.Conn, error) {
 	}
 }
 
+func (e *Exposure) drainAccepted() {
+	for {
+		select {
+		case conn := <-e.accepted:
+			if conn != nil {
+				_ = conn.Close()
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (e *Exposure) drainDatagrams() {
+	for {
+		select {
+		case <-e.datagrams:
+		default:
+			return
+		}
+	}
+}
+
 func (e *Exposure) Close() error {
 	var closeErr error
 	e.closeOnce.Do(func() {
@@ -597,6 +620,9 @@ func (e *Exposure) Close() error {
 				closeErr = errors.Join(closeErr, listener.Close())
 			}
 		}
+
+		e.drainAccepted()
+		e.drainDatagrams()
 
 		event := log.Info().
 			Int("relay_count", len(relayListeners)).

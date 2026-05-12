@@ -1,6 +1,8 @@
 package portal
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -530,11 +532,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := rw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"); err != nil {
-		_ = conn.Close()
-		return
-	}
-	if err := rw.Flush(); err != nil {
+	conn = wrapBufferedConn(conn, rw.Reader)
+	if _, err := io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"); err != nil {
 		_ = conn.Close()
 		return
 	}
@@ -544,6 +543,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		remoteAddr = conn.RemoteAddr().String()
 	}
 	if err := lease.stream.OfferConn(conn); err != nil {
+		_ = conn.Close()
 		log.Warn().
 			Err(err).
 			Str("address", lease.Address).
@@ -569,4 +569,27 @@ func (s *Server) extractAllowedClientIP(w http.ResponseWriter, r *http.Request) 
 	}
 	utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
 	return "", false
+}
+
+type bufferedConn struct {
+	net.Conn
+	reader *bytes.Reader
+}
+
+func wrapBufferedConn(conn net.Conn, reader *bufio.Reader) net.Conn {
+	if reader == nil || reader.Buffered() == 0 {
+		return conn
+	}
+	buf := make([]byte, reader.Buffered())
+	if _, err := io.ReadFull(reader, buf); err != nil {
+		return conn
+	}
+	return &bufferedConn{Conn: conn, reader: bytes.NewReader(buf)}
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	if c.reader != nil && c.reader.Len() > 0 {
+		return c.reader.Read(p)
+	}
+	return c.Conn.Read(p)
 }
