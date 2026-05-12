@@ -571,11 +571,13 @@ func (s *Server) extractAllowedClientIP(w http.ResponseWriter, r *http.Request) 
 	return "", false
 }
 
+// bufferedConn replays captured buffered bytes before reading from the connection.
 type bufferedConn struct {
 	net.Conn
 	reader *bytes.Reader
 }
 
+// wrapBufferedConn copies any buffered bytes from the hijacked reader so they are not lost.
 func wrapBufferedConn(conn net.Conn, reader *bufio.Reader) net.Conn {
 	if reader == nil || reader.Buffered() == 0 {
 		return conn
