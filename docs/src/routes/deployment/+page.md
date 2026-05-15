@@ -58,6 +58,9 @@ Set `ACME_DNS_PROVIDER` to one of:
 - `gcloud`
 - `route53`
 
+For a focused explanation of wallet auth and ENS gasless DNS behavior, see
+[Wallet and ENS](/wallet-and-ens).
+
 ### 3.2 Cloudflare setup
 
 #### Add domain to Cloudflare
@@ -305,7 +308,7 @@ WIREGUARD_PORT=51820
 
 - Open `WIREGUARD_PORT/udp` on the host or VM when discovery is enabled.
 - The relay always advertises the `PORTAL_URL` host for WireGuard discovery.
-- The relay stores its admin secret key in `IDENTITY_PATH/identity.json` and generates one automatically on first startup if the file does not already contain it.
+- The relay identity address can sign in to the admin UI by default; use `ADMIN_WALLETS` to allow additional admin wallets.
 - The relay stores its WireGuard keypair in `IDENTITY_PATH/identity.json`. If that file has no WireGuard key yet, Portal generates one on first discovery startup and saves it back to that file.
 - `BOOTSTRAPS` should point at at least one existing relay when you want discovery to join a multi-relay mesh.
 

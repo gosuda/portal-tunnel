@@ -134,6 +134,7 @@ verifies its SHA256 checksum, and replaces the current executable.
 ## Next Steps
 
 - [Concepts](/concepts): understand Portal's relay and transport model
+- [Portal Agent](/portal-agent): keep multiple tunnels running from config
 - [CLI Reference](/cli-reference): complete command and flag documentation
 - [TCP and UDP Tunneling](/tcp-udp-tunneling): raw TCP and UDP examples
 - [Deployment](/deployment): run your own public relay

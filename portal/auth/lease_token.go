@@ -9,6 +9,7 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -24,12 +25,11 @@ type LeaseAccessTokenClaims struct {
 }
 
 type es256kOpaqueSigner struct {
-	keyID      string
-	privateKey *secp256k1.PrivateKey
+	authority identity.Authority
 }
 
 func (s *es256kOpaqueSigner) Public() *jose.JSONWebKey {
-	return &jose.JSONWebKey{KeyID: s.keyID}
+	return &jose.JSONWebKey{}
 }
 
 func (s *es256kOpaqueSigner) Algs() []jose.SignatureAlgorithm {
@@ -40,10 +40,14 @@ func (s *es256kOpaqueSigner) SignPayload(payload []byte, alg jose.SignatureAlgor
 	if alg != leaseTokenAlgorithm {
 		return nil, jose.ErrUnsupportedAlgorithm
 	}
-	if s == nil || s.privateKey == nil {
+	if s == nil || s.authority == nil {
 		return nil, errors.New("signing key is required")
 	}
-	return utils.SignSHA256Secp256k1Raw64(payload, s.privateKey)
+	signature, err := s.authority.SignSHA256Secp256k1(payload)
+	if err != nil {
+		return nil, err
+	}
+	return signature.Raw64()
 }
 
 type es256kOpaqueVerifier struct {
@@ -57,8 +61,8 @@ func (v *es256kOpaqueVerifier) VerifyPayload(payload []byte, signature []byte, a
 	if v == nil || v.publicKey == nil {
 		return errors.New("verification key is required")
 	}
-	if err := utils.VerifySHA256Secp256k1Raw64(payload, signature, v.publicKey); err != nil {
-		if errors.Is(err, utils.ErrSecp256k1SignatureInvalid) {
+	if err := identity.VerifySHA256Secp256k1Raw64(payload, signature, v.publicKey); err != nil {
+		if errors.Is(err, identity.ErrSecp256k1SignatureInvalid) {
 			return errors.New("token signature is invalid")
 		}
 		return err
@@ -66,12 +70,11 @@ func (v *es256kOpaqueVerifier) VerifyPayload(payload []byte, signature []byte, a
 	return nil
 }
 
-func IssueLeaseAccessToken(privateKeyHex, keyID, issuer string, identity types.Identity, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {
-	privateKey, _, err := utils.ParseSecp256k1PrivateKeyHex(privateKeyHex, false)
-	if err != nil {
-		return "", LeaseAccessTokenClaims{}, err
+func IssueLeaseAccessToken(authority identity.Authority, issuer string, leaseIdentity types.Identity, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {
+	if authority == nil {
+		return "", LeaseAccessTokenClaims{}, errors.New("lease token signing authority is required")
 	}
-	normalizedIdentity, err := utils.NormalizeIdentity(identity)
+	normalizedIdentity, err := identity.NormalizeIdentity(leaseIdentity)
 	if err != nil {
 		return "", LeaseAccessTokenClaims{}, err
 	}
@@ -79,8 +82,7 @@ func IssueLeaseAccessToken(privateKeyHex, keyID, issuer string, identity types.I
 	signer, err := jose.NewSigner(jose.SigningKey{
 		Algorithm: leaseTokenAlgorithm,
 		Key: &es256kOpaqueSigner{
-			keyID:      strings.TrimSpace(keyID),
-			privateKey: privateKey,
+			authority: authority,
 		},
 	}, (&jose.SignerOptions{}).WithType("JWT"))
 	if err != nil {
@@ -110,7 +112,7 @@ func IssueLeaseAccessToken(privateKeyHex, keyID, issuer string, identity types.I
 }
 
 func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, now time.Time) (LeaseAccessTokenClaims, error) {
-	publicKey, err := utils.ParseSecp256k1PublicKeyHex(publicKeyHex)
+	publicKey, err := identity.ParseSecp256k1PublicKeyHex(publicKeyHex)
 	if err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
@@ -124,7 +126,7 @@ func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, now time.Time) (
 	if err := parsed.Claims(&es256kOpaqueVerifier{publicKey: publicKey}, &claims); err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
-	normalizedClaimsIdentity, err := utils.NormalizeIdentity(claims.Identity)
+	normalizedClaimsIdentity, err := identity.NormalizeIdentity(claims.Identity)
 	if err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}

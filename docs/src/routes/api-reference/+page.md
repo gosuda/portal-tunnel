@@ -54,14 +54,21 @@ SDK clients authenticate using Sign-In with Ethereum (SIWE):
 3. POST the signed message to `/sdk/register` to receive a JWT access token
 4. Include the access token in subsequent requests via the `X-Portal-Access-Token` header or in the JSON request body
 
-### Admin Authentication (Secret Key)
+### Admin Authentication (Wallet Session)
 
-Admin clients authenticate using a shared secret key:
+Admin clients authenticate with a wallet signature:
 
-1. POST to `/admin/login` with `{ "key": "<secret>" }`
-2. The server sets a `portal_admin` session cookie (HttpOnly, Secure, SameSite=Strict)
-3. Include the cookie in subsequent admin requests
-4. Sessions expire after 24 hours
+1. POST to `/admin/auth/challenge` with `{ "address": "<wallet-address>" }`
+2. Sign the returned SIWE message with the wallet
+3. POST the signed message to `/admin/auth/login`
+4. The server sets a `portal_admin` session cookie (HttpOnly, Secure, SameSite=Strict)
+5. Include the cookie in subsequent admin requests
+6. Sessions expire after 24 hours
+
+The local agent has its own loopback wallet auth endpoints under
+`/v1/agent/auth/*`. Agent wallet sessions can read `/v1/agent/status`; mutating
+agent actions require the bearer token stored in the agent state directory. See
+[Portal Agent](/portal-agent) for the local control API.
 
 ## Endpoint Summary
 
@@ -80,7 +87,8 @@ Admin clients authenticate using a shared secret key:
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| `POST` | [`/admin/login`](/api-reference/admin#post-adminlogin) | Authenticate with secret key | None |
+| `POST` | [`/admin/auth/challenge`](/api-reference/admin#post-adminauthchallenge) | Request wallet login challenge | None |
+| `POST` | [`/admin/auth/login`](/api-reference/admin#post-adminauthlogin) | Complete wallet login | None |
 | `POST` | [`/admin/logout`](/api-reference/admin#post-adminlogout) | End admin session | Session Cookie |
 | `GET` | [`/admin/auth/status`](/api-reference/admin#get-adminauthstatus) | Check authentication status | None |
 | `GET` | [`/admin/snapshot`](/api-reference/admin#get-adminsnapshot) | Get full relay state snapshot | Session Cookie |
@@ -106,7 +114,7 @@ Admin clients authenticate using a shared secret key:
 | `GET` | `/healthz` | Health check | None |
 | `GET` | `/discovery` | Relay discovery | None |
 | `POST` | `/discovery/announce` | Relay discovery self-announce | Signed Descriptor |
-| `POST` | `/v1/sign` | Keyless TLS signing | None |
+| `POST` | `/v1/sign` | Keyless TLS signing | Access Token |
 | `GET` | `/thumbnail/{hostname}` | Cached thumbnail screenshot | None |
 | `GET` | `/tunnel/status` | Tunnel connection status | Access Token |
 
@@ -191,7 +199,11 @@ Submits this relay's signed descriptor to a bootstrap relay so registry-external
 
 ### `POST /v1/sign`
 
-Keyless TLS signing endpoint. Used by the relay's keyless TLS infrastructure. Only available when the API server is configured with a TLS private key.
+Keyless TLS signing endpoint. Used by the SDK-side tenant TLS server during the
+default stream handshake. Requests must include a valid lease access token in
+the `X-Portal-Access-Token` header.
+
+Only available when the API server is configured with a TLS private key.
 
 Returns `404 Not Found` if signing is not configured.
 
@@ -220,7 +232,6 @@ All error codes that may appear in the `error.code` field:
 
 | Code | Description |
 |------|-------------|
-| `auth_disabled` | Admin authentication is not configured |
 | `feature_unavailable` | Requested feature is not available |
 | `hijack_failed` | HTTP connection hijack failed |
 | `hijack_unsupported` | HTTP connection hijack not supported |
@@ -229,7 +240,6 @@ All error codes that may appear in the `error.code` field:
 | `invalid_address` | Invalid Ethereum address |
 | `invalid_ip` | Invalid IP address format |
 | `invalid_json` | Malformed JSON request body |
-| `invalid_key` | Invalid admin secret key |
 | `invalid_mode` | Invalid approval mode value |
 | `invalid_request` | General request validation failure |
 | `internal` | Internal server error |
@@ -237,7 +247,6 @@ All error codes that may appear in the `error.code` field:
 | `lease_not_found` | No lease found for the given identity |
 | `lease_rejected` | Lease is not approved for routing |
 | `method_not_allowed` | HTTP method not allowed for this endpoint |
-| `session_create_failed` | Failed to create admin session |
 | `unauthorized` | Authentication required or token invalid |
 | `udp_port_exhausted` | No UDP ports available |
 | `udp_disabled` | UDP transport is disabled |

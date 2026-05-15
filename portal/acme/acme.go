@@ -25,7 +25,9 @@ import (
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -69,6 +71,8 @@ type Manager struct {
 	stopOnce      sync.Once
 	dnssecLogOnce sync.Once
 	ensLogOnce    sync.Once
+	ensStatusMu   sync.RWMutex
+	ensStatus     types.ENSStatus
 	trackedMu     sync.Mutex
 	echMu         sync.Mutex
 	echRecords    map[string]HTTPSRecord
@@ -162,7 +166,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		if cfg.ENSGaslessAddress == "" {
 			return nil, errors.New("ens gasless address is required when ens gasless import is enabled")
 		}
-		address, err := utils.NormalizeEVMAddress(cfg.ENSGaslessAddress)
+		address, err := identity.NormalizeEVMAddress(cfg.ENSGaslessAddress)
 		if err != nil {
 			return nil, fmt.Errorf("normalize ens gasless address: %w", err)
 		}
@@ -177,14 +181,16 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 	if utils.IsLocalRelayHost(cfg.BaseDomain) {
 		return &Manager{
-			cfg:    cfg,
-			stopCh: make(chan struct{}),
+			cfg:       cfg,
+			stopCh:    make(chan struct{}),
+			ensStatus: newENSStatus(cfg, nil),
 		}, nil
 	}
 
 	manager := &Manager{
-		cfg:    cfg,
-		stopCh: make(chan struct{}),
+		cfg:       cfg,
+		stopCh:    make(chan struct{}),
+		ensStatus: newENSStatus(cfg, nil),
 	}
 
 	acmeDNS, err := NewDNSProvider(cfg.DNSProvider, cfg)
@@ -198,6 +204,58 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 
 	return manager, nil
+}
+
+func newENSStatus(cfg Config, dns DNSProvider) types.ENSStatus {
+	provider := strings.TrimSpace(cfg.DNSProvider)
+	if dns != nil {
+		provider = dns.Name()
+	}
+	return types.ENSStatus{
+		Enabled:  cfg.ENSGaslessEnabled && !utils.IsLocalRelayHost(cfg.BaseDomain),
+		Provider: provider,
+		Address:  strings.TrimSpace(cfg.ENSGaslessAddress),
+	}
+}
+
+func (m *Manager) ENSStatus() types.ENSStatus {
+	if m == nil {
+		return types.ENSStatus{}
+	}
+	m.ensStatusMu.RLock()
+	status := m.ensStatus
+	m.ensStatusMu.RUnlock()
+	if status.Provider == "" && m.dns != nil {
+		status.Provider = m.dns.Name()
+	}
+	return status
+}
+
+func (m *Manager) setENSStatus(state, record, message string, syncErr error) {
+	if m == nil {
+		return
+	}
+	status := newENSStatus(m.cfg, m.dns)
+	status.DNSSECState = strings.TrimSpace(state)
+	status.DSRecord = strings.TrimSpace(record)
+	status.Message = strings.TrimSpace(message)
+	status.Verified = syncErr == nil && ensDNSSECVerified(status.DNSSECState)
+	if syncErr != nil {
+		status.LastError = syncErr.Error()
+	}
+
+	m.ensStatusMu.Lock()
+	m.ensStatus = status
+	m.ensStatusMu.Unlock()
+}
+
+func ensDNSSECVerified(state string) bool {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "active", "on", "signing", "transfer":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error) {
@@ -576,6 +634,7 @@ func (m *Manager) syncENSGasless(ctx context.Context) error {
 
 	state, dsRecord, message, err := m.dns.EnsureDNSSEC(ctx, m.cfg.BaseDomain)
 	if err != nil {
+		m.setENSStatus("", "", "", err)
 		return fmt.Errorf("ensure dnssec: %w", err)
 	}
 	m.dnssecLogOnce.Do(func() {
@@ -593,11 +652,15 @@ func (m *Manager) syncENSGasless(ctx context.Context) error {
 	})
 
 	if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
-		return fmt.Errorf("ensure ens gasless txt: %w", err)
-	}
-	if err := m.syncTrackedENSGaslessHostARecords(ctx); err != nil {
+		err = fmt.Errorf("ensure ens gasless txt: %w", err)
+		m.setENSStatus(state, dsRecord, message, err)
 		return err
 	}
+	if err := m.syncTrackedENSGaslessHostARecords(ctx); err != nil {
+		m.setENSStatus(state, dsRecord, message, err)
+		return err
+	}
+	m.setENSStatus(state, dsRecord, message, nil)
 	m.ensLogOnce.Do(func() {
 		log.Info().
 			Str("provider", m.dns.Name()).
@@ -624,7 +687,7 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 		return fmt.Errorf("hostname %q is outside acme base domain %q", hostname, m.cfg.BaseDomain)
 	}
 
-	address, err := utils.NormalizeEVMAddress(address)
+	address, err := identity.NormalizeEVMAddress(address)
 	if err != nil {
 		return fmt.Errorf("normalize ens gasless address: %w", err)
 	}

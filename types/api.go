@@ -110,9 +110,10 @@ type DiscoveryAnnounceResponse struct {
 }
 
 type RenewRequest struct {
-	AccessToken string `json:"access_token"`
-	TTL         int    `json:"ttl,omitempty"`
-	ReportedIP  string `json:"reported_ip,omitempty"`
+	AccessToken string        `json:"access_token"`
+	TTL         int           `json:"ttl,omitempty"`
+	ReportedIP  string        `json:"reported_ip,omitempty"`
+	Metadata    LeaseMetadata `json:"metadata,omitempty"`
 }
 
 type RenewResponse struct {
@@ -183,8 +184,20 @@ func HopRouteBytes(method string, route HopRoute) ([]byte, error) {
 }
 
 type DomainResponse struct {
-	ProtocolVersion string `json:"protocol_version"`
-	ReleaseVersion  string `json:"release_version"`
+	ProtocolVersion string    `json:"protocol_version"`
+	ReleaseVersion  string    `json:"release_version"`
+	ENS             ENSStatus `json:"ens"`
+}
+
+type ENSStatus struct {
+	Enabled     bool   `json:"enabled"`
+	Verified    bool   `json:"verified"`
+	Provider    string `json:"provider,omitempty"`
+	Address     string `json:"address,omitempty"`
+	DNSSECState string `json:"dnssec_state,omitempty"`
+	DSRecord    string `json:"ds_record,omitempty"`
+	Message     string `json:"message,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
 }
 
 type TunnelStatusResponse struct {
@@ -193,17 +206,29 @@ type TunnelStatusResponse struct {
 	ServiceAlive bool   `json:"service_alive"`
 }
 
-type AdminLoginRequest struct {
-	Key string `json:"key"`
+type WalletAuthChallengeRequest struct {
+	Address string `json:"address"`
 }
 
-type AdminLoginResponse struct {
-	Success bool `json:"success,omitempty"`
+type WalletAuthChallengeResponse struct {
+	ChallengeID string    `json:"challenge_id"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	SIWEMessage string    `json:"siwe_message"`
 }
 
-type AdminAuthStatusResponse struct {
-	Authenticated bool `json:"authenticated"`
-	AuthEnabled   bool `json:"auth_enabled"`
+type WalletAuthLoginRequest struct {
+	ChallengeID   string `json:"challenge_id"`
+	SIWEMessage   string `json:"siwe_message"`
+	SIWESignature string `json:"siwe_signature"`
+}
+
+type WalletAuthLoginResponse struct {
+	WalletAddress string `json:"wallet_address,omitempty"`
+}
+
+type WalletAuthStatusResponse struct {
+	Authenticated bool   `json:"authenticated"`
+	WalletAddress string `json:"wallet_address,omitempty"`
 }
 
 type AdminSnapshotResponse struct {

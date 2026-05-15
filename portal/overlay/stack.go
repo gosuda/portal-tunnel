@@ -17,8 +17,8 @@ import (
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/netstack"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const defaultEndpointResolveTTL = 3 * time.Second
@@ -36,7 +36,7 @@ type stack struct {
 }
 
 func newStack(cfg Config) (*stack, error) {
-	canonicalPrivateKey, err := utils.NormalizeWireGuardPrivateKey(cfg.PrivateKey)
+	canonicalPrivateKey, err := identity.NormalizeWireGuardPrivateKey(cfg.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("normalize wireguard private key: %w", err)
 	}
@@ -46,7 +46,7 @@ func newStack(cfg Config) (*stack, error) {
 		return nil, errors.New("wireguard listen port is invalid")
 	}
 
-	overlayIPv4, err := utils.DeriveWireGuardOverlayIPv4(cfg.PublicKey)
+	overlayIPv4, err := identity.DeriveWireGuardOverlayIPv4(cfg.PublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("derive overlay ipv4: %w", err)
 	}
@@ -61,7 +61,7 @@ func newStack(cfg Config) (*stack, error) {
 	}
 
 	wgDevice := device.NewDevice(tunDevice, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "portal-wg"))
-	privateKeyHex, err := utils.WireGuardKeyHex(canonicalPrivateKey)
+	privateKeyHex, err := identity.WireGuardKeyHex(canonicalPrivateKey)
 	if err != nil {
 		wgDevice.Close()
 		<-wgDevice.Wait()
@@ -143,15 +143,15 @@ func (s *stack) ApplyPeers(peers []types.RelayDescriptor) error {
 
 	for _, peer := range peers {
 		peerKey := strings.TrimSpace(peer.WireGuardPublicKey)
-		overlayIPv4, err := utils.DeriveWireGuardOverlayIPv4(peer.WireGuardPublicKey)
+		overlayIPv4, err := identity.DeriveWireGuardOverlayIPv4(peer.WireGuardPublicKey)
 		if err != nil {
 			continue
 		}
-		wireGuardEndpoint, err := utils.RelayWireGuardEndpoint(peer)
+		wireGuardEndpoint, err := identity.RelayWireGuardEndpoint(peer)
 		if err != nil {
 			continue
 		}
-		publicKeyHex, err := utils.WireGuardKeyHex(peer.WireGuardPublicKey)
+		publicKeyHex, err := identity.WireGuardKeyHex(peer.WireGuardPublicKey)
 		if err != nil {
 			return fmt.Errorf("normalize peer %q public key: %w", peerKey, err)
 		}

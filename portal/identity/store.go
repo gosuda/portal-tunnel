@@ -1,4 +1,4 @@
-package utils
+package identity
 
 import (
 	"encoding/json"
@@ -6,18 +6,18 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 	normalized := identity.Copy()
 
-	name, err := NormalizeDNSLabel(identity.Name)
+	name, err := utils.NormalizeDNSLabel(identity.Name)
 	if err != nil {
 		return types.Identity{}, err
 	}
@@ -31,7 +31,7 @@ func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 	return normalized, nil
 }
 
-func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
+func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
 	desc.Address = strings.TrimSpace(desc.Address)
 	desc.Version = strings.TrimSpace(desc.Version)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
@@ -47,7 +47,7 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 	}
 
 	if desc.APIHTTPSAddr != "" {
-		normalized, err := NormalizeRelayURL(desc.APIHTTPSAddr)
+		normalized, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr)
 		if err != nil {
 			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
 		}
@@ -98,7 +98,7 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 }
 
 func RelayWireGuardEndpoint(desc types.RelayDescriptor) (string, error) {
-	host := PortalRootHost(desc.APIHTTPSAddr)
+	host := utils.PortalRootHost(desc.APIHTTPSAddr)
 	if host == "" {
 		return "", errors.New("api_https_addr host is required")
 	}
@@ -121,7 +121,7 @@ func ResolveRelayStateDir(path string) string {
 	}
 }
 
-func ResolveRelayIdentityPath(path string) string {
+func resolveRelayIdentityPath(path string) string {
 	stateDir := ResolveRelayStateDir(path)
 	if stateDir == "" {
 		return ""
@@ -137,12 +137,13 @@ func ResolveRelayAdminSettingsPath(path string) string {
 	return filepath.Join(stateDir, types.RelayAdminSettingsFilename)
 }
 
-func NormalizeStoredIdentity(identity types.Identity) (types.Identity, error) {
+func normalizeStoredIdentity(identity types.Identity) (types.Identity, error) {
 	normalized := identity.Copy()
 	normalized.Name = strings.TrimSpace(normalized.Name)
 	normalized.Address = strings.TrimSpace(normalized.Address)
 	normalized.PublicKey = strings.TrimSpace(normalized.PublicKey)
 	normalized.PrivateKey = strings.TrimSpace(normalized.PrivateKey)
+	normalized.TokenSecret = strings.TrimSpace(normalized.TokenSecret)
 
 	switch {
 	case normalized.PrivateKey != "":
@@ -150,7 +151,7 @@ func NormalizeStoredIdentity(identity types.Identity) (types.Identity, error) {
 		if err != nil {
 			return types.Identity{}, err
 		}
-		if normalized.PublicKey != "" && !strings.EqualFold(TrimHexPrefix(normalized.PublicKey), resolved.PublicKey) {
+		if normalized.PublicKey != "" && !strings.EqualFold(utils.TrimHexPrefix(normalized.PublicKey), resolved.PublicKey) {
 			return types.Identity{}, errors.New("identity public key does not match private key")
 		}
 		if normalized.Address != "" && !strings.EqualFold(normalized.Address, resolved.Address) {
@@ -164,7 +165,7 @@ func NormalizeStoredIdentity(identity types.Identity) (types.Identity, error) {
 		if err != nil {
 			return types.Identity{}, err
 		}
-		normalized.PublicKey = strings.ToLower(TrimHexPrefix(normalized.PublicKey))
+		normalized.PublicKey = strings.ToLower(utils.TrimHexPrefix(normalized.PublicKey))
 		if normalized.Address == "" {
 			normalized.Address = address
 			break
@@ -183,14 +184,13 @@ func NormalizeStoredIdentity(identity types.Identity) (types.Identity, error) {
 	return normalized, nil
 }
 
-func NormalizeStoredRelayIdentity(identity types.RelayIdentity) (types.RelayIdentity, error) {
+func normalizeStoredRelayIdentity(identity types.RelayIdentity) (types.RelayIdentity, error) {
 	normalized := identity.Copy()
-	baseIdentity, err := NormalizeStoredIdentity(normalized.Identity)
+	baseIdentity, err := normalizeStoredIdentity(normalized.Identity)
 	if err != nil {
 		return types.RelayIdentity{}, err
 	}
 	normalized.Identity = baseIdentity
-	normalized.AdminSecretKey = strings.TrimSpace(normalized.AdminSecretKey)
 	normalized.WireGuardPublicKey = strings.TrimSpace(normalized.WireGuardPublicKey)
 	normalized.WireGuardPrivateKey = strings.TrimSpace(normalized.WireGuardPrivateKey)
 	normalized.EncryptedClientHelloSeed = strings.TrimSpace(normalized.EncryptedClientHelloSeed)
@@ -225,57 +225,67 @@ func NormalizeStoredRelayIdentity(identity types.RelayIdentity) (types.RelayIden
 }
 
 type storedIdentity struct {
-	Name       string `json:"name,omitempty"`
-	Address    string `json:"address,omitempty"`
-	PublicKey  string `json:"public_key,omitempty"`
-	PrivateKey string `json:"private_key,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Address     string `json:"address,omitempty"`
+	PublicKey   string `json:"public_key,omitempty"`
+	PrivateKey  string `json:"private_key,omitempty"`
+	TokenSecret string `json:"token_secret,omitempty"`
 }
 
 type storedRelayIdentity struct {
 	storedIdentity
-	AdminSecretKey           string `json:"admin_secret_key,omitempty"`
 	WireGuardPublicKey       string `json:"wireguard_public_key,omitempty"`
 	WireGuardPrivateKey      string `json:"wireguard_private_key,omitempty"`
 	EncryptedClientHelloSeed string `json:"encrypted_client_hello_seed,omitempty"`
 }
 
-func SaveIdentity(path string, identity types.Identity) error {
+func saveIdentity(path string, identity types.Identity) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return errors.New("identity path is required")
 	}
-	normalized, err := NormalizeStoredIdentity(identity)
+	normalized, err := normalizeStoredIdentity(identity)
 	if err != nil {
 		return err
 	}
-	if err := WriteJSONFile(path, storedIdentity{
-		Name:       normalized.Name,
-		Address:    normalized.Address,
-		PublicKey:  normalized.PublicKey,
-		PrivateKey: normalized.PrivateKey,
+	normalized, err = ensureTokenSecret(normalized)
+	if err != nil {
+		return err
+	}
+	if err := utils.WriteJSONFile(path, storedIdentity{
+		Name:        normalized.Name,
+		Address:     normalized.Address,
+		PublicKey:   normalized.PublicKey,
+		PrivateKey:  normalized.PrivateKey,
+		TokenSecret: normalized.TokenSecret,
 	}, 0o600); err != nil {
 		return fmt.Errorf("write identity file: %w", err)
 	}
 	return nil
 }
 
-func SaveRelayIdentity(path string, identity types.RelayIdentity) error {
-	path = ResolveRelayIdentityPath(path)
+func saveRelayIdentity(path string, identity types.RelayIdentity) error {
+	path = resolveRelayIdentityPath(path)
 	if path == "" {
 		return errors.New("identity path is required")
 	}
-	normalized, err := NormalizeStoredRelayIdentity(identity)
+	normalized, err := normalizeStoredRelayIdentity(identity)
 	if err != nil {
 		return err
 	}
-	if err := WriteJSONFile(path, storedRelayIdentity{
+	baseIdentity, err := ensureTokenSecret(normalized.Identity)
+	if err != nil {
+		return err
+	}
+	normalized.Identity = baseIdentity
+	if err := utils.WriteJSONFile(path, storedRelayIdentity{
 		storedIdentity: storedIdentity{
-			Name:       normalized.Name,
-			Address:    normalized.Address,
-			PublicKey:  normalized.PublicKey,
-			PrivateKey: normalized.PrivateKey,
+			Name:        normalized.Name,
+			Address:     normalized.Address,
+			PublicKey:   normalized.PublicKey,
+			PrivateKey:  normalized.PrivateKey,
+			TokenSecret: normalized.TokenSecret,
 		},
-		AdminSecretKey:           normalized.AdminSecretKey,
 		WireGuardPublicKey:       normalized.WireGuardPublicKey,
 		WireGuardPrivateKey:      normalized.WireGuardPrivateKey,
 		EncryptedClientHelloSeed: normalized.EncryptedClientHelloSeed,
@@ -285,47 +295,48 @@ func SaveRelayIdentity(path string, identity types.RelayIdentity) error {
 	return nil
 }
 
-func LoadIdentity(path string) (types.Identity, error) {
+func loadIdentity(path string) (types.Identity, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return types.Identity{}, errors.New("identity path is required")
 	}
 	var payload storedIdentity
-	if err := ReadJSONFile(path, &payload); err != nil {
+	if err := utils.ReadJSONFile(path, &payload); err != nil {
 		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
 	}
-	return NormalizeStoredIdentity(types.Identity{
-		Name:       payload.Name,
-		Address:    payload.Address,
-		PublicKey:  payload.PublicKey,
-		PrivateKey: payload.PrivateKey,
+	return normalizeStoredIdentity(types.Identity{
+		Name:        payload.Name,
+		Address:     payload.Address,
+		PublicKey:   payload.PublicKey,
+		PrivateKey:  payload.PrivateKey,
+		TokenSecret: payload.TokenSecret,
 	})
 }
 
-func LoadRelayIdentity(path string) (types.RelayIdentity, error) {
-	path = ResolveRelayIdentityPath(path)
+func loadRelayIdentity(path string) (types.RelayIdentity, error) {
+	path = resolveRelayIdentityPath(path)
 	if path == "" {
 		return types.RelayIdentity{}, errors.New("identity path is required")
 	}
 	var payload storedRelayIdentity
-	if err := ReadJSONFile(path, &payload); err != nil {
+	if err := utils.ReadJSONFile(path, &payload); err != nil {
 		return types.RelayIdentity{}, fmt.Errorf("read identity file: %w", err)
 	}
-	return NormalizeStoredRelayIdentity(types.RelayIdentity{
+	return normalizeStoredRelayIdentity(types.RelayIdentity{
 		Identity: types.Identity{
-			Name:       payload.Name,
-			Address:    payload.Address,
-			PublicKey:  payload.PublicKey,
-			PrivateKey: payload.PrivateKey,
+			Name:        payload.Name,
+			Address:     payload.Address,
+			PublicKey:   payload.PublicKey,
+			PrivateKey:  payload.PrivateKey,
+			TokenSecret: payload.TokenSecret,
 		},
-		AdminSecretKey:           payload.AdminSecretKey,
 		WireGuardPublicKey:       payload.WireGuardPublicKey,
 		WireGuardPrivateKey:      payload.WireGuardPrivateKey,
 		EncryptedClientHelloSeed: payload.EncryptedClientHelloSeed,
 	})
 }
 
-func ParseIdentityJSON(raw string) (types.Identity, error) {
+func parseIdentityJSON(raw string) (types.Identity, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return types.Identity{}, errors.New("identity json is required")
@@ -335,21 +346,22 @@ func ParseIdentityJSON(raw string) (types.Identity, error) {
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return types.Identity{}, fmt.Errorf("decode identity json: %w", err)
 	}
-	return NormalizeStoredIdentity(types.Identity{
-		Name:       payload.Name,
-		Address:    payload.Address,
-		PublicKey:  payload.PublicKey,
-		PrivateKey: payload.PrivateKey,
+	return normalizeStoredIdentity(types.Identity{
+		Name:        payload.Name,
+		Address:     payload.Address,
+		PublicKey:   payload.PublicKey,
+		PrivateKey:  payload.PrivateKey,
+		TokenSecret: payload.TokenSecret,
 	})
 }
 
-func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity, bool, error) {
+func loadOrCreateIdentity(path string, identity types.Identity) (types.Identity, bool, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return types.Identity{}, false, errors.New("identity path is required")
 	}
 
-	stored, err := LoadIdentity(path)
+	stored, err := loadIdentity(path)
 	switch {
 	case err == nil:
 		if name := strings.TrimSpace(identity.Name); name != "" {
@@ -364,13 +376,16 @@ func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 		if privateKey := strings.TrimSpace(identity.PrivateKey); privateKey != "" {
 			stored.PrivateKey = privateKey
 		}
+		if tokenSecret := strings.TrimSpace(identity.TokenSecret); tokenSecret != "" {
+			stored.TokenSecret = tokenSecret
+		}
 		if strings.TrimSpace(stored.PrivateKey) == "" {
 			return types.Identity{}, false, errors.New("stored identity private key is required")
 		}
-		if err := SaveIdentity(path, stored); err != nil {
+		if err := saveIdentity(path, stored); err != nil {
 			return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
 		}
-		loaded, err := LoadIdentity(path)
+		loaded, err := loadIdentity(path)
 		if err != nil {
 			return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
 		}
@@ -391,29 +406,77 @@ func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 		created.PublicKey = generated.PublicKey
 	}
 	created.PrivateKey = generated.PrivateKey
-	if err := SaveIdentity(path, created); err != nil {
+	if strings.TrimSpace(created.TokenSecret) == "" {
+		created, err = ensureTokenSecret(created)
+		if err != nil {
+			return types.Identity{}, false, err
+		}
+	}
+	if err := saveIdentity(path, created); err != nil {
 		return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
 	}
-	loaded, err := LoadIdentity(path)
+	loaded, err := loadIdentity(path)
 	if err != nil {
 		return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
 	}
 	return loaded, true, nil
 }
 
+func ResolveListenerIdentity(baseIdentity types.Identity, target, identityPath, identityJSON string) (types.Identity, bool, error) {
+	identityPath = strings.TrimSpace(identityPath)
+	identityJSON = strings.TrimSpace(identityJSON)
+	resolvedName, err := resolveExposeName(baseIdentity.Name, target, identityPath, identityJSON)
+	if err != nil {
+		return types.Identity{}, false, err
+	}
+	baseIdentity.Name = resolvedName
+	if identityJSON != "" {
+		provided, err := parseIdentityJSON(identityJSON)
+		if err != nil {
+			return types.Identity{}, false, err
+		}
+		provided.Name = baseIdentity.Name
+		if identityPath != "" {
+			if err := saveIdentity(identityPath, provided); err != nil {
+				return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
+			}
+			provided, err = loadIdentity(identityPath)
+			if err != nil {
+				return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
+			}
+		}
+		resolved, err := resolveLeaseIdentity(provided)
+		return resolved, false, err
+	}
+	if identityPath == "" {
+		resolved, err := resolveLeaseIdentity(baseIdentity)
+		return resolved, false, err
+	}
+
+	loaded, created, err := loadOrCreateIdentity(identityPath, baseIdentity)
+	if err != nil {
+		return types.Identity{}, false, err
+	}
+	resolved, err := resolveLeaseIdentity(loaded)
+	if err != nil {
+		return types.Identity{}, false, err
+	}
+	return resolved, created, nil
+}
+
 func LoadOrCreateRelayIdentity(path, rootHost string, discoveryEnabled bool) (types.RelayIdentity, error) {
-	path = ResolveRelayIdentityPath(path)
+	path = resolveRelayIdentityPath(path)
 	if path == "" {
 		return types.RelayIdentity{}, errors.New("identity path is required")
 	}
 	rootHost = strings.TrimSpace(rootHost)
-	if normalizedRootHost := PortalRootHost(rootHost); normalizedRootHost != "" {
+	if normalizedRootHost := utils.PortalRootHost(rootHost); normalizedRootHost != "" {
 		rootHost = normalizedRootHost
 	} else {
-		rootHost = NormalizeHostname(rootHost)
+		rootHost = utils.NormalizeHostname(rootHost)
 	}
 
-	stored, err := LoadRelayIdentity(path)
+	stored, err := loadRelayIdentity(path)
 	switch {
 	case err == nil:
 		if rootHost != "" {
@@ -423,10 +486,10 @@ func LoadOrCreateRelayIdentity(path, rootHost string, discoveryEnabled bool) (ty
 		if err := populateRelayIdentity(&stored, discoveryEnabled); err != nil {
 			return types.RelayIdentity{}, err
 		}
-		if err := SaveRelayIdentity(path, stored); err != nil {
+		if err := saveRelayIdentity(path, stored); err != nil {
 			return types.RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
 		}
-		loaded, err := LoadRelayIdentity(path)
+		loaded, err := loadRelayIdentity(path)
 		if err != nil {
 			return types.RelayIdentity{}, fmt.Errorf("load identity: %w", err)
 		}
@@ -449,14 +512,18 @@ func LoadOrCreateRelayIdentity(path, rootHost string, discoveryEnabled bool) (ty
 		created.PublicKey = generated.PublicKey
 	}
 	created.PrivateKey = generated.PrivateKey
+	created.Identity, err = ensureTokenSecret(created.Identity)
+	if err != nil {
+		return types.RelayIdentity{}, err
+	}
 
 	if err := populateRelayIdentity(&created, discoveryEnabled); err != nil {
 		return types.RelayIdentity{}, err
 	}
-	if err := SaveRelayIdentity(path, created); err != nil {
+	if err := saveRelayIdentity(path, created); err != nil {
 		return types.RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
 	}
-	loaded, err := LoadRelayIdentity(path)
+	loaded, err := loadRelayIdentity(path)
 	if err != nil {
 		return types.RelayIdentity{}, fmt.Errorf("load identity: %w", err)
 	}
@@ -467,14 +534,11 @@ func populateRelayIdentity(identity *types.RelayIdentity, discoveryEnabled bool)
 	if identity == nil {
 		return errors.New("relay identity is required")
 	}
-
-	if strings.TrimSpace(identity.AdminSecretKey) == "" {
-		adminSecretKey, err := identity.DeriveToken("admin-secret")
-		if err != nil {
-			return fmt.Errorf("derive relay admin secret key: %w", err)
-		}
-		identity.AdminSecretKey = adminSecretKey
+	baseIdentity, err := ensureTokenSecret(identity.Identity)
+	if err != nil {
+		return err
 	}
+	identity.Identity = baseIdentity
 
 	if discoveryEnabled && strings.TrimSpace(identity.WireGuardPrivateKey) == "" {
 		var err error
@@ -486,55 +550,13 @@ func populateRelayIdentity(identity *types.RelayIdentity, discoveryEnabled bool)
 	}
 
 	if strings.TrimSpace(identity.EncryptedClientHelloSeed) == "" {
-		identity.EncryptedClientHelloSeed = RandomID("")
+		identity.EncryptedClientHelloSeed = utils.RandomID("")
 	}
 
 	return nil
 }
 
-func ResolveListenerIdentity(identity types.Identity, target, identityPath, identityJSON string) (types.Identity, bool, error) {
-	identityPath = strings.TrimSpace(identityPath)
-	identityJSON = strings.TrimSpace(identityJSON)
-	resolvedName, err := resolveExposeName(identity.Name, target, identityPath, identityJSON)
-	if err != nil {
-		return types.Identity{}, false, err
-	}
-	identity.Name = resolvedName
-	if identityJSON != "" {
-		provided, err := ParseIdentityJSON(identityJSON)
-		if err != nil {
-			return types.Identity{}, false, err
-		}
-		provided.Name = identity.Name
-		if identityPath != "" {
-			if err := SaveIdentity(identityPath, provided); err != nil {
-				return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
-			}
-			provided, err = LoadIdentity(identityPath)
-			if err != nil {
-				return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
-			}
-		}
-		resolved, err := ResolveLeaseIdentity(provided)
-		return resolved, false, err
-	}
-	if identityPath == "" {
-		resolved, err := ResolveLeaseIdentity(identity)
-		return resolved, false, err
-	}
-
-	loaded, created, err := LoadOrCreateIdentity(identityPath, identity)
-	if err != nil {
-		return types.Identity{}, false, err
-	}
-	resolved, err := ResolveLeaseIdentity(loaded)
-	if err != nil {
-		return types.Identity{}, false, err
-	}
-	return resolved, created, nil
-}
-
-func NormalizeIdentityKey(raw string) string {
+func normalizeIdentityKey(raw string) string {
 	key := strings.ToLower(strings.TrimSpace(raw))
 	if key == "" {
 		return ""
@@ -547,7 +569,7 @@ func NormalizeIdentityKey(raw string) string {
 }
 
 func NormalizeIdentityKeys(inputs []string) []string {
-	return normalizeUniqueStrings(inputs, NormalizeIdentityKey)
+	return normalizeUniqueStrings(inputs, normalizeIdentityKey)
 }
 
 func NormalizeIdentityKeyBPS(inputs map[string]int64) map[string]int64 {
@@ -557,7 +579,7 @@ func NormalizeIdentityKeyBPS(inputs map[string]int64) map[string]int64 {
 
 	out := make(map[string]int64, len(inputs))
 	for input, bps := range inputs {
-		key := NormalizeIdentityKey(input)
+		key := normalizeIdentityKey(input)
 		if key == "" || bps <= 0 {
 			continue
 		}
@@ -569,10 +591,38 @@ func NormalizeIdentityKeyBPS(inputs map[string]int64) map[string]int64 {
 	return out
 }
 
-func ResolveLeaseIdentity(identity types.Identity) (types.Identity, error) {
+func resolveExposeName(name, target, identityPath, identityJSON string) (string, error) {
+	if name = strings.TrimSpace(name); name != "" {
+		return name, nil
+	}
+	if identityJSON = strings.TrimSpace(identityJSON); identityJSON != "" {
+		providedIdentity, err := parseIdentityJSON(identityJSON)
+		if err != nil {
+			return "", err
+		}
+		if name := strings.TrimSpace(providedIdentity.Name); name != "" {
+			return name, nil
+		}
+	}
+	if identityPath = strings.TrimSpace(identityPath); identityPath != "" {
+		storedIdentity, err := loadIdentity(identityPath)
+		switch {
+		case err == nil:
+			if name := strings.TrimSpace(storedIdentity.Name); name != "" {
+				return name, nil
+			}
+		case !errors.Is(err, os.ErrNotExist):
+			return "", err
+		}
+	}
+
+	return utils.DefaultExposeName(target, utils.RandomID("cli_"))
+}
+
+func resolveLeaseIdentity(identity types.Identity) (types.Identity, error) {
 	resolved := identity.Copy()
 
-	name, err := NormalizeDNSLabel(resolved.Name)
+	name, err := utils.NormalizeDNSLabel(resolved.Name)
 	if err != nil {
 		return types.Identity{}, err
 	}
@@ -597,154 +647,29 @@ func ResolveLeaseIdentity(identity types.Identity) (types.Identity, error) {
 
 	resolved.PublicKey = signingIdentity.PublicKey
 	resolved.PrivateKey = signingIdentity.PrivateKey
-	return resolved, nil
+	return ensureTokenSecret(resolved)
 }
 
-var exposeNameOpeners = []string{
-	"arcade", "bouncy", "bravo", "bubble", "candy", "cosmic", "dapper", "electric",
-	"fancy", "fizzy", "flashy", "fuzzy", "gentle", "glitter", "golden", "happy",
-	"hyper", "jazzy", "jolly", "lively", "lucky", "magic", "mellow", "minty",
-	"misty", "moonlit", "mystic", "neon", "nova", "peppy", "pixel", "playful",
-	"poppy", "rapid", "rocket", "rowdy", "snappy", "snazzy", "sparkly", "spicy",
-	"sprightly", "starry", "sunny", "swift", "tangy", "tidy", "toasty", "turbo",
-	"velvet", "vivid", "wavy", "whimsy", "wild", "wonky", "zany", "zesty",
-}
-
-var exposeNameCenters = []string{
-	"alpaca", "badger", "banjo", "beacon", "biscuit", "capybara", "comet", "cricket",
-	"dragon", "falcon", "feather", "fjord", "fox", "gadget", "gecko", "gizmo",
-	"harbor", "heron", "iguana", "jelly", "koala", "lemur", "mango", "narwhal",
-	"nebula", "noodle", "octopus", "otter", "panda", "pepper", "phoenix", "pickle",
-	"puffin", "quokka", "radar", "ranger", "rocket", "scooter", "seahorse", "skylark",
-	"sprocket", "starling", "sunbeam", "taco", "thimble", "tiger", "toucan", "triton",
-	"walrus", "widget", "willow", "wombat", "yeti", "zeppelin", "zigzag", "zinnia",
-}
-
-var exposeNameClosers = []string{
-	"arcade", "beacon", "boogie", "bounce", "burst", "cascade", "chorus", "dash",
-	"disco", "drift", "echo", "fiesta", "flare", "flash", "flight", "flip",
-	"glow", "groove", "jam", "jive", "launch", "loop", "march", "orbit",
-	"parade", "party", "pulse", "quest", "rally", "riot", "ripple", "rodeo",
-	"roll", "rush", "serenade", "shuffle", "signal", "sketch", "spark", "sprint",
-	"starlight", "stride", "sway", "swoop", "twirl", "uplift", "vibe", "voyage",
-	"whirl", "wink", "zap", "zenith", "zip", "zoom", "zest", "zone",
-}
-
-const (
-	defaultExposeTargetPort = "3000"
-	defaultExposeTargetHost = "127.0.0.1"
-)
-
-// DefaultExposeName generates a deterministic 3-word DNS label from a target
-// address and seed using FNV-1a hashing. The algorithm matches the frontend
-// implementation in frontend/src/lib/exposeName.ts:buildDefaultExposeName.
-func DefaultExposeName(target, rawSeed string) (string, error) {
-	seed := strings.TrimSpace(rawSeed)
-	if cut, ok := strings.CutPrefix(seed, "cli_"); ok {
-		seed = cut
-	}
-	if seed == "" {
-		seed = "portal"
+func normalizeUniqueStrings(inputs []string, normalize func(string) string) []string {
+	if len(inputs) == 0 {
+		return nil
 	}
 
-	input := []byte(seed + "|" + normalizeExposeTarget(target))
-	first := fnv1a32(input, 0x811c9dc5)
-	second := fnv1a32(input, 0x9e3779b9)
-	third := fnv1a32(input, 0x85ebca6b)
-
-	label := strings.Join([]string{
-		exposeNameOpeners[int(first&0xff)%len(exposeNameOpeners)],
-		exposeNameCenters[int(second&0xff)%len(exposeNameCenters)],
-		exposeNameClosers[int(third&0xff)%len(exposeNameClosers)],
-	}, "-")
-
-	return NormalizeDNSLabel(label)
-}
-
-// normalizeExposeTarget normalizes a target address for deterministic name
-// generation. Must match frontend/src/lib/exposeName.ts:normalizeExposeTarget.
-func normalizeExposeTarget(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	candidate := trimmed
-	if candidate == "" {
-		candidate = defaultExposeTargetPort
-	}
-
-	if isAllDigits(candidate) {
-		return defaultExposeTargetHost + ":" + candidate
-	}
-
-	if strings.Contains(candidate, "://") {
-		u, err := url.Parse(candidate)
-		if err != nil {
-			return candidate
+	out := make([]string, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		normalized := normalize(input)
+		if normalized == "" {
+			continue
 		}
-		if (u.Scheme == "http" || u.Scheme == "https") &&
-			u.Host != "" &&
-			(u.Path == "" || u.Path == "/") &&
-			u.RawQuery == "" &&
-			u.Fragment == "" {
-			return u.Host
+		if _, ok := seen[normalized]; ok {
+			continue
 		}
-		return candidate
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
 	}
-
-	u, err := url.Parse("tcp://" + candidate)
-	if err != nil || u.Hostname() == "" {
-		return candidate
+	if len(out) == 0 {
+		return nil
 	}
-	port := u.Port()
-	if port == "" {
-		port = "80"
-	}
-	return net.JoinHostPort(u.Hostname(), port)
-}
-
-func isAllDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func resolveExposeName(name, target, identityPath, identityJSON string) (string, error) {
-	if name = strings.TrimSpace(name); name != "" {
-		return name, nil
-	}
-	if identityJSON = strings.TrimSpace(identityJSON); identityJSON != "" {
-		identity, err := ParseIdentityJSON(identityJSON)
-		if err != nil {
-			return "", err
-		}
-		if name := strings.TrimSpace(identity.Name); name != "" {
-			return name, nil
-		}
-	}
-	if identityPath = strings.TrimSpace(identityPath); identityPath != "" {
-		identity, err := LoadIdentity(identityPath)
-		switch {
-		case err == nil:
-			if name := strings.TrimSpace(identity.Name); name != "" {
-				return name, nil
-			}
-		case !errors.Is(err, os.ErrNotExist):
-			return "", err
-		}
-	}
-
-	return DefaultExposeName(target, RandomID("cli_"))
-}
-
-func fnv1a32(data []byte, seed uint32) uint32 {
-	h := seed
-	for _, b := range data {
-		h ^= uint32(b)
-		h *= 0x01000193
-	}
-	return h
+	return out
 }

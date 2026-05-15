@@ -220,13 +220,18 @@ The agent service owns multiple tunnel definitions from one config file. The
 local control API binds to loopback and is authenticated with a token stored in
 the agent state directory.
 
+For the full agent workflow, control API, dashboard behavior, and wallet status
+auth details, see [Portal Agent](../../docs/src/routes/portal-agent/+page.md)
+and [Wallet and ENS](../../docs/src/routes/wallet-and-ens/+page.md).
+
 Useful commands:
 
 - `portal agent run` reads the platform default config path, installs or updates
   the OS service, starts it in the background, and exits after the agent is ready.
 - `portal agent run --config config.toml --foreground` runs the agent in the
   current terminal and opens the dashboard when the terminal is interactive.
-- `portal agent dashboard` attaches to a running agent and opens the local TUI.
+- `portal agent dashboard` attaches to a running agent and opens the local TUI
+  for tunnels, relays, multi-hop routes, and editable tunnel settings.
 - `portal agent stop` asks the local agent to shut down, then disables or stops
   the OS service so intentional shutdown is not immediately restarted.
 - `portal agent restart` stops the running agent if present, installs or updates

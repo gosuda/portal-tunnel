@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -191,7 +192,7 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	desc, err := utils.NormalizeDescriptor(req.Descriptor)
+	desc, err := identity.NormalizeRelayDescriptor(req.Descriptor)
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
@@ -249,6 +250,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
 		ProtocolVersion: types.SDKVersion,
 		ReleaseVersion:  types.ReleaseVersion,
+		ENS:             s.acmeManager.ENSStatus(),
 	})
 }
 
@@ -332,7 +334,7 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		Path:   types.PathSDKRegister,
 	}).String()
 
-	if strings.TrimSpace(req.HopToken) != "" && s.overlay == nil {
+	if strings.TrimSpace(req.HopToken) != "" && !s.hasHopTransport() {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
 		return
 	}
@@ -406,7 +408,7 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		utils.MethodNotAllowedError().Write(w)
 		return
 	}
-	if s.overlay == nil || s.relaySet == nil {
+	if !s.hasHopTransport() || !s.hasOverlayRuntime() || s.relaySet == nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
 		return
 	}
@@ -459,7 +461,7 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		utils.InvalidRequestError(fmt.Errorf("forward relay: %w", err)).Write(w)
 		return
 	}
-	if err := s.overlay.Sync(s.relaySet.OverlayPeerStates()); err != nil {
+	if err := s.syncOverlayPeers(s.relaySet.OverlayPeerDescriptor()); err != nil {
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
 		return
 	}

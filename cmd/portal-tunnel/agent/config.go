@@ -32,9 +32,10 @@ type Config struct {
 }
 
 type AgentConfig struct {
-	StateDir    string `koanf:"state_dir"`
-	ControlAddr string `koanf:"control_addr"`
-	ServiceName string `koanf:"service_name"`
+	StateDir       string   `koanf:"state_dir"`
+	ControlAddr    string   `koanf:"control_addr"`
+	ServiceName    string   `koanf:"service_name"`
+	AllowedWallets []string `koanf:"allowed_wallets"`
 }
 
 type TunnelConfig struct {
@@ -149,6 +150,7 @@ func configMap(cfg Config) map[string]any {
 	addStringDocumentField(agent, "state_dir", cfg.Agent.StateDir)
 	addStringDocumentField(agent, "control_addr", cfg.Agent.ControlAddr)
 	addStringDocumentField(agent, "service_name", cfg.Agent.ServiceName)
+	addStringSliceDocumentField(agent, "allowed_wallets", cfg.Agent.AllowedWallets)
 
 	tunnels := make([]map[string]any, 0, len(cfg.Tunnels))
 	for _, tunnel := range cfg.Tunnels {
@@ -233,6 +235,13 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 	cfg.Agent.StateDir = strings.TrimSpace(cfg.Agent.StateDir)
 	cfg.Agent.ControlAddr = strings.TrimSpace(cfg.Agent.ControlAddr)
 	cfg.Agent.ServiceName = strings.TrimSpace(cfg.Agent.ServiceName)
+	allowedWallets := cfg.Agent.AllowedWallets[:0]
+	for _, wallet := range cfg.Agent.AllowedWallets {
+		if wallet = strings.TrimSpace(wallet); wallet != "" {
+			allowedWallets = append(allowedWallets, wallet)
+		}
+	}
+	cfg.Agent.AllowedWallets = allowedWallets
 	if strings.TrimSpace(cfg.Agent.StateDir) == "" {
 		cfg.Agent.StateDir = service.DefaultDataDir()
 	} else if !filepath.IsAbs(cfg.Agent.StateDir) {

@@ -1,63 +1,60 @@
 ---
 title: SIWE Authentication
-description: Use Sign-In with Ethereum (SIWE) and ENS for portable tunnel identity.
+description: How Portal uses SIWE for tunnel registration and wallet sessions.
 ---
 
 # SIWE Authentication
 
-Portal supports **Sign-In with Ethereum (SIWE)** for proving ownership of tunnel names without centralized accounts or API keys.
+Portal uses Sign-In with Ethereum (SIWE) in two places:
 
-## Overview
+- tunnel registration, signed automatically by the local tunnel identity
+- browser wallet sessions for relay admin and optional local agent status access
 
-SIWE allows you to:
+For the full operational guide, see [Wallet and ENS](/wallet-and-ens).
 
-- **Claim a tunnel name** by signing a message with your Ethereum wallet
-- **Prove ownership** without passwords, tokens, or a central auth server
-- **Use ENS names** for human-readable, portable identity (e.g., `alice.eth`)
+## Tunnel Registration
 
-## How It Works
+`portal expose` and `portal agent` create or load a local secp256k1 identity
+from `identity.json`. During registration, the relay returns a SIWE challenge
+with statement `Register a portal lease`; the tunnel signs it with the local
+identity private key and receives a lease access token.
 
-1. You choose a tunnel name (or use your ENS name)
-2. Portal generates a SIWE message containing the tunnel name and relay domain
-3. You sign the message with your Ethereum wallet (e.g., MetaMask, hardware wallet)
-4. The signed message is sent to the relay server
-5. The relay verifies the signature on-chain and grants the tunnel name
-
-```
-Wallet  -->  Sign SIWE message  -->  Portal CLI  -->  Relay server
-                                                         |
-                                                    Verify signature
-                                                         |
-                                                    Grant tunnel name
-```
-
-## ENS Integration
-
-If you own an ENS name, you can use it directly as your tunnel name:
-
-- `alice.eth` becomes your portable identity across relays
-- No registration or DNS configuration needed
-- Works with any relay in the public registry
-
-## Configuration
+This flow is automatic. It does not require a browser wallet.
 
 ```bash
-# Use SIWE authentication with a specific tunnel name
-portal-tunnel --auth siwe --name my-tunnel localhost:3000
-
-# Use your ENS name
-portal-tunnel --auth siwe --name alice.eth localhost:3000
+portal expose 3000 --name myapp
 ```
 
-## Without SIWE
+There is no `--auth siwe` flag. SIWE is part of the normal registration
+protocol.
 
-SIWE is optional. Without it:
+## Wallet Sessions
 
-- Tunnel names are assigned on a first-come, first-served basis
-- No ownership guarantee — anyone can claim an unused name
-- Suitable for temporary or throwaway tunnels
+The relay admin UI uses browser wallet login:
+
+1. request `/admin/auth/challenge`
+2. sign the returned SIWE message with the connected wallet
+3. submit `/admin/auth/login`
+4. use the resulting `portal_admin` session cookie
+
+The relay identity address is allowed by default. Add more admin wallets with
+`ADMIN_WALLETS`.
+
+The local agent also exposes `/v1/agent/auth/*` wallet endpoints. Agent wallet
+sessions can read `/v1/agent/status`; tunnel mutations still require the local
+bearer token stored in the agent state directory.
+
+## ENS
+
+Portal does not use ENS names as tunnel names. Tunnel names are single DNS
+labels such as `myapp`.
+
+Relay operators can optionally enable ENS gasless DNS import. In that mode,
+Portal manages DNSSEC and `ENS1 ...` TXT records for the relay domain and lease
+hostnames so ENS-aware clients can resolve them to Portal identity addresses.
 
 ## Next Steps
 
-- [Security Model](/security-model) — understand Portal's encryption and trust model
-- [Configuration](/configuration) — full configuration reference
+- [Wallet and ENS](/wallet-and-ens): detailed wallet and ENS behavior
+- [Security Model](/security-model): encryption and identity boundaries
+- [Configuration](/configuration): full configuration reference

@@ -5,17 +5,17 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func mustSigningIdentity(t *testing.T) types.Identity {
 	t.Helper()
-	identity, err := utils.ResolveSecp256k1Identity("")
+	signingIdentity, err := identity.ResolveSecp256k1Identity("")
 	if err != nil {
-		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
+		t.Fatalf("identity.ResolveSecp256k1Identity() error = %v", err)
 	}
-	return identity
+	return signingIdentity
 }
 
 func mustUnsignedDescriptor(t *testing.T, signing types.Identity, relayURL string) types.RelayDescriptor {
@@ -32,13 +32,17 @@ func mustUnsignedDescriptor(t *testing.T, signing types.Identity, relayURL strin
 
 func mustSignedDescriptor(t *testing.T, signing types.Identity, relayURL string, issuedAt time.Time) types.RelayDescriptor {
 	t.Helper()
+	authority, err := identity.NewLocalAuthority(signing)
+	if err != nil {
+		t.Fatalf("identity.NewLocalAuthority() error = %v", err)
+	}
 	signed, err := auth.SignRelayDescriptor(types.RelayDescriptor{
 		Address:      signing.Address,
 		Version:      types.DiscoveryVersion,
 		IssuedAt:     issuedAt,
 		ExpiresAt:    issuedAt.Add(DiscoveryDescriptorTTL),
 		APIHTTPSAddr: relayURL,
-	}, signing.PrivateKey)
+	}, authority)
 	if err != nil {
 		t.Fatalf("SignRelayDescriptor() error = %v", err)
 	}

@@ -165,7 +165,7 @@ interface ServerListViewProps {
   onBulkApprove?: (identityKeys: string[]) => void | Promise<void>;
   onBulkDeny?: (identityKeys: string[]) => void | Promise<void>;
   onBulkBan?: (identityKeys: string[]) => void | Promise<void>;
-  onLogout?: () => void;
+  onAuthChange?: () => void | Promise<void>;
 }
 
 function isAdminServer(server: ListServer): server is AdminServer {
@@ -209,7 +209,7 @@ export function ServerListView({
   onBulkApprove,
   onBulkDeny,
   onBulkBan,
-  onLogout,
+  onAuthChange,
 }: ServerListViewProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [relayReleaseVersions, setRelayReleaseVersions] = useState<
@@ -719,7 +719,11 @@ export function ServerListView({
           <>
             <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
               <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
-                <Header title={title} isAdmin={isAdmin} onLogout={onLogout} />
+                <Header
+                  title={title}
+                  isAdmin={isAdmin}
+                  onAuthChange={onAuthChange}
+                />
                 <div className="flex items-center gap-2">
                   <div className="flex-1">{searchBar}</div>
                 </div>
@@ -785,7 +789,7 @@ export function ServerListView({
                 <Header
                   title={title}
                   isAdmin={isAdmin}
-                  onLogout={onLogout}
+                  onAuthChange={onAuthChange}
                   showQuickStartLink={landingPageEnabled}
                 />
               </div>

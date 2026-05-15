@@ -21,7 +21,7 @@ const (
 
 type OverlayRuntime interface {
 	DiscoverRelay(context.Context, types.RelayDescriptor) (types.DiscoveryResponse, error)
-	Sync([]RelayState) error
+	Sync([]types.RelayDescriptor) error
 }
 
 type Refresher struct {
@@ -161,10 +161,26 @@ func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 			}
 			continue
 		}
+		client := r.httpClient
+		var closeClient func()
+		if utils.IsLocalRelayHost(baseURL.Hostname()) {
+			_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)
+			if err != nil {
+				if recoveryFailures > 0 {
+					r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
+				}
+				continue
+			}
+			client = localClient
+			closeClient = transport.CloseIdleConnections
+		}
 
 		startedAt := time.Now()
 		var resp types.DiscoveryResponse
-		if err := utils.HTTPDoAPIPath(ctx, r.httpClient, baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
+		if err := utils.HTTPDoAPIPath(ctx, client, baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
+			if closeClient != nil {
+				closeClient()
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -172,6 +188,9 @@ func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 				r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
 			}
 			continue
+		}
+		if closeClient != nil {
+			closeClient()
 		}
 		measuredAt := time.Now().UTC()
 
@@ -187,11 +206,15 @@ func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 }
 
 func (r *Refresher) refreshOverlay(ctx context.Context) error {
-	states := r.relaySet.OverlayPeerStates()
+	states := r.relaySet.overlayPeerRelayStates()
 	if len(states) == 0 {
 		return nil
 	}
-	if err := r.overlay.Sync(states); err != nil {
+	descriptors := make([]types.RelayDescriptor, 0, len(states))
+	for _, state := range states {
+		descriptors = append(descriptors, state.Descriptor)
+	}
+	if err := r.overlay.Sync(descriptors); err != nil {
 		return err
 	}
 	relaySetChanged := false
@@ -232,7 +255,7 @@ func (r *Refresher) refreshOverlay(ctx context.Context) error {
 	if !relaySetChanged {
 		return nil
 	}
-	if err := r.overlay.Sync(r.relaySet.OverlayPeerStates()); err != nil {
+	if err := r.overlay.Sync(r.relaySet.OverlayPeerDescriptor()); err != nil {
 		return err
 	}
 	return nil

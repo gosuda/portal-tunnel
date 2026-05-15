@@ -15,6 +15,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
@@ -32,38 +33,41 @@ const (
 )
 
 type leaseRegistry struct {
-	records         []*leaseRecord
-	rootHostname    string
-	sniPort         int
-	tokenPrivateKey string
-	tokenPublicKey  string
-	tokenKeyID      string
-	tokenIssuer     string
-	policy          *policy.Runtime
-	udpPorts        *transport.PortAllocator
-	tcpPorts        *transport.PortAllocator
-	proxy           *proxy
-	mu              sync.RWMutex
+	records        []*leaseRecord
+	rootHostname   string
+	sniPort        int
+	tokenAuthority identity.Authority
+	tokenIssuer    string
+	policy         *policy.Runtime
+	udpPorts       *transport.PortAllocator
+	tcpPorts       *transport.PortAllocator
+	proxy          *proxy
+	mu             sync.RWMutex
 }
 
-func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, rootHostname string, sniPort int, tokenPrivateKey, tokenPublicKey, tokenKeyID, tokenIssuer string, trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*leaseRegistry, error) {
+func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, rootHostname string, sniPort int, tokenAuthority identity.Authority, tokenIssuer string, trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*leaseRegistry, error) {
+	if tokenAuthority == nil {
+		return nil, errors.New("lease token authority is required")
+	}
+	tokenIdentity := tokenAuthority.Identity()
+	if strings.TrimSpace(tokenIdentity.PublicKey) == "" {
+		return nil, errors.New("lease token authority public key is required")
+	}
 	runtime, err := policy.NewRuntime(udpEnabled, tcpPortEnabled, trustProxyHeaders, rawTrustedProxyCIDRs)
 	if err != nil {
 		return nil, err
 	}
 
 	return &leaseRegistry{
-		records:         make([]*leaseRecord, 0),
-		rootHostname:    utils.NormalizeHostname(rootHostname),
-		sniPort:         sniPort,
-		tokenPrivateKey: tokenPrivateKey,
-		tokenPublicKey:  tokenPublicKey,
-		tokenKeyID:      tokenKeyID,
-		tokenIssuer:     tokenIssuer,
-		policy:          runtime,
-		udpPorts:        transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
-		tcpPorts:        transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
-		proxy:           &proxy{},
+		records:        make([]*leaseRecord, 0),
+		rootHostname:   utils.NormalizeHostname(rootHostname),
+		sniPort:        sniPort,
+		tokenAuthority: tokenAuthority,
+		tokenIssuer:    tokenIssuer,
+		policy:         runtime,
+		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
+		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
+		proxy:          &proxy{},
 	}, nil
 }
 
@@ -150,7 +154,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
 	}
-	identity, err := utils.NormalizeIdentity(req.Identity)
+	leaseIdentity, err := identity.NormalizeIdentity(req.Identity)
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
 	}
@@ -163,7 +167,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		ttl = time.Duration(req.TTL) * time.Second
 	}
 
-	identityKey := identity.Key()
+	identityKey := leaseIdentity.Key()
 	hopToken := strings.TrimSpace(req.HopToken)
 	routeHostname := utils.NormalizeHostname(req.RouteHostname)
 	hostnameHash := strings.TrimSpace(req.HostnameHash)
@@ -188,7 +192,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			return nil, types.RegisterResponse{}, errors.New("route hostname must be a child of relay root hostname")
 		}
 
-		publicHostname, err = utils.LeaseHostname(identity.Name, r.rootHostname)
+		publicHostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {
 			return nil, types.RegisterResponse{}, err
 		}
@@ -222,13 +226,13 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 
 	hostname := routeHostname
 	if hostname == "" && hopToken == "" {
-		hostname, err = utils.LeaseHostname(identity.Name, r.rootHostname)
+		hostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {
 			return nil, types.RegisterResponse{}, err
 		}
 	}
 
-	accessToken, claims, err := auth.IssueLeaseAccessToken(r.tokenPrivateKey, r.tokenKeyID, r.tokenIssuer, identity, ttl)
+	accessToken, claims, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, leaseIdentity, ttl)
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
 	}
@@ -237,7 +241,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 
 	stream := transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit)
 	record := &leaseRecord{
-		Identity:       identity,
+		Identity:       leaseIdentity,
 		Hostname:       hostname,
 		HostnameHash:   hostnameHash,
 		ECHConfigList:  echConfigList,
@@ -256,7 +260,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		if r.udpPorts == nil {
 			return nil, types.RegisterResponse{}, errors.New("udp port allocation not available")
 		}
-		port, err := r.udpPorts.Allocate(identity.Name)
+		port, err := r.udpPorts.Allocate(leaseIdentity.Name)
 		if err != nil {
 			if errors.Is(err, transport.ErrPortExhausted) {
 				return nil, types.RegisterResponse{}, errUDPPortExhausted
@@ -272,7 +276,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			record.Close()
 			return nil, types.RegisterResponse{}, errors.New("tcp port allocation not available")
 		}
-		port, err := r.tcpPorts.Allocate(identity.Name)
+		port, err := r.tcpPorts.Allocate(leaseIdentity.Name)
 		if err != nil {
 			record.Close()
 			if errors.Is(err, transport.ErrPortExhausted) {
@@ -387,7 +391,7 @@ func (r *leaseRegistry) admitLeaseByToken(token string, requireDatagram bool) (*
 		return nil, errFeatureUnavailable
 	}
 	now := time.Now().UTC()
-	claims, err := auth.VerifyLeaseAccessToken(token, r.tokenPublicKey, r.tokenIssuer, now)
+	claims, err := auth.VerifyLeaseAccessToken(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
 	if err != nil {
 		return nil, errUnauthorized
 	}
@@ -410,7 +414,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	if r == nil {
 		return types.RenewResponse{}, errFeatureUnavailable
 	}
-	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, r.tokenPublicKey, r.tokenIssuer, time.Now().UTC())
+	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, time.Now().UTC())
 	if err != nil {
 		return types.RenewResponse{}, errUnauthorized
 	}
@@ -438,11 +442,12 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	if strings.TrimSpace(reportedIP) != "" {
 		record.ReportedIP = reportedIP
 	}
+	record.Metadata = req.Metadata.Copy()
 	r.policy.IPFilter().RegisterIdentityIP(leaseKey, clientIP)
-	identity := record.Identity
+	recordIdentity := record.Identity
 	r.mu.Unlock()
 
-	nextAccessToken, _, err := auth.IssueLeaseAccessToken(r.tokenPrivateKey, r.tokenKeyID, r.tokenIssuer, identity, ttl)
+	nextAccessToken, _, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, recordIdentity, ttl)
 	if err != nil {
 		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
@@ -457,7 +462,7 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 	if r == nil {
 		return nil, errFeatureUnavailable
 	}
-	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, r.tokenPublicKey, r.tokenIssuer, time.Now().UTC())
+	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, time.Now().UTC())
 	if err != nil {
 		return nil, errUnauthorized
 	}
@@ -482,7 +487,7 @@ func (r *leaseRegistry) RegisterHopRoute(route *types.HopRoute, now time.Time) (
 	if route == nil {
 		return nil, errors.New("hop route is required")
 	}
-	ownerKey, err := utils.AddressFromCompressedPublicKeyHex(route.OwnerPublicKey)
+	ownerKey, err := identity.AddressFromCompressedPublicKeyHex(route.OwnerPublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -491,7 +496,7 @@ func (r *leaseRegistry) RegisterHopRoute(route *types.HopRoute, now time.Time) (
 	echConfigList := bytes.Clone(route.ECHConfigList)
 	publicHostname := utils.NormalizeHostname(route.PublicHostname)
 	matchToken := route.MatchToken
-	overlayIPv4, overlayErr := utils.DeriveWireGuardOverlayIPv4(route.ForwardRelay.WireGuardPublicKey)
+	overlayIPv4, overlayErr := identity.DeriveWireGuardOverlayIPv4(route.ForwardRelay.WireGuardPublicKey)
 	forwardToken := route.ForwardToken
 	expiresAt := route.ExpiresAt.UTC()
 	hasPublicMatcher := routeHostname != "" || hostnameHash != ""
@@ -610,7 +615,7 @@ func (r *leaseRegistry) DeleteHopRoute(route *types.HopRoute) *leaseRecord {
 	if r == nil || route == nil {
 		return nil
 	}
-	ownerKey, err := utils.AddressFromCompressedPublicKeyHex(route.OwnerPublicKey)
+	ownerKey, err := identity.AddressFromCompressedPublicKeyHex(route.OwnerPublicKey)
 	if err != nil {
 		return nil
 	}
@@ -787,13 +792,13 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 }
 
 func (r *leaseRegistry) issueLeaseAccessToken(record *leaseRecord, now time.Time) (string, error) {
-	token, _, err := auth.IssueLeaseAccessToken(r.tokenPrivateKey, r.tokenKeyID, r.tokenIssuer, record.Identity, record.ExpiresAt.Sub(now))
+	token, _, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, record.Identity, record.ExpiresAt.Sub(now))
 	return token, err
 }
 
 func (r *leaseRegistry) verifySigningAccessToken(token string) error {
 	now := time.Now().UTC()
-	claims, err := auth.VerifyLeaseAccessToken(token, r.tokenPublicKey, r.tokenIssuer, time.Now().UTC())
+	claims, err := auth.VerifyLeaseAccessToken(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
 	if err != nil {
 		return errUnauthorized
 	}

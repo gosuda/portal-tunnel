@@ -1,12 +1,7 @@
 package types
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
-	"errors"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -18,24 +13,25 @@ const (
 )
 
 type Identity struct {
-	Name       string `json:"name,omitempty"`
-	Address    string `json:"address,omitempty"`
-	PublicKey  string `json:"-"`
-	PrivateKey string `json:"-"`
+	Name        string `json:"name,omitempty"`
+	Address     string `json:"address,omitempty"`
+	PublicKey   string `json:"-"`
+	PrivateKey  string `json:"-"`
+	TokenSecret string `json:"-"`
 }
 
 func (i Identity) Copy() Identity {
 	return Identity{
-		Name:       i.Name,
-		Address:    i.Address,
-		PublicKey:  i.PublicKey,
-		PrivateKey: i.PrivateKey,
+		Name:        i.Name,
+		Address:     i.Address,
+		PublicKey:   i.PublicKey,
+		PrivateKey:  i.PrivateKey,
+		TokenSecret: i.TokenSecret,
 	}
 }
 
 type RelayIdentity struct {
 	Identity
-	AdminSecretKey           string `json:"-"`
 	WireGuardPublicKey       string `json:"-"`
 	WireGuardPrivateKey      string `json:"-"`
 	EncryptedClientHelloSeed string `json:"-"`
@@ -44,15 +40,10 @@ type RelayIdentity struct {
 func (i RelayIdentity) Copy() RelayIdentity {
 	return RelayIdentity{
 		Identity:                 i.Identity.Copy(),
-		AdminSecretKey:           i.AdminSecretKey,
 		WireGuardPublicKey:       i.WireGuardPublicKey,
 		WireGuardPrivateKey:      i.WireGuardPrivateKey,
 		EncryptedClientHelloSeed: i.EncryptedClientHelloSeed,
 	}
-}
-
-func (i RelayIdentity) Base() Identity {
-	return i.Identity.Copy()
 }
 
 func (i Identity) Key() string {
@@ -62,27 +53,6 @@ func (i Identity) Key() string {
 		return ""
 	}
 	return name + IdentityKeySeparator + address
-}
-
-// DeriveToken derives a deterministic identity-scoped token from ordered
-// length-prefixed token parts. The first part should identify the token family.
-func (i Identity) DeriveToken(parts ...string) (string, error) {
-	privateKey := strings.TrimSpace(i.PrivateKey)
-	if privateKey == "" {
-		return "", errors.New("identity private key is required")
-	}
-
-	mac := hmac.New(sha256.New, []byte(privateKey))
-	_, _ = mac.Write([]byte("Portal identity token v1\n"))
-	_, _ = mac.Write([]byte(i.Key()))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		_, _ = mac.Write([]byte("\n"))
-		_, _ = mac.Write([]byte(strconv.Itoa(len(part))))
-		_, _ = mac.Write([]byte(":"))
-		_, _ = mac.Write([]byte(part))
-	}
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
 type LeaseMetadata struct {

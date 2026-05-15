@@ -60,7 +60,12 @@ fetch_url() {
 TMPDIR="${TMPDIR:-/tmp}"
 WORKDIR="$(mktemp -d "$TMPDIR/portal-install.XXXXXX" 2>/dev/null || mktemp -d -t portal-install)"
 BIN_PATH="$WORKDIR/portal"
-cleanup() { rm -rf "$WORKDIR"; }
+cleanup() {
+  if [ -n "${TMP_INSTALL_PATH:-}" ]; then
+    rm -f "$TMP_INSTALL_PATH"
+  fi
+  rm -rf "$WORKDIR"
+}
 trap cleanup EXIT INT TERM
 
 echo "Downloading portal ($PORTAL_OS/$PORTAL_ARCH)..." >&2
@@ -120,12 +125,15 @@ INSTALL_PATH="$(pick_install_path)" || {
   exit 1
 }
 
-cp "$BIN_PATH" "$INSTALL_PATH"
-chmod +x "$INSTALL_PATH"
+INSTALL_DIR="$(dirname "$INSTALL_PATH")"
+TMP_INSTALL_PATH="$(mktemp "$INSTALL_DIR/.portal.tmp.XXXXXX")"
+cp "$BIN_PATH" "$TMP_INSTALL_PATH"
+chmod +x "$TMP_INSTALL_PATH"
+mv -f "$TMP_INSTALL_PATH" "$INSTALL_PATH"
+TMP_INSTALL_PATH=""
 
 echo "Installed portal to $INSTALL_PATH" >&2
 
-INSTALL_DIR="$(dirname "$INSTALL_PATH")"
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *)

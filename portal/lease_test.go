@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -16,11 +17,15 @@ import (
 
 func newTestRegistry(t *testing.T) *leaseRegistry {
 	t.Helper()
-	relay, err := utils.LoadOrCreateRelayIdentity(t.TempDir(), "example.com", false)
+	relay, err := identity.LoadOrCreateRelayIdentity(t.TempDir(), "example.com", false)
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
-	registry, err := newLeaseRegistry(false, false, 10000, 10100, relay.Name, 443, relay.PrivateKey, relay.PublicKey, relay.Address, "https://example.com", false, "")
+	relayAuthority, err := identity.NewLocalAuthority(relay.Identity)
+	if err != nil {
+		t.Fatalf("identity.NewLocalAuthority() error = %v", err)
+	}
+	registry, err := newLeaseRegistry(false, false, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com", false, "")
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
@@ -29,12 +34,12 @@ func newTestRegistry(t *testing.T) *leaseRegistry {
 
 func newTestLeaseIdentity(t *testing.T, name string) types.Identity {
 	t.Helper()
-	identity, err := utils.ResolveSecp256k1Identity("")
+	testIdentity, err := identity.ResolveSecp256k1Identity("")
 	if err != nil {
-		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
+		t.Fatalf("identity.ResolveSecp256k1Identity() error = %v", err)
 	}
-	identity.Name = name
-	return identity
+	testIdentity.Name = name
+	return testIdentity
 }
 
 func TestLeaseRegistryLifecycle(t *testing.T) {
@@ -157,13 +162,13 @@ func TestLeaseRegistryHopRouteCanExposeECHAndPlainSNIFallback(t *testing.T) {
 
 	registry := newTestRegistry(t)
 	owner := newTestLeaseIdentity(t, "multi-hop-owner")
-	wgPrivate, err := utils.GenerateWireGuardPrivateKey()
+	wgPrivate, err := identity.GenerateWireGuardPrivateKey()
 	if err != nil {
-		t.Fatalf("GenerateWireGuardPrivateKey() error = %v", err)
+		t.Fatalf("identity.GenerateWireGuardPrivateKey() error = %v", err)
 	}
-	wgPublic, err := utils.WireGuardPublicKeyFromPrivate(wgPrivate)
+	wgPublic, err := identity.WireGuardPublicKeyFromPrivate(wgPrivate)
 	if err != nil {
-		t.Fatalf("WireGuardPublicKeyFromPrivate() error = %v", err)
+		t.Fatalf("identity.WireGuardPublicKeyFromPrivate() error = %v", err)
 	}
 	now := time.Now()
 	baseRoute := types.HopRoute{

@@ -56,8 +56,9 @@ export const guidesNavigation: NavSection[] = [
 		title: 'Guides',
 		items: [
 			{ title: 'Self-Hosting', href: '/self-hosting' },
+			{ title: 'Portal Agent', href: '/portal-agent' },
 			{ title: 'TCP/UDP Tunneling', href: '/tcp-udp-tunneling' },
-			{ title: 'SIWE Authentication', href: '/siwe-authentication' },
+			{ title: 'Wallet and ENS', href: '/wallet-and-ens' },
 			{ title: 'Deployment', href: '/deployment' },
 			{ title: 'Configuration', href: '/configuration' }
 		]

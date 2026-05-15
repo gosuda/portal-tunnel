@@ -300,6 +300,14 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 - The overlay peer API is plain HTTP on the WireGuard network, not public Internet HTTP. It serves the same discovery payload shape used by public `/discovery`.
 - Overlay failure affects inter-relay discovery, mesh synchronization, and multi-hop relay forwarding. Direct tenant TLS routing, keyless TLS, register/renew/connect, and public UDP ingress do not depend on the WireGuard transport path.
 
+### Local multi-hop test harness
+
+`portal/multihop_local_test.go` verifies the multi-hop relay path inside one `go test` process. It starts local relay servers on `127.0.0.1:0`, seeds signed local discovery descriptors, and uses test fakes only for the WireGuard transport layer.
+
+Use `make test-local-multihop` for the focused local harness. The same tests are also included in `make test` through the `./portal/...` package set. Use `go test ./portal ./sdk` when checking the narrower portal and SDK interaction without the full repository test suite.
+
+The harness exercises SDK expose/register logic, `/sdk/hop`, `RelaySet`, signed descriptors, route registration, SNI ingress, hop token matching, and `bridgeLeaseConn`. It intentionally excludes public DNS, ACME provider side effects, public registry bootstrap, and real WireGuard devices. `localRelaySpec` provides relay-level server and descriptor mutation hooks for future policy tests, and the fake overlay records synced peers so fake hop streams only open after the `/sdk/hop` overlay sync path has run.
+
 ## Control Plane Flow
 
 ### 1. Register

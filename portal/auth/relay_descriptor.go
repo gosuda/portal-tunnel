@@ -7,25 +7,31 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // SignRelayDescriptor returns a copy of desc with its Signature field
-// populated by signing the canonical bytes with the supplied secp256k1
-// private key (hex encoded). The signature is recoverable, so verifiers do
-// not need to know the public key out of band; they recover it from the
-// signature and check it derives the descriptor's Address field.
-func SignRelayDescriptor(desc types.RelayDescriptor, privateKeyHex string) (types.RelayDescriptor, error) {
-	privateKey, _, err := utils.ParseSecp256k1PrivateKeyHex(privateKeyHex, true)
-	if err != nil {
-		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signing key: %w", err)
+// populated by signing the canonical bytes with authority. The signature is
+// recoverable, so verifiers do not need to know the public key out of band;
+// they recover it from the signature and check it derives the descriptor's
+// Address field.
+func SignRelayDescriptor(desc types.RelayDescriptor, authority identity.Authority) (types.RelayDescriptor, error) {
+	if authority == nil {
+		return types.RelayDescriptor{}, errors.New("relay descriptor signing authority is required")
+	}
+	signingIdentity := authority.Identity()
+	if desc.Address == "" {
+		desc.Address = signingIdentity.Address
 	}
 
 	desc.Signature = ""
-	normalized, err := utils.NormalizeDescriptor(desc)
+	normalized, err := identity.NormalizeRelayDescriptor(desc)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("normalize relay descriptor for signing: %w", err)
+	}
+	if signingIdentity.Address != "" && !strings.EqualFold(strings.TrimSpace(signingIdentity.Address), strings.TrimSpace(normalized.Address)) {
+		return types.RelayDescriptor{}, errors.New("relay descriptor address does not match signing authority")
 	}
 	desc = normalized
 
@@ -33,12 +39,16 @@ func SignRelayDescriptor(desc types.RelayDescriptor, privateKeyHex string) (type
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("canonicalize relay descriptor: %w", err)
 	}
-	signature, err := utils.SignSHA256Secp256k1Compact(canonical, privateKey, true)
+	signature, err := authority.SignSHA256Secp256k1(canonical)
+	if err != nil {
+		return types.RelayDescriptor{}, err
+	}
+	compactSignature, err := signature.Compact()
 	if err != nil {
 		return types.RelayDescriptor{}, err
 	}
 
-	desc.Signature = base64.StdEncoding.EncodeToString(signature)
+	desc.Signature = base64.StdEncoding.EncodeToString(compactSignature)
 	return desc, nil
 }
 
@@ -59,7 +69,7 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 
 	unsignedCopy := desc
 	unsignedCopy.Signature = ""
-	normalized, err := utils.NormalizeDescriptor(unsignedCopy)
+	normalized, err := identity.NormalizeRelayDescriptor(unsignedCopy)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: normalize: %w", err)
 	}
@@ -68,13 +78,13 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 		return types.RelayDescriptor{}, fmt.Errorf("canonicalize relay descriptor: %w", err)
 	}
 
-	publicKey, err := utils.RecoverSHA256Secp256k1Compact(canonical, signature)
+	publicKey, err := identity.RecoverSHA256Secp256k1Compact(canonical, signature)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: %w", err)
 	}
 
 	publicKeyHex := hex.EncodeToString(publicKey.SerializeCompressed())
-	derivedAddress, err := utils.AddressFromCompressedPublicKeyHex(publicKeyHex)
+	derivedAddress, err := identity.AddressFromCompressedPublicKeyHex(publicKeyHex)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("derive address from recovered key: %w", err)
 	}

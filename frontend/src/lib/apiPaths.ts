@@ -2,7 +2,8 @@ export const API_PATHS = {
   admin: {
     prefix: "/admin",
     snapshot: "/admin/snapshot",
-    login: "/admin/login",
+    authChallenge: "/admin/auth/challenge",
+    authLogin: "/admin/auth/login",
     logout: "/admin/logout",
     authStatus: "/admin/auth/status",
     leases: "/admin/leases",
@@ -23,6 +24,12 @@ export const API_PATHS = {
   tunnel: {
     status: "/tunnel/status",
   },
+  agent: {
+    authChallenge: "/v1/agent/auth/challenge",
+    authLogin: "/v1/agent/auth/login",
+    authLogout: "/v1/agent/auth/logout",
+    authStatus: "/v1/agent/auth/status",
+  },
   discovery: "/discovery",
   healthz: "/healthz",
   install: {
@@ -36,7 +43,6 @@ export const ROUTE_PATHS = {
   home: "/",
   serverDetail: "/server/:id",
   admin: "/admin",
-  adminLogin: "/admin/login",
 } as const;
 
 export function encodePathPart(value: string): string {

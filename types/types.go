@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/pelletier/go-toml/v2"
@@ -33,16 +34,19 @@ func init() {
 			Tunnel    string `toml:"tunnel"`
 			Discovery string `toml:"discovery"`
 		} `toml:"protocol"`
-		Bootstrap struct {
-			Relays []string `toml:"relays"`
-		} `toml:"bootstrap"`
 	}
 	if err := toml.Unmarshal(portaltunnel.ConfigTOML, &m); err != nil {
 		panic(fmt.Errorf("unmarshal config TOML: %w", err))
+	}
+	var registry struct {
+		Relays []string `json:"relays"`
+	}
+	if err := json.Unmarshal(portaltunnel.RegistryJSON, &registry); err != nil {
+		panic(fmt.Errorf("unmarshal registry JSON: %w", err))
 	}
 	ReleaseVersion = m.Release.Version
 	OfficialReleaseBaseURL = m.Release.BaseURL
 	SDKVersion = m.Protocol.Tunnel
 	DiscoveryVersion = m.Protocol.Discovery
-	BootstrapRelays = m.Bootstrap.Relays
+	BootstrapRelays = registry.Relays
 }

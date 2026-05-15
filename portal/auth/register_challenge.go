@@ -8,6 +8,7 @@ import (
 
 	"github.com/spruceid/siwe-go"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -29,7 +30,7 @@ type RegisterChallenge struct {
 }
 
 func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string, now time.Time, ttl time.Duration) (*RegisterChallenge, error) {
-	normalizedIdentity, err := utils.NormalizeIdentity(req.Identity)
+	normalizedIdentity, err := identity.NormalizeIdentity(req.Identity)
 	if err != nil {
 		return nil, err
 	}

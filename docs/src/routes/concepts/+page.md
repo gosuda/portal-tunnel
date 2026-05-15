@@ -160,6 +160,10 @@ datagram authentication.
 
 Reusing the same identity path keeps the same tunnel identity across runs.
 
+Browser wallet login is separate from tunnel registration. Wallet sessions are
+used for relay admin access and optional local agent status access. See
+[Wallet and ENS](/wallet-and-ens) for the distinction.
+
 ## Domain Boundary
 
 The default stream path prevents the relay from safely injecting `robots.txt`,
@@ -170,5 +174,6 @@ separate wildcard tunnel domain instead of a brand or docs domain.
 ## Next Steps
 
 - [Getting Started](/getting-started): run your first tunnel
+- [Portal Agent](/portal-agent): run durable tunnel configs
 - [CLI Reference](/cli-reference): command and flag details
 - [Architecture](/architecture): protocol-level design notes

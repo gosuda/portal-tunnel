@@ -18,7 +18,7 @@ import (
 	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -60,11 +60,11 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		return Config{}, errors.New("wireguard private key is required when relay overlay is enabled")
 	}
 
-	privateKey, err := utils.NormalizeWireGuardPrivateKey(cfg.PrivateKey)
+	privateKey, err := identity.NormalizeWireGuardPrivateKey(cfg.PrivateKey)
 	if err != nil {
 		return Config{}, fmt.Errorf("normalize wireguard private key: %w", err)
 	}
-	publicKey, err := utils.WireGuardPublicKeyFromPrivate(privateKey)
+	publicKey, err := identity.WireGuardPublicKeyFromPrivate(privateKey)
 	if err != nil {
 		return Config{}, fmt.Errorf("derive wireguard public key: %w", err)
 	}
@@ -468,7 +468,7 @@ func (o *Overlay) DiscoverRelay(ctx context.Context, relay types.RelayDescriptor
 	if !relay.HasOverlayPeer() {
 		return types.DiscoveryResponse{}, errors.New("relay wireguard overlay metadata is required")
 	}
-	overlayIPv4, err := utils.DeriveWireGuardOverlayIPv4(relay.WireGuardPublicKey)
+	overlayIPv4, err := identity.DeriveWireGuardOverlayIPv4(relay.WireGuardPublicKey)
 	if err != nil {
 		return types.DiscoveryResponse{}, err
 	}
@@ -484,14 +484,13 @@ func (o *Overlay) DiscoverRelay(ctx context.Context, relay types.RelayDescriptor
 	return resp, nil
 }
 
-func (o *Overlay) Sync(relays []discovery.RelayState) error {
+func (o *Overlay) Sync(relays []types.RelayDescriptor) error {
 	if o == nil || o.stack == nil {
 		return nil
 	}
 
 	peers := make([]types.RelayDescriptor, 0, len(relays))
-	for _, relay := range relays {
-		desc := relay.Descriptor
+	for _, desc := range relays {
 		if !desc.HasOverlayPeer() {
 			continue
 		}

@@ -2,19 +2,9 @@
 # Bump protocol versions only when wire-level behavior changes.
 
 [release]
-version  = "v2.2.1"
+version  = "v2.2.2"
 base_url = "https://github.com/gosuda/portal-tunnel/releases"
 
 [protocol]
-tunnel    = "6"
+tunnel    = "7"
 discovery = "7"
-
-[bootstrap]
-relays = [
-  "https://portal.thumbgo.kr/",
-  "https://portal.rabbitson87.dev/",
-  "https://s-h.day/",
-  "https://portal.dawnfullstack.com/",
-  "https://portal.damn.it.com/",
-  "https://kakashit.org",
-]

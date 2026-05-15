@@ -75,6 +75,24 @@ portal expose localhost:25565 --name minecraft --tcp
 portal expose 3000 --multi-hop-depth 3
 ```
 
+### Keep tunnels running with Portal Agent
+
+Use `portal agent run` when tunnels should keep running outside your terminal.
+It runs as a local OS service, keeps every tunnel in one TOML config alive, and
+provides a dashboard for relay and multi-hop management.
+
+```bash
+portal agent run --config config.toml
+portal agent dashboard --config config.toml
+portal agent restart
+portal agent stop
+
+# Foreground mode skips OS service installation.
+portal agent run --config config.toml --foreground
+```
+
+See [Portal Agent](docs/src/routes/portal-agent/+page.md) for the config format.
+
 ### Run your own relay
 
 ```bash
@@ -130,6 +148,8 @@ Tunnel clients include this registry by default. If you operate a public Portal 
 
 - [CLI Reference](cmd/portal-tunnel/README.md)
 - [Concepts](docs/src/routes/concepts/+page.md)
+- [Portal Agent](docs/src/routes/portal-agent/+page.md)
+- [Wallet and ENS](docs/src/routes/wallet-and-ens/+page.md)
 - [Security Model](docs/src/routes/security-model/+page.md)
 - [Architecture](docs/src/routes/architecture/+page.md)
 - [Deployment](docs/src/routes/deployment/+page.md)

@@ -152,9 +152,9 @@ func runExposeCommand(args []string) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(flags.relayCSV),
 		Discovery:       flags.discovery,
+		Identity:        types.Identity{Name: flags.name},
 		IdentityPath:    flags.identityPath,
 		IdentityJSON:    flags.identityJSON,
-		Name:            flags.name,
 		TargetAddr:      flags.targetAddr,
 		UDPAddr:         flags.udpAddr,
 		UDPEnabled:      flags.udp,

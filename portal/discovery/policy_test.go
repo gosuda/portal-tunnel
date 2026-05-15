@@ -6,16 +6,20 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func mustPolicyRelayDescriptor(t *testing.T, relayURL string) types.RelayDescriptor {
 	t.Helper()
 
-	signing, err := utils.ResolveSecp256k1Identity("")
+	signing, err := identity.ResolveSecp256k1Identity("")
 	if err != nil {
-		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
+		t.Fatalf("identity.ResolveSecp256k1Identity() error = %v", err)
+	}
+	authority, err := identity.NewLocalAuthority(signing)
+	if err != nil {
+		t.Fatalf("identity.NewLocalAuthority() error = %v", err)
 	}
 	now := time.Now().UTC()
 	signed, err := auth.SignRelayDescriptor(types.RelayDescriptor{
@@ -24,7 +28,7 @@ func mustPolicyRelayDescriptor(t *testing.T, relayURL string) types.RelayDescrip
 		IssuedAt:     now,
 		ExpiresAt:    now.Add(time.Hour),
 		APIHTTPSAddr: relayURL,
-	}, signing.PrivateKey)
+	}, authority)
 	if err != nil {
 		t.Fatalf("SignRelayDescriptor() error = %v", err)
 	}

@@ -133,9 +133,9 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
 		Discovery:       cfg.discovery,
+		Identity:        types.Identity{Name: cfg.name},
 		IdentityPath:    cfg.identityPath,
 		IdentityJSON:    cfg.identityJSON,
-		Name:            cfg.name,
 		BanMITM:         cfg.banMITM,
 		MaxActiveRelays: cfg.maxActiveRelays,
 		Metadata: types.LeaseMetadata{
@@ -176,9 +176,9 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
 		Discovery:       cfg.discovery,
+		Identity:        types.Identity{Name: cfg.name},
 		IdentityPath:    cfg.identityPath,
 		IdentityJSON:    cfg.identityJSON,
-		Name:            cfg.name,
 		UDPEnabled:      true,
 		BanMITM:         cfg.banMITM,
 		MaxActiveRelays: cfg.maxActiveRelays,

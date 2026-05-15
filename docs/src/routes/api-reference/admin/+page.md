@@ -9,8 +9,10 @@ import Mermaid from '$lib/components/Mermaid.svelte'
 const adminWorkflowDiagram = `sequenceDiagram
     participant Admin
     participant Relay as Portal Relay
-    Admin->>Relay: POST /admin/login
-    Note right of Admin: secret key in body
+    Admin->>Relay: POST /admin/auth/challenge
+    Relay->>Admin: SIWE message
+    Admin->>Relay: POST /admin/auth/login
+    Note right of Admin: wallet signature in body
     Relay->>Admin: Set-Cookie session token
     Admin->>Relay: GET /admin/snapshot
     Relay->>Admin: Full relay state
@@ -39,9 +41,9 @@ These endpoints allow relay operators to manage leases, configure settings, and 
 
 ## Authentication
 
-### `POST /admin/login`
+### `POST /admin/auth/challenge`
 
-Authenticate with the admin secret key. On success, sets a session cookie used for all subsequent admin requests.
+Request a SIWE message for wallet-based admin login.
 
 **Auth:** None
 
@@ -49,13 +51,45 @@ Authenticate with the admin secret key. On success, sets a session cookie used f
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `key` | `string` | Yes | Admin secret key |
+| `address` | `string` | Yes | Ethereum wallet address |
 
 **Response fields:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `success` | `bool` | `true` on successful login |
+| `challenge_id` | `string` | Challenge identifier |
+| `siwe_message` | `string` | Message to sign with the wallet |
+| `expires_at` | `string` | ISO 8601 challenge expiration |
+
+**Example:**
+
+```bash
+curl -X POST https://relay.example.com/admin/auth/challenge \
+  -H "Content-Type: application/json" \
+  -d '{ "address": "0x1234567890abcdef1234567890abcdef12345678" }'
+```
+
+---
+
+### `POST /admin/auth/login`
+
+Complete wallet login with the signed SIWE message. On success, sets a session cookie used for subsequent admin requests.
+
+**Auth:** None
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `challenge_id` | `string` | Yes | Challenge identifier returned by `/admin/auth/challenge` |
+| `siwe_message` | `string` | Yes | Exact SIWE message returned by `/admin/auth/challenge` |
+| `siwe_signature` | `string` | Yes | Wallet signature for the SIWE message |
+
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `wallet_address` | `string` | Authenticated wallet address |
 
 **Response cookies:**
 
@@ -67,16 +101,15 @@ Authenticate with the admin secret key. On success, sets a session cookie used f
 
 | Code | Status | Description |
 |------|--------|-------------|
-| `auth_disabled` | 503 | Admin authentication is not configured |
-| `invalid_key` | 401 | Incorrect secret key |
+| `unauthorized` | 401/403 | Signature, challenge, or wallet address is invalid |
 
 **Example:**
 
 ```bash
-curl -X POST https://relay.example.com/admin/login \
+curl -X POST https://relay.example.com/admin/auth/login \
   -H "Content-Type: application/json" \
   -c cookies.txt \
-  -d '{ "key": "my-secret-key" }'
+  -d '{ "challenge_id": "...", "siwe_message": "...", "siwe_signature": "0x..." }'
 ```
 
 **Response:**
@@ -85,7 +118,7 @@ curl -X POST https://relay.example.com/admin/login \
 {
   "ok": true,
   "data": {
-    "success": true
+    "wallet_address": "0x1234567890abcdef1234567890abcdef12345678"
   }
 }
 ```
@@ -113,7 +146,7 @@ curl -X POST https://relay.example.com/admin/logout \
 
 ### `GET /admin/auth/status`
 
-Check the current authentication status. Can be called without a session to determine whether admin auth is enabled.
+Check the current wallet session. Can be called without a session.
 
 **Auth:** None (returns status regardless)
 
@@ -122,7 +155,7 @@ Check the current authentication status. Can be called without a session to dete
 | Field | Type | Description |
 |-------|------|-------------|
 | `authenticated` | `bool` | `true` if the request has a valid session |
-| `auth_enabled` | `bool` | `true` if admin auth is configured |
+| `wallet_address` | `string` | Authenticated wallet address, when logged in |
 
 **Example:**
 
@@ -138,7 +171,7 @@ curl https://relay.example.com/admin/auth/status \
   "ok": true,
   "data": {
     "authenticated": true,
-    "auth_enabled": true
+    "wallet_address": "0x1234567890abcdef1234567890abcdef12345678"
   }
 }
 ```

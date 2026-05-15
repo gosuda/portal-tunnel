@@ -66,6 +66,20 @@ Get relay domain and protocol version information. Used by the SDK to verify rel
 |-------|------|-------------|
 | `protocol_version` | `string` | Protocol version (must match SDK version) |
 | `release_version` | `string` | Relay software release version |
+| `ens` | `object` | ENS gasless status for this relay |
+
+`ens` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | `bool` | ENS gasless automation is enabled for a non-local relay domain |
+| `verified` | `bool` | DNSSEC is active according to Portal and the last ENS sync succeeded |
+| `provider` | `string` | DNS provider used for automation |
+| `address` | `string` | Base-domain ENS address, usually the relay identity address |
+| `dnssec_state` | `string` | Provider DNSSEC state |
+| `ds_record` | `string` | DS record that may need registrar publication |
+| `message` | `string` | Provider-specific DNSSEC guidance |
+| `last_error` | `string` | Last ENS/DNS sync error |
 
 **Example:**
 
@@ -80,7 +94,14 @@ curl https://relay.example.com/sdk/domain
   "ok": true,
   "data": {
     "protocol_version": "5",
-    "release_version": "v2.1.5"
+    "release_version": "v2.1.5",
+    "ens": {
+      "enabled": true,
+      "verified": true,
+      "provider": "cloudflare",
+      "address": "0x1234567890abcdef1234567890abcdef12345678",
+      "dnssec_state": "active"
+    }
   }
 }
 ```

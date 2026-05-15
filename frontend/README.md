@@ -31,7 +31,7 @@ frontend/
 │   │   ├── useServerList.ts  # Converts SSR payload into list models
 │   │   ├── useAdmin.ts       # Admin API integration and actions
 │   │   ├── useList.ts        # Shared list filtering/sorting state
-│   │   └── useAuth.ts        # Admin auth helper hooks
+│   │   └── useAuth.ts        # Wallet auth helper hooks
 │   ├── lib/
 │   │   ├── apiClient.ts
 │   │   ├── apiPaths.ts
@@ -39,7 +39,6 @@ frontend/
 │   │   └── utils.ts
 │   ├── pages/
 │   │   ├── Admin.tsx         # Admin area shell
-│   │   ├── AdminLogin.tsx    # Login flow UI
 │   │   ├── ServerDetail.tsx  # Server detail view with page transition
 │   │   └── ServerList.tsx    # Listing pages and route assembly
 │   ├── App.tsx

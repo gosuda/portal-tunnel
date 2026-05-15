@@ -21,6 +21,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
@@ -60,7 +61,7 @@ type ServerConfig struct {
 
 func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
-	cfg.IdentityPath = utils.ResolveRelayStateDir(cfg.IdentityPath)
+	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
 	if cfg.IdentityPath == "" {
 		return ServerConfig{}, errors.New("identity path is required")
 	}
@@ -114,6 +115,7 @@ type Server struct {
 
 	cfg         ServerConfig
 	identity    types.RelayIdentity
+	authority   identity.Authority
 	acmeManager *acme.Manager
 	proxy       proxy
 
@@ -129,6 +131,13 @@ type Server struct {
 	relaySet        *discovery.RelaySet
 	announceLimiter *discovery.AnnounceLimiter
 	registry        *leaseRegistry
+	testHooks       *serverTestHooks
+}
+
+type serverTestHooks struct {
+	overlayConfig    func() overlay.Config
+	syncOverlayPeers func([]types.RelayDescriptor) error
+	openHopStream    func(context.Context, string, string) (net.Conn, error)
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -137,11 +146,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 
-	identity, err := utils.LoadOrCreateRelayIdentity(cfg.IdentityPath, utils.PortalRootHost(cfg.PortalURL), cfg.DiscoveryEnabled)
+	relayIdentity, err := identity.LoadOrCreateRelayIdentity(cfg.IdentityPath, utils.PortalRootHost(cfg.PortalURL), cfg.DiscoveryEnabled)
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
-	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, identity.Name, cfg.SNIPort, identity.PrivateKey, identity.PublicKey, identity.Address, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	relayAuthority, err := identity.NewLocalAuthority(relayIdentity.Identity)
+	if err != nil {
+		return nil, fmt.Errorf("load relay authority: %w", err)
+	}
+	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, cfg.SNIPort, relayAuthority, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +170,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	server := &Server{
 		cfg:             cfg,
-		identity:        identity,
+		identity:        relayIdentity,
+		authority:       relayAuthority,
 		registry:        registry,
 		relaySet:        relaySet,
 		announceLimiter: discovery.NewAnnounceLimiter(0, 0),
@@ -437,7 +451,8 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
 	}
-	echSeed, err := s.identity.DeriveToken(
+	echSeed, err := identity.DeriveToken(
+		s.identity.Identity,
 		"relay-ech",
 		s.identity.EncryptedClientHelloSeed,
 		s.identity.Name,
@@ -553,9 +568,21 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 
 		openCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
 		defer cancel()
-		next, err := s.overlay.OpenHopStream(openCtx, overlayIPv4, forwardToken)
-		if err != nil {
-			return fmt.Errorf("open next hop stream: %w", err)
+		var next net.Conn
+		var lastErr error
+		for {
+			var err error
+			next, err = s.openHopStream(openCtx, overlayIPv4, forwardToken)
+			if err == nil {
+				break
+			}
+			lastErr = err
+			if errors.Is(err, net.ErrClosed) {
+				return fmt.Errorf("open next hop stream: %w", err)
+			}
+			if !utils.SleepOrDone(openCtx, defaultHopOpenRetryWait) {
+				return fmt.Errorf("open next hop stream within %s: %w", defaultClaimTimeout, errors.Join(lastErr, openCtx.Err()))
+			}
 		}
 		s.proxy.bridge(conn, next, "", nil)
 		return nil
@@ -574,6 +601,53 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	}
 	s.proxy.bridge(conn, session, record.Key(), s.registry.policy.BPSManager())
 	return nil
+}
+
+func (s *Server) hasHopTransport() bool {
+	return s != nil && (s.overlay != nil || (s.testHooks != nil && s.testHooks.openHopStream != nil))
+}
+
+func (s *Server) hasOverlayRuntime() bool {
+	return s != nil && (s.overlay != nil || (s.testHooks != nil && s.testHooks.overlayConfig != nil && s.testHooks.syncOverlayPeers != nil))
+}
+
+func (s *Server) currentOverlayConfig() (overlay.Config, bool) {
+	if s == nil {
+		return overlay.Config{}, false
+	}
+	if s.overlay != nil {
+		return s.overlay.Config(), true
+	}
+	if s.testHooks != nil && s.testHooks.overlayConfig != nil {
+		return s.testHooks.overlayConfig(), true
+	}
+	return overlay.Config{}, false
+}
+
+func (s *Server) syncOverlayPeers(descriptors []types.RelayDescriptor) error {
+	if s == nil {
+		return errors.New("server is unavailable")
+	}
+	if s.overlay != nil {
+		return s.overlay.Sync(descriptors)
+	}
+	if s.testHooks != nil && s.testHooks.syncOverlayPeers != nil {
+		return s.testHooks.syncOverlayPeers(descriptors)
+	}
+	return errors.New("relay overlay is unavailable")
+}
+
+func (s *Server) openHopStream(ctx context.Context, overlayIPv4, token string) (net.Conn, error) {
+	if s == nil {
+		return nil, errors.New("server is unavailable")
+	}
+	if s.overlay != nil {
+		return s.overlay.OpenHopStream(ctx, overlayIPv4, token)
+	}
+	if s.testHooks != nil && s.testHooks.openHopStream != nil {
+		return s.testHooks.openHopStream(ctx, overlayIPv4, token)
+	}
+	return nil, errors.New("relay overlay is unavailable")
 }
 
 func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration) error {
@@ -701,7 +775,7 @@ func (s *Server) startOverlay() (*overlay.Overlay, error) {
 		}
 	})
 
-	if err := ov.Sync(s.relaySet.OverlayPeerStates()); err != nil {
+	if err := ov.Sync(s.relaySet.OverlayPeerDescriptor()); err != nil {
 		_ = ov.Shutdown(context.Background())
 		return nil, fmt.Errorf("sync wireguard peers: %w", err)
 	}
@@ -751,10 +825,11 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 
 	var wireGuardPublicKey string
 	var wireGuardPort int
-	if s.overlay != nil {
-		cfg := s.overlay.Config()
+	supportsOverlay := false
+	if cfg, ok := s.currentOverlayConfig(); ok {
 		wireGuardPublicKey = cfg.PublicKey
 		wireGuardPort = cfg.ListenPort
+		supportsOverlay = true
 	}
 
 	return auth.SignRelayDescriptor(types.RelayDescriptor{
@@ -765,10 +840,10 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 		APIHTTPSAddr:       s.cfg.PortalURL,
 		WireGuardPublicKey: wireGuardPublicKey,
 		WireGuardPort:      wireGuardPort,
-		SupportsOverlay:    s.overlay != nil,
+		SupportsOverlay:    supportsOverlay,
 		SupportsUDP:        s.cfg.UDPEnabled && s.quicBackhaul != nil,
 		SupportsTCP:        s.cfg.TCPEnabled,
 		ActiveConnections:  s.proxy.activeConnectionCount(),
 		TCPBPS:             s.proxy.currentTCPBPS(now),
-	}, s.identity.PrivateKey)
+	}, s.authority)
 }

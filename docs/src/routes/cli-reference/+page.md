@@ -201,13 +201,27 @@ portal agent restart
 |---------|-------------|
 | `portal agent run` | Install or update and start the managed agent service |
 | `portal agent run --config config.toml --foreground` | Run the agent in the current terminal |
-| `portal agent dashboard` | Open the local TUI for tunnels, relays, and multi-hop routes |
+| `portal agent dashboard` | Open the local TUI for tunnels, relays, multi-hop routes, and settings |
 | `portal agent stop` | Gracefully stop the agent and disable or stop the OS service |
 | `portal agent restart` | Stop the current agent if present, install or update the service, and start it again |
 
 The local control API binds only to loopback and uses a token in the agent state
-directory. See [Configuration Reference](/configuration#configtoml) for the
-`config.toml` format.
+directory. See [Portal Agent](/portal-agent) for the workflow and
+[Configuration Reference](/configuration#configtoml) for the `config.toml`
+format.
+
+Agent flags:
+
+| Command | Flag | Default | Description |
+|---------|------|---------|-------------|
+| `portal agent run` | `--config` | platform default | Agent TOML config path |
+| `portal agent run` | `--foreground` | `false` | Run in the current process without installing the OS service |
+| `portal agent run` | `--service` | `false` | Internal service entrypoint used by the installed OS service |
+| `portal agent dashboard` | `--config` | platform default | Config path used for display and state-dir discovery |
+| `portal agent dashboard` | `--state-dir` | config/default | Agent state directory to attach to |
+| `portal agent stop` | `--config` | platform default | Config path used to resolve state dir and service name |
+| `portal agent stop` | `--state-dir` | config/default | Agent state directory to stop |
+| `portal agent restart` | `--config` | platform default | Config path used to reinstall and restart the service |
 
 ## `portal update`
 
@@ -253,6 +267,8 @@ Prints the installed version string and exits.
 ## Next Steps
 
 - [Getting Started](/getting-started): run your first tunnel
+- [Portal Agent](/portal-agent): run durable multi-tunnel services
+- [Wallet and ENS](/wallet-and-ens): understand wallet auth and ENS gasless DNS
 - [Concepts](/concepts): understand the relay and transport model
 - [TCP and UDP Tunneling](/tcp-udp-tunneling): raw TCP and UDP setup
 - [Deployment](/deployment): run your own relay server

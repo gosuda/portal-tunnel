@@ -1,5 +1,4 @@
 import { Admin } from "@/pages/Admin";
-import { AdminLogin } from "@/pages/AdminLogin";
 import { ServerDetail } from "@/pages/ServerDetail";
 import { ServerList } from "@/pages/ServerList";
 import { ROUTE_PATHS } from "@/lib/apiPaths";
@@ -10,7 +9,6 @@ function App() {
     <Routes>
       <Route path={ROUTE_PATHS.home} element={<ServerList />} />
       <Route path={ROUTE_PATHS.serverDetail} element={<ServerDetail />} />
-      <Route path={ROUTE_PATHS.adminLogin} element={<AdminLogin />} />
       <Route path={ROUTE_PATHS.admin} element={<Admin />} />
     </Routes>
   );

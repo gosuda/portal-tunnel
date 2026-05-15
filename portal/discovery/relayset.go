@@ -287,7 +287,7 @@ func (s *RelaySet) PriorityRelaysWithTrace(clientState ClientState) ([]string, t
 		Int("output_count", len(trace.OutputURLs)).
 		Str("mode", trace.Mode).
 		Bool("congested", trace.Congested).
-		Strs("top3", first3(trace.OutputURLs)).
+		Strs("relay_urls", trace.OutputURLs).
 		Msg("relay selection")
 	return result, trace
 }
@@ -322,7 +322,7 @@ func (s *RelaySet) PriorityMultiHopWithTrace(clientState ClientState) ([]string,
 		Int("output_count", len(trace.OutputURLs)).
 		Str("mode", trace.Mode).
 		Bool("congested", trace.Congested).
-		Strs("top3", first3(trace.OutputURLs)).
+		Strs("relay_urls", trace.OutputURLs).
 		Msg("relay selection")
 	return result, trace
 }
@@ -369,6 +369,18 @@ func (s *RelaySet) OverlayPeerStates() []RelayState {
 	s.mu.RUnlock()
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+func (s *RelaySet) OverlayPeerDescriptor() []types.RelayDescriptor {
+	states := s.overlayPeerRelayStates()
+	if len(states) == 0 {
+		return nil
+	}
+	out := make([]types.RelayDescriptor, 0, len(states))
+	for _, state := range states {
+		out = append(out, state.Descriptor)
 	}
 	return out
 }

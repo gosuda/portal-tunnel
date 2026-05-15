@@ -5,22 +5,25 @@ description: System requirements and prerequisites for running Portal tunnel.
 
 # Prerequisites
 
-Before installing Portal, make sure your environment meets the following requirements.
+Before installing Portal, make sure your environment meets the following
+requirements.
 
 ## System Requirements
 
 | Requirement | Minimum |
 |-------------|---------|
 | OS | Linux (amd64/arm64), macOS (amd64/arm64), Windows (amd64) |
-| Network | Outbound TCP access (no inbound ports needed) |
-| Disk | ~10 MB for the binary |
+| Network | Outbound TCP access for tunnel clients |
+| Disk | About 10 MB for the binary |
 
 ## For Tunnel Users
 
-- A local service running on a TCP port (e.g., a web server on `localhost:3000`)
+- A local service running on a TCP port, for example a web server on
+  `localhost:3000`
 - Internet connectivity to reach a relay server
 
-No accounts, API keys, or billing setup required.
+No accounts, API keys, billing setup, inbound firewall rules, or browser wallet
+are required for normal tunnel use.
 
 ## For Relay Operators
 
@@ -28,14 +31,17 @@ If you plan to run your own relay server:
 
 - A server with a public IP address
 - A domain name with DNS pointing to the server
-- TLS certificate (auto-provisioned via ACME/Let's Encrypt, or manually provided)
-- Ports 443 (HTTPS) and optionally 80 (HTTP redirect) open
+- TLS certificate material, either managed through ACME or manually provided
+- Open inbound `443/tcp` and `4017/tcp`
+- Optional UDP and raw TCP transport port ranges
 
 ## Optional
 
-- **ENS name** — for SIWE-based identity and portable naming
-- **Ethereum wallet** — for signing SIWE authentication messages
+- Ethereum wallet for relay admin login or optional local agent status access
+- DNS provider account for relay-managed ACME, ECH DNS records, and optional ENS
+  gasless DNS import
 
 ## Next Steps
 
-- [Getting Started](/getting-started) — install Portal and create your first tunnel
+- [Getting Started](/getting-started): install Portal and create your first tunnel
+- [Wallet and ENS](/wallet-and-ens): understand wallet auth and ENS gasless DNS

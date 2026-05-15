@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	portalauth "github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -30,6 +31,14 @@ func Run(ctx context.Context, cfg Config) error {
 	defer cancel()
 
 	manager := newManager(cfg, "")
+	walletAuth, err := portalauth.NewWalletAuthenticator(portalauth.WalletAuthConfig{
+		AllowedAddresses: cfg.Agent.AllowedWallets,
+		AllowAnyAddress:  len(cfg.Agent.AllowedWallets) == 0,
+		Statement:        "Sign in to Portal agent",
+	})
+	if err != nil {
+		return err
+	}
 	controlAddr := strings.TrimSpace(cfg.Agent.ControlAddr)
 	if controlAddr == "" {
 		return errors.New("control address is required")
@@ -57,6 +66,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Handler: &controlHandler{
 			manager:  manager,
 			token:    token,
+			auth:     walletAuth,
 			shutdown: cancel,
 		},
 		ReadHeaderTimeout: 5 * time.Second,

@@ -22,9 +22,10 @@ func ProxyExposure(ctx context.Context, exposure *Exposure) error {
 		return errors.New("no relay URLs provided")
 	}
 
-	identity := exposure.Identity()
-	tcpTarget := exposure.TargetAddr
-	udpTarget := exposure.UDPAddr
+	cfg := exposure.Config()
+	identity := cfg.Identity
+	tcpTarget := cfg.TargetAddr
+	udpTarget := cfg.UDPAddr
 	udpEnabled := udpTarget != ""
 
 	log.Info().

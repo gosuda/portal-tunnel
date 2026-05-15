@@ -166,7 +166,7 @@ async function loadAdminSnapshot(): Promise<AdminSnapshot> {
   };
 }
 
-export function useAdmin() {
+export function useAdmin(enabled = true) {
   const [serverData, setServerData] = useState<AdminLeaseData[]>([]);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
   const [landingPageEnabled, setLandingPageEnabled] = useState(true);
@@ -197,6 +197,14 @@ export function useAdmin() {
 
   useEffect(() => {
     let mounted = true;
+    if (!enabled) {
+      setError("");
+      setLoading(false);
+      return () => {
+        mounted = false;
+      };
+    }
+
     const loadInitialData = async () => {
       setError("");
       setLoading(true);
@@ -222,7 +230,7 @@ export function useAdmin() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [enabled]);
 
   const servers: AdminServer[] = useMemo(() => {
     return serverData.map((row) => toAdminServer(row));

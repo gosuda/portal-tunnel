@@ -198,6 +198,11 @@ Agent fields:
 | `state_dir` | Platform default state directory | Stores the local control endpoint token and runtime state |
 | `control_addr` | `127.0.0.1:4018` | Loopback-only local control API address |
 | `service_name` | `portal-agent` | OS service name |
+| `allowed_wallets` | empty | Wallet addresses allowed to read local agent status through wallet auth; empty allows any wallet on the loopback auth endpoint |
+
+The local agent dashboard and mutating control API calls use the bearer token in
+the agent state directory. Wallet-authenticated agent requests are read-only and
+can only read `/v1/agent/status`.
 
 Tunnel fields mirror `portal expose` flags:
 
@@ -211,8 +216,11 @@ Tunnel fields mirror `portal expose` flags:
 | `multi_hop` | string array | Ordered multi-hop relay path |
 | `multi_hop_depth` | int | Automatically select one multi-hop route with this depth |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
+| `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
+
+For a task-oriented walkthrough, see [Portal Agent](/portal-agent).
 
 ### `identity.json`
 
@@ -224,7 +232,6 @@ Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors
 | `address` | string | Derived EVM address used for SIWE and identity ownership |
 | `public_key` | string | Compressed secp256k1 public key hex |
 | `private_key` | string | secp256k1 private key hex; keep secret |
-| `admin_secret_key` | string | Relay-only admin login secret, generated automatically when missing |
 | `wireguard_public_key` | string | Relay-only WireGuard overlay public key when discovery is enabled |
 | `wireguard_private_key` | string | Relay-only WireGuard overlay private key when discovery is enabled |
 | `encrypted_client_hello_seed` | string | Relay-only HKDF salt for deriving the ECH HPKE private key; generated automatically when missing; keep secret |
@@ -244,6 +251,8 @@ Relay admin settings are stored at `IDENTITY_PATH/admin_settings.json`.
 Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, ECH HTTPS records, and optional ENS gasless DNS records.
 
 When this variable is empty the relay server falls back to manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH`.
+
+For ENS gasless behavior and wallet authentication details, see [Wallet and ENS](/wallet-and-ens).
 
 ### Cloudflare (`cloudflare`)
 

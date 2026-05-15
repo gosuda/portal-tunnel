@@ -1,13 +1,15 @@
-import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { SsgoiTransition } from "@ssgoi/react";
+import { Header } from "@/components/Header";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useAuth } from "@/hooks/useAuth";
 import { ServerListView } from "@/components/ServerListView";
 
 export function Admin() {
-  const navigate = useNavigate();
-  const { isAuthenticated, isLoading: authLoading, logout } = useAuth();
+  const {
+    isAuthenticated,
+    isLoading: authLoading,
+    checkAuth,
+  } = useAuth("admin");
 
   const {
     servers,
@@ -43,18 +45,10 @@ export function Admin() {
     handleBulkApprove,
     handleBulkDeny,
     handleBulkBan,
-  } = useAdmin();
+  } = useAdmin(isAuthenticated);
 
-  // Redirect to login if not authenticated
-  useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      navigate("/admin/login", { replace: true });
-    }
-  }, [authLoading, isAuthenticated, navigate]);
-
-  const handleLogout = async () => {
-    await logout();
-    navigate("/admin/login", { replace: true });
+  const handleAuthChange = async () => {
+    await checkAuth();
   };
 
   if (authLoading) {
@@ -62,7 +56,26 @@ export function Admin() {
   }
 
   if (!isAuthenticated) {
-    return null; // Will redirect
+    return (
+      <SsgoiTransition id="admin">
+        <div className="relative flex min-h-screen w-full flex-col bg-background">
+          <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
+            <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
+              <Header
+                title="PORTAL ADMIN"
+                isAdmin={true}
+                onAuthChange={handleAuthChange}
+              />
+            </div>
+          </div>
+          <main className="mx-auto flex w-full max-w-6xl flex-1 items-center justify-center px-6 py-16">
+            <div className="rounded-lg border border-border bg-card px-6 py-5 text-center text-sm text-muted-foreground shadow-sm">
+              Connect a wallet from the header to view admin controls.
+            </div>
+          </main>
+        </div>
+      </SsgoiTransition>
+    );
   }
 
   if (loading && servers.length === 0) {
@@ -108,7 +121,7 @@ export function Admin() {
         onBulkApprove={handleBulkApprove}
         onBulkDeny={handleBulkDeny}
         onBulkBan={handleBulkBan}
-        onLogout={handleLogout}
+        onAuthChange={handleAuthChange}
       />
     </SsgoiTransition>
   );

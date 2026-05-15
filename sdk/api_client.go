@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -77,6 +78,8 @@ func (l *listener) initHTTPTransport(ctx context.Context) error {
 		return fmt.Errorf("%w: relay sdk protocol version mismatch: relay=%q client=%q", errRelayIncompatible, protocolVersion, types.SDKVersion)
 	}
 
+	l.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
+
 	l.httpClient = httpClient
 	l.httpTransport = httpTransport
 	l.tlsConfig = tlsConfig
@@ -90,7 +93,8 @@ func (l *listener) buildHopRoutes(hopPath []types.RelayDescriptor, publicHostnam
 	hopRoutes := make([]types.HopRoute, 0, len(hopPath)-1)
 	var previousHopToken string
 	for i := 0; i < len(hopPath)-1; i++ {
-		token, err := l.identity.DeriveToken(
+		token, err := identity.DeriveToken(
+			l.identity,
 			"hop-token",
 			publicHostname,
 			strconv.Itoa(i),
@@ -111,7 +115,7 @@ func (l *listener) buildHopRoutes(hopPath []types.RelayDescriptor, publicHostnam
 			route.RouteHostname = routeHostname
 			route.HostnameHash = utils.HostnameHash(publicHostname)
 			route.ECHConfigList = bytes.Clone(echConfigList)
-			route.Metadata = l.metadata.Copy()
+			route.Metadata = l.metadataSnapshot()
 			route.Metadata.Hide = true
 		} else {
 			route.MatchToken = previousHopToken
@@ -163,7 +167,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		return types.RegisterResponse{}, nil, "", "", err
 	}
 	if streamLease {
-		routeToken, err := l.identity.DeriveToken("ech-route", publicHostname, rootHostname)
+		routeToken, err := identity.DeriveToken(l.identity, "ech-route", publicHostname, rootHostname)
 		if err != nil {
 			return types.RegisterResponse{}, nil, "", "", err
 		}
@@ -192,7 +196,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 
 	registerReq := types.RegisterChallengeRequest{
 		Identity:   registerIdentity,
-		Metadata:   l.metadata,
+		Metadata:   l.metadataSnapshot(),
 		TTL:        int(ttl / time.Second),
 		UDPEnabled: udpEnabled,
 		TCPEnabled: tcpEnabled,
@@ -209,7 +213,11 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		return types.RegisterResponse{}, nil, "", "", err
 	}
 
-	signature, err := utils.SignEthereumPersonalMessage(challenge.SIWEMessage, l.identity.PrivateKey)
+	authority, err := identity.NewLocalAuthority(l.identity)
+	if err != nil {
+		return types.RegisterResponse{}, nil, "", "", err
+	}
+	signature, err := authority.SignEthereumPersonalMessage(challenge.SIWEMessage)
 	if err != nil {
 		return types.RegisterResponse{}, nil, "", "", err
 	}
@@ -223,7 +231,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	}, nil, &resp); err != nil {
 		return types.RegisterResponse{}, nil, "", "", err
 	}
-	registeredIdentity, err := utils.NormalizeIdentity(resp.Identity)
+	registeredIdentity, err := identity.NormalizeIdentity(resp.Identity)
 	if err != nil {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken, hopRoutes)
 		return types.RegisterResponse{}, nil, "", "", err
@@ -237,14 +245,20 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 
 func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, accessToken string) (types.RenewResponse, error) {
 	var resp types.RenewResponse
-	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
-		AccessToken: accessToken,
-		TTL:         int(ttl / time.Second),
-		ReportedIP:  utils.ResolvePublicIP(ctx),
-	}, nil, &resp); err != nil {
+	req := newRenewRequest(ttl, accessToken, utils.ResolvePublicIP(ctx), l.metadataSnapshot())
+	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRenew, req, nil, &resp); err != nil {
 		return types.RenewResponse{}, err
 	}
 	return resp, nil
+}
+
+func newRenewRequest(ttl time.Duration, accessToken, reportedIP string, metadata types.LeaseMetadata) types.RenewRequest {
+	return types.RenewRequest{
+		AccessToken: accessToken,
+		TTL:         int(ttl / time.Second),
+		ReportedIP:  reportedIP,
+		Metadata:    metadata.Copy(),
+	}
 }
 
 func (l *listener) unregisterLease(ctx context.Context, accessToken string, hopRoutes []types.HopRoute) error {
@@ -259,6 +273,10 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 	if l.relaySet == nil {
 		return "", 0, errors.New("multi-hop relay set is unavailable")
 	}
+	authority, err := identity.NewLocalAuthority(l.identity)
+	if err != nil {
+		return "", 0, err
+	}
 
 	now := time.Now().UTC()
 	for i := len(routes) - 1; i >= 0; i-- {
@@ -269,7 +287,11 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 		}
 		route.ForwardRelay = desc
 		route.FirstSeenAt = expiresAt.Add(-30 * time.Second)
-		route, err := auth.SignHopRoute(http.MethodPost, route, l.identity, expiresAt)
+		if i == 0 {
+			route.Metadata = l.metadataSnapshot()
+			route.Metadata.Hide = true
+		}
+		route, err := auth.SignHopRoute(http.MethodPost, route, authority, expiresAt)
 		if err != nil {
 			return "", 0, err
 		}
@@ -306,8 +328,12 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 
 func (l *listener) unregisterHopRoutes(ctx context.Context, routes []types.HopRoute) error {
 	var unregisterErr error
+	authority, err := identity.NewLocalAuthority(l.identity)
+	if err != nil {
+		return err
+	}
 	for _, route := range routes {
-		route, err := auth.SignHopRoute(http.MethodDelete, route, l.identity, time.Time{})
+		route, err := auth.SignHopRoute(http.MethodDelete, route, authority, time.Time{})
 		if err != nil {
 			unregisterErr = errors.Join(unregisterErr, err)
 			continue

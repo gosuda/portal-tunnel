@@ -204,15 +204,33 @@ func replaceBinaryUnix(srcPath, dstPath string) error {
 	}
 	defer func() { _ = src.Close() }()
 
-	dst, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
+	dstDir := filepath.Dir(dstPath)
+	tmp, err := os.CreateTemp(dstDir, "."+filepath.Base(dstPath)+".update-*")
 	if err != nil {
-		return fmt.Errorf("failed to open destination: %w", err)
+		return fmt.Errorf("failed to create replacement file: %w", err)
 	}
-	defer func() { _ = dst.Close() }()
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
 
-	if _, err := io.Copy(dst, src); err != nil {
+	if _, err := io.Copy(tmp, src); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("failed to copy binary: %w", err)
 	}
+	if err := tmp.Chmod(0755); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("failed to set replacement permissions: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("failed to sync replacement binary: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close replacement binary: %w", err)
+	}
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		return fmt.Errorf("failed to replace destination: %w", err)
+	}
+	tmpPath = ""
 	return nil
 }
 
