@@ -15,7 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/pepper"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -44,11 +45,16 @@ type Exposure struct {
 
 	relaySet       *discovery.RelaySet
 	mu             sync.RWMutex
+	listenerMu     sync.RWMutex
 	relayListeners map[string]*listener
 
+	cfgMu sync.RWMutex
+	cfg   ExposeConfig
+
 	activeMu        sync.RWMutex
-	activeCircuit   *pepper.ActiveCircuit
+	activeCircuit   types.Circuit
 	activeResetting bool
+	pepperProvider  types.PepperProvider
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
@@ -68,20 +74,15 @@ type ExposeConfig struct {
 	MultiHop        []string
 	MultiHopDepth   int
 	PepperMode      string
+	PepperProvider  types.PepperProvider
 	BanMITM         bool
 	MaxActiveRelays int
 	Metadata        types.LeaseMetadata
 }
 
-const (
-	PepperModeDisabled = ""
-	PepperModePassive  = "passive"
-	PepperModeActive   = "active"
-)
-
 func ValidatePepperMode(mode string) error {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
-	case PepperModeDisabled, PepperModePassive, PepperModeActive:
+	case types.PepperModeDisabled, types.PepperModePassive, types.PepperModeActive:
 		return nil
 	default:
 		return fmt.Errorf("unsupported pepper mode %q: want active or passive", mode)
@@ -123,16 +124,14 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	if (len(multiHop) > 0 || cfg.MultiHopDepth > 1) && (cfg.UDPEnabled || cfg.TCPEnabled) {
 		return nil, errors.New("multi-hop currently supports only the default SNI TLS stream transport")
 	}
-	if cfg.PepperMode != PepperModeDisabled && len(multiHop) == 0 && cfg.MultiHopDepth <= 1 {
+	if cfg.PepperMode != types.PepperModeDisabled && len(multiHop) == 0 && cfg.MultiHopDepth <= 1 {
 		return nil, errors.New("pepper requires --multi-hop or --multi-hop-depth 2+")
 	}
-	if cfg.PepperMode == PepperModeActive {
-		if err := (pepper.ActivePolicy{
-			MultiHopDepth: cfg.MultiHopDepth,
-			ExplicitPath:  multiHop,
-			Discovery:     cfg.Discovery,
-			IdentityJSON:  cfg.IdentityJSON,
-		}).Validate(); err != nil {
+	if cfg.PepperMode == types.PepperModeActive {
+		if cfg.PepperProvider == nil {
+			return nil, errors.New("pepper active mode requires a PepperProvider")
+		}
+		if err := cfg.PepperProvider.ValidatePolicy(cfg.MultiHopDepth, multiHop, cfg.Discovery, cfg.IdentityJSON); err != nil {
 			return nil, err
 		}
 	}
@@ -157,12 +156,12 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 
 	identityPath := cfg.IdentityPath
 	identityJSON := cfg.IdentityJSON
-	if cfg.PepperMode == PepperModeActive {
+	if cfg.PepperMode == types.PepperModeActive {
 		identityPath = ""
 		identityJSON = ""
 	}
-	identity, createdIdentity, err := utils.ResolveListenerIdentity(
-		types.Identity{Name: cfg.Name},
+	identity, createdIdentity, err := identity.ResolveListenerIdentity(
+		types.Identity{Name: cfg.Identity.Name},
 		cfg.TargetAddr,
 		identityPath,
 		identityJSON,
@@ -173,7 +172,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	if createdIdentity {
 		log.Info().
 			Str("identity_path", strings.TrimSpace(cfg.IdentityPath)).
-			Str("address", listenerIdentity.Address).
+			Str("address", identity.Address).
 			Msg("generated tunnel identity and saved it to disk")
 	}
 	targetAddr, err := utils.NormalizeLoopbackTarget(cfg.TargetAddr)
@@ -189,7 +188,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	}
 	runtimeCfg := cfg.clone()
 	runtimeCfg.RelayURLs = append([]string(nil), explicitRelayURLs...)
-	runtimeCfg.Identity = listenerIdentity.Copy()
+	runtimeCfg.Identity = identity.Copy()
 	runtimeCfg.TargetAddr = targetAddr
 	runtimeCfg.UDPAddr = udpAddr
 	runtimeCfg.MultiHop = append([]string(nil), multiHop...)
@@ -208,9 +207,11 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		multiHop:        multiHop,
 		multiHopDepth:   cfg.MultiHopDepth,
 		pepperMode:      cfg.PepperMode,
+		pepperProvider:  cfg.PepperProvider,
 		banMITM:         cfg.BanMITM,
 		maxActiveRelays: cfg.MaxActiveRelays,
 		metadata:        cfg.Metadata,
+		cfg:             runtimeCfg,
 		accepted:        make(chan net.Conn, max(initialRouteCapacity(listenerRelayURLs, cfg.MultiHopDepth)*defaultReadyTarget*2, 1)),
 		datagrams:       make(chan types.DatagramFrame, max(initialRouteCapacity(listenerRelayURLs, cfg.MultiHopDepth)*32, 1)),
 		relaySet:        discovery.NewRelaySet(relaySetURLs),
@@ -225,7 +226,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		}
 	}
 
-	if cfg.PepperMode == PepperModeActive {
+	if cfg.PepperMode == types.PepperModeActive {
 		if err := exposure.establishActiveCircuit(false); err != nil {
 			_ = exposure.Close()
 			return nil, err
@@ -374,6 +375,23 @@ func (e *Exposure) UpdateMaxActiveRelays(maxActiveRelays int) error {
 		return nil
 	}
 	return e.reconcileRelayListeners(false)
+}
+
+func (cfg ExposeConfig) clone() ExposeConfig {
+	cfg.RelayURLs = append([]string(nil), cfg.RelayURLs...)
+	cfg.Identity = cfg.Identity.Copy()
+	cfg.MultiHop = append([]string(nil), cfg.MultiHop...)
+	cfg.Metadata = cfg.Metadata.Copy()
+	return cfg
+}
+
+func (e *Exposure) config() ExposeConfig {
+	if e == nil {
+		return ExposeConfig{}
+	}
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	return e.cfg.clone()
 }
 
 func initialRouteCapacity(listenerRelayURLs []string, multiHopDepth int) int {
@@ -728,13 +746,16 @@ func (e *Exposure) Close() error {
 }
 
 func (e *Exposure) establishActiveCircuit(reset bool) error {
-	if e.pepperMode != PepperModeActive {
+	if e.pepperMode != types.PepperModeActive {
 		return nil
 	}
-	if err := pepper.RequireEntropy(pepper.DefaultMinEntropyBits); err != nil {
+	if e.pepperProvider == nil {
+		return errors.New("pepper active mode requires a PepperProvider")
+	}
+	if err := e.pepperProvider.RequireEntropy(types.DefaultPepperMinEntropyBits); err != nil {
 		return err
 	}
-	circuit, err := pepper.NewActiveCircuit()
+	circuit, err := e.pepperProvider.NewCircuit()
 	if err != nil {
 		return err
 	}
@@ -749,7 +770,7 @@ func (e *Exposure) establishActiveCircuit(reset bool) error {
 	}
 	if reset {
 		log.Debug().
-			Str("error_code", pepper.ErrCircuitResetIntegrityVoid).
+			Str("error_code", types.ErrPepperCircuitResetIntegrityVoid).
 			Msg("pepper active circuit reset")
 	}
 	return nil
@@ -765,7 +786,7 @@ func (e *Exposure) activeCircuitSnapshot() (uint64, []byte, [32]byte, bool) {
 }
 
 func (e *Exposure) activeCircuitAvailable() bool {
-	if e.pepperMode != PepperModeActive {
+	if e.pepperMode != types.PepperModeActive {
 		return true
 	}
 	e.activeMu.RLock()
@@ -774,7 +795,7 @@ func (e *Exposure) activeCircuitAvailable() bool {
 }
 
 func (e *Exposure) resetActiveCircuit(failed *listener) {
-	if e.pepperMode != PepperModeActive {
+	if e.pepperMode != types.PepperModeActive {
 		return
 	}
 
@@ -789,7 +810,7 @@ func (e *Exposure) resetActiveCircuit(failed *listener) {
 	e.activeMu.Unlock()
 
 	log.Warn().
-		Str("error_code", pepper.ErrCircuitResetIntegrityVoid).
+		Str("error_code", types.ErrPepperCircuitResetIntegrityVoid).
 		Msg("pepper active circuit reset required")
 
 	e.listenerMu.Lock()
@@ -803,10 +824,10 @@ func (e *Exposure) resetActiveCircuit(failed *listener) {
 		}
 		if e.relaySet != nil {
 			e.relaySet.UnconfirmRelayURL(relayURL)
-			e.relaySet.RecordActiveFailure(relayURL, errors.New(pepper.ErrCircuitResetIntegrityVoid), 1)
+			e.relaySet.RecordActiveFailure(relayURL, errors.New(types.ErrPepperCircuitResetIntegrityVoid), 1)
 		}
 		if err := stale.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			log.Warn().Str("error_code", pepper.ErrCircuitResetIntegrityVoid).Msg("pepper active stale circuit close failed")
+			log.Warn().Str("error_code", types.ErrPepperCircuitResetIntegrityVoid).Msg("pepper active stale circuit close failed")
 		}
 	}
 	if failed != nil {
@@ -816,13 +837,13 @@ func (e *Exposure) resetActiveCircuit(failed *listener) {
 
 	if err := e.establishActiveCircuit(true); err != nil {
 		log.Error().
-			Str("error_code", pepper.ErrPFSHandshakeFailed).
+			Str("error_code", types.ErrPepperPFSHandshakeFailed).
 			Msg("pepper active circuit re-handshake failed")
 		return
 	}
 	if err := e.reconcileRelayListeners(false); err != nil {
 		log.Error().
-			Str("error_code", pepper.ErrPFSHandshakeFailed).
+			Str("error_code", types.ErrPepperPFSHandshakeFailed).
 			Msg("pepper active circuit route selection failed")
 	}
 }
@@ -857,7 +878,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	multiHop = append([]string(nil), cfg.MultiHop...)
 	if len(multiHop) > 0 {
 		listenerRelayURLs = e.relaySet.PriorityRelays(discovery.ClientState{
-			ExplicitRelayURLs: explicitRelays,
+			ExplicitRelayURLs: e.explicitRelays,
 			MaxActiveRelays:   e.maxActiveRelays,
 			RequireUDP:        e.udpEnabled,
 			RequireTCP:        e.tcpEnabled,
@@ -871,7 +892,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			MultiHopDepth: e.multiHopDepth,
 			LocalAddress:  e.identity.Address,
 		}
-		if e.pepperMode == PepperModeActive {
+		if e.pepperMode == types.PepperModeActive {
 			multiHop = e.relaySet.RandomMultiHop(clientState)
 		} else {
 			multiHop = e.relaySet.PriorityMultiHop(clientState)
@@ -935,7 +956,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		if len(listenerMultiHop) > 0 {
 			retryCount = 0
 		}
-		if e.pepperMode == PepperModeActive {
+		if e.pepperMode == types.PepperModeActive {
 			retryCount = -1
 		}
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
@@ -1054,7 +1075,7 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 			e.relaySet.RemoveBootstrapRelayURL(relayURL)
 		}
 		e.listenerMu.Unlock()
-		if e.pepperMode == PepperModeActive {
+		if e.pepperMode == types.PepperModeActive {
 			go e.resetActiveCircuit(listener)
 		}
 	}()
@@ -1079,8 +1100,8 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			if e.pepperMode == PepperModeActive {
-				log.Warn().Str("error_code", pepper.ErrOnionIntegrityVoid).Msg("pepper active circuit accept failed")
+			if e.pepperMode == types.PepperModeActive {
+				log.Warn().Str("error_code", types.ErrPepperOnionIntegrityVoid).Msg("pepper active circuit accept failed")
 			} else {
 				log.Warn().Err(err).Str("relay_url", relayURL).Msg("exposure listener accept failed")
 			}

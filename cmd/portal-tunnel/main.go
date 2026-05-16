@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/portal/pepper"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -162,6 +163,7 @@ func runExposeCommand(args []string) error {
 		MultiHop:        utils.SplitCSV(flags.multiHopCSV),
 		MultiHopDepth:   flags.multiHopDepth,
 		PepperMode:      flags.pepperMode,
+		PepperProvider:  pepper.DefaultProvider{},
 		BanMITM:         flags.banMITM,
 		MaxActiveRelays: flags.maxActiveRelays,
 		Metadata: types.LeaseMetadata{

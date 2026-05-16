@@ -18,6 +18,7 @@ require (
 	github.com/go-rod/rod v0.116.2
 	github.com/gosuda/keyless_tls v0.0.2-0.20260507061030-5128be6b5008
 	github.com/hashicorp/yamux v0.1.2
+	github.com/klauspost/reedsolomon v1.12.4
 	github.com/knadh/koanf/parsers/toml/v2 v2.2.0
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.4
@@ -79,7 +80,8 @@ require (
 	github.com/googleapis/gax-go/v2 v2.21.0 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.8 // indirect
-	github.com/klauspost/reedsolomon v1.12.4 // indirect
+	github.com/knadh/koanf/maps v0.1.2 // indirect
+	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect

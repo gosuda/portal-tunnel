@@ -22,7 +22,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
-	"github.com/gosuda/portal-tunnel/v2/portal/pepper"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -168,9 +167,9 @@ func (l *listener) run(ctx context.Context) {
 					l.relaySet.UnconfirmRelayURL(relayURL)
 					l.relaySet.RecordActiveFailure(relayURL, err, 1)
 				}
-				if l.pepperMode == PepperModeActive {
+				if l.pepperMode == types.PepperModeActive {
 					log.Error().
-						Str("error_code", pepper.ErrPFSHandshakeFailed).
+						Str("error_code", types.ErrPepperPFSHandshakeFailed).
 						Msg("pepper active circuit failed closed")
 				} else {
 					log.Error().
@@ -214,9 +213,9 @@ func (l *listener) run(ctx context.Context) {
 			}
 			l.resetTransport()
 			relayURL := l.relayURL.String()
-			if l.pepperMode == PepperModeActive {
+			if l.pepperMode == types.PepperModeActive {
 				log.Debug().
-					Str("error_code", pepper.ErrPFSHandshakeFailed).
+					Str("error_code", types.ErrPepperPFSHandshakeFailed).
 					Msg("pepper active lease refresh required")
 			} else {
 				log.Debug().
@@ -320,9 +319,9 @@ func (l *listener) Accept() (net.Conn, error) {
 
 		nextConn, handled, handleErr := l.mitmManager.maybeHandleConn(conn)
 		if handleErr != nil {
-			if l.pepperMode == PepperModeActive {
+			if l.pepperMode == types.PepperModeActive {
 				log.Debug().
-					Str("error_code", pepper.ErrPFSHandshakeFailed).
+					Str("error_code", types.ErrPepperPFSHandshakeFailed).
 					Msg("pepper active self-probe handling failed")
 			} else {
 				log.Debug().
@@ -898,9 +897,9 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		return false
 	}
 
-	if l.pepperMode == PepperModeActive {
+	if l.pepperMode == types.PepperModeActive {
 		log.Debug().
-			Str("error_code", pepper.ErrPFSHandshakeFailed).
+			Str("error_code", types.ErrPepperPFSHandshakeFailed).
 			Str("operation", operation).
 			Msg("pepper active operation failed; tearing down circuit")
 		return false

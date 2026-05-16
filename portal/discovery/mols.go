@@ -11,7 +11,6 @@ package discovery
 //
 import (
 	"crypto/rand"
-	"hash/fnv"
 	"math"
 	"math/big"
 	"slices"

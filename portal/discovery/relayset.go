@@ -373,6 +373,21 @@ func (s *RelaySet) OverlayPeerStates() []RelayState {
 	return out
 }
 
+func (s *RelaySet) overlayPeerRelayStates() []RelayState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	now := time.Now().UTC()
+	states := make([]RelayState, 0, len(s.relays))
+	for _, state := range s.relays {
+		if state.Banned || !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) || !state.Descriptor.HasOverlayPeer() {
+			continue
+		}
+		states = append(states, state)
+	}
+	return states
+}
+
 func (s *RelaySet) OverlayPeerDescriptor() []types.RelayDescriptor {
 	states := s.overlayPeerRelayStates()
 	if len(states) == 0 {

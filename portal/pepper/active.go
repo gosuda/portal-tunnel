@@ -11,22 +11,15 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/curve25519"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-const (
-	DefaultMinEntropyBits = 256
-
-	ErrPFSHandshakeFailed        = "ERR_PFS_HANDSHAKE_FAILED"
-	ErrOnionIntegrityVoid        = "ERR_ONION_INTEGRITY_VOID"
-	ErrPepperEntropyLow          = "ERR_PEPPER_ENTROPY_LOW"
-	ErrPepperStaticEntry         = "ERR_PEPPER_STATIC_ENTRY"
-	ErrPepperStaticIdentity      = "ERR_PEPPER_STATIC_IDENTITY"
-	ErrCircuitResetIntegrityVoid = "ERR_CIRCUIT_RESET_INTEGRITY_VOID"
-)
+const DefaultMinEntropyBits = types.DefaultPepperMinEntropyBits
 
 var (
-	ErrStaticKeyMaterial = errors.New(ErrPFSHandshakeFailed)
-	ErrEntropyLow        = errors.New(ErrPepperEntropyLow)
+	ErrStaticKeyMaterial = errors.New(types.ErrPepperPFSHandshakeFailed)
+	ErrEntropyLow        = errors.New(types.ErrPepperEntropyLow)
 )
 
 type ActivePolicy struct {
@@ -44,9 +37,9 @@ func (p ActivePolicy) Validate() error {
 	}
 	switch {
 	case len(p.ExplicitPath) > 0:
-		return errors.New(ErrPepperStaticEntry)
+		return errors.New(types.ErrPepperStaticEntry)
 	case strings.TrimSpace(p.IdentityJSON) != "":
-		return errors.New(ErrPepperStaticIdentity)
+		return errors.New(types.ErrPepperStaticIdentity)
 	case p.MultiHopDepth < 2:
 		return errors.New("pepper active requires automatic --multi-hop-depth 2+")
 	case !p.Discovery:
@@ -153,7 +146,7 @@ func NewEphemeralX25519() (*EphemeralX25519, error) {
 
 func (e *EphemeralX25519) Shared(peerPublic [32]byte, forbiddenPeerPublicKeys ...[32]byte) (*LockedKey, error) {
 	if e == nil || e.private == nil {
-		return nil, errors.New(ErrPFSHandshakeFailed)
+		return nil, errors.New(types.ErrPepperPFSHandshakeFailed)
 	}
 	for _, forbidden := range forbiddenPeerPublicKeys {
 		if peerPublic == forbidden {
@@ -272,4 +265,24 @@ func (c *ActiveCircuit) Close() error {
 	c.local = nil
 	c.id = 0
 	return err
+}
+
+// DefaultProvider implements types.PepperProvider using the concrete pepper package.
+type DefaultProvider struct{}
+
+func (DefaultProvider) NewCircuit() (types.Circuit, error) {
+	return NewActiveCircuit()
+}
+
+func (DefaultProvider) ValidatePolicy(multiHopDepth int, explicitPath []string, discovery bool, identityJSON string) error {
+	return (ActivePolicy{
+		MultiHopDepth: multiHopDepth,
+		ExplicitPath:  explicitPath,
+		Discovery:     discovery,
+		IdentityJSON:  identityJSON,
+	}).Validate()
+}
+
+func (DefaultProvider) RequireEntropy(minBits int) error {
+	return RequireEntropy(minBits)
 }
