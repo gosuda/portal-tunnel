@@ -10,6 +10,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/pepper"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func mustRelaySet(t *testing.T, relayURLs ...string) *discovery.RelaySet {
