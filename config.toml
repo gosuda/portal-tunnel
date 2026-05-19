@@ -2,7 +2,7 @@
 # Bump protocol versions only when wire-level behavior changes.
 
 [release]
-version  = "v2.2.2"
+version  = "v2.2.3"
 base_url = "https://github.com/gosuda/portal-tunnel/releases"
 
 [protocol]

@@ -292,8 +292,8 @@ func TestRegisterLeaseIncludesSNIPortForPublicIngress(t *testing.T) {
 		record.Close()
 	})
 
-	if resp.SNIPort != server.cfg.SNIPort {
-		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, server.cfg.SNIPort)
+	if resp.SNIPort != server.config().SNIPort {
+		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, server.config().SNIPort)
 	}
 }
 
@@ -411,7 +411,7 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
-	server.registry.policy.SetUDPPolicy(true, 0)
+	server.SetUDPPolicy(true, 0)
 
 	record, resp, err := server.registry.Register(types.RegisterChallengeRequest{
 		Identity: types.Identity{
@@ -436,8 +436,8 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	if got := record.datagram.UDPPort(); got < 40000 || got > 40009 {
 		t.Fatalf("UDPPort() = %d, want port within %d-%d", got, 40000, 40009)
 	}
-	if resp.SNIPort != server.cfg.SNIPort {
-		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, server.cfg.SNIPort)
+	if resp.SNIPort != server.config().SNIPort {
+		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, server.config().SNIPort)
 	}
 	if resp.UDPAddr == "" {
 		t.Fatal("RegisterResponse.UDPAddr = empty, want public udp address")
@@ -476,7 +476,7 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET relay discovery status = %d, want %d", resp.StatusCode, http.StatusNotFound)
 	}
-	if server.cfg.DiscoveryEnabled {
+	if server.config().DiscoveryEnabled {
 		t.Fatal("cfg.DiscoveryEnabled = true, want false without configured discovery service")
 	}
 }

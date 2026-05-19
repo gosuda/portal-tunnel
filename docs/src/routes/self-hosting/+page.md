@@ -109,7 +109,7 @@ By default the relay expects you to place `fullchain.pem` and `privatekey.pem` i
 
 ```yaml
 environment:
-  ACME_DNS_PROVIDER: cloudflare   # or: gcloud, route53
+  ACME_DNS_PROVIDER: cloudflare   # or: gcloud, hetzner, route53, vultr
   CLOUDFLARE_TOKEN: <your-token>
 ```
 

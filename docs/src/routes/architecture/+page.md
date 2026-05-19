@@ -197,8 +197,8 @@ UDP client
 ### Operational Constraints
 
 - For non-localhost deployments, relay TLS can run from manual certificate files in the relay `IDENTITY_PATH` directory or from managed ACME.
-- When managed ACME is enabled, supported DNS providers are `cloudflare`, `gcloud`, and `route53`.
-- ENS gasless automation reuses `ACME_DNS_PROVIDER` for DNSSEC and ENS TXT sync.
+- When managed ACME is enabled, supported DNS providers are `cloudflare`, `gcloud`, `hetzner`, `route53`, and `vultr`.
+- ENS gasless automation reuses `ACME_DNS_PROVIDER` for DNSSEC and ENS TXT sync when the selected provider supports DNSSEC.
 - Relay stores its state under `IDENTITY_PATH`, including `identity.json`, `admin_settings.json`, and certificate material. Tunnel and demo-app identities still use `IDENTITY_PATH` / `--identity-path` as a direct JSON file path.
 - Managed non-localhost ACME keeps both root and wildcard DNS A records in sync.
 - Relay certificate material lives under `IDENTITY_PATH` as `fullchain.pem` and `privatekey.pem`.
@@ -299,14 +299,6 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 - `/discovery/announce` accepts only signed relay descriptors. Loopback or localhost relay descriptors are rejected because they cannot join the public discovery mesh.
 - The overlay peer API is plain HTTP on the WireGuard network, not public Internet HTTP. It serves the same discovery payload shape used by public `/discovery`.
 - Overlay failure affects inter-relay discovery, mesh synchronization, and multi-hop relay forwarding. Direct tenant TLS routing, keyless TLS, register/renew/connect, and public UDP ingress do not depend on the WireGuard transport path.
-
-### Local multi-hop test harness
-
-`portal/multihop_local_test.go` verifies the multi-hop relay path inside one `go test` process. It starts local relay servers on `127.0.0.1:0`, seeds signed local discovery descriptors, and uses test fakes only for the WireGuard transport layer.
-
-Use `make test-local-multihop` for the focused local harness. The same tests are also included in `make test` through the `./portal/...` package set. Use `go test ./portal ./sdk` when checking the narrower portal and SDK interaction without the full repository test suite.
-
-The harness exercises SDK expose/register logic, `/sdk/hop`, `RelaySet`, signed descriptors, route registration, SNI ingress, hop token matching, and `bridgeLeaseConn`. It intentionally excludes public DNS, ACME provider side effects, public registry bootstrap, and real WireGuard devices. `localRelaySpec` provides relay-level server and descriptor mutation hooks for future policy tests, and the fake overlay records synced peers so fake hop streams only open after the `/sdk/hop` overlay sync path has run.
 
 ## Control Plane Flow
 

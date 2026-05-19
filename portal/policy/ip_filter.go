@@ -4,10 +4,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 type IPFilter struct {
-	bannedIPs      map[string]struct{}
+	bannedIPs      *utils.Snapshot[map[string]struct{}]
 	identityToIP   map[string]string
 	ipToIdentities map[string][]string
 	mu             sync.RWMutex
@@ -15,52 +17,68 @@ type IPFilter struct {
 
 func NewIPFilter() *IPFilter {
 	return &IPFilter{
-		bannedIPs:      make(map[string]struct{}),
+		bannedIPs:      utils.NewSnapshot(map[string]struct{}{}, utils.CloneMap[string, struct{}]),
 		identityToIP:   make(map[string]string),
 		ipToIdentities: make(map[string][]string),
 	}
 }
 
 func (f *IPFilter) BanIP(ip string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.bannedIPs[strings.TrimSpace(ip)] = struct{}{}
+	if f == nil || f.bannedIPs == nil {
+		return
+	}
+	ip = strings.TrimSpace(ip)
+	f.bannedIPs.UpdateCopy(func(ips *map[string]struct{}) {
+		if *ips == nil {
+			*ips = make(map[string]struct{})
+		}
+		(*ips)[ip] = struct{}{}
+	})
 }
 
 func (f *IPFilter) UnbanIP(ip string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.bannedIPs, strings.TrimSpace(ip))
+	if f == nil || f.bannedIPs == nil {
+		return
+	}
+	ip = strings.TrimSpace(ip)
+	f.bannedIPs.UpdateCopy(func(ips *map[string]struct{}) {
+		delete(*ips, ip)
+	})
 }
 
 func (f *IPFilter) IsIPBanned(ip string) bool {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	_, ok := f.bannedIPs[strings.TrimSpace(ip)]
+	if f == nil || f.bannedIPs == nil {
+		return false
+	}
+	_, ok := f.bannedIPs.Load()[strings.TrimSpace(ip)]
 	return ok
 }
 
 func (f *IPFilter) BannedIPs() []string {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	out := make([]string, 0, len(f.bannedIPs))
-	for ip := range f.bannedIPs {
+	if f == nil || f.bannedIPs == nil {
+		return nil
+	}
+	ips := f.bannedIPs.Load()
+	out := make([]string, 0, len(ips))
+	for ip := range ips {
 		out = append(out, ip)
 	}
 	return out
 }
 
 func (f *IPFilter) SetBannedIPs(ips []string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.bannedIPs = make(map[string]struct{}, len(ips))
+	if f == nil || f.bannedIPs == nil {
+		return
+	}
+	bannedIPs := make(map[string]struct{}, len(ips))
 	for _, ip := range ips {
 		ip = strings.TrimSpace(ip)
 		if ip == "" {
 			continue
 		}
-		f.bannedIPs[ip] = struct{}{}
+		bannedIPs[ip] = struct{}{}
 	}
+	f.bannedIPs.Store(bannedIPs)
 }
 
 func (f *IPFilter) RegisterIdentityIP(key, ip string) {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -35,9 +34,8 @@ type Config struct {
 }
 
 type Provider struct {
-	cfg    Config
-	zoneMu sync.RWMutex
-	zones  map[string]string
+	cfg   Config
+	zones *utils.Snapshot[map[string]string]
 }
 
 func New(cfg Config) *Provider {
@@ -50,6 +48,7 @@ func New(cfg Config) *Provider {
 			HostedZoneID:    normalizeZoneID(cfg.HostedZoneID),
 			KMSKeyARN:       strings.TrimSpace(cfg.KMSKeyARN),
 		},
+		zones: utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
 	}
 }
 
@@ -371,14 +370,12 @@ func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Clie
 		return "", fmt.Errorf("invalid base domain for hosted zone lookup: %q", domain)
 	}
 
-	p.zoneMu.RLock()
+	zones := p.zones.Load()
 	for _, candidate := range candidates {
-		if zoneID := p.zones[candidate]; zoneID != "" {
-			p.zoneMu.RUnlock()
+		if zoneID := zones[candidate]; zoneID != "" {
 			return zoneID, nil
 		}
 	}
-	p.zoneMu.RUnlock()
 
 	zonesByName := make(map[string]string)
 	paginator := awsroute53.NewListHostedZonesPaginator(client, &awsroute53.ListHostedZonesInput{})
@@ -401,14 +398,14 @@ func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Clie
 	}
 
 	if len(zonesByName) > 0 {
-		p.zoneMu.Lock()
-		if p.zones == nil {
-			p.zones = make(map[string]string)
-		}
-		for zoneName, zoneID := range zonesByName {
-			p.zones[zoneName] = zoneID
-		}
-		p.zoneMu.Unlock()
+		p.zones.UpdateCopy(func(zones *map[string]string) {
+			if *zones == nil {
+				*zones = make(map[string]string)
+			}
+			for zoneName, zoneID := range zonesByName {
+				(*zones)[zoneName] = zoneID
+			}
+		})
 	}
 
 	for _, candidate := range candidates {

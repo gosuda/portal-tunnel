@@ -44,12 +44,11 @@ func (r *Runtime) ExtractClientIP(req *http.Request) string {
 		return ""
 	}
 
-	r.mu.RLock()
-	trustProxyHeaders := r.trustProxyHeaders
-	trustedProxyCIDRs := append([]*net.IPNet(nil), r.trustedProxyCIDRs...)
-	r.mu.RUnlock()
-
-	if trustProxyHeaders && isTrustedProxyRemoteAddr(req.RemoteAddr, trustedProxyCIDRs) {
+	cfg := runtimeConfig{}
+	if r.config != nil {
+		cfg = r.config.Load()
+	}
+	if cfg.trustProxyHeaders && isTrustedProxyRemoteAddr(req.RemoteAddr, cfg.trustedProxyCIDRs) {
 		if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
 			if before, _, ok := strings.Cut(xff, ","); ok {
 				if ip := normalizeClientIPCandidate(before); ip != "" {

@@ -57,12 +57,14 @@ type relayServerConfig struct {
 	CloudflareToken    string
 	GCPProjectID       string
 	GCPManagedZone     string
+	HetznerAPIToken    string
 	AWSAccessKeyID     string
 	AWSSecretAccessKey string
 	AWSSessionToken    string
 	AWSRegion          string
 	AWSHostedZoneID    string
 	AWSDNSSECKMSKeyARN string
+	VultrAPIKey        string
 }
 
 func runServeCommand(args []string) error {
@@ -91,17 +93,19 @@ func runServeCommand(args []string) error {
 	utils.BoolFlagEnv(fs, &cfg.PProfEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.PProfAddr, "pprof-addr", portal.DefaultPProfListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
 
-	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (cloudflare|gcloud|route53); leave empty to use manual fullchain.pem/privatekey.pem from IDENTITY_PATH", "ACME_DNS_PROVIDER")
+	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (cloudflare|gcloud|hetzner|route53|vultr); leave empty to use manual fullchain.pem/privatekey.pem from IDENTITY_PATH", "ACME_DNS_PROVIDER")
 	utils.BoolFlagEnv(fs, &cfg.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.CloudflareToken, "cloudflare-token", "", "Cloudflare DNS API token (required when acme-dns-provider=cloudflare)", "CLOUDFLARE_TOKEN")
 	utils.StringFlagEnv(fs, &cfg.GCPProjectID, "gcp-project-id", "", "Google Cloud project id for Cloud DNS automation; auto-detected from ADC or GCE metadata when omitted", "GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCE_PROJECT")
 	utils.StringFlagEnv(fs, &cfg.GCPManagedZone, "gcp-managed-zone", "", "explicit Google Cloud DNS managed zone name or numeric ID override", "GCP_MANAGED_ZONE", "GCP_ZONE", "GCE_ZONE_ID")
+	utils.StringFlagEnv(fs, &cfg.HetznerAPIToken, "hetzner-api-token", "", "Hetzner Cloud API token for DNS automation (required when acme-dns-provider=hetzner)", "HETZNER_API_TOKEN", "HCLOUD_TOKEN")
 	utils.StringFlagEnv(fs, &cfg.AWSAccessKeyID, "aws-access-key-id", "", "AWS access key ID for Route53 static credentials; uses the default AWS credential chain when omitted", "AWS_ACCESS_KEY_ID")
 	utils.StringFlagEnv(fs, &cfg.AWSSecretAccessKey, "aws-secret-access-key", "", "AWS secret access key for Route53 static credentials", "AWS_SECRET_ACCESS_KEY")
 	utils.StringFlagEnv(fs, &cfg.AWSSessionToken, "aws-session-token", "", "AWS session token for Route53 temporary credentials", "AWS_SESSION_TOKEN")
 	utils.StringFlagEnv(fs, &cfg.AWSRegion, "aws-region", "", "AWS region for Route53 and Route53-backed DNS-01; defaults to us-east-1 when unset", "AWS_REGION", "AWS_DEFAULT_REGION")
 	utils.StringFlagEnv(fs, &cfg.AWSHostedZoneID, "aws-hosted-zone-id", "", "explicit Route53 hosted zone ID override", "AWS_HOSTED_ZONE_ID")
 	utils.StringFlagEnv(fs, &cfg.AWSDNSSECKMSKeyARN, "aws-dnssec-kms-key-arn", "", "AWS KMS key ARN used to create a Route53 DNSSEC key-signing key when needed", "AWS_DNSSEC_KMS_KEY_ARN")
+	utils.StringFlagEnv(fs, &cfg.VultrAPIKey, "vultr-api-key", "", "Vultr API key for DNS automation (required when acme-dns-provider=vultr)", "VULTR_API_KEY")
 
 	if err := utils.ParseFlagSet(fs, args, printRootUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -169,12 +173,14 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 			CloudflareToken:    cfg.CloudflareToken,
 			GCPProjectID:       cfg.GCPProjectID,
 			GCPManagedZone:     cfg.GCPManagedZone,
+			HetznerAPIToken:    cfg.HetznerAPIToken,
 			AWSAccessKeyID:     cfg.AWSAccessKeyID,
 			AWSSecretAccessKey: cfg.AWSSecretAccessKey,
 			AWSSessionToken:    cfg.AWSSessionToken,
 			AWSRegion:          cfg.AWSRegion,
 			AWSHostedZoneID:    cfg.AWSHostedZoneID,
 			AWSKMSKeyARN:       cfg.AWSDNSSECKMSKeyARN,
+			VultrAPIKey:        cfg.VultrAPIKey,
 		},
 	})
 	if err != nil {

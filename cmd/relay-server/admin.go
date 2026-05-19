@@ -8,7 +8,8 @@ import (
 	"strings"
 	"time"
 
-	portalauth "github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -21,7 +22,7 @@ const (
 	adminBodyLimit = 1 << 16
 )
 
-func loadAdminState(path string, runtime *policy.Runtime) (persistedAdminState, error) {
+func loadAdminState(path string, server *portal.Server) (persistedAdminState, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return persistedAdminState{}, nil
@@ -31,7 +32,7 @@ func loadAdminState(path string, runtime *policy.Runtime) (persistedAdminState, 
 	if _, err := utils.ReadJSONFileIfExists(path, &payload); err != nil {
 		return persistedAdminState{}, err
 	}
-	if err := payload.apply(runtime); err != nil {
+	if err := payload.apply(server); err != nil {
 		return persistedAdminState{}, err
 	}
 	return payload, nil
@@ -140,14 +141,14 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		})
 	case types.PathAdminUDP:
 		f.handlePortSettings(w, r, invalidRequestBody, runtime,
-			runtime.SetUDPPolicy,
+			f.server.SetUDPPolicy,
 			func() any {
 				return types.AdminUDPSettingsResponse{Enabled: runtime.IsUDPEnabled(), MaxLeases: runtime.UDPMaxLeases()}
 			},
 		)
 	case types.PathAdminTCPPort:
 		f.handlePortSettings(w, r, invalidRequestBody, runtime,
-			runtime.SetTCPPortPolicy,
+			f.server.SetTCPPortPolicy,
 			func() any {
 				return types.AdminTCPPortSettingsResponse{Enabled: runtime.IsTCPPortEnabled(), MaxLeases: runtime.TCPPortMaxLeases()}
 			},
@@ -385,9 +386,9 @@ func adminAuthURI(r *http.Request, endpointPath string) string {
 
 func writeWalletAuthError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, portalauth.ErrWalletAuthUnauthorized):
+	case errors.Is(err, auth.ErrWalletAuthUnauthorized):
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
-	case errors.Is(err, portalauth.ErrWalletAuthChallengeNotFound), errors.Is(err, portalauth.ErrWalletAuthChallengeExpired), errors.Is(err, portalauth.ErrWalletAuthInvalidSignature):
+	case errors.Is(err, auth.ErrWalletAuthChallengeNotFound), errors.Is(err, auth.ErrWalletAuthChallengeExpired), errors.Is(err, auth.ErrWalletAuthInvalidSignature):
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, err.Error())
 	default:
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
@@ -450,7 +451,11 @@ func applyOptionalPolicy(enabled *bool, maxLeases *int, getEnabled func() bool, 
 	set(e, m)
 }
 
-func (s persistedAdminState) apply(runtime *policy.Runtime) error {
+func (s persistedAdminState) apply(server *portal.Server) error {
+	if server == nil {
+		return nil
+	}
+	runtime := server.PolicyRuntime()
 	if runtime == nil {
 		return nil
 	}
@@ -466,7 +471,7 @@ func (s persistedAdminState) apply(runtime *policy.Runtime) error {
 	runtime.SetBannedIdentityKeys(identity.NormalizeIdentityKeys(s.BannedIdentityKeys))
 	runtime.IPFilter().SetBannedIPs(s.BannedIPs)
 	runtime.BPSManager().SetIdentityBPSLimits(identity.NormalizeIdentityKeyBPS(s.IdentityBPS))
-	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, runtime.SetUDPPolicy)
-	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, runtime.SetTCPPortPolicy)
+	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, server.SetUDPPolicy)
+	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, server.SetTCPPortPolicy)
 	return nil
 }

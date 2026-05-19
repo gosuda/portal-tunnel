@@ -3,7 +3,6 @@ package policy
 import (
 	"fmt"
 	"net"
-	"sync"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -21,27 +20,37 @@ func (p *PortPolicy) Set(enabled bool, maxLeases int) {
 	p.maxLeases = maxLeases
 }
 
+type runtimeConfig struct {
+	udp               PortPolicy
+	tcpPort           PortPolicy
+	trustProxyHeaders bool
+	trustedProxyCIDRs []*net.IPNet
+}
+
+func (cfg runtimeConfig) snapshot() runtimeConfig {
+	cfg.trustedProxyCIDRs = utils.CloneSlice(cfg.trustedProxyCIDRs)
+	return cfg
+}
+
 type Runtime struct {
 	approver           *Approver
 	bpsManager         *BPSManager
 	ipFilter           *IPFilter
-	bannedIdentityKeys map[string]struct{}
-	udp                PortPolicy
-	tcpPort            PortPolicy
-	trustProxyHeaders  bool
-	trustedProxyCIDRs  []*net.IPNet
-	mu                 sync.RWMutex
+	config             *utils.Snapshot[runtimeConfig]
+	bannedIdentityKeys *utils.Snapshot[map[string]struct{}]
 }
 
 func NewRuntime(udpEnabled, tcpPortEnabled bool, trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*Runtime, error) {
 	runtime := &Runtime{
-		approver:           NewApprover(),
-		bpsManager:         NewBPSManager(),
-		ipFilter:           NewIPFilter(),
-		bannedIdentityKeys: make(map[string]struct{}),
+		approver:   NewApprover(),
+		bpsManager: NewBPSManager(),
+		ipFilter:   NewIPFilter(),
+		config: utils.NewSnapshot(runtimeConfig{
+			udp:     PortPolicy{enabled: udpEnabled},
+			tcpPort: PortPolicy{enabled: tcpPortEnabled},
+		}, runtimeConfig.snapshot),
+		bannedIdentityKeys: utils.NewSnapshot(map[string]struct{}{}, utils.CloneMap[string, struct{}]),
 	}
-	runtime.udp.Set(udpEnabled, 0)
-	runtime.tcpPort.Set(tcpPortEnabled, 0)
 	if err := runtime.SetProxyTrust(trustProxyHeaders, rawTrustedProxyCIDRs); err != nil {
 		return nil, err
 	}
@@ -61,44 +70,50 @@ func (r *Runtime) BPSManager() *BPSManager {
 }
 
 func (r *Runtime) BanIdentity(key string) {
-	if key == "" {
+	if r == nil || r.bannedIdentityKeys == nil || key == "" {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.bannedIdentityKeys[key] = struct{}{}
+	r.bannedIdentityKeys.UpdateCopy(func(keys *map[string]struct{}) {
+		if *keys == nil {
+			*keys = make(map[string]struct{})
+		}
+		(*keys)[key] = struct{}{}
+	})
 }
 
 func (r *Runtime) UnbanIdentity(key string) {
-	if key == "" {
+	if r == nil || r.bannedIdentityKeys == nil || key == "" {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.bannedIdentityKeys, key)
+	r.bannedIdentityKeys.UpdateCopy(func(keys *map[string]struct{}) {
+		delete(*keys, key)
+	})
 }
 
 func (r *Runtime) IsIdentityBanned(key string) bool {
-	if key == "" {
+	if r == nil || r.bannedIdentityKeys == nil || key == "" {
 		return false
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	_, ok := r.bannedIdentityKeys[key]
+	_, ok := r.bannedIdentityKeys.Load()[key]
 	return ok
 }
 
 func (r *Runtime) BannedIdentityKeys() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.bannedIdentityKeys))
-	for key := range r.bannedIdentityKeys {
+	if r == nil || r.bannedIdentityKeys == nil {
+		return nil
+	}
+	keys := r.bannedIdentityKeys.Load()
+	out := make([]string, 0, len(keys))
+	for key := range keys {
 		out = append(out, key)
 	}
 	return out
 }
 
 func (r *Runtime) SetBannedIdentityKeys(keys []string) {
+	if r == nil || r.bannedIdentityKeys == nil {
+		return
+	}
 	bannedIdentityKeys := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
 		if key == "" {
@@ -107,9 +122,7 @@ func (r *Runtime) SetBannedIdentityKeys(keys []string) {
 		bannedIdentityKeys[key] = struct{}{}
 	}
 
-	r.mu.Lock()
-	r.bannedIdentityKeys = bannedIdentityKeys
-	r.mu.Unlock()
+	r.bannedIdentityKeys.Store(bannedIdentityKeys)
 }
 
 func (r *Runtime) EffectiveApproval(key string) bool {
@@ -137,27 +150,35 @@ func (r *Runtime) IsIdentityRoutable(key string) bool {
 }
 
 func (r *Runtime) SetUDPPolicy(enabled bool, maxLeases int) {
-	r.mu.Lock()
-	r.udp.Set(enabled, maxLeases)
-	r.mu.Unlock()
+	if r == nil || r.config == nil {
+		return
+	}
+	r.config.UpdateCopy(func(cfg *runtimeConfig) {
+		cfg.udp.Set(enabled, maxLeases)
+	})
 }
 
 func (r *Runtime) IsUDPEnabled() bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.udp.IsEnabled()
+	if r == nil || r.config == nil {
+		return false
+	}
+	return r.config.Load().udp.IsEnabled()
 }
 
 func (r *Runtime) UDPMaxLeases() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.udp.MaxLeases()
+	if r == nil || r.config == nil {
+		return 0
+	}
+	return r.config.Load().udp.MaxLeases()
 }
 
 func (r *Runtime) SetTCPPortPolicy(enabled bool, maxLeases int) {
-	r.mu.Lock()
-	r.tcpPort.Set(enabled, maxLeases)
-	r.mu.Unlock()
+	if r == nil || r.config == nil {
+		return
+	}
+	r.config.UpdateCopy(func(cfg *runtimeConfig) {
+		cfg.tcpPort.Set(enabled, maxLeases)
+	})
 }
 
 func (r *Runtime) SetProxyTrust(trustProxyHeaders bool, rawTrustedProxyCIDRs string) error {
@@ -168,24 +189,28 @@ func (r *Runtime) SetProxyTrust(trustProxyHeaders bool, rawTrustedProxyCIDRs str
 	if err != nil {
 		return fmt.Errorf("parse trusted proxy cidrs: %w", err)
 	}
-	copied := append([]*net.IPNet(nil), trustedProxyCIDRs...)
-	r.mu.Lock()
-	r.trustProxyHeaders = trustProxyHeaders
-	r.trustedProxyCIDRs = copied
-	r.mu.Unlock()
+	if r.config == nil {
+		r.config = utils.NewSnapshot(runtimeConfig{}, runtimeConfig.snapshot)
+	}
+	r.config.UpdateCopy(func(cfg *runtimeConfig) {
+		cfg.trustProxyHeaders = trustProxyHeaders
+		cfg.trustedProxyCIDRs = append([]*net.IPNet(nil), trustedProxyCIDRs...)
+	})
 	return nil
 }
 
 func (r *Runtime) IsTCPPortEnabled() bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.tcpPort.IsEnabled()
+	if r == nil || r.config == nil {
+		return false
+	}
+	return r.config.Load().tcpPort.IsEnabled()
 }
 
 func (r *Runtime) TCPPortMaxLeases() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.tcpPort.MaxLeases()
+	if r == nil || r.config == nil {
+		return 0
+	}
+	return r.config.Load().tcpPort.MaxLeases()
 }
 
 func (r *Runtime) ForgetIdentity(key string) {

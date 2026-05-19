@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
@@ -22,8 +21,7 @@ const (
 type Provider struct {
 	token string
 
-	zoneMu sync.RWMutex
-	zones  map[string]string
+	zones *utils.Snapshot[map[string]string]
 }
 
 type apiError struct {
@@ -80,7 +78,10 @@ type dnssecResult struct {
 }
 
 func New(token string) *Provider {
-	return &Provider{token: strings.TrimSpace(token)}
+	return &Provider{
+		token: strings.TrimSpace(token),
+		zones: utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
+	}
 }
 
 func (p *Provider) Name() string {
@@ -366,14 +367,12 @@ func (p *Provider) findZoneID(ctx context.Context, domain string) (string, error
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
 
-	p.zoneMu.RLock()
+	zones := p.zones.Load()
 	for _, candidate := range candidates {
-		if zoneID := p.zones[candidate]; zoneID != "" {
-			p.zoneMu.RUnlock()
+		if zoneID := zones[candidate]; zoneID != "" {
 			return zoneID, nil
 		}
 	}
-	p.zoneMu.RUnlock()
 
 	for _, candidate := range candidates {
 		zones, err := listZones(ctx, p.token, candidate)
@@ -386,12 +385,13 @@ func (p *Provider) findZoneID(ctx context.Context, domain string) (string, error
 				if zoneID == "" {
 					continue
 				}
-				p.zoneMu.Lock()
-				if p.zones == nil {
-					p.zones = make(map[string]string)
-				}
-				p.zones[utils.NormalizeHostname(z.Name)] = zoneID
-				p.zoneMu.Unlock()
+				zoneName := utils.NormalizeHostname(z.Name)
+				p.zones.UpdateCopy(func(zones *map[string]string) {
+					if *zones == nil {
+						*zones = make(map[string]string)
+					}
+					(*zones)[zoneName] = zoneID
+				})
 				return zoneID, nil
 			}
 		}

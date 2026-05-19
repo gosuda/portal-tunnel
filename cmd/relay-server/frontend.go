@@ -19,7 +19,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	portalauth "github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -36,7 +36,7 @@ var embeddedDistFS embed.FS
 type Frontend struct {
 	distFS            readDirFileFS
 	server            *portal.Server
-	auth              *portalauth.WalletAuthenticator
+	auth              *auth.WalletAuthenticator
 	adminSettingsPath string
 	thumbnails        *thumbnailService
 
@@ -57,13 +57,13 @@ func NewFrontend(server *portal.Server, identityPath string, defaultLandingPageE
 	if adminSettingsPath == "" {
 		return nil, errors.New("frontend requires identity path")
 	}
-	state, err := loadAdminState(adminSettingsPath, runtime)
+	state, err := loadAdminState(adminSettingsPath, server)
 	if err != nil {
 		return nil, err
 	}
 	relayIdentity := server.RelayIdentity()
 	allowedWallets := append([]string{relayIdentity.Address}, adminWallets...)
-	authenticator, err := portalauth.NewWalletAuthenticator(portalauth.WalletAuthConfig{
+	authenticator, err := auth.NewWalletAuthenticator(auth.WalletAuthConfig{
 		AllowedAddresses: allowedWallets,
 		Statement:        "Sign in to Portal relay admin",
 	})

@@ -19,6 +19,7 @@ require (
 	github.com/gosuda/keyless_tls v0.0.2-0.20260507061030-5128be6b5008
 	github.com/hashicorp/yamux v0.1.2
 	github.com/klauspost/reedsolomon v1.12.4
+	github.com/hetznercloud/hcloud-go/v2 v2.40.0
 	github.com/knadh/koanf/parsers/toml/v2 v2.2.0
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.4
@@ -29,6 +30,7 @@ require (
 	github.com/quic-go/quic-go v0.59.0
 	github.com/rs/zerolog v1.34.0
 	github.com/spruceid/siwe-go v0.2.1
+	github.com/vultr/govultr/v3 v3.30.0
 	golang.org/x/crypto v0.50.0
 	golang.org/x/net v0.53.0
 	golang.org/x/oauth2 v0.36.0
@@ -74,10 +76,13 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/google/btree v1.1.2 // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.14 // indirect
 	github.com/googleapis/gax-go/v2 v2.21.0 // indirect
+	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
+	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.8 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect

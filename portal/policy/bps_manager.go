@@ -1,20 +1,21 @@
 package policy
 
 import (
-	"maps"
 	"sync"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 type BPSManager struct {
-	identityBPS      map[string]int64
+	identityBPS      *utils.Snapshot[map[string]int64]
 	identityLimiters map[string]*bpsLimiter
 	mu               sync.RWMutex
 }
 
 func NewBPSManager() *BPSManager {
 	return &BPSManager{
-		identityBPS:      make(map[string]int64),
+		identityBPS:      utils.NewSnapshot(map[string]int64{}, utils.CloneMap[string, int64]),
 		identityLimiters: make(map[string]*bpsLimiter),
 	}
 }
@@ -23,10 +24,10 @@ func (m *BPSManager) IdentityBPS(key string) int64 {
 	if m == nil || key == "" {
 		return 0
 	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.identityBPS[key]
+	if m.identityBPS == nil {
+		return 0
+	}
+	return m.identityBPS.Load()[key]
 }
 
 func (m *BPSManager) SetIdentityBPS(key string, bps int64) {
@@ -34,14 +35,24 @@ func (m *BPSManager) SetIdentityBPS(key string, bps int64) {
 		return
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if bps <= 0 {
-		delete(m.identityBPS, key)
-		delete(m.identityLimiters, key)
+	if m.identityBPS == nil {
 		return
 	}
-	m.identityBPS[key] = bps
+	if bps <= 0 {
+		m.identityBPS.UpdateCopy(func(limits *map[string]int64) {
+			delete(*limits, key)
+		})
+		m.mu.Lock()
+		delete(m.identityLimiters, key)
+		m.mu.Unlock()
+		return
+	}
+	m.identityBPS.UpdateCopy(func(limits *map[string]int64) {
+		if *limits == nil {
+			*limits = make(map[string]int64)
+		}
+		(*limits)[key] = bps
+	})
 }
 
 func (m *BPSManager) DeleteIdentityBPS(key string) {
@@ -49,10 +60,14 @@ func (m *BPSManager) DeleteIdentityBPS(key string) {
 		return
 	}
 
+	if m.identityBPS != nil {
+		m.identityBPS.UpdateCopy(func(limits *map[string]int64) {
+			delete(*limits, key)
+		})
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.identityBPS, key)
 	delete(m.identityLimiters, key)
+	m.mu.Unlock()
 }
 
 func (m *BPSManager) IdentityBPSLimits() map[string]int64 {
@@ -60,12 +75,10 @@ func (m *BPSManager) IdentityBPSLimits() map[string]int64 {
 		return nil
 	}
 
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	out := make(map[string]int64, len(m.identityBPS))
-	maps.Copy(out, m.identityBPS)
-	return out
+	if m.identityBPS == nil {
+		return nil
+	}
+	return m.identityBPS.Load()
 }
 
 func (m *BPSManager) SetIdentityBPSLimits(limits map[string]int64) {
@@ -81,8 +94,10 @@ func (m *BPSManager) SetIdentityBPSLimits(limits map[string]int64) {
 		next[key] = bps
 	}
 
+	if m.identityBPS != nil {
+		m.identityBPS.Store(next)
+	}
 	m.mu.Lock()
-	m.identityBPS = next
 	m.identityLimiters = make(map[string]*bpsLimiter)
 	m.mu.Unlock()
 }
@@ -107,18 +122,22 @@ func (m *BPSManager) ThrottleIdentityBPS(key string, maxBytes int) int {
 }
 
 func (m *BPSManager) identityLimiter(key string) (int64, *bpsLimiter) {
+	bps := m.IdentityBPS(key)
+	if bps <= 0 {
+		return 0, nil
+	}
+
 	m.mu.RLock()
-	bps := m.identityBPS[key]
 	limiter := m.identityLimiters[key]
 	m.mu.RUnlock()
-	if bps <= 0 || limiter != nil {
+	if limiter != nil {
 		return bps, limiter
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	bps = m.identityBPS[key]
+	bps = m.IdentityBPS(key)
 	if bps <= 0 {
 		return 0, nil
 	}

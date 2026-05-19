@@ -39,6 +39,7 @@ type Exposure struct {
 	banMITM         bool
 	maxActiveRelays int
 	metadata        types.LeaseMetadata
+	cfg *utils.Snapshot[ExposeConfig]
 
 	accepted  chan net.Conn
 	datagrams chan types.DatagramFrame
@@ -87,6 +88,12 @@ func ValidatePepperMode(mode string) error {
 	default:
 		return fmt.Errorf("unsupported pepper mode %q: want active or passive", mode)
 	}
+func (cfg ExposeConfig) snapshot() ExposeConfig {
+	cfg.RelayURLs = utils.CloneSlice(cfg.RelayURLs)
+	cfg.Identity = cfg.Identity.Copy()
+	cfg.MultiHop = utils.CloneSlice(cfg.MultiHop)
+	cfg.Metadata = cfg.Metadata.Copy()
+	return cfg
 }
 
 // Expose creates relay listeners for the selected relay pool and exposes a
@@ -186,7 +193,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 			return nil, fmt.Errorf("invalid --udp-addr value %q: %w", cfg.UDPAddr, err)
 		}
 	}
-	runtimeCfg := cfg.clone()
+	runtimeCfg := cfg.snapshot()
 	runtimeCfg.RelayURLs = append([]string(nil), explicitRelayURLs...)
 	runtimeCfg.Identity = identity.Copy()
 	runtimeCfg.TargetAddr = targetAddr
@@ -211,7 +218,8 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		banMITM:         cfg.BanMITM,
 		maxActiveRelays: cfg.MaxActiveRelays,
 		metadata:        cfg.Metadata,
-		cfg:             runtimeCfg,
+		cfg:            utils.NewSnapshot(runtimeCfg, ExposeConfig.snapshot),
+    datagrams:      make(chan types.DatagramFrame, max(initialRouteCapacity(listenerRelayURLs, cfg.MultiHopDepth)*32, 1)),
 		accepted:        make(chan net.Conn, max(initialRouteCapacity(listenerRelayURLs, cfg.MultiHopDepth)*defaultReadyTarget*2, 1)),
 		datagrams:       make(chan types.DatagramFrame, max(initialRouteCapacity(listenerRelayURLs, cfg.MultiHopDepth)*32, 1)),
 		relaySet:        discovery.NewRelaySet(relaySetURLs),
@@ -266,11 +274,11 @@ func (e *Exposure) AddRelay(relayURL string) error {
 		return errors.New("exposure relay set is not initialized")
 	}
 
-	e.cfgMu.Lock()
-	if !slices.Contains(e.cfg.RelayURLs, relayURL) {
-		e.cfg.RelayURLs = append(append([]string(nil), e.cfg.RelayURLs...), relayURL)
-	}
-	e.cfgMu.Unlock()
+	e.cfg.UpdateCopy(func(cfg *ExposeConfig) {
+		if !slices.Contains(cfg.RelayURLs, relayURL) {
+			cfg.RelayURLs = append(cfg.RelayURLs, relayURL)
+		}
+	})
 
 	e.relaySet.AllowRelayURL(relayURL)
 	e.relaySet.AddBootstrapRelayURL(relayURL)
@@ -291,19 +299,21 @@ func (e *Exposure) RemoveRelay(relayURL string) error {
 		return errors.New("exposure relay set is not initialized")
 	}
 
-	e.cfgMu.Lock()
-	if slices.Contains(e.cfg.MultiHop, relayURL) {
-		e.cfgMu.Unlock()
+	if _, ok := e.cfg.UpdateIf(func(cfg ExposeConfig) (ExposeConfig, bool) {
+		if slices.Contains(cfg.MultiHop, relayURL) {
+			return cfg, false
+		}
+		nextRelays := cfg.RelayURLs[:0]
+		for _, existing := range cfg.RelayURLs {
+			if existing != relayURL {
+				nextRelays = append(nextRelays, existing)
+			}
+		}
+		cfg.RelayURLs = nextRelays
+		return cfg, true
+	}); !ok {
 		return errors.New("relay is part of the multi-hop route; clear multi-hop first")
 	}
-	nextRelays := make([]string, 0, len(e.cfg.RelayURLs))
-	for _, existing := range e.cfg.RelayURLs {
-		if existing != relayURL {
-			nextRelays = append(nextRelays, existing)
-		}
-	}
-	e.cfg.RelayURLs = nextRelays
-	e.cfgMu.Unlock()
 
 	e.relaySet.DeactivateRelayURL(relayURL)
 	e.relaySet.RemoveBootstrapRelayURL(relayURL)
@@ -325,7 +335,7 @@ func (e *Exposure) SetMultiHop(relayURLs []string) error {
 	if len(multiHop) == 1 {
 		return errors.New("multi-hop requires at least entry and exit relay urls")
 	}
-	cfg := e.config()
+	cfg := e.Config()
 	if len(multiHop) > 0 && (cfg.UDPEnabled || cfg.TCPEnabled) {
 		return errors.New("multi-hop currently supports only the default SNI TLS stream transport")
 	}
@@ -341,10 +351,10 @@ func (e *Exposure) SetMultiHop(relayURLs []string) error {
 		e.relaySet.AddBootstrapRelayURL(relayURL)
 	}
 
-	e.cfgMu.Lock()
-	e.cfg.MultiHop = append([]string(nil), multiHop...)
-	e.cfg.MultiHopDepth = 0
-	e.cfgMu.Unlock()
+	e.cfg.UpdateCopy(func(cfg *ExposeConfig) {
+		cfg.MultiHop = append([]string(nil), multiHop...)
+		cfg.MultiHopDepth = 0
+	})
 	return e.reconcileRelayListeners(false)
 }
 
@@ -353,9 +363,9 @@ func (e *Exposure) UpdateMetadata(metadata types.LeaseMetadata) error {
 		return net.ErrClosed
 	}
 
-	e.cfgMu.Lock()
-	e.cfg.Metadata = metadata.Copy()
-	e.cfgMu.Unlock()
+	e.cfg.UpdateCopy(func(cfg *ExposeConfig) {
+		cfg.Metadata = metadata.Copy()
+	})
 	return nil
 }
 
@@ -367,10 +377,13 @@ func (e *Exposure) UpdateMaxActiveRelays(maxActiveRelays int) error {
 		return net.ErrClosed
 	}
 
-	e.cfgMu.Lock()
-	changed := e.cfg.MaxActiveRelays != maxActiveRelays
-	e.cfg.MaxActiveRelays = maxActiveRelays
-	e.cfgMu.Unlock()
+	_, changed := e.cfg.UpdateIf(func(cfg ExposeConfig) (ExposeConfig, bool) {
+		if cfg.MaxActiveRelays == maxActiveRelays {
+			return cfg, false
+		}
+		cfg.MaxActiveRelays = maxActiveRelays
+		return cfg, true
+	})
 	if !changed {
 		return nil
 	}
@@ -422,7 +435,7 @@ func (e *Exposure) closed() bool {
 }
 
 func (e *Exposure) Addr() net.Addr {
-	identity := e.config().Identity
+	identity := e.Config().Identity
 	if identity.Address == "" {
 		return exposureAddr("portal:exposure")
 	}
@@ -435,11 +448,14 @@ func (a exposureAddr) Network() string { return "portal" }
 func (a exposureAddr) String() string  { return string(a) }
 
 func (e *Exposure) Config() ExposeConfig {
-	return e.config()
+	if e == nil || e.cfg == nil {
+		return ExposeConfig{}
+	}
+	return e.cfg.Load()
 }
 
 func (e *Exposure) Snapshot() types.AgentTunnelStatus {
-	cfg := e.config()
+	cfg := e.Config()
 	e.mu.RLock()
 	listeners := make([]*listener, 0, len(e.relayListeners))
 	for _, listener := range e.relayListeners {
@@ -521,7 +537,7 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 }
 
 func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
-	if !e.config().UDPEnabled {
+	if !e.Config().UDPEnabled {
 		return types.DatagramFrame{}, net.ErrClosed
 	}
 
@@ -534,7 +550,7 @@ func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
 }
 
 func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
-	if !e.config().UDPEnabled {
+	if !e.Config().UDPEnabled {
 		return net.ErrClosed
 	}
 
@@ -548,7 +564,7 @@ func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
 }
 
 func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
-	if !e.config().UDPEnabled {
+	if !e.Config().UDPEnabled {
 		return nil, errors.New("exposure does not have udp enabled")
 	}
 
@@ -873,7 +889,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	var multiHop []string
 	var listenerRelayURLs []string
 
-	cfg := e.config()
+	cfg := e.Config()
 	e.mu.Lock()
 	multiHop = append([]string(nil), cfg.MultiHop...)
 	if len(multiHop) > 0 {
@@ -960,12 +976,16 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			retryCount = -1
 		}
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
-			Identity:   e.identity,
-			UDPEnabled: e.udpEnabled,
-			TCPEnabled: e.tcpEnabled,
-			MultiHop:   multiHop,
+			Identity:   cfg.Identity.Copy(),
+			UDPEnabled: cfg.UDPEnabled,
+			TCPEnabled: cfg.TCPEnabled,
 			PepperMode: e.pepperMode,
-			BanMITM:    e.banMITM,
+			BanMITM:    cfg.BanMITM,
+			Identity:   cfg.Identity.Copy(),
+			Metadata: func() types.LeaseMetadata {
+				return e.Config().Metadata
+			},
+			MultiHop:   listenerMultiHop,
 			RetryCount: retryCount,
 			relaySet:   e.relaySet,
 		})
@@ -1058,17 +1078,15 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 		}
 
 		removedExplicit := false
-		e.cfgMu.Lock()
-		next := e.cfg.RelayURLs[:0]
-		for _, existing := range e.cfg.RelayURLs {
-			if existing == relayURL {
-				removedExplicit = true
-				continue
-			}
-			next = append(next, existing)
+		if e.cfg != nil {
+			_, removedExplicit = e.cfg.UpdateIf(func(cfg ExposeConfig) (ExposeConfig, bool) {
+				if !slices.Contains(cfg.RelayURLs, relayURL) {
+					return cfg, false
+				}
+				cfg.RelayURLs = utils.RemoveRelayURL(cfg.RelayURLs, relayURL)
+				return cfg, true
+			})
 		}
-		e.cfg.RelayURLs = next
-		e.cfgMu.Unlock()
 
 		if removedExplicit && e.relaySet != nil {
 			e.relaySet.DeactivateRelayURL(relayURL)

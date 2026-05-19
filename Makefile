@@ -1,4 +1,4 @@
-.PHONY: help install fmt vet lint lint-auto test test-local-multihop vuln tidy all run build build-frontend build-docs build-tunnel build-server clean load-test
+.PHONY: help install fmt vet lint lint-auto test vuln tidy all run build build-frontend build-docs build-tunnel build-server clean load-test
 
 .DEFAULT_GOAL := help
 
@@ -15,8 +15,7 @@ help:
 	@echo "  make install           - Install Go developer tools used by this repo"
 	@echo "  make fmt               - Apply gofmt/goimports"
 	@echo "  make lint-auto         - Run autofix lint/format pipeline"
-	@echo "  make test              - Run Go tests, including the local multi-hop harness"
-	@echo "  make test-local-multihop - Run the focused local multi-hop relay harness"
+	@echo "  make test              - Run Go tests"
 	@echo "  make build             - Build everything (frontend, tunnel, server)"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-docs        - Build documentation site (SvelteKit)"
@@ -47,9 +46,6 @@ lint-auto:
 
 test:
 	go test -v -coverprofile=coverage.out $(GO_PACKAGES)
-
-test-local-multihop:
-	go test -v ./portal -run 'TestLocalCluster'
 
 vuln:
 	govulncheck $(GO_PACKAGES)

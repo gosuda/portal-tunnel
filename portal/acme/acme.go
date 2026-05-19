@@ -54,12 +54,14 @@ type Config struct {
 	CloudflareToken    string
 	GCPProjectID       string
 	GCPManagedZone     string
+	HetznerAPIToken    string
 	AWSAccessKeyID     string
 	AWSSecretAccessKey string
 	AWSSessionToken    string
 	AWSRegion          string
 	AWSHostedZoneID    string
 	AWSKMSKeyARN       string
+	VultrAPIKey        string
 }
 
 type Manager struct {
@@ -71,8 +73,7 @@ type Manager struct {
 	stopOnce      sync.Once
 	dnssecLogOnce sync.Once
 	ensLogOnce    sync.Once
-	ensStatusMu   sync.RWMutex
-	ensStatus     types.ENSStatus
+	ensStatus     *utils.Snapshot[types.ENSStatus]
 	trackedMu     sync.Mutex
 	echMu         sync.Mutex
 	echRecords    map[string]HTTPSRecord
@@ -156,12 +157,14 @@ func NewManager(cfg Config) (*Manager, error) {
 	cfg.CloudflareToken = strings.TrimSpace(cfg.CloudflareToken)
 	cfg.GCPProjectID = strings.TrimSpace(cfg.GCPProjectID)
 	cfg.GCPManagedZone = strings.TrimSpace(cfg.GCPManagedZone)
+	cfg.HetznerAPIToken = strings.TrimSpace(cfg.HetznerAPIToken)
 	cfg.AWSAccessKeyID = strings.TrimSpace(cfg.AWSAccessKeyID)
 	cfg.AWSSecretAccessKey = strings.TrimSpace(cfg.AWSSecretAccessKey)
 	cfg.AWSSessionToken = strings.TrimSpace(cfg.AWSSessionToken)
 	cfg.AWSRegion = strings.TrimSpace(cfg.AWSRegion)
 	cfg.AWSHostedZoneID = strings.TrimSpace(cfg.AWSHostedZoneID)
 	cfg.AWSKMSKeyARN = strings.TrimSpace(cfg.AWSKMSKeyARN)
+	cfg.VultrAPIKey = strings.TrimSpace(cfg.VultrAPIKey)
 	if cfg.ENSGaslessEnabled {
 		if cfg.ENSGaslessAddress == "" {
 			return nil, errors.New("ens gasless address is required when ens gasless import is enabled")
@@ -183,14 +186,14 @@ func NewManager(cfg Config) (*Manager, error) {
 		return &Manager{
 			cfg:       cfg,
 			stopCh:    make(chan struct{}),
-			ensStatus: newENSStatus(cfg, nil),
+			ensStatus: utils.NewSnapshot(newENSStatus(cfg, nil)),
 		}, nil
 	}
 
 	manager := &Manager{
 		cfg:       cfg,
 		stopCh:    make(chan struct{}),
-		ensStatus: newENSStatus(cfg, nil),
+		ensStatus: utils.NewSnapshot(newENSStatus(cfg, nil)),
 	}
 
 	acmeDNS, err := NewDNSProvider(cfg.DNSProvider, cfg)
@@ -222,9 +225,10 @@ func (m *Manager) ENSStatus() types.ENSStatus {
 	if m == nil {
 		return types.ENSStatus{}
 	}
-	m.ensStatusMu.RLock()
-	status := m.ensStatus
-	m.ensStatusMu.RUnlock()
+	status := types.ENSStatus{}
+	if m.ensStatus != nil {
+		status = m.ensStatus.Load()
+	}
 	if status.Provider == "" && m.dns != nil {
 		status.Provider = m.dns.Name()
 	}
@@ -244,9 +248,11 @@ func (m *Manager) setENSStatus(state, record, message string, syncErr error) {
 		status.LastError = syncErr.Error()
 	}
 
-	m.ensStatusMu.Lock()
-	m.ensStatus = status
-	m.ensStatusMu.Unlock()
+	if m.ensStatus == nil {
+		m.ensStatus = utils.NewSnapshot(status)
+		return
+	}
+	m.ensStatus.Store(status)
 }
 
 func ensDNSSECVerified(state string) bool {

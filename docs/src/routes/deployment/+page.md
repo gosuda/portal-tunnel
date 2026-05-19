@@ -19,7 +19,7 @@ You need:
 - A public domain, for example `example.com`
 - A public Linux server with a static public IPv4
 - Docker and Docker Compose
-- Optional for managed ACME DNS-01 automation, Portal-managed ECH HTTPS records, or Portal-managed ENS TXT sync: a supported DNS provider account for `cloudflare`, `gcloud`, or `route53`
+- Optional for managed ACME DNS-01 automation and Portal-managed ECH HTTPS records: a supported DNS provider account for `cloudflare`, `gcloud`, `hetzner`, `route53`, or `vultr`
 - Open inbound ports:
   - `443/tcp`
   - `4017/tcp`
@@ -39,12 +39,12 @@ Choose one of these modes:
   - Portal uses the files as-is and does not modify DNS or renew the certificate.
 - Manual certificate + gasless mode
   - Place `fullchain.pem` and `privatekey.pem` in `IDENTITY_PATH`.
-  - Set `ACME_DNS_PROVIDER`.
+  - Set `ACME_DNS_PROVIDER` to a DNSSEC-capable provider.
   - Portal keeps the manual certificate files, skips ACME certificate issuance, and still uses the provider for ECH HTTPS records and DNSSEC + ENS TXT automation.
 - Managed ACME mode
-  - Set `ACME_DNS_PROVIDER` to `cloudflare`, `gcloud`, or `route53`.
+  - Set `ACME_DNS_PROVIDER` to `cloudflare`, `gcloud`, `hetzner`, `route53`, or `vultr`.
   - Portal manages root/wildcard A records, ECH HTTPS records, and certificate renewal.
-  - If ENS gasless is enabled, Portal also manages DNSSEC.
+  - ENS gasless additionally requires a DNSSEC-capable provider.
 
 If you only need a relay and do not need Portal-managed DNS or automatic renewal, manual certificate mode is the simplest option.
 
@@ -56,7 +56,9 @@ Set `ACME_DNS_PROVIDER` to one of:
 
 - `cloudflare`
 - `gcloud`
+- `hetzner`
 - `route53`
+- `vultr`
 
 For a focused explanation of wallet auth and ENS gasless DNS behavior, see
 [Wallet and ENS](/wallet-and-ens).
@@ -163,7 +165,42 @@ Notes:
 - `GOOGLE_APPLICATION_CREDENTIALS` should point to the in-container path when you run Portal in Docker with a mounted service account JSON file.
 - Portal only targets public Cloud DNS managed zones.
 
-### 3.5 Optional ENS Gasless Automation
+### 3.5 Hetzner DNS setup
+
+Create or select a Hetzner DNS zone that covers your relay host in Hetzner Console.
+
+Required environment variable:
+
+- `HETZNER_API_TOKEN`
+
+Equivalent relay flag:
+
+- `--hetzner-api-token`
+
+Notes:
+
+- The token needs permission to list DNS zones and edit RRSets for the target zone.
+- Hetzner uses `@` for apex records and relative names such as `www` or `*` for subdomains.
+- Hetzner DNS does not support provider-side DNSSEC signing, so ENS gasless automation is not supported with `ACME_DNS_PROVIDER=hetzner`.
+
+### 3.6 Vultr DNS setup
+
+Create or select a Vultr DNS domain that covers your relay host.
+
+Required environment variable:
+
+- `VULTR_API_KEY`
+
+Equivalent relay flag:
+
+- `--vultr-api-key`
+
+Notes:
+
+- The API key needs permission to list DNS domains, edit DNS records, and update DNSSEC for the target domain.
+- Vultr uses `@` for apex records and relative names such as `www` or `*` for subdomains.
+
+### 3.7 Optional ENS Gasless Automation
 
 Portal can optionally enable ENS gasless DNS import for the base domain and lease hostnames.
 
@@ -175,6 +212,7 @@ Portal can optionally enable ENS gasless DNS import for the base domain and leas
 - Cloudflare can enable zone signing directly, but some registrars still require publishing the returned DS record.
 - Google Cloud DNS can enable zone signing directly, but the registrar may still require publishing the returned DS record.
 - Route53 requires a compatible KMS key ARN when no active KSK already exists, and the registrar may still require the DS record.
+- Vultr can enable zone signing directly, but the registrar may still require publishing the returned DS record.
 - New lease hostnames such as `app.portal.example.com` are published automatically when they register and are cleaned up on unregister or expiry.
 - ENS gasless import still depends on DNSSEC being valid for the domain.
 - By default Portal writes `ENS1 0x238A8F792dFA6033814B18618aD4100654aeef01 <address>`.
@@ -188,20 +226,20 @@ Typical rollout:
 1. Set `ACME_DNS_PROVIDER` and the provider credentials.
 2. Set `ENS_GASLESS_ENABLED=true`.
 3. Start Portal and confirm the log contains both `dnssec configured` and `ens gasless dns import configured`.
-4. If the DNSSEC state is `pending`, publish the returned `DS` record at your registrar and wait for propagation.
-5. Re-check until the provider DNSSEC state becomes `active`.
+4. If the DNSSEC state is `pending` or the provider returns a `DS` record, publish the returned `DS` record at your registrar and wait for propagation.
+5. Re-check until the provider DNSSEC state becomes `active` or `enabled`.
 6. Verify external resolution with an ENS-aware client after DNSSEC is active.
 
 Registrar DS publication:
 
-- Cloudflare, Google Cloud DNS, and Route53 can sign the zone and return the DS record, but they do not control your registrar unless the domain is registered with the same provider.
+- Cloudflare, Google Cloud DNS, Route53, and Vultr can sign the zone and return the DS record, but they do not control your registrar unless the domain is registered with the same provider.
 - If your registrar is separate, you must copy the DS values from the provider into the registrar's DNSSEC or DS configuration screen.
 - Example: if the domain is registered at Namecheap and delegated to Cloudflare nameservers, enable DNSSEC in Cloudflare first, then add the Cloudflare DS record in Namecheap under the domain's `Advanced DNS` DNSSEC section.
 - Until the registrar publishes the DS record at the parent zone, provider status typically stays `pending` and ENS gasless resolution may fail even though Portal already wrote the `ENS1 ...` TXT record.
 
 Verification checklist:
 
-- Provider DNSSEC status is `active`.
+- Provider DNSSEC status is `active` or `enabled`.
 - `dig +short DS example.com` returns the DS record from the parent zone.
 - `dig +short TXT example.com` returns the `ENS1 ...` TXT record.
 - ENS-aware resolution returns the expected address for the base domain and each lease hostname.
@@ -287,6 +325,24 @@ GCP_PROJECT_ID=my-gcp-project
 GCP_MANAGED_ZONE=portal-example-com
 # Standard ADC when using a mounted service account file.
 GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-dns.json
+ENS_GASLESS_ENABLED=false
+```
+
+Vultr example:
+
+```bash
+IDENTITY_PATH=/portal-certs
+ACME_DNS_PROVIDER=vultr
+VULTR_API_KEY=...
+ENS_GASLESS_ENABLED=false
+```
+
+Hetzner example:
+
+```bash
+IDENTITY_PATH=/portal-certs
+ACME_DNS_PROVIDER=hetzner
+HETZNER_API_TOKEN=...
 ENS_GASLESS_ENABLED=false
 ```
 

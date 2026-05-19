@@ -13,7 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	portalauth "github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -31,7 +31,7 @@ func Run(ctx context.Context, cfg Config) error {
 	defer cancel()
 
 	manager := newManager(cfg, "")
-	walletAuth, err := portalauth.NewWalletAuthenticator(portalauth.WalletAuthConfig{
+	walletAuth, err := auth.NewWalletAuthenticator(auth.WalletAuthConfig{
 		AllowedAddresses: cfg.Agent.AllowedWallets,
 		AllowAnyAddress:  len(cfg.Agent.AllowedWallets) == 0,
 		Statement:        "Sign in to Portal agent",

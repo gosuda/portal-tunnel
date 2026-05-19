@@ -411,6 +411,7 @@ func (m *manager) ApplyConfig(cfg Config) error {
 
 func (m *manager) Snapshot() types.AgentStatusResponse {
 	m.mu.RLock()
+	configPath := m.cfg.sourcePath
 	tunnels := make([]*managedTunnel, 0, len(m.tunnels))
 	for _, tunnel := range m.tunnels {
 		tunnels = append(tunnels, tunnel)
@@ -426,7 +427,7 @@ func (m *manager) Snapshot() types.AgentStatusResponse {
 	})
 
 	return types.AgentStatusResponse{
-		ConfigPath:  m.cfg.sourcePath,
+		ConfigPath:  configPath,
 		ControlAddr: m.controlAddr,
 		Tunnels:     statuses,
 	}
@@ -521,8 +522,8 @@ func (t *managedTunnel) SetMultiHop(relayURLs []string) error {
 
 func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays bool) error {
 	t.mu.RLock()
-	cfg := t.cfg
 	exposure := t.exposure
+	cfg := t.cfg
 	t.mu.RUnlock()
 	if exposure == nil {
 		return nil

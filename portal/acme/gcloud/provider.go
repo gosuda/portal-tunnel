@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -32,9 +31,8 @@ type Config struct {
 }
 
 type Provider struct {
-	cfg    Config
-	zoneMu sync.RWMutex
-	zones  map[string]string
+	cfg   Config
+	zones *utils.Snapshot[map[string]string]
 }
 
 type runtimeConfig struct {
@@ -49,6 +47,7 @@ func New(cfg Config) *Provider {
 			ProjectID:   strings.TrimSpace(cfg.ProjectID),
 			ManagedZone: strings.TrimSpace(cfg.ManagedZone),
 		},
+		zones: utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
 	}
 }
 
@@ -436,14 +435,12 @@ func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, pr
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
 
-	p.zoneMu.RLock()
+	zones := p.zones.Load()
 	for _, candidate := range candidates {
-		if zoneName := p.zones[candidate]; zoneName != "" {
-			p.zoneMu.RUnlock()
+		if zoneName := zones[candidate]; zoneName != "" {
 			return &dns.ManagedZone{Name: zoneName, DnsName: fqdn(candidate)}, nil
 		}
 	}
-	p.zoneMu.RUnlock()
 
 	if explicit = strings.TrimSpace(explicit); explicit != "" {
 		zone, err := service.ManagedZones.Get(projectID, explicit).Context(ctx).Do()
@@ -454,12 +451,12 @@ func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, pr
 			return nil, err
 		}
 		if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain != "" && zone.Name != "" {
-			p.zoneMu.Lock()
-			if p.zones == nil {
-				p.zones = make(map[string]string)
-			}
-			p.zones[zoneDomain] = zone.Name
-			p.zoneMu.Unlock()
+			p.zones.UpdateCopy(func(zones *map[string]string) {
+				if *zones == nil {
+					*zones = make(map[string]string)
+				}
+				(*zones)[zoneDomain] = zone.Name
+			})
 		}
 		return zone, nil
 	}
@@ -474,12 +471,12 @@ func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, pr
 				continue
 			}
 			if zone.Name != "" {
-				p.zoneMu.Lock()
-				if p.zones == nil {
-					p.zones = make(map[string]string)
-				}
-				p.zones[candidate] = zone.Name
-				p.zoneMu.Unlock()
+				p.zones.UpdateCopy(func(zones *map[string]string) {
+					if *zones == nil {
+						*zones = make(map[string]string)
+					}
+					(*zones)[candidate] = zone.Name
+				})
 			}
 			return zone, nil
 		}
