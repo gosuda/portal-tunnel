@@ -49,7 +49,7 @@ The relay server (`relay-server`) reads configuration from environment variables
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (`cloudflare` \| `gcloud` \| `hetzner` \| `route53` \| `vultr`); leave empty to use manual `fullchain.pem`/`privatekey.pem` from `IDENTITY_PATH` |
+| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (`cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); leave empty to use manual `fullchain.pem`/`privatekey.pem` from `IDENTITY_PATH` |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames |
 
 ### Admin
@@ -101,6 +101,12 @@ The relay server (`relay-server`) reads configuration from environment variables
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `VULTR_API_KEY` | | string | Vultr API key for DNS automation; required when `ACME_DNS_PROVIDER=vultr` |
+
+### Njalla
+
+| Variable | Default | Type | Description |
+|----------|---------|------|-------------|
+| `NJALLA_TOKEN` | | string | Njalla API token for DNS automation; required when `ACME_DNS_PROVIDER=njalla` |
 
 ---
 
@@ -298,6 +304,14 @@ For ENS gasless behavior and wallet authentication details, see [Wallet and ENS]
 | `HETZNER_API_TOKEN` | Yes | Hetzner Cloud API token with DNS zone and RRSet write access |
 
 Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PROVIDER=hetzner` supports ACME, A records, and HTTPS/ECH records, but not ENS gasless DNSSEC automation.
+
+### Njalla DNS (`njalla`)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NJALLA_TOKEN` | Yes | Njalla API token with DNS record write access |
+
+Note: `ACME_DNS_PROVIDER=njalla` supports ACME, A records, and HTTPS/ECH records, but not ENS gasless DNSSEC automation.
 
 ### Vultr DNS (`vultr`)
 

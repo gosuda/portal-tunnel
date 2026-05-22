@@ -150,7 +150,7 @@ Requirements:
 - `ENS_GASLESS_ENABLED=true`
 - DNSSEC active at the parent zone
 
-Hetzner is supported for managed ACME DNS automation, but not for ENS gasless automation because Hetzner DNS does not support provider-side DNSSEC signing.
+Hetzner and Njalla are supported for managed ACME DNS automation, but not for ENS gasless automation because their Portal providers do not support provider-side DNSSEC signing.
 
 Example:
 

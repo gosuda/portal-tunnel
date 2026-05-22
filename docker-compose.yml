@@ -69,6 +69,7 @@ services:
       AWS_HOSTED_ZONE_ID: ${AWS_HOSTED_ZONE_ID:-}
       AWS_DNSSEC_KMS_KEY_ARN: ${AWS_DNSSEC_KMS_KEY_ARN:-}
       VULTR_API_KEY: ${VULTR_API_KEY:-}
+      NJALLA_TOKEN: ${NJALLA_TOKEN:-}
     volumes:
       - ./.portal-certs:${IDENTITY_PATH:-/portal-certs}
       # Uncomment when using a Google Cloud service account file for gcloud automation.
