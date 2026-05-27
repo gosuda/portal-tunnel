@@ -113,7 +113,7 @@ func TestHTPVerifierAcceptsValidPacket(t *testing.T) {
 	}
 }
 
-func TestHTPVerifierFilters(t *testing.T) {
+func TestHTPVerifierRejections(t *testing.T) {
 	t.Parallel()
 
 	const (

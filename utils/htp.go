@@ -109,21 +109,20 @@ func ComputeHTPCheck(timestamp uint32, nonce uint32, S uint32) uint8 {
 	return uint8(check & 0xFF)
 }
 
-// VerifyHTPPacket performs full inbound verification (Filters Alpha, Beta, Gamma).
-//
-//   Filter Alpha: Reconstruct the HTP grid and verify the modular congruence.
-//   Filter Beta:  Ensure the nonce is strictly greater than the highest seen nonce.
-//   Filter Gamma: Ensure |serverTime - packetTime| <= 1 second.
+// VerifyHTPPacket performs full inbound verification:
+//   1. Reconstruct the HTP grid and verify the modular congruence.
+//   2. Ensure the nonce is strictly greater than the highest seen nonce.
+//   3. Ensure |serverTime - packetTime| <= 1 second.
 func (v *HTPVerifier) VerifyHTPPacket(vRot uint64, now time.Time) error {
 	vRaw := DeobfuscatePacket(vRot, v.ShiftK)
 	timestamp, nonce, htpCheck := UnpackHTPBlock(vRaw)
 
-	// Filter Alpha — Mathematical Congruence Check.
+	// Mathematical Congruence Check.
 	if ComputeHTPCheck(timestamp, nonce, v.S) != htpCheck {
 		return ErrHTPCongruence
 	}
 
-	// Filter Beta — Anti-Replay Verification.
+	// Anti-Replay Verification.
 	v.mu.Lock()
 	if nonce <= v.maxNonce {
 		v.mu.Unlock()
@@ -132,7 +131,7 @@ func (v *HTPVerifier) VerifyHTPPacket(vRot uint64, now time.Time) error {
 	v.maxNonce = nonce
 	v.mu.Unlock()
 
-	// Filter Gamma — Temporal Delta Validation.
+	// Temporal Delta Validation.
 	pktTime := time.Unix(int64(timestamp), 0)
 	delta := now.Sub(pktTime)
 	if delta < 0 {
