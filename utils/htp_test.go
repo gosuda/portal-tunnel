@@ -148,7 +148,7 @@ func TestHTPVerifierRejections(t *testing.T) {
 	}
 
 	// Stale timestamp → temporal failure.
-	oldTimestamp := uint32(now.Add(-2 * time.Second).Unix())
+	oldTimestamp := uint32(now.Add(-6 * time.Second).Unix())
 	oldCheck := ComputeHTPCheck(oldTimestamp, nonce+2, S)
 	oldRaw := PackHTPBlock(oldTimestamp, nonce+2, oldCheck)
 	oldRot := ObfuscatePacket(oldRaw, shiftK)
