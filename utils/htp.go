@@ -137,7 +137,7 @@ func (v *HTPVerifier) VerifyHTPPacket(vRot uint64, now time.Time) error {
 	if delta < 0 {
 		delta = -delta
 	}
-	if delta > time.Second {
+	if delta > 5*time.Second {
 		return ErrHTPTemporal
 	}
 
