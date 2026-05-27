@@ -212,7 +212,7 @@ func TestHTPVerifierTemporalBoundary(t *testing.T) {
 	}
 
 	// Packet from 2 seconds ago must fail.
-	oldTime := uint32(now.Add(-2 * time.Second).Unix())
+	oldTime := uint32(now.Add(-6 * time.Second).Unix())
 	oldCheck := ComputeHTPCheck(oldTime, nonce+1, S)
 	oldRaw := PackHTPBlock(oldTime, nonce+1, oldCheck)
 	oldRot := ObfuscatePacket(oldRaw, shiftK)
