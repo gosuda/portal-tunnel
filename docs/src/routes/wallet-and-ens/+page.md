@@ -150,7 +150,7 @@ Requirements:
 - `ENS_GASLESS_ENABLED=true`
 - DNSSEC active at the parent zone
 
-Hetzner and Njalla are supported for managed ACME DNS automation, but not for ENS gasless automation because their Portal providers do not support provider-side DNSSEC signing.
+Hetzner and Njalla are supported for managed ACME DNS automation, but not for ENS gasless automation because Portal does not automate DNSSEC signing for those providers.
 
 Example:
 
@@ -235,6 +235,6 @@ A lease hostname has no ENS TXT record:
 
 ## Next Steps
 
-- [Deployment](/deployment#35-optional-ens-gasless-automation): production setup
+- [Deployment](/deployment#38-optional-ens-gasless-automation): production setup
 - [Security Model](/security-model): identity and TLS trust boundaries
 - [Portal Agent](/portal-agent): local durable tunnel management

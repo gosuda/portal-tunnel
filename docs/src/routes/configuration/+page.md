@@ -311,7 +311,7 @@ Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PR
 |----------|----------|-------------|
 | `NJALLA_TOKEN` | Yes | Njalla API token with DNS record write access |
 
-Note: `ACME_DNS_PROVIDER=njalla` supports ACME, A records, and HTTPS/ECH records, but not ENS gasless DNSSEC automation.
+Note: Njalla supports managed ACME, A records, TXT records, and HTTPS/ECH records. Portal does not automate Njalla DNSSEC signing, so `ACME_DNS_PROVIDER=njalla` does not support ENS gasless DNSSEC automation.
 
 ### Vultr DNS (`vultr`)
 

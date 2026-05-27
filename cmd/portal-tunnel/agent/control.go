@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,7 +22,10 @@ const (
 	agentCookieName         = "portal_agent"
 )
 
-var controlHTTPClient = utils.NewHTTPClient(utils.WithHTTPTimeout(5 * time.Second))
+var (
+	ErrNotRunning     = errors.New("portal agent is not running")
+	controlHTTPClient = utils.NewHTTPClient(utils.WithHTTPTimeout(5 * time.Second))
+)
 
 type endpoint struct {
 	ControlAddr string `json:"control_addr"`
@@ -330,6 +335,9 @@ func controlRequest(ctx context.Context, stateDir, method, path string, payload 
 	}
 	var endpoint endpoint
 	if err := utils.ReadJSONFile(filepath.Join(stateDir, endpointFilename), &endpoint); err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotRunning
+		}
 		return err
 	}
 	if strings.TrimSpace(endpoint.ControlAddr) == "" || strings.TrimSpace(endpoint.Token) == "" {
@@ -340,5 +348,14 @@ func controlRequest(ctx context.Context, stateDir, method, path string, payload 
 		return err
 	}
 	headers := http.Header{"Authorization": []string{"Bearer " + endpoint.Token}}
-	return utils.HTTPDoAPIPath(ctx, controlHTTPClient, baseURL, method, path, payload, headers, out)
+	err = utils.HTTPDoAPIPath(ctx, controlHTTPClient, baseURL, method, path, payload, headers, out)
+	if controlDialError(err) {
+		return ErrNotRunning
+	}
+	return err
+}
+
+func controlDialError(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }

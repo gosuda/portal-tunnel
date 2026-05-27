@@ -242,17 +242,26 @@ func runAgentStopCommand(args []string) error {
 	if stateDir != "" {
 		cfg.Agent.StateDir = stateDir
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	shutdownErr := agent.Shutdown(ctx, cfg.Agent.StateDir)
-	if err := service.StopDisable(ctx, cfg.Agent.ServiceName); err != nil {
-		if shutdownErr == nil {
-			fmt.Fprintf(os.Stderr, "Warning: agent stopped, but service manager cleanup failed: %v\n", err)
-			fmt.Fprintln(os.Stdout, "Portal agent stopped.")
-			return nil
+	serviceErr := service.StopDisable(ctx, cfg.Agent.ServiceName)
+	if errors.Is(shutdownErr, agent.ErrNotRunning) {
+		if serviceErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: agent is not running, but service manager cleanup failed: %v\n", serviceErr)
 		}
-		return fmt.Errorf("stop portal agent service: %w", err)
+		fmt.Fprintln(os.Stdout, "Portal agent is not running.")
+		return nil
+	}
+	if shutdownErr != nil {
+		return fmt.Errorf("stop portal agent: %w", errors.Join(shutdownErr, serviceErr))
+	}
+	if err := waitAgentStopped(ctx, cfg.Agent.StateDir); err != nil {
+		return fmt.Errorf("stop portal agent: %w", errors.Join(err, serviceErr))
+	}
+	if serviceErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: agent stopped, but service manager cleanup failed: %v\n", serviceErr)
 	}
 	fmt.Fprintln(os.Stdout, "Portal agent stopped.")
 	return nil

@@ -215,9 +215,9 @@ Equivalent relay flag:
 
 Notes:
 
-- The token needs permission to list, add, and remove DNS records for the target domain.
-- Njalla uses an empty name for apex records and relative names such as `www` or `*` for subdomains.
-- ENS gasless automation is not supported with `ACME_DNS_PROVIDER=njalla`.
+- The token needs permission to list and edit DNS records for the target domain.
+- Njalla uses `@` for apex records and relative names such as `www` or `*` for subdomains.
+- Portal does not automate Njalla DNSSEC signing, so ENS gasless automation is not supported with `ACME_DNS_PROVIDER=njalla`.
 
 ### 3.8 Optional ENS Gasless Automation
 
@@ -232,6 +232,7 @@ Portal can optionally enable ENS gasless DNS import for the base domain and leas
 - Google Cloud DNS can enable zone signing directly, but the registrar may still require publishing the returned DS record.
 - Route53 requires a compatible KMS key ARN when no active KSK already exists, and the registrar may still require the DS record.
 - Vultr can enable zone signing directly, but the registrar may still require publishing the returned DS record.
+- Hetzner and Njalla are supported for managed ACME DNS automation, but not for ENS gasless automation.
 - New lease hostnames such as `app.portal.example.com` are published automatically when they register and are cleaned up on unregister or expiry.
 - ENS gasless import still depends on DNSSEC being valid for the domain.
 - By default Portal writes `ENS1 0x238A8F792dFA6033814B18618aD4100654aeef01 <address>`.
