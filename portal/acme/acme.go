@@ -76,6 +76,7 @@ type Manager struct {
 	ensLogOnce    sync.Once
 	ensStatus     *utils.Snapshot[types.ENSStatus]
 	trackedMu     sync.Mutex
+	ensRecords    map[string]string
 	echMu         sync.Mutex
 	echRecords    map[string]HTTPSRecord
 }
@@ -285,7 +286,7 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 		return "", "", err
 	}
 	if manual {
-		if err := m.syncENSGasless(ctx); err != nil {
+		if err := m.syncDNS(ctx); err != nil {
 			return "", "", err
 		}
 		return certFile, keyFile, nil
@@ -335,6 +336,7 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 
 	m.startOnce.Do(func() {
+		m.loadENSRecords()
 		m.wg.Add(1)
 		go m.maintenanceLoop(ctx)
 	})
@@ -466,7 +468,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			return
 		case <-dnsTicker.C:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err := errors.Join(m.syncDNS(syncCtx), m.syncECHRecords(syncCtx))
+			err := m.syncDNS(syncCtx)
 			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
@@ -490,7 +492,7 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
-	if err := m.syncENSGasless(ctx); err != nil {
+	if err := m.ensureDNSSEC(ctx); err != nil {
 		return err
 	}
 	_, _, manual, err := m.manualCertificateOverride()
@@ -498,6 +500,11 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 		return err
 	}
 	if manual || !m.managedACME() {
+		if m.cfg.ENSGaslessEnabled && m.dns != nil {
+			if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -505,8 +512,44 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("detect public ip: %w", err)
 	}
+	if err := m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP); err != nil {
+		return err
+	}
 
-	return m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP)
+	if m.cfg.ENSGaslessEnabled {
+		if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
+			return err
+		}
+	}
+
+	m.echMu.Lock()
+	echCopy := make(map[string]HTTPSRecord, len(m.echRecords))
+	for h, r := range m.echRecords {
+		echCopy[h] = r
+	}
+	m.echMu.Unlock()
+
+	m.trackedMu.Lock()
+	ensCopy := make(map[string]string, len(m.ensRecords))
+	for h, a := range m.ensRecords {
+		ensCopy[h] = a
+	}
+	m.trackedMu.Unlock()
+
+	seen := make(map[string]struct{})
+	for h := range echCopy {
+		seen[h] = struct{}{}
+	}
+	for h := range ensCopy {
+		seen[h] = struct{}{}
+	}
+	var syncErr error
+	for hostname := range seen {
+		if err := m.syncHostnameDNS(ctx, hostname); err != nil {
+			syncErr = errors.Join(syncErr, err)
+		}
+	}
+	return syncErr
 }
 
 func (m *Manager) SyncECHConfig(ctx context.Context, hostname string, echConfigList []byte, port int) error {
@@ -537,11 +580,6 @@ func (m *Manager) SyncECHConfig(ctx context.Context, hostname string, echConfigL
 	if err != nil {
 		return err
 	}
-	content, err := record.Content()
-	if err != nil {
-		return err
-	}
-	svcParams := record.SvcParams()
 
 	m.echMu.Lock()
 	if m.echRecords == nil {
@@ -550,18 +588,7 @@ func (m *Manager) SyncECHConfig(ctx context.Context, hostname string, echConfigL
 	m.echRecords[hostname] = record
 	m.echMu.Unlock()
 
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
-	if err != nil {
-		return fmt.Errorf("detect public ip for ECH hostname %s: %w", hostname, err)
-	}
-	if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-		return fmt.Errorf("ensure ECH A record for %s: %w", hostname, err)
-	}
-
-	if err := m.dns.EnsureHTTPSRecord(ctx, hostname, record.Priority, record.Target, svcParams, content); err != nil {
-		return err
-	}
-	return nil
+	return m.syncHostnameDNS(ctx, hostname)
 }
 
 func (m *Manager) DeleteECHConfig(ctx context.Context, hostname string) error {
@@ -579,104 +606,11 @@ func (m *Manager) DeleteECHConfig(ctx context.Context, hostname string) error {
 		return nil
 	}
 
-	if err := m.dns.DeleteHTTPSRecord(ctx, hostname); err != nil {
-		return err
-	}
-	if hostname != m.cfg.BaseDomain {
-		if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
-			return fmt.Errorf("delete ECH A record for %s: %w", hostname, err)
-		}
-	}
-
 	m.echMu.Lock()
 	delete(m.echRecords, hostname)
 	m.echMu.Unlock()
-	return nil
-}
 
-func (m *Manager) syncECHRecords(ctx context.Context) error {
-	if m == nil || m.dns == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
-		return nil
-	}
-
-	m.echMu.Lock()
-	records := make(map[string]HTTPSRecord, len(m.echRecords))
-	for hostname, record := range m.echRecords {
-		records[hostname] = record
-	}
-	m.echMu.Unlock()
-
-	var syncErr error
-	publicIP := ""
-	if len(records) > 0 {
-		var err error
-		publicIP, err = utils.ResolvePublicIPv4(ctx)
-		if err != nil {
-			return fmt.Errorf("detect public ip for ECH records: %w", err)
-		}
-	}
-	for hostname, record := range records {
-		if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ECH A record for %s: %w", hostname, err))
-			continue
-		}
-		content, err := record.Content()
-		if err != nil {
-			syncErr = errors.Join(syncErr, fmt.Errorf("build ECH HTTPS record for %s: %w", hostname, err))
-			continue
-		}
-		if err := m.dns.EnsureHTTPSRecord(ctx, hostname, record.Priority, record.Target, record.SvcParams(), content); err != nil {
-			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ECH HTTPS record for %s: %w", hostname, err))
-		}
-	}
-	return syncErr
-}
-
-func (m *Manager) syncENSGasless(ctx context.Context) error {
-	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
-		return nil
-	}
-	if m.dns == nil {
-		return errors.New("ACME_DNS_PROVIDER is required")
-	}
-
-	state, dsRecord, message, err := m.dns.EnsureDNSSEC(ctx, m.cfg.BaseDomain)
-	if err != nil {
-		m.setENSStatus("", "", "", err)
-		return fmt.Errorf("ensure dnssec: %w", err)
-	}
-	m.dnssecLogOnce.Do(func() {
-		event := log.Info().
-			Str("provider", m.dns.Name()).
-			Str("base_domain", m.cfg.BaseDomain).
-			Str("state", strings.TrimSpace(state))
-		if strings.TrimSpace(dsRecord) != "" {
-			event = event.Str("ds_record", strings.TrimSpace(dsRecord))
-		}
-		if strings.TrimSpace(message) != "" {
-			event = event.Str("message", strings.TrimSpace(message))
-		}
-		event.Msg("dnssec configured")
-	})
-
-	if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
-		err = fmt.Errorf("ensure ens gasless txt: %w", err)
-		m.setENSStatus(state, dsRecord, message, err)
-		return err
-	}
-	if err := m.syncTrackedENSGaslessHostARecords(ctx); err != nil {
-		m.setENSStatus(state, dsRecord, message, err)
-		return err
-	}
-	m.setENSStatus(state, dsRecord, message, nil)
-	m.ensLogOnce.Do(func() {
-		log.Info().
-			Str("provider", m.dns.Name()).
-			Str("base_domain", m.cfg.BaseDomain).
-			Str("address", m.cfg.ENSGaslessAddress).
-			Msg("ens gasless dns import configured")
-	})
-	return nil
+	return m.syncHostnameDNS(ctx, hostname)
 }
 
 func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address string) error {
@@ -699,15 +633,18 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 	if err != nil {
 		return fmt.Errorf("normalize ens gasless address: %w", err)
 	}
-	if err := m.syncENSGaslessHostnameARecord(ctx, hostname); err != nil {
+
+	m.trackedMu.Lock()
+	if m.ensRecords == nil {
+		m.ensRecords = make(map[string]string)
+	}
+	m.ensRecords[hostname] = address
+	m.trackedMu.Unlock()
+
+	if err := m.persistENSRecords(); err != nil {
 		return err
 	}
-	if err := m.dns.EnsureTXTRecord(ctx, hostname, gaslessENSTXTPrefix+defaultENSGaslessResolver+" "+strings.TrimSpace(address)); err != nil {
-		return err
-	}
-	return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
-		return append(hostnames, hostname)
-	})
+	return m.syncHostnameDNS(ctx, hostname)
 }
 
 func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string) error {
@@ -728,22 +665,15 @@ func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string)
 	if hostname == m.cfg.BaseDomain {
 		return nil
 	}
-	if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
+
+	m.trackedMu.Lock()
+	delete(m.ensRecords, hostname)
+	m.trackedMu.Unlock()
+
+	if err := m.persistENSRecords(); err != nil {
 		return err
 	}
-	if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
-		return err
-	}
-	return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
-		filtered := hostnames[:0]
-		for _, tracked := range hostnames {
-			if tracked == hostname {
-				continue
-			}
-			filtered = append(filtered, tracked)
-		}
-		return filtered
-	})
+	return m.syncHostnameDNS(ctx, hostname)
 }
 
 func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error {
@@ -751,97 +681,202 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 		return nil
 	}
 
+	m.loadENSRecords()
+
+	m.trackedMu.Lock()
+	prev := m.ensRecords
+	m.ensRecords = make(map[string]string)
+	m.trackedMu.Unlock()
+
+	if err := m.persistENSRecords(); err != nil {
+		return err
+	}
+
 	var cleanupErr error
-	if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
-		remaining := hostnames[:0]
-		for _, hostname := range hostnames {
-			if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
-				remaining = append(remaining, hostname)
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err))
-				continue
-			}
-			if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
-				remaining = append(remaining, hostname)
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless A record for %s: %w", hostname, err))
-			}
+	for hostname := range prev {
+		if err := m.syncHostnameDNS(ctx, hostname); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("reconcile ens gasless hostname %s: %w", hostname, err))
 		}
-		return remaining
-	}); err != nil {
-		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("persist ens gasless hostnames: %w", err))
 	}
 	return cleanupErr
 }
 
-func (m *Manager) syncTrackedENSGaslessHostARecords(ctx context.Context) error {
-	hostnames, err := m.trackedENSGaslessHostnames()
-	if err != nil || len(hostnames) == 0 {
-		return err
-	}
-
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
-	if err != nil {
-		return fmt.Errorf("detect public ip: %w", err)
-	}
-	for _, hostname := range hostnames {
-		if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-			return fmt.Errorf("ensure ens gasless A record for %s: %w", hostname, err)
-		}
-	}
-	return nil
-}
-
-func (m *Manager) syncENSGaslessHostnameARecord(ctx context.Context, hostname string) error {
-	hostname = utils.NormalizeHostname(hostname)
-	if hostname == "" || hostname == m.cfg.BaseDomain {
+func (m *Manager) syncHostnameDNS(ctx context.Context, hostname string) error {
+	if m == nil || m.dns == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
-	if err != nil {
-		return fmt.Errorf("detect public ip: %w", err)
+	m.echMu.Lock()
+	ech, hasECH := m.echRecords[hostname]
+	m.echMu.Unlock()
+
+	m.trackedMu.Lock()
+	ensAddr, hasENS := m.ensRecords[hostname]
+	m.trackedMu.Unlock()
+
+	isBaseDomain := hostname == m.cfg.BaseDomain
+	needA := !isBaseDomain && (hasECH || hasENS)
+
+	if needA {
+		publicIP, err := utils.ResolvePublicIPv4(ctx)
+		if err != nil {
+			return fmt.Errorf("detect public ip for %s: %w", hostname, err)
+		}
+		if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
+			return fmt.Errorf("ensure A record for %s: %w", hostname, err)
+		}
+	} else if !isBaseDomain {
+		if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
+			return fmt.Errorf("delete A record for %s: %w", hostname, err)
+		}
 	}
-	if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-		return fmt.Errorf("ensure ens gasless A record for %s: %w", hostname, err)
+
+	if hasECH {
+		content, err := ech.Content()
+		if err != nil {
+			return fmt.Errorf("build ECH HTTPS record for %s: %w", hostname, err)
+		}
+		if err := m.dns.EnsureHTTPSRecord(ctx, hostname, ech.Priority, ech.Target, ech.SvcParams(), content); err != nil {
+			return fmt.Errorf("ensure HTTPS record for %s: %w", hostname, err)
+		}
+	} else {
+		if err := m.dns.DeleteHTTPSRecord(ctx, hostname); err != nil {
+			return fmt.Errorf("delete HTTPS record for %s: %w", hostname, err)
+		}
 	}
+
+	if hasENS {
+		txtValue := gaslessENSTXTPrefix + defaultENSGaslessResolver + " " + strings.TrimSpace(ensAddr)
+		if err := m.dns.EnsureTXTRecord(ctx, hostname, txtValue); err != nil {
+			return fmt.Errorf("ensure TXT record for %s: %w", hostname, err)
+		}
+	} else {
+		if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
+			return fmt.Errorf("delete TXT records for %s: %w", hostname, err)
+		}
+	}
+
 	return nil
 }
 
-func (m *Manager) trackedENSGaslessHostnames() ([]string, error) {
-	if m == nil {
-		return nil, nil
+func (m *Manager) syncAllHostnames(ctx context.Context, publicIP string) error {
+	m.echMu.Lock()
+	echCopy := make(map[string]HTTPSRecord, len(m.echRecords))
+	for h, r := range m.echRecords {
+		echCopy[h] = r
+	}
+	m.echMu.Unlock()
+
+	m.trackedMu.Lock()
+	ensCopy := make(map[string]string, len(m.ensRecords))
+	for h, a := range m.ensRecords {
+		ensCopy[h] = a
+	}
+	m.trackedMu.Unlock()
+
+	seen := make(map[string]struct{})
+	for h := range echCopy {
+		seen[h] = struct{}{}
+	}
+	for h := range ensCopy {
+		seen[h] = struct{}{}
 	}
 
-	path := filepath.Join(m.cfg.KeyDir, ensGaslessHostnamesFileName)
-	var hostnames []string
-	if _, err := utils.ReadJSONFileIfExists(path, &hostnames); err != nil {
-		return nil, err
+	var syncErr error
+	for hostname := range seen {
+		if err := m.syncHostnameDNS(ctx, hostname); err != nil {
+			syncErr = errors.Join(syncErr, err)
+		}
 	}
-	return utils.NormalizeChildHostnames(hostnames, m.cfg.BaseDomain), nil
+	return syncErr
 }
 
-func (m *Manager) updateTrackedENSGaslessHostnames(update func([]string) []string) error {
+func (m *Manager) ensureDNSSEC(ctx context.Context) error {
+	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) || m.dns == nil {
+		return nil
+	}
+
+	state, dsRecord, message, err := m.dns.EnsureDNSSEC(ctx, m.cfg.BaseDomain)
+	if err != nil {
+		m.setENSStatus("", "", "", err)
+		return fmt.Errorf("ensure dnssec: %w", err)
+	}
+	m.dnssecLogOnce.Do(func() {
+		event := log.Info().
+			Str("provider", m.dns.Name()).
+			Str("base_domain", m.cfg.BaseDomain).
+			Str("state", strings.TrimSpace(state))
+		if strings.TrimSpace(dsRecord) != "" {
+			event = event.Str("ds_record", strings.TrimSpace(dsRecord))
+		}
+		if strings.TrimSpace(message) != "" {
+			event = event.Str("message", strings.TrimSpace(message))
+		}
+		event.Msg("dnssec configured")
+	})
+	m.setENSStatus(state, dsRecord, message, nil)
+	m.ensLogOnce.Do(func() {
+		log.Info().
+			Str("provider", m.dns.Name()).
+			Str("base_domain", m.cfg.BaseDomain).
+			Str("address", m.cfg.ENSGaslessAddress).
+			Msg("ens gasless dns import configured")
+	})
+	return nil
+}
+
+func (m *Manager) loadENSRecords() {
+	if m == nil {
+		return
+	}
+	m.trackedMu.Lock()
+	defer m.trackedMu.Unlock()
+
+	path := filepath.Join(m.cfg.KeyDir, ensGaslessHostnamesFileName)
+
+	var entries map[string]string
+	if _, err := utils.ReadJSONFileIfExists(path, &entries); err == nil && len(entries) > 0 {
+		m.ensRecords = make(map[string]string, len(entries))
+		for h, a := range entries {
+			normalized := utils.NormalizeHostname(h)
+			if normalized == "" || normalized == m.cfg.BaseDomain || !utils.HostnameMatchesBaseDomain(normalized, m.cfg.BaseDomain) {
+				continue
+			}
+			m.ensRecords[normalized] = a
+		}
+		return
+	}
+
+	var legacyHostnames []string
+	if _, err := utils.ReadJSONFileIfExists(path, &legacyHostnames); err == nil {
+		normalized := utils.NormalizeChildHostnames(legacyHostnames, m.cfg.BaseDomain)
+		m.ensRecords = make(map[string]string, len(normalized))
+		for _, h := range normalized {
+			m.ensRecords[h] = ""
+		}
+		return
+	}
+
+	m.ensRecords = make(map[string]string)
+}
+
+func (m *Manager) persistENSRecords() error {
 	if m == nil {
 		return nil
 	}
 
 	m.trackedMu.Lock()
-	defer m.trackedMu.Unlock()
+	records := m.ensRecords
+	m.trackedMu.Unlock()
 
 	path := filepath.Join(m.cfg.KeyDir, ensGaslessHostnamesFileName)
-	hostnames, err := m.trackedENSGaslessHostnames()
-	if err != nil {
-		return err
-	}
-	if update != nil {
-		hostnames = utils.NormalizeChildHostnames(update(hostnames), m.cfg.BaseDomain)
-	}
-	if len(hostnames) == 0 {
+	if len(records) == 0 {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		return nil
 	}
-	return utils.WriteJSONFile(path, hostnames, 0o600)
+	return utils.WriteJSONFile(path, records, 0o600)
 }
 
 func (m *Manager) shouldRenew() bool {
