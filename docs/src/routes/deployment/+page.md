@@ -14,9 +14,11 @@ Portal supports two deployment profiles:
 
 - API-only relay: one `portal` image exposes relay API paths and tunnel ingress
   directly. This is documented in [Self-Hosting](/self-hosting).
-- Full Portal edge: `nginx`, `portal`, `portal-frontend`, and `portal-api`
+- Full Portal edge: `portal-nginx`, `portal`, `portal-frontend`, and `portal-api`
   provide one browser-facing HTTPS origin with dashboard, presentation API, and
-  wildcard tunnel routing.
+  wildcard tunnel routing. When an existing public nginx already owns the
+  domain, place the Portal edge nginx behind it and have the outer nginx
+  passthrough Portal SNI traffic to the Portal edge.
 
 This guide covers the full Portal edge profile and is the source of truth for
 how the split relay, frontend, and presentation API are expected to be deployed
@@ -24,11 +26,13 @@ together.
 
 ## 1. Production Topology
 
-The production deployment has four roles:
+The production deployment has five roles when Portal is mounted under a
+subdomain of an existing nginx deployment:
 
 | Role | Service or image | Publicly exposed | Owns |
 |---|---|---|---|
-| Public edge | `nginx` | yes, `443/tcp` | Public TLS termination, path routing, wildcard SNI passthrough |
+| Existing public edge | your nginx | yes, `443/tcp` | SNI selection for Portal versus existing services |
+| Portal edge | `portal-nginx`, `nginx:stable-alpine` | loopback only | Portal root-host TLS termination, path routing, wildcard SNI passthrough |
 | Relay | `portal`, `ghcr.io/gosuda/portal` | no direct public API port | Relay API, wallet auth, policy enforcement, tunnel ingress |
 | Static frontend | `portal-frontend`, `ghcr.io/gosuda/portal-frontend` | no direct public port | SPA assets |
 | Presentation API | `portal-api`, `ghcr.io/gosuda/portal-api` | no direct public port | Frontend-owned state, policy composition, service status, thumbnails |
@@ -38,14 +42,16 @@ Traffic should flow through one public HTTPS origin:
 ```text
 Browser
   -> https://portal.example.com
-  -> nginx public TLS edge
+  -> existing public nginx TCP passthrough
+  -> portal-nginx Portal edge
       -> portal-frontend for SPA routes and assets
       -> portal for /sdk/*, /discovery*, /v1/sign, and /api/* relay paths
       -> portal-api for /ui/* presentation API paths
 
 Tunnel clients and public app visitors
   -> https://*.portal.example.com
-  -> nginx TCP passthrough
+  -> existing public nginx TCP passthrough
+  -> portal-nginx TCP passthrough
   -> portal SNI listener
 ```
 
@@ -53,11 +59,11 @@ Tunnel clients and public app visitors
 
 | Public request | nginx behavior | Upstream |
 |---|---|---|
-| `portal.example.com/`, `/admin`, SPA assets | Terminate TLS, HTTP proxy | `portal-frontend:8080` |
-| `/sdk/*`, `/discovery*`, `/v1/sign` | Terminate TLS, HTTP proxy | `portal:4017` over HTTPS |
-| `/api/*` | Terminate TLS, HTTP proxy | `portal:4017` over HTTPS |
-| `/ui/*` | Terminate TLS, HTTP proxy | `portal-api:8081` |
-| `*.portal.example.com` | Raw TCP passthrough with `ssl_preread` | `portal` SNI listener |
+| `portal.example.com/`, `/admin`, SPA assets | Existing nginx TCP-passthrough, then Portal edge TLS termination and HTTP proxy | `portal-frontend:8080` |
+| `/sdk/*`, `/discovery*`, `/v1/sign` | Existing nginx TCP-passthrough, then Portal edge TLS termination and HTTP proxy | `portal:4017` over HTTPS |
+| `/api/*` | Existing nginx TCP-passthrough, then Portal edge TLS termination and HTTP proxy | `portal:4017` over HTTPS |
+| `/ui/*` | Existing nginx TCP-passthrough, then Portal edge TLS termination and HTTP proxy | `portal-api:8081` |
+| `*.portal.example.com` | Raw TCP passthrough through both nginx layers | `portal` SNI listener |
 
 The root relay host needs HTTP path routing, so it is not TCP-passthrough. Wildcard app hosts need TCP passthrough, so nginx must not terminate TLS for them.
 
@@ -68,21 +74,34 @@ Older deployments could run only `ghcr.io/gosuda/portal` because the relay serve
 - `portal` for relay API and tunnel ingress
 - `portal-frontend` for static SPA assets
 - `portal-api` for frontend-owned dynamic behavior
-- `nginx` as the public TLS edge
+- `portal-nginx` as the Portal TLS edge
 
-Operators upgrading from the embedded frontend must deploy all three Portal images and route them through nginx. `PORTAL_URL` remains the browser-facing HTTPS origin, for example `https://portal.example.com`; do not set it to `localhost` or an internal Docker hostname for a public relay.
+Operators upgrading from the embedded frontend must deploy all three Portal
+images and route them through `portal-nginx`. `PORTAL_URL` remains the
+browser-facing HTTPS origin, for example `https://portal.example.com`; do not
+set it to `localhost` or an internal Docker hostname for a public relay.
+
+When Portal is mounted under a subdomain of a larger nginx deployment, keep
+Portal's routing isolated behind `portal-nginx`. The outer nginx should use
+`ssl_preread` and send both `portal.example.com` and `*.portal.example.com` to
+the loopback Portal edge port without TLS termination. `portal-nginx` then
+terminates TLS only for `portal.example.com` and passes wildcard tunnel hosts
+through to the relay SNI listener.
 
 ### Security Boundary
 
 To keep the same practical security level as the embedded frontend deployment:
 
 - Public users reach the dashboard only through `https://portal.example.com`.
-- `portal:4017`, `portal-frontend:8080`, and `portal-api:8081` are not exposed directly to the internet.
-- Root-host relay protocol paths (`/sdk/*`, `/discovery*`, `/v1/sign`) and relay JSON API paths (`/api/*`) are HTTP reverse-proxied by nginx to the relay API upstream, while `/ui/*` presentation paths go to `portal-api`.
-- Wildcard app hosts are TCP-passthrough to the relay SNI listener.
-- The nginx browser certificate and the relay API certificate are separate operational concerns unless you intentionally share the same certificate files.
+- The existing public nginx does not expose `portal:4017`, `portal-frontend:8080`, or `portal-api:8081` directly.
+- The existing public nginx forwards Portal root and wildcard SNI traffic to `portal-nginx` without TLS termination.
+- `portal-nginx` terminates TLS only for the root host and reverse-proxies `/sdk/*`, `/discovery*`, `/v1/sign`, and `/api/*` to the relay API upstream, while `/ui/*` presentation paths go to `portal-api`.
+- Wildcard app hosts are TCP-passthrough through `portal-nginx` to the relay SNI listener.
+- `portal-nginx` and `portal` share the same Portal certificate and private key.
 
-It is fine for nginx to terminate public TLS and then proxy to the relay API over HTTPS internally. That is two TLS legs. TCP passthrough is only for wildcard tunnel app hosts.
+This example intentionally keeps the external nginx template focused on service
+selection. Portal-specific path routing stays inside `portal-nginx`, and raw
+wildcard tunnel hosts are never TLS-terminated by the external nginx.
 
 ## 2. Prerequisites
 
@@ -104,8 +123,8 @@ Open only the public ports that match the topology:
 
 | Port | Required | Purpose |
 |---|---|---|
-| `80/tcp` | optional | HTTP to HTTPS redirect in the bundled nginx example |
-| `443/tcp` | yes | Public nginx edge for dashboard, relay API path routing, and wildcard TCP passthrough |
+| `80/tcp` | optional | HTTP to HTTPS redirect in your external nginx |
+| `443/tcp` | yes | Existing public nginx SNI selection for Portal and non-Portal services |
 | `WIREGUARD_PORT/udp` | when `DISCOVERY=true` | Relay discovery WireGuard transport |
 | `SNI_PORT/udp` | when UDP transport is enabled | QUIC tunnel ingress |
 | `MIN_PORT-MAX_PORT/udp` | when UDP lease transport is enabled | Public UDP lease ports |
@@ -115,6 +134,7 @@ Keep these ports private or loopback-only in the recommended topology:
 
 | Port | Owner |
 |---|---|
+| `PORTAL_EDGE_PORT/tcp` | `portal-nginx` loopback passthrough upstream for your external nginx |
 | `4017/tcp` | `portal` relay API |
 | `8080/tcp` | `portal-frontend` static server |
 | `8081/tcp` | `portal-api` presentation API |
@@ -123,31 +143,29 @@ Certificate files are also split by owner:
 
 | Certificate | Default path in the example | Used by |
 |---|---|---|
-| Browser-facing HTTPS certificate | `./certs/fullchain.pem`, `./certs/privkey.pem` | nginx public edge |
-| Relay API and SNI certificate | `./.portal-certs/fullchain.pem`, `./.portal-certs/privatekey.pem` | `portal` unless managed ACME is configured |
+| Portal root and wildcard certificate | `./.portal-certs/fullchain.pem`, `./.portal-certs/privatekey.pem` | `portal-nginx` and `portal` |
+| Existing app certificates | managed by your external nginx template | existing non-Portal services |
 
-Portal-managed ACME can manage the relay certificate and relay DNS records. The bundled nginx example still expects a browser-facing certificate in `./certs`; manage that with your normal edge certificate process.
+Portal-managed ACME can manage the Portal certificate and relay DNS records.
+Your existing nginx template remains responsible for certificates for
+non-Portal services.
 
 ## 3. Deploy the Recommended Stack
 
-Start from the single-domain nginx example:
+Start from the subdomain multi-service example:
 
 ```bash
 mkdir -p portal-deploy
 cd portal-deploy
 
-cp <repo>/docs/static/examples/nginx-proxy/docker-compose.yaml ./docker-compose.yaml
-cp <repo>/docs/static/examples/nginx-proxy/nginx.conf ./nginx.conf
-cp <repo>/docs/static/examples/nginx-proxy/.env.example ./.env
-cp <repo>/docs/static/examples/nginx-proxy/deploy_portal.sh ./deploy_portal.sh
-cp <repo>/docs/static/examples/nginx-proxy/watch_and_deploy.sh ./watch_and_deploy.sh
-cp <repo>/docs/static/examples/nginx-proxy/nginx_deploy.sh ./nginx_deploy.sh
-chmod +x deploy_portal.sh watch_and_deploy.sh nginx_deploy.sh
+cp <repo>/docs/static/examples/nginx-proxy-multi-service/docker-compose.yaml ./docker-compose.yaml
+cp <repo>/docs/static/examples/nginx-proxy-multi-service/.env.example ./.env
+cp <repo>/nginx.conf.template ./nginx.conf.template
 ```
 
-Replace every `portal.example.com` in `nginx.conf` and `.env`.
-
-For deployments with multiple additional services behind the same edge nginx, use `docs/static/examples/nginx-proxy-multi-service` instead. The same Portal routing rules apply.
+Replace `portal.example.com` in `.env`, and configure your existing public nginx
+template to passthrough both `portal.example.com` and `*.portal.example.com` to
+`127.0.0.1:${PORTAL_EDGE_PORT:-9443}` without TLS termination.
 
 ### Configure `.env`
 
@@ -158,6 +176,7 @@ PORTAL_URL=https://portal.example.com
 BOOTSTRAPS=
 DISCOVERY=true
 IDENTITY_PATH=/portal-certs
+PORTAL_EDGE_PORT=9443
 
 API_PORT=4017
 SNI_PORT=443
@@ -176,7 +195,11 @@ TRUSTED_PROXY_CIDRS=
 LANDING_PAGE_ENABLED=false
 ```
 
-`API_PORT` defaults to `4017`. If you change it, update the relay `proxy_pass` targets in the bundled `nginx.conf` to the same port. Keep `SNI_PORT=443` because this is the public SNI port advertised to tunnel clients. The single-domain Compose example maps the relay container's SNI listener to `127.0.0.1:4443` on the host so nginx can own public `443/tcp` and still pass wildcard TCP traffic to the relay. Do not open `4443/tcp` publicly; it is only a host-local upstream in that example.
+`PORTAL_EDGE_PORT` is the host loopback port your existing nginx should use as
+the Portal passthrough upstream. `API_PORT` defaults to `4017`; if you change
+it, update the relay `proxy_pass` targets in `nginx.conf.template` before
+mounting it. Keep `SNI_PORT=443` because this is the public SNI port advertised
+to tunnel clients.
 
 If the relay joins public discovery, set `BOOTSTRAPS` to at least one reachable relay URL and keep `WIREGUARD_PORT/udp` open.
 
@@ -189,28 +212,26 @@ Leave `TRUSTED_PROXY_CIDRS` empty for the default private and loopback proxy ran
 Create the state directories:
 
 ```bash
-mkdir -p ./.portal-certs/frontend-state ./certs
+mkdir -p ./.portal-certs/frontend-state
 sudo chown 65532:65532 ./.portal-certs
 chmod 755 ./.portal-certs
 ```
 
-Place the nginx browser certificate here:
-
-```text
-./certs/fullchain.pem
-./certs/privkey.pem
-```
-
-In manual relay certificate mode, also place the relay certificate here before startup:
+In manual certificate mode, place the Portal root and wildcard certificate here
+before startup:
 
 ```text
 ./.portal-certs/fullchain.pem
 ./.portal-certs/privatekey.pem
 ```
 
-You may use the same certificate material for nginx and the relay when it covers both `portal.example.com` and `*.portal.example.com`; keep the filenames expected by each service.
+`portal-nginx` and the `portal` container must share this same pair. Tunnel TLS
+uses the relay keyless signer, so if nginx presents one certificate while
+`portal` signs with a different private key, browsers will fail the wildcard app
+handshake with protocol errors or TLS `bad signature` diagnostics.
 
-When `ACME_DNS_PROVIDER` is configured, Portal can create and renew the relay certificate under `IDENTITY_PATH`. That does not remove nginx's need for its own browser-facing certificate under `./certs`.
+When `ACME_DNS_PROVIDER` is configured, Portal can create and renew this
+certificate under `IDENTITY_PATH`.
 
 ### Start and Verify
 
@@ -229,7 +250,7 @@ docker compose ps
 
 Expected service names in the recommended stack:
 
-- `nginx`
+- `portal-nginx`
 - `portal`
 - `portal-frontend`
 - `portal-api`
@@ -397,57 +418,16 @@ pull all production images from that same release track:
 - `ghcr.io/gosuda/portal-frontend:2`
 - `ghcr.io/gosuda/portal-api:2`
 
-The bundled `deploy_portal.sh` pulls all Portal images together and reloads nginx after the services are updated:
+To update the Portal stack:
 
 ```bash
-#!/bin/bash
-set -e
-
 docker compose pull portal portal-frontend portal-api
-docker compose up -d portal portal-frontend portal-api
-bash nginx_deploy.sh
+docker compose up -d portal-nginx portal portal-frontend portal-api
 ```
 
-The bundled `watch_and_deploy.sh` reads the Portal images from Docker Compose,
-polls their remote digests, and runs the deploy script when any watched release
-tag changes.
-
-Systemd example:
-
-```bash
-sudo tee /etc/systemd/system/portal-watcher.service << 'EOF'
-[Unit]
-Description=Portal Docker Image Watcher
-After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
-
-[Service]
-Type=simple
-User=opc
-WorkingDirectory=<path-to-project>
-ExecStart=/bin/bash <path-to-project>/watch_and_deploy.sh
-Restart=always
-RestartSec=10
-Environment=INTERVAL=60
-Environment=DEPLOY_SCRIPT=deploy_portal.sh
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now portal-watcher
-```
-
-Adjust `User` and paths to match your server. The service user must be able to run Docker.
-
-Monitor it with:
-
-```bash
-sudo systemctl status portal-watcher
-sudo journalctl -u portal-watcher -f
-```
+If your existing public nginx template changed, reload that external nginx
+through your normal deployment process. The Portal compose example does not own
+the external nginx lifecycle.
 
 ## 8. Troubleshooting
 
@@ -457,15 +437,32 @@ That is expected. `4017/tcp` is the relay API, not the dashboard. Use `https://p
 
 ### Frontend Logs Show Binary TLS Bytes and `400`
 
-Logs like `"\x16\x03\x01..." 400` mean a client sent HTTPS to the plain HTTP `portal-frontend:8080` listener. Do not expose `8080` publicly. Put nginx with TLS in front of it.
+Logs like `"\x16\x03\x01..." 400` mean a client sent HTTPS to the plain HTTP
+`portal-frontend:8080` listener. Do not expose `8080` publicly. Route public
+Portal traffic through `portal-nginx`.
 
 ### Relay Logs Show `tls: unknown certificate`
 
-This usually means a browser or proxy hit the relay API certificate directly instead of the public nginx certificate, or an upstream proxy tried to verify the relay's internal certificate. In the bundled nginx example, public browsers verify nginx's certificate, while nginx proxies to the relay API over internal HTTPS.
+This usually means a browser or proxy hit the relay API certificate directly, or
+an upstream proxy tried to verify the relay's internal certificate. Public
+browsers should reach `portal-nginx`, while `portal-nginx` proxies to the relay
+API over internal HTTPS with upstream verification disabled.
 
 ### Root Host Works but Wildcard Apps Fail
 
-Check that `portal.example.com` is HTTP-proxied after TLS termination and that `*.portal.example.com` is TCP-passthrough to the relay SNI listener. Do not terminate TLS for wildcard app hosts in nginx.
+Check both nginx layers. The external nginx must passthrough both
+`portal.example.com` and `*.portal.example.com` to the loopback
+`PORTAL_EDGE_PORT`. Only `portal-nginx` should split root-host HTTP routing from
+wildcard SNI passthrough. Do not terminate TLS for wildcard app hosts in the
+external nginx.
+
+### Wildcard Apps Show `ERR_SSL_PROTOCOL_ERROR`
+
+If `openssl s_client` reports `tls_process_cert_verify:bad signature`, nginx is
+presenting a certificate whose private key is not the one used by the Portal
+keyless signer. Make `portal-nginx` and `portal` use the same
+`./.portal-certs/fullchain.pem` and `./.portal-certs/privatekey.pem` pair, then
+restart both services and reconnect the tunnel clients.
 
 ### Discovery Announce Is Rejected as Local-Only
 

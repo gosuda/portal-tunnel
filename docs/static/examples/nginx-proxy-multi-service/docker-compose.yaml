@@ -1,53 +1,74 @@
-# Portal relay + multiple services - docker compose deployment example.
+# Portal relay under a subdomain behind an existing public nginx.
 #
-# This example runs Portal alongside other web services behind one nginx.
+# This example runs the Portal stack for portal.example.com while an existing
+# external nginx owns public :80/:443 and other sibling subdomains.
 #
-# Architecture:
-#   nginx:443 (L4 stream, ssl_preread)
-#     - portal.example.com    -> nginx:8443 (L7 path split)
-#         - /sdk/*, /discovery*, /v1/sign -> portal:${API_PORT:-4017} (portal protocol, HTTPS, Docker network only)
-#         - /api/* relay API -> portal:${API_PORT:-4017} (portal, HTTPS, Docker network only)
-#         - /ui/* presentation API -> portal-api:8081 (HTTP)
-#         - frontend/UI paths     -> portal-frontend:8080 (HTTP)
-#     - *.portal.example.com  -> portal:443 (portal SNI passthrough, Docker network only)
-#     - everything else       -> nginx:8443 (L7 for other apps)
+# External nginx responsibility:
+#   - Route portal.example.com and *.portal.example.com with stream/ssl_preread
+#     to 127.0.0.1:${PORTAL_EDGE_PORT:-9443} without TLS termination.
+#   - Keep ordinary HTTP/TLS routing for the rest of your services in your own
+#     nginx template.
+#
+# Portal edge responsibility:
+#   - portal-nginx uses the repository-level nginx.conf.template.
+#   - portal.example.com is TLS-terminated and routed to Portal UI/API services.
+#   - *.portal.example.com is raw TCP passthrough to the portal SNI listener.
 #
 # Prerequisites:
 #   1. Copy .env.example to .env and set all required values.
-#   2. Place TLS certificates in ./certs/:
-#        - portal_fullchain.pem, portal_privkey.pem for portal.example.com
-#        - app_a_fullchain.pem, app_a_privkey.pem for app-a.example.com
-#        - app_b_fullchain.pem, app_b_privkey.pem for app-b.example.com
-#      Portal also needs API TLS material in ./.portal-certs unless ACME_DNS_PROVIDER is configured.
-#   3. Create the .portal-certs directory with correct ownership (UID 65532 = nonroot).
-#      Frontend presentation state is stored under ./.portal-certs/frontend-state:
+#   2. Copy the repository-level nginx.conf.template next to this file:
+#        cp <repo>/nginx.conf.template ./nginx.conf.template
+#   3. Place the Portal relay certificate in ./.portal-certs/:
+#        - fullchain.pem covers portal.example.com and *.portal.example.com
+#        - privatekey.pem matches fullchain.pem
+#      portal-nginx and portal intentionally share this pair. Tunnel TLS uses
+#      the portal keyless signer, so mismatched keys cause
+#      ERR_SSL_PROTOCOL_ERROR / TLS bad signature failures.
+#   4. Create the .portal-certs directory with correct ownership (UID 65532 = nonroot):
 #        mkdir -p ./.portal-certs/frontend-state
 #        sudo chown 65532:65532 ./.portal-certs
 #        chmod 755 ./.portal-certs
-#   4. Start all services:
+#   5. Start Portal:
 #        docker compose up -d
 
 services:
-  nginx:
+  portal-nginx:
     image: nginx:stable-alpine
-    container_name: nginx
+    container_name: portal-nginx
     ports:
-      - "80:80"
-      - "443:443"
+      - "127.0.0.1:${PORTAL_EDGE_PORT:-9443}:443"
+    environment:
+      PORTAL_URL: ${PORTAL_URL:-https://portal.example.com}
+      NGINX_CERT_FILE: ${NGINX_CERT_FILE:-/etc/nginx/certs/fullchain.pem}
+      NGINX_CERT_KEY: ${NGINX_CERT_KEY:-/etc/nginx/certs/privatekey.pem}
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./certs:/etc/certs:ro
+      - ./nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
+      - ./.portal-certs:/etc/nginx/certs:ro
     depends_on:
       - portal
       - portal-frontend
       - portal-api
-      - app-a-api
-      - app-a-frontend
+    command:
+      - /bin/sh
+      - -c
+      - |
+        portal_host="$${PORTAL_URL#*://}"
+        portal_host="$${portal_host%%/*}"
+        portal_host="$${portal_host%%:*}"
+        export PORTAL_HOST="$${portal_host:-localhost}"
+
+        export NGINX_CERT_FILE="$${NGINX_CERT_FILE:-/etc/nginx/certs/fullchain.pem}"
+        export NGINX_CERT_KEY="$${NGINX_CERT_KEY:-/etc/nginx/certs/privatekey.pem}"
+        envsubst '$$PORTAL_HOST $$NGINX_CERT_FILE $$NGINX_CERT_KEY' \
+          < /etc/nginx/templates/nginx.conf.template \
+          > /etc/nginx/nginx.conf
+
+        until [ -s "$$NGINX_CERT_FILE" ] && [ -s "$$NGINX_CERT_KEY" ]; do
+          echo "waiting for Portal TLS certificate files"
+          sleep 1
+        done
+        exec nginx -g 'daemon off;'
     restart: unless-stopped
-    networks:
-      - default
-      - app-a-network
-      - app-b-network
 
   # Optional: uncomment to enable auto-generated thumbnails for tunnel apps.
   # See docs/src/routes/deployment/+page.md for details.
@@ -128,39 +149,3 @@ services:
     volumes:
       - ./.portal-certs/frontend-state:/frontend-state
     restart: unless-stopped
-
-  app-a-api:
-    image: your-registry/app-a-api:latest
-    container_name: app-a-api
-    restart: unless-stopped
-    networks:
-      - app-a-network
-
-  app-a-frontend:
-    image: your-registry/app-a-frontend:latest
-    container_name: app-a-frontend
-    restart: unless-stopped
-    networks:
-      - app-a-network
-    depends_on:
-      - app-a-api
-
-  app-b-api:
-    image: your-registry/app-b-api:latest
-    container_name: app-b-api
-    restart: unless-stopped
-    networks:
-      - app-b-network
-
-  app-b-frontend:
-    image: your-registry/app-b-frontend:latest
-    container_name: app-b-frontend
-    restart: unless-stopped
-    networks:
-      - app-b-network
-
-networks:
-  app-a-network:
-    driver: bridge
-  app-b-network:
-    driver: bridge
