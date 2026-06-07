@@ -668,7 +668,7 @@ func BenchmarkMOLSRankRelayPool(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rankRelayPool(relays, localAddr)
+		RankRelayPool(relays, localAddr)
 	}
 }
 

@@ -8,12 +8,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
-	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -50,6 +48,10 @@ type RelaySet struct {
 	mu       sync.RWMutex
 	relays   map[string]RelayState
 	keyIndex map[string]keyIndexEntry
+
+	// activeRoutes holds the current route slice consumed by the runtime loop.
+	// It is computed by PlanRoutes and atomically swapped by OptimizeRoutes.
+	activeRoutes atomic.Pointer[[]Route]
 }
 
 // keyIndexEntry records the rollback anchor for a signing identity.
@@ -362,7 +364,18 @@ func (r Route) Explicit() bool {
 	return r.explicit
 }
 
+// ListenerRelayURL returns the entry relay URL for this route.
+// For single-hop routes this is the sole relay; for multi-hop
+// routes it is the first hop the local listener connects to.
 func (r Route) ListenerRelayURL() string {
+	if len(r.path) == 0 {
+		return ""
+	}
+	return r.path[0]
+}
+
+// ExitRelayURL returns the final relay URL in the path.
+func (r Route) ExitRelayURL() string {
 	if len(r.path) == 0 {
 		return ""
 	}
@@ -380,16 +393,30 @@ func (r Route) Equal(other Route) bool {
 	return r.explicit == other.explicit && slices.Equal(r.path, other.path)
 }
 
+// WithListenerRelayURL returns a new Route with the entry relay URL
+// replaced by the normalized value. This is used after URL normalization
+// so the path and the listener target remain consistent.
 func (r Route) WithListenerRelayURL(relayURL string) Route {
 	if len(r.path) == 0 {
 		return NewRoute([]string{relayURL}, r.explicit)
 	}
 	path := append([]string(nil), r.path...)
-	path[len(path)-1] = relayURL
-	return NewRoute(path, r.explicit)
+	path[0] = relayURL
+	return Route{path: path, explicit: r.explicit}
 }
 
 func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]Route, error) {
+	routes, err := s.planRoutesInternal(explicitPath, routeState)
+	if err != nil {
+		return nil, err
+	}
+	// Atomically publish the computed routes so the runtime loop and
+	// OptimizeRoutes operate on the same canonical slice.
+	s.activeRoutes.Store(&routes)
+	return routes, nil
+}
+
+func (s *RelaySet) planRoutesInternal(explicitPath []string, routeState RouteState) ([]Route, error) {
 	if len(explicitPath) > 0 {
 		if len(explicitPath) == 1 {
 			return nil, fmt.Errorf("multi-hop requires at least entry and exit relay urls")
@@ -397,7 +424,8 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 		return []Route{NewRoute(explicitPath, true)}, nil
 	}
 
-	states := s.currentRelayStates(time.Now().UTC())
+	now := time.Now().UTC()
+	states := s.currentRelayStates(now)
 	if len(routeState.ExplicitRelayURLs) > 0 {
 		seen := make(map[string]struct{}, len(states))
 		for _, state := range states {
@@ -418,76 +446,244 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 		}
 	}
 
-	if routeState.MultiHopDepth > 1 {
-		path := SelectMultiHop(states, routeState)
-		if len(path) < routeState.MultiHopDepth {
-			return nil, fmt.Errorf("multi-hop-depth %d requires %d overlay relay candidates, got %d", routeState.MultiHopDepth, routeState.MultiHopDepth, len(path))
+	// Single unified MOLS flow: RankRelayPool is the sole scheduler for
+	// both single-hop and multi-hop routing. Depth determines whether we
+	// emit 1-length paths or sliding-window multi-hop paths.
+	requireOverlay := routeState.MultiHopDepth > 1
+	autoPool := filterCandidatePool(states, routeState, now, requireOverlay)
+	ranked := RankRelayPool(autoPool, routeState.LocalAddress)
+
+	depth := routeState.MultiHopDepth
+	if depth <= 1 {
+		maxActive := routeState.MaxActiveRelays
+		if maxActive <= 0 {
+			maxActive = defaultMaxActiveRelays
 		}
-		return []Route{NewRoute(path, false)}, nil
+		if len(ranked) > maxActive {
+			ranked = ranked[:maxActive]
+		}
+		// Banned explicit relays must be dropped, matching the legacy
+		// selectAggregate gate that filtered them before promotion.
+		bannedSet := make(map[string]bool, len(states))
+		for _, state := range states {
+			if state.Banned {
+				bannedSet[state.Descriptor.APIHTTPSAddr] = true
+			}
+		}
+		routes := make([]Route, 0, len(ranked)+len(routeState.ExplicitRelayURLs))
+		for _, relayURL := range routeState.ExplicitRelayURLs {
+			if bannedSet[relayURL] {
+				continue
+			}
+			routes = append(routes, NewRoute([]string{relayURL}, true))
+		}
+		for _, relayURL := range ranked {
+			routes = append(routes, NewRoute([]string{relayURL}, false))
+		}
+		return routes, nil
 	}
 
-	relayURLs := SelectPriority(states, routeState)
-	routes := make([]Route, 0, len(relayURLs))
-	for _, relayURL := range relayURLs {
-		routes = append(routes, NewRoute([]string{relayURL}, slices.Contains(routeState.ExplicitRelayURLs, relayURL)))
+	return buildMOLSPaths(ranked, depth)
+}
+
+// ActiveRoutes returns the currently active route slice. The returned slice
+// is a copy, so callers can inspect it safely while the route set continues
+// to optimize and swap paths in the background.
+func (s *RelaySet) ActiveRoutes() []Route {
+	ptr := s.activeRoutes.Load()
+	if ptr == nil {
+		return nil
+	}
+	routes := *ptr
+	out := make([]Route, len(routes))
+	copy(out, routes)
+	return out
+}
+
+// OptimizeRoutes scans the active route slice for dirty paths — routes whose
+// hops carry a saturated or heavily loaded RelayState — and transposes each
+// dirty hop with the best available lighter candidate from a copied MOLS
+// array. The entire route slice is replaced atomically; no per-route state
+// flags or complex lifecycle machinery is introduced.
+func (s *RelaySet) OptimizeRoutes(routeState RouteState) (bool, error) {
+	now := time.Now().UTC()
+	states := s.currentRelayStates(now)
+
+	currentPtr := s.activeRoutes.Load()
+	if currentPtr == nil {
+		return false, nil
+	}
+	current := *currentPtr
+
+	// Infer overlay requirement from the currently active paths rather than
+	// relying on an external configuration flag. Any multi-hop path means we
+	// need overlay-capable candidates for transposition.
+	requireOverlay := false
+	for _, route := range current {
+		if len(route.path) > 1 {
+			requireOverlay = true
+			break
+		}
+	}
+
+	// Build the replacement pool using the same eligibility rules as path
+	// generation, but excluding explicit relays (operator intent is fixed).
+	pool := filterCandidatePool(states, routeState, now, requireOverlay)
+	if len(pool) == 0 {
+		return false, nil
+	}
+
+	// Copy the MOLS-ranked array so transposition does not mutate the canonical ranking.
+	ranked := RankRelayPool(pool, routeState.LocalAddress)
+	if len(ranked) == 0 {
+		return false, nil
+	}
+	rankedCopy := append([]string(nil), ranked...)
+
+	// Index relay state by URL for fast load lookup during dirty detection.
+	stateByURL := make(map[string]RelayState, len(states))
+	for _, state := range states {
+		url := strings.TrimSpace(state.Descriptor.APIHTTPSAddr)
+		if url != "" {
+			stateByURL[url] = state
+		}
+	}
+
+	newRoutes := make([]Route, len(current))
+	copy(newRoutes, current)
+
+	swapped := false
+	for i, route := range current {
+		path := route.path
+		if len(path) == 0 {
+			continue
+		}
+		// Explicit routes reflect operator intent; they are never auto-tuned.
+		if route.explicit {
+			continue
+		}
+
+		// Detect the most heavily loaded (dirty) hop in this path.
+		dirtyIdx := -1
+		var dirtyLoad float64
+		for j, hop := range path {
+			state, ok := stateByURL[hop]
+			if !ok {
+				continue
+			}
+			if state.IsSaturated && state.LoadFactor > dirtyLoad {
+				dirtyIdx = j
+				dirtyLoad = state.LoadFactor
+			}
+		}
+		if dirtyIdx == -1 {
+			continue
+		}
+
+		// Find the highest-ranked replacement that is not already in the
+		// path and is not itself saturated.
+		used := make(map[string]struct{}, len(path))
+		for _, hop := range path {
+			used[hop] = struct{}{}
+		}
+
+		replacement := ""
+		for _, candidate := range rankedCopy {
+			if _, ok := used[candidate]; ok {
+				continue
+			}
+			candState, ok := stateByURL[candidate]
+			if !ok {
+				continue
+			}
+			if candState.IsSaturated {
+				continue
+			}
+			replacement = candidate
+			break
+		}
+		if replacement == "" {
+			continue
+		}
+
+		newPath := make([]string, len(path))
+		copy(newPath, path)
+		newPath[dirtyIdx] = replacement
+		newRoutes[i] = NewRoute(newPath, route.explicit)
+		swapped = true
+	}
+
+	if !swapped {
+		return false, nil
+	}
+
+	// Atomic swap: the runtime loop sees the new slice in one stroke.
+	s.activeRoutes.Store(&newRoutes)
+	return true, nil
+}
+
+// filterCandidatePool returns the auto-selected relay pool eligible for MOLS
+// ranking. When requireOverlay is true, only relays with observed descriptors,
+// valid expiry, and overlay peer support are admitted.
+func filterCandidatePool(states []RelayState, routeState RouteState, now time.Time, requireOverlay bool) []RelayState {
+	pool := make([]RelayState, 0, len(states))
+	for _, state := range states {
+		if state.Banned {
+			continue
+		}
+		relayURL := state.Descriptor.APIHTTPSAddr
+		if slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
+			continue
+		}
+		if state.hasObservedDescriptor() {
+			if !state.Descriptor.ExpiresAt.After(now) {
+				continue
+			}
+			if routeState.RequireUDP && !state.Descriptor.SupportsUDP {
+				continue
+			}
+			if routeState.RequireTCP && !state.Descriptor.SupportsTCP {
+				continue
+			}
+			if requireOverlay && !state.Descriptor.HasOverlayPeer() {
+				continue
+			}
+		} else if requireOverlay {
+			continue
+		}
+		if !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now) {
+			continue
+		}
+		pool = append(pool, state)
+	}
+	return pool
+}
+
+// buildMOLSPaths constructs non-wrapping, loop-free multi-hop paths from a
+// MOLS-ranked relay list using a sliding window of the given depth.
+func buildMOLSPaths(ranked []string, depth int) ([]Route, error) {
+	if len(ranked) < depth {
+		return nil, fmt.Errorf("multi-hop-depth %d requires at least %d candidates, got %d", depth, depth, len(ranked))
+	}
+	n := len(ranked)
+	routes := make([]Route, 0, n-depth+1)
+	seen := make(map[string]bool, n-depth+1)
+	for start := 0; start <= n-depth; start++ {
+		path := make([]string, 0, depth)
+		for i := 0; i < depth; i++ {
+			path = append(path, ranked[start+i])
+		}
+		key := strings.Join(path, "|")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		routes = append(routes, NewRoute(path, false))
+	}
+	if len(routes) == 0 {
+		return nil, fmt.Errorf("no valid multi-hop paths could be constructed from %d candidates with depth %d", n, depth)
 	}
 	return routes, nil
-}
-
-// PriorityRelaysWithTrace returns the same ordered relay-URL list as
-// PriorityRelays, plus a SelectionTrace populated with pool statistics,
-// eligibility classification, and the scoring parameters used. Prometheus
-// metrics are emitted from the trace before returning, and a sampled zerolog
-// debug entry is written.
-func (s *RelaySet) PriorityRelaysWithTrace(routeState RouteState) ([]string, telemetry.SelectionTrace) {
-	states := s.currentRelayStates(time.Now().UTC())
-
-	result, trace := selectPriorityWithTrace(states, routeState)
-	telemetry.EmitFromTrace(trace)
-	log.Debug().
-		Uint8("client_hash", trace.ClientHash).
-		Int("pool_size", trace.PoolTotal).
-		Int("output_count", len(trace.OutputURLs)).
-		Str("mode", trace.Mode).
-		Bool("congested", trace.Congested).
-		Strs("relay_urls", trace.OutputURLs).
-		Msg("relay selection")
-	return result, trace
-}
-
-// PriorityRelays returns the ordered list of relay URLs for a client. It
-// delegates to PriorityRelaysWithTrace and discards the trace.
-func (s *RelaySet) PriorityRelays(routeState RouteState) []string {
-	out, _ := s.PriorityRelaysWithTrace(routeState)
-	return out
-}
-
-// PriorityMultiHopWithTrace returns the same ordered relay-URL list as
-// PriorityMultiHop, plus a SelectionTrace populated with pool statistics,
-// eligibility classification, and the scoring parameters used. Prometheus
-// metrics are emitted from the trace before returning, and a sampled zerolog
-// debug entry is written.
-func (s *RelaySet) PriorityMultiHopWithTrace(routeState RouteState) ([]string, telemetry.SelectionTrace) {
-	states := s.currentRelayStates(time.Now().UTC())
-
-	result, trace := selectMultiHopWithTrace(states, routeState)
-	telemetry.EmitFromTrace(trace)
-	log.Debug().
-		Uint8("client_hash", trace.ClientHash).
-		Int("pool_size", trace.PoolTotal).
-		Int("output_count", len(trace.OutputURLs)).
-		Str("mode", trace.Mode).
-		Bool("congested", trace.Congested).
-		Strs("relay_urls", trace.OutputURLs).
-		Msg("relay selection")
-	return result, trace
-}
-
-// PriorityMultiHop returns the ordered list of relay URLs for multi-hop
-// routing. It delegates to PriorityMultiHopWithTrace and discards the trace.
-func (s *RelaySet) PriorityMultiHop(routeState RouteState) []string {
-	out, _ := s.PriorityMultiHopWithTrace(routeState)
-	return out
 }
 
 func (s *RelaySet) overlayRefreshCandidates(now time.Time) []RelayState {

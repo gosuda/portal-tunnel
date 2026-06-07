@@ -210,8 +210,12 @@ func TestExposureRemoveRelayStopsRunningListener(t *testing.T) {
 	if got := exposure.Config().RelayURLs; len(got) != 0 {
 		t.Fatalf("RelayURLs = %v, want empty", got)
 	}
-	if got := exposure.relaySet.PriorityRelays(discovery.RouteState{}); len(got) != 0 {
-		t.Fatalf("PriorityRelays() = %v, want empty", got)
+	routes, err := exposure.relaySet.PlanRoutes(nil, discovery.RouteState{})
+	if err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("PlanRoutes() = %v, want empty", routes)
 	}
 	relays := exposure.relaySet.AllRelays()
 	if len(relays) != 1 || relays[0].Descriptor.APIHTTPSAddr != relayA || relays[0].Banned {
