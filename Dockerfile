@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=$BUILDPLATFORM golang:1.26.4 AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1 AS go-builder
 WORKDIR /src
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

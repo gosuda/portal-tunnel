@@ -57,8 +57,7 @@ type ServerConfig struct {
 	PProfEnabled      bool
 	PProfListenAddr   string
 	X402Enabled       bool
-	X402Testnet       bool
-	X402PayTo         string
+	X402Network       string
 	ACME              acme.Config
 }
 
@@ -93,7 +92,11 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if cfg.PProfEnabled {
 		cfg.PProfListenAddr = utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
 	}
-	cfg.X402PayTo = strings.TrimSpace(cfg.X402PayTo)
+	cfg.X402Network = strings.TrimSpace(cfg.X402Network)
+	if cfg.X402Enabled && cfg.X402Network == "" {
+		cfg.X402Network = types.X402DefaultNetwork
+	}
+
 	hasPortRange := cfg.MinPort > 0 && cfg.MaxPort > 0
 	if cfg.UDPEnabled || cfg.TCPEnabled {
 		switch {
@@ -480,9 +483,6 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name
-	if strings.TrimSpace(acmeCfg.ENSGaslessAddress) == "" {
-		acmeCfg.ENSGaslessAddress = s.identity.Address
-	}
 
 	manager, err := acme.NewManager(acmeCfg)
 	if err != nil {

@@ -38,13 +38,12 @@ docker run -d \
   -p 4017:4017 \
   -e PORTAL_URL=https://relay.example.com:4017 \
   -e IDENTITY_PATH=/portal-certs \
-  -e ADMIN_TOKEN="$(openssl rand -hex 32)" \
   -v $(pwd)/relay-data:/portal-certs \
   ghcr.io/gosuda/portal:2
 ```
 
-Replace `relay.example.com` with your domain. Keep the generated
-`ADMIN_TOKEN`; it is required for relay admin and policy access.
+Replace `relay.example.com` with your domain. The relay identity address is
+allowed to use relay admin auth by default.
 
 ## Docker Compose Setup
 
@@ -64,7 +63,6 @@ services:
       API_PORT: "4017"
       SNI_PORT: "443"
       IDENTITY_PATH: /portal-certs
-      ADMIN_TOKEN: ${ADMIN_TOKEN}
     volumes:
       - ./relay-data:/portal-certs
 ```
@@ -83,32 +81,6 @@ docker compose up -d
 | `API_PORT` | `4017` | Admin/API server port. |
 | `SNI_PORT` | `443` | TCP SNI router port for tunnel traffic. |
 | `IDENTITY_PATH` | `./.portal-certs` | Relay state directory containing `identity.json`, `policy.json`, and TLS materials. |
-| `ADMIN_TOKEN` | | Bearer token source for relay admin and policy APIs. |
-
-## Optional: Enable Relay-Owned Sui x402 Facilitator
-
-To reserve relay-side x402 support for future control-plane resources, enable
-the relay-owned facilitator. This is intended for relay-owned charges such as
-tunnel registration, lease renewal, raw TCP/UDP port allocation, or premium
-capacity if an operator decides to require them. Payments use Sui mainnet by
-default; set `X402_TESTNET=true` for Sui testnet.
-
-```yaml
-environment:
-  X402_ENABLED: "true"
-  X402_TESTNET: "false"
-  X402_PAY_TO: "0x..."
-```
-
-This serves `/api/x402/supported`, `/api/x402/verify`, and `/api/x402/settle`.
-Portal payments intentionally support only Sui mainnet/testnet USDC through the
-gasless stablecoin address-balance flow.
-
-Tunnel paid routes do not use these relay settings. Route-level payment
-enforcement is configured separately by the tunnel with
-`portal expose --x402-pay-to` and optional `--x402-testnet`; relay
-`X402_PAY_TO` and `X402_TESTNET` are reserved for relay-owned control-plane
-resources.
 
 ## Connecting Your Tunnel
 
@@ -166,6 +138,44 @@ ports:
 ```
 
 See [TCP/UDP Tunneling](/tcp-udp-tunneling) for usage details.
+
+## Optional: Enable Sui Payment Facilitator
+
+The relay can expose a relay-local Sui payment facilitator at `/api/x402`. Frontends and
+configuration tools can read `/sdk/domain` for the current relay's facilitator
+URL and selected payment rail, then call `/api/x402/supported` for mechanism details when needed.
+
+```yaml
+environment:
+  X402_FACILITATOR_ENABLED: "true"
+  X402_NETWORK: sui:mainnet
+  X402_RPC_URL: https://sui-rpc.publicnode.com
+```
+
+The relay-local facilitator defaults to Sui gasless stablecoin settlement.
+Set `X402_NETWORK` to the target Sui network and provide `X402_RPC_URL` only
+when the default Sui RPC endpoint should be overridden.
+
+For CLI-created Sui paid routes, pass the selected facilitator explicitly:
+
+```bash
+portal expose 3000 \
+  --relays https://relay.example.com:4017 \
+  --discovery=false \
+  --sui-facilitator-url https://relay.example.com:4017/api/x402 \
+  --sui-price "$0.01"
+```
+
+Native Go apps can use the same relay facilitator without putting payment
+policy in the tunnel config. The payment app includes a Sui paid image route:
+
+```bash
+go run ./cmd/payment-app \
+  --relays https://relay.example.com:4017 \
+  --discovery=false \
+  --sui-facilitator-url https://relay.example.com:4017/api/x402 \
+  --sui-price "$0.01"
+```
 
 ## Troubleshooting
 

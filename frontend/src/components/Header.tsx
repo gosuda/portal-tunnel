@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { KeyRound, Loader2, LogOut } from "lucide-react";
+import { Loader2, LogOut, Wallet } from "lucide-react";
+import { ConnectModal } from "@mysten/dapp-kit";
 import { Button } from "@/components/ui/button";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { useAuth } from "@/hooks/useAuth";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
-import type { DomainResponse } from "@/types/api";
+import type { DomainResponse, X402FacilitatorInfo } from "@/types/api";
 import {
   Tooltip,
   TooltipContent,
@@ -22,6 +23,24 @@ interface HeaderProps {
 
 const repoURL = "https://github.com/gosuda/portal-tunnel";
 
+function formatWalletAddress(address: string): string {
+  const trimmed = address.trim();
+  if (trimmed.length <= 12) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
+}
+
+function paymentFacilitatorLabel(x402: X402FacilitatorInfo): string {
+  const network = x402.network?.trim().toLowerCase() || "";
+  const networkName = x402.network_name?.trim() || x402.network?.trim() || "";
+  if (network.startsWith("sui:") || networkName.toLowerCase().startsWith("sui")) {
+    const suffix = networkName.replace(/^sui\s+/i, "").trim();
+    return suffix ? `Sui payments ${suffix}` : "Sui payments";
+  }
+  return networkName ? `Payments ${networkName}` : "Payments enabled";
+}
+
 export function Header({
   title = "PORTAL",
   isAdmin,
@@ -30,23 +49,25 @@ export function Header({
 }: HeaderProps) {
   const [releaseVersion, setReleaseVersion] = useState("");
   const [ensVerified, setENSVerified] = useState(false);
+  const [x402, setX402] = useState<X402FacilitatorInfo | null>(null);
   const {
     isAuthenticated,
     isLoading,
+    walletAddress,
+    connectedWalletAddress,
+    hasAvailableWallet,
     login,
     logout,
   } = useAuth();
-  const [adminToken, setAdminToken] = useState("");
   const [authError, setAuthError] = useState("");
 
-  const handleAdminLogin = async () => {
+  const handleWalletLogin = async () => {
     setAuthError("");
-    const result = await login(adminToken);
+    const result = await login();
     if (!result.success) {
-      setAuthError(result.error || "Admin login failed.");
+      setAuthError(result.error || "Wallet login failed.");
       return;
     }
-    setAdminToken("");
     await onAuthChange?.();
   };
 
@@ -55,6 +76,42 @@ export function Header({
     await logout();
     await onAuthChange?.();
   };
+
+  const displayWalletAddress = isAuthenticated ? walletAddress : connectedWalletAddress;
+  const walletLabel = displayWalletAddress
+    ? isAuthenticated ? formatWalletAddress(displayWalletAddress) : "Sign in"
+    : "Sui Wallet";
+  const walletTooltip = authError || (
+    isAuthenticated && walletAddress
+      ? walletAddress
+      : connectedWalletAddress
+        ? connectedWalletAddress
+        : hasAvailableWallet
+          ? "Connect Sui wallet"
+          : "Install or enable a Sui wallet"
+  );
+  const walletButton = (
+    <Button
+      variant={isAuthenticated ? "secondary" : "outline"}
+      onClick={isAuthenticated ? undefined : connectedWalletAddress ? handleWalletLogin : undefined}
+      disabled={isLoading}
+      className={`h-12 rounded-full border-border/70 bg-background/90 px-3 text-foreground shadow-sm transition-all hover:bg-background disabled:cursor-not-allowed sm:px-4 ${
+        isAuthenticated
+          ? "cursor-default"
+          : "cursor-pointer hover:-translate-y-0.5 hover:border-primary/40 hover:text-primary"
+      }`}
+      aria-label={isAuthenticated ? "Sui wallet connected" : "Connect Sui wallet"}
+    >
+      {isLoading ? (
+        <Loader2 className="h-5 w-5 animate-spin" />
+      ) : (
+        <Wallet className="h-5 w-5" />
+      )}
+      <span className="max-w-28 truncate font-mono text-xs sm:max-w-36">
+        {walletLabel}
+      </span>
+    </Button>
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -71,11 +128,13 @@ export function Header({
               : ""
           );
           setENSVerified(status?.ens?.verified === true);
+          setX402(status?.x402?.enabled === true ? status.x402 : null);
         }
       } catch {
         if (!cancelled) {
           setReleaseVersion("");
           setENSVerified(false);
+          setX402(null);
         }
       }
     })();
@@ -106,17 +165,25 @@ export function Header({
             </div>
 
             <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-              <h2 className="min-w-0 wrap-break-word text-xl leading-none font-extrabold tracking-normal text-foreground sm:text-2xl">
+              <h2 className="min-w-0 wrap-break-word text-xl leading-none font-extrabold tracking-tight text-foreground sm:text-2xl">
                 {title}
               </h2>
               {releaseVersion && (
-                <span className="inline-flex h-6 items-center rounded-md bg-secondary px-2.5 text-xs font-semibold text-text-muted">
+                <span className="inline-flex h-6 items-center rounded-full bg-secondary px-2.5 text-xs font-semibold text-text-muted">
                   {releaseVersion}
                 </span>
               )}
               {ensVerified && (
-                <span className="inline-flex h-6 items-center rounded-md bg-primary/12 px-2.5 text-xs font-semibold text-primary ring-1 ring-primary/20">
+                <span className="inline-flex h-6 items-center rounded-full bg-primary/12 px-2.5 text-xs font-semibold text-primary ring-1 ring-primary/20">
                   ENS verified
+                </span>
+              )}
+              {x402 && (
+                <span
+                  className="inline-flex h-6 max-w-40 cursor-default items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full bg-emerald-500/10 px-2.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-500/20 dark:text-emerald-300"
+                  title="Payment facilitator enabled"
+                >
+                  {paymentFacilitatorLabel(x402)}
                 </span>
               )}
             </div>
@@ -154,7 +221,7 @@ export function Header({
             href={repoURL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/90 text-foreground shadow-sm transition-colors hover:border-primary/40 hover:text-primary"
+            className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/90 text-foreground shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:text-primary"
             aria-label="View source on GitHub"
           >
             <svg
@@ -171,66 +238,38 @@ export function Header({
 
         <ThemeToggleButton className="inline-flex shrink-0" />
 
-        {isAdmin && (
-          <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
-            {authError && (
-              <span className="max-w-64 text-right text-xs font-medium text-destructive">
-                {authError}
-              </span>
-            )}
+        {!isAuthenticated && !connectedWalletAddress ? (
+          <ConnectModal trigger={walletButton} />
+        ) : (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>{walletButton}</TooltipTrigger>
+              <TooltipContent>
+                <p>{walletTooltip}</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
 
-            {!isAuthenticated ? (
-              <form
-                className="flex max-w-full flex-wrap items-center justify-end gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void handleAdminLogin();
-                }}
-              >
-                <input
-                  type="password"
-                  value={adminToken}
-                  onChange={(event) => setAdminToken(event.target.value)}
-                  placeholder="Admin token"
-                  autoComplete="current-password"
-                  className="h-12 w-44 rounded-md border border-border/70 bg-background/90 px-4 text-sm text-foreground shadow-sm outline-none transition focus:border-primary/50 sm:w-56"
-                  disabled={isLoading}
-                />
+        {isAuthenticated && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <Button
-                  type="submit"
                   variant="outline"
-                  disabled={isLoading}
-                  className="h-12 rounded-md border-border/70 bg-background/90 px-4 text-foreground shadow-sm transition-colors hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed"
+                  size="icon"
+                  onClick={handleLogout}
+                  className="h-12 w-12 cursor-pointer rounded-full border-border/70 bg-background/90 text-foreground shadow-sm transition-all hover:-translate-y-0.5 hover:border-destructive/40 hover:bg-background hover:text-destructive"
+                  aria-label="Logout"
                 >
-                  {isLoading ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    <KeyRound className="h-5 w-5" />
-                  )}
-                  <span className="text-sm font-semibold">Login</span>
+                  <LogOut className="h-5 w-5" />
                 </Button>
-              </form>
-            ) : (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={handleLogout}
-                      className="h-12 w-12 cursor-pointer rounded-md border-border/70 bg-background/90 text-foreground shadow-sm transition-colors hover:border-destructive/40 hover:bg-background hover:text-destructive"
-                      aria-label="Logout"
-                    >
-                      <LogOut className="h-5 w-5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Logout</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
-          </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Logout</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
       </div>
     </header>

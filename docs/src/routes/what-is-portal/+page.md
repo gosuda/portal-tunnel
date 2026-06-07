@@ -24,7 +24,7 @@ tenant plaintext or session keys.
   own relay.
 - **Relay pools and multi-hop**: keep multiple relays connected or route through
   an ordered relay chain.
-- **Local identity**: lease ownership is proven with a locally stored secp256k1
+- **Local identity**: lease ownership is proven with a locally stored Sui Ed25519
   identity and challenge signing.
 
 ## The Mental Model

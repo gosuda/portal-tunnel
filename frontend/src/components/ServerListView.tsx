@@ -208,6 +208,7 @@ export function ServerListView({
   const [relayDiscoveryLoading, setRelayDiscoveryLoading] = useState(
     () => !isAdmin
   );
+  const [relayDiscoveryMessage, setRelayDiscoveryMessage] = useState("");
   const [selectedIdentityKeys, setSelectedIdentityKeys] = useState<Set<string>>(
     new Set()
   );
@@ -215,10 +216,6 @@ export function ServerListView({
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
   const showLandingHero = !isAdmin && landingPageEnabled;
   const currentRelayURL = useMemo(() => readCurrentOrigin(), []);
-  const paymentAppCount = useMemo(
-    () => serverItems.filter((server) => server.paymentEnabled).length,
-    [serverItems]
-  );
 
   const handleToggleSelect = (identityKey: string) => {
     setSelectedIdentityKeys((prev) => {
@@ -296,8 +293,10 @@ export function ServerListView({
     setRelayDiscoveryLoading(true);
     setRelayReleaseVersions({});
     setKnownRelays([]);
+    setRelayDiscoveryMessage("");
 
     void (async () => {
+      let discoveryMessage = "";
       let nextKnownRelays = normalizeKnownRelays(undefined, currentRelayURL);
 
       try {
@@ -308,7 +307,7 @@ export function ServerListView({
           currentRelayURL
         );
       } catch {
-        // Keep the current relay fallback when discovery is unavailable.
+        discoveryMessage = "Known relay data is unavailable on this relay.";
       }
 
       if (cancelled) {
@@ -317,6 +316,7 @@ export function ServerListView({
 
       setKnownRelays(nextKnownRelays);
       setRelayDiscoveryLoading(false);
+      setRelayDiscoveryMessage(discoveryMessage);
 
       const relayURLs = nextKnownRelays.map((relay) => relay.relayURL);
       const uniqueRelayURLs = [...new Set(relayURLs)];
@@ -614,14 +614,10 @@ export function ServerListView({
           owner: server.owner,
           online: server.online,
           serverUrl: server.link,
-          paymentEnabled: server.paymentEnabled,
-          paymentLabel: server.paymentLabel,
         }}
         firstSeen={server.firstSeen}
         isFavorite={favoriteIds.has(server.id)}
         onToggleFavorite={onToggleFavorite}
-        paymentEnabled={server.paymentEnabled}
-        paymentLabel={server.paymentLabel}
         showAdminControls={isAdmin && !!adminServer}
         identityKey={adminServer?.identityKey}
         address={adminServer?.address}
@@ -676,7 +672,7 @@ export function ServerListView({
         <div className="space-y-1.5">
           <a
             href={ROUTE_PATHS.home}
-            className="inline-block text-lg font-bold tracking-normal text-foreground transition-colors hover:text-primary"
+            className="inline-block text-lg font-bold tracking-tight text-foreground transition-colors hover:text-primary"
           >
             PORTAL
           </a>
@@ -802,12 +798,12 @@ export function ServerListView({
                 >
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                     <div className="space-y-2">
-                      <p className="text-sm font-semibold uppercase tracking-normal text-primary">
+                      <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
                         Live apps
                       </p>
                       <h2
                         id="live-servers-title"
-                        className="text-3xl font-semibold tracking-normal text-foreground"
+                        className="text-3xl font-semibold tracking-tight text-foreground"
                       >
                         Browse live apps
                       </h2>
@@ -820,10 +816,6 @@ export function ServerListView({
                       {searchBar}
                       <div className="px-1 pt-3 text-sm text-text-muted">
                         {filteredServers.length.toLocaleString()} services visible
-                        {paymentAppCount > 0 &&
-                          `, including ${paymentAppCount.toLocaleString()} paid app${
-                            paymentAppCount === 1 ? "" : "s"
-                          }`}
                       </div>
                       {serverGrid}
                     </div>
@@ -847,12 +839,12 @@ export function ServerListView({
                 >
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="space-y-2">
-                      <p className="text-sm font-semibold uppercase tracking-normal text-primary">
+                      <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
                         Relays
                       </p>
                       <h2
                         id="public-relays-title"
-                        className="text-3xl font-semibold tracking-normal text-foreground"
+                        className="text-3xl font-semibold tracking-tight text-foreground"
                       >
                         Public relays
                       </h2>
@@ -861,19 +853,19 @@ export function ServerListView({
                       href={OFFICIAL_REGISTRY_SOURCE_URL}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex h-10 items-center justify-center rounded-md bg-primary/10 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/16"
+                      className="inline-flex h-10 items-center justify-center rounded-full bg-primary/12 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
                     >
                       Open registry.json
                     </a>
                   </div>
 
-                  <div className="mt-6 rounded-lg border border-border/80 bg-secondary/25 p-5 sm:p-6">
+                  <div className="mt-6 rounded-xl border border-border/80 bg-secondary/35 p-5 sm:p-6">
                     {relayDiscoveryLoading ? (
-                      <div className="rounded-md border border-border/70 bg-background px-4 py-3 text-sm text-text-muted">
+                      <div className="rounded-2xl border border-border/70 bg-background/90 px-4 py-3 text-sm text-text-muted">
                         Loading known relays...
                       </div>
                     ) : knownRelays.length === 0 ? (
-                      <div className="rounded-md border border-border/70 bg-background px-4 py-3 text-sm text-text-muted">
+                      <div className="rounded-2xl border border-border/70 bg-background/90 px-4 py-3 text-sm text-text-muted">
                         No known relays discovered from this relay.
                       </div>
                     ) : (
@@ -881,7 +873,7 @@ export function ServerListView({
                         {knownRelays.map((relay) => (
                           <div
                             key={relay.relayURL}
-                            className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border/70 bg-background px-4 py-3"
+                            className="flex min-w-0 items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/90 px-4 py-3"
                           >
                             <a
                               href={relay.relayURL}
@@ -892,7 +884,7 @@ export function ServerListView({
                               {relay.relayURL}
                             </a>
                             <div className="flex shrink-0 items-center gap-2">
-                              <span className="rounded-sm bg-secondary/70 px-2.5 py-1 font-mono text-[11px] font-medium text-text-muted ring-1 ring-border">
+                              <span className="rounded-full bg-background px-2.5 py-1 font-mono text-[11px] font-medium text-text-muted ring-1 ring-border">
                                 {relayReleaseLabel(
                                   relayReleaseVersions,
                                   relay.relayURL
@@ -903,6 +895,11 @@ export function ServerListView({
                         ))}
                       </div>
                     )}
+                    {relayDiscoveryMessage ? (
+                      <div className="mt-3 text-sm text-text-muted">
+                        {relayDiscoveryMessage}
+                      </div>
+                    ) : null}
                   </div>
                 </section>
               </main>

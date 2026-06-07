@@ -12,9 +12,9 @@ that switches to a raw stream after a successful HTTP/1.1 response.
 
 ## Flow
 
-1. `GET /sdk/domain` checks relay compatibility, optional ENS support, and optional relay-owned Sui x402 control-plane facilitator support.
-2. `POST /sdk/register/challenge` creates a SIWE challenge for the requested identity.
-3. The SDK signs the returned `siwe_message`.
+1. `GET /sdk/domain` checks relay compatibility and optional ENS/payment support.
+2. `POST /sdk/register/challenge` creates a Sui challenge for the requested identity.
+3. The SDK signs the returned `message`.
 4. `POST /sdk/register` exchanges the signature for a lease `access_token`.
 5. The SDK keeps the lease alive with `/sdk/renew` and opens reverse streams with `/sdk/connect`.
 6. `POST /sdk/unregister` removes the lease.
@@ -25,7 +25,7 @@ that switches to a raw stream after a successful HTTP/1.1 response.
 |--------|------|------|------|------|
 | `GET` | `/sdk/domain` | None | none | `DomainResponse` |
 | `POST` | `/sdk/register/challenge` | None | `RegisterChallengeRequest` | `RegisterChallengeResponse` |
-| `POST` | `/sdk/register` | SIWE signature body | `RegisterRequest` | `RegisterResponse` |
+| `POST` | `/sdk/register` | Sui signature body | `RegisterRequest` | `RegisterResponse` |
 | `POST` | `/sdk/renew` | lease token body | `RenewRequest` | `RenewResponse` |
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
 | `GET` | `/sdk/connect` | lease token header | none | hijacked stream |
@@ -39,7 +39,7 @@ that switches to a raw stream after a successful HTTP/1.1 response.
 | `protocol_version` | `string` | SDK tunnel protocol version |
 | `release_version` | `string` | relay software release |
 | `ens` | `ENSStatus` | gasless ENS status |
-| `x402` | `X402FacilitatorInfo` | relay-owned Sui x402 control-plane facilitator status |
+| `x402` | `X402FacilitatorInfo` | relay-local payment facilitator info |
 
 `ENSStatus`:
 
@@ -53,11 +53,7 @@ that switches to a raw stream after a successful HTTP/1.1 response.
 | Field | Type |
 |-------|------|
 | `enabled` | `boolean` |
-| `url`, `network`, `network_name`, `supported_url`, `pay_to` | `string` |
-
-This object describes the relay's own optional x402 facilitator for
-control-plane resources. It is separate from tunnel-owned routed HTTP payments,
-which are configured locally by the tunnel process.
+| `url`, `network`, `network_name`, `supported_url` | `string` |
 
 ## Register Challenge
 
@@ -80,7 +76,7 @@ Overlay-only fields are also accepted by relay-to-relay clients:
 |-------|------|
 | `challenge_id` | `string` |
 | `expires_at` | `string` |
-| `siwe_message` | `string` |
+| `message` | `string` |
 
 ## Register
 
@@ -89,8 +85,8 @@ Overlay-only fields are also accepted by relay-to-relay clients:
 | Field | Type | Required |
 |-------|------|----------|
 | `challenge_id` | `string` | yes |
-| `siwe_message` | `string` | yes |
-| `siwe_signature` | `string` | yes |
+| `message` | `string` | yes |
+| `signature` | `string` | yes |
 | `reported_ip` | `string` | no |
 
 `RegisterResponse`:

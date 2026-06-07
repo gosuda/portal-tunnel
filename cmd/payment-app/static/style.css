@@ -10,8 +10,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
-button,
-select {
+button {
   font: inherit;
 }
 
@@ -61,6 +60,7 @@ select {
 }
 
 h1,
+h2,
 p,
 dl {
   margin: 0;
@@ -75,7 +75,7 @@ h1 {
 }
 
 .lede {
-  max-width: 36ch;
+  max-width: 34ch;
   margin-top: 16px;
   color: #536171;
   font-size: 16px;
@@ -108,38 +108,18 @@ dd {
   font-weight: 760;
 }
 
-.checkout {
-  display: grid;
-  gap: 10px;
-  margin-top: 30px;
-}
-
-.wallet-label {
-  color: #475569;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.wallet-select {
-  width: 100%;
-  min-height: 42px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  padding: 0 10px;
-  background: #ffffff;
-  color: #111827;
-}
-
 .actions {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
   align-items: center;
+  margin-top: 30px;
 }
 
 .primary-button {
   min-height: 42px;
   border-radius: 6px;
+  border: 1px solid transparent;
   padding: 0 16px;
   cursor: pointer;
   font-size: 14px;
@@ -148,25 +128,17 @@ dd {
 }
 
 .primary-button {
-  border: 1px solid transparent;
   background: #0e7490;
   color: #ffffff;
   box-shadow: 0 10px 22px rgba(14, 116, 144, 0.24);
 }
 
-.primary-button:hover:not(:disabled) {
+.primary-button:hover {
   background: #155e75;
   transform: translateY(-1px);
 }
 
-.primary-button:disabled,
-.wallet-select:disabled {
-  cursor: not-allowed;
-  opacity: 0.58;
-}
-
 .status {
-  overflow-wrap: anywhere;
   color: #667085;
   font-size: 13px;
   font-weight: 700;

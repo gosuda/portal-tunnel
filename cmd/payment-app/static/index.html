@@ -16,47 +16,43 @@
     <meta name="twitter:description" content="{{.PageDescription}}">
     <meta name="twitter:image" content="{{.OGImage}}">
     <link rel="stylesheet" href="/static/style.css">
-    <script id="payment-config" type="application/json">{{.ConfigJSON}}</script>
 </head>
 
 <body>
     <main class="shell">
         <section class="app-surface" aria-label="Payment app">
             <div class="summary">
-                <div>
-                    <div class="kicker">
-                        <span>Sui wallet</span>
-                        <span>{{.NetworkName}}</span>
-                        <span>USDC</span>
-                    </div>
-                    <h1>Paid image delivery</h1>
-                    <p class="lede">Connect a Sui wallet, sign the x402 payment transaction, and reveal the protected image in the viewer.</p>
-
-                    <dl class="facts">
-                        <div>
-                            <dt>Amount</dt>
-                            <dd>{{.Amount}}</dd>
-                        </div>
-                        <div>
-                            <dt>Network</dt>
-                            <dd>{{.Network}}</dd>
-                        </div>
-                        <div>
-                            <dt>Recipient</dt>
-                            <dd>{{.RecipientAddress}}</dd>
-                        </div>
-                    </dl>
+                <div class="kicker">
+                    <span>{{.PaymentRailName}}</span>
+                    <span>{{.NetworkName}}</span>
                 </div>
+                <h1>{{.Headline}}</h1>
+                <p class="lede">{{.Lede}}</p>
 
-                <div class="checkout">
-                    <label class="wallet-label" for="walletSelect">Wallet</label>
-                    <select id="walletSelect" class="wallet-select"></select>
-                    <label class="wallet-label" for="accountSelect">Address</label>
-                    <select id="accountSelect" class="wallet-select" disabled></select>
-                    <div class="actions">
-                        <button id="unlockButton" class="primary-button" type="button" disabled>Connect and pay</button>
+                <dl class="facts">
+                    <div>
+                        <dt>Amount</dt>
+                        <dd>{{.Price}}</dd>
                     </div>
-                    <p id="status" class="status">Looking for Sui wallets</p>
+                    <div>
+                        <dt>Asset</dt>
+                        <dd>{{.AssetLabel}}</dd>
+                    </div>
+                    <div>
+                        <dt>{{.NetworkLabel}}</dt>
+                        <dd>{{.NetworkName}}</dd>
+                    </div>
+                    <div>
+                        <dt>{{.RecipientLabel}}</dt>
+                        <dd>{{.RecipientAddress}}</dd>
+                    </div>
+                </dl>
+
+                <div class="actions">
+                    <button id="unlockButton" class="primary-button" type="button" data-protected-path="{{.ProtectedPath}}" data-checkout-title="{{.CheckoutTitle}}" data-status-open="{{.StatusOpen}}" data-status-paused="{{.StatusPaused}}" data-preview-title="{{.PreviewTitle}}">
+                        {{.ButtonLabel}}
+                    </button>
+                    <span id="status" class="status">{{.StatusReady}}</span>
                 </div>
             </div>
 
@@ -67,220 +63,50 @@
                         <span></span>
                         <span></span>
                     </div>
-                    <span id="viewerTitle" class="viewer-title">Protected image</span>
+                    <span id="viewerTitle" class="viewer-title">{{.PreviewTitle}}</span>
                     <button id="resetViewer" class="viewer-reset" type="button" hidden>Reset</button>
                 </div>
                 <div id="lockedPreview" class="preview-body">
-                    <div class="lock-mark">402</div>
+                    <div class="lock-mark">{{.LockedMark}}</div>
                     <div>
-                        <p class="preview-label">Protected image</p>
-                        <p class="preview-title">Wallet payment opens here</p>
+                        <p class="preview-label">{{.PreviewLabel}}</p>
+                        <p class="preview-title">{{.PreviewMessage}}</p>
                     </div>
                 </div>
-                <iframe id="paymentFrame" class="payment-frame" title="Unlocked protected image" hidden></iframe>
+                <iframe id="paymentFrame" class="payment-frame" title="{{.CheckoutTitle}}" allow="clipboard-read; clipboard-write; payment; publickey-credentials-get" hidden></iframe>
             </div>
         </section>
     </main>
 
-    <script type="module">
-        import { getSuiWallets, onSuiWalletChange, x402Fetch } from '/x402/client.js';
-
-        const config = JSON.parse(document.getElementById('payment-config').textContent || '{}');
-        const walletSelect = document.getElementById('walletSelect');
-        const accountSelect = document.getElementById('accountSelect');
+    <script>
         const unlockButton = document.getElementById('unlockButton');
-        const statusEl = document.getElementById('status');
         const viewer = document.getElementById('viewer');
         const lockedPreview = document.getElementById('lockedPreview');
         const paymentFrame = document.getElementById('paymentFrame');
         const resetViewer = document.getElementById('resetViewer');
         const viewerTitle = document.getElementById('viewerTitle');
-        let wallets = [];
-        let connectedWalletIndex = '';
-        let connectedAccounts = [];
+        const statusEl = document.getElementById('status');
 
-        function setStatus(value) {
-            statusEl.textContent = value;
-        }
-
-        function setPaymentEvent(event) {
-            setStatus(event.message);
-        }
-
-        function currentWallets() {
-            wallets = getSuiWallets({ network: config.network });
-            return wallets;
-        }
-
-        function resetAccountSelect() {
-            const option = document.createElement('option');
-            option.value = '';
-            option.textContent = 'Connect wallet first';
-            accountSelect.replaceChildren(option);
-            accountSelect.disabled = true;
-        }
-
-        function refreshWallets() {
-            const selectedWalletIndex = walletSelect.value;
-            const nextWallets = currentWallets();
-            walletSelect.replaceChildren(...nextWallets.map((wallet, index) => {
-                const option = document.createElement('option');
-                option.value = String(index);
-                option.textContent = wallet.name;
-                return option;
-            }));
-            if (selectedWalletIndex && Number(selectedWalletIndex) < nextWallets.length) {
-                walletSelect.value = selectedWalletIndex;
+        unlockButton.addEventListener('click', () => {
+            viewer.classList.add('is-active');
+            lockedPreview.hidden = true;
+            paymentFrame.hidden = false;
+            resetViewer.hidden = false;
+            viewerTitle.textContent = unlockButton.dataset.checkoutTitle;
+            statusEl.textContent = unlockButton.dataset.statusOpen;
+            if (!paymentFrame.src) {
+                paymentFrame.src = unlockButton.dataset.protectedPath;
             }
-            const hasWallets = nextWallets.length > 0;
-            walletSelect.disabled = !hasWallets;
-            unlockButton.disabled = !hasWallets;
-            unlockButton.textContent = 'Connect and pay';
-            connectedWalletIndex = '';
-            connectedAccounts = [];
-            resetAccountSelect();
-            setStatus(hasWallets ? 'Select a wallet and continue' : 'Install a Sui wallet extension');
-        }
-
-        function accountKey(account) {
-            return String(account?.address || '').trim().toLowerCase();
-        }
-
-        function shortAddress(value) {
-            const address = String(value || '').trim();
-            if (address.length <= 18) {
-                return address;
-            }
-            return `${address.slice(0, 10)}...${address.slice(-6)}`;
-        }
-
-        function accountByAddress(accounts, address) {
-            const key = String(address || '').trim().toLowerCase();
-            return accounts.find((account) => account.address === address) ||
-                accounts.find((account) => accountKey(account) === key) ||
-                null;
-        }
-
-        function setAccountOptions(accounts, preferredAddress) {
-            const seen = new Set();
-            connectedAccounts = accounts.filter((account) => {
-                const key = accountKey(account);
-                if (!key || seen.has(key)) {
-                    return false;
-                }
-                seen.add(key);
-                return true;
-            });
-            accountSelect.replaceChildren(...connectedAccounts.map((account) => {
-                const option = document.createElement('option');
-                option.value = account.address;
-                option.textContent = shortAddress(account.address);
-                return option;
-            }));
-            const preferred = accountByAddress(connectedAccounts, preferredAddress);
-            if (preferred) {
-                accountSelect.value = preferred.address;
-            }
-            accountSelect.disabled = connectedAccounts.length === 0;
-        }
-
-        async function connectWallet() {
-            const selectedWalletIndex = walletSelect.value;
-            const wallet = wallets[Number(selectedWalletIndex)] || currentWallets()[Number(selectedWalletIndex)];
-            if (!wallet) {
-                throw new Error('No Sui wallet selected');
-            }
-
-            const hadAccountSelection = connectedWalletIndex === selectedWalletIndex && accountSelect.value !== '';
-            const accounts = await wallet.accounts(config.network);
-            connectedWalletIndex = selectedWalletIndex;
-            setAccountOptions(accounts, accountSelect.value);
-
-            if (connectedAccounts.length > 1 && !hadAccountSelection) {
-                unlockButton.textContent = 'Pay with selected address';
-                setStatus('Select an address and continue');
-                return null;
-            }
-
-            const account = accountByAddress(connectedAccounts, accountSelect.value) ||
-                (connectedAccounts.length === 1 ? connectedAccounts[0] : null);
-            if (!account) {
-                throw new Error('Connected wallet did not return an account');
-            }
-            if (Array.isArray(account.chains) && !account.chains.includes(config.network)) {
-                throw new Error(`Connected account does not advertise ${config.network}`);
-            }
-            return { wallet, account };
-        }
-
-        async function unlock() {
-            unlockButton.disabled = true;
-            walletSelect.disabled = true;
-            accountSelect.disabled = true;
-            paymentFrame.removeAttribute('srcdoc');
-            try {
-                setStatus('Connecting wallet');
-                const connection = await connectWallet();
-                if (!connection) {
-                    return;
-                }
-                const { wallet, account } = connection;
-
-                viewer.classList.add('is-active');
-                resetViewer.hidden = false;
-                lockedPreview.hidden = true;
-                paymentFrame.hidden = false;
-                viewerTitle.textContent = 'Sui wallet payment';
-
-                const protectedResponse = await x402Fetch(config.protectedPath, { method: 'GET' }, {
-                    wallet,
-                    account,
-                    network: config.network,
-                    preparePath: config.preparePath,
-                    onEvent: setPaymentEvent,
-                });
-                if (!protectedResponse.ok) {
-                    throw new Error(await protectedResponse.text());
-                }
-                paymentFrame.srcdoc = await protectedResponse.text();
-                viewerTitle.textContent = 'Image unlocked';
-                setStatus('Payment complete');
-            } catch (error) {
-                lockedPreview.hidden = false;
-                paymentFrame.hidden = true;
-                paymentFrame.removeAttribute('srcdoc');
-                viewerTitle.textContent = 'Protected image';
-                setStatus(error instanceof Error ? error.message.trim() : String(error));
-            } finally {
-                const hasWallets = currentWallets().length > 0;
-                walletSelect.disabled = !hasWallets;
-                accountSelect.disabled = connectedAccounts.length === 0;
-                unlockButton.disabled = !hasWallets;
-                unlockButton.textContent = connectedAccounts.length > 0 ? 'Pay with selected address' : 'Connect and pay';
-            }
-        }
-
-        unlockButton.addEventListener('click', unlock);
-        walletSelect.addEventListener('change', () => {
-            connectedWalletIndex = '';
-            connectedAccounts = [];
-            resetAccountSelect();
-            unlockButton.textContent = 'Connect and pay';
-            setStatus('Select a wallet and continue');
         });
 
         resetViewer.addEventListener('click', () => {
             viewer.classList.remove('is-active');
             lockedPreview.hidden = false;
             paymentFrame.hidden = true;
-            paymentFrame.removeAttribute('srcdoc');
             resetViewer.hidden = true;
-            viewerTitle.textContent = 'Protected image';
-            setStatus('Ready');
+            viewerTitle.textContent = unlockButton.dataset.previewTitle;
+            statusEl.textContent = paymentFrame.src ? unlockButton.dataset.statusPaused : statusEl.textContent;
         });
-
-        refreshWallets();
-        onSuiWalletChange(refreshWallets);
     </script>
 </body>
 

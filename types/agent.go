@@ -8,27 +8,18 @@ type AgentStatusResponse struct {
 }
 
 type AgentTunnelStatus struct {
-	ID              string             `json:"id"`
-	Name            string             `json:"name,omitempty"`
-	Address         string             `json:"address,omitempty"`
-	State           string             `json:"state"`
-	TargetAddr      string             `json:"target_addr,omitempty"`
-	LastError       string             `json:"last_error,omitempty"`
-	Discovery       bool               `json:"discovery"`
-	MaxActiveRelays int                `json:"max_active_relays,omitempty"`
-	Metadata        LeaseMetadata      `json:"metadata,omitempty"`
-	MultiHop        []string           `json:"multi_hop,omitempty"`
-	X402PayTo       string             `json:"x402_pay_to,omitempty"`
-	X402Testnet     bool               `json:"x402_testnet,omitempty"`
-	HTTPRoutes      []AgentHTTPRoute   `json:"http_routes,omitempty"`
-	Relays          []AgentRelayStatus `json:"relays,omitempty"`
-}
-
-type AgentHTTPRoute struct {
-	Prefix   string   `json:"prefix"`
-	Upstream string   `json:"upstream"`
-	Methods  []string `json:"methods,omitempty"`
-	Amount   string   `json:"amount,omitempty"`
+	ID                 string             `json:"id"`
+	Name               string             `json:"name,omitempty"`
+	Address            string             `json:"address,omitempty"`
+	State              string             `json:"state"`
+	TargetAddr         string             `json:"target_addr,omitempty"`
+	LastError          string             `json:"last_error,omitempty"`
+	MaxActiveRelays    int                `json:"max_active_relays,omitempty"`
+	Metadata           LeaseMetadata      `json:"metadata,omitempty"`
+	X402Enabled        bool               `json:"x402_enabled,omitempty"`
+	X402FacilitatorURL string             `json:"x402_facilitator_url,omitempty"`
+	MultiHop           []string           `json:"multi_hop,omitempty"`
+	Relays             []AgentRelayStatus `json:"relays,omitempty"`
 }
 
 type AgentRelayStatus struct {
@@ -45,15 +36,10 @@ type AgentRelayStatus struct {
 }
 
 type AgentTunnelRequest struct {
-	ID              string           `json:"id"`
-	Name            string           `json:"name,omitempty"`
-	TargetAddr      string           `json:"target_addr,omitempty"`
-	HTTPRoutes      []AgentHTTPRoute `json:"http_routes,omitempty"`
-	RelayURLs       []string         `json:"relays,omitempty"`
-	Discovery       *bool            `json:"discovery,omitempty"`
-	MaxActiveRelays int              `json:"max_active_relays,omitempty"`
-	X402PayTo       string           `json:"x402_pay_to,omitempty"`
-	X402Testnet     bool             `json:"x402_testnet,omitempty"`
+	ID         string   `json:"id"`
+	Name       string   `json:"name,omitempty"`
+	TargetAddr string   `json:"target_addr,omitempty"`
+	RelayURLs  []string `json:"relays,omitempty"`
 }
 
 type AgentRelayRequest struct {
@@ -65,13 +51,15 @@ type AgentMultiHopRequest struct {
 }
 
 type AgentTunnelUpdateRequest struct {
-	MaxActiveRelays *int                  `json:"max_active_relays,omitempty"`
-	Metadata        *AgentMetadataRequest `json:"metadata,omitempty"`
+	MaxActiveRelays    *int                  `json:"max_active_relays,omitempty"`
+	Metadata           *AgentMetadataRequest `json:"metadata,omitempty"`
+	X402FacilitatorURL *string               `json:"x402_facilitator_url,omitempty"`
 }
 
 func (r AgentTunnelUpdateRequest) Empty() bool {
 	return r.MaxActiveRelays == nil &&
-		(r.Metadata == nil || r.Metadata.Empty())
+		(r.Metadata == nil || r.Metadata.Empty()) &&
+		r.X402FacilitatorURL == nil
 }
 
 type AgentMetadataRequest struct {

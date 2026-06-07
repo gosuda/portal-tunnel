@@ -8,8 +8,8 @@ import (
 
 type Authority interface {
 	Identity() types.Identity
-	SignEthereumPersonalMessage(message string) (string, error)
-	SignSHA256Secp256k1(payload []byte) (Secp256k1Signature, error)
+	SignEd25519(payload []byte) (string, error)
+	SignSuiPersonalMessage(message []byte) (string, error)
 }
 
 type LocalAuthority struct {
@@ -21,14 +21,14 @@ func NewLocalAuthority(raw types.Identity) (LocalAuthority, error) {
 	if err != nil {
 		return LocalAuthority{}, err
 	}
-	if normalized.PrivateKey == "" {
-		return LocalAuthority{}, errors.New("authority private key is required")
+	if normalized.SuiPrivateKey == "" {
+		return LocalAuthority{}, errors.New("authority sui private key is required")
 	}
-	if normalized.PublicKey == "" {
-		return LocalAuthority{}, errors.New("authority public key is required")
+	if normalized.SuiPublicKey == "" {
+		return LocalAuthority{}, errors.New("authority sui public key is required")
 	}
-	if normalized.Address == "" {
-		return LocalAuthority{}, errors.New("authority address is required")
+	if normalized.SuiAddress == "" {
+		return LocalAuthority{}, errors.New("authority sui address is required")
 	}
 	return LocalAuthority{identity: normalized}, nil
 }
@@ -38,18 +38,16 @@ func (a LocalAuthority) Identity() types.Identity {
 	identity.PrivateKey = ""
 	identity.Mnemonic = ""
 	identity.DerivationPath = ""
+	identity.SuiPrivateKey = ""
+	identity.SuiDerivationPath = ""
 	identity.TokenSecret = ""
 	return identity
 }
 
-func (a LocalAuthority) SignEthereumPersonalMessage(message string) (string, error) {
-	return signEthereumPersonalMessage(message, a.identity.PrivateKey)
+func (a LocalAuthority) SignEd25519(payload []byte) (string, error) {
+	return SignEd25519Hex(payload, a.identity.SuiPrivateKey)
 }
 
-func (a LocalAuthority) SignSHA256Secp256k1(payload []byte) (Secp256k1Signature, error) {
-	privateKey, _, err := parseSecp256k1PrivateKeyHex(a.identity.PrivateKey, true)
-	if err != nil {
-		return Secp256k1Signature{}, err
-	}
-	return signSHA256Secp256k1(payload, privateKey)
+func (a LocalAuthority) SignSuiPersonalMessage(message []byte) (string, error) {
+	return SignSuiPersonalMessage(message, a.identity.SuiPrivateKey)
 }

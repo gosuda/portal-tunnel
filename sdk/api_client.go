@@ -218,17 +218,17 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	if err != nil {
 		return types.RegisterResponse{}, nil, "", "", err
 	}
-	signature, err := authority.SignEthereumPersonalMessage(challenge.SIWEMessage)
+	signature, err := authority.SignSuiPersonalMessage([]byte(challenge.Message))
 	if err != nil {
 		return types.RegisterResponse{}, nil, "", "", err
 	}
 
 	var resp types.RegisterResponse
 	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
-		ChallengeID:   challenge.ChallengeID,
-		SIWEMessage:   challenge.SIWEMessage,
-		SIWESignature: signature,
-		ReportedIP:    utils.ResolvePublicIP(ctx),
+		ChallengeID: challenge.ChallengeID,
+		Message:     challenge.Message,
+		Signature:   signature,
+		ReportedIP:  utils.ResolvePublicIP(ctx),
 	}, nil, &resp); err != nil {
 		return types.RegisterResponse{}, nil, "", "", err
 	}

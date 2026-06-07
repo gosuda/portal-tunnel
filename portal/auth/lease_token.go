@@ -1,11 +1,11 @@
 package auth
 
 import (
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
@@ -16,7 +16,7 @@ import (
 
 const (
 	leaseAccessTokenAudience = "portal-sdk"
-	leaseTokenAlgorithm      = jose.SignatureAlgorithm("ES256K")
+	leaseTokenAlgorithm      = jose.EdDSA
 )
 
 type LeaseAccessTokenClaims struct {
@@ -24,48 +24,45 @@ type LeaseAccessTokenClaims struct {
 	Identity types.Identity `json:"identity"`
 }
 
-type es256kOpaqueSigner struct {
+type ed25519OpaqueSigner struct {
 	authority identity.Authority
 }
 
-func (s *es256kOpaqueSigner) Public() *jose.JSONWebKey {
+func (s *ed25519OpaqueSigner) Public() *jose.JSONWebKey {
 	return &jose.JSONWebKey{}
 }
 
-func (s *es256kOpaqueSigner) Algs() []jose.SignatureAlgorithm {
+func (s *ed25519OpaqueSigner) Algs() []jose.SignatureAlgorithm {
 	return []jose.SignatureAlgorithm{leaseTokenAlgorithm}
 }
 
-func (s *es256kOpaqueSigner) SignPayload(payload []byte, alg jose.SignatureAlgorithm) ([]byte, error) {
+func (s *ed25519OpaqueSigner) SignPayload(payload []byte, alg jose.SignatureAlgorithm) ([]byte, error) {
 	if alg != leaseTokenAlgorithm {
 		return nil, jose.ErrUnsupportedAlgorithm
 	}
 	if s == nil || s.authority == nil {
 		return nil, errors.New("signing key is required")
 	}
-	signature, err := s.authority.SignSHA256Secp256k1(payload)
+	signatureHex, err := s.authority.SignEd25519(payload)
 	if err != nil {
 		return nil, err
 	}
-	return signature.Raw64()
+	return hex.DecodeString(signatureHex)
 }
 
-type es256kOpaqueVerifier struct {
-	publicKey *secp256k1.PublicKey
+type ed25519OpaqueVerifier struct {
+	publicKey string
 }
 
-func (v *es256kOpaqueVerifier) VerifyPayload(payload []byte, signature []byte, alg jose.SignatureAlgorithm) error {
+func (v *ed25519OpaqueVerifier) VerifyPayload(payload []byte, signature []byte, alg jose.SignatureAlgorithm) error {
 	if alg != leaseTokenAlgorithm {
 		return jose.ErrUnsupportedAlgorithm
 	}
-	if v == nil || v.publicKey == nil {
+	if v == nil || strings.TrimSpace(v.publicKey) == "" {
 		return errors.New("verification key is required")
 	}
-	if err := identity.VerifySHA256Secp256k1Raw64(payload, signature, v.publicKey); err != nil {
-		if errors.Is(err, identity.ErrSecp256k1SignatureInvalid) {
-			return errors.New("token signature is invalid")
-		}
-		return err
+	if err := identity.VerifyEd25519Hex(payload, v.publicKey, hex.EncodeToString(signature)); err != nil {
+		return errors.New("token signature is invalid")
 	}
 	return nil
 }
@@ -81,7 +78,7 @@ func IssueLeaseAccessToken(authority identity.Authority, issuer string, leaseIde
 
 	signer, err := jose.NewSigner(jose.SigningKey{
 		Algorithm: leaseTokenAlgorithm,
-		Key: &es256kOpaqueSigner{
+		Key: &ed25519OpaqueSigner{
 			authority: authority,
 		},
 	}, (&jose.SignerOptions{}).WithType("JWT"))
@@ -112,18 +109,13 @@ func IssueLeaseAccessToken(authority identity.Authority, issuer string, leaseIde
 }
 
 func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, now time.Time) (LeaseAccessTokenClaims, error) {
-	publicKey, err := identity.ParseSecp256k1PublicKeyHex(publicKeyHex)
-	if err != nil {
-		return LeaseAccessTokenClaims{}, err
-	}
-
 	parsed, err := jwt.ParseSigned(strings.TrimSpace(token), []jose.SignatureAlgorithm{leaseTokenAlgorithm})
 	if err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
 
 	var claims LeaseAccessTokenClaims
-	if err := parsed.Claims(&es256kOpaqueVerifier{publicKey: publicKey}, &claims); err != nil {
+	if err := parsed.Claims(&ed25519OpaqueVerifier{publicKey: publicKeyHex}, &claims); err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
 	normalizedClaimsIdentity, err := identity.NormalizeIdentity(claims.Identity)

@@ -487,7 +487,7 @@ func (r *leaseRegistry) RegisterHopRoute(route *types.HopRoute, now time.Time) (
 	if route == nil {
 		return nil, errors.New("hop route is required")
 	}
-	ownerKey, err := identity.AddressFromCompressedPublicKeyHex(route.OwnerPublicKey)
+	ownerKey, err := identity.SuiAddressFromEd25519PublicKeyHex(route.OwnerPublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -615,7 +615,7 @@ func (r *leaseRegistry) DeleteHopRoute(route *types.HopRoute) *leaseRecord {
 	if r == nil || route == nil {
 		return nil
 	}
-	ownerKey, err := identity.AddressFromCompressedPublicKeyHex(route.OwnerPublicKey)
+	ownerKey, err := identity.SuiAddressFromEd25519PublicKeyHex(route.OwnerPublicKey)
 	if err != nil {
 		return nil
 	}
@@ -758,7 +758,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	return types.RegisterChallengeResponse{
 		ChallengeID: challenge.ChallengeID,
 		ExpiresAt:   challenge.ExpiresAt,
-		SIWEMessage: challenge.SIWEMessage,
+		Message:     challenge.Message,
 	}, nil
 }
 

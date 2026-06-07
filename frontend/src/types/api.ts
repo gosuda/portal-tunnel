@@ -72,16 +72,20 @@ export interface PolicySettings {
   tcp_port: PolicyPortSettings;
 }
 
-export interface AdminAuthStatusResponse {
+export interface WalletAuthStatusResponse {
   authenticated: boolean;
+  wallet_address?: string;
 }
 
-export interface AdminAuthLoginRequest {
-  token: string;
+export interface WalletAuthChallengeResponse {
+  challenge_id: string;
+  expires_at: string;
+  message: string;
 }
 
-export interface AdminAuthLoginResponse {
+export interface WalletAuthLoginResponse {
   access_token?: string;
+  wallet_address?: string;
 }
 
 export interface ENSStatus {
@@ -101,7 +105,6 @@ export interface X402FacilitatorInfo {
   network?: string;
   network_name?: string;
   supported_url?: string;
-  pay_to?: string;
 }
 
 export interface DomainResponse {

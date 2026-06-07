@@ -9,15 +9,16 @@ Operator endpoints are the control surface for a relay. They all return
 the standard JSON envelope described in [API Reference](/api-reference), except
 for internal operational endpoints that are not part of the stable API.
 
-`/admin` is reserved for the frontend route. Relay admin auth endpoints live
+`/admin` is reserved for the frontend route. Relay wallet auth endpoints live
 under `/api/admin`, and enforcement settings live under `/api/policy`.
 
 ## Auth Flow
 
-1. Set `ADMIN_TOKEN` on the relay.
-2. `POST /api/admin/auth/login` with `{ "token": "<admin-token>" }`.
-3. Send the returned `access_token` as `Authorization: Bearer <token>`.
-4. `POST /api/admin/auth/logout` to clear the browser-stored token.
+1. `POST /api/admin/auth/challenge` with the Sui wallet address.
+2. Sign the returned `message`.
+3. `POST /api/admin/auth/login` with the challenge id, message, and signature.
+4. Send the returned `access_token` as `Authorization: Bearer <token>`.
+5. `POST /api/admin/auth/logout` to invalidate the current token.
 
 Admin bearer tokens are separate from SDK lease tokens.
 
@@ -25,8 +26,9 @@ Admin bearer tokens are separate from SDK lease tokens.
 
 | Method | Path | Auth | Body | Data |
 |--------|------|------|------|------|
-| `POST` | `/api/admin/auth/login` | None | `AdminAuthLoginRequest` | `AdminAuthLoginResponse` |
-| `GET` | `/api/admin/auth/status` | Optional bearer | none | `AdminAuthStatusResponse` |
+| `POST` | `/api/admin/auth/challenge` | None | `WalletAuthChallengeRequest` | `WalletAuthChallengeResponse` |
+| `POST` | `/api/admin/auth/login` | Sui signature body | `WalletAuthLoginRequest` | `WalletAuthLoginResponse` |
+| `GET` | `/api/admin/auth/status` | Optional bearer | none | `WalletAuthStatusResponse` |
 | `POST` | `/api/admin/auth/logout` | Bearer | none | `{}` |
 | `GET` | `/api/policy` | Bearer | none | `PolicySettings` |
 | `POST` | `/api/policy` | Bearer | `PolicySettings` | `PolicySettings` |
@@ -36,23 +38,44 @@ Admin bearer tokens are separate from SDK lease tokens.
 
 ## Auth Payloads
 
-`AdminAuthLoginRequest`:
+`WalletAuthChallengeRequest`:
 
 | Field | Type | Required |
 |-------|------|----------|
-| `token` | `string` | yes |
+| `address` | `string` | yes |
+| `auth_method` | `string` | no |
 
-`AdminAuthLoginResponse`:
+`WalletAuthChallengeResponse`:
+
+| Field | Type |
+|-------|------|
+| `challenge_id` | `string` |
+| `expires_at` | `string` |
+| `message` | `string` |
+
+`WalletAuthLoginRequest`:
+
+| Field | Type | Required |
+|-------|------|----------|
+| `challenge_id` | `string` | yes |
+| `address` | `string` | no |
+| `auth_method` | `string` | no |
+| `message` | `string` | yes |
+| `signature` | `string` | yes |
+
+`WalletAuthLoginResponse`:
 
 | Field | Type |
 |-------|------|
 | `access_token` | `string` |
+| `wallet_address` | `string` |
 
-`AdminAuthStatusResponse`:
+`WalletAuthStatusResponse`:
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `authenticated` | `boolean` | true only when a valid bearer token was sent |
+| `wallet_address` | `string` | omitted when unauthenticated |
 
 ## State
 
@@ -69,7 +92,7 @@ and adds:
 | Field | Type | Notes |
 |-------|------|-------|
 | `identity_key` | `string` | normalized `name:address` key |
-| `address` | `string` | normalized Ethereum address |
+| `address` | `string` | normalized Sui address |
 | `bps` | `number` | bytes per second limit, `0` means unlimited |
 | `client_ip` | `string` | relay-observed client IP |
 | `reported_ip` | `string` | client-reported public IP, when present |

@@ -176,7 +176,7 @@ Portal's own nginx, it should TCP-passthrough `portal.example.com` and
 
 If the relay joins public discovery, set `BOOTSTRAPS` to at least one reachable relay URL and keep `WIREGUARD_PORT/udp` open.
 
-Set `ADMIN_TOKEN` to a long random value before exposing the admin UI or policy API.
+The relay identity wallet can always sign in through admin auth. Set `ADMIN_WALLETS` only when you need additional admin wallets.
 
 Leave `TRUSTED_PROXY_CIDRS` empty for the default private and loopback proxy ranges. Set it only when you need a stricter proxy source allowlist.
 
@@ -280,7 +280,7 @@ ENS_GASLESS_ENABLED=true
 Operational notes:
 
 - ENS gasless requires `ACME_DNS_PROVIDER`.
-- Portal writes `ENS1 0x238A8F792dFA6033814B18618aD4100654aeef01 <address>` TXT records.
+- Portal writes `ENS1 0x238A8F792dFA6033814B18618aD4100654aeef01 <ethereum-address>` TXT records.
 - The base domain uses the relay identity address; lease hostnames use each lease identity address.
 - Provider-side DNSSEC automation is not the same as registrar-side DS publication.
 - If the provider returns a `DS` record or reports DNSSEC as pending, publish the DS record at your registrar and wait for parent-zone propagation.
@@ -359,7 +359,7 @@ It owns:
 - `/ui/thumbnail/<hostname>`, when optional screenshot generation is enabled.
 - The landing-page flag persisted at `PORTAL_FRONTEND_STATE_PATH`; a Compose deployment can store it under `./.portal-certs/frontend-state/state.json`.
 
-The Go relay remains the owner of authentication, policy enforcement, lease state, tunnel ingress, install scripts, and discovery paths.
+The Go relay remains the owner of authentication, policy enforcement, lease state, tunnel ingress, install scripts, discovery, and Sui payment facilitator paths.
 
 ### Custom Frontend
 

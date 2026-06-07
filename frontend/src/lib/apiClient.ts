@@ -120,6 +120,7 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
       isPathOrChild(pathname, RELAY_API_PATHS.admin.root);
     if (
       requiresAdminAuth &&
+      pathname !== BROWSER_API_PATHS.admin.authChallenge &&
       pathname !== BROWSER_API_PATHS.admin.authLogin
     ) {
       const token = readAdminAuthToken();

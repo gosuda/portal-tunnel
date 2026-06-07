@@ -1,7 +1,6 @@
 import { SsgoiTransition } from "@ssgoi/react";
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { BadgeDollarSign } from "lucide-react";
 
 interface ServerDetailState {
   id: string;
@@ -12,8 +11,6 @@ interface ServerDetailState {
   owner: string;
   online: boolean;
   serverUrl: string;
-  paymentEnabled?: boolean;
-  paymentLabel?: string;
 }
 
 export function ServerDetail() {
@@ -73,19 +70,7 @@ export function ServerDetail() {
     return null;
   }
 
-  const {
-    id,
-    thumbnail,
-    name,
-    online,
-    description,
-    tags,
-    owner,
-    paymentEnabled,
-    paymentLabel = "",
-  } = server;
-  const normalizedPaymentLabel = paymentLabel.trim();
-  const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
+  const { id, thumbnail, name, online, description, tags, owner } = server;
 
   // Base size multiplier (1 = default, 2 = 2x size)
   const basicSize = 2.5;
@@ -99,7 +84,7 @@ export function ServerDetail() {
       >
         {/* Content overlay - Full screen */}
         <div className="absolute inset-0 flex items-center justify-center p-6 md:p-12">
-          <div className="w-full h-full max-w-7xl bg-background/78 backdrop-blur-sm rounded-lg flex flex-col gap-6 p-8 md:p-12 items-start text-start">
+          <div className="w-full h-full max-w-7xl bg-background/70 backdrop-blur-sm rounded-xl flex flex-col gap-6 p-8 md:p-12 items-start text-start">
             <div className="w-full h-full flex flex-col justify-center gap-6 md:gap-8">
               <div
                 className="flex flex-col"
@@ -127,14 +112,6 @@ export function ServerDetail() {
                     {online ? "Online" : "Offline"}
                   </p>
                 </div>
-                {showPaymentBadge && (
-                  <div className="inline-flex w-fit max-w-full items-center gap-2 rounded-md border border-amber-400/25 bg-amber-400/10 px-4 py-2 font-display text-amber-700 dark:text-amber-100">
-                    <BadgeDollarSign className="h-5 w-5 shrink-0" />
-                    <span className="truncate text-base font-bold uppercase tracking-wide">
-                      {normalizedPaymentLabel || "Paid app"}
-                    </span>
-                  </div>
-                )}
                 <p
                   className="text-foreground font-bold leading-tight"
                   style={{ fontSize: `${6 * basicSize}vw` }}

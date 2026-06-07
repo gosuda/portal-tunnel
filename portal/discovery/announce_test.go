@@ -11,9 +11,9 @@ import (
 
 func mustSigningIdentity(t *testing.T) types.Identity {
 	t.Helper()
-	signingIdentity, err := identity.ResolveSecp256k1Identity("")
+	signingIdentity, err := identity.ResolveSuiEd25519Identity("")
 	if err != nil {
-		t.Fatalf("identity.ResolveSecp256k1Identity() error = %v", err)
+		t.Fatalf("identity.ResolveSuiEd25519Identity() error = %v", err)
 	}
 	return signingIdentity
 }

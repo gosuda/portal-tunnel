@@ -2,17 +2,19 @@ package main
 
 import (
 	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -29,11 +31,11 @@ const (
 
 type RelayAPI struct {
 	server          *portal.Server
-	adminToken      string
+	auth            *auth.WalletAuthenticator
 	policyStatePath string
 }
 
-func NewRelayAPI(server *portal.Server, identityPath, adminToken string) (*RelayAPI, error) {
+func NewRelayAPI(server *portal.Server, identityPath string, adminWallets []string) (*RelayAPI, error) {
 	if server == nil {
 		return nil, errors.New("relay api requires portal server")
 	}
@@ -48,10 +50,19 @@ func NewRelayAPI(server *portal.Server, identityPath, adminToken string) (*Relay
 	if err := loadPolicyState(policyStatePath, server); err != nil {
 		return nil, err
 	}
+	relayIdentity := server.RelayIdentity()
+	allowedWallets := append([]string{relayIdentity.Address}, adminWallets...)
+	authenticator, err := auth.NewWalletAuthenticator(auth.WalletAuthConfig{
+		AllowedAddresses: allowedWallets,
+		Statement:        "Sign in to Portal relay admin",
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	api := &RelayAPI{
 		server:          server,
-		adminToken:      strings.TrimSpace(adminToken),
+		auth:            authenticator,
 		policyStatePath: strings.TrimSpace(policyStatePath),
 	}
 	return api, nil
@@ -123,29 +134,38 @@ func (api *RelayAPI) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	case types.PathAdmin:
 		http.NotFound(w, r)
 		return
+	case types.PathAdminAuthChallenge:
+		if !utils.RequireMethod(w, r, http.MethodPost) {
+			return
+		}
+		api.handleWalletChallenge(w, r)
+		return
 	case types.PathAdminAuthLogin:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		api.handleAdminLogin(w, r)
+		api.handleWalletLogin(w, r)
 		return
 	case types.PathAdminLogout:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
+		api.auth.DeleteSession(adminAccessToken(r))
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		return
 	case types.PathAdminAuthStatus:
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
-		utils.WriteAPIData(w, http.StatusOK, types.AdminAuthStatusResponse{
-			Authenticated: api.authenticatedAdmin(r),
+		walletAddress, authenticated := api.authenticatedWallet(r)
+		utils.WriteAPIData(w, http.StatusOK, types.WalletAuthStatusResponse{
+			Authenticated: authenticated,
+			WalletAddress: walletAddress,
 		})
 		return
 	}
 
-	if !api.authenticatedAdmin(r) {
+	if _, ok := api.authenticatedWallet(r); !ok {
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized")
 		return
 	}
@@ -165,7 +185,7 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		path = types.PathRoot
 	}
 
-	if !api.authenticatedAdmin(r) {
+	if _, ok := api.authenticatedWallet(r); !ok {
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized")
 		return
 	}
@@ -333,22 +353,58 @@ func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, iden
 	return true
 }
 
-func (api *RelayAPI) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONRequestAs[types.AdminAuthLoginRequest](w, r, controlBodyLimit, utils.InvalidRequestError(errors.New("invalid request body")))
+func (api *RelayAPI) handleWalletChallenge(w http.ResponseWriter, r *http.Request) {
+	req, ok := utils.DecodeJSONRequestAs[types.WalletAuthChallengeRequest](w, r, controlBodyLimit, utils.InvalidRequestError(errors.New("invalid request body")))
 	if !ok {
 		return
 	}
-	if !api.tokenAllowed(req.Token) {
-		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "invalid admin token")
+	resp, err := api.auth.IssueChallenge(req, adminAuthDomain(r, api.server.RelayIdentity().Name), adminAuthURI(r, types.PathAdminAuthLogin), time.Now().UTC())
+	if err != nil {
+		writeWalletAuthError(w, err)
 		return
 	}
-	utils.WriteAPIData(w, http.StatusOK, types.AdminAuthLoginResponse{
-		AccessToken: api.adminToken,
+	utils.WriteAPIData(w, http.StatusCreated, resp)
+}
+
+func (api *RelayAPI) handleWalletLogin(w http.ResponseWriter, r *http.Request) {
+	req, ok := utils.DecodeJSONRequestAs[types.WalletAuthLoginRequest](w, r, controlBodyLimit, utils.InvalidRequestError(errors.New("invalid request body")))
+	if !ok {
+		return
+	}
+	token, walletAddress, err := api.auth.Login(req, time.Now().UTC())
+	if err != nil {
+		writeWalletAuthError(w, err)
+		return
+	}
+
+	utils.WriteAPIData(w, http.StatusOK, types.WalletAuthLoginResponse{
+		AccessToken:   token,
+		WalletAddress: walletAddress,
 	})
 }
 
-func (api *RelayAPI) authenticatedAdmin(r *http.Request) bool {
-	return api.tokenAllowed(adminAccessToken(r))
+func (api *RelayAPI) authenticatedWallet(r *http.Request) (string, bool) {
+	return api.auth.ValidateSession(adminAccessToken(r))
+}
+
+func adminAuthDomain(r *http.Request, fallback string) string {
+	domain := strings.TrimSpace(r.Host)
+	if domain != "" {
+		return domain
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func adminAuthURI(r *http.Request, endpointPath string) string {
+	scheme := "https"
+	if r.TLS == nil {
+		scheme = "http"
+	}
+	return (&url.URL{
+		Scheme: scheme,
+		Host:   adminAuthDomain(r, "localhost"),
+		Path:   endpointPath,
+	}).String()
 }
 
 func adminAccessToken(r *http.Request) string {
@@ -359,13 +415,15 @@ func adminAccessToken(r *http.Request) string {
 	return strings.TrimSpace(parts[1])
 }
 
-func (api *RelayAPI) tokenAllowed(raw string) bool {
-	token := strings.TrimSpace(raw)
-	expected := strings.TrimSpace(api.adminToken)
-	if token == "" || expected == "" || len(token) != len(expected) {
-		return false
+func writeWalletAuthError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, auth.ErrWalletAuthUnauthorized):
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
+	case errors.Is(err, auth.ErrWalletAuthChallengeNotFound), errors.Is(err, auth.ErrWalletAuthChallengeExpired), errors.Is(err, auth.ErrWalletAuthInvalidSignature):
+		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, err.Error())
+	default:
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
 }
 
 func savePolicyState(path string, runtime *policy.Runtime) {

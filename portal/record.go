@@ -6,6 +6,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -137,7 +138,11 @@ func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manag
 		return nil
 	}
 	if ensHostname := r.ensGaslessDNSHostname(); ensHostname != "" {
-		if err := manager.SyncENSGaslessHostname(ctx, ensHostname, r.Address); err != nil {
+		address, err := identity.NormalizeEVMAddress(r.Address)
+		if err != nil {
+			return err
+		}
+		if err := manager.SyncENSGaslessHostname(ctx, ensHostname, address); err != nil {
 			return err
 		}
 	}

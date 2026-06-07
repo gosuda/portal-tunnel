@@ -21,7 +21,7 @@ func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 	if err != nil {
 		return types.Identity{}, err
 	}
-	address, err := NormalizeEVMAddress(identity.Address)
+	address, err := NormalizeSuiAddress(identity.Address)
 	if err != nil {
 		return types.Identity{}, err
 	}
@@ -54,7 +54,7 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 		desc.APIHTTPSAddr = normalized
 	}
 	if desc.Address != "" {
-		normalized, err := NormalizeEVMAddress(desc.Address)
+		normalized, err := NormalizeSuiAddress(desc.Address)
 		if err != nil {
 			return types.RelayDescriptor{}, fmt.Errorf("normalize address: %w", err)
 		}
@@ -145,58 +145,26 @@ func normalizeStoredIdentity(identity types.Identity) (types.Identity, error) {
 	normalized.PrivateKey = strings.TrimSpace(normalized.PrivateKey)
 	normalized.Mnemonic = normalizeMnemonic(normalized.Mnemonic)
 	normalized.DerivationPath = strings.TrimSpace(normalized.DerivationPath)
+	normalized.SuiAddress = strings.TrimSpace(normalized.SuiAddress)
+	normalized.SuiPublicKey = strings.TrimSpace(normalized.SuiPublicKey)
+	normalized.SuiPrivateKey = strings.TrimSpace(normalized.SuiPrivateKey)
+	normalized.SuiDerivationPath = strings.TrimSpace(normalized.SuiDerivationPath)
 	normalized.TokenSecret = strings.TrimSpace(normalized.TokenSecret)
 
-	if normalized.Mnemonic != "" {
-		privateKey, derivationPath, err := deriveSecp256k1PrivateKeyFromMnemonic(normalized.Mnemonic, normalized.DerivationPath)
-		if err != nil {
-			return types.Identity{}, err
-		}
-		normalized.DerivationPath = derivationPath
-		if normalized.PrivateKey == "" {
-			normalized.PrivateKey = privateKey
-		} else if !strings.EqualFold(utils.TrimHexPrefix(normalized.PrivateKey), privateKey) {
-			return types.Identity{}, errors.New("identity private key does not match mnemonic")
-		}
-	} else if normalized.DerivationPath != "" {
-		return types.Identity{}, errors.New("identity derivation_path requires mnemonic")
+	if normalized.SuiAddress == "" {
+		normalized.SuiAddress = normalized.Address
 	}
-
-	switch {
-	case normalized.PrivateKey != "":
-		resolved, err := ResolveSecp256k1Identity(normalized.PrivateKey)
-		if err != nil {
-			return types.Identity{}, err
-		}
-		if normalized.PublicKey != "" && !strings.EqualFold(utils.TrimHexPrefix(normalized.PublicKey), resolved.PublicKey) {
-			return types.Identity{}, errors.New("identity public key does not match private key")
-		}
-		if normalized.Address != "" && !strings.EqualFold(normalized.Address, resolved.Address) {
-			return types.Identity{}, errors.New("identity address does not match private key")
-		}
-		normalized.Address = resolved.Address
-		normalized.PublicKey = resolved.PublicKey
-		normalized.PrivateKey = resolved.PrivateKey
-	case normalized.PublicKey != "":
-		address, err := AddressFromCompressedPublicKeyHex(normalized.PublicKey)
-		if err != nil {
-			return types.Identity{}, err
-		}
-		normalized.PublicKey = strings.ToLower(utils.TrimHexPrefix(normalized.PublicKey))
-		if normalized.Address == "" {
-			normalized.Address = address
-			break
-		}
-		if !strings.EqualFold(normalized.Address, address) {
-			return types.Identity{}, errors.New("identity address does not match public key")
-		}
-		normalized.Address = address
-	case normalized.Address != "":
-		address, err := NormalizeEVMAddress(normalized.Address)
-		if err != nil {
-			return types.Identity{}, err
-		}
-		normalized.Address = address
+	if normalized.SuiPublicKey == "" {
+		normalized.SuiPublicKey = normalized.PublicKey
+	}
+	if normalized.SuiPrivateKey == "" {
+		normalized.SuiPrivateKey = normalized.PrivateKey
+	}
+	if normalized.SuiDerivationPath == "" {
+		normalized.SuiDerivationPath = normalized.DerivationPath
+	}
+	if err := normalizeStoredSuiIdentity(&normalized); err != nil {
+		return types.Identity{}, err
 	}
 	return normalized, nil
 }
@@ -242,13 +210,17 @@ func normalizeStoredRelayIdentity(identity types.RelayIdentity) (types.RelayIden
 }
 
 type storedIdentity struct {
-	Name           string `json:"name,omitempty"`
-	Address        string `json:"address,omitempty"`
-	PublicKey      string `json:"public_key,omitempty"`
-	PrivateKey     string `json:"private_key,omitempty"`
-	Mnemonic       string `json:"mnemonic,omitempty"`
-	DerivationPath string `json:"derivation_path,omitempty"`
-	TokenSecret    string `json:"token_secret,omitempty"`
+	Name              string `json:"name,omitempty"`
+	Address           string `json:"address,omitempty"`
+	PublicKey         string `json:"public_key,omitempty"`
+	PrivateKey        string `json:"private_key,omitempty"`
+	Mnemonic          string `json:"mnemonic,omitempty"`
+	DerivationPath    string `json:"derivation_path,omitempty"`
+	SuiAddress        string `json:"sui_address,omitempty"`
+	SuiPublicKey      string `json:"sui_public_key,omitempty"`
+	SuiPrivateKey     string `json:"sui_private_key,omitempty"`
+	SuiDerivationPath string `json:"sui_derivation_path,omitempty"`
+	TokenSecret       string `json:"token_secret,omitempty"`
 }
 
 type storedRelayIdentity struct {
@@ -260,17 +232,23 @@ type storedRelayIdentity struct {
 
 func storedIdentityFromIdentity(identity types.Identity) storedIdentity {
 	privateKey := identity.PrivateKey
+	suiPrivateKey := identity.SuiPrivateKey
 	if strings.TrimSpace(identity.Mnemonic) != "" {
 		privateKey = ""
+		suiPrivateKey = ""
 	}
 	return storedIdentity{
-		Name:           identity.Name,
-		Address:        identity.Address,
-		PublicKey:      identity.PublicKey,
-		PrivateKey:     privateKey,
-		Mnemonic:       identity.Mnemonic,
-		DerivationPath: identity.DerivationPath,
-		TokenSecret:    identity.TokenSecret,
+		Name:              identity.Name,
+		Address:           identity.Address,
+		PublicKey:         identity.PublicKey,
+		PrivateKey:        privateKey,
+		Mnemonic:          identity.Mnemonic,
+		DerivationPath:    identity.DerivationPath,
+		SuiAddress:        identity.SuiAddress,
+		SuiPublicKey:      identity.SuiPublicKey,
+		SuiPrivateKey:     suiPrivateKey,
+		SuiDerivationPath: identity.SuiDerivationPath,
+		TokenSecret:       identity.TokenSecret,
 	}
 }
 
@@ -329,13 +307,17 @@ func loadIdentity(path string) (types.Identity, error) {
 		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
 	}
 	return normalizeStoredIdentity(types.Identity{
-		Name:           payload.Name,
-		Address:        payload.Address,
-		PublicKey:      payload.PublicKey,
-		PrivateKey:     payload.PrivateKey,
-		Mnemonic:       payload.Mnemonic,
-		DerivationPath: payload.DerivationPath,
-		TokenSecret:    payload.TokenSecret,
+		Name:              payload.Name,
+		Address:           payload.Address,
+		PublicKey:         payload.PublicKey,
+		PrivateKey:        payload.PrivateKey,
+		Mnemonic:          payload.Mnemonic,
+		DerivationPath:    payload.DerivationPath,
+		SuiAddress:        payload.SuiAddress,
+		SuiPublicKey:      payload.SuiPublicKey,
+		SuiPrivateKey:     payload.SuiPrivateKey,
+		SuiDerivationPath: payload.SuiDerivationPath,
+		TokenSecret:       payload.TokenSecret,
 	})
 }
 
@@ -350,13 +332,17 @@ func loadRelayIdentity(path string) (types.RelayIdentity, error) {
 	}
 	return normalizeStoredRelayIdentity(types.RelayIdentity{
 		Identity: types.Identity{
-			Name:           payload.Name,
-			Address:        payload.Address,
-			PublicKey:      payload.PublicKey,
-			PrivateKey:     payload.PrivateKey,
-			Mnemonic:       payload.Mnemonic,
-			DerivationPath: payload.DerivationPath,
-			TokenSecret:    payload.TokenSecret,
+			Name:              payload.Name,
+			Address:           payload.Address,
+			PublicKey:         payload.PublicKey,
+			PrivateKey:        payload.PrivateKey,
+			Mnemonic:          payload.Mnemonic,
+			DerivationPath:    payload.DerivationPath,
+			SuiAddress:        payload.SuiAddress,
+			SuiPublicKey:      payload.SuiPublicKey,
+			SuiPrivateKey:     payload.SuiPrivateKey,
+			SuiDerivationPath: payload.SuiDerivationPath,
+			TokenSecret:       payload.TokenSecret,
 		},
 		WireGuardPublicKey:       payload.WireGuardPublicKey,
 		WireGuardPrivateKey:      payload.WireGuardPrivateKey,
@@ -375,13 +361,17 @@ func parseIdentityJSON(raw string) (types.Identity, error) {
 		return types.Identity{}, fmt.Errorf("decode identity json: %w", err)
 	}
 	return normalizeStoredIdentity(types.Identity{
-		Name:           payload.Name,
-		Address:        payload.Address,
-		PublicKey:      payload.PublicKey,
-		PrivateKey:     payload.PrivateKey,
-		Mnemonic:       payload.Mnemonic,
-		DerivationPath: payload.DerivationPath,
-		TokenSecret:    payload.TokenSecret,
+		Name:              payload.Name,
+		Address:           payload.Address,
+		PublicKey:         payload.PublicKey,
+		PrivateKey:        payload.PrivateKey,
+		Mnemonic:          payload.Mnemonic,
+		DerivationPath:    payload.DerivationPath,
+		SuiAddress:        payload.SuiAddress,
+		SuiPublicKey:      payload.SuiPublicKey,
+		SuiPrivateKey:     payload.SuiPrivateKey,
+		SuiDerivationPath: payload.SuiDerivationPath,
+		TokenSecret:       payload.TokenSecret,
 	})
 }
 
@@ -412,11 +402,23 @@ func loadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 		if derivationPath := strings.TrimSpace(identity.DerivationPath); derivationPath != "" {
 			stored.DerivationPath = derivationPath
 		}
+		if suiAddress := strings.TrimSpace(identity.SuiAddress); suiAddress != "" {
+			stored.SuiAddress = suiAddress
+		}
+		if suiPublicKey := strings.TrimSpace(identity.SuiPublicKey); suiPublicKey != "" {
+			stored.SuiPublicKey = suiPublicKey
+		}
+		if suiPrivateKey := strings.TrimSpace(identity.SuiPrivateKey); suiPrivateKey != "" {
+			stored.SuiPrivateKey = suiPrivateKey
+		}
+		if suiDerivationPath := strings.TrimSpace(identity.SuiDerivationPath); suiDerivationPath != "" {
+			stored.SuiDerivationPath = suiDerivationPath
+		}
 		if tokenSecret := strings.TrimSpace(identity.TokenSecret); tokenSecret != "" {
 			stored.TokenSecret = tokenSecret
 		}
-		if strings.TrimSpace(stored.PrivateKey) == "" {
-			return types.Identity{}, false, errors.New("stored identity private key is required")
+		if strings.TrimSpace(stored.SuiPrivateKey) == "" && strings.TrimSpace(stored.PrivateKey) == "" && strings.TrimSpace(stored.Mnemonic) == "" {
+			return types.Identity{}, false, errors.New("stored identity sui private key is required")
 		}
 		if err := saveIdentity(path, stored); err != nil {
 			return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
@@ -431,13 +433,29 @@ func loadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 	}
 
 	created := identity.Copy()
-	if strings.TrimSpace(created.Mnemonic) != "" || strings.TrimSpace(created.DerivationPath) != "" {
+	if strings.TrimSpace(created.SuiPrivateKey) == "" &&
+		strings.TrimSpace(created.PrivateKey) == "" &&
+		strings.TrimSpace(created.Mnemonic) == "" &&
+		strings.TrimSpace(created.SuiDerivationPath) == "" &&
+		strings.TrimSpace(created.DerivationPath) == "" {
+		mnemonic, err := GenerateMnemonic()
+		if err != nil {
+			return types.Identity{}, false, fmt.Errorf("generate identity mnemonic: %w", err)
+		}
+		created.Mnemonic = mnemonic
+		created.SuiDerivationPath = DefaultSuiEd25519PaymentDerivationPath
+	}
+	if strings.TrimSpace(created.Mnemonic) != "" || strings.TrimSpace(created.SuiDerivationPath) != "" || strings.TrimSpace(created.DerivationPath) != "" {
 		created, err = normalizeStoredIdentity(created)
 		if err != nil {
 			return types.Identity{}, false, fmt.Errorf("resolve identity mnemonic: %w", err)
 		}
 	} else {
-		generated, err := ResolveSecp256k1Identity(created.PrivateKey)
+		privateKey := strings.TrimSpace(created.SuiPrivateKey)
+		if privateKey == "" {
+			privateKey = strings.TrimSpace(created.PrivateKey)
+		}
+		generated, err := ResolveSuiEd25519Identity(privateKey)
 		if err != nil {
 			return types.Identity{}, false, fmt.Errorf("generate identity: %w", err)
 		}
@@ -448,6 +466,9 @@ func loadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 			created.PublicKey = generated.PublicKey
 		}
 		created.PrivateKey = generated.PrivateKey
+		created.SuiAddress = generated.SuiAddress
+		created.SuiPublicKey = generated.SuiPublicKey
+		created.SuiPrivateKey = generated.SuiPrivateKey
 	}
 	if strings.TrimSpace(created.TokenSecret) == "" {
 		created, err = ensureTokenSecret(created)
@@ -544,7 +565,7 @@ func LoadOrCreateRelayIdentity(path, rootHost string, discoveryEnabled bool) (ty
 	created := types.RelayIdentity{
 		Identity: types.Identity{Name: rootHost},
 	}
-	generated, err := ResolveSecp256k1Identity(created.PrivateKey)
+	generated, err := ResolveSuiEd25519Identity(created.SuiPrivateKey)
 	if err != nil {
 		return types.RelayIdentity{}, fmt.Errorf("generate identity: %w", err)
 	}
@@ -555,6 +576,9 @@ func LoadOrCreateRelayIdentity(path, rootHost string, discoveryEnabled bool) (ty
 		created.PublicKey = generated.PublicKey
 	}
 	created.PrivateKey = generated.PrivateKey
+	created.SuiAddress = generated.SuiAddress
+	created.SuiPublicKey = generated.SuiPublicKey
+	created.SuiPrivateKey = generated.SuiPrivateKey
 	created.Identity, err = ensureTokenSecret(created.Identity)
 	if err != nil {
 		return types.RelayIdentity{}, err
@@ -674,14 +698,14 @@ func resolveLeaseIdentity(identity types.Identity) (types.Identity, error) {
 	}
 	resolved.Name = name
 
-	signingIdentity, err := ResolveSecp256k1Identity(resolved.PrivateKey)
+	signingIdentity, err := ResolveSuiEd25519Identity(resolved.SuiPrivateKey)
 	if err != nil {
 		return types.Identity{}, err
 	}
 	if resolved.Address == "" {
 		resolved.Address = signingIdentity.Address
 	} else {
-		address, err := NormalizeEVMAddress(resolved.Address)
+		address, err := NormalizeSuiAddress(resolved.Address)
 		if err != nil {
 			return types.Identity{}, err
 		}
@@ -693,6 +717,9 @@ func resolveLeaseIdentity(identity types.Identity) (types.Identity, error) {
 
 	resolved.PublicKey = signingIdentity.PublicKey
 	resolved.PrivateKey = signingIdentity.PrivateKey
+	resolved.SuiAddress = signingIdentity.SuiAddress
+	resolved.SuiPublicKey = signingIdentity.SuiPublicKey
+	resolved.SuiPrivateKey = signingIdentity.SuiPrivateKey
 	return ensureTokenSecret(resolved)
 }
 

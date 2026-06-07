@@ -58,7 +58,7 @@ func main() {
 
 	// Build K synthetic relay states. We construct discovery.RelayState values
 	// directly (not via RelaySet.InsertAnnounced) because the public announce
-	// path requires real EVM-signed descriptors. Selection functions are called
+	// path requires real Sui-signed descriptors. Selection functions are called
 	// directly so that no signature gate runs.
 	//
 	// For priority mode: states without an observed descriptor (LastSeenAt zero)

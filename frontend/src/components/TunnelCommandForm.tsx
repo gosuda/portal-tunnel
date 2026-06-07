@@ -131,7 +131,7 @@ function HeroTunnelCommandForm({
   }[serviceStatus];
   const isPreviewURLDisabled = serviceStatus === "waiting";
   const heroSectionLabelClass = cn(
-    "text-[13px] font-semibold tracking-normal sm:text-sm",
+    "text-[13px] font-semibold tracking-[0.04em] sm:text-sm",
     isTerminal ? "text-slate-100" : "text-foreground/85"
   );
   const heroURLClass = cn(
@@ -139,14 +139,14 @@ function HeroTunnelCommandForm({
     isTerminal ? "text-sky-300" : "text-primary"
   );
   const platformButtonGroupClass = cn(
-    "flex shrink-0 rounded-md border p-0.5",
+    "flex shrink-0 rounded-lg border p-0.5",
     isTerminal
       ? "border-white/6 bg-white/[0.035]"
       : "border-border bg-border"
   );
   const platformButtonClass = (selected: boolean) =>
     cn(
-      "min-w-[72px] whitespace-nowrap rounded-sm px-2.5 py-1.5 text-[11px] font-semibold transition-colors",
+      "min-w-[72px] whitespace-nowrap rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition-colors",
       selected
         ? isTerminal
           ? "bg-white/[0.08] text-slate-200"
@@ -156,7 +156,7 @@ function HeroTunnelCommandForm({
           : "text-text-muted hover:text-foreground"
     );
   const heroControlLabelClass = cn(
-    "shrink-0 text-[9px] font-semibold uppercase tracking-normal",
+    "shrink-0 text-[9px] font-semibold uppercase tracking-[0.16em]",
     isTerminal ? "text-slate-500" : "text-text-muted"
   );
   const heroControlInputClass = cn(
@@ -166,7 +166,7 @@ function HeroTunnelCommandForm({
       : "text-foreground/85 placeholder:text-muted-foreground"
   );
   const heroShuffleButtonClass = cn(
-    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm transition-colors",
+    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors",
     isTerminal
       ? "text-slate-500 hover:bg-white/[0.06] hover:text-slate-200"
       : "text-text-muted hover:bg-foreground/5 hover:text-foreground"
@@ -227,7 +227,7 @@ function HeroTunnelCommandForm({
               onChange={(event) => setTarget(event.target.value)}
               placeholder={DEFAULT_HOST}
               aria-label="Local port or address"
-              className={cn(heroControlInputClass, "w-20 font-mono")}
+              className={cn(heroControlInputClass, "w-[19 font-mono")}
             />
           </div>
           <div className="ml-auto flex min-w-0 items-center justify-end gap-2 sm:w-88">
@@ -252,7 +252,7 @@ function HeroTunnelCommandForm({
         </div>
         <div
           className={cn(
-            "relative min-h-37 rounded-lg border px-4 py-4 pr-14 font-mono text-sm leading-7",
+            "relative min-h-37 rounded-xl border px-4 py-4 pr-14 font-mono text-sm leading-7",
             isTerminal
               ? "border-white/10 bg-black/55 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
               : "border-border/80 bg-border/90 text-foreground"
@@ -262,7 +262,7 @@ function HeroTunnelCommandForm({
             type="button"
             onClick={handleCopy}
             className={cn(
-              "absolute top-4 right-4 inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+              "absolute top-4 right-4 inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors",
               isTerminal
                 ? "text-emerald-300/75 hover:bg-emerald-400/10 hover:text-emerald-200"
                 : "text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700"
@@ -287,7 +287,7 @@ function HeroTunnelCommandForm({
         <p className={heroSectionLabelClass}>3. Open this public URL</p>
         <div
           className={cn(
-            "space-y-3 rounded-lg border px-3.5 py-3",
+            "space-y-3 rounded-xl border px-3.5 py-3",
             isTerminal
               ? "border-white/8 bg-white/4.5"
               : "border-border bg-white"
@@ -419,29 +419,29 @@ function FullTunnelCommandForm({
     ? "text-xs text-slate-400"
     : "text-xs leading-5 text-muted-foreground dark:text-zinc-500";
   const inlineFieldClass = isTerminal
-    ? "flex items-center overflow-hidden rounded-lg border border-white/10 bg-white/5"
-    : "flex items-center overflow-hidden rounded-md border border-border/80 bg-secondary/55 focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30 dark:border-white/10 dark:bg-secondary/60";
+    ? "flex items-center overflow-hidden rounded-xl border border-white/10 bg-white/5"
+    : "flex items-center overflow-hidden rounded-md border border-border/80 bg-secondary/55 focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30 dark:border-white/10 dark:bg-[#272727]";
   const inlinePrefixClass = isTerminal
-    ? "shrink-0 border-r border-white/10 px-3 text-xs font-medium uppercase tracking-normal text-slate-400"
-    : "shrink-0 border-r border-border px-3 text-[0.82rem] font-medium uppercase tracking-normal text-text-muted dark:border-border dark:text-zinc-400";
+    ? "shrink-0 border-r border-white/10 px-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-400"
+    : "shrink-0 border-r border-border px-3 text-[0.82rem] font-medium uppercase tracking-[0.08em] text-text-muted dark:border-black/25 dark:text-zinc-400";
   const inlineInputClass = isTerminal
     ? "h-10 border-0 bg-transparent px-3 text-sm text-white placeholder:text-slate-500 shadow-none focus-visible:ring-0"
     : "h-9 border-0 bg-transparent px-3 text-sm font-semibold text-foreground placeholder:text-text-muted shadow-none focus-visible:ring-0 dark:text-zinc-100 dark:placeholder:text-zinc-500";
   const relayFieldClass = isTerminal
-    ? "flex min-h-12 flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2.5 py-2"
+    ? "flex min-h-12 flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2.5 py-2"
     : "flex min-h-10 flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-2 shadow-sm focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/25 dark:border-white/10 dark:bg-transparent";
   const relayChipClass = isTerminal
     ? "inline-flex items-center gap-1 rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium text-slate-100"
-    : "inline-flex items-center gap-1 rounded-md bg-secondary px-2.5 py-1 text-xs font-semibold text-secondary-foreground dark:bg-primary/14 dark:text-primary";
+    : "inline-flex items-center gap-1 rounded-md bg-secondary px-2.5 py-1 text-xs font-semibold text-secondary-foreground dark:bg-[#22312c] dark:text-[#dceee4]";
   const relayChipRemoveClass = isTerminal
     ? "hover:bg-white/10"
-    : "text-text-muted hover:bg-background/80 dark:text-primary dark:hover:bg-black/20";
+    : "text-text-muted hover:bg-background/80 dark:text-[#cfe3d8] dark:hover:bg-black/20";
   const advancedInputClass = isTerminal
     ? "h-10 rounded-lg border-white/10 bg-white/5 text-white placeholder:text-slate-500"
-    : "h-10 rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground shadow-sm dark:border-white/10 dark:bg-background dark:text-zinc-100 dark:placeholder:text-zinc-500";
+    : "h-10 rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground shadow-sm dark:border-white/10 dark:bg-[#171717] dark:text-zinc-100 dark:placeholder:text-zinc-500";
   const osGroupClass = isTerminal
-    ? "flex rounded-lg bg-white/8 p-1"
-    : "flex rounded-md bg-border p-1 dark:bg-secondary/60";
+    ? "flex rounded-xl bg-white/8 p-1"
+    : "flex rounded-md bg-border p-1 dark:bg-[#272727]";
   const osButtonClass = (selected: boolean) =>
     cn(
       "flex-1 rounded-sm px-3 py-2 text-sm font-semibold transition-colors",
@@ -450,12 +450,12 @@ function FullTunnelCommandForm({
           ? "bg-white/8 text-slate-200"
           : "text-slate-400 hover:text-slate-300"
         : selected
-          ? "bg-card text-foreground shadow-sm ring-1 ring-border/80 dark:bg-background dark:text-zinc-100 dark:ring-transparent"
+          ? "bg-card text-foreground shadow-sm ring-1 ring-border/80 dark:bg-[#0b0b0b] dark:text-zinc-100 dark:ring-transparent"
           : "text-muted-foreground hover:text-foreground dark:text-zinc-500 dark:hover:text-zinc-300"
     );
   const commandPanelClass = isTerminal
-    ? "relative rounded-lg border border-white/10 bg-black/30"
-    : "relative rounded-md bg-secondary/55 shadow-sm ring-1 ring-border/70 dark:bg-secondary/60 dark:ring-transparent";
+    ? "relative rounded-xl border border-white/10 bg-black/30"
+    : "relative rounded-md bg-secondary/55 shadow-sm ring-1 ring-border/70 dark:bg-[#272727] dark:ring-transparent";
   const commandPreClass = isTerminal
     ? "overflow-x-auto whitespace-pre-wrap break-all p-4 pr-12 font-mono text-sm leading-7 text-white"
     : "overflow-x-auto whitespace-pre-wrap break-all p-3 pr-12 font-mono text-sm leading-7 text-foreground dark:text-zinc-100";
@@ -610,7 +610,7 @@ function FullTunnelCommandForm({
             {showAdvanced ? "Hide advanced options" : "Advanced options"}
           </button>
           {showAdvanced && (
-            <div className="mt-3 space-y-4 rounded-md border border-border bg-muted/45 px-4 py-4 dark:border-white/8 dark:bg-background/70">
+            <div className="mt-3 space-y-4 rounded-md border border-border bg-muted/45 px-4 py-4 dark:border-white/8 dark:bg-[#101010]">
               <label className="flex items-center gap-2 text-sm text-foreground dark:text-zinc-300">
                 <input
                   type="checkbox"
@@ -676,7 +676,7 @@ function FullTunnelCommandForm({
                   className={advancedInputClass}
                 />
                 {normalizedThumbnailURL && (
-                  <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border border-border bg-background dark:border-white/10 dark:bg-background">
+                  <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border border-border bg-background dark:border-white/10 dark:bg-[#171717]">
                     <img
                       src={normalizedThumbnailURL}
                       alt="Thumbnail preview"

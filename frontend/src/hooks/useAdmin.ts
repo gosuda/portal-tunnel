@@ -3,11 +3,7 @@ import { useList, type BaseServer } from "@/hooks/useList";
 import type { BanFilter } from "@/types/filters";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
-import {
-  parseLeaseMetadata,
-  resolveLeasePayment,
-  resolveLeaseThumbnail,
-} from "@/lib/metadata";
+import { parseLeaseMetadata, resolveLeaseThumbnail } from "@/lib/metadata";
 import type {
   ApprovalMode,
   IPPolicyUpdate,
@@ -91,7 +87,6 @@ function toAdminServer(
   row: PolicyLease,
 ): AdminServer {
   const metadata = parseLeaseMetadata(row.metadata);
-  const payment = resolveLeasePayment(metadata);
   const hostname = row.hostname || "";
   const serviceName = row.name || "";
   const address = row.address.trim();
@@ -108,8 +103,6 @@ function toAdminServer(
     link: hostname ? `https://${hostname}/` : "",
     lastUpdated: row.last_seen_at || undefined,
     firstSeen: row.first_seen_at || undefined,
-    paymentEnabled: payment.enabled,
-    paymentLabel: payment.label,
     identityKey: row.identity_key.trim(),
     address,
     isBanned: row.is_banned,

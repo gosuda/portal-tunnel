@@ -59,16 +59,26 @@ type exposeFlags struct {
 	owner           string
 	thumbnail       string
 	hide            bool
-	x402PayTo       string
-	x402Testnet     bool
 	targetAddr      string
 	httpRoutes      []string
+	x402            exposeX402Flags
 	udp             bool
 	udpAddr         string
 	tcp             bool
 	maxActiveRelays int
 	multiHopDepth   int
 	metricsAddr     string
+}
+
+type exposeX402Flags struct {
+	network        string
+	price          string
+	payTo          string
+	facilitator    string
+	resource       string
+	mimeType       string
+	maxTimeout     int
+	paymentTimeout int
 }
 
 func runExposeCommand(args []string) error {
@@ -89,9 +99,8 @@ func runExposeCommand(args []string) error {
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
-	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Sui USDC payment recipient address for this tunnel")
-	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use Sui testnet for tunnel x402 payments; default is Sui mainnet")
-	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
+	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM form; repeat to aggregate multiple local HTTP services behind one public URL")
+	flags.x402.bind(fs)
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
@@ -112,7 +121,15 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return err
 	}
+	x402Config, err := flags.x402.config()
+	if err != nil {
+		printExposeUsage(os.Stderr)
+		return err
+	}
 	httpRouteInputs := append([]string(nil), flags.httpRoutes...)
+	if x402Config != nil && flags.targetAddr != "" && len(httpRouteInputs) == 0 {
+		httpRouteInputs = []string{"/=" + flags.targetAddr}
+	}
 	switch {
 	case flags.targetAddr == "" && len(httpRouteInputs) == 0:
 		printExposeUsage(os.Stderr)
@@ -123,45 +140,9 @@ func runExposeCommand(args []string) error {
 	case len(httpRouteInputs) > 0 && flags.udp:
 		printExposeUsage(os.Stderr)
 		return errors.New("--udp cannot be combined with --http-route")
-	}
-
-	httpRoutes := make([]sdk.HTTPRouteConfig, 0, len(httpRouteInputs))
-	for _, raw := range httpRouteInputs {
-		fields := strings.Fields(raw)
-		if len(fields) == 0 || len(fields) > 2 {
-			return fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
-		}
-		prefix, upstream, ok := strings.Cut(fields[0], "=")
-		if !ok {
-			return fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
-		}
-		prefix = strings.TrimSpace(prefix)
-		if prefix == "" {
-			return fmt.Errorf("--http-route %q: path is required", raw)
-		}
-		if !strings.HasPrefix(prefix, "/") {
-			return fmt.Errorf("--http-route %q: path must start with /", raw)
-		}
-		upstream = strings.TrimSpace(upstream)
-		if upstream == "" {
-			return fmt.Errorf("--http-route %q: upstream is required", raw)
-		}
-		route := sdk.HTTPRouteConfig{
-			Prefix:   prefix,
-			Upstream: upstream,
-		}
-		if len(fields) == 2 {
-			methods, amount, err := parseHTTPRoutePayment(fields[1])
-			if err != nil {
-				return fmt.Errorf("--http-route %q: %w", raw, err)
-			}
-			if strings.TrimSpace(flags.x402PayTo) == "" {
-				return fmt.Errorf("--http-route %q: payment amount requires --x402-pay-to", raw)
-			}
-			route.Methods = methods
-			route.Amount = amount
-		}
-		httpRoutes = append(httpRoutes, route)
+	case x402Config != nil && flags.tcp:
+		printExposeUsage(os.Stderr)
+		return errors.New("paid HTTP routes cannot be combined with --tcp")
 	}
 
 	ctx, stop := utils.SignalContext()
@@ -204,56 +185,75 @@ func runExposeCommand(args []string) error {
 			Thumbnail:   flags.thumbnail,
 			Hide:        flags.hide,
 		},
-		X402PayTo:   flags.x402PayTo,
-		X402Testnet: flags.x402Testnet,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start relays: %w", err)
 	}
 	if len(httpRouteInputs) > 0 {
+		httpRoutes := make([]sdk.HTTPRoute, 0, len(httpRouteInputs))
+		for _, raw := range httpRouteInputs {
+			prefix, upstream, ok := strings.Cut(raw, "=")
+			if !ok {
+				return fmt.Errorf("--http-route %q: expected PATH=UPSTREAM", raw)
+			}
+			httpRoutes = append(httpRoutes, sdk.HTTPRoute{
+				Prefix:   strings.TrimSpace(prefix),
+				Upstream: strings.TrimSpace(upstream),
+				X402:     x402Config,
+			})
+		}
+
 		defer exposure.Close()
 		return exposure.RunHTTPRoutes(ctx, httpRoutes, "")
 	}
 	return sdk.ProxyExposure(ctx, exposure)
 }
 
-func parseHTTPRoutePayment(value string) ([]string, string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil, "", errors.New("payment amount is required")
+func (f *exposeX402Flags) bind(fs *flag.FlagSet) {
+	utils.StringFlag(fs, &f.network, "sui-network", "", "Sui network for paid routes, such as sui:mainnet or sui:testnet")
+	utils.StringFlag(fs, &f.price, "sui-price", "", "Sui USDC route price, such as $0.01")
+	utils.StringFlag(fs, &f.payTo, "sui-receive-address", "", "Sui receive address; empty uses the tunnel Sui payment address")
+	utils.StringFlag(fs, &f.facilitator, "sui-facilitator-url", "", "Sui payment facilitator URL")
+	utils.StringFlag(fs, &f.resource, "sui-resource", "", "paid resource URL; empty uses the requested URL")
+	utils.StringFlag(fs, &f.mimeType, "sui-mime-type", "", "paid resource MIME type")
+	utils.StringFlag(fs, &f.network, "x402-network", "", "advanced Sui payment network selector")
+	utils.StringFlag(fs, &f.price, "x402-price", "", "advanced alias for --sui-price")
+	utils.StringFlag(fs, &f.payTo, "x402-pay-to", "", "advanced alias for --sui-receive-address")
+	utils.StringFlag(fs, &f.facilitator, "x402-facilitator-url", "", "advanced alias for --sui-facilitator-url")
+	utils.StringFlag(fs, &f.resource, "x402-resource", "", "advanced alias for --sui-resource")
+	utils.StringFlag(fs, &f.mimeType, "x402-mime-type", "", "advanced alias for --sui-mime-type")
+	fs.IntVar(&f.maxTimeout, "x402-max-timeout", 0, "payment max timeout seconds advertised to clients")
+	fs.IntVar(&f.paymentTimeout, "x402-payment-timeout", 0, "payment verify/settle timeout seconds")
+}
+
+func (f exposeX402Flags) config() (*types.X402Config, error) {
+	cfg := &types.X402Config{
+		Network:            f.network,
+		Price:              f.price,
+		PayTo:              f.payTo,
+		FacilitatorURL:     f.facilitator,
+		Resource:           f.resource,
+		MimeType:           f.mimeType,
+		MaxTimeoutSeconds:  f.maxTimeout,
+		PaymentTimeoutSecs: f.paymentTimeout,
 	}
-	methodPart, amount, hasMethods := strings.Cut(value, ":")
-	if !hasMethods {
-		amount = value
-		methodPart = ""
+	if cfg.Empty() {
+		return nil, nil
 	}
-	amount = strings.TrimSpace(amount)
-	if amount == "" {
-		return nil, "", errors.New("payment amount is required")
+	if strings.TrimSpace(cfg.Network) == "" {
+		cfg.Network = types.X402DefaultNetwork
 	}
-	methods := []string(nil)
-	if hasMethods {
-		for _, rawMethod := range strings.Split(methodPart, ",") {
-			method := strings.ToUpper(strings.TrimSpace(rawMethod))
-			if method == "" {
-				return nil, "", errors.New("payment method is required")
-			}
-			exists := false
-			for _, existing := range methods {
-				if existing == method {
-					exists = true
-					break
-				}
-			}
-			if !exists {
-				methods = append(methods, method)
-			}
-		}
-		if len(methods) == 0 {
-			return nil, "", errors.New("payment methods are required before ':'")
-		}
+	switch {
+	case strings.TrimSpace(cfg.FacilitatorURL) == "":
+		return nil, errors.New("--sui-facilitator-url is required when payment is enabled")
+	case strings.TrimSpace(cfg.Price) == "":
+		return nil, errors.New("--sui-price is required when payment is enabled")
+	case cfg.MaxTimeoutSeconds < 0:
+		return nil, errors.New("--x402-max-timeout cannot be negative")
+	case cfg.PaymentTimeoutSecs < 0:
+		return nil, errors.New("--x402-payment-timeout cannot be negative")
 	}
-	return methods, amount, nil
+	return cfg, nil
 }
 
 func runUpdateCommand(args []string) error {
@@ -345,7 +345,7 @@ func printRootUsage(w io.Writer) {
 	utils.WriteCommandUsage(w,
 		[]string{
 			"portal expose [flags] <target>",
-			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]\" [...]",
+			"portal expose [flags] --http-route PATH=UPSTREAM [--http-route PATH=UPSTREAM]",
 			"portal agent run [flags]",
 			"portal agent dashboard [flags]",
 			"portal agent stop [flags]",
@@ -358,7 +358,6 @@ func printRootUsage(w io.Writer) {
 			"portal expose 3000",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
-			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --http-route /=http://127.0.0.1:5173 --x402-pay-to 0x...",
 			"portal agent run",
 			"portal agent dashboard",
 			"portal agent stop",
@@ -376,13 +375,12 @@ func printExposeUsage(w io.Writer) {
 	utils.WriteCommandUsage(w,
 		[]string{
 			"portal expose [flags] <target>",
-			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]\" [...]",
+			"portal expose [flags] --http-route PATH=UPSTREAM [--http-route PATH=UPSTREAM]",
 		},
 		[]string{
 			"portal expose 3000",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
-			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --http-route /=http://127.0.0.1:5173 --x402-pay-to 0x...",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal expose 3000 --ban-mitm",
 			"portal expose 3000 --relays https://portal.example.com --discovery=false",

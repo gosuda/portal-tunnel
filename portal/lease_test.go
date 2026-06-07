@@ -34,9 +34,9 @@ func newTestRegistry(t *testing.T) *leaseRegistry {
 
 func newTestLeaseIdentity(t *testing.T, name string) types.Identity {
 	t.Helper()
-	testIdentity, err := identity.ResolveSecp256k1Identity("")
+	testIdentity, err := identity.ResolveSuiEd25519Identity("")
 	if err != nil {
-		t.Fatalf("identity.ResolveSecp256k1Identity() error = %v", err)
+		t.Fatalf("identity.ResolveSuiEd25519Identity() error = %v", err)
 	}
 	testIdentity.Name = name
 	return testIdentity

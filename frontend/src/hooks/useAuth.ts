@@ -1,16 +1,23 @@
 import { useEffect, useState } from "react";
+import {
+  useCurrentAccount,
+  useDisconnectWallet,
+  useSignPersonalMessage,
+  useWallets,
+} from "@mysten/dapp-kit";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
-import { readAdminAuthToken, writeAdminAuthToken } from "@/lib/adminAuthToken";
+import { writeAdminAuthToken } from "@/lib/adminAuthToken";
 import type {
-  AdminAuthLoginRequest,
-  AdminAuthLoginResponse,
-  AdminAuthStatusResponse,
+  WalletAuthChallengeResponse,
+  WalletAuthLoginResponse,
+  WalletAuthStatusResponse,
 } from "@/types/api";
 
 interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
+  walletAddress: string;
 }
 
 interface LoginResult {
@@ -22,42 +29,34 @@ function emptyAuthState(): AuthState {
   return {
     isAuthenticated: false,
     isLoading: false,
+    walletAddress: "",
   };
 }
 
-function authErrorMessage(err: unknown): string {
-  if (err instanceof APIClientError) {
-    return err.message || "Admin login failed.";
-  }
-  return err instanceof Error ? err.message : "Admin login failed.";
-}
-
 async function fetchAuthState(): Promise<AuthState> {
-  if (!readAdminAuthToken()) {
-    return emptyAuthState();
-  }
   try {
-    const data = await apiClient.get<AdminAuthStatusResponse>(
+    const data = await apiClient.get<WalletAuthStatusResponse>(
       BROWSER_API_PATHS.admin.authStatus
     );
-    if (!data.authenticated) {
-      writeAdminAuthToken("");
-      return emptyAuthState();
-    }
     return {
       isAuthenticated: data.authenticated,
       isLoading: false,
+      walletAddress: data.wallet_address || "",
     };
   } catch {
-    writeAdminAuthToken("");
     return emptyAuthState();
   }
 }
 
 export function useAuth() {
+  const currentAccount = useCurrentAccount();
+  const wallets = useWallets();
+  const { mutateAsync: disconnectWallet } = useDisconnectWallet();
+  const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
   const [authState, setAuthState] = useState<AuthState>({
     isAuthenticated: false,
     isLoading: true,
+    walletAddress: "",
   });
 
   const checkAuth = async () => {
@@ -70,16 +69,33 @@ export function useAuth() {
     })();
   }, []);
 
-  const login = async (token: string): Promise<LoginResult> => {
-    const trimmed = token.trim();
-    if (!trimmed) {
-      return { success: false, error: "Admin token is required." };
-    }
+  const login = async (): Promise<LoginResult> => {
     try {
-      const body: AdminAuthLoginRequest = { token: trimmed };
-      const data = await apiClient.post<AdminAuthLoginResponse>(
+      const address = currentAccount?.address || "";
+      if (!address) {
+        return {
+          success: false,
+          error: wallets.length === 0
+            ? "Sui wallet is unavailable."
+            : "Connect Sui wallet first.",
+        };
+      }
+      const challenge = await apiClient.post<WalletAuthChallengeResponse>(
+        BROWSER_API_PATHS.admin.authChallenge,
+        { address, auth_method: "sui_wallet" }
+      );
+      const signed = await signPersonalMessage({
+        message: new TextEncoder().encode(challenge.message),
+      });
+      const data = await apiClient.post<WalletAuthLoginResponse>(
         BROWSER_API_PATHS.admin.authLogin,
-        body
+        {
+          challenge_id: challenge.challenge_id,
+          address,
+          auth_method: "sui_wallet",
+          message: challenge.message,
+          signature: signed.signature,
+        }
       );
       const accessToken = data.access_token?.trim() || "";
       if (!accessToken) {
@@ -87,15 +103,24 @@ export function useAuth() {
         return { success: false, error: "Admin login did not return an access token." };
       }
       writeAdminAuthToken(accessToken);
-      setAuthState({
+      setAuthState((prev) => ({
+        ...prev,
         isAuthenticated: true,
-        isLoading: false,
-      });
+        walletAddress: data.wallet_address || address,
+      }));
       return { success: true };
     } catch (err: unknown) {
-      writeAdminAuthToken("");
-      setAuthState(emptyAuthState());
-      return { success: false, error: authErrorMessage(err) };
+      if (err instanceof APIClientError) {
+        return {
+          success: false,
+          error: err.message || "Sui wallet login failed.",
+        };
+      }
+
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : "Sui wallet login failed.",
+      };
     }
   };
 
@@ -107,12 +132,20 @@ export function useAuth() {
     } finally {
       writeAdminAuthToken("");
     }
-    setAuthState(emptyAuthState());
+    setAuthState((prev) => ({ ...prev, isAuthenticated: false, walletAddress: "" }));
+    try {
+      await disconnectWallet();
+    } catch {
+      // Some wallet connectors cannot be disconnected programmatically.
+    }
   };
 
   return {
     isAuthenticated: authState.isAuthenticated,
     isLoading: authState.isLoading,
+    walletAddress: authState.walletAddress,
+    connectedWalletAddress: currentAccount?.address || "",
+    hasAvailableWallet: wallets.length > 0,
     login,
     logout,
     checkAuth,

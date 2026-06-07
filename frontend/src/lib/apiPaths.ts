@@ -4,6 +4,7 @@ export const RELAY_API_PATHS = {
   },
   admin: {
     root: "/api/admin",
+    authChallenge: "/api/admin/auth/challenge",
     authLogin: "/api/admin/auth/login",
     logout: "/api/admin/auth/logout",
     authStatus: "/api/admin/auth/status",
@@ -13,12 +14,6 @@ export const RELAY_API_PATHS = {
     state: "/api/policy/state",
     leases: "/api/policy/leases",
     ips: "/api/policy/ips",
-  },
-  x402: {
-    root: "/api/x402",
-    supported: "/api/x402/supported",
-    verify: "/api/x402/verify",
-    settle: "/api/x402/settle",
   },
   sdk: {
     domain: "/sdk/domain",

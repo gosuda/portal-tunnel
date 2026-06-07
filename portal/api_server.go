@@ -17,7 +17,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
-	"github.com/gosuda/portal-tunnel/v2/portal/x402"
+	portalx402 "github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -249,23 +249,23 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
+
 	cfg := s.config()
-	x402Info := types.X402FacilitatorInfo{Enabled: cfg.X402Enabled}
-	if cfg.X402Enabled {
-		baseURL := strings.TrimRight(cfg.PortalURL, "/")
-		network := x402.Network(cfg.X402Testnet)
-		x402Info.URL = baseURL + types.PathX402Facilitator
-		x402Info.Network = network
-		x402Info.NetworkName = x402.NetworkDisplayName(network)
-		x402Info.SupportedURL = baseURL + types.X402SupportedPath
-		x402Info.PayTo = cfg.X402PayTo
+	x402 := types.X402FacilitatorInfo{
+		Enabled: cfg.X402Enabled,
+	}
+	if x402.Enabled {
+		x402.Network = strings.TrimSpace(cfg.X402Network)
+		x402.NetworkName = portalx402.NetworkDisplayName(x402.Network)
+		x402.URL = cfg.PortalURL + types.PathX402Facilitator
+		x402.SupportedURL = cfg.PortalURL + types.X402SupportedPath
 	}
 
 	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
 		ProtocolVersion: types.SDKVersion,
 		ReleaseVersion:  types.ReleaseVersion,
 		ENS:             s.acmeManager.ENSStatus(),
-		X402:            x402Info,
+		X402:            x402,
 	})
 }
 

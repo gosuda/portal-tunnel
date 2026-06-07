@@ -7,9 +7,9 @@
   --font-family-display: "Manrope", sans-serif;
   --font-family-sans: "Open Sans", sans-serif;
 
-  --radius: 0.5rem;
-  --radius-lg: 0.75rem;
-  --radius-xl: 1rem;
+  --radius: 0.875rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.75rem;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -42,7 +42,7 @@
     --card-foreground: oklch(25% 0.02 250);
     --popover: oklch(100% 0 0);
     --popover-foreground: oklch(25% 0.02 250);
-    --primary: oklch(60% 0.11 195);
+    --primary: oklch(75% 0.14 195);
     --primary-foreground: oklch(100% 0 0);
     --secondary: oklch(92% 0.01 250);
     --secondary-foreground: oklch(45% 0.02 250);
@@ -54,18 +54,30 @@
     --destructive-foreground: oklch(100% 0 0);
     --border: oklch(90% 0.01 250);
     --input: oklch(95% 0.005 250);
-    --ring: oklch(60% 0.11 195);
+    --ring: oklch(75% 0.14 195);
 
     --green-status: oklch(55% 0.16 150);
     --text-muted: oklch(55% 0.03 250);
+    --accent-orange: oklch(60% 0.2 35);
+    --accent-magenta: oklch(50% 0.22 350);
+    --neon-cyan: oklch(75% 0.14 195);
 
-    --hero-grid-dot: oklch(60% 0.11 195 / 0.14);
+    --hero-grid-dot: oklch(75% 0.14 195 / 0.18);
+    --hero-gradient-start: var(--accent-orange);
+    --hero-gradient-mid: var(--neon-cyan);
+    --hero-gradient-end: var(--accent-magenta);
     --hero-terminal-bg:
-      linear-gradient(180deg, oklch(19% 0.005 250 / 0.98), oklch(15% 0.006 250 / 0.98));
-    --hero-terminal-border: oklch(60% 0.11 195 / 0.22);
+      linear-gradient(160deg, oklch(19% 0.005 250 / 0.98), oklch(14% 0.008 250 / 0.98));
+    --hero-terminal-border: oklch(75% 0.14 195 / 0.22);
     --hero-terminal-foreground: oklch(98% 0.01 0);
-    --hero-terminal-accent: var(--primary);
-    --hero-terminal-shadow: oklch(15% 0 0 / 0.12);
+    --hero-terminal-accent: var(--neon-cyan);
+    --hero-terminal-shadow: oklch(15% 0 0 / 0.18);
+
+    --card-media-fallback-start: oklch(97% 0.015 220);
+    --card-media-fallback-end: oklch(91% 0.04 195);
+    --card-media-overlay:
+      radial-gradient(circle at top left, oklch(75% 0.14 195 / 0.18), transparent 36%),
+      linear-gradient(180deg, transparent, oklch(100% 0 0 / 0.72));
   }
 
   .dark {
@@ -75,7 +87,7 @@
     --card-foreground: oklch(98% 0.01 0);
     --popover: oklch(20% 0 0);
     --popover-foreground: oklch(98% 0.01 0);
-    --primary: oklch(78% 0.1 195);
+    --primary: oklch(80% 0.14 195);
     --primary-foreground: oklch(10% 0 0);
     --secondary: oklch(25% 0.02 195);
     --secondary-foreground: oklch(98% 0.01 0);
@@ -87,18 +99,30 @@
     --destructive-foreground: oklch(98% 0 0);
     --border: oklch(100% 0 0 / 0.1);
     --input: oklch(22% 0.01 0);
-    --ring: oklch(78% 0.1 195);
+    --ring: oklch(80% 0.14 195);
 
     --green-status: oklch(75% 0.16 150);
     --text-muted: oklch(65% 0.02 0);
+    --accent-orange: oklch(65% 0.2 35);
+    --accent-magenta: oklch(55% 0.25 350);
+    --neon-cyan: oklch(80% 0.14 195);
 
-    --hero-grid-dot: oklch(78% 0.1 195 / 0.18);
+    --hero-grid-dot: oklch(80% 0.14 195 / 0.22);
+    --hero-gradient-start: var(--neon-cyan);
+    --hero-gradient-mid: var(--accent-magenta);
+    --hero-gradient-end: var(--accent-orange);
     --hero-terminal-bg:
-      linear-gradient(180deg, oklch(18% 0 0 / 0.9), oklch(12% 0.01 250 / 0.94));
-    --hero-terminal-border: oklch(78% 0.1 195 / 0.28);
+      linear-gradient(160deg, oklch(19% 0 0 / 0.78), oklch(12% 0.01 250 / 0.88));
+    --hero-terminal-border: oklch(80% 0.14 195 / 0.3);
     --hero-terminal-foreground: oklch(98% 0.01 0);
-    --hero-terminal-accent: var(--primary);
+    --hero-terminal-accent: var(--neon-cyan);
     --hero-terminal-shadow: oklch(0% 0 0 / 0.28);
+
+    --card-media-fallback-start: oklch(26% 0.03 235);
+    --card-media-fallback-end: oklch(18% 0.02 260);
+    --card-media-overlay:
+      radial-gradient(circle at top left, oklch(80% 0.14 195 / 0.26), transparent 36%),
+      linear-gradient(180deg, transparent, oklch(10% 0 0 / 0.78));
   }
 
   * {
@@ -150,7 +174,7 @@
   h5,
   h6 {
     font-family: var(--font-family-display);
-    letter-spacing: 0;
+    letter-spacing: -0.03em;
   }
 
   button {

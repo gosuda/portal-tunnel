@@ -70,7 +70,7 @@ export function Admin() {
           </div>
           <main className="mx-auto flex w-full max-w-6xl flex-1 items-center justify-center px-6 py-16">
             <div className="rounded-lg border border-border bg-card px-6 py-5 text-center text-sm text-muted-foreground shadow-sm">
-              Enter the admin token from the header to view admin controls.
+              Connect a wallet from the header to view admin controls.
             </div>
           </main>
         </div>

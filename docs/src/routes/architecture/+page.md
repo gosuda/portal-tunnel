@@ -46,7 +46,7 @@ const tlsStreamDiagram = `sequenceDiagram
     participant Client as Client Browser
 
     SDK->>Relay: POST /sdk/register/challenge
-    Relay->>SDK: SIWE challenge message
+    Relay->>SDK: Sui challenge message
     SDK->>Relay: POST /sdk/register (signed)
     Relay->>SDK: access_token + lease info
 
@@ -66,7 +66,7 @@ const tcpPortDiagram = `sequenceDiagram
     participant Relay as Relay Server
     participant ExtClient as External TCP Client
 
-    SDK->>Relay: POST /sdk/register (tcp_enabled=true, signed SIWE)
+    SDK->>Relay: POST /sdk/register (tcp_enabled=true, signed Sui message)
     Note over Relay: Validates TCP plane enabled, allocates port from MIN_PORT-MAX_PORT
     Relay->>SDK: tcp_addr + access_token
 
@@ -85,7 +85,7 @@ const udpQuicDiagram = `sequenceDiagram
     participant Relay as Relay Server
     participant UDPClient as External UDP Client
 
-    SDK->>Relay: POST /sdk/register (udp_enabled=true, signed SIWE)
+    SDK->>Relay: POST /sdk/register (udp_enabled=true, signed Sui message)
     Note over Relay: Allocates UDP port from MIN_PORT-MAX_PORT
     Relay->>SDK: udp_addr + access_token + sni_port
 
@@ -106,15 +106,15 @@ const registrationDiagram = `sequenceDiagram
     participant Relay as Relay Server
 
     SDK->>Relay: POST /sdk/register/challenge (address)
-    Relay->>SDK: SIWE challenge message
+    Relay->>SDK: Sui challenge message
 
-    Note over SDK: Signs SIWE message with secp256k1 identity key (personal_sign)
+    Note over SDK: Signs Sui message with Ed25519 identity key
 
     SDK->>Relay: POST /sdk/register (message, signature, name, tcp_enabled?, udp_enabled?)
-    Note over Relay: Validates SIWE signature, checks name availability
+    Note over Relay: Validates Sui signature, checks name availability
     Note over Relay: Creates lease, publishes route at name.relay-host
     Note over Relay: Allocates TCP/UDP ports if requested
-    Relay->>SDK: access_token (ES256K JWT) + lease info (tcp_addr?, udp_addr?, sni_port?)`
+    Relay->>SDK: access_token (EdDSA JWT) + lease info (tcp_addr?, udp_addr?, sni_port?)`
 </script>
 
 <div class="not-prose mb-8 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
@@ -171,7 +171,7 @@ UDP client
 - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
 - In keyless TLS, the relay performs certificate private-key signing through `/v1/sign`, but the SDK/tunnel endpoint still runs the TLS server handshake and derives tenant TLS session keys locally.
 - `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` are authorized by lease existence plus a relay-issued lease access token.
-- `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay identity key and used for the rest of the lease lifecycle.
+- `/sdk/register` is authenticated by a Sui challenge/response flow using the SDK identity Ed25519 key. On success, the relay issues a lease-scoped EdDSA JWT access token signed by the relay identity key and used for the rest of the lease lifecycle.
 - Relay URLs must use `https://`.
 - HTTP/2 stays disabled on the admin/API TLS listener because `/sdk/connect` depends on HTTP/1.1 hijacking semantics.
 - WireGuard, when enabled, is relay-to-relay overlay transport only. It carries multi-hop relay forwarding and overlay discovery, but it is not used for direct tenant TLS termination, public UDP ingress, or `/sdk/*` control-plane traffic.
@@ -264,7 +264,7 @@ Result: this is a detect-only signal by default. It raises the cost of adaptive 
 
 ### TCP Port Transport (non-TLS)
 
-1. SDK/tunnel requests a register challenge with `tcp_enabled=true`, signs the returned SIWE message, and completes registration.
+1. SDK/tunnel requests a register challenge with `tcp_enabled=true`, signs the returned Sui message, and completes registration.
 2. Relay validates that the TCP port plane is enabled, allocates a TCP port, and creates a per-lease TCP listener.
 3. Registration response includes `tcp_addr` (public TCP endpoint).
 4. An external TCP client connects to `tcp_addr`.
@@ -278,7 +278,7 @@ Result: the relay allocates a dedicated TCP port per lease and bridges raw TCP w
 
 ### UDP/QUIC Datagram Transport
 
-1. SDK/tunnel requests a register challenge with `udp_enabled=true`, signs the returned SIWE message, and completes registration.
+1. SDK/tunnel requests a register challenge with `udp_enabled=true`, signs the returned Sui message, and completes registration.
 2. Relay validates that the datagram plane is enabled, allocates a UDP port, and creates a per-lease datagram runtime.
 3. Registration response includes `udp_addr`, `access_token`, and `sni_port`. The SDK dials QUIC to the relay on `sni_port`.
 4. SDK opens a QUIC connection with ALPN `portal-tunnel` and DATAGRAM support enabled.
@@ -305,10 +305,10 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 ### 1. Register
 
 - `POST /sdk/register/challenge` then `POST /sdk/register`.
-- Caller signs the returned SIWE message with the identity secp256k1 key (`personal_sign`).
+- Caller signs the returned Sui message with the identity Ed25519 key.
 - `name` must be a valid single DNS label; the relay publishes the lease at `<name>.<root host>`.
 - Registration reserves the hostname and publishes the route immediately; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`.
-- On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay identity key, used for the rest of the lease lifecycle.
+- On success, the relay issues a lease-scoped EdDSA JWT access token signed by the relay identity key, used for the rest of the lease lifecycle.
 - UDP registration requires server `UDP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and admin enablement. Failures: `udp_disabled` (403), `udp_capacity_exceeded` (503), `udp_port_exhausted` (503).
 - TCP port registration has equivalent three-condition gating. Failures: `tcp_port_disabled` (403), `tcp_port_capacity_exceeded` (503), `tcp_port_exhausted` (503).
 - `PORTAL_URL` is normalized to its host component only; path/query segments are ignored for routing.
@@ -362,7 +362,7 @@ The relay signs handshake digests via `/v1/sign` but never receives tenant TLS t
 - SNI-based routing with root-host fallback
 - End-to-end tenant TLS with relay-backed keyless signing
 - Traffic-triggered detect-only MITM self-probing for probable relay-side TLS termination
-- SIWE identity proof for registration plus relay-issued ES256K JWT access tokens for the lease lifecycle
+- Sui identity proof for registration plus relay-issued EdDSA JWT access tokens for the lease lifecycle
 - Lease-local stream and datagram ownership through per-lease transport runtimes
 - Optional QUIC/UDP datagram transport coexisting with TCP on the same lease
 - Per-lease UDP and TCP port allocation with sticky name-based reservation

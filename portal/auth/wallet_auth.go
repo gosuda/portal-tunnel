@@ -1,13 +1,16 @@
 package auth
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/spruceid/siwe-go"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -17,6 +20,10 @@ import (
 const (
 	defaultWalletAuthChallengeTTL = 2 * time.Minute
 	defaultWalletAuthSessionTTL   = 24 * time.Hour
+	defaultSuiAuthRPCURL          = "https://sui-rpc.publicnode.com"
+
+	walletAuthMethodSuiWallet = "sui_wallet"
+	walletAuthMethodZkLogin   = "zklogin"
 )
 
 var (
@@ -30,12 +37,14 @@ type WalletAuthConfig struct {
 	AllowedAddresses []string
 	AllowAnyAddress  bool
 	Statement        string
+	SuiRPCURL        string
 }
 
 type WalletAuthenticator struct {
 	allowed   map[string]struct{}
 	allowAny  bool
 	statement string
+	suiRPCURL string
 
 	mu         sync.Mutex
 	challenges map[string]walletAuthChallenge
@@ -43,11 +52,10 @@ type WalletAuthenticator struct {
 }
 
 type walletAuthChallenge struct {
-	Address     string
-	Domain      string
-	ExpiresAt   time.Time
-	Nonce       string
-	SIWEMessage string
+	Address    string
+	AuthMethod string
+	ExpiresAt  time.Time
+	Message    string
 }
 
 type walletAuthSession struct {
@@ -61,25 +69,30 @@ func NewWalletAuthenticator(cfg WalletAuthConfig) (*WalletAuthenticator, error) 
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
-		address, err := identity.NormalizeEVMAddress(raw)
+		address, err := identity.NormalizeSuiAddress(raw)
 		if err != nil {
 			return nil, fmt.Errorf("wallet address: %w", err)
 		}
 		allowed[strings.ToLower(address)] = struct{}{}
 	}
 	if !cfg.AllowAnyAddress && len(allowed) == 0 {
-		return nil, errors.New("wallet auth requires at least one allowed address")
+		return nil, errors.New("wallet auth requires at least one allowed Sui address")
 	}
 
 	statement := strings.TrimSpace(cfg.Statement)
 	if statement == "" {
 		statement = "Sign in to Portal"
 	}
+	suiRPCURL := strings.TrimSpace(cfg.SuiRPCURL)
+	if suiRPCURL == "" {
+		suiRPCURL = defaultSuiAuthRPCURL
+	}
 
 	return &WalletAuthenticator{
 		allowed:    allowed,
 		allowAny:   cfg.AllowAnyAddress,
 		statement:  statement,
+		suiRPCURL:  suiRPCURL,
 		challenges: make(map[string]walletAuthChallenge),
 		sessions:   make(map[string]walletAuthSession),
 	}, nil
@@ -89,7 +102,7 @@ func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeReques
 	if a == nil {
 		return types.WalletAuthChallengeResponse{}, ErrWalletAuthUnauthorized
 	}
-	address, err := identity.NormalizeEVMAddress(req.Address)
+	address, err := identity.NormalizeSuiAddress(req.Address)
 	if err != nil {
 		return types.WalletAuthChallengeResponse{}, err
 	}
@@ -97,26 +110,16 @@ func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeReques
 		return types.WalletAuthChallengeResponse{}, ErrWalletAuthUnauthorized
 	}
 
+	authMethod := normalizeWalletAuthMethod(req.AuthMethod)
 	challengeID := utils.RandomID("wac_")
-	nonce := siwe.GenerateNonce()
+	nonce := utils.RandomID("nonce_")
 	expiresAt := now.UTC().Add(defaultWalletAuthChallengeTTL)
-	message, err := siwe.InitMessage(domain, address, uri, nonce, map[string]interface{}{
-		"statement":      a.statement,
-		"chainId":        1,
-		"issuedAt":       now.UTC().Format(time.RFC3339),
-		"expirationTime": expiresAt.UTC().Format(time.RFC3339),
-		"requestId":      challengeID,
-	})
-	if err != nil {
-		return types.WalletAuthChallengeResponse{}, fmt.Errorf("build wallet auth message: %w", err)
-	}
-
+	message := buildSuiAuthMessage(a.statement, strings.TrimSpace(domain), strings.TrimSpace(uri), address, nonce, challengeID, now.UTC(), expiresAt)
 	challenge := walletAuthChallenge{
-		Address:     address,
-		Domain:      strings.TrimSpace(domain),
-		ExpiresAt:   expiresAt,
-		Nonce:       nonce,
-		SIWEMessage: message.String(),
+		Address:    address,
+		AuthMethod: authMethod,
+		ExpiresAt:  expiresAt,
+		Message:    message,
 	}
 
 	a.mu.Lock()
@@ -127,7 +130,7 @@ func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeReques
 	return types.WalletAuthChallengeResponse{
 		ChallengeID: challengeID,
 		ExpiresAt:   expiresAt,
-		SIWEMessage: challenge.SIWEMessage,
+		Message:     challenge.Message,
 	}, nil
 }
 
@@ -153,26 +156,25 @@ func (a *WalletAuthenticator) Login(req types.WalletAuthLoginRequest, now time.T
 		a.mu.Unlock()
 		return "", "", ErrWalletAuthChallengeExpired
 	}
-	if strings.TrimSpace(req.SIWEMessage) != challenge.SIWEMessage {
+	if strings.TrimSpace(req.Message) != challenge.Message {
+		return "", "", ErrWalletAuthInvalidSignature
+	}
+	if method := normalizeWalletAuthMethod(req.AuthMethod); method != "" && method != challenge.AuthMethod {
 		return "", "", ErrWalletAuthInvalidSignature
 	}
 
-	message, err := siwe.ParseMessage(strings.TrimSpace(req.SIWEMessage))
-	if err != nil {
-		return "", "", ErrWalletAuthInvalidSignature
-	}
-	domain := challenge.Domain
-	nonce := challenge.Nonce
-	verifiedAt := now.UTC()
-	if _, err := message.Verify(strings.TrimSpace(req.SIWESignature), &domain, &nonce, &verifiedAt); err != nil {
-		return "", "", ErrWalletAuthInvalidSignature
-	}
-	address, err := identity.NormalizeEVMAddress(message.GetAddress().Hex())
+	address, err := identity.VerifySuiPersonalMessageSignature([]byte(challenge.Message), req.Signature, a.verifyZkLoginPersonalMessage)
 	if err != nil {
 		return "", "", ErrWalletAuthInvalidSignature
 	}
 	if !strings.EqualFold(address, challenge.Address) || !a.addressAllowed(address) {
 		return "", "", ErrWalletAuthUnauthorized
+	}
+	if reqAddress := strings.TrimSpace(req.Address); reqAddress != "" {
+		normalized, err := identity.NormalizeSuiAddress(reqAddress)
+		if err != nil || !strings.EqualFold(normalized, challenge.Address) {
+			return "", "", ErrWalletAuthUnauthorized
+		}
 	}
 
 	token := utils.RandomID("was_")
@@ -242,4 +244,81 @@ func (a *WalletAuthenticator) cleanupExpiredLocked(now time.Time) {
 			delete(a.sessions, token)
 		}
 	}
+}
+
+func (a *WalletAuthenticator) verifyZkLoginPersonalMessage(author string, message []byte, signature string) (bool, error) {
+	rpcURL := strings.TrimSpace(a.suiRPCURL)
+	if rpcURL == "" {
+		rpcURL = defaultSuiAuthRPCURL
+	}
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "sui_verifyZkLoginSignature",
+		"params": []any{
+			base64.StdEncoding.EncodeToString(message),
+			strings.TrimSpace(signature),
+			"PersonalMessage",
+			strings.TrimSpace(author),
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Result struct {
+			Success bool     `json:"success"`
+			Errors  []string `json:"errors"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, err
+	}
+	if out.Error != nil {
+		return false, errors.New(out.Error.Message)
+	}
+	return out.Result.Success && len(out.Result.Errors) == 0, nil
+}
+
+func normalizeWalletAuthMethod(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", walletAuthMethodSuiWallet:
+		return walletAuthMethodSuiWallet
+	case walletAuthMethodZkLogin:
+		return walletAuthMethodZkLogin
+	default:
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
+}
+
+func buildSuiAuthMessage(statement, domain, uri, address, nonce, requestID string, issuedAt, expiresAt time.Time) string {
+	lines := []string{
+		strings.TrimSpace(statement),
+		"",
+		"Domain: " + strings.TrimSpace(domain),
+		"URI: " + strings.TrimSpace(uri),
+		"Sui Address: " + strings.TrimSpace(address),
+		"Nonce: " + strings.TrimSpace(nonce),
+		"Issued At: " + issuedAt.UTC().Format(time.RFC3339),
+		"Expiration Time: " + expiresAt.UTC().Format(time.RFC3339),
+		"Request ID: " + strings.TrimSpace(requestID),
+	}
+	return strings.Join(lines, "\n")
 }

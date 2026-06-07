@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
-import { BadgeDollarSign } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -36,8 +35,6 @@ interface ServerCardProps {
   ip?: string;
   displayIP?: string;
   isIPBanned?: boolean;
-  paymentEnabled?: boolean;
-  paymentLabel?: string;
   onBanStatusChange?: (
     identityKey: string,
     isBan: boolean
@@ -75,8 +72,6 @@ export function ServerCard({
   ip = "",
   displayIP,
   isIPBanned = false,
-  paymentEnabled = false,
-  paymentLabel = "",
   onBanStatusChange,
   onBPSChange,
   onApproveStatusChange,
@@ -89,9 +84,6 @@ export function ServerCard({
   const [bpsInput, setBpsInput] = useState(bps.toString());
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const effectiveThumbnail = thumbnailFailed ? "" : thumbnail;
-  const normalizedPaymentLabel = paymentLabel.trim();
-  const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
-  const effectivePaymentLabel = normalizedPaymentLabel || "Paid app";
 
   useEffect(() => {
     setThumbnailFailed(false);
@@ -204,7 +196,7 @@ export function ServerCard({
   };
 
   const formatStepLabel = (value: number): string => {
-    if (value === 0) return "No cap";
+    if (value === 0) return "∞";
     if (value >= 1000000) return `${value / 1000000}M`;
     if (value >= 1000) return `${value / 1000}K`;
     return value.toString();
@@ -240,7 +232,7 @@ export function ServerCard({
     <article
       data-hero-key={`server-bg-${serverId}`}
       className={clsx(
-        "relative w-full overflow-hidden rounded-lg group border border-border bg-card shadow-sm transition-shadow hover:shadow-md dark:border-white/10",
+        "relative w-full overflow-hidden rounded-3xl group border border-white/10 shadow-lg",
         showAdminControls ? "h-71.5" : "h-[174.5px]"
       )}
     >
@@ -262,44 +254,35 @@ export function ServerCard({
         />
       )}
 
-      <div className="absolute inset-0 bg-linear-to-t from-black/86 via-black/58 to-black/18" />
+      <div className="absolute inset-0 bg-linear-to-t from-black via-black/60 to-transparent" />
 
       <div className="relative z-10 flex h-full flex-col justify-between p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <div className="flex items-center gap-2 rounded-md bg-black/45 px-2.5 py-1 backdrop-blur-sm border border-white/8">
-              <div
-                className={clsx(
-                  "size-2 rounded-full",
-                  online
-                    ? "bg-primary"
-                    : "bg-gray-500"
-                )}
-              />
-              <span
-                className={clsx(
-                  "text-[10px] font-bold uppercase tracking-wider",
-                  online ? "text-white" : "text-white/60"
-                )}
-              >
-                {online ? "Online" : "Offline"}
-                {formattedDuration && online && ` - ${formattedDuration}`}
-              </span>
-            </div>
-
-            {showPaymentBadge && (
-              <div className="inline-flex max-w-[8.5rem] items-center gap-1.5 rounded-md border border-amber-300/25 bg-amber-300/18 px-2.5 py-1 text-[10px] font-bold uppercase tracking-normal text-amber-100 backdrop-blur-sm">
-                <BadgeDollarSign className="size-3 shrink-0" />
-                <span className="min-w-0 truncate">{effectivePaymentLabel}</span>
-              </div>
-            )}
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-2 rounded-full bg-black/40 px-3 py-1 backdrop-blur-sm border border-white/5">
+            <div
+              className={clsx(
+                "size-2 rounded-full",
+                online
+                  ? "bg-primary shadow-[0_0_8px_rgba(0,219,219,0.8)] animate-pulse"
+                  : "bg-gray-500"
+              )}
+            />
+            <span
+              className={clsx(
+                "text-[10px] font-bold uppercase tracking-wider",
+                online ? "text-white" : "text-white/60"
+              )}
+            >
+              {online ? "Online" : "Offline"}
+              {formattedDuration && online && ` · ${formattedDuration}`}
+            </span>
           </div>
 
           {showAdminControls ? (
             <button
               onClick={handleSelectClick}
               className={clsx(
-                "flex size-8 items-center justify-center rounded-md backdrop-blur-md transition-colors border border-white/8 cursor-pointer",
+                "flex size-8 items-center justify-center rounded-full backdrop-blur-md transition-colors border border-white/5 cursor-pointer",
                 isSelected
                   ? "bg-primary text-black"
                   : "bg-black/40 text-white/70 hover:bg-primary hover:text-black"
@@ -323,7 +306,7 @@ export function ServerCard({
             <button
               onClick={handleFavoriteClick}
               className={clsx(
-                "flex size-8 items-center justify-center rounded-md backdrop-blur-md transition-colors border border-white/8 cursor-pointer",
+                "flex size-8 items-center justify-center rounded-full backdrop-blur-md transition-colors border border-white/5 cursor-pointer",
                 isFavorite
                   ? "bg-primary text-black"
                   : "bg-black/40 text-white/70 hover:bg-primary hover:text-black"
@@ -367,7 +350,7 @@ export function ServerCard({
                     {tags.map((tag, index) => (
                       <span
                         key={index}
-                        className="rounded-sm bg-primary/16 px-2 py-0.5 text-[10px] font-bold uppercase tracking-normal text-primary border border-primary/24 whitespace-nowrap"
+                        className="rounded bg-primary/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary border border-primary/30 whitespace-nowrap"
                       >
                         #{tag}
                       </span>
@@ -385,7 +368,7 @@ export function ServerCard({
 
             {!showAdminControls && effectiveThumbnail && (
               <div className="shrink-0">
-                <div className="size-10 overflow-hidden rounded-md border border-white/20 shadow-sm">
+                <div className="size-10 overflow-hidden rounded-xl border border-white/20 shadow-lg">
                   <img
                     alt={`${name} avatar`}
                     className="h-full w-full object-cover"
@@ -406,7 +389,7 @@ export function ServerCard({
                   </span>
                   <button
                     onClick={handleBPSSettingsClick}
-                    className="px-3 py-1 text-[10px] rounded-md bg-white/10 hover:bg-white/20 text-white/80 transition-colors cursor-pointer border border-white/10"
+                    className="px-3 py-1 text-[10px] rounded-full bg-white/10 hover:bg-white/20 text-white/80 transition-colors cursor-pointer border border-white/10"
                   >
                     Settings
                   </button>
@@ -426,13 +409,13 @@ export function ServerCard({
                 <div className="flex gap-2 w-full">
                   <button
                     onClick={handleApproveClick}
-                    className="flex-1 px-4 py-2 rounded-md font-medium text-xs transition-colors cursor-pointer text-white bg-green-600/80 hover:bg-green-600 backdrop-blur-sm"
+                    className="flex-1 px-4 py-2 rounded-lg font-medium text-xs transition-colors cursor-pointer text-white bg-green-600/80 hover:bg-green-600 backdrop-blur-sm"
                   >
                     Approve
                   </button>
                   <button
                     onClick={handleDenyClick}
-                    className="flex-1 px-4 py-2 rounded-md font-medium text-xs transition-colors cursor-pointer text-white bg-red-600/80 hover:bg-red-600 backdrop-blur-sm"
+                    className="flex-1 px-4 py-2 rounded-lg font-medium text-xs transition-colors cursor-pointer text-white bg-red-600/80 hover:bg-red-600 backdrop-blur-sm"
                   >
                     Deny
                   </button>
@@ -441,7 +424,7 @@ export function ServerCard({
                 <button
                   onClick={ip ? handleIPBanClick : handleBanClick}
                   className={clsx(
-                    "w-full px-4 py-2 rounded-md font-medium text-xs transition-colors cursor-pointer text-white backdrop-blur-sm",
+                    "w-full px-4 py-2 rounded-lg font-medium text-xs transition-colors cursor-pointer text-white backdrop-blur-sm",
                     (ip ? isIPBanned : isBanned)
                       ? "bg-green-600/80 hover:bg-green-600"
                       : "bg-red-600/80 hover:bg-red-600"
@@ -478,7 +461,7 @@ export function ServerCard({
       )}
 
       <Dialog open={showBPSModal} onOpenChange={setShowBPSModal}>
-        <DialogContent className="max-w-sm rounded-lg">
+        <DialogContent className="max-w-sm rounded-xl">
           <DialogHeader>
             <DialogTitle>BPS Settings</DialogTitle>
             <DialogDescription>

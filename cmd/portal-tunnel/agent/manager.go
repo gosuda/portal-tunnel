@@ -161,6 +161,7 @@ func (m *manager) UpdateTunnel(id string, req types.AgentTunnelUpdateRequest) er
 	}
 	updateMetadata := req.Metadata != nil && !req.Metadata.Empty()
 	updateMaxActiveRelays := req.MaxActiveRelays != nil
+	restartTunnel := false
 	if err := m.updateTunnelConfig(id, func(tunnel *TunnelConfig) error {
 		if req.MaxActiveRelays != nil {
 			if *req.MaxActiveRelays <= 0 {
@@ -185,6 +186,25 @@ func (m *manager) UpdateTunnel(id string, req types.AgentTunnelUpdateRequest) er
 				tunnel.Hide = *req.Metadata.Hide
 			}
 		}
+		if req.X402FacilitatorURL != nil {
+			facilitatorURL := strings.TrimSpace(*req.X402FacilitatorURL)
+			x402Route := false
+			for i := range tunnel.HTTPRoutes {
+				if tunnel.HTTPRoutes[i].X402 == nil || tunnel.HTTPRoutes[i].X402.Empty() {
+					continue
+				}
+				x402Route = true
+				x402Config := *tunnel.HTTPRoutes[i].X402
+				if strings.TrimSpace(x402Config.FacilitatorURL) != facilitatorURL {
+					restartTunnel = true
+				}
+				x402Config.FacilitatorURL = facilitatorURL
+				tunnel.HTTPRoutes[i].X402 = &x402Config
+			}
+			if !x402Route {
+				return errors.New("tunnel has no paid http routes")
+			}
+		}
 		return nil
 	}); err != nil {
 		return err
@@ -193,9 +213,20 @@ func (m *manager) UpdateTunnel(id string, req types.AgentTunnelUpdateRequest) er
 	id = strings.TrimSpace(id)
 	m.mu.RLock()
 	tunnel := m.tunnels[id]
+	rootCtx := m.rootCtx
 	m.mu.RUnlock()
 	if tunnel == nil {
 		return fmt.Errorf("tunnel %q not found", id)
+	}
+	if restartTunnel {
+		if err := tunnel.Stop(context.Background()); err != nil {
+			return err
+		}
+		if rootCtx == nil {
+			rootCtx = context.Background()
+		}
+		tunnel.Start(rootCtx)
+		return nil
 	}
 	return tunnel.UpdateSettings(updateMetadata, updateMaxActiveRelays)
 }
@@ -220,19 +251,7 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 		return err
 	}
 	target := strings.TrimSpace(req.TargetAddr)
-	httpRoutes := make([]HTTPRouteConfig, 0, len(req.HTTPRoutes))
-	for _, route := range req.HTTPRoutes {
-		httpRoutes = append(httpRoutes, HTTPRouteConfig{
-			Prefix:   strings.TrimSpace(route.Prefix),
-			Upstream: strings.TrimSpace(route.Upstream),
-			Methods:  normalizeAgentHTTPRouteMethods(route.Methods),
-			Amount:   strings.TrimSpace(route.Amount),
-		})
-	}
-	if target != "" && len(httpRoutes) > 0 {
-		return errors.New("target cannot be combined with http_routes")
-	}
-	if target == "" && len(httpRoutes) == 0 {
+	if target == "" {
 		target = defaultTargetAddr
 	}
 	if name == "" {
@@ -243,22 +262,12 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 		return err
 	}
 	discovery := true
-	if req.Discovery != nil {
-		discovery = *req.Discovery
-	}
-	if req.MaxActiveRelays < 0 {
-		return errors.New("max_active_relays cannot be negative")
-	}
 	tunnelCfg := TunnelConfig{
-		ID:              id,
-		Name:            name,
-		TargetAddr:      target,
-		HTTPRoutes:      httpRoutes,
-		RelayURLs:       relayURLs,
-		Discovery:       &discovery,
-		MaxActiveRelays: req.MaxActiveRelays,
-		X402PayTo:       strings.TrimSpace(req.X402PayTo),
-		X402Testnet:     req.X402Testnet,
+		ID:         id,
+		Name:       name,
+		TargetAddr: target,
+		RelayURLs:  relayURLs,
+		Discovery:  &discovery,
 	}
 	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
 		return fmt.Errorf("tunnel %q already exists", tunnelCfg.ID)
@@ -283,17 +292,6 @@ func agentTunnelID(name string) string {
 		dash = false
 	}
 	return strings.Trim(out.String(), "-")
-}
-
-func normalizeAgentHTTPRouteMethods(methods []string) []string {
-	out := make([]string, 0, len(methods))
-	for _, raw := range methods {
-		method := strings.ToUpper(strings.TrimSpace(raw))
-		if method != "" && !slices.Contains(out, method) {
-			out = append(out, method)
-		}
-	}
-	return out
 }
 
 func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error) error {
@@ -598,34 +596,30 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 	case running:
 		state = "starting"
 	}
-	discovery := true
-	if cfg.Discovery != nil {
-		discovery = *cfg.Discovery
+
+	x402Enabled := false
+	x402FacilitatorURL := ""
+	for _, route := range cfg.HTTPRoutes {
+		if route.X402 == nil || route.X402.Empty() {
+			continue
+		}
+		x402Enabled = true
+		if x402FacilitatorURL == "" {
+			x402FacilitatorURL = strings.TrimSpace(route.X402.FacilitatorURL)
+		}
 	}
 
 	status := types.AgentTunnelStatus{
-		ID:              cfg.ID,
-		Name:            cfg.Name,
-		State:           state,
-		TargetAddr:      cfg.TargetAddr,
-		LastError:       lastError,
-		Discovery:       discovery,
-		MaxActiveRelays: cfg.MaxActiveRelays,
-		Metadata:        metadataFromTunnelConfig(cfg),
-		MultiHop:        append([]string(nil), cfg.MultiHop...),
-		X402PayTo:       strings.TrimSpace(cfg.X402PayTo),
-		X402Testnet:     cfg.X402Testnet,
-	}
-	if len(cfg.HTTPRoutes) > 0 {
-		status.HTTPRoutes = make([]types.AgentHTTPRoute, 0, len(cfg.HTTPRoutes))
-		for _, route := range cfg.HTTPRoutes {
-			status.HTTPRoutes = append(status.HTTPRoutes, types.AgentHTTPRoute{
-				Prefix:   route.Prefix,
-				Upstream: route.Upstream,
-				Methods:  append([]string(nil), route.Methods...),
-				Amount:   route.Amount,
-			})
-		}
+		ID:                 cfg.ID,
+		Name:               cfg.Name,
+		State:              state,
+		TargetAddr:         cfg.TargetAddr,
+		LastError:          lastError,
+		MaxActiveRelays:    cfg.MaxActiveRelays,
+		Metadata:           metadataFromTunnelConfig(cfg),
+		X402Enabled:        x402Enabled,
+		X402FacilitatorURL: x402FacilitatorURL,
+		MultiHop:           append([]string(nil), cfg.MultiHop...),
 	}
 	if exposure == nil {
 		if strings.TrimSpace(runtime.Address) != "" {
@@ -712,8 +706,6 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		BanMITM:         banMITM,
 		MaxActiveRelays: cfg.MaxActiveRelays,
 		Metadata:        metadataFromTunnelConfig(cfg),
-		X402PayTo:       cfg.X402PayTo,
-		X402Testnet:     cfg.X402Testnet,
 	})
 	if err != nil {
 		return err
@@ -734,13 +726,12 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	defer exposure.Close()
 
 	if len(cfg.HTTPRoutes) > 0 {
-		routes := make([]sdk.HTTPRouteConfig, 0, len(cfg.HTTPRoutes))
+		routes := make([]sdk.HTTPRoute, 0, len(cfg.HTTPRoutes))
 		for _, route := range cfg.HTTPRoutes {
-			routes = append(routes, sdk.HTTPRouteConfig{
+			routes = append(routes, sdk.HTTPRoute{
 				Prefix:   route.Prefix,
 				Upstream: route.Upstream,
-				Methods:  route.Methods,
-				Amount:   route.Amount,
+				X402:     route.X402,
 			})
 		}
 		err = exposure.RunHTTPRoutes(ctx, routes, "")

@@ -2,11 +2,8 @@ package auth
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"time"
-
-	"github.com/spruceid/siwe-go"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -16,17 +13,14 @@ import (
 var (
 	ErrRegisterChallengeExpired          = errors.New("register challenge expired")
 	ErrRegisterChallengeNotFound         = errors.New("register challenge not found")
-	ErrRegisterChallengeInvalidSignature = errors.New("siwe signature is invalid")
+	ErrRegisterChallengeInvalidSignature = errors.New("sui signature is invalid")
 )
 
 type RegisterChallenge struct {
 	ChallengeID string
 	ExpiresAt   time.Time
 	Request     types.RegisterChallengeRequest
-	SIWEMessage string
-
-	domain string
-	nonce  string
+	Message     string
 }
 
 func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string, now time.Time, ttl time.Duration) (*RegisterChallenge, error) {
@@ -36,18 +30,9 @@ func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string
 	}
 
 	challengeID := utils.RandomID("rch_")
-	nonce := siwe.GenerateNonce()
+	nonce := utils.RandomID("nonce_")
 	expiresAt := now.UTC().Add(ttl)
-	message, err := siwe.InitMessage(domain, normalizedIdentity.Address, uri, nonce, map[string]interface{}{
-		"statement":      "Register a portal lease",
-		"chainId":        1,
-		"issuedAt":       now.UTC().Format(time.RFC3339),
-		"expirationTime": expiresAt.UTC().Format(time.RFC3339),
-		"requestId":      challengeID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build siwe message: %w", err)
-	}
+	message := buildSuiAuthMessage("Register a Portal lease", strings.TrimSpace(domain), strings.TrimSpace(uri), normalizedIdentity.Address, nonce, challengeID, now.UTC(), expiresAt)
 
 	req.Identity = normalizedIdentity
 	req.Metadata = req.Metadata.Copy()
@@ -56,9 +41,7 @@ func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string
 		ChallengeID: challengeID,
 		ExpiresAt:   expiresAt,
 		Request:     req,
-		SIWEMessage: message.String(),
-		domain:      strings.TrimSpace(domain),
-		nonce:       nonce,
+		Message:     message,
 	}, nil
 }
 
@@ -70,17 +53,14 @@ func (c *RegisterChallenge) Verify(req types.RegisterRequest, now time.Time) err
 	if c == nil {
 		return ErrRegisterChallengeNotFound
 	}
-	if strings.TrimSpace(req.SIWEMessage) != c.SIWEMessage {
-		return errors.New("siwe message does not match register challenge")
+	if strings.TrimSpace(req.Message) != c.Message {
+		return errors.New("message does not match register challenge")
 	}
-	message, err := siwe.ParseMessage(strings.TrimSpace(c.SIWEMessage))
+	address, err := identity.VerifySuiPersonalMessageSignature([]byte(c.Message), req.Signature, nil)
 	if err != nil {
 		return ErrRegisterChallengeInvalidSignature
 	}
-	normalizedDomain := strings.TrimSpace(c.domain)
-	normalizedNonce := strings.TrimSpace(c.nonce)
-	verifiedAt := now.UTC()
-	if _, err := message.Verify(strings.TrimSpace(req.SIWESignature), &normalizedDomain, &normalizedNonce, &verifiedAt); err != nil {
+	if !strings.EqualFold(address, c.Request.Identity.Address) {
 		return ErrRegisterChallengeInvalidSignature
 	}
 	return nil

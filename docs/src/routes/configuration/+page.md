@@ -37,14 +37,6 @@ The relay server (`relay-server`) reads configuration from environment variables
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
 
-### Payments
-
-| Variable | Default | Type | Description |
-|----------|---------|------|-------------|
-| `X402_ENABLED` | `false` | bool | Enable relay-owned Sui x402 facilitator endpoints under `/api/x402` for future control-plane payments |
-| `X402_TESTNET` | `false` | bool | Use Sui testnet for relay-owned x402 facilitator payments; `false` uses Sui mainnet |
-| `X402_PAY_TO` | `""` | string | Sui payment recipient address for relay-owned control-plane x402 resources |
-
 ### Proxy
 
 | Variable | Default | Type | Description |
@@ -66,11 +58,17 @@ The relay server (`relay-server`) reads configuration from environment variables
 | `PPROF_ENABLED` | `false` | bool | Enable the relay pprof diagnostics HTTP server |
 | `PPROF_ADDR` | `127.0.0.1:6060` | string | pprof listen address when enabled; keep it on loopback unless the port is protected |
 
-### Admin
+### Payments
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ADMIN_TOKEN` | | string | Bearer token source for relay admin and policy APIs; set a long random value for production relays |
+| `X402_FACILITATOR_ENABLED` | `false` | bool | Enable the relay-local Sui payment facilitator under `/api/x402` |
+| `X402_NETWORK` | Sui Mainnet when enabled | string | Sui facilitator network selector |
+| `X402_RPC_URL` | | string | RPC URL used by the facilitator; empty uses the Sui default for supported networks |
+
+The relay-local facilitator defaults to Sui gasless stablecoin settlement.
+`/sdk/domain` exposes only the public facilitator URL and selected rail;
+`X402_RPC_URL` is not returned to clients.
 
 ### Frontend API Service
 
@@ -162,14 +160,12 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--owner` | | string | | Service owner metadata |
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
-| `--x402-pay-to` | | string | | Sui USDC payment recipient address for this tunnel |
-| `--x402-testnet` | | bool | `false` | Use Sui testnet for tunnel x402 payments; default is Sui mainnet |
 
 ### Routing
 
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
-| `--http-route` | | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]` form; repeat to aggregate multiple local HTTP services behind one public URL; route amounts require `--x402-pay-to` |
+| `--http-route` | | string | | HTTP route mapping in `PATH=UPSTREAM` form; repeat to aggregate multiple local HTTP services behind one public URL |
 
 ### Transport
 
@@ -221,14 +217,10 @@ tags = ["web"]
 [[tunnels]]
 id = "api"
 name = "myapp"
-x402_pay_to = "0x..."
-x402_testnet = true
 
 [[tunnels.http_routes]]
 prefix = "/api"
 upstream = "http://127.0.0.1:3001"
-methods = ["GET"]
-amount = "0.01"
 
 [[tunnels.http_routes]]
 prefix = "/"
@@ -263,42 +255,67 @@ Tunnel fields mirror `portal expose` flags:
 | `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
-| `x402_pay_to` | string | Tunnel-owned Sui USDC x402 payment recipient for paid HTTP routes |
-| `x402_testnet` | bool | Use Sui testnet for tunnel-owned x402 paid routes; omitted or `false` uses Sui mainnet |
-| `http_routes[].amount` | string | Optional Sui USDC x402 amount, such as `0.01`, for one HTTP route prefix; requires `x402_pay_to` |
-| `http_routes[].methods` | string array | Optional HTTP methods that require payment on that route; empty means every method |
+| `http_routes.x402` | table | Sui payment settings for one HTTP route; set `facilitator_url` explicitly or let frontend/configuration tooling write it |
 
-When any routed HTTP entry has `amount`, the tunnel also serves
-`/x402/client.js` and `/x402/prepare` on the public tunnel origin. Browser
-frontends served by another route in the same tunnel can import
-`/x402/client.js` and use `x402Fetch()` to run the same Sui wallet payment flow
-as the standalone payment app. Native clients use `/x402/prepare` directly and
-send the signed payload as `X-PAYMENT`. Payment is still enforced by the tunnel
-on the paid route prefix. Tunnel paid routes default to Sui mainnet and use Sui
-testnet when `x402_testnet = true`.
+`http_routes.x402` is evaluated by the tunnel process before proxying to the
+upstream. By default it requires Sui USDC payment for the selected HTTP path:
+
+```toml
+[[tunnels]]
+id = "paid-api"
+name = "paid-api"
+relays = ["https://portal.example.com"]
+discovery = false
+
+[[tunnels.http_routes]]
+prefix = "/"
+upstream = "http://127.0.0.1:5173"
+
+[[tunnels.http_routes]]
+prefix = "/api/report"
+upstream = "http://127.0.0.1:3001"
+
+[tunnels.http_routes.x402]
+price = "$0.010"
+pay_to = "identity"
+facilitator_url = "https://portal.example.com:4017/api/x402"
+resource = "/api/report"
+mime_type = "application/json"
+max_timeout_seconds = 0
+payment_timeout_seconds = 0
+```
+
+Repeat `[[tunnels.http_routes]]` with a different `x402.price` for each static
+priced path. If prices depend on product state, user input, or a database row,
+wrap the app's Go handler with `portal/x402` and use a Sui `PriceResolver`;
+tunnel config is intentionally static.
 
 For a task-oriented walkthrough, see [Portal Agent](/portal-agent).
 
 ### `identity.json`
 
-Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors. `portal expose` treats `--identity-path` as a direct JSON file path. `relay-server` treats `IDENTITY_PATH` as a state directory and stores this file at `IDENTITY_PATH/identity.json`.
+Stores the Sui Ed25519 identity used to sign tunnel sessions and relay descriptors. `portal expose` treats `--identity-path` as a direct JSON file path. `relay-server` treats `IDENTITY_PATH` as a state directory and stores this file at `IDENTITY_PATH/identity.json`.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Human-readable label for this identity |
-| `address` | string | Derived EVM address used for SIWE and identity ownership |
-| `public_key` | string | Compressed secp256k1 public key hex |
-| `private_key` | string | secp256k1 private key hex; keep secret |
-| `mnemonic` | string | BIP-39 mnemonic used to derive the secp256k1 identity key; keep secret |
-| `derivation_path` | string | EVM derivation path for `mnemonic`; defaults to `m/44'/60'/0'/0/0` |
+| `address` | string | Derived Sui address used for identity ownership |
+| `public_key` | string | Sui Ed25519 public key hex |
+| `private_key` | string | Sui Ed25519 private key seed hex; keep secret |
+| `mnemonic` | string | BIP-39 mnemonic used to derive the Sui identity key; keep secret |
+| `derivation_path` | string | Sui Ed25519 derivation path for `mnemonic`; defaults to `m/44'/784'/0'/0'/0'` |
+| `sui_address` | string | Alias for the derived Sui address |
+| `sui_public_key` | string | Sui Ed25519 public key hex |
+| `sui_private_key` | string | Sui Ed25519 private key seed hex; keep secret; omitted when `mnemonic` is stored |
+| `sui_derivation_path` | string | Sui Ed25519 derivation path for `mnemonic`; defaults to `m/44'/784'/0'/0'/0'` |
 | `wireguard_public_key` | string | Relay-only WireGuard overlay public key when discovery is enabled |
 | `wireguard_private_key` | string | Relay-only WireGuard overlay private key when discovery is enabled |
 | `encrypted_client_hello_seed` | string | Relay-only HKDF salt for deriving the ECH HPKE private key; generated automatically when missing; keep secret |
 
-When `mnemonic` is present, Portal derives the private key at `derivation_path`
-and preserves the mnemonic form when rewriting `identity.json`. The same
-identity file or state directory can be reused across restarts to keep a stable
-address.
+When `mnemonic` is present, Portal derives the Sui Ed25519 identity key at
+`sui_derivation_path` or `derivation_path`, then preserves the mnemonic form when
+rewriting `identity.json`. The same identity file or state directory can be
+reused across restarts to keep a stable Sui address.
 
 ### `policy.json`
 

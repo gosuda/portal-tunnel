@@ -16,7 +16,7 @@ var ErrHopRouteSignatureInvalid = errors.New("hop route signature is invalid")
 func normalizeHopRoute(route *types.HopRoute, requireOwner bool) error {
 	ownerPublicKey := strings.ToLower(utils.TrimHexPrefix(strings.TrimSpace(route.OwnerPublicKey)))
 	if ownerPublicKey != "" {
-		if _, err := identity.ParseSecp256k1PublicKeyHex(ownerPublicKey); err != nil {
+		if _, err := identity.SuiAddressFromEd25519PublicKeyHex(ownerPublicKey); err != nil {
 			return fmt.Errorf("hop route owner public key: %w", err)
 		}
 	} else if requireOwner {
@@ -57,7 +57,7 @@ func SignHopRoute(method string, route types.HopRoute, authority identity.Author
 	if ownerPublicKey == "" {
 		return types.HopRoute{}, errors.New("hop route owner identity is required")
 	}
-	if _, err := identity.ParseSecp256k1PublicKeyHex(ownerPublicKey); err != nil {
+	if _, err := identity.SuiAddressFromEd25519PublicKeyHex(ownerPublicKey); err != nil {
 		return types.HopRoute{}, fmt.Errorf("hop route owner public key: %w", err)
 	}
 
@@ -66,14 +66,11 @@ func SignHopRoute(method string, route types.HopRoute, authority identity.Author
 	if err != nil {
 		return types.HopRoute{}, err
 	}
-	signature, err := authority.SignSHA256Secp256k1(payload)
+	signature, err := authority.SignEd25519(payload)
 	if err != nil {
 		return types.HopRoute{}, err
 	}
-	route.Signature, err = signature.DERHex()
-	if err != nil {
-		return types.HopRoute{}, err
-	}
+	route.Signature = signature
 	return route, nil
 }
 
@@ -88,7 +85,7 @@ func VerifyHopRoute(method string, route types.HopRoute) (types.HopRoute, error)
 	if err != nil {
 		return types.HopRoute{}, err
 	}
-	if err := identity.VerifySHA256Secp256k1DER(payload, route.OwnerPublicKey, signature); err != nil {
+	if err := identity.VerifyEd25519Hex(payload, route.OwnerPublicKey, signature); err != nil {
 		return types.HopRoute{}, ErrHopRouteSignatureInvalid
 	}
 	route.Signature = signature

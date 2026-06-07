@@ -1,64 +1,50 @@
 package types
 
-import (
-	"net/http"
-	"time"
-
-	facilitatortypes "github.com/gosuda/x402-facilitator/types"
+const (
+	X402SchemeExact    = "exact"
+	X402PayToIdentity  = "identity"
+	X402DefaultNetwork = "sui:mainnet"
 )
 
-// X402FacilitatorInfo describes relay-owned x402 control-plane facilitator settings exposed by the API.
+type X402Config struct {
+	Network            string `json:"network,omitempty" koanf:"network"`
+	Price              string `json:"price,omitempty" koanf:"price"`
+	PayTo              string `json:"pay_to,omitempty" koanf:"pay_to"`
+	FacilitatorURL     string `json:"facilitator_url,omitempty" koanf:"facilitator_url"`
+	Resource           string `json:"resource,omitempty" koanf:"resource"`
+	MimeType           string `json:"mime_type,omitempty" koanf:"mime_type"`
+	MaxTimeoutSeconds  int    `json:"max_timeout_seconds,omitempty" koanf:"max_timeout_seconds"`
+	PaymentTimeoutSecs int    `json:"payment_timeout_seconds,omitempty" koanf:"payment_timeout_seconds"`
+}
+
+func (c X402Config) Empty() bool {
+	return c.Network == "" &&
+		c.Price == "" &&
+		c.PayTo == "" &&
+		c.FacilitatorURL == "" &&
+		c.Resource == "" &&
+		c.MimeType == "" &&
+		c.MaxTimeoutSeconds == 0 &&
+		c.PaymentTimeoutSecs == 0
+}
+
 type X402FacilitatorInfo struct {
 	Enabled      bool   `json:"enabled"`
 	URL          string `json:"url,omitempty"`
 	Network      string `json:"network,omitempty"`
 	NetworkName  string `json:"network_name,omitempty"`
 	SupportedURL string `json:"supported_url,omitempty"`
-	PayTo        string `json:"pay_to,omitempty"`
 }
 
-// X402Payment is the stable x402 payment contract shared by SDK helpers and payment apps.
-type X402Payment struct {
-	Testnet             bool
-	Network             string
-	NetworkName         string
-	Asset               string
-	PayTo               string
-	Amount              string
-	MaxTimeoutSeconds   int
-	RequestTimeout      time.Duration
-	Endpoints           []string
-	ResourcePath        string
-	ResourceDescription string
-	ResourceMimeType    string
+type X402SupportedKind struct {
+	X402Version int            `json:"x402Version"`
+	Scheme      string         `json:"scheme"`
+	Network     string         `json:"network"`
+	Extra       map[string]any `json:"extra,omitempty"`
 }
 
-// X402PaymentResult is the successful settlement data passed to protected handlers.
-type X402PaymentResult struct {
-	TransactionID string
-	Network       string
-	Payer         string
-}
-
-// X402PaymentHandlerFunc handles a request after its x402 payment has settled.
-type X402PaymentHandlerFunc func(http.ResponseWriter, *http.Request, X402PaymentResult)
-
-// X402PreparePaymentRequest is the shared prepare endpoint request body.
-type X402PreparePaymentRequest struct {
-	Sender string `json:"sender"`
-	Method string `json:"method,omitempty"`
-	Path   string `json:"path,omitempty"`
-}
-
-// X402PreparePaymentResponse is the wallet transaction payload returned by a payment prepare endpoint.
-type X402PreparePaymentResponse struct {
-	X402Version         int                                  `json:"x402Version"`
-	PaymentRequirements facilitatortypes.PaymentRequirements `json:"paymentRequirements"`
-	Resource            *facilitatortypes.ResourceInfo       `json:"resource,omitempty"`
-	PrepareTransaction  *struct {
-		Transaction string `json:"transaction"`
-	} `json:"prepareTransaction,omitempty"`
-	PaymentTransaction struct {
-		Transaction string `json:"transaction"`
-	} `json:"paymentTransaction"`
+type X402SupportedResponse struct {
+	Kinds      []X402SupportedKind `json:"kinds"`
+	Extensions []string            `json:"extensions"`
+	Signers    map[string][]string `json:"signers"`
 }

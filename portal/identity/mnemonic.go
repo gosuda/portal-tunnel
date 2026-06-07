@@ -7,30 +7,29 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/big"
 	"strconv"
 	"strings"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/tyler-smith/go-bip39"
 )
 
 const (
-	DefaultEVMIdentityDerivationPath = "m/44'/60'/0'/0/0"
+	DefaultSuiEd25519PaymentDerivationPath = "m/44'/784'/0'/0'/0'"
 
 	bip32HardenedOffset = uint32(0x80000000)
 )
 
 type derivationPath []uint32
 
-var defaultEVMRootDerivationPath = derivationPath{
-	bip32HardenedOffset + 44,
-	bip32HardenedOffset + 60,
-	bip32HardenedOffset,
-	0,
+func GenerateMnemonic() (string, error) {
+	entropy, err := bip39.NewEntropy(256)
+	if err != nil {
+		return "", err
+	}
+	return bip39.NewMnemonic(entropy)
 }
 
-func deriveSecp256k1PrivateKeyFromMnemonic(rawMnemonic, rawDerivationPath string) (string, string, error) {
+func deriveEd25519PrivateKeyFromMnemonic(rawMnemonic, rawDerivationPath string) (string, string, error) {
 	mnemonic := normalizeMnemonic(rawMnemonic)
 	if mnemonic == "" {
 		return "", "", errors.New("identity mnemonic is required")
@@ -38,18 +37,26 @@ func deriveSecp256k1PrivateKeyFromMnemonic(rawMnemonic, rawDerivationPath string
 
 	derivationPath := strings.TrimSpace(rawDerivationPath)
 	if derivationPath == "" {
-		derivationPath = DefaultEVMIdentityDerivationPath
+		derivationPath = DefaultSuiEd25519PaymentDerivationPath
+	}
+	if !strings.HasPrefix(derivationPath, "m/") {
+		return "", "", errors.New("sui ed25519 derivation path must be absolute")
 	}
 	path, err := parseDerivationPath(derivationPath)
 	if err != nil {
-		return "", "", fmt.Errorf("parse identity derivation path: %w", err)
+		return "", "", fmt.Errorf("parse sui ed25519 derivation path: %w", err)
+	}
+	for _, child := range path {
+		if child < bip32HardenedOffset {
+			return "", "", errors.New("sui ed25519 derivation path components must be hardened")
+		}
 	}
 
 	seed, err := bip39.NewSeedWithErrorChecking(mnemonic, "")
 	if err != nil {
 		return "", "", fmt.Errorf("validate identity mnemonic: %w", err)
 	}
-	privateKey, err := deriveBIP32Secp256k1PrivateKey(seed, path)
+	privateKey, err := deriveSLIP10Ed25519PrivateKey(seed, path)
 	if err != nil {
 		return "", "", err
 	}
@@ -73,7 +80,7 @@ func parseDerivationPath(raw string) (derivationPath, error) {
 	case "m":
 		components = components[1:]
 	default:
-		path = append(path, defaultEVMRootDerivationPath...)
+		return nil, errors.New("derivation path must start with 'm/'")
 	}
 	if len(components) == 0 {
 		return nil, errors.New("empty derivation path")
@@ -117,7 +124,7 @@ func (path derivationPath) String() string {
 	return builder.String()
 }
 
-func deriveBIP32Secp256k1PrivateKey(seed []byte, path derivationPath) ([]byte, error) {
+func deriveSLIP10Ed25519PrivateKey(seed []byte, path derivationPath) ([]byte, error) {
 	if len(seed) == 0 {
 		return nil, errors.New("identity mnemonic seed is required")
 	}
@@ -125,41 +132,25 @@ func deriveBIP32Secp256k1PrivateKey(seed []byte, path derivationPath) ([]byte, e
 		return nil, errors.New("identity derivation path is required")
 	}
 
-	mac := hmac.New(sha512.New, []byte("Bitcoin seed"))
+	mac := hmac.New(sha512.New, []byte("ed25519 seed"))
 	_, _ = mac.Write(seed)
 	digest := mac.Sum(nil)
-
-	privateKey, err := normalizeBIP32PrivateKey(digest[:32])
-	if err != nil {
-		return nil, fmt.Errorf("derive identity master key: %w", err)
-	}
+	privateKey := append([]byte(nil), digest[:32]...)
 	chainCode := append([]byte(nil), digest[32:]...)
 
 	for _, child := range path {
-		privateKey, chainCode, err = deriveBIP32Secp256k1ChildPrivateKey(privateKey, chainCode, child)
-		if err != nil {
-			return nil, fmt.Errorf("derive identity child key %d: %w", child, err)
+		if child < bip32HardenedOffset {
+			return nil, errors.New("ed25519 child derivation requires hardened path")
 		}
+		privateKey, chainCode = deriveSLIP10Ed25519ChildPrivateKey(privateKey, chainCode, child)
 	}
 	return privateKey, nil
 }
 
-func deriveBIP32Secp256k1ChildPrivateKey(parentPrivateKey, parentChainCode []byte, child uint32) ([]byte, []byte, error) {
-	if len(parentChainCode) != 32 {
-		return nil, nil, errors.New("parent chain code must be 32 bytes")
-	}
-	parentKey, err := normalizeBIP32PrivateKey(parentPrivateKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parent private key: %w", err)
-	}
-
+func deriveSLIP10Ed25519ChildPrivateKey(parentPrivateKey, parentChainCode []byte, child uint32) ([]byte, []byte) {
 	data := make([]byte, 0, 37)
-	if child >= bip32HardenedOffset {
-		data = append(data, 0)
-		data = append(data, parentKey...)
-	} else {
-		data = append(data, secp256k1.PrivKeyFromBytes(parentKey).PubKey().SerializeCompressed()...)
-	}
+	data = append(data, 0)
+	data = append(data, parentPrivateKey...)
 	var childBytes [4]byte
 	binary.BigEndian.PutUint32(childBytes[:], child)
 	data = append(data, childBytes[:]...)
@@ -167,46 +158,5 @@ func deriveBIP32Secp256k1ChildPrivateKey(parentPrivateKey, parentChainCode []byt
 	mac := hmac.New(sha512.New, parentChainCode)
 	_, _ = mac.Write(data)
 	digest := mac.Sum(nil)
-
-	childKey, err := addBIP32PrivateKeys(digest[:32], parentKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	return childKey, append([]byte(nil), digest[32:]...), nil
-}
-
-func addBIP32PrivateKeys(left, right []byte) ([]byte, error) {
-	order := secp256k1.Params().N
-	leftInt := new(big.Int).SetBytes(left)
-	if leftInt.Sign() == 0 || leftInt.Cmp(order) >= 0 {
-		return nil, errors.New("child key offset is outside the secp256k1 order")
-	}
-	rightInt := new(big.Int).SetBytes(right)
-	if rightInt.Sign() == 0 || rightInt.Cmp(order) >= 0 {
-		return nil, errors.New("parent private key is outside the secp256k1 order")
-	}
-
-	child := leftInt.Add(leftInt, rightInt)
-	child.Mod(child, order)
-	if child.Sign() == 0 {
-		return nil, errors.New("derived private key is zero")
-	}
-	return padded32(child), nil
-}
-
-func normalizeBIP32PrivateKey(raw []byte) ([]byte, error) {
-	key := new(big.Int).SetBytes(raw)
-	if key.Sign() == 0 {
-		return nil, errors.New("private key is zero")
-	}
-	if key.Cmp(secp256k1.Params().N) >= 0 {
-		return nil, errors.New("private key is outside the secp256k1 order")
-	}
-	return padded32(key), nil
-}
-
-func padded32(value *big.Int) []byte {
-	out := make([]byte, 32)
-	value.FillBytes(out)
-	return out
+	return append([]byte(nil), digest[:32]...), append([]byte(nil), digest[32:]...)
 }

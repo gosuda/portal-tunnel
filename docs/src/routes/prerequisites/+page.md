@@ -37,12 +37,11 @@ If you plan to run your own relay server:
 
 ## Optional
 
-- Long random admin token for relay admin access
-- Ethereum wallet for optional local agent status access
+- Sui wallet for relay admin login or optional local agent status access
 - DNS provider account for relay-managed ACME, ECH DNS records, and optional ENS
   gasless DNS import
 
 ## Next Steps
 
 - [Getting Started](/getting-started): install Portal and create your first tunnel
-- [Wallet and ENS](/wallet-and-ens): understand admin tokens, wallet auth, and ENS gasless DNS
+- [Wallet and ENS](/wallet-and-ens): understand wallet auth and ENS gasless DNS

@@ -22,7 +22,7 @@ import (
 // such as ban/failure tracking and observed discovery RTT.
 //
 // The relays map is keyed by APIHTTPSAddr (URL). The keyIndex map provides a
-// reverse lookup from signing identity (the EVM address derived from the
+// reverse lookup from signing identity (the Sui address derived from the
 // signing public key, lower-cased) to the most recent IssuedAt we have ever
 // accepted for that identity, along with a tombstone TombstoneUntil that
 // records how long the rollback anchor must be remembered. The keyIndex is
@@ -829,8 +829,8 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 // from external (untrusted) callers. The full validation pipeline runs
 // inline:
 //
-//  1. The descriptor signature is verified against the recovered public key
-//     and matched to the descriptor's Address field.
+//  1. The descriptor signature is verified against its embedded public key
+//     and matched to the descriptor's Sui address.
 //  2. The descriptor must be currently valid (ExpiresAt strictly in the
 //     future) and not significantly clock-skewed (IssuedAt no further into
 //     the future than AnnounceClockSkewTolerance, validity window no longer

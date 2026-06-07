@@ -7,11 +7,6 @@ interface Metadata {
   owner: string;
 }
 
-export interface PaymentDisplay {
-  enabled: boolean;
-  label: string;
-}
-
 const EMPTY_METADATA: Metadata = {
   description: "",
   tags: [],
@@ -72,34 +67,4 @@ export function resolveLeaseThumbnail(metadata: Metadata, hostname: string): str
     return "";
   }
   return `${BROWSER_API_PATHS.thumbnail.prefix}${encodeURIComponent(normalizedHostname)}`;
-}
-
-export function resolveLeasePayment(metadata: Metadata): PaymentDisplay {
-  const normalizedTags = new Set(
-    metadata.tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean)
-  );
-  const description = metadata.description.toLowerCase();
-  const enabled =
-    normalizedTags.has("x402") ||
-    normalizedTags.has("payment") ||
-    normalizedTags.has("paid") ||
-    normalizedTags.has("usdc") ||
-    /\bx402\b|\bpaid\b|\bpayment\b|\busdc\b/.test(description);
-
-  if (!enabled) {
-    return { enabled: false, label: "" };
-  }
-
-  const labelParts: string[] = [];
-  if (normalizedTags.has("x402") || description.includes("x402")) {
-    labelParts.push("x402");
-  }
-  if (normalizedTags.has("usdc") || description.includes("usdc")) {
-    labelParts.push("USDC");
-  }
-
-  return {
-    enabled: true,
-    label: labelParts.length > 0 ? labelParts.join(" ") : "Paid app",
-  };
 }

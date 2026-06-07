@@ -6,11 +6,12 @@ const (
 	PathHealthz   = PathAPIPrefix + "/healthz"
 	PathState     = PathAPIPrefix + "/state"
 
-	PathAdmin           = PathAPIPrefix + "/admin"
-	PathAdminPrefix     = PathAdmin + "/"
-	PathAdminAuthLogin  = PathAdmin + "/auth/login"
-	PathAdminLogout     = PathAdmin + "/auth/logout"
-	PathAdminAuthStatus = PathAdmin + "/auth/status"
+	PathAdmin              = PathAPIPrefix + "/admin"
+	PathAdminPrefix        = PathAdmin + "/"
+	PathAdminAuthChallenge = PathAdmin + "/auth/challenge"
+	PathAdminAuthLogin     = PathAdmin + "/auth/login"
+	PathAdminLogout        = PathAdmin + "/auth/logout"
+	PathAdminAuthStatus    = PathAdmin + "/auth/status"
 
 	PathPolicy       = PathAPIPrefix + "/policy"
 	PathPolicyPrefix = PathPolicy + "/"
@@ -43,9 +44,6 @@ const (
 )
 
 const (
-	X402PreparePath = "/x402/prepare"
-	X402ClientPath  = "/x402/client.js"
-
 	PathAgentPrefix        = "/agent"
 	PathAgentStatus        = PathAgentPrefix + "/status"
 	PathAgentShutdown      = PathAgentPrefix + "/shutdown"

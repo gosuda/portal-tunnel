@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -18,10 +17,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-const (
-	defaultThumbnailURL = "https://image.portal.thumbgo.kr/generated/1e56ad0f0a1d.png"
-	defaultPhotoURL     = "https://image.portal.thumbgo.kr/generated/905a4835ad50.png"
-)
+const defaultPhotoURL = "https://image.s-h.day/generated/905a4835ad50.png"
 
 type paymentConfig struct {
 	relayURLs       string
@@ -38,13 +34,7 @@ type paymentConfig struct {
 	thumbnail       string
 	photoURL        string
 	maxActiveRelays int
-
-	x402Testnet           bool
-	x402PayTo             string
-	x402Amount            string
-	x402Endpoints         []string
-	x402MaxTimeoutSeconds int
-	x402RequestTimeout    int
+	x402            types.X402Config
 }
 
 func main() {
@@ -59,26 +49,30 @@ func run(args []string) error {
 	cfg := paymentConfig{}
 	fs := utils.NewFlagSet("payment-app", printUsage)
 
-	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://localhost", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with bootstrap relays when discovery is enabled)", "RELAYS")
-	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", false, "include bootstrap relays and enable discovery", "DISCOVERY")
+	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://gosunuts.xyz", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with bootstrap relays when discovery is enabled)", "RELAYS")
+	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", true, "include bootstrap relays and enable discovery", "DISCOVERY")
 	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
 	utils.IntFlagEnv(fs, &cfg.maxActiveRelays, "max-active-relays", 3, nil, "maximum number of auto-selected relays to keep connected; explicit --relays are always included", "MAX_ACTIVE_RELAYS")
-	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8093", "local payment app HTTP listen address (host:port or URL)")
+	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8093", "local payment app HTTP listen address (host:port or URL; disable if empty)")
 	utils.StringFlag(fs, &cfg.name, "name", "payment-app", "public hostname prefix (single DNS label)")
-	utils.StringFlag(fs, &cfg.desc, "description", "Portal Sui wallet x402 payment app", "lease description")
-	utils.StringFlag(fs, &cfg.tags, "tags", "payment,x402,sui,usdc,image,photo", "comma-separated lease tags")
+	utils.StringFlag(fs, &cfg.desc, "description", "Portal Sui USDC payment app", "lease description")
+	utils.StringFlag(fs, &cfg.tags, "tags", "payment,sui,usdc,image,photo", "comma-separated lease tags")
 	utils.StringFlag(fs, &cfg.owner, "owner", "PortalApp Developer", "lease owner")
-	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", defaultThumbnailURL, "lease thumbnail")
+	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", defaultPhotoURL, "lease thumbnail")
 	utils.StringFlag(fs, &cfg.photoURL, "photo-url", defaultPhotoURL, "image URL revealed after payment")
 	utils.BoolFlag(fs, &cfg.hide, "hide", false, "hide this lease from listings")
-	utils.BoolFlag(fs, &cfg.x402Testnet, "x402-testnet", true, "use Sui testnet for x402 payments")
-	utils.StringFlag(fs, &cfg.x402PayTo, "x402-pay-to", "", "Sui USDC recipient address")
-	utils.StringFlag(fs, &cfg.x402Amount, "x402-amount", "0.01", "USDC amount")
-	utils.RepeatedStringFlag(fs, &cfg.x402Endpoints, "x402-rpc", "Sui gRPC endpoint; repeat to try multiple endpoints before defaults")
-	fs.IntVar(&cfg.x402MaxTimeoutSeconds, "x402-max-timeout", 0, "x402 max payment timeout seconds advertised to clients")
-	fs.IntVar(&cfg.x402RequestTimeout, "x402-request-timeout", 30, "Sui gRPC and x402 verify/settle timeout seconds")
+	utils.StringFlag(fs, &cfg.x402.FacilitatorURL, "sui-facilitator-url", "https://gosunuts.xyz/api/x402", "Sui payment facilitator URL, such as https://relay.example.com:4017/api/x402")
+	utils.StringFlag(fs, &cfg.x402.Network, "sui-network", types.X402DefaultNetwork, "Sui network for the payment app, such as sui:mainnet or sui:testnet")
+	utils.StringFlag(fs, &cfg.x402.Price, "sui-price", "$0.01", "Sui USDC price for the protected image, such as $0.01")
+	utils.StringFlag(fs, &cfg.x402.PayTo, "sui-receive-address", "", "Sui receive address; empty uses the payment app Sui payment address")
+	utils.StringFlag(fs, &cfg.x402.FacilitatorURL, "x402-facilitator-url", cfg.x402.FacilitatorURL, "advanced: payment facilitator URL")
+	utils.StringFlag(fs, &cfg.x402.Network, "x402-network", cfg.x402.Network, "advanced payment rail selector; Sui networks only")
+	utils.StringFlag(fs, &cfg.x402.Price, "x402-price", cfg.x402.Price, "advanced: payment price")
+	utils.StringFlag(fs, &cfg.x402.PayTo, "x402-pay-to", cfg.x402.PayTo, "advanced: payment receive address")
+	fs.IntVar(&cfg.x402.MaxTimeoutSeconds, "x402-max-timeout", 0, "payment max timeout seconds advertised to clients")
+	fs.IntVar(&cfg.x402.PaymentTimeoutSecs, "x402-payment-timeout", 0, "payment verify/settle timeout seconds")
 
 	if err := utils.ParseFlagSet(fs, args, printUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -107,16 +101,18 @@ func run(args []string) error {
 
 func validatePaymentConfig(cfg paymentConfig) error {
 	switch {
-	case strings.TrimSpace(cfg.x402PayTo) == "":
-		return errors.New("--x402-pay-to is required")
-	case strings.TrimSpace(cfg.x402Amount) == "":
-		return errors.New("--x402-amount is required")
+	case strings.TrimSpace(cfg.x402.FacilitatorURL) == "":
+		return errors.New("--sui-facilitator-url is required")
+	case strings.TrimSpace(cfg.x402.Network) == "":
+		return errors.New("--sui-network is required")
+	case strings.TrimSpace(cfg.x402.Price) == "":
+		return errors.New("--sui-price is required")
 	case strings.TrimSpace(cfg.photoURL) == "":
 		return errors.New("--photo-url is required")
-	case cfg.x402MaxTimeoutSeconds < 0:
+	case cfg.x402.MaxTimeoutSeconds < 0:
 		return errors.New("--x402-max-timeout cannot be negative")
-	case cfg.x402RequestTimeout < 0:
-		return errors.New("--x402-request-timeout cannot be negative")
+	case cfg.x402.PaymentTimeoutSecs < 0:
+		return errors.New("--x402-payment-timeout cannot be negative")
 	default:
 		return nil
 	}
@@ -130,26 +126,6 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 		Thumbnail:   cfg.thumbnail,
 		Hide:        cfg.hide,
 	}
-	rawAddr := cfg.addr
-	addr, err := utils.NormalizeTargetAddr(cfg.addr)
-	if err != nil {
-		return fmt.Errorf("invalid --addr value %q: %w", rawAddr, err)
-	}
-
-	handler, err := newHandler(paymentHandlerConfig{
-		Metadata:          metadata,
-		Testnet:           cfg.x402Testnet,
-		PayTo:             cfg.x402PayTo,
-		Amount:            cfg.x402Amount,
-		MaxTimeoutSeconds: cfg.x402MaxTimeoutSeconds,
-		RequestTimeout:    time.Duration(cfg.x402RequestTimeout) * time.Second,
-		Endpoints:         cfg.x402Endpoints,
-		PhotoURL:          cfg.photoURL,
-	})
-	if err != nil {
-		return err
-	}
-
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
 		Discovery:       cfg.discovery,
@@ -165,7 +141,29 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	}
 	defer exposure.Close()
 
-	err = exposure.RunHTTP(ctx, handler, addr)
+	rawAddr := cfg.addr
+	cfg.addr, err = utils.NormalizeTargetAddr(cfg.addr)
+	if err != nil {
+		return fmt.Errorf("invalid --addr value %q: %w", rawAddr, err)
+	}
+	if strings.TrimSpace(cfg.x402.PayTo) == "" {
+		cfg.x402.PayTo = types.X402PayToIdentity
+	}
+	if strings.TrimSpace(cfg.x402.MimeType) == "" {
+		cfg.x402.MimeType = "text/html"
+	}
+
+	handler, err := newHandler(paymentHandlerConfig{
+		Identity: exposure.Identity(),
+		Metadata: metadata,
+		X402:     cfg.x402,
+		PhotoURL: cfg.photoURL,
+	})
+	if err != nil {
+		return err
+	}
+
+	err = exposure.RunHTTP(ctx, handler, cfg.addr)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			err = nil
@@ -183,12 +181,12 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 func printUsage(w io.Writer) {
 	utils.WriteCommandUsage(w,
 		[]string{
-			"payment-app --x402-pay-to SUI_ADDRESS [flags]",
+			"payment-app [flags]",
 		},
 		[]string{
-			"payment-app --x402-pay-to 0x...",
-			"payment-app --name paid-photo --x402-pay-to 0x... --x402-amount 0.01",
-			"payment-app --x402-testnet=false --x402-pay-to 0x... --x402-amount 0.01",
+			"payment-app",
+			"payment-app --name paid-photo",
+			"payment-app --sui-facilitator-url https://relay.example.com:4017/api/x402 --sui-price \"$0.01\"",
 		},
 	)
 }

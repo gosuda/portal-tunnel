@@ -114,7 +114,7 @@ Relay server exposes:
 - `/` - relay API identity response
 - `/api/state` - public leases
 - `/api/install.sh` and `/api/install.ps1` - CLI installers
-- `/api/admin/auth/*` - admin token auth endpoints
+- `/api/admin/auth/*` - admin wallet auth endpoints
 - `/api/policy/*` - relay policy endpoints
 - `/sdk/*` - SDK/control endpoints
 - `/discovery` - relay discovery when enabled

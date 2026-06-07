@@ -58,10 +58,10 @@ export const FloatingActionBar = ({
 
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200">
-      <div className="flex items-center gap-2 px-3 py-2 bg-background rounded-lg shadow-lg border border-foreground/20">
+      <div className="flex items-center gap-2 px-3 py-2 bg-background rounded-xl shadow-2xl border border-foreground/20">
         <button
           onClick={onSelectAll}
-          className={`px-3 h-10 text-sm font-medium rounded-md transition-colors whitespace-nowrap ${
+          className={`px-3 h-10 text-sm font-medium rounded-lg transition-colors whitespace-nowrap ${
             isAllSelected
               ? "bg-primary text-primary-foreground"
               : "bg-secondary text-secondary-foreground hover:bg-secondary/80"

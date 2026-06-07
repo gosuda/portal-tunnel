@@ -40,8 +40,8 @@ The envelope does not apply to streaming or delegated endpoints:
 |------|--------|
 | `/sdk/connect` | HTTP/1.1 connection hijack |
 | `/v1/sign` | keyless TLS signer protocol |
-| `/api/x402/*` | relay-owned x402 facilitator response |
 | `/api/install.sh`, `/api/install.ps1`, `/api/install/bin/*` | script or binary bytes |
+| `/api/x402/*` | Sui payment facilitator API |
 
 Unknown routes may be handled by the frontend/proxy layer or return a normal
 HTTP 404 outside the envelope.
@@ -57,9 +57,8 @@ HTTP 404 outside the envelope.
 | Signed descriptor | relay discovery announce | signed `RelayDescriptor` body |
 | Signed hop route | relay overlay route | signed `HopRoute` body |
 
-Admin auth and SDK lease auth issue different tokens and are not
-interchangeable. SDK lease registration uses SIWE; relay admin access uses the
-configured admin token.
+Admin and SDK login both use Sui signatures, but they issue different tokens and are not
+interchangeable.
 
 ## Endpoint Groups
 
@@ -94,7 +93,7 @@ presentation state.
 |--------|------|------|------|----------|
 | `GET` | `/sdk/domain` | None | none | `DomainResponse` |
 | `POST` | `/sdk/register/challenge` | None | `RegisterChallengeRequest` | `RegisterChallengeResponse` |
-| `POST` | `/sdk/register` | SIWE signature body | `RegisterRequest` | `RegisterResponse` |
+| `POST` | `/sdk/register` | Sui signature body | `RegisterRequest` | `RegisterResponse` |
 | `POST` | `/sdk/renew` | lease token body | `RenewRequest` | `RenewResponse` |
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
 | `GET` | `/sdk/connect` | lease token header | none | hijacked stream |
@@ -106,41 +105,12 @@ SDK clients.
 
 | Method | Path | Auth | Body | Response |
 |--------|------|------|------|----------|
-| `POST` | `/api/admin/auth/login` | None | `AdminAuthLoginRequest` | `AdminAuthLoginResponse` |
-| `GET` | `/api/admin/auth/status` | Optional admin bearer | none | `AdminAuthStatusResponse` |
+| `POST` | `/api/admin/auth/challenge` | None | `WalletAuthChallengeRequest` | `WalletAuthChallengeResponse` |
+| `POST` | `/api/admin/auth/login` | Sui signature body | `WalletAuthLoginRequest` | `WalletAuthLoginResponse` |
+| `GET` | `/api/admin/auth/status` | Optional admin bearer | none | `WalletAuthStatusResponse` |
 | `POST` | `/api/admin/auth/logout` | Admin bearer | none | `{}` |
 
 `/admin` itself is a frontend route, not a relay API endpoint.
-
-### Payments
-
-Relay `/api/x402/*` endpoints are optional relay-owned control-plane
-facilitator endpoints. Enable them with `X402_ENABLED=true` when a relay
-operator wants to reserve support for relay resources such as future tunnel
-registration fees, lease renewal fees, raw TCP/UDP port allocation, or premium
-capacity. They are served by the embedded `gosuda/x402-facilitator` handler and
-do not use the Portal JSON envelope. Portal selects Sui mainnet by default and
-Sui testnet when `X402_TESTNET=true`. Portal accepts only USDC gasless
-stablecoin address-balance payments. `X402_PAY_TO` is the relay-owned payment
-recipient.
-
-Relay x402 settings do not affect tunnel paid routes. Tunnel payment recipients
-and payment networks are local tunnel configuration and are not part of the
-relay lease API.
-
-Paid routed HTTP tunnels additionally expose `/x402/prepare` and
-`/x402/client.js` on the public tunnel origin. Those are tunnel-owned helper
-endpoints for app frontends, not relay API routes, and they do not use the
-`/api` prefix. Tunnel paid routes use Sui mainnet by default and Sui testnet
-when the tunnel is exposed with `--x402-testnet` or configured with
-`x402_testnet = true`. `/x402/client.js` is browser-only; native clients call
-`/x402/prepare` directly and send `X-PAYMENT` on the protected request.
-
-| Method | Path | Auth | Body | Response |
-|--------|------|------|------|----------|
-| `GET` | `/api/x402/supported` | None | none | x402 supported kinds |
-| `POST` | `/api/x402/verify` | None | x402 verify request | x402 verify response |
-| `POST` | `/api/x402/settle` | None | x402 settle request | x402 settle response |
 
 ### Policy
 
@@ -152,13 +122,14 @@ when the tunnel is exposed with `--x402-testnet` or configured with
 | `POST` | `/api/policy/leases` | Admin bearer | `LeasePolicyUpdate` | `{}` |
 | `POST` | `/api/policy/ips` | Admin bearer | `IPPolicyUpdate` | `{}` |
 
-### Relay
+### Relay And Payment
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
 | `GET` | `/discovery` | None | `DiscoveryResponse` |
 | `POST` | `/discovery/announce` | Signed descriptor | `DiscoveryAnnounceResponse` |
 | `POST` | `/v1/sign` | Lease token header | keyless signer response |
+| `ANY` | `/api/x402/*` | payment-specific | delegated facilitator response |
 
 ## Shared Types
 
@@ -169,7 +140,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | Field | Type | Notes |
 |-------|------|-------|
 | `name` | `string` | DNS label used by the lease |
-| `address` | `string` | Ethereum address |
+| `address` | `string` | Sui address |
 
 `LeaseMetadata`:
 

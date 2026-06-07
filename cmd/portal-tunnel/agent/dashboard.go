@@ -42,7 +42,6 @@ const (
 	agentDashboardActionClearHop
 	agentDashboardActionApplySettings
 	agentDashboardActionFocusSettingsField
-	agentDashboardActionFocusAddTunnelField
 	agentDashboardActionOpenTunnelURL
 )
 
@@ -57,24 +56,13 @@ const (
 )
 
 const (
-	agentDashboardAddFieldName = iota
-	agentDashboardAddFieldTarget
-	agentDashboardAddFieldHTTPRoutes
-	agentDashboardAddFieldX402PayTo
-	agentDashboardAddFieldX402Testnet
-	agentDashboardAddFieldRelays
-	agentDashboardAddFieldDiscovery
-	agentDashboardAddFieldMaxRelays
-	agentDashboardAddFieldCount
-)
-
-const (
 	agentDashboardSettingsFieldMaxActiveRelays = iota
 	agentDashboardSettingsFieldDescription
 	agentDashboardSettingsFieldTags
 	agentDashboardSettingsFieldOwner
 	agentDashboardSettingsFieldThumbnail
 	agentDashboardSettingsFieldHide
+	agentDashboardSettingsFieldX402Facilitator
 	agentDashboardSettingsFieldCount
 )
 
@@ -100,16 +88,8 @@ type agentDashboardModel struct {
 	routeDraft    []string
 	draftTunnelID string
 
-	addingTunnel   bool
-	addFocus       int
-	addName        textinput.Model
-	addTarget      textinput.Model
-	addHTTPRoutes  textinput.Model
-	addX402PayTo   textinput.Model
-	addX402Testnet textinput.Model
-	addRelays      textinput.Model
-	addDiscovery   textinput.Model
-	addMaxRelays   textinput.Model
+	addingTunnel bool
+	input        textinput.Model
 
 	settingsEditTunnelID string
 	settingsFocus        int
@@ -119,6 +99,7 @@ type agentDashboardModel struct {
 	metadataOwner        textinput.Model
 	metadataThumbnail    textinput.Model
 	metadataHide         textinput.Model
+	x402FacilitatorURL   textinput.Model
 }
 
 type agentDashboardStatusMsg struct {
@@ -171,25 +152,23 @@ var (
 )
 
 func RunDashboard(configPath, stateDir string) error {
+	input := newAgentDashboardTextInput()
+	input.Prompt = "Name port: "
+	input.Placeholder = "myname 3000"
+	input.Width = agentDashboardTunnelInputMaxWidth
+
 	model := agentDashboardModel{
 		configPath:          configPath,
 		stateDir:            stateDir,
-		addName:             newAgentDashboardInlineInput("myapp"),
-		addTarget:           newAgentDashboardInlineInput("3000"),
-		addHTTPRoutes:       newAgentDashboardInlineInput("/paid=3001 GET:0.01; /=5173"),
-		addX402PayTo:        newAgentDashboardInlineInput("0x..."),
-		addX402Testnet:      newAgentDashboardInlineInput("false"),
-		addRelays:           newAgentDashboardInlineInput("https://portal.example.com"),
-		addDiscovery:        newAgentDashboardInlineInput("true"),
-		addMaxRelays:        newAgentDashboardInlineInput("3"),
+		input:               input,
 		settingsMaxRelays:   newAgentDashboardInlineInput("3"),
 		metadataDescription: newAgentDashboardInlineInput("description"),
 		metadataTags:        newAgentDashboardInlineInput("api,staging"),
 		metadataOwner:       newAgentDashboardInlineInput("owner"),
 		metadataThumbnail:   newAgentDashboardInlineInput("https://..."),
 		metadataHide:        newAgentDashboardInlineInput("true or false"),
+		x402FacilitatorURL:  newAgentDashboardInlineInput("https://relay.example.com/api/x402"),
 	}
-	model.resetAddTunnelForm()
 	model.resizeInputs(0)
 
 	_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
@@ -259,6 +238,8 @@ func (m agentDashboardModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activePane == agentDashboardPaneTunnels {
 			if m.addingTunnel {
 				m.cancelTunnelInput()
+			} else {
+				m.input.Reset()
 			}
 		} else {
 			m.setActivePane(agentDashboardPaneTunnels)
@@ -288,27 +269,6 @@ func (m agentDashboardModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m agentDashboardModel) updateTunnelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.addingTunnel {
-		switch msg.String() {
-		case "tab", "down":
-			m.focusAddTunnelField(m.addFocus + 1)
-			return m, nil
-		case "shift+tab", "up":
-			m.focusAddTunnelField(m.addFocus - 1)
-			return m, nil
-		case "enter":
-			return m.addTunnelFromInput()
-		}
-
-		input := m.focusedAddTunnelInput()
-		if input == nil {
-			return m, nil
-		}
-		var cmd tea.Cmd
-		*input, cmd = input.Update(msg)
-		return m, cmd
-	}
-
 	switch msg.String() {
 	case "up":
 		m.selectTunnelOffset(-1)
@@ -317,9 +277,20 @@ func (m agentDashboardModel) updateTunnelKeys(msg tea.KeyMsg) (tea.Model, tea.Cm
 		m.selectTunnelOffset(1)
 		return m, nil
 	case "delete":
-		return m.deleteTunnel("")
+		if !m.addingTunnel {
+			return m.deleteTunnel("")
+		}
+	case "enter":
+		if m.addingTunnel {
+			return m.addTunnelFromInput()
+		}
 	}
-	return m, nil
+	if !m.addingTunnel {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
 }
 
 func (m agentDashboardModel) updateRelayKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -391,15 +362,6 @@ func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 			if region.action == agentDashboardActionFocusSettingsField {
 				m.setActivePane(agentDashboardPaneSettings)
 				m.focusSettingsField(region.field)
-				return m, nil
-			}
-			if region.action == agentDashboardActionFocusAddTunnelField {
-				m.setActivePane(agentDashboardPaneTunnels)
-				if !m.addingTunnel {
-					m.addingTunnel = true
-					m.resetAddTunnelForm()
-				}
-				m.focusAddTunnelField(region.field)
 				return m, nil
 			}
 			return m.runAction(region.action, region.tunnel, region.relay)
@@ -520,12 +482,12 @@ func (m *agentDashboardModel) setActivePane(pane agentDashboardPane) {
 		pane = 0
 	}
 	m.activePane = pane
-	m.blurAddTunnelInputs()
+	m.input.Blur()
 	m.blurSettingsInputs()
 	switch pane {
 	case agentDashboardPaneTunnels:
 		if m.addingTunnel {
-			m.focusAddTunnelField(m.addFocus)
+			_ = m.input.Focus()
 		}
 	case agentDashboardPaneSettings:
 		m.ensureSelectedSettingsDraft()
@@ -720,81 +682,6 @@ func agentDashboardRelayKey(tunnelID, relayURL string) string {
 	return tunnelID + "\x00" + relayURL
 }
 
-func (m *agentDashboardModel) focusAddTunnelField(field int) {
-	fieldCount := agentDashboardAddFieldCount
-	if field < 0 {
-		field = fieldCount - 1
-	}
-	if field >= fieldCount {
-		field = 0
-	}
-	m.blurSettingsInputs()
-	m.addFocus = field
-	m.blurAddTunnelInputs()
-	if input := m.focusedAddTunnelInput(); input != nil {
-		_ = input.Focus()
-	}
-}
-
-func (m *agentDashboardModel) focusedAddTunnelInput() *textinput.Model {
-	switch m.addFocus {
-	case agentDashboardAddFieldName:
-		return &m.addName
-	case agentDashboardAddFieldTarget:
-		return &m.addTarget
-	case agentDashboardAddFieldHTTPRoutes:
-		return &m.addHTTPRoutes
-	case agentDashboardAddFieldX402PayTo:
-		return &m.addX402PayTo
-	case agentDashboardAddFieldX402Testnet:
-		return &m.addX402Testnet
-	case agentDashboardAddFieldRelays:
-		return &m.addRelays
-	case agentDashboardAddFieldDiscovery:
-		return &m.addDiscovery
-	case agentDashboardAddFieldMaxRelays:
-		return &m.addMaxRelays
-	default:
-		return nil
-	}
-}
-
-func (m *agentDashboardModel) blurAddTunnelInputs() {
-	for _, input := range []*textinput.Model{
-		&m.addName,
-		&m.addTarget,
-		&m.addHTTPRoutes,
-		&m.addX402PayTo,
-		&m.addX402Testnet,
-		&m.addRelays,
-		&m.addDiscovery,
-		&m.addMaxRelays,
-	} {
-		input.Blur()
-	}
-}
-
-func (m *agentDashboardModel) resetAddTunnelForm() {
-	for _, input := range []*textinput.Model{
-		&m.addName,
-		&m.addTarget,
-		&m.addHTTPRoutes,
-		&m.addX402PayTo,
-		&m.addX402Testnet,
-		&m.addRelays,
-	} {
-		input.Reset()
-	}
-	m.addX402Testnet.SetValue("false")
-	m.addDiscovery.SetValue("true")
-	m.addMaxRelays.SetValue("3")
-	m.addX402Testnet.CursorEnd()
-	m.addDiscovery.CursorEnd()
-	m.addMaxRelays.CursorEnd()
-	m.addFocus = agentDashboardAddFieldName
-	m.blurAddTunnelInputs()
-}
-
 func (m agentDashboardModel) updateSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "tab", "down":
@@ -818,13 +705,16 @@ func (m agentDashboardModel) updateSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.
 
 func (m *agentDashboardModel) focusSettingsField(field int) {
 	fieldCount := agentDashboardSettingsFieldCount
+	if tunnel, ok := m.selectedTunnelStatus(); ok && !tunnel.X402Enabled {
+		fieldCount = agentDashboardSettingsFieldX402Facilitator
+	}
 	if field < 0 {
 		field = fieldCount - 1
 	}
 	if field >= fieldCount {
 		field = 0
 	}
-	m.blurAddTunnelInputs()
+	m.input.Blur()
 	m.settingsFocus = field
 	for _, input := range []*textinput.Model{
 		&m.settingsMaxRelays,
@@ -833,6 +723,7 @@ func (m *agentDashboardModel) focusSettingsField(field int) {
 		&m.metadataOwner,
 		&m.metadataThumbnail,
 		&m.metadataHide,
+		&m.x402FacilitatorURL,
 	} {
 		input.Blur()
 	}
@@ -855,6 +746,8 @@ func (m *agentDashboardModel) focusedSettingsInput() *textinput.Model {
 		return &m.metadataThumbnail
 	case agentDashboardSettingsFieldHide:
 		return &m.metadataHide
+	case agentDashboardSettingsFieldX402Facilitator:
+		return &m.x402FacilitatorURL
 	default:
 		return nil
 	}
@@ -868,6 +761,7 @@ func (m *agentDashboardModel) blurSettingsInputs() {
 		&m.metadataOwner,
 		&m.metadataThumbnail,
 		&m.metadataHide,
+		&m.x402FacilitatorURL,
 	} {
 		input.Blur()
 	}
@@ -882,12 +776,13 @@ func (m *agentDashboardModel) clearSettingsDraft() {
 		&m.metadataOwner,
 		&m.metadataThumbnail,
 		&m.metadataHide,
+		&m.x402FacilitatorURL,
 	} {
 		input.Reset()
 	}
 	m.blurSettingsInputs()
 	if m.activePane == agentDashboardPaneTunnels && m.addingTunnel {
-		m.focusAddTunnelField(m.addFocus)
+		_ = m.input.Focus()
 	}
 }
 
@@ -896,22 +791,18 @@ func (m *agentDashboardModel) resizeInputs(width int) {
 		width = 88
 	}
 	contentWidth, _, _ := agentDashboardColumnWidths(width)
+	availableWidth := contentWidth - lipgloss.Width(m.input.Prompt)
+	m.input.Width = max(1, min(agentDashboardTunnelInputMaxWidth, availableWidth))
+
 	settingsWidth := max(1, min(agentDashboardTunnelInputMaxWidth, contentWidth-13))
 	for _, input := range []*textinput.Model{
-		&m.addName,
-		&m.addTarget,
-		&m.addHTTPRoutes,
-		&m.addX402PayTo,
-		&m.addX402Testnet,
-		&m.addRelays,
-		&m.addDiscovery,
-		&m.addMaxRelays,
 		&m.settingsMaxRelays,
 		&m.metadataDescription,
 		&m.metadataTags,
 		&m.metadataOwner,
 		&m.metadataThumbnail,
 		&m.metadataHide,
+		&m.x402FacilitatorURL,
 	} {
 		input.Width = settingsWidth
 	}
@@ -935,223 +826,66 @@ func (m *agentDashboardModel) ensureSettingsDraft(tunnel types.AgentTunnelStatus
 func (m *agentDashboardModel) loadSettingsDraft(tunnel types.AgentTunnelStatus) {
 	metadata := tunnel.Metadata
 	m.settingsEditTunnelID = tunnel.ID
+	if !tunnel.X402Enabled && m.settingsFocus == agentDashboardSettingsFieldX402Facilitator {
+		m.settingsFocus = agentDashboardSettingsFieldMaxActiveRelays
+	}
 	m.settingsMaxRelays.SetValue(strconv.Itoa(tunnel.MaxActiveRelays))
 	m.metadataDescription.SetValue(strings.TrimSpace(metadata.Description))
 	m.metadataTags.SetValue(strings.Join(metadata.Tags, ","))
 	m.metadataOwner.SetValue(strings.TrimSpace(metadata.Owner))
 	m.metadataThumbnail.SetValue(strings.TrimSpace(metadata.Thumbnail))
 	m.metadataHide.SetValue(strconv.FormatBool(metadata.Hide))
+	m.x402FacilitatorURL.SetValue(strings.TrimSpace(tunnel.X402FacilitatorURL))
 	m.settingsMaxRelays.CursorEnd()
 	m.metadataDescription.CursorEnd()
 	m.metadataTags.CursorEnd()
 	m.metadataOwner.CursorEnd()
 	m.metadataThumbnail.CursorEnd()
 	m.metadataHide.CursorEnd()
+	m.x402FacilitatorURL.CursorEnd()
 }
 
 func (m agentDashboardModel) addTunnelFromInput() (tea.Model, tea.Cmd) {
-	req, err := m.addTunnelRequest()
-	if err != nil {
-		m.err = err
+	value := strings.TrimSpace(m.input.Value())
+	if value == "" {
+		m.addingTunnel = true
+		_ = m.input.Focus()
+		return m, nil
+	}
+	fields := strings.Fields(value)
+	if len(fields) < 2 {
+		m.err = fmt.Errorf("use: name port")
+		return m, nil
+	}
+	name := strings.Join(fields[:len(fields)-1], " ")
+	if agentTunnelID(name) == "" {
+		m.err = fmt.Errorf("tunnel name is required")
+		return m, nil
+	}
+	targetInput := fields[len(fields)-1]
+	target, err := utils.NormalizeLoopbackTarget(targetInput)
+	if err != nil || target == "" {
+		m.err = fmt.Errorf("invalid target %q", targetInput)
 		return m, nil
 	}
 
 	m.err = nil
+	m.input.Reset()
 	m.addingTunnel = false
-	m.resetAddTunnelForm()
+	m.input.Blur()
 	return m, agentDashboardRun(func(ctx context.Context) error {
-		return AddTunnel(ctx, m.stateDir, req)
+		return AddTunnel(ctx, m.stateDir, types.AgentTunnelRequest{
+			Name:       name,
+			TargetAddr: target,
+		})
 	})
-}
-
-func (m agentDashboardModel) addTunnelRequest() (types.AgentTunnelRequest, error) {
-	name := strings.TrimSpace(m.addName.Value())
-	if agentTunnelID(name) == "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("tunnel name is required")
-	}
-
-	targetInput := strings.TrimSpace(m.addTarget.Value())
-	routesInput := strings.TrimSpace(m.addHTTPRoutes.Value())
-	if targetInput != "" && routesInput != "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("target cannot be combined with routes")
-	}
-	if targetInput == "" && routesInput == "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("target or routes is required")
-	}
-
-	var target string
-	if targetInput != "" {
-		var err error
-		target, err = utils.NormalizeLoopbackTarget(targetInput)
-		if err != nil || target == "" {
-			return types.AgentTunnelRequest{}, fmt.Errorf("invalid target %q", targetInput)
-		}
-	}
-
-	routes, err := agentDashboardParseAddHTTPRoutes(routesInput)
-	if err != nil {
-		return types.AgentTunnelRequest{}, err
-	}
-	payTo := strings.TrimSpace(m.addX402PayTo.Value())
-	hasPaidRoute := false
-	for _, route := range routes {
-		if strings.TrimSpace(route.Amount) != "" {
-			hasPaidRoute = true
-			break
-		}
-	}
-	if hasPaidRoute && payTo == "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("paid routes require X402 Pay To")
-	}
-	if len(routes) == 0 && payTo != "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Pay To requires routes")
-	}
-	x402TestnetRaw := strings.TrimSpace(m.addX402Testnet.Value())
-	if x402TestnetRaw == "" {
-		x402TestnetRaw = "false"
-	}
-	x402Testnet, err := strconv.ParseBool(x402TestnetRaw)
-	if err != nil {
-		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Testnet must be true or false")
-	}
-	if x402Testnet && !hasPaidRoute {
-		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Testnet requires paid routes")
-	}
-
-	discoveryRaw := strings.TrimSpace(m.addDiscovery.Value())
-	if discoveryRaw == "" {
-		discoveryRaw = "true"
-	}
-	discovery, err := strconv.ParseBool(discoveryRaw)
-	if err != nil {
-		return types.AgentTunnelRequest{}, fmt.Errorf("discovery must be true or false")
-	}
-
-	maxRelaysRaw := strings.TrimSpace(m.addMaxRelays.Value())
-	if maxRelaysRaw == "" {
-		maxRelaysRaw = "3"
-	}
-	maxRelays, err := strconv.Atoi(maxRelaysRaw)
-	if err != nil || maxRelays <= 0 {
-		return types.AgentTunnelRequest{}, fmt.Errorf("max relays must be a positive integer")
-	}
-
-	return types.AgentTunnelRequest{
-		Name:            name,
-		TargetAddr:      target,
-		HTTPRoutes:      routes,
-		RelayURLs:       utils.SplitCSV(m.addRelays.Value()),
-		Discovery:       &discovery,
-		MaxActiveRelays: maxRelays,
-		X402PayTo:       payTo,
-		X402Testnet:     x402Testnet,
-	}, nil
-}
-
-func agentDashboardParseAddHTTPRoutes(value string) ([]types.AgentHTTPRoute, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil, nil
-	}
-	var routes []types.AgentHTTPRoute
-	seen := make(map[string]struct{})
-
-	for _, rawSegment := range strings.Split(value, ";") {
-		segment := strings.TrimSpace(rawSegment)
-		if segment == "" {
-			continue
-		}
-		key, rest, ok := strings.Cut(segment, "=")
-		if !ok {
-			return nil, fmt.Errorf("route %q must be PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", segment)
-		}
-		key = strings.TrimSpace(key)
-		rest = strings.TrimSpace(rest)
-		if strings.EqualFold(key, "payto") || strings.EqualFold(key, "x402_pay_to") {
-			return nil, fmt.Errorf("use the X402 Pay To field instead of %q in routes", key)
-		}
-		if key == "" {
-			return nil, fmt.Errorf("route path is required")
-		}
-		if !strings.HasPrefix(key, "/") {
-			return nil, fmt.Errorf("route path %q must start with /", key)
-		}
-
-		parts := strings.Fields(rest)
-		if len(parts) == 0 || len(parts) > 2 {
-			return nil, fmt.Errorf("route %q must be PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", segment)
-		}
-		if parts[0] == "" {
-			return nil, fmt.Errorf("route %q upstream is required", key)
-		}
-
-		prefix := utils.NormalizeURLPath(key)
-		if _, ok := seen[prefix]; ok {
-			return nil, fmt.Errorf("duplicate route path %q", prefix)
-		}
-		seen[prefix] = struct{}{}
-
-		route := types.AgentHTTPRoute{
-			Prefix:   prefix,
-			Upstream: parts[0],
-		}
-		if len(parts) == 2 {
-			methods, amount, err := agentDashboardParseAddRoutePayment(parts[1])
-			if err != nil {
-				return nil, fmt.Errorf("route %q: %w", prefix, err)
-			}
-			route.Methods = methods
-			route.Amount = amount
-		}
-		routes = append(routes, route)
-	}
-
-	if len(routes) == 0 {
-		return nil, fmt.Errorf("at least one http route is required")
-	}
-	return routes, nil
-}
-
-func agentDashboardParseAddRoutePayment(value string) ([]string, string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil, "", fmt.Errorf("payment amount is required")
-	}
-	methodPart, amount, hasMethods := strings.Cut(value, ":")
-	if !hasMethods {
-		amount = value
-		methodPart = ""
-	}
-	amount = strings.TrimSpace(amount)
-	if amount == "" {
-		return nil, "", fmt.Errorf("payment amount is required")
-	}
-	if !hasMethods {
-		return nil, amount, nil
-	}
-
-	methods := []string(nil)
-	for _, rawMethod := range strings.Split(methodPart, ",") {
-		method := strings.ToUpper(strings.TrimSpace(rawMethod))
-		if method == "" {
-			return nil, "", fmt.Errorf("payment method is required")
-		}
-		if !slices.Contains(methods, method) {
-			methods = append(methods, method)
-		}
-	}
-	if len(methods) == 0 {
-		return nil, "", fmt.Errorf("payment methods are required before ':'")
-	}
-	return methods, amount, nil
 }
 
 func (m agentDashboardModel) startOrAddTunnel() (tea.Model, tea.Cmd) {
 	if !m.addingTunnel {
 		m.addingTunnel = true
-		m.resetAddTunnelForm()
 		m.setActivePane(agentDashboardPaneTunnels)
-		m.focusAddTunnelField(agentDashboardAddFieldName)
+		_ = m.input.Focus()
 		return m, nil
 	}
 	return m.addTunnelFromInput()
@@ -1159,7 +893,8 @@ func (m agentDashboardModel) startOrAddTunnel() (tea.Model, tea.Cmd) {
 
 func (m *agentDashboardModel) cancelTunnelInput() {
 	m.addingTunnel = false
-	m.resetAddTunnelForm()
+	m.input.Reset()
+	m.input.Blur()
 }
 
 func (m agentDashboardModel) applySettingsEdit() (tea.Model, tea.Cmd) {
@@ -1200,6 +935,12 @@ func (m agentDashboardModel) applySettingsEdit() (tea.Model, tea.Cmd) {
 	req := types.AgentTunnelUpdateRequest{
 		MaxActiveRelays: &maxActiveRelays,
 		Metadata:        &metadata,
+	}
+	if tunnel.X402Enabled {
+		facilitatorURL := strings.TrimSpace(m.x402FacilitatorURL.Value())
+		if facilitatorURL != strings.TrimSpace(tunnel.X402FacilitatorURL) {
+			req.X402FacilitatorURL = &facilitatorURL
+		}
 	}
 	m.err = nil
 	return m, agentDashboardRun(func(ctx context.Context) error {
@@ -1436,7 +1177,7 @@ func (m agentDashboardModel) renderTunnelsSection(width, height int) agentDashbo
 	addDisabled := false
 	if m.addingTunnel {
 		addLabel = "Create"
-		addDisabled = strings.TrimSpace(m.addName.Value()) == ""
+		addDisabled = strings.TrimSpace(m.input.Value()) == ""
 	}
 	buttons := []agentDashboardButton{
 		{label: addLabel, action: agentDashboardActionAddTunnel, disabled: addDisabled},
@@ -1449,7 +1190,7 @@ func (m agentDashboardModel) renderTunnelsSection(width, height int) agentDashbo
 	)
 	pane.addButtons(width, buttons...)
 	if m.addingTunnel {
-		m.renderAddTunnelForm(&pane, width)
+		pane.addLine(m.input.View())
 	}
 	tunnelRowWidth := agentDashboardTunnelTableWidth(width, m.status.Tunnels)
 	pane.addLine(agentDashboardHeaderStyle.Render(agentDashboardTunnelRow(tunnelRowWidth, "STATUS", "TARGET", "TUNNEL")))
@@ -1479,26 +1220,6 @@ func (m agentDashboardModel) renderTunnelsSection(width, height int) agentDashbo
 		pane.addStyled(width, agentDashboardErrorStyle, "Error: "+tunnel.LastError)
 	}
 	return pane
-}
-
-func (m agentDashboardModel) renderAddTunnelForm(pane *agentDashboardView, width int) {
-	rows := []struct {
-		label string
-		input textinput.Model
-		field int
-	}{
-		{label: "Name", input: m.addName, field: agentDashboardAddFieldName},
-		{label: "Target", input: m.addTarget, field: agentDashboardAddFieldTarget},
-		{label: "Routes", input: m.addHTTPRoutes, field: agentDashboardAddFieldHTTPRoutes},
-		{label: "X402 Pay To", input: m.addX402PayTo, field: agentDashboardAddFieldX402PayTo},
-		{label: "X402 Testnet", input: m.addX402Testnet, field: agentDashboardAddFieldX402Testnet},
-		{label: "Relays", input: m.addRelays, field: agentDashboardAddFieldRelays},
-		{label: "Discovery", input: m.addDiscovery, field: agentDashboardAddFieldDiscovery},
-		{label: "Max Relays", input: m.addMaxRelays, field: agentDashboardAddFieldMaxRelays},
-	}
-	for _, row := range rows {
-		pane.addAddTunnelInputRow(width, row.label, row.input, row.field, m.addFocus == row.field)
-	}
 }
 
 func (m agentDashboardModel) renderTunnelPane(width, height int) agentDashboardView {
@@ -1603,72 +1324,18 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 		{label: "Thumbnail", input: m.metadataThumbnail, field: agentDashboardSettingsFieldThumbnail},
 		{label: "Hidden", input: m.metadataHide, field: agentDashboardSettingsFieldHide},
 	}
+	if tunnel.X402Enabled {
+		rows = append(rows, struct {
+			label string
+			input textinput.Model
+			field int
+		}{label: "Payment facilitator", input: m.x402FacilitatorURL, field: agentDashboardSettingsFieldX402Facilitator})
+	}
 	for _, row := range rows {
 		if len(pane.lines)-startLine >= height {
 			return
 		}
 		pane.addSettingsInputRow(width, row.label, row.input, row.field, m.settingsFocus == row.field)
-	}
-
-	if len(pane.lines)-startLine >= height {
-		return
-	}
-	pane.addMeta(width, 0, "Discovery", strconv.FormatBool(tunnel.Discovery))
-
-	paidRouteCount := 0
-	for _, route := range tunnel.HTTPRoutes {
-		if strings.TrimSpace(route.Amount) != "" {
-			paidRouteCount++
-		}
-	}
-	payTo := strings.TrimSpace(tunnel.X402PayTo)
-	if payTo == "" && len(tunnel.HTTPRoutes) == 0 {
-		return
-	}
-	if len(pane.lines)-startLine >= height {
-		return
-	}
-	pane.addLine("")
-	if len(pane.lines)-startLine >= height {
-		return
-	}
-	pane.addStyled(width, agentDashboardLabelStyle, "Payments")
-	if payTo != "" {
-		if len(pane.lines)-startLine >= height {
-			return
-		}
-		pane.addMeta(width, 0, "Pay To", payTo)
-	}
-	if payTo != "" || paidRouteCount > 0 {
-		if len(pane.lines)-startLine >= height {
-			return
-		}
-		pane.addMeta(width, 0, "Network", agentDashboardX402Network(tunnel.X402Testnet))
-	}
-	if len(tunnel.HTTPRoutes) == 0 {
-		if len(pane.lines)-startLine >= height {
-			return
-		}
-		pane.addStyled(width, agentDashboardMutedStyle, "no routed HTTP paths")
-		return
-	}
-
-	shown := 0
-	for _, route := range tunnel.HTTPRoutes {
-		if shown >= 4 {
-			break
-		}
-		if len(pane.lines)-startLine >= height {
-			return
-		}
-		pane.addText(width, agentDashboardHTTPRouteSummary(route))
-		shown++
-	}
-	if len(tunnel.HTTPRoutes) > shown && len(pane.lines)-startLine < height {
-		pane.addStyled(width, agentDashboardMutedStyle, fmt.Sprintf("+%d more routes", len(tunnel.HTTPRoutes)-shown))
-	}
-	if paidRouteCount == 0 && len(pane.lines)-startLine < height {
-		pane.addStyled(width, agentDashboardMutedStyle, "no paid routes")
 	}
 }
 
@@ -1871,26 +1538,6 @@ func (v *agentDashboardView) addSettingsInputRow(width int, label string, input 
 	})
 }
 
-func (v *agentDashboardView) addAddTunnelInputRow(width int, label string, input textinput.Model, field int, focused bool) {
-	if width <= 0 {
-		width = 1
-	}
-	labelStyle := agentDashboardMutedStyle
-	if focused {
-		labelStyle = agentDashboardInputStyle
-	}
-	labelText := agentDashboardCell(label+":", 12)
-	y := len(v.lines)
-	v.lines = append(v.lines, labelStyle.Render(labelText)+" "+input.View())
-	v.regions = append(v.regions, agentDashboardRegion{
-		x0:     0,
-		x1:     width,
-		y:      y,
-		action: agentDashboardActionFocusAddTunnelField,
-		field:  field,
-	})
-}
-
 func (v *agentDashboardView) clip(height int) {
 	if height <= 0 || len(v.lines) <= height {
 		return
@@ -2027,40 +1674,6 @@ func relayDashboardConnected(tunnel types.AgentTunnelStatus, relay types.AgentRe
 	return relay.PublicURL != "" || slices.Contains(tunnel.MultiHop, relay.RelayURL)
 }
 
-func agentDashboardHTTPRouteSummary(route types.AgentHTTPRoute) string {
-	prefix := strings.TrimSpace(route.Prefix)
-	if prefix == "" {
-		prefix = "-"
-	}
-	upstream := strings.TrimSpace(route.Upstream)
-	if upstream == "" {
-		upstream = "-"
-	}
-	if amount := strings.TrimSpace(route.Amount); amount != "" {
-		methods := "ALL"
-		if len(route.Methods) > 0 {
-			var normalized []string
-			for _, raw := range route.Methods {
-				if method := strings.ToUpper(strings.TrimSpace(raw)); method != "" {
-					normalized = append(normalized, method)
-				}
-			}
-			if len(normalized) > 0 {
-				methods = strings.Join(normalized, ",")
-			}
-		}
-		return fmt.Sprintf("%s -> %s (%s %s)", prefix, upstream, methods, amount)
-	}
-	return prefix + " -> " + upstream
-}
-
-func agentDashboardX402Network(testnet bool) string {
-	if testnet {
-		return "sui:testnet"
-	}
-	return "sui:mainnet"
-}
-
 func (m agentDashboardModel) settingsChanged(tunnel types.AgentTunnelStatus) bool {
 	if m.settingsEditTunnelID != tunnel.ID {
 		return false
@@ -2074,12 +1687,15 @@ func (m agentDashboardModel) settingsChanged(tunnel types.AgentTunnelStatus) boo
 		return true
 	}
 	metadata := tunnel.Metadata
+	x402Changed := tunnel.X402Enabled &&
+		strings.TrimSpace(m.x402FacilitatorURL.Value()) != strings.TrimSpace(tunnel.X402FacilitatorURL)
 	return maxRelays != tunnel.MaxActiveRelays ||
 		strings.TrimSpace(m.metadataDescription.Value()) != strings.TrimSpace(metadata.Description) ||
 		!slices.Equal(utils.SplitCSV(m.metadataTags.Value()), metadata.Tags) ||
 		strings.TrimSpace(m.metadataOwner.Value()) != strings.TrimSpace(metadata.Owner) ||
 		strings.TrimSpace(m.metadataThumbnail.Value()) != strings.TrimSpace(metadata.Thumbnail) ||
-		hide != metadata.Hide
+		hide != metadata.Hide ||
+		x402Changed
 }
 
 func relayDashboardFeatures(relay types.AgentRelayStatus) string {
@@ -2185,31 +1801,11 @@ func tunnelDashboardName(tunnel types.AgentTunnelStatus) string {
 	return tunnel.ID
 }
 
-func tunnelDashboardTarget(tunnel types.AgentTunnelStatus) string {
-	if target := strings.TrimSpace(tunnel.TargetAddr); target != "" {
-		return target
-	}
-	if len(tunnel.HTTPRoutes) == 0 {
-		return "-"
-	}
-	paid := 0
-	for _, route := range tunnel.HTTPRoutes {
-		if strings.TrimSpace(route.Amount) != "" {
-			paid++
-		}
-	}
-	if paid == 0 {
-		return fmt.Sprintf("%d routes", len(tunnel.HTTPRoutes))
-	}
-	return fmt.Sprintf("%d routes, %d paid", len(tunnel.HTTPRoutes), paid)
-}
-
 func agentDashboardTunnelTableWidth(width int, tunnels []types.AgentTunnelStatus) int {
 	tableWidth := 56
 	for _, tunnel := range tunnels {
 		nameWidth := max(lipgloss.Width(tunnelDashboardName(tunnel)), lipgloss.Width("TUNNEL"))
-		targetWidth := max(lipgloss.Width(tunnelDashboardTarget(tunnel)), lipgloss.Width("TARGET"))
-		tableWidth = max(tableWidth, 11+1+targetWidth+1+nameWidth)
+		tableWidth = max(tableWidth, 11+1+22+1+nameWidth)
 	}
 	return max(1, min(tableWidth, width))
 }

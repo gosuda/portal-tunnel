@@ -70,27 +70,15 @@ id = "frontend"
 name = "myapp"
 relays = ["https://portal.example.com"]
 discovery = false
-x402_pay_to = "0x..."
-x402_testnet = true
 
 [[tunnels.http_routes]]
 prefix = "/api"
 upstream = "http://127.0.0.1:3001"
-methods = ["GET"]
-amount = "0.01"
 
 [[tunnels.http_routes]]
 prefix = "/"
 upstream = "http://127.0.0.1:5173"
 ```
-
-If a route has `amount`, the tunnel serves `/x402/client.js` and
-`/x402/prepare` on the public tunnel origin. A browser frontend served by the
-`/` route can import the helper and call `x402Fetch()` from its own UI. Native
-clients use `/x402/prepare` directly and send the signed payload as
-`X-PAYMENT`. The tunnel still verifies and settles payment before proxying the
-paid route. Paid routes use Sui mainnet by default; set `x402_testnet = true`
-to use Sui testnet.
 
 Relative paths in the config are resolved from the config file directory.
 
@@ -137,8 +125,8 @@ Dashboard panes:
 
 | Pane | Purpose |
 |------|---------|
-| Tunnels | Add, select, and delete tunnels |
-| Settings | Edit max active relays and public metadata |
+| Tunnels | Add, select, and delete simple target tunnels |
+| Settings | Edit max active relays, public metadata, and Sui payment facilitator URLs for paid routes |
 | Relays | Connect or disconnect relays for the selected tunnel |
 | Multi-hop | Build and apply an ordered multi-hop route |
 
@@ -158,25 +146,9 @@ Keyboard controls:
 | `esc` | Cancel input or return to the Tunnels pane |
 | `ctrl+c` | Exit the dashboard |
 
-The Add Tunnel action opens a form. Fill either `Target` for a simple loopback
-tunnel or `Routes` for routed HTTP. Routes use this syntax:
-
-```text
-/paid=3001 GET:0.01; /=5173
-```
-
-Each entry is `PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]`. Fill `X402 Pay
-To` when any route has an amount, and set `X402 Testnet` to `true` for Sui
-testnet. The form also accepts explicit `Relays`,
-`Discovery`, and `Max Relays`; max relays caps auto-selected discovery relays
-while explicit relays are still included.
-
-After creation, routed HTTP paths, x402 payment amounts, payment network, and
-discovery mode are read-only in the Settings pane. To change routes, payment
-amounts, payment network, or discovery mode, edit `http_routes`,
-`x402_pay_to`, `x402_testnet`, and `discovery` in `config.toml`, then restart
-the agent or tunnel. Other advanced options such as UDP, TCP, custom
-identity JSON, or explicit multi-hop defaults are also configured in
+The Add Tunnel action accepts `name port`, for example `myapp 3000`. It creates
+a simple loopback target tunnel. Advanced options such as `http_routes`, UDP,
+TCP, custom identity JSON, or explicit multi-hop defaults should be edited in
 `config.toml`.
 
 ## Tunnel Config Fields
@@ -200,10 +172,6 @@ Common fields:
 | `multi_hop_depth` | Automatically choose one multi-hop route with this depth |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
-| `x402_pay_to` | Tunnel-owned Sui USDC x402 recipient for paid HTTP routes |
-| `x402_testnet` | Use Sui testnet for tunnel-owned x402 paid routes; omitted or `false` uses Sui mainnet |
-| `http_routes[].amount` | Optional Sui USDC x402 amount, such as `0.01`, for one HTTP route prefix |
-| `http_routes[].methods` | Optional HTTP methods that require payment on that route; empty means every method |
 
 Constraints match `portal expose`:
 
@@ -213,8 +181,6 @@ Constraints match `portal expose`:
 - `multi_hop` cannot be combined with `multi_hop_depth`.
 - Multi-hop currently supports only the default stream transport, not UDP or raw
   TCP port mode.
-- `http_routes[].amount` requires `x402_pay_to`.
-- `http_routes[].methods` requires `http_routes[].amount`.
 
 ## Identity Layout
 
@@ -248,8 +214,8 @@ Control endpoints:
 |--------|------|------|---------|
 | `GET` | `/agent/status` | Bearer token or wallet session | Read agent and tunnel status |
 | `POST` | `/agent/shutdown` | Bearer token | Ask the agent to stop |
-| `POST` | `/agent/tunnels` | Bearer token | Add a tunnel |
-| `PATCH` | `/agent/tunnels/{id}` | Bearer token | Update metadata or max active relays |
+| `POST` | `/agent/tunnels` | Bearer token | Add a simple target tunnel |
+| `PATCH` | `/agent/tunnels/{id}` | Bearer token | Update metadata, max active relays, or Sui payment facilitator URL |
 | `DELETE` | `/agent/tunnels/{id}` | Bearer token | Delete a tunnel |
 | `POST` | `/agent/tunnels/{id}/relays` | Bearer token | Connect a relay |
 | `DELETE` | `/agent/tunnels/{id}/relays` | Bearer token | Disconnect a relay |
@@ -266,7 +232,7 @@ Set `agent.allowed_wallets` to restrict wallet-authenticated status access:
 
 ```toml
 [agent]
-allowed_wallets = ["0x1234567890abcdef1234567890abcdef12345678"]
+allowed_wallets = ["0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"]
 ```
 
 When `allowed_wallets` is empty, any wallet can sign in to the loopback agent
@@ -294,5 +260,5 @@ transport disabled on the relay, or an invalid multi-hop route.
 ## Next Steps
 
 - [Configuration Reference](/configuration#configtoml): every agent config field
-- [Wallet and ENS](/wallet-and-ens): admin tokens, wallet auth, and ENS gasless behavior
+- [Wallet and ENS](/wallet-and-ens): wallet auth and ENS gasless behavior
 - [CLI Reference](/cli-reference): command flags and examples

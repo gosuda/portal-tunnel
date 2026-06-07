@@ -58,10 +58,10 @@ func (e *APIRequestError) Is(target error) bool {
 }
 
 type RegisterRequest struct {
-	ChallengeID   string `json:"challenge_id"`
-	SIWEMessage   string `json:"siwe_message"`
-	SIWESignature string `json:"siwe_signature"`
-	ReportedIP    string `json:"reported_ip,omitempty"`
+	ChallengeID string `json:"challenge_id"`
+	Message     string `json:"message"`
+	Signature   string `json:"signature"`
+	ReportedIP  string `json:"reported_ip,omitempty"`
 }
 
 type RegisterChallengeRequest struct {
@@ -79,7 +79,7 @@ type RegisterChallengeRequest struct {
 type RegisterChallengeResponse struct {
 	ChallengeID string    `json:"challenge_id"`
 	ExpiresAt   time.Time `json:"expires_at"`
-	SIWEMessage string    `json:"siwe_message"`
+	Message     string    `json:"message"`
 }
 
 type RegisterResponse struct {
@@ -205,32 +205,23 @@ type PublicStateResponse struct {
 	Leases []Lease `json:"leases,omitempty"`
 }
 
-type AdminAuthLoginRequest struct {
-	Token string `json:"token"`
-}
-
-type AdminAuthLoginResponse struct {
-	AccessToken string `json:"access_token,omitempty"`
-}
-
-type AdminAuthStatusResponse struct {
-	Authenticated bool `json:"authenticated"`
-}
-
 type WalletAuthChallengeRequest struct {
-	Address string `json:"address"`
+	Address    string `json:"address"`
+	AuthMethod string `json:"auth_method,omitempty"`
 }
 
 type WalletAuthChallengeResponse struct {
 	ChallengeID string    `json:"challenge_id"`
 	ExpiresAt   time.Time `json:"expires_at"`
-	SIWEMessage string    `json:"siwe_message"`
+	Message     string    `json:"message"`
 }
 
 type WalletAuthLoginRequest struct {
-	ChallengeID   string `json:"challenge_id"`
-	SIWEMessage   string `json:"siwe_message"`
-	SIWESignature string `json:"siwe_signature"`
+	ChallengeID string `json:"challenge_id"`
+	Address     string `json:"address,omitempty"`
+	AuthMethod  string `json:"auth_method,omitempty"`
+	Message     string `json:"message"`
+	Signature   string `json:"signature"`
 }
 
 type WalletAuthLoginResponse struct {

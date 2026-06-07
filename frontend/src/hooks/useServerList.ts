@@ -2,11 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useList, type BaseServer } from "@/hooks/useList";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
-import {
-  parseLeaseMetadata,
-  resolveLeasePayment,
-  resolveLeaseThumbnail,
-} from "@/lib/metadata";
+import { parseLeaseMetadata, resolveLeaseThumbnail } from "@/lib/metadata";
 import type { Lease, PublicStateResponse } from "@/types/api";
 
 type PublicState = {
@@ -17,7 +13,6 @@ type PublicState = {
 function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
   return leases.map((row) => {
     const metadata = parseLeaseMetadata(row.metadata);
-    const payment = resolveLeasePayment(metadata);
     const hostname = row.hostname || "";
     const serviceName = row.name || "";
 
@@ -33,8 +28,6 @@ function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
       link: hostname ? `https://${hostname}/` : "",
       lastUpdated: row.last_seen_at || undefined,
       firstSeen: row.first_seen_at || undefined,
-      paymentEnabled: payment.enabled,
-      paymentLabel: payment.label,
     };
   });
 }
