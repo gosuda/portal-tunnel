@@ -845,3 +845,124 @@ func TestOptimizeRoutesPreservesExplicitRelay(t *testing.T) {
 		t.Fatalf("explicit hop was mutated: %v", path)
 	}
 }
+
+func TestPlanRoutesCachesResultAcrossSameGeneration(t *testing.T) {
+	set := NewRelaySet(nil)
+	now := time.Now().UTC()
+	relays := []string{
+		"https://relay-a.example",
+		"https://relay-b.example",
+	}
+	for _, url := range relays {
+		state := confirmedRelayState(t, url)
+		state.LastSeenAt = now
+		set.mu.Lock()
+		set.relays[url] = state
+		set.mu.Unlock()
+	}
+
+	routeState := RouteState{LocalAddress: "test-client"}
+	routes1, err := set.PlanRoutes(nil, routeState)
+	if err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+
+	routes2, err := set.PlanRoutes(nil, routeState)
+	if err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+
+	set.mu.RLock()
+	cacheHit := set.lastPlan != nil && set.lastPlan.generation == set.generation
+	set.mu.RUnlock()
+	if !cacheHit {
+		t.Fatal("route plan cache was not used for identical generation and route state")
+	}
+
+	if len(routes1) != len(routes2) {
+		t.Fatalf("cached routes length mismatch: %d vs %d", len(routes1), len(routes2))
+	}
+	for i := range routes1 {
+		if !routes1[i].Equal(routes2[i]) {
+			t.Fatalf("cached routes differ at %d: %v vs %v", i, routes1[i], routes2[i])
+		}
+	}
+}
+
+func TestPlanRoutesCacheInvalidatedOnGenerationBump(t *testing.T) {
+	set := NewRelaySet(nil)
+	now := time.Now().UTC()
+	relayURL := "https://relay-a.example"
+	state := confirmedRelayState(t, relayURL)
+	state.LastSeenAt = now
+	set.mu.Lock()
+	set.relays[relayURL] = state
+	set.mu.Unlock()
+
+	routeState := RouteState{LocalAddress: "test-client"}
+	if _, err := set.PlanRoutes(nil, routeState); err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+
+	set.RecordLoadFactor(relayURL, fixedLoad(0.5))
+
+	set.mu.RLock()
+	cacheStale := set.lastPlan == nil || set.lastPlan.generation != set.generation
+	set.mu.RUnlock()
+	if !cacheStale {
+		t.Fatal("route plan cache was not invalidated after telemetry change")
+	}
+}
+
+func TestOptimizeRoutesDeltaSkipsUnrelatedPaths(t *testing.T) {
+	set := NewRelaySet(nil)
+	now := time.Now().UTC()
+	relays := []string{
+		"https://relay-a.example",
+		"https://relay-b.example",
+		"https://relay-c.example",
+		"https://relay-d.example",
+	}
+	for _, url := range relays {
+		state := confirmedRelayState(t, url)
+		state.Descriptor.SupportsOverlay = true
+		state.Descriptor.WireGuardPublicKey = "wg-key"
+		state.Descriptor.WireGuardPort = 51820
+		state.LastSeenAt = now
+		set.mu.Lock()
+		set.relays[url] = state
+		set.mu.Unlock()
+	}
+
+	routeState := RouteState{MultiHopDepth: 3, LocalAddress: "test-client"}
+	if _, err := set.PlanRoutes(nil, routeState); err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+
+	// Saturate relay-a, which participates in the first active path.
+	set.mu.Lock()
+	state := set.relays["https://relay-a.example"]
+	state.IsSaturated = true
+	state.LoadFactor = 0.95
+	state.StoreLoadFactor(fixedLoad(state.LoadFactor))
+	set.relays["https://relay-a.example"] = state
+	set.mu.Unlock()
+
+	// Optimize with a changed URL that is not in any active path.
+	swapped, err := set.OptimizeRoutes(routeState, "https://relay-z.example")
+	if err != nil {
+		t.Fatalf("OptimizeRoutes() error = %v", err)
+	}
+	if swapped {
+		t.Fatal("OptimizeRoutes() swapped a path despite an unrelated changed URL")
+	}
+
+	// Optimize with the actual changed URL should perform the swap.
+	swapped, err = set.OptimizeRoutes(routeState, "https://relay-a.example")
+	if err != nil {
+		t.Fatalf("OptimizeRoutes() error = %v", err)
+	}
+	if !swapped {
+		t.Fatal("OptimizeRoutes() = false, want true after supplying the real changed URL")
+	}
+}

@@ -49,9 +49,25 @@ type RelaySet struct {
 	relays   map[string]RelayState
 	keyIndex map[string]keyIndexEntry
 
+	// generation is incremented on every material change to the relay set or
+	// its telemetry (descriptors, bans, RTT, load, confirmations). It lets
+	// PlanRoutes skip redundant recomputation when the route state and the
+	// set have not changed since the last plan.
+	generation uint64
+	lastPlan   *cachedPlan
+
 	// activeRoutes holds the current route slice consumed by the runtime loop.
 	// It is computed by PlanRoutes and atomically swapped by OptimizeRoutes.
 	activeRoutes atomic.Pointer[[]Route]
+}
+
+// cachedPlan stores the last route plan together with the generation and
+// route state that produced it. Only one entry is kept because RouteState is
+// stable in normal operation.
+type cachedPlan struct {
+	routeState RouteState
+	generation uint64
+	routes     []Route
 }
 
 // keyIndexEntry records the rollback anchor for a signing identity.
@@ -79,6 +95,37 @@ func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 	}
 	set.SetBootstrapRelayURLs(bootstrapRelayURLs)
 	return set
+}
+
+// bumpGenerationLocked increments the relay-set generation. The caller must
+// already hold s.mu as a write lock.
+func (s *RelaySet) bumpGenerationLocked() {
+	s.generation++
+}
+
+// matchCachedPlanLocked returns a copy of the cached route plan if the route
+// state and generation match the current set. The caller must already hold
+// s.mu as a read or write lock.
+func (s *RelaySet) matchCachedPlanLocked(routeState RouteState) ([]Route, bool) {
+	if s.lastPlan == nil || s.lastPlan.generation != s.generation {
+		return nil, false
+	}
+	if !s.lastPlan.routeState.Equal(routeState) {
+		return nil, false
+	}
+	routes := make([]Route, len(s.lastPlan.routes))
+	copy(routes, s.lastPlan.routes)
+	return routes, true
+}
+
+// storeCachedPlanLocked stores a route plan for the current generation. The
+// caller must already hold s.mu as a write lock.
+func (s *RelaySet) storeCachedPlanLocked(routeState RouteState, routes []Route) {
+	s.lastPlan = &cachedPlan{
+		routeState: routeState,
+		generation: s.generation,
+		routes:     routes,
+	}
 }
 
 // currentRelayStates returns a copy of the set after expiring temporary pool bans.
@@ -127,18 +174,24 @@ func (s *RelaySet) refreshCandidates(now time.Time) []RelayState {
 }
 
 func (s *RelaySet) clearExpiredPoolBansLocked(now time.Time) {
+	changed := false
 	for relayURL, state := range s.relays {
 		if !state.Banned || state.suppressActiveUntil.IsZero() || state.suppressActiveUntil.After(now) {
 			continue
 		}
 		if !state.Bootstrap {
 			delete(s.relays, relayURL)
+			changed = true
 			continue
 		}
 		state.Banned = false
 		state.suppressActiveUntil = time.Time{}
 		state.unhealthySince = time.Time{}
 		s.relays[relayURL] = state
+		changed = true
+	}
+	if changed {
+		s.bumpGenerationLocked()
 	}
 }
 
@@ -156,6 +209,7 @@ func (s *RelaySet) banFromPoolLocked(relayURL string, now time.Time) {
 	state.Banned = true
 	state.suppressActiveUntil = now.Add(relayPoolBanTTL)
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 func mergeLocalRelayState(record, existing RelayState) RelayState {
@@ -247,6 +301,7 @@ func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allo
 		}
 	}
 	s.relays[relayURL] = record
+	s.bumpGenerationLocked()
 	if address != "" {
 		issuedAt := record.Descriptor.IssuedAt
 		tombstoneUntil := issuedAt.Add(AnnounceMaxValidity)
@@ -278,27 +333,38 @@ func (s *RelaySet) SetBootstrapRelayURLs(inputs []string) {
 		keep[relayURL] = struct{}{}
 	}
 
+	changed := false
 	for key, state := range s.relays {
 		_, bootstrap := keep[key]
+		if state.Bootstrap == bootstrap {
+			continue
+		}
 		state.Bootstrap = bootstrap
 		if disposableRelayState(state) {
 			delete(s.relays, key)
-			continue
+		} else {
+			s.relays[key] = state
 		}
-
-		s.relays[key] = state
+		changed = true
 	}
 
 	for _, relayURL := range inputs {
 		if state, ok := s.relays[relayURL]; ok {
-			state.Bootstrap = true
-			s.relays[relayURL] = state
+			if !state.Bootstrap {
+				state.Bootstrap = true
+				s.relays[relayURL] = state
+				changed = true
+			}
 			continue
 		}
 
 		state := newRelayState(relayURL)
 		state.Bootstrap = true
 		s.relays[relayURL] = state
+		changed = true
+	}
+	if changed {
+		s.bumpGenerationLocked()
 	}
 }
 
@@ -307,11 +373,15 @@ func (s *RelaySet) AddBootstrapRelayURL(relayURL string) {
 	defer s.mu.Unlock()
 
 	state, ok := s.relays[relayURL]
+	if ok && state.Bootstrap {
+		return
+	}
 	if !ok {
 		state = newRelayState(relayURL)
 	}
 	state.Bootstrap = true
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) RemoveBootstrapRelayURL(relayURL string) {
@@ -319,15 +389,16 @@ func (s *RelaySet) RemoveBootstrapRelayURL(relayURL string) {
 	defer s.mu.Unlock()
 
 	state, ok := s.relays[relayURL]
-	if !ok {
+	if !ok || !state.Bootstrap {
 		return
 	}
 	state.Bootstrap = false
 	if disposableRelayState(state) {
 		delete(s.relays, relayURL)
-		return
+	} else {
+		s.relays[relayURL] = state
 	}
-	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 func disposableRelayState(state RelayState) bool {
@@ -424,6 +495,13 @@ func (s *RelaySet) planRoutesInternal(explicitPath []string, routeState RouteSta
 		return []Route{NewRoute(explicitPath, true)}, nil
 	}
 
+	s.mu.RLock()
+	if cached, ok := s.matchCachedPlanLocked(routeState); ok {
+		s.mu.RUnlock()
+		return cached, nil
+	}
+	s.mu.RUnlock()
+
 	now := time.Now().UTC()
 	states := s.currentRelayStates(now)
 	if len(routeState.ExplicitRelayURLs) > 0 {
@@ -480,10 +558,20 @@ func (s *RelaySet) planRoutesInternal(explicitPath []string, routeState RouteSta
 		for _, relayURL := range ranked {
 			routes = append(routes, NewRoute([]string{relayURL}, false))
 		}
+		s.mu.Lock()
+		s.storeCachedPlanLocked(routeState, routes)
+		s.mu.Unlock()
 		return routes, nil
 	}
 
-	return buildMOLSPaths(ranked, depth)
+	routes, err := buildMOLSPaths(ranked, depth)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.storeCachedPlanLocked(routeState, routes)
+	s.mu.Unlock()
+	return routes, nil
 }
 
 // ActiveRoutes returns the currently active route slice. The returned slice
@@ -505,7 +593,11 @@ func (s *RelaySet) ActiveRoutes() []Route {
 // dirty hop with the best available lighter candidate from a copied MOLS
 // array. The entire route slice is replaced atomically; no per-route state
 // flags or complex lifecycle machinery is introduced.
-func (s *RelaySet) OptimizeRoutes(routeState RouteState) (bool, error) {
+//
+// If changedURLs is supplied, only routes that contain one or more of those
+// URLs are considered. This lets callers react to load telemetry updates
+// without re-scanning the entire active route table.
+func (s *RelaySet) OptimizeRoutes(routeState RouteState, changedURLs ...string) (bool, error) {
 	now := time.Now().UTC()
 	states := s.currentRelayStates(now)
 
@@ -514,6 +606,16 @@ func (s *RelaySet) OptimizeRoutes(routeState RouteState) (bool, error) {
 		return false, nil
 	}
 	current := *currentPtr
+	if len(current) == 0 {
+		return false, nil
+	}
+
+	changedSet := make(map[string]struct{}, len(changedURLs))
+	for _, url := range changedURLs {
+		if url != "" {
+			changedSet[url] = struct{}{}
+		}
+	}
 
 	// Infer overlay requirement from the currently active paths rather than
 	// relying on an external configuration flag. Any multi-hop path means we
@@ -561,6 +663,21 @@ func (s *RelaySet) OptimizeRoutes(routeState RouteState) (bool, error) {
 		// Explicit routes reflect operator intent; they are never auto-tuned.
 		if route.explicit {
 			continue
+		}
+
+		// When the caller tells us which URLs changed, skip routes that are
+		// unrelated to the change.
+		if len(changedSet) > 0 {
+			relevant := false
+			for _, hop := range path {
+				if _, ok := changedSet[hop]; ok {
+					relevant = true
+					break
+				}
+			}
+			if !relevant {
+				continue
+			}
 		}
 
 		// Detect the most heavily loaded (dirty) hop in this path.
@@ -821,6 +938,7 @@ func (s *RelaySet) BanRelayURL(relayURL string) {
 	state.suppressActiveUntil = time.Time{}
 	state.Banned = true
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) DropRelayURLFromActivePool(relayURL string) {
@@ -836,6 +954,7 @@ func (s *RelaySet) DropRelayURLFromActivePool(relayURL string) {
 	state.Confirmed = false
 	state.suppressActiveUntil = now.Add(activeDropTTL)
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) AllowRelayURL(relayURL string) {
@@ -850,6 +969,7 @@ func (s *RelaySet) AllowRelayURL(relayURL string) {
 	state.suppressActiveUntil = time.Time{}
 	state.unhealthySince = time.Time{}
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) ConfirmRelayURL(relayURL string) {
@@ -870,6 +990,7 @@ func (s *RelaySet) ConfirmRelayURL(relayURL string) {
 	state.activeFailures = 0
 	state.suppressActiveUntil = time.Time{}
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) UnconfirmRelayURL(relayURL string) {
@@ -882,6 +1003,7 @@ func (s *RelaySet) UnconfirmRelayURL(relayURL string) {
 	}
 	state.Confirmed = false
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 // DeactivateRelayURL drops a relay out of active selection while keeping its
@@ -897,6 +1019,7 @@ func (s *RelaySet) DeactivateRelayURL(relayURL string) {
 	state.Confirmed = false
 	state.suppressActiveUntil = time.Now().Add(defaultDirectRecoveryBackoff)
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.DiscoveryResponse, now time.Time) (relaySetChanged bool, err error) {
@@ -984,6 +1107,9 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		}
 	}
 	s.enforceCapLocked()
+	if relaySetChanged {
+		s.bumpGenerationLocked()
+	}
 	if missingTarget {
 		return relaySetChanged, errors.New("target relay descriptor missing from relays")
 	}
@@ -1005,6 +1131,7 @@ func (s *RelaySet) RecordDiscoveryRTT(relayURL string, rtt time.Duration, measur
 	state.DiscoveryRTT = rtt
 	state.DiscoveryRTTAt = measuredAt
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
@@ -1018,6 +1145,7 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 
 	state.StoreLoadFactor(loadFixed)
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 }
 
 // InsertAnnounced ingests a single descriptor submitted via the announce
@@ -1152,6 +1280,7 @@ func (s *RelaySet) enforceCapLocked() {
 			return
 		}
 		delete(s.relays, c.url)
+		s.bumpGenerationLocked()
 	}
 }
 
@@ -1176,6 +1305,7 @@ func (s *RelaySet) RecordDiscoveryFailure(relayURL string, recoveryFailures int)
 
 	if recoveryFailures <= 0 || state.discoveryFailures < recoveryFailures {
 		s.relays[relayURL] = state
+		s.bumpGenerationLocked()
 		return false, "retry", state.discoveryFailures
 	}
 	failuresOverBudget := state.discoveryFailures - recoveryFailures
@@ -1185,6 +1315,7 @@ func (s *RelaySet) RecordDiscoveryFailure(relayURL string, recoveryFailures int)
 	}
 	state.nextDiscoveryRefreshAt = now.Add(backoff)
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 	return true, "discovery", state.discoveryFailures
 }
 
@@ -1202,6 +1333,7 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 
 	if recoveryFailures <= 0 || state.activeFailures < recoveryFailures {
 		s.relays[relayURL] = state
+		s.bumpGenerationLocked()
 		return false, "retry", state.activeFailures
 	}
 	failuresOverBudget := state.activeFailures - recoveryFailures
@@ -1211,5 +1343,6 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 	}
 	state.suppressActiveUntil = now.Add(backoff)
 	s.relays[relayURL] = state
+	s.bumpGenerationLocked()
 	return true, "active", state.activeFailures
 }

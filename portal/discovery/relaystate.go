@@ -175,3 +175,22 @@ type RouteState struct {
 	// derive a deterministic row index into the GF(64) MOLS grid.
 	LocalAddress string
 }
+
+// Equal reports whether two RouteState values describe the same selection
+// constraints. The slice is compared element-by-element in order.
+func (r RouteState) Equal(other RouteState) bool {
+	if r.MaxActiveRelays != other.MaxActiveRelays ||
+		r.MultiHopDepth != other.MultiHopDepth ||
+		r.RequireUDP != other.RequireUDP ||
+		r.RequireTCP != other.RequireTCP ||
+		r.LocalAddress != other.LocalAddress ||
+		len(r.ExplicitRelayURLs) != len(other.ExplicitRelayURLs) {
+		return false
+	}
+	for i := range r.ExplicitRelayURLs {
+		if r.ExplicitRelayURLs[i] != other.ExplicitRelayURLs[i] {
+			return false
+		}
+	}
+	return true
+}
