@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"google.golang.org/api/dns/v1"
 	"google.golang.org/api/option"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -191,7 +191,7 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 	seen := make(map[string]struct{}, len(existing)+1)
 	for _, recordSet := range existing {
 		for _, raw := range recordSet.Rrdatas {
-			normalized := txtContent(raw)
+			normalized := dnsrecord.TXTContent(raw)
 			if normalized == "" {
 				continue
 			}
@@ -249,7 +249,7 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	removed := false
 	for _, recordSet := range existing {
 		for _, raw := range recordSet.Rrdatas {
-			normalized := txtContent(raw)
+			normalized := dnsrecord.TXTContent(raw)
 			if normalized == "" {
 				continue
 			}
@@ -718,10 +718,10 @@ func sameRecordSet(current, desired *dns.ResourceRecordSet) bool {
 
 	currentValues := make(map[string]int, len(current.Rrdatas))
 	for _, value := range current.Rrdatas {
-		currentValues[txtContent(value)]++
+		currentValues[dnsrecord.TXTContent(value)]++
 	}
 	for _, value := range desired.Rrdatas {
-		normalized := txtContent(value)
+		normalized := dnsrecord.TXTContent(value)
 		if currentValues[normalized] == 0 {
 			return false
 		}
@@ -758,12 +758,4 @@ func fqdn(name string) string {
 		return ""
 	}
 	return normalized + "."
-}
-
-func txtContent(raw string) string {
-	unquoted, err := strconv.Unquote(strings.TrimSpace(raw))
-	if err == nil {
-		return unquoted
-	}
-	return strings.Trim(strings.TrimSpace(raw), "\"")
 }
