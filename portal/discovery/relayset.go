@@ -1044,11 +1044,8 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		// silently; they cannot poison the local relay set, and other peers
 		// will reach the same verdict independently. This is the sole global
 		// trust gate under unconditional propagation, so it is mandatory.
-		verified, verifyErr := auth.VerifyRelayDescriptor(descriptor)
+		verified, verifyErr := verifyFreshRelayDescriptor(descriptor, now)
 		if verifyErr != nil {
-			return
-		}
-		if err := validateRelayDescriptorFreshness(verified, now); err != nil {
 			return
 		}
 		relayState := RelayState{
@@ -1178,11 +1175,8 @@ func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) er
 		now = now.UTC()
 	}
 
-	normalized, err := auth.VerifyRelayDescriptor(desc)
+	normalized, err := verifyFreshRelayDescriptor(desc, now)
 	if err != nil {
-		return err
-	}
-	if err := validateRelayDescriptorFreshness(normalized, now); err != nil {
 		return err
 	}
 
@@ -1213,6 +1207,17 @@ func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) er
 		return errors.New("announced descriptor rejected by rollback or takeover guard")
 	}
 	return nil
+}
+
+func verifyFreshRelayDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayDescriptor, error) {
+	verified, err := auth.VerifyRelayDescriptor(desc)
+	if err != nil {
+		return types.RelayDescriptor{}, err
+	}
+	if err := validateRelayDescriptorFreshness(verified, now); err != nil {
+		return types.RelayDescriptor{}, err
+	}
+	return verified, nil
 }
 
 func validateRelayDescriptorFreshness(desc types.RelayDescriptor, now time.Time) error {

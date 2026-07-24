@@ -61,6 +61,28 @@ func TestApplyRelayDiscoveryResponsePreservesBootstrapFlag(t *testing.T) {
 	}
 }
 
+func TestApplyRelayDiscoveryResponseDropsUntrustedDescriptors(t *testing.T) {
+	set := NewRelaySet(nil)
+	signing := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	unsigned := mustUnsignedDescriptor(t, signing, "https://relay-unsigned.example")
+	expired := mustSignedDescriptor(t, signing, "https://relay-expired.example", now.Add(-DiscoveryDescriptorTTL-time.Second))
+
+	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{unsigned, expired},
+	}, now)
+	if err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+	if changed {
+		t.Fatal("untrusted descriptors changed relay set")
+	}
+	if got := relayStates(set); len(got) != 0 {
+		t.Fatalf("len(relayStates()) = %d, want 0", len(got))
+	}
+}
+
 func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
 	set := NewRelaySet(nil)
 
