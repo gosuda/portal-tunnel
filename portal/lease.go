@@ -877,7 +877,7 @@ func (r *leaseRegistry) PublicLeases(now time.Time) []types.Lease {
 		}
 		if record.stream != nil {
 			identityKey := record.Key()
-			if r.policy.IsIdentityBanned(identityKey) || r.policy.IsIdentityDenied(identityKey) || !r.policy.EffectiveApproval(identityKey) {
+			if !r.policy.IsIdentityRoutable(identityKey) {
 				continue
 			}
 			since := time.Duration(0)

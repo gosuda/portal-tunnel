@@ -317,7 +317,6 @@ func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, iden
 	if req.IsDenied != nil {
 		if *req.IsDenied {
 			approver.Deny(identityKey)
-			approver.Revoke(identityKey)
 		} else {
 			approver.Undeny(identityKey)
 		}
@@ -325,7 +324,6 @@ func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, iden
 	if req.IsApproved != nil {
 		if *req.IsApproved {
 			approver.Approve(identityKey)
-			approver.Undeny(identityKey)
 		} else {
 			approver.Revoke(identityKey)
 		}

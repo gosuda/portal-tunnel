@@ -254,7 +254,7 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 	}
 }
 
-func TestLeaseRegistryPolicyLeasesAndRoutableUsePolicy(t *testing.T) {
+func TestLeaseRegistryPolicyViewsUseRoutablePolicy(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t)
@@ -272,6 +272,9 @@ func TestLeaseRegistryPolicyLeasesAndRoutableUsePolicy(t *testing.T) {
 	if registry.policy.IsIdentityRoutable(record.Key()) {
 		t.Fatal("policy.IsIdentityRoutable() = true, want false before approval")
 	}
+	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
+		t.Fatalf("PublicLeases() length = %d, want 0 before approval", len(leases))
+	}
 
 	leases := registry.PolicyLeases(time.Now())
 	if len(leases) != 1 {
@@ -288,6 +291,9 @@ func TestLeaseRegistryPolicyLeasesAndRoutableUsePolicy(t *testing.T) {
 	if !registry.policy.IsIdentityRoutable(record.Key()) {
 		t.Fatal("policy.IsIdentityRoutable() = false, want true after approval")
 	}
+	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 {
+		t.Fatalf("PublicLeases() length = %d, want 1 after approval", len(leases))
+	}
 
 	leases = registry.PolicyLeases(time.Now())
 	if len(leases) != 1 {
@@ -295,6 +301,22 @@ func TestLeaseRegistryPolicyLeasesAndRoutableUsePolicy(t *testing.T) {
 	}
 	if !leases[0].IsApproved {
 		t.Fatal("PolicyLeases()[0].IsApproved = false, want true after approval")
+	}
+
+	runtime.Approver().Deny(record.Key())
+	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
+		t.Fatalf("PublicLeases() length = %d, want 0 after denial", len(leases))
+	}
+
+	runtime.Approver().Approve(record.Key())
+	runtime.BanIdentity(record.Key())
+	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
+		t.Fatalf("PublicLeases() length = %d, want 0 while banned", len(leases))
+	}
+
+	runtime.UnbanIdentity(record.Key())
+	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 {
+		t.Fatalf("PublicLeases() length = %d, want 1 after unban", len(leases))
 	}
 }
 
