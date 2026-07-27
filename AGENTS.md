@@ -27,7 +27,7 @@ Architecture, product behavior, and design rationale belong in `docs/architectur
 
 ## Verification
 
-- CI commands: `make vet`, `make lint`, `make test`, `make vuln`.
+- CI commands: `make vet`, `make lint`, `make test`.
 - `make tidy` is local maintenance, not a CI requirement.
 - Run tests only when explicitly requested.
 - If verification seems necessary, ask before running it.
