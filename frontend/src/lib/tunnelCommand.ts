@@ -1,5 +1,6 @@
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
 import { resolveExposeName } from "@/lib/exposeName";
+import type { ShareKind } from "@/lib/shareLink";
 
 export type TunnelCommandOS = "unix" | "windows";
 
@@ -14,61 +15,25 @@ export interface TunnelCommandOptions {
   enableUDP?: boolean;
   udpPort?: string;
   os: TunnelCommandOS;
+  /** How the share input was classified; defaults to "port". */
+  shareKind?: ShareKind;
+  /** Local path passed to `--serve` when shareKind is "file". */
+  servePath?: string;
 }
 
 
-export function buildTunnelCommand({
-  currentOrigin,
-  discovery,
-  enableUDP = false,
-  name,
-  nameSeed,
-  os,
-  relayUrls,
-  target,
-  thumbnailURL,
-  udpPort = "",
-}: TunnelCommandOptions): string {
-  const { installLine, exposeHead, exposeOptions } = buildTunnelCommandParts({
-    currentOrigin,
-    discovery,
-    enableUDP,
-    name,
-    nameSeed,
-    os,
-    relayUrls,
-    target,
-    thumbnailURL,
-    udpPort,
-  });
+export function buildTunnelCommand(options: TunnelCommandOptions): string {
+  const { installLine, exposeHead, exposeOptions } =
+    buildTunnelCommandParts(options);
 
   return joinTunnelCommand(installLine, exposeHead, exposeOptions);
 }
 
-export function buildTunnelDisplayCommand({
-  currentOrigin,
-  discovery,
-  enableUDP = false,
-  name,
-  nameSeed,
-  os,
-  relayUrls,
-  target,
-  thumbnailURL,
-  udpPort = "",
-}: TunnelCommandOptions): string {
-  const { installLine, exposeHead, exposeOptions } = buildTunnelCommandParts({
-    currentOrigin,
-    discovery,
-    enableUDP,
-    name,
-    nameSeed,
-    os,
-    relayUrls,
-    target,
-    thumbnailURL,
-    udpPort,
-  });
+export function buildTunnelDisplayCommand(
+  options: TunnelCommandOptions
+): string {
+  const { installLine, exposeHead, exposeOptions } =
+    buildTunnelCommandParts(options);
 
   return joinTunnelCommand(installLine, exposeHead, exposeOptions);
 }
@@ -84,15 +49,22 @@ function buildTunnelCommandParts({
   target,
   thumbnailURL,
   udpPort = "",
+  shareKind = "port",
+  servePath = "",
 }: TunnelCommandOptions): {
   installLine: string;
   exposeHead: string;
   exposeOptions: string[];
 } {
+  const isFile = shareKind === "file";
   const targetValue = target.trim() === "" ? "3000" : target.trim();
-  const nameValue = resolveExposeName(name, targetValue, nameSeed);
+  const nameSeedTarget = isFile ? servePath : targetValue;
+  const nameValue = resolveExposeName(name, nameSeedTarget, nameSeed);
   const relayURLValue =
     relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
+  const leadingArgs = isFile
+    ? ["--serve", formatToken(servePath, os)]
+    : [formatToken(targetValue, os)];
   const installScriptURL = new URL(
     BROWSER_API_PATHS.install.shell,
     currentOrigin
@@ -131,7 +103,7 @@ function buildTunnelCommandParts({
         `irm ${formatToken(installPowerShellURL, os)} | iex`,
       ].join("\n"),
       exposeHead: "portal expose",
-      exposeOptions: [formatToken(targetValue, os), ...exposeArgs],
+      exposeOptions: [...leadingArgs, ...exposeArgs],
     };
   }
 
@@ -139,7 +111,7 @@ function buildTunnelCommandParts({
   return {
     installLine: `curl ${curlFlags} ${formatToken(installScriptURL, os)} | bash`,
     exposeHead: "portal expose",
-    exposeOptions: [formatToken(targetValue, os), ...exposeArgs],
+    exposeOptions: [...leadingArgs, ...exposeArgs],
   };
 }
 

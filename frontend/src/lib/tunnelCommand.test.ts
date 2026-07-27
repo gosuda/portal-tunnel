@@ -59,6 +59,57 @@ describe("tunnelCommand", () => {
     );
   });
 
+  it("serves a static path with --serve for file share links", () => {
+    const options = {
+      currentOrigin: "https://localhost:4017",
+      target: "",
+      name: "my-app",
+      nameSeed: "web_portal",
+      relayUrls: ["https://localhost:4017"],
+      discovery: true,
+      thumbnailURL: "",
+      os: "unix" as const,
+      shareKind: "file" as const,
+      servePath: "/Users/me/site/main.html",
+    };
+
+    expect(buildTunnelCommand(options)).toBe(
+      [
+        "curl -ksSL https://localhost:4017/api/install.sh | bash",
+        "portal expose --serve /Users/me/site/main.html --name my-app --relays https://localhost:4017",
+      ].join("\n")
+    );
+  });
+
+  it("quotes serve paths that contain spaces per OS", () => {
+    const base = {
+      currentOrigin: "https://relay.example.com",
+      target: "",
+      name: "my-app",
+      nameSeed: "web_portal",
+      relayUrls: ["https://relay.example.com"],
+      discovery: true,
+      thumbnailURL: "",
+      shareKind: "file" as const,
+    };
+
+    expect(
+      buildTunnelCommand({
+        ...base,
+        os: "unix",
+        servePath: "/Users/me/my site/main.html",
+      })
+    ).toContain("portal expose --serve '/Users/me/my site/main.html' --name my-app");
+
+    expect(
+      buildTunnelCommand({
+        ...base,
+        os: "windows",
+        servePath: "C:\\Users\\me\\site\\main.html",
+      })
+    ).toContain(`portal expose --serve 'C:\\Users\\me\\site\\main.html' --name my-app`);
+  });
+
   it("uses the relay root host for preview URLs instead of a placeholder host", () => {
     expect(
       buildTunnelPreviewURL(

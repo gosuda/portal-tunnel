@@ -6,11 +6,15 @@
 		RELAY_ORIGIN,
 		type TunnelCommandOS
 	} from '$lib/tunnel-command';
-	import { buildDefaultExposeName, resolveExposeName } from '$lib/expose-name';
+	import { buildDefaultExposeName } from '$lib/expose-name';
+	import { classifyShareInput, type ShareKind } from '$lib/share-link';
 
-	const DEFAULT_HOST = '3000';
+	const SHARE_KIND_LABEL: Record<ShareKind, string> = { url: 'URL', file: 'File', port: 'Port' };
+	const SHARE_PLACEHOLDER = 'file:///Users/me/site/index.html or 3000';
 
-	let target = $state('3000');
+	// Empty by default so the field reads as "paste a link here" instead of
+	// pre-committing the user to a local port.
+	let target = $state('');
 	let os: TunnelCommandOS = $state('unix');
 	let name = $state('');
 	let nameSeed = $state('');
@@ -20,49 +24,35 @@
 		nameSeed = crypto.randomUUID();
 	});
 
-	const generatedName = $derived(buildDefaultExposeName(target, nameSeed));
+	const share = $derived(classifyShareInput(target));
+	const generatedName = $derived(buildDefaultExposeName(share.seedTarget, nameSeed));
 	const effectiveName = $derived(name.trim() || generatedName);
 
-	const installBlock = $derived.by(() => {
-		const cmd = buildTunnelDisplayCommand({
+	const commandLines = $derived.by(() =>
+		buildTunnelDisplayCommand({
 			currentOrigin: RELAY_ORIGIN,
-			target,
+			target: share.target,
 			name: effectiveName,
 			nameSeed,
 			relayUrls: [RELAY_ORIGIN],
 			discovery: true,
 			thumbnailURL: '',
-			os
-		});
-		const lines = cmd.split('\n');
-		// Install is first line(s), expose is the rest
-		if (os === 'windows') {
-			// Windows: first two lines are install
-			return lines.slice(0, 2).join('\n');
-		}
-		return lines[0] ?? '';
-	});
+			os,
+			shareKind: share.kind,
+			servePath: share.path
+		}).split('\n')
+	);
 
-	const runBlock = $derived.by(() => {
-		const cmd = buildTunnelDisplayCommand({
-			currentOrigin: RELAY_ORIGIN,
-			target,
-			name: effectiveName,
-			nameSeed,
-			relayUrls: [RELAY_ORIGIN],
-			discovery: true,
-			thumbnailURL: '',
-			os
-		});
-		const lines = cmd.split('\n');
-		if (os === 'windows') {
-			return lines.slice(2).join('\n');
-		}
-		return lines.slice(1).join('\n');
-	});
+	// Install is the first line(s); the expose command is the rest.
+	const installBlock = $derived(
+		os === 'windows' ? commandLines.slice(0, 2).join('\n') : (commandLines[0] ?? '')
+	);
+	const runBlock = $derived(
+		os === 'windows' ? commandLines.slice(2).join('\n') : commandLines.slice(1).join('\n')
+	);
 
 	const previewURL = $derived(
-		buildTunnelPreviewURL(RELAY_ORIGIN, effectiveName, target, nameSeed)
+		buildTunnelPreviewURL(RELAY_ORIGIN, effectiveName, share.seedTarget, nameSeed)
 	);
 
 	function handleCopy() {
@@ -123,16 +113,23 @@
 			</div>
 
 			<div class="space-y-5">
-				<!-- 1. Start your local app -->
+				<!-- 1. Paste what you want to share -->
 				<div class="space-y-2">
 					<div class="space-y-1.5">
 						<p class="text-[13px] font-semibold tracking-[0.04em] text-slate-100 sm:text-sm">
-							1. Start your local app
-							<span class="ml-1 normal-case tracking-normal text-slate-400">
-								(e.g.
-								<span class="mx-1 font-mono text-slate-200">localhost:3000</span>
-								)
-							</span>
+							1. Paste what you want to share
+						</p>
+						<p class="text-[12px] leading-5 text-slate-400">
+							A local port such as
+							<span class="mx-1 font-mono text-slate-200">3000</span>, a running URL
+							such as
+							<span class="mx-1 font-mono text-slate-200">http://localhost:3000</span>,
+							or a file path such as
+							<span class="mx-1 font-mono text-slate-200"
+								>file:///Users/me/site/index.html</span
+							>
+							— file paths are served as a static site straight from that folder, so
+							nothing needs to be running locally.
 						</p>
 					</div>
 				</div>
@@ -174,23 +171,32 @@
 						</div>
 					</div>
 
-					<!-- Port + Name controls -->
-					<div class="flex flex-wrap items-center gap-x-4 gap-y-2 sm:flex-nowrap">
-						<div class="flex shrink-0 items-center gap-2">
+					<!-- Share + Name controls -->
+					<div class="space-y-2">
+						<div class="flex min-w-0 items-center gap-2">
 							<span
 								class="shrink-0 text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500"
 							>
-								Port
+								Share
 							</span>
 							<input
 								type="text"
 								bind:value={target}
-								placeholder={DEFAULT_HOST}
-								aria-label="Local port or address"
-								class="h-auto w-[76px] border-0 bg-transparent px-0 py-0 font-mono text-[13px] text-slate-200 shadow-none outline-none placeholder:text-slate-600"
+								placeholder={SHARE_PLACEHOLDER}
+								aria-label="Link, file path, or local port to share"
+								class="h-auto min-w-0 flex-1 border-0 bg-transparent px-0 py-0 font-mono text-[13px] text-slate-200 shadow-none outline-none placeholder:text-slate-600"
 							/>
+							{#if target.trim() !== ''}
+								<span
+									class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-400"
+									style="background: rgba(255,255,255,0.06);"
+									title="Detected share type"
+								>
+									{SHARE_KIND_LABEL[share.kind]}
+								</span>
+							{/if}
 						</div>
-						<div class="ml-auto flex min-w-0 items-center justify-end gap-2 sm:w-88">
+						<div class="flex min-w-0 items-center gap-2">
 							<span
 								class="shrink-0 text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500"
 							>

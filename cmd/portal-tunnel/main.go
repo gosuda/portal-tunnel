@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -63,6 +64,7 @@ type exposeFlags struct {
 	x402Testnet     bool
 	targetAddr      string
 	httpRoutes      []string
+	serve           string
 	udp             bool
 	udpAddr         string
 	tcp             bool
@@ -92,6 +94,7 @@ func runExposeCommand(args []string) error {
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Sui USDC payment recipient address for this tunnel")
 	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use Sui testnet for tunnel x402 payments; default is Sui mainnet")
 	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
+	utils.StringFlag(fs, &flags.serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
@@ -113,10 +116,23 @@ func runExposeCommand(args []string) error {
 		return err
 	}
 	httpRouteInputs := append([]string(nil), flags.httpRoutes...)
+	serve := strings.TrimSpace(flags.serve)
 	switch {
-	case flags.targetAddr == "" && len(httpRouteInputs) == 0:
+	case serve != "" && flags.targetAddr != "":
 		printExposeUsage(os.Stderr)
-		return errors.New("target or at least one --http-route is required")
+		return errors.New("target cannot be combined with --serve")
+	case serve != "" && len(httpRouteInputs) > 0:
+		printExposeUsage(os.Stderr)
+		return errors.New("--serve cannot be combined with --http-route")
+	case serve != "" && flags.udp:
+		printExposeUsage(os.Stderr)
+		return errors.New("--serve cannot be combined with --udp")
+	case serve != "" && flags.tcp:
+		printExposeUsage(os.Stderr)
+		return errors.New("--serve cannot be combined with --tcp")
+	case serve == "" && flags.targetAddr == "" && len(httpRouteInputs) == 0:
+		printExposeUsage(os.Stderr)
+		return errors.New("target, --serve, or at least one --http-route is required")
 	case flags.targetAddr != "" && len(flags.httpRoutes) > 0:
 		printExposeUsage(os.Stderr)
 		return errors.New("target cannot be combined with --http-route")
@@ -125,7 +141,19 @@ func runExposeCommand(args []string) error {
 		return errors.New("--udp cannot be combined with --http-route")
 	}
 
-	httpRoutes := make([]sdk.HTTPRouteConfig, 0, len(httpRouteInputs))
+	httpRoutes := make([]sdk.HTTPRouteConfig, 0, len(httpRouteInputs)+1)
+	if serve != "" {
+		root, index, err := resolveServeDir(serve)
+		if err != nil {
+			printExposeUsage(os.Stderr)
+			return err
+		}
+		httpRoutes = append(httpRoutes, sdk.HTTPRouteConfig{
+			Prefix:      "/",
+			StaticRoot:  root,
+			StaticIndex: index,
+		})
+	}
 	for _, raw := range httpRouteInputs {
 		fields := strings.Fields(raw)
 		if len(fields) == 0 || len(fields) > 2 {
@@ -210,11 +238,38 @@ func runExposeCommand(args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to start relays: %w", err)
 	}
-	if len(httpRouteInputs) > 0 {
+	if len(httpRoutes) > 0 {
 		defer exposure.Close()
 		return exposure.RunHTTPRoutes(ctx, httpRoutes, "")
 	}
 	return sdk.ProxyExposure(ctx, exposure)
+}
+
+// resolveServeDir turns a --serve path into a static root directory and its SPA
+// entry file. A directory serves index.html; an HTML file serves its parent
+// directory with that file as the entry. The entry file must exist.
+func resolveServeDir(input string) (root string, index string, err error) {
+	abs, err := filepath.Abs(strings.TrimSpace(input))
+	if err != nil {
+		return "", "", fmt.Errorf("--serve %q: %w", input, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", "", fmt.Errorf("--serve %q: %w", input, err)
+	}
+	if info.IsDir() {
+		root, index = abs, "index.html"
+	} else {
+		root, index = filepath.Dir(abs), filepath.Base(abs)
+	}
+	indexInfo, err := os.Stat(filepath.Join(root, index))
+	if err != nil {
+		return "", "", fmt.Errorf("--serve %q: entry file %q not found: %w", input, index, err)
+	}
+	if indexInfo.IsDir() {
+		return "", "", fmt.Errorf("--serve %q: entry %q is a directory", input, index)
+	}
+	return root, index, nil
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {
@@ -376,11 +431,14 @@ func printExposeUsage(w io.Writer) {
 	utils.WriteCommandUsage(w,
 		[]string{
 			"portal expose [flags] <target>",
+			"portal expose [flags] --serve <dir|file.html>",
 			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]\" [...]",
 		},
 		[]string{
 			"portal expose 3000",
 			"portal expose localhost:8080 --name my-app",
+			"portal expose --serve ./site --name my-app",
+			"portal expose --serve ./site/main.html --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
 			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --http-route /=http://127.0.0.1:5173 --x402-pay-to 0x...",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",

@@ -38,6 +38,16 @@ Default HTTPS stream for most local web apps:
 portal expose 3000 --name myapp
 ```
 
+Static site when you want to publish a local folder or a single HTML file
+without running a server. Pass a directory (served with `index.html`) or an HTML
+file (its folder is served with that file as the SPA/CSR entry). Unknown paths
+fall back to the entry file, and paths escaping the folder are refused:
+
+```text
+portal expose --serve ./site --name my-app
+portal expose --serve ./site/main.html --name my-app
+```
+
 Routed HTTP when one public URL should mount multiple local HTTP upstreams:
 
 ```text
@@ -100,6 +110,7 @@ Common `portal expose` flags:
 --thumbnail          Service thumbnail URL metadata
 --owner              Service owner metadata
 --hide               Hide service from relay listing screens
+--serve              Serve a local static site: a directory (served with index.html) or an HTML file (folder served with that file as SPA/CSR entry)
 --http-route         HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT] form
 --x402-pay-to        Sui USDC payment recipient address for this tunnel
 --x402-testnet       Use Sui testnet for tunnel x402 payments
@@ -130,6 +141,10 @@ the Settings pane. Edit `http_routes`, `x402_pay_to`, `x402_testnet`, or
 ## Constraints
 
 - A positional `<target>` cannot be combined with `--http-route`.
+- `--serve` cannot be combined with a positional `<target>`, `--http-route`,
+  `--udp`, or `--tcp`. The `--serve` entry file must exist. Path traversal
+  (`..`) is refused, but a symlink inside the folder that points outside it is
+  still followed, so only serve folders you trust.
 - `--http-route` cannot be combined with `--udp`.
 - Route payment amounts are USDC values such as `0.01`, are part of
   `--http-route`, and require `--x402-pay-to`; add `--x402-testnet` for Sui

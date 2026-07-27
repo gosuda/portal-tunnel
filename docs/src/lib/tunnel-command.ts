@@ -1,4 +1,5 @@
 import { resolveExposeName } from './expose-name';
+import type { ShareKind } from './share-link';
 
 /** Hardcoded relay origin for the static docs site */
 export const RELAY_ORIGIN = 'https://portal.suda.me';
@@ -16,6 +17,10 @@ export interface TunnelCommandOptions {
 	enableUDP?: boolean;
 	udpPort?: string;
 	os: TunnelCommandOS;
+	/** How the share input was classified; defaults to 'port'. */
+	shareKind?: ShareKind;
+	/** Local path passed to `--serve` when shareKind is 'file'. */
+	servePath?: string;
 }
 
 export function buildTunnelDisplayCommand(opts: TunnelCommandOptions): string {
@@ -44,15 +49,22 @@ function buildTunnelCommandParts({
 	relayUrls,
 	target,
 	thumbnailURL,
-	udpPort = ''
+	udpPort = '',
+	shareKind = 'port',
+	servePath = ''
 }: TunnelCommandOptions): {
 	installLine: string;
 	exposeHead: string;
 	exposeOptions: string[];
 } {
+	const isFile = shareKind === 'file';
 	const targetValue = target.trim() === '' ? '3000' : target.trim();
-	const nameValue = resolveExposeName(name, targetValue, nameSeed);
+	const nameSeedTarget = isFile ? servePath : targetValue;
+	const nameValue = resolveExposeName(name, nameSeedTarget, nameSeed);
 	const relayURLValue = relayUrls.length > 0 ? relayUrls.join(',') : currentOrigin;
+	const leadingArgs = isFile
+		? ['--serve', formatToken(servePath, os)]
+		: [formatToken(targetValue, os)];
 
 	// Inlined install paths — no apiPaths dependency
 	const installScriptURL = new URL('/api/install.sh', currentOrigin).toString();
@@ -86,7 +98,7 @@ function buildTunnelCommandParts({
 				`irm ${formatToken(installPowerShellURL, os)} | iex`
 			].join('\n'),
 			exposeHead: 'portal expose',
-			exposeOptions: [formatToken(targetValue, os), ...exposeArgs]
+			exposeOptions: [...leadingArgs, ...exposeArgs]
 		};
 	}
 
@@ -94,7 +106,7 @@ function buildTunnelCommandParts({
 	return {
 		installLine: `curl ${curlFlags} ${formatToken(installScriptURL, os)} | bash`,
 		exposeHead: 'portal expose',
-		exposeOptions: [formatToken(targetValue, os), ...exposeArgs]
+		exposeOptions: [...leadingArgs, ...exposeArgs]
 	};
 }
 
