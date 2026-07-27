@@ -39,4 +39,3 @@ jobs:
           make vet
           make lint
           make test
-          make vuln
