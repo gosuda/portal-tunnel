@@ -28,20 +28,13 @@ import (
 )
 
 type listenerConfig struct {
-	Identity         types.Identity
-	UDPEnabled       bool
-	TCPEnabled       bool
-	BanMITM          bool
-	Metadata         func() types.LeaseMetadata
-	DialTimeout      time.Duration
-	RequestTimeout   time.Duration
-	HandshakeTimeout time.Duration
-	LeaseTTL         time.Duration
-	RenewBefore      time.Duration
-	ReadyTarget      int
-	RetryCount       int
-	RetryWait        time.Duration
-	relaySet         *discovery.RelaySet
+	Identity   types.Identity
+	UDPEnabled bool
+	TCPEnabled bool
+	BanMITM    bool
+	Metadata   func() types.LeaseMetadata
+	RetryCount int
+	relaySet   *discovery.RelaySet
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -83,13 +76,6 @@ type listener struct {
 // Only local config validation fails immediately; relay startup runs in the background until ready.
 func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig) (*listener, error) {
 	listenerCtx, cancel := context.WithCancel(ctx)
-	readyTarget := utils.IntOrDefault(cfg.ReadyTarget, defaultReadyTarget)
-	leaseTTL := utils.DurationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
-	dialTimeout := utils.DurationOrDefault(cfg.DialTimeout, defaultDialTimeout)
-	requestTimeout := utils.DurationOrDefault(cfg.RequestTimeout, defaultRequestTimeout)
-	handshakeTimeout := utils.DurationOrDefault(cfg.HandshakeTimeout, defaultHandshakeTimeout)
-	renewBefore := utils.DurationOrDefault(cfg.RenewBefore, defaultRenewBefore)
-	retryWait := utils.DurationOrDefault(cfg.RetryWait, defaultRetryWait)
 
 	normalizedRelayURL, err := utils.NormalizeRelayURL(route.ListenerRelayURL())
 	if err != nil {
@@ -111,17 +97,17 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		relaySet:       cfg.relaySet,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
-		dialTimeout:    dialTimeout,
-		requestTimeout: requestTimeout,
-		readyTarget:    readyTarget,
+		dialTimeout:    defaultDialTimeout,
+		requestTimeout: defaultRequestTimeout,
+		readyTarget:    defaultReadyTarget,
 		retryCount:     cfg.RetryCount,
-		retryWait:      retryWait,
-		leaseTTL:       leaseTTL,
-		renewBefore:    renewBefore,
+		retryWait:      defaultRetryWait,
+		leaseTTL:       defaultLeaseTTL,
+		renewBefore:    defaultRenewBefore,
 		lease:          utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l, cfg.BanMITM)
-	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
+	l.stream = transport.NewClientStream(defaultReadyTarget, defaultHandshakeTimeout)
 	if l.udpEnabled {
 		l.datagram = transport.NewClientDatagram(func(err error) {
 			log.Info().
@@ -255,7 +241,6 @@ type listenerSnapshot struct {
 	hostname            string
 	echConfigList       []byte
 	udpAddr             string
-	tcpAddr             string
 	accessToken         string
 	multihopAccessToken string
 	expiresAt           time.Time
@@ -850,7 +835,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		hostname:            publicHostname,
 		echConfigList:       echConfigList,
 		udpAddr:             resp.UDPAddr,
-		tcpAddr:             resp.TCPAddr,
 		accessToken:         resp.AccessToken,
 		expiresAt:           resp.ExpiresAt,
 		sniPort:             sniPort,
