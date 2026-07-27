@@ -16,6 +16,7 @@ import (
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/providers/dns/route53"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -435,7 +436,7 @@ func ensureTXTRecord(ctx context.Context, client *awsroute53.Client, hostedZoneI
 	}
 
 	for _, record := range recordSet.ResourceRecords {
-		if route53TXTContent(aws.ToString(record.Value)) == value {
+		if dnsrecord.TXTContent(aws.ToString(record.Value)) == value {
 			return nil
 		}
 	}
@@ -461,7 +462,7 @@ func deleteTXTRecords(ctx context.Context, client *awsroute53.Client, hostedZone
 	removed := false
 	for _, record := range recordSet.ResourceRecords {
 		value := aws.ToString(record.Value)
-		if strings.HasPrefix(route53TXTContent(value), matchPrefix) {
+		if strings.HasPrefix(dnsrecord.TXTContent(value), matchPrefix) {
 			removed = true
 			continue
 		}
@@ -520,14 +521,6 @@ func upsertRecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, 
 
 func route53TXTValue(value string) string {
 	return strconv.Quote(strings.TrimSpace(value))
-}
-
-func route53TXTContent(value string) string {
-	unquoted, err := strconv.Unquote(strings.TrimSpace(value))
-	if err == nil {
-		return unquoted
-	}
-	return strings.Trim(strings.TrimSpace(value), "\"")
 }
 
 func getTXTRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneID, name string) (*route53types.ResourceRecordSet, error) {

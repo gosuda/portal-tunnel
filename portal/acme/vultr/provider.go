@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/go-acme/lego/v4/challenge"
@@ -12,6 +11,7 @@ import (
 	"github.com/vultr/govultr/v3"
 	"golang.org/x/oauth2"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -329,7 +329,7 @@ func (p *Provider) findZone(ctx context.Context, client *govultr.Client, domain 
 }
 
 func ensureRecord(ctx context.Context, client *govultr.Client, zone, fqdn, recordType, data string) error {
-	recordName, err := relativeRecordName(fqdn, zone)
+	recordName, err := dnsrecord.RelativeName("vultr", fqdn, zone)
 	if err != nil {
 		return err
 	}
@@ -362,7 +362,7 @@ func ensureRecord(ctx context.Context, client *govultr.Client, zone, fqdn, recor
 }
 
 func ensureTXTRecord(ctx context.Context, client *govultr.Client, zone, fqdn, value string) error {
-	recordName, err := relativeRecordName(fqdn, zone)
+	recordName, err := dnsrecord.RelativeName("vultr", fqdn, zone)
 	if err != nil {
 		return err
 	}
@@ -371,7 +371,7 @@ func ensureTXTRecord(ctx context.Context, client *govultr.Client, zone, fqdn, va
 		return err
 	}
 	for _, record := range existing {
-		if txtContent(record.Data) == value {
+		if dnsrecord.TXTContent(record.Data) == value {
 			return nil
 		}
 	}
@@ -391,7 +391,7 @@ func deleteRecords(ctx context.Context, client *govultr.Client, zone, fqdn, reco
 		return err
 	}
 	for _, record := range existing {
-		if matchPrefix != "" && !strings.HasPrefix(txtContent(record.Data), matchPrefix) {
+		if matchPrefix != "" && !strings.HasPrefix(dnsrecord.TXTContent(record.Data), matchPrefix) {
 			continue
 		}
 		if err := client.DomainRecord.Delete(ctx, zone, record.ID); err != nil {
@@ -405,7 +405,7 @@ func listRecords(ctx context.Context, client *govultr.Client, zone, fqdn, record
 	if client == nil {
 		return nil, errors.New("vultr client is nil")
 	}
-	recordName, err := relativeRecordName(fqdn, zone)
+	recordName, err := dnsrecord.RelativeName("vultr", fqdn, zone)
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +419,7 @@ func listRecords(ctx context.Context, client *govultr.Client, zone, fqdn, record
 			return nil, err
 		}
 		for _, record := range records {
-			if !strings.EqualFold(strings.TrimSpace(record.Type), recordType) || !sameRecordName(record.Name, recordName, fqdn, zone) {
+			if !strings.EqualFold(strings.TrimSpace(record.Type), recordType) || !dnsrecord.NameMatches(record.Name, recordName, fqdn, zone) {
 				continue
 			}
 			filtered = append(filtered, record)
@@ -430,48 +430,6 @@ func listRecords(ctx context.Context, client *govultr.Client, zone, fqdn, record
 		listOptions.Cursor = meta.Links.Next
 	}
 	return filtered, nil
-}
-
-func relativeRecordName(fqdn, zone string) (string, error) {
-	fqdn = utils.NormalizeHostname(fqdn)
-	zone = utils.NormalizeBaseDomain(zone)
-	if fqdn == "" {
-		return "", errors.New("record name is required")
-	}
-	if zone == "" {
-		return "", errors.New("vultr zone is required")
-	}
-	if fqdn == zone {
-		return "@", nil
-	}
-	suffix := "." + zone
-	if !strings.HasSuffix(fqdn, suffix) {
-		return "", fmt.Errorf("hostname %q is outside vultr zone %q", fqdn, zone)
-	}
-	return strings.TrimSuffix(fqdn, suffix), nil
-}
-
-func sameRecordName(recordName, expected, fqdn, zone string) bool {
-	recordName = utils.NormalizeHostname(recordName)
-	expected = strings.TrimSpace(strings.ToLower(expected))
-	fqdn = utils.NormalizeHostname(fqdn)
-	zone = utils.NormalizeBaseDomain(zone)
-
-	if recordName == expected {
-		return true
-	}
-	if expected == "@" && (recordName == "" || recordName == zone || recordName == fqdn) {
-		return true
-	}
-	return recordName == fqdn
-}
-
-func txtContent(raw string) string {
-	unquoted, err := strconv.Unquote(strings.TrimSpace(raw))
-	if err == nil {
-		return unquoted
-	}
-	return strings.Trim(strings.TrimSpace(raw), "\"")
 }
 
 func preferredDSRecord(records []string) string {

@@ -18,35 +18,6 @@ func TestChallengeProviderRequiresAPIKey(t *testing.T) {
 	}
 }
 
-func TestRelativeRecordName(t *testing.T) {
-	t.Parallel()
-
-	testCases := []struct {
-		name string
-		fqdn string
-		want string
-	}{
-		{name: "apex", fqdn: "example.com", want: "@"},
-		{name: "subdomain", fqdn: "portal.example.com", want: "portal"},
-		{name: "wildcard", fqdn: "*.example.com", want: "*"},
-		{name: "nested", fqdn: "_ens.portal.example.com", want: "_ens.portal"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			got, err := relativeRecordName(tc.fqdn, "example.com")
-			if err != nil {
-				t.Fatalf("relativeRecordName() error = %v", err)
-			}
-			if got != tc.want {
-				t.Fatalf("relativeRecordName() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestPreferredDSRecordPrefersSHA256(t *testing.T) {
 	t.Parallel()
 
