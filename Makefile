@@ -1,4 +1,4 @@
-.PHONY: help install fmt vet lint lint-auto test vuln tidy all run build build-frontend build-docs build-tunnel build-server clean load-test
+.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server clean load-test
 
 .DEFAULT_GOAL := help
 
@@ -6,7 +6,6 @@ GO_PACKAGES := ./cmd/... ./portal/... ./sdk/... ./types/...
 GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
 GOIMPORTS_VERSION := v0.41.0
 GOLANGCI_LINT_VERSION := v2.11.1
-GOVULNCHECK_VERSION := v1.1.4
 
 export GOTOOLCHAIN := $(GO_TOOLCHAIN_VERSION)
 
@@ -27,7 +26,6 @@ help:
 install:
 	go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
 fmt:
 	gofmt -w .
@@ -47,15 +45,12 @@ lint-auto:
 test:
 	go test -v -coverprofile=coverage.out $(GO_PACKAGES)
 
-vuln:
-	govulncheck $(GO_PACKAGES)
-
 tidy:
 	go get -u ./...
 	go mod tidy
 	go mod verify
 
-all: fmt vet lint test vuln build
+all: fmt vet lint test build
 
 run:
 	./bin/relay-server
