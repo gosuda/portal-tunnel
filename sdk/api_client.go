@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
@@ -281,7 +280,6 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 	}
 
 	now := time.Now().UTC()
-	refreshed := make([]types.HopRoute, len(routes))
 	for i := len(routes) - 1; i >= 0; i-- {
 		route := routes[i]
 		desc, ok := l.relaySet.OverlayRelayDescriptor(route.ForwardRelay.APIHTTPSAddr, now)
@@ -294,106 +292,38 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 			route.Metadata = l.metadataSnapshot()
 			route.Metadata.Hide = true
 		}
-		refreshed[i] = route
-	}
-
-	// The entry hop (index 0) must be registered synchronously because it
-	// returns the access token and SNI port used by the local listener.
-	entryRoute, err := auth.SignHopRoute(http.MethodPost, refreshed[0], authority, expiresAt)
-	if err != nil {
-		return "", 0, err
-	}
-	entryURL, err := url.Parse(entryRoute.RelayURL)
-	if err != nil {
-		return "", 0, fmt.Errorf("parse hop route relay url: %w", err)
-	}
-	entryClient, entryTransport, err := l.newHopHTTPClient(ctx, entryURL)
-	if err != nil {
-		return "", 0, err
-	}
-	defer entryTransport.CloseIdleConnections()
-
-	var entryResp types.HopRouteResponse
-	if err := utils.HTTPDoAPIPath(ctx, entryClient, entryURL, http.MethodPost, types.PathSDKHop, entryRoute, nil, &entryResp); err != nil {
-		return "", 0, err
-	}
-	if entryResp.AccessToken == "" {
-		return "", 0, errors.New("entry relay did not return access token")
-	}
-	if entryResp.SNIPort <= 0 {
-		return "", 0, errors.New("entry relay did not return sni port")
-	}
-
-	// Register intermediate hops in parallel. They are independent because
-	// each targets a different relay and only installs forwarding rules.
-	if len(refreshed) > 1 {
-		var wg sync.WaitGroup
-		errCh := make(chan error, len(refreshed)-1)
-		for i := 1; i < len(refreshed); i++ {
-			wg.Add(1)
-			go func(idx int) {
-				defer wg.Done()
-				if err := l.registerOneHopRoute(ctx, authority, expiresAt, refreshed[idx]); err != nil {
-					select {
-					case errCh <- err:
-					default:
-					}
-				}
-			}(i)
-		}
-		wg.Wait()
-		select {
-		case err := <-errCh:
-			// Best-effort cleanup of the entry hop so the listener does not
-			// leave a stale forwarding rule behind.
-			_ = l.unregisterHopRoutes(ctx, []types.HopRoute{entryRoute})
+		route, err := auth.SignHopRoute(http.MethodPost, route, authority, expiresAt)
+		if err != nil {
 			return "", 0, err
-		default:
 		}
+		relayURL, err := url.Parse(route.RelayURL)
+		if err != nil {
+			return "", 0, fmt.Errorf("parse hop route relay url: %w", err)
+		}
+		bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
+		_, client, transport, err := utils.NewHTTPTLSClient(bootstrapCtx, relayURL, l.requestTimeout)
+		cancel()
+		if err != nil {
+			return "", 0, err
+		}
+		var hopResp types.HopRouteResponse
+		if err := utils.HTTPDoAPIPath(ctx, client, relayURL, http.MethodPost, types.PathSDKHop, route, nil, &hopResp); err != nil {
+			transport.CloseIdleConnections()
+			return "", 0, err
+		}
+		transport.CloseIdleConnections()
+		if route.MatchToken != "" || route.RouteHostname == "" {
+			continue
+		}
+		if hopResp.AccessToken == "" {
+			return "", 0, errors.New("entry relay did not return access token")
+		}
+		if hopResp.SNIPort <= 0 {
+			return "", 0, errors.New("entry relay did not return sni port")
+		}
+		return hopResp.AccessToken, hopResp.SNIPort, nil
 	}
-
-	return entryResp.AccessToken, entryResp.SNIPort, nil
-}
-
-func (l *listener) registerOneHopRoute(ctx context.Context, authority identity.Authority, expiresAt time.Time, route types.HopRoute) error {
-	route, err := auth.SignHopRoute(http.MethodPost, route, authority, expiresAt)
-	if err != nil {
-		return err
-	}
-	relayURL, err := url.Parse(route.RelayURL)
-	if err != nil {
-		return fmt.Errorf("parse hop route relay url: %w", err)
-	}
-	client, transport, err := l.newHopHTTPClient(ctx, relayURL)
-	if err != nil {
-		return err
-	}
-	defer transport.CloseIdleConnections()
-
-	var hopResp types.HopRouteResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, relayURL, http.MethodPost, types.PathSDKHop, route, nil, &hopResp); err != nil {
-		return err
-	}
-	if route.MatchToken != "" || route.RouteHostname == "" {
-		return nil
-	}
-	if hopResp.AccessToken == "" {
-		return errors.New("entry relay did not return access token")
-	}
-	if hopResp.SNIPort <= 0 {
-		return errors.New("entry relay did not return sni port")
-	}
-	return nil
-}
-
-func (l *listener) newHopHTTPClient(ctx context.Context, relayURL *url.URL) (*http.Client, *http.Transport, error) {
-	bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
-	defer cancel()
-	_, client, transport, err := utils.NewHTTPTLSClient(bootstrapCtx, relayURL, l.requestTimeout)
-	if err != nil {
-		return nil, nil, err
-	}
-	return client, transport, nil
+	return "", 0, errors.New("entry hop route did not return access token")
 }
 
 func (l *listener) unregisterHopRoutes(ctx context.Context, routes []types.HopRoute) error {

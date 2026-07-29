@@ -89,62 +89,31 @@ func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDesc
 		return nil
 	}
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxConcurrentAnnounce)
-	errCh := make(chan error, 1)
-
-	for _, relayURL := range targets {
+	return parallel(targets, maxConcurrentAnnounce, func(relayURL string) error {
 		if relayURL == descriptor.APIHTTPSAddr {
-			continue
+			return nil
 		}
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(relayURL string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			baseURL, err := url.Parse(relayURL)
-			if err != nil {
-				if r.shouldLogAnnounce(relayURL, false) {
-					log.Warn().
-						Err(err).
-						Str("relay", relayURL).
-						Msg("relay discovery announce target skipped")
-				}
-				return
+		baseURL, err := url.Parse(relayURL)
+		if err != nil {
+			if r.shouldLogAnnounce(relayURL, false) {
+				log.Warn().Err(err).Str("relay", relayURL).Msg("relay discovery announce target skipped")
 			}
-
-			if err := utils.HTTPDoAPIPath(ctx, r.httpClient, baseURL, http.MethodPost, types.PathDiscoveryAnnounce, req, nil, nil); err != nil {
-				if ctx.Err() != nil {
-					select {
-					case errCh <- ctx.Err():
-					default:
-					}
-					return
-				}
-				if r.shouldLogAnnounce(relayURL, false) {
-					log.Warn().
-						Err(err).
-						Str("relay", relayURL).
-						Msg("relay discovery announce failed")
-				}
-				return
+			return nil
+		}
+		if err := utils.HTTPDoAPIPath(ctx, r.httpClient, baseURL, http.MethodPost, types.PathDiscoveryAnnounce, req, nil, nil); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-			if r.shouldLogAnnounce(relayURL, true) {
-				log.Info().
-					Str("relay", relayURL).
-					Msg("relay discovery announce succeeded")
+			if r.shouldLogAnnounce(relayURL, false) {
+				log.Warn().Err(err).Str("relay", relayURL).Msg("relay discovery announce failed")
 			}
-		}(relayURL)
-	}
-
-	wg.Wait()
-	select {
-	case err := <-errCh:
-		return err
-	default:
+			return nil
+		}
+		if r.shouldLogAnnounce(relayURL, true) {
+			log.Info().Str("relay", relayURL).Msg("relay discovery announce succeeded")
+		}
 		return nil
-	}
+	})
 }
 
 func (r *Refresher) shouldLogAnnounce(relayURL string, success bool) bool {
@@ -203,32 +172,9 @@ func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 	}
 	candidates = sortRefreshCandidates(candidates)
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxConcurrentRefresh)
-	errCh := make(chan error, 1)
-
-	for _, state := range candidates {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(state RelayState) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			if err := r.refreshOneHTTPS(ctx, state); err != nil {
-				select {
-				case errCh <- err:
-				default:
-				}
-			}
-		}(state)
-	}
-
-	wg.Wait()
-	select {
-	case err := <-errCh:
-		return err
-	default:
-		return nil
-	}
+	return parallel(candidates, maxConcurrentRefresh, func(state RelayState) error {
+		return r.refreshOneHTTPS(ctx, state)
+	})
 }
 
 func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error {
@@ -309,36 +255,15 @@ func (r *Refresher) refreshOverlay(ctx context.Context) error {
 	}
 	candidates = sortRefreshCandidates(candidates)
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxConcurrentOverlayDial)
-	errCh := make(chan error, 1)
 	var relaySetChanged atomic.Bool
-
-	for _, state := range candidates {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(state RelayState) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			changed, err := r.refreshOneOverlay(ctx, state)
-			if err != nil {
-				select {
-				case errCh <- err:
-				default:
-				}
-				return
-			}
-			if changed {
-				relaySetChanged.Store(true)
-			}
-		}(state)
-	}
-
-	wg.Wait()
-	select {
-	case err := <-errCh:
+	if err := parallel(candidates, maxConcurrentOverlayDial, func(state RelayState) error {
+		changed, err := r.refreshOneOverlay(ctx, state)
+		if changed {
+			relaySetChanged.Store(true)
+		}
 		return err
-	default:
+	}); err != nil {
+		return err
 	}
 
 	if !relaySetChanged.Load() {
@@ -348,6 +273,33 @@ func (r *Refresher) refreshOverlay(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func parallel[T any](items []T, limit int, fn func(T) error) error {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, limit)
+	errs := make(chan error, 1)
+	for _, item := range items {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(item T) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := fn(item); err != nil {
+				select {
+				case errs <- err:
+				default:
+				}
+			}
+		}(item)
+	}
+	wg.Wait()
+	select {
+	case err := <-errs:
+		return err
+	default:
+		return nil
+	}
 }
 
 func (r *Refresher) refreshOneOverlay(ctx context.Context, state RelayState) (bool, error) {

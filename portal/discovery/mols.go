@@ -12,8 +12,6 @@ import (
 	"math"
 	"slices"
 	"time"
-
-	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 )
 
 const (
@@ -263,159 +261,33 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 	return append(activeURLs, fallbackURLs...)
 }
 
-// selectPriorityWithTrace is the telemetry-instrumented sibling of
-// SelectPriority. It returns the same ordered relay list plus a SelectionTrace.
-func selectPriorityWithTrace(states []RelayState, cs RouteState) ([]string, telemetry.SelectionTrace) {
-	start := time.Now()
-	now := start.UTC()
-
-	trace := telemetry.SelectionTrace{
-		Timestamp:  start,
-		ClientHash: hashToGF64(cs.LocalAddress),
-		Mode:       "priority",
-		PoolTotal:  len(states),
-		Reasons:    make(map[string]string),
-	}
-
-	for _, state := range states {
-		if state.Banned {
-			url := state.Descriptor.APIHTTPSAddr
-			trace.Suppressed = append(trace.Suppressed, url)
-			trace.Reasons[url] = "banned"
-		}
-	}
-
-	selected := selectAggregate(states)
-	if len(selected) == 0 {
-		trace.SelectionTook = time.Since(start)
-		return nil, trace
-	}
-
-	explicit := make([]string, 0)
-	autoPool := make([]RelayState, 0, len(selected))
-	for _, state := range selected {
-		relayURL := state.Descriptor.APIHTTPSAddr
-		if slices.Contains(cs.ExplicitRelayURLs, relayURL) {
-			if state.hasObservedDescriptor() && state.Descriptor.ExpiresAt.After(now) {
-				if cs.RequireUDP && !state.Descriptor.SupportsUDP {
-					trace.Suppressed = append(trace.Suppressed, relayURL)
-					trace.Reasons[relayURL] = "require_udp"
-					continue
-				}
-				if cs.RequireTCP && !state.Descriptor.SupportsTCP {
-					trace.Suppressed = append(trace.Suppressed, relayURL)
-					trace.Reasons[relayURL] = "require_tcp"
-					continue
-				}
-			}
-			explicit = append(explicit, relayURL)
-			continue
-		}
-		if state.hasObservedDescriptor() {
-			if !state.Descriptor.ExpiresAt.After(now) {
-				trace.Suppressed = append(trace.Suppressed, relayURL)
-				trace.Reasons[relayURL] = "expired"
-				continue
-			}
-			if cs.RequireUDP && !state.Descriptor.SupportsUDP {
-				trace.Suppressed = append(trace.Suppressed, relayURL)
-				trace.Reasons[relayURL] = "require_udp"
-				continue
-			}
-			if cs.RequireTCP && !state.Descriptor.SupportsTCP {
-				trace.Suppressed = append(trace.Suppressed, relayURL)
-				trace.Reasons[relayURL] = "require_tcp"
-				continue
-			}
-		}
-		if !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now) {
-			trace.Suppressed = append(trace.Suppressed, relayURL)
-			trace.Reasons[relayURL] = "suppressed"
-			continue
-		}
-		autoPool = append(autoPool, state)
-	}
-
-	avgRTT, cv := molsRTTStats(autoPool)
-	trace.AvgRTT = avgRTT
-	trace.CV = cv
-	congested := avgRTT > molsCongestionRTTThreshold
-	nonLinear := cv > molsCVThreshold
-	trace.Congested = congested
-	trace.NonLinear = nonLinear
-
-	m1, m2 := molsBaseM1, molsBaseM2
-	if nonLinear {
-		m1, m2 = molsVariantM1, molsVariantM2
-	}
-	trace.M1, trace.M2 = m1, m2
-
-	active, fallbacks := traceFallbackPartition(autoPool)
-	trace.PoolEligible = len(autoPool)
-	trace.PoolFallback = len(fallbacks)
-	if len(active) < molsMinActiveNodes && len(fallbacks) > 0 {
-		promote := min(molsMinActiveNodes-len(active), len(fallbacks))
-		fallbacks = fallbacks[promote:]
-	}
-	demotedURLs := relayURLSet(fallbacks)
-
-	ingressIdx := hashToGF64(cs.LocalAddress)
-	order := gridOrderForSize(len(autoPool))
-	for _, state := range autoPool {
-		candidateIdx := hashToGF64(state.Descriptor.APIHTTPSAddr)
-		row := int(ingressIdx) % order
-		col := int(candidateIdx) % order
-		score := molsScore(row, col, int(m1), int(m2), order)
-		if congested {
-			score = molsCongestionScore(row, col, int(m1), int(m2), order)
-		}
-		trace.Ranked = append(trace.Ranked, telemetry.TraceEntry{
-			URL:       state.Descriptor.APIHTTPSAddr,
-			Score:     score,
-			Confirmed: state.Confirmed,
-			RTT:       state.DiscoveryRTT,
-			Demoted:   demotedURLs[state.Descriptor.APIHTTPSAddr],
-		})
-	}
-
-	autoURLs := RankRelayPool(autoPool, cs.LocalAddress)
-	maxActiveRelays := cs.MaxActiveRelays
-	if maxActiveRelays <= 0 {
-		maxActiveRelays = defaultMaxActiveRelays
-	}
-	if len(autoURLs) > maxActiveRelays {
-		autoURLs = autoURLs[:maxActiveRelays]
-	}
-	result := append(explicit, autoURLs...)
-	trace.OutputURLs = result
-	trace.SelectionTook = time.Since(start)
-	return result, trace
-}
-
-func traceFallbackPartition(autoPool []RelayState) ([]RelayState, []RelayState) {
-	active := make([]RelayState, 0, len(autoPool))
-	fallbacks := make([]RelayState, 0)
-	for _, state := range autoPool {
-		if isRelayFallback(state) {
-			fallbacks = append(fallbacks, state)
-		} else {
-			active = append(active, state)
-		}
-	}
-	return active, fallbacks
-}
-
-func relayURLSet(states []RelayState) map[string]bool {
-	out := make(map[string]bool, len(states))
-	for _, state := range states {
-		out[state.Descriptor.APIHTTPSAddr] = true
-	}
-	return out
-}
-
-// SelectPriority returns the ordered list of relay URLs for a client using the
-// MOLS selection. It delegates to selectPriorityWithTrace and discards the trace.
+// SelectPriority returns the ordered relay URLs for a client using MOLS selection.
 func SelectPriority(states []RelayState, routeState RouteState) []string {
-	out, _ := selectPriorityWithTrace(states, routeState)
-	return out
+	if len(states) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	explicit := make([]string, 0, len(routeState.ExplicitRelayURLs))
+	for _, state := range states {
+		relayURL := state.Descriptor.APIHTTPSAddr
+		if state.Banned || !slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
+			continue
+		}
+		if state.hasObservedDescriptor() && state.Descriptor.ExpiresAt.After(now) {
+			if (routeState.RequireUDP && !state.Descriptor.SupportsUDP) ||
+				(routeState.RequireTCP && !state.Descriptor.SupportsTCP) {
+				continue
+			}
+		}
+		explicit = append(explicit, relayURL)
+	}
+	auto := RankRelayPool(filterCandidatePool(states, routeState, now, false), routeState.LocalAddress)
+	maxActive := routeState.MaxActiveRelays
+	if maxActive <= 0 {
+		maxActive = defaultMaxActiveRelays
+	}
+	if len(auto) > maxActive {
+		auto = auto[:maxActive]
+	}
+	return append(explicit, auto...)
 }

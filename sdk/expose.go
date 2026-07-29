@@ -35,7 +35,6 @@ type Exposure struct {
 	relaySet       *discovery.RelaySet
 	mu             sync.RWMutex
 	relayListeners map[string]*listener
-	lastRoutes     []discovery.Route
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
@@ -694,14 +693,6 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		return err
 	}
 
-	e.mu.Lock()
-	if routesEqual(e.lastRoutes, routes) {
-		e.mu.Unlock()
-		return nil
-	}
-	e.lastRoutes = routes
-	e.mu.Unlock()
-
 	routesByRelay := make(map[string]discovery.Route, len(routes))
 	for _, route := range routes {
 		relayURL := route.ListenerRelayURL()
@@ -885,26 +876,4 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 		case e.accepted <- wrappedConn:
 		}
 	}
-}
-
-// routesEqual reports whether two route slices describe the same listener
-// targets in the same order. A nil slice and an empty slice are considered
-// different so that the first reconcile always runs even when the planned
-// route set is empty.
-func routesEqual(a, b []discovery.Route) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if !a[i].Equal(b[i]) {
-			return false
-		}
-	}
-	return true
 }

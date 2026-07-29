@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
@@ -48,26 +47,6 @@ type RelaySet struct {
 	mu       sync.RWMutex
 	relays   map[string]RelayState
 	keyIndex map[string]keyIndexEntry
-
-	// generation is incremented on every material change to the relay set or
-	// its telemetry (descriptors, bans, RTT, load, confirmations). It lets
-	// PlanRoutes skip redundant recomputation when the route state and the
-	// set have not changed since the last plan.
-	generation uint64
-	lastPlan   *cachedPlan
-
-	// activeRoutes holds the current route slice consumed by the runtime loop.
-	// It is computed by PlanRoutes and atomically swapped by OptimizeRoutes.
-	activeRoutes atomic.Pointer[[]Route]
-}
-
-// cachedPlan stores the last route plan together with the generation and
-// route state that produced it. Only one entry is kept because RouteState is
-// stable in normal operation.
-type cachedPlan struct {
-	routeState RouteState
-	generation uint64
-	routes     []Route
 }
 
 // keyIndexEntry records the rollback anchor for a signing identity.
@@ -95,37 +74,6 @@ func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 	}
 	set.SetBootstrapRelayURLs(bootstrapRelayURLs)
 	return set
-}
-
-// bumpGenerationLocked increments the relay-set generation. The caller must
-// already hold s.mu as a write lock.
-func (s *RelaySet) bumpGenerationLocked() {
-	s.generation++
-}
-
-// matchCachedPlanLocked returns a copy of the cached route plan if the route
-// state and generation match the current set. The caller must already hold
-// s.mu as a read or write lock.
-func (s *RelaySet) matchCachedPlanLocked(routeState RouteState) ([]Route, bool) {
-	if s.lastPlan == nil || s.lastPlan.generation != s.generation {
-		return nil, false
-	}
-	if !s.lastPlan.routeState.Equal(routeState) {
-		return nil, false
-	}
-	routes := make([]Route, len(s.lastPlan.routes))
-	copy(routes, s.lastPlan.routes)
-	return routes, true
-}
-
-// storeCachedPlanLocked stores a route plan for the current generation. The
-// caller must already hold s.mu as a write lock.
-func (s *RelaySet) storeCachedPlanLocked(routeState RouteState, routes []Route) {
-	s.lastPlan = &cachedPlan{
-		routeState: routeState,
-		generation: s.generation,
-		routes:     routes,
-	}
 }
 
 // currentRelayStates returns a copy of the set after expiring temporary pool bans.
@@ -174,24 +122,18 @@ func (s *RelaySet) refreshCandidates(now time.Time) []RelayState {
 }
 
 func (s *RelaySet) clearExpiredPoolBansLocked(now time.Time) {
-	changed := false
 	for relayURL, state := range s.relays {
 		if !state.Banned || state.suppressActiveUntil.IsZero() || state.suppressActiveUntil.After(now) {
 			continue
 		}
 		if !state.Bootstrap {
 			delete(s.relays, relayURL)
-			changed = true
 			continue
 		}
 		state.Banned = false
 		state.suppressActiveUntil = time.Time{}
 		state.unhealthySince = time.Time{}
 		s.relays[relayURL] = state
-		changed = true
-	}
-	if changed {
-		s.bumpGenerationLocked()
 	}
 }
 
@@ -209,7 +151,6 @@ func (s *RelaySet) banFromPoolLocked(relayURL string, now time.Time) {
 	state.Banned = true
 	state.suppressActiveUntil = now.Add(relayPoolBanTTL)
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 }
 
 func mergeLocalRelayState(record, existing RelayState) RelayState {
@@ -301,7 +242,6 @@ func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allo
 		}
 	}
 	s.relays[relayURL] = record
-	s.bumpGenerationLocked()
 	if address != "" {
 		issuedAt := record.Descriptor.IssuedAt
 		tombstoneUntil := issuedAt.Add(AnnounceMaxValidity)
@@ -333,7 +273,6 @@ func (s *RelaySet) SetBootstrapRelayURLs(inputs []string) {
 		keep[relayURL] = struct{}{}
 	}
 
-	changed := false
 	for key, state := range s.relays {
 		_, bootstrap := keep[key]
 		if state.Bootstrap == bootstrap {
@@ -345,7 +284,6 @@ func (s *RelaySet) SetBootstrapRelayURLs(inputs []string) {
 		} else {
 			s.relays[key] = state
 		}
-		changed = true
 	}
 
 	for _, relayURL := range inputs {
@@ -353,7 +291,6 @@ func (s *RelaySet) SetBootstrapRelayURLs(inputs []string) {
 			if !state.Bootstrap {
 				state.Bootstrap = true
 				s.relays[relayURL] = state
-				changed = true
 			}
 			continue
 		}
@@ -361,10 +298,6 @@ func (s *RelaySet) SetBootstrapRelayURLs(inputs []string) {
 		state := newRelayState(relayURL)
 		state.Bootstrap = true
 		s.relays[relayURL] = state
-		changed = true
-	}
-	if changed {
-		s.bumpGenerationLocked()
 	}
 }
 
@@ -381,7 +314,6 @@ func (s *RelaySet) AddBootstrapRelayURL(relayURL string) {
 	}
 	state.Bootstrap = true
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) RemoveBootstrapRelayURL(relayURL string) {
@@ -398,7 +330,6 @@ func (s *RelaySet) RemoveBootstrapRelayURL(relayURL string) {
 	} else {
 		s.relays[relayURL] = state
 	}
-	s.bumpGenerationLocked()
 }
 
 func disposableRelayState(state RelayState) bool {
@@ -477,30 +408,12 @@ func (r Route) WithListenerRelayURL(relayURL string) Route {
 }
 
 func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]Route, error) {
-	routes, err := s.planRoutesInternal(explicitPath, routeState)
-	if err != nil {
-		return nil, err
-	}
-	// Atomically publish the computed routes so the runtime loop and
-	// OptimizeRoutes operate on the same canonical slice.
-	s.activeRoutes.Store(&routes)
-	return routes, nil
-}
-
-func (s *RelaySet) planRoutesInternal(explicitPath []string, routeState RouteState) ([]Route, error) {
 	if len(explicitPath) > 0 {
 		if len(explicitPath) == 1 {
 			return nil, fmt.Errorf("multi-hop requires at least entry and exit relay urls")
 		}
 		return []Route{NewRoute(explicitPath, true)}, nil
 	}
-
-	s.mu.RLock()
-	if cached, ok := s.matchCachedPlanLocked(routeState); ok {
-		s.mu.RUnlock()
-		return cached, nil
-	}
-	s.mu.RUnlock()
 
 	now := time.Now().UTC()
 	states := s.currentRelayStates(now)
@@ -524,219 +437,40 @@ func (s *RelaySet) planRoutesInternal(explicitPath []string, routeState RouteSta
 		}
 	}
 
-	// Single unified MOLS flow: RankRelayPool is the sole scheduler for
-	// both single-hop and multi-hop routing. Depth determines whether we
-	// emit 1-length paths or sliding-window multi-hop paths.
-	requireOverlay := routeState.MultiHopDepth > 1
-	autoPool := filterCandidatePool(states, routeState, now, requireOverlay)
-	ranked := RankRelayPool(autoPool, routeState.LocalAddress)
+	ranked := RankRelayPool(filterCandidatePool(states, routeState, now, routeState.MultiHopDepth > 1), routeState.LocalAddress)
+	if routeState.MultiHopDepth > 1 {
+		maxPaths := routeState.MaxActiveRelays
+		if maxPaths <= 0 {
+			maxPaths = defaultMaxActiveRelays
+		}
+		return matchMOLSPaths(ranked, routeState.MultiHopDepth, maxPaths, states)
+	}
 
-	depth := routeState.MultiHopDepth
-	if depth <= 1 {
-		maxActive := routeState.MaxActiveRelays
-		if maxActive <= 0 {
-			maxActive = defaultMaxActiveRelays
-		}
-		if len(ranked) > maxActive {
-			ranked = ranked[:maxActive]
-		}
-		// Banned explicit relays must be dropped, matching the legacy
-		// selectAggregate gate that filtered them before promotion.
-		bannedSet := make(map[string]bool, len(states))
+	maxActive := routeState.MaxActiveRelays
+	if maxActive <= 0 {
+		maxActive = defaultMaxActiveRelays
+	}
+	if len(ranked) > maxActive {
+		ranked = ranked[:maxActive]
+	}
+	routes := make([]Route, 0, len(ranked)+len(routeState.ExplicitRelayURLs))
+	for _, relayURL := range routeState.ExplicitRelayURLs {
+		banned := false
 		for _, state := range states {
-			if state.Banned {
-				bannedSet[state.Descriptor.APIHTTPSAddr] = true
+			if state.Descriptor.APIHTTPSAddr == relayURL && state.Banned {
+				banned = true
+				break
 			}
 		}
-		routes := make([]Route, 0, len(ranked)+len(routeState.ExplicitRelayURLs))
-		for _, relayURL := range routeState.ExplicitRelayURLs {
-			if bannedSet[relayURL] {
-				continue
-			}
-			routes = append(routes, NewRoute([]string{relayURL}, true))
+		if banned {
+			continue
 		}
-		for _, relayURL := range ranked {
-			routes = append(routes, NewRoute([]string{relayURL}, false))
-		}
-		s.mu.Lock()
-		s.storeCachedPlanLocked(routeState, routes)
-		s.mu.Unlock()
-		return routes, nil
+		routes = append(routes, NewRoute([]string{relayURL}, true))
 	}
-
-	routes, err := buildMOLSPaths(ranked, depth)
-	if err != nil {
-		return nil, err
+	for _, relayURL := range ranked {
+		routes = append(routes, NewRoute([]string{relayURL}, false))
 	}
-	s.mu.Lock()
-	s.storeCachedPlanLocked(routeState, routes)
-	s.mu.Unlock()
 	return routes, nil
-}
-
-// ActiveRoutes returns the currently active route slice. The returned slice
-// is a copy, so callers can inspect it safely while the route set continues
-// to optimize and swap paths in the background.
-func (s *RelaySet) ActiveRoutes() []Route {
-	ptr := s.activeRoutes.Load()
-	if ptr == nil {
-		return nil
-	}
-	routes := *ptr
-	out := make([]Route, len(routes))
-	copy(out, routes)
-	return out
-}
-
-// OptimizeRoutes scans the active route slice for dirty paths — routes whose
-// hops carry a saturated or heavily loaded RelayState — and transposes each
-// dirty hop with the best available lighter candidate from a copied MOLS
-// array. The entire route slice is replaced atomically; no per-route state
-// flags or complex lifecycle machinery is introduced.
-//
-// If changedURLs is supplied, only routes that contain one or more of those
-// URLs are considered. This lets callers react to load telemetry updates
-// without re-scanning the entire active route table.
-func (s *RelaySet) OptimizeRoutes(routeState RouteState, changedURLs ...string) (bool, error) {
-	now := time.Now().UTC()
-	states := s.currentRelayStates(now)
-
-	currentPtr := s.activeRoutes.Load()
-	if currentPtr == nil {
-		return false, nil
-	}
-	current := *currentPtr
-	if len(current) == 0 {
-		return false, nil
-	}
-
-	changedSet := make(map[string]struct{}, len(changedURLs))
-	for _, url := range changedURLs {
-		if url != "" {
-			changedSet[url] = struct{}{}
-		}
-	}
-
-	// Infer overlay requirement from the currently active paths rather than
-	// relying on an external configuration flag. Any multi-hop path means we
-	// need overlay-capable candidates for transposition.
-	requireOverlay := false
-	for _, route := range current {
-		if len(route.path) > 1 {
-			requireOverlay = true
-			break
-		}
-	}
-
-	// Build the replacement pool using the same eligibility rules as path
-	// generation, but excluding explicit relays (operator intent is fixed).
-	pool := filterCandidatePool(states, routeState, now, requireOverlay)
-	if len(pool) == 0 {
-		return false, nil
-	}
-
-	// Copy the MOLS-ranked array so transposition does not mutate the canonical ranking.
-	ranked := RankRelayPool(pool, routeState.LocalAddress)
-	if len(ranked) == 0 {
-		return false, nil
-	}
-	rankedCopy := append([]string(nil), ranked...)
-
-	// Index relay state by URL for fast load lookup during dirty detection.
-	stateByURL := make(map[string]RelayState, len(states))
-	for _, state := range states {
-		url := strings.TrimSpace(state.Descriptor.APIHTTPSAddr)
-		if url != "" {
-			stateByURL[url] = state
-		}
-	}
-
-	newRoutes := make([]Route, len(current))
-	copy(newRoutes, current)
-
-	swapped := false
-	for i, route := range current {
-		path := route.path
-		if len(path) == 0 {
-			continue
-		}
-		// Explicit routes reflect operator intent; they are never auto-tuned.
-		if route.explicit {
-			continue
-		}
-
-		// When the caller tells us which URLs changed, skip routes that are
-		// unrelated to the change.
-		if len(changedSet) > 0 {
-			relevant := false
-			for _, hop := range path {
-				if _, ok := changedSet[hop]; ok {
-					relevant = true
-					break
-				}
-			}
-			if !relevant {
-				continue
-			}
-		}
-
-		// Detect the most heavily loaded (dirty) hop in this path.
-		dirtyIdx := -1
-		var dirtyLoad float64
-		for j, hop := range path {
-			state, ok := stateByURL[hop]
-			if !ok {
-				continue
-			}
-			if state.IsSaturated && state.LoadFactor > dirtyLoad {
-				dirtyIdx = j
-				dirtyLoad = state.LoadFactor
-			}
-		}
-		if dirtyIdx == -1 {
-			continue
-		}
-
-		// Find the highest-ranked replacement that is not already in the
-		// path and is not itself saturated.
-		used := make(map[string]struct{}, len(path))
-		for _, hop := range path {
-			used[hop] = struct{}{}
-		}
-
-		replacement := ""
-		for _, candidate := range rankedCopy {
-			if _, ok := used[candidate]; ok {
-				continue
-			}
-			candState, ok := stateByURL[candidate]
-			if !ok {
-				continue
-			}
-			if candState.IsSaturated {
-				continue
-			}
-			replacement = candidate
-			break
-		}
-		if replacement == "" {
-			continue
-		}
-
-		newPath := make([]string, len(path))
-		copy(newPath, path)
-		newPath[dirtyIdx] = replacement
-		newRoutes[i] = NewRoute(newPath, route.explicit)
-		swapped = true
-	}
-
-	if !swapped {
-		return false, nil
-	}
-
-	// Atomic swap: the runtime loop sees the new slice in one stroke.
-	s.activeRoutes.Store(&newRoutes)
-	return true, nil
 }
 
 // filterCandidatePool returns the auto-selected relay pool eligible for MOLS
@@ -801,6 +535,94 @@ func buildMOLSPaths(ranked []string, depth int) ([]Route, error) {
 		return nil, fmt.Errorf("no valid multi-hop paths could be constructed from %d candidates with depth %d", n, depth)
 	}
 	return routes, nil
+}
+
+// matchMOLSPaths orders MOLS candidates as a greedy minimum-cost matching.
+// Paths never share a hop. Stable metrics (EWMA RTT and load) choose among
+// topology-feasible alternatives; recent changes (RTT and load deltas) break
+// ties. The number of paths is capped by available disjoint relay groups, so
+// a smaller pool returns fewer paths rather than pretending overlap diversifies.
+func matchMOLSPaths(ranked []string, depth, maxPaths int, states []RelayState) ([]Route, error) {
+	candidates, err := buildMOLSPaths(ranked, depth)
+	if err != nil {
+		return nil, err
+	}
+	maxPaths = min(maxPaths, len(ranked)/depth)
+	if maxPaths == 0 {
+		return nil, nil
+	}
+	stateByURL := make(map[string]RelayState, len(states))
+	for _, state := range states {
+		stateByURL[state.Descriptor.APIHTTPSAddr] = state
+	}
+	stableCost := make([]float64, len(candidates))
+	deltaCost := make([]float64, len(candidates))
+	for i, route := range candidates {
+		for _, relayURL := range route.path {
+			state := stateByURL[relayURL]
+			rtt := state.EWMARTT
+			if rtt == 0 {
+				rtt = state.DiscoveryRTT
+			}
+			stableCost[i] += float64(rtt)/float64(time.Millisecond) + state.EWMALoad*1000
+			deltaCost[i] += float64(state.RTTDelta)/float64(time.Millisecond) + state.LoadDelta*1000
+		}
+	}
+
+	matched := make([]Route, 0, maxPaths)
+	used := make(map[string]int, len(ranked))
+	selected := make([]bool, len(candidates))
+	for range maxPaths {
+		best, bestOptions, bestCost := -1, 0, 0.0
+		for i, route := range candidates {
+			if selected[i] {
+				continue
+			}
+			overlap := 0
+			for _, relayURL := range route.path {
+				overlap += used[relayURL]
+			}
+			if overlap > 0 {
+				continue
+			}
+			options := 0
+			if len(matched) == 0 && maxPaths > 1 {
+				for j, other := range candidates {
+					if i == j || selected[j] {
+						continue
+					}
+					sharesRelay := false
+					for _, relayURL := range other.path {
+						for _, selectedURL := range route.path {
+							if relayURL == selectedURL {
+								sharesRelay = true
+								break
+							}
+						}
+						if sharesRelay {
+							break
+						}
+					}
+					if !sharesRelay {
+						options++
+					}
+				}
+			}
+			cost := stableCost[i] + deltaCost[i]*0.25
+			if best == -1 || options > bestOptions || options == bestOptions && cost < bestCost {
+				best, bestOptions, bestCost = i, options, cost
+			}
+		}
+		if best == -1 {
+			break
+		}
+		selected[best] = true
+		matched = append(matched, candidates[best])
+		for _, relayURL := range candidates[best].path {
+			used[relayURL]++
+		}
+	}
+	return matched, nil
 }
 
 func (s *RelaySet) overlayRefreshCandidates(now time.Time) []RelayState {
@@ -938,7 +760,6 @@ func (s *RelaySet) BanRelayURL(relayURL string) {
 	state.suppressActiveUntil = time.Time{}
 	state.Banned = true
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) DropRelayURLFromActivePool(relayURL string) {
@@ -954,7 +775,6 @@ func (s *RelaySet) DropRelayURLFromActivePool(relayURL string) {
 	state.Confirmed = false
 	state.suppressActiveUntil = now.Add(activeDropTTL)
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) AllowRelayURL(relayURL string) {
@@ -969,7 +789,6 @@ func (s *RelaySet) AllowRelayURL(relayURL string) {
 	state.suppressActiveUntil = time.Time{}
 	state.unhealthySince = time.Time{}
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) ConfirmRelayURL(relayURL string) {
@@ -990,7 +809,6 @@ func (s *RelaySet) ConfirmRelayURL(relayURL string) {
 	state.activeFailures = 0
 	state.suppressActiveUntil = time.Time{}
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) UnconfirmRelayURL(relayURL string) {
@@ -1003,7 +821,6 @@ func (s *RelaySet) UnconfirmRelayURL(relayURL string) {
 	}
 	state.Confirmed = false
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 }
 
 // DeactivateRelayURL drops a relay out of active selection while keeping its
@@ -1019,7 +836,6 @@ func (s *RelaySet) DeactivateRelayURL(relayURL string) {
 	state.Confirmed = false
 	state.suppressActiveUntil = time.Now().Add(defaultDirectRecoveryBackoff)
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.DiscoveryResponse, now time.Time) (relaySetChanged bool, err error) {
@@ -1104,9 +920,6 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		}
 	}
 	s.enforceCapLocked()
-	if relaySetChanged {
-		s.bumpGenerationLocked()
-	}
 	if missingTarget {
 		return relaySetChanged, errors.New("target relay descriptor missing from relays")
 	}
@@ -1125,10 +938,10 @@ func (s *RelaySet) RecordDiscoveryRTT(relayURL string, rtt time.Duration, measur
 		return
 	}
 
+	state.UpdateEWMARTT(rtt)
 	state.DiscoveryRTT = rtt
 	state.DiscoveryRTTAt = measuredAt
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 }
 
 func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
@@ -1140,9 +953,8 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 		return
 	}
 
-	state.StoreLoadFactor(loadFixed)
+	state.UpdateLoad(loadFixed)
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 }
 
 // InsertAnnounced ingests a single descriptor submitted via the announce
@@ -1285,7 +1097,6 @@ func (s *RelaySet) enforceCapLocked() {
 			return
 		}
 		delete(s.relays, c.url)
-		s.bumpGenerationLocked()
 	}
 }
 
@@ -1310,7 +1121,6 @@ func (s *RelaySet) RecordDiscoveryFailure(relayURL string, recoveryFailures int)
 
 	if recoveryFailures <= 0 || state.discoveryFailures < recoveryFailures {
 		s.relays[relayURL] = state
-		s.bumpGenerationLocked()
 		return false, "retry", state.discoveryFailures
 	}
 	failuresOverBudget := state.discoveryFailures - recoveryFailures
@@ -1320,7 +1130,6 @@ func (s *RelaySet) RecordDiscoveryFailure(relayURL string, recoveryFailures int)
 	}
 	state.nextDiscoveryRefreshAt = now.Add(backoff)
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 	return true, "discovery", state.discoveryFailures
 }
 
@@ -1338,7 +1147,6 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 
 	if recoveryFailures <= 0 || state.activeFailures < recoveryFailures {
 		s.relays[relayURL] = state
-		s.bumpGenerationLocked()
 		return false, "retry", state.activeFailures
 	}
 	failuresOverBudget := state.activeFailures - recoveryFailures
@@ -1348,6 +1156,5 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 	}
 	state.suppressActiveUntil = now.Add(backoff)
 	s.relays[relayURL] = state
-	s.bumpGenerationLocked()
 	return true, "active", state.activeFailures
 }

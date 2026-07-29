@@ -66,10 +66,12 @@ type RelayState struct {
 	DiscoveryRTT   time.Duration
 	DiscoveryRTTAt time.Time
 	EWMARTT        time.Duration
+	RTTDelta       time.Duration
 	RTTTracker     PercentileTracker
 
-	// SLIT LoadState
 	LoadFactor  float64
+	EWMALoad    float64
+	LoadDelta   float64
 	FailureRate float64
 	IsSaturated bool
 	loadFixed   uint32
@@ -107,12 +109,31 @@ func (state *RelayState) StoreLoadFactor(loadFixed uint32) {
 	state.LoadFactor = float64(loadFixed) / relayMetricScale
 }
 
+func (state *RelayState) UpdateLoad(loadFixed uint32) {
+	if loadFixed > relayMetricScale {
+		loadFixed = relayMetricScale
+	}
+	load := float64(loadFixed) / relayMetricScale
+	state.LoadDelta = absFloat(load - state.LoadFactor)
+	if state.EWMALoad == 0 {
+		state.EWMALoad = load
+	} else {
+		state.EWMALoad = 0.7*state.EWMALoad + 0.3*load
+	}
+	state.StoreLoadFactor(loadFixed)
+}
+
 func (state *RelayState) inheritAdaptiveTelemetry(existing RelayState) {
 	load := atomic.LoadUint32(&existing.loadFixed)
 	if load == 0 && existing.LoadFactor != 0 {
 		load = fixedLoad(existing.LoadFactor)
 	}
 	state.StoreLoadFactor(load)
+	state.EWMALoad = existing.EWMALoad
+	state.LoadDelta = existing.LoadDelta
+	state.EWMARTT = existing.EWMARTT
+	state.RTTDelta = existing.RTTDelta
+	state.RTTTracker.samples = append(state.RTTTracker.samples, existing.RTTTracker.samples...)
 	state.IsSaturated = existing.IsSaturated || atomic.LoadUint32(&existing.saturated) == 1
 	if state.IsSaturated {
 		atomic.StoreUint32(&state.saturated, 1)
@@ -143,12 +164,27 @@ func (state *RelayState) EvaluateSaturation() {
 
 func (state *RelayState) UpdateEWMARTT(newRTT time.Duration) {
 	const alpha = 0.3
+	state.RTTDelta = absDuration(newRTT - state.DiscoveryRTT)
 	if state.EWMARTT == 0 {
 		state.EWMARTT = newRTT
 	} else {
 		state.EWMARTT = time.Duration(float64(state.EWMARTT)*(1-alpha) + float64(newRTT)*alpha)
 	}
 	state.RTTTracker.Add(newRTT)
+}
+
+func absDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func absFloat(value float64) float64 {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func newRelayState(relayURL string) RelayState {
@@ -174,23 +210,4 @@ type RouteState struct {
 	// LocalAddress is the ingress identity address used by MOLS route selection to
 	// derive a deterministic row index into the GF(64) MOLS grid.
 	LocalAddress string
-}
-
-// Equal reports whether two RouteState values describe the same selection
-// constraints. The slice is compared element-by-element in order.
-func (r RouteState) Equal(other RouteState) bool {
-	if r.MaxActiveRelays != other.MaxActiveRelays ||
-		r.MultiHopDepth != other.MultiHopDepth ||
-		r.RequireUDP != other.RequireUDP ||
-		r.RequireTCP != other.RequireTCP ||
-		r.LocalAddress != other.LocalAddress ||
-		len(r.ExplicitRelayURLs) != len(other.ExplicitRelayURLs) {
-		return false
-	}
-	for i := range r.ExplicitRelayURLs {
-		if r.ExplicitRelayURLs[i] != other.ExplicitRelayURLs[i] {
-			return false
-		}
-	}
-	return true
 }

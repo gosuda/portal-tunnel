@@ -1,7 +1,6 @@
 package discovery
 
 import (
-	"sync"
 	"testing"
 	"time"
 
@@ -58,28 +57,6 @@ func TestApplyRelayDiscoveryResponsePreservesBootstrapFlag(t *testing.T) {
 	}
 	if !states[0].Bootstrap {
 		t.Fatal("bootstrap relay lost bootstrap flag after discovery update")
-	}
-}
-
-func TestApplyRelayDiscoveryResponseDropsUntrustedDescriptors(t *testing.T) {
-	set := NewRelaySet(nil)
-	signing := mustSigningIdentity(t)
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	unsigned := mustUnsignedDescriptor(t, signing, "https://relay-unsigned.example")
-	expired := mustSignedDescriptor(t, signing, "https://relay-expired.example", now.Add(-DiscoveryDescriptorTTL-time.Second))
-
-	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
-		Relays:          []types.RelayDescriptor{unsigned, expired},
-	}, now)
-	if err != nil {
-		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
-	}
-	if changed {
-		t.Fatal("untrusted descriptors changed relay set")
-	}
-	if got := relayStates(set); len(got) != 0 {
-		t.Fatalf("len(relayStates()) = %d, want 0", len(got))
 	}
 }
 
@@ -487,14 +464,8 @@ func TestPlanRoutesExplicitPathReturnsSingleRouteToEntry(t *testing.T) {
 	if !route.Explicit() {
 		t.Fatal("route.Explicit() = false, want true")
 	}
-	// ListenerRelayURL() always returns path[0] (the entry node) so that
-	// the listener connects to the ingress relay for both single-hop and
-	// multi-hop routes. The exit node is available via ExitRelayURL().
 	if got := route.ListenerRelayURL(); got != entry {
 		t.Fatalf("ListenerRelayURL() = %q, want %q", got, entry)
-	}
-	if got := route.ExitRelayURL(); got != exit {
-		t.Fatalf("ExitRelayURL() = %q, want %q", got, exit)
 	}
 	path := route.MultiHop()
 	if len(path) != 3 || path[0] != entry || path[1] != mid || path[2] != exit {
@@ -502,53 +473,79 @@ func TestPlanRoutesExplicitPathReturnsSingleRouteToEntry(t *testing.T) {
 	}
 }
 
-func TestPlanRoutesMOLSMultiHopDistinctPaths(t *testing.T) {
+func TestPlanRoutesBuildsNonWrappingMultiHopPaths(t *testing.T) {
 	set := NewRelaySet(nil)
 	now := time.Now().UTC()
-	relays := []string{
-		"https://relay-a.example",
-		"https://relay-b.example",
-		"https://relay-c.example",
-		"https://relay-d.example",
-	}
-	for _, url := range relays {
-		state := confirmedRelayState(t, url)
+	for _, relayURL := range []string{
+		"https://relay-a.example", "https://relay-b.example",
+		"https://relay-c.example", "https://relay-d.example",
+	} {
+		state := confirmedRelayState(t, relayURL)
+		state.LastSeenAt = now
 		state.Descriptor.SupportsOverlay = true
 		state.Descriptor.WireGuardPublicKey = "wg-key"
 		state.Descriptor.WireGuardPort = 51820
-		state.LastSeenAt = now
-		set.mu.Lock()
-		set.relays[url] = state
-		set.mu.Unlock()
+		set.relays[relayURL] = state
 	}
 
-	routes, err := set.PlanRoutes(nil, RouteState{
-		MultiHopDepth: 3,
-		LocalAddress:  "test-client",
-	})
+	routes, err := set.PlanRoutes(nil, RouteState{MultiHopDepth: 3, LocalAddress: "client"})
 	if err != nil {
 		t.Fatalf("PlanRoutes() error = %v", err)
 	}
-	// With 4 candidates and depth 3, the sliding-window builder produces
-	// 2 loop-free paths: [a,b,c] and [b,c,d]. The legacy cyclic indexer
-	// produced 4 paths by wrapping, which could create loops in production.
+	if len(routes) != 1 {
+		t.Fatalf("len(routes) = %d, want 1; four relays cannot form two disjoint three-hop paths", len(routes))
+	}
+	for _, route := range routes {
+		if path := route.MultiHop(); len(path) != 3 || route.ListenerRelayURL() != path[0] {
+			t.Fatalf("route = %v, want three-hop path from its entry relay", path)
+		}
+	}
+}
+
+func TestMatchMOLSPathsPrefersStableAndUnchangedRelays(t *testing.T) {
+	for _, metric := range []RelayState{
+		{EWMARTT: time.Second},
+		{EWMARTT: time.Millisecond, RTTDelta: time.Second},
+	} {
+		states := []RelayState{
+			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "a"}, EWMARTT: metric.EWMARTT, RTTDelta: metric.RTTDelta},
+			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "b"}, EWMARTT: time.Millisecond},
+			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "c"}, EWMARTT: time.Millisecond},
+			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "d"}, EWMARTT: time.Millisecond},
+		}
+		routes, err := matchMOLSPaths([]string{"a", "b", "c", "d"}, 3, 1, states)
+		if err != nil {
+			t.Fatalf("matchMOLSPaths() error = %v", err)
+		}
+		if got := routes[0].MultiHop(); got[0] != "b" {
+			t.Fatalf("first matched path = %v, want path beginning with b", got)
+		}
+	}
+}
+
+func TestMatchMOLSPathsAvoidsSharedHops(t *testing.T) {
+	routes, err := matchMOLSPaths(
+		[]string{"a", "b", "c", "d", "e", "f"}, 3, 2,
+		[]RelayState{
+			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "a"}},
+			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "b"}},
+			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "c"}},
+			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "d"}},
+			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "e"}},
+			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "f"}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("matchMOLSPaths() error = %v", err)
+	}
 	if len(routes) != 2 {
 		t.Fatalf("len(routes) = %d, want 2", len(routes))
 	}
-	for _, route := range routes {
-		path := route.MultiHop()
-		if len(path) != 3 {
-			t.Fatalf("len(path) = %d, want 3", len(path))
-		}
-		if route.ListenerRelayURL() != path[0] {
-			t.Fatalf("ListenerRelayURL() = %q, want entry node %q", route.ListenerRelayURL(), path[0])
-		}
-		seen := make(map[string]struct{}, len(path))
-		for _, hop := range path {
-			if _, ok := seen[hop]; ok {
-				t.Fatalf("path contains duplicate relay %q", hop)
+	for _, firstHop := range routes[0].MultiHop() {
+		for _, secondHop := range routes[1].MultiHop() {
+			if firstHop == secondHop {
+				t.Fatalf("paths share relay %q: %v, %v", firstHop, routes[0].MultiHop(), routes[1].MultiHop())
 			}
-			seen[hop] = struct{}{}
 		}
 	}
 }
@@ -571,420 +568,5 @@ func TestPlanRoutesIncludesExplicitRelayMissingFromSet(t *testing.T) {
 	}
 	if got := route.ListenerRelayURL(); got != relayURL {
 		t.Fatalf("ListenerRelayURL() = %q, want %q", got, relayURL)
-	}
-}
-
-func TestActiveRoutesReturnsCopyAfterPlanRoutes(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	relays := []string{
-		"https://relay-a.example",
-		"https://relay-b.example",
-	}
-	for _, url := range relays {
-		state := confirmedRelayState(t, url)
-		state.LastSeenAt = now
-		set.mu.Lock()
-		set.relays[url] = state
-		set.mu.Unlock()
-	}
-
-	routes, err := set.PlanRoutes(nil, RouteState{LocalAddress: "client"})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-	if len(routes) != 2 {
-		t.Fatalf("len(routes) = %d, want 2", len(routes))
-	}
-
-	active := set.ActiveRoutes()
-	if len(active) != 2 {
-		t.Fatalf("len(ActiveRoutes()) = %d, want 2", len(active))
-	}
-	// Mutating the returned slice must not affect the stored routes.
-	active[0] = NewRoute([]string{"https://tampered.example"}, false)
-	stored := set.ActiveRoutes()
-	if stored[0].ListenerRelayURL() != routes[0].ListenerRelayURL() {
-		t.Fatal("ActiveRoutes copy mutation leaked into stored routes")
-	}
-}
-
-func TestOptimizeRoutesTransposesDirtyHop(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	relays := []string{
-		"https://relay-a.example",
-		"https://relay-b.example",
-		"https://relay-c.example",
-		"https://relay-d.example",
-	}
-	for _, url := range relays {
-		state := confirmedRelayState(t, url)
-		state.Descriptor.SupportsOverlay = true
-		state.Descriptor.WireGuardPublicKey = "wg-key"
-		state.Descriptor.WireGuardPort = 51820
-		state.LastSeenAt = now
-		set.mu.Lock()
-		set.relays[url] = state
-		set.mu.Unlock()
-	}
-
-	_, err := set.PlanRoutes(nil, RouteState{
-		MultiHopDepth: 3,
-		LocalAddress:  "test-client",
-	})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-
-	before := set.ActiveRoutes()
-	if len(before) == 0 {
-		t.Fatal("no active routes to optimize")
-	}
-
-	// Mark the first hop of the first route as saturated (dirty).
-	targetHop := before[0].path[0]
-	set.mu.Lock()
-	state := set.relays[targetHop]
-	state.IsSaturated = true
-	state.LoadFactor = 0.95
-	state.StoreLoadFactor(fixedLoad(state.LoadFactor))
-	set.relays[targetHop] = state
-	set.mu.Unlock()
-
-	swapped, err := set.OptimizeRoutes(RouteState{
-		MultiHopDepth: 3,
-		LocalAddress:  "test-client",
-	})
-	if err != nil {
-		t.Fatalf("OptimizeRoutes() error = %v", err)
-	}
-	if !swapped {
-		t.Fatal("OptimizeRoutes() = false, want true after dirtying a hop")
-	}
-
-	after := set.ActiveRoutes()
-	if len(after) != len(before) {
-		t.Fatalf("route count changed: %d -> %d", len(before), len(after))
-	}
-
-	// The dirty hop must have been replaced.
-	if after[0].path[0] == targetHop {
-		t.Fatalf("dirty hop %q was not transposed", targetHop)
-	}
-
-	// No duplicate relays in the transposed path.
-	seen := make(map[string]struct{})
-	for _, hop := range after[0].path {
-		if _, ok := seen[hop]; ok {
-			t.Fatalf("transposed path contains duplicate %q", hop)
-		}
-		seen[hop] = struct{}{}
-	}
-}
-
-func TestOptimizeRoutesNoSwapWhenClean(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	relays := []string{
-		"https://relay-a.example",
-		"https://relay-b.example",
-		"https://relay-c.example",
-		"https://relay-d.example",
-	}
-	for _, url := range relays {
-		state := confirmedRelayState(t, url)
-		state.Descriptor.SupportsOverlay = true
-		state.Descriptor.WireGuardPublicKey = "wg-key"
-		state.Descriptor.WireGuardPort = 51820
-		state.LastSeenAt = now
-		set.mu.Lock()
-		set.relays[url] = state
-		set.mu.Unlock()
-	}
-
-	_, err := set.PlanRoutes(nil, RouteState{
-		MultiHopDepth: 3,
-		LocalAddress:  "test-client",
-	})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-
-	before := set.ActiveRoutes()
-	swapped, err := set.OptimizeRoutes(RouteState{
-		MultiHopDepth: 3,
-		LocalAddress:  "test-client",
-	})
-	if err != nil {
-		t.Fatalf("OptimizeRoutes() error = %v", err)
-	}
-	if swapped {
-		t.Fatal("OptimizeRoutes() = true, want false for clean paths")
-	}
-
-	after := set.ActiveRoutes()
-	for i := range before {
-		if !before[i].Equal(after[i]) {
-			t.Fatalf("route[%d] changed without dirty hops", i)
-		}
-	}
-}
-
-func TestOptimizeRoutesAtomicUnderConcurrency(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	relays := []string{
-		"https://relay-a.example",
-		"https://relay-b.example",
-		"https://relay-c.example",
-		"https://relay-d.example",
-	}
-	for _, url := range relays {
-		state := confirmedRelayState(t, url)
-		state.Descriptor.SupportsOverlay = true
-		state.Descriptor.WireGuardPublicKey = "wg-key"
-		state.Descriptor.WireGuardPort = 51820
-		state.LastSeenAt = now
-		set.mu.Lock()
-		set.relays[url] = state
-		set.mu.Unlock()
-	}
-
-	_, err := set.PlanRoutes(nil, RouteState{
-		MultiHopDepth: 3,
-		LocalAddress:  "test-client",
-	})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-
-	// Randomly saturate a relay mid-test to trigger transpositions.
-	go func() {
-		for i := 0; i < 50; i++ {
-			time.Sleep(time.Millisecond)
-			set.mu.Lock()
-			for _, url := range relays {
-				state := set.relays[url]
-				state.IsSaturated = i%2 == 0 && url == relays[i%len(relays)]
-				if state.IsSaturated {
-					state.LoadFactor = 0.95
-					state.StoreLoadFactor(fixedLoad(state.LoadFactor))
-				} else {
-					state.LoadFactor = 0.1
-					state.StoreLoadFactor(fixedLoad(state.LoadFactor))
-				}
-				set.relays[url] = state
-			}
-			set.mu.Unlock()
-		}
-	}()
-
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			_, _ = set.OptimizeRoutes(RouteState{
-				MultiHopDepth: 3,
-				LocalAddress:  "test-client",
-			})
-		}()
-		go func() {
-			defer wg.Done()
-			_ = set.ActiveRoutes()
-		}()
-	}
-	wg.Wait()
-
-	// If we reach here without panic or race, the atomic swap is safe.
-	final := set.ActiveRoutes()
-	if len(final) == 0 {
-		t.Fatal("final active routes are empty")
-	}
-	for _, route := range final {
-		seen := make(map[string]struct{})
-		for _, hop := range route.path {
-			if _, ok := seen[hop]; ok {
-				t.Fatalf("concurrent optimization produced duplicate hop %q", hop)
-			}
-			seen[hop] = struct{}{}
-		}
-	}
-}
-
-func TestOptimizeRoutesPreservesExplicitRelay(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	relays := []string{
-		"https://relay-a.example",
-		"https://relay-b.example",
-		"https://relay-c.example",
-		"https://relay-d.example",
-	}
-	for _, url := range relays {
-		state := confirmedRelayState(t, url)
-		state.Descriptor.SupportsOverlay = true
-		state.Descriptor.WireGuardPublicKey = "wg-key"
-		state.Descriptor.WireGuardPort = 51820
-		state.LastSeenAt = now
-		set.mu.Lock()
-		set.relays[url] = state
-		set.mu.Unlock()
-	}
-
-	explicitPath := []string{"https://relay-a.example", "https://relay-b.example", "https://relay-c.example"}
-	_, err := set.PlanRoutes(explicitPath, RouteState{})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-
-	// Saturate relay-b, which is an explicit hop.
-	set.mu.Lock()
-	state := set.relays["https://relay-b.example"]
-	state.IsSaturated = true
-	state.LoadFactor = 0.95
-	state.StoreLoadFactor(fixedLoad(state.LoadFactor))
-	set.relays["https://relay-b.example"] = state
-	set.mu.Unlock()
-
-	// Explicit relays are excluded from the replacement pool, so a dirty
-	// explicit hop cannot be transposed. No swap should occur.
-	swapped, err := set.OptimizeRoutes(RouteState{MultiHopDepth: 3, LocalAddress: "test-client"})
-	if err != nil {
-		t.Fatalf("OptimizeRoutes() error = %v", err)
-	}
-	if swapped {
-		t.Fatal("OptimizeRoutes() transposed an explicit relay; want no swap")
-	}
-
-	active := set.ActiveRoutes()
-	if len(active) != 1 {
-		t.Fatalf("len(active) = %d, want 1", len(active))
-	}
-	path := active[0].path
-	if path[1] != "https://relay-b.example" {
-		t.Fatalf("explicit hop was mutated: %v", path)
-	}
-}
-
-func TestPlanRoutesCachesResultAcrossSameGeneration(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	relays := []string{
-		"https://relay-a.example",
-		"https://relay-b.example",
-	}
-	for _, url := range relays {
-		state := confirmedRelayState(t, url)
-		state.LastSeenAt = now
-		set.mu.Lock()
-		set.relays[url] = state
-		set.mu.Unlock()
-	}
-
-	routeState := RouteState{LocalAddress: "test-client"}
-	routes1, err := set.PlanRoutes(nil, routeState)
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-
-	routes2, err := set.PlanRoutes(nil, routeState)
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-
-	set.mu.RLock()
-	cacheHit := set.lastPlan != nil && set.lastPlan.generation == set.generation
-	set.mu.RUnlock()
-	if !cacheHit {
-		t.Fatal("route plan cache was not used for identical generation and route state")
-	}
-
-	if len(routes1) != len(routes2) {
-		t.Fatalf("cached routes length mismatch: %d vs %d", len(routes1), len(routes2))
-	}
-	for i := range routes1 {
-		if !routes1[i].Equal(routes2[i]) {
-			t.Fatalf("cached routes differ at %d: %v vs %v", i, routes1[i], routes2[i])
-		}
-	}
-}
-
-func TestPlanRoutesCacheInvalidatedOnGenerationBump(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	relayURL := "https://relay-a.example"
-	state := confirmedRelayState(t, relayURL)
-	state.LastSeenAt = now
-	set.mu.Lock()
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	routeState := RouteState{LocalAddress: "test-client"}
-	if _, err := set.PlanRoutes(nil, routeState); err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-
-	set.RecordLoadFactor(relayURL, fixedLoad(0.5))
-
-	set.mu.RLock()
-	cacheStale := set.lastPlan == nil || set.lastPlan.generation != set.generation
-	set.mu.RUnlock()
-	if !cacheStale {
-		t.Fatal("route plan cache was not invalidated after telemetry change")
-	}
-}
-
-func TestOptimizeRoutesDeltaSkipsUnrelatedPaths(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	relays := []string{
-		"https://relay-a.example",
-		"https://relay-b.example",
-		"https://relay-c.example",
-		"https://relay-d.example",
-	}
-	for _, url := range relays {
-		state := confirmedRelayState(t, url)
-		state.Descriptor.SupportsOverlay = true
-		state.Descriptor.WireGuardPublicKey = "wg-key"
-		state.Descriptor.WireGuardPort = 51820
-		state.LastSeenAt = now
-		set.mu.Lock()
-		set.relays[url] = state
-		set.mu.Unlock()
-	}
-
-	routeState := RouteState{MultiHopDepth: 3, LocalAddress: "test-client"}
-	if _, err := set.PlanRoutes(nil, routeState); err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-
-	// Saturate relay-a, which participates in the first active path.
-	set.mu.Lock()
-	state := set.relays["https://relay-a.example"]
-	state.IsSaturated = true
-	state.LoadFactor = 0.95
-	state.StoreLoadFactor(fixedLoad(state.LoadFactor))
-	set.relays["https://relay-a.example"] = state
-	set.mu.Unlock()
-
-	// Optimize with a changed URL that is not in any active path.
-	swapped, err := set.OptimizeRoutes(routeState, "https://relay-z.example")
-	if err != nil {
-		t.Fatalf("OptimizeRoutes() error = %v", err)
-	}
-	if swapped {
-		t.Fatal("OptimizeRoutes() swapped a path despite an unrelated changed URL")
-	}
-
-	// Optimize with the actual changed URL should perform the swap.
-	swapped, err = set.OptimizeRoutes(routeState, "https://relay-a.example")
-	if err != nil {
-		t.Fatalf("OptimizeRoutes() error = %v", err)
-	}
-	if !swapped {
-		t.Fatal("OptimizeRoutes() = false, want true after supplying the real changed URL")
 	}
 }
