@@ -2,6 +2,8 @@ package sdk
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -49,6 +51,15 @@ func TestHopRegistrationErrorPreservesRelayURLAndCause(t *testing.T) {
 	}
 	if !errors.Is(err, cause) {
 		t.Fatal("hop registration error does not unwrap its cause")
+	}
+}
+
+func TestUnavailableRelayErrorRecognizesClosedConnections(t *testing.T) {
+	if !isUnavailableRelayError(fmt.Errorf("request failed: %w", io.EOF)) {
+		t.Fatal("wrapped EOF must be considered unavailable")
+	}
+	if isUnavailableRelayError(errors.New("EOF")) {
+		t.Fatal("string-only error must not be considered unavailable")
 	}
 }
 

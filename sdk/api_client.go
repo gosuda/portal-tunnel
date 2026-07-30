@@ -7,6 +7,7 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -46,6 +47,10 @@ func (err *hopRegistrationError) Unwrap() error {
 	return err.err
 }
 
+func isUnavailableRelayError(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
 // resetTransport tears down the cached HTTP client and TLS config so the next
 // API call creates fresh TCP connections. Call this after detecting a system
 // sleep/wake cycle where pooled connections are almost certainly dead.
@@ -75,6 +80,9 @@ func (l *listener) initHTTPTransport(ctx context.Context) error {
 	if err := utils.HTTPDoAPIPath(ctx, httpClient, l.relayURL, http.MethodGet, types.PathSDKDomain, nil, nil, &domainResp); err != nil {
 		httpTransport.CloseIdleConnections()
 		err = fmt.Errorf("check relay compatibility: %w", err)
+		if isUnavailableRelayError(err) {
+			return fmt.Errorf("%w: %w", errRelayIncompatible, err)
+		}
 		var netErr net.Error
 		var apiErr *types.APIRequestError
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) {
