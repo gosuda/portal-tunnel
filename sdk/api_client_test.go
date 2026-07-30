@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -36,6 +37,18 @@ func TestNewRenewRequestIncludesMetadata(t *testing.T) {
 	metadata.Tags[0] = "mutated"
 	if req.Metadata.Tags[0] != "demo" {
 		t.Fatalf("Metadata tags alias input slice: got %q", req.Metadata.Tags[0])
+	}
+}
+
+func TestHopRegistrationErrorPreservesRelayURLAndCause(t *testing.T) {
+	cause := errors.New("connection closed")
+	err := &hopRegistrationError{relayURL: "https://relay.example", err: cause}
+
+	if err.relayURL != "https://relay.example" {
+		t.Fatalf("relayURL = %q, want relay URL", err.relayURL)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("hop registration error does not unwrap its cause")
 	}
 }
 

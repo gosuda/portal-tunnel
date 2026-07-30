@@ -33,6 +33,19 @@ const (
 
 var errRelayIncompatible = errors.New("relay is incompatible")
 
+type hopRegistrationError struct {
+	relayURL string
+	err      error
+}
+
+func (err *hopRegistrationError) Error() string {
+	return fmt.Sprintf("register hop route at %s: %v", err.relayURL, err.err)
+}
+
+func (err *hopRegistrationError) Unwrap() error {
+	return err.err
+}
+
 // resetTransport tears down the cached HTTP client and TLS config so the next
 // API call creates fresh TCP connections. Call this after detecting a system
 // sleep/wake cycle where pooled connections are almost certainly dead.
@@ -304,12 +317,12 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 		_, client, transport, err := utils.NewHTTPTLSClient(bootstrapCtx, relayURL, l.requestTimeout)
 		cancel()
 		if err != nil {
-			return "", 0, err
+			return "", 0, &hopRegistrationError{relayURL: route.RelayURL, err: err}
 		}
 		var hopResp types.HopRouteResponse
 		if err := utils.HTTPDoAPIPath(ctx, client, relayURL, http.MethodPost, types.PathSDKHop, route, nil, &hopResp); err != nil {
 			transport.CloseIdleConnections()
-			return "", 0, err
+			return "", 0, &hopRegistrationError{relayURL: route.RelayURL, err: err}
 		}
 		transport.CloseIdleConnections()
 		if route.MatchToken != "" || route.RouteHostname == "" {
