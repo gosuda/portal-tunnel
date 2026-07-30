@@ -137,7 +137,6 @@ func (l *listener) buildHopRoutes(hopPath []types.RelayDescriptor, publicHostnam
 			route.HostnameHash = utils.HostnameHash(publicHostname)
 			route.ECHConfigList = bytes.Clone(echConfigList)
 			route.Metadata = l.metadataSnapshot()
-			route.Metadata.Hide = true
 		} else {
 			route.MatchToken = previousHopToken
 		}
@@ -311,7 +310,6 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 		route.FirstSeenAt = expiresAt.Add(-30 * time.Second)
 		if i == 0 {
 			route.Metadata = l.metadataSnapshot()
-			route.Metadata.Hide = true
 		}
 		route, err := auth.SignHopRoute(http.MethodPost, route, authority, expiresAt)
 		if err != nil {
