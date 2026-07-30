@@ -164,8 +164,8 @@ func (l *listener) run(ctx context.Context) {
 		case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
 			return
 		default:
-			if errors.Is(err, errRelayIncompatible) ||
-				hopRelayUnavailable ||
+			incompatibleRelay := errors.Is(err, errRelayIncompatible) || hopRelayUnavailable
+			if incompatibleRelay ||
 				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) ||
 				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTransportMismatch}) ||
 				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict}) ||
@@ -176,7 +176,11 @@ func (l *listener) run(ctx context.Context) {
 				}
 				if l.relaySet != nil && relayURL != "" {
 					l.relaySet.UnconfirmRelayURL(relayURL)
-					l.relaySet.RecordActiveFailure(relayURL, 1)
+					if incompatibleRelay {
+						l.relaySet.DropRelayURLFromActivePool(relayURL)
+					} else {
+						l.relaySet.RecordActiveFailure(relayURL, 1)
+					}
 				}
 				log.Error().
 					Err(err).
