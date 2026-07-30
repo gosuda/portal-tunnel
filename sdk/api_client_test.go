@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -35,5 +36,22 @@ func TestNewRenewRequestIncludesMetadata(t *testing.T) {
 	metadata.Tags[0] = "mutated"
 	if req.Metadata.Tags[0] != "demo" {
 		t.Fatalf("Metadata tags alias input slice: got %q", req.Metadata.Tags[0])
+	}
+}
+
+func TestNewListenerUsesMultiHopExitForControl(t *testing.T) {
+	entry := "https://entry.example"
+	exit := "https://exit.example"
+	route := discovery.NewRoute([]string{entry, "https://middle.example", exit}, false)
+	entryURL, controlURL, err := routeRelayURLs(route)
+	if err != nil {
+		t.Fatalf("routeRelayURLs() error = %v", err)
+	}
+
+	if got := controlURL; got != exit {
+		t.Fatalf("control relay = %q, want %q", got, exit)
+	}
+	if got := entryURL; got != entry {
+		t.Fatalf("route entry = %q, want %q", got, entry)
 	}
 }

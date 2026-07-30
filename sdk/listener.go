@@ -72,17 +72,36 @@ type listener struct {
 	lease *utils.Snapshot[listenerSnapshot]
 }
 
-// newListener creates one relay listener and its dedicated relay transport for one relay URL.
+// routeRelayURLs returns the public ingress relay and the relay that owns the
+// lease and reverse stream. Multi-hop ingress forwards from entry to exit.
+func routeRelayURLs(route discovery.Route) (entryURL, controlURL string, err error) {
+	entryURL, err = utils.NormalizeRelayURL(route.ListenerRelayURL())
+	if err != nil {
+		return "", "", err
+	}
+	controlURL = entryURL
+	if multiHop := route.MultiHop(); len(multiHop) > 0 {
+		controlURL, err = utils.NormalizeRelayURL(multiHop[len(multiHop)-1])
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return entryURL, controlURL, nil
+}
+
+// newListener creates one relay listener. Multi-hop public ingress starts at
+// the route entry, while lease control and the reverse stream terminate at
+// the route exit.
 // Only local config validation fails immediately; relay startup runs in the background until ready.
 func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig) (*listener, error) {
 	listenerCtx, cancel := context.WithCancel(ctx)
 
-	normalizedRelayURL, err := utils.NormalizeRelayURL(route.ListenerRelayURL())
+	entryRelayURL, controlURL, err := routeRelayURLs(route)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-	relayurl, err := url.Parse(normalizedRelayURL)
+	relayurl, err := url.Parse(controlURL)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("parse relay url: %w", err)
@@ -91,7 +110,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		cancel:         cancel,
 		doneCh:         listenerCtx.Done(),
 		relayURL:       relayurl,
-		route:          route.WithListenerRelayURL(normalizedRelayURL),
+		route:          route.WithListenerRelayURL(entryRelayURL),
 		metadata:       cfg.Metadata,
 		identity:       cfg.Identity.Copy(),
 		relaySet:       cfg.relaySet,
