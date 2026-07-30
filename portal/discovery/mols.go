@@ -5,7 +5,7 @@ package discovery
 //
 // Ordering Pipeline:
 //   1. Filter: Apply ban, expiry, and protocol compatibility gates.
-//   2. Extract: Keep the top fixed-depth deterministic MOLS candidates.
+//   2. Rank: Order every eligible candidate deterministically with MOLS.
 //   3. Partition: Move saturated relays behind active relays.
 //   4. Preserve: Keep intra-tier MOLS order unchanged.
 import (
@@ -28,7 +28,6 @@ const (
 	molsFallbackRTTThreshold   = 2 * time.Second
 	molsMinActiveNodes         = 2
 	defaultMaxActiveRelays     = 3
-	molsCandidateDepth         = 8
 )
 
 // gf64Mul performs multiplication in GF(2^6) with primitive polynomial x^6 + x + 1 (0x43).
@@ -217,40 +216,34 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 		if len(states) == 0 {
 			return nil
 		}
-		var candidates [molsCandidateDepth]molsCandidate
-		count := 0
+		candidates := make([]molsCandidate, 0, len(states))
 		for i, state := range states {
 			state.EvaluateSaturation()
-			candidate := molsCandidate{
+			candidates = append(candidates, molsCandidate{
 				state: state,
 				score: scoreFor(state),
 				seq:   i,
-			}
-			insertAt := count
-			for insertAt > 0 && betterMOLSCandidate(candidate, candidates[insertAt-1]) {
-				if insertAt < molsCandidateDepth {
-					candidates[insertAt] = candidates[insertAt-1]
-				}
-				insertAt--
-			}
-			if insertAt >= molsCandidateDepth {
-				continue
-			}
-			candidates[insertAt] = candidate
-			if count < molsCandidateDepth {
-				count++
-			}
+			})
 		}
+		slices.SortFunc(candidates, func(a, b molsCandidate) int {
+			if betterMOLSCandidate(a, b) {
+				return -1
+			}
+			if betterMOLSCandidate(b, a) {
+				return 1
+			}
+			return 0
+		})
 
-		tierOut := make([]string, 0, count)
-		for i := 0; i < count; i++ {
-			if !candidates[i].state.IsSaturated {
-				tierOut = append(tierOut, candidates[i].state.Descriptor.APIHTTPSAddr)
+		tierOut := make([]string, 0, len(candidates))
+		for _, candidate := range candidates {
+			if !candidate.state.IsSaturated {
+				tierOut = append(tierOut, candidate.state.Descriptor.APIHTTPSAddr)
 			}
 		}
-		for i := 0; i < count; i++ {
-			if candidates[i].state.IsSaturated {
-				tierOut = append(tierOut, candidates[i].state.Descriptor.APIHTTPSAddr)
+		for _, candidate := range candidates {
+			if candidate.state.IsSaturated {
+				tierOut = append(tierOut, candidate.state.Descriptor.APIHTTPSAddr)
 			}
 		}
 		return tierOut
