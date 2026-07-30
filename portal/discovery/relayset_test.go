@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -473,7 +474,7 @@ func TestPlanRoutesExplicitPathReturnsSingleRouteToEntry(t *testing.T) {
 	}
 }
 
-func TestPlanRoutesBuildsNonWrappingMultiHopPaths(t *testing.T) {
+func TestPlanRoutesBuildsMultiHopPathsForEveryEntryRelay(t *testing.T) {
 	set := NewRelaySet(nil)
 	now := time.Now().UTC()
 	for _, relayURL := range []string{
@@ -492,61 +493,81 @@ func TestPlanRoutesBuildsNonWrappingMultiHopPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanRoutes() error = %v", err)
 	}
-	if len(routes) != 1 {
-		t.Fatalf("len(routes) = %d, want 1; four relays cannot form two disjoint three-hop paths", len(routes))
+	if len(routes) != 4 {
+		t.Fatalf("len(routes) = %d, want 4; every relay should be an entry point", len(routes))
 	}
+	entries := make(map[string]bool, len(routes))
 	for _, route := range routes {
 		if path := route.MultiHop(); len(path) != 3 || route.ListenerRelayURL() != path[0] {
 			t.Fatalf("route = %v, want three-hop path from its entry relay", path)
 		}
+		entries[route.ListenerRelayURL()] = true
+	}
+	if len(entries) != 4 {
+		t.Fatalf("entry relays = %v, want all four relays", entries)
 	}
 }
 
-func TestMatchMOLSPathsPrefersStableAndUnchangedRelays(t *testing.T) {
-	for _, metric := range []RelayState{
-		{EWMARTT: time.Second},
-		{EWMARTT: time.Millisecond, RTTDelta: time.Second},
+func TestPlanRoutesSkipsUnavailableMultiHopRelays(t *testing.T) {
+	set := NewRelaySet(nil)
+	now := time.Now().UTC()
+	for _, relayURL := range []string{
+		"https://relay-a.example", "https://relay-b.example", "https://relay-c.example",
 	} {
-		states := []RelayState{
-			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "a"}, EWMARTT: metric.EWMARTT, RTTDelta: metric.RTTDelta},
-			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "b"}, EWMARTT: time.Millisecond},
-			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "c"}, EWMARTT: time.Millisecond},
-			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "d"}, EWMARTT: time.Millisecond},
-		}
-		routes, err := matchMOLSPaths([]string{"a", "b", "c", "d"}, 3, 1, states)
-		if err != nil {
-			t.Fatalf("matchMOLSPaths() error = %v", err)
-		}
-		if got := routes[0].MultiHop(); got[0] != "b" {
-			t.Fatalf("first matched path = %v, want path beginning with b", got)
-		}
+		state := confirmedRelayState(t, relayURL)
+		state.LastSeenAt = now
+		state.Descriptor.SupportsOverlay = true
+		state.Descriptor.WireGuardPublicKey = "wg-key"
+		state.Descriptor.WireGuardPort = 51820
+		set.relays[relayURL] = state
 	}
-}
 
-func TestMatchMOLSPathsAvoidsSharedHops(t *testing.T) {
-	routes, err := matchMOLSPaths(
-		[]string{"a", "b", "c", "d", "e", "f"}, 3, 2,
-		[]RelayState{
-			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "a"}},
-			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "b"}},
-			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "c"}},
-			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "d"}},
-			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "e"}},
-			{Descriptor: types.RelayDescriptor{APIHTTPSAddr: "f"}},
-		},
-	)
+	incompatible := confirmedRelayState(t, "https://relay-incompatible.example")
+	incompatible.LastSeenAt = now
+	set.relays[incompatible.Descriptor.APIHTTPSAddr] = incompatible
+
+	suppressed := confirmedRelayState(t, "https://relay-suppressed.example")
+	suppressed.LastSeenAt = now
+	suppressed.Descriptor.SupportsOverlay = true
+	suppressed.Descriptor.WireGuardPublicKey = "wg-key"
+	suppressed.Descriptor.WireGuardPort = 51820
+	suppressed.suppressActiveUntil = now.Add(time.Minute)
+	set.relays[suppressed.Descriptor.APIHTTPSAddr] = suppressed
+
+	recovering := confirmedRelayState(t, "https://relay-recovering.example")
+	recovering.LastSeenAt = now
+	recovering.Descriptor.SupportsOverlay = true
+	recovering.Descriptor.WireGuardPublicKey = "wg-key"
+	recovering.Descriptor.WireGuardPort = 51820
+	recovering.nextDiscoveryRefreshAt = now.Add(time.Minute)
+	set.relays[recovering.Descriptor.APIHTTPSAddr] = recovering
+
+	routes, err := set.PlanRoutes(nil, RouteState{MultiHopDepth: 3, LocalAddress: "client"})
 	if err != nil {
-		t.Fatalf("matchMOLSPaths() error = %v", err)
+		t.Fatalf("PlanRoutes() error = %v", err)
 	}
-	if len(routes) != 2 {
-		t.Fatalf("len(routes) = %d, want 2", len(routes))
+	if len(routes) != 3 {
+		t.Fatalf("len(routes) = %d, want 3", len(routes))
 	}
-	for _, firstHop := range routes[0].MultiHop() {
-		for _, secondHop := range routes[1].MultiHop() {
-			if firstHop == secondHop {
-				t.Fatalf("paths share relay %q: %v, %v", firstHop, routes[0].MultiHop(), routes[1].MultiHop())
+	for _, route := range routes {
+		for _, relayURL := range route.MultiHop() {
+			if relayURL == incompatible.Descriptor.APIHTTPSAddr || relayURL == suppressed.Descriptor.APIHTTPSAddr || relayURL == recovering.Descriptor.APIHTTPSAddr {
+				t.Fatalf("route %v includes unavailable relay %q", route.MultiHop(), relayURL)
 			}
 		}
+	}
+}
+
+func TestBuildMOLSPathsWrapsAtEndOfRankedRelays(t *testing.T) {
+	routes, err := buildMOLSPaths([]string{"a", "b", "c", "d"}, 3)
+	if err != nil {
+		t.Fatalf("buildMOLSPaths() error = %v", err)
+	}
+	if len(routes) != 4 {
+		t.Fatalf("len(routes) = %d, want 4", len(routes))
+	}
+	if got, want := routes[3].MultiHop(), []string{"d", "a", "b"}; !slices.Equal(got, want) {
+		t.Fatalf("last path = %v, want %v", got, want)
 	}
 }
 

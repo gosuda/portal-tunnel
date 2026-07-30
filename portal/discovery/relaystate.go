@@ -199,10 +199,22 @@ func (state RelayState) hasObservedDescriptor() bool {
 	return !state.LastSeenAt.IsZero()
 }
 
+// eligibleForMultiHop reports whether a relay can safely participate in every
+// role of an automatically planned multi-hop route.
+func (state RelayState) eligibleForMultiHop(now time.Time) bool {
+	return !state.Banned &&
+		state.hasObservedDescriptor() &&
+		state.Descriptor.ExpiresAt.After(now) &&
+		state.Descriptor.HasOverlayPeer() &&
+		(state.suppressActiveUntil.IsZero() || !state.suppressActiveUntil.After(now)) &&
+		(state.nextDiscoveryRefreshAt.IsZero() || !state.nextDiscoveryRefreshAt.After(now))
+}
+
 type RouteState struct {
 	ExplicitRelayURLs []string
-	// MaxActiveRelays caps auto-selected relays. Zero or negative values use
-	// the selection default of 3.
+	// MaxActiveRelays caps auto-selected single-hop relays. Zero or negative
+	// values use the selection default of 3. Multi-hop routes use every
+	// eligible relay as an entry point.
 	MaxActiveRelays int
 	MultiHopDepth   int
 	RequireUDP      bool

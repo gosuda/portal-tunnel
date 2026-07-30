@@ -439,11 +439,7 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 
 	ranked := RankRelayPool(filterCandidatePool(states, routeState, now, routeState.MultiHopDepth > 1), routeState.LocalAddress)
 	if routeState.MultiHopDepth > 1 {
-		maxPaths := routeState.MaxActiveRelays
-		if maxPaths <= 0 {
-			maxPaths = defaultMaxActiveRelays
-		}
-		return matchMOLSPaths(ranked, routeState.MultiHopDepth, maxPaths, states)
+		return buildMOLSPaths(ranked, routeState.MultiHopDepth)
 	}
 
 	maxActive := routeState.MaxActiveRelays
@@ -479,11 +475,18 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 func filterCandidatePool(states []RelayState, routeState RouteState, now time.Time, requireOverlay bool) []RelayState {
 	pool := make([]RelayState, 0, len(states))
 	for _, state := range states {
-		if state.Banned {
-			continue
-		}
 		relayURL := state.Descriptor.APIHTTPSAddr
 		if slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
+			continue
+		}
+		if requireOverlay {
+			if !state.eligibleForMultiHop(now) {
+				continue
+			}
+			pool = append(pool, state)
+			continue
+		}
+		if state.Banned {
 			continue
 		}
 		if state.hasObservedDescriptor() {
@@ -496,11 +499,6 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 			if routeState.RequireTCP && !state.Descriptor.SupportsTCP {
 				continue
 			}
-			if requireOverlay && !state.Descriptor.HasOverlayPeer() {
-				continue
-			}
-		} else if requireOverlay {
-			continue
 		}
 		if !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now) {
 			continue
@@ -510,119 +508,22 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 	return pool
 }
 
-// buildMOLSPaths constructs non-wrapping, loop-free multi-hop paths from a
-// MOLS-ranked relay list using a sliding window of the given depth.
+// buildMOLSPaths constructs one loop-free multi-hop path per MOLS-ranked
+// relay. Paths wrap around the ranked list so every relay is an entry point.
 func buildMOLSPaths(ranked []string, depth int) ([]Route, error) {
 	if len(ranked) < depth {
 		return nil, fmt.Errorf("multi-hop-depth %d requires at least %d candidates, got %d", depth, depth, len(ranked))
 	}
 	n := len(ranked)
-	routes := make([]Route, 0, n-depth+1)
-	seen := make(map[string]bool, n-depth+1)
-	for start := 0; start <= n-depth; start++ {
+	routes := make([]Route, 0, n)
+	for start := range ranked {
 		path := make([]string, 0, depth)
 		for i := 0; i < depth; i++ {
-			path = append(path, ranked[start+i])
+			path = append(path, ranked[(start+i)%n])
 		}
-		key := strings.Join(path, "|")
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		routes = append(routes, NewRoute(path, false))
 	}
-	if len(routes) == 0 {
-		return nil, fmt.Errorf("no valid multi-hop paths could be constructed from %d candidates with depth %d", n, depth)
-	}
 	return routes, nil
-}
-
-// matchMOLSPaths orders MOLS candidates as a greedy minimum-cost matching.
-// Paths never share a hop. Stable metrics (EWMA RTT and load) choose among
-// topology-feasible alternatives; recent changes (RTT and load deltas) break
-// ties. The number of paths is capped by available disjoint relay groups, so
-// a smaller pool returns fewer paths rather than pretending overlap diversifies.
-func matchMOLSPaths(ranked []string, depth, maxPaths int, states []RelayState) ([]Route, error) {
-	candidates, err := buildMOLSPaths(ranked, depth)
-	if err != nil {
-		return nil, err
-	}
-	maxPaths = min(maxPaths, len(ranked)/depth)
-	if maxPaths == 0 {
-		return nil, nil
-	}
-	stateByURL := make(map[string]RelayState, len(states))
-	for _, state := range states {
-		stateByURL[state.Descriptor.APIHTTPSAddr] = state
-	}
-	stableCost := make([]float64, len(candidates))
-	deltaCost := make([]float64, len(candidates))
-	for i, route := range candidates {
-		for _, relayURL := range route.path {
-			state := stateByURL[relayURL]
-			rtt := state.EWMARTT
-			if rtt == 0 {
-				rtt = state.DiscoveryRTT
-			}
-			stableCost[i] += float64(rtt)/float64(time.Millisecond) + state.EWMALoad*1000
-			deltaCost[i] += float64(state.RTTDelta)/float64(time.Millisecond) + state.LoadDelta*1000
-		}
-	}
-
-	matched := make([]Route, 0, maxPaths)
-	used := make(map[string]int, len(ranked))
-	selected := make([]bool, len(candidates))
-	for range maxPaths {
-		best, bestOptions, bestCost := -1, 0, 0.0
-		for i, route := range candidates {
-			if selected[i] {
-				continue
-			}
-			overlap := 0
-			for _, relayURL := range route.path {
-				overlap += used[relayURL]
-			}
-			if overlap > 0 {
-				continue
-			}
-			options := 0
-			if len(matched) == 0 && maxPaths > 1 {
-				for j, other := range candidates {
-					if i == j || selected[j] {
-						continue
-					}
-					sharesRelay := false
-					for _, relayURL := range other.path {
-						for _, selectedURL := range route.path {
-							if relayURL == selectedURL {
-								sharesRelay = true
-								break
-							}
-						}
-						if sharesRelay {
-							break
-						}
-					}
-					if !sharesRelay {
-						options++
-					}
-				}
-			}
-			cost := stableCost[i] + deltaCost[i]*0.25
-			if best == -1 || options > bestOptions || options == bestOptions && cost < bestCost {
-				best, bestOptions, bestCost = i, options, cost
-			}
-		}
-		if best == -1 {
-			break
-		}
-		selected[best] = true
-		matched = append(matched, candidates[best])
-		for _, relayURL := range candidates[best].path {
-			used[relayURL]++
-		}
-	}
-	return matched, nil
 }
 
 func (s *RelaySet) overlayRefreshCandidates(now time.Time) []RelayState {
