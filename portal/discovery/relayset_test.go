@@ -508,6 +508,37 @@ func TestPlanRoutesBuildsMultiHopPathsForEveryEntryRelay(t *testing.T) {
 	}
 }
 
+func TestPlanRoutesKeepsBootstrapRelayAsMultiHopEntry(t *testing.T) {
+	set := NewRelaySet(nil)
+	now := time.Now().UTC()
+	const bootstrap = "https://relay-bootstrap.example"
+	for _, relayURL := range []string{
+		bootstrap, "https://relay-b.example", "https://relay-c.example",
+	} {
+		state := confirmedRelayState(t, relayURL)
+		state.LastSeenAt = now
+		state.Descriptor.SupportsOverlay = true
+		state.Descriptor.WireGuardPublicKey = "wg-key"
+		state.Descriptor.WireGuardPort = 51820
+		set.relays[relayURL] = state
+	}
+
+	routes, err := set.PlanRoutes(nil, RouteState{
+		ExplicitRelayURLs: []string{bootstrap},
+		MultiHopDepth:     3,
+		LocalAddress:      "client",
+	})
+	if err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+	for _, route := range routes {
+		if route.ListenerRelayURL() == bootstrap {
+			return
+		}
+	}
+	t.Fatalf("routes = %v, want bootstrap relay %q as an entry", routes, bootstrap)
+}
+
 func TestPlanRoutesSkipsUnavailableMultiHopRelays(t *testing.T) {
 	set := NewRelaySet(nil)
 	now := time.Now().UTC()

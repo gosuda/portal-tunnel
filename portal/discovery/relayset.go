@@ -476,7 +476,7 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 	pool := make([]RelayState, 0, len(states))
 	for _, state := range states {
 		relayURL := state.Descriptor.APIHTTPSAddr
-		if slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
+		if !requireOverlay && slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
 			continue
 		}
 		if requireOverlay {
