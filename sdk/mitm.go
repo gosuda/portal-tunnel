@@ -29,7 +29,7 @@ const (
 	mitmProbePaddingMax    = 320
 
 	defaultMITMProbeCooldown = 30 * time.Second
-	defaultMITMProbeTimeout  = 5 * time.Second
+	defaultMITMProbeTimeout  = 30 * time.Second
 )
 
 type MITMProbeReport struct {
