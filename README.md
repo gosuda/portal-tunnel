@@ -37,8 +37,9 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
   vendor lock-in.
 
 - **Built-in x402 Payments** - Routed HTTP paths can require Sui gasless
-  USDC x402 payment before proxying. Browser apps can import `/x402/client.js`,
-  and native clients can call `/x402/prepare` directly and send `X-PAYMENT`.
+  USDC or Casper wCSPR x402 payment before proxying. Browser apps can import
+  `/x402/client.js`, and native clients can call `/x402/prepare` directly and
+  send `X-PAYMENT`.
 
 ## Comparison
 
