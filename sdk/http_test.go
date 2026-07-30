@@ -3,6 +3,8 @@ package sdk
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -83,5 +85,63 @@ func TestHTTPRoutesRejectDuplicateNormalizedPrefixes(t *testing.T) {
 	}, "", false)
 	if err == nil {
 		t.Fatal("NewHTTPRoutes() error = nil, want duplicate prefix error")
+	}
+}
+
+func newStaticSiteDir(t *testing.T, name, content string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", name, err)
+	}
+	return root
+}
+
+// Static route behavior is covered in utils; these cases pin the wiring from
+// HTTPRouteConfig through to the static handler.
+func TestHTTPRoutesServeStaticRoute(t *testing.T) {
+	t.Parallel()
+
+	root := newStaticSiteDir(t, "main.html", "<html>main</html>")
+	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
+		{Prefix: "/", StaticRoot: root, StaticIndex: "main.html"},
+	}, "", false)
+	if err != nil {
+		t.Fatalf("NewHTTPRoutes() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "https://public.example/deep/route", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Body.String(); got != "<html>main</html>" {
+		t.Fatalf("body = %q, want the configured entry file", got)
+	}
+}
+
+func TestHTTPRoutesStaticPaidRouteChallengesUnpaid(t *testing.T) {
+	t.Parallel()
+
+	root := newStaticSiteDir(t, "index.html", "<html>paid</html>")
+	payTo := "0x" + strings.Repeat("a", 64)
+	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
+		{Prefix: "/", StaticRoot: root, Amount: "0.01"},
+	}, payTo, true)
+	if err != nil {
+		t.Fatalf("NewHTTPRoutes() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "https://public.example/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("unpaid request status = 200, want payment challenge")
+	}
+	if strings.Contains(rec.Body.String(), "paid") {
+		t.Fatalf("unpaid request served the static file body: %q", rec.Body.String())
 	}
 }

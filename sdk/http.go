@@ -128,7 +128,15 @@ type HTTPRouteConfig struct {
 	// Prefix is the public request path prefix, such as "/api" or "/".
 	Prefix string
 	// Upstream is the target HTTP URL, or a loopback host:port shorthand.
+	// Leave empty when StaticRoot is set.
 	Upstream string
+	// StaticRoot, when set, serves files from this local directory as a static
+	// SPA instead of proxying to an Upstream. Unknown paths fall back to
+	// StaticIndex (CSR routing); paths escaping the directory are refused.
+	StaticRoot string
+	// StaticIndex is the SPA entry file served for the root and any unknown
+	// path under a static route. Defaults to "index.html" when empty.
+	StaticIndex string
 	// Methods limits payment to these HTTP methods. Empty means every method.
 	Methods []string
 	// Amount enables Sui USDC x402 payment for this public path prefix.
@@ -235,6 +243,8 @@ type httpRoute struct {
 	upstream       *url.URL
 	upstreamPath   string
 	upstreamDomain string
+	staticRoot     string
+	staticIndex    string
 	payment        *x402.Payment
 	paymentMethods map[string]struct{}
 	handler        http.Handler
@@ -250,36 +260,49 @@ func newHTTPRoute(routeConfig HTTPRouteConfig, x402PayTo string, x402Testnet boo
 	}
 	prefix = utils.NormalizeURLPath(prefix)
 
-	upstreamInput := strings.TrimSpace(routeConfig.Upstream)
-	if upstreamInput == "" {
-		return nil, fmt.Errorf("http route %q upstream is required", prefix)
-	}
-	if !strings.Contains(upstreamInput, "://") {
-		target, err := utils.NormalizeLoopbackTarget(upstreamInput)
+	var route *httpRoute
+	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
+		staticIndex := strings.TrimSpace(routeConfig.StaticIndex)
+		if staticIndex == "" {
+			staticIndex = utils.DefaultStaticIndex
+		}
+		route = &httpRoute{
+			prefix:      prefix,
+			staticRoot:  staticRoot,
+			staticIndex: staticIndex,
+		}
+	} else {
+		upstreamInput := strings.TrimSpace(routeConfig.Upstream)
+		if upstreamInput == "" {
+			return nil, fmt.Errorf("http route %q upstream is required", prefix)
+		}
+		if !strings.Contains(upstreamInput, "://") {
+			target, err := utils.NormalizeLoopbackTarget(upstreamInput)
+			if err != nil {
+				return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
+			}
+			upstreamInput = "http://" + target
+		}
+
+		upstream, err := url.Parse(upstreamInput)
 		if err != nil {
 			return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
 		}
-		upstreamInput = "http://" + target
-	}
+		if upstream.Host == "" {
+			return nil, fmt.Errorf("http route %q upstream host is required", prefix)
+		}
+		if upstream.Scheme != "http" && upstream.Scheme != "https" {
+			return nil, fmt.Errorf("http route %q upstream scheme must be http or https", prefix)
+		}
+		upstream.Fragment = ""
+		upstream.Path = utils.NormalizeURLPath(upstream.Path)
 
-	upstream, err := url.Parse(upstreamInput)
-	if err != nil {
-		return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
-	}
-	if upstream.Host == "" {
-		return nil, fmt.Errorf("http route %q upstream host is required", prefix)
-	}
-	if upstream.Scheme != "http" && upstream.Scheme != "https" {
-		return nil, fmt.Errorf("http route %q upstream scheme must be http or https", prefix)
-	}
-	upstream.Fragment = ""
-	upstream.Path = utils.NormalizeURLPath(upstream.Path)
-
-	route := &httpRoute{
-		prefix:         prefix,
-		upstream:       upstream,
-		upstreamPath:   upstream.Path,
-		upstreamDomain: utils.NormalizeHostname(upstream.Hostname()),
+		route = &httpRoute{
+			prefix:         prefix,
+			upstream:       upstream,
+			upstreamPath:   upstream.Path,
+			upstreamDomain: utils.NormalizeHostname(upstream.Hostname()),
+		}
 	}
 	amount := strings.TrimSpace(routeConfig.Amount)
 	if amount == "" && len(routeConfig.Methods) > 0 {
@@ -312,7 +335,32 @@ func newHTTPRoute(routeConfig HTTPRouteConfig, x402PayTo string, x402Testnet boo
 }
 
 func (r *httpRoute) newHandler() http.Handler {
-	proxy := &httputil.ReverseProxy{
+	base := r.baseHandler()
+	if r.payment == nil {
+		return base
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if len(r.paymentMethods) > 0 {
+			if _, ok := r.paymentMethods[strings.ToUpper(req.Method)]; !ok {
+				base.ServeHTTP(w, req)
+				return
+			}
+		}
+
+		settled, ok := r.payment.Settle(req.Context(), w, req)
+		if !ok {
+			return
+		}
+		utils.SetPaymentResponseHeaders(w.Header(), settled)
+		base.ServeHTTP(w, req)
+	})
+}
+
+func (r *httpRoute) baseHandler() http.Handler {
+	if r.staticRoot != "" {
+		return utils.NewStaticSiteHandler(r.prefix, r.staticRoot, r.staticIndex)
+	}
+	return &httputil.ReverseProxy{
 		Rewrite:        r.rewriteProxyRequest,
 		ModifyResponse: r.rewriteProxyResponse,
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
@@ -323,24 +371,6 @@ func (r *httpRoute) newHandler() http.Handler {
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		},
 	}
-	if r.payment == nil {
-		return proxy
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if len(r.paymentMethods) > 0 {
-			if _, ok := r.paymentMethods[strings.ToUpper(req.Method)]; !ok {
-				proxy.ServeHTTP(w, req)
-				return
-			}
-		}
-
-		settled, ok := r.payment.Settle(req.Context(), w, req)
-		if !ok {
-			return
-		}
-		utils.SetPaymentResponseHeaders(w.Header(), settled)
-		proxy.ServeHTTP(w, req)
-	})
 }
 
 func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {

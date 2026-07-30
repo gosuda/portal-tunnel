@@ -21,6 +21,15 @@ import {
   readCurrentOrigin,
   useTunnelCommand,
 } from "@/hooks/useTunnelCommand";
+import type { ShareKind } from "@/lib/shareLink";
+
+const SHARE_KIND_LABEL: Record<ShareKind, string> = {
+  url: "URL",
+  file: "File",
+  port: "Port",
+};
+
+const SHARE_PLACEHOLDER = "file:///Users/me/site/index.html or 3000";
 
 interface TunnelCommandFormProps {
   className?: string;
@@ -58,6 +67,7 @@ function HeroTunnelCommandForm({
     setOs,
     generatedName,
     effectiveName,
+    shareKind,
     installBlock,
     runBlock,
     handleCopy,
@@ -159,6 +169,10 @@ function HeroTunnelCommandForm({
     "shrink-0 text-[9px] font-semibold uppercase tracking-normal",
     isTerminal ? "text-slate-500" : "text-text-muted"
   );
+  const heroExampleClass = cn(
+    "mx-1 font-mono",
+    isTerminal ? "text-slate-200" : "text-foreground"
+  );
   const heroControlInputClass = cn(
     "h-auto border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0",
     isTerminal
@@ -176,24 +190,23 @@ function HeroTunnelCommandForm({
       <div className="space-y-2">
         <div className="space-y-1.5">
           <p className={heroSectionLabelClass}>
-            1. Start your local app
-            <span
-              className={cn(
-                "ml-1 normal-case tracking-normal",
-                isTerminal ? "text-slate-400" : "text-text-muted"
-              )}
-            >
-              (e.g.
-              <span
-                className={cn(
-                  "mx-1 font-mono",
-                  isTerminal ? "text-slate-200" : "text-foreground"
-                )}
-              >
-                localhost:3000
-              </span>
-              )
+            1. Paste what you want to share
+          </p>
+          <p
+            className={cn(
+              "text-[12px] leading-5",
+              isTerminal ? "text-slate-400" : "text-text-muted"
+            )}
+          >
+            A local port such as
+            <span className={heroExampleClass}>3000</span>, a running URL such as
+            <span className={heroExampleClass}>http://localhost:3000</span>, or a
+            file path such as
+            <span className={heroExampleClass}>
+              file:///Users/me/site/index.html
             </span>
+            — file paths are served as a static site straight from that folder,
+            so nothing needs to be running locally.
           </p>
         </div>
       </div>
@@ -218,19 +231,32 @@ function HeroTunnelCommandForm({
             </button>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:flex-nowrap">
-          <div className="flex shrink-0 items-center gap-2">
-            <span className={heroControlLabelClass}>Port</span>
+        <div className="space-y-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={heroControlLabelClass}>Share</span>
             <Input
               type="text"
               value={target}
               onChange={(event) => setTarget(event.target.value)}
-              placeholder={DEFAULT_HOST}
-              aria-label="Local port or address"
-              className={cn(heroControlInputClass, "w-20 font-mono")}
+              placeholder={SHARE_PLACEHOLDER}
+              aria-label="Link, file path, or local port to share"
+              className={cn(heroControlInputClass, "min-w-0 flex-1 font-mono")}
             />
+            {target.trim() !== "" && (
+              <span
+                className={cn(
+                  "shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-normal",
+                  isTerminal
+                    ? "bg-white/8 text-slate-400"
+                    : "bg-muted text-text-muted"
+                )}
+                title="Detected share type"
+              >
+                {SHARE_KIND_LABEL[shareKind]}
+              </span>
+            )}
           </div>
-          <div className="ml-auto flex min-w-0 items-center justify-end gap-2 sm:w-88">
+          <div className="flex min-w-0 items-center gap-2">
             <span className={heroControlLabelClass}>Name</span>
             <Input
               type="text"
@@ -367,6 +393,7 @@ function FullTunnelCommandForm({
     os,
     setOs,
     generatedName,
+    shareKind,
     installBlock,
     runBlock,
     handleCopy,
@@ -463,25 +490,41 @@ function FullTunnelCommandForm({
   return (
     <div className={cn("space-y-4 py-1", className)}>
       <div className="space-y-2">
-        <label
-          htmlFor={`${inputId}-host`}
-          className={sectionLabelClass}
-        >
-          Host
-        </label>
+        <div className="flex items-center gap-2">
+          <label htmlFor={`${inputId}-host`} className={sectionLabelClass}>
+            Share
+          </label>
+          {target.trim() !== "" && (
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-normal",
+                isTerminal
+                  ? "bg-white/8 text-slate-400"
+                  : "bg-muted text-text-muted"
+              )}
+              title="Detected share type"
+            >
+              {SHARE_KIND_LABEL[shareKind]}
+            </span>
+          )}
+        </div>
         <div className={inlineFieldClass}>
-          <span className={inlinePrefixClass}>HOST=</span>
+          <span className={inlinePrefixClass}>SHARE=</span>
           <Input
             id={`${inputId}-host`}
             type="text"
             value={target}
             onChange={(event) => setTarget(event.target.value)}
-            placeholder={DEFAULT_HOST}
+            placeholder={SHARE_PLACEHOLDER}
+            aria-label="Local port, URL, or file path to share"
             className={inlineInputClass}
           />
         </div>
         <p className={helpTextClass}>
-          The hostname or IP:Port where your service is running
+          Paste what you want to share: a local port (3000), a running URL
+          (http://localhost:3000), or a file path
+          (file:///Users/me/site/index.html). File paths are served as a static
+          site from that folder, so nothing needs to be running locally.
         </p>
       </div>
 

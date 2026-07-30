@@ -3,6 +3,7 @@ import {
   buildDefaultExposeName,
   normalizeExposeName,
 } from "@/lib/exposeName";
+import { classifyShareInput } from "@/lib/shareLink";
 import {
   buildTunnelCommand,
   buildTunnelDisplayCommand,
@@ -68,20 +69,26 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
   const currentOrigin = useMemo(() => readCurrentOrigin(), []);
   const [nameSeed] = useState(readTunnelNameSeed);
 
-  const [target, setTarget] = useState(DEFAULT_HOST);
+  // Empty by default so the field reads as "paste a link here" instead of
+  // pre-committing the user to a local port.
+  const [target, setTarget] = useState("");
   const [name, setName] = useState("");
   const [nameShuffleKey, setNameShuffleKey] = useState("default");
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<TunnelCommandOS>("unix");
 
   const resolvedNameSeed = `${nameSeed}:${nameShuffleKey}`;
-  const generatedName = buildDefaultExposeName(target, resolvedNameSeed);
+  const share = useMemo(() => classifyShareInput(target), [target]);
+  const generatedName = buildDefaultExposeName(
+    share.seedTarget,
+    resolvedNameSeed
+  );
   const normalizedName = normalizeExposeName(name);
   const effectiveName = normalizedName === "" ? generatedName : normalizedName;
   const commandOptions = useMemo(
     () => ({
       currentOrigin,
-      target,
+      target: share.target,
       name: effectiveName,
       nameSeed,
       relayUrls: extras.relayUrls ?? [currentOrigin],
@@ -90,6 +97,8 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
       enableUDP: extras.enableUDP ?? false,
       udpPort: extras.udpPort ?? "",
       os,
+      shareKind: share.kind,
+      servePath: share.path,
     }),
     [
       currentOrigin,
@@ -101,7 +110,9 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
       extras.udpPort,
       nameSeed,
       os,
-      target,
+      share.kind,
+      share.path,
+      share.target,
     ]
   );
   const copyCommand = useMemo(
@@ -168,6 +179,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
     setOs,
     generatedName,
     effectiveName,
+    shareKind: share.kind,
     installBlock,
     runBlock,
     handleCopy,
