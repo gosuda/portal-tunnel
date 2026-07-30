@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -265,7 +264,7 @@ func newHTTPRoute(routeConfig HTTPRouteConfig, x402PayTo string, x402Testnet boo
 	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
 		staticIndex := strings.TrimSpace(routeConfig.StaticIndex)
 		if staticIndex == "" {
-			staticIndex = "index.html"
+			staticIndex = utils.DefaultStaticIndex
 		}
 		route = &httpRoute{
 			prefix:      prefix,
@@ -359,7 +358,7 @@ func (r *httpRoute) newHandler() http.Handler {
 
 func (r *httpRoute) baseHandler() http.Handler {
 	if r.staticRoot != "" {
-		return r.newStaticHandler()
+		return utils.NewStaticSiteHandler(r.prefix, r.staticRoot, r.staticIndex)
 	}
 	return &httputil.ReverseProxy{
 		Rewrite:        r.rewriteProxyRequest,
@@ -372,86 +371,6 @@ func (r *httpRoute) baseHandler() http.Handler {
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		},
 	}
-}
-
-// newStaticHandler serves files under staticRoot with SPA/CSR fallback: a
-// concrete file is served as-is, while the root and any unknown path return
-// staticIndex. http.Dir already refuses paths that escape the root directory.
-func (r *httpRoute) newStaticHandler() http.Handler {
-	root := http.Dir(r.staticRoot)
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		rel, ok := staticRequestPath(r.prefix, req.URL.Path)
-		if !ok {
-			http.NotFound(w, req)
-			return
-		}
-		if rel != "/" && serveStaticFile(w, req, root, rel) {
-			return
-		}
-		serveStaticIndex(w, req, root, r.staticIndex)
-	})
-}
-
-// staticRequestPath strips the route prefix and returns a clean, root-relative
-// path. It reports false for parent-directory traversal attempts.
-func staticRequestPath(prefix, urlPath string) (string, bool) {
-	p := utils.NormalizeURLPath(urlPath)
-	if prefix != "/" {
-		switch {
-		case p == prefix:
-			p = "/"
-		case strings.HasPrefix(p, prefix+"/"):
-			p = strings.TrimPrefix(p, prefix)
-		}
-	}
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	if containsDotDot(p) {
-		return "", false
-	}
-	return path.Clean(p), true
-}
-
-func containsDotDot(v string) bool {
-	if !strings.Contains(v, "..") {
-		return false
-	}
-	for _, ent := range strings.FieldsFunc(v, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if ent == ".." {
-			return true
-		}
-	}
-	return false
-}
-
-func serveStaticFile(w http.ResponseWriter, req *http.Request, root http.FileSystem, rel string) bool {
-	f, err := root.Open(rel)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.IsDir() {
-		return false
-	}
-	http.ServeContent(w, req, info.Name(), info.ModTime(), f)
-	return true
-}
-
-func serveStaticIndex(w http.ResponseWriter, req *http.Request, root http.FileSystem, index string) {
-	f, err := root.Open("/" + index)
-	if err != nil {
-		http.NotFound(w, req)
-		return
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.IsDir() {
-		http.NotFound(w, req)
-		return
-	}
-	http.ServeContent(w, req, info.Name(), info.ModTime(), f)
 }
 
 func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {

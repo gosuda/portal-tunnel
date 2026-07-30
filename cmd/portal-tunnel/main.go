@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -143,10 +142,10 @@ func runExposeCommand(args []string) error {
 
 	httpRoutes := make([]sdk.HTTPRouteConfig, 0, len(httpRouteInputs)+1)
 	if serve != "" {
-		root, index, err := resolveServeDir(serve)
+		root, index, err := utils.ResolveStaticSite(serve)
 		if err != nil {
 			printExposeUsage(os.Stderr)
-			return err
+			return fmt.Errorf("--serve %q: %w", serve, err)
 		}
 		httpRoutes = append(httpRoutes, sdk.HTTPRouteConfig{
 			Prefix:      "/",
@@ -243,33 +242,6 @@ func runExposeCommand(args []string) error {
 		return exposure.RunHTTPRoutes(ctx, httpRoutes, "")
 	}
 	return sdk.ProxyExposure(ctx, exposure)
-}
-
-// resolveServeDir turns a --serve path into a static root directory and its SPA
-// entry file. A directory serves index.html; an HTML file serves its parent
-// directory with that file as the entry. The entry file must exist.
-func resolveServeDir(input string) (root string, index string, err error) {
-	abs, err := filepath.Abs(strings.TrimSpace(input))
-	if err != nil {
-		return "", "", fmt.Errorf("--serve %q: %w", input, err)
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return "", "", fmt.Errorf("--serve %q: %w", input, err)
-	}
-	if info.IsDir() {
-		root, index = abs, "index.html"
-	} else {
-		root, index = filepath.Dir(abs), filepath.Base(abs)
-	}
-	indexInfo, err := os.Stat(filepath.Join(root, index))
-	if err != nil {
-		return "", "", fmt.Errorf("--serve %q: entry file %q not found: %w", input, index, err)
-	}
-	if indexInfo.IsDir() {
-		return "", "", fmt.Errorf("--serve %q: entry %q is a directory", input, index)
-	}
-	return root, index, nil
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {
