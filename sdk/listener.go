@@ -171,8 +171,8 @@ func (l *listener) run(ctx context.Context) {
 				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict}) ||
 				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeIPBanned}) {
 				relayURL := failedRelayURL
-				if relayURL == "" && l.relayURL != nil {
-					relayURL = l.relayURL.String()
+				if relayURL == "" {
+					relayURL = l.route.ListenerRelayURL()
 				}
 				if l.relaySet != nil && relayURL != "" {
 					l.relaySet.UnconfirmRelayURL(relayURL)
@@ -884,9 +884,9 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")
 	}
-	relayURL := l.relayURL.String()
-	if l.relaySet != nil && relayURL != "" {
-		l.relaySet.ConfirmRelayURL(relayURL)
+	entryURL := l.route.ListenerRelayURL()
+	if l.relaySet != nil && entryURL != "" {
+		l.relaySet.ConfirmRelayURL(entryURL)
 	}
 	if len(echConfigList) > 0 {
 		log.Info().
@@ -932,10 +932,11 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 	}
 
 	if l.retryCount > 0 && retries > l.retryCount {
-		if l.relaySet != nil && relayURL != "" {
-			l.relaySet.UnconfirmRelayURL(relayURL)
-			l.relaySet.RecordActiveFailure(relayURL, 1)
-			l.relaySet.DropRelayURLFromActivePool(relayURL)
+		entryURL := l.route.ListenerRelayURL()
+		if l.relaySet != nil && entryURL != "" {
+			l.relaySet.UnconfirmRelayURL(entryURL)
+			l.relaySet.RecordActiveFailure(entryURL, 1)
+			l.relaySet.DropRelayURLFromActivePool(entryURL)
 		}
 		logger.Error().
 			Err(err).

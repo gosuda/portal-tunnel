@@ -381,10 +381,7 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 
 	relayByURL := make(map[string]types.AgentRelayStatus, len(listeners))
 	for _, listener := range listeners {
-		relayURL := ""
-		if listener.relayURL != nil {
-			relayURL = listener.relayURL.String()
-		}
+		relayURL := listener.route.ListenerRelayURL()
 		explicit := slices.Contains(cfg.RelayURLs, relayURL)
 		snap := types.AgentRelayStatus{
 			RelayURL:   relayURL,
