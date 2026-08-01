@@ -62,6 +62,9 @@ const (
 	agentDashboardAddFieldHTTPRoutes
 	agentDashboardAddFieldX402PayTo
 	agentDashboardAddFieldX402Testnet
+	agentDashboardAddFieldX402Network
+	agentDashboardAddFieldX402Asset
+	agentDashboardAddFieldX402Endpoints
 	agentDashboardAddFieldRelays
 	agentDashboardAddFieldDiscovery
 	agentDashboardAddFieldMaxRelays
@@ -100,16 +103,19 @@ type agentDashboardModel struct {
 	routeDraft    []string
 	draftTunnelID string
 
-	addingTunnel   bool
-	addFocus       int
-	addName        textinput.Model
-	addTarget      textinput.Model
-	addHTTPRoutes  textinput.Model
-	addX402PayTo   textinput.Model
-	addX402Testnet textinput.Model
-	addRelays      textinput.Model
-	addDiscovery   textinput.Model
-	addMaxRelays   textinput.Model
+	addingTunnel     bool
+	addFocus         int
+	addName          textinput.Model
+	addTarget        textinput.Model
+	addHTTPRoutes    textinput.Model
+	addX402PayTo     textinput.Model
+	addX402Testnet   textinput.Model
+	addX402Network   textinput.Model
+	addX402Asset     textinput.Model
+	addX402Endpoints textinput.Model
+	addRelays        textinput.Model
+	addDiscovery     textinput.Model
+	addMaxRelays     textinput.Model
 
 	settingsEditTunnelID string
 	settingsFocus        int
@@ -179,6 +185,9 @@ func RunDashboard(configPath, stateDir string) error {
 		addHTTPRoutes:       newAgentDashboardInlineInput("/paid=3001 GET:0.01; /=5173"),
 		addX402PayTo:        newAgentDashboardInlineInput("0x..."),
 		addX402Testnet:      newAgentDashboardInlineInput("false"),
+		addX402Network:      newAgentDashboardInlineInput("casper:casper-test"),
+		addX402Asset:        newAgentDashboardInlineInput("hash-..."),
+		addX402Endpoints:    newAgentDashboardInlineInput("https://x402-facilitator.cspr.cloud"),
 		addRelays:           newAgentDashboardInlineInput("https://portal.example.com"),
 		addDiscovery:        newAgentDashboardInlineInput("true"),
 		addMaxRelays:        newAgentDashboardInlineInput("3"),
@@ -748,6 +757,12 @@ func (m *agentDashboardModel) focusedAddTunnelInput() *textinput.Model {
 		return &m.addX402PayTo
 	case agentDashboardAddFieldX402Testnet:
 		return &m.addX402Testnet
+	case agentDashboardAddFieldX402Network:
+		return &m.addX402Network
+	case agentDashboardAddFieldX402Asset:
+		return &m.addX402Asset
+	case agentDashboardAddFieldX402Endpoints:
+		return &m.addX402Endpoints
 	case agentDashboardAddFieldRelays:
 		return &m.addRelays
 	case agentDashboardAddFieldDiscovery:
@@ -766,6 +781,9 @@ func (m *agentDashboardModel) blurAddTunnelInputs() {
 		&m.addHTTPRoutes,
 		&m.addX402PayTo,
 		&m.addX402Testnet,
+		&m.addX402Network,
+		&m.addX402Asset,
+		&m.addX402Endpoints,
 		&m.addRelays,
 		&m.addDiscovery,
 		&m.addMaxRelays,
@@ -781,6 +799,9 @@ func (m *agentDashboardModel) resetAddTunnelForm() {
 		&m.addHTTPRoutes,
 		&m.addX402PayTo,
 		&m.addX402Testnet,
+		&m.addX402Network,
+		&m.addX402Asset,
+		&m.addX402Endpoints,
 		&m.addRelays,
 	} {
 		input.Reset()
@@ -903,6 +924,9 @@ func (m *agentDashboardModel) resizeInputs(width int) {
 		&m.addHTTPRoutes,
 		&m.addX402PayTo,
 		&m.addX402Testnet,
+		&m.addX402Network,
+		&m.addX402Asset,
+		&m.addX402Endpoints,
 		&m.addRelays,
 		&m.addDiscovery,
 		&m.addMaxRelays,
@@ -1017,6 +1041,15 @@ func (m agentDashboardModel) addTunnelRequest() (types.AgentTunnelRequest, error
 	if x402Testnet && !hasPaidRoute {
 		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Testnet requires paid routes")
 	}
+	x402Network := strings.ToLower(strings.TrimSpace(m.addX402Network.Value()))
+	x402Asset := strings.TrimSpace(m.addX402Asset.Value())
+	x402Endpoints := utils.SplitCSV(m.addX402Endpoints.Value())
+	if x402Network != "" && !hasPaidRoute {
+		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Network requires paid routes")
+	}
+	if strings.HasPrefix(x402Network, "casper:") && x402Asset == "" {
+		return types.AgentTunnelRequest{}, fmt.Errorf("Casper payments require X402 Asset")
+	}
 
 	discoveryRaw := strings.TrimSpace(m.addDiscovery.Value())
 	if discoveryRaw == "" {
@@ -1045,6 +1078,9 @@ func (m agentDashboardModel) addTunnelRequest() (types.AgentTunnelRequest, error
 		MaxActiveRelays: maxRelays,
 		X402PayTo:       payTo,
 		X402Testnet:     x402Testnet,
+		X402Network:     x402Network,
+		X402Asset:       x402Asset,
+		X402Endpoints:   x402Endpoints,
 	}, nil
 }
 
@@ -1492,6 +1528,9 @@ func (m agentDashboardModel) renderAddTunnelForm(pane *agentDashboardView, width
 		{label: "Routes", input: m.addHTTPRoutes, field: agentDashboardAddFieldHTTPRoutes},
 		{label: "X402 Pay To", input: m.addX402PayTo, field: agentDashboardAddFieldX402PayTo},
 		{label: "X402 Testnet", input: m.addX402Testnet, field: agentDashboardAddFieldX402Testnet},
+		{label: "X402 Network", input: m.addX402Network, field: agentDashboardAddFieldX402Network},
+		{label: "X402 Asset", input: m.addX402Asset, field: agentDashboardAddFieldX402Asset},
+		{label: "X402 Endpoints", input: m.addX402Endpoints, field: agentDashboardAddFieldX402Endpoints},
 		{label: "Relays", input: m.addRelays, field: agentDashboardAddFieldRelays},
 		{label: "Discovery", input: m.addDiscovery, field: agentDashboardAddFieldDiscovery},
 		{label: "Max Relays", input: m.addMaxRelays, field: agentDashboardAddFieldMaxRelays},
@@ -1643,7 +1682,10 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 		if len(pane.lines)-startLine >= height {
 			return
 		}
-		pane.addMeta(width, 0, "Network", agentDashboardX402Network(tunnel.X402Testnet))
+		pane.addMeta(width, 0, "Network", agentDashboardX402Network(tunnel.X402Network, tunnel.X402Testnet))
+	}
+	if strings.TrimSpace(tunnel.X402Asset) != "" && len(pane.lines)-startLine < height {
+		pane.addMeta(width, 0, "Asset", tunnel.X402Asset)
 	}
 	if len(tunnel.HTTPRoutes) == 0 {
 		if len(pane.lines)-startLine >= height {
@@ -2054,7 +2096,10 @@ func agentDashboardHTTPRouteSummary(route types.AgentHTTPRoute) string {
 	return prefix + " -> " + upstream
 }
 
-func agentDashboardX402Network(testnet bool) string {
+func agentDashboardX402Network(network string, testnet bool) string {
+	if network = strings.TrimSpace(network); network != "" {
+		return network
+	}
 	if testnet {
 		return "sui:testnet"
 	}

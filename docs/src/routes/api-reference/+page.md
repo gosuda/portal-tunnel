@@ -131,10 +131,11 @@ relay lease API.
 Paid routed HTTP tunnels additionally expose `/x402/prepare` and
 `/x402/client.js` on the public tunnel origin. Those are tunnel-owned helper
 endpoints for app frontends, not relay API routes, and they do not use the
-`/api` prefix. Tunnel paid routes use Sui mainnet by default and Sui testnet
-when the tunnel is exposed with `--x402-testnet` or configured with
-`x402_testnet = true`. `/x402/client.js` is browser-only; native clients call
-`/x402/prepare` directly and send `X-PAYMENT` on the protected request.
+`/api` prefix. `/x402/client.js` and the transaction-building prepare response
+are Sui-only. Casper clients consume the protected resource's 402 requirements,
+sign with an external Casper x402 SDK, and retry with `PAYMENT-SIGNATURE` or
+`X-PAYMENT`; Portal then delegates verification and settlement to the configured
+Casper facilitator.
 
 | Method | Path | Auth | Body | Response |
 |--------|------|------|------|----------|

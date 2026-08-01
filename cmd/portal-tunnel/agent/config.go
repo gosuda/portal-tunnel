@@ -61,6 +61,9 @@ type TunnelConfig struct {
 	Hide            bool              `koanf:"hide"`
 	X402PayTo       string            `koanf:"x402_pay_to"`
 	X402Testnet     bool              `koanf:"x402_testnet"`
+	X402Network     string            `koanf:"x402_network"`
+	X402Asset       string            `koanf:"x402_asset"`
+	X402Endpoints   []string          `koanf:"x402_endpoints"`
 }
 
 type HTTPRouteConfig struct {
@@ -221,6 +224,9 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	if cfg.X402Testnet {
 		out["x402_testnet"] = cfg.X402Testnet
 	}
+	addStringDocumentField(out, "x402_network", cfg.X402Network)
+	addStringDocumentField(out, "x402_asset", cfg.X402Asset)
+	addStringSliceDocumentField(out, "x402_endpoints", cfg.X402Endpoints)
 	return out
 }
 
@@ -268,6 +274,9 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		t := &cfg.Tunnels[i]
 		t.ID = strings.TrimSpace(t.ID)
 		t.Name = strings.TrimSpace(t.Name)
+		t.X402Network = strings.ToLower(strings.TrimSpace(t.X402Network))
+		t.X402Asset = strings.TrimSpace(t.X402Asset)
+		t.X402Endpoints = compactStrings(t.X402Endpoints)
 		if t.ID == "" {
 			t.ID = t.Name
 		}
@@ -372,7 +381,20 @@ func (cfg TunnelConfig) Validate() error {
 			return fmt.Errorf("tunnel %q http route %q methods require amount", cfg.ID, strings.TrimSpace(route.Prefix))
 		}
 	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.X402Network)), "casper:") && strings.TrimSpace(cfg.X402Asset) == "" {
+		return fmt.Errorf("tunnel %q Casper payments require x402_asset", cfg.ID)
+	}
 	return nil
+}
+
+func compactStrings(values []string) []string {
+	out := values[:0]
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func validateAgentPathComponent(name, value string) error {
