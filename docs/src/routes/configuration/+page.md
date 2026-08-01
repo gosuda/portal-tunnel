@@ -277,6 +277,17 @@ send the signed payload as `X-PAYMENT`. Payment is still enforced by the tunnel
 on the paid route prefix. Tunnel paid routes default to Sui mainnet and use Sui
 testnet when `x402_testnet = true`.
 
+#### x402 payment networks
+
+| Network | Asset | Decimals | Facilitator |
+|---|---|---|---|
+| `sui:mainnet`, `sui:testnet` | USDC gasless stablecoin | 6 | Built-in Sui facilitator |
+| `casper:casper`, `casper:casper-test` | wCSPR CEP-18 token | 9 | `https://x402-facilitator.cspr.cloud`, overridable per payment |
+
+Casper has no Go chain SDK, so `casper:*` payments delegate `/verify` and
+`/settle` to a remote x402 facilitator over HTTP. The wCSPR CEP-18 contract
+hash differs per network deployment, so it must be set as the payment asset.
+
 For a task-oriented walkthrough, see [Portal Agent](/portal-agent).
 
 ### `identity.json`

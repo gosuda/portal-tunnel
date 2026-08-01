@@ -268,6 +268,13 @@ func (p *Payment) WritePrepare(w http.ResponseWriter, r *http.Request, sender, r
 	}
 	defer cancel()
 
+	if IsCasperNetwork(p.requirements.Network) {
+		// Casper payments are signed by the wallet against the published
+		// requirements, so there is no server-built transaction to prepare.
+		p.writePaymentRequired(w, r, "payment required")
+		return
+	}
+
 	sender = suischeme.NormalizeAddress(sender)
 	if sender == "" {
 		http.Error(w, "sender is required", http.StatusBadRequest)
