@@ -67,6 +67,13 @@ func TestOnlyExplicitIncompatibilityDropsRelayFromActivePool(t *testing.T) {
 	if !shouldDropRelayFromActivePool(&types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) {
 		t.Fatal("feature_unavailable must drop an incompatible relay from the active pool")
 	}
+	unknownClientError := &types.APIRequestError{StatusCode: 404, Code: "unknown_endpoint"}
+	if shouldDropRelayFromActivePool(unknownClientError) {
+		t.Fatal("unclassified client error must not long-term drop a relay from the active pool")
+	}
+	if !isTerminalRelayError(unknownClientError) {
+		t.Fatal("unclassified client error must relinquish the listener for route reconciliation")
+	}
 }
 
 func TestTerminalRelayFailureTargetsTheReportingRelay(t *testing.T) {

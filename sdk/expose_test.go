@@ -123,13 +123,13 @@ func TestRunListenerAcceptLoopRemovesMultiHopListenerByIngressRelay(t *testing.T
 	if err != nil {
 		t.Fatalf("url.Parse(exit) error = %v", err)
 	}
-	listener := &listener{
+	relayListener := &listener{
 		relayURL: exitURL,
 		route:    discovery.NewRoute([]string{entry, exit}, false),
 	}
-	exposure := &Exposure{relayListeners: map[string]*listener{entry: listener}}
+	exposure := &Exposure{relayListeners: map[string]*listener{entry: relayListener}}
 
-	exposure.runListenerAcceptLoop(listener)
+	exposure.runListenerAcceptLoop(relayListener)
 
 	if _, ok := exposure.relayListeners[entry]; ok {
 		t.Fatal("terminated multi-hop listener remains keyed by ingress relay")

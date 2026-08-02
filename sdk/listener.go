@@ -49,9 +49,13 @@ func shouldDropRelayFromActivePool(err error) bool {
 }
 
 func isTerminalRelayError(err error) bool {
-	return shouldDropRelayFromActivePool(err) ||
+	if shouldDropRelayFromActivePool(err) ||
 		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict}) ||
-		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeIPBanned})
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeIPBanned}) {
+		return true
+	}
+	var apiErr *types.APIRequestError
+	return errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
 }
 
 func (l *listener) closeForTerminalRelayError(err error) bool {
