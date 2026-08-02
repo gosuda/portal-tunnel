@@ -114,6 +114,28 @@ func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {
 	}
 }
 
+func TestRunListenerAcceptLoopRemovesMultiHopListenerByIngressRelay(t *testing.T) {
+	const (
+		entry = "https://entry.example"
+		exit  = "https://exit.example"
+	)
+	exitURL, err := url.Parse(exit)
+	if err != nil {
+		t.Fatalf("url.Parse(exit) error = %v", err)
+	}
+	listener := &listener{
+		relayURL: exitURL,
+		route:    discovery.NewRoute([]string{entry, exit}, false),
+	}
+	exposure := &Exposure{relayListeners: map[string]*listener{entry: listener}}
+
+	exposure.runListenerAcceptLoop(listener)
+
+	if _, ok := exposure.relayListeners[entry]; ok {
+		t.Fatal("terminated multi-hop listener remains keyed by ingress relay")
+	}
+}
+
 func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"

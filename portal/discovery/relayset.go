@@ -439,7 +439,11 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 
 	ranked := RankRelayPool(filterCandidatePool(states, routeState, now, routeState.MultiHopDepth > 1), routeState.LocalAddress)
 	if routeState.MultiHopDepth > 1 {
-		return buildMOLSPaths(ranked, routeState.MultiHopDepth)
+		maxActive := routeState.MaxActiveRelays
+		if maxActive <= 0 {
+			maxActive = defaultMaxActiveRelays
+		}
+		return buildMOLSPaths(ranked, routeState.MultiHopDepth, maxActive)
 	}
 
 	maxActive := routeState.MaxActiveRelays
@@ -451,14 +455,15 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 	}
 	routes := make([]Route, 0, len(ranked)+len(routeState.ExplicitRelayURLs))
 	for _, relayURL := range routeState.ExplicitRelayURLs {
-		banned := false
+		eligible := true
 		for _, state := range states {
-			if state.Descriptor.APIHTTPSAddr == relayURL && state.Banned {
-				banned = true
+			if state.Descriptor.APIHTTPSAddr == relayURL &&
+				(state.Banned || !state.supportsRequiredTransports(routeState, now)) {
+				eligible = false
 				break
 			}
 		}
-		if banned {
+		if !eligible {
 			continue
 		}
 		routes = append(routes, NewRoute([]string{relayURL}, true))
@@ -480,7 +485,7 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 			continue
 		}
 		if requireOverlay {
-			if !state.eligibleForMultiHop(now) {
+			if !state.eligibleForMultiHop(routeState, now) {
 				continue
 			}
 			pool = append(pool, state)
@@ -493,10 +498,7 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 			if !state.Descriptor.ExpiresAt.After(now) {
 				continue
 			}
-			if routeState.RequireUDP && !state.Descriptor.SupportsUDP {
-				continue
-			}
-			if routeState.RequireTCP && !state.Descriptor.SupportsTCP {
+			if !state.supportsRequiredTransports(routeState, now) {
 				continue
 			}
 		}
@@ -508,15 +510,19 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 	return pool
 }
 
-// buildMOLSPaths constructs one loop-free multi-hop path per MOLS-ranked
-// relay. Paths wrap around the ranked list so every relay is an entry point.
-func buildMOLSPaths(ranked []string, depth int) ([]Route, error) {
+// buildMOLSPaths constructs loop-free paths from a ranked pool. Paths wrap
+// around the whole pool, while maxEntries independently bounds listener and
+// public-ingress fan-out.
+func buildMOLSPaths(ranked []string, depth, maxEntries int) ([]Route, error) {
 	if len(ranked) < depth {
 		return nil, fmt.Errorf("multi-hop-depth %d requires at least %d candidates, got %d", depth, depth, len(ranked))
 	}
 	n := len(ranked)
-	routes := make([]Route, 0, n)
-	for start := range ranked {
+	if maxEntries <= 0 || maxEntries > n {
+		maxEntries = n
+	}
+	routes := make([]Route, 0, maxEntries)
+	for start := 0; start < maxEntries; start++ {
 		path := make([]string, 0, depth)
 		for i := 0; i < depth; i++ {
 			path = append(path, ranked[(start+i)%n])

@@ -7,7 +7,6 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -34,21 +33,20 @@ const (
 
 var errRelayIncompatible = errors.New("relay is incompatible")
 
-type hopRegistrationError struct {
+// relayRegistrationError records the exact relay that rejected a registration
+// operation. In multi-hop routes that can be a hop relay or the exit relay
+// that owns lease control; it is not necessarily the ingress listener key.
+type relayRegistrationError struct {
 	relayURL string
 	err      error
 }
 
-func (err *hopRegistrationError) Error() string {
-	return fmt.Sprintf("register hop route at %s: %v", err.relayURL, err.err)
+func (err *relayRegistrationError) Error() string {
+	return fmt.Sprintf("register relay at %s: %v", err.relayURL, err.err)
 }
 
-func (err *hopRegistrationError) Unwrap() error {
+func (err *relayRegistrationError) Unwrap() error {
 	return err.err
-}
-
-func isUnavailableRelayError(err error) bool {
-	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // resetTransport tears down the cached HTTP client and TLS config so the next
@@ -79,19 +77,7 @@ func (l *listener) initHTTPTransport(ctx context.Context) error {
 	var domainResp types.DomainResponse
 	if err := utils.HTTPDoAPIPath(ctx, httpClient, l.relayURL, http.MethodGet, types.PathSDKDomain, nil, nil, &domainResp); err != nil {
 		httpTransport.CloseIdleConnections()
-		err = fmt.Errorf("check relay compatibility: %w", err)
-		if isUnavailableRelayError(err) {
-			return fmt.Errorf("%w: %w", errRelayIncompatible, err)
-		}
-		var netErr net.Error
-		var apiErr *types.APIRequestError
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) {
-			return err
-		}
-		if errors.As(err, &apiErr) && apiErr.StatusCode >= 500 {
-			return err
-		}
-		return fmt.Errorf("%w: %w", errRelayIncompatible, err)
+		return fmt.Errorf("check relay compatibility: %w", err)
 	}
 	protocolVersion := strings.TrimSpace(domainResp.ProtocolVersion)
 	if protocolVersion != types.SDKVersion {
@@ -323,12 +309,12 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 		_, client, transport, err := utils.NewHTTPTLSClient(bootstrapCtx, relayURL, l.requestTimeout)
 		cancel()
 		if err != nil {
-			return "", 0, &hopRegistrationError{relayURL: route.RelayURL, err: err}
+			return "", 0, &relayRegistrationError{relayURL: route.RelayURL, err: err}
 		}
 		var hopResp types.HopRouteResponse
 		if err := utils.HTTPDoAPIPath(ctx, client, relayURL, http.MethodPost, types.PathSDKHop, route, nil, &hopResp); err != nil {
 			transport.CloseIdleConnections()
-			return "", 0, &hopRegistrationError{relayURL: route.RelayURL, err: err}
+			return "", 0, &relayRegistrationError{relayURL: route.RelayURL, err: err}
 		}
 		transport.CloseIdleConnections()
 		if route.MatchToken != "" || route.RouteHostname == "" {

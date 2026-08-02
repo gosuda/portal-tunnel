@@ -199,14 +199,19 @@ func TestMITMProbeConnPassesThroughNormalTraffic(t *testing.T) {
 
 func TestMITMProbeDetectionBansListener(t *testing.T) {
 	doneCh := make(chan struct{})
-	relayURL, err := url.Parse("https://relay.example")
+	entryURL, err := url.Parse("https://entry.example")
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+	exitURL, err := url.Parse("https://exit.example")
 	if err != nil {
 		t.Fatalf("url.Parse() error = %v", err)
 	}
 
 	listener := &listener{
-		relayURL: relayURL,
-		relaySet: mustRelaySet(t, relayURL.String()),
+		relayURL: exitURL,
+		route:    discovery.NewRoute([]string{entryURL.String(), exitURL.String()}, false),
+		relaySet: mustRelaySet(t, entryURL.String(), exitURL.String()),
 		cancel: func() {
 			select {
 			case <-doneCh:
@@ -219,7 +224,7 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 	listener.mitmManager = newMITMManager(context.Background(), listener, true)
 
 	listener.mitmManager.logResult(MITMProbeReport{
-		RelayURL: relayURL.String(),
+		RelayURL: entryURL.String(),
 		Detected: true,
 		Reason:   types.MITMProbeReasonExporterMismatch,
 	}, nil)
@@ -229,8 +234,11 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 		t.Fatalf("PlanRoutes() error = %v", err)
 	}
 	for _, route := range routes {
-		if route.ListenerRelayURL() == relayURL.String() {
-			t.Fatal("relay still active after mitm detection")
+		if route.ListenerRelayURL() == entryURL.String() {
+			t.Fatal("ingress relay remains active after mitm detection")
+		}
+		if route.ListenerRelayURL() != exitURL.String() {
+			t.Fatalf("unexpected active relay after mitm detection: %q", route.ListenerRelayURL())
 		}
 	}
 	select {

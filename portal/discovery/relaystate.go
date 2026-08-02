@@ -201,20 +201,21 @@ func (state RelayState) hasObservedDescriptor() bool {
 
 // eligibleForMultiHop reports whether a relay can safely participate in every
 // role of an automatically planned multi-hop route.
-func (state RelayState) eligibleForMultiHop(now time.Time) bool {
+func (state RelayState) eligibleForMultiHop(routeState RouteState, now time.Time) bool {
 	return !state.Banned &&
 		state.hasObservedDescriptor() &&
 		state.Descriptor.ExpiresAt.After(now) &&
 		state.Descriptor.HasOverlayPeer() &&
+		state.supportsRequiredTransports(routeState, now) &&
 		(state.suppressActiveUntil.IsZero() || !state.suppressActiveUntil.After(now)) &&
 		(state.nextDiscoveryRefreshAt.IsZero() || !state.nextDiscoveryRefreshAt.After(now))
 }
 
 type RouteState struct {
 	ExplicitRelayURLs []string
-	// MaxActiveRelays caps auto-selected single-hop relays. Zero or negative
-	// values use the selection default of 3. Multi-hop routes use every
-	// eligible relay as an entry point.
+	// MaxActiveRelays caps auto-selected listener entries. Zero or negative
+	// values use the selection default of 3. Multi-hop paths may use further
+	// eligible relays as non-entry hops.
 	MaxActiveRelays int
 	MultiHopDepth   int
 	RequireUDP      bool
@@ -222,4 +223,12 @@ type RouteState struct {
 	// LocalAddress is the ingress identity address used by MOLS route selection to
 	// derive a deterministic row index into the GF(64) MOLS grid.
 	LocalAddress string
+}
+
+func (state RelayState) supportsRequiredTransports(routeState RouteState, now time.Time) bool {
+	if !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) {
+		return true
+	}
+	return (!routeState.RequireUDP || state.Descriptor.SupportsUDP) &&
+		(!routeState.RequireTCP || state.Descriptor.SupportsTCP)
 }

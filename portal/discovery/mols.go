@@ -266,11 +266,8 @@ func SelectPriority(states []RelayState, routeState RouteState) []string {
 		if state.Banned || !slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
 			continue
 		}
-		if state.hasObservedDescriptor() && state.Descriptor.ExpiresAt.After(now) {
-			if (routeState.RequireUDP && !state.Descriptor.SupportsUDP) ||
-				(routeState.RequireTCP && !state.Descriptor.SupportsTCP) {
-				continue
-			}
+		if !state.supportsRequiredTransports(routeState, now) {
+			continue
 		}
 		explicit = append(explicit, relayURL)
 	}

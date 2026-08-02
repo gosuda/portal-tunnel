@@ -474,7 +474,7 @@ func TestPlanRoutesExplicitPathReturnsSingleRouteToEntry(t *testing.T) {
 	}
 }
 
-func TestPlanRoutesBuildsMultiHopPathsForEveryEntryRelay(t *testing.T) {
+func TestPlanRoutesBuildsMultiHopPathsForEveryRequestedEntryRelay(t *testing.T) {
 	set := NewRelaySet(nil)
 	now := time.Now().UTC()
 	for _, relayURL := range []string{
@@ -489,7 +489,7 @@ func TestPlanRoutesBuildsMultiHopPathsForEveryEntryRelay(t *testing.T) {
 		set.relays[relayURL] = state
 	}
 
-	routes, err := set.PlanRoutes(nil, RouteState{MultiHopDepth: 3, LocalAddress: "client"})
+	routes, err := set.PlanRoutes(nil, RouteState{MultiHopDepth: 3, MaxActiveRelays: 4, LocalAddress: "client"})
 	if err != nil {
 		t.Fatalf("PlanRoutes() error = %v", err)
 	}
@@ -505,6 +505,34 @@ func TestPlanRoutesBuildsMultiHopPathsForEveryEntryRelay(t *testing.T) {
 	}
 	if len(entries) != 4 {
 		t.Fatalf("entry relays = %v, want all four relays", entries)
+	}
+}
+
+func TestPlanRoutesCapsMultiHopListenerEntries(t *testing.T) {
+	set := NewRelaySet(nil)
+	now := time.Now().UTC()
+	for _, relayURL := range []string{
+		"https://relay-a.example", "https://relay-b.example", "https://relay-c.example", "https://relay-d.example",
+	} {
+		state := confirmedRelayState(t, relayURL)
+		state.LastSeenAt = now
+		state.Descriptor.SupportsOverlay = true
+		state.Descriptor.WireGuardPublicKey = "wg-key"
+		state.Descriptor.WireGuardPort = 51820
+		set.relays[relayURL] = state
+	}
+
+	routes, err := set.PlanRoutes(nil, RouteState{MultiHopDepth: 3, MaxActiveRelays: 2, LocalAddress: "client"})
+	if err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+	if len(routes) != 2 {
+		t.Fatalf("len(routes) = %d, want 2 capped listener entries", len(routes))
+	}
+	for _, route := range routes {
+		if len(route.MultiHop()) != 3 {
+			t.Fatalf("route %v does not retain a complete three-hop path", route.MultiHop())
+		}
 	}
 }
 
@@ -589,8 +617,41 @@ func TestPlanRoutesSkipsUnavailableMultiHopRelays(t *testing.T) {
 	}
 }
 
+func TestPlanRoutesSkipsMultiHopRelayWithoutRequiredTransport(t *testing.T) {
+	set := NewRelaySet(nil)
+	now := time.Now().UTC()
+	for _, relayURL := range []string{
+		"https://relay-a.example", "https://relay-b.example", "https://relay-c.example", "https://relay-d.example",
+	} {
+		state := confirmedRelayState(t, relayURL)
+		state.LastSeenAt = now
+		state.Descriptor.SupportsOverlay = true
+		state.Descriptor.SupportsTCP = relayURL != "https://relay-d.example"
+		state.Descriptor.WireGuardPublicKey = "wg-key"
+		state.Descriptor.WireGuardPort = 51820
+		set.relays[relayURL] = state
+	}
+
+	routes, err := set.PlanRoutes(nil, RouteState{
+		MultiHopDepth:   3,
+		RequireTCP:      true,
+		MaxActiveRelays: 3,
+		LocalAddress:    "client",
+	})
+	if err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+	for _, route := range routes {
+		for _, relayURL := range route.MultiHop() {
+			if relayURL == "https://relay-d.example" {
+				t.Fatalf("TCP-incompatible relay appears in multi-hop route %v", route.MultiHop())
+			}
+		}
+	}
+}
+
 func TestBuildMOLSPathsWrapsAtEndOfRankedRelays(t *testing.T) {
-	routes, err := buildMOLSPaths([]string{"a", "b", "c", "d"}, 3)
+	routes, err := buildMOLSPaths([]string{"a", "b", "c", "d"}, 3, 4)
 	if err != nil {
 		t.Fatalf("buildMOLSPaths() error = %v", err)
 	}
@@ -599,6 +660,25 @@ func TestBuildMOLSPathsWrapsAtEndOfRankedRelays(t *testing.T) {
 	}
 	if got, want := routes[3].MultiHop(), []string{"d", "a", "b"}; !slices.Equal(got, want) {
 		t.Fatalf("last path = %v, want %v", got, want)
+	}
+}
+
+func TestPlanRoutesSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
+	const relayURL = "https://relay-udp-disabled.example"
+	set := NewRelaySet(nil)
+	state := confirmedRelayState(t, relayURL)
+	state.Descriptor.SupportsUDP = false
+	set.relays[relayURL] = state
+
+	routes, err := set.PlanRoutes(nil, RouteState{
+		ExplicitRelayURLs: []string{relayURL},
+		RequireUDP:        true,
+	})
+	if err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("PlanRoutes() = %v, want no UDP-incompatible explicit route", routes)
 	}
 }
 

@@ -802,10 +802,10 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 		return
 	}
 
-	relayURL := ""
-	if listener.relayURL != nil {
-		relayURL = listener.relayURL.String()
-	}
+	// relayListeners is keyed by the public ingress relay.  In a multi-hop
+	// route that is intentionally different from listener.relayURL, which is
+	// the exit relay used for lease control and the reverse stream.
+	relayURL := listener.route.ListenerRelayURL()
 	if listener.udpEnabled {
 		go func() {
 			for {

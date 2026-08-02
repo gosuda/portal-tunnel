@@ -39,6 +39,47 @@ type listenerConfig struct {
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
 
+// shouldDropRelayFromActivePool is deliberately limited to errors that prove
+// the relay cannot serve this client. Transport failures, including EOF, must
+// be retried so a transient close cannot quarantine a relay for days.
+func shouldDropRelayFromActivePool(err error) bool {
+	return errors.Is(err, errRelayIncompatible) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTransportMismatch})
+}
+
+func isTerminalRelayError(err error) bool {
+	return shouldDropRelayFromActivePool(err) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict}) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeIPBanned})
+}
+
+func (l *listener) closeForTerminalRelayError(err error) bool {
+	if !isTerminalRelayError(err) {
+		return false
+	}
+	relayURL := l.route.ListenerRelayURL()
+	var registrationErr *relayRegistrationError
+	if errors.As(err, &registrationErr) && registrationErr.relayURL != "" {
+		relayURL = registrationErr.relayURL
+	}
+	if l.relaySet != nil && relayURL != "" {
+		l.relaySet.UnconfirmRelayURL(relayURL)
+		if shouldDropRelayFromActivePool(err) {
+			l.relaySet.DropRelayURLFromActivePool(relayURL)
+		} else {
+			l.relaySet.RecordActiveFailure(relayURL, 1)
+		}
+	}
+	log.Error().
+		Err(err).
+		Str("relay_url", relayURL).
+		Str("address", l.identity.Address).
+		Msg("relay operation failed permanently; closing listener")
+	_ = l.Close()
+	return true
+}
+
 type listener struct {
 	cancel    context.CancelFunc
 	doneCh    <-chan struct{}
@@ -153,41 +194,12 @@ func (l *listener) run(ctx context.Context) {
 
 	for {
 		err := l.registerAndConfigure(ctx)
-		failedRelayURL := ""
-		var hopErr *hopRegistrationError
-		if errors.As(err, &hopErr) {
-			failedRelayURL = hopErr.relayURL
-		}
-		hopRelayUnavailable := hopErr != nil && isUnavailableRelayError(hopErr)
 		switch {
 		case err == nil:
 		case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
 			return
 		default:
-			incompatibleRelay := errors.Is(err, errRelayIncompatible) || hopRelayUnavailable
-			if incompatibleRelay ||
-				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) ||
-				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTransportMismatch}) ||
-				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict}) ||
-				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeIPBanned}) {
-				relayURL := failedRelayURL
-				if relayURL == "" {
-					relayURL = l.route.ListenerRelayURL()
-				}
-				if l.relaySet != nil && relayURL != "" {
-					l.relaySet.UnconfirmRelayURL(relayURL)
-					if incompatibleRelay {
-						l.relaySet.DropRelayURLFromActivePool(relayURL)
-					} else {
-						l.relaySet.RecordActiveFailure(relayURL, 1)
-					}
-				}
-				log.Error().
-					Err(err).
-					Str("relay_url", relayURL).
-					Str("address", l.identity.Address).
-					Msg("lease registration failed; closing listener")
-				_ = l.Close()
+			if l.closeForTerminalRelayError(err) {
 				return
 			}
 			retries++
@@ -212,6 +224,9 @@ func (l *listener) run(ctx context.Context) {
 
 		err = l.runLease(ctx)
 		if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+			return
+		}
+		if l.closeForTerminalRelayError(err) {
 			return
 		}
 
@@ -706,6 +721,9 @@ func (l *listener) runRenewLoop(ctx context.Context) error {
 			if errors.Is(err, errLeaseRefreshRequired) {
 				return err
 			}
+			if isTerminalRelayError(err) {
+				return err
+			}
 
 			retries++
 			if !l.waitRetry(ctx, "lease renewal", err, retries, 0) {
@@ -754,7 +772,7 @@ func (l *listener) renewLease(ctx context.Context) error {
 		if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
 			return errLeaseRefreshRequired
 		}
-		return err
+		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 	}
 
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
@@ -793,12 +811,12 @@ func (l *listener) renewLease(ctx context.Context) error {
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err := l.initHTTPTransport(ctx); err != nil {
-		return err
+		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 	}
 
 	resp, hopRoutes, publicHostname, routeHostname, err := l.registerLease(ctx, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
 	if err != nil {
-		return err
+		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 	}
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
 	if resp.AccessToken == "" {
