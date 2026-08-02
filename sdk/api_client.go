@@ -7,7 +7,6 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
