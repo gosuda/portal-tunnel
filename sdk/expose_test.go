@@ -253,7 +253,10 @@ func TestExposureListenerSelfExitKeepsExplicitRelayConfigured(t *testing.T) {
 		t.Fatalf("url.Parse(relayA) error = %v", err)
 	}
 
-	l := &listener{relayURL: relayAURL}
+	l := &listener{
+		relayURL: relayAURL,
+		route:    discovery.NewRoute([]string{relayA}, true),
+	}
 	exposure := &Exposure{
 		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: []string{relayA}}, ExposeConfig.snapshot),
 		relaySet:       mustRelaySet(t, relayA),

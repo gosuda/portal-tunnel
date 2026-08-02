@@ -294,6 +294,7 @@ func TestMITMProbeDialAddressUsesRelayHostForLocalRelay(t *testing.T) {
 
 	listener := &listener{
 		relayURL: relayURL,
+		route:    discovery.NewRoute([]string{relayURL.String()}, true),
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
@@ -314,6 +315,7 @@ func TestMITMProbeDialAddressUsesPublicURLForRemoteRelay(t *testing.T) {
 
 	listener := &listener{
 		relayURL: relayURL,
+		route:    discovery.NewRoute([]string{relayURL.String()}, true),
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
