@@ -7,7 +7,6 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -21,9 +20,9 @@ import (
 )
 
 const (
-	defaultDialTimeout         = 5 * time.Second
-	defaultRequestTimeout      = 15 * time.Second
-	defaultHandshakeTimeout    = 15 * time.Second
+	defaultDialTimeout         = 15 * time.Second
+	defaultRequestTimeout      = 30 * time.Second
+	defaultHandshakeTimeout    = 30 * time.Second
 	defaultLeaseTTL            = 2 * time.Minute
 	defaultRenewBefore         = 30 * time.Second
 	defaultReadyTarget         = 2
@@ -32,6 +31,22 @@ const (
 )
 
 var errRelayIncompatible = errors.New("relay is incompatible")
+
+// relayRegistrationError records the exact relay that rejected a registration
+// operation. In multi-hop routes that can be a hop relay or the exit relay
+// that owns lease control; it is not necessarily the ingress listener key.
+type relayRegistrationError struct {
+	relayURL string
+	err      error
+}
+
+func (err *relayRegistrationError) Error() string {
+	return fmt.Sprintf("register relay at %s: %v", err.relayURL, err.err)
+}
+
+func (err *relayRegistrationError) Unwrap() error {
+	return err.err
+}
 
 // resetTransport tears down the cached HTTP client and TLS config so the next
 // API call creates fresh TCP connections. Call this after detecting a system
@@ -61,16 +76,7 @@ func (l *listener) initHTTPTransport(ctx context.Context) error {
 	var domainResp types.DomainResponse
 	if err := utils.HTTPDoAPIPath(ctx, httpClient, l.relayURL, http.MethodGet, types.PathSDKDomain, nil, nil, &domainResp); err != nil {
 		httpTransport.CloseIdleConnections()
-		err = fmt.Errorf("check relay compatibility: %w", err)
-		var netErr net.Error
-		var apiErr *types.APIRequestError
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) {
-			return err
-		}
-		if errors.As(err, &apiErr) && apiErr.StatusCode >= 500 {
-			return err
-		}
-		return fmt.Errorf("%w: %w", errRelayIncompatible, err)
+		return fmt.Errorf("check relay compatibility: %w", err)
 	}
 	protocolVersion := strings.TrimSpace(domainResp.ProtocolVersion)
 	if protocolVersion != types.SDKVersion {
@@ -116,7 +122,6 @@ func (l *listener) buildHopRoutes(hopPath []types.RelayDescriptor, publicHostnam
 			route.HostnameHash = utils.HostnameHash(publicHostname)
 			route.ECHConfigList = bytes.Clone(echConfigList)
 			route.Metadata = l.metadataSnapshot()
-			route.Metadata.Hide = true
 		} else {
 			route.MatchToken = previousHopToken
 		}
@@ -290,7 +295,6 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 		route.FirstSeenAt = expiresAt.Add(-30 * time.Second)
 		if i == 0 {
 			route.Metadata = l.metadataSnapshot()
-			route.Metadata.Hide = true
 		}
 		route, err := auth.SignHopRoute(http.MethodPost, route, authority, expiresAt)
 		if err != nil {
@@ -300,19 +304,18 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 		if err != nil {
 			return "", 0, fmt.Errorf("parse hop route relay url: %w", err)
 		}
-
 		bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
 		_, client, transport, err := utils.NewHTTPTLSClient(bootstrapCtx, relayURL, l.requestTimeout)
 		cancel()
 		if err != nil {
-			return "", 0, err
+			return "", 0, &relayRegistrationError{relayURL: route.RelayURL, err: err}
 		}
 		var hopResp types.HopRouteResponse
-		err = utils.HTTPDoAPIPath(ctx, client, relayURL, http.MethodPost, types.PathSDKHop, route, nil, &hopResp)
-		transport.CloseIdleConnections()
-		if err != nil {
-			return "", 0, err
+		if err := utils.HTTPDoAPIPath(ctx, client, relayURL, http.MethodPost, types.PathSDKHop, route, nil, &hopResp); err != nil {
+			transport.CloseIdleConnections()
+			return "", 0, &relayRegistrationError{relayURL: route.RelayURL, err: err}
 		}
+		transport.CloseIdleConnections()
 		if route.MatchToken != "" || route.RouteHostname == "" {
 			continue
 		}

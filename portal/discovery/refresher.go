@@ -5,6 +5,9 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/url"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -14,9 +17,12 @@ import (
 )
 
 const (
-	defaultRequestTimeout   = 15 * time.Second
-	DiscoveryPollInterval   = 30 * time.Second
-	defaultRecoveryFailures = 5
+	defaultRequestTimeout    = 15 * time.Second
+	DiscoveryPollInterval    = 30 * time.Second
+	defaultRecoveryFailures  = 5
+	maxConcurrentRefresh     = 8
+	maxConcurrentAnnounce    = 8
+	maxConcurrentOverlayDial = 8
 )
 
 type OverlayRuntime interface {
@@ -30,6 +36,7 @@ type Refresher struct {
 	overlay                OverlayRuntime
 	directRecoveryFailures int
 	lastAnnounceSuccess    map[string]bool
+	lastAnnounceMu         sync.Mutex
 }
 
 func NewRefresher(relaySet *RelaySet, overlay OverlayRuntime) *Refresher {
@@ -77,43 +84,41 @@ func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDesc
 		Descriptor:      descriptor,
 	}
 
-	for _, relayURL := range r.relaySet.BootstrapRelayURLs() {
+	targets := r.relaySet.BootstrapRelayURLs()
+	if len(targets) == 0 {
+		return nil
+	}
+
+	return parallel(targets, maxConcurrentAnnounce, func(relayURL string) error {
 		if relayURL == descriptor.APIHTTPSAddr {
-			continue
+			return nil
 		}
 		baseURL, err := url.Parse(relayURL)
 		if err != nil {
 			if r.shouldLogAnnounce(relayURL, false) {
-				log.Warn().
-					Err(err).
-					Str("relay", relayURL).
-					Msg("relay discovery announce target skipped")
+				log.Warn().Err(err).Str("relay", relayURL).Msg("relay discovery announce target skipped")
 			}
-			continue
+			return nil
 		}
-
 		if err := utils.HTTPDoAPIPath(ctx, r.httpClient, baseURL, http.MethodPost, types.PathDiscoveryAnnounce, req, nil, nil); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if r.shouldLogAnnounce(relayURL, false) {
-				log.Warn().
-					Err(err).
-					Str("relay", relayURL).
-					Msg("relay discovery announce failed")
+				log.Warn().Err(err).Str("relay", relayURL).Msg("relay discovery announce failed")
 			}
-			continue
+			return nil
 		}
 		if r.shouldLogAnnounce(relayURL, true) {
-			log.Info().
-				Str("relay", relayURL).
-				Msg("relay discovery announce succeeded")
+			log.Info().Str("relay", relayURL).Msg("relay discovery announce succeeded")
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func (r *Refresher) shouldLogAnnounce(relayURL string, success bool) bool {
+	r.lastAnnounceMu.Lock()
+	defer r.lastAnnounceMu.Unlock()
 	previous, ok := r.lastAnnounceSuccess[relayURL]
 	if ok && previous == success {
 		return false
@@ -122,64 +127,111 @@ func (r *Refresher) shouldLogAnnounce(relayURL string, success bool) bool {
 	return true
 }
 
+// sortRefreshCandidates orders relays so that the most important sources are
+// refreshed first under concurrency limits: bootstrap, then confirmed, then
+// discovered healthy relays, and finally recovery/backoff candidates.
+func sortRefreshCandidates(states []RelayState) []RelayState {
+	slices.SortFunc(states, func(a, b RelayState) int {
+		if a.Bootstrap != b.Bootstrap {
+			if a.Bootstrap {
+				return -1
+			}
+			return 1
+		}
+		if a.Confirmed != b.Confirmed {
+			if a.Confirmed {
+				return -1
+			}
+			return 1
+		}
+		if a.discoveryFailures != b.discoveryFailures {
+			return a.discoveryFailures - b.discoveryFailures
+		}
+		if !a.nextDiscoveryRefreshAt.Equal(b.nextDiscoveryRefreshAt) {
+			if a.nextDiscoveryRefreshAt.IsZero() {
+				return -1
+			}
+			if b.nextDiscoveryRefreshAt.IsZero() {
+				return 1
+			}
+			if a.nextDiscoveryRefreshAt.Before(b.nextDiscoveryRefreshAt) {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+	return states
+}
+
 func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 	now := time.Now().UTC()
-	for _, state := range r.relaySet.refreshCandidates(now) {
-		relayURL := state.Descriptor.APIHTTPSAddr
+	candidates := r.relaySet.refreshCandidates(now)
+	if len(candidates) == 0 {
+		return nil
+	}
+	candidates = sortRefreshCandidates(candidates)
 
-		recoveryFailures := r.directRecoveryFailures
-		if state.Bootstrap {
-			recoveryFailures = 0
+	return parallel(candidates, maxConcurrentRefresh, func(state RelayState) error {
+		return r.refreshOneHTTPS(ctx, state)
+	})
+}
+
+func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error {
+	relayURL := state.Descriptor.APIHTTPSAddr
+
+	recoveryFailures := r.directRecoveryFailures
+	if state.Bootstrap {
+		recoveryFailures = 0
+	}
+
+	baseURL, err := url.Parse(relayURL)
+	if err != nil {
+		if recoveryFailures > 0 {
+			r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
 		}
-
-		baseURL, err := url.Parse(relayURL)
+		return nil
+	}
+	client := r.httpClient
+	var closeClient func()
+	if utils.IsLocalRelayHost(baseURL.Hostname()) {
+		_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)
 		if err != nil {
 			if recoveryFailures > 0 {
 				r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
 			}
-			continue
+			return nil
 		}
-		client := r.httpClient
-		var closeClient func()
-		if utils.IsLocalRelayHost(baseURL.Hostname()) {
-			_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)
-			if err != nil {
-				if recoveryFailures > 0 {
-					r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
-				}
-				continue
-			}
-			client = localClient
-			closeClient = transport.CloseIdleConnections
-		}
+		client = localClient
+		closeClient = transport.CloseIdleConnections
+	}
 
-		startedAt := time.Now()
-		var resp types.DiscoveryResponse
-		if err := utils.HTTPDoAPIPath(ctx, client, baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
-			if closeClient != nil {
-				closeClient()
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if recoveryFailures > 0 {
-				r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
-			}
-			continue
-		}
+	startedAt := time.Now()
+	var resp types.DiscoveryResponse
+	if err := utils.HTTPDoAPIPath(ctx, client, baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
 		if closeClient != nil {
 			closeClient()
 		}
-		measuredAt := time.Now().UTC()
-
-		if _, err := r.relaySet.ApplyRelayDiscoveryResponse(relayURL, resp, measuredAt); err != nil {
-			if recoveryFailures > 0 {
-				r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
-			}
-			continue
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		r.relaySet.RecordDiscoveryRTT(relayURL, time.Since(startedAt), measuredAt)
+		if recoveryFailures > 0 {
+			r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
+		}
+		return nil
 	}
+	if closeClient != nil {
+		closeClient()
+	}
+	measuredAt := time.Now().UTC()
+
+	if _, err := r.relaySet.ApplyRelayDiscoveryResponse(relayURL, resp, measuredAt); err != nil {
+		if recoveryFailures > 0 {
+			r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
+		}
+		return nil
+	}
+	r.relaySet.RecordDiscoveryRTT(relayURL, time.Since(startedAt), measuredAt)
 	return nil
 }
 
@@ -196,45 +248,88 @@ func (r *Refresher) refreshOverlay(ctx context.Context) error {
 	if err := r.overlay.Sync(descriptors); err != nil {
 		return err
 	}
-	relaySetChanged := false
-	for _, state := range r.relaySet.overlayRefreshCandidates(now) {
-		relay := state.Descriptor
-		recoveryFailures := r.directRecoveryFailures
-		if state.Bootstrap {
-			recoveryFailures = 0
-		}
-		startedAt := time.Now()
-		resp, err := r.overlay.DiscoverRelay(ctx, relay)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if recoveryFailures > 0 {
-				r.logDiscoveryFailure(relay.APIHTTPSAddr, relay.APIHTTPSAddr, recoveryFailures, err)
-			}
-			continue
-		}
 
-		measuredAt := time.Now().UTC()
-		changed, err := r.relaySet.ApplyRelayDiscoveryResponse(relay.APIHTTPSAddr, resp, measuredAt)
-		if err != nil {
-			if recoveryFailures > 0 {
-				r.logDiscoveryFailure(relay.APIHTTPSAddr, relay.APIHTTPSAddr, recoveryFailures, err)
-			}
-			continue
-		}
-		r.relaySet.RecordDiscoveryRTT(relay.APIHTTPSAddr, time.Since(startedAt), measuredAt)
-		if changed {
-			relaySetChanged = true
-		}
+	candidates := r.relaySet.overlayRefreshCandidates(now)
+	if len(candidates) == 0 {
+		return nil
 	}
-	if !relaySetChanged {
+	candidates = sortRefreshCandidates(candidates)
+
+	var relaySetChanged atomic.Bool
+	if err := parallel(candidates, maxConcurrentOverlayDial, func(state RelayState) error {
+		changed, err := r.refreshOneOverlay(ctx, state)
+		if changed {
+			relaySetChanged.Store(true)
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+
+	if !relaySetChanged.Load() {
 		return nil
 	}
 	if err := r.overlay.Sync(r.relaySet.OverlayPeerDescriptor()); err != nil {
 		return err
 	}
 	return nil
+}
+
+func parallel[T any](items []T, limit int, fn func(T) error) error {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, limit)
+	errs := make(chan error, 1)
+	for _, item := range items {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(item T) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := fn(item); err != nil {
+				select {
+				case errs <- err:
+				default:
+				}
+			}
+		}(item)
+	}
+	wg.Wait()
+	select {
+	case err := <-errs:
+		return err
+	default:
+		return nil
+	}
+}
+
+func (r *Refresher) refreshOneOverlay(ctx context.Context, state RelayState) (bool, error) {
+	relay := state.Descriptor
+	recoveryFailures := r.directRecoveryFailures
+	if state.Bootstrap {
+		recoveryFailures = 0
+	}
+	startedAt := time.Now()
+	resp, err := r.overlay.DiscoverRelay(ctx, relay)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		if recoveryFailures > 0 {
+			r.logDiscoveryFailure(relay.APIHTTPSAddr, relay.APIHTTPSAddr, recoveryFailures, err)
+		}
+		return false, nil
+	}
+
+	measuredAt := time.Now().UTC()
+	changed, err := r.relaySet.ApplyRelayDiscoveryResponse(relay.APIHTTPSAddr, resp, measuredAt)
+	if err != nil {
+		if recoveryFailures > 0 {
+			r.logDiscoveryFailure(relay.APIHTTPSAddr, relay.APIHTTPSAddr, recoveryFailures, err)
+		}
+		return false, nil
+	}
+	r.relaySet.RecordDiscoveryRTT(relay.APIHTTPSAddr, time.Since(startedAt), measuredAt)
+	return changed, nil
 }
 
 func (r *Refresher) logDiscoveryFailure(targetRelayURL, sourceURL string, recoveryFailures int, err error) {

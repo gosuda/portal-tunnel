@@ -381,10 +381,7 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 
 	relayByURL := make(map[string]types.AgentRelayStatus, len(listeners))
 	for _, listener := range listeners {
-		relayURL := ""
-		if listener.relayURL != nil {
-			relayURL = listener.relayURL.String()
-		}
+		relayURL := listener.route.ListenerRelayURL()
 		explicit := slices.Contains(cfg.RelayURLs, relayURL)
 		snap := types.AgentRelayStatus{
 			RelayURL:   relayURL,
@@ -752,6 +749,9 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			if failOnError {
 				return fmt.Errorf("listen %q: %w", relayURL, err)
 			}
+			if e.relaySet != nil && relayURL != "" {
+				e.relaySet.RecordActiveFailure(relayURL, 1)
+			}
 			log.Warn().Err(err).Str("relay_url", relayURL).Msg("add relay listener")
 			continue
 		}
@@ -802,10 +802,10 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 		return
 	}
 
-	relayURL := ""
-	if listener.relayURL != nil {
-		relayURL = listener.relayURL.String()
-	}
+	// relayListeners is keyed by the public ingress relay.  In a multi-hop
+	// route that is intentionally different from listener.relayURL, which is
+	// the exit relay used for lease control and the reverse stream.
+	relayURL := listener.route.ListenerRelayURL()
 	if listener.udpEnabled {
 		go func() {
 			for {

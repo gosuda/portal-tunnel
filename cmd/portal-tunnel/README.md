@@ -99,9 +99,9 @@ Common `portal expose` flags:
 --name               Public hostname prefix; auto-generated when omitted
 --relays             Additional relay API URLs, comma-separated
 --discovery          Include registry relays and relay discovery expansion
---max-active-relays  Maximum auto-selected relays
+--max-active-relays  Maximum auto-selected single-hop relays; multi-hop uses every eligible relay as an entry
 --multi-hop          Ordered multi-hop relay API URLs, comma-separated
---multi-hop-depth    Automatically select one multi-hop route with this hop count
+--multi-hop-depth    Automatically create this-depth multi-hop routes for every eligible entry relay
 --ban-mitm           Ban relay when the MITM self-probe detects termination
 --identity-path      Identity JSON file path; created automatically when missing
 --identity-json      Identity JSON payload; overrides --identity-path when set
