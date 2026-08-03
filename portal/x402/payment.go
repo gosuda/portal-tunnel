@@ -21,11 +21,25 @@ import (
 
 const usdcDecimals = 6
 
-// Payment owns one Sui USDC x402 payment contract and its facilitator runtime.
+// Payment owns one x402 payment contract and its facilitator runtime.
 type Payment struct {
 	payment      types.X402Payment
 	facilitator  facilitatorcore.Facilitator
 	requirements facilitatortypes.PaymentRequirements
+}
+
+// NewPayment builds the payment implementation selected by its CAIP-2 network.
+// An empty network preserves the existing Sui mainnet/testnet selection.
+func NewPayment(payment types.X402Payment) (*Payment, error) {
+	network := strings.ToLower(strings.TrimSpace(payment.Network))
+	switch {
+	case network == "", network == MainnetNetwork, network == TestnetNetwork:
+		return NewUSDCPayment(payment)
+	case IsCasperNetwork(network):
+		return NewCasperPayment(payment)
+	default:
+		return nil, fmt.Errorf("unsupported x402 network %q", network)
+	}
 }
 
 func NewUSDCPayment(payment types.X402Payment) (*Payment, error) {
@@ -144,7 +158,7 @@ func (p *Payment) paymentPayloadFromRequest(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	if rawPayment == "" {
-		p.writePaymentRequired(w, r, "payment required")
+		p.writePaymentRequired(w, r, "payment required", "")
 		return nil, false
 	}
 
@@ -172,7 +186,7 @@ func (p *Payment) paymentPayloadFromRequest(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	if payload == nil {
-		p.writePaymentRequired(w, r, "invalid payment payload")
+		p.writePaymentRequired(w, r, "invalid payment payload", "")
 		return nil, false
 	}
 	return payload, true
@@ -198,7 +212,7 @@ func (p *Payment) Settle(ctx context.Context, w http.ResponseWriter, r *http.Req
 			Str("network", p.requirements.Network).
 			Str("asset", p.requirements.Asset).
 			Msg("settle x402 payment")
-		p.writePaymentRequired(w, r, "payment settlement failed")
+		p.writePaymentRequired(w, r, "payment settlement failed", "")
 		return nil, false
 	}
 	if settled == nil || !settled.Success {
@@ -217,19 +231,22 @@ func (p *Payment) Settle(ctx context.Context, w http.ResponseWriter, r *http.Req
 				Str("transaction", strings.TrimSpace(settled.Transaction))
 		}
 		event.Msg("x402 payment settlement rejected")
-		p.writePaymentRequired(w, r, "payment settlement failed")
+		p.writePaymentRequired(w, r, "payment settlement failed", "")
 		return nil, false
 	}
 	return settled, true
 }
 
-func (p *Payment) writePaymentRequired(w http.ResponseWriter, r *http.Request, reason string) {
+func (p *Payment) writePaymentRequired(w http.ResponseWriter, r *http.Request, reason, resourcePath string) {
 	if p == nil {
 		http.Error(w, reason, http.StatusPaymentRequired)
 		return
 	}
 	resourceURL := ""
-	if r != nil && r.URL != nil {
+	resourcePath = strings.TrimSpace(resourcePath)
+	if resourcePath != "" {
+		resourceURL = utils.PublicURLForPath(r, resourcePath)
+	} else if r != nil && r.URL != nil {
 		resourceURL = utils.PublicURLForPath(r, r.URL.RequestURI())
 	}
 	body := struct {
@@ -271,7 +288,11 @@ func (p *Payment) WritePrepare(w http.ResponseWriter, r *http.Request, sender, r
 	if IsCasperNetwork(p.requirements.Network) {
 		// Casper payments are signed by the wallet against the published
 		// requirements, so there is no server-built transaction to prepare.
-		p.writePaymentRequired(w, r, "payment required")
+		resourcePath = strings.TrimSpace(resourcePath)
+		if resourcePath == "" {
+			resourcePath = strings.TrimSpace(p.payment.ResourcePath)
+		}
+		p.writePaymentRequired(w, r, "payment required", resourcePath)
 		return
 	}
 

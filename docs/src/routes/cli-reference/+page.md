@@ -56,7 +56,7 @@ portal expose [flags] <target>
 Or run routed HTTP mode:
 
 ```bash
-portal expose [flags] --http-route "PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]" [...]
+portal expose [flags] --http-route "PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]" [...]
 ```
 
 The payment suffix is optional; omit it for free routes.
@@ -99,9 +99,13 @@ not supported.
 | `--thumbnail` | string | | Service thumbnail URL metadata |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
-| `--x402-pay-to` | string | | Sui USDC payment recipient address for this tunnel |
-| `--x402-testnet` | bool | `false` | Use Sui testnet for tunnel x402 payments; default is Sui mainnet |
-| `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]` form; repeatable; route amounts require `--x402-pay-to` |
+| `--x402-pay-to` | string | | Payment recipient address for this tunnel |
+| `--x402-testnet` | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
+| `--x402-network` | string | | Optional Sui or Casper CAIP-2 network |
+| `--x402-asset` | string | | wCSPR CEP-18 contract hash required by Casper |
+| `--x402-endpoint` | string | | Optional Sui RPC or Casper facilitator endpoint; repeatable |
+| `--x402-facilitator-token` | string | `CSPR_CLOUD_API_KEY` | Casper facilitator authorization token; prefer the environment variable so the secret is not exposed in the process arguments |
+| `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]` form; repeatable; route amounts require `--x402-pay-to` |
 | `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
@@ -116,8 +120,10 @@ not supported.
 - `--tcp` and `--udp` require matching transport support on the relay.
 - Route payment amounts are part of `--http-route` and require a tunnel-owned
   `--x402-pay-to`.
-- Tunnel paid routes use Sui mainnet by default; add `--x402-testnet` for Sui
-  testnet. This is independent of relay-owned x402 facilitator settings.
+- Tunnel paid routes use Sui mainnet by default. Casper requires an explicit
+  `--x402-network casper:...` and `--x402-asset`; it uses the hosted facilitator
+  by default or the first `--x402-endpoint` override. The default CSPR.cloud
+  facilitator also requires `CSPR_CLOUD_API_KEY`.
 
 ### Examples
 

@@ -127,13 +127,15 @@ func TestNormalizeCasperAddress(t *testing.T) {
 }
 
 const testWCSPRAsset = "hash-9c0d3fd7b1d9b5a94b13a5df0b1c8f1a0b3e5d7c9a1b3d5f7092a4c6e8b0d2f4"
+const testFacilitatorToken = "test-token"
 
 func TestNewCasperPayment(t *testing.T) {
 	payment, err := NewCasperPayment(types.X402Payment{
-		Testnet: true,
-		Asset:   testWCSPRAsset,
-		PayTo:   "Account-Hash-ABC123",
-		Amount:  "0.25",
+		Testnet:          true,
+		Asset:            testWCSPRAsset,
+		PayTo:            "Account-Hash-ABC123",
+		Amount:           "0.25",
+		FacilitatorToken: testFacilitatorToken,
 	})
 	if err != nil {
 		t.Fatalf("NewCasperPayment: %v", err)
@@ -162,6 +164,9 @@ func TestNewCasperPayment(t *testing.T) {
 	if payment.facilitator == nil {
 		t.Fatal("facilitator is nil")
 	}
+	if payment.payment.FacilitatorToken != "" {
+		t.Fatal("facilitator token retained in normalized payment")
+	}
 }
 
 func TestNewCasperPaymentErrors(t *testing.T) {
@@ -185,6 +190,10 @@ func TestNewCasperPaymentErrors(t *testing.T) {
 			name:    "invalid amount",
 			payment: types.X402Payment{Network: CasperMainnetNetwork, Asset: testWCSPRAsset, PayTo: "01ab", Amount: "-1"},
 		},
+		{
+			name:    "missing default facilitator token",
+			payment: types.X402Payment{Network: CasperMainnetNetwork, Asset: testWCSPRAsset, PayTo: "01ab", Amount: "1"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -196,7 +205,7 @@ func TestNewCasperPaymentErrors(t *testing.T) {
 }
 
 func TestCasperFacilitatorSupported(t *testing.T) {
-	facilitator, err := newCasperFacilitator(CasperMainnetNetwork)
+	facilitator, err := newCasperFacilitator(CasperMainnetNetwork, testFacilitatorToken)
 	if err != nil {
 		t.Fatalf("newCasperFacilitator: %v", err)
 	}
@@ -225,6 +234,9 @@ func TestCasperFacilitatorSettle(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Errorf("decode settle request: %v", err)
 		}
+		if token := r.Header.Get("Authorization"); token != testFacilitatorToken {
+			t.Errorf("Authorization = %q, want %q", token, testFacilitatorToken)
+		}
 		_ = json.NewEncoder(w).Encode(facilitatortypes.PaymentSettleResponse{
 			Success:     true,
 			Payer:       "01a1b2c3",
@@ -235,11 +247,12 @@ func TestCasperFacilitatorSettle(t *testing.T) {
 	defer server.Close()
 
 	payment, err := NewCasperPayment(types.X402Payment{
-		Testnet:   true,
-		Asset:     testWCSPRAsset,
-		PayTo:     "account-hash-abc123",
-		Amount:    "0.01",
-		Endpoints: []string{server.URL},
+		Testnet:          true,
+		Asset:            testWCSPRAsset,
+		PayTo:            "account-hash-abc123",
+		Amount:           "0.01",
+		Endpoints:        []string{server.URL},
+		FacilitatorToken: testFacilitatorToken,
 	})
 	if err != nil {
 		t.Fatalf("NewCasperPayment: %v", err)
@@ -269,6 +282,9 @@ func TestCasperFacilitatorSettle(t *testing.T) {
 
 func TestCasperFacilitatorVerifyRejects(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if token := r.Header.Get("Authorization"); token != testFacilitatorToken {
+			t.Errorf("Authorization = %q, want %q", token, testFacilitatorToken)
+		}
 		_ = json.NewEncoder(w).Encode(facilitatortypes.PaymentVerifyResponse{
 			IsValid:        false,
 			InvalidReason:  "insufficient_balance",
@@ -277,7 +293,7 @@ func TestCasperFacilitatorVerifyRejects(t *testing.T) {
 	}))
 	defer server.Close()
 
-	facilitator, err := newCasperFacilitator(CasperTestnetNetwork, server.URL)
+	facilitator, err := newCasperFacilitator(CasperTestnetNetwork, testFacilitatorToken, server.URL)
 	if err != nil {
 		t.Fatalf("newCasperFacilitator: %v", err)
 	}
@@ -304,7 +320,7 @@ func TestCasperFacilitatorVerifyRejects(t *testing.T) {
 }
 
 func TestCasperFacilitatorNilArgs(t *testing.T) {
-	facilitator, err := newCasperFacilitator(CasperMainnetNetwork)
+	facilitator, err := newCasperFacilitator(CasperMainnetNetwork, testFacilitatorToken)
 	if err != nil {
 		t.Fatalf("newCasperFacilitator: %v", err)
 	}

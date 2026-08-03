@@ -106,7 +106,7 @@ type casperFacilitator struct {
 	client  *facilitatorclient.Client
 }
 
-func newCasperFacilitator(network string, endpoints ...string) (facilitatorcore.Facilitator, error) {
+func newCasperFacilitator(network, token string, endpoints ...string) (facilitatorcore.Facilitator, error) {
 	network = strings.ToLower(strings.TrimSpace(network))
 	if network == "" {
 		network = CasperMainnetNetwork
@@ -121,9 +121,21 @@ func newCasperFacilitator(network string, endpoints ...string) (facilitatorcore.
 			break
 		}
 	}
+	token = strings.TrimSpace(token)
+	if strings.EqualFold(strings.TrimRight(url, "/"), DefaultCasperFacilitatorURL) && token == "" {
+		return nil, errors.New("CSPR.cloud x402 facilitator requires an authorization token")
+	}
 	client, err := facilitatorclient.NewClient(url)
 	if err != nil {
 		return nil, fmt.Errorf("create casper x402 facilitator: %w", err)
+	}
+	if token != "" {
+		client.CreateAuthHeader = func() (map[string]map[string]string, error) {
+			return map[string]map[string]string{
+				"verify": {"Authorization": token},
+				"settle": {"Authorization": token},
+			}, nil
+		}
 	}
 	return &casperFacilitator{network: network, client: client}, nil
 }
@@ -196,7 +208,7 @@ func NewCasperPayment(payment types.X402Payment) (*Payment, error) {
 		},
 	}
 	endpoints := append([]string(nil), payment.Endpoints...)
-	facilitator, err := newCasperFacilitator(requirements.Network, endpoints...)
+	facilitator, err := newCasperFacilitator(requirements.Network, payment.FacilitatorToken, endpoints...)
 	if err != nil {
 		return nil, err
 	}
@@ -209,6 +221,7 @@ func NewCasperPayment(payment types.X402Payment) (*Payment, error) {
 	payment.Amount = requirements.Amount
 	payment.MaxTimeoutSeconds = requirements.MaxTimeoutSeconds
 	payment.Endpoints = endpoints
+	payment.FacilitatorToken = ""
 	payment.ResourcePath = strings.TrimSpace(payment.ResourcePath)
 	payment.ResourceDescription = strings.TrimSpace(payment.ResourceDescription)
 	payment.ResourceMimeType = strings.TrimSpace(payment.ResourceMimeType)
