@@ -87,9 +87,9 @@ not supported.
 |------|------|---------|-------------|
 | `--relays` | string | registry | Additional relay API URLs, comma-separated |
 | `--discovery` | bool | `true` | Include registry relays and relay discovery expansion |
-| `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
+| `--max-active-relays` | int | `3` | Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry; explicit relays are always included |
 | `--multi-hop` | string | | Ordered multi-hop relay API URLs, comma-separated |
-| `--multi-hop-depth` | int | `0` | Automatically select one multi-hop route with this hop count; `0` or `1` disables multi-hop |
+| `--multi-hop-depth` | int | `0` | Automatically create this-depth multi-hop routes for every eligible entry relay; `0` or `1` disables multi-hop |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
 | `--identity-json` | string | | Identity JSON payload; overrides `--identity-path` contents and is persisted there when both are set |
@@ -171,7 +171,7 @@ Use an explicit multi-hop route:
 portal expose 3000 --multi-hop https://entry.example.com,https://exit.example.com
 ```
 
-Ask Portal to select one three-hop route:
+Ask Portal to create three-hop routes for every eligible entry relay:
 
 ```bash
 portal expose 3000 --multi-hop-depth 3

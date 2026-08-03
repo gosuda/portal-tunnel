@@ -176,7 +176,7 @@ Each entry is `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]`. Fill `X402 Pa
 To` when any route has an amount. Sui uses `X402 Testnet`; Casper additionally
 uses `X402 Network`, `X402 Asset`, and optionally its facilitator in `X402 Endpoints`.
 The form also accepts explicit `Relays`,
-`Discovery`, and `Max Relays`; max relays caps auto-selected discovery relays
+`Discovery`, and `Max Relays`; max relays caps auto-selected single-hop discovery relays
 while explicit relays are still included.
 
 After creation, routed HTTP paths, x402 payment amounts, payment network, and
@@ -200,7 +200,7 @@ Common fields:
 | `http_routes` | Routed HTTP mappings; cannot be combined with `target` or `udp` |
 | `relays` | Explicit relay API URLs |
 | `discovery` | Include registry and relay discovery expansion |
-| `max_active_relays` | Maximum auto-selected relays kept connected |
+| `max_active_relays` | Maximum auto-selected single-hop relays kept connected; multi-hop uses every eligible relay as an entry |
 | `identity_path` | Tunnel identity JSON path |
 | `identity_json` | Identity JSON payload; persisted to `identity_path` when both are set |
 | `udp`, `udp_addr` | UDP transport settings |

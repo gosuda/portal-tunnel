@@ -1,9 +1,13 @@
 package sdk
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -35,5 +39,87 @@ func TestNewRenewRequestIncludesMetadata(t *testing.T) {
 	metadata.Tags[0] = "mutated"
 	if req.Metadata.Tags[0] != "demo" {
 		t.Fatalf("Metadata tags alias input slice: got %q", req.Metadata.Tags[0])
+	}
+}
+
+func TestRelayRegistrationErrorPreservesRelayURLAndCause(t *testing.T) {
+	cause := errors.New("connection closed")
+	err := &relayRegistrationError{relayURL: "https://relay.example", err: cause}
+
+	if err.relayURL != "https://relay.example" {
+		t.Fatalf("relayURL = %q, want relay URL", err.relayURL)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("hop registration error does not unwrap its cause")
+	}
+}
+
+func TestOnlyExplicitIncompatibilityDropsRelayFromActivePool(t *testing.T) {
+	if shouldDropRelayFromActivePool(errors.New("connection closed")) {
+		t.Fatal("ordinary connection failure must not drop a relay from the active pool")
+	}
+	if shouldDropRelayFromActivePool(fmt.Errorf("request failed: %w", io.EOF)) {
+		t.Fatal("EOF must be retried, not treated as relay incompatibility")
+	}
+	if !shouldDropRelayFromActivePool(fmt.Errorf("%w: unsupported version", errRelayIncompatible)) {
+		t.Fatal("protocol mismatch must drop an incompatible relay from the active pool")
+	}
+	if !shouldDropRelayFromActivePool(&types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) {
+		t.Fatal("feature_unavailable must drop an incompatible relay from the active pool")
+	}
+	unknownClientError := &types.APIRequestError{StatusCode: 404, Code: "unknown_endpoint"}
+	if shouldDropRelayFromActivePool(unknownClientError) {
+		t.Fatal("unclassified client error must not long-term drop a relay from the active pool")
+	}
+	if !isTerminalRelayError(unknownClientError) {
+		t.Fatal("unclassified client error must relinquish the listener for route reconciliation")
+	}
+}
+
+func TestTerminalRelayFailureTargetsTheReportingRelay(t *testing.T) {
+	const (
+		entry = "https://entry.example"
+		exit  = "https://exit.example"
+	)
+	listener := &listener{
+		route:    discovery.NewRoute([]string{entry, exit}, false),
+		relaySet: mustRelaySet(t, entry, exit),
+	}
+	err := &relayRegistrationError{
+		relayURL: exit,
+		err:      fmt.Errorf("%w: unsupported protocol", errRelayIncompatible),
+	}
+	if !listener.closeForTerminalRelayError(err) {
+		t.Fatal("terminal relay error was not handled")
+	}
+
+	routes, planErr := listener.relaySet.PlanRoutes(nil, discovery.RouteState{})
+	if planErr != nil {
+		t.Fatalf("PlanRoutes() error = %v", planErr)
+	}
+	for _, route := range routes {
+		if route.ListenerRelayURL() == exit {
+			t.Fatal("incompatible exit relay remains active")
+		}
+		if route.ListenerRelayURL() != entry {
+			t.Fatalf("unexpected remaining relay %q", route.ListenerRelayURL())
+		}
+	}
+}
+
+func TestNewListenerUsesMultiHopExitForControl(t *testing.T) {
+	entry := "https://entry.example"
+	exit := "https://exit.example"
+	route := discovery.NewRoute([]string{entry, "https://middle.example", exit}, false)
+	entryURL, controlURL, err := routeRelayURLs(route)
+	if err != nil {
+		t.Fatalf("routeRelayURLs() error = %v", err)
+	}
+
+	if got := controlURL; got != exit {
+		t.Fatalf("control relay = %q, want %q", got, exit)
+	}
+	if got := entryURL; got != entry {
+		t.Fatalf("route entry = %q, want %q", got, entry)
 	}
 }

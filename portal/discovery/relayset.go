@@ -10,10 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
-	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -278,19 +275,23 @@ func (s *RelaySet) SetBootstrapRelayURLs(inputs []string) {
 
 	for key, state := range s.relays {
 		_, bootstrap := keep[key]
+		if state.Bootstrap == bootstrap {
+			continue
+		}
 		state.Bootstrap = bootstrap
 		if disposableRelayState(state) {
 			delete(s.relays, key)
-			continue
+		} else {
+			s.relays[key] = state
 		}
-
-		s.relays[key] = state
 	}
 
 	for _, relayURL := range inputs {
 		if state, ok := s.relays[relayURL]; ok {
-			state.Bootstrap = true
-			s.relays[relayURL] = state
+			if !state.Bootstrap {
+				state.Bootstrap = true
+				s.relays[relayURL] = state
+			}
 			continue
 		}
 
@@ -305,6 +306,9 @@ func (s *RelaySet) AddBootstrapRelayURL(relayURL string) {
 	defer s.mu.Unlock()
 
 	state, ok := s.relays[relayURL]
+	if ok && state.Bootstrap {
+		return
+	}
 	if !ok {
 		state = newRelayState(relayURL)
 	}
@@ -317,15 +321,15 @@ func (s *RelaySet) RemoveBootstrapRelayURL(relayURL string) {
 	defer s.mu.Unlock()
 
 	state, ok := s.relays[relayURL]
-	if !ok {
+	if !ok || !state.Bootstrap {
 		return
 	}
 	state.Bootstrap = false
 	if disposableRelayState(state) {
 		delete(s.relays, relayURL)
-		return
+	} else {
+		s.relays[relayURL] = state
 	}
-	s.relays[relayURL] = state
 }
 
 func disposableRelayState(state RelayState) bool {
@@ -362,7 +366,18 @@ func (r Route) Explicit() bool {
 	return r.explicit
 }
 
+// ListenerRelayURL returns the entry relay URL for this route.
+// For single-hop routes this is the sole relay; for multi-hop
+// routes it is the first hop the local listener connects to.
 func (r Route) ListenerRelayURL() string {
+	if len(r.path) == 0 {
+		return ""
+	}
+	return r.path[0]
+}
+
+// ExitRelayURL returns the final relay URL in the path.
+func (r Route) ExitRelayURL() string {
 	if len(r.path) == 0 {
 		return ""
 	}
@@ -380,13 +395,16 @@ func (r Route) Equal(other Route) bool {
 	return r.explicit == other.explicit && slices.Equal(r.path, other.path)
 }
 
+// WithListenerRelayURL returns a new Route with the entry relay URL
+// replaced by the normalized value. This is used after URL normalization
+// so the path and the listener target remain consistent.
 func (r Route) WithListenerRelayURL(relayURL string) Route {
 	if len(r.path) == 0 {
 		return NewRoute([]string{relayURL}, r.explicit)
 	}
 	path := append([]string(nil), r.path...)
-	path[len(path)-1] = relayURL
-	return NewRoute(path, r.explicit)
+	path[0] = relayURL
+	return Route{path: path, explicit: r.explicit}
 }
 
 func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]Route, error) {
@@ -397,7 +415,8 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 		return []Route{NewRoute(explicitPath, true)}, nil
 	}
 
-	states := s.currentRelayStates(time.Now().UTC())
+	now := time.Now().UTC()
+	states := s.currentRelayStates(now)
 	if len(routeState.ExplicitRelayURLs) > 0 {
 		seen := make(map[string]struct{}, len(states))
 		for _, state := range states {
@@ -418,76 +437,99 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 		}
 	}
 
+	ranked := RankRelayPool(filterCandidatePool(states, routeState, now, routeState.MultiHopDepth > 1), routeState.LocalAddress)
 	if routeState.MultiHopDepth > 1 {
-		path := SelectMultiHop(states, routeState)
-		if len(path) < routeState.MultiHopDepth {
-			return nil, fmt.Errorf("multi-hop-depth %d requires %d overlay relay candidates, got %d", routeState.MultiHopDepth, routeState.MultiHopDepth, len(path))
+		maxActive := routeState.MaxActiveRelays
+		if maxActive <= 0 {
+			maxActive = defaultMaxActiveRelays
 		}
-		return []Route{NewRoute(path, false)}, nil
+		return buildMOLSPaths(ranked, routeState.MultiHopDepth, maxActive)
 	}
 
-	relayURLs := SelectPriority(states, routeState)
-	routes := make([]Route, 0, len(relayURLs))
-	for _, relayURL := range relayURLs {
-		routes = append(routes, NewRoute([]string{relayURL}, slices.Contains(routeState.ExplicitRelayURLs, relayURL)))
+	maxActive := routeState.MaxActiveRelays
+	if maxActive <= 0 {
+		maxActive = defaultMaxActiveRelays
+	}
+	if len(ranked) > maxActive {
+		ranked = ranked[:maxActive]
+	}
+	routes := make([]Route, 0, len(ranked)+len(routeState.ExplicitRelayURLs))
+	for _, relayURL := range routeState.ExplicitRelayURLs {
+		eligible := true
+		for _, state := range states {
+			if state.Descriptor.APIHTTPSAddr == relayURL &&
+				(state.Banned || !state.supportsRequiredTransports(routeState, now)) {
+				eligible = false
+				break
+			}
+		}
+		if !eligible {
+			continue
+		}
+		routes = append(routes, NewRoute([]string{relayURL}, true))
+	}
+	for _, relayURL := range ranked {
+		routes = append(routes, NewRoute([]string{relayURL}, false))
 	}
 	return routes, nil
 }
 
-// PriorityRelaysWithTrace returns the same ordered relay-URL list as
-// PriorityRelays, plus a SelectionTrace populated with pool statistics,
-// eligibility classification, and the scoring parameters used. Prometheus
-// metrics are emitted from the trace before returning, and a sampled zerolog
-// debug entry is written.
-func (s *RelaySet) PriorityRelaysWithTrace(routeState RouteState) ([]string, telemetry.SelectionTrace) {
-	states := s.currentRelayStates(time.Now().UTC())
-
-	result, trace := selectPriorityWithTrace(states, routeState)
-	telemetry.EmitFromTrace(trace)
-	log.Debug().
-		Uint8("client_hash", trace.ClientHash).
-		Int("pool_size", trace.PoolTotal).
-		Int("output_count", len(trace.OutputURLs)).
-		Str("mode", trace.Mode).
-		Bool("congested", trace.Congested).
-		Strs("relay_urls", trace.OutputURLs).
-		Msg("relay selection")
-	return result, trace
+// filterCandidatePool returns the auto-selected relay pool eligible for MOLS
+// ranking. When requireOverlay is true, only relays with observed descriptors,
+// valid expiry, and overlay peer support are admitted.
+func filterCandidatePool(states []RelayState, routeState RouteState, now time.Time, requireOverlay bool) []RelayState {
+	pool := make([]RelayState, 0, len(states))
+	for _, state := range states {
+		relayURL := state.Descriptor.APIHTTPSAddr
+		if !requireOverlay && slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
+			continue
+		}
+		if requireOverlay {
+			if !state.eligibleForMultiHop(routeState, now) {
+				continue
+			}
+			pool = append(pool, state)
+			continue
+		}
+		if state.Banned {
+			continue
+		}
+		if state.hasObservedDescriptor() {
+			if !state.Descriptor.ExpiresAt.After(now) {
+				continue
+			}
+			if !state.supportsRequiredTransports(routeState, now) {
+				continue
+			}
+		}
+		if !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now) {
+			continue
+		}
+		pool = append(pool, state)
+	}
+	return pool
 }
 
-// PriorityRelays returns the ordered list of relay URLs for a client. It
-// delegates to PriorityRelaysWithTrace and discards the trace.
-func (s *RelaySet) PriorityRelays(routeState RouteState) []string {
-	out, _ := s.PriorityRelaysWithTrace(routeState)
-	return out
-}
-
-// PriorityMultiHopWithTrace returns the same ordered relay-URL list as
-// PriorityMultiHop, plus a SelectionTrace populated with pool statistics,
-// eligibility classification, and the scoring parameters used. Prometheus
-// metrics are emitted from the trace before returning, and a sampled zerolog
-// debug entry is written.
-func (s *RelaySet) PriorityMultiHopWithTrace(routeState RouteState) ([]string, telemetry.SelectionTrace) {
-	states := s.currentRelayStates(time.Now().UTC())
-
-	result, trace := selectMultiHopWithTrace(states, routeState)
-	telemetry.EmitFromTrace(trace)
-	log.Debug().
-		Uint8("client_hash", trace.ClientHash).
-		Int("pool_size", trace.PoolTotal).
-		Int("output_count", len(trace.OutputURLs)).
-		Str("mode", trace.Mode).
-		Bool("congested", trace.Congested).
-		Strs("relay_urls", trace.OutputURLs).
-		Msg("relay selection")
-	return result, trace
-}
-
-// PriorityMultiHop returns the ordered list of relay URLs for multi-hop
-// routing. It delegates to PriorityMultiHopWithTrace and discards the trace.
-func (s *RelaySet) PriorityMultiHop(routeState RouteState) []string {
-	out, _ := s.PriorityMultiHopWithTrace(routeState)
-	return out
+// buildMOLSPaths constructs loop-free paths from a ranked pool. Paths wrap
+// around the whole pool, while maxEntries independently bounds listener and
+// public-ingress fan-out.
+func buildMOLSPaths(ranked []string, depth, maxEntries int) ([]Route, error) {
+	if len(ranked) < depth {
+		return nil, fmt.Errorf("multi-hop-depth %d requires at least %d candidates, got %d", depth, depth, len(ranked))
+	}
+	n := len(ranked)
+	if maxEntries <= 0 || maxEntries > n {
+		maxEntries = n
+	}
+	routes := make([]Route, 0, maxEntries)
+	for start := 0; start < maxEntries; start++ {
+		path := make([]string, 0, depth)
+		for i := 0; i < depth; i++ {
+			path = append(path, ranked[(start+i)%n])
+		}
+		routes = append(routes, NewRoute(path, false))
+	}
+	return routes, nil
 }
 
 func (s *RelaySet) overlayRefreshCandidates(now time.Time) []RelayState {
@@ -725,11 +767,8 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		// silently; they cannot poison the local relay set, and other peers
 		// will reach the same verdict independently. This is the sole global
 		// trust gate under unconditional propagation, so it is mandatory.
-		verified, verifyErr := auth.VerifyRelayDescriptor(descriptor)
+		verified, verifyErr := verifyFreshRelayDescriptor(descriptor, now)
 		if verifyErr != nil {
-			return
-		}
-		if err := validateRelayDescriptorFreshness(verified, now); err != nil {
 			return
 		}
 		relayState := RelayState{
@@ -806,6 +845,7 @@ func (s *RelaySet) RecordDiscoveryRTT(relayURL string, rtt time.Duration, measur
 		return
 	}
 
+	state.UpdateEWMARTT(rtt)
 	state.DiscoveryRTT = rtt
 	state.DiscoveryRTTAt = measuredAt
 	s.relays[relayURL] = state
@@ -820,7 +860,7 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 		return
 	}
 
-	state.StoreLoadFactor(loadFixed)
+	state.UpdateLoad(loadFixed)
 	s.relays[relayURL] = state
 }
 
@@ -854,11 +894,8 @@ func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) er
 		now = now.UTC()
 	}
 
-	normalized, err := auth.VerifyRelayDescriptor(desc)
+	normalized, err := verifyFreshRelayDescriptor(desc, now)
 	if err != nil {
-		return err
-	}
-	if err := validateRelayDescriptorFreshness(normalized, now); err != nil {
 		return err
 	}
 
@@ -889,6 +926,17 @@ func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) er
 		return errors.New("announced descriptor rejected by rollback or takeover guard")
 	}
 	return nil
+}
+
+func verifyFreshRelayDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayDescriptor, error) {
+	verified, err := auth.VerifyRelayDescriptor(desc)
+	if err != nil {
+		return types.RelayDescriptor{}, err
+	}
+	if err := validateRelayDescriptorFreshness(verified, now); err != nil {
+		return types.RelayDescriptor{}, err
+	}
+	return verified, nil
 }
 
 func validateRelayDescriptorFreshness(desc types.RelayDescriptor, now time.Time) error {

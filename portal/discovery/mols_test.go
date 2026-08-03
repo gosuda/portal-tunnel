@@ -448,6 +448,17 @@ func TestMOLSSelectPriorityMaxActiveRelaysLimitsAutoPool(t *testing.T) {
 	}
 }
 
+func TestRankRelayPoolIncludesEveryEligibleRelay(t *testing.T) {
+	relays := make([]RelayState, 12)
+	for i := range relays {
+		relays[i] = confirmedRelayState(t, fmt.Sprintf("https://relay-all-%d.example", i))
+	}
+
+	if ranked := RankRelayPool(relays, "client"); len(ranked) != len(relays) {
+		t.Fatalf("len(RankRelayPool()) = %d, want %d", len(ranked), len(relays))
+	}
+}
+
 func TestMOLSSelectPriorityZeroMaxActiveRelaysUsesDefault(t *testing.T) {
 
 	relays := make([]RelayState, 10)
@@ -668,7 +679,7 @@ func BenchmarkMOLSRankRelayPool(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rankRelayPool(relays, localAddr)
+		RankRelayPool(relays, localAddr)
 	}
 }
 

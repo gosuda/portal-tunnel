@@ -67,8 +67,20 @@ func TestInsertAnnouncedRejectsUnsigned(t *testing.T) {
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	desc := mustUnsignedDescriptor(t, signing, "https://relay-unsigned.example")
-	if err := set.InsertAnnounced(desc, now); err == nil {
-		t.Fatal("expected unsigned reject")
+	err := set.InsertAnnounced(desc, now)
+	if err == nil || err.Error() != "relay descriptor is not signed" {
+		t.Fatalf("InsertAnnounced() error = %v, want unsigned descriptor error", err)
+	}
+}
+
+func TestInsertAnnouncedRejectsExpired(t *testing.T) {
+	set := NewRelaySet(nil)
+	signing := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	desc := mustSignedDescriptor(t, signing, "https://relay-expired.example", now.Add(-DiscoveryDescriptorTTL-time.Second))
+	err := set.InsertAnnounced(desc, now)
+	if err == nil || err.Error() != "relay descriptor already expired" {
+		t.Fatalf("InsertAnnounced() error = %v, want expired descriptor error", err)
 	}
 }
 

@@ -29,7 +29,7 @@ const (
 	mitmProbePaddingMax    = 320
 
 	defaultMITMProbeCooldown = 30 * time.Second
-	defaultMITMProbeTimeout  = 5 * time.Second
+	defaultMITMProbeTimeout  = 30 * time.Second
 )
 
 type MITMProbeReport struct {
@@ -94,7 +94,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 	}
 
 	report := MITMProbeReport{
-		RelayURL:  l.relayURL.String(),
+		RelayURL:  l.route.ListenerRelayURL(),
 		PublicURL: publicURL,
 		Address:   l.identity.Address,
 	}
@@ -186,8 +186,12 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	}
 
 	dialHost := parsedURL.Host
-	if utils.IsLocalRelayHost(l.relayURL.Hostname()) {
-		dialHost = l.relayURL.Host
+	entryRelayURL, err := url.Parse(l.route.ListenerRelayURL())
+	if err != nil {
+		return "", fmt.Errorf("parse ingress relay url: %w", err)
+	}
+	if utils.IsLocalRelayHost(entryRelayURL.Hostname()) {
+		dialHost = entryRelayURL.Host
 	}
 	return utils.EnsurePort(dialHost), nil
 }
