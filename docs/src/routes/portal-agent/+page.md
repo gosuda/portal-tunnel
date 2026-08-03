@@ -93,6 +93,11 @@ x402_pay_to = "account-hash-..."
 x402_endpoints = ["https://x402-facilitator.cspr.cloud"]
 ```
 
+Set `CSPR_CLOUD_API_KEY` in the agent service environment for the hosted
+CSPR.cloud facilitator. If the service cannot receive that environment
+variable, set `x402_facilitator_token` in this tunnel's TOML instead. Custom
+facilitators that do not require authentication can omit both.
+
 If a route has `amount`, the tunnel serves `/x402/client.js` and
 `/x402/prepare` on the public tunnel origin for the Sui wallet flow. Casper
 clients consume the protected route's 402 requirements, sign with an external

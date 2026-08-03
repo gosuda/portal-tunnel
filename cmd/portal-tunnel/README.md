@@ -70,6 +70,9 @@ for the Sui wallet flow. Casper clients instead consume the protected route's
 402 requirements, sign with an external Casper x402 SDK, and retry with
 `PAYMENT-SIGNATURE` or `X-PAYMENT`; Portal settles it through the configured
 Casper facilitator before proxying the request.
+The hosted CSPR.cloud facilitator requires `CSPR_CLOUD_API_KEY`, which Portal
+sends as its server-side authorization token. A custom unauthenticated
+facilitator does not require the token.
 
 Raw TCP and UDP:
 
@@ -116,6 +119,7 @@ Common `portal expose` flags:
 --x402-network       Optional Sui or Casper CAIP-2 network
 --x402-asset         wCSPR CEP-18 contract hash required by Casper
 --x402-endpoint      Optional Sui RPC or Casper facilitator endpoint; repeatable
+--x402-facilitator-token  Casper facilitator authorization token; defaults to CSPR_CLOUD_API_KEY
 --tcp                Request a dedicated raw TCP port on the relay
 --udp                Enable public UDP relay
 --udp-addr           Local UDP target
@@ -138,7 +142,7 @@ Tunnel opens a small form for name, target or HTTP routes, x402 payment settings
 relays, discovery, and max active relays. After creation, routed HTTP paths,
 route-level x402 amounts, payment network, and discovery mode are read-only in
 the Settings pane. Edit `http_routes`, `x402_pay_to`, `x402_testnet`,
-`x402_network`, `x402_asset`, `x402_endpoints`, or `discovery` in TOML, then
+`x402_network`, `x402_asset`, `x402_endpoints`, `x402_facilitator_token`, or `discovery` in TOML, then
 restart the agent or tunnel to change them.
 
 ## Constraints
@@ -152,6 +156,7 @@ restart the agent or tunnel to change them.
 - Route payment amounts such as `0.01` are part of `--http-route` and require
   `--x402-pay-to`. Sui is the default; Casper additionally requires
   `--x402-network casper:...` and the wCSPR contract in `--x402-asset`.
+  The default CSPR.cloud facilitator also requires `CSPR_CLOUD_API_KEY`.
 - `--multi-hop` cannot be combined with `--multi-hop-depth`.
 - Multi-hop currently supports only the default SNI TLS stream transport.
 - `--tcp` and `--udp` require matching relay transport support.

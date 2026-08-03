@@ -44,23 +44,24 @@ type ExposeConfig struct {
 	RelayURLs []string
 	Discovery bool
 
-	Identity        types.Identity
-	IdentityPath    string
-	IdentityJSON    string
-	TargetAddr      string
-	UDPAddr         string
-	UDPEnabled      bool
-	TCPEnabled      bool
-	MultiHop        []string
-	MultiHopDepth   int
-	BanMITM         bool
-	MaxActiveRelays int
-	Metadata        types.LeaseMetadata
-	X402PayTo       string
-	X402Testnet     bool
-	X402Network     string
-	X402Asset       string
-	X402Endpoints   []string
+	Identity             types.Identity
+	IdentityPath         string
+	IdentityJSON         string
+	TargetAddr           string
+	UDPAddr              string
+	UDPEnabled           bool
+	TCPEnabled           bool
+	MultiHop             []string
+	MultiHopDepth        int
+	BanMITM              bool
+	MaxActiveRelays      int
+	Metadata             types.LeaseMetadata
+	X402PayTo            string
+	X402Testnet          bool
+	X402Network          string
+	X402Asset            string
+	X402Endpoints        []string
+	X402FacilitatorToken string
 }
 
 func (cfg ExposeConfig) snapshot() ExposeConfig {
@@ -72,6 +73,7 @@ func (cfg ExposeConfig) snapshot() ExposeConfig {
 	cfg.X402Network = strings.ToLower(strings.TrimSpace(cfg.X402Network))
 	cfg.X402Asset = strings.TrimSpace(cfg.X402Asset)
 	cfg.X402Endpoints = utils.CloneSlice(cfg.X402Endpoints)
+	cfg.X402FacilitatorToken = strings.TrimSpace(cfg.X402FacilitatorToken)
 	return cfg
 }
 
@@ -164,6 +166,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	runtimeCfg.X402Network = strings.ToLower(strings.TrimSpace(cfg.X402Network))
 	runtimeCfg.X402Asset = strings.TrimSpace(cfg.X402Asset)
 	runtimeCfg.X402Endpoints = utils.CloneSlice(cfg.X402Endpoints)
+	runtimeCfg.X402FacilitatorToken = strings.TrimSpace(cfg.X402FacilitatorToken)
 
 	exposureCtx, cancel := context.WithCancel(ctx)
 	exposure := &Exposure{
@@ -534,11 +537,12 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 func (e *Exposure) RunHTTPRoutes(ctx context.Context, routes []HTTPRouteConfig, localAddr string) error {
 	cfg := e.Config()
 	handler, err := NewHTTPRoutes(routes, types.X402Payment{
-		Testnet:   cfg.X402Testnet,
-		Network:   cfg.X402Network,
-		Asset:     cfg.X402Asset,
-		PayTo:     cfg.X402PayTo,
-		Endpoints: cfg.X402Endpoints,
+		Testnet:          cfg.X402Testnet,
+		Network:          cfg.X402Network,
+		Asset:            cfg.X402Asset,
+		PayTo:            cfg.X402PayTo,
+		Endpoints:        cfg.X402Endpoints,
+		FacilitatorToken: cfg.X402FacilitatorToken,
 	})
 	if err != nil {
 		return err

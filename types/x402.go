@@ -28,6 +28,7 @@ type X402Payment struct {
 	MaxTimeoutSeconds   int
 	RequestTimeout      time.Duration
 	Endpoints           []string
+	FacilitatorToken    string
 	ResourcePath        string
 	ResourceDescription string
 	ResourceMimeType    string

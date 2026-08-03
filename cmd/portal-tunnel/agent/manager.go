@@ -703,26 +703,31 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if cfg.BanMITM != nil {
 		banMITM = *cfg.BanMITM
 	}
+	x402FacilitatorToken := strings.TrimSpace(cfg.X402FacilitatorToken)
+	if x402FacilitatorToken == "" {
+		x402FacilitatorToken = strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY"))
+	}
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:       append([]string(nil), cfg.RelayURLs...),
-		Discovery:       discovery,
-		Identity:        types.Identity{Name: cfg.Name},
-		IdentityPath:    cfg.IdentityPath,
-		IdentityJSON:    cfg.IdentityJSON,
-		TargetAddr:      cfg.TargetAddr,
-		UDPAddr:         cfg.UDPAddr,
-		UDPEnabled:      cfg.UDPEnabled,
-		TCPEnabled:      cfg.TCPEnabled,
-		MultiHop:        append([]string(nil), cfg.MultiHop...),
-		MultiHopDepth:   cfg.MultiHopDepth,
-		BanMITM:         banMITM,
-		MaxActiveRelays: cfg.MaxActiveRelays,
-		Metadata:        metadataFromTunnelConfig(cfg),
-		X402PayTo:       cfg.X402PayTo,
-		X402Testnet:     cfg.X402Testnet,
-		X402Network:     cfg.X402Network,
-		X402Asset:       cfg.X402Asset,
-		X402Endpoints:   append([]string(nil), cfg.X402Endpoints...),
+		RelayURLs:            append([]string(nil), cfg.RelayURLs...),
+		Discovery:            discovery,
+		Identity:             types.Identity{Name: cfg.Name},
+		IdentityPath:         cfg.IdentityPath,
+		IdentityJSON:         cfg.IdentityJSON,
+		TargetAddr:           cfg.TargetAddr,
+		UDPAddr:              cfg.UDPAddr,
+		UDPEnabled:           cfg.UDPEnabled,
+		TCPEnabled:           cfg.TCPEnabled,
+		MultiHop:             append([]string(nil), cfg.MultiHop...),
+		MultiHopDepth:        cfg.MultiHopDepth,
+		BanMITM:              banMITM,
+		MaxActiveRelays:      cfg.MaxActiveRelays,
+		Metadata:             metadataFromTunnelConfig(cfg),
+		X402PayTo:            cfg.X402PayTo,
+		X402Testnet:          cfg.X402Testnet,
+		X402Network:          cfg.X402Network,
+		X402Asset:            cfg.X402Asset,
+		X402Endpoints:        append([]string(nil), cfg.X402Endpoints...),
+		X402FacilitatorToken: x402FacilitatorToken,
 	})
 	if err != nil {
 		return err

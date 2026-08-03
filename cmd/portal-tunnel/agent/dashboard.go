@@ -1048,7 +1048,7 @@ func (m agentDashboardModel) addTunnelRequest() (types.AgentTunnelRequest, error
 		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Network requires paid routes")
 	}
 	if strings.HasPrefix(x402Network, "casper:") && x402Asset == "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("Casper payments require X402 Asset")
+		return types.AgentTunnelRequest{}, fmt.Errorf("casper payments require X402 Asset")
 	}
 
 	discoveryRaw := strings.TrimSpace(m.addDiscovery.Value())

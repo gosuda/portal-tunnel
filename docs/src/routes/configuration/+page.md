@@ -167,6 +167,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--x402-network` | | string | | Optional Sui or Casper CAIP-2 network |
 | `--x402-asset` | | string | | wCSPR CEP-18 contract hash required by Casper |
 | `--x402-endpoint` | | string | | Optional Sui RPC or Casper facilitator endpoint; repeatable |
+| `--x402-facilitator-token` | `CSPR_CLOUD_API_KEY` | string | | Casper facilitator authorization token |
 
 ### Routing
 
@@ -271,6 +272,7 @@ Tunnel fields mirror `portal expose` flags:
 | `x402_network` | string | Optional CAIP-2 network: `sui:mainnet`, `sui:testnet`, `casper:casper`, or `casper:casper-test` |
 | `x402_asset` | string | wCSPR CEP-18 contract hash; required for Casper payments |
 | `x402_endpoints` | string array | Optional Sui RPC endpoints or Casper facilitator URL; Casper uses the first endpoint |
+| `x402_facilitator_token` | string | Casper facilitator authorization token; when omitted, the agent uses `CSPR_CLOUD_API_KEY` |
 | `http_routes[].amount` | string | Optional human payment amount, such as `0.01`, for one HTTP route prefix; requires `x402_pay_to` |
 | `http_routes[].methods` | string array | Optional HTTP methods that require payment on that route; empty means every method |
 
@@ -293,6 +295,9 @@ request reaches the upstream.
 Casper has no Go chain SDK, so `casper:*` payments delegate `/verify` and
 `/settle` to a remote x402 facilitator over HTTP. The wCSPR CEP-18 contract
 hash differs per network deployment, so it must be set as the payment asset.
+The default CSPR.cloud facilitator requires an access token in
+`CSPR_CLOUD_API_KEY`; use `x402_facilitator_token` only when the agent service
+cannot receive that environment variable.
 
 ```toml
 x402_network = "casper:casper-test"
