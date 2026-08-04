@@ -233,13 +233,19 @@ describe("useAdmin", () => {
     await waitForLoaded(result);
 
     let pending: Promise<void> | undefined;
-    await act(async () => {
+    act(() => {
       pending = result.current.handleBPSChange(
         "relay-1:0x00000000000000000000000000000000000000a1",
         2048
       );
-      await Promise.resolve();
-      expect(result.current.loading).toBe(false);
+    });
+
+    await waitFor(() => {
+      expect(getCalls).toBe(2);
+    });
+    expect(result.current.loading).toBe(false);
+
+    await act(async () => {
       resolveRefresh?.({
         leases: [{ ...buildLease("0x00000000000000000000000000000000000000A1"), bps: 2048 }],
         policy: buildSettings(),

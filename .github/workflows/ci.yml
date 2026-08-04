@@ -45,7 +45,7 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Run Go checks
+      - name: Run Make checks
         run: |
           make vet
           make lint
@@ -55,5 +55,4 @@ jobs:
         working-directory: frontend
         run: |
           npm run lint
-          npm test
           npm run build

@@ -14,7 +14,7 @@ help:
 	@echo "  make install           - Install Go developer tools used by this repo"
 	@echo "  make fmt               - Apply gofmt/goimports"
 	@echo "  make lint-auto         - Run autofix lint/format pipeline"
-	@echo "  make test              - Run Go tests"
+	@echo "  make test              - Run Go and frontend tests"
 	@echo "  make build             - Build Go tunnel and relay server artifacts"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-docs        - Build documentation site (SvelteKit)"
@@ -44,6 +44,7 @@ lint-auto:
 
 test:
 	go test -v -coverprofile=coverage.out $(GO_PACKAGES)
+	cd frontend && npm test
 
 tidy:
 	go get -u ./...
