@@ -21,10 +21,11 @@ func (p *PortPolicy) Set(enabled bool, maxLeases int) {
 }
 
 type runtimeConfig struct {
-	udp               PortPolicy
-	tcpPort           PortPolicy
-	trustProxyHeaders bool
-	trustedProxyCIDRs []*net.IPNet
+	udp                PortPolicy
+	tcpPort            PortPolicy
+	landingPageEnabled bool
+	trustProxyHeaders  bool
+	trustedProxyCIDRs  []*net.IPNet
 }
 
 func (cfg runtimeConfig) snapshot() runtimeConfig {
@@ -179,6 +180,22 @@ func (r *Runtime) SetTCPPortPolicy(enabled bool, maxLeases int) {
 	r.config.UpdateCopy(func(cfg *runtimeConfig) {
 		cfg.tcpPort.Set(enabled, maxLeases)
 	})
+}
+
+func (r *Runtime) SetLandingPageEnabled(enabled bool) {
+	if r == nil || r.config == nil {
+		return
+	}
+	r.config.UpdateCopy(func(cfg *runtimeConfig) {
+		cfg.landingPageEnabled = enabled
+	})
+}
+
+func (r *Runtime) IsLandingPageEnabled() bool {
+	if r == nil || r.config == nil {
+		return false
+	}
+	return r.config.Load().landingPageEnabled
 }
 
 func (r *Runtime) SetProxyTrust(trustProxyHeaders bool, rawTrustedProxyCIDRs string) error {

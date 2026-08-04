@@ -15,7 +15,8 @@ The relay server (`relay-server`) reads configuration from environment variables
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `PORTAL_URL` | `https://localhost:4017` | string | Public base URL of this relay server |
+| `PORTAL_URL` | `https://localhost` | string | Public HTTPS origin of this relay server and embedded dashboard |
+| `PORTAL_FRONTEND_DIR` | `""` | string | Custom SPA directory containing `index.html`; empty uses the frontend embedded in the Portal binary |
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
 | `API_PORT` | `4017` | int | Admin/API server listen port |
 | `SNI_PORT` | `443` | int | TCP SNI router listen port |
@@ -36,6 +37,7 @@ The relay server (`relay-server`) reads configuration from environment variables
 |----------|---------|------|-------------|
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
+| `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
 
 ### Payments
 
@@ -71,19 +73,6 @@ The relay server (`relay-server`) reads configuration from environment variables
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `ADMIN_TOKEN` | | string | Bearer token source for relay admin and policy APIs; set a long random value for production relays |
-
-### Frontend API Service
-
-The TypeScript API service reads these environment
-variables:
-
-| Variable | Default | Type | Description |
-|----------|---------|------|-------------|
-| `PORT` | `8081` | int | Frontend API HTTP listen port |
-| `PORTAL_API_BASE_URL` | `https://portal:4017` | string | Relay API base URL used to compose frontend-owned state |
-| `LANDING_PAGE_ENABLED` | `false` | bool | Default landing page flag when no frontend state has been saved yet |
-| `PORTAL_FRONTEND_STATE_PATH` | `""` | string | Optional JSON file path for persisted frontend-owned state; a Compose deployment can store this under `./.portal-certs/frontend-state/state.json` |
-| `HEADLESS_SHELL_URL` | `""` | string | Headless Chrome CDP WebSocket URL; leave empty to disable generated thumbnails |
 
 ### Cloudflare
 
@@ -160,7 +149,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--description` | | string | | Service description metadata |
 | `--tags` | | string | | Service tags metadata (comma-separated) |
 | `--owner` | | string | | Service owner metadata |
-| `--thumbnail` | | string | | Service thumbnail URL metadata |
+| `--thumbnail` | | string | | User-provided service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
 | `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
@@ -266,7 +255,7 @@ Tunnel fields mirror `portal expose` flags:
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
-| `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
+| `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays; `thumbnail` is a user-provided image URL |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |
 | `x402_testnet` | bool | Use Sui testnet when `x402_network` is omitted; omitted or `false` uses Sui mainnet |
 | `x402_network` | string | Optional CAIP-2 network: `sui:mainnet`, `sui:testnet`, `casper:casper`, or `casper:casper-test` |

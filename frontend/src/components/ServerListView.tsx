@@ -734,36 +734,34 @@ export function ServerListView({
                     />
                   </div>
                 )}
-              </div>
-              {onLandingPageEnabledChange && (
-                <div className="mt-4 flex items-center gap-3 px-4 sm:hidden">
-                  <span className="text-sm font-medium text-text-muted">
-                    Landing
-                  </span>
-                  <div className="flex overflow-hidden rounded-lg border border-foreground/20">
-                    <button
-                      onClick={() => handleLandingPageToggle(true)}
-                      className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
-                        landingPageEnabled
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                      }`}
-                    >
-                      Shown
-                    </button>
-                    <button
-                      onClick={() => handleLandingPageToggle(false)}
-                      className={`cursor-pointer border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${
-                        !landingPageEnabled
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                      }`}
-                    >
-                      Hidden
-                    </button>
+                {onLandingPageEnabledChange && (
+                  <div className="mt-4 flex items-center gap-3 sm:hidden">
+                    <span className="text-sm font-medium text-text-muted">Landing</span>
+                    <div className="flex overflow-hidden rounded-lg border border-foreground/20">
+                      <button
+                        onClick={() => handleLandingPageToggle(true)}
+                        className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
+                          landingPageEnabled
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                        }`}
+                      >
+                        Shown
+                      </button>
+                      <button
+                        onClick={() => handleLandingPageToggle(false)}
+                        className={`cursor-pointer border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${
+                          !landingPageEnabled
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                        }`}
+                      >
+                        Hidden
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
             <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-0">
               <main className="z-0 flex-1">
@@ -794,7 +792,6 @@ export function ServerListView({
                     <LandingHero />
                   </section>
                 )}
-
                 <section
                   id="live-servers"
                   aria-labelledby="live-servers-title"

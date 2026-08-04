@@ -96,7 +96,7 @@ not supported.
 | `--name` | string | auto | Public hostname prefix, one DNS label |
 | `--description` | string | | Service description metadata |
 | `--tags` | string | | Service tags metadata, comma-separated |
-| `--thumbnail` | string | | Service thumbnail URL metadata |
+| `--thumbnail` | string | | User-provided service thumbnail URL metadata |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |

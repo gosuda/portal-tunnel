@@ -59,8 +59,8 @@ func run(args []string) error {
 	cfg := paymentConfig{}
 	fs := utils.NewFlagSet("payment-app", printUsage)
 
-	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://localhost", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with bootstrap relays when discovery is enabled)", "RELAYS")
-	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", false, "include bootstrap relays and enable discovery", "DISCOVERY")
+	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://gosunuts.xyz", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with bootstrap relays when discovery is enabled)", "RELAYS")
+	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", true, "include bootstrap relays and enable discovery", "DISCOVERY")
 	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
@@ -74,7 +74,7 @@ func run(args []string) error {
 	utils.StringFlag(fs, &cfg.photoURL, "photo-url", defaultPhotoURL, "image URL revealed after payment")
 	utils.BoolFlag(fs, &cfg.hide, "hide", false, "hide this lease from listings")
 	utils.BoolFlag(fs, &cfg.x402Testnet, "x402-testnet", true, "use Sui testnet for x402 payments")
-	utils.StringFlag(fs, &cfg.x402PayTo, "x402-pay-to", "", "Sui USDC recipient address")
+	utils.StringFlag(fs, &cfg.x402PayTo, "x402-pay-to", "0x350e1c3fb0408247a14094110f0041d5f822db201d920658783af986d6d39543", "Sui USDC recipient address")
 	utils.StringFlag(fs, &cfg.x402Amount, "x402-amount", "0.01", "USDC amount")
 	utils.RepeatedStringFlag(fs, &cfg.x402Endpoints, "x402-rpc", "Sui gRPC endpoint; repeat to try multiple endpoints before defaults")
 	fs.IntVar(&cfg.x402MaxTimeoutSeconds, "x402-max-timeout", 0, "x402 max payment timeout seconds advertised to clients")

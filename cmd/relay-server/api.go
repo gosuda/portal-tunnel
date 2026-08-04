@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"strings"
@@ -31,9 +32,10 @@ type RelayAPI struct {
 	server          *portal.Server
 	adminToken      string
 	policyStatePath string
+	frontendFS      fs.FS
 }
 
-func NewRelayAPI(server *portal.Server, identityPath, adminToken string) (*RelayAPI, error) {
+func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir string) (*RelayAPI, error) {
 	if server == nil {
 		return nil, errors.New("relay api requires portal server")
 	}
@@ -48,11 +50,16 @@ func NewRelayAPI(server *portal.Server, identityPath, adminToken string) (*Relay
 	if err := loadPolicyState(policyStatePath, server); err != nil {
 		return nil, err
 	}
+	frontendFS, err := resolveFrontendFS(frontendDir)
+	if err != nil {
+		return nil, err
+	}
 
 	api := &RelayAPI{
 		server:          server,
 		adminToken:      strings.TrimSpace(adminToken),
 		policyStatePath: strings.TrimSpace(policyStatePath),
+		frontendFS:      frontendFS,
 	}
 	return api, nil
 }
@@ -60,15 +67,6 @@ func NewRelayAPI(server *portal.Server, identityPath, adminToken string) (*Relay
 func (api *RelayAPI) Handler() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
-		if !utils.RequireMethod(w, r, http.MethodGet) {
-			return
-		}
-		utils.WriteAPIData(w, http.StatusOK, map[string]any{
-			"service": "portal-relay",
-			"root":    api.server.RelayIdentity().Name,
-		})
-	})
 	mux.HandleFunc(types.PathAdmin, api.serveAdmin)
 	mux.HandleFunc(types.PathAdminPrefix, api.serveAdmin)
 	mux.HandleFunc(types.PathPolicy, api.servePolicy)
@@ -81,6 +79,7 @@ func (api *RelayAPI) Handler() *http.ServeMux {
 		serveInstallScript(w, r, api.server.PortalURL(), true)
 	})
 	mux.HandleFunc(types.PathInstallBinPrefix, serveInstallBinary)
+	mux.HandleFunc("/", api.serveFrontend)
 
 	return mux
 }
@@ -92,7 +91,8 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 
 	leases := api.server.PublicLeases()
 	utils.WriteAPIData(w, http.StatusOK, types.PublicStateResponse{
-		Leases: leases,
+		Leases:             leases,
+		LandingPageEnabled: api.server.PolicyRuntime().IsLandingPageEnabled(),
 	})
 }
 
@@ -244,7 +244,8 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 
 func (api *RelayAPI) policySettings(runtime *policy.Runtime) types.PolicySettings {
 	return types.PolicySettings{
-		ApprovalMode: string(runtime.Approver().Mode()),
+		ApprovalMode:       string(runtime.Approver().Mode()),
+		LandingPageEnabled: runtime.IsLandingPageEnabled(),
 		UDP: types.PolicyPortSettings{
 			Enabled:   runtime.IsUDPEnabled(),
 			MaxLeases: runtime.UDPMaxLeases(),
@@ -267,6 +268,7 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, runtime *policy.
 	}
 	api.server.SetUDPPolicy(req.UDP.Enabled, req.UDP.MaxLeases)
 	api.server.SetTCPPortPolicy(req.TCPPort.Enabled, req.TCPPort.MaxLeases)
+	api.server.SetLandingPageEnabled(req.LandingPageEnabled)
 	savePolicyState(api.policyStatePath, runtime)
 	return true
 }
@@ -377,6 +379,7 @@ func savePolicyState(path string, runtime *policy.Runtime) {
 	udpMaxLeases := runtime.UDPMaxLeases()
 	tcpPortEnabled := runtime.IsTCPPortEnabled()
 	tcpPortMaxLeases := runtime.TCPPortMaxLeases()
+	landingPageEnabled := runtime.IsLandingPageEnabled()
 	payload := persistedPolicyState{
 		ApprovalMode:         string(approver.Mode()),
 		ApprovedIdentityKeys: approver.ApprovedKeys(),
@@ -388,6 +391,7 @@ func savePolicyState(path string, runtime *policy.Runtime) {
 		UDPMaxLeases:         &udpMaxLeases,
 		TCPPortEnabled:       &tcpPortEnabled,
 		TCPPortMaxLeases:     &tcpPortMaxLeases,
+		LandingPageEnabled:   &landingPageEnabled,
 	}
 	_ = utils.WriteJSONFile(path, payload, 0o600)
 }
@@ -403,6 +407,7 @@ type persistedPolicyState struct {
 	UDPMaxLeases         *int             `json:"udp_max_leases,omitempty"`
 	TCPPortEnabled       *bool            `json:"tcp_port_enabled,omitempty"`
 	TCPPortMaxLeases     *int             `json:"tcp_port_max_leases,omitempty"`
+	LandingPageEnabled   *bool            `json:"landing_page_enabled,omitempty"`
 }
 
 func applyOptionalPolicy(enabled *bool, maxLeases *int, getEnabled func() bool, getMax func() int, set func(bool, int)) {
@@ -442,6 +447,9 @@ func (s persistedPolicyState) apply(server *portal.Server) error {
 	runtime.BPSManager().SetIdentityBPSLimits(identity.NormalizeIdentityKeyBPS(s.IdentityBPS))
 	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, server.SetUDPPolicy)
 	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, server.SetTCPPortPolicy)
+	if s.LandingPageEnabled != nil {
+		server.SetLandingPageEnabled(*s.LandingPageEnabled)
+	}
 	return nil
 }
 

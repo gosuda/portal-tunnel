@@ -34,25 +34,27 @@ func main() {
 }
 
 type relayServerConfig struct {
-	PortalURL         string
-	IdentityPath      string
-	Bootstraps        string
-	DiscoveryEnabled  bool
-	WireGuardPort     int
-	APIPort           int
-	SNIPort           int
-	TrustProxyHeaders bool
-	TrustedProxyCIDRs string
-	UDPEnabled        bool
-	TCPEnabled        bool
-	MinPort           int
-	MaxPort           int
-	AdminToken        string
-	PProfEnabled      bool
-	PProfAddr         string
-	X402Enabled       bool
-	X402Testnet       bool
-	X402PayTo         string
+	PortalURL          string
+	FrontendDir        string
+	IdentityPath       string
+	Bootstraps         string
+	DiscoveryEnabled   bool
+	WireGuardPort      int
+	APIPort            int
+	SNIPort            int
+	TrustProxyHeaders  bool
+	TrustedProxyCIDRs  string
+	UDPEnabled         bool
+	TCPEnabled         bool
+	LandingPageEnabled bool
+	MinPort            int
+	MaxPort            int
+	AdminToken         string
+	PProfEnabled       bool
+	PProfAddr          string
+	X402Enabled        bool
+	X402Testnet        bool
+	X402PayTo          string
 
 	ACMEDNSProvider    string
 	ENSGaslessEnabled  bool
@@ -74,7 +76,8 @@ func runServeCommand(args []string) error {
 	cfg := relayServerConfig{}
 	fs := utils.NewFlagSet("relay-server", printRootUsage)
 
-	utils.StringFlagEnv(fs, &cfg.PortalURL, "portal-url", "https://localhost:4017", "portal base URL", "PORTAL_URL")
+	utils.StringFlagEnv(fs, &cfg.PortalURL, "portal-url", "https://localhost", "portal base URL", "PORTAL_URL")
+	utils.StringFlagEnv(fs, &cfg.FrontendDir, "frontend-dir", "", "custom SPA directory containing index.html; embedded frontend is used when empty", "PORTAL_FRONTEND_DIR")
 	utils.StringFlagEnv(fs, &cfg.IdentityPath, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "bootstrap relay API URLs; merged with bootstrap relays when discovery is enabled", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
@@ -87,6 +90,7 @@ func runServeCommand(args []string) error {
 
 	utils.BoolFlagEnv(fs, &cfg.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
+	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "show the dashboard landing page", "LANDING_PAGE_ENABLED")
 	utils.IntFlagEnv(fs, &cfg.MinPort, "min-port", 0, utils.ParseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
 	utils.IntFlagEnv(fs, &cfg.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
 
@@ -127,6 +131,7 @@ func runServeCommand(args []string) error {
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
+		Str("frontend_dir", cfg.FrontendDir).
 		Str("identity_path", cfg.IdentityPath).
 		Str("bootstraps", cfg.Bootstraps).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
@@ -137,6 +142,7 @@ func runServeCommand(args []string) error {
 		Str("trusted_proxy_cidrs", cfg.TrustedProxyCIDRs).
 		Bool("udp_enabled", cfg.UDPEnabled).
 		Bool("tcp_enabled", cfg.TCPEnabled).
+		Bool("landing_page_enabled", cfg.LandingPageEnabled).
 		Int("min_port", cfg.MinPort).
 		Int("max_port", cfg.MaxPort).
 		Bool("admin_token_configured", strings.TrimSpace(cfg.AdminToken) != "").
@@ -157,24 +163,25 @@ func runServeCommand(args []string) error {
 
 func runServer(ctx context.Context, cfg relayServerConfig) error {
 	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:         cfg.PortalURL,
-		IdentityPath:      cfg.IdentityPath,
-		Bootstraps:        utils.SplitCSV(cfg.Bootstraps),
-		DiscoveryEnabled:  cfg.DiscoveryEnabled,
-		WireGuardPort:     cfg.WireGuardPort,
-		APIPort:           cfg.APIPort,
-		SNIPort:           cfg.SNIPort,
-		TrustProxyHeaders: cfg.TrustProxyHeaders,
-		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
-		UDPEnabled:        cfg.UDPEnabled,
-		TCPEnabled:        cfg.TCPEnabled,
-		MinPort:           cfg.MinPort,
-		MaxPort:           cfg.MaxPort,
-		PProfEnabled:      cfg.PProfEnabled,
-		PProfListenAddr:   cfg.PProfAddr,
-		X402Enabled:       cfg.X402Enabled,
-		X402Testnet:       cfg.X402Testnet,
-		X402PayTo:         cfg.X402PayTo,
+		PortalURL:          cfg.PortalURL,
+		IdentityPath:       cfg.IdentityPath,
+		Bootstraps:         utils.SplitCSV(cfg.Bootstraps),
+		DiscoveryEnabled:   cfg.DiscoveryEnabled,
+		WireGuardPort:      cfg.WireGuardPort,
+		APIPort:            cfg.APIPort,
+		SNIPort:            cfg.SNIPort,
+		TrustProxyHeaders:  cfg.TrustProxyHeaders,
+		TrustedProxyCIDRs:  cfg.TrustedProxyCIDRs,
+		UDPEnabled:         cfg.UDPEnabled,
+		TCPEnabled:         cfg.TCPEnabled,
+		LandingPageEnabled: cfg.LandingPageEnabled,
+		MinPort:            cfg.MinPort,
+		MaxPort:            cfg.MaxPort,
+		PProfEnabled:       cfg.PProfEnabled,
+		PProfListenAddr:    cfg.PProfAddr,
+		X402Enabled:        cfg.X402Enabled,
+		X402Testnet:        cfg.X402Testnet,
+		X402PayTo:          cfg.X402PayTo,
 		ACME: acme.Config{
 			KeyDir:             cfg.IdentityPath,
 			DNSProvider:        cfg.ACMEDNSProvider,
@@ -197,7 +204,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		return fmt.Errorf("create relay server: %w", err)
 	}
 
-	relayAPI, err := NewRelayAPI(server, cfg.IdentityPath, cfg.AdminToken)
+	relayAPI, err := NewRelayAPI(server, cfg.IdentityPath, cfg.AdminToken, cfg.FrontendDir)
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}

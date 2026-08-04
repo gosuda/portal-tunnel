@@ -55,14 +55,6 @@ jobs:
             echo "${REGISTRY}/gosuda/portal:branch-${safe_ref}"
             echo "${REGISTRY}/gosuda/portal:branch-${safe_ref}-${short_sha}"
             echo "EOF"
-            echo "frontend_image_tags<<EOF"
-            echo "${REGISTRY}/gosuda/portal-frontend:branch-${safe_ref}"
-            echo "${REGISTRY}/gosuda/portal-frontend:branch-${safe_ref}-${short_sha}"
-            echo "EOF"
-            echo "portal_api_image_tags<<EOF"
-            echo "${REGISTRY}/gosuda/portal-api:branch-${safe_ref}"
-            echo "${REGISTRY}/gosuda/portal-api:branch-${safe_ref}-${short_sha}"
-            echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Log in to Container Registry
@@ -93,42 +85,12 @@ jobs:
           cache-from: type=gha,scope=portal
           cache-to: type=gha,mode=max,scope=portal
 
-      - name: Build and push frontend Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          platforms: ${{ env.PLATFORMS }}
-          push: true
-          tags: ${{ steps.meta.outputs.frontend_image_tags }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ steps.meta.outputs.commit_sha }}
-            org.opencontainers.image.ref.name=${{ env.BUILD_REF }}
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
-
-      - name: Build and push portal API Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          target: api
-          platforms: ${{ env.PLATFORMS }}
-          push: true
-          tags: ${{ steps.meta.outputs.portal_api_image_tags }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ steps.meta.outputs.commit_sha }}
-            org.opencontainers.image.ref.name=${{ env.BUILD_REF }}
-          cache-from: type=gha,scope=portal-api
-          cache-to: type=gha,mode=max,scope=portal-api
-
       - name: Build binaries
         shell: bash
         run: |
           mkdir -p release
 
+          make build-frontend
           make build-tunnel
           cp cmd/relay-server/dist/tunnel/portal-* release/
 

@@ -56,12 +56,15 @@ run:
 	./bin/relay-server
 
 # Convenience target
-build: build-tunnel build-server
+build: build-frontend build-tunnel build-server
 
 # Build React frontend with Tailwind CSS 4
 build-frontend:
 	@echo "[frontend] building React frontend..."
 	@cd frontend && npm i && npm run build
+	@rm -rf cmd/relay-server/dist/app
+	@mkdir -p cmd/relay-server/dist/app
+	@cp -R frontend/dist/. cmd/relay-server/dist/app/
 	@echo "[frontend] build complete"
 
 # Build documentation site
@@ -85,13 +88,14 @@ build-tunnel:
 	done
 
 # Build Go relay server
-build-server:
+build-server: build-frontend
 	@echo "[server] building Go portal..."
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/relay-server ./cmd/relay-server
 
 clean:
 	rm -rf bin
 	rm -rf cmd/relay-server/dist/tunnel
+	rm -rf cmd/relay-server/dist/app
 	rm -rf frontend/dist
 
 # Run the uniformity probe. Extra flags are passed through after the target name:

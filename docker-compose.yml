@@ -1,80 +1,4 @@
 services:
-  nginx:
-    image: nginx:stable-alpine
-    depends_on:
-      - portal
-      - portal-frontend
-      - portal-api
-    ports:
-      - "${HTTP_PORT:-80}:80"
-      - "${HTTPS_PORT:-443}:443"
-    environment:
-      PORTAL_URL: ${PORTAL_URL:-https://localhost}
-      NGINX_CERT_FILE: ${NGINX_CERT_FILE:-/etc/nginx/certs/fullchain.pem}
-      NGINX_CERT_KEY: ${NGINX_CERT_KEY:-/etc/nginx/certs/privatekey.pem}
-    volumes:
-      - ./nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
-      - ./.portal-certs:/etc/nginx/certs:ro
-    command:
-      - /bin/sh
-      - -c
-      - |
-        portal_host="$${PORTAL_URL#*://}"
-        portal_host="$${portal_host%%/*}"
-        portal_host="$${portal_host%%:*}"
-        export PORTAL_HOST="$${portal_host:-localhost}"
-
-        export NGINX_CERT_FILE="$${NGINX_CERT_FILE:-/etc/nginx/certs/fullchain.pem}"
-        export NGINX_CERT_KEY="$${NGINX_CERT_KEY:-/etc/nginx/certs/privatekey.pem}"
-        envsubst '$$PORTAL_HOST $$NGINX_CERT_FILE $$NGINX_CERT_KEY' \
-          < /etc/nginx/templates/nginx.conf.template \
-          > /etc/nginx/nginx.conf
-
-        until [ -s "$$NGINX_CERT_FILE" ] && [ -s "$$NGINX_CERT_KEY" ]; do
-          echo "waiting for TLS certificate files: $$NGINX_CERT_FILE and $$NGINX_CERT_KEY"
-          sleep 1
-        done
-        exec nginx -g 'daemon off;'
-    restart: unless-stopped
-
-  # Optional: uncomment to enable auto-generated thumbnails for tunnel apps.
-  # See docs/src/routes/deployment/+page.md for details.
-  # headless-shell:
-  #   image: chromedp/headless-shell:stable
-  #   restart: unless-stopped
-
-  portal-api:
-    image: ghcr.io/gosuda/portal-api:2
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      target: api
-    depends_on:
-      - portal
-      # Uncomment with the headless-shell service above to enable generated screenshots.
-      # - headless-shell
-    environment:
-      PORT: 8081
-      PORTAL_API_BASE_URL: https://portal:4017
-      LANDING_PAGE_ENABLED: ${LANDING_PAGE_ENABLED:-false}
-      PORTAL_FRONTEND_STATE_PATH: /frontend-state/state.json
-      # Leave empty to disable generated screenshots without removing the service.
-      HEADLESS_SHELL_URL: ${HEADLESS_SHELL_URL:-}
-      # HEADLESS_SHELL_URL: ${HEADLESS_SHELL_URL:-ws://headless-shell:9222}
-    volumes:
-      - ./.portal-certs/frontend-state:/frontend-state
-    restart: unless-stopped
-
-  portal-frontend:
-    image: ghcr.io/gosuda/portal-frontend:2
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    depends_on:
-      - portal
-      - portal-api
-    restart: unless-stopped
-
   portal:
     image: ghcr.io/gosuda/portal:2
     build:
@@ -82,6 +6,7 @@ services:
       dockerfile: Dockerfile
     stop_grace_period: 30s
     ports:
+      - "${HTTPS_PORT:-443}:443"
       - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
       # Uncomment for UDP backhaul, public UDP lease ports, and raw TCP lease ports as needed.
       # - "443:443/udp"
@@ -92,6 +17,7 @@ services:
     environment:
       # Public routing, discovery, and relay identity persistence
       PORTAL_URL: ${PORTAL_URL:-https://localhost}
+      PORTAL_FRONTEND_DIR: ${PORTAL_FRONTEND_DIR:-}
       BOOTSTRAPS: ${BOOTSTRAPS:-}
       DISCOVERY: ${DISCOVERY:-false}
       IDENTITY_PATH: ${IDENTITY_PATH:-/portal-certs}
@@ -108,10 +34,11 @@ services:
 
       # Admin/auth configuration.
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      LANDING_PAGE_ENABLED: ${LANDING_PAGE_ENABLED:-false}
       X402_ENABLED: ${X402_ENABLED:-true}
       X402_TESTNET: ${X402_TESTNET:-true}
       X402_PAY_TO: ${X402_PAY_TO:-}
-      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
 
       # Optional diagnostics; keep loopback unless the pprof port is protected.
@@ -137,6 +64,9 @@ services:
       NJALLA_TOKEN: ${NJALLA_TOKEN:-}
     volumes:
       - ./.portal-certs:${IDENTITY_PATH:-/portal-certs}
+      # To replace the embedded SPA, set PORTAL_FRONTEND_DIR=/srv/portal/frontend
+      # and uncomment this read-only mount.
+      # - ./community-frontend/dist:/srv/portal/frontend:ro
       # Uncomment when using a Google Cloud service account file for gcloud automation.
       # - ./gcp-dns.json:/run/secrets/gcp-dns.json:ro
     restart: unless-stopped

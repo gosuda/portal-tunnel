@@ -39,27 +39,28 @@ const (
 )
 
 type ServerConfig struct {
-	PortalURL         string
-	IdentityPath      string
-	Bootstraps        []string
-	DiscoveryEnabled  bool
-	WireGuardPort     int
-	APIPort           int
-	SNIPort           int
-	APIListenAddr     string
-	SNIListenAddr     string
-	TrustProxyHeaders bool
-	TrustedProxyCIDRs string
-	UDPEnabled        bool
-	TCPEnabled        bool
-	MinPort           int
-	MaxPort           int
-	PProfEnabled      bool
-	PProfListenAddr   string
-	X402Enabled       bool
-	X402Testnet       bool
-	X402PayTo         string
-	ACME              acme.Config
+	PortalURL          string
+	IdentityPath       string
+	Bootstraps         []string
+	DiscoveryEnabled   bool
+	WireGuardPort      int
+	APIPort            int
+	SNIPort            int
+	APIListenAddr      string
+	SNIListenAddr      string
+	TrustProxyHeaders  bool
+	TrustedProxyCIDRs  string
+	UDPEnabled         bool
+	TCPEnabled         bool
+	LandingPageEnabled bool
+	MinPort            int
+	MaxPort            int
+	PProfEnabled       bool
+	PProfListenAddr    string
+	X402Enabled        bool
+	X402Testnet        bool
+	X402PayTo          string
+	ACME               acme.Config
 }
 
 func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
@@ -182,6 +183,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		announceLimiter: discovery.NewAnnounceLimiter(0, 0),
 	}
 	server.registry.proxy = &server.proxy
+	server.registry.policy.SetLandingPageEnabled(cfg.LandingPageEnabled)
 	return server, nil
 }
 
@@ -210,6 +212,15 @@ func (s *Server) SetTCPPortPolicy(enabled bool, maxLeases int) {
 	}
 	s.cfg.UpdateCopy(func(cfg *ServerConfig) {
 		cfg.TCPEnabled = enabled
+	})
+}
+
+func (s *Server) SetLandingPageEnabled(enabled bool) {
+	if runtime := s.PolicyRuntime(); runtime != nil {
+		runtime.SetLandingPageEnabled(enabled)
+	}
+	s.cfg.UpdateCopy(func(cfg *ServerConfig) {
+		cfg.LandingPageEnabled = enabled
 	})
 }
 

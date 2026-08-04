@@ -73,21 +73,6 @@ configured admin token.
 | `GET`/`HEAD` | `/api/install.sh`, `/api/install.ps1` | None | install script |
 | `GET`/`HEAD` | `/api/install/bin/{slug}` | None | install binary or redirect |
 
-### Frontend Presentation API
-
-These paths are served by the TypeScript API service when the static frontend stack is
-enabled. They live under `/ui/` and are derived from relay APIs plus frontend-owned
-presentation state.
-
-| Method | Path | Auth | Response |
-|--------|------|------|----------|
-| `GET` | `/ui/state` | None | `PublicStateResponse` plus `landing_page_enabled` |
-| `GET` | `/ui/service/status?hostname=...` | None | `ServiceStatusResponse` |
-| `GET` | `/ui/policy/state` | Admin bearer | `PolicyStateResponse` plus `landing_page_enabled` in `policy` |
-| `GET`/`POST` | `/ui/policy` | Admin bearer | `PolicySettings` plus `landing_page_enabled` |
-| `POST` | `/ui/policy/leases`, `/ui/policy/ips` | Admin bearer | relay policy update response |
-| `GET` | `/ui/thumbnail/{hostname}` | None | generated image |
-
 ### SDK
 
 | Method | Path | Auth | Body | Response |
@@ -178,7 +163,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 |-------|------|-------|
 | `description` | `string` | optional |
 | `owner` | `string` | optional |
-| `thumbnail` | `string` | optional URL or data value |
+| `thumbnail` | `string` | optional user-provided image URL |
 | `tags` | `string[]` | optional |
 | `hide` | `boolean` | hidden leases are omitted from the public state |
 
@@ -203,13 +188,12 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `client_ip`, `reported_ip` | `string` |
 | `is_approved`, `is_banned`, `is_denied`, `is_ip_banned` | `boolean` |
 
-`ServiceStatusResponse`:
+`PublicStateResponse`:
 
 | Field | Type |
 |-------|------|
-| `hostname` | `string` |
-| `registered` | `boolean` |
-| `service_alive` | `boolean` |
+| `leases` | `Lease[]` |
+| `landing_page_enabled` | `boolean` |
 
 `PolicyStateResponse`:
 
@@ -230,6 +214,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | Field | Type |
 |-------|------|
 | `approval_mode` | `"auto"` or `"manual"` |
+| `landing_page_enabled` | `boolean` |
 | `udp` | `PolicyPortSettings` |
 | `tcp_port` | `PolicyPortSettings` |
 

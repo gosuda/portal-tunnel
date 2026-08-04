@@ -15,29 +15,11 @@ concurrency:
 
 jobs:
   build-and-push:
-    name: Build and Push Docker Images
+    name: Build and Push Portal Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: gosuda/portal
-            context: .
-            file: Dockerfile
-            cache_scope: portal
-          - image: gosuda/portal-frontend
-            context: ./frontend
-            file: ./frontend/Dockerfile
-            cache_scope: frontend
-          - image: gosuda/portal-api
-            context: ./frontend
-            file: ./frontend/Dockerfile
-            target: api
-            cache_scope: portal-api
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -59,7 +41,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ matrix.image }}
+          images: ${{ env.REGISTRY }}/gosuda/portal
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
@@ -70,15 +52,14 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          target: ${{ matrix.target }}
+          context: .
+          file: Dockerfile
           platforms: ${{ env.PLATFORMS }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.cache_scope }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+          cache-from: type=gha,scope=portal
+          cache-to: type=gha,mode=max,scope=portal
 
   release-binaries:
     name: Build and Release Tunnel Binaries
