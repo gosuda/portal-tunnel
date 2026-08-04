@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-GO_PACKAGES := ./cmd/... ./portal/... ./sdk/... ./types/...
+GO_PACKAGES := ./cmd/... ./portal/... ./sdk/... ./types/... ./utils/...
 GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
 GOIMPORTS_VERSION := v0.41.0
 GOLANGCI_LINT_VERSION := v2.11.1
@@ -61,7 +61,7 @@ build: build-frontend build-tunnel build-server
 # Build React frontend with Tailwind CSS 4
 build-frontend:
 	@echo "[frontend] building React frontend..."
-	@cd frontend && npm i && npm run build
+	@cd frontend && npm ci && npm run build
 	@rm -rf cmd/relay-server/dist/app
 	@mkdir -p cmd/relay-server/dist/app
 	@cp -R frontend/dist/. cmd/relay-server/dist/app/

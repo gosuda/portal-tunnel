@@ -43,7 +43,7 @@ The envelope does not apply to streaming or delegated endpoints:
 | `/api/x402/*` | relay-owned x402 facilitator response |
 | `/api/install.sh`, `/api/install.ps1`, `/api/install/bin/*` | script or binary bytes |
 
-Unknown routes may be handled by the frontend/proxy layer or return a normal
+Unknown routes may be handled by the frontend fallback or return a normal
 HTTP 404 outside the envelope.
 
 ## Auth Schemes
@@ -67,7 +67,7 @@ configured admin token.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| `GET` | `/` | None | service identity |
+| `GET` | `/` | None | selected SPA `index.html` |
 | `GET` | `/api/healthz` | None | `{ "status": "ok" }` |
 | `GET` | `/api/state` | None | `PublicStateResponse` |
 | `GET`/`HEAD` | `/api/install.sh`, `/api/install.ps1` | None | install script |

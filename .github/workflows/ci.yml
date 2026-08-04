@@ -28,14 +28,32 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
       - name: Download dependencies
         run: go mod download
 
       - name: Install CI tools
         run: make install
 
-      - name: Run checks
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run Go checks
         run: |
           make vet
           make lint
           make test
+
+      - name: Run frontend checks
+        working-directory: frontend
+        run: |
+          npm run lint
+          npm test
+          npm run build

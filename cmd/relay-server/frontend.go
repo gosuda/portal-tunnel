@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io/fs"
 	"mime"
@@ -14,27 +16,38 @@ import (
 
 const embeddedFrontendRoot = "dist/app"
 
+type frontendAsset struct {
+	contentType string
+	data        []byte
+	gzipData    []byte
+}
+
 func resolveFrontendFS(frontendDir string) (fs.FS, error) {
 	frontendDir = strings.TrimSpace(frontendDir)
+	var frontendFS fs.FS
+	frontendSource := "embedded frontend"
+
 	if frontendDir == "" {
-		frontendFS, err := fs.Sub(embeddedDistFS, embeddedFrontendRoot)
+		var err error
+		frontendFS, err = fs.Sub(embeddedDistFS, embeddedFrontendRoot)
 		if err != nil {
 			return nil, fmt.Errorf("open embedded frontend: %w", err)
 		}
-		return frontendFS, nil
+	} else {
+		absDir, err := filepath.Abs(frontendDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve frontend directory %q: %w", frontendDir, err)
+		}
+		frontendFS = os.DirFS(absDir)
+		frontendSource = fmt.Sprintf("frontend directory %q", absDir)
 	}
 
-	absDir, err := filepath.Abs(frontendDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve frontend directory %q: %w", frontendDir, err)
-	}
-	frontendFS := os.DirFS(absDir)
 	entry, err := fs.Stat(frontendFS, "index.html")
 	if err != nil {
-		return nil, fmt.Errorf("frontend directory %q requires index.html: %w", absDir, err)
+		return nil, fmt.Errorf("%s requires index.html: %w", frontendSource, err)
 	}
 	if !entry.Mode().IsRegular() {
-		return nil, fmt.Errorf("frontend directory %q requires a regular index.html", absDir)
+		return nil, fmt.Errorf("%s requires a regular index.html", frontendSource)
 	}
 	return frontendFS, nil
 }
@@ -47,34 +60,40 @@ func (api *RelayAPI) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestPath := path.Clean("/" + strings.TrimSpace(r.URL.Path))
-	if reservedPortalPath(requestPath) {
-		http.NotFound(w, r)
-		return
-	}
-
-	assetPath := strings.TrimPrefix(requestPath, "/")
-	if assetPath == "" || assetPath == "." {
-		assetPath = "index.html"
-	}
-	data, err := fs.ReadFile(api.frontendFS, assetPath)
-	if err != nil {
-		if path.Ext(assetPath) != "" {
+	for _, prefix := range []string{"/api", "/sdk", "/discovery", "/v1"} {
+		if requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/") {
 			http.NotFound(w, r)
 			return
 		}
+	}
+
+	assetPath := strings.TrimPrefix(requestPath, "/")
+	if assetPath == "" {
 		assetPath = "index.html"
-		data, err = fs.ReadFile(api.frontendFS, assetPath)
+	}
+	asset, err := api.loadFrontendAsset(assetPath)
+	if err != nil {
+		assetPath = "index.html"
+		asset, err = api.loadFrontendAsset(assetPath)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
 	}
 
-	contentType := mime.TypeByExtension(path.Ext(assetPath))
-	if contentType == "" {
-		contentType = http.DetectContentType(data)
+	data := asset.data
+	w.Header().Set("Content-Type", asset.contentType)
+	if len(asset.gzipData) > 0 {
+		w.Header().Add("Vary", "Accept-Encoding")
+		for value := range strings.SplitSeq(r.Header.Get("Accept-Encoding"), ",") {
+			encoding, _, _ := strings.Cut(value, ";")
+			if strings.EqualFold(strings.TrimSpace(encoding), "gzip") {
+				data = asset.gzipData
+				w.Header().Set("Content-Encoding", "gzip")
+				break
+			}
+		}
 	}
-	w.Header().Set("Content-Type", contentType)
 	if assetPath == "index.html" {
 		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 	} else {
@@ -87,11 +106,41 @@ func (api *RelayAPI) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func reservedPortalPath(requestPath string) bool {
-	for _, prefix := range []string{"/api", "/sdk", "/discovery", "/v1"} {
-		if requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/") {
-			return true
-		}
+func (api *RelayAPI) loadFrontendAsset(assetPath string) (*frontendAsset, error) {
+	if cached, ok := api.frontendCache.Load(assetPath); ok {
+		return cached.(*frontendAsset), nil
 	}
-	return false
+
+	data, err := fs.ReadFile(api.frontendFS, assetPath)
+	if err != nil {
+		return nil, err
+	}
+	contentType := mime.TypeByExtension(path.Ext(assetPath))
+	if contentType == "" {
+		contentType = http.DetectContentType(data)
+	}
+	asset := &frontendAsset{contentType: contentType, data: data}
+	compressible := strings.HasPrefix(contentType, "text/") ||
+		strings.HasPrefix(contentType, "application/javascript") ||
+		strings.HasPrefix(contentType, "application/json") ||
+		strings.HasPrefix(contentType, "application/wasm") ||
+		strings.HasPrefix(contentType, "application/xml") ||
+		strings.HasPrefix(contentType, "image/svg+xml")
+	if len(data) >= 1024 && compressible {
+		var compressed bytes.Buffer
+		writer, err := gzip.NewWriterLevel(&compressed, gzip.BestSpeed)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := writer.Write(data); err != nil {
+			_ = writer.Close()
+			return nil, err
+		}
+		if err := writer.Close(); err != nil {
+			return nil, err
+		}
+		asset.gzipData = compressed.Bytes()
+	}
+	actual, _ := api.frontendCache.LoadOrStore(assetPath, asset)
+	return actual.(*frontendAsset), nil
 }

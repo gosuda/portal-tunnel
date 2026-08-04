@@ -181,7 +181,7 @@ docker compose up -d portal
 When `PORTAL_FRONTEND_DIR` is empty, use an image built after the embedded
 frontend migration. When it is set, confirm the mounted directory contains
 `index.html` and all asset paths expected by that file. `/admin` and other
-extensionless client routes fall back to the selected SPA's `index.html`.
+non-reserved client routes fall back to the selected SPA's `index.html`.
 
 ### Certificate Errors
 

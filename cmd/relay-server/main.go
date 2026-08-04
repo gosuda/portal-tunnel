@@ -163,25 +163,24 @@ func runServeCommand(args []string) error {
 
 func runServer(ctx context.Context, cfg relayServerConfig) error {
 	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:          cfg.PortalURL,
-		IdentityPath:       cfg.IdentityPath,
-		Bootstraps:         utils.SplitCSV(cfg.Bootstraps),
-		DiscoveryEnabled:   cfg.DiscoveryEnabled,
-		WireGuardPort:      cfg.WireGuardPort,
-		APIPort:            cfg.APIPort,
-		SNIPort:            cfg.SNIPort,
-		TrustProxyHeaders:  cfg.TrustProxyHeaders,
-		TrustedProxyCIDRs:  cfg.TrustedProxyCIDRs,
-		UDPEnabled:         cfg.UDPEnabled,
-		TCPEnabled:         cfg.TCPEnabled,
-		LandingPageEnabled: cfg.LandingPageEnabled,
-		MinPort:            cfg.MinPort,
-		MaxPort:            cfg.MaxPort,
-		PProfEnabled:       cfg.PProfEnabled,
-		PProfListenAddr:    cfg.PProfAddr,
-		X402Enabled:        cfg.X402Enabled,
-		X402Testnet:        cfg.X402Testnet,
-		X402PayTo:          cfg.X402PayTo,
+		PortalURL:         cfg.PortalURL,
+		IdentityPath:      cfg.IdentityPath,
+		Bootstraps:        utils.SplitCSV(cfg.Bootstraps),
+		DiscoveryEnabled:  cfg.DiscoveryEnabled,
+		WireGuardPort:     cfg.WireGuardPort,
+		APIPort:           cfg.APIPort,
+		SNIPort:           cfg.SNIPort,
+		TrustProxyHeaders: cfg.TrustProxyHeaders,
+		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
+		UDPEnabled:        cfg.UDPEnabled,
+		TCPEnabled:        cfg.TCPEnabled,
+		MinPort:           cfg.MinPort,
+		MaxPort:           cfg.MaxPort,
+		PProfEnabled:      cfg.PProfEnabled,
+		PProfListenAddr:   cfg.PProfAddr,
+		X402Enabled:       cfg.X402Enabled,
+		X402Testnet:       cfg.X402Testnet,
+		X402PayTo:         cfg.X402PayTo,
 		ACME: acme.Config{
 			KeyDir:             cfg.IdentityPath,
 			DNSProvider:        cfg.ACMEDNSProvider,
@@ -204,7 +203,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		return fmt.Errorf("create relay server: %w", err)
 	}
 
-	relayAPI, err := NewRelayAPI(server, cfg.IdentityPath, cfg.AdminToken, cfg.FrontendDir)
+	relayAPI, err := NewRelayAPI(server, cfg.IdentityPath, cfg.AdminToken, cfg.FrontendDir, cfg.LandingPageEnabled)
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}

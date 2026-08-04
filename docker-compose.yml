@@ -6,7 +6,7 @@ services:
       dockerfile: Dockerfile
     stop_grace_period: 30s
     ports:
-      - "${HTTPS_PORT:-443}:443"
+      - "443:443"
       - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
       # Uncomment for UDP backhaul, public UDP lease ports, and raw TCP lease ports as needed.
       # - "443:443/udp"
@@ -35,8 +35,8 @@ services:
       # Admin/auth configuration.
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       LANDING_PAGE_ENABLED: ${LANDING_PAGE_ENABLED:-false}
-      X402_ENABLED: ${X402_ENABLED:-true}
-      X402_TESTNET: ${X402_TESTNET:-true}
+      X402_ENABLED: ${X402_ENABLED:-false}
+      X402_TESTNET: ${X402_TESTNET:-false}
       X402_PAY_TO: ${X402_PAY_TO:-}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}

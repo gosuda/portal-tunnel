@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/portal"
@@ -19,6 +20,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog/log"
 )
 
 //go:embed dist/*
@@ -29,13 +31,16 @@ const (
 )
 
 type RelayAPI struct {
-	server          *portal.Server
-	adminToken      string
-	policyStatePath string
-	frontendFS      fs.FS
+	server             *portal.Server
+	adminToken         string
+	policyStatePath    string
+	frontendFS         fs.FS
+	frontendCache      sync.Map
+	policyMu           sync.RWMutex
+	landingPageEnabled bool
 }
 
-func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir string) (*RelayAPI, error) {
+func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
 	if server == nil {
 		return nil, errors.New("relay api requires portal server")
 	}
@@ -47,19 +52,20 @@ func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir st
 	if policyStatePath == "" {
 		return nil, errors.New("relay api requires identity path")
 	}
-	if err := loadPolicyState(policyStatePath, server); err != nil {
-		return nil, err
-	}
 	frontendFS, err := resolveFrontendFS(frontendDir)
 	if err != nil {
 		return nil, err
 	}
 
 	api := &RelayAPI{
-		server:          server,
-		adminToken:      strings.TrimSpace(adminToken),
-		policyStatePath: strings.TrimSpace(policyStatePath),
-		frontendFS:      frontendFS,
+		server:             server,
+		adminToken:         strings.TrimSpace(adminToken),
+		policyStatePath:    strings.TrimSpace(policyStatePath),
+		frontendFS:         frontendFS,
+		landingPageEnabled: landingPageEnabled,
+	}
+	if err := api.loadPolicyState(); err != nil {
+		return nil, err
 	}
 	return api, nil
 }
@@ -90,27 +96,25 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leases := api.server.PublicLeases()
+	api.policyMu.RLock()
+	landingPageEnabled := api.landingPageEnabled
+	api.policyMu.RUnlock()
 	utils.WriteAPIData(w, http.StatusOK, types.PublicStateResponse{
 		Leases:             leases,
-		LandingPageEnabled: api.server.PolicyRuntime().IsLandingPageEnabled(),
+		LandingPageEnabled: landingPageEnabled,
 	})
 }
 
-func loadPolicyState(path string, server *portal.Server) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil
-	}
-
+func (api *RelayAPI) loadPolicyState() error {
 	var payload persistedPolicyState
-	loaded, err := utils.ReadJSONFileIfExists(path, &payload)
+	loaded, err := utils.ReadJSONFileIfExists(api.policyStatePath, &payload)
 	if err != nil {
 		return err
 	}
 	if !loaded {
 		return nil
 	}
-	return payload.apply(server)
+	return payload.apply(api)
 }
 
 func (api *RelayAPI) serveAdmin(w http.ResponseWriter, r *http.Request) {
@@ -177,13 +181,22 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 	case types.PathPolicy:
 		switch r.Method {
 		case http.MethodGet:
-			utils.WriteAPIData(w, http.StatusOK, api.policySettings(runtime))
+			api.policyMu.RLock()
+			settings := api.policySettings(runtime)
+			api.policyMu.RUnlock()
+			utils.WriteAPIData(w, http.StatusOK, settings)
 		case http.MethodPost:
 			req, ok := utils.DecodeJSONRequestAs[types.PolicySettings](w, r, controlBodyLimit, invalidRequestBody)
 			if !ok {
 				return
 			}
+			api.policyMu.Lock()
+			defer api.policyMu.Unlock()
+			previous := api.policyState(runtime)
 			if !api.applyPolicySettings(w, runtime, req) {
+				return
+			}
+			if !api.persistPolicyState(w, runtime, previous) {
 				return
 			}
 			utils.WriteAPIData(w, http.StatusOK, api.policySettings(runtime))
@@ -195,9 +208,12 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
+		api.policyMu.RLock()
+		settings := api.policySettings(runtime)
+		api.policyMu.RUnlock()
 		leases := api.server.PolicyLeases()
 		utils.WriteAPIData(w, http.StatusOK, types.PolicyStateResponse{
-			Policy: api.policySettings(runtime),
+			Policy: settings,
 			Leases: leases,
 		})
 	case types.PathPolicyLeases:
@@ -208,6 +224,9 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		api.policyMu.Lock()
+		defer api.policyMu.Unlock()
+		previous := api.policyState(runtime)
 		identityKey, ok := normalizePolicyIdentityKey(w, req.IdentityKey)
 		if !ok {
 			return
@@ -215,7 +234,9 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		if !applyLeasePolicyUpdate(w, runtime, identityKey, req) {
 			return
 		}
-		savePolicyState(api.policyStatePath, runtime)
+		if !api.persistPolicyState(w, runtime, previous) {
+			return
+		}
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 	case types.PathPolicyIPs:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
@@ -225,6 +246,9 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		api.policyMu.Lock()
+		defer api.policyMu.Unlock()
+		previous := api.policyState(runtime)
 		ip := strings.TrimSpace(req.IP)
 		if net.ParseIP(ip) == nil {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidIP, "invalid IP address")
@@ -235,7 +259,9 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		} else {
 			runtime.IPFilter().UnbanIP(ip)
 		}
-		savePolicyState(api.policyStatePath, runtime)
+		if !api.persistPolicyState(w, runtime, previous) {
+			return
+		}
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 	default:
 		http.NotFound(w, r)
@@ -245,7 +271,7 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 func (api *RelayAPI) policySettings(runtime *policy.Runtime) types.PolicySettings {
 	return types.PolicySettings{
 		ApprovalMode:       string(runtime.Approver().Mode()),
-		LandingPageEnabled: runtime.IsLandingPageEnabled(),
+		LandingPageEnabled: api.landingPageEnabled,
 		UDP: types.PolicyPortSettings{
 			Enabled:   runtime.IsUDPEnabled(),
 			MaxLeases: runtime.UDPMaxLeases(),
@@ -268,8 +294,7 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, runtime *policy.
 	}
 	api.server.SetUDPPolicy(req.UDP.Enabled, req.UDP.MaxLeases)
 	api.server.SetTCPPortPolicy(req.TCPPort.Enabled, req.TCPPort.MaxLeases)
-	api.server.SetLandingPageEnabled(req.LandingPageEnabled)
-	savePolicyState(api.policyStatePath, runtime)
+	api.landingPageEnabled = req.LandingPageEnabled
 	return true
 }
 
@@ -368,19 +393,30 @@ func (api *RelayAPI) tokenAllowed(raw string) bool {
 	return subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
 }
 
-func savePolicyState(path string, runtime *policy.Runtime) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return
+func (api *RelayAPI) persistPolicyState(w http.ResponseWriter, runtime *policy.Runtime, previous persistedPolicyState) bool {
+	if err := api.savePolicyState(api.policyState(runtime)); err != nil {
+		log.Error().Err(err).Str("path", api.policyStatePath).Msg("persist relay policy state")
+		if rollbackErr := previous.apply(api); rollbackErr != nil {
+			log.Error().Err(rollbackErr).Msg("roll back relay policy state")
+		}
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "policy could not be persisted")
+		return false
 	}
+	return true
+}
 
+func (api *RelayAPI) savePolicyState(payload persistedPolicyState) error {
+	return utils.WriteJSONFile(api.policyStatePath, payload, 0o600)
+}
+
+func (api *RelayAPI) policyState(runtime *policy.Runtime) persistedPolicyState {
 	approver := runtime.Approver()
 	udpEnabled := runtime.IsUDPEnabled()
 	udpMaxLeases := runtime.UDPMaxLeases()
 	tcpPortEnabled := runtime.IsTCPPortEnabled()
 	tcpPortMaxLeases := runtime.TCPPortMaxLeases()
-	landingPageEnabled := runtime.IsLandingPageEnabled()
-	payload := persistedPolicyState{
+	landingPageEnabled := api.landingPageEnabled
+	return persistedPolicyState{
 		ApprovalMode:         string(approver.Mode()),
 		ApprovedIdentityKeys: approver.ApprovedKeys(),
 		DeniedIdentityKeys:   approver.DeniedKeys(),
@@ -393,7 +429,6 @@ func savePolicyState(path string, runtime *policy.Runtime) {
 		TCPPortMaxLeases:     &tcpPortMaxLeases,
 		LandingPageEnabled:   &landingPageEnabled,
 	}
-	_ = utils.WriteJSONFile(path, payload, 0o600)
 }
 
 type persistedPolicyState struct {
@@ -425,14 +460,9 @@ func applyOptionalPolicy(enabled *bool, maxLeases *int, getEnabled func() bool, 
 	set(e, m)
 }
 
-func (s persistedPolicyState) apply(server *portal.Server) error {
-	if server == nil {
-		return nil
-	}
+func (s persistedPolicyState) apply(api *RelayAPI) error {
+	server := api.server
 	runtime := server.PolicyRuntime()
-	if runtime == nil {
-		return nil
-	}
 	if mode := strings.TrimSpace(s.ApprovalMode); mode != "" {
 		if err := runtime.Approver().SetMode(policy.Mode(mode)); err != nil {
 			return err
@@ -448,7 +478,7 @@ func (s persistedPolicyState) apply(server *portal.Server) error {
 	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, server.SetUDPPolicy)
 	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, server.SetTCPPortPolicy)
 	if s.LandingPageEnabled != nil {
-		server.SetLandingPageEnabled(*s.LandingPageEnabled)
+		api.landingPageEnabled = *s.LandingPageEnabled
 	}
 	return nil
 }

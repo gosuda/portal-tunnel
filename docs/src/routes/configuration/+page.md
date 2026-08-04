@@ -19,7 +19,7 @@ The relay server (`relay-server`) reads configuration from environment variables
 | `PORTAL_FRONTEND_DIR` | `""` | string | Custom SPA directory containing `index.html`; empty uses the frontend embedded in the Portal binary |
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
 | `API_PORT` | `4017` | int | Admin/API server listen port |
-| `SNI_PORT` | `443` | int | TCP SNI router listen port |
+| `SNI_PORT` | `443` | int | TCP SNI router listen port; non-standard values are intended for local testing, while the bundled public deployment requires `443` |
 | `WIREGUARD_PORT` | `51820` | int | Public and listen UDP port for relay discovery overlay |
 
 ### Transport

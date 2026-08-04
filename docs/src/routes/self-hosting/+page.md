@@ -170,7 +170,8 @@ Port `443` is commonly taken by another process. Check what's listening:
 sudo ss -tlnp | grep ':443'
 ```
 
-Stop the conflicting service or change `SNI_PORT` and update your firewall rules accordingly.
+Stop or reconfigure the conflicting service. The bundled public deployment
+requires TCP `443` because Portal publishes standard HTTPS tunnel URLs.
 
 **DNS not resolving**
 
