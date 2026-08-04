@@ -149,7 +149,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--description` | | string | | Service description metadata |
 | `--tags` | | string | | Service tags metadata (comma-separated) |
 | `--owner` | | string | | Service owner metadata |
-| `--thumbnail` | | string | | User-provided service thumbnail URL metadata |
+| `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
 | `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
@@ -255,7 +255,7 @@ Tunnel fields mirror `portal expose` flags:
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
-| `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays; `thumbnail` is a user-provided image URL |
+| `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |
 | `x402_testnet` | bool | Use Sui testnet when `x402_network` is omitted; omitted or `false` uses Sui mainnet |
 | `x402_network` | string | Optional CAIP-2 network: `sui:mainnet`, `sui:testnet`, `casper:casper`, or `casper:casper-test` |

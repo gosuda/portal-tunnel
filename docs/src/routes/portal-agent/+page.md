@@ -213,7 +213,7 @@ Common fields:
 | `multi_hop` | Explicit ordered multi-hop relay URLs |
 | `multi_hop_depth` | Automatically choose one multi-hop route with this depth |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
-| `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata; `thumbnail` is a user-provided image URL |
+| `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
 | `x402_pay_to` | Payment recipient for paid HTTP routes |
 | `x402_testnet` | Use Sui testnet when `x402_network` is omitted |
 | `x402_network` | Optional Sui or Casper CAIP-2 network |

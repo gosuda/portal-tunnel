@@ -163,7 +163,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 |-------|------|-------|
 | `description` | `string` | optional |
 | `owner` | `string` | optional |
-| `thumbnail` | `string` | optional user-provided image URL |
+| `thumbnail` | `string` | optional URL or data value |
 | `tags` | `string[]` | optional |
 | `hide` | `boolean` | hidden leases are omitted from the public state |
 

@@ -72,7 +72,7 @@ docker compose up -d
 | Variable | Default | Description |
 |---|---|---|
 | `PORTAL_URL` | `https://localhost` | Public HTTPS origin of the relay and embedded dashboard. |
-| `API_PORT` | `4017` | Internal Admin/API server port; do not publish it in the bundled deployment. |
+| `API_PORT` | `4017` | Internal Admin/API server port. |
 | `SNI_PORT` | `443` | TCP SNI router port for tunnel traffic. |
 | `IDENTITY_PATH` | `./.portal-certs` | Relay state directory containing `identity.json`, `policy.json`, and TLS materials. |
 | `ADMIN_TOKEN` | | Bearer token source for relay admin and policy APIs. |
