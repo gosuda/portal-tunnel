@@ -92,9 +92,7 @@ build-tunnel:
 # Build Go relay server
 build-server: build-frontend build-server-bin
 
-# Compile only the relay server binary; assumes frontend assets are already in
-# cmd/relay-server/dist/app (used by the Dockerfile, which builds them in a
-# separate stage).
+# Binary only; assumes frontend assets already exist in cmd/relay-server/dist/app.
 build-server-bin:
 	@echo "[server] building Go portal..."
 	CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o bin/relay-server ./cmd/relay-server

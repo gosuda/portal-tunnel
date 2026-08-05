@@ -43,8 +43,7 @@ const (
 	PathDiscoveryAnnounce = PathDiscovery + "/announce"
 )
 
-// ReservedRootPrefixes are relay-owned root-host path trees that must never
-// be served by the SPA frontend fallback.
+// ReservedRootPrefixes are relay-owned root-host path trees never served by the SPA fallback.
 var ReservedRootPrefixes = []string{PathAPIPrefix, PathSDKPrefix, PathDiscovery, PathV1Prefix}
 
 const (

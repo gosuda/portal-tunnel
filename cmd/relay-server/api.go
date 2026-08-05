@@ -37,9 +37,8 @@ type RelayAPI struct {
 	frontendFS           fs.FS
 	frontendCache        sync.Map
 	frontendCacheEnabled bool
-	// policyWriteMu serializes policy mutations end to end, including the
-	// state-file write; policyMu only guards in-memory reads so readers never
-	// block on disk I/O.
+	// policyWriteMu serializes mutations including the state-file write;
+	// policyMu guards in-memory state only, so readers never block on disk I/O.
 	policyWriteMu      sync.Mutex
 	policyMu           sync.RWMutex
 	landingPageEnabled bool

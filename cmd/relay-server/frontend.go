@@ -33,7 +33,7 @@ func resolveFrontendFS(frontendDir string) (fs.FS, error) {
 		var err error
 		frontendFS, err = fs.Sub(embeddedDistFS, embeddedFrontendRoot)
 		if err != nil {
-			return nil, fmt.Errorf("open embedded frontend (run 'make build-frontend' before building the relay server): %w", err)
+			return nil, fmt.Errorf("open embedded frontend: %w", err)
 		}
 	} else {
 		absDir, err := filepath.Abs(frontendDir)
@@ -47,7 +47,7 @@ func resolveFrontendFS(frontendDir string) (fs.FS, error) {
 	entry, err := fs.Stat(frontendFS, "index.html")
 	if err != nil {
 		if frontendDir == "" {
-			return nil, fmt.Errorf("embedded frontend is missing index.html; run 'make build-frontend' before building the relay server: %w", err)
+			return nil, fmt.Errorf("embedded frontend is missing index.html; run 'make build-frontend' first: %w", err)
 		}
 		return nil, fmt.Errorf("%s requires index.html: %w", frontendSource, err)
 	}
@@ -78,9 +78,7 @@ func (api *RelayAPI) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 	asset, err := api.loadFrontendAsset(assetPath)
 	if err != nil {
-		// Missing static assets (paths with a recognized file extension) must
-		// 404 instead of serving HTML with a wrong content type; only
-		// client-route-looking paths fall back to the SPA entry point.
+		// Missing static assets 404; only client-route-looking paths fall back.
 		if assetPath == "index.html" || mime.TypeByExtension(path.Ext(assetPath)) != "" {
 			http.NotFound(w, r)
 			return
