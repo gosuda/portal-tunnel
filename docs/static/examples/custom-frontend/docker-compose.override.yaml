@@ -1,8 +1,0 @@
-# Replace only the frontend image. The service name stays portal-frontend so the
-# existing nginx route to portal-frontend:8080 does not change.
-
-services:
-  portal-frontend:
-    image: your-registry/portal-custom-frontend:latest
-    environment:
-      PORT: 8080

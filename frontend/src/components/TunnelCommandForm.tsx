@@ -9,7 +9,7 @@ import { Check, Copy, RefreshCw, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
-import type { ServiceStatusResponse } from "@/types/api";
+import type { PublicStateResponse } from "@/types/api";
 import { cn } from "@/lib/utils";
 import {
   buildTunnelPreviewURL,
@@ -96,20 +96,22 @@ function HeroTunnelCommandForm({
 
     const poll = async () => {
       try {
-        const params = new URLSearchParams({ hostname: statusHostname });
-        const statusResponse = await apiClient.get<ServiceStatusResponse>(
-          `${BROWSER_API_PATHS.service.status}?${params.toString()}`
+        const state = await apiClient.get<PublicStateResponse>(
+          BROWSER_API_PATHS.public.state
         );
         if (cancelled) {
           return;
         }
 
-        if (!statusResponse.registered) {
+        const lease = state.leases?.find(
+          (candidate) => candidate.hostname.trim().toLowerCase() === statusHostname
+        );
+        if (!lease) {
           setServiceStatus("waiting");
           return;
         }
 
-        setServiceStatus(statusResponse.service_alive ? "alive" : "registered");
+        setServiceStatus(lease.ready > 0 ? "alive" : "registered");
       } catch {
         if (!cancelled) {
           setServiceStatus("waiting");

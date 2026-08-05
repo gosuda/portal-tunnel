@@ -5,13 +5,9 @@ description: Run your own Portal relay for private tunneling.
 
 # Self-Hosting Guide
 
-This guide is for developers who want their own API-only relay for a single
-project or team. It runs the `portal` relay image directly and exposes relay API
-paths plus tunnel ingress without the hosted dashboard, `/ui/*` presentation API,
-generated thumbnails, or frontend-owned landing page state.
-
-If you need the browser dashboard and presentation API behind one public HTTPS
-origin, use the [Deployment Guide](/deployment) instead.
+This guide is for developers who want their own relay for a single project or
+team. The `portal` image serves the dashboard, relay APIs, and tunnel ingress
+from one public HTTPS origin.
 
 You should have a relay running and accepting tunnel connections in about 10 minutes.
 
@@ -20,9 +16,7 @@ You should have a relay running and accepting tunnel connections in about 10 min
 - Docker installed on your server
 - A Linux server with a static public IP
 - A domain name you control (e.g. `relay.example.com`)
-- Inbound ports open on your server:
-  - `443/tcp` — SNI router (tunnel traffic)
-  - `4017/tcp` — Admin/API port (tunnel registration)
+- Inbound `443/tcp` open for the dashboard, relay APIs, and SNI tunnel traffic
 
 ## Quick Start
 
@@ -35,8 +29,7 @@ docker run -d \
   --name portal-relay \
   --restart unless-stopped \
   -p 443:443 \
-  -p 4017:4017 \
-  -e PORTAL_URL=https://relay.example.com:4017 \
+  -e PORTAL_URL=https://relay.example.com \
   -e IDENTITY_PATH=/portal-certs \
   -e ADMIN_TOKEN="$(openssl rand -hex 32)" \
   -v $(pwd)/relay-data:/portal-certs \
@@ -58,9 +51,8 @@ services:
     restart: unless-stopped
     ports:
       - "443:443"
-      - "4017:4017"
     environment:
-      PORTAL_URL: https://relay.example.com:4017
+      PORTAL_URL: https://relay.example.com
       API_PORT: "4017"
       SNI_PORT: "443"
       IDENTITY_PATH: /portal-certs
@@ -79,11 +71,12 @@ docker compose up -d
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORTAL_URL` | `https://localhost:4017` | Public base URL of your relay. Tunnels use this to register. |
-| `API_PORT` | `4017` | Admin/API server port. |
+| `PORTAL_URL` | `https://localhost` | Public HTTPS origin of the relay and embedded dashboard. |
+| `API_PORT` | `4017` | Internal Admin/API server port. |
 | `SNI_PORT` | `443` | TCP SNI router port for tunnel traffic. |
 | `IDENTITY_PATH` | `./.portal-certs` | Relay state directory containing `identity.json`, `policy.json`, and TLS materials. |
 | `ADMIN_TOKEN` | | Bearer token source for relay admin and policy APIs. |
+| `LANDING_PAGE_ENABLED` | `false` | Initial dashboard landing-page visibility; admin changes persist in `policy.json`. |
 
 ## Optional: Enable Relay-Owned Sui x402 Facilitator
 
@@ -115,7 +108,7 @@ resources.
 Point `portal-tunnel` at your relay with the `--relays` flag:
 
 ```bash
-portal expose --relays https://relay.example.com:4017 --discovery=false localhost:3000
+portal expose --relays https://relay.example.com --discovery=false localhost:3000
 ```
 
 The `--relays` flag accepts a comma-separated list of relay API URLs. If you omit the scheme, `https` is assumed.
@@ -123,7 +116,7 @@ The `--relays` flag accepts a comma-separated list of relay API URLs. If you omi
 To avoid typing `--relays` every time, use a shell alias:
 
 ```bash
-alias portal-relay='portal expose --relays https://relay.example.com:4017 --discovery=false'
+alias portal-relay='portal expose --relays https://relay.example.com --discovery=false'
 portal-relay localhost:3000
 ```
 
@@ -177,7 +170,8 @@ Port `443` is commonly taken by another process. Check what's listening:
 sudo ss -tlnp | grep ':443'
 ```
 
-Stop the conflicting service or change `SNI_PORT` and update your firewall rules accordingly.
+Stop or reconfigure the conflicting service. The bundled public deployment
+requires TCP `443` because Portal publishes standard HTTPS tunnel URLs.
 
 **DNS not resolving**
 
@@ -191,12 +185,11 @@ If nothing returns, check your DNS provider dashboard and allow more time for pr
 
 **Firewall blocking connections**
 
-Ensure both ports are open in your cloud provider's security group or firewall:
+Ensure the public HTTPS port is open in your cloud provider's security group or firewall:
 
 ```bash
 # UFW example
 sudo ufw allow 443/tcp
-sudo ufw allow 4017/tcp
 ```
 
 **Certificate errors**

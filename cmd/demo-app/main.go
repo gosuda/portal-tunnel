@@ -100,7 +100,7 @@ func runUDPCommand(args []string) error {
 	cfg := demoConfig{}
 	fs := utils.NewFlagSet("demo-app-udp", printUDPUsage)
 
-	registerConnectivityFlags(fs, &cfg, "https://localhost:4017")
+	registerConnectivityFlags(fs, &cfg, "https://localhost")
 	utils.StringFlag(fs, &cfg.name, "name", "demo-udp", "public hostname prefix (single DNS label)")
 	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo UDP echo service", "lease description")
 	utils.StringFlag(fs, &cfg.tags, "tags", "demo,udp,echo", "comma-separated lease tags")

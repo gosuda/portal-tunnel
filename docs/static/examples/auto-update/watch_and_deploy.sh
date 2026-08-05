@@ -3,17 +3,16 @@ set -euo pipefail
 
 default_images() {
     docker compose config --images 2>/dev/null \
-        | grep -E '^ghcr\.io/gosuda/portal(:|-frontend:|-api:)' \
+        | grep -E '^ghcr\.io/gosuda/portal:' \
         | sort -u \
         | tr '\n' ' ' || true
 }
 
 IMAGES="${IMAGES:-$(default_images)}"
-IMAGES="${IMAGES:-ghcr.io/gosuda/portal:2 ghcr.io/gosuda/portal-frontend:2 ghcr.io/gosuda/portal-api:2}"
+IMAGES="${IMAGES:-ghcr.io/gosuda/portal:2}"
 DIGEST_FILE="${DIGEST_FILE:-.portal_image_digest}"
 INTERVAL="${INTERVAL:-60}"
-SERVICES="${SERVICES:-portal portal-frontend portal-api}"
-RELOAD_NGINX="${RELOAD_NGINX:-true}"
+SERVICES="${SERVICES:-portal}"
 
 get_remote_digest() {
     for image in $IMAGES; do
@@ -32,11 +31,7 @@ echo "Compose services: $SERVICES"
 
 update_services() {
     docker compose pull $SERVICES
-    docker compose up -d $SERVICES
-
-    if [[ "$RELOAD_NGINX" == "true" ]]; then
-        docker compose exec -T nginx nginx -s reload
-    fi
+    docker compose up -d --force-recreate --remove-orphans $SERVICES
 }
 
 while true; do

@@ -373,7 +373,7 @@ func ResolvePortalRelayURLs(explicit []string, includeBootstrap bool) ([]string,
 
 	defaults, err := NormalizeRelayURLs(types.BootstrapRelays...)
 	if err != nil {
-		return explicit, nil
+		return nil, err
 	}
 	if len(defaults) == 0 {
 		return explicit, nil

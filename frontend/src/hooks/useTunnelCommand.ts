@@ -12,7 +12,7 @@ import {
 
 export const DEFAULT_HOST = "3000";
 
-const FALLBACK_ORIGIN = "https://localhost:4017";
+const FALLBACK_ORIGIN = "https://localhost";
 const TUNNEL_NAME_SEED_STORAGE_KEY = "portal:tunnel-name-seed";
 
 export function readCurrentOrigin(): string {

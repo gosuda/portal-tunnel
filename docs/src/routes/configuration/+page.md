@@ -15,10 +15,11 @@ The relay server (`relay-server`) reads configuration from environment variables
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `PORTAL_URL` | `https://localhost:4017` | string | Public base URL of this relay server |
+| `PORTAL_URL` | `https://localhost` | string | Public HTTPS origin of this relay server and embedded dashboard |
+| `PORTAL_FRONTEND_DIR` | `""` | string | Custom SPA directory containing `index.html`; empty uses the frontend embedded in the Portal binary |
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
 | `API_PORT` | `4017` | int | Admin/API server listen port |
-| `SNI_PORT` | `443` | int | TCP SNI router listen port |
+| `SNI_PORT` | `443` | int | TCP SNI router listen port; non-standard values are intended for local testing, while the bundled public deployment requires `443` |
 | `WIREGUARD_PORT` | `51820` | int | Public and listen UDP port for relay discovery overlay |
 
 ### Transport
@@ -36,6 +37,7 @@ The relay server (`relay-server`) reads configuration from environment variables
 |----------|---------|------|-------------|
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
+| `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
 
 ### Payments
 
@@ -71,19 +73,6 @@ The relay server (`relay-server`) reads configuration from environment variables
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `ADMIN_TOKEN` | | string | Bearer token source for relay admin and policy APIs; set a long random value for production relays |
-
-### Frontend API Service
-
-The TypeScript API service reads these environment
-variables:
-
-| Variable | Default | Type | Description |
-|----------|---------|------|-------------|
-| `PORT` | `8081` | int | Frontend API HTTP listen port |
-| `PORTAL_API_BASE_URL` | `https://portal:4017` | string | Relay API base URL used to compose frontend-owned state |
-| `LANDING_PAGE_ENABLED` | `false` | bool | Default landing page flag when no frontend state has been saved yet |
-| `PORTAL_FRONTEND_STATE_PATH` | `""` | string | Optional JSON file path for persisted frontend-owned state; a Compose deployment can store this under `./.portal-certs/frontend-state/state.json` |
-| `HEADLESS_SHELL_URL` | `""` | string | Headless Chrome CDP WebSocket URL; leave empty to disable generated thumbnails |
 
 ### Cloudflare
 

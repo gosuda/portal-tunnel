@@ -26,7 +26,7 @@ function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
       name: serviceName || hostname || "(unnamed)",
       description: metadata.description || "",
       tags: metadata.tags,
-      thumbnail: resolveLeaseThumbnail(metadata, hostname),
+      thumbnail: resolveLeaseThumbnail(metadata),
       owner: metadata.owner || "",
       online: (row.ready || 0) > 0,
       dns: hostname,

@@ -32,7 +32,7 @@ If you plan to run your own relay server:
 - A server with a public IP address
 - A domain name with DNS pointing to the server
 - TLS certificate material, either managed through ACME or manually provided
-- Open inbound `443/tcp` and `4017/tcp`
+- Open inbound `443/tcp`
 - Optional UDP and raw TCP transport port ranges
 
 ## Optional

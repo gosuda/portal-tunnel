@@ -9,11 +9,11 @@ import {
 describe("tunnelCommand", () => {
   it("keeps copied unix commands flat and directly pasteable", () => {
     const options = {
-      currentOrigin: "https://localhost:4017",
+      currentOrigin: "https://localhost",
       target: "3000",
       name: "My App",
       nameSeed: "web_portal",
-      relayUrls: ["https://localhost:4017"],
+      relayUrls: ["https://localhost"],
       discovery: true,
       thumbnailURL: "",
       os: "unix" as const,
@@ -23,8 +23,8 @@ describe("tunnelCommand", () => {
 
     expect(command).toBe(
       [
-        "curl -ksSL https://localhost:4017/api/install.sh | bash",
-        "portal expose 3000 --name my-app --relays https://localhost:4017",
+        "curl -ksSL https://localhost/api/install.sh | bash",
+        "portal expose 3000 --name my-app --relays https://localhost",
       ].join("\n")
     );
     expect(command).not.toContain(" \\\n");
@@ -61,11 +61,11 @@ describe("tunnelCommand", () => {
 
   it("serves a static path with --serve for file share links", () => {
     const options = {
-      currentOrigin: "https://localhost:4017",
+      currentOrigin: "https://localhost",
       target: "",
       name: "my-app",
       nameSeed: "web_portal",
-      relayUrls: ["https://localhost:4017"],
+      relayUrls: ["https://localhost"],
       discovery: true,
       thumbnailURL: "",
       os: "unix" as const,
@@ -75,8 +75,8 @@ describe("tunnelCommand", () => {
 
     expect(buildTunnelCommand(options)).toBe(
       [
-        "curl -ksSL https://localhost:4017/api/install.sh | bash",
-        "portal expose --serve /Users/me/site/main.html --name my-app --relays https://localhost:4017",
+        "curl -ksSL https://localhost/api/install.sh | bash",
+        "portal expose --serve /Users/me/site/main.html --name my-app --relays https://localhost",
       ].join("\n")
     );
   });
@@ -113,7 +113,7 @@ describe("tunnelCommand", () => {
   it("uses the relay root host for preview URLs instead of a placeholder host", () => {
     expect(
       buildTunnelPreviewURL(
-        "https://localhost:4017",
+        "https://localhost",
         "my-app",
         "3000",
         "web_portal"

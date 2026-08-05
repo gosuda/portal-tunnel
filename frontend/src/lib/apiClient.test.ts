@@ -40,9 +40,9 @@ describe("apiClient", () => {
       jsonResponse({ ok: true, data: { status: "ok" } }),
     );
 
-    await apiClient.get("/ui/state");
+    await apiClient.get("/api/state");
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://portal.example.com/custom/ui/state");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://portal.example.com/custom/api/state");
   });
 
   it("treats an API base URL suffix as the public edge root", async () => {
@@ -51,9 +51,9 @@ describe("apiClient", () => {
       jsonResponse({ ok: true, data: { status: "ok" } }),
     );
 
-    await apiClient.get("/ui/state");
+    await apiClient.get("/api/state");
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://portal.example.com/ui/state");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://portal.example.com/api/state");
   });
 
   it("rejects successful non-envelope JSON payloads", async () => {
@@ -187,7 +187,7 @@ describe("apiClient", () => {
     writeAdminAuthToken("admin-token");
     fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true, data: {} }));
 
-    await apiClient.post("/ui/policy/leases", {
+    await apiClient.post("/api/policy/leases", {
       identity_key: "relay:0x1",
       is_approved: true,
     });

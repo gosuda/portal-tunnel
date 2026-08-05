@@ -119,12 +119,6 @@ export interface DiscoveryResponse {
   relays?: RelayDescriptor[];
 }
 
-export interface ServiceStatusResponse {
-  hostname: string;
-  registered: boolean;
-  service_alive: boolean;
-}
-
 export interface LeasePolicyUpdate {
   identity_key: string;
   bps?: number;
