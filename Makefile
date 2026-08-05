@@ -1,8 +1,9 @@
-.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server clean load-test
+.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean load-test
 
 .DEFAULT_GOAL := help
 
 GO_PACKAGES := ./cmd/... ./portal/... ./sdk/... ./types/... ./utils/...
+GO_BUILD_FLAGS := -trimpath -ldflags "-s -w"
 GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
 GOIMPORTS_VERSION := v0.41.0
 GOLANGCI_LINT_VERSION := v2.11.1
@@ -57,7 +58,7 @@ run:
 	./bin/relay-server
 
 # Convenience target
-build: build-frontend build-tunnel build-server
+build: build-tunnel build-server
 
 # Build React frontend with Tailwind CSS 4
 build-frontend:
@@ -84,14 +85,19 @@ build-tunnel:
 			if [ "$${GOOS}" = "windows" ]; then EXT=".exe"; fi; \
 			OUT="cmd/relay-server/dist/tunnel/portal-$${GOOS}-$${GOARCH}$${EXT}"; \
 			echo " - $${OUT}"; \
-			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build -trimpath -ldflags "-s -w" -o "$${OUT}" ./cmd/portal-tunnel; \
+			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build $(GO_BUILD_FLAGS) -o "$${OUT}" ./cmd/portal-tunnel; \
 		done; \
 	done
 
 # Build Go relay server
-build-server: build-frontend
+build-server: build-frontend build-server-bin
+
+# Compile only the relay server binary; assumes frontend assets are already in
+# cmd/relay-server/dist/app (used by the Dockerfile, which builds them in a
+# separate stage).
+build-server-bin:
 	@echo "[server] building Go portal..."
-	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/relay-server ./cmd/relay-server
+	CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o bin/relay-server ./cmd/relay-server
 
 clean:
 	rm -rf bin

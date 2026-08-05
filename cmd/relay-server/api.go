@@ -31,11 +31,16 @@ const (
 )
 
 type RelayAPI struct {
-	server             *portal.Server
-	adminToken         string
-	policyStatePath    string
-	frontendFS         fs.FS
-	frontendCache      sync.Map
+	server               *portal.Server
+	adminToken           string
+	policyStatePath      string
+	frontendFS           fs.FS
+	frontendCache        sync.Map
+	frontendCacheEnabled bool
+	// policyWriteMu serializes policy mutations end to end, including the
+	// state-file write; policyMu only guards in-memory reads so readers never
+	// block on disk I/O.
+	policyWriteMu      sync.Mutex
 	policyMu           sync.RWMutex
 	landingPageEnabled bool
 }
@@ -58,11 +63,12 @@ func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir st
 	}
 
 	api := &RelayAPI{
-		server:             server,
-		adminToken:         strings.TrimSpace(adminToken),
-		policyStatePath:    strings.TrimSpace(policyStatePath),
-		frontendFS:         frontendFS,
-		landingPageEnabled: landingPageEnabled,
+		server:               server,
+		adminToken:           strings.TrimSpace(adminToken),
+		policyStatePath:      strings.TrimSpace(policyStatePath),
+		frontendFS:           frontendFS,
+		frontendCacheEnabled: strings.TrimSpace(frontendDir) == "",
+		landingPageEnabled:   landingPageEnabled,
 	}
 	if err := api.loadPolicyState(); err != nil {
 		return nil, err
@@ -190,16 +196,21 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			api.policyWriteMu.Lock()
+			defer api.policyWriteMu.Unlock()
 			api.policyMu.Lock()
-			defer api.policyMu.Unlock()
 			previous := api.policyState(runtime)
 			if !api.applyPolicySettings(w, runtime, req) {
+				api.policyMu.Unlock()
 				return
 			}
-			if !api.persistPolicyState(w, runtime, previous) {
+			payload := api.policyState(runtime)
+			settings := api.policySettings(runtime)
+			api.policyMu.Unlock()
+			if !api.persistPolicyState(w, previous, payload) {
 				return
 			}
-			utils.WriteAPIData(w, http.StatusOK, api.policySettings(runtime))
+			utils.WriteAPIData(w, http.StatusOK, settings)
 		default:
 			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 			utils.MethodNotAllowedError().Write(w)
@@ -224,17 +235,21 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		api.policyMu.Lock()
-		defer api.policyMu.Unlock()
-		previous := api.policyState(runtime)
 		identityKey, ok := normalizePolicyIdentityKey(w, req.IdentityKey)
 		if !ok {
 			return
 		}
+		api.policyWriteMu.Lock()
+		defer api.policyWriteMu.Unlock()
+		api.policyMu.Lock()
+		previous := api.policyState(runtime)
 		if !applyLeasePolicyUpdate(w, runtime, identityKey, req) {
+			api.policyMu.Unlock()
 			return
 		}
-		if !api.persistPolicyState(w, runtime, previous) {
+		payload := api.policyState(runtime)
+		api.policyMu.Unlock()
+		if !api.persistPolicyState(w, previous, payload) {
 			return
 		}
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
@@ -246,20 +261,23 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		api.policyMu.Lock()
-		defer api.policyMu.Unlock()
-		previous := api.policyState(runtime)
 		ip := strings.TrimSpace(req.IP)
 		if net.ParseIP(ip) == nil {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidIP, "invalid IP address")
 			return
 		}
+		api.policyWriteMu.Lock()
+		defer api.policyWriteMu.Unlock()
+		api.policyMu.Lock()
+		previous := api.policyState(runtime)
 		if req.IsBanned {
 			runtime.IPFilter().BanIP(ip)
 		} else {
 			runtime.IPFilter().UnbanIP(ip)
 		}
-		if !api.persistPolicyState(w, runtime, previous) {
+		payload := api.policyState(runtime)
+		api.policyMu.Unlock()
+		if !api.persistPolicyState(w, previous, payload) {
 			return
 		}
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
@@ -393,10 +411,13 @@ func (api *RelayAPI) tokenAllowed(raw string) bool {
 	return subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
 }
 
-func (api *RelayAPI) persistPolicyState(w http.ResponseWriter, runtime *policy.Runtime, previous persistedPolicyState) bool {
-	if err := api.savePolicyState(api.policyState(runtime)); err != nil {
+func (api *RelayAPI) persistPolicyState(w http.ResponseWriter, previous, payload persistedPolicyState) bool {
+	if err := api.savePolicyState(payload); err != nil {
 		log.Error().Err(err).Str("path", api.policyStatePath).Msg("persist relay policy state")
-		if rollbackErr := previous.apply(api); rollbackErr != nil {
+		api.policyMu.Lock()
+		rollbackErr := previous.apply(api)
+		api.policyMu.Unlock()
+		if rollbackErr != nil {
 			log.Error().Err(rollbackErr).Msg("roll back relay policy state")
 		}
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "policy could not be persisted")
