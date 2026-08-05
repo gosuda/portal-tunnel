@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const embeddedFrontendRoot = "dist/app"
@@ -44,6 +46,9 @@ func resolveFrontendFS(frontendDir string) (fs.FS, error) {
 
 	entry, err := fs.Stat(frontendFS, "index.html")
 	if err != nil {
+		if frontendDir == "" {
+			return nil, fmt.Errorf("embedded frontend is missing index.html; run 'make build-frontend' first: %w", err)
+		}
 		return nil, fmt.Errorf("%s requires index.html: %w", frontendSource, err)
 	}
 	if !entry.Mode().IsRegular() {
@@ -60,7 +65,7 @@ func (api *RelayAPI) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestPath := path.Clean("/" + strings.TrimSpace(r.URL.Path))
-	for _, prefix := range []string{"/api", "/sdk", "/discovery", "/v1"} {
+	for _, prefix := range types.ReservedRootPrefixes {
 		if requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/") {
 			http.NotFound(w, r)
 			return
@@ -73,6 +78,11 @@ func (api *RelayAPI) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 	asset, err := api.loadFrontendAsset(assetPath)
 	if err != nil {
+		// Missing static assets 404; only client-route-looking paths fall back.
+		if assetPath == "index.html" || mime.TypeByExtension(path.Ext(assetPath)) != "" {
+			http.NotFound(w, r)
+			return
+		}
 		assetPath = "index.html"
 		asset, err = api.loadFrontendAsset(assetPath)
 		if err != nil {
@@ -107,8 +117,10 @@ func (api *RelayAPI) serveFrontend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *RelayAPI) loadFrontendAsset(assetPath string) (*frontendAsset, error) {
-	if cached, ok := api.frontendCache.Load(assetPath); ok {
-		return cached.(*frontendAsset), nil
+	if api.frontendCacheEnabled {
+		if cached, ok := api.frontendCache.Load(assetPath); ok {
+			return cached.(*frontendAsset), nil
+		}
 	}
 
 	data, err := fs.ReadFile(api.frontendFS, assetPath)
@@ -140,6 +152,9 @@ func (api *RelayAPI) loadFrontendAsset(assetPath string) (*frontendAsset, error)
 			return nil, err
 		}
 		asset.gzipData = compressed.Bytes()
+	}
+	if !api.frontendCacheEnabled {
+		return asset, nil
 	}
 	actual, _ := api.frontendCache.LoadOrStore(assetPath, asset)
 	return actual.(*frontendAsset), nil

@@ -27,7 +27,8 @@ const (
 	X402VerifyPath      = PathX402Facilitator + "/verify"
 	X402SettlePath      = PathX402Facilitator + "/settle"
 
-	PathV1Sign = "/v1/sign"
+	PathV1Prefix = "/v1"
+	PathV1Sign   = PathV1Prefix + "/sign"
 
 	PathSDKPrefix            = "/sdk"
 	PathSDKDomain            = PathSDKPrefix + "/domain"
@@ -41,6 +42,9 @@ const (
 	PathDiscovery         = "/discovery"
 	PathDiscoveryAnnounce = PathDiscovery + "/announce"
 )
+
+// ReservedRootPrefixes are relay-owned root-host path trees never served by the SPA fallback.
+var ReservedRootPrefixes = []string{PathAPIPrefix, PathSDKPrefix, PathDiscovery, PathV1Prefix}
 
 const (
 	X402PreparePath = "/x402/prepare"
