@@ -981,6 +981,24 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		return false
 	}
 
+	if retries == 1 {
+		transport := ""
+		switch {
+		case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTCPPortExhausted}):
+			transport = "tcp"
+		case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUDPPortExhausted}):
+			transport = "udp"
+		}
+		if transport != "" {
+			logger.Warn().
+				Err(err).
+				Str("transport", transport).
+				Dur("retry_wait", l.retryWait).
+				Msg("raw transport port pool exhausted; waiting for a port")
+			return utils.SleepOrDone(ctx, l.retryWait)
+		}
+	}
+
 	logger.Debug().
 		Err(err).
 		Int("retry_attempt", retries).
