@@ -36,7 +36,8 @@ from this repository:
 ```bash
 cd cmd/portal-tunnel
 mkdir -p identity
-sudo chown -R 65532:65532 identity
+# Linux only: Docker Desktop on macOS and Windows maps host ownership for you.
+if [ "$(uname)" = Linux ]; then sudo chown -R 65532:65532 identity; fi
 PORTAL_TUNNEL_TARGET=host.docker.internal:3000 \
 PORTAL_TUNNEL_NAME=my-app \
 docker compose up -d
@@ -58,11 +59,17 @@ agent config with its state directory inside the identity mount, then start the
 agent in the foreground:
 
 ```bash
-sudo tee identity/config.toml >/dev/null <<'EOF'
-[agent]
-state_dir = "/identity"
-EOF
-sudo chown 65532:65532 identity/config.toml
+mkdir -p identity
+CONFIG='[agent]
+state_dir = "/identity"'
+# On Linux the mount is owned by uid 65532, so seed it with sudo and hand the
+# whole directory back. Docker Desktop on macOS and Windows maps ownership.
+if [ "$(uname)" = Linux ]; then
+  printf '%s\n' "$CONFIG" | sudo tee identity/config.toml >/dev/null
+  sudo chown -R 65532:65532 identity
+else
+  printf '%s\n' "$CONFIG" > identity/config.toml
+fi
 docker compose run --rm portal-tunnel \
   agent run --foreground --config /identity/config.toml
 ```

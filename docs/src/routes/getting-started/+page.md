@@ -42,7 +42,8 @@ and start the tunnel-specific Compose project:
 git clone https://github.com/gosuda/portal-tunnel.git
 cd portal-tunnel/cmd/portal-tunnel
 mkdir -p identity
-sudo chown -R 65532:65532 identity
+# Linux only: Docker Desktop on macOS and Windows maps host ownership for you.
+if [ "$(uname)" = Linux ]; then sudo chown -R 65532:65532 identity; fi
 PORTAL_TUNNEL_TARGET=host.docker.internal:3000 \
 PORTAL_TUNNEL_NAME=my-app \
 docker compose up -d
