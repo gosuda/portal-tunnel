@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build-and-push:
-    name: Build and Push Portal Image
+    name: Build and Push Container Images
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -60,6 +60,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=portal
           cache-to: type=gha,mode=max,scope=portal
+
+      - name: Extract tunnel image metadata
+        id: tunnel_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/gosuda/portal-tunnel
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,enable=true,prefix=sha-,suffix=,format=short
+
+      - name: Build and push tunnel Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: cmd/portal-tunnel/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.tunnel_meta.outputs.tags }}
+          labels: ${{ steps.tunnel_meta.outputs.labels }}
+          cache-from: type=gha,scope=portal-tunnel
+          cache-to: type=gha,mode=max,scope=portal-tunnel
 
   release-binaries:
     name: Build and Release Tunnel Binaries

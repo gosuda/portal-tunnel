@@ -140,6 +140,22 @@ the default state directory or an explicit `--state-dir`.
 `portal agent run --service` is the internal service entrypoint installed by
 `portal agent run`. Operators normally do not run it directly.
 
+### Docker Compose TUI
+
+From the repository's `cmd/portal-tunnel` directory, create an empty config in
+the host-mounted identity directory and run the foreground agent:
+
+```bash
+mkdir -p identity
+touch identity/config.toml
+docker compose run --rm portal-tunnel \
+  agent run --foreground --config /identity/config.toml
+```
+
+`docker compose run` attaches the current terminal, so the dashboard opens
+there. Its changes persist in `./identity/config.toml`; press `Ctrl+C` to stop
+the agent.
+
 ## Dashboard
 
 The dashboard is a local terminal UI. It polls agent status every two seconds

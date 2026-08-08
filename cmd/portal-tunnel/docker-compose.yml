@@ -1,0 +1,16 @@
+services:
+  portal-tunnel:
+    image: ${PORTAL_TUNNEL_IMAGE:-ghcr.io/gosuda/portal-tunnel:latest}
+    build:
+      context: ../..
+      dockerfile: cmd/portal-tunnel/Dockerfile
+    command:
+      - expose
+      - ${PORTAL_TUNNEL_TARGET:-host.docker.internal:3000}
+      - --name
+      - ${PORTAL_TUNNEL_NAME:-my-app}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ${PORTAL_TUNNEL_IDENTITY_DIR:-./identity}:/identity
+    restart: unless-stopped

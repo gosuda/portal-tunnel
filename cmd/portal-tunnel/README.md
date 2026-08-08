@@ -30,6 +30,53 @@ curl -sSL https://portal.example.com/api/install.sh | bash
 portal expose 3000 --relays https://portal.example.com --discovery=false
 ```
 
+Run the multi-architecture container image (`linux/amd64` and `linux/arm64`):
+
+```bash
+docker run --rm --init \
+  --add-host=host.docker.internal:host-gateway \
+  -v "$PWD/identity:/identity" \
+  ghcr.io/gosuda/portal-tunnel:latest \
+  expose host.docker.internal:3000 --name my-app
+```
+
+The host directory `./identity` persists the tunnel identity at
+`/identity/identity.json`. When
+the target also runs in Docker, attach both containers to the same network and
+use the target container name instead of `host.docker.internal`.
+
+For a restartable Compose deployment from this repository:
+
+```bash
+cd cmd/portal-tunnel
+PORTAL_TUNNEL_TARGET=host.docker.internal:3000 \
+PORTAL_TUNNEL_NAME=my-app \
+docker compose up -d
+docker compose logs -f portal-tunnel
+```
+
+Compose uses `ghcr.io/gosuda/portal-tunnel:latest` by default. Run `docker
+compose pull` to refresh it, use `docker compose up -d --build` to build from
+the current checkout, or set `PORTAL_TUNNEL_IMAGE` to select another published
+tag. Set `PORTAL_TUNNEL_IDENTITY_DIR` to use a different host directory.
+
+### Agent Dashboard TUI
+
+The Compose service also supports the interactive agent dashboard. Create an
+empty agent config in the mounted identity directory, then start the agent in
+the foreground:
+
+```bash
+mkdir -p identity
+touch identity/config.toml
+docker compose run --rm portal-tunnel \
+  agent run --foreground --config /identity/config.toml
+```
+
+The dashboard appears in the current terminal. Use **Add Tunnel** to create the
+first tunnel; its configuration and identities are saved under `./identity`.
+Press `Ctrl+C` to stop the foreground agent.
+
 ## Modes
 
 Default HTTPS stream for most local web apps:
