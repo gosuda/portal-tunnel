@@ -45,7 +45,9 @@ var errLeaseRefreshRequired = errors.New("lease refresh required")
 func shouldDropRelayFromActivePool(err error) bool {
 	return errors.Is(err, errRelayIncompatible) ||
 		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) ||
-		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTransportMismatch})
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTransportMismatch}) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUDPDisabled}) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTCPPortDisabled})
 }
 
 func isTerminalRelayError(err error) bool {

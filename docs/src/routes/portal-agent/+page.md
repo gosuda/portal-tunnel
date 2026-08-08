@@ -142,19 +142,9 @@ the default state directory or an explicit `--state-dir`.
 
 ### Docker Compose TUI
 
-From the repository's `cmd/portal-tunnel` directory, create an empty config in
-the host-mounted identity directory and run the foreground agent:
-
-```bash
-mkdir -p identity
-touch identity/config.toml
-docker compose run --rm portal-tunnel \
-  agent run --foreground --config /identity/config.toml
-```
-
-`docker compose run` attaches the current terminal, so the dashboard opens
-there. Its changes persist in `./identity/config.toml`; press `Ctrl+C` to stop
-the agent.
+See the [Portal CLI Docker Compose instructions](https://github.com/gosuda/portal-tunnel/blob/main/cmd/portal-tunnel/README.md#agent-dashboard-tui)
+for the single maintained setup, including persistent agent state and host
+directory permissions.
 
 ## Dashboard
 

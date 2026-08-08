@@ -53,12 +53,15 @@ Set `PORTAL_TUNNEL_IDENTITY_DIR` to use a different host directory.
 
 ### Agent Dashboard TUI
 
-The Compose service also supports the interactive agent dashboard. Create an
-empty agent config in the mounted identity directory, then start the agent in
-the foreground:
+The Compose service also supports the interactive agent dashboard. Seed a new
+agent config with its state directory inside the identity mount, then start the
+agent in the foreground:
 
 ```bash
-sudo touch identity/config.toml
+sudo tee identity/config.toml >/dev/null <<'EOF'
+[agent]
+state_dir = "/identity"
+EOF
 sudo chown 65532:65532 identity/config.toml
 docker compose run --rm portal-tunnel \
   agent run --foreground --config /identity/config.toml

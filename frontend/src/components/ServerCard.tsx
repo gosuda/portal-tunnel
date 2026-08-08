@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
 import { BadgeDollarSign } from "lucide-react";
@@ -92,7 +92,8 @@ export function ServerCard({
   const [showBPSModal, setShowBPSModal] = useState(false);
   const [bpsInput, setBpsInput] = useState(bps.toString());
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedProtocol, setCopiedProtocol] = useState<string | null>(null);
+  const copyTimeoutRef = useRef<number | undefined>(undefined);
   const effectiveThumbnail = thumbnailFailed ? "" : thumbnail;
   const normalizedPaymentLabel = paymentLabel.trim();
   const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
@@ -109,6 +110,8 @@ export function ServerCard({
   useEffect(() => {
     setThumbnailFailed(false);
   }, [thumbnail]);
+
+  useEffect(() => () => window.clearTimeout(copyTimeoutRef.current), []);
 
   const bpsSteps = [0, 10, 100, 1000, 10000, 100000, 1000000, 10000000];
 
@@ -153,10 +156,17 @@ export function ServerCard({
     onToggleFavorite?.(serverId);
   };
 
-  const copyEndpoint = (address: string) => {
-    void navigator.clipboard?.writeText(address);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
+  const copyEndpoint = async (protocol: string, address: string) => {
+    if (!navigator.clipboard) return;
+
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopiedProtocol(protocol);
+      window.clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = window.setTimeout(() => setCopiedProtocol(null), 1500);
+    } catch {
+      // Clipboard access can be denied outside a secure, user-initiated context.
+    }
   };
 
   const handleSelectClick = (event: React.MouseEvent) => {
@@ -396,19 +406,23 @@ export function ServerCard({
               )}
 
               {isTransportService && (
-                <div
-                  className={clsx(
-                    "min-w-0 text-sm font-medium",
-                    copied ? "text-primary" : "text-white/90"
-                  )}
-                >
-                  {copied
-                    ? "Copied!"
-                    : endpoints.map((endpoint) => (
-                        <code key={endpoint.protocol} className="block truncate font-mono tracking-tight">
-                          {endpoint.address}
-                        </code>
-                      ))}
+                <div className="min-w-0 space-y-1 text-sm font-medium text-white/90">
+                  {endpoints.map((endpoint) => (
+                    <div key={endpoint.protocol} className="flex items-center gap-2">
+                      <code className="min-w-0 flex-1 truncate font-mono tracking-tight">
+                        {endpoint.address}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => void copyEndpoint(endpoint.protocol, endpoint.address)}
+                        className="shrink-0 rounded-md border border-white/20 bg-black/40 px-2 py-1 text-[10px] font-bold text-white transition-colors hover:bg-primary hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                      >
+                        {copiedProtocol === endpoint.protocol
+                          ? "Copied!"
+                          : `Copy ${endpoint.protocol}`}
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -512,12 +526,7 @@ export function ServerCard({
           {cardBody}
         </Link>
       ) : (
-        <div
-          className="relative cursor-copy"
-          onClick={() => copyEndpoint(endpoints[0].address)}
-        >
-          {cardBody}
-        </div>
+        <div className="relative">{cardBody}</div>
       )}
 
       <Dialog open={showBPSModal} onOpenChange={setShowBPSModal}>
