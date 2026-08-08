@@ -29,8 +29,8 @@ services:
       # Shared lease port range.
       MIN_PORT: ${MIN_PORT:-40000}
       MAX_PORT: ${MAX_PORT:-40009}
-      UDP_ENABLED: ${UDP_ENABLED:-false}
-      TCP_ENABLED: ${TCP_ENABLED:-false}
+      UDP_ENABLED: ${UDP_ENABLED:-true}
+      TCP_ENABLED: ${TCP_ENABLED:-true}
 
       # Admin/auth configuration.
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}

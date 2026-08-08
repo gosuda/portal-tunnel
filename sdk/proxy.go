@@ -121,7 +121,7 @@ func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr st
 		}
 
 		connID := connCount.Add(1)
-		log.Info().
+		log.Debug().
 			Int64("conn_id", connID).
 			Str("remote_addr", relayConn.RemoteAddr().String()).
 			Msg("accepted relay connection")
@@ -132,7 +132,7 @@ func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr st
 			if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
 				log.Debug().Err(err).Int64("conn_id", connID).Msg("proxy connection closed with an I/O error")
 			}
-			log.Info().Int64("conn_id", connID).Msg("proxy connection closed")
+			log.Debug().Int64("conn_id", connID).Msg("proxy connection closed")
 		}(connID, relayConn)
 	}
 }

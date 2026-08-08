@@ -24,6 +24,8 @@ interface ServerCardProps {
   dns: string;
   navigationPath: string;
   navigationState: any;
+  tcpAddr?: string;
+  udpAddr?: string;
   isFavorite?: boolean;
   onToggleFavorite?: (serverId: string) => void;
   showAdminControls?: boolean;
@@ -64,6 +66,8 @@ export function ServerCard({
   firstSeen,
   navigationPath,
   navigationState,
+  tcpAddr,
+  udpAddr,
   isFavorite = false,
   onToggleFavorite,
   showAdminControls = false,
@@ -88,10 +92,19 @@ export function ServerCard({
   const [showBPSModal, setShowBPSModal] = useState(false);
   const [bpsInput, setBpsInput] = useState(bps.toString());
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const [copied, setCopied] = useState(false);
   const effectiveThumbnail = thumbnailFailed ? "" : thumbnail;
   const normalizedPaymentLabel = paymentLabel.trim();
   const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
   const effectivePaymentLabel = normalizedPaymentLabel || "Paid app";
+  const endpoints = [
+    ...(tcpAddr ? [{ protocol: "TCP", address: tcpAddr }] : []),
+    ...(udpAddr ? [{ protocol: "UDP", address: udpAddr }] : []),
+  ];
+  const isTransportService = endpoints.length > 0;
+  const displayTags = [
+    ...new Set([...tags, ...endpoints.map((endpoint) => endpoint.protocol)]),
+  ];
 
   useEffect(() => {
     setThumbnailFailed(false);
@@ -138,6 +151,12 @@ export function ServerCard({
     event.preventDefault();
     event.stopPropagation();
     onToggleFavorite?.(serverId);
+  };
+
+  const copyEndpoint = (address: string) => {
+    void navigator.clipboard?.writeText(address);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
   };
 
   const handleSelectClick = (event: React.MouseEvent) => {
@@ -282,8 +301,8 @@ export function ServerCard({
                   online ? "text-white" : "text-white/60"
                 )}
               >
-                {online ? "Online" : "Offline"}
-                {formattedDuration && online && ` - ${formattedDuration}`}
+                {online ? (isTransportService ? "Live" : "Online") : "Offline"}
+                {formattedDuration && online && ` · ${formattedDuration}`}
               </span>
             </div>
 
@@ -361,10 +380,10 @@ export function ServerCard({
                 </p>
               )}
 
-              {tags && tags.length > 0 && (
+              {displayTags.length > 0 && (
                 <div className="mt-1 w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   <div className="flex min-w-max gap-1.5">
-                    {tags.map((tag, index) => (
+                    {displayTags.map((tag, index) => (
                       <span
                         key={index}
                         className="rounded-sm bg-primary/16 px-2 py-0.5 text-[10px] font-bold uppercase tracking-normal text-primary border border-primary/24 whitespace-nowrap"
@@ -373,6 +392,23 @@ export function ServerCard({
                       </span>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {isTransportService && (
+                <div
+                  className={clsx(
+                    "min-w-0 text-sm font-medium",
+                    copied ? "text-primary" : "text-white/90"
+                  )}
+                >
+                  {copied
+                    ? "Copied!"
+                    : endpoints.map((endpoint) => (
+                        <code key={endpoint.protocol} className="block truncate font-mono tracking-tight">
+                          {endpoint.address}
+                        </code>
+                      ))}
                 </div>
               )}
 
@@ -467,7 +503,7 @@ export function ServerCard({
     <>
       {showAdminControls ? (
         <div className="relative">{cardBody}</div>
-      ) : (
+      ) : endpoints.length === 0 ? (
         <Link
           to={navigationPath}
           state={navigationState}
@@ -475,6 +511,13 @@ export function ServerCard({
         >
           {cardBody}
         </Link>
+      ) : (
+        <div
+          className="relative cursor-copy"
+          onClick={() => copyEndpoint(endpoints[0].address)}
+        >
+          {cardBody}
+        </div>
       )}
 
       <Dialog open={showBPSModal} onOpenChange={setShowBPSModal}>

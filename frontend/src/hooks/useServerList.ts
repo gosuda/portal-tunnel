@@ -20,6 +20,8 @@ function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
     const payment = resolveLeasePayment(metadata);
     const hostname = row.hostname || "";
     const serviceName = row.name || "";
+    const tcpAddr = row.tcp_addr?.trim() || "";
+    const udpAddr = row.udp_addr?.trim() || "";
 
     return {
       id: hostname,
@@ -30,7 +32,9 @@ function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
       owner: metadata.owner || "",
       online: (row.ready || 0) > 0,
       dns: hostname,
-      link: hostname ? `https://${hostname}/` : "",
+      link: !tcpAddr && !udpAddr && hostname ? `https://${hostname}/` : "",
+      tcpAddr: tcpAddr || undefined,
+      udpAddr: udpAddr || undefined,
       lastUpdated: row.last_seen_at || undefined,
       firstSeen: row.first_seen_at || undefined,
       paymentEnabled: payment.enabled,

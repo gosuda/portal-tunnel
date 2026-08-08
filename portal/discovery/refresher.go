@@ -338,7 +338,7 @@ func (r *Refresher) logDiscoveryFailure(targetRelayURL, sourceURL string, recove
 		return
 	}
 
-	event := log.Warn().
+	event := log.Debug().
 		Err(err).
 		Str("relay", sourceURL).
 		Bool("backed_off", true).
@@ -347,7 +347,13 @@ func (r *Refresher) logDiscoveryFailure(targetRelayURL, sourceURL string, recove
 		event = event.Int("discovery_failures", failureCount)
 	}
 	if backoffReason == "unhealthy" {
-		event.Msg("discovery source removed from relay pool")
+		log.Warn().
+			Err(err).
+			Str("relay", sourceURL).
+			Bool("backed_off", true).
+			Str("reason", backoffReason).
+			Int("discovery_failures", failureCount).
+			Msg("discovery source removed from relay pool")
 		return
 	}
 	event.Msg("discovery source retry delayed")
