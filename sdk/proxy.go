@@ -338,7 +338,7 @@ func (m *udpFlowManager) runCleanup(ctx context.Context) {
 			m.mu.Lock()
 			now := time.Now()
 			for key, f := range m.flows {
-				if now.Sub(f.lastSeen) > 30*time.Second {
+				if now.Sub(f.lastSeen) > types.DefaultUDPFlowIdleTimeout {
 					_ = f.conn.Close()
 					delete(m.flows, key)
 				}
