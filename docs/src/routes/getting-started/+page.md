@@ -42,6 +42,7 @@ and start the tunnel-specific Compose project:
 git clone https://github.com/gosuda/portal-tunnel.git
 cd portal-tunnel/cmd/portal-tunnel
 mkdir -p identity
+sudo chown -R 65532:65532 identity
 PORTAL_TUNNEL_TARGET=host.docker.internal:3000 \
 PORTAL_TUNNEL_NAME=my-app \
 docker compose up -d
@@ -54,7 +55,9 @@ container, attach it to the same Docker network and use its service name and
 port instead.
 
 The host `./identity` directory persists `/identity/identity.json`, preserving
-the public tunnel identity across container restarts and upgrades. Set
+the public tunnel identity across container restarts and upgrades. The image
+runs as the distroless `nonroot` user (UID/GID `65532`), so on Linux the host
+directory must be writable by that user. Set
 `PORTAL_TUNNEL_IDENTITY_DIR` to use another host path. Follow or stop the tunnel
 with:
 
