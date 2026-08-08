@@ -20,10 +20,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static-debian12 AS runtime
 
 COPY --from=builder /out/portal /usr/bin/portal
-COPY --from=builder /out/identity/ /identity/
+COPY --from=builder --chown=nonroot:nonroot /out/identity/ /identity/
 
 WORKDIR /identity
 ENV IDENTITY_PATH=/identity/identity.json
+USER nonroot:nonroot
 
 ENTRYPOINT ["/usr/bin/portal"]
 CMD ["help"]

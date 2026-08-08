@@ -30,25 +30,13 @@ curl -sSL https://portal.example.com/api/install.sh | bash
 portal expose 3000 --relays https://portal.example.com --discovery=false
 ```
 
-Run the multi-architecture container image (`linux/amd64` and `linux/arm64`):
-
-```bash
-docker run --rm --init \
-  --add-host=host.docker.internal:host-gateway \
-  -v "$PWD/identity:/identity" \
-  ghcr.io/gosuda/portal-tunnel:latest \
-  expose host.docker.internal:3000 --name my-app
-```
-
-The host directory `./identity` persists the tunnel identity at
-`/identity/identity.json`. When
-the target also runs in Docker, attach both containers to the same network and
-use the target container name instead of `host.docker.internal`.
-
-For a restartable Compose deployment from this repository:
+Run the multi-architecture image (`linux/amd64` and `linux/arm64`) with Compose
+from this repository:
 
 ```bash
 cd cmd/portal-tunnel
+mkdir -p identity
+sudo chown -R 65532:65532 identity
 PORTAL_TUNNEL_TARGET=host.docker.internal:3000 \
 PORTAL_TUNNEL_NAME=my-app \
 docker compose up -d
@@ -58,7 +46,10 @@ docker compose logs -f portal-tunnel
 Compose uses `ghcr.io/gosuda/portal-tunnel:latest` by default. Run `docker
 compose pull` to refresh it, use `docker compose up -d --build` to build from
 the current checkout, or set `PORTAL_TUNNEL_IMAGE` to select another published
-tag. Set `PORTAL_TUNNEL_IDENTITY_DIR` to use a different host directory.
+tag. The host directory `./identity` persists the tunnel identity at
+`/identity/identity.json`. The image runs as the distroless `nonroot` user
+(UID/GID `65532`), so on Linux the host directory must be writable by that user.
+Set `PORTAL_TUNNEL_IDENTITY_DIR` to use a different host directory.
 
 ### Agent Dashboard TUI
 
@@ -67,8 +58,8 @@ empty agent config in the mounted identity directory, then start the agent in
 the foreground:
 
 ```bash
-mkdir -p identity
-touch identity/config.toml
+sudo touch identity/config.toml
+sudo chown 65532:65532 identity/config.toml
 docker compose run --rm portal-tunnel \
   agent run --foreground --config /identity/config.toml
 ```
