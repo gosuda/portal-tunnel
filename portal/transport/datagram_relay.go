@@ -16,7 +16,6 @@ import (
 
 const (
 	defaultMaxPacketSize       = 1350
-	defaultFlowIdleTimeout     = 30 * time.Second
 	defaultFlowCleanupInterval = 30 * time.Second
 )
 
@@ -216,7 +215,7 @@ func (d *RelayDatagram) expireIdleFlows(now time.Time) {
 	defer d.mu.Unlock()
 
 	for flowID, flow := range d.flowTable {
-		if flow == nil || now.Sub(flow.lastSeen) > defaultFlowIdleTimeout {
+		if flow == nil || now.Sub(flow.lastSeen) > types.DefaultUDPFlowIdleTimeout {
 			if flow != nil {
 				delete(d.addrIndex, flow.key)
 			}

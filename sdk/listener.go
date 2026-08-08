@@ -45,7 +45,9 @@ var errLeaseRefreshRequired = errors.New("lease refresh required")
 func shouldDropRelayFromActivePool(err error) bool {
 	return errors.Is(err, errRelayIncompatible) ||
 		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) ||
-		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTransportMismatch})
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTransportMismatch}) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUDPDisabled}) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTCPPortDisabled})
 }
 
 func isTerminalRelayError(err error) bool {
@@ -216,11 +218,23 @@ func (l *listener) run(ctx context.Context) {
 
 		retries = 0
 		publicURL := ""
+		udpAddr := ""
+		tcpAddr := ""
 		if lease, ok := l.leaseSnapshot(); ok {
 			publicURL = l.publicURLForLease(lease)
+			udpAddr = lease.udpAddr
+			tcpAddr = lease.tcpAddr
 		}
 		event := log.Info().Str("address", l.identity.Address)
-		if publicURL != "" {
+		if udpAddr != "" {
+			event = event.Str("udp_addr", udpAddr)
+		}
+		if tcpAddr != "" {
+			event = event.Str("tcp_addr", tcpAddr)
+		}
+		if udpAddr != "" || tcpAddr != "" {
+			event.Msg("raw transport endpoints allocated")
+		} else if publicURL != "" {
 			event.Msg("service ready at " + publicURL)
 		} else {
 			event.Msg("relay listener registered")
@@ -293,6 +307,7 @@ type listenerSnapshot struct {
 	hostname            string
 	echConfigList       []byte
 	udpAddr             string
+	tcpAddr             string
 	accessToken         string
 	multihopAccessToken string
 	expiresAt           time.Time
@@ -890,6 +905,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		hostname:            publicHostname,
 		echConfigList:       echConfigList,
 		udpAddr:             resp.UDPAddr,
+		tcpAddr:             resp.TCPAddr,
 		accessToken:         resp.AccessToken,
 		expiresAt:           resp.ExpiresAt,
 		sniPort:             sniPort,
@@ -911,7 +927,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		l.relaySet.ConfirmRelayURL(entryURL)
 	}
 	if len(echConfigList) > 0 {
-		log.Info().
+		log.Debug().
 			Str("address", l.identity.Address).
 			Str("route_hostname", routeHostname).
 			Str("ech_config_list_base64", base64.StdEncoding.EncodeToString(echConfigList)).
@@ -965,6 +981,24 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 			Int("retry_count", l.retryCount).
 			Msg("retry budget exhausted")
 		return false
+	}
+
+	if retries == 1 {
+		transport := ""
+		switch {
+		case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTCPPortExhausted}):
+			transport = "tcp"
+		case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUDPPortExhausted}):
+			transport = "udp"
+		}
+		if transport != "" {
+			logger.Warn().
+				Err(err).
+				Str("transport", transport).
+				Dur("retry_wait", l.retryWait).
+				Msg("raw transport port pool exhausted; waiting for a port")
+			return utils.SleepOrDone(ctx, l.retryWait)
+		}
 	}
 
 	logger.Debug().

@@ -581,7 +581,7 @@ func (c *exposureConn) Close() error {
 			closeErr = nil
 		}
 
-		event := log.Info().
+		event := log.Debug().
 			Uint64("conn_id", c.id).
 			Str("local_addr", c.localAddr).
 			Str("remote_addr", c.remoteAddr)
@@ -622,7 +622,7 @@ func (e *Exposure) Accept() (net.Conn, error) {
 		}
 
 		connID := e.connSeq.Add(1)
-		log.Info().
+		log.Debug().
 			Uint64("conn_id", connID).
 			Str("local_addr", conn.LocalAddr().String()).
 			Str("remote_addr", conn.RemoteAddr().String()).
@@ -657,7 +657,7 @@ func (e *Exposure) Close() error {
 			}
 		}
 
-		event := log.Info().
+		event := log.Debug().
 			Int("relay_count", len(relayListeners)).
 			Strs("relays", relayURLs)
 		if closeErr != nil {

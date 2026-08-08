@@ -30,6 +30,54 @@ curl -sSL https://portal.example.com/api/install.sh | bash
 portal expose 3000 --relays https://portal.example.com --discovery=false
 ```
 
+Run the multi-architecture image (`linux/amd64` and `linux/arm64`) with Compose
+from this repository:
+
+```bash
+cd cmd/portal-tunnel
+mkdir -p identity
+# Linux only: Docker Desktop on macOS and Windows maps host ownership for you.
+if [ "$(uname)" = Linux ]; then sudo chown -R 65532:65532 identity; fi
+PORTAL_TUNNEL_TARGET=host.docker.internal:3000 \
+PORTAL_TUNNEL_NAME=my-app \
+docker compose up -d
+docker compose logs -f portal-tunnel
+```
+
+Compose uses `ghcr.io/gosuda/portal-tunnel:latest` by default. Run `docker
+compose pull` to refresh it, use `docker compose up -d --build` to build from
+the current checkout, or set `PORTAL_TUNNEL_IMAGE` to select another published
+tag. The host directory `./identity` persists the tunnel identity at
+`/identity/identity.json`. The image runs as the distroless `nonroot` user
+(UID/GID `65532`), so on Linux the host directory must be writable by that user.
+Set `PORTAL_TUNNEL_IDENTITY_DIR` to use a different host directory.
+
+### Agent Dashboard TUI
+
+The Compose service also supports the interactive agent dashboard. Seed a new
+agent config with its state directory inside the identity mount, then start the
+agent in the foreground:
+
+```bash
+mkdir -p identity
+CONFIG='[agent]
+state_dir = "/identity"'
+# On Linux the mount is owned by uid 65532, so seed it with sudo and hand the
+# whole directory back. Docker Desktop on macOS and Windows maps ownership.
+if [ "$(uname)" = Linux ]; then
+  printf '%s\n' "$CONFIG" | sudo tee identity/config.toml >/dev/null
+  sudo chown -R 65532:65532 identity
+else
+  printf '%s\n' "$CONFIG" > identity/config.toml
+fi
+docker compose run --rm portal-tunnel \
+  agent run --foreground --config /identity/config.toml
+```
+
+The dashboard appears in the current terminal. Use **Add Tunnel** to create the
+first tunnel; its configuration and identities are saved under `./identity`.
+Press `Ctrl+C` to stop the foreground agent.
+
 ## Modes
 
 Default HTTPS stream for most local web apps:

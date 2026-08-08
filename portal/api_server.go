@@ -354,11 +354,13 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if req.UDPEnabled && !s.supportsUDP() {
-		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled,
+			"UDP transport is disabled on this relay")
 		return
 	}
 	if req.TCPEnabled && !s.supportsTCP() {
-		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTCPPortDisabled,
+			"raw TCP transport is disabled on this relay")
 		return
 	}
 

@@ -951,6 +951,9 @@ func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 	if record.tcpPort != nil {
 		lease.TCPAddr = fmt.Sprintf("%s:%d", record.Hostname, record.tcpPort.TCPPort())
 	}
+	if record.datagram != nil {
+		lease.UDPAddr = fmt.Sprintf("%s:%d", record.Hostname, record.datagram.UDPPort())
+	}
 	if record.stream != nil {
 		lease.Ready = record.stream.ReadyCount()
 	} else if record.isPublicEntry() {

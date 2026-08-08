@@ -140,6 +140,12 @@ the default state directory or an explicit `--state-dir`.
 `portal agent run --service` is the internal service entrypoint installed by
 `portal agent run`. Operators normally do not run it directly.
 
+### Docker Compose TUI
+
+See the [Portal CLI Docker Compose instructions](https://github.com/gosuda/portal-tunnel/blob/main/cmd/portal-tunnel/README.md#agent-dashboard-tui)
+for the single maintained setup, including persistent agent state and host
+directory permissions.
+
 ## Dashboard
 
 The dashboard is a local terminal UI. It polls agent status every two seconds

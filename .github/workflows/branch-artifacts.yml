@@ -55,6 +55,10 @@ jobs:
             echo "${REGISTRY}/gosuda/portal:branch-${safe_ref}"
             echo "${REGISTRY}/gosuda/portal:branch-${safe_ref}-${short_sha}"
             echo "EOF"
+            echo "tunnel_image_tags<<EOF"
+            echo "${REGISTRY}/gosuda/portal-tunnel:branch-${safe_ref}"
+            echo "${REGISTRY}/gosuda/portal-tunnel:branch-${safe_ref}-${short_sha}"
+            echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Log in to Container Registry
@@ -84,6 +88,21 @@ jobs:
             org.opencontainers.image.ref.name=${{ env.BUILD_REF }}
           cache-from: type=gha,scope=portal
           cache-to: type=gha,mode=max,scope=portal
+
+      - name: Build and push tunnel Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: cmd/portal-tunnel/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tunnel_image_tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.commit_sha }}
+            org.opencontainers.image.ref.name=${{ env.BUILD_REF }}
+          cache-from: type=gha,scope=portal-tunnel
+          cache-to: type=gha,mode=max,scope=portal-tunnel
 
       - name: Build binaries
         shell: bash

@@ -617,6 +617,8 @@ export function ServerListView({
           paymentEnabled: server.paymentEnabled,
           paymentLabel: server.paymentLabel,
         }}
+        tcpAddr={server.tcpAddr}
+        udpAddr={server.udpAddr}
         firstSeen={server.firstSeen}
         isFavorite={favoriteIds.has(server.id)}
         onToggleFavorite={onToggleFavorite}
