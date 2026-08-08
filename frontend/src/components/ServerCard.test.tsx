@@ -85,4 +85,18 @@ describe("ServerCard raw transport endpoints", () => {
     expect(screen.queryByRole("button", { name: /^Copy / })).toBeNull();
     expect(screen.getByRole("link")).toBeTruthy();
   });
+
+  // The card once made the whole surface a <div onClick>, which no keyboard
+  // could reach. Wrapping these buttons back in a <Link> would nest
+  // interactive content instead, so pin both halves: reachable, not nested.
+  it("keeps every copy control keyboard reachable and outside a link", () => {
+    renderCard({ tcpAddr: TCP, udpAddr: UDP });
+
+    for (const address of [TCP, UDP]) {
+      const button = copyButton(address);
+      button.focus();
+      expect(document.activeElement).toBe(button);
+      expect(button.closest("a")).toBeNull();
+    }
+  });
 });
