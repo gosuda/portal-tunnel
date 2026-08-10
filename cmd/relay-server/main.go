@@ -24,9 +24,10 @@ import (
 func main() {
 	log.Logger = log.Output(zerolog.NewConsoleWriter())
 	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
-		"":      runServeCommand,
-		"serve": runServeCommand,
-		"help":  runHelpCommand,
+		"":       runServeCommand,
+		"serve":  runServeCommand,
+		"config": runConfigCommand,
+		"help":   runHelpCommand,
 	}); err != nil {
 		log.Error().Err(err).Msg("execute root command")
 		os.Exit(1)
@@ -72,7 +73,10 @@ type relayServerConfig struct {
 	NjallaToken        string
 }
 
-func runServeCommand(args []string) error {
+// resolveRelayServerConfig registers every flag and resolves it against the
+// process environment. The config subcommand reuses it so that inspecting a
+// deployment and running it read the same definitions.
+func resolveRelayServerConfig(args []string) (relayServerConfig, error) {
 	cfg := relayServerConfig{}
 	fs := utils.NewFlagSet("relay-server", printRootUsage)
 
@@ -117,43 +121,41 @@ func runServeCommand(args []string) error {
 	utils.StringFlagEnv(fs, &cfg.NjallaToken, "njalla-token", "", "Njalla API token for DNS automation (required when acme-dns-provider=njalla)", "NJALLA_TOKEN")
 
 	if err := utils.ParseFlagSet(fs, args, printRootUsage); err != nil {
+		return relayServerConfig{}, err
+	}
+	if err := utils.RequireNoArgs(fs.Args(), "relay-server"); err != nil {
+		printRootUsage(os.Stderr)
+		return relayServerConfig{}, err
+	}
+	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
+	return cfg, nil
+}
+
+func runServeCommand(args []string) error {
+	cfg, err := resolveRelayServerConfig(args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "relay-server"); err != nil {
-		printRootUsage(os.Stderr)
+	// A value that could not be parsed is always a mistake. Starting anyway is
+	// how a deployment ends up running with a setting nobody reads.
+	if err := envIssueError(); err != nil {
 		return err
 	}
-	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
 
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
-		Str("frontend_dir", cfg.FrontendDir).
 		Str("identity_path", cfg.IdentityPath).
-		Str("bootstraps", cfg.Bootstraps).
-		Bool("discovery_enabled", cfg.DiscoveryEnabled).
-		Int("wireguard_port", cfg.WireGuardPort).
 		Int("api_port", cfg.APIPort).
 		Int("sni_port", cfg.SNIPort).
-		Bool("trust_proxy_headers", cfg.TrustProxyHeaders).
-		Str("trusted_proxy_cidrs", cfg.TrustedProxyCIDRs).
-		Bool("udp_enabled", cfg.UDPEnabled).
-		Bool("tcp_enabled", cfg.TCPEnabled).
-		Bool("landing_page_enabled", cfg.LandingPageEnabled).
-		Int("min_port", cfg.MinPort).
-		Int("max_port", cfg.MaxPort).
-		Bool("admin_token_configured", strings.TrimSpace(cfg.AdminToken) != "").
-		Bool("pprof_enabled", cfg.PProfEnabled).
-		Str("pprof_addr", cfg.PProfAddr).
-		Bool("x402_facilitator_enabled", cfg.X402Enabled).
-		Bool("x402_testnet", cfg.X402Testnet).
-		Bool("x402_pay_to_configured", strings.TrimSpace(cfg.X402PayTo) != "").
-		Str("acme_dns_provider", cfg.ACMEDNSProvider).
-		Bool("ens_gasless_enabled", cfg.ENSGaslessEnabled).
-		Msg("configured relay server")
+		Msg("starting relay server")
+
+	// Report each capability with the setting that produced it, so a feature
+	// that was switched off is distinguishable from one that cannot run.
+	logFeatureReport(evaluateFeatures(cfg))
 
 	ctx, stop := utils.SignalContext()
 	defer stop()

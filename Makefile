@@ -1,4 +1,4 @@
-.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean load-test
+.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean load-test check-env-example env-reference
 
 .DEFAULT_GOAL := help
 
@@ -16,6 +16,8 @@ help:
 	@echo "  make fmt               - Apply gofmt/goimports"
 	@echo "  make lint-auto         - Run autofix lint/format pipeline"
 	@echo "  make test              - Run Go and frontend tests"
+	@echo "  make check-env-example - Fail if .env.example is missing a configuration key"
+	@echo "  make env-reference     - Print every configuration key, generated from the flags"
 	@echo "  make build             - Build Go tunnel and relay server artifacts"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-docs        - Build documentation site (SvelteKit)"
@@ -51,6 +53,45 @@ tidy:
 	go get -u ./...
 	go mod tidy
 	go mod verify
+
+# The keys themselves are owned by the flag definitions in
+# cmd/relay-server/main.go and by the catalog of keys other components read.
+# .env.example and the configuration reference are documentation of that set.
+# Adding a flag without documenting it is how configuration drifts away from the
+# code, so fail loudly here rather than let an operator find the gap in
+# production. Keys the bundled topology pins are excluded on purpose; see
+# cmd/relay-server/envcatalog.go.
+CONFIG_DOC := docs/src/routes/configuration/+page.md
+
+check-env-example:
+	@go run ./cmd/relay-server config --format names > /tmp/portal-env-names.txt
+	@status=0; \
+	missing=""; \
+	while read -r name; do \
+		grep -qE "^#? *$$name=" .env.example || missing="$$missing $$name"; \
+	done < /tmp/portal-env-names.txt; \
+	if [ -n "$$missing" ]; then \
+		echo "[env] .env.example does not document:"; \
+		for name in $$missing; do echo "  - $$name"; done; \
+		status=1; \
+	fi; \
+	missing=""; \
+	while read -r name; do \
+		grep -qF "\`$$name\`" $(CONFIG_DOC) || missing="$$missing $$name"; \
+	done < /tmp/portal-env-names.txt; \
+	if [ -n "$$missing" ]; then \
+		echo "[env] $(CONFIG_DOC) does not document:"; \
+		for name in $$missing; do echo "  - $$name"; done; \
+		status=1; \
+	fi; \
+	if [ "$$status" -ne 0 ]; then \
+		echo "[env] run 'make env-reference' to see each key with its usage text"; \
+		exit 1; \
+	fi; \
+	echo "[env] .env.example and $(CONFIG_DOC) document every configuration key"
+
+env-reference:
+	@go run ./cmd/relay-server config --format env
 
 all: fmt vet lint test build
 
