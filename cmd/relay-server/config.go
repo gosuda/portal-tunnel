@@ -161,6 +161,15 @@ func ensGaslessFeature(cfg relayServerConfig) feature {
 		f.Missing = "ACME_DNS_PROVIDER is empty; ENS gasless automation needs a DNS provider even when certificates are managed manually"
 		return f
 	}
+	// ENS gasless drives the same provider ACME does, so it cannot work when
+	// that provider cannot. Repeating only the "is it set" half of the check
+	// here would report this as enabled while acme is blocked, which is exactly
+	// the mismatch this report exists to surface.
+	if acme := acmeFeature(cfg); acme.State == stateBlocked {
+		f.State, f.By = stateBlocked, "ENS_GASLESS_ENABLED=true"
+		f.Missing = "the DNS provider it shares with ACME is blocked: " + acme.Missing
+		return f
+	}
 	f.State, f.By = stateEnabled, "ENS_GASLESS_ENABLED=true"
 	f.Detail = "DNSSEC and ENS TXT automation through " + cfg.ACMEDNSProvider
 	return f
@@ -349,6 +358,33 @@ func secretEnvName(name string) bool {
 	return false
 }
 
+// valueMarker distinguishes a key that something supplied from one running on
+// its default, so a long list can be skimmed for what the operator actually set.
+func valueMarker(entry utils.EnvVar) string {
+	if entry.SetBy == "" {
+		return "--"
+	}
+	return "OK"
+}
+
+// valueSource names where the effective value came from. When an alias supplied
+// it, the alias is named: "I set AWS_REGION, why is the value different?" is
+// answered by seeing that AWS_DEFAULT_REGION was consulted first.
+func valueSource(entry utils.EnvVar, supplied map[string]bool, envFile string) string {
+	if entry.SetBy == "" {
+		return fmt.Sprintf("default (%s)", defaultDisplay(entry.Default))
+	}
+
+	origin := "process environment"
+	if supplied[entry.SetBy] {
+		origin = envFile
+	}
+	if entry.SetBy != entry.Name {
+		return fmt.Sprintf("%s, via the alias %s", origin, entry.SetBy)
+	}
+	return origin
+}
+
 func displayValue(name, value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "<unset>"
@@ -364,45 +400,58 @@ func writeConfigReport(w io.Writer, cfg relayServerConfig, entries []envFileEntr
 
 	fmt.Fprintf(w, "Portal relay configuration (%s)\n\n", source)
 
-	if len(entries) > 0 {
-		fmt.Fprintln(w, "Keys")
-		var unknown []envFileEntry
-		for _, entry := range entries {
-			switch {
-			case relay[entry.Name].Name != "":
-				known := relay[entry.Name]
-				fmt.Fprintf(w, "  OK   %-30s %-24s relay --%s\n",
-					entry.Name, displayValue(entry.Name, entry.Value), known.Flag)
-				writeWrapped(w, known.Usage)
-				if pinned, ok := pinnedByTopology[entry.Name]; ok && entry.Value != pinned.Value {
-					fmt.Fprintf(w, "         WARNING: pinned to %s by the bundled topology; %s\n",
-						pinned.Value, pinned.Reason)
-				}
-				if note := alsoConsumedBy[entry.Name]; note != "" {
-					fmt.Fprintf(w, "         also: %s\n", note)
-				}
-			case externalEnvVars[entry.Name].Owner != "":
-				external := externalEnvVars[entry.Name]
-				fmt.Fprintf(w, "  OK   %-30s %-24s %s\n",
-					entry.Name, displayValue(entry.Name, entry.Value), external.Owner)
-				writeWrapped(w, external.Usage)
-			default:
-				unknown = append(unknown, entry)
-			}
-		}
-
-		if len(unknown) > 0 {
-			fmt.Fprintf(w, "\nUNKNOWN  %d key(s) are not read by any component and are silently ignored:\n", len(unknown))
-			for _, entry := range unknown {
-				if suggestion := nearestEnvName(entry.Name, relay); suggestion != "" {
-					fmt.Fprintf(w, "  %-30s did you mean %s?\n", entry.Name, suggestion)
-					continue
-				}
-				fmt.Fprintf(w, "  %-30s no equivalent key exists\n", entry.Name)
-			}
-		}
-		fmt.Fprintln(w)
+	supplied := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		supplied[entry.Name] = true
 	}
+
+	// Every relay key is listed with the value the flag actually resolved to,
+	// not the text of whichever line happened to appear in the file. A key that
+	// an alias or a higher-priority name overrode would otherwise read as though
+	// it were in effect, which is the confusion this report exists to remove.
+	fmt.Fprintln(w, "Keys")
+	for _, entry := range utils.EnvVars() {
+		fmt.Fprintf(w, "  %-4s %-30s %-24s relay --%s\n",
+			valueMarker(entry), entry.Name, displayValue(entry.Name, entry.Value), entry.Flag)
+		fmt.Fprintf(w, "         source: %s\n", valueSource(entry, supplied, source))
+		writeWrapped(w, entry.Usage)
+		if pinned, ok := pinnedByTopology[entry.Name]; ok && entry.Value != pinned.Value {
+			fmt.Fprintf(w, "         WARNING: pinned to %s by the bundled topology; %s\n",
+				pinned.Value, pinned.Reason)
+		}
+		if note := alsoConsumedBy[entry.Name]; note != "" {
+			fmt.Fprintf(w, "         also: %s\n", note)
+		}
+	}
+
+	// Keys owned by another component are only shown when actually supplied:
+	// the relay cannot resolve them, so there is no effective value to report.
+	var unknown []envFileEntry
+	for _, entry := range entries {
+		if _, isRelay := relay[entry.Name]; isRelay {
+			continue
+		}
+		external, isExternal := externalEnvVars[entry.Name]
+		if !isExternal {
+			unknown = append(unknown, entry)
+			continue
+		}
+		fmt.Fprintf(w, "  OK   %-30s %-24s %s\n",
+			entry.Name, displayValue(entry.Name, entry.Value), external.Owner)
+		writeWrapped(w, external.Usage)
+	}
+
+	if len(unknown) > 0 {
+		fmt.Fprintf(w, "\nUNKNOWN  %d key(s) are not read by any component and are silently ignored:\n", len(unknown))
+		for _, entry := range unknown {
+			if suggestion := nearestEnvName(entry.Name, relay); suggestion != "" {
+				fmt.Fprintf(w, "  %-30s did you mean %s?\n", entry.Name, suggestion)
+				continue
+			}
+			fmt.Fprintf(w, "  %-30s no equivalent key exists\n", entry.Name)
+		}
+	}
+	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "Features")
 	for _, f := range evaluateFeatures(cfg) {

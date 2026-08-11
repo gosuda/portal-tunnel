@@ -77,6 +77,11 @@ type relayServerConfig struct {
 // process environment. The config subcommand reuses it so that inspecting a
 // deployment and running it read the same definitions.
 func resolveRelayServerConfig(args []string) (relayServerConfig, error) {
+	// Registration records into a process-global registry, so start from empty:
+	// the config subcommand loads an env file and resolves again, and issues
+	// from an earlier pass must not fail the current one.
+	utils.ResetEnvRegistry()
+
 	cfg := relayServerConfig{}
 	fs := utils.NewFlagSet("relay-server", printRootUsage)
 

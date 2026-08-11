@@ -31,6 +31,10 @@ type EnvVar struct {
 	Flag    string
 	Usage   string
 	Default string
+	// Value is what the flag actually resolved to. Reporting the raw text of an
+	// env file instead would show a value that a higher-priority name overrode,
+	// or an alias that was never consulted, as though it were in effect.
+	Value string
 	// SetBy is the environment variable that supplied the value, or empty when
 	// the default was used. It answers "I set that, why did nothing change?".
 	SetBy string
@@ -64,7 +68,17 @@ func EnvIssues() []EnvIssue {
 	return slices.Clone(envIssues)
 }
 
-func registerEnvVar(flagName, usage, defaultValue, setBy string, envNames []string) {
+// ResetEnvRegistry clears both the registry and the recorded issues so a
+// resolution pass reports only its own environment. Registering a flag twice
+// already replaces its entry, but issues would otherwise accumulate across
+// passes and a stale one could fail a configuration that no longer has it.
+func ResetEnvRegistry() {
+	envVars = nil
+	envVarIndex = map[string]int{}
+	envIssues = nil
+}
+
+func registerEnvVar(flagName, usage, defaultValue, value, setBy string, envNames []string) {
 	names := make([]string, 0, len(envNames))
 	for _, envName := range envNames {
 		if envName = strings.TrimSpace(envName); envName != "" {
@@ -81,6 +95,7 @@ func registerEnvVar(flagName, usage, defaultValue, setBy string, envNames []stri
 		Flag:    flagName,
 		Usage:   usage,
 		Default: defaultValue,
+		Value:   value,
 		SetBy:   setBy,
 	}
 	// Registering the same flag twice (a re-parsed command, a test) replaces the
@@ -208,7 +223,7 @@ func StringFlag(fs *flag.FlagSet, target *string, name, fallback, usage string) 
 
 func StringFlagEnv(fs *flag.FlagSet, target *string, name, fallback, usage string, envNames ...string) {
 	value, setBy := resolveStringEnv(fallback, envNames...)
-	registerEnvVar(name, usage, fallback, setBy, envNames)
+	registerEnvVar(name, usage, fallback, value, setBy, envNames)
 	ensureFlagSet(fs).StringVar(target, name, value, flagUsage(usage, envNames...))
 }
 
@@ -218,13 +233,13 @@ func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage 
 
 func BoolFlagEnv(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string, envNames ...string) {
 	value, setBy := resolveBoolEnv(fallback, envNames...)
-	registerEnvVar(name, usage, strconv.FormatBool(fallback), setBy, envNames)
+	registerEnvVar(name, usage, strconv.FormatBool(fallback), strconv.FormatBool(value), setBy, envNames)
 	ensureFlagSet(fs).BoolVar(target, name, value, flagUsage(usage, envNames...))
 }
 
 func IntFlagEnv(fs *flag.FlagSet, target *int, name string, fallback int, parse IntEnvParser, usage string, envNames ...string) {
 	value, setBy := resolveIntEnv(fallback, parse, envNames...)
-	registerEnvVar(name, usage, strconv.Itoa(fallback), setBy, envNames)
+	registerEnvVar(name, usage, strconv.Itoa(fallback), strconv.Itoa(value), setBy, envNames)
 	ensureFlagSet(fs).IntVar(target, name, value, flagUsage(usage, envNames...))
 }
 
