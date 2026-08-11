@@ -483,7 +483,7 @@ func writeConfigReport(w io.Writer, cfg relayServerConfig, entries []envFileEntr
 	if issues := utils.EnvIssues(); len(issues) > 0 {
 		fmt.Fprintln(w, "\nInvalid values")
 		for _, issue := range issues {
-			fmt.Fprintf(w, "  %s=%s  %s\n", issue.Name, issue.Value, issue.Problem)
+			fmt.Fprintf(w, "  %s=%s  %s\n", issue.Name, displayValue(issue.Name, issue.Value), issue.Problem)
 		}
 	}
 }
