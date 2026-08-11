@@ -123,6 +123,18 @@ func acmeFeature(cfg relayServerConfig) feature {
 		return f
 	}
 
+	// acme.NewManager returns before it builds a DNS provider when the base
+	// domain is local-only, so managed issuance cannot run however well the
+	// provider is configured. Reporting it as enabled here would describe an
+	// automation that never starts.
+	if host := portalURLHost(cfg.PortalURL); host == "" || utils.IsLocalRelayHost(host) {
+		f.State, f.By = stateBlocked, "ACME_DNS_PROVIDER="+provider
+		f.Missing = fmt.Sprintf(
+			"PORTAL_URL host %q is local-only; managed issuance is skipped for local hosts and a development certificate is used instead",
+			host)
+		return f
+	}
+
 	required, supported := dnsProviderCredential[provider]
 	if !supported {
 		f.State, f.By = stateBlocked, "ACME_DNS_PROVIDER="+provider
@@ -641,6 +653,70 @@ func writeCommentWrapped(w io.Writer, text string) {
 	}
 }
 
+// applyEnvFileInIsolation makes the file the whole environment for the pass
+// that follows, and returns a function restoring what was there before.
+//
+// Setting only the file's own keys is not enough. A relay variable absent from
+// the file would stay inherited from the shell, and a higher-priority alias in
+// the shell would beat a value the file does supply — process AWS_REGION over
+// file AWS_DEFAULT_REGION, for instance. Either way the report would describe a
+// configuration different from the one Compose is going to deploy, which is the
+// opposite of what checking a file is for.
+func applyEnvFileInIsolation(entries []envFileEntry) (func(), error) {
+	// A first pass populates the registry, which is how the set of names the
+	// deployment understands is known at all.
+	if _, err := resolveRelayServerConfig(nil); err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(externalEnvVars))
+	for _, entry := range utils.EnvVars() {
+		names = append(names, entry.Name)
+		names = append(names, entry.Aliases...)
+	}
+	for name := range externalEnvVars {
+		names = append(names, name)
+	}
+	for _, entry := range entries {
+		names = append(names, entry.Name)
+	}
+
+	type saved struct {
+		value string
+		set   bool
+	}
+	previous := make(map[string]saved, len(names))
+	restore := func() {
+		for name, prior := range previous {
+			if prior.set {
+				_ = os.Setenv(name, prior.value)
+				continue
+			}
+			_ = os.Unsetenv(name)
+		}
+	}
+
+	for _, name := range names {
+		if _, recorded := previous[name]; recorded {
+			continue
+		}
+		value, set := os.LookupEnv(name)
+		previous[name] = saved{value: value, set: set}
+		if err := os.Unsetenv(name); err != nil {
+			restore()
+			return nil, fmt.Errorf("isolate %s: %w", name, err)
+		}
+	}
+
+	for _, entry := range entries {
+		if err := os.Setenv(entry.Name, entry.Value); err != nil {
+			restore()
+			return nil, fmt.Errorf("apply %s: %w", entry.Name, err)
+		}
+	}
+	return restore, nil
+}
+
 func runConfigCommand(args []string) error {
 	var (
 		envFilePath string
@@ -661,8 +737,6 @@ func runConfigCommand(args []string) error {
 		return err
 	}
 
-	// Load the file before registering flags: flag defaults resolve from the
-	// process environment, which is exactly how Compose delivers env_file.
 	var entries []envFileEntry
 	source := "process environment"
 	if strings.TrimSpace(envFilePath) != "" {
@@ -670,11 +744,11 @@ func runConfigCommand(args []string) error {
 		if err != nil {
 			return fmt.Errorf("read env file: %w", err)
 		}
-		for _, entry := range loaded {
-			if err := os.Setenv(entry.Name, entry.Value); err != nil {
-				return fmt.Errorf("apply %s: %w", entry.Name, err)
-			}
+		restore, err := applyEnvFileInIsolation(loaded)
+		if err != nil {
+			return err
 		}
+		defer restore()
 		entries = loaded
 		source = envFilePath
 	}
