@@ -1,22 +1,24 @@
-# Portal - 面向 localhost 的自托管中继隧道
+# Webhole — 面向 localhost 的自托管中继隧道
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-<p align="center"><img width="800" alt="Portal Demo" src="./portal.gif" /></p>
+[![awesome-tunneling](https://img.shields.io/badge/awesome--tunneling-listed-blue)](https://github.com/anderspitman/awesome-tunneling)
+
+<p align="center"><img width="800" alt="Webhole Demo" src="./portal.gif" /></p>
 
 <p align="center"><b>通过自托管或公共中继公开本地服务。</b><br/>无需端口转发。无需入站防火墙规则。无需手动 DNS 配置。无需账户。</p>
 
-## 为什么选择 Portal？
+## 为什么选择 Webhole？
 
-Portal 是一个本地隧道运行时和中继网络。它通过自托管或公共中继发布本地服务，把路由策略保留在隧道进程中，并避免依赖托管式厂商账户。
+Webhole 是一个本地隧道运行时和中继网络。它通过自托管或公共中继发布本地服务，把路由策略保留在隧道进程中，并避免依赖托管式厂商账户。
 
 - **自托管，完全开源** - 用一条命令运行你自己的中继。中继采用 MIT 许可证，没有企业版层级，没有功能门槛，也不会回传遥测。你的中继，你的规则。
 
 - **匿名中继网络** - 无需托管账户或中心化运营方即可连接公共中继。你可以把自托管中继和公共中继组合到一个池中，把信任拆分给你选择的多个独立运营方。
 
-- **端到端租户 TLS 和 ECH** - 因为中继是不可信的，Portal 会在用户端点而不是中继处终止租户 TLS。Portal 还提供 ECH，避免真实主机名以明文 SNI 暴露。
+- **端到端租户 TLS 和 ECH** - 因为中继是不可信的，Webhole 会在用户端点而不是中继处终止租户 TLS。Webhole 还提供 ECH，避免真实主机名以明文 SNI 暴露。
 
-- **内置 MITM 检测** - Portal 会在真实流量开始后主动自探测自己的连接。它会比较两端导出的 TLS 密钥材料，并把不匹配视为疑似中继侧 TLS 终止。
+- **内置 MITM 检测** - Webhole 会在真实流量开始后主动自探测自己的连接。它会比较两端导出的 TLS 密钥材料，并把不匹配视为疑似中继侧 TLS 终止。
 
 - **多跳中继路由** - 将多个中继串联起来，使单个中继无法同时知道来源和目的地。使用 `--multi-hop-depth 3` 可以自动选择三跳路由。
 
@@ -26,7 +28,7 @@ Portal 是一个本地隧道运行时和中继网络。它通过自托管或公�
 
 ## 对比
 
-| | Portal | ngrok | Cloudflare Tunnel | frp |
+| | Webhole | ngrok | Cloudflare Tunnel | frp |
 |---|---|---|---|---|
 | 公共 localhost URL | **是** | 是 | 是 | 是 |
 | 可自托管 | **是** | 仅企业版 | 否 | 是 |
@@ -47,7 +49,7 @@ Portal 是一个本地隧道运行时和中继网络。它通过自托管或公�
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/gosuda/webhole/releases/latest/download/install.sh | bash
 portal expose 3000
 ```
 
@@ -55,11 +57,11 @@ portal expose 3000
 
 ```powershell
 $ProgressPreference = 'SilentlyContinue'
-irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
+irm https://github.com/gosuda/webhole/releases/latest/download/install.ps1 | iex
 portal expose 3000
 ```
 
-Portal 会立即为你的本地应用打印一个公共 HTTPS URL。更多示例：
+Webhole 会立即为你的本地应用打印一个公共 HTTPS URL。更多示例：
 
 ```bash
 # 自定义名称和中继
@@ -87,7 +89,7 @@ portal expose 3000 --multi-hop-depth 3
 
 完整路由语法请参阅 [CLI Reference](cmd/portal-tunnel/README.md)，x402 helper endpoint 请参阅 [API Reference](docs/src/routes/api-reference/+page.md#payments)。
 
-### 使用 Portal Agent 持续运行隧道
+### 使用 Webhole Agent 持续运行隧道
 
 当隧道需要在终端之外持续运行时，使用 `portal agent run`。它会作为本地 OS 服务运行，在一个 TOML 配置中保持所有隧道在线，并提供用于中继和多跳管理的 dashboard。
 
@@ -101,13 +103,13 @@ portal agent stop
 portal agent run --config config.toml --foreground
 ```
 
-配置格式请参阅 [Portal Agent](docs/src/routes/portal-agent/+page.md)。
+配置格式请参阅 [Webhole Agent](docs/src/routes/portal-agent/+page.md)。
 
 ### 运行你自己的中继
 
 ```bash
-git clone https://github.com/gosuda/portal-tunnel
-cd portal-tunnel && cp .env.example .env
+git clone https://github.com/gosuda/webhole
+cd webhole && cp .env.example .env
 docker compose up
 ```
 
@@ -119,13 +121,13 @@ docker compose up
 Browser
   -> Relay SNI router  (只读取路由 token，转发原始字节)
   -> Reverse session
-  -> Portal tunnel     (在本地执行 TLS 握手，派生 session key)
+  -> Webhole tunnel    (在本地执行 TLS 握手，派生 session key)
   -> Local service
 ```
 
 1. 中继接受传入连接，并只读取 TLS ClientHello 中用于 SNI 路由的信息。
 2. 中继通过反向 session 转发原始加密流，而不终止 TLS。
-3. 你这边的 Portal 隧道在本地完成 TLS 握手。Session key 在你的机器上派生。
+3. 你这边的 Webhole 隧道在本地完成 TLS 握手。Session key 在你的机器上派生。
 4. 对于中继托管域名，隧道会通过 `/v1/sign` 获取证书签名，把中继仅用作 keyless signing oracle。中继签署握手摘要，但永远不会接收 session key。
 5. 握手完成后，中继继续转发密文，无法访问明文。
 
@@ -138,7 +140,7 @@ Browser
   -> Entry relay  (只看到不透明 route hostname)
   -> Middle relay (只看到 next-hop token)
   -> Exit relay   (只看到 reverse session token)
-  -> Portal tunnel
+  -> Webhole tunnel
   -> Local service
 ```
 
@@ -146,19 +148,19 @@ Browser
 
 ## 公共中继 Registry
 
-Portal 官方公共中继 registry 是：
+Webhole 官方公共中继 registry 是：
 
 ```text
-https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json
+https://raw.githubusercontent.com/gosuda/webhole/main/registry.json
 ```
 
-隧道客户端默认包含这个 registry。如果你运营公共 Portal 中继，可以提交 pull request，把你的中继 URL 添加到 `registry.json`。
+隧道客户端默认包含这个 registry。如果你运营公共 Webhole 中继，可以提交 pull request，把你的中继 URL 添加到 `registry.json`。
 
 ## 文档
 
 - [CLI Reference](cmd/portal-tunnel/README.md)
 - [Concepts](docs/src/routes/concepts/+page.md)
-- [Portal Agent](docs/src/routes/portal-agent/+page.md)
+- [Webhole Agent](docs/src/routes/portal-agent/+page.md)
 - [Wallet and ENS](docs/src/routes/wallet-and-ens/+page.md)
 - [Security Model](docs/src/routes/security-model/+page.md)
 - [Architecture](docs/src/routes/architecture/+page.md)

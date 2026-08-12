@@ -1,14 +1,16 @@
-# Portal - Self-Hostable Relay Tunnel for Localhost
+# Webhole — Self-Hostable Relay Tunnel for Localhost
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-<p align="center"><img width="800" alt="Portal Demo" src="./portal.gif" /></p>
+[![awesome-tunneling](https://img.shields.io/badge/awesome--tunneling-listed-blue)](https://github.com/anderspitman/awesome-tunneling)
+
+<p align="center"><img width="800" alt="Webhole Demo" src="./portal.gif" /></p>
 
 <p align="center"><b>Expose local services through self-hosted or public relays.</b><br/>No port forwarding. No inbound firewall rules. No manual DNS setup. No accounts.</p>
 
-## Why Portal?
+## Why Webhole?
 
-Portal is a local tunnel runtime and relay network for publishing services to the agentic web.
+Webhole is a local tunnel runtime and relay network for publishing services to the agentic web.
 It publishes local apps, APIs, tools, and agents through self-hosted or public relays,
 keeps routing and x402 payment policy in the tunnel process, and avoids requiring a hosted vendor account.
 
@@ -20,11 +22,11 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
   account or central operator. Combine self-hosted relays with public relays in
   a pool to split trust across independent operators you choose.
 
-- **End-to-End Tenant TLS And ECH** - Because relays are trustless, Portal
-  terminates tenant TLS at the user's endpoint instead of the relay. Portal also
+- **End-to-End Tenant TLS And ECH** - Because relays are trustless, Webhole
+  terminates tenant TLS at the user's endpoint instead of the relay. Webhole also
   provides ECH to avoid exposing the real hostname in plaintext SNI.
 
-- **Built-in MITM Detection** - Portal actively self-probes its own connection
+- **Built-in MITM Detection** - Webhole actively self-probes its own connection
   after real traffic begins. It compares TLS keying material exported on both
   sides and treats a mismatch as suspected relay-side TLS termination.
 
@@ -43,7 +45,7 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
 
 ## Comparison
 
-| | Portal | ngrok | Cloudflare Tunnel | frp |
+| | Webhole | ngrok | Cloudflare Tunnel | frp |
 |---|---|---|---|---|
 | Public localhost URL | **Yes** | Yes | Yes | Yes |
 | Self-hostable | **Yes** | Enterprise only | No | Yes |
@@ -64,7 +66,7 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/gosuda/webhole/releases/latest/download/install.sh | bash
 portal expose 3000
 ```
 
@@ -72,11 +74,11 @@ portal expose 3000
 
 ```powershell
 $ProgressPreference = 'SilentlyContinue'
-irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
+irm https://github.com/gosuda/webhole/releases/latest/download/install.ps1 | iex
 portal expose 3000
 ```
 
-Portal prints a public HTTPS URL for your local app instantly. More examples:
+Webhole prints a public HTTPS URL for your local app instantly. More examples:
 
 ```bash
 # Custom name and relay
@@ -104,7 +106,7 @@ See [CLI Reference](cmd/portal-tunnel/README.md) for the full route syntax and
 [API Reference](docs/src/routes/api-reference/+page.md#payments) for the x402
 helper endpoints.
 
-### Keep tunnels running with Portal Agent
+### Keep tunnels running with Webhole Agent
 
 Use `portal agent run` when tunnels should keep running outside your terminal.
 It runs as a local OS service, keeps every tunnel in one TOML config alive, and
@@ -120,13 +122,13 @@ portal agent stop
 portal agent run --config config.toml --foreground
 ```
 
-See [Portal Agent](docs/src/routes/portal-agent/+page.md) for the config format.
+See [Webhole Agent](docs/src/routes/portal-agent/+page.md) for the config format.
 
 ### Run your own relay
 
 ```bash
-git clone https://github.com/gosuda/portal-tunnel
-cd portal-tunnel && cp .env.example .env
+git clone https://github.com/gosuda/webhole
+cd webhole && cp .env.example .env
 docker compose up
 ```
 
@@ -139,7 +141,7 @@ policy, see [Deployment](docs/src/routes/deployment/+page.md).
 Browser
   -> Relay SNI router  (reads only routing token, forwards raw bytes)
   -> Reverse session
-  -> Portal tunnel     (performs TLS handshake locally, derives session keys)
+  -> Webhole tunnel    (performs TLS handshake locally, derives session keys)
   -> Local service
 ```
 
@@ -147,7 +149,7 @@ Browser
    for SNI-based routing.
 2. It forwards the raw encrypted stream over the reverse session without
    terminating TLS.
-3. The Portal tunnel on your side completes the TLS handshake locally. Session
+3. The Webhole tunnel on your side completes the TLS handshake locally. Session
    keys are derived on your machine.
 4. For relay-hosted domains, the tunnel obtains certificate signatures via
    `/v1/sign`, using the relay only as a keyless signing oracle. The relay signs
@@ -166,7 +168,7 @@ Browser
   -> Entry relay  (sees only the opaque route hostname)
   -> Middle relay (sees only the next-hop token)
   -> Exit relay   (sees only the reverse session token)
-  -> Portal tunnel
+  -> Webhole tunnel
   -> Local service
 ```
 
@@ -176,20 +178,20 @@ in the chain receives tenant TLS plaintext.
 
 ## Public Relay Registry
 
-Portal's official public relay registry is:
+Webhole's official public relay registry is:
 
 ```text
-https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json
+https://raw.githubusercontent.com/gosuda/webhole/main/registry.json
 ```
 
-Tunnel clients include this registry by default. If you operate a public Portal
+Tunnel clients include this registry by default. If you operate a public Webhole
 relay, open a pull request to add your relay URL to `registry.json`.
 
 ## Documentation
 
 - [CLI Reference](cmd/portal-tunnel/README.md)
 - [Concepts](docs/src/routes/concepts/+page.md)
-- [Portal Agent](docs/src/routes/portal-agent/+page.md)
+- [Webhole Agent](docs/src/routes/portal-agent/+page.md)
 - [Wallet and ENS](docs/src/routes/wallet-and-ens/+page.md)
 - [Security Model](docs/src/routes/security-model/+page.md)
 - [Architecture](docs/src/routes/architecture/+page.md)
