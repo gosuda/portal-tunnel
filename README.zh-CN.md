@@ -1,8 +1,11 @@
 # Webhole — 面向 localhost 的自托管中继隧道
 
-[English](./README.md) | [简体中文](./README.zh-CN.md)
-
+[![CI](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/gosuda/portal-tunnel)](https://github.com/gosuda/portal-tunnel/releases/latest)
+[![License](https://img.shields.io/github/license/gosuda/portal-tunnel)](./LICENSE)
 [![awesome-tunneling](https://img.shields.io/badge/awesome--tunneling-listed-blue)](https://github.com/anderspitman/awesome-tunneling)
+
+[English](./README.md) | [简体中文](./README.zh-CN.md)
 
 <p align="center"><img width="800" alt="Webhole Demo" src="./portal.gif" /></p>
 
