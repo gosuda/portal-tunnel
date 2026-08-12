@@ -27,6 +27,10 @@ The internal API listener defaults to `4017/tcp` and is not published by the
 bundled Compose deployment. Root-host traffic reaches it through Portal's own
 SNI router.
 
+This topology assumes Portal owns public `443/tcp`. If that port already
+belongs to something else on the host, see
+[Running Behind an Existing Reverse Proxy](#running-behind-an-existing-reverse-proxy).
+
 ## Prerequisites
 
 - A public Linux server with Docker and Docker Compose.
@@ -95,14 +99,19 @@ also required when wildcard tunnel names terminate TLS at Portal.
 ```bash
 mkdir -p ./.portal-certs
 docker compose pull portal
-docker compose up -d --force-recreate --remove-orphans portal
+docker compose up -d --force-recreate portal
 ```
 
 For a local source build:
 
 ```bash
-docker compose up -d --build --force-recreate --remove-orphans portal
+docker compose up -d --build --force-recreate portal
 ```
+
+`--remove-orphans` is deliberately absent. It is useful once, to clear the
+containers a superseded topology left behind, and dangerous in a project shared
+with unrelated services. Remove those containers by name instead — see
+[Migration From the Split Stack](#migration-from-the-split-stack).
 
 The Compose stack publishes:
 
@@ -136,6 +145,141 @@ The `/admin` request must return the SPA entry rather than `404`. Registered
 subdomains must continue to reach their tunnel targets through the same public
 443 listener.
 
+## Running Behind an Existing Reverse Proxy
+
+Portal expects to own public `443/tcp`. On a host that already serves other
+sites from that port, it cannot simply be pointed at: Portal's SNI router
+**closes any hostname it has no lease for**, so a shared socket would drop
+every request meant for those other sites.
+
+The proxy keeps the port and hands Portal the hostnames that belong to it. How
+it hands them over is not uniform, and the two halves are split for opposite
+reasons.
+
+### Split by SNI, not by path
+
+```text
+:443 -> SNI inspection
+         portal.example.com    -> terminate TLS, proxy to Portal's API listener
+         *.portal.example.com  -> pass through untouched to Portal's SNI listener
+         anything else         -> whatever the host already served
+```
+
+**Lease hostnames must pass through.** Terminating TLS for them breaks tunnels:
+clients started with `--ban-mitm` probe for termination and drop a relay that
+does it. It also disables keyless TLS and Encrypted Client Hello, both of which
+need the handshake itself to reach Portal.
+
+**The root host should be terminated.** Portal derives the client address from
+`X-Forwarded-For` and `X-Real-IP` only; it does not speak the PROXY protocol.
+Passing the root host through raw is simpler, but then every visitor reaches
+Portal as the proxy's own address, `TRUST_PROXY_HEADERS` has nothing to read,
+and IP policy under `/api/policy/ips` matches everyone or no one.
+
+### Client addresses across the loopback hop
+
+An SNI router that forwards to a local port opens a new connection, so the
+terminating listener sees the router rather than the visitor. Carry the
+original address explicitly:
+
+```nginx
+stream {
+    server {
+        listen 443;
+        ssl_preread on;
+        proxy_pass $portal_backend;
+        proxy_protocol on;          # adds the PROXY header
+    }
+}
+
+http {
+    set_real_ip_from 127.0.0.1;     # trust only the loopback hop
+    real_ip_header proxy_protocol;  # recover the address from it
+}
+```
+
+Then set `TRUST_PROXY_HEADERS=true`. Leave `TRUSTED_PROXY_CIDRS` empty to trust
+the default private and loopback ranges, which covers container networks.
+
+`proxy_protocol` on a `listen` directive is a socket option, so every server
+block on that port receives the header. Other sites keep a plain `listen ... ssl`
+and still see real client addresses.
+
+A complete, tested configuration is at
+`docs/static/examples/reverse-proxy/nginx.conf`. HAProxy expresses the same
+split with `tcp-request inspect-delay` plus `req_ssl_sni` ACLs, and Traefik with
+a TCP router using `HostSNI` rules and TLS passthrough.
+
+### Publishing Portal's ports
+
+With a proxy in front, Portal should not publish `443/tcp` on the host. Bind
+its SNI listener to loopback or leave it on the container network, and keep the
+UDP ports published:
+
+```yaml
+services:
+  portal:
+    ports: !override
+      - "127.0.0.1:8443:443"
+      - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
+```
+
+Do not change `SNI_PORT`. It is fixed at 443 because Portal reaches its own API
+listener through its SNI router, and because that port is published in the ECH
+`HTTPS` record. Only the host-side mapping moves.
+
+`!override` replaces the ports list rather than appending to it; without it
+Compose merges both entries and still tries to bind `443`. It requires Docker
+Compose 2.24.4 or newer.
+
+### Sharing a Compose project with unrelated services
+
+A host like this usually runs Portal alongside services that have nothing to do
+with it. Compose commands operate on the whole project by default, so name the
+service explicitly every time:
+
+```bash
+docker compose up -d portal        # not: docker compose up -d
+docker compose stop portal         # not: docker compose down
+```
+
+Never pass `--remove-orphans` on a shared project. It deletes every container
+in the project that the current file does not define, which includes services
+that belong to other stacks. Remove superseded containers by name instead:
+
+```bash
+docker stop portal-api portal-frontend
+docker rm   portal-api portal-frontend
+```
+
+### Verifying without a regression hunt
+
+Record how the host answers **before** changing anything, so that an error found
+afterwards can be attributed rather than investigated:
+
+```bash
+# One line per host, with a path its clients actually use.
+cat > probe.txt <<'PROBE'
+portal.example.com   /api/healthz
+other-site.example   /
+PROBE
+
+probe() {
+  while read -r host path; do
+    [ -z "$host" ] && continue
+    printf '%-32s %-16s %s\n' "$host" "$path" \
+      "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://$host$path")"
+  done < probe.txt
+}
+
+probe > baseline.txt
+```
+
+Compare with `probe | diff baseline.txt -` afterwards. Judge by the difference,
+not by whether a code looks healthy: `/` is not a valid request for every host,
+and a WebSocket-only endpoint answers a plain `GET` with nothing at all, which a
+proxy correctly reports as `502`.
+
 ## Automated Updates
 
 Production deployments should follow the v2 release track:
@@ -154,11 +298,21 @@ chmod +x watch_and_deploy.sh
 
 ## Migration From the Split Stack
 
-1. Confirm `./.portal-certs` contains the Portal certificate and state.
+1. Confirm `./.portal-certs` contains the Portal certificate and state. It holds
+   the relay identity: losing it makes this a different relay.
 2. Pull or build the new single Portal image.
 3. Stop the old stack so it releases public port 443.
-4. Start `portal` with `--remove-orphans` to remove the old edge and frontend
-   containers.
+4. Remove the superseded edge and frontend containers, then start `portal`.
+   Name them rather than reaching for `--remove-orphans`, which deletes every
+   container in the project that the current file does not define — including
+   services that belong to other stacks when the project is shared:
+
+   ```bash
+   docker stop portal-api portal-frontend
+   docker rm   portal-api portal-frontend
+   docker compose up -d portal
+   ```
+
 5. Verify the SPA, relay APIs, and at least one wildcard tunnel.
 
 The old edge configuration and its separate browser certificate are no longer
@@ -169,12 +323,24 @@ for root-host requests.
 
 ### Port 443 Is Already Allocated
 
-Stop the previous edge container or host service before starting Portal:
+Identify what holds the port first:
 
 ```bash
-docker compose down --remove-orphans
+sudo ss -tlnp | grep ':443\b'
+```
+
+If it is a superseded Portal edge container, stop and remove it by name, then
+start Portal:
+
+```bash
+docker stop <old-edge-container>
+docker rm   <old-edge-container>
 docker compose up -d portal
 ```
+
+If it is something that has to keep serving — an nginx fronting other sites, for
+example — Portal cannot take the port from it and must not try. See
+[Running Behind an Existing Reverse Proxy](#running-behind-an-existing-reverse-proxy).
 
 ### SPA Routes Return 404
 
