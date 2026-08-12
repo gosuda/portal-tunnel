@@ -96,7 +96,8 @@ not supported.
 | `--name` | string | auto | Public hostname prefix, one DNS label |
 | `--description` | string | | Service description metadata |
 | `--tags` | string | | Service tags metadata, comma-separated |
-| `--thumbnail` | string | | Service thumbnail URL metadata |
+| `--thumbnail` | string | | Service thumbnail URL metadata, as an absolute `http://` or `https://` URL |
+| `--thumbnail-from-target` | bool | `false` | When `--thumbnail` is empty, read the `og:image` the target advertises and use that. The tunnel reads its own target, so nothing else is fetched; the chosen URL is logged at startup |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |

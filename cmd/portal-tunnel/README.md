@@ -158,6 +158,7 @@ Common `portal expose` flags:
 --description        Service description metadata
 --tags               Service tags metadata, comma-separated
 --thumbnail          Service thumbnail URL metadata
+--thumbnail-from-target  Use the target's og:image when --thumbnail is empty
 --owner              Service owner metadata
 --hide               Hide service from relay listing screens
 --serve              Serve a local static site: a directory (served with index.html) or an HTML file (folder served with that file as SPA/CSR entry)

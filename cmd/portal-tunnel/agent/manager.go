@@ -722,6 +722,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		BanMITM:              banMITM,
 		MaxActiveRelays:      cfg.MaxActiveRelays,
 		Metadata:             metadataFromTunnelConfig(cfg),
+		ThumbnailFromTarget:  cfg.ThumbnailFromTarget,
 		X402PayTo:            cfg.X402PayTo,
 		X402Testnet:          cfg.X402Testnet,
 		X402Network:          cfg.X402Network,

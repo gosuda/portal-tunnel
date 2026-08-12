@@ -59,6 +59,7 @@ type exposeFlags struct {
 	tags                 string
 	owner                string
 	thumbnail            string
+	thumbnailFromTarget  bool
 	hide                 bool
 	x402PayTo            string
 	x402Testnet          bool
@@ -94,6 +95,7 @@ func runExposeCommand(args []string) error {
 	utils.StringFlag(fs, &flags.tags, "tags", "", "Service tags metadata (comma-separated)")
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
+	utils.BoolFlag(fs, &flags.thumbnailFromTarget, "thumbnail-from-target", false, "when --thumbnail is empty, use the og:image the target advertises")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
 	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
@@ -243,6 +245,7 @@ func runExposeCommand(args []string) error {
 			Thumbnail:   flags.thumbnail,
 			Hide:        flags.hide,
 		},
+		ThumbnailFromTarget:  flags.thumbnailFromTarget,
 		X402PayTo:            flags.x402PayTo,
 		X402Testnet:          flags.x402Testnet,
 		X402Network:          flags.x402Network,

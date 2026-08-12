@@ -44,18 +44,23 @@ type ExposeConfig struct {
 	RelayURLs []string
 	Discovery bool
 
-	Identity             types.Identity
-	IdentityPath         string
-	IdentityJSON         string
-	TargetAddr           string
-	UDPAddr              string
-	UDPEnabled           bool
-	TCPEnabled           bool
-	MultiHop             []string
-	MultiHopDepth        int
-	BanMITM              bool
-	MaxActiveRelays      int
-	Metadata             types.LeaseMetadata
+	Identity        types.Identity
+	IdentityPath    string
+	IdentityJSON    string
+	TargetAddr      string
+	UDPAddr         string
+	UDPEnabled      bool
+	TCPEnabled      bool
+	MultiHop        []string
+	MultiHopDepth   int
+	BanMITM         bool
+	MaxActiveRelays int
+	Metadata        types.LeaseMetadata
+	// ThumbnailFromTarget fills an empty Metadata.Thumbnail with the image the
+	// target application advertises, so a card does not have to be described
+	// twice. Off by default: it is one request to the target, and a caller that
+	// did not ask for it should not make it.
+	ThumbnailFromTarget  bool
 	X402PayTo            string
 	X402Testnet          bool
 	X402Network          string
@@ -161,6 +166,8 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	runtimeCfg.UDPAddr = udpAddr
 	runtimeCfg.MultiHop = append([]string(nil), multiHop...)
 	runtimeCfg.Metadata = cfg.Metadata.Copy()
+	runtimeCfg.Metadata.Thumbnail = resolveMetadataThumbnail(
+		ctx, cfg, targetAddr, listenerIdentity.Name, explicitRelayURLs)
 	runtimeCfg.X402PayTo = x402PayTo
 	runtimeCfg.X402Testnet = cfg.X402Testnet
 	runtimeCfg.X402Network = strings.ToLower(strings.TrimSpace(cfg.X402Network))
