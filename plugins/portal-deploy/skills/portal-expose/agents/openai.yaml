@@ -1,4 +1,4 @@
 interface:
   display_name: "Expose App with Portal"
-  short_description: "Expose and verify a local app with Portal"
+  short_description: "Expose local apps via Portal"
   default_prompt: "Use $portal-expose to publish this local app safely with Portal and verify its public URL."

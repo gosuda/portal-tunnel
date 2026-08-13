@@ -97,6 +97,22 @@ Public listing is a Git repository submitted at [cursor.com/marketplace/publish]
 
 The skill should not trigger for deploying a Portal relay, normal cloud hosting, or publishing the plugin itself.
 
+## Marketplace review cases
+
+Positive:
+
+- Deploy this local app with Portal and verify the public URL.
+- Create a temporary Portal preview for this project.
+- Run this app as a persistent Portal tunnel.
+- Serve this trusted static site through Portal.
+- Create a temporary Portal preview for the frontend on port 5173.
+
+Negative:
+
+- Deploy a Portal relay with this plugin.
+- Publish this plugin to a marketplace.
+- Host this app on generic cloud hosting.
+
 ## Development validation
 
 From the repository root:

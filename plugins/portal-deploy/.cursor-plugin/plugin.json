@@ -10,5 +10,6 @@
   "repository": "https://github.com/gosuda/portal-tunnel",
   "license": "MIT",
   "keywords": ["portal", "tunnel", "deploy", "preview", "localhost", "expose"],
+  "logo": "assets/logo.svg",
   "skills": "./skills/"
 }
