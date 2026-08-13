@@ -1,0 +1,20 @@
+{
+  "name": "portal-tunnel",
+  "interface": {
+    "displayName": "Portal Tunnel"
+  },
+  "plugins": [
+    {
+      "name": "portal-deploy",
+      "source": {
+        "source": "local",
+        "path": "./plugins/portal-deploy"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

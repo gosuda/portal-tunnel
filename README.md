@@ -109,6 +109,10 @@ See [CLI Reference](cmd/portal-tunnel/README.md) for the full route syntax and
 [API Reference](docs/src/routes/api-reference/+page.md#payments) for the x402
 helper endpoints.
 
+### Use the local AI agent plugin
+
+The repository includes a local `portal-deploy` plugin for Codex, Claude Code, and Cursor. One shared `portal-expose` skill covers app startup, Portal tunnel selection, public URL verification, and lifecycle handoff. Host-specific plugin manifests and marketplace catalogs stay separate. See [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md).
+
 ### Keep tunnels running with Portal Agent
 
 Use `portal agent run` when tunnels should keep running outside your terminal.

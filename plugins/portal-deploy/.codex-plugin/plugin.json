@@ -1,0 +1,28 @@
+{
+  "name": "portal-deploy",
+  "version": "0.1.0",
+  "description": "Safely expose and verify local apps with Portal tunnels.",
+  "author": {
+    "name": "gosuda",
+    "url": "https://github.com/gosuda"
+  },
+  "homepage": "https://github.com/gosuda/portal-tunnel/tree/main/plugins/portal-deploy",
+  "repository": "https://github.com/gosuda/portal-tunnel",
+  "license": "MIT",
+  "keywords": ["portal", "tunnel", "deploy", "preview", "localhost", "expose"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Portal Deploy",
+    "shortDescription": "Expose and verify local apps with Portal",
+    "longDescription": "Start or inspect a local app, publish it through Portal, verify the public HTTPS endpoint, and hand off a safe stop or persistence workflow.",
+    "developerName": "gosuda",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/gosuda/portal-tunnel",
+    "defaultPrompt": [
+      "Deploy this local app with Portal and verify the public URL.",
+      "Create a temporary Portal preview for this project.",
+      "Run this app as a persistent Portal tunnel."
+    ]
+  }
+}
