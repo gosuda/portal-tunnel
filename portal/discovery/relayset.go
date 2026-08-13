@@ -157,6 +157,7 @@ func mergeLocalRelayState(record, existing RelayState) RelayState {
 	record.Bootstrap = record.Bootstrap || existing.Bootstrap
 	record.Confirmed = record.Confirmed || existing.Confirmed
 	record.Banned = record.Banned || existing.Banned
+	record.Dead = record.Dead || existing.Dead
 	if record.discoveryFailures < existing.discoveryFailures {
 		record.discoveryFailures = existing.discoveryFailures
 	}
@@ -175,6 +176,7 @@ func mergeLocalRelayState(record, existing RelayState) RelayState {
 }
 
 func markDiscoveryConfirmed(state RelayState) RelayState {
+	state.Dead = false
 	state.discoveryFailures = 0
 	state.nextDiscoveryRefreshAt = time.Time{}
 	state.unhealthySince = time.Time{}
@@ -458,7 +460,7 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 		eligible := true
 		for _, state := range states {
 			if state.Descriptor.APIHTTPSAddr == relayURL &&
-				(state.Banned || !state.supportsRequiredTransports(routeState, now)) {
+				(state.Banned || state.Dead || !state.supportsRequiredTransports(routeState, now)) {
 				eligible = false
 				break
 			}
@@ -491,7 +493,7 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 			pool = append(pool, state)
 			continue
 		}
-		if state.Banned {
+		if state.Banned || state.Dead {
 			continue
 		}
 		if state.hasObservedDescriptor() {
@@ -645,7 +647,7 @@ func (s *RelaySet) Descriptors(self types.RelayDescriptor) []types.RelayDescript
 		add(self)
 	}
 	for _, state := range s.currentRelayStates(now) {
-		if state.Banned || !state.hasObservedDescriptor() {
+		if state.Banned || state.Dead || !state.hasObservedDescriptor() {
 			continue
 		}
 		add(state.Descriptor)
@@ -1035,6 +1037,7 @@ func (s *RelaySet) RecordDiscoveryFailure(relayURL string, recoveryFailures int)
 	if backoff > maxDirectRecoveryBackoff {
 		backoff = maxDirectRecoveryBackoff
 	}
+	state.Dead = true
 	state.nextDiscoveryRefreshAt = now.Add(backoff)
 	s.relays[relayURL] = state
 	return true, "discovery", state.discoveryFailures

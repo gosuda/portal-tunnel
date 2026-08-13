@@ -404,6 +404,10 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 			if relayURL == "" {
 				continue
 			}
+			if state.Dead {
+				delete(relayByURL, relayURL)
+				continue
+			}
 			snap := relayByURL[relayURL]
 			snap.RelayURL = relayURL
 			snap.Explicit = slices.Contains(cfg.RelayURLs, relayURL)

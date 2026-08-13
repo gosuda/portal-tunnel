@@ -355,3 +355,46 @@ func TestExposureReconcileSkipsUnchangedRoutes(t *testing.T) {
 	default:
 	}
 }
+
+func TestExposureSnapshotExcludesDeadRelayListener(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+
+	relayAURL, err := url.Parse(relayA)
+	if err != nil {
+		t.Fatalf("url.Parse(relayA) error = %v", err)
+	}
+	relayBURL, err := url.Parse(relayB)
+	if err != nil {
+		t.Fatalf("url.Parse(relayB) error = %v", err)
+	}
+
+	relaySet := mustRelaySet(t, relayA, relayB)
+	exposure := &Exposure{
+		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: []string{relayA, relayB}}, ExposeConfig.snapshot),
+		relaySet:       relaySet,
+		relayListeners: make(map[string]*listener, 2),
+	}
+	exposure.relayListeners = map[string]*listener{
+		relayA: {
+			relayURL: relayAURL,
+			route:    discovery.NewRoute([]string{relayA}, true),
+		},
+		relayB: {
+			relayURL: relayBURL,
+			route:    discovery.NewRoute([]string{relayB}, true),
+		},
+	}
+
+	for i := 0; i < 3; i++ {
+		relaySet.RecordDiscoveryFailure(relayA, 3)
+	}
+	snap := exposure.Snapshot()
+	for _, relayStatus := range snap.Relays {
+		if relayStatus.RelayURL == relayA {
+			t.Fatalf("Snapshot() included dead relay %q despite listener existing", relayA)
+		}
+	}
+}
