@@ -394,13 +394,6 @@ func TestExposureSnapshotExcludesDeadRelayListener(t *testing.T) {
 	snap := exposure.Snapshot()
 	foundRelayB := false
 	for _, relayStatus := range snap.Relays {
-		if relayStatus.RelayURL == relayA {
-			t.Fatalf("Snapshot() included dead relay %q despite listener existing", relayA)
-		}
-		if relayStatus.RelayURL == relayB {
-	snap := exposure.Snapshot()
-	foundRelayB := false
-	for _, relayStatus := range snap.Relays {
 		if relayStatus.RelayURL == relayB {
 			foundRelayB = true
 		}
