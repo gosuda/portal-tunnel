@@ -871,13 +871,21 @@ export function ServerListView({
                       <div className="rounded-md border border-border/70 bg-background px-4 py-3 text-sm text-text-muted">
                         Loading known relays...
                       </div>
-                    ) : knownRelays.length === 0 ? (
+                    ) : knownRelays.filter((relay) => {
+                        const version = relayReleaseVersions[relay.relayURL];
+                        return version !== "" && version !== "offline";
+                      }).length === 0 ? (
                       <div className="rounded-md border border-border/70 bg-background px-4 py-3 text-sm text-text-muted">
                         No known relays discovered from this relay.
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                        {knownRelays.map((relay) => (
+                        {knownRelays
+                          .filter((relay) => {
+                            const version = relayReleaseVersions[relay.relayURL];
+                            return version !== "" && version !== "offline";
+                          })
+                          .map((relay) => (
                           <div
                             key={relay.relayURL}
                             className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border/70 bg-background px-4 py-3"
