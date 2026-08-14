@@ -172,7 +172,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	if err != nil {
 		return types.RegisterResponse{}, nil, "", "", err
 	}
-	if streamLease {
+	if streamLease && l.echEnabled {
 		routeToken, err := identity.DeriveToken(l.identity, "ech-route", publicHostname, rootHostname)
 		if err != nil {
 			return types.RegisterResponse{}, nil, "", "", err
@@ -185,7 +185,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		}
 	}
 	var echConfigList []byte
-	if streamLease {
+	if streamLease && l.echEnabled {
 		_, echConfigList, err = l.tenantECHMaterials(publicHostname, routeHostname)
 		if err != nil {
 			return types.RegisterResponse{}, nil, "", "", err

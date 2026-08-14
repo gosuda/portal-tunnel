@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,6 +44,8 @@ const (
 	defaultRenewInterval        = 24 * time.Hour
 	defaultDNSSyncInterval      = 10 * time.Minute
 	defaultSyncTimeout          = 2 * time.Minute
+	defaultECHRetryBase         = time.Second
+	defaultECHRetryMax          = 10 * time.Minute
 )
 
 type Config struct {
@@ -70,6 +73,7 @@ type Manager struct {
 	cfg           Config
 	wg            sync.WaitGroup
 	dns           DNSProvider
+	resolveIPv4   func(context.Context) (string, error)
 	startOnce     sync.Once
 	stopOnce      sync.Once
 	dnssecLogOnce sync.Once
@@ -77,7 +81,21 @@ type Manager struct {
 	ensStatus     *utils.Snapshot[types.ENSStatus]
 	trackedMu     sync.Mutex
 	echMu         sync.Mutex
-	echRecords    map[string]HTTPSRecord
+	echRecords    map[string]*echDNSState
+}
+
+// echDNSState is the desired DNS state for one public hostname. Operations on
+// the same hostname are serialized so an older delete cannot overtake a newer
+// create or update.
+type echDNSState struct {
+	mu             sync.Mutex
+	record         HTTPSRecord
+	present        bool
+	dirty          bool
+	httpsDeleted   bool
+	retryFailures  int
+	retryScheduled bool
+	retryWake      chan struct{}
 }
 
 type HTTPSRecord struct {
@@ -186,16 +204,18 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 	if utils.IsLocalRelayHost(cfg.BaseDomain) {
 		return &Manager{
-			cfg:       cfg,
-			stopCh:    make(chan struct{}),
-			ensStatus: utils.NewSnapshot(newENSStatus(cfg, nil)),
+			cfg:         cfg,
+			stopCh:      make(chan struct{}),
+			ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
+			resolveIPv4: utils.ResolvePublicIPv4,
 		}, nil
 	}
 
 	manager := &Manager{
-		cfg:       cfg,
-		stopCh:    make(chan struct{}),
-		ensStatus: utils.NewSnapshot(newENSStatus(cfg, nil)),
+		cfg:         cfg,
+		stopCh:      make(chan struct{}),
+		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
+		resolveIPv4: utils.ResolvePublicIPv4,
 	}
 
 	acmeDNS, err := NewDNSProvider(cfg.DNSProvider, cfg)
@@ -466,7 +486,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			return
 		case <-dnsTicker.C:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err := errors.Join(m.syncDNS(syncCtx), m.syncECHRecords(syncCtx))
+			err := m.syncDNS(syncCtx)
 			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
@@ -501,7 +521,11 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 		return nil
 	}
 
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	resolveIPv4 := m.resolveIPv4
+	if resolveIPv4 == nil {
+		resolveIPv4 = utils.ResolvePublicIPv4
+	}
+	publicIP, err := resolveIPv4(ctx)
 	if err != nil {
 		return fmt.Errorf("detect public ip: %w", err)
 	}
@@ -537,31 +561,27 @@ func (m *Manager) SyncECHConfig(ctx context.Context, hostname string, echConfigL
 	if err != nil {
 		return err
 	}
-	content, err := record.Content()
-	if err != nil {
-		return err
-	}
-	svcParams := record.SvcParams()
-
 	m.echMu.Lock()
 	if m.echRecords == nil {
-		m.echRecords = make(map[string]HTTPSRecord)
+		m.echRecords = make(map[string]*echDNSState)
 	}
-	m.echRecords[hostname] = record
+	state := m.echRecords[hostname]
+	if state == nil {
+		state = &echDNSState{retryWake: make(chan struct{}, 1)}
+		m.echRecords[hostname] = state
+	}
+	state.mu.Lock()
 	m.echMu.Unlock()
 
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
-	if err != nil {
-		return fmt.Errorf("detect public ip for ECH hostname %s: %w", hostname, err)
-	}
-	if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-		return fmt.Errorf("ensure ECH A record for %s: %w", hostname, err)
-	}
-
-	if err := m.dns.EnsureHTTPSRecord(ctx, hostname, record.Priority, record.Target, svcParams, content); err != nil {
-		return err
-	}
-	return nil
+	defer state.mu.Unlock()
+	state.record = record
+	state.present = true
+	state.dirty = true
+	state.httpsDeleted = false
+	err = m.syncECHState(ctx, hostname, state)
+	state.dirty = err != nil
+	m.updateECHRetry(hostname, state, err)
+	return err
 }
 
 func (m *Manager) DeleteECHConfig(ctx context.Context, hostname string) error {
@@ -579,57 +599,186 @@ func (m *Manager) DeleteECHConfig(ctx context.Context, hostname string) error {
 		return nil
 	}
 
-	if err := m.dns.DeleteHTTPSRecord(ctx, hostname); err != nil {
-		return err
-	}
-	if hostname != m.cfg.BaseDomain {
-		if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
-			return fmt.Errorf("delete ECH A record for %s: %w", hostname, err)
-		}
-	}
-
 	m.echMu.Lock()
-	delete(m.echRecords, hostname)
+	if m.echRecords == nil {
+		m.echRecords = make(map[string]*echDNSState)
+	}
+	state := m.echRecords[hostname]
+	if state == nil {
+		state = &echDNSState{retryWake: make(chan struct{}, 1)}
+		m.echRecords[hostname] = state
+	}
+	state.mu.Lock()
 	m.echMu.Unlock()
-	return nil
+
+	if state.present {
+		state.httpsDeleted = false
+	}
+	state.present = false
+	state.dirty = true
+	err := m.syncECHState(ctx, hostname, state)
+	state.dirty = err != nil
+	m.updateECHRetry(hostname, state, err)
+	state.mu.Unlock()
+	if err == nil {
+		m.removeECHState(hostname, state)
+	}
+	return err
 }
 
-func (m *Manager) syncECHRecords(ctx context.Context) error {
-	if m == nil || m.dns == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+func (m *Manager) syncECHState(ctx context.Context, hostname string, state *echDNSState) error {
+	if !state.present {
+		if !state.httpsDeleted {
+			err := m.dns.DeleteHTTPSRecord(ctx, hostname)
+			if err != nil {
+				return err
+			}
+			state.httpsDeleted = true
+		}
+		if hostname != m.cfg.BaseDomain {
+			err := m.dns.DeleteARecord(ctx, hostname)
+			if err != nil {
+				return fmt.Errorf("delete ECH A record for %s: %w", hostname, err)
+			}
+		}
 		return nil
 	}
 
-	m.echMu.Lock()
-	records := make(map[string]HTTPSRecord, len(m.echRecords))
-	for hostname, record := range m.echRecords {
-		records[hostname] = record
+	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	if err != nil {
+		return fmt.Errorf("detect public ip for ECH hostname %s: %w", hostname, err)
 	}
-	m.echMu.Unlock()
+	err = m.dns.EnsureARecord(ctx, hostname, publicIP)
+	if err != nil {
+		return fmt.Errorf("ensure ECH A record for %s: %w", hostname, err)
+	}
+	content, err := state.record.Content()
+	if err != nil {
+		return fmt.Errorf("build ECH HTTPS record for %s: %w", hostname, err)
+	}
+	err = m.dns.EnsureHTTPSRecord(ctx, hostname, state.record.Priority, state.record.Target, state.record.SvcParams(), content)
+	if err != nil {
+		return fmt.Errorf("ensure ECH HTTPS record for %s: %w", hostname, err)
+	}
+	return nil
+}
 
-	var syncErr error
-	publicIP := ""
-	if len(records) > 0 {
-		var err error
-		publicIP, err = utils.ResolvePublicIPv4(ctx)
-		if err != nil {
-			return fmt.Errorf("detect public ip for ECH records: %w", err)
+func (m *Manager) updateECHRetry(hostname string, state *echDNSState, err error) {
+	if err == nil {
+		state.retryFailures = 0
+		if state.retryScheduled {
+			select {
+			case state.retryWake <- struct{}{}:
+			default:
+			}
 		}
+		return
 	}
-	for hostname, record := range records {
-		if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ECH A record for %s: %w", hostname, err))
-			continue
+	state.retryFailures++
+	if state.retryScheduled {
+		select {
+		case state.retryWake <- struct{}{}:
+		default:
 		}
-		content, err := record.Content()
-		if err != nil {
-			syncErr = errors.Join(syncErr, fmt.Errorf("build ECH HTTPS record for %s: %w", hostname, err))
-			continue
-		}
-		if err := m.dns.EnsureHTTPSRecord(ctx, hostname, record.Priority, record.Target, record.SvcParams(), content); err != nil {
-			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ECH HTTPS record for %s: %w", hostname, err))
-		}
+		return
 	}
-	return syncErr
+	state.retryScheduled = true
+	go m.retryECHState(hostname, state)
+}
+
+func (m *Manager) retryECHState(hostname string, state *echDNSState) {
+	for {
+		state.mu.Lock()
+		if !state.dirty {
+			state.retryScheduled = false
+			remove := !state.present
+			state.mu.Unlock()
+			if remove {
+				m.removeECHState(hostname, state)
+			}
+			return
+		}
+		delay := echRetryDelay(state.retryFailures)
+		state.mu.Unlock()
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-m.stopCh:
+			timer.Stop()
+			state.mu.Lock()
+			state.retryScheduled = false
+			state.mu.Unlock()
+			return
+		case <-state.retryWake:
+			timer.Stop()
+			continue
+		case <-timer.C:
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), defaultSyncTimeout)
+		state.mu.Lock()
+		if !state.dirty {
+			state.retryScheduled = false
+			remove := !state.present
+			state.mu.Unlock()
+			cancel()
+			if remove {
+				m.removeECHState(hostname, state)
+			}
+			return
+		}
+		err := m.syncECHState(ctx, hostname, state)
+		state.dirty = err != nil
+		failures := 0
+		if err == nil {
+			state.retryFailures = 0
+			state.retryScheduled = false
+		} else {
+			state.retryFailures++
+			failures = state.retryFailures
+		}
+		remove := err == nil && !state.present
+		state.mu.Unlock()
+		cancel()
+
+		if err == nil {
+			if remove {
+				m.removeECHState(hostname, state)
+			}
+			return
+		}
+		log.Warn().
+			Err(err).
+			Str("hostname", hostname).
+			Int("retry_failures", failures).
+			Msg("retry ech dns operation")
+	}
+}
+
+func (m *Manager) removeECHState(hostname string, state *echDNSState) {
+	m.echMu.Lock()
+	state.mu.Lock()
+	if m.echRecords[hostname] == state && !state.present && !state.dirty && !state.retryScheduled {
+		delete(m.echRecords, hostname)
+	}
+	state.mu.Unlock()
+	m.echMu.Unlock()
+}
+
+func echRetryDelay(failures int) time.Duration {
+	delay := defaultECHRetryBase
+	for i := 1; i < failures; i++ {
+		if delay >= defaultECHRetryMax/2 {
+			delay = defaultECHRetryMax
+			break
+		}
+		delay *= 2
+	}
+	if delay > defaultECHRetryMax {
+		delay = defaultECHRetryMax
+	}
+	half := delay / 2
+	return half + time.Duration(mathrand.Int64N(int64(half)+1))
 }
 
 func (m *Manager) syncENSGasless(ctx context.Context) error {

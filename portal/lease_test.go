@@ -95,6 +95,27 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 }
 
+func TestLeaseRegistryStreamDefaultsToPlainSNI(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	record, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "plain-sni"),
+	}, "203.0.113.10", "")
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if record.Hostname != "plain-sni.example.com" {
+		t.Fatalf("Register() hostname = %q, want public hostname", record.Hostname)
+	}
+	if record.HostnameHash != "" || len(record.ECHConfigList) != 0 || record.ECHDNSHostname != "" {
+		t.Fatalf("Register() ECH state = hash %q, config %d bytes, DNS hostname %q; want disabled", record.HostnameHash, len(record.ECHConfigList), record.ECHDNSHostname)
+	}
+	if lookedUp, ok := registry.Lookup("plain-sni.example.com"); !ok || lookedUp != record {
+		t.Fatalf("Lookup(plain SNI) = %v, %v, want registered lease", lookedUp, ok)
+	}
+}
+
 func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	t.Parallel()
 

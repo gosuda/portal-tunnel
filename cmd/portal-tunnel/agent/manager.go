@@ -717,6 +717,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		UDPAddr:              cfg.UDPAddr,
 		UDPEnabled:           cfg.UDPEnabled,
 		TCPEnabled:           cfg.TCPEnabled,
+		ECH:                  cfg.ECH,
 		MultiHop:             append([]string(nil), cfg.MultiHop...),
 		MultiHopDepth:        cfg.MultiHopDepth,
 		BanMITM:              banMITM,

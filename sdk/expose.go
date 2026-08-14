@@ -51,6 +51,7 @@ type ExposeConfig struct {
 	UDPAddr              string
 	UDPEnabled           bool
 	TCPEnabled           bool
+	ECH                  bool
 	MultiHop             []string
 	MultiHopDepth        int
 	BanMITM              bool
@@ -757,6 +758,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			Identity:   cfg.Identity.Copy(),
 			UDPEnabled: cfg.UDPEnabled,
 			TCPEnabled: cfg.TCPEnabled,
+			ECH:        cfg.ECH,
 			BanMITM:    cfg.BanMITM,
 			Metadata: func() types.LeaseMetadata {
 				return e.Config().Metadata
