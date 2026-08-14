@@ -84,6 +84,7 @@ type Lease struct {
 	LastSeenAt  time.Time     `json:"last_seen_at"`
 	Hostname    string        `json:"hostname"`
 	UDPEnabled  bool          `json:"udp_enabled,omitempty"`
+	UDPAddr     string        `json:"udp_addr,omitempty"`
 	TCPEnabled  bool          `json:"tcp_enabled,omitempty"`
 	TCPAddr     string        `json:"tcp_addr,omitempty"`
 	Metadata    LeaseMetadata `json:"metadata"`

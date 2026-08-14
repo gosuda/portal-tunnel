@@ -86,6 +86,7 @@ in the same shape:
 ```json
 {
   "approval_mode": "manual",
+  "landing_page_enabled": false,
   "udp": {
     "enabled": true,
     "max_leases": 10

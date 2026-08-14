@@ -1,5 +1,10 @@
 # Portal - 面向 localhost 的自托管中继隧道
 
+[![CI](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/gosuda/portal-tunnel)](https://github.com/gosuda/portal-tunnel/releases/latest)
+[![License](https://img.shields.io/github/license/gosuda/portal-tunnel)](./LICENSE)
+[![awesome-tunneling](https://img.shields.io/badge/awesome--tunneling-listed-blue)](https://github.com/anderspitman/awesome-tunneling)
+
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
 <p align="center"><img width="800" alt="Portal Demo" src="./portal.gif" /></p>
@@ -86,6 +91,10 @@ portal expose 3000 --multi-hop-depth 3
 对于付费路由，支付策略运行在隧道进程内，而不是中继上。默认使用 Sui mainnet；加上 `--x402-testnet` 可切换到 Sui testnet，这个选择与中继自身的支付设置无关。隧道会在同一个公共 origin 上提供 `/x402/client.js` 和 `/x402/prepare`。浏览器前端可以导入 `/x402/client.js` 并调用 `x402Fetch()`；原生客户端可以直接调用 `/x402/prepare`，用自己的 Sui 运行时签名返回的交易，并发送签名后的 `X-PAYMENT`。
 
 完整路由语法请参阅 [CLI Reference](cmd/portal-tunnel/README.md)，x402 helper endpoint 请参阅 [API Reference](docs/src/routes/api-reference/+page.md#payments)。
+
+### 使用本地 AI agent 插件
+
+仓库提供面向 Codex、Claude Code 和 Cursor 的本地 `portal-deploy` 插件。共用的 `portal-expose` skill 负责应用启动、Portal 隧道选择、公网 URL 验证和生命周期交接。各宿主的 plugin manifest 与 marketplace catalog 分开存放。详见 [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md)。
 
 ### 使用 Portal Agent 持续运行隧道
 

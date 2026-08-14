@@ -11,6 +11,8 @@ export interface BaseServer {
   online: boolean;
   dns: string;
   link: string;
+  tcpAddr?: string;
+  udpAddr?: string;
   lastUpdated?: string;
   firstSeen?: string;
   paymentEnabled?: boolean;

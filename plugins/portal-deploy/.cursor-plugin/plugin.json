@@ -1,0 +1,15 @@
+{
+  "name": "portal-deploy",
+  "displayName": "Portal Deploy",
+  "version": "0.1.0",
+  "description": "Safely expose and verify local apps with Portal tunnels.",
+  "author": {
+    "name": "gosuda"
+  },
+  "homepage": "https://github.com/gosuda/portal-tunnel/tree/main/plugins/portal-deploy",
+  "repository": "https://github.com/gosuda/portal-tunnel",
+  "license": "MIT",
+  "keywords": ["portal", "tunnel", "deploy", "preview", "localhost", "expose"],
+  "logo": "assets/logo.svg",
+  "skills": "./skills/"
+}

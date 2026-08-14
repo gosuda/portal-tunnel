@@ -33,6 +33,44 @@ The installer downloads the `portal` binary and adds it to your `PATH`. It does
 not create a config file. Portal works out of the box because relay discovery is
 enabled by default.
 
+## Run With Docker Compose
+
+The tunnel image supports `linux/amd64` and `linux/arm64`. Clone the repository
+and start the tunnel-specific Compose project:
+
+```bash
+git clone https://github.com/gosuda/portal-tunnel.git
+cd portal-tunnel/cmd/portal-tunnel
+mkdir -p identity
+# Linux only: Docker Desktop on macOS and Windows maps host ownership for you.
+if [ "$(uname)" = Linux ]; then sudo chown -R 65532:65532 identity; fi
+PORTAL_TUNNEL_TARGET=host.docker.internal:3000 \
+PORTAL_TUNNEL_NAME=my-app \
+docker compose up -d
+```
+
+`PORTAL_TUNNEL_TARGET` is the service address as seen from the tunnel
+container. The included Compose file maps `host.docker.internal` to the Docker
+host, so the example reaches port `3000` on the host. If the target is another
+container, attach it to the same Docker network and use its service name and
+port instead.
+
+The host `./identity` directory persists `/identity/identity.json`, preserving
+the public tunnel identity across container restarts and upgrades. The image
+runs as the distroless `nonroot` user (UID/GID `65532`), so on Linux the host
+directory must be writable by that user. Set
+`PORTAL_TUNNEL_IDENTITY_DIR` to use another host path. Follow or stop the tunnel
+with:
+
+```bash
+docker compose logs -f portal-tunnel
+docker compose down
+```
+
+Compose uses `ghcr.io/gosuda/portal-tunnel:latest` by default. Run `docker
+compose pull` to refresh it, set `PORTAL_TUNNEL_IMAGE` to pin a release tag, or
+use `docker compose up -d --build` to build the image from the current checkout.
+
 ## Expose Your First App
 
 Start your local app, then run:

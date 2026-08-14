@@ -1,8 +1,9 @@
-.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server clean load-test
+.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean load-test
 
 .DEFAULT_GOAL := help
 
-GO_PACKAGES := ./cmd/... ./portal/... ./sdk/... ./types/...
+GO_PACKAGES := ./cmd/... ./portal/... ./sdk/... ./types/... ./utils/...
+GO_BUILD_FLAGS := -trimpath -ldflags "-s -w"
 GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
 GOIMPORTS_VERSION := v0.41.0
 GOLANGCI_LINT_VERSION := v2.11.1
@@ -14,7 +15,7 @@ help:
 	@echo "  make install           - Install Go developer tools used by this repo"
 	@echo "  make fmt               - Apply gofmt/goimports"
 	@echo "  make lint-auto         - Run autofix lint/format pipeline"
-	@echo "  make test              - Run Go tests"
+	@echo "  make test              - Run Go and frontend tests"
 	@echo "  make build             - Build Go tunnel and relay server artifacts"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-docs        - Build documentation site (SvelteKit)"
@@ -44,6 +45,7 @@ lint-auto:
 
 test:
 	go test -v -coverprofile=coverage.out $(GO_PACKAGES)
+	cd frontend && npm test
 
 tidy:
 	go get -u ./...
@@ -61,7 +63,10 @@ build: build-tunnel build-server
 # Build React frontend with Tailwind CSS 4
 build-frontend:
 	@echo "[frontend] building React frontend..."
-	@cd frontend && npm i && npm run build
+	@cd frontend && npm ci && npm run build
+	@rm -rf cmd/relay-server/dist/app
+	@mkdir -p cmd/relay-server/dist/app
+	@cp -R frontend/dist/. cmd/relay-server/dist/app/
 	@echo "[frontend] build complete"
 
 # Build documentation site
@@ -80,18 +85,22 @@ build-tunnel:
 			if [ "$${GOOS}" = "windows" ]; then EXT=".exe"; fi; \
 			OUT="cmd/relay-server/dist/tunnel/portal-$${GOOS}-$${GOARCH}$${EXT}"; \
 			echo " - $${OUT}"; \
-			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build -trimpath -ldflags "-s -w" -o "$${OUT}" ./cmd/portal-tunnel; \
+			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build $(GO_BUILD_FLAGS) -o "$${OUT}" ./cmd/portal-tunnel; \
 		done; \
 	done
 
 # Build Go relay server
-build-server:
+build-server: build-frontend build-server-bin
+
+# Binary only; assumes frontend assets already exist in cmd/relay-server/dist/app.
+build-server-bin:
 	@echo "[server] building Go portal..."
-	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/relay-server ./cmd/relay-server
+	CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o bin/relay-server ./cmd/relay-server
 
 clean:
 	rm -rf bin
 	rm -rf cmd/relay-server/dist/tunnel
+	rm -rf cmd/relay-server/dist/app
 	rm -rf frontend/dist
 
 # Run the uniformity probe. Extra flags are passed through after the target name:

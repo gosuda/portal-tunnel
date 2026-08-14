@@ -3,7 +3,10 @@ package types
 import (
 	"encoding/binary"
 	"errors"
+	"time"
 )
+
+const DefaultUDPFlowIdleTimeout = 5 * time.Minute
 
 // errDatagramTooSmall is returned when a datagram payload is too short to
 // contain a valid flow ID varint.

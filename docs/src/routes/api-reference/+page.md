@@ -43,7 +43,7 @@ The envelope does not apply to streaming or delegated endpoints:
 | `/api/x402/*` | relay-owned x402 facilitator response |
 | `/api/install.sh`, `/api/install.ps1`, `/api/install/bin/*` | script or binary bytes |
 
-Unknown routes may be handled by the frontend/proxy layer or return a normal
+Unknown routes may be handled by the frontend fallback or return a normal
 HTTP 404 outside the envelope.
 
 ## Auth Schemes
@@ -67,26 +67,11 @@ configured admin token.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| `GET` | `/` | None | service identity |
+| `GET` | `/` | None | selected SPA `index.html` |
 | `GET` | `/api/healthz` | None | `{ "status": "ok" }` |
 | `GET` | `/api/state` | None | `PublicStateResponse` |
 | `GET`/`HEAD` | `/api/install.sh`, `/api/install.ps1` | None | install script |
 | `GET`/`HEAD` | `/api/install/bin/{slug}` | None | install binary or redirect |
-
-### Frontend Presentation API
-
-These paths are served by the TypeScript API service when the static frontend stack is
-enabled. They live under `/ui/` and are derived from relay APIs plus frontend-owned
-presentation state.
-
-| Method | Path | Auth | Response |
-|--------|------|------|----------|
-| `GET` | `/ui/state` | None | `PublicStateResponse` plus `landing_page_enabled` |
-| `GET` | `/ui/service/status?hostname=...` | None | `ServiceStatusResponse` |
-| `GET` | `/ui/policy/state` | Admin bearer | `PolicyStateResponse` plus `landing_page_enabled` in `policy` |
-| `GET`/`POST` | `/ui/policy` | Admin bearer | `PolicySettings` plus `landing_page_enabled` |
-| `POST` | `/ui/policy/leases`, `/ui/policy/ips` | Admin bearer | relay policy update response |
-| `GET` | `/ui/thumbnail/{hostname}` | None | generated image |
 
 ### SDK
 
@@ -131,10 +116,11 @@ relay lease API.
 Paid routed HTTP tunnels additionally expose `/x402/prepare` and
 `/x402/client.js` on the public tunnel origin. Those are tunnel-owned helper
 endpoints for app frontends, not relay API routes, and they do not use the
-`/api` prefix. Tunnel paid routes use Sui mainnet by default and Sui testnet
-when the tunnel is exposed with `--x402-testnet` or configured with
-`x402_testnet = true`. `/x402/client.js` is browser-only; native clients call
-`/x402/prepare` directly and send `X-PAYMENT` on the protected request.
+`/api` prefix. `/x402/client.js` and the transaction-building prepare response
+are Sui-only. Casper clients consume the protected resource's 402 requirements,
+sign with an external Casper x402 SDK, and retry with `PAYMENT-SIGNATURE` or
+`X-PAYMENT`; Portal then delegates verification and settlement to the configured
+Casper facilitator.
 
 | Method | Path | Auth | Body | Response |
 |--------|------|------|------|----------|
@@ -202,13 +188,12 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `client_ip`, `reported_ip` | `string` |
 | `is_approved`, `is_banned`, `is_denied`, `is_ip_banned` | `boolean` |
 
-`ServiceStatusResponse`:
+`PublicStateResponse`:
 
 | Field | Type |
 |-------|------|
-| `hostname` | `string` |
-| `registered` | `boolean` |
-| `service_alive` | `boolean` |
+| `leases` | `Lease[]` |
+| `landing_page_enabled` | `boolean` |
 
 `PolicyStateResponse`:
 
@@ -229,6 +214,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | Field | Type |
 |-------|------|
 | `approval_mode` | `"auto"` or `"manual"` |
+| `landing_page_enabled` | `boolean` |
 | `udp` | `PolicyPortSettings` |
 | `tcp_port` | `PolicyPortSettings` |
 

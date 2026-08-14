@@ -64,8 +64,14 @@ func TestOnlyExplicitIncompatibilityDropsRelayFromActivePool(t *testing.T) {
 	if !shouldDropRelayFromActivePool(fmt.Errorf("%w: unsupported version", errRelayIncompatible)) {
 		t.Fatal("protocol mismatch must drop an incompatible relay from the active pool")
 	}
-	if !shouldDropRelayFromActivePool(&types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) {
-		t.Fatal("feature_unavailable must drop an incompatible relay from the active pool")
+	for _, code := range []string{
+		types.APIErrorCodeFeatureUnavailable,
+		types.APIErrorCodeUDPDisabled,
+		types.APIErrorCodeTCPPortDisabled,
+	} {
+		if !shouldDropRelayFromActivePool(&types.APIRequestError{Code: code}) {
+			t.Errorf("%s must drop an incompatible relay from the active pool", code)
+		}
 	}
 	unknownClientError := &types.APIRequestError{StatusCode: 404, Code: "unknown_endpoint"}
 	if shouldDropRelayFromActivePool(unknownClientError) {

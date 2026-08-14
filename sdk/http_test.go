@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestHTTPRoutesUseLongestPrefix(t *testing.T) {
@@ -27,7 +29,7 @@ func TestHTTPRoutesUseLongestPrefix(t *testing.T) {
 	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
 		{Prefix: "/", Upstream: rootServer.URL},
 		{Prefix: "/api", Upstream: apiServer.URL},
-	}, "", false)
+	}, types.X402Payment{})
 	if err != nil {
 		t.Fatalf("NewHTTPRoutes() error = %v", err)
 	}
@@ -58,7 +60,7 @@ func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 
 	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
 		{Prefix: "/app", Upstream: upstreamURL + "/base"},
-	}, "", false)
+	}, types.X402Payment{})
 	if err != nil {
 		t.Fatalf("NewHTTPRoutes() error = %v", err)
 	}
@@ -82,7 +84,7 @@ func TestHTTPRoutesRejectDuplicateNormalizedPrefixes(t *testing.T) {
 	_, err := NewHTTPRoutes([]HTTPRouteConfig{
 		{Prefix: "/api", Upstream: "127.0.0.1:3001"},
 		{Prefix: "/api/", Upstream: "127.0.0.1:3002"},
-	}, "", false)
+	}, types.X402Payment{})
 	if err == nil {
 		t.Fatal("NewHTTPRoutes() error = nil, want duplicate prefix error")
 	}
@@ -105,7 +107,7 @@ func TestHTTPRoutesServeStaticRoute(t *testing.T) {
 	root := newStaticSiteDir(t, "main.html", "<html>main</html>")
 	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
 		{Prefix: "/", StaticRoot: root, StaticIndex: "main.html"},
-	}, "", false)
+	}, types.X402Payment{})
 	if err != nil {
 		t.Fatalf("NewHTTPRoutes() error = %v", err)
 	}
@@ -129,7 +131,7 @@ func TestHTTPRoutesStaticPaidRouteChallengesUnpaid(t *testing.T) {
 	payTo := "0x" + strings.Repeat("a", 64)
 	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
 		{Prefix: "/", StaticRoot: root, Amount: "0.01"},
-	}, payTo, true)
+	}, types.X402Payment{PayTo: payTo, Testnet: true})
 	if err != nil {
 		t.Fatalf("NewHTTPRoutes() error = %v", err)
 	}

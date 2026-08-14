@@ -24,6 +24,7 @@ import (
 )
 
 func main() {
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	log.Logger = log.Output(zerolog.NewConsoleWriter())
 	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
 		"expose": runExposeCommand,
@@ -47,29 +48,33 @@ func main() {
 }
 
 type exposeFlags struct {
-	relayCSV        string
-	multiHopCSV     string
-	discovery       bool
-	banMITM         bool
-	identityPath    string
-	identityJSON    string
-	name            string
-	desc            string
-	tags            string
-	owner           string
-	thumbnail       string
-	hide            bool
-	x402PayTo       string
-	x402Testnet     bool
-	targetAddr      string
-	httpRoutes      []string
-	serve           string
-	udp             bool
-	udpAddr         string
-	tcp             bool
-	maxActiveRelays int
-	multiHopDepth   int
-	metricsAddr     string
+	relayCSV             string
+	multiHopCSV          string
+	discovery            bool
+	banMITM              bool
+	identityPath         string
+	identityJSON         string
+	name                 string
+	desc                 string
+	tags                 string
+	owner                string
+	thumbnail            string
+	hide                 bool
+	x402PayTo            string
+	x402Testnet          bool
+	x402Network          string
+	x402Asset            string
+	x402Endpoints        []string
+	x402FacilitatorToken string
+	targetAddr           string
+	httpRoutes           []string
+	serve                string
+	udp                  bool
+	udpAddr              string
+	tcp                  bool
+	maxActiveRelays      int
+	multiHopDepth        int
+	metricsAddr          string
 }
 
 func runExposeCommand(args []string) error {
@@ -90,9 +95,13 @@ func runExposeCommand(args []string) error {
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
-	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Sui USDC payment recipient address for this tunnel")
-	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use Sui testnet for tunnel x402 payments; default is Sui mainnet")
-	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
+	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
+	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
+	utils.StringFlag(fs, &flags.x402Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, and casper:casper-test")
+	utils.StringFlag(fs, &flags.x402Asset, "x402-asset", "", "Payment asset contract; required for Casper wCSPR")
+	utils.RepeatedStringFlag(fs, &flags.x402Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint")
+	utils.StringFlagEnv(fs, &flags.x402FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
+	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
 	utils.StringFlag(fs, &flags.serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
@@ -190,6 +199,9 @@ func runExposeCommand(args []string) error {
 		}
 		httpRoutes = append(httpRoutes, route)
 	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(flags.x402Network)), "casper:") && strings.TrimSpace(flags.x402Asset) == "" {
+		return errors.New("--x402-asset is required for Casper wCSPR payments")
+	}
 
 	ctx, stop := utils.SignalContext()
 	defer stop()
@@ -231,8 +243,12 @@ func runExposeCommand(args []string) error {
 			Thumbnail:   flags.thumbnail,
 			Hide:        flags.hide,
 		},
-		X402PayTo:   flags.x402PayTo,
-		X402Testnet: flags.x402Testnet,
+		X402PayTo:            flags.x402PayTo,
+		X402Testnet:          flags.x402Testnet,
+		X402Network:          flags.x402Network,
+		X402Asset:            flags.x402Asset,
+		X402Endpoints:        flags.x402Endpoints,
+		X402FacilitatorToken: flags.x402FacilitatorToken,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start relays: %w", err)
@@ -372,7 +388,7 @@ func printRootUsage(w io.Writer) {
 	utils.WriteCommandUsage(w,
 		[]string{
 			"portal expose [flags] <target>",
-			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]\" [...]",
+			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]\" [...]",
 			"portal agent run [flags]",
 			"portal agent dashboard [flags]",
 			"portal agent stop [flags]",
@@ -386,6 +402,7 @@ func printRootUsage(w io.Writer) {
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
 			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --http-route /=http://127.0.0.1:5173 --x402-pay-to 0x...",
+			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --x402-network casper:casper-test --x402-asset hash-... --x402-pay-to account-hash-...",
 			"portal agent run",
 			"portal agent dashboard",
 			"portal agent stop",
@@ -404,7 +421,7 @@ func printExposeUsage(w io.Writer) {
 		[]string{
 			"portal expose [flags] <target>",
 			"portal expose [flags] --serve <dir|file.html>",
-			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]\" [...]",
+			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]\" [...]",
 		},
 		[]string{
 			"portal expose 3000",
@@ -413,6 +430,7 @@ func printExposeUsage(w io.Writer) {
 			"portal expose --serve ./site/main.html --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
 			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --http-route /=http://127.0.0.1:5173 --x402-pay-to 0x...",
+			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --x402-network casper:casper-test --x402-asset hash-... --x402-pay-to account-hash-...",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal expose 3000 --ban-mitm",
 			"portal expose 3000 --relays https://portal.example.com --discovery=false",

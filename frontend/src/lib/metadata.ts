@@ -1,5 +1,3 @@
-import { BROWSER_API_PATHS } from "./apiPaths.js";
-
 interface Metadata {
   description: string;
   tags: string[];
@@ -61,17 +59,8 @@ export function parseLeaseMetadata(metadataValue: unknown): Metadata {
   }
 }
 
-export function resolveLeaseThumbnail(metadata: Metadata, hostname: string): string {
-  const configuredThumbnail = metadata.thumbnail.trim();
-  if (configuredThumbnail !== "") {
-    return configuredThumbnail;
-  }
-
-  const normalizedHostname = hostname.trim().toLowerCase().replace(/\.$/, "");
-  if (normalizedHostname === "" || normalizedHostname.startsWith("*.")) {
-    return "";
-  }
-  return `${BROWSER_API_PATHS.thumbnail.prefix}${encodeURIComponent(normalizedHostname)}`;
+export function resolveLeaseThumbnail(metadata: Metadata): string {
+  return metadata.thumbnail.trim();
 }
 
 export function resolveLeasePayment(metadata: Metadata): PaymentDisplay {

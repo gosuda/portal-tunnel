@@ -32,6 +32,7 @@ export interface Lease {
   last_seen_at: string;
   hostname: string;
   udp_enabled?: boolean;
+  udp_addr?: string;
   tcp_enabled?: boolean;
   tcp_addr?: string;
   metadata: LeaseMetadata;
@@ -117,12 +118,6 @@ export interface RelayDescriptor {
 
 export interface DiscoveryResponse {
   relays?: RelayDescriptor[];
-}
-
-export interface ServiceStatusResponse {
-  hostname: string;
-  registered: boolean;
-  service_alive: boolean;
 }
 
 export interface LeasePolicyUpdate {

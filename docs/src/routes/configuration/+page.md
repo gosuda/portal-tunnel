@@ -15,10 +15,11 @@ The relay server (`relay-server`) reads configuration from environment variables
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `PORTAL_URL` | `https://localhost:4017` | string | Public base URL of this relay server |
+| `PORTAL_URL` | `https://localhost` | string | Public HTTPS origin of this relay server and embedded dashboard |
+| `PORTAL_FRONTEND_DIR` | `""` | string | Custom SPA directory containing `index.html`; empty uses the frontend embedded in the Portal binary |
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
 | `API_PORT` | `4017` | int | Admin/API server listen port |
-| `SNI_PORT` | `443` | int | TCP SNI router listen port |
+| `SNI_PORT` | `443` | int | TCP SNI router listen port; non-standard values are intended for local testing, while the bundled public deployment requires `443` |
 | `WIREGUARD_PORT` | `51820` | int | Public and listen UDP port for relay discovery overlay |
 
 ### Transport
@@ -36,6 +37,7 @@ The relay server (`relay-server`) reads configuration from environment variables
 |----------|---------|------|-------------|
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
+| `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
 
 ### Payments
 
@@ -71,19 +73,6 @@ The relay server (`relay-server`) reads configuration from environment variables
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `ADMIN_TOKEN` | | string | Bearer token source for relay admin and policy APIs; set a long random value for production relays |
-
-### Frontend API Service
-
-The TypeScript API service reads these environment
-variables:
-
-| Variable | Default | Type | Description |
-|----------|---------|------|-------------|
-| `PORT` | `8081` | int | Frontend API HTTP listen port |
-| `PORTAL_API_BASE_URL` | `https://portal:4017` | string | Relay API base URL used to compose frontend-owned state |
-| `LANDING_PAGE_ENABLED` | `false` | bool | Default landing page flag when no frontend state has been saved yet |
-| `PORTAL_FRONTEND_STATE_PATH` | `""` | string | Optional JSON file path for persisted frontend-owned state; a Compose deployment can store this under `./.portal-certs/frontend-state/state.json` |
-| `HEADLESS_SHELL_URL` | `""` | string | Headless Chrome CDP WebSocket URL; leave empty to disable generated thumbnails |
 
 ### Cloudflare
 
@@ -162,14 +151,18 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--owner` | | string | | Service owner metadata |
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
-| `--x402-pay-to` | | string | | Sui USDC payment recipient address for this tunnel |
-| `--x402-testnet` | | bool | `false` | Use Sui testnet for tunnel x402 payments; default is Sui mainnet |
+| `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
+| `--x402-testnet` | | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
+| `--x402-network` | | string | | Optional Sui or Casper CAIP-2 network |
+| `--x402-asset` | | string | | wCSPR CEP-18 contract hash required by Casper |
+| `--x402-endpoint` | | string | | Optional Sui RPC or Casper facilitator endpoint; repeatable |
+| `--x402-facilitator-token` | `CSPR_CLOUD_API_KEY` | string | | Casper facilitator authorization token |
 
 ### Routing
 
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
-| `--http-route` | | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]` form; repeat to aggregate multiple local HTTP services behind one public URL; route amounts require `--x402-pay-to` |
+| `--http-route` | | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]` form; repeat to aggregate multiple local HTTP services behind one public URL; route amounts require `--x402-pay-to` |
 
 ### Transport
 
@@ -263,19 +256,44 @@ Tunnel fields mirror `portal expose` flags:
 | `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
-| `x402_pay_to` | string | Tunnel-owned Sui USDC x402 payment recipient for paid HTTP routes |
-| `x402_testnet` | bool | Use Sui testnet for tunnel-owned x402 paid routes; omitted or `false` uses Sui mainnet |
-| `http_routes[].amount` | string | Optional Sui USDC x402 amount, such as `0.01`, for one HTTP route prefix; requires `x402_pay_to` |
+| `x402_pay_to` | string | Payment recipient for paid HTTP routes |
+| `x402_testnet` | bool | Use Sui testnet when `x402_network` is omitted; omitted or `false` uses Sui mainnet |
+| `x402_network` | string | Optional CAIP-2 network: `sui:mainnet`, `sui:testnet`, `casper:casper`, or `casper:casper-test` |
+| `x402_asset` | string | wCSPR CEP-18 contract hash; required for Casper payments |
+| `x402_endpoints` | string array | Optional Sui RPC endpoints or Casper facilitator URL; Casper uses the first endpoint |
+| `x402_facilitator_token` | string | Casper facilitator authorization token; when omitted, the agent uses `CSPR_CLOUD_API_KEY` |
+| `http_routes[].amount` | string | Optional human payment amount, such as `0.01`, for one HTTP route prefix; requires `x402_pay_to` |
 | `http_routes[].methods` | string array | Optional HTTP methods that require payment on that route; empty means every method |
 
 When any routed HTTP entry has `amount`, the tunnel also serves
 `/x402/client.js` and `/x402/prepare` on the public tunnel origin. Browser
 frontends served by another route in the same tunnel can import
-`/x402/client.js` and use `x402Fetch()` to run the same Sui wallet payment flow
-as the standalone payment app. Native clients use `/x402/prepare` directly and
-send the signed payload as `X-PAYMENT`. Payment is still enforced by the tunnel
-on the paid route prefix. Tunnel paid routes default to Sui mainnet and use Sui
-testnet when `x402_testnet = true`.
+`/x402/client.js` and use `x402Fetch()` for Sui payments. Casper clients read
+the 402 requirements from the protected resource, sign them with a compatible
+external SDK, and retry with `PAYMENT-SIGNATURE` or `X-PAYMENT`; the embedded
+browser client remains Sui-only. Payment is enforced by the tunnel before the
+request reaches the upstream.
+
+#### x402 payment networks
+
+| Network | Asset | Decimals | Facilitator |
+|---|---|---|---|
+| `sui:mainnet`, `sui:testnet` | USDC gasless stablecoin | 6 | Built-in Sui facilitator |
+| `casper:casper`, `casper:casper-test` | wCSPR CEP-18 token | 9 | `https://x402-facilitator.cspr.cloud`, overridable per payment |
+
+Casper has no Go chain SDK, so `casper:*` payments delegate `/verify` and
+`/settle` to a remote x402 facilitator over HTTP. The wCSPR CEP-18 contract
+hash differs per network deployment, so it must be set as the payment asset.
+The default CSPR.cloud facilitator requires an access token in
+`CSPR_CLOUD_API_KEY`; use `x402_facilitator_token` only when the agent service
+cannot receive that environment variable.
+
+```toml
+x402_network = "casper:casper-test"
+x402_asset = "hash-..."
+x402_pay_to = "account-hash-..."
+x402_endpoints = ["https://x402-facilitator.cspr.cloud"]
+```
 
 For a task-oriented walkthrough, see [Portal Agent](/portal-agent).
 

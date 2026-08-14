@@ -101,7 +101,7 @@ function toAdminServer(
     name: serviceName || hostname || "(unnamed)",
     description: metadata.description,
     tags: metadata.tags,
-    thumbnail: resolveLeaseThumbnail(metadata, hostname),
+    thumbnail: resolveLeaseThumbnail(metadata),
     owner: metadata.owner,
     online: (row.ready || 0) > 0,
     dns: hostname,
@@ -324,6 +324,12 @@ export function useAdmin(enabled = true) {
     });
   };
 
+  const handleLandingPageEnabledChange = async (enabled: boolean) => {
+    await runAdminAction(async () => {
+      await postPolicySettings(currentPolicySettings({ landing_page_enabled: enabled }));
+    });
+  };
+
   const handleSettingsChange = (key: "udp" | "tcp_port") =>
     async (settings: { enabled: boolean; maxLeases: number }) => {
       await runAdminAction(async () => {
@@ -341,12 +347,6 @@ export function useAdmin(enabled = true) {
 
   const handleUDPSettingsChange = handleSettingsChange("udp");
   const handleTCPPortSettingsChange = handleSettingsChange("tcp_port");
-
-  const handleLandingPageEnabledChange = async (enabled: boolean) => {
-    await runAdminAction(async () => {
-      await postPolicySettings(currentPolicySettings({ landing_page_enabled: enabled }));
-    });
-  };
 
   const handleApproveStatus = (identityKey: string, approve: boolean) =>
     runAdminAction(() => updateLeasePolicy(identityKey, { is_approved: approve }));

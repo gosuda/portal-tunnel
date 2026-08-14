@@ -1,5 +1,10 @@
 # Portal - Self-Hostable Relay Tunnel for Localhost
 
+[![CI](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/gosuda/portal-tunnel)](https://github.com/gosuda/portal-tunnel/releases/latest)
+[![License](https://img.shields.io/github/license/gosuda/portal-tunnel)](./LICENSE)
+[![awesome-tunneling](https://img.shields.io/badge/awesome--tunneling-listed-blue)](https://github.com/anderspitman/awesome-tunneling)
+
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
 <p align="center"><img width="800" alt="Portal Demo" src="./portal.gif" /></p>
@@ -37,8 +42,9 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
   vendor lock-in.
 
 - **Built-in x402 Payments** - Routed HTTP paths can require Sui gasless
-  USDC x402 payment before proxying. Browser apps can import `/x402/client.js`,
-  and native clients can call `/x402/prepare` directly and send `X-PAYMENT`.
+  USDC or Casper wCSPR x402 payment before proxying. Browser apps can import
+  `/x402/client.js`, and native clients can call `/x402/prepare` directly and
+  send `X-PAYMENT`.
 
 ## Comparison
 
@@ -102,6 +108,10 @@ portal expose 3000 --multi-hop-depth 3
 See [CLI Reference](cmd/portal-tunnel/README.md) for the full route syntax and
 [API Reference](docs/src/routes/api-reference/+page.md#payments) for the x402
 helper endpoints.
+
+### Use the local AI agent plugin
+
+The repository includes a local `portal-deploy` plugin for Codex, Claude Code, and Cursor. One shared `portal-expose` skill covers app startup, Portal tunnel selection, public URL verification, and lifecycle handoff. Host-specific plugin manifests and marketplace catalogs stay separate. See [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md).
 
 ### Keep tunnels running with Portal Agent
 

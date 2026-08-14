@@ -39,28 +39,32 @@ type AgentConfig struct {
 }
 
 type TunnelConfig struct {
-	ID              string            `koanf:"id"`
-	Name            string            `koanf:"name"`
-	TargetAddr      string            `koanf:"target"`
-	HTTPRoutes      []HTTPRouteConfig `koanf:"http_routes"`
-	RelayURLs       []string          `koanf:"relays"`
-	Discovery       *bool             `koanf:"discovery"`
-	IdentityPath    string            `koanf:"identity_path"`
-	IdentityJSON    string            `koanf:"identity_json"`
-	UDPEnabled      bool              `koanf:"udp"`
-	UDPAddr         string            `koanf:"udp_addr"`
-	TCPEnabled      bool              `koanf:"tcp"`
-	MultiHop        []string          `koanf:"multi_hop"`
-	MultiHopDepth   int               `koanf:"multi_hop_depth"`
-	BanMITM         *bool             `koanf:"ban_mitm"`
-	MaxActiveRelays int               `koanf:"max_active_relays"`
-	Description     string            `koanf:"description"`
-	Tags            []string          `koanf:"tags"`
-	Owner           string            `koanf:"owner"`
-	Thumbnail       string            `koanf:"thumbnail"`
-	Hide            bool              `koanf:"hide"`
-	X402PayTo       string            `koanf:"x402_pay_to"`
-	X402Testnet     bool              `koanf:"x402_testnet"`
+	ID                   string            `koanf:"id"`
+	Name                 string            `koanf:"name"`
+	TargetAddr           string            `koanf:"target"`
+	HTTPRoutes           []HTTPRouteConfig `koanf:"http_routes"`
+	RelayURLs            []string          `koanf:"relays"`
+	Discovery            *bool             `koanf:"discovery"`
+	IdentityPath         string            `koanf:"identity_path"`
+	IdentityJSON         string            `koanf:"identity_json"`
+	UDPEnabled           bool              `koanf:"udp"`
+	UDPAddr              string            `koanf:"udp_addr"`
+	TCPEnabled           bool              `koanf:"tcp"`
+	MultiHop             []string          `koanf:"multi_hop"`
+	MultiHopDepth        int               `koanf:"multi_hop_depth"`
+	BanMITM              *bool             `koanf:"ban_mitm"`
+	MaxActiveRelays      int               `koanf:"max_active_relays"`
+	Description          string            `koanf:"description"`
+	Tags                 []string          `koanf:"tags"`
+	Owner                string            `koanf:"owner"`
+	Thumbnail            string            `koanf:"thumbnail"`
+	Hide                 bool              `koanf:"hide"`
+	X402PayTo            string            `koanf:"x402_pay_to"`
+	X402Testnet          bool              `koanf:"x402_testnet"`
+	X402Network          string            `koanf:"x402_network"`
+	X402Asset            string            `koanf:"x402_asset"`
+	X402Endpoints        []string          `koanf:"x402_endpoints"`
+	X402FacilitatorToken string            `koanf:"x402_facilitator_token"`
 }
 
 type HTTPRouteConfig struct {
@@ -221,6 +225,10 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	if cfg.X402Testnet {
 		out["x402_testnet"] = cfg.X402Testnet
 	}
+	addStringDocumentField(out, "x402_network", cfg.X402Network)
+	addStringDocumentField(out, "x402_asset", cfg.X402Asset)
+	addStringSliceDocumentField(out, "x402_endpoints", cfg.X402Endpoints)
+	addStringDocumentField(out, "x402_facilitator_token", cfg.X402FacilitatorToken)
 	return out
 }
 
@@ -268,6 +276,10 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		t := &cfg.Tunnels[i]
 		t.ID = strings.TrimSpace(t.ID)
 		t.Name = strings.TrimSpace(t.Name)
+		t.X402Network = strings.ToLower(strings.TrimSpace(t.X402Network))
+		t.X402Asset = strings.TrimSpace(t.X402Asset)
+		t.X402Endpoints = compactStrings(t.X402Endpoints)
+		t.X402FacilitatorToken = strings.TrimSpace(t.X402FacilitatorToken)
 		if t.ID == "" {
 			t.ID = t.Name
 		}
@@ -372,7 +384,20 @@ func (cfg TunnelConfig) Validate() error {
 			return fmt.Errorf("tunnel %q http route %q methods require amount", cfg.ID, strings.TrimSpace(route.Prefix))
 		}
 	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.X402Network)), "casper:") && strings.TrimSpace(cfg.X402Asset) == "" {
+		return fmt.Errorf("tunnel %q Casper payments require x402_asset", cfg.ID)
+	}
 	return nil
+}
+
+func compactStrings(values []string) []string {
+	out := values[:0]
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func validateAgentPathComponent(name, value string) error {
