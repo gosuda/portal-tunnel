@@ -647,7 +647,7 @@ func (s *RelaySet) Descriptors(self types.RelayDescriptor) []types.RelayDescript
 		add(self)
 	}
 	for _, state := range s.currentRelayStates(now) {
-		if state.Banned || state.Dead || !state.hasObservedDescriptor() {
+		if state.Banned || state.Dead || state.discoveryFailures > 0 || !state.hasObservedDescriptor() {
 			continue
 		}
 		add(state.Descriptor)

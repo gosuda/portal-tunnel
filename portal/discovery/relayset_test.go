@@ -99,6 +99,40 @@ func TestDescriptorsDropsDeadRelayDescriptor(t *testing.T) {
 	}
 }
 
+func TestDescriptorsDropsOfflineRelayDescriptor(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-offline.example"
+	state := confirmedRelayState(t, relayURL)
+	state.discoveryFailures = 1
+
+	set.mu.Lock()
+	set.relays[relayURL] = state
+	set.mu.Unlock()
+
+	descriptors := set.Descriptors(types.RelayDescriptor{})
+	if len(descriptors) != 0 {
+		t.Fatalf("len(Descriptors(offline)) = %d, want 0", len(descriptors))
+	}
+}
+
+func TestDescriptorsDropsBannedRelayDescriptor(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-banned.example"
+	state := confirmedRelayState(t, relayURL)
+	state.Banned = true
+
+	set.mu.Lock()
+	set.relays[relayURL] = state
+	set.mu.Unlock()
+
+	descriptors := set.Descriptors(types.RelayDescriptor{})
+	if len(descriptors) != 0 {
+		t.Fatalf("len(Descriptors(banned)) = %d, want 0", len(descriptors))
+	}
+}
+
 func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *testing.T) {
 	set := NewRelaySet(nil)
 
