@@ -99,10 +99,10 @@ func TestDescriptorsDropsDeadRelayDescriptor(t *testing.T) {
 	}
 }
 
-func TestDescriptorsDropsOfflineRelayDescriptor(t *testing.T) {
+func TestDescriptorsKeepsRelayDuringTransientDiscoveryFailure(t *testing.T) {
 	set := NewRelaySet(nil)
 
-	relayURL := "https://relay-offline.example"
+	relayURL := "https://relay-unstable.example"
 	state := confirmedRelayState(t, relayURL)
 	state.discoveryFailures = 1
 
@@ -111,8 +111,11 @@ func TestDescriptorsDropsOfflineRelayDescriptor(t *testing.T) {
 	set.mu.Unlock()
 
 	descriptors := set.Descriptors(types.RelayDescriptor{})
-	if len(descriptors) != 0 {
-		t.Fatalf("len(Descriptors(offline)) = %d, want 0", len(descriptors))
+	if len(descriptors) != 1 {
+		t.Fatalf("len(Descriptors(transient failure)) = %d, want 1", len(descriptors))
+	}
+	if descriptors[0].APIHTTPSAddr != relayURL {
+		t.Fatalf("Descriptors(transient failure)[0] = %q, want %q", descriptors[0].APIHTTPSAddr, relayURL)
 	}
 }
 
