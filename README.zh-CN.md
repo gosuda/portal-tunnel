@@ -92,6 +92,10 @@ portal expose 3000 --multi-hop-depth 3
 
 完整路由语法请参阅 [CLI Reference](cmd/portal-tunnel/README.md)，x402 helper endpoint 请参阅 [API Reference](docs/src/routes/api-reference/+page.md#payments)。
 
+### 使用本地 AI agent 插件
+
+仓库提供面向 Codex、Claude Code 和 Cursor 的本地 `portal-deploy` 插件。共用的 `portal-expose` skill 负责应用启动、Portal 隧道选择、公网 URL 验证和生命周期交接。各宿主的 plugin manifest 与 marketplace catalog 分开存放。详见 [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md)。
+
 ### 使用 Portal Agent 持续运行隧道
 
 当隧道需要在终端之外持续运行时，使用 `portal agent run`。它会作为本地 OS 服务运行，在一个 TOML 配置中保持所有隧道在线，并提供用于中继和多跳管理的 dashboard。
