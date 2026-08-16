@@ -8,13 +8,76 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-acme/lego/v4/challenge"
 )
+
+type retryDNSProvider struct {
+	deleteHTTPSCalls int
+	failDeleteHTTPS  bool
+}
+
+func (p *retryDNSProvider) Name() string { return "retry" }
+func (p *retryDNSProvider) ChallengeProvider(context.Context) (challenge.Provider, error) {
+	return nil, nil
+}
+func (p *retryDNSProvider) EnsureARecords(context.Context, string, string) error { return nil }
+func (p *retryDNSProvider) EnsureARecord(context.Context, string, string) error  { return nil }
+func (p *retryDNSProvider) DeleteARecord(context.Context, string) error          { return nil }
+func (p *retryDNSProvider) EnsureTXTRecord(context.Context, string, string) error {
+	return nil
+}
+func (p *retryDNSProvider) DeleteTXTRecords(context.Context, string, string) error {
+	return nil
+}
+func (p *retryDNSProvider) EnsureHTTPSRecord(context.Context, string, uint16, string, string, string) error {
+	return nil
+}
+func (p *retryDNSProvider) DeleteHTTPSRecord(context.Context, string) error {
+	p.deleteHTTPSCalls++
+	if p.failDeleteHTTPS {
+		p.failDeleteHTTPS = false
+		return errors.New("temporary delete failure")
+	}
+	return nil
+}
+func (p *retryDNSProvider) EnsureDNSSEC(context.Context, string) (string, string, string, error) {
+	return "", "", "", nil
+}
+
+func TestECHDNSRetriesOnlyDirtyDelete(t *testing.T) {
+	provider := &retryDNSProvider{failDeleteHTTPS: true}
+	manager := &Manager{
+		cfg: Config{BaseDomain: "example.com"},
+		dns: provider,
+	}
+
+	if err := manager.DeleteECHConfig(context.Background(), "tenant.example.com"); err == nil {
+		t.Fatal("DeleteECHConfig() error = nil, want transient provider error")
+	}
+	if provider.deleteHTTPSCalls != 1 {
+		t.Fatalf("DeleteHTTPSRecord() calls = %d, want 1", provider.deleteHTTPSCalls)
+	}
+	if err := manager.syncECHRecords(context.Background()); err != nil {
+		t.Fatalf("syncECHRecords() error = %v", err)
+	}
+	if provider.deleteHTTPSCalls != 2 {
+		t.Fatalf("DeleteHTTPSRecord() calls after retry = %d, want 2", provider.deleteHTTPSCalls)
+	}
+	if err := manager.syncECHRecords(context.Background()); err != nil {
+		t.Fatalf("clean syncECHRecords() error = %v", err)
+	}
+	if provider.deleteHTTPSCalls != 2 {
+		t.Fatalf("clean record retried: DeleteHTTPSRecord() calls = %d, want 2", provider.deleteHTTPSCalls)
+	}
+}
 
 func TestEnsureCertificateGeneratesLocalDevelopmentMaterial(t *testing.T) {
 	t.Parallel()

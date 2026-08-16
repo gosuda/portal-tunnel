@@ -77,7 +77,14 @@ type Manager struct {
 	ensStatus     *utils.Snapshot[types.ENSStatus]
 	trackedMu     sync.Mutex
 	echMu         sync.Mutex
-	echRecords    map[string]HTTPSRecord
+	echRecords    map[string]*echRecordState
+}
+
+type echRecordState struct {
+	opMu       sync.Mutex
+	record     *HTTPSRecord
+	generation uint64
+	dirty      bool
 }
 
 type HTTPSRecord struct {
@@ -537,31 +544,8 @@ func (m *Manager) SyncECHConfig(ctx context.Context, hostname string, echConfigL
 	if err != nil {
 		return err
 	}
-	content, err := record.Content()
-	if err != nil {
-		return err
-	}
-	svcParams := record.SvcParams()
-
-	m.echMu.Lock()
-	if m.echRecords == nil {
-		m.echRecords = make(map[string]HTTPSRecord)
-	}
-	m.echRecords[hostname] = record
-	m.echMu.Unlock()
-
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
-	if err != nil {
-		return fmt.Errorf("detect public ip for ECH hostname %s: %w", hostname, err)
-	}
-	if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-		return fmt.Errorf("ensure ECH A record for %s: %w", hostname, err)
-	}
-
-	if err := m.dns.EnsureHTTPSRecord(ctx, hostname, record.Priority, record.Target, svcParams, content); err != nil {
-		return err
-	}
-	return nil
+	state := m.setECHRecord(hostname, &record)
+	return m.syncECHRecord(ctx, hostname, state)
 }
 
 func (m *Manager) DeleteECHConfig(ctx context.Context, hostname string) error {
@@ -579,19 +563,8 @@ func (m *Manager) DeleteECHConfig(ctx context.Context, hostname string) error {
 		return nil
 	}
 
-	if err := m.dns.DeleteHTTPSRecord(ctx, hostname); err != nil {
-		return err
-	}
-	if hostname != m.cfg.BaseDomain {
-		if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
-			return fmt.Errorf("delete ECH A record for %s: %w", hostname, err)
-		}
-	}
-
-	m.echMu.Lock()
-	delete(m.echRecords, hostname)
-	m.echMu.Unlock()
-	return nil
+	state := m.setECHRecord(hostname, nil)
+	return m.syncECHRecord(ctx, hostname, state)
 }
 
 func (m *Manager) syncECHRecords(ctx context.Context) error {
@@ -600,36 +573,101 @@ func (m *Manager) syncECHRecords(ctx context.Context) error {
 	}
 
 	m.echMu.Lock()
-	records := make(map[string]HTTPSRecord, len(m.echRecords))
-	for hostname, record := range m.echRecords {
-		records[hostname] = record
+	records := make(map[string]*echRecordState)
+	for hostname, state := range m.echRecords {
+		if state.dirty {
+			records[hostname] = state
+		}
 	}
 	m.echMu.Unlock()
 
 	var syncErr error
-	publicIP := ""
-	if len(records) > 0 {
-		var err error
-		publicIP, err = utils.ResolvePublicIPv4(ctx)
-		if err != nil {
-			return fmt.Errorf("detect public ip for ECH records: %w", err)
-		}
-	}
-	for hostname, record := range records {
-		if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ECH A record for %s: %w", hostname, err))
-			continue
-		}
-		content, err := record.Content()
-		if err != nil {
-			syncErr = errors.Join(syncErr, fmt.Errorf("build ECH HTTPS record for %s: %w", hostname, err))
-			continue
-		}
-		if err := m.dns.EnsureHTTPSRecord(ctx, hostname, record.Priority, record.Target, record.SvcParams(), content); err != nil {
-			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ECH HTTPS record for %s: %w", hostname, err))
+	for hostname, state := range records {
+		if err := m.syncECHRecord(ctx, hostname, state); err != nil {
+			syncErr = errors.Join(syncErr, err)
 		}
 	}
 	return syncErr
+}
+
+func (m *Manager) setECHRecord(hostname string, record *HTTPSRecord) *echRecordState {
+	m.echMu.Lock()
+	defer m.echMu.Unlock()
+	if m.echRecords == nil {
+		m.echRecords = make(map[string]*echRecordState)
+	}
+	state := m.echRecords[hostname]
+	if state == nil {
+		state = &echRecordState{}
+		m.echRecords[hostname] = state
+	}
+	state.generation++
+	state.dirty = true
+	if record == nil {
+		state.record = nil
+	} else {
+		copy := *record
+		copy.ECHConfigList = bytes.Clone(record.ECHConfigList)
+		state.record = &copy
+	}
+	return state
+}
+
+func (m *Manager) syncECHRecord(ctx context.Context, hostname string, state *echRecordState) error {
+	state.opMu.Lock()
+	defer state.opMu.Unlock()
+
+	m.echMu.Lock()
+	current := m.echRecords[hostname]
+	if current != state || !state.dirty {
+		m.echMu.Unlock()
+		return nil
+	}
+	generation := state.generation
+	var record *HTTPSRecord
+	if state.record != nil {
+		copy := *state.record
+		copy.ECHConfigList = bytes.Clone(state.record.ECHConfigList)
+		record = &copy
+	}
+	m.echMu.Unlock()
+
+	var err error
+	if record == nil {
+		err = m.dns.DeleteHTTPSRecord(ctx, hostname)
+		if err == nil && hostname != m.cfg.BaseDomain {
+			err = m.dns.DeleteARecord(ctx, hostname)
+			if err != nil {
+				err = fmt.Errorf("delete ECH A record for %s: %w", hostname, err)
+			}
+		}
+	} else {
+		var publicIP string
+		publicIP, err = utils.ResolvePublicIPv4(ctx)
+		if err != nil {
+			err = fmt.Errorf("detect public ip for ECH hostname %s: %w", hostname, err)
+		} else if err = m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
+			err = fmt.Errorf("ensure ECH A record for %s: %w", hostname, err)
+		} else {
+			content, contentErr := record.Content()
+			if contentErr != nil {
+				err = contentErr
+			} else {
+				err = m.dns.EnsureHTTPSRecord(ctx, hostname, record.Priority, record.Target, record.SvcParams(), content)
+			}
+		}
+	}
+
+	m.echMu.Lock()
+	if m.echRecords[hostname] == state && state.generation == generation {
+		if err == nil && state.record == nil {
+			delete(m.echRecords, hostname)
+		} else {
+			state.dirty = err != nil
+		}
+	}
+	m.echMu.Unlock()
+	return err
 }
 
 func (m *Manager) syncENSGasless(ctx context.Context) error {
