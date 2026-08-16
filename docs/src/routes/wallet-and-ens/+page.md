@@ -150,8 +150,10 @@ CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 ENS_GASLESS_ENABLED=true
 ```
 
-The same provider is used for ACME DNS-01, managed A records, ECH HTTPS records,
-DNSSEC, and ENS TXT records. If manual `fullchain.pem` and `privatekey.pem`
+The same provider is used for ACME DNS-01, managed A records, the relay root
+HTTPS/ECH record, tenant HTTPS/ECH records for tunnels that explicitly enable
+ECH, DNSSEC, and ENS TXT records. The default tunnel mode does not create tenant
+ECH records. If manual `fullchain.pem` and `privatekey.pem`
 already exist under `IDENTITY_PATH`, Portal keeps using those certificate files
 and still uses the provider for ENS/DNS automation.
 

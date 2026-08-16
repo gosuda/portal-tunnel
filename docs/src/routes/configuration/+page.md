@@ -58,7 +58,7 @@ The relay server (`relay-server`) reads configuration from environment variables
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (`cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); leave empty to use manual `fullchain.pem`/`privatekey.pem` from `IDENTITY_PATH` |
+| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync, the relay ECH record, opt-in tunnel ECH records, and ENS gasless DNSSEC/TXT automation (`cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); leave empty to use manual `fullchain.pem`/`privatekey.pem` from `IDENTITY_PATH` |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames |
 
 ### Diagnostics
@@ -329,7 +329,7 @@ Relay policy settings are stored at `IDENTITY_PATH/policy.json`.
 
 ## ACME DNS Provider Configuration
 
-Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, ECH HTTPS records, and optional ENS gasless DNS records.
+Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, the relay root HTTPS/ECH record, tenant A and HTTPS/ECH records for tunnels with `ech = true`, and optional ENS gasless DNS records. The default `ech = false` tunnel mode does not create tenant ECH DNS records.
 
 When this variable is empty the relay server falls back to manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH`.
 

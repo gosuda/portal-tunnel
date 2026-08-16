@@ -33,13 +33,17 @@ Relay API TLS is separate from tenant TLS:
 
 ## Tunnel ECH
 
-For default stream leases, the SDK derives an opaque route hostname from the tunnel identity private key. The relay still receives the lease identity name and can derive the public fallback hostname so it can validate plaintext-SNI fallback routing and manage DNS automation. The relay stores the route hostname for ECH routing and a validated hash of the public fallback hostname. When DNS automation is enabled, the relay also keeps the public hostname needed to publish and delete its HTTPS `ech` record.
+Tunnel ECH is optional and disabled by default. A normal stream tunnel uses its public hostname as the TLS `ServerName`; the relay routes the encrypted TLS stream by plaintext SNI without terminating tenant TLS. ECH adds hostname privacy, not the end-to-end TLS protection itself.
 
-ECH-capable clients can use the opaque route hostname as the outer SNI while the real tenant SNI stays inside the ECH-protected ClientHello handled by the SDK. For multi-hop stream routes, the entry relay gets the opaque route hostname for ECH and the public hostname needed to validate the plaintext-SNI fallback hash and manage DNS automation. After the entry relay chooses the route, the remaining hops continue to use hop tokens and passthrough forwarding.
+Enable ECH for a CLI tunnel with `portal expose ... --ech` or set `ech = true` in a portal-agent tunnel. For ECH-enabled stream leases, the SDK derives an opaque route hostname and tenant ECH material from the tunnel identity. The relay receives the route hostname, a validated hash of the public fallback hostname, and the ECHConfigList. ECH-capable clients use the opaque route hostname as the outer SNI while the real tenant SNI remains inside the ECH-protected ClientHello handled by the SDK.
 
-When `ACME_DNS_PROVIDER` is configured, Portal publishes DNS HTTPS records with the `ech` parameter for the relay root and stream lease public hostnames. Without a DNS provider, operators must distribute the logged ECHConfigList through DNS HTTPS/SVCB or another ECH-capable bootstrap. Without that distribution, ordinary clients keep using the public hostname SNI and the relay routes them through the existing plaintext-SNI fallback.
+ECH-enabled tunnels retain plaintext-SNI fallback routing. This lets clients that do not obtain or use the ECHConfigList connect through the public hostname without weakening tenant TLS passthrough. For multi-hop routes, the entry relay owns ECH and plaintext-SNI selection; later hops continue with hop tokens and passthrough forwarding.
 
-Legacy clients and raw TCP/UDP transports still use the legacy hostname registration path. On those paths the relay control plane receives the lease hostname and can expose it to admin views.
+When `ACME_DNS_PROVIDER` is configured, Portal publishes the relay root HTTPS/ECH record. For each ECH-enabled stream lease it also creates or updates the public hostname A record and HTTPS record containing the `ech` parameter. Portal does not create tenant ECH DNS records for the default `ECH=false` mode. It removes tenant A and HTTPS/ECH records when the owning ECH lease is removed and no active replacement requires the hostname. Successful ECH DNS operations are not periodically rewritten; failed create, update, and delete operations remain pending for retry.
+
+Without a DNS provider, operators must distribute the ECHConfigList through DNS HTTPS/SVCB or another ECH-capable bootstrap. Until clients obtain that configuration, they continue through the public hostname and plaintext-SNI fallback.
+
+Raw TCP and UDP transports do not use tunnel ECH.
 
 ## MITM Self-Probe
 
