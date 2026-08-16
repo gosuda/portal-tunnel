@@ -92,8 +92,13 @@ func (m *Manager) syncENSGasless(ctx context.Context) error {
 	if err := m.syncENSDNSSEC(ctx); err != nil {
 		return err
 	}
-	if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
-		return fmt.Errorf("queue ens gasless txt: %w", err)
+	if err := m.applyENSCommand(ctx, ensDNSCommand{
+		hostname: m.cfg.BaseDomain,
+		address:  m.cfg.ENSGaslessAddress,
+	}); err != nil {
+		status := m.ENSStatus()
+		m.setENSStatus(status.DNSSECState, status.DSRecord, status.Message, err)
+		return fmt.Errorf("ensure ens gasless txt: %w", err)
 	}
 	return nil
 }
