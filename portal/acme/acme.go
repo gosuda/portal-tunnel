@@ -1,7 +1,6 @@
 package acme
 
 import (
-	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -25,6 +24,7 @@ import (
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -66,89 +66,21 @@ type Config struct {
 }
 
 type Manager struct {
-	stopCh        chan struct{}
-	cfg           Config
-	wg            sync.WaitGroup
-	dns           DNSProvider
-	startOnce     sync.Once
-	stopOnce      sync.Once
-	dnssecLogOnce sync.Once
-	ensLogOnce    sync.Once
-	ensStatus     *utils.Snapshot[types.ENSStatus]
-	trackedMu     sync.Mutex
-	echMu         sync.Mutex
-	echRecords    map[string]*echRecordState
+	stopCh      chan struct{}
+	cfg         Config
+	wg          sync.WaitGroup
+	dns         DNSProvider
+	startOnce   sync.Once
+	stopOnce    sync.Once
+	ensStatus   *utils.Snapshot[types.ENSStatus]
+	trackedMu   sync.Mutex
+	echCommands chan echDNSCommand
 }
 
-type echRecordState struct {
-	opMu       sync.Mutex
-	record     *HTTPSRecord
-	generation uint64
-	dirty      bool
-}
-
-type HTTPSRecord struct {
-	Priority      uint16
-	Target        string
-	Port          int
-	ECHConfigList []byte
-}
-
-func (r HTTPSRecord) Normalized() (HTTPSRecord, error) {
-	target := strings.TrimSpace(r.Target)
-	if target == "" {
-		target = "."
-	}
-	if target != "." {
-		target = strings.TrimSuffix(target, ".")
-		if target == "" {
-			target = "."
-		} else {
-			target += "."
-		}
-	}
-	priority := r.Priority
-	if priority == 0 {
-		priority = 1
-	}
-	if len(r.ECHConfigList) == 0 {
-		return HTTPSRecord{}, errors.New("ech config list is required")
-	}
-	if r.Port < 0 || r.Port > 65535 {
-		return HTTPSRecord{}, errors.New("https record port must be between 0 and 65535")
-	}
-	return HTTPSRecord{
-		Priority:      priority,
-		Target:        target,
-		Port:          r.Port,
-		ECHConfigList: bytes.Clone(r.ECHConfigList),
-	}, nil
-}
-
-func (r HTTPSRecord) Content() (string, error) {
-	normalized, err := r.Normalized()
-	if err != nil {
-		return "", err
-	}
-	return strings.Join([]string{
-		strconv.Itoa(int(normalized.Priority)),
-		normalized.Target,
-		normalized.SvcParams(),
-	}, " "), nil
-}
-
-func (r HTTPSRecord) SvcParams() string {
-	normalized, err := r.Normalized()
-	if err != nil {
-		return ""
-	}
-	params := []string{
-		`ech="` + base64.StdEncoding.EncodeToString(normalized.ECHConfigList) + `"`,
-	}
-	if normalized.Port > 0 && normalized.Port != 443 {
-		params = append(params, "port="+strconv.Itoa(normalized.Port))
-	}
-	return strings.Join(params, " ")
+type echDNSCommand struct {
+	hostname string
+	record   dnsrecord.HTTPSRecord
+	remove   bool
 }
 
 type acmeUser struct {
@@ -200,9 +132,10 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 
 	manager := &Manager{
-		cfg:       cfg,
-		stopCh:    make(chan struct{}),
-		ensStatus: utils.NewSnapshot(newENSStatus(cfg, nil)),
+		cfg:         cfg,
+		stopCh:      make(chan struct{}),
+		echCommands: make(chan echDNSCommand, 256),
+		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
 	}
 
 	acmeDNS, err := NewDNSProvider(cfg.DNSProvider, cfg)
@@ -337,7 +270,7 @@ func (m *Manager) EnsureTLSMaterial(ctx context.Context) ([]byte, []byte, error)
 }
 
 func (m *Manager) Start(ctx context.Context) {
-	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) || (!m.cfg.ENSGaslessEnabled && !m.managedACME()) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) || (m.dns == nil && !m.cfg.ENSGaslessEnabled && !m.managedACME()) {
 		return
 	}
 
@@ -459,6 +392,7 @@ func (m *Manager) provision(ctx context.Context) error {
 
 func (m *Manager) maintenanceLoop(ctx context.Context) {
 	defer m.wg.Done()
+	pendingECH := make(map[string]echDNSCommand)
 
 	renewTicker := time.NewTicker(defaultRenewInterval)
 	dnsTicker := time.NewTicker(defaultDNSSyncInterval)
@@ -471,9 +405,26 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			return
 		case <-m.stopCh:
 			return
+		case command := <-m.echCommands:
+			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+			err := m.applyECHCommand(syncCtx, command)
+			cancel()
+			if err != nil {
+				pendingECH[command.hostname] = command
+				log.Warn().Err(err).Str("hostname", command.hostname).Msg("sync ech dns record")
+			} else {
+				delete(pendingECH, command.hostname)
+			}
 		case <-dnsTicker.C:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err := errors.Join(m.syncDNS(syncCtx), m.syncECHRecords(syncCtx))
+			err := m.syncDNS(syncCtx)
+			for hostname, command := range pendingECH {
+				if commandErr := m.applyECHCommand(syncCtx, command); commandErr != nil {
+					err = errors.Join(err, commandErr)
+				} else {
+					delete(pendingECH, hostname)
+				}
+			}
 			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
@@ -534,18 +485,19 @@ func (m *Manager) SyncECHConfig(ctx context.Context, hostname string, echConfigL
 	if err != nil {
 		return err
 	}
-	record := HTTPSRecord{
-		Priority:      1,
-		Target:        ".",
-		Port:          port,
-		ECHConfigList: echConfigList,
+	if port < 0 || port > 65535 {
+		return errors.New("https record port must be between 0 and 65535")
 	}
+	svcParams := `ech="` + base64.StdEncoding.EncodeToString(echConfigList) + `"`
+	if port > 0 && port != 443 {
+		svcParams += " port=" + strconv.Itoa(port)
+	}
+	record := dnsrecord.HTTPSRecord{Priority: 1, Target: ".", SvcParams: svcParams}
 	record, err = record.Normalized()
 	if err != nil {
 		return err
 	}
-	state := m.setECHRecord(hostname, &record)
-	return m.syncECHRecord(ctx, hostname, state)
+	return m.queueECHCommand(ctx, echDNSCommand{hostname: hostname, record: record})
 }
 
 func (m *Manager) DeleteECHConfig(ctx context.Context, hostname string) error {
@@ -563,111 +515,41 @@ func (m *Manager) DeleteECHConfig(ctx context.Context, hostname string) error {
 		return nil
 	}
 
-	state := m.setECHRecord(hostname, nil)
-	return m.syncECHRecord(ctx, hostname, state)
+	return m.queueECHCommand(ctx, echDNSCommand{hostname: hostname, remove: true})
 }
 
-func (m *Manager) syncECHRecords(ctx context.Context) error {
-	if m == nil || m.dns == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+func (m *Manager) queueECHCommand(ctx context.Context, command echDNSCommand) error {
+	select {
+	case m.echCommands <- command:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.stopCh:
+		return errors.New("acme manager is stopped")
+	}
+}
+
+func (m *Manager) applyECHCommand(ctx context.Context, command echDNSCommand) error {
+	if command.remove {
+		if err := m.dns.DeleteHTTPSRecord(ctx, command.hostname); err != nil {
+			return err
+		}
+		if command.hostname != m.cfg.BaseDomain {
+			if err := m.dns.DeleteARecord(ctx, command.hostname); err != nil {
+				return fmt.Errorf("delete ECH A record for %s: %w", command.hostname, err)
+			}
+		}
 		return nil
 	}
 
-	m.echMu.Lock()
-	records := make(map[string]*echRecordState)
-	for hostname, state := range m.echRecords {
-		if state.dirty {
-			records[hostname] = state
-		}
+	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	if err != nil {
+		return fmt.Errorf("detect public ip for ECH hostname %s: %w", command.hostname, err)
 	}
-	m.echMu.Unlock()
-
-	var syncErr error
-	for hostname, state := range records {
-		if err := m.syncECHRecord(ctx, hostname, state); err != nil {
-			syncErr = errors.Join(syncErr, err)
-		}
+	if err := m.dns.EnsureARecord(ctx, command.hostname, publicIP); err != nil {
+		return fmt.Errorf("ensure ECH A record for %s: %w", command.hostname, err)
 	}
-	return syncErr
-}
-
-func (m *Manager) setECHRecord(hostname string, record *HTTPSRecord) *echRecordState {
-	m.echMu.Lock()
-	defer m.echMu.Unlock()
-	if m.echRecords == nil {
-		m.echRecords = make(map[string]*echRecordState)
-	}
-	state := m.echRecords[hostname]
-	if state == nil {
-		state = &echRecordState{}
-		m.echRecords[hostname] = state
-	}
-	state.generation++
-	state.dirty = true
-	if record == nil {
-		state.record = nil
-	} else {
-		copy := *record
-		copy.ECHConfigList = bytes.Clone(record.ECHConfigList)
-		state.record = &copy
-	}
-	return state
-}
-
-func (m *Manager) syncECHRecord(ctx context.Context, hostname string, state *echRecordState) error {
-	state.opMu.Lock()
-	defer state.opMu.Unlock()
-
-	m.echMu.Lock()
-	current := m.echRecords[hostname]
-	if current != state || !state.dirty {
-		m.echMu.Unlock()
-		return nil
-	}
-	generation := state.generation
-	var record *HTTPSRecord
-	if state.record != nil {
-		copy := *state.record
-		copy.ECHConfigList = bytes.Clone(state.record.ECHConfigList)
-		record = &copy
-	}
-	m.echMu.Unlock()
-
-	var err error
-	if record == nil {
-		err = m.dns.DeleteHTTPSRecord(ctx, hostname)
-		if err == nil && hostname != m.cfg.BaseDomain {
-			err = m.dns.DeleteARecord(ctx, hostname)
-			if err != nil {
-				err = fmt.Errorf("delete ECH A record for %s: %w", hostname, err)
-			}
-		}
-	} else {
-		var publicIP string
-		publicIP, err = utils.ResolvePublicIPv4(ctx)
-		if err != nil {
-			err = fmt.Errorf("detect public ip for ECH hostname %s: %w", hostname, err)
-		} else if err = m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-			err = fmt.Errorf("ensure ECH A record for %s: %w", hostname, err)
-		} else {
-			content, contentErr := record.Content()
-			if contentErr != nil {
-				err = contentErr
-			} else {
-				err = m.dns.EnsureHTTPSRecord(ctx, hostname, record.Priority, record.Target, record.SvcParams(), content)
-			}
-		}
-	}
-
-	m.echMu.Lock()
-	if m.echRecords[hostname] == state && state.generation == generation {
-		if err == nil && state.record == nil {
-			delete(m.echRecords, hostname)
-		} else {
-			state.dirty = err != nil
-		}
-	}
-	m.echMu.Unlock()
-	return err
+	return m.dns.EnsureHTTPSRecord(ctx, command.hostname, command.record)
 }
 
 func (m *Manager) syncENSGasless(ctx context.Context) error {
@@ -683,20 +565,6 @@ func (m *Manager) syncENSGasless(ctx context.Context) error {
 		m.setENSStatus("", "", "", err)
 		return fmt.Errorf("ensure dnssec: %w", err)
 	}
-	m.dnssecLogOnce.Do(func() {
-		event := log.Info().
-			Str("provider", m.dns.Name()).
-			Str("base_domain", m.cfg.BaseDomain).
-			Str("state", strings.TrimSpace(state))
-		if strings.TrimSpace(dsRecord) != "" {
-			event = event.Str("ds_record", strings.TrimSpace(dsRecord))
-		}
-		if strings.TrimSpace(message) != "" {
-			event = event.Str("message", strings.TrimSpace(message))
-		}
-		event.Msg("dnssec configured")
-	})
-
 	if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
 		err = fmt.Errorf("ensure ens gasless txt: %w", err)
 		m.setENSStatus(state, dsRecord, message, err)
@@ -707,13 +575,6 @@ func (m *Manager) syncENSGasless(ctx context.Context) error {
 		return err
 	}
 	m.setENSStatus(state, dsRecord, message, nil)
-	m.ensLogOnce.Do(func() {
-		log.Info().
-			Str("provider", m.dns.Name()).
-			Str("base_domain", m.cfg.BaseDomain).
-			Str("address", m.cfg.ENSGaslessAddress).
-			Msg("ens gasless dns import configured")
-	})
 	return nil
 }
 

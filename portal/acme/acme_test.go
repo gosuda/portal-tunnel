@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/challenge"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 )
 
 type retryDNSProvider struct {
@@ -37,7 +39,7 @@ func (p *retryDNSProvider) EnsureTXTRecord(context.Context, string, string) erro
 func (p *retryDNSProvider) DeleteTXTRecords(context.Context, string, string) error {
 	return nil
 }
-func (p *retryDNSProvider) EnsureHTTPSRecord(context.Context, string, uint16, string, string, string) error {
+func (p *retryDNSProvider) EnsureHTTPSRecord(context.Context, string, dnsrecord.HTTPSRecord) error {
 	return nil
 }
 func (p *retryDNSProvider) DeleteHTTPSRecord(context.Context, string) error {
@@ -52,30 +54,33 @@ func (p *retryDNSProvider) EnsureDNSSEC(context.Context, string) (string, string
 	return "", "", "", nil
 }
 
-func TestECHDNSRetriesOnlyDirtyDelete(t *testing.T) {
+func TestECHDNSChannelQueuesDeleteForWorker(t *testing.T) {
 	provider := &retryDNSProvider{failDeleteHTTPS: true}
 	manager := &Manager{
-		cfg: Config{BaseDomain: "example.com"},
-		dns: provider,
+		cfg:         Config{BaseDomain: "example.com"},
+		dns:         provider,
+		stopCh:      make(chan struct{}),
+		echCommands: make(chan echDNSCommand, 1),
 	}
 
-	if err := manager.DeleteECHConfig(context.Background(), "tenant.example.com"); err == nil {
-		t.Fatal("DeleteECHConfig() error = nil, want transient provider error")
+	if err := manager.DeleteECHConfig(context.Background(), "tenant.example.com"); err != nil {
+		t.Fatalf("DeleteECHConfig() error = %v", err)
+	}
+	if provider.deleteHTTPSCalls != 0 {
+		t.Fatalf("DeleteECHConfig() called provider synchronously: calls = %d", provider.deleteHTTPSCalls)
+	}
+	command := <-manager.echCommands
+	if err := manager.applyECHCommand(context.Background(), command); err == nil {
+		t.Fatal("applyECHCommand() error = nil, want transient provider error")
 	}
 	if provider.deleteHTTPSCalls != 1 {
 		t.Fatalf("DeleteHTTPSRecord() calls = %d, want 1", provider.deleteHTTPSCalls)
 	}
-	if err := manager.syncECHRecords(context.Background()); err != nil {
-		t.Fatalf("syncECHRecords() error = %v", err)
+	if err := manager.applyECHCommand(context.Background(), command); err != nil {
+		t.Fatalf("applyECHCommand() retry error = %v", err)
 	}
 	if provider.deleteHTTPSCalls != 2 {
 		t.Fatalf("DeleteHTTPSRecord() calls after retry = %d, want 2", provider.deleteHTTPSCalls)
-	}
-	if err := manager.syncECHRecords(context.Background()); err != nil {
-		t.Fatalf("clean syncECHRecords() error = %v", err)
-	}
-	if provider.deleteHTTPSCalls != 2 {
-		t.Fatalf("clean record retried: DeleteHTTPSRecord() calls = %d, want 2", provider.deleteHTTPSCalls)
 	}
 }
 
