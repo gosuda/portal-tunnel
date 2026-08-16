@@ -116,6 +116,12 @@ When enabled, Portal uses the configured DNS provider to:
 - keep A records for lease hostnames in sync with the relay public IPv4
 - remove lease hostname records when leases unregister or expire
 
+Lease registration and removal enqueue DNS changes to a single worker. Successful
+TXT changes are not repeated by the periodic maintenance pass; only failed
+changes are retried. Lease A records are checked again when the relay public IPv4
+changes, while DNSSEC is checked periodically only until Portal reports it as
+verified.
+
 Portal writes TXT values in this shape:
 
 ```text

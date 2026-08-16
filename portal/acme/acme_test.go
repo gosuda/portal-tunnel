@@ -24,6 +24,9 @@ import (
 type retryDNSProvider struct {
 	deleteHTTPSCalls int
 	failDeleteHTTPS  bool
+	deleteACalls     int
+	deleteTXTCalls   int
+	failDeleteTXT    bool
 }
 
 func (p *retryDNSProvider) Name() string { return "retry" }
@@ -32,11 +35,19 @@ func (p *retryDNSProvider) ChallengeProvider(context.Context) (challenge.Provide
 }
 func (p *retryDNSProvider) EnsureARecords(context.Context, string, string) error { return nil }
 func (p *retryDNSProvider) EnsureARecord(context.Context, string, string) error  { return nil }
-func (p *retryDNSProvider) DeleteARecord(context.Context, string) error          { return nil }
+func (p *retryDNSProvider) DeleteARecord(context.Context, string) error {
+	p.deleteACalls++
+	return nil
+}
 func (p *retryDNSProvider) EnsureTXTRecord(context.Context, string, string) error {
 	return nil
 }
 func (p *retryDNSProvider) DeleteTXTRecords(context.Context, string, string) error {
+	p.deleteTXTCalls++
+	if p.failDeleteTXT {
+		p.failDeleteTXT = false
+		return errors.New("temporary delete failure")
+	}
 	return nil
 }
 func (p *retryDNSProvider) EnsureHTTPSRecord(context.Context, string, dnsrecord.HTTPSRecord) error {
@@ -81,6 +92,40 @@ func TestECHDNSChannelQueuesDeleteForWorker(t *testing.T) {
 	}
 	if provider.deleteHTTPSCalls != 2 {
 		t.Fatalf("DeleteHTTPSRecord() calls after retry = %d, want 2", provider.deleteHTTPSCalls)
+	}
+}
+
+func TestENSDNSChannelQueuesDeleteForWorker(t *testing.T) {
+	provider := &retryDNSProvider{failDeleteTXT: true}
+	manager := &Manager{
+		cfg: Config{
+			BaseDomain:        "example.com",
+			KeyDir:            t.TempDir(),
+			ENSGaslessEnabled: true,
+		},
+		dns:         provider,
+		stopCh:      make(chan struct{}),
+		ensCommands: make(chan ensDNSCommand, 1),
+	}
+
+	if err := manager.DeleteENSGaslessHostname(context.Background(), "tenant.example.com"); err != nil {
+		t.Fatalf("DeleteENSGaslessHostname() error = %v", err)
+	}
+	if provider.deleteTXTCalls != 0 || provider.deleteACalls != 0 {
+		t.Fatalf("DeleteENSGaslessHostname() called provider synchronously: TXT = %d, A = %d", provider.deleteTXTCalls, provider.deleteACalls)
+	}
+	command := <-manager.ensCommands
+	if err := manager.applyENSCommand(context.Background(), command); err == nil {
+		t.Fatal("applyENSCommand() error = nil, want transient provider error")
+	}
+	if provider.deleteTXTCalls != 1 || provider.deleteACalls != 0 {
+		t.Fatalf("provider calls after failure: TXT = %d, A = %d; want TXT = 1, A = 0", provider.deleteTXTCalls, provider.deleteACalls)
+	}
+	if err := manager.applyENSCommand(context.Background(), command); err != nil {
+		t.Fatalf("applyENSCommand() retry error = %v", err)
+	}
+	if provider.deleteTXTCalls != 2 || provider.deleteACalls != 1 {
+		t.Fatalf("provider calls after retry: TXT = %d, A = %d; want TXT = 2, A = 1", provider.deleteTXTCalls, provider.deleteACalls)
 	}
 }
 
