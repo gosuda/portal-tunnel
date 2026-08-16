@@ -252,6 +252,7 @@ Tunnel fields mirror `portal expose` flags:
 | `discovery` | bool | Include registry and relay discovery expansion |
 | `multi_hop` | string array | Ordered multi-hop relay path |
 | `multi_hop_depth` | int | Automatically create this-depth multi-hop routes for every eligible entry relay |
+| `ech` | bool | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
