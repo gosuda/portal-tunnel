@@ -22,7 +22,44 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 	defer m.wg.Done()
 	pendingECH := make(map[string]echDNSCommand)
 	pendingENS := make(map[string]ensDNSCommand)
+	activeECHARecords := make(map[string]struct{})
+	trackECHARecord := func(command echDNSCommand) {
+		if command.remove {
+			delete(activeECHARecords, command.hostname)
+			return
+		}
+		activeECHARecords[command.hostname] = struct{}{}
+	}
 	lastPublicIP := ""
+	syncChangedARecords := func(ctx context.Context) error {
+		if len(activeECHARecords) == 0 && !m.cfg.ENSGaslessEnabled {
+			return nil
+		}
+
+		publicIP, err := utils.ResolvePublicIPv4(ctx)
+		if err != nil {
+			return fmt.Errorf("detect public ip: %w", err)
+		}
+		if publicIP == lastPublicIP {
+			return nil
+		}
+
+		var syncErr error
+		for hostname := range activeECHARecords {
+			if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
+				syncErr = errors.Join(syncErr, fmt.Errorf("ensure ECH A record for %s: %w", hostname, err))
+			}
+		}
+		if m.cfg.ENSGaslessEnabled {
+			syncErr = errors.Join(syncErr, m.syncTrackedENSGaslessHostARecords(ctx, publicIP))
+		}
+		if syncErr != nil {
+			return syncErr
+		}
+
+		lastPublicIP = publicIP
+		return nil
+	}
 
 	renewTicker := time.NewTicker(defaultRenewInterval)
 	dnsTicker := time.NewTicker(defaultManagedDNSSyncInterval)
@@ -38,6 +75,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		case <-m.stopCh:
 			return
 		case command := <-m.echCommands:
+			trackECHARecord(command)
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
 			err := m.applyECHCommand(syncCtx, command)
 			cancel()
@@ -66,26 +104,15 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			}
 		case <-retryTicker.C:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			var err error
-			if m.cfg.ENSGaslessEnabled {
-				publicIP, resolveErr := utils.ResolvePublicIPv4(syncCtx)
-				if resolveErr != nil {
-					err = fmt.Errorf("detect public ip: %w", resolveErr)
-				} else if publicIP != lastPublicIP {
-					ensErr := m.syncTrackedENSGaslessHostARecords(syncCtx, publicIP)
-					err = errors.Join(err, ensErr)
-					if ensErr == nil {
-						lastPublicIP = publicIP
-					}
-				}
-				if !m.ENSStatus().Verified {
-					err = errors.Join(err, m.syncENSDNSSEC(syncCtx))
-				}
+			err := syncChangedARecords(syncCtx)
+			if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
+				err = errors.Join(err, m.syncENSDNSSEC(syncCtx))
 			}
 		drainECH:
 			for {
 				select {
 				case command := <-m.echCommands:
+					trackECHARecord(command)
 					pendingECH[command.hostname] = command
 				default:
 					break drainECH
