@@ -129,3 +129,36 @@ func TestNewListenerUsesMultiHopExitForControl(t *testing.T) {
 		t.Fatalf("route entry = %q, want %q", got, entry)
 	}
 }
+
+func TestBuildHopRoutesUsesPublicHostnameWithoutECH(t *testing.T) {
+	listener := &listener{
+		identity: types.Identity{
+			Name:        "demo",
+			Address:     "0x1234",
+			TokenSecret: "test-token-secret",
+		},
+	}
+	hopPath := []types.RelayDescriptor{
+		{APIHTTPSAddr: "https://entry.example.com"},
+		{APIHTTPSAddr: "https://exit.example.com"},
+	}
+
+	routes, exitHopToken, err := listener.buildHopRoutes(hopPath, "demo.example.com", "", nil)
+	if err != nil {
+		t.Fatalf("buildHopRoutes() error = %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("buildHopRoutes() routes = %d, want 1", len(routes))
+	}
+	if exitHopToken == "" {
+		t.Fatal("buildHopRoutes() exit hop token is empty")
+	}
+
+	entry := routes[0]
+	if entry.RouteHostname != "demo.example.com" {
+		t.Fatalf("entry RouteHostname = %q, want public hostname", entry.RouteHostname)
+	}
+	if entry.PublicHostname != "" || entry.HostnameHash != "" || len(entry.ECHConfigList) != 0 {
+		t.Fatalf("entry ECH fields = PublicHostname %q, HostnameHash %q, ECHConfigList %x; want empty", entry.PublicHostname, entry.HostnameHash, entry.ECHConfigList)
+	}
+}

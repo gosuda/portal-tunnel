@@ -117,10 +117,14 @@ func (l *listener) buildHopRoutes(hopPath []types.RelayDescriptor, publicHostnam
 			ForwardToken: forwardToken,
 		}
 		if i == 0 {
-			route.PublicHostname = publicHostname
-			route.RouteHostname = routeHostname
-			route.HostnameHash = utils.HostnameHash(publicHostname)
-			route.ECHConfigList = bytes.Clone(echConfigList)
+			if routeHostname == "" {
+				route.RouteHostname = publicHostname
+			} else {
+				route.PublicHostname = publicHostname
+				route.RouteHostname = routeHostname
+				route.HostnameHash = utils.HostnameHash(publicHostname)
+				route.ECHConfigList = bytes.Clone(echConfigList)
+			}
 			route.Metadata = l.metadataSnapshot()
 		} else {
 			route.MatchToken = previousHopToken
