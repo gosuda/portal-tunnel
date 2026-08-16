@@ -43,7 +43,9 @@ When `ACME_DNS_PROVIDER` is configured, Portal publishes the relay root HTTPS/EC
 
 Without a DNS provider, operators must distribute the ECHConfigList through DNS HTTPS/SVCB or another ECH-capable bootstrap. Until clients obtain that configuration, they continue through the public hostname and plaintext-SNI fallback.
 
-Raw TCP and UDP transports do not use tunnel ECH.
+Enabling UDP or a dedicated raw TCP port does not disable tunnel ECH on the
+default TLS hostname. The additional raw TCP and UDP endpoints do not themselves
+use ECH or add tenant TLS.
 
 ## MITM Self-Probe
 

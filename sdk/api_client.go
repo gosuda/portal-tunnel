@@ -143,11 +143,11 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	var hopRoutes []types.HopRoute
 	multiHop := l.route.MultiHop()
 	var hopPath []types.RelayDescriptor
-	streamLease := !udpEnabled && !tcpEnabled
+	hasPortTransport := udpEnabled || tcpEnabled
 	registerIdentity := l.identity
 	if len(multiHop) > 0 {
-		if !streamLease {
-			return types.RegisterResponse{}, nil, "", "", errors.New("multi-hop requires stream lease")
+		if hasPortTransport {
+			return types.RegisterResponse{}, nil, "", "", errors.New("multi-hop does not support UDP or raw TCP")
 		}
 		if len(multiHop) < 2 {
 			return types.RegisterResponse{}, nil, "", "", errors.New("multi-hop requires at least entry and exit relay urls")
@@ -176,7 +176,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	if err != nil {
 		return types.RegisterResponse{}, nil, "", "", err
 	}
-	if streamLease && l.echEnabled {
+	if l.echEnabled {
 		routeToken, err := identity.DeriveToken(l.identity, "ech-route", publicHostname, rootHostname)
 		if err != nil {
 			return types.RegisterResponse{}, nil, "", "", err
@@ -189,7 +189,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		}
 	}
 	var echConfigList []byte
-	if streamLease && l.echEnabled {
+	if l.echEnabled {
 		_, echConfigList, err = l.tenantECHMaterials(publicHostname, routeHostname)
 		if err != nil {
 			return types.RegisterResponse{}, nil, "", "", err
@@ -212,7 +212,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		TCPEnabled: tcpEnabled,
 		HopToken:   exitHopToken,
 	}
-	if streamLease && l.echEnabled && len(multiHop) == 0 {
+	if l.echEnabled && len(multiHop) == 0 {
 		registerReq.RouteHostname = routeHostname
 		registerReq.HostnameHash = utils.HostnameHash(publicHostname)
 		registerReq.ECHConfigList = bytes.Clone(echConfigList)
