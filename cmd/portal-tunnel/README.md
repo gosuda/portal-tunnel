@@ -153,6 +153,7 @@ Common `portal expose` flags:
 --multi-hop          Ordered multi-hop relay API URLs, comma-separated
 --multi-hop-depth    Automatically create this-depth multi-hop routes for every eligible entry relay
 --ban-mitm           Ban relay when the MITM self-probe detects termination
+--ech                Enable ECH hostname privacy for TLS stream tunnels (disabled by default)
 --identity-path      Identity JSON file path; created automatically when missing
 --identity-json      Identity JSON payload; overrides --identity-path when set
 --description        Service description metadata

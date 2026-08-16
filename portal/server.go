@@ -250,7 +250,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		if started {
 			return
 		}
-		acmeManager.Stop()
+		_ = acmeManager.Stop(ctx)
 		if ov != nil {
 			_ = ov.Shutdown(context.Background())
 		}
@@ -467,7 +467,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			_ = s.apiTLSClose.Close()
 		}
 		if s.acmeManager != nil {
-			s.acmeManager.Stop()
+			if err := s.acmeManager.Stop(ctx); err != nil && shutdownErr == nil {
+				shutdownErr = fmt.Errorf("stop acme manager: %w", err)
+			}
 		}
 	})
 	return shutdownErr
@@ -491,7 +493,7 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 
 	certPEM, keyPEM, err := manager.EnsureTLSMaterial(ctx)
 	if err != nil {
-		manager.Stop()
+		_ = manager.Stop(ctx)
 		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("ensure relay certificate: %w", err)
 	}
 
@@ -506,12 +508,12 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 		s.identity.Name,
 	)
 	if err != nil {
-		manager.Stop()
+		_ = manager.Stop(ctx)
 		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("derive relay ech seed: %w", err)
 	}
 	echKeys, echConfigList, err := keyless.EncryptedClientHelloMaterials(echSeed, s.identity.Name)
 	if err != nil {
-		manager.Stop()
+		_ = manager.Stop(ctx)
 		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("prepare ech materials: %w", err)
 	}
 	if len(echKeys) > 0 {

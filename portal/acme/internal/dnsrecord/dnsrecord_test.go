@@ -2,6 +2,23 @@ package dnsrecord
 
 import "testing"
 
+func TestHTTPSRecordContent(t *testing.T) {
+	record, err := (HTTPSRecord{Target: "public.example.com", SvcParams: `ech="config" port=8443`}).Normalized()
+	if err != nil {
+		t.Fatalf("Normalized() error = %v", err)
+	}
+	if record.Priority != 1 || record.Target != "public.example.com." {
+		t.Fatalf("Normalized() = %#v", record)
+	}
+	content, err := record.Content()
+	if err != nil {
+		t.Fatalf("Content() error = %v", err)
+	}
+	if content != `1 public.example.com. ech="config" port=8443` {
+		t.Fatalf("Content() = %q", content)
+	}
+}
+
 func TestRelativeName(t *testing.T) {
 	t.Parallel()
 

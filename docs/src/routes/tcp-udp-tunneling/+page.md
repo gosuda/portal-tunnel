@@ -27,6 +27,10 @@ For protocols that do not fit a public HTTPS URL, use one of the port modes:
 Both modes require the relay server to have a port range configured and the
 matching transport enabled.
 
+These port modes can be combined with tunnel ECH. ECH continues to protect the
+default TLS hostname, while the dedicated raw TCP and UDP endpoints remain
+separate transports and do not themselves use ECH.
+
 ## Relay Configuration
 
 Enable TCP and UDP transports on your relay with these environment variables:

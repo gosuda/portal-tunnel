@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -523,6 +524,62 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	}
 	if resp.UDPAddr == "" {
 		t.Fatal("RegisterResponse.UDPAddr = empty, want public udp address")
+	}
+}
+
+func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
+	t.Parallel()
+
+	port := tempLeasePort(t)
+	server, err := NewServer(ServerConfig{
+		PortalURL:    "https://portal.example.com",
+		IdentityPath: tempIdentityPath(t),
+		MinPort:      port,
+		MaxPort:      port,
+		UDPEnabled:   true,
+		TCPEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	server.SetUDPPolicy(true, 0)
+
+	publicHostname := "demo-ech.portal.example.com"
+	routeHostname := "ech-demo-ech.portal.example.com"
+	_, echConfigList, err := keyless.EncryptedClientHelloMaterials("test-seed", routeHostname)
+	if err != nil {
+		t.Fatalf("EncryptedClientHelloMaterials() error = %v", err)
+	}
+	record, resp, err := server.registry.Register(types.RegisterChallengeRequest{
+		Identity: types.Identity{
+			Name:    "demo-ech",
+			Address: server.identity.Address,
+		},
+		RouteHostname: routeHostname,
+		HostnameHash:  utils.HostnameHash(publicHostname),
+		ECHConfigList: echConfigList,
+		UDPEnabled:    true,
+		TCPEnabled:    true,
+	}, "203.0.113.10", "")
+	if err != nil {
+		t.Fatalf("registry.Register() error = %v", err)
+	}
+	t.Cleanup(record.Close)
+
+	if !record.hasECHDNSRecord() {
+		t.Fatal("hasECHDNSRecord() = false, want ECH on the default TLS route")
+	}
+	if record.datagram == nil || record.tcpPort == nil {
+		t.Fatalf("transport runtimes = datagram %v, tcp %v; want both", record.datagram != nil, record.tcpPort != nil)
+	}
+	if !resp.UDPEnabled || !resp.TCPEnabled || resp.UDPAddr == "" || resp.TCPAddr == "" {
+		t.Fatalf("RegisterResponse transports = %+v, want UDP and raw TCP endpoints", resp)
+	}
+	if lookedUp, ok := server.registry.Lookup(publicHostname); !ok || lookedUp != record {
+		t.Fatalf("Lookup(public hostname) = %v, %v, want ECH fallback lease", lookedUp, ok)
+	}
+	if lookedUp, ok := server.registry.Lookup(routeHostname); !ok || lookedUp != record {
+		t.Fatalf("Lookup(route hostname) = %v, %v, want ECH route lease", lookedUp, ok)
 	}
 }
 
