@@ -45,15 +45,19 @@ type Config struct {
 }
 
 type Manager struct {
-	stopCh      chan struct{}
-	cfg         Config
-	wg          sync.WaitGroup
-	dns         DNSProvider
-	startOnce   sync.Once
-	stopOnce    sync.Once
-	ensStatus   *utils.Snapshot[types.ENSStatus]
-	echCommands chan echDNSCommand
-	ensCommands chan ensDNSCommand
+	stopCh       chan struct{}
+	stopCtx      context.Context
+	stopErr      error
+	workerCancel context.CancelFunc
+	cfg          Config
+	wg           sync.WaitGroup
+	commandMu    sync.RWMutex
+	dns          DNSProvider
+	startOnce    sync.Once
+	stopOnce     sync.Once
+	ensStatus    *utils.Snapshot[types.ENSStatus]
+	echCommands  chan echDNSCommand
+	ensCommands  chan ensDNSCommand
 }
 
 func NewManager(cfg Config) (*Manager, error) {
@@ -188,19 +192,35 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 
 	m.startOnce.Do(func() {
+		m.commandMu.Lock()
+		defer m.commandMu.Unlock()
+		select {
+		case <-m.stopCh:
+			return
+		default:
+		}
+		workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		m.workerCancel = cancel
 		m.wg.Add(1)
-		go m.maintenanceLoop(ctx)
+		go m.maintenanceLoop(workerCtx)
 	})
 }
 
-func (m *Manager) Stop() {
+func (m *Manager) Stop(ctx context.Context) error {
 	if m == nil {
-		return
+		return nil
 	}
 	m.stopOnce.Do(func() {
+		m.commandMu.Lock()
+		m.stopCtx = ctx
+		if m.workerCancel != nil {
+			m.workerCancel()
+		}
 		close(m.stopCh)
+		m.commandMu.Unlock()
 	})
 	m.wg.Wait()
+	return m.stopErr
 }
 
 func (m *Manager) TLSFiles() (string, string, error) {

@@ -158,13 +158,18 @@ func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string)
 }
 
 func (m *Manager) queueENSCommand(ctx context.Context, command ensDNSCommand) error {
+	m.commandMu.RLock()
+	defer m.commandMu.RUnlock()
+	select {
+	case <-m.stopCh:
+		return errors.New("acme manager is stopped")
+	default:
+	}
 	select {
 	case m.ensCommands <- command:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-m.stopCh:
-		return errors.New("acme manager is stopped")
 	}
 }
 

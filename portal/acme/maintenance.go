@@ -60,6 +60,44 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		lastPublicIP = publicIP
 		return nil
 	}
+	flushCommands := func(ctx context.Context) error {
+	drainECH:
+		for {
+			select {
+			case command := <-m.echCommands:
+				trackECHARecord(command)
+				pendingECH[command.hostname] = command
+			default:
+				break drainECH
+			}
+		}
+	drainENS:
+		for {
+			select {
+			case command := <-m.ensCommands:
+				pendingENS[command.hostname] = command
+			default:
+				break drainENS
+			}
+		}
+
+		var err error
+		for hostname, command := range pendingECH {
+			if commandErr := m.applyECHCommand(ctx, command); commandErr != nil {
+				err = errors.Join(err, commandErr)
+			} else {
+				delete(pendingECH, hostname)
+			}
+		}
+		for hostname, command := range pendingENS {
+			if commandErr := m.applyENSCommand(ctx, command); commandErr != nil {
+				err = errors.Join(err, commandErr)
+			} else {
+				delete(pendingENS, hostname)
+			}
+		}
+		return err
+	}
 
 	renewTicker := time.NewTicker(defaultRenewInterval)
 	dnsTicker := time.NewTicker(defaultManagedDNSSyncInterval)
@@ -70,9 +108,13 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 
 	for {
 		select {
-		case <-ctx.Done():
-			return
 		case <-m.stopCh:
+			syncCtx, cancel := context.WithTimeout(m.stopCtx, defaultSyncTimeout)
+			m.stopErr = flushCommands(syncCtx)
+			cancel()
+			if m.stopErr != nil {
+				log.Warn().Err(m.stopErr).Str("base_domain", m.cfg.BaseDomain).Msg("flush dns records")
+			}
 			return
 		case command := <-m.echCommands:
 			trackECHARecord(command)
@@ -108,39 +150,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
 				err = errors.Join(err, m.syncENSDNSSEC(syncCtx))
 			}
-		drainECH:
-			for {
-				select {
-				case command := <-m.echCommands:
-					trackECHARecord(command)
-					pendingECH[command.hostname] = command
-				default:
-					break drainECH
-				}
-			}
-		drainENS:
-			for {
-				select {
-				case command := <-m.ensCommands:
-					pendingENS[command.hostname] = command
-				default:
-					break drainENS
-				}
-			}
-			for hostname, command := range pendingECH {
-				if commandErr := m.applyECHCommand(syncCtx, command); commandErr != nil {
-					err = errors.Join(err, commandErr)
-				} else {
-					delete(pendingECH, hostname)
-				}
-			}
-			for hostname, command := range pendingENS {
-				if commandErr := m.applyENSCommand(syncCtx, command); commandErr != nil {
-					err = errors.Join(err, commandErr)
-				} else {
-					delete(pendingENS, hostname)
-				}
-			}
+			err = errors.Join(err, flushCommands(syncCtx))
 			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")

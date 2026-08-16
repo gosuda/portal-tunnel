@@ -70,13 +70,18 @@ func (m *Manager) DeleteECHConfig(ctx context.Context, hostname string) error {
 }
 
 func (m *Manager) queueECHCommand(ctx context.Context, command echDNSCommand) error {
+	m.commandMu.RLock()
+	defer m.commandMu.RUnlock()
+	select {
+	case <-m.stopCh:
+		return errors.New("acme manager is stopped")
+	default:
+	}
 	select {
 	case m.echCommands <- command:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-m.stopCh:
-		return errors.New("acme manager is stopped")
 	}
 }
 
