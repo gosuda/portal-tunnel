@@ -98,7 +98,15 @@ portal expose 3000 --multi-hop-depth 3
 
 ### 使用本地 AI agent 插件
 
-仓库提供面向 Codex、Claude Code 和 Cursor 的本地 `portal-deploy` 插件。共用的 `portal-expose` skill 负责应用启动、Portal 隧道选择、公网 URL 验证和生命周期交接。各宿主的 plugin manifest 与 marketplace catalog 分开存放。详见 [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md)。
+仓库提供面向 Codex、Claude Code 和 Cursor 的 `portal-deploy` 插件。共用的 `portal-expose` skill 会检查本地应用、打开 Portal 隧道、验证公网 URL，并交接生命周期。
+
+只安装该 skill：
+
+```bash
+npx skills add gosuda/portal-tunnel --skill portal-expose
+```
+
+加上 `-g` 可安装到所有项目。然后让 agent 用 Portal 部署、预览或分享本地应用。Codex、Claude Code 和 Cursor 的宿主 marketplace 安装步骤见 [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md)。
 
 ### 使用 Portal Agent 持续运行隧道
 
