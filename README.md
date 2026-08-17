@@ -115,7 +115,15 @@ helper endpoints.
 
 ### Use the local AI agent plugin
 
-The repository includes a local `portal-deploy` plugin for Codex, Claude Code, and Cursor. One shared `portal-expose` skill covers app startup, Portal tunnel selection, public URL verification, and lifecycle handoff. Host-specific plugin manifests and marketplace catalogs stay separate. See [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md).
+The repository includes a `portal-deploy` plugin for Codex, Claude Code, and Cursor. The shared `portal-expose` skill inspects a local app, opens a Portal tunnel, verifies the public URL, and hands off the lifecycle.
+
+Install only that skill:
+
+```bash
+npx skills add gosuda/portal-tunnel --skill portal-expose
+```
+
+Add `-g` to install it for every project. Then ask the agent to deploy, preview, or share a local app with Portal. Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md).
 
 ### Keep tunnels running with Portal Agent
 
