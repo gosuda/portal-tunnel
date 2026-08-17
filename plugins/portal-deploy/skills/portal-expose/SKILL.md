@@ -1,6 +1,7 @@
 ---
 name: portal-expose
 description: Expose, preview, or keep a local web app, static site, HTTP route set, or explicitly requested TCP/UDP service reachable through Portal, then verify the public endpoint and report its lifecycle. Use when the user asks to deploy, publish, share, tunnel, expose, or create a public preview of a local app with Portal. Do not use for deploying a Portal relay, generic cloud hosting, or publishing this plugin.
+license: MIT
 ---
 
 # Expose an App with Portal
