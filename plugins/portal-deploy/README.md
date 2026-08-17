@@ -1,6 +1,6 @@
 # Portal Deploy plugin
 
-`portal-deploy` is a skills-only plugin for Codex, Claude Code, and Cursor. It teaches an agent to inspect a local app, choose the appropriate Portal tunnel mode, verify the public endpoint, and hand off the tunnel lifecycle safely.
+`portal-deploy` is a skills-only plugin for Codex, Claude Code, and Cursor. It teaches an agent to inspect a local app, choose the appropriate Portal tunnel mode, configure explicitly requested x402 paid routes, verify the public endpoint and payment challenge, and hand off the tunnel lifecycle safely.
 
 Portal exposes a service that remains on the local machine. This plugin does not turn Portal into a cloud build or hosting platform.
 
@@ -91,6 +91,7 @@ Public listing is a Git repository submitted at [cursor.com/marketplace/publish]
 ## Example prompts
 
 - `Deploy the app in this repository with Portal and verify the public URL.`
+- `Expose this app with Portal, protect GET /paid with x402, and verify the payment challenge.`
 - `Create a temporary Portal preview for the frontend on port 5173.`
 - `Keep this service available through a persistent Portal agent tunnel.`
 - `Serve this trusted static site through Portal.`
@@ -102,6 +103,7 @@ The skill should not trigger for deploying a Portal relay, normal cloud hosting,
 Positive:
 
 - Deploy this local app with Portal and verify the public URL.
+- Protect GET /paid with a 0.01 USDC x402 payment and verify the public challenge.
 - Create a temporary Portal preview for this project.
 - Run this app as a persistent Portal tunnel.
 - Serve this trusted static site through Portal.
