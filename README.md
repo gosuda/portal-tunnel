@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./logo.png" alt="Portal" width="280" />
+</p>
+
 # Portal - Self-Hostable Relay Tunnel for Localhost
 
 [![CI](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml)

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./logo.png" alt="Portal" width="280" />
+</p>
+
 # Portal - 面向 localhost 的自托管中继隧道
 
 [![CI](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml)
