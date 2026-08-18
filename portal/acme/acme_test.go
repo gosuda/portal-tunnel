@@ -162,7 +162,7 @@ func TestEnsureCertificateGeneratesLocalDevelopmentMaterial(t *testing.T) {
 	}
 }
 
-func TestEnsureTLSMaterialUsesManualCertificateWithoutDNSProvider(t *testing.T) {
+func TestEnsureTLSMaterialUsesManualCertificateWithDefaultEmbeddedProvider(t *testing.T) {
 	t.Parallel()
 
 	keyDir := t.TempDir()
@@ -171,12 +171,14 @@ func TestEnsureTLSMaterialUsesManualCertificateWithoutDNSProvider(t *testing.T) 
 	}
 
 	manager, err := NewManager(Config{
-		BaseDomain: "portal.example.com",
-		KeyDir:     keyDir,
+		BaseDomain:      "portal.example.com",
+		KeyDir:          keyDir,
+		EmbeddedDNSPort: 0,
 	})
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
+	t.Cleanup(func() { _ = manager.Stop(context.Background()) })
 
 	certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
 	if err != nil {
@@ -187,40 +189,60 @@ func TestEnsureTLSMaterialUsesManualCertificateWithoutDNSProvider(t *testing.T) 
 	}
 }
 
-func TestEnsureTLSMaterialRequiresManualCertificateWhenProviderUnset(t *testing.T) {
+func TestNewManagerDefaultsToEmbeddedProvider(t *testing.T) {
 	t.Parallel()
 
 	manager, err := NewManager(Config{
-		BaseDomain: "portal.example.com",
-		KeyDir:     t.TempDir(),
+		BaseDomain:      "portal.example.com",
+		KeyDir:          t.TempDir(),
+		EmbeddedDNSPort: 0,
 	})
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
-
-	_, _, err = manager.EnsureTLSMaterial(context.Background())
-	if err == nil {
-		t.Fatal("EnsureTLSMaterial() error = nil, want missing manual certificate error")
+	if manager.dns == nil || manager.dns.Name() != TypeEmbedded {
+		t.Fatalf("dns provider = %v, want embedded default", manager.dns)
 	}
-	if got := err.Error(); got == "" || !containsAll(got, "manual certificate mode requires", "fullchain.pem", "privatekey.pem") {
-		t.Fatalf("EnsureTLSMaterial() error = %q, want manual certificate guidance", got)
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v, want embedded listeners closed", err)
 	}
 }
 
-func TestNewManagerRejectsENSGaslessWithoutDNSProvider(t *testing.T) {
+func TestNewManagerRejectsENSGaslessWithEmbeddedProvider(t *testing.T) {
 	t.Parallel()
 
 	_, err := NewManager(Config{
 		BaseDomain:        "portal.example.com",
 		KeyDir:            t.TempDir(),
+		DNSProvider:       TypeEmbedded,
 		ENSGaslessEnabled: true,
 		ENSGaslessAddress: "0x1234567890123456789012345678901234567890",
 	})
 	if err == nil {
-		t.Fatal("NewManager() error = nil, want ENS gasless provider error")
+		t.Fatal("NewManager() error = nil, want embedded ENS gasless error")
 	}
-	if got := err.Error(); got != "ens gasless automation requires ACME_DNS_PROVIDER" {
-		t.Fatalf("NewManager() error = %q, want ENS gasless provider guidance", got)
+	if got := err.Error(); got != "ens gasless automation is not supported by the embedded dns provider yet" {
+		t.Fatalf("NewManager() error = %q, want embedded dnssec guidance", got)
+	}
+}
+
+func TestManagerStopsEmbeddedDNSServer(t *testing.T) {
+	t.Parallel()
+
+	manager, err := NewManager(Config{
+		BaseDomain:      "portal.example.com",
+		KeyDir:          t.TempDir(),
+		DNSProvider:     TypeEmbedded,
+		EmbeddedDNSPort: 0,
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v, want embedded provider", err)
+	}
+	if manager.dns == nil || manager.dns.Name() != TypeEmbedded {
+		t.Fatalf("dns provider = %v, want embedded", manager.dns)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v, want embedded listeners closed", err)
 	}
 }
 

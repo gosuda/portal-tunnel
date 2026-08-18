@@ -30,6 +30,7 @@ type Config struct {
 	DNSProvider        string
 	ENSGaslessEnabled  bool
 	ENSGaslessAddress  string
+	EmbeddedDNSPort    int
 	CloudflareToken    string
 	GCPProjectID       string
 	GCPManagedZone     string
@@ -64,6 +65,9 @@ func NewManager(cfg Config) (*Manager, error) {
 	cfg.BaseDomain = utils.NormalizeBaseDomain(cfg.BaseDomain)
 	cfg.KeyDir = strings.TrimSpace(cfg.KeyDir)
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
+	if cfg.DNSProvider == "" {
+		cfg.DNSProvider = TypeEmbedded
+	}
 	cfg.ENSGaslessAddress = strings.TrimSpace(cfg.ENSGaslessAddress)
 	cfg.CloudflareToken = strings.TrimSpace(cfg.CloudflareToken)
 	cfg.GCPProjectID = strings.TrimSpace(cfg.GCPProjectID)
@@ -110,15 +114,15 @@ func NewManager(cfg Config) (*Manager, error) {
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
 	}
 
+	if cfg.ENSGaslessEnabled && cfg.DNSProvider == TypeEmbedded {
+		return nil, errors.New("ens gasless automation is not supported by the embedded dns provider yet")
+	}
+
 	acmeDNS, err := NewDNSProvider(cfg.DNSProvider, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create acme dns provider: %w", err)
 	}
 	manager.dns = acmeDNS
-
-	if cfg.ENSGaslessEnabled && manager.dns == nil {
-		return nil, errors.New("ens gasless automation requires ACME_DNS_PROVIDER")
-	}
 
 	return manager, nil
 }
@@ -146,9 +150,6 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	}
 	if manual {
 		return certFile, keyFile, nil
-	}
-	if m.dns == nil {
-		return m.ensureManualCertificate()
 	}
 
 	if err := m.syncDNS(ctx); err != nil {
@@ -187,7 +188,7 @@ func (m *Manager) EnsureTLSMaterial(ctx context.Context) ([]byte, []byte, error)
 }
 
 func (m *Manager) Start(ctx context.Context) {
-	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) || (m.dns == nil && !m.cfg.ENSGaslessEnabled) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return
 	}
 
@@ -220,6 +221,9 @@ func (m *Manager) Stop(ctx context.Context) error {
 		m.commandMu.Unlock()
 	})
 	m.wg.Wait()
+	if dnsServer, ok := m.dns.(interface{ Stop() error }); ok {
+		m.stopErr = errors.Join(m.stopErr, dnsServer.Stop())
+	}
 	return m.stopErr
 }
 
@@ -231,22 +235,6 @@ func (m *Manager) TLSFiles() (string, string, error) {
 	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
 	if !utils.FileExists(certFile) || !utils.FileExists(keyFile) {
 		return "", "", errors.New("relay certificate files do not exist")
-	}
-	return certFile, keyFile, nil
-}
-
-func (m *Manager) ensureManualCertificate() (string, string, error) {
-	certFile, keyFile, err := m.TLSFiles()
-	if err != nil {
-		return "", "", fmt.Errorf("manual certificate mode requires %s and %s in %s or configure ACME_DNS_PROVIDER", fullChainFileName, keyFileName, m.cfg.KeyDir)
-	}
-
-	covered, err := certCoversDomains(certFile, certificateDomains(m.cfg.BaseDomain))
-	if err != nil {
-		return "", "", fmt.Errorf("validate relay certificate: %w", err)
-	}
-	if !covered {
-		return "", "", fmt.Errorf("manual relay certificate must cover %s and *.%s", m.cfg.BaseDomain, m.cfg.BaseDomain)
 	}
 	return certFile, keyFile, nil
 }

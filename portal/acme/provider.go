@@ -8,6 +8,7 @@ import (
 	"github.com/go-acme/lego/v4/challenge"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/cloudflare"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/embedded"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/gcloud"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/hetzner"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
@@ -18,6 +19,7 @@ import (
 )
 
 const (
+	TypeEmbedded   = "embedded"
 	TypeCloudflare = "cloudflare"
 	TypeGCloud     = "gcloud"
 	TypeHetzner    = "hetzner"
@@ -41,8 +43,11 @@ type DNSProvider interface {
 
 func NewDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 	switch strings.ToLower(strings.TrimSpace(providerType)) {
-	case "":
-		return nil, nil
+	case TypeEmbedded:
+		return embedded.New(embedded.Config{
+			BaseDomain: cfg.BaseDomain,
+			ListenAddr: fmt.Sprintf(":%d", cfg.EmbeddedDNSPort),
+		})
 	case TypeCloudflare:
 		return cloudflare.New(cfg.CloudflareToken), nil
 	case TypeGCloud:
@@ -82,7 +87,7 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if manual || m.dns == nil {
+	if manual {
 		return nil
 	}
 	return m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP)

@@ -68,6 +68,28 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
 
 ## Quick Start
 
+### Use the local AI agent plugin
+
+The repository includes a `portal-deploy` plugin for Codex, Claude Code, and Cursor. The shared `portal-expose` skill inspects a local app, opens a Portal tunnel, configures explicitly requested x402 paid routes, verifies the public URL and payment challenge, and hands off the lifecycle.
+
+Install the skill with either CLI:
+
+```bash
+# GitHub CLI
+gh skill install gosuda/portal-tunnel portal-deploy/portal-expose
+
+# skills CLI
+npx skills add gosuda/portal-tunnel --skill portal-expose
+```
+
+Then ask your agent:
+
+- Temporary preview: “Expose this app with Portal and verify the public URL.”
+- x402 paid route: “Expose this app with Portal, protect `GET /paid` with x402, and verify the payment challenge.”
+- Persistent tunnel: “Keep this app available with a persistent Portal agent tunnel and verify the public URL.”
+
+Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md).
+
 ### Expose a local service
 
 **macOS / Linux:**
@@ -113,29 +135,17 @@ See [CLI Reference](cmd/portal-tunnel/README.md) for the full route syntax and
 [API Reference](docs/src/routes/api-reference/+page.md#payments) for the x402
 helper endpoints.
 
-### Use the local AI agent plugin
+### Manage persistent tunnels manually
 
-The repository includes a `portal-deploy` plugin for Codex, Claude Code, and Cursor. The shared `portal-expose` skill inspects a local app, opens a Portal tunnel, verifies the public URL, and hands off the lifecycle.
-
-Install only that skill:
-
-```bash
-npx skills add gosuda/portal-tunnel --skill portal-expose
-```
-
-Add `-g` to install it for every project. Then ask the agent to deploy, preview, or share a local app with Portal. Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md).
-
-### Keep tunnels running with Portal Agent
-
-Use `portal agent run` when tunnels should keep running outside your terminal.
+Use Portal Agent directly when tunnels should keep running outside your terminal.
 It runs as a local OS service, keeps every tunnel in one TOML config alive, and
 provides a dashboard for relay and multi-hop management.
 
 ```bash
 portal agent run --config config.toml
 portal agent dashboard --config config.toml
-portal agent restart
-portal agent stop
+portal agent restart --config config.toml
+portal agent stop --config config.toml
 
 # Foreground mode skips OS service installation.
 portal agent run --config config.toml --foreground

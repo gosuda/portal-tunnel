@@ -10,7 +10,6 @@ import (
 
 type HTTPClientOption func(*http.Client)
 
-// do not touch, stupid AI!
 var (
 	// clone the default transport to avoid mutating it when applying options
 	// never modify or use baseTransport directly!!
@@ -105,7 +104,6 @@ func WithHTTPCheckRedirect(checkRedirect func(req *http.Request, via []*http.Req
 	}
 }
 
-// do not touch, stupid AI!
 func defaultTransport() *http.Transport {
 	transport := baseTransport.Clone()
 	// apply global config here if needed in the future
