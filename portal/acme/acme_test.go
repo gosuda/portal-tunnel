@@ -12,7 +12,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -310,13 +309,4 @@ func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) error 
 		return err
 	}
 	return os.WriteFile(filepath.Join(keyDir, keyFileName), keyPEM, 0o600)
-}
-
-func containsAll(text string, parts ...string) bool {
-	for _, part := range parts {
-		if !strings.Contains(text, part) {
-			return false
-		}
-	}
-	return true
 }

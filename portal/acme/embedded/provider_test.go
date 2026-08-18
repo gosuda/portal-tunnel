@@ -175,19 +175,19 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 	if err := p.Present(testZone, "token", keyAuth); err != nil {
 		t.Fatalf("present: %v", err)
 	}
-	fqdn, value := dns01.GetRecord(testZone, keyAuth)
-	resp := exchange(t, p, "tcp", dns.TypeTXT, fqdn)
+	info := dns01.GetChallengeInfo(testZone, keyAuth)
+	resp := exchange(t, p, "tcp", dns.TypeTXT, info.EffectiveFQDN)
 	if len(resp.Answer) != 1 {
 		t.Fatalf("got %d txt answers, want 1", len(resp.Answer))
 	}
-	if got := strings.Join(resp.Answer[0].(*dns.TXT).Txt, ""); got != value {
-		t.Fatalf("got txt %q, want %q", got, value)
+	if got := strings.Join(resp.Answer[0].(*dns.TXT).Txt, ""); got != info.Value {
+		t.Fatalf("got txt %q, want %q", got, info.Value)
 	}
 
 	if err := p.CleanUp(testZone, "token", keyAuth); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
-	resp = exchange(t, p, "tcp", dns.TypeTXT, fqdn)
+	resp = exchange(t, p, "tcp", dns.TypeTXT, info.EffectiveFQDN)
 	requireRcode(t, resp, dns.RcodeSuccess)
 	if len(resp.Answer) != 0 {
 		t.Fatalf("txt survived cleanup")

@@ -166,24 +166,24 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 }
 
 func (p *Provider) Present(domain, _, keyAuth string) error {
-	fqdn, value := dns01.GetRecord(domain, keyAuth)
-	name, err := p.zoneHostname(fqdn)
+	info := dns01.GetChallengeInfo(domain, keyAuth)
+	name, err := p.zoneHostname(info.EffectiveFQDN)
 	if err != nil {
 		return err
 	}
-	return p.EnsureTXTRecord(context.Background(), name, value)
+	return p.EnsureTXTRecord(context.Background(), name, info.Value)
 }
 
 func (p *Provider) CleanUp(domain, _, keyAuth string) error {
-	fqdn, value := dns01.GetRecord(domain, keyAuth)
-	name, err := p.zoneHostname(fqdn)
+	info := dns01.GetChallengeInfo(domain, keyAuth)
+	name, err := p.zoneHostname(info.EffectiveFQDN)
 	if err != nil {
 		return err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	values := p.txt[name]
-	idx := slices.Index(values, value)
+	idx := slices.Index(values, info.Value)
 	if idx < 0 {
 		return nil
 	}
@@ -367,16 +367,17 @@ func (p *Provider) bumpSerialLocked() {
 // listenDNS binds the UDP and TCP listeners. When the address requests an
 // ephemeral port both transports are pinned to the same port.
 func listenDNS(addr string) (net.PacketConn, net.Listener, error) {
+	listenConfig := net.ListenConfig{}
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse embedded dns listen address %q: %w", addr, err)
 	}
 	if portStr != "0" {
-		packetConn, err := net.ListenPacket("udp", addr)
+		packetConn, err := listenConfig.ListenPacket(context.Background(), "udp", addr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("listen embedded dns udp %s: %w", addr, err)
 		}
-		listener, err := net.Listen("tcp", addr)
+		listener, err := listenConfig.Listen(context.Background(), "tcp", addr)
 		if err != nil {
 			_ = packetConn.Close()
 			return nil, nil, fmt.Errorf("listen embedded dns tcp %s: %w", addr, err)
@@ -386,12 +387,12 @@ func listenDNS(addr string) (net.PacketConn, net.Listener, error) {
 
 	var lastErr error
 	for range 5 {
-		packetConn, err := net.ListenPacket("udp", addr)
+		packetConn, err := listenConfig.ListenPacket(context.Background(), "udp", addr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("listen embedded dns udp %s: %w", addr, err)
 		}
 		port := packetConn.LocalAddr().(*net.UDPAddr).Port
-		listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+		listener, err := listenConfig.Listen(context.Background(), "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
 		if err == nil {
 			return packetConn, listener, nil
 		}
