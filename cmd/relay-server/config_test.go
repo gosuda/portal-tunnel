@@ -163,3 +163,82 @@ func TestACMEFeatureBlockedWithoutCredential(t *testing.T) {
 		t.Fatalf("acme missing = %q, want it to name the credential", f.Missing)
 	}
 }
+
+// A line that is neither blank, a comment, nor an assignment is a typo, and
+// dropping it would recreate the silent misconfiguration this command exists to
+// expose: the feature would report its default with nothing to explain why.
+func TestLoadEnvFileRejectsMalformedLines(t *testing.T) {
+	for name, line := range map[string]string{
+		"missing separator": "DISCOVERY true",
+		"empty name":        "=true",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeEnvFile(t, "PORTAL_URL=https://relay.example.com", line)
+
+			_, err := loadEnvFile(path)
+			if err == nil {
+				t.Fatalf("%q was accepted", line)
+			}
+			if !strings.Contains(err.Error(), ":2:") {
+				t.Fatalf("error does not point at the line: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadEnvFileKeepsCommentsAndBlanks(t *testing.T) {
+	path := writeEnvFile(t, "# a comment", "", "  ", "export PORTAL_URL=https://relay.example.com")
+
+	entries, err := loadEnvFile(path)
+	if err != nil {
+		t.Fatalf("load env file: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name != "PORTAL_URL" {
+		t.Fatalf("entries = %v, want only PORTAL_URL", entries)
+	}
+}
+
+// The report must not claim a feature works when the server will reject the
+// same value moments later. portal.NewServer normalizes PORTAL_URL through
+// utils.NormalizeRelayURL, which requires https.
+func TestDiscoveryBlockedForNonHTTPSPortalURL(t *testing.T) {
+	path := writeEnvFile(t, "DISCOVERY=true", "PORTAL_URL=http://relay.example.com")
+	cfg := resolveWithEnvFile(t, path)
+
+	f := discoveryFeature(cfg)
+	if f.State != stateBlocked {
+		t.Fatalf("discovery state = %q, want blocked for a non-https PORTAL_URL", f.State)
+	}
+	if !strings.Contains(f.Missing, "https") {
+		t.Fatalf("missing = %q, want it to name the https requirement", f.Missing)
+	}
+}
+
+func TestDiscoveryBlockedForUnusableBootstraps(t *testing.T) {
+	path := writeEnvFile(t,
+		"DISCOVERY=true",
+		"PORTAL_URL=https://relay.example.com",
+		"BOOTSTRAPS=http://peer.example.com")
+	cfg := resolveWithEnvFile(t, path)
+
+	f := discoveryFeature(cfg)
+	if f.State != stateBlocked {
+		t.Fatalf("discovery state = %q, want blocked for an unusable BOOTSTRAPS", f.State)
+	}
+}
+
+func TestDiscoveryEnabledCountsNormalizedBootstraps(t *testing.T) {
+	path := writeEnvFile(t,
+		"DISCOVERY=true",
+		"PORTAL_URL=https://relay.example.com",
+		"BOOTSTRAPS=https://a.example.com,https://b.example.com")
+	cfg := resolveWithEnvFile(t, path)
+
+	f := discoveryFeature(cfg)
+	if f.State != stateEnabled {
+		t.Fatalf("discovery state = %q, want enabled", f.State)
+	}
+	if !strings.Contains(f.Detail, "bootstraps=2") {
+		t.Fatalf("detail = %q, want bootstraps=2", f.Detail)
+	}
+}

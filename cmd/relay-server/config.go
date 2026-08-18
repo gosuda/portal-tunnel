@@ -100,6 +100,15 @@ func discoveryFeature(cfg relayServerConfig) feature {
 		f.State, f.By = stateDisabled, "DISCOVERY=false"
 		return f
 	}
+	// The same normalization portal.NewServer applies, not a second opinion
+	// about it. Checking only the parsed hostname would report PORTAL_URL=http://…
+	// as enabled and then have the server reject it seconds later, which is
+	// exactly the divergence this report exists to remove.
+	if _, err := utils.NormalizeRelayURL(cfg.PortalURL); err != nil {
+		f.State, f.By = stateBlocked, "DISCOVERY=true"
+		f.Missing = fmt.Sprintf("PORTAL_URL is not usable as a relay URL: %v", err)
+		return f
+	}
 	host := portalURLHost(cfg.PortalURL)
 	if host == "" || utils.IsLocalRelayHost(host) {
 		f.State, f.By = stateBlocked, "DISCOVERY=true"
@@ -108,9 +117,15 @@ func discoveryFeature(cfg relayServerConfig) feature {
 			host)
 		return f
 	}
+	bootstraps, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.Bootstraps)...)
+	if err != nil {
+		f.State, f.By = stateBlocked, "DISCOVERY=true"
+		f.Missing = fmt.Sprintf("BOOTSTRAPS is not usable: %v", err)
+		return f
+	}
 	f.State, f.By = stateEnabled, "DISCOVERY=true"
 	f.Detail = fmt.Sprintf("host=%s bootstraps=%d wireguard_port=%d",
-		host, len(utils.SplitCSV(cfg.Bootstraps)), cfg.WireGuardPort)
+		host, len(bootstraps), cfg.WireGuardPort)
 	return f
 }
 
@@ -321,19 +336,25 @@ func loadEnvFile(path string) ([]envFileEntry, error) {
 
 	var entries []envFileEntry
 	scanner := bufio.NewScanner(file)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		line = strings.TrimPrefix(line, "export ")
+		// A line that is neither blank, a comment, nor an assignment is a
+		// mistake, and skipping it would reproduce the silent misconfiguration
+		// this command exists to expose: `DISCOVERY true` would simply vanish
+		// and the feature would report its default with nothing to explain why.
 		name, value, found := strings.Cut(line, "=")
 		if !found {
-			continue
+			return nil, fmt.Errorf("%s:%d: not an assignment: %q", path, lineNo, line)
 		}
 		name = strings.TrimSpace(name)
 		if name == "" {
-			continue
+			return nil, fmt.Errorf("%s:%d: assignment has no name: %q", path, lineNo, line)
 		}
 		// Compose does not expand values read from an env file, so neither do we.
 		value = strings.TrimSpace(value)
@@ -410,7 +431,18 @@ func displayValue(name, value string) string {
 func writeConfigReport(w io.Writer, cfg relayServerConfig, entries []envFileEntry, source string) {
 	relay := knownEnvNames()
 
-	fmt.Fprintf(w, "Portal relay configuration (%s)\n\n", source)
+	fmt.Fprintf(w, "Portal relay configuration (%s)\n", source)
+	// Say what was inspected, because the two modes answer different questions
+	// and only one of them describes a Compose deployment. Reading a file in
+	// isolation applies relay defaults to every key the file omits, while
+	// Compose supplies its own first: a file with only PORTAL_URL reports
+	// MIN_PORT=0 here, and `docker compose up` would run it with 40000.
+	if len(entries) > 0 {
+		fmt.Fprint(w, "Keys absent from this file take relay defaults. A Compose deployment\n"+
+			"supplies its own first; for that environment run the command inside the\n"+
+			"container instead: docker compose run --rm -T portal config\n")
+	}
+	fmt.Fprintln(w)
 
 	supplied := make(map[string]bool, len(entries))
 	for _, entry := range entries {
@@ -723,7 +755,11 @@ func runConfigCommand(args []string) error {
 		format      string
 	)
 	fs := utils.NewFlagSet("relay-server config", printConfigUsage)
-	utils.StringFlag(fs, &envFilePath, "env-file", "", "env file to inspect instead of the process environment")
+	utils.StringFlag(fs, &envFilePath, "env-file", "",
+		"read this file in place of the process environment, against relay defaults. "+
+			"Compose supplies its own defaults on top of a file, so to see what a Compose "+
+			"deployment will actually run, omit this flag and let Compose build the environment: "+
+			"docker compose run --rm -T portal config")
 	utils.StringFlag(fs, &format, "format", "text", "output format: text, env or names")
 
 	if err := utils.ParseFlagSet(fs, args, printConfigUsage); err != nil {
@@ -780,8 +816,9 @@ func printConfigUsage(w io.Writer) {
 			"relay-server config [--env-file PATH] [--format text|env]",
 		},
 		[]string{
-			"relay-server config",
-			"relay-server config --env-file .env",
+			"docker compose run --rm -T portal config    # what Compose will run",
+			"relay-server config                         # this process environment",
+			"relay-server config --env-file .env         # one file, against relay defaults",
 			"relay-server config --format env > env.reference",
 		},
 	)

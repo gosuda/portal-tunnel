@@ -13,13 +13,29 @@ This page describes what each variable means. To see what a specific deployment
 is actually doing, ask the binary rather than reading a table:
 
 ```bash
-relay-server config --env-file .env
+docker compose run --rm -T portal config
 ```
 
 It prints every key with its effective value and where that value came from,
 names any key nothing reads, and reports which features are off and what is
-missing. `relay-server config --format env` regenerates the full list from the
-flag definitions, and `make check-env-example` fails when this page or
+missing.
+
+Run it **inside the container, without `--env-file`**. Compose has already
+combined `.env` with the defaults declared in `docker-compose.yml`, so the
+report then describes the environment `docker compose up` will actually
+provide. `--env-file` reads a file on its own, against the relay binary's
+defaults — `MIN_PORT` is `0` there and `40000` under Compose — so a file that
+sets only `PORTAL_URL` and `UDP_ENABLED=true` is reported as
+`udp-transport blocked` although the deployment would enable it. Use it to
+inspect a file in isolation, not to predict a deployment:
+
+```bash
+relay-server config                    # this process environment
+relay-server config --env-file .env    # one file, against relay defaults
+```
+
+`relay-server config --format env` regenerates the full list from the flag
+definitions, and `make check-env-example` fails when this page or
 `.env.example` stops mentioning a key.
 
 ## Relay Server Environment Variables
