@@ -157,7 +157,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			}
 		case <-renewTicker.C:
 			_, _, manual, err := m.manualCertificateOverride()
-			if err != nil || manual || m.dns == nil || !m.shouldRenew() {
+			if err != nil || manual || !m.shouldRenew() {
 				continue
 			}
 			renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)

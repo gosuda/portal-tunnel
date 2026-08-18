@@ -85,9 +85,6 @@ func (m *Manager) syncENSGasless(ctx context.Context) error {
 	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
-	if m.dns == nil {
-		return errors.New("ACME_DNS_PROVIDER is required")
-	}
 
 	if err := m.syncENSDNSSEC(ctx); err != nil {
 		return err
@@ -117,9 +114,6 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
-	if m.dns == nil {
-		return errors.New("ACME_DNS_PROVIDER is required")
-	}
 
 	hostname = utils.NormalizeHostname(hostname)
 	if hostname == "" {
@@ -139,9 +133,6 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string) error {
 	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
-	}
-	if m.dns == nil {
-		return errors.New("ACME_DNS_PROVIDER is required")
 	}
 
 	hostname = utils.NormalizeHostname(hostname)
@@ -205,7 +196,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 }
 
 func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error {
-	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) || m.dns == nil {
+	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 

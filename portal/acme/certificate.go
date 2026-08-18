@@ -117,9 +117,6 @@ func newClient(ctx context.Context, email, accountKeyFile, registrationFile stri
 		return nil, fmt.Errorf("create acme client: %w", err)
 	}
 
-	if dnsProvider == nil {
-		return nil, errors.New("ACME_DNS_PROVIDER is required")
-	}
 	challengeProvider, err := dnsProvider.ChallengeProvider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create dns challenge provider: %w", err)

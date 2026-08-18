@@ -22,9 +22,6 @@ func (m *Manager) SyncECHConfig(ctx context.Context, hostname string, echConfigL
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
-	if m.dns == nil {
-		return nil
-	}
 	hostname = utils.NormalizeHostname(hostname)
 	if hostname == "" {
 		return errors.New("hostname is required")
@@ -53,9 +50,6 @@ func (m *Manager) SyncECHConfig(ctx context.Context, hostname string, echConfigL
 
 func (m *Manager) DeleteECHConfig(ctx context.Context, hostname string) error {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
-		return nil
-	}
-	if m.dns == nil {
 		return nil
 	}
 	hostname = utils.NormalizeHostname(hostname)

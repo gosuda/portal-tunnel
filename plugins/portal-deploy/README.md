@@ -18,7 +18,8 @@ plugins/portal-deploy/
 │   ├── agents/openai.yaml         # Codex skill UI metadata
 │   └── references/
 │       ├── portal-cli.md
-│       └── safety-and-verification.md
+│       ├── safety-and-verification.md
+│       └── x402.md
 └── README.md
 ```
 
