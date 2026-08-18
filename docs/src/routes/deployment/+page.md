@@ -152,85 +152,137 @@ sites from that port, it cannot simply be pointed at: Portal's SNI router
 **closes any hostname it has no lease for**, so a shared socket would drop
 every request meant for those other sites.
 
-The proxy keeps the port and hands Portal the hostnames that belong to it. How
-it hands them over is not uniform, and the two halves are split for opposite
-reasons.
+The proxy keeps the port and hands Portal the hostnames that belong to it.
+Complete, tested configurations are in
+`docs/static/examples/reverse-proxy/`.
 
-### Split by SNI, not by path
+### One topology: nginx in a container beside Portal
+
+nginx runs as a service on the same Compose network as Portal. Only nginx
+publishes host ports. Portal publishes no TCP port at all and is reached as
+`portal:443` and `portal:4017` over that network.
 
 ```text
-:443 -> SNI inspection
-         portal.example.com    -> terminate TLS, proxy to Portal's API listener
-         *.portal.example.com  -> pass through untouched to Portal's SNI listener
-         anything else         -> whatever the host already served
+host :443 -> nginx container
+               :443  stream, ssl_preread, sends PROXY protocol
+                 *.portal.example.com -> :8444 -> strips PROXY -> portal:443
+                 portal.example.com   -> :8444 -> strips PROXY -> portal:443
+                 anything else        -> :8443 -> nginx http, other sites
 ```
 
-**Lease hostnames must pass through.** Terminating TLS for them breaks tunnels:
-clients started with `--ban-mitm` probe for termination and drop a relay that
-does it. It also disables keyless TLS and Encrypted Client Hello, both of which
-need the handshake itself to reach Portal.
+Mixing this with a host-loopback port mapping does not work: if Portal also
+published `127.0.0.1:8443`, nginx's own listener on that address could not
+bind. Pick this topology or a host nginx reaching Portal over published ports —
+not both.
 
-**The root host should be terminated.** Portal derives the client address from
-`X-Forwarded-For` and `X-Real-IP` only; it does not speak the PROXY protocol.
-Passing the root host through raw is simpler, but then every visitor reaches
-Portal as the proxy's own address, `TRUST_PROXY_HEADERS` has nothing to read,
-and IP policy under `/api/policy/ips` matches everyone or no one.
+`SNI_PORT` stays `443` inside the container. Portal reaches its own API listener
+through its SNI router, and that port is what goes into the ECH `HTTPS` record.
 
-### Client addresses across the loopback hop
+### Lease hostnames must pass through, unmodified
 
-An SNI router that forwards to a local port opens a new connection, so the
-terminating listener sees the router rather than the visitor. Carry the
-original address explicitly:
+Terminating TLS for `*.portal.example.com` breaks tunnels: clients started with
+`--ban-mitm` probe for termination and drop a relay that does it, and it
+disables keyless TLS and Encrypted Client Hello, both of which need the
+handshake itself to reach Portal.
+
+Two things in an nginx `stream` block break this quietly.
+
+**The map needs `hostnames;`.** Without it, `map` compares keys as literal
+strings and `*.portal.example.com` matches nothing, so every lease hostname
+falls through to `default` and is answered by the HTTP terminator instead of
+Portal:
 
 ```nginx
-stream {
-    server {
-        listen 443;
-        ssl_preread on;
-        proxy_pass $portal_backend;
-        proxy_protocol on;          # adds the PROXY header
-    }
-}
-
-http {
-    set_real_ip_from 127.0.0.1;     # trust only the loopback hop
-    real_ip_header proxy_protocol;  # recover the address from it
+map $ssl_preread_server_name $portal_backend {
+    hostnames;                              # required for the wildcard to match
+    *.portal.example.com  127.0.0.1:8444;
+    portal.example.com    127.0.0.1:8444;
+    default               127.0.0.1:8443;
 }
 ```
 
-Then set `TRUST_PROXY_HEADERS=true`. Leave `TRUSTED_PROXY_CIDRS` empty to trust
-the default private and loopback ranges, which covers container networks.
+**The PROXY header must be stripped before Portal.** `proxy_protocol on` is a
+server-level directive, so the `:443` listener sends the header to *every*
+destination it selects. Portal does not parse the PROXY protocol: it would read
+`PROXY TCP4 ...` where it expects a TLS ClientHello and close the connection.
+Send the lease path through a stage that consumes the header first:
 
-`proxy_protocol` on a `listen` directive is a socket option, so every server
-block on that port receives the header. Other sites keep a plain `listen ... ssl`
-and still see real client addresses.
+```nginx
+server {
+    listen 127.0.0.1:8444 proxy_protocol;   # consumes it
+    set $portal_sni portal:443;             # variable, so it resolves per request
+    proxy_pass $portal_sni;                 # no proxy_protocol on: plain TLS onward
+}
+```
 
-A complete, tested configuration is at
-`docs/static/examples/reverse-proxy/nginx.conf`. HAProxy expresses the same
-split with `tcp-request inspect-delay` plus `req_ssl_sni` ACLs, and Traefik with
-a TCP router using `HostSNI` rules and TLS passthrough.
+### Client addresses, and the trust boundary
+
+An SNI router forwarding to a local port opens a new connection, so the
+terminating listener sees the router rather than the visitor. `proxy_protocol on`
+carries the original address, and the http block recovers it:
+
+```nginx
+set_real_ip_from 127.0.0.1;     # trust only the loopback hop
+real_ip_header proxy_protocol;
+```
+
+This is what gives the *other sites* on the box their real client addresses. For
+Portal itself it only matters if you terminate the root host — see below.
+
+If you do, **overwrite `X-Forwarded-For` rather than appending to it**:
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;    # not $proxy_add_x_forwarded_for
+```
+
+`$proxy_add_x_forwarded_for` keeps whatever the visitor sent and appends the
+peer. Portal trusts the *first* entry, so a request carrying
+`X-Forwarded-For: 10.0.0.9` from the Internet arrives as `10.0.0.9, <real>` and
+is read as `10.0.0.9` — an `/api/policy/ips` bypass. `$remote_addr` has already
+been restored from the PROXY header, so it is both correct and unspoofable.
+
+Set `TRUSTED_PROXY_CIDRS` to **the proxy's own address as a `/32`**, not the
+default private ranges. The default trusts every RFC 1918 address, which on a
+Docker host means every container.
+
+### Terminating the root host conflicts with ECH
+
+Passing the root host through leaves Portal with no client address at all: it
+reads `X-Forwarded-For` and `X-Real-IP` only, and a pass-through carries no HTTP
+layer to put them in. Terminating it recovers that, but check one thing first.
+
+When a DNS provider is configured, Portal publishes an `HTTPS` record carrying
+`ech=` for its own hostname and installs the matching key **only on its own API
+listener**. An nginx terminator has neither, so ECH-capable clients that read
+the record can fail the connection before any request arrives.
+
+`SyncECHConfig` is a no-op when no DNS provider is configured, so:
+
+| `ACME_DNS_PROVIDER` | Root host |
+|---|---|
+| set (managed issuance) | pass through — terminating breaks the ECH it advertises |
+| empty (manual certificates) | may be terminated, which is what recovers client addresses |
+
+Pass-through is the default in the example for that reason.
 
 ### Publishing Portal's ports
-
-With a proxy in front, Portal should not publish `443/tcp` on the host. Bind
-its SNI listener to loopback or leave it on the container network, and keep the
-UDP ports published:
 
 ```yaml
 services:
   portal:
     ports: !override
-      - "127.0.0.1:8443:443"
       - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
 ```
 
-Do not change `SNI_PORT`. It is fixed at 443 because Portal reaches its own API
-listener through its SNI router, and because that port is published in the ECH
-`HTTPS` record. Only the host-side mapping moves.
+`!override` replaces the base `ports` list rather than appending to it; without
+it Compose merges both and still tries to bind `443`. It requires Docker Compose
+2.24.4 or newer.
 
-`!override` replaces the ports list rather than appending to it; without it
-Compose merges both entries and still tries to bind `443`. It requires Docker
-Compose 2.24.4 or newer.
+Because it *replaces*, this list must carry **every mapping the deployment had
+enabled**. The bundled file publishes TCP 443 and the WireGuard port and
+comments out three more — `443/udp` for QUIC backhaul, the `MIN_PORT`–`MAX_PORT`
+UDP range, and the same range for raw TCP leases. Anything left out here stops
+being published, silently, and tunnels that used it stop working.
 
 ### Sharing a Compose project with unrelated services
 
@@ -245,12 +297,7 @@ docker compose stop portal         # not: docker compose down
 
 Never pass `--remove-orphans` on a shared project. It deletes every container
 in the project that the current file does not define, which includes services
-that belong to other stacks. Remove superseded containers by name instead:
-
-```bash
-docker stop portal-api portal-frontend
-docker rm   portal-api portal-frontend
-```
+that belong to other stacks.
 
 ### Verifying without a regression hunt
 
@@ -302,16 +349,32 @@ chmod +x watch_and_deploy.sh
    the relay identity: losing it makes this a different relay.
 2. Pull or build the new single Portal image.
 3. Stop the old stack so it releases public port 443.
-4. Remove the superseded edge and frontend containers, then start `portal`.
-   Name them rather than reaching for `--remove-orphans`, which deletes every
-   container in the project that the current file does not define — including
-   services that belong to other stacks when the project is shared:
+4. Remove the superseded `nginx`, `portal-api` and `portal-frontend` services,
+   then start `portal`.
+
+   Do this through the **old** Compose file. Those services did not set
+   `container_name`, so their containers are named `<project>-portal-api-1`
+   rather than `portal-api`, and `docker stop portal-api` fails with
+   `No such container`. Keep the old file until this step is done:
 
    ```bash
-   docker stop portal-api portal-frontend
-   docker rm   portal-api portal-frontend
+   docker compose -f docker-compose.old.yml ps            # confirm the real names
+   docker compose -f docker-compose.old.yml stop nginx portal-api portal-frontend
+   docker compose -f docker-compose.old.yml rm -f nginx portal-api portal-frontend
    docker compose up -d portal
    ```
+
+   If the old file is already gone, resolve the names through Compose's own
+   labels instead of guessing:
+
+   ```bash
+   docker ps -a --filter label=com.docker.compose.service=portal-api \
+     --format '{{.Names}}'
+   ```
+
+   Not `--remove-orphans`: it deletes every container in the project that the
+   current file does not define, including services belonging to other stacks
+   when the project is shared.
 
 5. Verify the SPA, relay APIs, and at least one wildcard tunnel.
 
