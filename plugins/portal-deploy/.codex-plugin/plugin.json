@@ -24,7 +24,8 @@
     "defaultPrompt": [
       "Deploy this local app with Portal and verify the public URL.",
       "Create a temporary Portal preview for this project.",
-      "Run this app as a persistent Portal tunnel."
+      "Run this app as a persistent Portal tunnel.",
+      "Share my running OMP session with my phone and verify the connection."
     ]
   }
 }

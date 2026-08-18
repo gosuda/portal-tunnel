@@ -1,0 +1,4 @@
+interface:
+  display_name: "Share OMP Session via Portal"
+  short_description: "Share a live OMP session with a phone"
+  default_prompt: "Use $omp-collab to share my running OMP session with my phone and verify the connection."

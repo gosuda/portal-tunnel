@@ -1,12 +1,12 @@
 # Portal Deploy plugin
 
-`portal-deploy` is a skills-only plugin for Codex, Claude Code, and Cursor. It teaches an agent to inspect a local app, choose the appropriate Portal tunnel mode, configure explicitly requested x402 paid routes, verify the public endpoint and payment challenge, and hand off the tunnel lifecycle safely.
+`portal-deploy` is a skills-only plugin for Codex, Claude Code, and Cursor. It teaches an agent to inspect a local app, choose the appropriate Portal tunnel mode, configure explicitly requested x402 paid routes, verify the public endpoint and payment challenge, and hand off the tunnel lifecycle safely. The `omp-collab` skill shares a live Oh My Pi session with a phone or remote browser through OMP collab, via the hosted relay or a self-hosted relay behind a Portal tunnel.
 
 Portal exposes a service that remains on the local machine. This plugin does not turn Portal into a cloud build or hosting platform.
 
 ## Layout
 
-One shared skill, three host manifests. Do not copy `SKILL.md` per host.
+Two shared skills, three host manifests. Do not copy `SKILL.md` per host.
 
 ```text
 plugins/portal-deploy/
@@ -18,7 +18,13 @@ plugins/portal-deploy/
 │   ├── agents/openai.yaml         # Codex skill UI metadata
 │   └── references/
 │       ├── portal-cli.md
-│       └── safety-and-verification.md
+│       ├── safety-and-verification.md
+│       └── x402.md
+├── skills/omp-collab/
+│   ├── SKILL.md                   # Share a live OMP session via collab
+│   ├── agents/openai.yaml         # Codex skill UI metadata
+│   └── references/
+│       └── omp-collab-details.md
 └── README.md
 ```
 
@@ -30,7 +36,7 @@ Repository-root catalogs, each pointing at this same plugin directory:
 | Claude Code | `.claude-plugin/marketplace.json` | `portal-tunnel` |
 | Cursor | `.cursor-plugin/marketplace.json` | `portal-tunnel` |
 
-Install unit is the plugin `portal-deploy`. Agent invocation unit is the skill `portal-expose`.
+Install unit is the plugin `portal-deploy`. Agent invocation units are the skills `portal-expose` and `omp-collab`.
 
 ## Local Codex setup
 
