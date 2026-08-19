@@ -31,7 +31,7 @@ SNI router.
 
 - A public Linux server with Docker and Docker Compose.
 - A public hostname such as `portal.example.com`.
-- A one-time NS delegation at the parent zone: `NS portal.example.com -> ns.portal.example.com` with a glue `A` record pointing at the relay public IP.
+- A one-time NS delegation at the parent zone: `NS portal.example.com -> ns.portal.example.com` with a glue `A` record pointing at the relay public IP. See the [Configuration Reference](/configuration#embedded-dns) for the canonical embedded DNS details.
 - Inbound `443/tcp`, `53/tcp` + `53/udp` for the embedded authoritative DNS, and `51820/udp` when the overlay is enabled.
 - Certificates for the root and wildcard names are issued automatically via ACME DNS-01 against the embedded authoritative DNS.
 

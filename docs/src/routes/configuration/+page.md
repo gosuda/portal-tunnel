@@ -63,6 +63,8 @@ The relay server (`relay-server`) reads configuration from environment variables
 
 ### Embedded DNS
 
+> This section is the canonical reference for embedded DNS configuration. The deployment and self-hosting guides link here rather than restating the details.
+
 Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` pointing at the relay public IP) and open `53/tcp` + `53/udp`. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A answers for the apex and every covered name are synthesized from the relay public IPv4; ACME DNS-01 TXT and tunnel ECH HTTPS records are served directly. ENS gasless automation (zone DNSSEC) is not supported yet.
 
 | Variable | Default | Type | Description |

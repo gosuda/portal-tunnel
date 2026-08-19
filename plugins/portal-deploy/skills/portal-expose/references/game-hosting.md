@@ -2,6 +2,8 @@
 
 Read this when the user asks to host, publish, or share a game server (Minecraft, Terraria, Palworld, Valheim, Rust, or any game with a dedicated server). Game hosting uses Portal's raw TCP/UDP transport, not HTTP — the workflow, prerequisites, and verification differ fundamentally from web exposure.
 
+> **Sync notice**: the compatibility table and relay-setup facts in this file mirror `docs/src/routes/game-server-hosting/+page.md`. When Portal's transport capabilities change (new game support, multi-port allocation, etc.), update both files together. The docs page is the human-facing source; this reference is the agent-facing copy.
+
 ## Game quick-reference
 
 | Game | Transport | Ports | Status | Notes |
