@@ -18,8 +18,11 @@ plugins/portal-deploy/
 │   ├── agents/openai.yaml         # Codex skill UI metadata
 │   └── references/
 │       ├── portal-cli.md
+│       ├── game-hosting.md
 │       ├── safety-and-verification.md
 │       └── x402.md
+├── skills/portal-relay/
+│   └── SKILL.md                   # Run a public Portal relay
 └── README.md
 ```
 
@@ -31,7 +34,7 @@ Repository-root catalogs, each pointing at this same plugin directory:
 | Claude Code | `.claude-plugin/marketplace.json` | `portal-tunnel` |
 | Cursor | `.cursor-plugin/marketplace.json` | `portal-tunnel` |
 
-Install unit is the plugin `portal-deploy`. Agent invocation unit is the skill `portal-expose`.
+Install unit is the plugin `portal-deploy`. Agent invocation units are the skills `portal-expose` and `portal-relay`.
 
 ## Local Codex setup
 
