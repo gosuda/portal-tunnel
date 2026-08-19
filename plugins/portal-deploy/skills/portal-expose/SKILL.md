@@ -8,7 +8,7 @@ license: MIT
 
 Portal publishes a service that is already running on the user's machine. It does not build the app or move it to a cloud host. Treat a successful tunnel as dependent on both the local app and the Portal process or agent remaining available.
 
-Read `references/portal-cli.md` when choosing commands or persistent-agent configuration. Read `references/x402.md` whenever the user requests x402 or a paid route. Read `references/safety-and-verification.md` before exposing a nontrivial project, a service with authentication, or any non-HTTP port.
+Read `references/portal-cli.md` when choosing commands or persistent-agent configuration. Read `references/x402.md` whenever the user requests x402 or a paid route. Read `references/safety-and-verification.md` before exposing a nontrivial project, a service with authentication, or any non-HTTP port. Read `references/game-hosting.md` whenever the user asks to host, publish, or share a game server — it covers game-specific ports, protocol identification, relay raw-transport prerequisites, and raw-endpoint verification.
 
 ## Choose the Mode
 
@@ -20,7 +20,7 @@ Use the smallest mode that satisfies the request:
 - Paid HTTP path: routed HTTP with an explicit x402 payment contract; never enable payment implicitly.
 - Durable tunnel that should survive terminal or login restarts: an explicit `portal agent` config and managed service.
 - Session-owned durable tunnel without an OS service: `portal agent run --foreground`.
-- Raw TCP or UDP: only when the user explicitly requests that transport and names the target.
+- Game server (Minecraft, Terraria, Palworld, or any dedicated game server): always start from `references/game-hosting.md` — raw TCP/UDP transport has different prerequisites and verification than HTTP.
 
 Default to a temporary preview when the user says only "share", "preview", or "deploy locally". Do not install an OS service unless the user asks for a persistent, managed, or restart-surviving tunnel and accepts that `portal agent run` without `--foreground` installs a per-user launchd or systemd unit.
 

@@ -132,6 +132,8 @@ portal-relay localhost:3000
 
 ## DNS Configuration
 
+> The [Configuration Reference](/configuration#embedded-dns) is the canonical source for embedded DNS settings. This section summarizes the delegation step only.
+
 The relay serves DNS for its own subdomains from the embedded authoritative
 server (`relay.example.com` and every name under it, including tunnel
 hostnames). Delegate the zone to the relay once from your existing DNS
