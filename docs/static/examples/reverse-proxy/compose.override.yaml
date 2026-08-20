@@ -31,7 +31,15 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./sites-enabled:/etc/nginx/sites-enabled:ro
-      - ./certs:/etc/nginx/certs:ro
+      # The relay's own ACME writes fullchain.pem and privatekey.pem under
+      # IDENTITY_PATH, which the base file binds from ./.portal-certs. nginx
+      # reads them and never writes. Mounting a separate ./certs would leave it
+      # looking at an empty directory and failing to start with
+      # "cannot load certificate".
+      #
+      # Only the terminate-the-root-host variant needs this; the default
+      # pass-through config has no ssl listener of its own.
+      - ./.portal-certs:/etc/nginx/certs:ro
       - acme-webroot:/var/www/acme
     restart: unless-stopped
 
