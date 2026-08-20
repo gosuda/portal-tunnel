@@ -98,7 +98,7 @@ not supported.
 | `--description` | string | | Service description metadata |
 | `--tags` | string | | Service tags metadata, comma-separated |
 | `--thumbnail` | string | | Service thumbnail URL metadata, as an absolute `http://` or `https://` URL |
-| `--thumbnail-from-target` | bool | `false` | When `--thumbnail` is empty, read the `og:image` the target advertises and use that. The tunnel reads its own target, so nothing else is fetched; the chosen URL is logged at startup |
+| `--thumbnail-from-target` | bool | `false` | When `--thumbnail` is empty, use the first **absolute** image URL the target advertises: `og:image`, then `twitter:image`, then an icon link. Relative references are skipped, since Open Graph calls for an absolute URL and `metadata.thumbnail` is one by contract. Only `/` on the tunnel's own target is read, redirects are not followed, and the chosen URL is logged at startup |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |

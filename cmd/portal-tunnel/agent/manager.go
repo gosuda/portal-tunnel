@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/thumbnail"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -709,6 +710,12 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if x402FacilitatorToken == "" {
 		x402FacilitatorToken = strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY"))
 	}
+	// Only when the tunnel starts. The metadata update and snapshot paths reuse
+	// metadataFromTunnelConfig and must not re-read the target every time.
+	exposeMetadata := metadataFromTunnelConfig(cfg)
+	exposeMetadata.Thumbnail = thumbnail.Resolve(
+		ctx, exposeMetadata.Thumbnail, cfg.TargetAddr, cfg.ThumbnailFromTarget)
+
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:            append([]string(nil), cfg.RelayURLs...),
 		Discovery:            discovery,
@@ -724,8 +731,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		MultiHopDepth:        cfg.MultiHopDepth,
 		BanMITM:              banMITM,
 		MaxActiveRelays:      cfg.MaxActiveRelays,
-		Metadata:             metadataFromTunnelConfig(cfg),
-		ThumbnailFromTarget:  cfg.ThumbnailFromTarget,
+		Metadata:             exposeMetadata,
 		X402PayTo:            cfg.X402PayTo,
 		X402Testnet:          cfg.X402Testnet,
 		X402Network:          cfg.X402Network,
