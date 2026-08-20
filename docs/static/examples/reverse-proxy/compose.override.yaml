@@ -16,6 +16,18 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    networks:
+      edge:
+        # Only needed when the root host is terminated and Portal is therefore
+        # configured with TRUST_PROXY_HEADERS=true. Compose assigns container
+        # addresses dynamically, so TRUSTED_PROXY_CIDRS pointing at whatever
+        # nginx happened to get would stop matching the next time the container
+        # is recreated. Portal would then ignore the forwarded address and apply
+        # IP bans and rate limits to nginx instead of to visitors -- silently,
+        # because everything still works.
+        #
+        # Set TRUSTED_PROXY_CIDRS=172.31.240.2/32 to match.
+        ipv4_address: 172.31.240.2
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./sites-enabled:/etc/nginx/sites-enabled:ro
@@ -42,6 +54,19 @@ services:
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}"
       # - "${PPROF_PORT:-6060}:${PPROF_PORT:-6060}"
+    networks: [edge]
 
 volumes:
   acme-webroot: {}
+
+networks:
+  # A named network with its own IPAM, because Compose's implicit default
+  # network does not accept ipv4_address. Both services join it, so nginx still
+  # reaches portal:443 and portal:4017 by name.
+  #
+  # Check that this subnet does not overlap anything already on the host:
+  #   docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
+  edge:
+    ipam:
+      config:
+        - subnet: 172.31.240.0/24

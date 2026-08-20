@@ -250,6 +250,34 @@ Set `TRUSTED_PROXY_CIDRS` to **the proxy's own address as a `/32`**, not the
 default private ranges. The default trusts every RFC 1918 address, which on a
 Docker host means every container.
 
+That address has to be *fixed*. Compose assigns container addresses
+dynamically, so a `/32` matching whatever nginx got today stops matching the
+next time it is recreated — and the failure is silent: everything still works,
+Portal just ignores the forwarded address and starts applying IP bans and rate
+limits to nginx instead of to visitors. Give the network its own IPAM and pin
+nginx into it:
+
+```yaml
+services:
+  nginx:
+    networks:
+      edge:
+        ipv4_address: 172.31.240.2      # TRUSTED_PROXY_CIDRS=172.31.240.2/32
+  portal:
+    networks: [edge]
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 172.31.240.0/24
+```
+
+Compose's implicit default network does not accept `ipv4_address`, which is why
+the network is declared. Check the subnet does not overlap something already on
+the host with
+`docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'`.
+
 ### Terminating the root host conflicts with ECH
 
 Passing the root host through leaves Portal with no client address at all: it
