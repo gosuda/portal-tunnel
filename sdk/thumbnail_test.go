@@ -243,3 +243,19 @@ func TestResolveMetadataThumbnailResolvesRelativeFromTheRelayURL(t *testing.T) {
 		t.Fatalf("thumbnail = %q, want it resolved against the lease hostname", got)
 	}
 }
+
+// The address must be the bare host:port the tunnel dials. Accepting a URL
+// would turn this into "fetch any path on any host".
+func TestDiscoverThumbnailRejectsNonHostPortTargets(t *testing.T) {
+	for _, target := range []string{
+		"http://127.0.0.1:8080/admin",
+		"127.0.0.1",
+		"user:pass@127.0.0.1:8080",
+		"127.0.0.1:http",
+		"",
+	} {
+		if _, err := DiscoverThumbnail(context.Background(), target, "app.example.com"); err == nil {
+			t.Errorf("target %q was accepted", target)
+		}
+	}
+}

@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +85,11 @@ func discoverThumbnailForExposure(ctx context.Context, targetAddr, name string, 
 // an absolute URL, but declaring "/og.png" is common, and the file is served
 // through the tunnel like every other path.
 //
+// targetAddr must be the same bare host:port the tunnel dials, and only "/" on
+// it is ever requested. That is deliberately narrower than the string it looks
+// like: accepting a URL would turn "read the target's front page" into "fetch
+// any path on any host", which is a different capability and not one this needs.
+//
 // Callers should treat any error as "no thumbnail". A card image is not worth
 // failing a tunnel over.
 func DiscoverThumbnail(ctx context.Context, targetAddr, publicHostname string) (string, error) {
@@ -90,6 +97,19 @@ func DiscoverThumbnail(ctx context.Context, targetAddr, publicHostname string) (
 	if targetAddr == "" {
 		return "", fmt.Errorf("no target address")
 	}
+	host, port, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		return "", fmt.Errorf("target %q is not a host:port address: %w", targetAddr, err)
+	}
+	if host == "" || port == "" {
+		return "", fmt.Errorf("target %q is not a host:port address", targetAddr)
+	}
+	if _, err := strconv.Atoi(port); err != nil {
+		return "", fmt.Errorf("target %q has a non-numeric port", targetAddr)
+	}
+	// Rebuilt from the validated parts rather than reusing the input string, so
+	// the request URL cannot carry a path, query or credentials.
+	targetAddr = net.JoinHostPort(host, port)
 
 	pageURL := &url.URL{Scheme: "http", Host: targetAddr, Path: "/"}
 	refs, err := declaredImageRefs(ctx, pageURL)
