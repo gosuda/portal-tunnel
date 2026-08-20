@@ -95,26 +95,31 @@ func FromTarget(ctx context.Context, targetAddr string) (string, error) {
 	return "", nil
 }
 
-// dialTarget accepts only what the tunnel itself dials. A URL would turn "read
-// the target's front page" into "fetch any path on any host", which is a
-// different capability and not one this needs.
+// dialTarget resolves the address exactly as sdk.Expose will.
+//
+// Validating it separately here looked safer and was wrong: the CLI accepts a
+// port on its own, `sdk.Expose` normalizes that afterwards, and a resolver that
+// insisted on host:port silently skipped discovery for `portal expose 3000`.
+// Sharing the normalization also keeps the guarantees -- NormalizeTargetAddr
+// rejects a URL carrying a path, query or fragment -- in one place instead of
+// two that can drift.
 func dialTarget(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	addr, err := utils.NormalizeLoopbackTarget(raw)
+	if err != nil {
+		return "", fmt.Errorf("target %q is not usable: %w", raw, err)
+	}
+	if strings.TrimSpace(addr) == "" {
 		return "", fmt.Errorf("no target address")
 	}
-	host, port, err := net.SplitHostPort(raw)
+	// Rebuilt from the parsed parts rather than reused, so the request URL
+	// cannot carry anything but a host and port.
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return "", fmt.Errorf("target %q is not a host:port address: %w", raw, err)
-	}
-	if host == "" || port == "" {
-		return "", fmt.Errorf("target %q is not a host:port address", raw)
 	}
 	if _, err := strconv.Atoi(port); err != nil {
 		return "", fmt.Errorf("target %q has a non-numeric port", raw)
 	}
-	// Rebuilt from the validated parts rather than reusing the input, so the
-	// request URL cannot carry a path, query or credentials.
 	return net.JoinHostPort(host, port), nil
 }
 
@@ -132,6 +137,12 @@ func absoluteImageURL(ref string) string {
 		return ""
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ""
+	}
+	// IsAbs only means "has a scheme". "https:card.png" and "http:/card.png"
+	// satisfy it with no authority at all, and a browser would resolve either
+	// against the dashboard rather than fetching the image the app meant.
+	if parsed.Host == "" {
 		return ""
 	}
 	return parsed.String()

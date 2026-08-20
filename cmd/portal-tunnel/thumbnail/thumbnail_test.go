@@ -2,6 +2,7 @@ package thumbnail
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -222,5 +223,45 @@ func TestResolveUsesTheTargetWhenAsked(t *testing.T) {
 func TestResolveSurvivesAnUnreachableTarget(t *testing.T) {
 	if got := Resolve(context.Background(), "", "127.0.0.1:1", true); got != "" {
 		t.Fatalf("thumbnail = %q, want empty", got)
+	}
+}
+
+// The CLI accepts a bare port and sdk.Expose normalizes it afterwards, so a
+// resolver that insisted on host:port skipped discovery for `portal expose 3000`.
+func TestFromTargetAcceptsThePortOnlyFormTheCLIAccepts(t *testing.T) {
+	addr, requests := targetServing(t, declaringDoc)
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("split test server address: %v", err)
+	}
+
+	for _, target := range []string{port, ":" + port} {
+		got, err := FromTarget(context.Background(), target)
+		if err != nil {
+			t.Fatalf("target %q: %v", target, err)
+		}
+		if got != "https://cdn.example.com/card.png" {
+			t.Fatalf("target %q gave %q, want the declared image", target, got)
+		}
+	}
+	if n := requests.Load(); n != 2 {
+		t.Fatalf("target received %d requests, want 2", n)
+	}
+}
+
+// url.Parse calls these absolute because they carry a scheme, but neither has
+// an authority, so a browser would resolve them against the dashboard.
+func TestFromTargetRejectsSchemeOnlyReferences(t *testing.T) {
+	addr, _ := targetServing(t, `<html><head>
+		<meta property="og:image" content="https:card.png">
+		<meta property="og:image" content="http:/card.png">
+	</head></html>`)
+
+	got, err := FromTarget(context.Background(), addr)
+	if err != nil {
+		t.Fatalf("from target: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("thumbnail = %q, want empty for a reference with no host", got)
 	}
 }
