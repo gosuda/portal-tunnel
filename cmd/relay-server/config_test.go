@@ -242,3 +242,49 @@ func TestDiscoveryEnabledCountsNormalizedBootstraps(t *testing.T) {
 		t.Fatalf("detail = %q, want bootstraps=2", f.Detail)
 	}
 }
+
+// An unset ACME_DNS_PROVIDER selects the embedded authoritative server, not
+// "no automation". Reporting it as disabled would describe a relay that is in
+// fact serving its own zone.
+func TestACMEFeatureReportsEmbeddedWhenUnset(t *testing.T) {
+	path := writeEnvFile(t, "PORTAL_URL=https://relay.example.com")
+	cfg := resolveWithEnvFile(t, path)
+
+	f := acmeFeature(cfg)
+	if f.State != stateEnabled {
+		t.Fatalf("acme state = %q, want enabled for the embedded default", f.State)
+	}
+	if !strings.Contains(f.By, "embedded") {
+		t.Fatalf("by = %q, want it to name the embedded provider", f.By)
+	}
+}
+
+// The embedded server cannot manage zone DNSSEC yet, and it is what an operator
+// gets by enabling ENS and changing nothing else.
+func TestENSGaslessBlockedOnEmbeddedProvider(t *testing.T) {
+	path := writeEnvFile(t,
+		"PORTAL_URL=https://relay.example.com",
+		"ENS_GASLESS_ENABLED=true")
+	cfg := resolveWithEnvFile(t, path)
+
+	f := ensGaslessFeature(cfg)
+	if f.State != stateBlocked {
+		t.Fatalf("ens-gasless state = %q, want blocked on the embedded provider", f.State)
+	}
+	if !strings.Contains(f.Missing, "DNSSEC") {
+		t.Fatalf("missing = %q, want it to name the DNSSEC limitation", f.Missing)
+	}
+}
+
+func TestENSGaslessEnabledOnManagedProvider(t *testing.T) {
+	path := writeEnvFile(t,
+		"PORTAL_URL=https://relay.example.com",
+		"ACME_DNS_PROVIDER=cloudflare",
+		"CLOUDFLARE_TOKEN=token",
+		"ENS_GASLESS_ENABLED=true")
+	cfg := resolveWithEnvFile(t, path)
+
+	if f := ensGaslessFeature(cfg); f.State != stateEnabled {
+		t.Fatalf("ens-gasless state = %q (%s), want enabled", f.State, f.Missing)
+	}
+}

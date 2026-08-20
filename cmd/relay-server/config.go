@@ -15,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	portalx402 "github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -131,10 +132,19 @@ func discoveryFeature(cfg relayServerConfig) feature {
 
 func acmeFeature(cfg relayServerConfig) feature {
 	f := feature{Name: "acme"}
+	// Unset is not off. The relay falls back to the embedded authoritative DNS
+	// server, so reporting "disabled" here would describe a relay that is in
+	// fact serving its own zone and answering ACME challenges from it.
 	provider := strings.ToLower(strings.TrimSpace(cfg.ACMEDNSProvider))
 	if provider == "" {
-		f.State, f.By = stateDisabled, "ACME_DNS_PROVIDER="
-		f.Detail = "manual certificates: place fullchain.pem and privatekey.pem under IDENTITY_PATH"
+		provider = acme.TypeEmbedded
+	}
+	if provider == acme.TypeEmbedded {
+		f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
+		f.Detail = fmt.Sprintf(
+			"the relay serves its own zone on port %d; delegate the base domain with an NS record and open 53/tcp+udp. "+
+				"Manual fullchain.pem and privatekey.pem under IDENTITY_PATH are used instead when present",
+			cfg.EmbeddedDNSPort)
 		return f
 	}
 
@@ -183,22 +193,30 @@ func ensGaslessFeature(cfg relayServerConfig) feature {
 		f.State, f.By = stateDisabled, "ENS_GASLESS_ENABLED=false"
 		return f
 	}
-	if strings.TrimSpace(cfg.ACMEDNSProvider) == "" {
+	// The embedded server cannot manage zone DNSSEC yet, and it is what an
+	// unset ACME_DNS_PROVIDER selects, so this is the combination an operator
+	// reaches by turning ENS on and changing nothing else.
+	provider := strings.ToLower(strings.TrimSpace(cfg.ACMEDNSProvider))
+	if provider == "" {
+		provider = acme.TypeEmbedded
+	}
+	if provider == acme.TypeEmbedded {
 		f.State, f.By = stateBlocked, "ENS_GASLESS_ENABLED=true"
-		f.Missing = "ACME_DNS_PROVIDER is empty; ENS gasless automation needs a DNS provider even when certificates are managed manually"
+		f.Missing = "ACME_DNS_PROVIDER=" + provider +
+			" cannot manage zone DNSSEC yet; ENS gasless automation needs one of the managed providers"
 		return f
 	}
 	// ENS gasless drives the same provider ACME does, so it cannot work when
 	// that provider cannot. Repeating only the "is it set" half of the check
 	// here would report this as enabled while acme is blocked, which is exactly
 	// the mismatch this report exists to surface.
-	if acme := acmeFeature(cfg); acme.State == stateBlocked {
+	if acmeState := acmeFeature(cfg); acmeState.State == stateBlocked {
 		f.State, f.By = stateBlocked, "ENS_GASLESS_ENABLED=true"
-		f.Missing = "the DNS provider it shares with ACME is blocked: " + acme.Missing
+		f.Missing = "the DNS provider it shares with ACME is blocked: " + acmeState.Missing
 		return f
 	}
 	f.State, f.By = stateEnabled, "ENS_GASLESS_ENABLED=true"
-	f.Detail = "DNSSEC and ENS TXT automation through " + cfg.ACMEDNSProvider
+	f.Detail = "DNSSEC and ENS TXT automation through " + provider
 	return f
 }
 

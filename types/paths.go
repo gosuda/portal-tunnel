@@ -2,6 +2,7 @@ package types
 
 const (
 	PathRoot      = "/"
+	PathLLMs      = "/llms.txt"
 	PathAPIPrefix = "/api"
 	PathHealthz   = PathAPIPrefix + "/healthz"
 	PathState     = PathAPIPrefix + "/state"

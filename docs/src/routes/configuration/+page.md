@@ -92,8 +92,18 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (`cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); leave empty to use manual `fullchain.pem`/`privatekey.pem` from `IDENTITY_PATH` |
-| `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames |
+| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync, the relay ECH record, opt-in tunnel ECH records, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` is used when present |
+| `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames; not supported with `ACME_DNS_PROVIDER=embedded` yet |
+
+### Embedded DNS
+
+> This section is the canonical reference for embedded DNS configuration. The deployment and self-hosting guides link here rather than restating the details.
+
+Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` pointing at the relay public IP) and open `53/tcp` + `53/udp`. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A answers for the apex and every covered name are synthesized from the relay public IPv4; ACME DNS-01 TXT and tunnel ECH HTTPS records are served directly. ENS gasless automation (zone DNSSEC) is not supported yet.
+
+| Variable | Default | Type | Description |
+|----------|---------|------|-------------|
+| `EMBEDDED_DNS_PORT` | `53` | int | Listen port for the embedded authoritative DNS server (UDP and TCP) |
 
 ### Diagnostics
 
@@ -287,6 +297,7 @@ Tunnel fields mirror `portal expose` flags:
 | `discovery` | bool | Include registry and relay discovery expansion |
 | `multi_hop` | string array | Ordered multi-hop relay path |
 | `multi_hop_depth` | int | Automatically create this-depth multi-hop routes for every eligible entry relay |
+| `ech` | bool | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
@@ -363,7 +374,7 @@ Relay policy settings are stored at `IDENTITY_PATH/policy.json`.
 
 ## ACME DNS Provider Configuration
 
-Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, ECH HTTPS records, and optional ENS gasless DNS records.
+Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, the relay root HTTPS/ECH record, tenant A and HTTPS/ECH records for tunnels with `ech = true`, and optional ENS gasless DNS records. The default `ech = false` tunnel mode does not create tenant ECH DNS records.
 
 When this variable is empty the relay server falls back to manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH`.
 

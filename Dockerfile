@@ -39,4 +39,9 @@ ENV TZ=UTC
 
 EXPOSE 443/tcp
 EXPOSE 51820/udp
+# Embedded authoritative DNS (ACME_DNS_PROVIDER=embedded). The runtime is
+# nonroot, so binding 53 requires CAP_NET_BIND_SERVICE:
+#   docker run --cap-add NET_BIND_SERVICE -p 53:53/tcp -p 53:53/udp ...
+EXPOSE 53/tcp
+EXPOSE 53/udp
 ENTRYPOINT ["/usr/bin/relay-server"]

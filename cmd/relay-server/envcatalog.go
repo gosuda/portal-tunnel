@@ -72,6 +72,9 @@ var pinnedByTopology = map[string]struct {
 // decides what is supported, and this map only adds the credential each one
 // needs, which is knowledge the report owns.
 var dnsProviderCredential = map[string][]string{
+	// The embedded server is the default and needs no credentials: it answers
+	// from the relay itself rather than through a provider API.
+	acme.TypeEmbedded:   nil,
 	acme.TypeCloudflare: {"CLOUDFLARE_TOKEN"},
 	acme.TypeHetzner:    {"HETZNER_API_TOKEN"},
 	acme.TypeNjalla:     {"NJALLA_TOKEN"},

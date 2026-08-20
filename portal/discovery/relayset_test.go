@@ -82,6 +82,60 @@ func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
 	}
 }
 
+func TestDescriptorsDropsDeadRelayDescriptor(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-dead.example"
+	state := confirmedRelayState(t, relayURL)
+	state.Dead = true
+
+	set.mu.Lock()
+	set.relays[relayURL] = state
+	set.mu.Unlock()
+
+	descriptors := set.Descriptors(types.RelayDescriptor{})
+	if len(descriptors) != 0 {
+		t.Fatalf("len(Descriptors(dead)) = %d, want 0", len(descriptors))
+	}
+}
+
+func TestDescriptorsKeepsRelayDuringTransientDiscoveryFailure(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-unstable.example"
+	state := confirmedRelayState(t, relayURL)
+	state.discoveryFailures = 1
+
+	set.mu.Lock()
+	set.relays[relayURL] = state
+	set.mu.Unlock()
+
+	descriptors := set.Descriptors(types.RelayDescriptor{})
+	if len(descriptors) != 1 {
+		t.Fatalf("len(Descriptors(transient failure)) = %d, want 1", len(descriptors))
+	}
+	if descriptors[0].APIHTTPSAddr != relayURL {
+		t.Fatalf("Descriptors(transient failure)[0] = %q, want %q", descriptors[0].APIHTTPSAddr, relayURL)
+	}
+}
+
+func TestDescriptorsDropsBannedRelayDescriptor(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-banned.example"
+	state := confirmedRelayState(t, relayURL)
+	state.Banned = true
+
+	set.mu.Lock()
+	set.relays[relayURL] = state
+	set.mu.Unlock()
+
+	descriptors := set.Descriptors(types.RelayDescriptor{})
+	if len(descriptors) != 0 {
+		t.Fatalf("len(Descriptors(banned)) = %d, want 0", len(descriptors))
+	}
+}
+
 func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *testing.T) {
 	set := NewRelaySet(nil)
 
@@ -307,6 +361,76 @@ func TestRecordDiscoveryFailureBackoff(t *testing.T) {
 	}
 	if !state.suppressActiveUntil.IsZero() {
 		t.Fatalf("suppressActiveUntil = %v, want zero", state.suppressActiveUntil)
+	}
+}
+
+func TestRecordDiscoveryFailureMarksDeadAndRevivesOnAuthoritativeSuccess(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	deadURL := "https://relay-dead.example"
+	aliveURL := "https://relay-alive.example"
+	deadDesc := mustRelayDescriptor(t, deadURL)
+
+	set.mu.Lock()
+	set.relays[deadURL] = RelayState{
+		Descriptor: deadDesc,
+		Confirmed:  true,
+		LastSeenAt: time.Now().UTC(),
+	}
+	set.relays[aliveURL] = confirmedRelayState(t, aliveURL)
+	set.mu.Unlock()
+
+	budget := 3
+	for i := 0; i < budget; i++ {
+		set.RecordDiscoveryFailure(deadURL, budget)
+	}
+
+	set.mu.RLock()
+	dead := set.relays[deadURL]
+	set.mu.RUnlock()
+	if !dead.Dead {
+		t.Fatal("relay was not marked dead after exhausting discovery failure budget")
+	}
+
+	routes, err := set.PlanRoutes(nil, RouteState{LocalAddress: "client", ExplicitRelayURLs: []string{deadURL}})
+	if err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+	if len(routes) == 0 {
+		t.Fatal("alive relay was excluded from route planning")
+	}
+	for _, route := range routes {
+		if route.ListenerRelayURL() == deadURL {
+			t.Fatal("dead relay was included in route planning")
+		}
+	}
+
+	if _, err := set.ApplyRelayDiscoveryResponse(deadURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{deadDesc},
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+
+	set.mu.RLock()
+	revived := set.relays[deadURL]
+	set.mu.RUnlock()
+	if revived.Dead {
+		t.Fatal("dead mark was not cleared after authoritative discovery success")
+	}
+
+	routes, err = set.PlanRoutes(nil, RouteState{LocalAddress: "client"})
+	if err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+	found := false
+	for _, route := range routes {
+		if route.ListenerRelayURL() == deadURL {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("revived relay was not re-included in route planning")
 	}
 }
 

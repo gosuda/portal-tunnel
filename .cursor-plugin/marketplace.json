@@ -1,0 +1,22 @@
+{
+  "name": "portal-tunnel",
+  "owner": {
+    "name": "gosuda"
+  },
+  "metadata": {
+    "description": "Portal agent workflows for exposing local apps.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "portal-deploy",
+      "source": "./plugins/portal-deploy",
+      "description": "Expose and verify local apps with Portal tunnels.",
+      "version": "0.1.0",
+      "author": {
+        "name": "gosuda"
+      },
+      "keywords": ["portal", "tunnel", "deploy", "preview", "localhost", "expose"]
+    }
+  ]
+}
