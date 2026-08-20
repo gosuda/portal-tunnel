@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	portaltunnel "github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
@@ -78,6 +79,9 @@ func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir st
 func (api *RelayAPI) Handler() *http.ServeMux {
 	mux := http.NewServeMux()
 
+	mux.HandleFunc(types.PathLLMs, func(w http.ResponseWriter, r *http.Request) {
+		serveLLMs(w, r, api.server.PortalURL())
+	})
 	mux.HandleFunc(types.PathAdmin, api.serveAdmin)
 	mux.HandleFunc(types.PathAdminPrefix, api.serveAdmin)
 	mux.HandleFunc(types.PathPolicy, api.servePolicy)
@@ -567,4 +571,20 @@ func serveInstallScript(w http.ResponseWriter, r *http.Request, portalURL string
 	if r.Method == http.MethodGet {
 		_, _ = w.Write([]byte(script))
 	}
+}
+
+func serveLLMs(w http.ResponseWriter, r *http.Request, portalURL string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if r.Method == http.MethodHead {
+		return
+	}
+
+	body := strings.ReplaceAll(string(portaltunnel.LLMsTXT), "%s", portalURL)
+	_, _ = w.Write([]byte(body))
 }

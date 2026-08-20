@@ -17,6 +17,7 @@ You should have a relay running and accepting tunnel connections in about 10 min
 - A Linux server with a static public IP
 - A domain name you control (e.g. `relay.example.com`)
 - Inbound `443/tcp` open for the dashboard, relay APIs, and SNI tunnel traffic
+- Inbound `53/tcp` + `53/udp` open for the embedded authoritative DNS
 
 ## Quick Start
 
@@ -24,11 +25,15 @@ Run the relay with a single Docker command:
 
 ```bash
 mkdir -p ./relay-data
-# Put fullchain.pem and privatekey.pem in ./relay-data first, or configure ACME below.
+# Optional: place fullchain.pem/privatekey.pem in ./relay-data to use a manual
+# certificate instead of ACME.
 docker run -d \
   --name portal-relay \
   --restart unless-stopped \
+  --cap-add NET_BIND_SERVICE \
   -p 443:443 \
+  -p 53:53/tcp \
+  -p 53:53/udp \
   -e PORTAL_URL=https://relay.example.com \
   -e IDENTITY_PATH=/portal-certs \
   -e ADMIN_TOKEN="$(openssl rand -hex 32)" \
@@ -49,8 +54,13 @@ services:
   relay:
     image: ghcr.io/gosuda/portal:2
     restart: unless-stopped
+    # Binding the default embedded DNS port 53 as a nonroot container.
+    cap_add:
+      - NET_BIND_SERVICE
     ports:
       - "443:443"
+      - "53:53/tcp"
+      - "53:53/udp"
     environment:
       PORTAL_URL: https://relay.example.com
       API_PORT: "4017"
@@ -76,7 +86,7 @@ docker compose up -d
 | `SNI_PORT` | `443` | TCP SNI router port for tunnel traffic. |
 | `IDENTITY_PATH` | `./.portal-certs` | Relay state directory containing `identity.json`, `policy.json`, and TLS materials. |
 | `ADMIN_TOKEN` | | Bearer token source for relay admin and policy APIs. |
-| `LANDING_PAGE_ENABLED` | `false` | Initial dashboard landing-page visibility; admin changes persist in `policy.json`. |
+| `EMBEDDED_DNS_PORT` | `53` | Embedded authoritative DNS listen port; requires `53/tcp` + `53/udp` and `CAP_NET_BIND_SERVICE` in containers. |
 
 ## Optional: Enable Relay-Owned Sui x402 Facilitator
 
@@ -122,18 +132,27 @@ portal-relay localhost:3000
 
 ## DNS Configuration
 
-Tunnels are assigned subdomains under your relay domain (e.g. `abc123.relay.example.com`). You need a wildcard DNS record pointing to your server:
+> The [Configuration Reference](/configuration#embedded-dns) is the canonical source for embedded DNS settings. This section summarizes the delegation step only.
+
+The relay serves DNS for its own subdomains from the embedded authoritative
+server (`relay.example.com` and every name under it, including tunnel
+hostnames). Delegate the zone to the relay once from your existing DNS
+management UI:
 
 | Type | Name | Value |
 |---|---|---|
-| `A` | `*.relay.example.com` | `<your server IP>` |
-| `A` | `relay.example.com` | `<your server IP>` |
+| `NS` | `relay.example.com` | `ns.relay.example.com` |
+| `A` | `ns.relay.example.com` | `<your server IP>` (glue) |
+No wildcard record is needed: the relay synthesizes answers for every tunnel
+hostname. The nameserver name is fixed to `ns.<your relay domain>`; publish the
+matching glue `A` record at the parent zone as shown above.
 
-DNS propagation typically takes a few minutes but can take up to 48 hours depending on your provider.
+## TLS with ACME
 
-## Optional: TLS with ACME
-
-By default the relay expects you to place `fullchain.pem` and `privatekey.pem` in the `IDENTITY_PATH` directory (`.portal-certs` by default). For automatic certificate management via DNS-01 challenges, set `ACME_DNS_PROVIDER`:
+Certificates are issued automatically via ACME DNS-01 against the embedded
+authoritative DNS server — no DNS provider credentials are required once the
+delegation above is in place. To use an external DNS provider instead, set
+`ACME_DNS_PROVIDER`:
 
 ```yaml
 environment:
@@ -175,21 +194,28 @@ requires TCP `443` because Portal publishes standard HTTPS tunnel URLs.
 
 **DNS not resolving**
 
-Verify your wildcard record is live before connecting a tunnel:
+Query the relay's authoritative server directly first, then through a public
+resolver:
 
 ```bash
+dig +short @<your server IP> test.relay.example.com
 dig +short test.relay.example.com
 ```
 
-If nothing returns, check your DNS provider dashboard and allow more time for propagation.
+If the direct query works but the public one does not, the NS delegation at
+the parent zone is missing or not yet propagated. If both fail, confirm the
+relay is running and `53/tcp` + `53/udp` are open.
 
 **Firewall blocking connections**
 
-Ensure the public HTTPS port is open in your cloud provider's security group or firewall:
+Ensure the public HTTPS and DNS ports are open in your cloud provider's
+security group or firewall:
 
 ```bash
 # UFW example
 sudo ufw allow 443/tcp
+sudo ufw allow 53/tcp
+sudo ufw allow 53/udp
 ```
 
 **Certificate errors**

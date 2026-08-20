@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./logo.png" alt="Portal" width="280" />
+</p>
+
 # Portal - 面向 localhost 的自托管中继隧道
 
 [![CI](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/gosuda/portal-tunnel/actions/workflows/ci.yml)
@@ -91,6 +95,18 @@ portal expose 3000 --multi-hop-depth 3
 对于付费路由，支付策略运行在隧道进程内，而不是中继上。默认使用 Sui mainnet；加上 `--x402-testnet` 可切换到 Sui testnet，这个选择与中继自身的支付设置无关。隧道会在同一个公共 origin 上提供 `/x402/client.js` 和 `/x402/prepare`。浏览器前端可以导入 `/x402/client.js` 并调用 `x402Fetch()`；原生客户端可以直接调用 `/x402/prepare`，用自己的 Sui 运行时签名返回的交易，并发送签名后的 `X-PAYMENT`。
 
 完整路由语法请参阅 [CLI Reference](cmd/portal-tunnel/README.md)，x402 helper endpoint 请参阅 [API Reference](docs/src/routes/api-reference/+page.md#payments)。
+
+### 使用本地 AI agent 插件
+
+仓库提供面向 Codex、Claude Code 和 Cursor 的 `portal-deploy` 插件。共用的 `portal-expose` skill 会检查本地应用、打开 Portal 隧道、验证公网 URL，并交接生命周期。
+
+只安装该 skill：
+
+```bash
+npx skills add gosuda/portal-tunnel --skill portal-expose
+```
+
+加上 `-g` 可安装到所有项目。然后让 agent 用 Portal 部署、预览或分享本地应用。Codex、Claude Code 和 Cursor 的宿主 marketplace 安装步骤见 [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md)。
 
 ### 使用 Portal Agent 持续运行隧道
 

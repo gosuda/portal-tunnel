@@ -53,6 +53,9 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
+	if record.Hostname != "demo.example.com" || record.HostnameHash != "" || len(record.ECHConfigList) != 0 || record.ECHDNSHostname != "" {
+		t.Fatalf("Register() plaintext SNI record = %#v, want public hostname without ECH material", record)
+	}
 
 	lookedUp, ok := registry.Lookup("demo.example.com")
 	if !ok || lookedUp != record {

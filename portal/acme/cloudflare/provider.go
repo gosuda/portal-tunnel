@@ -11,6 +11,7 @@ import (
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -255,7 +256,7 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	return nil
 }
 
-func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, priority uint16, target, svcParams, content string) error {
+func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, record dnsrecord.HTTPSRecord) error {
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
@@ -266,24 +267,16 @@ func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, priority 
 	if p.token == "" {
 		return errors.New("cloudflare token is required")
 	}
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return errors.New("https record target is required")
-	}
-	svcParams = strings.TrimSpace(svcParams)
-	if svcParams == "" {
-		return errors.New("https record svc params are required")
-	}
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return errors.New("https record content is required")
+	record, err := record.Normalized()
+	if err != nil {
+		return err
 	}
 
 	zoneID, err := p.findZoneID(ctx, name)
 	if err != nil {
 		return fmt.Errorf("find cloudflare zone: %w", err)
 	}
-	if err := ensureHTTPSRecord(ctx, p.token, zoneID, name, priority, target, svcParams, content); err != nil {
+	if err := ensureHTTPSRecord(ctx, p.token, zoneID, name, record); err != nil {
 		return fmt.Errorf("ensure HTTPS record for %s: %w", name, err)
 	}
 	return nil
@@ -434,7 +427,7 @@ func ensureTXTRecord(ctx context.Context, token, zoneID, name, value string) err
 	return createDNSRecord(ctx, token, zoneID, "TXT", name, value)
 }
 
-func ensureHTTPSRecord(ctx context.Context, token, zoneID, name string, priority uint16, target, svcParams, content string) error {
+func ensureHTTPSRecord(ctx context.Context, token, zoneID, name string, record dnsrecord.HTTPSRecord) error {
 	records, err := listDNSRecords(ctx, token, zoneID, name, "HTTPS")
 	if err != nil {
 		return err
@@ -444,25 +437,26 @@ func ensureHTTPSRecord(ctx context.Context, token, zoneID, name string, priority
 		if !strings.EqualFold(existing.Name, name) {
 			continue
 		}
-		if sameHTTPSRecord(existing, priority, target, svcParams, content) {
+		if sameHTTPSRecord(existing, record) {
 			return nil
 		}
-		return updateHTTPSRecord(ctx, token, zoneID, existing.ID, name, priority, target, svcParams, content)
+		return updateHTTPSRecord(ctx, token, zoneID, existing.ID, name, record)
 	}
 
-	return createHTTPSRecord(ctx, token, zoneID, name, priority, target, svcParams, content)
+	return createHTTPSRecord(ctx, token, zoneID, name, record)
 }
 
-func sameHTTPSRecord(existing dnsRecord, priority uint16, target, svcParams, content string) bool {
+func sameHTTPSRecord(existing dnsRecord, record dnsrecord.HTTPSRecord) bool {
 	if existing.Data != nil {
 		existingTarget := strings.TrimSpace(existing.Data.Target)
 		if existingTarget == "" {
 			existingTarget = "."
 		}
-		return existing.Data.Priority == int(priority) &&
-			existingTarget == target &&
-			strings.TrimSpace(existing.Data.Value) == svcParams
+		return existing.Data.Priority == int(record.Priority) &&
+			existingTarget == record.Target &&
+			strings.TrimSpace(existing.Data.Value) == record.SvcParams
 	}
+	content, _ := record.Content()
 	return strings.TrimSpace(existing.Content) == content
 }
 
@@ -550,9 +544,9 @@ func createDNSRecord(ctx context.Context, token, zoneID, recordType, name, conte
 	return nil
 }
 
-func createHTTPSRecord(ctx context.Context, token, zoneID, name string, priority uint16, target, svcParams, content string) error {
+func createHTTPSRecord(ctx context.Context, token, zoneID, name string, record dnsrecord.HTTPSRecord) error {
 	endpoint := fmt.Sprintf("%s/zones/%s/dns_records", apiBase, zoneID)
-	body := httpsRecordBody("HTTPS", name, priority, target, svcParams, content)
+	body := httpsRecordBody(name, record)
 
 	var out recordResult
 	if err := utils.HTTPDoJSON(ctx, nil, http.MethodPost, endpoint, body, cloudflareHeaders(token), &out); err != nil {
@@ -586,9 +580,9 @@ func updateDNSRecord(ctx context.Context, token, zoneID, recordID, recordType, n
 	return nil
 }
 
-func updateHTTPSRecord(ctx context.Context, token, zoneID, recordID, name string, priority uint16, target, svcParams, content string) error {
+func updateHTTPSRecord(ctx context.Context, token, zoneID, recordID, name string, record dnsrecord.HTTPSRecord) error {
 	endpoint := fmt.Sprintf("%s/zones/%s/dns_records/%s", apiBase, zoneID, recordID)
-	body := httpsRecordBody("HTTPS", name, priority, target, svcParams, content)
+	body := httpsRecordBody(name, record)
 
 	var out recordResult
 	if err := utils.HTTPDoJSON(ctx, nil, http.MethodPut, endpoint, body, cloudflareHeaders(token), &out); err != nil {
@@ -600,15 +594,16 @@ func updateHTTPSRecord(ctx context.Context, token, zoneID, recordID, name string
 	return nil
 }
 
-func httpsRecordBody(recordType, name string, priority uint16, target, svcParams, content string) map[string]any {
+func httpsRecordBody(name string, record dnsrecord.HTTPSRecord) map[string]any {
+	content, _ := record.Content()
 	return map[string]any{
-		"type":    recordType,
+		"type":    "HTTPS",
 		"name":    name,
 		"content": content,
 		"data": map[string]any{
-			"priority": int(priority),
-			"target":   target,
-			"value":    svcParams,
+			"priority": int(record.Priority),
+			"target":   record.Target,
+			"value":    record.SvcParams,
 		},
 		"ttl": 1,
 	}

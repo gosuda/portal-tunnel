@@ -61,6 +61,11 @@ type RelayState struct {
 	Bootstrap  bool
 	Confirmed  bool
 	Banned     bool
+	// Dead marks a relay whose consecutive discovery failures exhausted the
+	// recovery budget. Dead relays are excluded from route planning and relay
+	// listings but stay in the set: the refresher keeps probing them and a
+	// successful discovery response clears the mark.
+	Dead       bool
 	LastSeenAt time.Time
 
 	DiscoveryRTT   time.Duration
@@ -203,6 +208,7 @@ func (state RelayState) hasObservedDescriptor() bool {
 // role of an automatically planned multi-hop route.
 func (state RelayState) eligibleForMultiHop(routeState RouteState, now time.Time) bool {
 	return !state.Banned &&
+		!state.Dead &&
 		state.hasObservedDescriptor() &&
 		state.Descriptor.ExpiresAt.After(now) &&
 		state.Descriptor.HasOverlayPeer() &&

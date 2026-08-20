@@ -35,10 +35,9 @@ belongs to something else on the host, see
 
 - A public Linux server with Docker and Docker Compose.
 - A public hostname such as `portal.example.com`.
-- DNS `A` records for `portal.example.com` and `*.portal.example.com`.
-- Inbound `443/tcp` and `51820/udp` when the overlay is enabled.
-- A certificate covering the root and wildcard names, or a configured Portal
-  DNS provider that can issue it.
+- A one-time NS delegation at the parent zone: `NS portal.example.com -> ns.portal.example.com` with a glue `A` record pointing at the relay public IP. See the [Configuration Reference](/configuration#embedded-dns) for the canonical embedded DNS details.
+- Inbound `443/tcp`, `53/tcp` + `53/udp` for the embedded authoritative DNS, and `51820/udp` when the overlay is enabled.
+- Certificates for the root and wildcard names are issued automatically via ACME DNS-01 against the embedded authoritative DNS.
 
 ## Configuration
 
@@ -52,8 +51,12 @@ LANDING_PAGE_ENABLED=false
 DISCOVERY=false
 BOOTSTRAPS=
 
-ACME_DNS_PROVIDER=cloudflare
-CLOUDFLARE_TOKEN=replace-with-an-api-token
+# Embedded authoritative DNS is the default provider and needs no API
+# credentials once the NS delegation above is in place. External providers
+# (cloudflare, gcloud, hetzner, njalla, route53, vultr) remain available by
+# setting ACME_DNS_PROVIDER explicitly.
+ACME_DNS_PROVIDER=
+EMBEDDED_DNS_PORT=53
 ```
 
 `LANDING_PAGE_ENABLED` supplies the initial value. Changes made from the admin
@@ -84,7 +87,8 @@ Frameworks that require a live SSR server cannot be mounted as static files.
 Run those applications separately and call the Portal API over HTTPS; the API
 allows cross-origin requests. Static-export modes can use the mount directly.
 
-When `ACME_DNS_PROVIDER` is empty, place these files in `./.portal-certs`:
+To override ACME with a manually managed certificate, place these files in
+`./.portal-certs`:
 
 ```text
 fullchain.pem
@@ -118,6 +122,7 @@ The Compose stack publishes:
 | Port | Purpose |
 |---|---|
 | `443/tcp` | Portal HTTPS, SPA, APIs, and SNI tunnel ingress |
+| `53/tcp` + `53/udp` | Embedded authoritative DNS for the delegated relay zone |
 | `51820/udp` | Relay discovery overlay |
 | configured lease range | Optional UDP and raw TCP leases |
 
@@ -415,8 +420,10 @@ non-reserved client routes fall back to the selected SPA's `index.html`.
 ### Certificate Errors
 
 Confirm `PORTAL_URL` matches the certificate root hostname and inspect the
-certificate files under `IDENTITY_PATH`. With managed ACME, verify the DNS API
-token has permission to update the selected zone.
+certificate files under `IDENTITY_PATH`. With the embedded DNS provider,
+confirm the delegation is visible (`dig @<relay public IP> portal.example.com NS`)
+and that `53/tcp` + `53/udp` are reachable. With an external provider, verify
+the DNS API token has permission to update the selected zone.
 
 ### API Port 4017
 

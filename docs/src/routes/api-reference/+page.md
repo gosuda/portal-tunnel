@@ -38,6 +38,7 @@ The envelope does not apply to streaming or delegated endpoints:
 
 | Path | Format |
 |------|--------|
+| `/llms.txt` | Markdown-formatted plain-text relay and tunnel connection guide |
 | `/sdk/connect` | HTTP/1.1 connection hijack |
 | `/v1/sign` | keyless TLS signer protocol |
 | `/api/x402/*` | relay-owned x402 facilitator response |
@@ -68,6 +69,7 @@ configured admin token.
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
 | `GET` | `/` | None | selected SPA `index.html` |
+| `GET`/`HEAD` | `/llms.txt` | None | relay and tunnel connection guide |
 | `GET` | `/api/healthz` | None | `{ "status": "ok" }` |
 | `GET` | `/api/state` | None | `PublicStateResponse` |
 | `GET`/`HEAD` | `/api/install.sh`, `/api/install.ps1` | None | install script |

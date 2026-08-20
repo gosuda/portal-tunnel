@@ -223,7 +223,7 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	return nil
 }
 
-func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, _ uint16, _, _, content string) error {
+func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, record dnsrecord.HTTPSRecord) error {
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
@@ -231,9 +231,9 @@ func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, _ uint16,
 	if name == "" {
 		return errors.New("record name is required")
 	}
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return errors.New("https record content is required")
+	content, err := record.Content()
+	if err != nil {
+		return err
 	}
 
 	client, err := newClient(ctx, p.cfg)

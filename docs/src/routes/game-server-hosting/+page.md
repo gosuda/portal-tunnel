@@ -5,6 +5,8 @@ description: Expose self-hosted game servers through Portal without opening port
 
 # Game Server Hosting
 
+> **Maintainer note**: the compatibility table and relay-setup facts on this page are mirrored in the agent skill reference at `plugins/portal-deploy/skills/portal-expose/references/game-hosting.md`. When transport capabilities change, update both files. This page is the human-facing source; the reference is the agent-facing copy.
+
 Portal exposes a game server running on your own machine through a public relay.
 Players connect to the relay's assigned `host:port`; they do not install Portal.
 

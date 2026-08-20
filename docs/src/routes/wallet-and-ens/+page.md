@@ -116,6 +116,12 @@ When enabled, Portal uses the configured DNS provider to:
 - keep A records for lease hostnames in sync with the relay public IPv4
 - remove lease hostname records when leases unregister or expire
 
+Lease registration and removal enqueue DNS changes to a single worker. Successful
+TXT changes are not repeated by the periodic maintenance pass; only failed
+changes are retried. Lease A records are checked again when the relay public IPv4
+changes, while DNSSEC is checked periodically only until Portal reports it as
+verified.
+
 Portal writes TXT values in this shape:
 
 ```text
@@ -150,8 +156,10 @@ CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 ENS_GASLESS_ENABLED=true
 ```
 
-The same provider is used for ACME DNS-01, managed A records, ECH HTTPS records,
-DNSSEC, and ENS TXT records. If manual `fullchain.pem` and `privatekey.pem`
+The same provider is used for ACME DNS-01, managed A records, the relay root
+HTTPS/ECH record, tenant HTTPS/ECH records for tunnels that explicitly enable
+ECH, DNSSEC, and ENS TXT records. The default tunnel mode does not create tenant
+ECH records. If manual `fullchain.pem` and `privatekey.pem`
 already exist under `IDENTITY_PATH`, Portal keeps using those certificate files
 and still uses the provider for ENS/DNS automation.
 

@@ -58,6 +58,7 @@ type relayServerConfig struct {
 
 	ACMEDNSProvider    string
 	ENSGaslessEnabled  bool
+	EmbeddedDNSPort    int
 	CloudflareToken    string
 	GCPProjectID       string
 	GCPManagedZone     string
@@ -101,9 +102,9 @@ func runServeCommand(args []string) error {
 	utils.BoolFlagEnv(fs, &cfg.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
 	utils.StringFlagEnv(fs, &cfg.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
 
-	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (cloudflare|gcloud|hetzner|njalla|route53|vultr); leave empty to use manual fullchain.pem/privatekey.pem from IDENTITY_PATH", "ACME_DNS_PROVIDER")
+	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded when unset", "ACME_DNS_PROVIDER")
 	utils.BoolFlagEnv(fs, &cfg.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
-	utils.StringFlagEnv(fs, &cfg.CloudflareToken, "cloudflare-token", "", "Cloudflare DNS API token (required when acme-dns-provider=cloudflare)", "CLOUDFLARE_TOKEN")
+	utils.IntFlagEnv(fs, &cfg.EmbeddedDNSPort, "embedded-dns-port", 53, utils.ParsePortNumber, "listen port for the embedded authoritative DNS server (the default DNS provider); requires a one-time NS delegation of the base domain and open 53/tcp+udp", "EMBEDDED_DNS_PORT")
 	utils.StringFlagEnv(fs, &cfg.GCPProjectID, "gcp-project-id", "", "Google Cloud project id for Cloud DNS automation; auto-detected from ADC or GCE metadata when omitted", "GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCE_PROJECT")
 	utils.StringFlagEnv(fs, &cfg.GCPManagedZone, "gcp-managed-zone", "", "explicit Google Cloud DNS managed zone name or numeric ID override", "GCP_MANAGED_ZONE", "GCP_ZONE", "GCE_ZONE_ID")
 	utils.StringFlagEnv(fs, &cfg.HetznerAPIToken, "hetzner-api-token", "", "Hetzner Cloud API token for DNS automation (required when acme-dns-provider=hetzner)", "HETZNER_API_TOKEN", "HCLOUD_TOKEN")
@@ -152,6 +153,7 @@ func runServeCommand(args []string) error {
 		Bool("x402_testnet", cfg.X402Testnet).
 		Bool("x402_pay_to_configured", strings.TrimSpace(cfg.X402PayTo) != "").
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
+		Int("embedded_dns_port", cfg.EmbeddedDNSPort).
 		Bool("ens_gasless_enabled", cfg.ENSGaslessEnabled).
 		Msg("configured relay server")
 
@@ -185,7 +187,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 			KeyDir:             cfg.IdentityPath,
 			DNSProvider:        cfg.ACMEDNSProvider,
 			ENSGaslessEnabled:  cfg.ENSGaslessEnabled,
-			CloudflareToken:    cfg.CloudflareToken,
+			EmbeddedDNSPort:    cfg.EmbeddedDNSPort,
 			GCPProjectID:       cfg.GCPProjectID,
 			GCPManagedZone:     cfg.GCPManagedZone,
 			HetznerAPIToken:    cfg.HetznerAPIToken,

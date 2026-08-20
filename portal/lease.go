@@ -172,10 +172,10 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	routeHostname := utils.NormalizeHostname(req.RouteHostname)
 	hostnameHash := strings.TrimSpace(req.HostnameHash)
 	echConfigList := bytes.Clone(req.ECHConfigList)
-	if hopToken != "" && (req.UDPEnabled || req.TCPEnabled) {
-		return nil, types.RegisterResponse{}, errTransportMismatch
-	}
-	if (routeHostname != "" || hostnameHash != "") && (hopToken != "" || req.UDPEnabled || req.TCPEnabled) {
+	isHopLease := hopToken != ""
+	hasPortTransport := req.UDPEnabled || req.TCPEnabled
+	hasRouteMatcher := routeHostname != "" || hostnameHash != ""
+	if isHopLease && (hasPortTransport || hasRouteMatcher) {
 		return nil, types.RegisterResponse{}, errTransportMismatch
 	}
 	if hostnameHash != "" && routeHostname == "" {
@@ -225,7 +225,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 
 	hostname := routeHostname
-	if hostname == "" && hopToken == "" {
+	if hostname == "" && !isHopLease {
 		hostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {
 			return nil, types.RegisterResponse{}, err
