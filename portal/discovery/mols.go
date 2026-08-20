@@ -4,7 +4,7 @@ package discovery
 // non-invasive adaptive partition over local load telemetry.
 //
 // Ordering Pipeline:
-//   1. Filter: Apply ban, expiry, and protocol compatibility gates.
+//   1. Filter: Apply ban, dead, expiry, and protocol compatibility gates.
 //   2. Rank: Order every eligible candidate deterministically with MOLS.
 //   3. Partition: Move saturated relays behind active relays.
 //   4. Preserve: Keep intra-tier MOLS order unchanged.

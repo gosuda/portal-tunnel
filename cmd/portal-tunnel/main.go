@@ -73,6 +73,7 @@ type exposeFlags struct {
 	udp                  bool
 	udpAddr              string
 	tcp                  bool
+	ech                  bool
 	maxActiveRelays      int
 	multiHopDepth        int
 	metricsAddr          string
@@ -108,6 +109,7 @@ func runExposeCommand(args []string) error {
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
+	utils.BoolFlagEnv(fs, &flags.ech, "ech", false, "Enable ECH hostname privacy for the default TLS stream transport", "ECH_ENABLED")
 	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry", "MAX_ACTIVE_RELAYS")
 	utils.IntFlagEnv(fs, &flags.multiHopDepth, "multi-hop-depth", 0, nil, "Automatically create multi-hop routes at this hop count for every eligible entry relay; 0 or 1 disables multi-hop", "MULTI_HOP_DEPTH")
 	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
@@ -234,6 +236,7 @@ func runExposeCommand(args []string) error {
 		UDPAddr:         flags.udpAddr,
 		UDPEnabled:      flags.udp,
 		TCPEnabled:      flags.tcp,
+		ECH:             flags.ech,
 		MultiHop:        utils.SplitCSV(flags.multiHopCSV),
 		MultiHopDepth:   flags.multiHopDepth,
 		BanMITM:         flags.banMITM,

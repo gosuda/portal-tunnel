@@ -51,6 +51,7 @@ type ExposeConfig struct {
 	UDPAddr         string
 	UDPEnabled      bool
 	TCPEnabled      bool
+	ECH             bool
 	MultiHop        []string
 	MultiHopDepth   int
 	BanMITM         bool
@@ -423,6 +424,10 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 			if relayURL == "" {
 				continue
 			}
+			if state.Dead {
+				delete(relayByURL, relayURL)
+				continue
+			}
 			snap := relayByURL[relayURL]
 			snap.RelayURL = relayURL
 			snap.Explicit = slices.Contains(cfg.RelayURLs, relayURL)
@@ -764,6 +769,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			Identity:   cfg.Identity.Copy(),
 			UDPEnabled: cfg.UDPEnabled,
 			TCPEnabled: cfg.TCPEnabled,
+			ECH:        cfg.ECH,
 			BanMITM:    cfg.BanMITM,
 			Metadata: func() types.LeaseMetadata {
 				return e.Config().Metadata

@@ -1,0 +1,61 @@
+# Portal Relay
+
+> Portal exposes local HTTP, TCP, and UDP services through self-hosted or public relays with end-to-end tenant TLS.
+
+This Portal relay is available at %s.
+
+## Quick Start
+
+Install the Portal CLI and expose a local HTTP service through only this relay:
+
+~~~bash
+curl -fsSL %s/api/install.sh | bash
+portal expose 3000 --relays %s --discovery=false
+~~~
+
+On Windows PowerShell:
+
+~~~powershell
+irm %s/api/install.ps1 | iex
+portal expose 3000 --relays %s --discovery=false
+~~~
+
+The expose command prints the public tunnel URL after registration. Replace 3000 with a local port or address such as localhost:8080.
+
+## Relay Selection
+
+- Use --discovery=false to connect through only this relay.
+- Omit --discovery=false to keep public relay discovery enabled while adding this relay as a candidate.
+
+## Other Targets
+
+Expose a named local service:
+
+~~~bash
+portal expose localhost:8080 --name my-app --relays %s --discovery=false
+~~~
+
+Serve a local directory directly:
+
+~~~bash
+portal expose --serve ./dist --name my-site --relays %s --discovery=false
+~~~
+
+## Documentation
+
+- [Portal overview](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/README.md): Install, use, and self-host Portal.
+- [Getting started](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/getting-started/+page.md): Create a first tunnel.
+- [CLI reference](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/cli-reference/+page.md): Commands, flags, and routing options.
+- [Relay hosting](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/self-hosting/+page.md): Configure and operate a relay.
+- [API reference](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/api-reference/+page.md): Relay HTTP endpoints and shared types.
+- [Security model](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/security-model/+page.md): Encryption and trust boundaries.
+- [Public relay state](%s/api/state): Current public leases and landing-page state for this relay.
+- [GitHub repository](https://github.com/gosuda/portal-tunnel): Source, releases, and issue tracking.
+
+## For AI Agents
+
+If the user asks you to expose, publish, share, tunnel, or create a public preview of a local application, read and follow:
+
+- [portal-expose skill](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md): Inspect the local app, verify it locally, expose it through Portal, verify the public endpoint, and hand off lifecycle information.
+
+Do not expose databases, admin or debug interfaces, or sensitive unauthenticated services unless the user explicitly requests it and accepts the risk.

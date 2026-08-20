@@ -91,6 +91,7 @@ not supported.
 | `--multi-hop` | string | | Ordered multi-hop relay API URLs, comma-separated |
 | `--multi-hop-depth` | int | `0` | Automatically create this-depth multi-hop routes for every eligible entry relay; `0` or `1` disables multi-hop |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
+| `--ech` | bool | `false` | Enable ECH hostname privacy for TLS stream tunnels; plaintext-SNI routing remains available as fallback |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
 | `--identity-json` | string | | Identity JSON payload; overrides `--identity-path` contents and is persisted there when both are set |
 | `--name` | string | auto | Public hostname prefix, one DNS label |

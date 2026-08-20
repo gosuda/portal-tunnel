@@ -31,6 +31,7 @@ type listenerConfig struct {
 	Identity   types.Identity
 	UDPEnabled bool
 	TCPEnabled bool
+	ECH        bool
 	BanMITM    bool
 	Metadata   func() types.LeaseMetadata
 	RetryCount int
@@ -98,6 +99,7 @@ type listener struct {
 	relaySet       *discovery.RelaySet
 	udpEnabled     bool
 	tcpEnabled     bool
+	echEnabled     bool
 	dialTimeout    time.Duration
 	requestTimeout time.Duration
 	readyTarget    int
@@ -163,6 +165,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		relaySet:       cfg.relaySet,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
+		echEnabled:     cfg.ECH,
 		dialTimeout:    defaultDialTimeout,
 		requestTimeout: defaultRequestTimeout,
 		readyTarget:    defaultReadyTarget,

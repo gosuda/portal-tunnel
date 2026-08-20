@@ -218,6 +218,7 @@ Common fields:
 | `tcp` | Dedicated raw TCP port setting |
 | `multi_hop` | Explicit ordered multi-hop relay URLs |
 | `multi_hop_depth` | Automatically choose one multi-hop route with this depth |
+| `ech` | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
 | `thumbnail_from_target` | Fill an empty `thumbnail` with the `og:image` the target advertises |
