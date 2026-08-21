@@ -23,7 +23,7 @@ Tenant TLS terminates on the SDK side. The local service receives the decrypted 
 
 ## Keyless Signing
 
-For relay-hosted names, the SDK builds a tenant-facing TLS server config backed by the relay's `/v1/sign` endpoint. The relay signs handshake digests with its certificate key, but it does not receive the negotiated tenant TLS session keys.
+For relay-hosted names, the SDK builds a tenant-facing TLS server config backed by the relay's `/v1/sign` endpoint. The relay signs handshake digests with a wildcard-only tenant key that is distinct from the relay API key, but it does not receive the negotiated tenant TLS session keys. The SDK obtains the corresponding public certificate chain and key ID from `/v1/keyless/materials`.
 
 Relay API TLS is separate from tenant TLS:
 

@@ -28,8 +28,9 @@ const (
 	X402VerifyPath      = PathX402Facilitator + "/verify"
 	X402SettlePath      = PathX402Facilitator + "/settle"
 
-	PathV1Prefix = "/v1"
-	PathV1Sign   = PathV1Prefix + "/sign"
+	PathV1Prefix           = "/v1"
+	PathV1Sign             = PathV1Prefix + "/sign"
+	PathV1KeylessMaterials = PathV1Prefix + "/keyless/materials"
 
 	PathSDKPrefix            = "/sdk"
 	PathSDKDomain            = PathSDKPrefix + "/domain"

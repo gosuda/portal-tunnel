@@ -231,7 +231,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		return errors.New("server already started")
 	}
 	cfg := s.config()
-	apiTLS, acmeManager, err := s.prepareAPITLS(ctx)
+	apiTLS, tenantTLS, acmeManager, err := s.prepareTLSMaterials(ctx)
 	if err != nil {
 		return err
 	}
@@ -286,7 +286,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	}
 
 	group, groupCtx := errgroup.WithContext(serverCtx)
-	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiMux, apiTLS)
+	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiMux, apiTLS, tenantTLS)
 	if err != nil {
 		return err
 	}
@@ -475,11 +475,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return shutdownErr
 }
 
-func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, *acme.Manager, error) {
+func (s *Server) prepareTLSMaterials(ctx context.Context) (keyless.TLSMaterialConfig, keyless.TLSMaterialConfig, *acme.Manager, error) {
 	cfg := s.config()
 	acmeCfg := cfg.ACME
 	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
+		return keyless.TLSMaterialConfig{}, keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name
 	if strings.TrimSpace(acmeCfg.ENSGaslessAddress) == "" {
@@ -488,18 +488,31 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 
 	manager, err := acme.NewManager(acmeCfg)
 	if err != nil {
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("create acme manager: %w", err)
+		return keyless.TLSMaterialConfig{}, keyless.TLSMaterialConfig{}, nil, fmt.Errorf("create acme manager: %w", err)
 	}
 
 	certPEM, keyPEM, err := manager.EnsureTLSMaterial(ctx)
 	if err != nil {
 		_ = manager.Stop(ctx)
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("ensure relay certificate: %w", err)
+		return keyless.TLSMaterialConfig{}, keyless.TLSMaterialConfig{}, nil, fmt.Errorf("ensure relay certificate: %w", err)
 	}
 
 	apiTLS := keyless.TLSMaterialConfig{
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
+	}
+	tenantCertPEM, tenantKeyPEM, err := manager.EnsureTenantTLSMaterial(ctx)
+	if err != nil {
+		_ = manager.Stop(ctx)
+		return keyless.TLSMaterialConfig{}, keyless.TLSMaterialConfig{}, nil, fmt.Errorf("ensure tenant certificate: %w", err)
+	}
+	if err := keyless.ValidateMaterialSeparation(s.identity.Name, certPEM, tenantCertPEM); err != nil {
+		_ = manager.Stop(ctx)
+		return keyless.TLSMaterialConfig{}, keyless.TLSMaterialConfig{}, nil, fmt.Errorf("validate keyless material separation: %w", err)
+	}
+	tenantTLS := keyless.TLSMaterialConfig{
+		CertPEM: tenantCertPEM,
+		KeyPEM:  tenantKeyPEM,
 	}
 	echSeed, err := identity.DeriveToken(
 		s.identity.Identity,
@@ -509,12 +522,12 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 	)
 	if err != nil {
 		_ = manager.Stop(ctx)
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("derive relay ech seed: %w", err)
+		return keyless.TLSMaterialConfig{}, keyless.TLSMaterialConfig{}, nil, fmt.Errorf("derive relay ech seed: %w", err)
 	}
 	echKeys, echConfigList, err := keyless.EncryptedClientHelloMaterials(echSeed, s.identity.Name)
 	if err != nil {
 		_ = manager.Stop(ctx)
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("prepare ech materials: %w", err)
+		return keyless.TLSMaterialConfig{}, keyless.TLSMaterialConfig{}, nil, fmt.Errorf("prepare ech materials: %w", err)
 	}
 	if len(echKeys) > 0 {
 		apiTLS.EncryptedClientHelloKeys = echKeys
@@ -526,7 +539,7 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 		}
 	}
 
-	return apiTLS, manager, nil
+	return apiTLS, tenantTLS, manager, nil
 }
 
 func (s *Server) runAPIServer() error {

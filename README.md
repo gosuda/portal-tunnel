@@ -181,8 +181,9 @@ Browser
 3. The Portal tunnel on your side completes the TLS handshake locally. Session
    keys are derived on your machine.
 4. For relay-hosted domains, the tunnel obtains certificate signatures via
-   `/v1/sign`, using the relay only as a keyless signing oracle. The relay signs
-   handshake digests but never receives session keys.
+   `/v1/sign`, using the relay's wildcard-only tenant key. The relay API key is
+   separate and is never exposed to the signer. The relay signs handshake
+   digests but never receives session keys.
 5. After the handshake, the relay continues forwarding ciphertext without access
    to plaintext.
 

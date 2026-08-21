@@ -39,8 +39,18 @@ func (m *Manager) shouldRenew() bool {
 	return err == nil && needsRenewal
 }
 
+func (m *Manager) shouldRenewTenant() bool {
+	certFile := filepath.Join(m.cfg.KeyDir, tenantKeyDirName, fullChainFileName)
+	needsRenewal, err := certNeedsRenewal(certFile, tenantCertificateDomains(m.cfg.BaseDomain))
+	return err == nil && needsRenewal
+}
+
 func certificateDomains(baseDomain string) []string {
 	return []string{baseDomain, "*." + baseDomain}
+}
+
+func tenantCertificateDomains(baseDomain string) []string {
+	return []string{"*." + baseDomain}
 }
 
 func certNeedsRenewal(certFile string, domains []string) (bool, error) {
@@ -168,13 +178,22 @@ func loadOrCreateAccountKey(path string) (crypto.PrivateKey, error) {
 }
 
 func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
-	domains := localDevelopmentDomains(baseHost)
+	return ensureLocalDevelopmentCertificateForDomains(keyDir, baseHost, localDevelopmentDomains(baseHost), true)
+}
+
+func ensureLocalDevelopmentTenantCertificate(keyDir, baseHost string) error {
+	baseHost = utils.NormalizeBaseDomain(baseHost)
+	return ensureLocalDevelopmentCertificateForDomains(keyDir, "*."+baseHost, tenantCertificateDomains(baseHost), false)
+}
+
+func ensureLocalDevelopmentCertificateForDomains(keyDir, commonName string, domains []string, isCA bool) error {
 	keyFile := filepath.Join(keyDir, keyFileName)
 	certFile := filepath.Join(keyDir, fullChainFileName)
 
 	if utils.FileExists(keyFile) && utils.FileExists(certFile) {
 		covered, err := certCoversDomains(certFile, domains)
-		if err == nil && covered {
+		cert, certErr := loadCertificate(certFile)
+		if err == nil && certErr == nil && covered && cert.IsCA == isCA {
 			return nil
 		}
 	}
@@ -201,15 +220,18 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName:   baseHost,
+			CommonName:   commonName,
 			Organization: []string{"Portal Local Development"},
 		},
 		NotBefore:             now.Add(-1 * time.Hour),
 		NotAfter:              now.Add(localDevelopmentCertificateTTL),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageKeyAgreement | x509.KeyUsageCertSign,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageKeyAgreement,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		IsCA:                  true,
+		IsCA:                  isCA,
+	}
+	if isCA {
+		template.KeyUsage |= x509.KeyUsageCertSign
 	}
 
 	for _, domain := range domains {

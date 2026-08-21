@@ -21,6 +21,7 @@ const (
 	keyFileName            = "privatekey.pem"
 	accountKeyFileName     = "acme-account.key"
 	registrationFileName   = "acme-registration.json"
+	tenantKeyDirName       = "tenant"
 	defaultACMEEmailPrefix = "acme@"
 )
 
@@ -187,6 +188,57 @@ func (m *Manager) EnsureTLSMaterial(ctx context.Context) ([]byte, []byte, error)
 	return certPEM, keyPEM, nil
 }
 
+func (m *Manager) EnsureTenantTLSMaterial(ctx context.Context) ([]byte, []byte, error) {
+	certFile, keyFile, err := m.ensureTenantCertificate(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read tenant tls certificate: %w", err)
+	}
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read tenant tls private key: %w", err)
+	}
+	return certPEM, keyPEM, nil
+}
+
+func (m *Manager) ensureTenantCertificate(ctx context.Context) (string, string, error) {
+	if m == nil {
+		return "", "", errors.New("acme manager is nil")
+	}
+	tenantDir := filepath.Join(m.cfg.KeyDir, tenantKeyDirName)
+	domains := tenantCertificateDomains(m.cfg.BaseDomain)
+	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+		if err := ensureLocalDevelopmentTenantCertificate(tenantDir, m.cfg.BaseDomain); err != nil {
+			return "", "", err
+		}
+		return tlsFiles(tenantDir)
+	}
+
+	certFile, keyFile, err := tlsFiles(tenantDir)
+	if err == nil {
+		covered, coverErr := certCoversDomains(certFile, domains)
+		if coverErr == nil && covered {
+			cert, parseErr := loadCertificate(certFile)
+			wildcard := "*." + m.cfg.BaseDomain
+			if parseErr == nil && !cert.IsCA && cert.VerifyHostname(m.cfg.BaseDomain) != nil &&
+				len(cert.DNSNames) == 1 && strings.EqualFold(strings.TrimSpace(cert.DNSNames[0]), wildcard) && len(cert.IPAddresses) == 0 {
+				return certFile, keyFile, nil
+			}
+		}
+	}
+	if err := m.syncDNS(ctx); err != nil {
+		return "", "", fmt.Errorf("ensure dns records for tenant certificate: %w", err)
+	}
+	if err := m.provisionTenant(ctx); err != nil {
+		return "", "", err
+	}
+	return tlsFiles(tenantDir)
+}
+
 func (m *Manager) Start(ctx context.Context) {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return
@@ -231,12 +283,24 @@ func (m *Manager) TLSFiles() (string, string, error) {
 	if m == nil {
 		return "", "", errors.New("acme manager is nil")
 	}
-	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
-	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
+	return tlsFiles(m.cfg.KeyDir)
+}
+
+func tlsFiles(keyDir string) (string, string, error) {
+	certFile := filepath.Join(keyDir, fullChainFileName)
+	keyFile := filepath.Join(keyDir, keyFileName)
 	if !utils.FileExists(certFile) || !utils.FileExists(keyFile) {
-		return "", "", errors.New("relay certificate files do not exist")
+		return "", "", errors.New("certificate files do not exist")
 	}
 	return certFile, keyFile, nil
+}
+
+func certificateMaterialIsManual(keyDir string) bool {
+	if _, _, err := tlsFiles(keyDir); err != nil {
+		return false
+	}
+	return !utils.FileExists(filepath.Join(keyDir, accountKeyFileName)) &&
+		!utils.FileExists(filepath.Join(keyDir, registrationFileName))
 }
 
 func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
@@ -267,11 +331,18 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 }
 
 func (m *Manager) provision(ctx context.Context) error {
-	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
-	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
-	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
-	registrationFile := filepath.Join(m.cfg.KeyDir, registrationFileName)
-	domains := certificateDomains(m.cfg.BaseDomain)
+	return m.provisionMaterial(ctx, m.cfg.KeyDir, certificateDomains(m.cfg.BaseDomain))
+}
+
+func (m *Manager) provisionTenant(ctx context.Context) error {
+	return m.provisionMaterial(ctx, filepath.Join(m.cfg.KeyDir, tenantKeyDirName), tenantCertificateDomains(m.cfg.BaseDomain))
+}
+
+func (m *Manager) provisionMaterial(ctx context.Context, keyDir string, domains []string) error {
+	keyFile := filepath.Join(keyDir, keyFileName)
+	certFile := filepath.Join(keyDir, fullChainFileName)
+	accountKeyFile := filepath.Join(keyDir, accountKeyFileName)
+	registrationFile := filepath.Join(keyDir, registrationFileName)
 
 	for _, path := range []string{keyFile, certFile, accountKeyFile, registrationFile} {
 		if err := utils.EnsureParentDir(path); err != nil {

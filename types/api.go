@@ -93,6 +93,12 @@ type RegisterResponse struct {
 	TCPEnabled  bool      `json:"tcp_enabled,omitempty"`
 }
 
+// KeylessMaterials identifies the certificate chain and key ID exposed by the tenant signer.
+type KeylessMaterials struct {
+	KeyID            string `json:"key_id"`
+	CertificateChain []byte `json:"certificate_chain"`
+}
+
 type DiscoveryResponse struct {
 	ProtocolVersion string            `json:"protocol_version"`
 	GeneratedAt     time.Time         `json:"generated_at"`
