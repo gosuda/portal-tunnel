@@ -30,6 +30,7 @@ func confirmedRelayState(t *testing.T, relayURL string) RelayState {
 	t.Helper()
 	return RelayState{
 		Descriptor: mustRelayDescriptor(t, relayURL),
+		Trust:      RelayVerified,
 		Confirmed:  true,
 		LastSeenAt: time.Now().UTC(),
 	}

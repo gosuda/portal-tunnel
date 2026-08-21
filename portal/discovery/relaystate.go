@@ -21,6 +21,13 @@ const (
 	// listener-confirmed entries are pinned and never evicted by capacity.
 	MaxAnnouncedRelays = 1024
 
+	// MaxAnnouncedRelaysPerIdentity bounds how many unverified announced
+	// entries one signing identity may hold. Overflow recycles that
+	// identity's own oldest entries, so an unauthenticated announce or
+	// hop-route flood cannot use the identity's slots to push other relays
+	// toward the global-cap eviction.
+	MaxAnnouncedRelaysPerIdentity = 4
+
 	// AnnounceClockSkewTolerance bounds how far in the future a descriptor's
 	// IssuedAt may sit relative to local time. Anything beyond this is
 	// rejected as clock-skewed or maliciously post-dated.
@@ -31,6 +38,26 @@ const (
 	// so a 24h cap leaves ample headroom while preventing attackers from
 	// minting year-long descriptors.
 	AnnounceMaxValidity = 24 * time.Hour
+)
+
+// RelayTrust classifies whether this relay has directly verified a pool
+// entry or only received its descriptor from untrusted input. Verifying a
+// relay never verifies the other relays its discovery response mentions;
+// those are admitted as candidates like any other untrusted descriptor.
+type RelayTrust uint8
+
+const (
+	// RelayCandidate marks a descriptor admitted from untrusted input.
+	// Candidates still serve overlay routing for the hop route that brought
+	// them in and remain refresh-poll targets, but they are excluded from
+	// Descriptors(), automatic route selection, and this relay's own gossip
+	// output until promoted.
+	RelayCandidate RelayTrust = iota
+
+	// RelayVerified marks a relay whose own URL this relay polled directly
+	// and which served a validly signed self-descriptor. Verified entries
+	// are globally discoverable and automatically selectable.
+	RelayVerified
 )
 
 type PercentileTracker struct {
@@ -59,9 +86,14 @@ func (pt *PercentileTracker) Get(p float64) time.Duration {
 type RelayState struct {
 	Descriptor types.RelayDescriptor
 	Bootstrap  bool
-	Confirmed  bool
-	Banned     bool
-	// Dead marks a relay whose consecutive discovery failures exhausted the
+	// Trust classifies how the entry entered the set. Descriptors from
+	// untrusted input (/sdk/hop, /discovery/announce, or gossiped discovery
+	// content) are admitted as RelayCandidate and stay out of Descriptors()
+	// and automatic route selection until a direct authoritative probe of
+	// that exact relay promotes them to RelayVerified.
+	Trust     RelayTrust
+	Confirmed bool
+	Banned    bool
 	// recovery budget. Dead relays are excluded from route planning and relay
 	// listings but stay in the set: the refresher keeps probing them and a
 	// successful discovery response clears the mark.

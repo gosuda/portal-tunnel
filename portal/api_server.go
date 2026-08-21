@@ -229,7 +229,7 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 	}
 
 	now := time.Now().UTC()
-	if err := s.relaySet.InsertAnnounced(desc, now); err != nil {
+	if err := s.relaySet.InsertCandidate(desc, now); err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
@@ -425,11 +425,18 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		utils.MethodNotAllowedError().Write(w)
 		return
 	}
-	if s.overlay == nil || s.relaySet == nil {
-		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
+	clientIP, ok := s.extractAllowedClientIP(w, r)
+	if !ok {
 		return
 	}
-	if _, ok := s.extractAllowedClientIP(w, r); !ok {
+	// Only the mutating POST consumes the announce budget: DELETE performs
+	// route and DNS cleanup only and must stay available after a POST burst.
+	if r.Method == http.MethodPost && !s.announceLimiter.Allow(clientIP) {
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "hop route rate limit exceeded")
+		return
+	}
+	if s.overlay == nil || s.relaySet == nil {
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
 		return
 	}
 
@@ -475,7 +482,7 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	route.ForwardRelay = forwardRelay
-	if err := s.relaySet.InsertAnnounced(forwardRelay, now); err != nil {
+	if err := s.relaySet.InsertCandidate(forwardRelay, now); err != nil {
 		utils.InvalidRequestError(fmt.Errorf("forward relay: %w", err)).Write(w)
 		return
 	}
