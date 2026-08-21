@@ -279,7 +279,15 @@ func decodeJSONRequestBody[T any](w http.ResponseWriter, r *http.Request, maxByt
 	var dst T
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(&dst); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&dst); err != nil {
+		return dst, err
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return dst, errors.New("request body must contain a single JSON value")
+		}
 		return dst, err
 	}
 	return dst, nil

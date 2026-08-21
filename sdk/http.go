@@ -33,6 +33,7 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 		relaySrv = &http.Server{
 			Handler:           handler,
 			ReadHeaderTimeout: defaultRequestTimeout,
+			IdleTimeout:       defaultIdleTimeout,
 		}
 	}
 
@@ -42,6 +43,7 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 			Addr:              localAddr,
 			Handler:           handler,
 			ReadHeaderTimeout: defaultRequestTimeout,
+			IdleTimeout:       defaultIdleTimeout,
 		}
 	}
 
