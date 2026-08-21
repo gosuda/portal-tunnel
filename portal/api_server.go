@@ -229,7 +229,7 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 	}
 
 	now := time.Now().UTC()
-	if err := s.relaySet.InsertAnnounced(desc, now); err != nil {
+	if err := s.relaySet.InsertCandidate(desc, now); err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
@@ -482,7 +482,7 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	route.ForwardRelay = forwardRelay
-	if err := s.relaySet.InsertHopRelay(forwardRelay, now); err != nil {
+	if err := s.relaySet.InsertCandidate(forwardRelay, now); err != nil {
 		utils.InvalidRequestError(fmt.Errorf("forward relay: %w", err)).Write(w)
 		return
 	}

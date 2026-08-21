@@ -158,7 +158,9 @@ func mergeLocalRelayState(record, existing RelayState) RelayState {
 	record.Confirmed = record.Confirmed || existing.Confirmed
 	record.Banned = record.Banned || existing.Banned
 	record.Dead = record.Dead || existing.Dead
-	record.Staged = record.Staged || existing.Staged
+	if existing.Trust > record.Trust {
+		record.Trust = existing.Trust
+	}
 	if record.discoveryFailures < existing.discoveryFailures {
 		record.discoveryFailures = existing.discoveryFailures
 	}
@@ -176,7 +178,8 @@ func mergeLocalRelayState(record, existing RelayState) RelayState {
 	return record
 }
 
-func markDiscoveryConfirmed(state RelayState) RelayState {
+func markDiscoveryVerified(state RelayState) RelayState {
+	state.Trust = RelayVerified
 	state.Dead = false
 	state.discoveryFailures = 0
 	state.nextDiscoveryRefreshAt = time.Time{}
@@ -489,7 +492,7 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 	pool := make([]RelayState, 0, len(states))
 	for _, state := range states {
 		relayURL := state.Descriptor.APIHTTPSAddr
-		if state.Staged && !state.Confirmed {
+		if !state.Bootstrap && state.Trust != RelayVerified {
 			continue
 		}
 		if !requireOverlay && slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
@@ -659,7 +662,7 @@ func (s *RelaySet) Descriptors(self types.RelayDescriptor) []types.RelayDescript
 		if state.Banned || state.Dead || !state.hasObservedDescriptor() {
 			continue
 		}
-		if state.Staged && !state.Confirmed {
+		if !state.Bootstrap && state.Trust != RelayVerified {
 			continue
 		}
 		add(state.Descriptor)
@@ -816,7 +819,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 
 		isAuthoritativeTarget := !protocolMismatch && !missingTarget && authoritative && relayURL == targetURL
 		if isAuthoritativeTarget {
-			record = markDiscoveryConfirmed(record)
+			record = markDiscoveryVerified(record)
 		}
 
 		if upsert := s.upsertDescriptorLocked(record, now, isAuthoritativeTarget); upsert != upsertAccepted {
@@ -828,7 +831,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 			// existing URL slot.
 			if isAuthoritativeTarget && hasExistingAtURL {
 				if existingAtURL.discoveryFailures != 0 || !existingAtURL.nextDiscoveryRefreshAt.IsZero() || !existingAtURL.unhealthySince.IsZero() {
-					existingAtURL = markDiscoveryConfirmed(existingAtURL)
+					existingAtURL = markDiscoveryVerified(existingAtURL)
 					s.relays[relayURL] = existingAtURL
 					relaySetChanged = true
 				}
@@ -878,10 +881,8 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 	s.relays[relayURL] = state
 }
 
-// InsertAnnounced ingests a single descriptor submitted via the announce
-// endpoint. It is the only public mutator that is intended to be reachable
-// from external (untrusted) callers. The full validation pipeline runs
-// inline:
+// InsertCandidate ingests a single descriptor from untrusted input (/sdk/hop
+// or the announce endpoint). The full validation pipeline runs inline:
 //
 //  1. The descriptor signature is verified against the recovered public key
 //     and matched to the descriptor's Address field.
@@ -889,31 +890,18 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 //     future) and not significantly clock-skewed (IssuedAt no further into
 //     the future than AnnounceClockSkewTolerance, validity window no longer
 //     than AnnounceMaxValidity).
-//  3. Local merge preserves Bootstrap, Confirmed, Banned, discovery retry
-//     state, active suppression state, and telemetry from any pre-existing
-//     entry at the same URL.
+//  3. Local merge preserves Bootstrap, Confirmed, Banned, Trust, discovery
+//     retry state, active suppression state, and telemetry from any
+//     pre-existing entry at the same URL.
 //  4. The shared upsertDescriptorLocked method enforces the
 //     monotonic-IssuedAt-per-key rollback guard and the cross-identity
-//     URL-takeover guard. Announce never grants takeover authority; only
-//     direct authoritative refresh can do that.
-//  5. After a successful upsert, the LRU cap is enforced; bootstrap and
-//     listener-confirmed entries are pinned.
-//
-// Returns nil iff the descriptor was stored, idempotently refreshed, or is an
-// older same-URL/same-identity announce already superseded by local state.
-func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) error {
-	return s.insertDescriptor(desc, now, false)
-}
-
-// InsertHopRelay admits a forward relay supplied by an untrusted hop-routing
-// request. The entry is staged: it serves the overlay peer of that hop route
-// but stays out of Descriptors() and automatic route planning until a direct
-// discovery poll marks it Confirmed.
-func (s *RelaySet) InsertHopRelay(desc types.RelayDescriptor, now time.Time) error {
-	return s.insertDescriptor(desc, now, true)
-}
-
-func (s *RelaySet) insertDescriptor(desc types.RelayDescriptor, now time.Time, staged bool) error {
+// InsertCandidate admits a descriptor from untrusted input (/sdk/hop,
+// /discovery/announce) as a RelayCandidate. Candidates serve overlay
+// routing for the hop route that brought them in and remain refresh-poll
+// targets, but they stay out of Descriptors() and automatic route planning
+// until a direct authoritative probe of that exact relay promotes them to
+// RelayVerified via ApplyRelayDiscoveryResponse.
+func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) error {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	} else {
@@ -928,7 +916,6 @@ func (s *RelaySet) insertDescriptor(desc types.RelayDescriptor, now time.Time, s
 	record := RelayState{
 		Descriptor: normalized,
 		LastSeenAt: now,
-		Staged:     staged,
 	}
 
 	s.mu.Lock()
@@ -955,13 +942,13 @@ func (s *RelaySet) insertDescriptor(desc types.RelayDescriptor, now time.Time, s
 	return nil
 }
 
-// enforceIdentityCapLocked bounds how many unverified announced entries a
-// single signing identity holds in the set. Overflow evicts that identity's
-// own oldest entries by LastSeenAt, so a flooding identity recycles its own
+// enforceIdentityCapLocked bounds how many candidate entries a single
+// signing identity holds in the set. Overflow evicts that identity's own
+// oldest candidates by LastSeenAt, so a flooding identity recycles its own
 // slots instead of displacing other relays through the global cap. Bootstrap,
-// banned, and listener-confirmed entries are never evicted here; the keyIndex
-// rollback anchors survive eviction by design. The caller MUST already hold
-// s.mu as a write lock.
+// banned, verified, and listener-confirmed entries are never evicted here;
+// the keyIndex rollback anchors survive eviction by design. The caller MUST
+// already hold s.mu as a write lock.
 func (s *RelaySet) enforceIdentityCapLocked(address string) {
 	address = strings.ToLower(strings.TrimSpace(address))
 	if address == "" {
@@ -973,7 +960,7 @@ func (s *RelaySet) enforceIdentityCapLocked(address string) {
 	}
 	owned := make([]ownedEntry, 0, MaxAnnouncedRelaysPerIdentity+1)
 	for url, state := range s.relays {
-		if state.Bootstrap || state.Banned || state.Confirmed {
+		if state.Bootstrap || state.Banned || state.Confirmed || state.Trust == RelayVerified {
 			continue
 		}
 		if strings.ToLower(strings.TrimSpace(state.Descriptor.Address)) != address {
@@ -1039,7 +1026,7 @@ func (s *RelaySet) enforceCapLocked() {
 	}
 	type ageEntry struct {
 		url       string
-		confirmed bool
+		protected bool
 		seenAt    time.Time
 	}
 	candidates := make([]ageEntry, 0, len(s.relays))
@@ -1049,15 +1036,16 @@ func (s *RelaySet) enforceCapLocked() {
 		}
 		candidates = append(candidates, ageEntry{
 			url:       url,
-			confirmed: state.Confirmed,
+			protected: state.Confirmed || state.Trust == RelayVerified,
 			seenAt:    state.LastSeenAt,
 		})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		// Non-confirmed entries evict first; confirmed is the last-resort
-		// tier. Within each tier, oldest LastSeenAt evicts first.
-		if candidates[i].confirmed != candidates[j].confirmed {
-			return !candidates[i].confirmed
+		// Candidate entries evict first; verified and listener-confirmed
+		// entries are the last-resort tier. Within each tier, oldest
+		// LastSeenAt evicts first.
+		if candidates[i].protected != candidates[j].protected {
+			return !candidates[i].protected
 		}
 		return candidates[i].seenAt.Before(candidates[j].seenAt)
 	})

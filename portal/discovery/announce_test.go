@@ -51,52 +51,52 @@ func mustSignedDescriptor(t *testing.T, signing types.Identity, relayURL string,
 	return signed
 }
 
-func TestInsertAnnouncedAcceptsValidDescriptor(t *testing.T) {
+func TestInsertCandidateAcceptsValidDescriptor(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	desc := mustSignedDescriptor(t, signing, "https://relay-ann.example", now)
-	if err := set.InsertAnnounced(desc, now); err != nil {
-		t.Fatalf("InsertAnnounced() error = %v", err)
+	if err := set.InsertCandidate(desc, now); err != nil {
+		t.Fatalf("InsertCandidate() error = %v", err)
 	}
 	if got := relayStates(set); len(got) != 1 {
 		t.Fatalf("len(relayStates()) = %d, want 1", len(got))
 	}
 }
 
-func TestInsertAnnouncedRejectsUnsigned(t *testing.T) {
+func TestInsertCandidateRejectsUnsigned(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	desc := mustUnsignedDescriptor(t, signing, "https://relay-unsigned.example")
-	err := set.InsertAnnounced(desc, now)
+	err := set.InsertCandidate(desc, now)
 	if err == nil || err.Error() != "relay descriptor is not signed" {
-		t.Fatalf("InsertAnnounced() error = %v, want unsigned descriptor error", err)
+		t.Fatalf("InsertCandidate() error = %v, want unsigned descriptor error", err)
 	}
 }
 
-func TestInsertAnnouncedRejectsExpired(t *testing.T) {
+func TestInsertCandidateRejectsExpired(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	desc := mustSignedDescriptor(t, signing, "https://relay-expired.example", now.Add(-DiscoveryDescriptorTTL-time.Second))
-	err := set.InsertAnnounced(desc, now)
+	err := set.InsertCandidate(desc, now)
 	if err == nil || err.Error() != "relay descriptor already expired" {
-		t.Fatalf("InsertAnnounced() error = %v, want expired descriptor error", err)
+		t.Fatalf("InsertCandidate() error = %v, want expired descriptor error", err)
 	}
 }
 
-func TestInsertAnnouncedIgnoresSupersededRollback(t *testing.T) {
+func TestInsertCandidateIgnoresSupersededRollback(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	relayURL := "https://relay-roll.example"
 	newer := mustSignedDescriptor(t, signing, relayURL, now)
-	if err := set.InsertAnnounced(newer, now); err != nil {
+	if err := set.InsertCandidate(newer, now); err != nil {
 		t.Fatalf("seed insert error = %v", err)
 	}
 	older := mustSignedDescriptor(t, signing, relayURL, now.Add(-time.Minute))
-	if err := set.InsertAnnounced(older, now); err != nil {
+	if err := set.InsertCandidate(older, now); err != nil {
 		t.Fatalf("superseded insert error = %v", err)
 	}
 
@@ -109,21 +109,21 @@ func TestInsertAnnouncedIgnoresSupersededRollback(t *testing.T) {
 	}
 }
 
-func TestInsertAnnouncedRejectsRollbackAcrossRelayURL(t *testing.T) {
+func TestInsertCandidateRejectsRollbackAcrossRelayURL(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	newer := mustSignedDescriptor(t, signing, "https://relay-roll-new.example", now)
-	if err := set.InsertAnnounced(newer, now); err != nil {
+	if err := set.InsertCandidate(newer, now); err != nil {
 		t.Fatalf("seed insert error = %v", err)
 	}
 	older := mustSignedDescriptor(t, signing, "https://relay-roll-old.example", now.Add(-time.Minute))
-	if err := set.InsertAnnounced(older, now); err == nil {
+	if err := set.InsertCandidate(older, now); err == nil {
 		t.Fatal("expected rollback reject")
 	}
 }
 
-func TestInsertAnnouncedBlocksCrossIdentityTakeover(t *testing.T) {
+func TestInsertCandidateBlocksCrossIdentityTakeover(t *testing.T) {
 	set := NewRelaySet(nil)
 	owner := mustSigningIdentity(t)
 	attacker := mustSigningIdentity(t)
@@ -131,12 +131,12 @@ func TestInsertAnnouncedBlocksCrossIdentityTakeover(t *testing.T) {
 	relayURL := "https://relay-takeover.example"
 
 	ownerDesc := mustSignedDescriptor(t, owner, relayURL, now)
-	if err := set.InsertAnnounced(ownerDesc, now); err != nil {
+	if err := set.InsertCandidate(ownerDesc, now); err != nil {
 		t.Fatalf("owner insert error = %v", err)
 	}
 
 	attackerDesc := mustSignedDescriptor(t, attacker, relayURL, now.Add(time.Second))
-	if err := set.InsertAnnounced(attackerDesc, now); err == nil {
+	if err := set.InsertCandidate(attackerDesc, now); err == nil {
 		t.Fatal("expected takeover reject")
 	}
 
@@ -164,13 +164,13 @@ func TestAnnounceLimiterAllowsBurstThenThrottles(t *testing.T) {
 	}
 }
 
-func TestInsertAnnouncedCapsFloodPerSigningIdentity(t *testing.T) {
+func TestInsertCandidateCapsFloodPerSigningIdentity(t *testing.T) {
 	set := NewRelaySet(nil)
 	legit := mustSigningIdentity(t)
 	attacker := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	if err := set.InsertAnnounced(mustSignedDescriptor(t, legit, "https://legit.example", now), now); err != nil {
+	if err := set.InsertCandidate(mustSignedDescriptor(t, legit, "https://legit.example", now), now); err != nil {
 		t.Fatalf("legit insert error = %v", err)
 	}
 	// Flood the pool the way the reported abuse does: one signing identity
@@ -178,7 +178,7 @@ func TestInsertAnnouncedCapsFloodPerSigningIdentity(t *testing.T) {
 	for i := range MaxAnnouncedRelays {
 		at := now.Add(time.Duration(i) * time.Second)
 		url := fmt.Sprintf("https://attacker-%04d.example", i)
-		if err := set.InsertAnnounced(mustSignedDescriptor(t, attacker, url, at), at); err != nil {
+		if err := set.InsertCandidate(mustSignedDescriptor(t, attacker, url, at), at); err != nil {
 			t.Fatalf("flood insert %d error = %v", i, err)
 		}
 	}
@@ -200,7 +200,7 @@ func TestInsertAnnouncedCapsFloodPerSigningIdentity(t *testing.T) {
 	}
 }
 
-func TestInsertAnnouncedPerIdentityCapKeepsConfirmedEntries(t *testing.T) {
+func TestInsertCandidatePerIdentityCapKeepsConfirmedEntries(t *testing.T) {
 	set := NewRelaySet(nil)
 	owner := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -214,7 +214,7 @@ func TestInsertAnnouncedPerIdentityCapKeepsConfirmedEntries(t *testing.T) {
 	for i := range MaxAnnouncedRelaysPerIdentity * 2 {
 		at := now.Add(time.Duration(i) * time.Second)
 		url := fmt.Sprintf("https://owner-%02d.example", i)
-		if err := set.InsertAnnounced(mustSignedDescriptor(t, owner, url, at), at); err != nil {
+		if err := set.InsertCandidate(mustSignedDescriptor(t, owner, url, at), at); err != nil {
 			t.Fatalf("insert %d error = %v", i, err)
 		}
 	}
@@ -247,18 +247,19 @@ func mustSignedOverlayDescriptor(t *testing.T, signing types.Identity, relayURL 
 	return signed
 }
 
-func TestInsertHopRelayStagesUntilConfirmed(t *testing.T) {
+func TestInsertCandidateHiddenUntilDirectProbe(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	relayURL := "https://hop-forward.example"
+	descriptor := mustSignedOverlayDescriptor(t, signing, relayURL, now)
 
-	if err := set.InsertHopRelay(mustSignedOverlayDescriptor(t, signing, relayURL, now), now); err != nil {
-		t.Fatalf("InsertHopRelay() error = %v", err)
+	if err := set.InsertCandidate(descriptor, now); err != nil {
+		t.Fatalf("InsertCandidate() error = %v", err)
 	}
 	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
 		if desc.APIHTTPSAddr == relayURL {
-			t.Fatal("staged hop relay must stay out of Descriptors() until confirmed")
+			t.Fatal("candidate relay must stay out of Descriptors() until directly probed")
 		}
 	}
 	overlayPeer := false
@@ -268,10 +269,18 @@ func TestInsertHopRelayStagesUntilConfirmed(t *testing.T) {
 		}
 	}
 	if !overlayPeer {
-		t.Fatal("staged hop relay must remain an overlay peer for its hop route")
+		t.Fatal("candidate relay must remain an overlay peer for its hop route")
 	}
 
-	set.ConfirmRelayURL(relayURL)
+	// The real promotion path: the refresher polls the relay itself and
+	// ApplyRelayDiscoveryResponse verifies the target's own descriptor.
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		GeneratedAt:     now,
+		Relays:          []types.RelayDescriptor{descriptor},
+	}, now); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
 	discovered := false
 	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
 		if desc.APIHTTPSAddr == relayURL {
@@ -279,28 +288,27 @@ func TestInsertHopRelayStagesUntilConfirmed(t *testing.T) {
 		}
 	}
 	if !discovered {
-		t.Fatal("confirmed hop relay must appear in Descriptors()")
+		t.Fatal("directly probed relay must appear in Descriptors()")
 	}
 }
 
-func TestFilterCandidatePoolExcludesStagedUntilConfirmed(t *testing.T) {
+func TestFilterCandidatePoolExcludesCandidatesUntilVerified(t *testing.T) {
 	signing := mustSigningIdentity(t)
 	other := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	staged := RelayState{
-		Descriptor: mustSignedOverlayDescriptor(t, signing, "https://staged.example", now),
-		Staged:     true,
+	candidate := RelayState{
+		Descriptor: mustSignedOverlayDescriptor(t, signing, "https://candidate.example", now),
 		LastSeenAt: now,
 	}
-	confirmed := RelayState{
-		Descriptor: mustSignedDescriptor(t, other, "https://confirmed-candidate.example", now),
-		Confirmed:  true,
+	verified := RelayState{
+		Descriptor: mustSignedDescriptor(t, other, "https://verified-candidate.example", now),
+		Trust:      RelayVerified,
 		LastSeenAt: now,
 	}
 
-	pool := filterCandidatePool([]RelayState{staged, confirmed}, RouteState{}, now, false)
-	if len(pool) != 1 || pool[0].Descriptor.APIHTTPSAddr != "https://confirmed-candidate.example" {
-		t.Fatalf("filterCandidatePool() = %v, want only the confirmed entry", pool)
+	pool := filterCandidatePool([]RelayState{candidate, verified}, RouteState{}, now, false)
+	if len(pool) != 1 || pool[0].Descriptor.APIHTTPSAddr != "https://verified-candidate.example" {
+		t.Fatalf("filterCandidatePool() = %v, want only the verified entry", pool)
 	}
 }
 
@@ -330,5 +338,127 @@ func TestApplyRelayDiscoveryResponseAppliesIdentityCap(t *testing.T) {
 	}
 	if ingested > MaxAnnouncedRelaysPerIdentity {
 		t.Fatalf("gossip ingested %d entries for one identity, want <= %d", ingested, MaxAnnouncedRelaysPerIdentity)
+	}
+}
+
+func TestApplyRelayDiscoveryResponsePromotesOnlyTarget(t *testing.T) {
+	set := NewRelaySet(nil)
+	source := mustSigningIdentity(t)
+	gossiped := make([]types.Identity, 3)
+	for i := range gossiped {
+		gossiped[i] = mustSigningIdentity(t)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	sourceURL := "https://probed-source.example"
+
+	sourceDescriptor := mustSignedDescriptor(t, source, sourceURL, now)
+	relays := []types.RelayDescriptor{sourceDescriptor}
+	for i, identity := range gossiped {
+		url := fmt.Sprintf("https://laundered-%d.example", i)
+		relays = append(relays, mustSignedDescriptor(t, identity, url, now.Add(time.Duration(i)*time.Second)))
+	}
+	if _, err := set.ApplyRelayDiscoveryResponse(sourceURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		GeneratedAt:     now,
+		Relays:          relays,
+	}, now); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+
+	visible := set.Descriptors(types.RelayDescriptor{})
+	if len(visible) != 1 || visible[0].APIHTTPSAddr != sourceURL {
+		t.Fatalf("Descriptors() = %v, want only the directly probed source", visible)
+	}
+
+	// A relay mentioned by the probed source only becomes visible through
+	// its own direct probe.
+	launderedURL := "https://laundered-0.example"
+	launderedDescriptor := relays[1]
+	if _, err := set.ApplyRelayDiscoveryResponse(launderedURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		GeneratedAt:     now,
+		Relays:          []types.RelayDescriptor{launderedDescriptor},
+	}, now); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse(laundered) error = %v", err)
+	}
+	visible = set.Descriptors(types.RelayDescriptor{})
+	if len(visible) != 2 {
+		t.Fatalf("len(Descriptors()) = %d, want 2 after the second direct probe", len(visible))
+	}
+}
+
+func TestGossipRefreshKeepsVerifiedTrust(t *testing.T) {
+	set := NewRelaySet(nil)
+	signing := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	relayURL := "https://monotone.example"
+	descriptor := mustSignedDescriptor(t, signing, relayURL, now)
+
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		GeneratedAt:     now,
+		Relays:          []types.RelayDescriptor{descriptor},
+	}, now); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse(target) error = %v", err)
+	}
+	refreshed := mustSignedDescriptor(t, signing, relayURL, now.Add(time.Second))
+	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		GeneratedAt:     now.Add(time.Second),
+		Relays:          []types.RelayDescriptor{refreshed},
+	}, now.Add(time.Second)); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse(gossip) error = %v", err)
+	}
+
+	visible := false
+	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
+		if desc.APIHTTPSAddr == relayURL {
+			visible = true
+		}
+	}
+	if !visible {
+		t.Fatal("gossip refresh must not demote a verified entry")
+	}
+}
+
+func TestGlobalCapEvictsCandidatesBeforeVerified(t *testing.T) {
+	set := NewRelaySet(nil)
+	verified := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	verifiedDescriptor := mustSignedDescriptor(t, verified, "https://verified.example", now)
+	if _, err := set.ApplyRelayDiscoveryResponse("https://verified.example", types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		GeneratedAt:     now,
+		Relays:          []types.RelayDescriptor{verifiedDescriptor},
+	}, now); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse(verified) error = %v", err)
+	}
+
+	identitiesNeeded := MaxAnnouncedRelays / MaxAnnouncedRelaysPerIdentity
+	inserted := 0
+	for i := 0; i < identitiesNeeded+1 && inserted <= MaxAnnouncedRelays; i++ {
+		identity := mustSigningIdentity(t)
+		for j := 0; j < MaxAnnouncedRelaysPerIdentity && inserted <= MaxAnnouncedRelays; j++ {
+			at := now.Add(time.Duration(inserted) * time.Millisecond)
+			url := fmt.Sprintf("https://flood-%05d.example", inserted)
+			if err := set.InsertCandidate(mustSignedDescriptor(t, identity, url, at), at); err != nil {
+				t.Fatalf("InsertCandidate(%d) error = %v", inserted, err)
+			}
+			inserted++
+		}
+	}
+
+	visible := false
+	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
+		if desc.APIHTTPSAddr == "https://verified.example" {
+			visible = true
+		}
+	}
+	if !visible {
+		t.Fatal("verified relay must survive a candidate flood filling the global cap")
+	}
+	if got := len(relayStates(set)); got > MaxAnnouncedRelays {
+		t.Fatalf("pool size = %d, want <= %d", got, MaxAnnouncedRelays)
 	}
 }
