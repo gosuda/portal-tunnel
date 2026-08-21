@@ -220,6 +220,13 @@ func TestHandleHopRateLimited(t *testing.T) {
 	if statuses[2] != http.StatusTooManyRequests {
 		t.Fatalf("third status = %d, want %d", statuses[2], http.StatusTooManyRequests)
 	}
+	deleteReq := httptest.NewRequest(http.MethodDelete, types.PathSDKHop, strings.NewReader(`{}`))
+	deleteReq.RemoteAddr = "192.0.2.1:1234"
+	deleteRec := httptest.NewRecorder()
+	server.handleHop(deleteRec, deleteReq)
+	if deleteRec.Code == http.StatusTooManyRequests {
+		t.Fatalf("DELETE after exhausted POST burst = %d, want cleanup to bypass the POST-only limiter", deleteRec.Code)
+	}
 }
 
 func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {

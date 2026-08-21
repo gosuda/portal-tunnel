@@ -429,7 +429,9 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.announceLimiter.Allow(clientIP) {
+	// Only the mutating POST consumes the announce budget: DELETE performs
+	// route and DNS cleanup only and must stay available after a POST burst.
+	if r.Method == http.MethodPost && !s.announceLimiter.Allow(clientIP) {
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "hop route rate limit exceeded")
 		return
 	}
@@ -480,7 +482,7 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	route.ForwardRelay = forwardRelay
-	if err := s.relaySet.InsertAnnounced(forwardRelay, now); err != nil {
+	if err := s.relaySet.InsertHopRelay(forwardRelay, now); err != nil {
 		utils.InvalidRequestError(fmt.Errorf("forward relay: %w", err)).Write(w)
 		return
 	}

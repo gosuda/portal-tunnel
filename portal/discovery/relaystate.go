@@ -66,8 +66,14 @@ func (pt *PercentileTracker) Get(p float64) time.Duration {
 type RelayState struct {
 	Descriptor types.RelayDescriptor
 	Bootstrap  bool
-	Confirmed  bool
-	Banned     bool
+	// Staged marks a relay that entered the set through an untrusted
+	// hop-routing request rather than announce or gossip. Staged entries
+	// still serve the overlay peer of the hop route that introduced them,
+	// but they stay out of Descriptors() and route planning until a direct
+	// discovery poll marks the entry Confirmed.
+	Staged    bool
+	Confirmed bool
+	Banned    bool
 	// Dead marks a relay whose consecutive discovery failures exhausted the
 	// recovery budget. Dead relays are excluded from route planning and relay
 	// listings but stay in the set: the refresher keeps probing them and a

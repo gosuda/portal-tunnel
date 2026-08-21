@@ -224,3 +224,111 @@ func TestInsertAnnouncedPerIdentityCapKeepsConfirmedEntries(t *testing.T) {
 		t.Fatal("listener-confirmed entry must survive the identity cap")
 	}
 }
+
+func mustSignedOverlayDescriptor(t *testing.T, signing types.Identity, relayURL string, issuedAt time.Time) types.RelayDescriptor {
+	t.Helper()
+	authority, err := identity.NewLocalAuthority(signing)
+	if err != nil {
+		t.Fatalf("identity.NewLocalAuthority() error = %v", err)
+	}
+	signed, err := auth.SignRelayDescriptor(types.RelayDescriptor{
+		Address:            signing.Address,
+		Version:            types.DiscoveryVersion,
+		IssuedAt:           issuedAt,
+		ExpiresAt:          issuedAt.Add(DiscoveryDescriptorTTL),
+		APIHTTPSAddr:       relayURL,
+		WireGuardPublicKey: "3dpOqFgLYqlt/5hKsy653evfDxl7PjHUtTXLzcwkqxo=",
+		WireGuardPort:      51820,
+		SupportsOverlay:    true,
+	}, authority)
+	if err != nil {
+		t.Fatalf("SignRelayDescriptor() error = %v", err)
+	}
+	return signed
+}
+
+func TestInsertHopRelayStagesUntilConfirmed(t *testing.T) {
+	set := NewRelaySet(nil)
+	signing := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	relayURL := "https://hop-forward.example"
+
+	if err := set.InsertHopRelay(mustSignedOverlayDescriptor(t, signing, relayURL, now), now); err != nil {
+		t.Fatalf("InsertHopRelay() error = %v", err)
+	}
+	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
+		if desc.APIHTTPSAddr == relayURL {
+			t.Fatal("staged hop relay must stay out of Descriptors() until confirmed")
+		}
+	}
+	overlayPeer := false
+	for _, desc := range set.OverlayPeerDescriptor() {
+		if desc.APIHTTPSAddr == relayURL {
+			overlayPeer = true
+		}
+	}
+	if !overlayPeer {
+		t.Fatal("staged hop relay must remain an overlay peer for its hop route")
+	}
+
+	set.ConfirmRelayURL(relayURL)
+	discovered := false
+	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
+		if desc.APIHTTPSAddr == relayURL {
+			discovered = true
+		}
+	}
+	if !discovered {
+		t.Fatal("confirmed hop relay must appear in Descriptors()")
+	}
+}
+
+func TestFilterCandidatePoolExcludesStagedUntilConfirmed(t *testing.T) {
+	signing := mustSigningIdentity(t)
+	other := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	staged := RelayState{
+		Descriptor: mustSignedOverlayDescriptor(t, signing, "https://staged.example", now),
+		Staged:     true,
+		LastSeenAt: now,
+	}
+	confirmed := RelayState{
+		Descriptor: mustSignedDescriptor(t, other, "https://confirmed-candidate.example", now),
+		Confirmed:  true,
+		LastSeenAt: now,
+	}
+
+	pool := filterCandidatePool([]RelayState{staged, confirmed}, RouteState{}, now, false)
+	if len(pool) != 1 || pool[0].Descriptor.APIHTTPSAddr != "https://confirmed-candidate.example" {
+		t.Fatalf("filterCandidatePool() = %v, want only the confirmed entry", pool)
+	}
+}
+
+func TestApplyRelayDiscoveryResponseAppliesIdentityCap(t *testing.T) {
+	set := NewRelaySet(nil)
+	signing := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	relays := make([]types.RelayDescriptor, 0, MaxAnnouncedRelaysPerIdentity*2)
+	for i := range MaxAnnouncedRelaysPerIdentity * 2 {
+		url := fmt.Sprintf("https://gossip-%02d.example", i)
+		relays = append(relays, mustSignedDescriptor(t, signing, url, now.Add(time.Duration(i)*time.Second)))
+	}
+	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		GeneratedAt:     now,
+		Relays:          relays,
+	}, now); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+
+	ingested := 0
+	for _, state := range relayStates(set) {
+		if strings.EqualFold(state.Descriptor.Address, signing.Address) {
+			ingested++
+		}
+	}
+	if ingested > MaxAnnouncedRelaysPerIdentity {
+		t.Fatalf("gossip ingested %d entries for one identity, want <= %d", ingested, MaxAnnouncedRelaysPerIdentity)
+	}
+}

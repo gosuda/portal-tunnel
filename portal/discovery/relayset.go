@@ -158,6 +158,7 @@ func mergeLocalRelayState(record, existing RelayState) RelayState {
 	record.Confirmed = record.Confirmed || existing.Confirmed
 	record.Banned = record.Banned || existing.Banned
 	record.Dead = record.Dead || existing.Dead
+	record.Staged = record.Staged || existing.Staged
 	if record.discoveryFailures < existing.discoveryFailures {
 		record.discoveryFailures = existing.discoveryFailures
 	}
@@ -260,6 +261,11 @@ func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allo
 			TombstoneUntil: tombstoneUntil,
 		}
 	}
+	// Shared untrusted-ingestion invariant: whichever path admitted the
+	// descriptor (announce, hop route, or gossiped discovery response), a
+	// single signing identity never holds more unverified entries than the
+	// per-identity cap. Confirmed entries are never evicted by this cap.
+	s.enforceIdentityCapLocked(address)
 	return upsertAccepted
 }
 
@@ -483,6 +489,9 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 	pool := make([]RelayState, 0, len(states))
 	for _, state := range states {
 		relayURL := state.Descriptor.APIHTTPSAddr
+		if state.Staged && !state.Confirmed {
+			continue
+		}
 		if !requireOverlay && slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
 			continue
 		}
@@ -648,6 +657,9 @@ func (s *RelaySet) Descriptors(self types.RelayDescriptor) []types.RelayDescript
 	}
 	for _, state := range s.currentRelayStates(now) {
 		if state.Banned || state.Dead || !state.hasObservedDescriptor() {
+			continue
+		}
+		if state.Staged && !state.Confirmed {
 			continue
 		}
 		add(state.Descriptor)
@@ -890,6 +902,18 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 // Returns nil iff the descriptor was stored, idempotently refreshed, or is an
 // older same-URL/same-identity announce already superseded by local state.
 func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) error {
+	return s.insertDescriptor(desc, now, false)
+}
+
+// InsertHopRelay admits a forward relay supplied by an untrusted hop-routing
+// request. The entry is staged: it serves the overlay peer of that hop route
+// but stays out of Descriptors() and automatic route planning until a direct
+// discovery poll marks it Confirmed.
+func (s *RelaySet) InsertHopRelay(desc types.RelayDescriptor, now time.Time) error {
+	return s.insertDescriptor(desc, now, true)
+}
+
+func (s *RelaySet) insertDescriptor(desc types.RelayDescriptor, now time.Time, staged bool) error {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	} else {
@@ -904,6 +928,7 @@ func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) er
 	record := RelayState{
 		Descriptor: normalized,
 		LastSeenAt: now,
+		Staged:     staged,
 	}
 
 	s.mu.Lock()
@@ -920,7 +945,6 @@ func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) er
 
 	switch s.upsertDescriptorLocked(record, now, false) {
 	case upsertAccepted:
-		s.enforceIdentityCapLocked(record.Descriptor.Address)
 		s.enforceCapLocked()
 		return nil
 	case upsertIgnored:
