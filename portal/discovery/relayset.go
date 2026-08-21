@@ -882,7 +882,8 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 }
 
 // InsertCandidate ingests a single descriptor from untrusted input (/sdk/hop
-// or the announce endpoint). The full validation pipeline runs inline:
+// or the announce endpoint) as a RelayCandidate. The full validation
+// pipeline runs inline:
 //
 //  1. The descriptor signature is verified against the recovered public key
 //     and matched to the descriptor's Address field.
@@ -895,12 +896,13 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 //     pre-existing entry at the same URL.
 //  4. The shared upsertDescriptorLocked method enforces the
 //     monotonic-IssuedAt-per-key rollback guard and the cross-identity
-// InsertCandidate admits a descriptor from untrusted input (/sdk/hop,
-// /discovery/announce) as a RelayCandidate. Candidates serve overlay
-// routing for the hop route that brought them in and remain refresh-poll
-// targets, but they stay out of Descriptors() and automatic route planning
-// until a direct authoritative probe of that exact relay promotes them to
-// RelayVerified via ApplyRelayDiscoveryResponse.
+//     URL-takeover guard, plus the per-identity candidate cap shared by
+//     every untrusted ingestion path.
+//
+// Candidates serve overlay routing for the hop route that brought them in
+// and remain refresh-poll targets, but they stay out of Descriptors() and
+// automatic route planning until a direct authoritative probe of that exact
+// relay promotes them to RelayVerified via ApplyRelayDiscoveryResponse.
 func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) error {
 	if now.IsZero() {
 		now = time.Now().UTC()
