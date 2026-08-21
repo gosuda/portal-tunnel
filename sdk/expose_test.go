@@ -4,12 +4,40 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
+
+func TestDefaultX402SpentLedgerPath(t *testing.T) {
+	t.Setenv("PORTAL_X402_STATE_DIR", t.TempDir())
+
+	path, err := DefaultX402SpentLedgerPath("0xAbC123-_. Zz")
+	if err != nil {
+		t.Fatalf("DefaultX402SpentLedgerPath() error = %v", err)
+	}
+	if base := filepath.Base(path); base != "x402-spent-0xabc123-_zz.log" {
+	}
+	if info, err := os.Stat(filepath.Dir(path)); err != nil || !info.IsDir() {
+		t.Fatalf("state dir missing after DefaultX402SpentLedgerPath(): %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("ledger file should not be created before the first payment: %v", err)
+	}
+
+	empty, err := DefaultX402SpentLedgerPath("  ")
+	if err != nil {
+		t.Fatalf("DefaultX402SpentLedgerPath(empty) error = %v", err)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(empty), "x402-spent-default.log") {
+		t.Fatalf("empty identity ledger = %q, want default fallback", empty)
+	}
+}
 
 func mustRelaySet(t *testing.T, relayURLs ...string) *discovery.RelaySet {
 	t.Helper()

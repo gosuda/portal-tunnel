@@ -31,22 +31,53 @@ type Payment struct {
 
 // NewPayment builds the payment implementation selected by its CAIP-2
 // network. An empty network preserves the existing Sui mainnet/testnet
-// selection. The spent store is resource-server-global security state and
-// must be shared by every paid route of one HTTP surface; a nil store
-// disables replay tracking.
-func NewPayment(payment types.X402Payment, spent *SpentDigests) (*Payment, error) {
-	network := strings.ToLower(strings.TrimSpace(payment.Network))
-	switch {
-	case network == "", network == MainnetNetwork, network == TestnetNetwork:
-		return NewUSDCPayment(payment, spent)
-	case IsCasperNetwork(network):
-		return NewCasperPayment(payment, spent)
-	default:
-		return nil, fmt.Errorf("unsupported x402 network %q", network)
-	}
+// selection. The payment gets its own spent-digest store, persisted when the
+// contract configures a ledger path; resource servers serving several paid
+// routes must share one store via NewPaymentWithSpent.
+func NewPayment(payment types.X402Payment) (*Payment, error) {
+	return newPayment(payment, nil)
 }
 
-func NewUSDCPayment(payment types.X402Payment, spent *SpentDigests) (*Payment, error) {
+// NewPaymentWithSpent builds a payment bound to a caller-owned spent-digest
+// store so every paid route of one HTTP surface enforces globally single-use
+// settlements.
+func NewPaymentWithSpent(payment types.X402Payment, spent *SpentDigests) (*Payment, error) {
+	if spent == nil {
+		return nil, errors.New("x402 payment requires a spent-digest store")
+	}
+	return newPayment(payment, spent)
+}
+
+func newPayment(payment types.X402Payment, spent *SpentDigests) (*Payment, error) {
+	network := strings.ToLower(strings.TrimSpace(payment.Network))
+	usdc := network == "" || network == MainnetNetwork || network == TestnetNetwork
+	if !usdc && !IsCasperNetwork(network) {
+		return nil, fmt.Errorf("unsupported x402 network %q", network)
+	}
+	if spent == nil {
+		store, err := NewSpentDigests(payment.SpentLedgerPath)
+		if err != nil {
+			return nil, fmt.Errorf("x402 spent-payment ledger: %w", err)
+		}
+		spent = store
+	}
+	if usdc {
+		return newUSDCPayment(payment, spent)
+	}
+	return newCasperPayment(payment, spent)
+}
+
+// NewUSDCPayment builds a Sui USDC payment contract with its own spent-digest
+// store, persisted when the contract configures a ledger path.
+func NewUSDCPayment(payment types.X402Payment) (*Payment, error) {
+	store, err := NewSpentDigests(payment.SpentLedgerPath)
+	if err != nil {
+		return nil, fmt.Errorf("x402 spent-payment ledger: %w", err)
+	}
+	return newUSDCPayment(payment, store)
+}
+
+func newUSDCPayment(payment types.X402Payment, spent *SpentDigests) (*Payment, error) {
 	network := strings.TrimSpace(payment.Network)
 	if network == "" {
 		network = Network(payment.Testnet)
@@ -249,6 +280,10 @@ func (p *Payment) Settle(ctx context.Context, w http.ResponseWriter, r *http.Req
 	network := strings.TrimSpace(string(settled.Network))
 	if network == "" {
 		network = string(p.requirements.Network)
+	}
+	if p.spent == nil {
+		p.writePaymentRequired(w, r, "payment replay tracking unavailable", "")
+		return nil, false
 	}
 	consumed, err := p.spent.Consume(network, digest)
 	if err != nil {

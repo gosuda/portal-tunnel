@@ -41,13 +41,8 @@ func NewUSDCPaymentHandler(payment types.X402Payment, protectedPath, protectedMe
 	if handler == nil {
 		return nil, errors.New("USDC payment handler is required")
 	}
-	spent, err := NewSpentDigests(strings.TrimSpace(payment.SpentLedgerPath))
+	paid, err := NewUSDCPayment(payment)
 	if err != nil {
-		return nil, fmt.Errorf("x402 spent-payment ledger: %w", err)
-	}
-	paid, err := NewUSDCPayment(payment, spent)
-	if err != nil {
-		_ = spent.Close()
 		return nil, err
 	}
 	payment = paid.payment

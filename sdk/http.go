@@ -351,7 +351,7 @@ func newHTTPRoute(routeConfig HTTPRouteConfig, x402Payment types.X402Payment, en
 		if err != nil {
 			return nil, fmt.Errorf("http route %q x402 payment: %w", route.prefix, err)
 		}
-		payment, err := x402.NewPayment(paymentConfig, spent)
+		payment, err := x402.NewPaymentWithSpent(paymentConfig, spent)
 		if err != nil {
 			return nil, fmt.Errorf("http route %q x402 payment: %w", route.prefix, err)
 		}

@@ -204,6 +204,23 @@ func TestSettleRejectsEmptyTransactionDigest(t *testing.T) {
 	}
 }
 
+func TestSettleRejectsMissingSpentStore(t *testing.T) {
+	payment := &Payment{
+		facilitator:  &replayFacilitator{transaction: "digest-no-store"},
+		requirements: facilitatortypes.PaymentRequirements{Network: "sui:mainnet"},
+	}
+	recorder := httptest.NewRecorder()
+	if _, ok := payment.Settle(context.Background(), recorder, newPaidRequest()); ok {
+		t.Fatal("a settlement without a spent-digest store must be rejected")
+	}
+	if recorder.Code != http.StatusPaymentRequired {
+		t.Fatalf("missing-store settlement status = %d, want %d", recorder.Code, http.StatusPaymentRequired)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "replay tracking unavailable") {
+		t.Fatalf("missing-store settlement body = %q, want unavailable reason", body)
+	}
+}
+
 func TestSettleReplayRejectedAfterReconstruction(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "spent.log")
 

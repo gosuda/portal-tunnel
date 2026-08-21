@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -544,7 +546,7 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 // RunHTTPRoutes serves path-routed HTTP upstreams through the exposure.
 func (e *Exposure) RunHTTPRoutes(ctx context.Context, routes []HTTPRouteConfig, localAddr string) error {
 	cfg := e.Config()
-	handler, err := NewHTTPRoutes(routes, types.X402Payment{
+	paymentConfig := types.X402Payment{
 		Testnet:          cfg.X402Testnet,
 		Network:          cfg.X402Network,
 		Asset:            cfg.X402Asset,
@@ -552,11 +554,58 @@ func (e *Exposure) RunHTTPRoutes(ctx context.Context, routes []HTTPRouteConfig, 
 		Endpoints:        cfg.X402Endpoints,
 		FacilitatorToken: cfg.X402FacilitatorToken,
 		SpentLedgerPath:  cfg.X402SpentLedgerPath,
-	})
+	}
+	// Paid routes get a durable default ledger so replay protection survives
+	// restarts even when no explicit path was configured.
+	if paymentConfig.SpentLedgerPath == "" {
+		for _, route := range routes {
+			if strings.TrimSpace(route.Amount) == "" {
+				continue
+			}
+			path, err := DefaultX402SpentLedgerPath(cfg.Identity.Address)
+			if err != nil {
+				return fmt.Errorf("default x402 spent-payment ledger: %w", err)
+			}
+			paymentConfig.SpentLedgerPath = path
+			break
+		}
+	}
+	handler, err := NewHTTPRoutes(routes, paymentConfig)
 	if err != nil {
 		return err
 	}
 	return e.RunHTTP(ctx, handler, localAddr)
+}
+
+// DefaultX402SpentLedgerPath returns the durable spent-payment journal used
+// when paid routes exist but no explicit ledger path is configured. The path
+// is derived from the tunnel identity so the same service keeps its replay
+// protection across restarts, while unrelated services never contend on one
+// file. PORTAL_X402_STATE_DIR overrides the base directory.
+func DefaultX402SpentLedgerPath(identityAddress string) (string, error) {
+	base := strings.TrimSpace(os.Getenv("PORTAL_X402_STATE_DIR"))
+	if base == "" {
+		userConfig, err := os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve x402 state dir: %w", err)
+		}
+		base = filepath.Join(userConfig, "portal-tunnel")
+	}
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return "", fmt.Errorf("create x402 state dir: %w", err)
+	}
+	safe := strings.ToLower(strings.TrimSpace(identityAddress))
+	var builder strings.Builder
+	for _, r := range safe {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'z', r == '-', r == '_':
+			builder.WriteRune(r)
+		}
+	}
+	if builder.Len() == 0 {
+		builder.WriteString("default")
+	}
+	return filepath.Join(base, "x402-spent-"+builder.String()+".log"), nil
 }
 
 func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr string) error {

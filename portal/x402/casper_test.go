@@ -136,7 +136,7 @@ func TestNewCasperPayment(t *testing.T) {
 		PayTo:            "Account-Hash-ABC123",
 		Amount:           "0.25",
 		FacilitatorToken: testFacilitatorToken,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("NewCasperPayment: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestNewCasperPaymentErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := NewCasperPayment(tt.payment, nil); err == nil {
+			if _, err := NewCasperPayment(tt.payment); err == nil {
 				t.Fatal("expected an error")
 			}
 		})
@@ -253,7 +253,7 @@ func TestCasperFacilitatorSettle(t *testing.T) {
 		Amount:           "0.01",
 		Endpoints:        []string{server.URL},
 		FacilitatorToken: testFacilitatorToken,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("NewCasperPayment: %v", err)
 	}

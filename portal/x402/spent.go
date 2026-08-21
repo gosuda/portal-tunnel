@@ -17,8 +17,9 @@ import (
 // route of one HTTP surface must share a single instance, because a
 // settlement digest is globally single-use. State is a process-local set
 // plus an optional append-only journal that restores protection across
-// restarts. A nil SpentDigests disables tracking, which keeps zero-value
-// Payments usable.
+// restarts. A nil SpentDigests performs no tracking for direct Consume
+// callers; Payment.Settle rejects payments that have no store, so payments
+// built through the constructors always enforce single-use settlements.
 type SpentDigests struct {
 	mu      sync.Mutex
 	spent   map[string]struct{}
