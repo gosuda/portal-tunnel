@@ -254,6 +254,9 @@ func DecodeAPIRequestError(resp *http.Response) error {
 func DecodeJSONRequest[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (T, bool) {
 	dst, err := decodeJSONRequestBody[T](w, r, maxBytes)
 	if err != nil {
+		if writeRequestBodyTooLarge(w, err) {
+			return dst, false
+		}
 		WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return dst, false
 	}
@@ -263,6 +266,9 @@ func DecodeJSONRequest[T any](w http.ResponseWriter, r *http.Request, maxBytes i
 func DecodeJSONRequestAs[T any](w http.ResponseWriter, r *http.Request, maxBytes int64, invalid APIErrorResponse) (T, bool) {
 	dst, err := decodeJSONRequestBody[T](w, r, maxBytes)
 	if err != nil {
+		if writeRequestBodyTooLarge(w, err) {
+			return dst, false
+		}
 		invalid.Write(w)
 		return dst, false
 	}
@@ -277,6 +283,15 @@ func decodeJSONRequestBody[T any](w http.ResponseWriter, r *http.Request, maxByt
 		return dst, err
 	}
 	return dst, nil
+}
+
+func writeRequestBodyTooLarge(w http.ResponseWriter, err error) bool {
+	var maxBytesError *http.MaxBytesError
+	if !errors.As(err, &maxBytesError) {
+		return false
+	}
+	WriteAPIError(w, http.StatusRequestEntityTooLarge, types.APIErrorCodeInvalidRequest, "request body too large")
+	return true
 }
 
 func httpJSONRequest(payload any, headers http.Header) (io.Reader, http.Header, error) {

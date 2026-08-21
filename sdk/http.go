@@ -2,7 +2,6 @@ package sdk
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -199,9 +198,12 @@ func (h *HTTPRoutes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		var req types.X402PreparePaymentRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid payment prepare request", http.StatusBadRequest)
+		req, ok := utils.DecodeJSONRequestAs[types.X402PreparePaymentRequest](w, r, types.X402RequestBodyLimit, utils.APIErrorResponse{
+			Status:  http.StatusBadRequest,
+			Code:    types.APIErrorCodeInvalidJSON,
+			Message: "invalid payment prepare request",
+		})
+		if !ok {
 			return
 		}
 		if strings.TrimSpace(req.Path) == "" {
