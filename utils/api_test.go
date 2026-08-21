@@ -97,3 +97,17 @@ func TestDecodeJSONRequestAsWritesCustomInvalidError(t *testing.T) {
 		t.Fatalf("DecodeJSONRequestAs() status/envelope = %d/%+v, want custom invalid error", rec.Code, envelope)
 	}
 }
+
+func TestDecodeJSONRequestRejectsOversizedBody(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(`{"value":"too large"}`))
+	rec := httptest.NewRecorder()
+
+	if _, ok := DecodeJSONRequest[map[string]string](rec, req, 8); ok {
+		t.Fatal("DecodeJSONRequest() ok = true, want false")
+	}
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("DecodeJSONRequest() status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}

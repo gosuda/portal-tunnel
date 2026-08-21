@@ -7,6 +7,9 @@ import (
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
 )
 
+// X402RequestBodyLimit is the maximum accepted size of an x402 JSON request body.
+const X402RequestBodyLimit int64 = 64 << 10
+
 // X402FacilitatorInfo describes relay-owned x402 control-plane facilitator settings exposed by the API.
 type X402FacilitatorInfo struct {
 	Enabled      bool   `json:"enabled"`

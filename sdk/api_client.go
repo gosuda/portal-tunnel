@@ -28,6 +28,7 @@ const (
 	defaultReadyTarget         = 2
 	defaultRetryWait           = 3 * time.Second
 	defaultHTTPShutdownTimeout = 5 * time.Second
+	defaultIdleTimeout         = 90 * time.Second
 )
 
 var errRelayIncompatible = errors.New("relay is incompatible")
