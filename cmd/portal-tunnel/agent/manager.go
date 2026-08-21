@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/thumbnail"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -479,6 +480,12 @@ type managedTunnel struct {
 	exposure  *sdk.Exposure
 	lastError string
 	runtime   types.AgentTunnelStatus
+
+	// discoveredThumbnail is what --thumbnail-from-target found at startup.
+	// cfg.Thumbnail stays as configured, so without keeping this the next
+	// metadata update would rebuild metadata from cfg and erase the value, and
+	// Snapshot would report the tunnel as having no thumbnail at all.
+	discoveredThumbnail string
 }
 
 func newTunnel(cfg TunnelConfig) *managedTunnel {
@@ -567,7 +574,7 @@ func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays boo
 	}
 	var err error
 	if updateMetadata {
-		err = errors.Join(err, exposure.UpdateMetadata(metadataFromTunnelConfig(cfg)))
+		err = errors.Join(err, exposure.UpdateMetadata(t.metadata(cfg)))
 	}
 	if updateMaxActiveRelays {
 		err = errors.Join(err, exposure.UpdateMaxActiveRelays(cfg.MaxActiveRelays))
@@ -616,7 +623,7 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 		Discovery:       discovery,
 		MaxActiveRelays: cfg.MaxActiveRelays,
 		ECH:             cfg.ECH,
-		Metadata:        metadataFromTunnelConfig(cfg),
+		Metadata:        t.metadata(cfg),
 		MultiHop:        append([]string(nil), cfg.MultiHop...),
 		X402PayTo:       strings.TrimSpace(cfg.X402PayTo),
 		X402Testnet:     cfg.X402Testnet,
@@ -709,6 +716,15 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if x402FacilitatorToken == "" {
 		x402FacilitatorToken = strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY"))
 	}
+	// Only when the tunnel starts. The metadata update and snapshot paths reuse
+	// metadataFromTunnelConfig and must not re-read the target every time.
+	exposeMetadata := metadataFromTunnelConfig(cfg)
+	exposeMetadata.Thumbnail = thumbnail.Resolve(
+		ctx, exposeMetadata.Thumbnail, cfg.TargetAddr, cfg.ThumbnailFromTarget)
+	t.mu.Lock()
+	t.discoveredThumbnail = exposeMetadata.Thumbnail
+	t.mu.Unlock()
+
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:            append([]string(nil), cfg.RelayURLs...),
 		Discovery:            discovery,
@@ -724,7 +740,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		MultiHopDepth:        cfg.MultiHopDepth,
 		BanMITM:              banMITM,
 		MaxActiveRelays:      cfg.MaxActiveRelays,
-		Metadata:             metadataFromTunnelConfig(cfg),
+		Metadata:             exposeMetadata,
 		X402PayTo:            cfg.X402PayTo,
 		X402Testnet:          cfg.X402Testnet,
 		X402Network:          cfg.X402Network,
@@ -768,6 +784,20 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		return ctx.Err()
 	}
 	return err
+}
+
+// metadata is metadataFromTunnelConfig plus whatever discovery supplied, so a
+// value the operator never typed survives an update that rebuilds from cfg.
+// An explicit thumbnail always wins, exactly as it does at startup.
+func (t *managedTunnel) metadata(cfg TunnelConfig) types.LeaseMetadata {
+	meta := metadataFromTunnelConfig(cfg)
+	if strings.TrimSpace(meta.Thumbnail) != "" {
+		return meta
+	}
+	t.mu.RLock()
+	meta.Thumbnail = t.discoveredThumbnail
+	t.mu.RUnlock()
+	return meta
 }
 
 func metadataFromTunnelConfig(cfg TunnelConfig) types.LeaseMetadata {

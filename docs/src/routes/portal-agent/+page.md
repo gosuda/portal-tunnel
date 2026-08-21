@@ -221,6 +221,7 @@ Common fields:
 | `ech` | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
+| `thumbnail_from_target` | Fill an empty `thumbnail` with the first absolute image URL the target advertises: `og:image`, then `twitter:image`, then an icon link |
 | `x402_pay_to` | Payment recipient for paid HTTP routes |
 | `x402_testnet` | Use Sui testnet when `x402_network` is omitted |
 | `x402_network` | Optional Sui or Casper CAIP-2 network |

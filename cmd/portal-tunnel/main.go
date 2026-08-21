@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/thumbnail"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -59,6 +60,7 @@ type exposeFlags struct {
 	tags                 string
 	owner                string
 	thumbnail            string
+	thumbnailFromTarget  bool
 	hide                 bool
 	x402PayTo            string
 	x402Testnet          bool
@@ -95,6 +97,7 @@ func runExposeCommand(args []string) error {
 	utils.StringFlag(fs, &flags.tags, "tags", "", "Service tags metadata (comma-separated)")
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
+	utils.BoolFlag(fs, &flags.thumbnailFromTarget, "thumbnail-from-target", false, "when --thumbnail is empty, use the first absolute image URL the target advertises (og:image, then twitter:image, then an icon link)")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
 	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
@@ -243,8 +246,11 @@ func runExposeCommand(args []string) error {
 			Description: flags.desc,
 			Tags:        utils.SplitCSV(flags.tags),
 			Owner:       flags.owner,
-			Thumbnail:   flags.thumbnail,
-			Hide:        flags.hide,
+			// Resolved here rather than by the SDK: how metadata.thumbnail was
+			// chosen is not part of the tunnelling contract, and sdk.Expose
+			// should receive a finished value.
+			Thumbnail: thumbnail.Resolve(ctx, flags.thumbnail, flags.targetAddr, flags.thumbnailFromTarget),
+			Hide:      flags.hide,
 		},
 		X402PayTo:            flags.x402PayTo,
 		X402Testnet:          flags.x402Testnet,

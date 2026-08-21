@@ -59,6 +59,7 @@ type TunnelConfig struct {
 	Tags                 []string          `koanf:"tags"`
 	Owner                string            `koanf:"owner"`
 	Thumbnail            string            `koanf:"thumbnail"`
+	ThumbnailFromTarget  bool              `koanf:"thumbnail_from_target"`
 	Hide                 bool              `koanf:"hide"`
 	X402PayTo            string            `koanf:"x402_pay_to"`
 	X402Testnet          bool              `koanf:"x402_testnet"`
@@ -222,6 +223,9 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	addStringSliceDocumentField(out, "tags", cfg.Tags)
 	addStringDocumentField(out, "owner", cfg.Owner)
 	addStringDocumentField(out, "thumbnail", cfg.Thumbnail)
+	if cfg.ThumbnailFromTarget {
+		out["thumbnail_from_target"] = cfg.ThumbnailFromTarget
+	}
 	if cfg.Hide {
 		out["hide"] = cfg.Hide
 	}
