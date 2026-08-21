@@ -230,5 +230,6 @@ func NewCasperPayment(payment types.X402Payment) (*Payment, error) {
 		payment:      payment,
 		facilitator:  facilitator,
 		requirements: requirements,
+		spent:        NewSpentDigests(payment.SpentLedgerPath),
 	}, nil
 }

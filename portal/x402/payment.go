@@ -26,6 +26,7 @@ type Payment struct {
 	payment      types.X402Payment
 	facilitator  facilitatorcore.Facilitator
 	requirements facilitatortypes.PaymentRequirements
+	spent        *SpentDigests
 }
 
 // NewPayment builds the payment implementation selected by its CAIP-2 network.
@@ -96,11 +97,11 @@ func NewUSDCPayment(payment types.X402Payment) (*Payment, error) {
 	payment.ResourcePath = strings.TrimSpace(payment.ResourcePath)
 	payment.ResourceDescription = strings.TrimSpace(payment.ResourceDescription)
 	payment.ResourceMimeType = strings.TrimSpace(payment.ResourceMimeType)
-
 	return &Payment{
 		payment:      payment,
 		facilitator:  facilitator,
 		requirements: requirements,
+		spent:        NewSpentDigests(payment.SpentLedgerPath),
 	}, nil
 }
 
@@ -232,6 +233,18 @@ func (p *Payment) Settle(ctx context.Context, w http.ResponseWriter, r *http.Req
 		}
 		event.Msg("x402 payment settlement rejected")
 		p.writePaymentRequired(w, r, "payment settlement failed", "")
+		return nil, false
+	}
+	network := strings.TrimSpace(string(settled.Network))
+	if network == "" {
+		network = string(p.requirements.Network)
+	}
+	if !p.spent.Consume(network, settled.Transaction) {
+		log.Warn().
+			Str("network", network).
+			Str("transaction", strings.TrimSpace(settled.Transaction)).
+			Msg("x402 payment replay rejected")
+		p.writePaymentRequired(w, r, "payment already redeemed", "")
 		return nil, false
 	}
 	return settled, true
