@@ -22,6 +22,7 @@ func TestDefaultX402SpentLedgerPath(t *testing.T) {
 		t.Fatalf("DefaultX402SpentLedgerPath() error = %v", err)
 	}
 	if base := filepath.Base(path); base != "x402-spent-0xabc123-_zz.log" {
+		t.Fatalf("ledger file name = %q, want sanitized identity", base)
 	}
 	if info, err := os.Stat(filepath.Dir(path)); err != nil || !info.IsDir() {
 		t.Fatalf("state dir missing after DefaultX402SpentLedgerPath(): %v", err)
