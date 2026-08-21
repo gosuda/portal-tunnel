@@ -169,7 +169,7 @@ func (f *casperFacilitator) Supported() *facilitatortypes.SupportedResponse {
 // NewCasperPayment builds a wCSPR x402 payment contract settled by a Casper
 // x402 facilitator. The wCSPR CEP-18 contract hash must be configured through
 // payment.Asset because it differs per network deployment.
-func NewCasperPayment(payment types.X402Payment) (*Payment, error) {
+func NewCasperPayment(payment types.X402Payment, spent *SpentDigests) (*Payment, error) {
 	network := strings.TrimSpace(payment.Network)
 	if network == "" {
 		network = CasperNetwork(payment.Testnet)
@@ -230,6 +230,6 @@ func NewCasperPayment(payment types.X402Payment) (*Payment, error) {
 		payment:      payment,
 		facilitator:  facilitator,
 		requirements: requirements,
-		spent:        NewSpentDigests(payment.SpentLedgerPath),
+		spent:        spent,
 	}, nil
 }

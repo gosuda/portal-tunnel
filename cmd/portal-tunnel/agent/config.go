@@ -66,6 +66,7 @@ type TunnelConfig struct {
 	X402Asset            string            `koanf:"x402_asset"`
 	X402Endpoints        []string          `koanf:"x402_endpoints"`
 	X402FacilitatorToken string            `koanf:"x402_facilitator_token"`
+	X402SpentLedgerPath  string            `koanf:"x402_spent_ledger_path"`
 }
 
 type HTTPRouteConfig struct {
@@ -233,6 +234,7 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	addStringDocumentField(out, "x402_asset", cfg.X402Asset)
 	addStringSliceDocumentField(out, "x402_endpoints", cfg.X402Endpoints)
 	addStringDocumentField(out, "x402_facilitator_token", cfg.X402FacilitatorToken)
+	addStringDocumentField(out, "x402_spent_ledger_path", cfg.X402SpentLedgerPath)
 	return out
 }
 

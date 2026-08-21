@@ -731,6 +731,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		X402Asset:            cfg.X402Asset,
 		X402Endpoints:        append([]string(nil), cfg.X402Endpoints...),
 		X402FacilitatorToken: x402FacilitatorToken,
+		X402SpentLedgerPath:  strings.TrimSpace(cfg.X402SpentLedgerPath),
 	})
 	if err != nil {
 		return err

@@ -151,28 +151,47 @@ type HTTPRoutes struct {
 }
 
 // NewHTTPRoutes creates routed HTTP handling with an explicit x402
-// payment contract shared by every paid route.
+// payment contract shared by every paid route. All paid routes share one
+// spent-digest store so a settlement digest is single-use across the whole
+// HTTP surface; the optional journal path comes from the shared contract.
 func NewHTTPRoutes(routeConfigs []HTTPRouteConfig, x402Payment types.X402Payment) (*HTTPRoutes, error) {
 	if len(routeConfigs) == 0 {
 		return nil, errors.New("at least one http route is required")
 	}
 
 	x402Payment.PayTo = strings.TrimSpace(x402Payment.PayTo)
+	x402Payment.SpentLedgerPath = strings.TrimSpace(x402Payment.SpentLedgerPath)
+	var spent *x402.SpentDigests
+	ensureSpent := func() (*x402.SpentDigests, error) {
+		if spent == nil {
+			store, err := x402.NewSpentDigests(x402Payment.SpentLedgerPath)
+			if err != nil {
+				return nil, fmt.Errorf("x402 spent-payment ledger: %w", err)
+			}
+			spent = store
+		}
+		return spent, nil
+	}
 	routes := make([]*httpRoute, 0, len(routeConfigs))
 	seen := make(map[string]struct{}, len(routeConfigs))
 	for _, routeConfig := range routeConfigs {
-		route, err := newHTTPRoute(routeConfig, x402Payment)
+		route, err := newHTTPRoute(routeConfig, x402Payment, ensureSpent)
 		if err != nil {
+			if spent != nil {
+				_ = spent.Close()
+			}
 			return nil, err
 		}
 		if _, ok := seen[route.prefix]; ok {
+			if spent != nil {
+				_ = spent.Close()
+			}
 			return nil, fmt.Errorf("duplicate http route prefix %q", route.prefix)
 		}
 		seen[route.prefix] = struct{}{}
 		route.handler = route.newHandler()
 		routes = append(routes, route)
 	}
-
 	sort.Slice(routes, func(i, j int) bool {
 		if len(routes[i].prefix) == len(routes[j].prefix) {
 			return routes[i].prefix < routes[j].prefix
@@ -255,7 +274,7 @@ type httpRoute struct {
 	handler        http.Handler
 }
 
-func newHTTPRoute(routeConfig HTTPRouteConfig, x402Payment types.X402Payment) (*httpRoute, error) {
+func newHTTPRoute(routeConfig HTTPRouteConfig, x402Payment types.X402Payment, ensureSpent func() (*x402.SpentDigests, error)) (*httpRoute, error) {
 	prefix := strings.TrimSpace(routeConfig.Prefix)
 	if prefix == "" {
 		return nil, errors.New("http route prefix is required")
@@ -328,7 +347,11 @@ func newHTTPRoute(routeConfig HTTPRouteConfig, x402Payment types.X402Payment) (*
 		paymentConfig := x402Payment
 		paymentConfig.Amount = amount
 		paymentConfig.ResourcePath = route.prefix
-		payment, err := x402.NewPayment(paymentConfig)
+		spent, err := ensureSpent()
+		if err != nil {
+			return nil, fmt.Errorf("http route %q x402 payment: %w", route.prefix, err)
+		}
+		payment, err := x402.NewPayment(paymentConfig, spent)
 		if err != nil {
 			return nil, fmt.Errorf("http route %q x402 payment: %w", route.prefix, err)
 		}

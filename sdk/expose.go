@@ -63,6 +63,7 @@ type ExposeConfig struct {
 	X402Asset            string
 	X402Endpoints        []string
 	X402FacilitatorToken string
+	X402SpentLedgerPath  string
 }
 
 func (cfg ExposeConfig) snapshot() ExposeConfig {
@@ -75,6 +76,7 @@ func (cfg ExposeConfig) snapshot() ExposeConfig {
 	cfg.X402Asset = strings.TrimSpace(cfg.X402Asset)
 	cfg.X402Endpoints = utils.CloneSlice(cfg.X402Endpoints)
 	cfg.X402FacilitatorToken = strings.TrimSpace(cfg.X402FacilitatorToken)
+	cfg.X402SpentLedgerPath = strings.TrimSpace(cfg.X402SpentLedgerPath)
 	return cfg
 }
 
@@ -168,6 +170,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	runtimeCfg.X402Asset = strings.TrimSpace(cfg.X402Asset)
 	runtimeCfg.X402Endpoints = utils.CloneSlice(cfg.X402Endpoints)
 	runtimeCfg.X402FacilitatorToken = strings.TrimSpace(cfg.X402FacilitatorToken)
+	runtimeCfg.X402SpentLedgerPath = strings.TrimSpace(cfg.X402SpentLedgerPath)
 
 	exposureCtx, cancel := context.WithCancel(ctx)
 	exposure := &Exposure{
@@ -548,6 +551,7 @@ func (e *Exposure) RunHTTPRoutes(ctx context.Context, routes []HTTPRouteConfig, 
 		PayTo:            cfg.X402PayTo,
 		Endpoints:        cfg.X402Endpoints,
 		FacilitatorToken: cfg.X402FacilitatorToken,
+		SpentLedgerPath:  cfg.X402SpentLedgerPath,
 	})
 	if err != nil {
 		return err
