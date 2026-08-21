@@ -920,6 +920,7 @@ func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) er
 
 	switch s.upsertDescriptorLocked(record, now, false) {
 	case upsertAccepted:
+		s.enforceIdentityCapLocked(record.Descriptor.Address)
 		s.enforceCapLocked()
 		return nil
 	case upsertIgnored:
@@ -928,6 +929,41 @@ func (s *RelaySet) InsertAnnounced(desc types.RelayDescriptor, now time.Time) er
 		return errors.New("announced descriptor rejected by rollback or takeover guard")
 	}
 	return nil
+}
+
+// enforceIdentityCapLocked bounds how many unverified announced entries a
+// single signing identity holds in the set. Overflow evicts that identity's
+// own oldest entries by LastSeenAt, so a flooding identity recycles its own
+// slots instead of displacing other relays through the global cap. Bootstrap,
+// banned, and listener-confirmed entries are never evicted here; the keyIndex
+// rollback anchors survive eviction by design. The caller MUST already hold
+// s.mu as a write lock.
+func (s *RelaySet) enforceIdentityCapLocked(address string) {
+	address = strings.ToLower(strings.TrimSpace(address))
+	if address == "" {
+		return
+	}
+	type ownedEntry struct {
+		url    string
+		seenAt time.Time
+	}
+	owned := make([]ownedEntry, 0, MaxAnnouncedRelaysPerIdentity+1)
+	for url, state := range s.relays {
+		if state.Bootstrap || state.Banned || state.Confirmed {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(state.Descriptor.Address)) != address {
+			continue
+		}
+		owned = append(owned, ownedEntry{url: url, seenAt: state.LastSeenAt})
+	}
+	if len(owned) <= MaxAnnouncedRelaysPerIdentity {
+		return
+	}
+	sort.Slice(owned, func(i, j int) bool { return owned[i].seenAt.Before(owned[j].seenAt) })
+	for _, entry := range owned[:len(owned)-MaxAnnouncedRelaysPerIdentity] {
+		delete(s.relays, entry.url)
+	}
 }
 
 func verifyFreshRelayDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayDescriptor, error) {

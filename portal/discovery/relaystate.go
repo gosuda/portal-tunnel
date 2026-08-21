@@ -21,6 +21,13 @@ const (
 	// listener-confirmed entries are pinned and never evicted by capacity.
 	MaxAnnouncedRelays = 1024
 
+	// MaxAnnouncedRelaysPerIdentity bounds how many unverified announced
+	// entries one signing identity may hold. Overflow recycles that
+	// identity's own oldest entries, so an unauthenticated announce or
+	// hop-route flood cannot use the identity's slots to push other relays
+	// toward the global-cap eviction.
+	MaxAnnouncedRelaysPerIdentity = 4
+
 	// AnnounceClockSkewTolerance bounds how far in the future a descriptor's
 	// IssuedAt may sit relative to local time. Anything beyond this is
 	// rejected as clock-skewed or maliciously post-dated.

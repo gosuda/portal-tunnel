@@ -425,11 +425,16 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		utils.MethodNotAllowedError().Write(w)
 		return
 	}
-	if s.overlay == nil || s.relaySet == nil {
-		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
+	clientIP, ok := s.extractAllowedClientIP(w, r)
+	if !ok {
 		return
 	}
-	if _, ok := s.extractAllowedClientIP(w, r); !ok {
+	if !s.announceLimiter.Allow(clientIP) {
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "hop route rate limit exceeded")
+		return
+	}
+	if s.overlay == nil || s.relaySet == nil {
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
 		return
 	}
 

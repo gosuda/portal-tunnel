@@ -1,6 +1,8 @@
 package discovery
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +161,66 @@ func TestAnnounceLimiterAllowsBurstThenThrottles(t *testing.T) {
 	}
 	if !limiter.Allow("10.0.0.2") {
 		t.Fatal("different IP should have its own bucket")
+	}
+}
+
+func TestInsertAnnouncedCapsFloodPerSigningIdentity(t *testing.T) {
+	set := NewRelaySet(nil)
+	legit := mustSigningIdentity(t)
+	attacker := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	if err := set.InsertAnnounced(mustSignedDescriptor(t, legit, "https://legit.example", now), now); err != nil {
+		t.Fatalf("legit insert error = %v", err)
+	}
+	// Flood the pool the way the reported abuse does: one signing identity
+	// announcing MaxAnnouncedRelays distinct URLs with fresh IssuedAt.
+	for i := range MaxAnnouncedRelays {
+		at := now.Add(time.Duration(i) * time.Second)
+		url := fmt.Sprintf("https://attacker-%04d.example", i)
+		if err := set.InsertAnnounced(mustSignedDescriptor(t, attacker, url, at), at); err != nil {
+			t.Fatalf("flood insert %d error = %v", i, err)
+		}
+	}
+
+	var legitEntries, attackerEntries int
+	for _, state := range relayStates(set) {
+		switch strings.ToLower(state.Descriptor.Address) {
+		case strings.ToLower(legit.Address):
+			legitEntries++
+		case strings.ToLower(attacker.Address):
+			attackerEntries++
+		}
+	}
+	if legitEntries != 1 {
+		t.Fatalf("legit entries = %d, want 1 (identity flood must not displace other relays)", legitEntries)
+	}
+	if attackerEntries != MaxAnnouncedRelaysPerIdentity {
+		t.Fatalf("attacker entries = %d, want %d", attackerEntries, MaxAnnouncedRelaysPerIdentity)
+	}
+}
+
+func TestInsertAnnouncedPerIdentityCapKeepsConfirmedEntries(t *testing.T) {
+	set := NewRelaySet(nil)
+	owner := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	confirmedURL := "https://confirmed.example"
+	set.relays[confirmedURL] = RelayState{
+		Descriptor: mustSignedDescriptor(t, owner, confirmedURL, now),
+		Confirmed:  true,
+		LastSeenAt: now,
+	}
+	for i := range MaxAnnouncedRelaysPerIdentity * 2 {
+		at := now.Add(time.Duration(i) * time.Second)
+		url := fmt.Sprintf("https://owner-%02d.example", i)
+		if err := set.InsertAnnounced(mustSignedDescriptor(t, owner, url, at), at); err != nil {
+			t.Fatalf("insert %d error = %v", i, err)
+		}
+	}
+
+	confirmed, ok := set.relays[confirmedURL]
+	if !ok || !confirmed.Confirmed {
+		t.Fatal("listener-confirmed entry must survive the identity cap")
 	}
 }
