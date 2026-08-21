@@ -158,7 +158,14 @@ func mergeLocalRelayState(record, existing RelayState) RelayState {
 	record.Confirmed = record.Confirmed || existing.Confirmed
 	record.Banned = record.Banned || existing.Banned
 	record.Dead = record.Dead || existing.Dead
-	if existing.Trust > record.Trust {
+	// Trust never transfers across an identity change on the same URL: a
+	// takeover after descriptor expiry must start over as a candidate. A
+	// genuine rotation re-verifies through the authoritative probe path.
+	sameIdentity := strings.EqualFold(
+		strings.TrimSpace(record.Descriptor.Address),
+		strings.TrimSpace(existing.Descriptor.Address),
+	)
+	if sameIdentity && existing.Trust > record.Trust {
 		record.Trust = existing.Trust
 	}
 	if record.discoveryFailures < existing.discoveryFailures {
@@ -492,8 +499,15 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 	pool := make([]RelayState, 0, len(states))
 	for _, state := range states {
 		relayURL := state.Descriptor.APIHTTPSAddr
-		if !state.Bootstrap && state.Trust != RelayVerified {
-			continue
+		if state.Trust != RelayVerified {
+			// A bootstrap URL configured by the operator stays eligible as
+			// a URL-only single-hop fallback until a direct probe verifies
+			// it, but a descriptor squatted on a bootstrap URL by an
+			// untrusted candidate is not eligible at all, and unverified
+			// bootstrap entries never join multi-hop paths.
+			if requireOverlay || !state.Bootstrap || state.hasObservedDescriptor() {
+				continue
+			}
 		}
 		if !requireOverlay && slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
 			continue
@@ -662,13 +676,10 @@ func (s *RelaySet) Descriptors(self types.RelayDescriptor) []types.RelayDescript
 		if state.Banned || state.Dead || !state.hasObservedDescriptor() {
 			continue
 		}
-		if !state.Bootstrap && state.Trust != RelayVerified {
+		if state.Trust != RelayVerified {
 			continue
 		}
 		add(state.Descriptor)
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }

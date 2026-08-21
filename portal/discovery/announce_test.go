@@ -462,3 +462,77 @@ func TestGlobalCapEvictsCandidatesBeforeVerified(t *testing.T) {
 		t.Fatalf("pool size = %d, want <= %d", got, MaxAnnouncedRelays)
 	}
 }
+
+func TestTrustDoesNotTransferAcrossIdentityTakeover(t *testing.T) {
+	set := NewRelaySet(nil)
+	first := mustSigningIdentity(t)
+	attacker := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	relayURL := "https://takeover.example"
+
+	firstDescriptor := mustSignedDescriptor(t, first, relayURL, now)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		GeneratedAt:     now,
+		Relays:          []types.RelayDescriptor{firstDescriptor},
+	}, now); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+
+	// The verified descriptor expires, which opens the URL slot to a
+	// cross-identity takeover.
+	later := now.Add(DiscoveryDescriptorTTL + time.Minute)
+	if err := set.InsertCandidate(mustSignedDescriptor(t, attacker, relayURL, later), later); err != nil {
+		t.Fatalf("InsertCandidate() error = %v", err)
+	}
+
+	state, ok := set.relays[relayURL]
+	if !ok {
+		t.Fatal("replacement descriptor must be stored")
+	}
+	if state.Trust != RelayCandidate {
+		t.Fatalf("trust = %v, want RelayCandidate after a cross-identity takeover", state.Trust)
+	}
+	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
+		if desc.APIHTTPSAddr == relayURL {
+			t.Fatal("replacement identity must not inherit visibility from the previous identity")
+		}
+	}
+}
+
+func TestBootstrapCandidateDescriptorStaysHidden(t *testing.T) {
+	bootstrapURL := "https://bootstrap.example"
+	set := NewRelaySet([]string{bootstrapURL})
+	attacker := mustSigningIdentity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	if err := set.InsertCandidate(mustSignedDescriptor(t, attacker, bootstrapURL, now), now); err != nil {
+		t.Fatalf("InsertCandidate() error = %v", err)
+	}
+	state, ok := set.relays[bootstrapURL]
+	if !ok || !state.Bootstrap {
+		t.Fatal("bootstrap pin must survive a candidate insert at the same URL")
+	}
+	if state.Trust != RelayCandidate {
+		t.Fatalf("trust = %v, want RelayCandidate for a squatted bootstrap descriptor", state.Trust)
+	}
+	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
+		if desc.APIHTTPSAddr == bootstrapURL {
+			t.Fatal("candidate descriptor squatted on a bootstrap URL must stay out of Descriptors()")
+		}
+	}
+	if pool := filterCandidatePool([]RelayState{state}, RouteState{}, now, false); len(pool) != 0 {
+		t.Fatalf("filterCandidatePool() = %v, want the squatted bootstrap excluded", pool)
+	}
+
+	// URL-only bootstrap entries keep their single-hop fallback role, but
+	// never join multi-hop paths.
+	urlOnly := newRelayState("https://bootstrap-fallback.example")
+	urlOnly.Bootstrap = true
+	if pool := filterCandidatePool([]RelayState{urlOnly}, RouteState{}, now, false); len(pool) != 1 {
+		t.Fatal("URL-only bootstrap entry must remain a single-hop fallback candidate")
+	}
+	if pool := filterCandidatePool([]RelayState{urlOnly}, RouteState{}, now, true); len(pool) != 0 {
+		t.Fatal("URL-only bootstrap entry must not join multi-hop paths")
+	}
+}
