@@ -22,20 +22,16 @@ type X402FacilitatorInfo struct {
 
 // X402Payment is the stable x402 payment contract shared by SDK helpers and payment apps.
 type X402Payment struct {
-	Testnet           bool
-	Network           string
-	NetworkName       string
-	Asset             string
-	PayTo             string
-	Amount            string
-	MaxTimeoutSeconds int
-	RequestTimeout    time.Duration
-	Endpoints         []string
-	FacilitatorToken  string
-	// SpentLedgerPath is an optional append-only journal that records
-	// consumed settlement digests so replay protection survives restarts.
-	// Empty keeps consumed digests in process memory only.
-	SpentLedgerPath     string
+	Testnet             bool
+	Network             string
+	NetworkName         string
+	Asset               string
+	PayTo               string
+	Amount              string
+	MaxTimeoutSeconds   int
+	RequestTimeout      time.Duration
+	Endpoints           []string
+	FacilitatorToken    string
 	ResourcePath        string
 	ResourceDescription string
 	ResourceMimeType    string

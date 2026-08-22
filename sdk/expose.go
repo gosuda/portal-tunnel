@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -65,7 +63,6 @@ type ExposeConfig struct {
 	X402Asset            string
 	X402Endpoints        []string
 	X402FacilitatorToken string
-	X402SpentLedgerPath  string
 }
 
 func (cfg ExposeConfig) snapshot() ExposeConfig {
@@ -78,7 +75,6 @@ func (cfg ExposeConfig) snapshot() ExposeConfig {
 	cfg.X402Asset = strings.TrimSpace(cfg.X402Asset)
 	cfg.X402Endpoints = utils.CloneSlice(cfg.X402Endpoints)
 	cfg.X402FacilitatorToken = strings.TrimSpace(cfg.X402FacilitatorToken)
-	cfg.X402SpentLedgerPath = strings.TrimSpace(cfg.X402SpentLedgerPath)
 	return cfg
 }
 
@@ -172,7 +168,6 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	runtimeCfg.X402Asset = strings.TrimSpace(cfg.X402Asset)
 	runtimeCfg.X402Endpoints = utils.CloneSlice(cfg.X402Endpoints)
 	runtimeCfg.X402FacilitatorToken = strings.TrimSpace(cfg.X402FacilitatorToken)
-	runtimeCfg.X402SpentLedgerPath = strings.TrimSpace(cfg.X402SpentLedgerPath)
 
 	exposureCtx, cancel := context.WithCancel(ctx)
 	exposure := &Exposure{
@@ -553,59 +548,12 @@ func (e *Exposure) RunHTTPRoutes(ctx context.Context, routes []HTTPRouteConfig, 
 		PayTo:            cfg.X402PayTo,
 		Endpoints:        cfg.X402Endpoints,
 		FacilitatorToken: cfg.X402FacilitatorToken,
-		SpentLedgerPath:  cfg.X402SpentLedgerPath,
-	}
-	// Paid routes get a durable default ledger so replay protection survives
-	// restarts even when no explicit path was configured.
-	if paymentConfig.SpentLedgerPath == "" {
-		for _, route := range routes {
-			if strings.TrimSpace(route.Amount) == "" {
-				continue
-			}
-			path, err := DefaultX402SpentLedgerPath(cfg.Identity.Address)
-			if err != nil {
-				return fmt.Errorf("default x402 spent-payment ledger: %w", err)
-			}
-			paymentConfig.SpentLedgerPath = path
-			break
-		}
 	}
 	handler, err := NewHTTPRoutes(routes, paymentConfig)
 	if err != nil {
 		return err
 	}
 	return e.RunHTTP(ctx, handler, localAddr)
-}
-
-// DefaultX402SpentLedgerPath returns the durable spent-payment journal used
-// when paid routes exist but no explicit ledger path is configured. The path
-// is derived from the tunnel identity so the same service keeps its replay
-// protection across restarts, while unrelated services never contend on one
-// file. PORTAL_X402_STATE_DIR overrides the base directory.
-func DefaultX402SpentLedgerPath(identityAddress string) (string, error) {
-	base := strings.TrimSpace(os.Getenv("PORTAL_X402_STATE_DIR"))
-	if base == "" {
-		userConfig, err := os.UserConfigDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve x402 state dir: %w", err)
-		}
-		base = filepath.Join(userConfig, "portal-tunnel")
-	}
-	if err := os.MkdirAll(base, 0o700); err != nil {
-		return "", fmt.Errorf("create x402 state dir: %w", err)
-	}
-	safe := strings.ToLower(strings.TrimSpace(identityAddress))
-	var builder strings.Builder
-	for _, r := range safe {
-		switch {
-		case r >= '0' && r <= '9', r >= 'a' && r <= 'z', r == '-', r == '_':
-			builder.WriteRune(r)
-		}
-	}
-	if builder.Len() == 0 {
-		builder.WriteString("default")
-	}
-	return filepath.Join(base, "x402-spent-"+builder.String()+".log"), nil
 }
 
 func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr string) error {

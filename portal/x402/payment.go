@@ -26,58 +26,23 @@ type Payment struct {
 	payment      types.X402Payment
 	facilitator  facilitatorcore.Facilitator
 	requirements facilitatortypes.PaymentRequirements
-	spent        *SpentDigests
 }
 
 // NewPayment builds the payment implementation selected by its CAIP-2
-// network. An empty network preserves the existing Sui mainnet/testnet
-// selection. The payment gets its own spent-digest store, persisted when the
-// contract configures a ledger path; resource servers serving several paid
-// routes must share one store via NewPaymentWithSpent.
+// network. An empty network preserves the existing Sui mainnet/testnet selection.
 func NewPayment(payment types.X402Payment) (*Payment, error) {
-	return newPayment(payment, nil)
-}
-
-// NewPaymentWithSpent builds a payment bound to a caller-owned spent-digest
-// store so every paid route of one HTTP surface enforces globally single-use
-// settlements.
-func NewPaymentWithSpent(payment types.X402Payment, spent *SpentDigests) (*Payment, error) {
-	if spent == nil {
-		return nil, errors.New("x402 payment requires a spent-digest store")
-	}
-	return newPayment(payment, spent)
-}
-
-func newPayment(payment types.X402Payment, spent *SpentDigests) (*Payment, error) {
 	network := strings.ToLower(strings.TrimSpace(payment.Network))
-	usdc := network == "" || network == MainnetNetwork || network == TestnetNetwork
-	if !usdc && !IsCasperNetwork(network) {
+	switch {
+	case network == "", network == MainnetNetwork, network == TestnetNetwork:
+		return NewUSDCPayment(payment)
+	case IsCasperNetwork(network):
+		return NewCasperPayment(payment)
+	default:
 		return nil, fmt.Errorf("unsupported x402 network %q", network)
 	}
-	if spent == nil {
-		store, err := NewSpentDigests(payment.SpentLedgerPath)
-		if err != nil {
-			return nil, fmt.Errorf("x402 spent-payment ledger: %w", err)
-		}
-		spent = store
-	}
-	if usdc {
-		return newUSDCPayment(payment, spent)
-	}
-	return newCasperPayment(payment, spent)
 }
 
-// NewUSDCPayment builds a Sui USDC payment contract with its own spent-digest
-// store, persisted when the contract configures a ledger path.
 func NewUSDCPayment(payment types.X402Payment) (*Payment, error) {
-	store, err := NewSpentDigests(payment.SpentLedgerPath)
-	if err != nil {
-		return nil, fmt.Errorf("x402 spent-payment ledger: %w", err)
-	}
-	return newUSDCPayment(payment, store)
-}
-
-func newUSDCPayment(payment types.X402Payment, spent *SpentDigests) (*Payment, error) {
 	network := strings.TrimSpace(payment.Network)
 	if network == "" {
 		network = Network(payment.Testnet)
@@ -135,7 +100,6 @@ func newUSDCPayment(payment types.X402Payment, spent *SpentDigests) (*Payment, e
 		payment:      payment,
 		facilitator:  facilitator,
 		requirements: requirements,
-		spent:        spent,
 	}, nil
 }
 
@@ -277,22 +241,20 @@ func (p *Payment) Settle(ctx context.Context, w http.ResponseWriter, r *http.Req
 		p.writePaymentRequired(w, r, "settlement response missing transaction digest", "")
 		return nil, false
 	}
-	network := strings.TrimSpace(string(settled.Network))
-	if network == "" {
-		network = string(p.requirements.Network)
-	}
-	if p.spent == nil {
-		p.writePaymentRequired(w, r, "payment replay tracking unavailable", "")
-		return nil, false
-	}
-	consumed, err := p.spent.Consume(network, digest)
-	if err != nil {
-		p.writePaymentRequired(w, r, "payment ledger unavailable", "")
-		return nil, false
-	}
-	if !consumed {
+	requiredNetwork := strings.ToLower(strings.TrimSpace(string(p.requirements.Network)))
+	settledNetwork := strings.ToLower(strings.TrimSpace(string(settled.Network)))
+	if settledNetwork != "" && settledNetwork != requiredNetwork {
 		log.Warn().
-			Str("network", network).
+			Str("required_network", requiredNetwork).
+			Str("settled_network", settledNetwork).
+			Str("transaction", digest).
+			Msg("x402 settlement returned an unexpected network")
+		p.writePaymentRequired(w, r, "settlement response network mismatch", "")
+		return nil, false
+	}
+	if !consumeSettlement(requiredNetwork, digest) {
+		log.Warn().
+			Str("network", requiredNetwork).
 			Str("transaction", digest).
 			Msg("x402 payment replay rejected")
 		p.writePaymentRequired(w, r, "payment already redeemed", "")

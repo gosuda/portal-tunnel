@@ -285,6 +285,12 @@ external SDK, and retry with `PAYMENT-SIGNATURE` or `X-PAYMENT`; the embedded
 browser client remains Sui-only. Payment is enforced by the tunnel before the
 request reaches the upstream.
 
+Portal treats a successful settlement response from the configured facilitator
+as authoritative. It requires a transaction identifier, verifies any returned
+network against the requested network, and allows each `(network, transaction)`
+to grant access once per Portal process. This consumed-payment state is kept in
+memory and resets when the process restarts.
+
 #### x402 payment networks
 
 | Network | Asset | Decimals | Facilitator |

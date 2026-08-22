@@ -66,7 +66,6 @@ type exposeFlags struct {
 	x402Asset            string
 	x402Endpoints        []string
 	x402FacilitatorToken string
-	x402SpentLedgerPath  string
 	targetAddr           string
 	httpRoutes           []string
 	serve                string
@@ -103,7 +102,6 @@ func runExposeCommand(args []string) error {
 	utils.StringFlag(fs, &flags.x402Asset, "x402-asset", "", "Payment asset contract; required for Casper wCSPR")
 	utils.RepeatedStringFlag(fs, &flags.x402Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint")
 	utils.StringFlagEnv(fs, &flags.x402FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
-	utils.StringFlag(fs, &flags.x402SpentLedgerPath, "x402-spent-ledger-path", "", "Append-only journal that records spent x402 settlement digests so replay protection survives restarts; required for persistent paid routes")
 	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
 	utils.StringFlag(fs, &flags.serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
@@ -254,7 +252,6 @@ func runExposeCommand(args []string) error {
 		X402Asset:            flags.x402Asset,
 		X402Endpoints:        flags.x402Endpoints,
 		X402FacilitatorToken: flags.x402FacilitatorToken,
-		X402SpentLedgerPath:  flags.x402SpentLedgerPath,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start relays: %w", err)
