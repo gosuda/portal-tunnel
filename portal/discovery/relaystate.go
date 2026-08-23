@@ -259,7 +259,7 @@ type RouteState struct {
 	RequireUDP      bool
 	RequireTCP      bool
 	// LocalAddress is the ingress identity address used by MOLS route selection to
-	// derive a deterministic row index into the GF(64) MOLS grid.
+	// derive a deterministic row index into the MOLS grid.
 	LocalAddress string
 }
 

@@ -1,7 +1,10 @@
 package discovery
 
-// MOLS selection ranks relays using a GF(64)-based MOLS grid with a
-// non-invasive adaptive partition over local load telemetry.
+// MOLS selection ranks relays on an NxN MOLS grid sized to the current relay
+// pool, with a non-invasive adaptive partition over local load telemetry.
+// The grid is rebuilt on every selection from the eligible pool, so a node
+// that was evicted or filtered out simply shrinks the grid (N+1 -> N) and the
+// remaining indexes are recomputed mechanically; no stale entries can linger.
 //
 // Ordering Pipeline:
 //   1. Filter: Apply ban, dead, expiry, and protocol compatibility gates.
@@ -15,9 +18,6 @@ import (
 )
 
 const (
-	molsOrder         = 64
-	molsMagicConstant = molsOrder*molsOrder + 1 // n^2+1 = 4097
-
 	molsBaseM1    uint8 = 3
 	molsBaseM2    uint8 = 5
 	molsVariantM1 uint8 = 7
@@ -30,44 +30,7 @@ const (
 	defaultMaxActiveRelays     = 3
 )
 
-// gf64Mul performs multiplication in GF(2^6) with primitive polynomial x^6 + x + 1 (0x43).
-func gf64Mul(a, b uint8) uint8 {
-	a &= 0x3f
-	b &= 0x3f
-	var r uint8
-	for b != 0 {
-		if b&1 != 0 {
-			r ^= a
-		}
-		if a&0x20 != 0 {
-			a = ((a << 1) ^ 0x43) & 0x3f
-		} else {
-			a = (a << 1) & 0x3f
-		}
-		b >>= 1
-	}
-	return r
-}
-
-// gridOrderForSize returns the smallest supported MOLS grid order that can
-// accommodate the relay pool size.
-func gridOrderForSize(poolSize int) int {
-	if poolSize <= molsOrder {
-		return molsOrder
-	}
-	rem := poolSize % 32
-	if rem == 0 {
-		return poolSize
-	}
-	return poolSize + (32 - rem)
-}
-
 func molsScore(i, j, m1, m2, order int) int {
-	if order == molsOrder {
-		l1 := gf64Mul(uint8(m1), uint8(i)) ^ uint8(j)
-		l2 := gf64Mul(uint8(m2), uint8(i)) ^ uint8(j)
-		return int(l1)*order + int(l2) + 1
-	}
 	return ((m1*i+j)%order)*order + ((m2*i + j) % order) + 1
 }
 
@@ -75,13 +38,16 @@ func molsCongestionScore(i, j, m1, m2, order int) int {
 	return (order*order + 1) - molsScore(i, (order-1)-j, m1, m2, order)
 }
 
-func hashToGF64(s string) uint8 {
+// hashToGridIndex maps an identity string to an FNV-1a hash. Callers fold it
+// into the current grid order with % order, so the same identity keeps a
+// stable index as the grid grows or shrinks with the pool.
+func hashToGridIndex(s string) uint32 {
 	var h uint32 = 2166136261
 	for i := 0; i < len(s); i++ {
 		h ^= uint32(s[i])
 		h *= 16777619
 	}
-	return uint8(h & 0x3f)
+	return h
 }
 
 func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
@@ -166,7 +132,6 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 		return nil
 	}
 
-	ingressIdx := hashToGF64(localAddress)
 	avgRTT, cv := molsRTTStats(autoPool)
 	congested := avgRTT > molsCongestionRTTThreshold
 	nonLinear := cv > molsCVThreshold
@@ -176,15 +141,14 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 		m1, m2 = molsVariantM1, molsVariantM2
 	}
 
-	order := gridOrderForSize(len(autoPool))
+	order := len(autoPool)
+	ingressRow := int(hashToGridIndex(localAddress) % uint32(order))
 	scoreFor := func(state RelayState) int {
-		candidateIdx := hashToGF64(state.Descriptor.APIHTTPSAddr)
-		row := int(ingressIdx) % order
-		col := int(candidateIdx) % order
+		col := int(hashToGridIndex(state.Descriptor.APIHTTPSAddr) % uint32(order))
 		if congested {
-			return molsCongestionScore(row, col, int(m1), int(m2), order)
+			return molsCongestionScore(ingressRow, col, int(m1), int(m2), order)
 		}
-		return molsScore(row, col, int(m1), int(m2), order)
+		return molsScore(ingressRow, col, int(m1), int(m2), order)
 	}
 
 	activeStates := make([]RelayState, 0, len(autoPool))

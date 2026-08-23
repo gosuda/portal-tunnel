@@ -7,8 +7,8 @@ import "time"
 type SelectionTrace struct {
 	Timestamp time.Time
 
-	// ClientHash is hashToGF64(LocalAddress) — a single byte derived from the
-	// client identity. Used only for sampled debug-log correlation. Not a
+	// ClientHash is the FNV-1a hash of LocalAddress folded into the grid order
+	// at selection time. Used only for sampled debug-log correlation. Not a
 	// Prometheus label (would unbounded cardinality) and not a public field on
 	// any external API.
 	ClientHash uint8
