@@ -2,6 +2,9 @@ package discovery
 
 // MOLS selection ranks relays on an NxN MOLS grid sized to the current relay
 // pool, with a non-invasive adaptive partition over local load telemetry.
+// Multipliers are chosen per grid order so m1, m2, and m1-m2 stay coprime to
+// the order; even orders admit no such pair and fall back to a single-square
+// (1,1) score, which remains deterministic and duplicate-free per row.
 // The grid is rebuilt on every selection from the eligible pool, so a node
 // that was evicted or filtered out simply shrinks the grid (N+1 -> N) and the
 // remaining indexes are recomputed mechanically; no stale entries can linger.
@@ -34,13 +37,51 @@ func molsScore(i, j, m1, m2, order int) int {
 	return ((m1*i+j)%order)*order + ((m2*i + j) % order) + 1
 }
 
+// molsPairValid reports whether m1, m2, and m1-m2 are all coprime to order,
+// which keeps both linear Latin squares orthogonal at this grid order.
+func molsPairValid(order, m1, m2 int) bool {
+	gcd := func(a, b int) int {
+		if a < 0 {
+			a = -a
+		}
+		for b != 0 {
+			a, b = b, a%b
+		}
+		return a
+	}
+	return gcd(m1, order) == 1 && gcd(m2, order) == 1 && gcd(m1-m2, order) == 1
+}
+
+// molsMultipliers selects per-order multipliers: it prefers the base (or
+// variant) constants and otherwise scans for the smallest valid pair. Even
+// orders admit no orthogonal pair (all units are odd, so m1-m2 is even); ok is
+// false then and callers fall back to the single-square (1,1) score, which
+// stays deterministic and duplicate-free per row without MOLS fairness.
+func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
+	p1, p2 := int(molsBaseM1), int(molsBaseM2)
+	if variant {
+		p1, p2 = int(molsVariantM1), int(molsVariantM2)
+	}
+	if molsPairValid(order, p1, p2) {
+		return p1, p2, true
+	}
+	for a := 1; a < order; a++ {
+		for b := a + 1; b < order; b++ {
+			if molsPairValid(order, a, b) {
+				return a, b, true
+			}
+		}
+	}
+	return 1, 1, false
+}
+
 func molsCongestionScore(i, j, m1, m2, order int) int {
 	return (order*order + 1) - molsScore(i, (order-1)-j, m1, m2, order)
 }
 
-// hashToGridIndex maps an identity string to an FNV-1a hash. Callers fold it
-// into the current grid order with % order, so the same identity keeps a
-// stable index as the grid grows or shrinks with the pool.
+// hashToGridIndex maps an identity string to a stable FNV-1a hash. Callers
+// fold it into the current grid order with % order; the folded index is not
+// stable across orders, so it is recomputed whenever the pool size changes.
 func hashToGridIndex(s string) uint32 {
 	var h uint32 = 2166136261
 	for i := 0; i < len(s); i++ {
@@ -136,19 +177,15 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 	congested := avgRTT > molsCongestionRTTThreshold
 	nonLinear := cv > molsCVThreshold
 
-	m1, m2 := molsBaseM1, molsBaseM2
-	if nonLinear {
-		m1, m2 = molsVariantM1, molsVariantM2
-	}
-
 	order := len(autoPool)
+	m1, m2, _ := molsMultipliers(order, nonLinear)
 	ingressRow := int(hashToGridIndex(localAddress) % uint32(order))
 	scoreFor := func(state RelayState) int {
 		col := int(hashToGridIndex(state.Descriptor.APIHTTPSAddr) % uint32(order))
 		if congested {
-			return molsCongestionScore(ingressRow, col, int(m1), int(m2), order)
+			return molsCongestionScore(ingressRow, col, m1, m2, order)
 		}
-		return molsScore(ingressRow, col, int(m1), int(m2), order)
+		return molsScore(ingressRow, col, m1, m2, order)
 	}
 
 	activeStates := make([]RelayState, 0, len(autoPool))

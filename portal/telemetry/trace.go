@@ -11,7 +11,7 @@ type SelectionTrace struct {
 	// at selection time. Used only for sampled debug-log correlation. Not a
 	// Prometheus label (would unbounded cardinality) and not a public field on
 	// any external API.
-	ClientHash uint8
+	ClientHash uint32
 
 	// Mode is "priority" or "multihop", matching the calling method.
 	Mode string

@@ -60,12 +60,13 @@ func TestMOLSSelectPriorityMathematicalOrdering(t *testing.T) {
 	selected := SelectPriority(states, RouteState{LocalAddress: clientAddr})
 
 	order := len(states)
+	m1, m2, _ := molsMultipliers(order, false)
 	row := int(hashToGridIndex(clientAddr) % uint32(order))
 	for i := 0; i < len(selected)-1; i++ {
 		colA := int(hashToGridIndex(selected[i]) % uint32(order))
 		colB := int(hashToGridIndex(selected[i+1]) % uint32(order))
-		scoreA := molsScore(row, colA, int(molsBaseM1), int(molsBaseM2), order)
-		scoreB := molsScore(row, colB, int(molsBaseM1), int(molsBaseM2), order)
+		scoreA := molsScore(row, colA, m1, m2, order)
+		scoreB := molsScore(row, colB, m1, m2, order)
 		if scoreA < scoreB {
 			t.Fatalf("selected[%d:%d] scores = %d < %d", i, i+1, scoreA, scoreB)
 		}
@@ -279,13 +280,14 @@ func TestMOLSSelectPriorityCongestionSwitchChangesOrder(t *testing.T) {
 	if normal[0] == congested[0] {
 		// Verify the scores are actually different to confirm the switch is working.
 		order := 2
+		m1, m2, _ := molsMultipliers(order, false)
 		row := int(hashToGridIndex("ingress-test") % uint32(order))
 		j1 := int(hashToGridIndex("https://relay-one.example") % uint32(order))
 		j2 := int(hashToGridIndex("https://relay-two.example") % uint32(order))
-		normal1 := molsScore(row, j1, int(molsBaseM1), int(molsBaseM2), order)
-		normal2 := molsScore(row, j2, int(molsBaseM1), int(molsBaseM2), order)
-		cong1 := molsCongestionScore(row, j1, int(molsBaseM1), int(molsBaseM2), order)
-		cong2 := molsCongestionScore(row, j2, int(molsBaseM1), int(molsBaseM2), order)
+		normal1 := molsScore(row, j1, m1, m2, order)
+		normal2 := molsScore(row, j2, m1, m2, order)
+		cong1 := molsCongestionScore(row, j1, m1, m2, order)
+		cong2 := molsCongestionScore(row, j2, m1, m2, order)
 		if (normal1 > normal2) != (cong1 > cong2) {
 			t.Fatal("expected congestion switch to invert ordering but result matched normal mode")
 		}
@@ -333,10 +335,12 @@ func TestMOLSSelectPriorityVariantGridActivatesOnHighCV(t *testing.T) {
 	variantOrder := SelectPriority(variantStates, RouteState{LocalAddress: localAddress})
 
 	order := len(relays)
-	if want := expectedScoreOrder(relays, localAddress, order, molsBaseM1, molsBaseM2); !slices.Equal(normalOrder, want) {
+	baseM1, baseM2, _ := molsMultipliers(order, false)
+	variantM1, variantM2, _ := molsMultipliers(order, true)
+	if want := expectedScoreOrder(relays, localAddress, order, baseM1, baseM2); !slices.Equal(normalOrder, want) {
 		t.Fatalf("normal order = %v, want %v (base multipliers)", normalOrder, want)
 	}
-	if want := expectedScoreOrder(relays, localAddress, order, molsVariantM1, molsVariantM2); !slices.Equal(variantOrder, want) {
+	if want := expectedScoreOrder(relays, localAddress, order, variantM1, variantM2); !slices.Equal(variantOrder, want) {
 		t.Fatalf("variant order = %v, want %v (variant multipliers)", variantOrder, want)
 	}
 }
@@ -372,6 +376,7 @@ func TestMOLSSelectPriorityDifferentIngressDifferentOrder(t *testing.T) {
 	if len(orderings) == 1 {
 		// Verify by checking MOLS row diversity for these relays.
 		order := len(states)
+		m1, m2, _ := molsMultipliers(order, false)
 		cols := make([]int, len(relayURLs))
 		for i, relayURL := range relayURLs {
 			cols[i] = int(hashToGridIndex(relayURL) % uint32(order))
@@ -383,7 +388,7 @@ func TestMOLSSelectPriorityDifferentIngressDifferentOrder(t *testing.T) {
 			i := int(hashToGridIndex(addr) % uint32(order))
 			var r row
 			for k, col := range cols {
-				r[k] = molsScore(i, col, int(molsBaseM1), int(molsBaseM2), order)
+				r[k] = molsScore(i, col, m1, m2, order)
 			}
 			rows[r] = struct{}{}
 		}
@@ -430,7 +435,7 @@ func TestRankRelayPoolIncludesEveryEligibleRelay(t *testing.T) {
 // expectedScoreOrder mirrors RankRelayPool's index derivation: the ingress row
 // is hashToGridIndex(localAddress) % order and each relay's column is
 // hashToGridIndex(url) % order, where order is the current pool size.
-func expectedScoreOrder(urls []string, localAddress string, order int, m1, m2 uint8) []string {
+func expectedScoreOrder(urls []string, localAddress string, order, m1, m2 int) []string {
 	row := int(hashToGridIndex(localAddress) % uint32(order))
 	type scored struct {
 		url   string
@@ -441,7 +446,7 @@ func expectedScoreOrder(urls []string, localAddress string, order int, m1, m2 ui
 		col := int(hashToGridIndex(relayURL) % uint32(order))
 		scoredURLs = append(scoredURLs, scored{
 			url:   relayURL,
-			score: molsScore(row, col, int(m1), int(m2), order),
+			score: molsScore(row, col, m1, m2, order),
 		})
 	}
 	slices.SortStableFunc(scoredURLs, func(a, b scored) int {
@@ -475,7 +480,8 @@ func TestRankRelayPoolGridShrinksWithPool(t *testing.T) {
 	}
 
 	ranked4 := RankRelayPool(states, localAddress)
-	if want := expectedScoreOrder(relays, localAddress, 4, molsBaseM1, molsBaseM2); !slices.Equal(ranked4, want) {
+	m1o4, m2o4, _ := molsMultipliers(4, false)
+	if want := expectedScoreOrder(relays, localAddress, 4, m1o4, m2o4); !slices.Equal(ranked4, want) {
 		t.Fatalf("RankRelayPool(4 relays) = %v, want %v (4x4 grid order)", ranked4, want)
 	}
 
@@ -486,7 +492,8 @@ func TestRankRelayPoolGridShrinksWithPool(t *testing.T) {
 	if slices.Contains(ranked3, relays[3]) {
 		t.Fatalf("RankRelayPool(3 relays) = %v, removed relay %q still present", ranked3, relays[3])
 	}
-	if want := expectedScoreOrder(survivors, localAddress, 3, molsBaseM1, molsBaseM2); !slices.Equal(ranked3, want) {
+	m1o3, m2o3, _ := molsMultipliers(3, false)
+	if want := expectedScoreOrder(survivors, localAddress, 3, m1o3, m2o3); !slices.Equal(ranked3, want) {
 		t.Fatalf("RankRelayPool(3 relays) = %v, want %v (3x3 grid order)", ranked3, want)
 	}
 }
@@ -518,7 +525,8 @@ func TestSelectPriorityBannedRelayShrinksGrid(t *testing.T) {
 	if slices.Contains(selected, bannedURL) {
 		t.Fatalf("selected = %v, banned relay %q still present", selected, bannedURL)
 	}
-	if want := expectedScoreOrder(survivors, localAddress, len(survivors), molsBaseM1, molsBaseM2); !slices.Equal(selected, want) {
+	m1, m2, _ := molsMultipliers(len(survivors), false)
+	if want := expectedScoreOrder(survivors, localAddress, len(survivors), m1, m2); !slices.Equal(selected, want) {
 		t.Fatalf("selected = %v, want %v (3x3 grid order)", selected, want)
 	}
 }
@@ -710,7 +718,8 @@ func TestMOLSSelectPriorityScoreOrdering(t *testing.T) {
 		t.Fatalf("len(selected) = %d, want 2", len(selected))
 	}
 
-	if want := expectedScoreOrder(relays, localAddress, len(relays), molsBaseM1, molsBaseM2); !slices.Equal(selected, want) {
+	m1, m2, _ := molsMultipliers(len(relays), false)
+	if want := expectedScoreOrder(relays, localAddress, len(relays), m1, m2); !slices.Equal(selected, want) {
 		t.Fatalf("selected = %v, want %v (2x2 grid order)", selected, want)
 	}
 }
