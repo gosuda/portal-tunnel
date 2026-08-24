@@ -58,6 +58,9 @@ func molsPairValid(order, m1, m2 int) bool {
 // false then and callers fall back to the single-square (1,1) score, which
 // stays deterministic and duplicate-free per row without MOLS fairness.
 func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
+	if order%2 == 0 {
+		return 1, 1, false
+	}
 	p1, p2 := int(molsBaseM1), int(molsBaseM2)
 	if variant {
 		p1, p2 = int(molsVariantM1), int(molsVariantM2)
@@ -65,10 +68,13 @@ func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
 	if molsPairValid(order, p1, p2) {
 		return p1, p2, true
 	}
+	base1, base2 := int(molsBaseM1), int(molsBaseM2)
 	for a := 1; a < order; a++ {
 		for b := a + 1; b < order; b++ {
 			if molsPairValid(order, a, b) {
-				return a, b, true
+				if !variant || a%order != base1%order || b%order != base2%order {
+					return a, b, true
+				}
 			}
 		}
 	}
