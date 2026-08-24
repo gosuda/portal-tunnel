@@ -6,7 +6,7 @@ GO_PACKAGES := . ./cmd/... ./portal/... ./sdk/... ./types/... ./utils/...
 GO_BUILD_FLAGS := -trimpath -ldflags "-s -w"
 GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
 GOIMPORTS_VERSION := v0.49.0
-GOLANGCI_LINT_VERSION := v2.12.2
+GOLANGCI_LINT_VERSION := v2.13.1
 GOJGP_VERSION := v1.1.1
 GOIMPORTS_LOCAL := github.com/gosuda/portal-tunnel/v2
 

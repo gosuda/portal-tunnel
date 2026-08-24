@@ -311,7 +311,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	peeked, err := reader.Peek(frameSize)
 	defer conn.SetReadDeadline(time.Time{})
 	if err != nil {
-		return wrapBufferedConn(conn, reader), false, nil
+		return wrapBufferedConn(conn, reader), false, fmt.Errorf("peek mitm probe frame: %w", err)
 	}
 
 	nonceHex := hex.EncodeToString(peeked[:frameSize])
