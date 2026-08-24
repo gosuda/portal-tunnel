@@ -194,6 +194,50 @@ func markDiscoveryVerified(state RelayState) RelayState {
 	return state
 }
 
+func (s *RelaySet) descriptorRollbackResultLocked(
+	record RelayState,
+	relayURL string,
+	address string,
+	now time.Time,
+) (upsertResult, bool) {
+	prev, ok := s.keyIndex[address]
+	if !ok {
+		return 0, false
+	}
+	// Stale tombstone: no replayable descriptor could still be within its
+	// validity window, so drop the anchor and accept the fresh descriptor as
+	// if first-seen.
+	if !prev.TombstoneUntil.IsZero() && now.After(prev.TombstoneUntil) {
+		delete(s.keyIndex, address)
+		return 0, false
+	}
+	if !record.Descriptor.IssuedAt.Before(prev.IssuedAt) {
+		return 0, false
+	}
+
+	existing, ok := s.relays[relayURL]
+	if !ok {
+		return upsertRejected, true
+	}
+	existingAddress := strings.ToLower(strings.TrimSpace(existing.Descriptor.Address))
+	existingIsCurrent := !existing.Descriptor.IssuedAt.Before(record.Descriptor.IssuedAt)
+	if existingAddress == address && existing.Descriptor.ExpiresAt.After(now) && existingIsCurrent {
+		return upsertIgnored, true
+	}
+	return upsertRejected, true
+}
+
+func (s *RelaySet) crossIdentityTakeoverBlockedLocked(relayURL, address string, now time.Time) bool {
+	existing, ok := s.relays[relayURL]
+	if !ok {
+		return false
+	}
+	existingAddress := strings.ToLower(strings.TrimSpace(existing.Descriptor.Address))
+	differentIdentity := existingAddress != "" && address != "" && existingAddress != address
+	unexpired := !existing.Descriptor.ExpiresAt.IsZero() && existing.Descriptor.ExpiresAt.After(now)
+	return differentIdentity && unexpired
+}
+
 // upsertDescriptorLocked applies a fully-merged RelayState to s.relays and
 // updates the keyIndex. The caller MUST already hold s.mu as a write lock.
 //
@@ -226,33 +270,12 @@ func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allo
 	}
 	address := strings.ToLower(strings.TrimSpace(record.Descriptor.Address))
 	if address != "" {
-		if prev, ok := s.keyIndex[address]; ok {
-			// Stale tombstone: no replayable descriptor could still be
-			// within its validity window, so drop the anchor and accept
-			// the fresh descriptor as if first-seen.
-			if !prev.TombstoneUntil.IsZero() && now.After(prev.TombstoneUntil) {
-				delete(s.keyIndex, address)
-			} else if record.Descriptor.IssuedAt.Before(prev.IssuedAt) {
-				if existing, ok := s.relays[relayURL]; ok {
-					existingAddress := strings.ToLower(strings.TrimSpace(existing.Descriptor.Address))
-					if existingAddress == address && existing.Descriptor.ExpiresAt.After(now) &&
-						!existing.Descriptor.IssuedAt.Before(record.Descriptor.IssuedAt) {
-						return upsertIgnored
-					}
-				}
-				return upsertRejected
-			}
+		if result, found := s.descriptorRollbackResultLocked(record, relayURL, address, now); found {
+			return result
 		}
 	}
-	if !allowCrossIdentityTakeover {
-		if existing, ok := s.relays[relayURL]; ok {
-			existingAddress := strings.ToLower(strings.TrimSpace(existing.Descriptor.Address))
-			if existingAddress != "" && address != "" && existingAddress != address {
-				if !existing.Descriptor.ExpiresAt.IsZero() && existing.Descriptor.ExpiresAt.After(now) {
-					return upsertRejected
-				}
-			}
-		}
+	if !allowCrossIdentityTakeover && s.crossIdentityTakeoverBlockedLocked(relayURL, address, now) {
+		return upsertRejected
 	}
 	s.relays[relayURL] = record
 	if address != "" {
@@ -475,8 +498,11 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 	for _, relayURL := range routeState.ExplicitRelayURLs {
 		eligible := true
 		for _, state := range states {
-			if state.Descriptor.APIHTTPSAddr == relayURL &&
-				(state.Banned || state.Dead || !state.supportsRequiredTransports(routeState, now)) {
+			if state.Descriptor.APIHTTPSAddr != relayURL {
+				continue
+			}
+			unavailable := state.Banned || state.Dead || !state.supportsRequiredTransports(routeState, now)
+			if unavailable {
 				eligible = false
 				break
 			}
@@ -552,7 +578,7 @@ func buildMOLSPaths(ranked []string, depth, maxEntries int) ([]Route, error) {
 	routes := make([]Route, 0, maxEntries)
 	for start := 0; start < maxEntries; start++ {
 		path := make([]string, 0, depth)
-		for i := 0; i < depth; i++ {
+		for i := range depth {
 			path = append(path, ranked[(start+i)%n])
 		}
 		routes = append(routes, NewRoute(path, false))
@@ -773,6 +799,26 @@ func (s *RelaySet) DeactivateRelayURL(relayURL string) {
 	s.relays[relayURL] = state
 }
 
+// discoveryRelayStateLocked is the cryptographic gate for every gossiped
+// descriptor. The caller must hold s.mu for reading the URL ban state.
+func (s *RelaySet) discoveryRelayStateLocked(
+	descriptor types.RelayDescriptor,
+	now time.Time,
+) (RelayState, string, bool) {
+	verified, err := verifyFreshRelayDescriptor(descriptor, now)
+	if err != nil {
+		return RelayState{}, "", false
+	}
+	relayURL := verified.APIHTTPSAddr
+	if relayURL == "" {
+		return RelayState{}, "", false
+	}
+	if existing, ok := s.relays[relayURL]; ok && existing.Banned {
+		return RelayState{}, "", false
+	}
+	return RelayState{Descriptor: verified, LastSeenAt: now}, relayURL, true
+}
+
 func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.DiscoveryResponse, now time.Time) (relaySetChanged bool, err error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -789,26 +835,10 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	discoveredByURL := make(map[string]RelayState, len(resp.Relays))
 	discoveredOrder := make([]string, 0, len(resp.Relays)+1)
 	targetFound := false
-	add := func(descriptor types.RelayDescriptor) {
-		// Cryptographic gate: every gossiped descriptor must carry a valid
-		// signature. Unsigned or invalid-signature descriptors are dropped
-		// silently; they cannot poison the local relay set, and other peers
-		// will reach the same verdict independently. This is the sole global
-		// trust gate under unconditional propagation, so it is mandatory.
-		verified, verifyErr := verifyFreshRelayDescriptor(descriptor, now)
-		if verifyErr != nil {
-			return
-		}
-		relayState := RelayState{
-			Descriptor: verified,
-			LastSeenAt: now,
-		}
-		relayURL := verified.APIHTTPSAddr
-		if relayURL == "" {
-			return
-		}
-		if existing, ok := s.relays[relayURL]; ok && existing.Banned {
-			return
+	for _, descriptor := range resp.Relays {
+		relayState, relayURL, ok := s.discoveryRelayStateLocked(descriptor, now)
+		if !ok {
+			continue
 		}
 		if authoritative && relayURL == targetURL {
 			targetFound = true
@@ -817,9 +847,6 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 			discoveredOrder = append(discoveredOrder, relayURL)
 		}
 		discoveredByURL[relayURL] = relayState
-	}
-	for _, descriptor := range resp.Relays {
-		add(descriptor)
 	}
 	missingTarget := authoritative && !targetFound
 
@@ -1094,10 +1121,7 @@ func (s *RelaySet) RecordDiscoveryFailure(relayURL string, recoveryFailures int)
 		return false, "retry", state.discoveryFailures
 	}
 	failuresOverBudget := state.discoveryFailures - recoveryFailures
-	backoff := defaultDirectRecoveryBackoff << min(failuresOverBudget, 3)
-	if backoff > maxDirectRecoveryBackoff {
-		backoff = maxDirectRecoveryBackoff
-	}
+	backoff := min(defaultDirectRecoveryBackoff<<min(failuresOverBudget, 3), maxDirectRecoveryBackoff)
 	state.Dead = true
 	state.nextDiscoveryRefreshAt = now.Add(backoff)
 	s.relays[relayURL] = state
@@ -1121,10 +1145,7 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 		return false, "retry", state.activeFailures
 	}
 	failuresOverBudget := state.activeFailures - recoveryFailures
-	backoff := defaultDirectRecoveryBackoff << min(failuresOverBudget, 3)
-	if backoff > maxDirectRecoveryBackoff {
-		backoff = maxDirectRecoveryBackoff
-	}
+	backoff := min(defaultDirectRecoveryBackoff<<min(failuresOverBudget, 3), maxDirectRecoveryBackoff)
 	state.suppressActiveUntil = now.Add(backoff)
 	s.relays[relayURL] = state
 	return true, "active", state.activeFailures

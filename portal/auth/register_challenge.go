@@ -38,7 +38,7 @@ func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string
 	challengeID := utils.RandomID("rch_")
 	nonce := siwe.GenerateNonce()
 	expiresAt := now.UTC().Add(ttl)
-	message, err := siwe.InitMessage(domain, normalizedIdentity.Address, uri, nonce, map[string]interface{}{
+	message, err := siwe.InitMessage(domain, normalizedIdentity.Address, uri, nonce, map[string]any{
 		"statement":      "Register a portal lease",
 		"chainId":        1,
 		"issuedAt":       now.UTC().Format(time.RFC3339),

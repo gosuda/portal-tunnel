@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -77,9 +78,7 @@ type HTTPRouteConfig struct {
 
 func LoadExistingConfig(path string) (Config, error) {
 	path = strings.TrimSpace(path)
-	if path == "" {
-		path = service.DefaultConfigPath()
-	}
+	path = cmp.Or(path, service.DefaultConfigPath())
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return Config{}, err
@@ -99,9 +98,7 @@ func LoadExistingConfig(path string) (Config, error) {
 
 func loadConfigDocument(path string) (Config, string, os.FileMode, error) {
 	path = strings.TrimSpace(path)
-	if path == "" {
-		path = service.DefaultConfigPath()
-	}
+	path = cmp.Or(path, service.DefaultConfigPath())
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return Config{}, "", 0, err
@@ -148,9 +145,7 @@ func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	if mode == 0 {
-		mode = 0o644
-	}
+	mode = cmp.Or(mode, 0o644)
 	return os.WriteFile(path, data, mode)
 }
 
@@ -365,7 +360,9 @@ func (cfg TunnelConfig) Validate() error {
 	if len(cfg.MultiHop) > 0 && cfg.MultiHopDepth > 1 {
 		return fmt.Errorf("tunnel %q cannot combine multi_hop and multi_hop_depth", cfg.ID)
 	}
-	if (len(cfg.MultiHop) > 0 || cfg.MultiHopDepth > 1) && (cfg.UDPEnabled || cfg.TCPEnabled) {
+	multiHopEnabled := len(cfg.MultiHop) > 0 || cfg.MultiHopDepth > 1
+	nonStreamTransport := cfg.UDPEnabled || cfg.TCPEnabled
+	if multiHopEnabled && nonStreamTransport {
 		return fmt.Errorf("tunnel %q multi-hop supports only the default stream transport", cfg.ID)
 	}
 	if len(cfg.MultiHop) > 0 {

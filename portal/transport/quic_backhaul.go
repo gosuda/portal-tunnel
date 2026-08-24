@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -75,9 +76,7 @@ func DialQUICBackhaul(ctx context.Context, addr string, tlsConfig *tls.Config, a
 
 	if !resp.OK {
 		errText := strings.TrimSpace(resp.Error)
-		if errText == "" {
-			errText = "rejected"
-		}
+		errText = cmp.Or(errText, "rejected")
 		_ = conn.CloseWithError(1, errText)
 		return nil, fmt.Errorf("quic backhaul rejected: %s", errText)
 	}
@@ -122,13 +121,9 @@ func (c *QUICBackhaulControl) Reject(code, reason string) error {
 		return nil
 	}
 	code = strings.TrimSpace(code)
-	if code == "" {
-		code = "rejected"
-	}
+	code = cmp.Or(code, "rejected")
 	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		reason = code
-	}
+	reason = cmp.Or(reason, code)
 
 	var err error
 	if c.stream != nil {

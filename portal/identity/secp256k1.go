@@ -371,7 +371,8 @@ func parseSecp256k1PrivateKeyHex(raw string, requireNonZero bool) (*secp256k1.Pr
 }
 
 func trimHexPrefix(raw string) string {
-	if len(raw) >= 2 && raw[0] == '0' && (raw[1] == 'x' || raw[1] == 'X') {
+	hasHexPrefix := len(raw) >= 2 && raw[0] == '0'
+	if hasHexPrefix && (raw[1] == 'x' || raw[1] == 'X') {
 		return raw[2:]
 	}
 	return raw

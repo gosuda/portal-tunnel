@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"cmp"
 	"net"
 	"net/url"
 	"strings"
@@ -49,9 +50,7 @@ func DefaultExposeName(target, rawSeed string) (string, error) {
 	if cut, ok := strings.CutPrefix(seed, "cli_"); ok {
 		seed = cut
 	}
-	if seed == "" {
-		seed = "portal"
-	}
+	seed = cmp.Or(seed, "portal")
 
 	input := []byte(seed + "|" + normalizeExposeTarget(target))
 	first := fnv1a32(input, 0x811c9dc5)
@@ -72,9 +71,7 @@ func DefaultExposeName(target, rawSeed string) (string, error) {
 func normalizeExposeTarget(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	candidate := trimmed
-	if candidate == "" {
-		candidate = defaultExposeTargetPort
-	}
+	candidate = cmp.Or(candidate, defaultExposeTargetPort)
 
 	if isAllDigits(candidate) {
 		return defaultExposeTargetHost + ":" + candidate
@@ -85,11 +82,10 @@ func normalizeExposeTarget(raw string) string {
 		if err != nil {
 			return candidate
 		}
-		if (u.Scheme == "http" || u.Scheme == "https") &&
-			u.Host != "" &&
-			(u.Path == "" || u.Path == "/") &&
-			u.RawQuery == "" &&
-			u.Fragment == "" {
+		isHTTPURL := u.Scheme == "http" || u.Scheme == "https"
+		hasRootPath := u.Path == "" || u.Path == "/"
+		hasNoSuffix := u.RawQuery == "" && u.Fragment == ""
+		if isHTTPURL && u.Host != "" && hasRootPath && hasNoSuffix {
 			return u.Host
 		}
 		return candidate
@@ -100,9 +96,7 @@ func normalizeExposeTarget(raw string) string {
 		return candidate
 	}
 	port := u.Port()
-	if port == "" {
-		port = "80"
-	}
+	port = cmp.Or(port, "80")
 	return net.JoinHostPort(u.Hostname(), port)
 }
 

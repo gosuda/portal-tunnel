@@ -32,7 +32,11 @@ func TestNewRenewRequestIncludesMetadata(t *testing.T) {
 	if req.ReportedIP != "203.0.113.10" {
 		t.Fatalf("ReportedIP = %q, want 203.0.113.10", req.ReportedIP)
 	}
-	if got := req.Metadata; got.Description != metadata.Description || got.Owner != metadata.Owner || got.Thumbnail != metadata.Thumbnail || got.Hide != metadata.Hide || len(got.Tags) != 2 || got.Tags[0] != "demo" || got.Tags[1] != "live" {
+	got := req.Metadata
+	metadataMatches := got.Description == metadata.Description && got.Owner == metadata.Owner &&
+		got.Thumbnail == metadata.Thumbnail && got.Hide == metadata.Hide && len(got.Tags) == 2 &&
+		got.Tags[0] == "demo" && got.Tags[1] == "live"
+	if !metadataMatches {
 		t.Fatalf("Metadata = %#v, want %#v", got, metadata)
 	}
 

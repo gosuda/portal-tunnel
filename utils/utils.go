@@ -37,7 +37,8 @@ func SplitCSV(raw string) []string {
 }
 
 func TrimHexPrefix(raw string) string {
-	if len(raw) >= 2 && raw[0] == '0' && (raw[1] == 'x' || raw[1] == 'X') {
+	hasHexPrefix := len(raw) >= 2 && raw[0] == '0'
+	if hasHexPrefix && (raw[1] == 'x' || raw[1] == 'X') {
 		return raw[2:]
 	}
 	return raw
@@ -89,7 +90,8 @@ func NormalizeDNSLabel(raw string) (string, error) {
 		return "", errors.New("name must not start or end with hyphen")
 	}
 	for _, r := range label {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+		validRune := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-'
+		if validRune {
 			continue
 		}
 		return "", errors.New("name must contain only letters, numbers, or hyphen")
@@ -125,7 +127,8 @@ func sanitizeDNSLabelInput(raw string) string {
 
 func isPlainDNSLabel(label string) bool {
 	for _, r := range label {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+		validRune := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-'
+		if validRune {
 			continue
 		}
 		return false

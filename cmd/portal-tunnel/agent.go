@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -230,9 +231,7 @@ func runAgentStopCommand(args []string) error {
 	stateDir = strings.TrimSpace(stateDir)
 	cfg := agent.Config{Agent: agent.AgentConfig{ServiceName: agent.DefaultServiceName}}
 	if configPath != "" || stateDir == "" {
-		if configPath == "" {
-			configPath = service.DefaultConfigPath()
-		}
+		configPath = cmp.Or(configPath, service.DefaultConfigPath())
 		var err error
 		cfg, err = agent.LoadExistingConfig(configPath)
 		if err != nil {
@@ -286,9 +285,7 @@ func runAgentDashboardCommand(args []string) error {
 
 	configPath = strings.TrimSpace(configPath)
 	stateDir = strings.TrimSpace(stateDir)
-	if configPath == "" {
-		configPath = service.DefaultConfigPath()
-	}
+	configPath = cmp.Or(configPath, service.DefaultConfigPath())
 	if stateDir == "" {
 		if _, err := os.Stat(configPath); err == nil {
 			cfg, err := agent.LoadExistingConfig(configPath)
@@ -329,7 +326,10 @@ func waitAgentStopped(ctx context.Context, stateDir string) error {
 	for {
 		_, err := agent.Status(ctx, stateDir)
 		if err != nil {
-			return nil
+			if errors.Is(err, agent.ErrNotRunning) {
+				return nil
+			}
+			return fmt.Errorf("check portal agent status while waiting for shutdown: %w", err)
 		}
 		select {
 		case <-ctx.Done():

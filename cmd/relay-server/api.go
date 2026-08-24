@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
@@ -13,6 +14,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog/log"
+
 	portaltunnel "github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/portal"
@@ -20,8 +24,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/rs/zerolog/log"
 )
 
 //go:embed dist/*
@@ -128,9 +130,7 @@ func (api *RelayAPI) loadPolicyState() error {
 
 func (api *RelayAPI) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(strings.TrimSpace(r.URL.Path), "/")
-	if path == "" {
-		path = types.PathRoot
-	}
+	path = cmp.Or(path, types.PathRoot)
 
 	switch path {
 	case types.PathAdmin:
@@ -174,9 +174,7 @@ func (api *RelayAPI) serveAdmin(w http.ResponseWriter, r *http.Request) {
 
 func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(strings.TrimSpace(r.URL.Path), "/")
-	if path == "" {
-		path = types.PathRoot
-	}
+	path = cmp.Or(path, types.PathRoot)
 
 	if !api.authenticatedAdmin(r) {
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized")

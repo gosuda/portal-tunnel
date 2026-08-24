@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -561,9 +562,7 @@ func (m *agentDashboardModel) clampSidebarScroll() {
 
 func (m agentDashboardModel) sidebarContentWidth() int {
 	configPath := strings.TrimSpace(m.status.ConfigPath)
-	if configPath == "" {
-		configPath = strings.TrimSpace(m.configPath)
-	}
+	configPath = cmp.Or(configPath, strings.TrimSpace(m.configPath))
 	contentWidth := lipgloss.Width("PORTAL")
 	contentWidth = max(contentWidth, agentDashboardMetaWidth(configPath))
 	contentWidth = max(contentWidth, agentDashboardMetaWidth(strings.TrimSpace(m.status.ControlAddr)))
@@ -1031,9 +1030,7 @@ func (m agentDashboardModel) addTunnelRequest() (types.AgentTunnelRequest, error
 		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Pay To requires routes")
 	}
 	x402TestnetRaw := strings.TrimSpace(m.addX402Testnet.Value())
-	if x402TestnetRaw == "" {
-		x402TestnetRaw = "false"
-	}
+	x402TestnetRaw = cmp.Or(x402TestnetRaw, "false")
 	x402Testnet, err := strconv.ParseBool(x402TestnetRaw)
 	if err != nil {
 		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Testnet must be true or false")
@@ -1052,18 +1049,14 @@ func (m agentDashboardModel) addTunnelRequest() (types.AgentTunnelRequest, error
 	}
 
 	discoveryRaw := strings.TrimSpace(m.addDiscovery.Value())
-	if discoveryRaw == "" {
-		discoveryRaw = "true"
-	}
+	discoveryRaw = cmp.Or(discoveryRaw, "true")
 	discovery, err := strconv.ParseBool(discoveryRaw)
 	if err != nil {
 		return types.AgentTunnelRequest{}, fmt.Errorf("discovery must be true or false")
 	}
 
 	maxRelaysRaw := strings.TrimSpace(m.addMaxRelays.Value())
-	if maxRelaysRaw == "" {
-		maxRelaysRaw = "3"
-	}
+	maxRelaysRaw = cmp.Or(maxRelaysRaw, "3")
 	maxRelays, err := strconv.Atoi(maxRelaysRaw)
 	if err != nil || maxRelays <= 0 {
 		return types.AgentTunnelRequest{}, fmt.Errorf("max relays must be a positive integer")
@@ -1092,7 +1085,7 @@ func agentDashboardParseAddHTTPRoutes(value string) ([]types.AgentHTTPRoute, err
 	var routes []types.AgentHTTPRoute
 	seen := make(map[string]struct{})
 
-	for _, rawSegment := range strings.Split(value, ";") {
+	for rawSegment := range strings.SplitSeq(value, ";") {
 		segment := strings.TrimSpace(rawSegment)
 		if segment == "" {
 			continue
@@ -1167,7 +1160,7 @@ func agentDashboardParseAddRoutePayment(value string) ([]string, string, error) 
 	}
 
 	methods := []string(nil)
-	for _, rawMethod := range strings.Split(methodPart, ",") {
+	for rawMethod := range strings.SplitSeq(methodPart, ",") {
 		method := strings.ToUpper(strings.TrimSpace(rawMethod))
 		if method == "" {
 			return nil, "", fmt.Errorf("payment method is required")
@@ -1213,9 +1206,7 @@ func (m agentDashboardModel) applySettingsEdit() (tea.Model, tea.Cmd) {
 	}
 
 	hideRaw := strings.TrimSpace(m.metadataHide.Value())
-	if hideRaw == "" {
-		hideRaw = "false"
-	}
+	hideRaw = cmp.Or(hideRaw, "false")
 	hide, err := strconv.ParseBool(hideRaw)
 	if err != nil {
 		m.err = fmt.Errorf("metadata hidden must be true or false")
@@ -1436,9 +1427,7 @@ func (m agentDashboardModel) renderSidebar(width, height int) agentDashboardView
 	pane.addStyled(width, agentDashboardRuleStyle, strings.Repeat("-", width))
 
 	configPath := strings.TrimSpace(m.status.ConfigPath)
-	if configPath == "" {
-		configPath = strings.TrimSpace(m.configPath)
-	}
+	configPath = cmp.Or(configPath, strings.TrimSpace(m.configPath))
 	pane.addSidebarTitle(width, "Runtime")
 	pane.addMeta(width, m.sidebarScrollX, "Config", configPath)
 	pane.addMeta(width, m.sidebarScrollX, "Control", strings.TrimSpace(m.status.ControlAddr))
@@ -1776,9 +1765,7 @@ func (v *agentDashboardView) addSidebarTitle(width int, title string) {
 
 func (v *agentDashboardView) addMeta(width, offset int, label, value string) {
 	value = strings.TrimSpace(value)
-	if value == "" {
-		value = "-"
-	}
+	value = cmp.Or(value, "-")
 	labelText := agentDashboardLabelStyle.Render(agentDashboardCell(label+":", 9))
 	valueText := agentDashboardMutedStyle.Render(agentDashboardWindow(value, offset, max(1, width-10)))
 	v.addLine(labelText + " " + valueText)
@@ -2012,9 +1999,7 @@ func agentDashboardColumnWidths(width int) (int, int, int) {
 
 func agentDashboardMetaWidth(value string) int {
 	value = strings.TrimSpace(value)
-	if value == "" {
-		value = "-"
-	}
+	value = cmp.Or(value, "-")
 	return 10 + lipgloss.Width(value)
 }
 
@@ -2071,13 +2056,9 @@ func relayDashboardConnected(tunnel types.AgentTunnelStatus, relay types.AgentRe
 
 func agentDashboardHTTPRouteSummary(route types.AgentHTTPRoute) string {
 	prefix := strings.TrimSpace(route.Prefix)
-	if prefix == "" {
-		prefix = "-"
-	}
+	prefix = cmp.Or(prefix, "-")
 	upstream := strings.TrimSpace(route.Upstream)
-	if upstream == "" {
-		upstream = "-"
-	}
+	upstream = cmp.Or(upstream, "-")
 	if amount := strings.TrimSpace(route.Amount); amount != "" {
 		methods := "ALL"
 		if len(route.Methods) > 0 {
@@ -2168,9 +2149,7 @@ func relayDashboardPublicURL(rawURL string) string {
 		return rawURL
 	}
 	host := parsed.Hostname()
-	if host == "" {
-		host = parsed.Host
-	}
+	host = cmp.Or(host, parsed.Host)
 	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		host = "[" + host + "]"
 	}
@@ -2289,10 +2268,7 @@ func agentDashboardRelayWindow(selected, total, rows int) (int, int) {
 	if selected >= total {
 		selected = total - 1
 	}
-	start := selected - rows/2
-	if start < 0 {
-		start = 0
-	}
+	start := max(selected-rows/2, 0)
 	if start+rows > total {
 		start = total - rows
 	}
@@ -2331,9 +2307,7 @@ func agentDashboardURLCell(value string, width int) string {
 	parsed, err := url.Parse(value)
 	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
 		host := strings.TrimSpace(parsed.Hostname())
-		if host == "" {
-			host = strings.TrimSpace(parsed.Host)
-		}
+		host = cmp.Or(host, strings.TrimSpace(parsed.Host))
 		if host != "" {
 			return agentDashboardFit("open "+host, width)
 		}

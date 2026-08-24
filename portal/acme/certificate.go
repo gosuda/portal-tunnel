@@ -96,9 +96,11 @@ func newClient(ctx context.Context, email, accountKeyFile, registrationFile stri
 
 	var accountReg registration.Resource
 	accountRegPtr := (*registration.Resource)(nil)
-	if ok, err := utils.ReadJSONFileIfExists(registrationFile, &accountReg); err != nil {
+	ok, err := utils.ReadJSONFileIfExists(registrationFile, &accountReg)
+	if err != nil {
 		return nil, fmt.Errorf("load acme registration: %w", err)
-	} else if ok {
+	}
+	if ok {
 		accountRegPtr = &accountReg
 	}
 

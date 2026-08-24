@@ -347,7 +347,7 @@ func TestRecordDiscoveryFailureBackoff(t *testing.T) {
 	budget := 3
 
 	start := time.Now()
-	for i := 0; i < budget; i++ {
+	for i := range budget {
 		backedOff, _, _ := set.RecordDiscoveryFailure(relayURL, budget)
 		if i < budget-1 && backedOff {
 			t.Fatal("discovery failure backed off before budget")
@@ -382,7 +382,7 @@ func TestRecordDiscoveryFailureMarksDeadAndRevivesOnAuthoritativeSuccess(t *test
 	set.mu.Unlock()
 
 	budget := 3
-	for i := 0; i < budget; i++ {
+	for range budget {
 		set.RecordDiscoveryFailure(deadURL, budget)
 	}
 

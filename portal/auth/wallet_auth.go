@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"strings"
@@ -72,9 +73,7 @@ func NewWalletAuthenticator(cfg WalletAuthConfig) (*WalletAuthenticator, error) 
 	}
 
 	statement := strings.TrimSpace(cfg.Statement)
-	if statement == "" {
-		statement = "Sign in to Portal"
-	}
+	statement = cmp.Or(statement, "Sign in to Portal")
 
 	return &WalletAuthenticator{
 		allowed:    allowed,
@@ -100,7 +99,7 @@ func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeReques
 	challengeID := utils.RandomID("wac_")
 	nonce := siwe.GenerateNonce()
 	expiresAt := now.UTC().Add(defaultWalletAuthChallengeTTL)
-	message, err := siwe.InitMessage(domain, address, uri, nonce, map[string]interface{}{
+	message, err := siwe.InitMessage(domain, address, uri, nonce, map[string]any{
 		"statement":      a.statement,
 		"chainId":        1,
 		"issuedAt":       now.UTC().Format(time.RFC3339),

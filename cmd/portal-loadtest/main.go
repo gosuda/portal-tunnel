@@ -142,7 +142,7 @@ func gamSer(s, x float64) float64 {
 	ap := s
 	del := 1.0 / s
 	sum := del
-	for n := 0; n < maxIter; n++ {
+	for range maxIter {
 		ap++
 		del *= x / ap
 		sum += del

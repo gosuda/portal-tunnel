@@ -1,6 +1,7 @@
 package x402
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -108,9 +109,7 @@ type casperFacilitator struct {
 
 func newCasperFacilitator(network, token string, endpoints ...string) (facilitatorcore.Facilitator, error) {
 	network = strings.ToLower(strings.TrimSpace(network))
-	if network == "" {
-		network = CasperMainnetNetwork
-	}
+	network = cmp.Or(network, CasperMainnetNetwork)
 	if _, ok := casperNetworkDisplayNames[network]; !ok {
 		return nil, fmt.Errorf("unsupported Casper network %q", network)
 	}
@@ -171,9 +170,7 @@ func (f *casperFacilitator) Supported() *facilitatortypes.SupportedResponse {
 // payment.Asset because it differs per network deployment.
 func NewCasperPayment(payment types.X402Payment) (*Payment, error) {
 	network := strings.TrimSpace(payment.Network)
-	if network == "" {
-		network = CasperNetwork(payment.Testnet)
-	}
+	network = cmp.Or(network, CasperNetwork(payment.Testnet))
 	network = strings.ToLower(network)
 	if _, ok := casperNetworkDisplayNames[network]; !ok {
 		return nil, fmt.Errorf("unsupported Casper network %q", network)
@@ -201,7 +198,7 @@ func NewCasperPayment(payment types.X402Payment) (*Payment, error) {
 		Amount:            amount,
 		PayTo:             payTo,
 		MaxTimeoutSeconds: maxTimeoutSeconds,
-		Extra: map[string]interface{}{
+		Extra: map[string]any{
 			"asset":               "wCSPR",
 			"assetTransferMethod": "casper-cep18-transfer",
 			"decimals":            csprDecimals,

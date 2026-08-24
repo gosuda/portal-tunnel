@@ -4,8 +4,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/montanaflynn/stats"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const (

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"embed"
 	"encoding/json"
 	"html/template"
@@ -125,9 +126,7 @@ func (h *paymentHandler) renderPaidPhoto(w http.ResponseWriter, r *http.Request,
 
 func (h *paymentHandler) newPaymentPageData(r *http.Request) paymentPageData {
 	description := strings.TrimSpace(h.metadata.Description)
-	if description == "" {
-		description = "Connect a Sui wallet, settle USDC with x402, and reveal the protected image."
-	}
+	description = cmp.Or(description, "Connect a Sui wallet, settle USDC with x402, and reveal the protected image.")
 	config := map[string]any{
 		"network":       h.network,
 		"networkName":   h.networkName,

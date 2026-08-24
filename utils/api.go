@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -12,8 +13,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 type APIErrorResponse struct {
@@ -123,9 +125,7 @@ func PublicURLForPath(r *http.Request, path string) string {
 	}
 	host, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Host"), ",")
 	host = strings.TrimSpace(host)
-	if host == "" {
-		host = strings.TrimSpace(r.Host)
-	}
+	host = cmp.Or(host, strings.TrimSpace(r.Host))
 	if host == "" {
 		return path
 	}
@@ -294,8 +294,7 @@ func decodeJSONRequestBody[T any](w http.ResponseWriter, r *http.Request, maxByt
 }
 
 func writeRequestBodyTooLarge(w http.ResponseWriter, err error) bool {
-	var maxBytesError *http.MaxBytesError
-	if !errors.As(err, &maxBytesError) {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); !ok {
 		return false
 	}
 	WriteAPIError(w, http.StatusRequestEntityTooLarge, types.APIErrorCodeInvalidRequest, "request body too large")

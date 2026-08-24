@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"cmp"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -27,9 +28,7 @@ func FileExists(path string) bool {
 func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	path = strings.TrimSpace(path)
 	dir := filepath.Dir(path)
-	if dir == "" {
-		dir = "."
-	}
+	dir = cmp.Or(dir, ".")
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
 		return err

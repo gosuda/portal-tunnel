@@ -2,6 +2,7 @@ package njalla
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -480,9 +481,7 @@ func (c *apiClient) do(ctx context.Context, method string, params any, out any) 
 		return errors.New("njalla client is nil")
 	}
 	endpoint := strings.TrimSpace(c.endpoint)
-	if endpoint == "" {
-		endpoint = apiEndpoint
-	}
+	endpoint = cmp.Or(endpoint, apiEndpoint)
 	body, err := json.Marshal(apiRequest{Method: method, Params: params})
 	if err != nil {
 		return fmt.Errorf("marshal njalla api request: %w", err)
