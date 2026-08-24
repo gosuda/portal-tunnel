@@ -308,10 +308,10 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	frameSize := 16
 	reader := bufio.NewReaderSize(conn, frameSize)
 	_ = conn.SetReadDeadline(time.Now().Add(mitmProbePeekTimeout))
-	peeked, err := reader.Peek(frameSize)
+	peeked, _ := reader.Peek(frameSize)
 	defer conn.SetReadDeadline(time.Time{})
-	if err != nil {
-		return wrapBufferedConn(conn, reader), false, fmt.Errorf("peek mitm probe frame: %w", err)
+	if len(peeked) != frameSize {
+		return wrapBufferedConn(conn, reader), false, nil
 	}
 
 	nonceHex := hex.EncodeToString(peeked[:frameSize])
