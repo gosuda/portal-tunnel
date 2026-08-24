@@ -1,6 +1,7 @@
 package dnsrecord
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"strconv"
@@ -17,15 +18,12 @@ type HTTPSRecord struct {
 
 func (r HTTPSRecord) Normalized() (HTTPSRecord, error) {
 	target := strings.TrimSpace(r.Target)
-	if target == "" {
-		target = "."
-	} else if target != "." {
+	target = cmp.Or(target, ".")
+	if target != "." {
 		target = strings.TrimSuffix(target, ".") + "."
 	}
 	priority := r.Priority
-	if priority == 0 {
-		priority = 1
-	}
+	priority = cmp.Or(priority, 1)
 	svcParams := strings.TrimSpace(r.SvcParams)
 	if svcParams == "" {
 		return HTTPSRecord{}, errors.New("https record svc params are required")
@@ -73,7 +71,8 @@ func NameMatches(recordName, expected, fqdn, zone string) bool {
 	if recordName == expected {
 		return true
 	}
-	if expected == "@" && (recordName == "" || recordName == zone || recordName == fqdn) {
+	apexRecord := recordName == "" || recordName == zone || recordName == fqdn
+	if expected == "@" && apexRecord {
 		return true
 	}
 	return recordName == fqdn

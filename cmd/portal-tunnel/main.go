@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -279,18 +281,12 @@ func parseHTTPRoutePayment(value string) ([]string, string, error) {
 	}
 	methods := []string(nil)
 	if hasMethods {
-		for _, rawMethod := range strings.Split(methodPart, ",") {
+		for rawMethod := range strings.SplitSeq(methodPart, ",") {
 			method := strings.ToUpper(strings.TrimSpace(rawMethod))
 			if method == "" {
 				return nil, "", errors.New("payment method is required")
 			}
-			exists := false
-			for _, existing := range methods {
-				if existing == method {
-					exists = true
-					break
-				}
-			}
+			exists := slices.Contains(methods, method)
 			if !exists {
 				methods = append(methods, method)
 			}
@@ -379,9 +375,7 @@ func runListCommand(args []string) error {
 	fmt.Fprintln(table, "RELAY\tVERSION")
 	for i, relayURL := range relayURLs {
 		ver := versions[i]
-		if ver == "" {
-			ver = "unknown"
-		}
+		ver = cmp.Or(ver, "unknown")
 		fmt.Fprintf(table, "%s\t%s\n", relayURL, ver)
 	}
 	return table.Flush()

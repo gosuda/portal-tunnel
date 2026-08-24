@@ -1,6 +1,7 @@
 package gcloud
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -391,9 +392,7 @@ func newRuntimeConfig(ctx context.Context, cfg Config) (runtimeConfig, error) {
 	}
 
 	projectID := strings.TrimSpace(cfg.ProjectID)
-	if projectID == "" {
-		projectID = strings.TrimSpace(creds.ProjectID)
-	}
+	projectID = cmp.Or(projectID, strings.TrimSpace(creds.ProjectID))
 	if projectID == "" && metadata.OnGCE() {
 		if detected, err := metadata.ProjectIDWithContext(ctx); err == nil {
 			projectID = strings.TrimSpace(detected)

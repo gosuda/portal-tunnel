@@ -1,6 +1,7 @@
 package cloudflare
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -449,9 +450,7 @@ func ensureHTTPSRecord(ctx context.Context, token, zoneID, name string, record d
 func sameHTTPSRecord(existing dnsRecord, record dnsrecord.HTTPSRecord) bool {
 	if existing.Data != nil {
 		existingTarget := strings.TrimSpace(existing.Data.Target)
-		if existingTarget == "" {
-			existingTarget = "."
-		}
+		existingTarget = cmp.Or(existingTarget, ".")
 		return existing.Data.Priority == int(record.Priority) &&
 			existingTarget == record.Target &&
 			strings.TrimSpace(existing.Data.Value) == record.SvcParams

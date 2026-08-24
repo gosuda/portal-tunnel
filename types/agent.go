@@ -17,7 +17,7 @@ type AgentTunnelStatus struct {
 	Discovery       bool               `json:"discovery"`
 	MaxActiveRelays int                `json:"max_active_relays,omitempty"`
 	ECH             bool               `json:"ech,omitempty"`
-	Metadata        LeaseMetadata      `json:"metadata,omitempty"`
+	Metadata        LeaseMetadata      `json:"metadata"`
 	MultiHop        []string           `json:"multi_hop,omitempty"`
 	X402PayTo       string             `json:"x402_pay_to,omitempty"`
 	X402Testnet     bool               `json:"x402_testnet,omitempty"`

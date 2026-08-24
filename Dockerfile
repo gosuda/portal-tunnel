@@ -9,7 +9,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.26.4 AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.27.0 AS go-builder
 WORKDIR /src
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

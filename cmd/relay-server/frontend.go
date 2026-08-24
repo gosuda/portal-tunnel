@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"fmt"
 	"io/fs"
@@ -73,9 +74,7 @@ func (api *RelayAPI) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	assetPath := strings.TrimPrefix(requestPath, "/")
-	if assetPath == "" {
-		assetPath = "index.html"
-	}
+	assetPath = cmp.Or(assetPath, "index.html")
 	asset, err := api.loadFrontendAsset(assetPath)
 	if err != nil {
 		// Missing static assets 404; only client-route-looking paths fall back.
@@ -128,9 +127,7 @@ func (api *RelayAPI) loadFrontendAsset(assetPath string) (*frontendAsset, error)
 		return nil, err
 	}
 	contentType := mime.TypeByExtension(path.Ext(assetPath))
-	if contentType == "" {
-		contentType = http.DetectContentType(data)
-	}
+	contentType = cmp.Or(contentType, http.DetectContentType(data))
 	asset := &frontendAsset{contentType: contentType, data: data}
 	compressible := strings.HasPrefix(contentType, "text/") ||
 		strings.HasPrefix(contentType, "application/javascript") ||

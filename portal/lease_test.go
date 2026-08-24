@@ -373,7 +373,7 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 
 	registry := newTestRegistry(t)
 	clientIP := "203.0.113.50"
-	for i := 0; i < defaultRegisterChallengeOutstandingPerIP; i++ {
+	for i := range defaultRegisterChallengeOutstandingPerIP {
 		_, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{
 			Identity: newTestLeaseIdentity(t, fmt.Sprintf("demo-%d", i)),
 		}, "example.com", "https://example.com"+types.PathSDKRegister, clientIP)

@@ -388,7 +388,7 @@ func TestExposureSnapshotExcludesDeadRelayListener(t *testing.T) {
 		},
 	}
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		relaySet.RecordDiscoveryFailure(relayA, 3)
 	}
 	snap := exposure.Snapshot()

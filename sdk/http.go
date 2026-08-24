@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -268,9 +269,7 @@ func newHTTPRoute(routeConfig HTTPRouteConfig, x402Payment types.X402Payment) (*
 	var route *httpRoute
 	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
 		staticIndex := strings.TrimSpace(routeConfig.StaticIndex)
-		if staticIndex == "" {
-			staticIndex = utils.DefaultStaticIndex
-		}
+		staticIndex = cmp.Or(staticIndex, utils.DefaultStaticIndex)
 		route = &httpRoute{
 			prefix:      prefix,
 			staticRoot:  staticRoot,
@@ -386,9 +385,7 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 			path = "/"
 		default:
 			path = strings.TrimPrefix(path, r.prefix)
-			if path == "" {
-				path = "/"
-			}
+			path = cmp.Or(path, "/")
 		}
 
 		if rawPath != "" {
@@ -425,6 +422,11 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	if r.prefix != "/" {
 		pr.Out.Header.Set("X-Forwarded-Prefix", r.prefix)
 	}
+}
+
+func isSafeAbsoluteURLPath(value string) bool {
+	return strings.HasPrefix(value, "/") &&
+		(len(value) == 1 || (value[1] != '/' && value[1] != '\\'))
 }
 
 func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
@@ -479,14 +481,14 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 				} else {
 					parsed = nil
 				}
-			case strings.HasPrefix(location, "/") && parsed.Host == "" && (len(location) == 1 || (location[1] != '\\' && location[1] != '/')):
+			case parsed.Host == "" && isSafeAbsoluteURLPath(location):
 			default:
 				parsed = nil
 			}
 
 			if parsed != nil {
 				mapped := publicPath(parsed.Path)
-				if strings.HasPrefix(mapped, "/") && (len(mapped) == 1 || (mapped[1] != '/' && mapped[1] != '\\')) {
+				if isSafeAbsoluteURLPath(mapped) {
 					parsed.Path = mapped
 					parsed.RawPath = ""
 					header.Set("Location", parsed.String())
@@ -523,8 +525,9 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 		}
 
 		domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
-		if domain != "" && domain != publicDomain &&
-			(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain)) {
+		rewriteDomain := domain != "" && domain != publicDomain &&
+			(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain))
+		if rewriteDomain {
 			cookie.Domain = ""
 			changed = true
 		}

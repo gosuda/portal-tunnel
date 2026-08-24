@@ -113,7 +113,7 @@ type RenewRequest struct {
 	AccessToken string        `json:"access_token"`
 	TTL         int           `json:"ttl,omitempty"`
 	ReportedIP  string        `json:"reported_ip,omitempty"`
-	Metadata    LeaseMetadata `json:"metadata,omitempty"`
+	Metadata    LeaseMetadata `json:"metadata"`
 }
 
 type RenewResponse struct {
@@ -133,11 +133,11 @@ type HopRoute struct {
 	HostnameHash   string          `json:"hostname_hash,omitempty"`
 	ECHConfigList  []byte          `json:"ech_config_list,omitempty"`
 	MatchToken     string          `json:"match_token,omitempty"`
-	Metadata       LeaseMetadata   `json:"metadata,omitempty"`
+	Metadata       LeaseMetadata   `json:"metadata"`
 	ForwardRelay   RelayDescriptor `json:"forward_relay"`
 	ForwardToken   string          `json:"forward_token"`
-	FirstSeenAt    time.Time       `json:"first_seen_at,omitempty"`
-	ExpiresAt      time.Time       `json:"expires_at,omitempty"`
+	FirstSeenAt    time.Time       `json:"first_seen_at"`
+	ExpiresAt      time.Time       `json:"expires_at"`
 	Signature      string          `json:"signature,omitempty"`
 }
 

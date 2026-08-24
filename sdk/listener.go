@@ -3,6 +3,7 @@ package sdk
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -464,7 +465,8 @@ func (l *listener) publicURLForLease(lease listenerSnapshot) string {
 	host := lease.hostname
 	sniPort := lease.sniPort
 	scheme := strings.ToLower(strings.TrimSpace(baseURL.Scheme))
-	if (scheme == "https" && sniPort == 443) || (scheme == "http" && sniPort == 80) {
+	usesDefaultPort := scheme == "https" && sniPort == 443 || scheme == "http" && sniPort == 80
+	if usesDefaultPort {
 		sniPort = 0
 	}
 	if sniPort > 0 {
@@ -690,9 +692,7 @@ func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, err
 		return nil, errors.New("relay tls config is unavailable")
 	}
 	host := strings.TrimSpace(l.relayURL.Hostname())
-	if host == "" {
-		host = strings.TrimSpace(l.relayURL.Host)
-	}
+	host = cmp.Or(host, strings.TrimSpace(l.relayURL.Host))
 	dialAddr := net.JoinHostPort(host, fmt.Sprintf("%d", lease.sniPort))
 	return transport.DialQUICBackhaul(ctx, dialAddr, l.tlsConfig, lease.accessToken)
 }

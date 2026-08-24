@@ -18,6 +18,8 @@ func TestRefresherRefreshHTTPSIsParallel(t *testing.T) {
 	var received atomic.Int32
 	var maxConcurrent atomic.Int32
 	var current atomic.Int32
+	requestStarted := make(chan struct{}, n)
+	releaseRequests := make(chan struct{})
 
 	servers := make([]*httptest.Server, n)
 	urls := make([]string, n)
@@ -29,13 +31,16 @@ func TestRefresherRefreshHTTPSIsParallel(t *testing.T) {
 				return
 			}
 			c := current.Add(1)
+			defer current.Add(-1)
 			if c > maxConcurrent.Load() {
 				maxConcurrent.Store(c)
 			}
-			// Hold the request open so concurrent requests must overlap if
-			// the refresher is truly parallel.
-			time.Sleep(50 * time.Millisecond)
-			current.Add(-1)
+			requestStarted <- struct{}{}
+			select {
+			case <-releaseRequests:
+			case <-r.Context().Done():
+				return
+			}
 			received.Add(1)
 
 			// Each server returns a signed descriptor for itself so the
@@ -67,7 +72,18 @@ func TestRefresherRefreshHTTPSIsParallel(t *testing.T) {
 		Timeout:   defaultRequestTimeout,
 	}
 
-	if err := refresher.refreshHTTPS(testContext(t)); err != nil {
+	ctx := testContext(t)
+	go func() {
+		for range 2 {
+			select {
+			case <-requestStarted:
+			case <-ctx.Done():
+				return
+			}
+		}
+		close(releaseRequests)
+	}()
+	if err := refresher.refreshHTTPS(ctx); err != nil {
 		t.Fatalf("refreshHTTPS() error = %v", err)
 	}
 

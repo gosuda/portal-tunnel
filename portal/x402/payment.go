@@ -1,6 +1,7 @@
 package x402
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -44,9 +45,7 @@ func NewPayment(payment types.X402Payment) (*Payment, error) {
 
 func NewUSDCPayment(payment types.X402Payment) (*Payment, error) {
 	network := strings.TrimSpace(payment.Network)
-	if network == "" {
-		network = Network(payment.Testnet)
-	}
+	network = cmp.Or(network, Network(payment.Testnet))
 	network = strings.ToLower(network)
 	asset, err := usdcAsset(network)
 	if err != nil {
@@ -71,7 +70,7 @@ func NewUSDCPayment(payment types.X402Payment) (*Payment, error) {
 		Amount:            amount,
 		PayTo:             payTo,
 		MaxTimeoutSeconds: maxTimeoutSeconds,
-		Extra: map[string]interface{}{
+		Extra: map[string]any{
 			"asset":               "USDC",
 			"assetTransferMethod": "sui-gasless-stablecoin-address-balance",
 		},
@@ -82,9 +81,7 @@ func NewUSDCPayment(payment types.X402Payment) (*Payment, error) {
 		return nil, err
 	}
 	networkName := NetworkDisplayName(requirements.Network)
-	if networkName == "" {
-		networkName = requirements.Network
-	}
+	networkName = cmp.Or(networkName, requirements.Network)
 	payment.Testnet = strings.EqualFold(requirements.Network, TestnetNetwork)
 	payment.Network = requirements.Network
 	payment.NetworkName = networkName
@@ -221,9 +218,7 @@ func (p *Payment) Settle(ctx context.Context, w http.ResponseWriter, r *http.Req
 			Str("asset", p.requirements.Asset)
 		if settled != nil {
 			errorMessage := strings.TrimSpace(settled.ErrorMessage)
-			if errorMessage == "" {
-				errorMessage = "<empty>"
-			}
+			errorMessage = cmp.Or(errorMessage, "<empty>")
 			event = event.
 				Str("reason", strings.TrimSpace(settled.ErrorReason)).
 				Str("error_message", errorMessage).
@@ -289,9 +284,7 @@ func (p *Payment) WritePrepare(w http.ResponseWriter, r *http.Request, sender, r
 		// Casper payments are signed by the wallet against the published
 		// requirements, so there is no server-built transaction to prepare.
 		resourcePath = strings.TrimSpace(resourcePath)
-		if resourcePath == "" {
-			resourcePath = strings.TrimSpace(p.payment.ResourcePath)
-		}
+		resourcePath = cmp.Or(resourcePath, strings.TrimSpace(p.payment.ResourcePath))
 		p.writePaymentRequired(w, r, "payment required", resourcePath)
 		return
 	}
@@ -354,19 +347,13 @@ func (p *Payment) WritePrepare(w http.ResponseWriter, r *http.Request, sender, r
 	}
 
 	resourcePath = strings.TrimSpace(resourcePath)
-	if resourcePath == "" {
-		resourcePath = strings.TrimSpace(p.payment.ResourcePath)
-	}
+	resourcePath = cmp.Or(resourcePath, strings.TrimSpace(p.payment.ResourcePath))
 	if resourcePath == "" && r.URL != nil {
 		resourcePath = r.URL.Path
 	}
-	if resourcePath == "" {
-		resourcePath = "/"
-	}
+	resourcePath = cmp.Or(resourcePath, "/")
 	resourceMimeType := strings.TrimSpace(p.payment.ResourceMimeType)
-	if resourceMimeType == "" {
-		resourceMimeType = "text/html"
-	}
+	resourceMimeType = cmp.Or(resourceMimeType, "text/html")
 	utils.WritePaymentJSON(w, http.StatusOK, types.X402PreparePaymentResponse{
 		X402Version:         int(facilitatortypes.X402VersionV2),
 		PaymentRequirements: p.requirements,

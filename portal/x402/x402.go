@@ -1,6 +1,7 @@
 package x402
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/http"
@@ -63,9 +64,7 @@ func usdcAsset(network string) (string, error) {
 
 func newUSDCFacilitator(network, asset string, endpoints ...string) (facilitatorcore.Facilitator, error) {
 	network = strings.ToLower(strings.TrimSpace(network))
-	if network == "" {
-		network = MainnetNetwork
-	}
+	network = cmp.Or(network, MainnetNetwork)
 	if asset == "" {
 		var err error
 		asset, err = usdcAsset(network)

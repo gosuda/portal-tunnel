@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 func Install(ctx context.Context, def Definition) error {
@@ -68,9 +69,9 @@ func launchdPlistPath(name string) (string, string, error) {
 
 func launchdPlist(def Definition) string {
 	args := append([]string{def.Executable}, def.Args...)
-	argXML := ""
+	var argXML strings.Builder
 	for _, arg := range args {
-		argXML += "\n    <string>" + xmlEscape(arg) + "</string>"
+		argXML.WriteString("\n    <string>" + xmlEscape(arg) + "</string>")
 	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -89,12 +90,12 @@ func launchdPlist(def Definition) string {
   <true/>
 </dict>
 </plist>
-`, xmlEscape(def.Name), argXML, xmlEscape(def.WorkingDir))
+`, xmlEscape(def.Name), argXML.String(), xmlEscape(def.WorkingDir))
 }
 
 func xmlEscape(value string) string {
 	var out []byte
-	xml.EscapeText((*appendWriter)(&out), []byte(value))
+	_ = xml.EscapeText((*appendWriter)(&out), []byte(value))
 	return string(out)
 }
 

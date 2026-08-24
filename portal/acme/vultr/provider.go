@@ -1,6 +1,7 @@
 package vultr
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -440,9 +441,7 @@ func preferredDSRecord(records []string) string {
 		if ds == "" {
 			continue
 		}
-		if first == "" {
-			first = ds
-		}
+		first = cmp.Or(first, ds)
 		fields := strings.Fields(ds)
 		if len(fields) < 4 {
 			continue
