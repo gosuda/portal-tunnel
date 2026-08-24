@@ -15,6 +15,7 @@ package discovery
 //   3. Partition: Move saturated relays behind active relays.
 //   4. Preserve: Keep intra-tier MOLS order unchanged.
 import (
+	"cmp"
 	"math"
 	"slices"
 	"time"
@@ -61,20 +62,23 @@ func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
 	if order%2 == 0 {
 		return 1, 1, false
 	}
-	p1, p2 := int(molsBaseM1), int(molsBaseM2)
+	baseP1, baseP2 := int(molsBaseM1), int(molsBaseM2)
+	p1, p2 := baseP1, baseP2
 	if variant {
 		p1, p2 = int(molsVariantM1), int(molsVariantM2)
 	}
 	if molsPairValid(order, p1, p2) {
-		return p1, p2, true
+		if !variant || p1%order != baseP1%order || p2%order != baseP2%order {
+			return p1, p2, true
+		}
 	}
-	base1, base2 := int(molsBaseM1), int(molsBaseM2)
 	for a := 1; a < order; a++ {
 		for b := a + 1; b < order; b++ {
 			if molsPairValid(order, a, b) {
-				if !variant || a%order != base1%order || b%order != base2%order {
-					return a, b, true
+				if variant && a%order == baseP1%order && b%order == baseP2%order {
+					continue
 				}
+				return a, b, true
 			}
 		}
 	}
@@ -186,8 +190,32 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 	order := len(autoPool)
 	m1, m2, _ := molsMultipliers(order, nonLinear)
 	ingressRow := int(hashToGridIndex(localAddress) % uint32(order))
+
+	type relayHash struct {
+		url  string
+		hash uint32
+	}
+	sortedRelays := make([]relayHash, order)
+	for i, state := range autoPool {
+		sortedRelays[i] = relayHash{
+			url:  state.Descriptor.APIHTTPSAddr,
+			hash: hashToGridIndex(state.Descriptor.APIHTTPSAddr),
+		}
+	}
+	slices.SortFunc(sortedRelays, func(a, b relayHash) int {
+		if a.hash != b.hash {
+			return cmp.Compare(a.hash, b.hash)
+		}
+		return cmp.Compare(a.url, b.url)
+	})
+
+	relayCols := make(map[string]int, order)
+	for col, rh := range sortedRelays {
+		relayCols[rh.url] = col
+	}
+
 	scoreFor := func(state RelayState) int {
-		col := int(hashToGridIndex(state.Descriptor.APIHTTPSAddr) % uint32(order))
+		col := relayCols[state.Descriptor.APIHTTPSAddr]
 		if congested {
 			return molsCongestionScore(ingressRow, col, m1, m2, order)
 		}

@@ -62,9 +62,10 @@ func TestMOLSSelectPriorityMathematicalOrdering(t *testing.T) {
 	order := len(states)
 	m1, m2, _ := molsMultipliers(order, false)
 	row := int(hashToGridIndex(clientAddr) % uint32(order))
+	cols := makeRelayColumns(relays)
 	for i := 0; i < len(selected)-1; i++ {
-		colA := int(hashToGridIndex(selected[i]) % uint32(order))
-		colB := int(hashToGridIndex(selected[i+1]) % uint32(order))
+		colA := cols[selected[i]]
+		colB := cols[selected[i+1]]
 		scoreA := molsScore(row, colA, m1, m2, order)
 		scoreB := molsScore(row, colB, m1, m2, order)
 		if scoreA < scoreB {
@@ -282,8 +283,9 @@ func TestMOLSSelectPriorityCongestionSwitchChangesOrder(t *testing.T) {
 		order := 2
 		m1, m2, _ := molsMultipliers(order, false)
 		row := int(hashToGridIndex("ingress-test") % uint32(order))
-		j1 := int(hashToGridIndex("https://relay-one.example") % uint32(order))
-		j2 := int(hashToGridIndex("https://relay-two.example") % uint32(order))
+		cols := makeRelayColumns([]string{"https://relay-one.example", "https://relay-two.example"})
+		j1 := cols["https://relay-one.example"]
+		j2 := cols["https://relay-two.example"]
 		normal1 := molsScore(row, j1, m1, m2, order)
 		normal2 := molsScore(row, j2, m1, m2, order)
 		cong1 := molsCongestionScore(row, j1, m1, m2, order)
@@ -377,18 +379,14 @@ func TestMOLSSelectPriorityDifferentIngressDifferentOrder(t *testing.T) {
 		// Verify by checking MOLS row diversity for these relays.
 		order := len(states)
 		m1, m2, _ := molsMultipliers(order, false)
-		cols := make([]int, len(relayURLs))
-		for i, relayURL := range relayURLs {
-			cols[i] = int(hashToGridIndex(relayURL) % uint32(order))
-		}
-
 		type row [12]int
 		rows := make(map[row]struct{})
+		relayCols := makeRelayColumns(relayURLs)
 		for _, addr := range addresses {
 			i := int(hashToGridIndex(addr) % uint32(order))
 			var r row
-			for k, col := range cols {
-				r[k] = molsScore(i, col, m1, m2, order)
+			for k, relayURL := range relayURLs {
+				r[k] = molsScore(i, relayCols[relayURL], m1, m2, order)
 			}
 			rows[r] = struct{}{}
 		}
@@ -432,18 +430,44 @@ func TestRankRelayPoolIncludesEveryEligibleRelay(t *testing.T) {
 	}
 }
 
+func makeRelayColumns(urls []string) map[string]int {
+	type relayHash struct {
+		url  string
+		hash uint32
+	}
+	sortedRelays := make([]relayHash, len(urls))
+	for i, u := range urls {
+		sortedRelays[i] = relayHash{
+			url:  u,
+			hash: hashToGridIndex(u),
+		}
+	}
+	slices.SortFunc(sortedRelays, func(a, b relayHash) int {
+		if a.hash != b.hash {
+			return cmp.Compare(a.hash, b.hash)
+		}
+		return cmp.Compare(a.url, b.url)
+	})
+	relayCols := make(map[string]int, len(urls))
+	for col, rh := range sortedRelays {
+		relayCols[rh.url] = col
+	}
+	return relayCols
+}
+
 // expectedScoreOrder mirrors RankRelayPool's index derivation: the ingress row
-// is hashToGridIndex(localAddress) % order and each relay's column is
-// hashToGridIndex(url) % order, where order is the current pool size.
+// is hashToGridIndex(localAddress) % order and each relay's unique column is
+// assigned by sorted hash order in [0, order-1].
 func expectedScoreOrder(urls []string, localAddress string, order, m1, m2 int) []string {
 	row := int(hashToGridIndex(localAddress) % uint32(order))
+	relayCols := makeRelayColumns(urls)
 	type scored struct {
 		url   string
 		score int
 	}
 	scoredURLs := make([]scored, 0, len(urls))
 	for _, relayURL := range urls {
-		col := int(hashToGridIndex(relayURL) % uint32(order))
+		col := relayCols[relayURL]
 		scoredURLs = append(scoredURLs, scored{
 			url:   relayURL,
 			score: molsScore(row, col, m1, m2, order),
@@ -694,6 +718,36 @@ func TestMOLSRTTStatsEmpty(t *testing.T) {
 	mean, cv := molsRTTStats(nil)
 	if mean != 0 || cv != 0 {
 		t.Fatalf("molsRTTStats(nil) = (%v, %v), want (0, 0)", mean, cv)
+	}
+}
+
+// TestMOLSUniqueColumnAssignment verifies that N relays are assigned unique
+// column indices 0..N-1 based on their hash order, preventing column collisions
+// regardless of pool size.
+func TestMOLSUniqueColumnAssignment(t *testing.T) {
+	for n := 1; n <= 32; n++ {
+		relays := make([]string, n)
+		for i := 0; i < n; i++ {
+			relays[i] = fmt.Sprintf("https://relay-col-%d.example.com", i)
+		}
+		cols := makeRelayColumns(relays)
+		seen := make(map[int]bool, n)
+		for _, u := range relays {
+			col, ok := cols[u]
+			if !ok {
+				t.Fatalf("n=%d: relay %q missing from column map", n, u)
+			}
+			if col < 0 || col >= n {
+				t.Fatalf("n=%d: relay %q assigned column %d out of range [0, %d)", n, u, col, n)
+			}
+			if seen[col] {
+				t.Fatalf("n=%d: duplicate column index %d detected", n, col)
+			}
+			seen[col] = true
+		}
+		if len(seen) != n {
+			t.Fatalf("n=%d: got %d unique columns, want %d", n, len(seen), n)
+		}
 	}
 }
 
