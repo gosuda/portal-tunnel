@@ -668,7 +668,7 @@ func TestMOLSSelectPriorityEWMAStabilityTransposition(t *testing.T) {
 func BenchmarkMOLSRankRelayPool(b *testing.B) {
 	localAddr := "test-client-address"
 	relays := make([]RelayState, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		relays[i] = RelayState{
 			Descriptor:     types.RelayDescriptor{APIHTTPSAddr: "test"},
 			DiscoveryRTT:   100 * time.Millisecond,

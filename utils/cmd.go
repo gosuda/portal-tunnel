@@ -242,7 +242,8 @@ func NewFlagSet(name string, usage func(io.Writer)) *flag.FlagSet {
 
 func ParseFlagSet(fs *flag.FlagSet, args []string, usage func(io.Writer)) error {
 	args = normalizeFlagArgs(fs, args)
-	if len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+	helpRequested := len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help")
+	if helpRequested {
 		if usage != nil {
 			usage(os.Stdout)
 		}

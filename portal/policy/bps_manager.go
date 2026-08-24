@@ -156,10 +156,7 @@ func bpsChunkSize(length int, bps int64) int {
 	if bps <= 0 {
 		return length
 	}
-	chunk := bps / 10
-	if chunk < 1 {
-		chunk = 1
-	}
+	chunk := max(bps/10, 1)
 	if chunk > int64(length) {
 		chunk = int64(length)
 	}

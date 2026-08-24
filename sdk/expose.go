@@ -105,7 +105,9 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	if len(multiHop) > 0 && cfg.MultiHopDepth > 1 {
 		return nil, errors.New("explicit --multi-hop cannot be combined with automatic --multi-hop-depth")
 	}
-	if (len(multiHop) > 0 || cfg.MultiHopDepth > 1) && (cfg.UDPEnabled || cfg.TCPEnabled) {
+	multiHopEnabled := len(multiHop) > 0 || cfg.MultiHopDepth > 1
+	nonStreamTransport := cfg.UDPEnabled || cfg.TCPEnabled
+	if multiHopEnabled && nonStreamTransport {
 		return nil, errors.New("multi-hop currently supports only the default SNI TLS stream transport")
 	}
 	x402PayTo := strings.TrimSpace(cfg.X402PayTo)

@@ -43,7 +43,7 @@ func tempIdentityPath(t *testing.T) string {
 func tempLeasePort(t *testing.T) int {
 	t.Helper()
 
-	for attempt := 0; attempt < 100; attempt++ {
+	for range 100 {
 		probe, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("allocate probe port: %v", err)

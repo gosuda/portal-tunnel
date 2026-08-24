@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -290,8 +291,8 @@ func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, r
 	}
 
 	now := time.Now().UTC()
-	for i := len(routes) - 1; i >= 0; i-- {
-		route := routes[i]
+	for i, route := range slices.Backward(routes) {
+
 		desc, ok := l.relaySet.OverlayRelayDescriptor(route.ForwardRelay.APIHTTPSAddr, now)
 		if !ok {
 			return "", 0, fmt.Errorf("multi-hop forward relay %d descriptor is unavailable", i)

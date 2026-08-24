@@ -260,7 +260,7 @@ func TestCasperFacilitatorSettle(t *testing.T) {
 
 	settled, err := payment.facilitator.Settle(context.Background(), &facilitatortypes.PaymentPayload{
 		X402Version: int(facilitatortypes.X402VersionV2),
-		Payload:     map[string]interface{}{"signature": "deadbeef"},
+		Payload:     map[string]any{"signature": "deadbeef"},
 		Accepted:    payment.requirements,
 	}, &payment.requirements)
 	if err != nil {

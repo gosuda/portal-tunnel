@@ -8,8 +8,9 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 )
 
 // metricFamilyByName gathers all metric families and returns the one with the
@@ -205,7 +206,7 @@ func TestEmitFromTrace_CardinalityCap(t *testing.T) {
 
 	// Build the set of our namespace URLs.
 	ourURLs := make(map[string]struct{}, total)
-	for i := 0; i < total; i++ {
+	for i := range total {
 		ourURLs[fmt.Sprintf("t-cap-%03d", i)] = struct{}{}
 	}
 
@@ -235,7 +236,7 @@ func TestEmitFromTrace_CardinalityCap(t *testing.T) {
 	// Our traces are all non-congested non-nonlinear → reason="auto".
 	baseOther := relayReasonCounter("other", "auto")
 
-	for i := 0; i < total; i++ {
+	for i := range total {
 		url := fmt.Sprintf("t-cap-%03d", i)
 		telemetry.EmitFromTrace(telemetry.SelectionTrace{
 			OutputURLs:    []string{url},

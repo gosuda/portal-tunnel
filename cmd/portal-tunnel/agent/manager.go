@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -210,9 +211,7 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 	}
 	id := strings.TrimSpace(req.ID)
 	name := strings.TrimSpace(req.Name)
-	if id == "" {
-		id = agentTunnelID(name)
-	}
+	id = cmp.Or(id, agentTunnelID(name))
 	if id == "" {
 		return errors.New("tunnel name is required")
 	}
@@ -235,9 +234,7 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 	if target == "" && len(httpRoutes) == 0 {
 		target = defaultTargetAddr
 	}
-	if name == "" {
-		name = id
-	}
+	name = cmp.Or(name, id)
 	relayURLs, err := utils.NormalizeRelayURLs(req.RelayURLs...)
 	if err != nil {
 		return err
@@ -706,9 +703,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		banMITM = *cfg.BanMITM
 	}
 	x402FacilitatorToken := strings.TrimSpace(cfg.X402FacilitatorToken)
-	if x402FacilitatorToken == "" {
-		x402FacilitatorToken = strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY"))
-	}
+	x402FacilitatorToken = cmp.Or(x402FacilitatorToken, strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:            append([]string(nil), cfg.RelayURLs...),
 		Discovery:            discovery,

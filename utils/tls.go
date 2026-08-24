@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"cmp"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -75,12 +76,8 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 		return nil, errors.New("endpoint hostname is empty")
 	}
 	port := u.Port()
-	if port == "" {
-		port = "443"
-	}
-	if serverName == "" {
-		serverName = host
-	}
+	port = cmp.Or(port, "443")
+	serverName = cmp.Or(serverName, host)
 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	rawConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))

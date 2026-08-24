@@ -2,6 +2,7 @@ package portal
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -326,7 +327,9 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			record.Close()
 			return nil, types.RegisterResponse{}, errHostnameConflict
 		}
-		if hopToken != "" && (existing.isHopMiddle() || existing.isHopExit()) && existing.hopToken == hopToken && existingKey != identityKey {
+		isHopRecord := existing.isHopMiddle() || existing.isHopExit()
+		sameHopToken := hopToken != "" && existing.hopToken == hopToken
+		if isHopRecord && sameHopToken && existingKey != identityKey {
 			r.mu.Unlock()
 			record.Close()
 			return nil, types.RegisterResponse{}, errors.New("hop token conflict")
@@ -611,13 +614,13 @@ func (r *leaseRegistry) RegisterHopRoute(route *types.HopRoute, now time.Time) (
 	}
 }
 
-func (r *leaseRegistry) DeleteHopRoute(route *types.HopRoute) *leaseRecord {
+func (r *leaseRegistry) DeleteHopRoute(route *types.HopRoute) (*leaseRecord, error) {
 	if r == nil || route == nil {
-		return nil
+		return nil, nil
 	}
 	ownerKey, err := identity.AddressFromCompressedPublicKeyHex(route.OwnerPublicKey)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("delete hop route owner key: %w", err)
 	}
 	routeHostname := route.RouteHostname
 	hostnameHash := route.HostnameHash
@@ -653,7 +656,7 @@ func (r *leaseRegistry) DeleteHopRoute(route *types.HopRoute) *leaseRecord {
 	}
 	r.mu.Unlock()
 	deleted.Close()
-	return deleted
+	return deleted, nil
 }
 
 func (r *leaseRegistry) promoteECHDNS(record *leaseRecord, manager *acme.Manager, sniPort int) {
@@ -725,9 +728,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 		return types.RegisterChallengeResponse{}, err
 	}
 	clientIP = strings.ToLower(strings.TrimSpace(clientIP))
-	if clientIP == "" {
-		clientIP = "<unknown>"
-	}
+	clientIP = cmp.Or(clientIP, "<unknown>")
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

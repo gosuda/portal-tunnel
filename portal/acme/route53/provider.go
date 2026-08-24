@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -403,9 +404,7 @@ func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Clie
 			if *zones == nil {
 				*zones = make(map[string]string)
 			}
-			for zoneName, zoneID := range zonesByName {
-				(*zones)[zoneName] = zoneID
-			}
+			maps.Copy((*zones), zonesByName)
 		})
 	}
 
@@ -650,8 +649,7 @@ func ensureActiveKeySigningKey(ctx context.Context, client *awsroute53.Client, h
 		Status:                  aws.String("ACTIVE"),
 	})
 	if err != nil {
-		var alreadyExists *route53types.KeySigningKeyAlreadyExists
-		if errors.As(err, &alreadyExists) {
+		if _, ok := errors.AsType[*route53types.KeySigningKeyAlreadyExists](err); ok {
 			return nil
 		}
 		return fmt.Errorf("create route53 key-signing key %q: %w", kskName, err)

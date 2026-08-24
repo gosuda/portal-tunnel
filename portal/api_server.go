@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -48,8 +49,7 @@ var (
 )
 
 func writeAPIErrorResponse(w http.ResponseWriter, err error) {
-	var ae *apiError
-	if errors.As(err, &ae) {
+	if ae, ok := errors.AsType[*apiError](err); ok {
 		utils.WriteAPIError(w, ae.status, ae.code, ae.msg)
 		return
 	}
@@ -340,9 +340,7 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		scheme = "http"
 	}
 	domain := strings.TrimSpace(r.Host)
-	if domain == "" {
-		domain = s.identity.Name
-	}
+	domain = cmp.Or(domain, s.identity.Name)
 	registerURI := (&url.URL{
 		Scheme: scheme,
 		Host:   domain,
@@ -459,7 +457,11 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
-		record := s.registry.DeleteHopRoute(&route)
+		record, err := s.registry.DeleteHopRoute(&route)
+		if err != nil {
+			utils.InvalidRequestError(err).Write(w)
+			return
+		}
 		dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
 		record.deleteDNS(dnsCtx, s.acmeManager, true)
 		cancel()
@@ -499,7 +501,8 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 	err = record.syncENSGaslessDNS(dnsCtx, s.acmeManager)
 	cancel()
 	if err != nil {
-		removed := s.registry.DeleteHopRoute(&route)
+		removed, deleteErr := s.registry.DeleteHopRoute(&route)
+		err = errors.Join(err, deleteErr)
 		if removed == nil {
 			removed = record
 		}

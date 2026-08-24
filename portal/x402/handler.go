@@ -1,6 +1,7 @@
 package x402
 
 import (
+	"cmp"
 	"context"
 	_ "embed"
 	"errors"
@@ -48,9 +49,7 @@ func NewUSDCPaymentHandler(payment types.X402Payment, protectedPath, protectedMe
 	payment = paid.payment
 
 	protectedPath = strings.TrimSpace(protectedPath)
-	if protectedPath == "" {
-		protectedPath = payment.ResourcePath
-	}
+	protectedPath = cmp.Or(protectedPath, payment.ResourcePath)
 	if protectedPath == "" {
 		return nil, errors.New("USDC payment protected path is required")
 	}

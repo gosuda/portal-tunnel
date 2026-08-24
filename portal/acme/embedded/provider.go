@@ -5,6 +5,7 @@
 package embedded
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -84,9 +85,7 @@ func New(cfg Config) (*Provider, error) {
 		return nil, fmt.Errorf("embedded dns base domain %q must be a hostname", baseDomain)
 	}
 	listenAddr := strings.TrimSpace(cfg.ListenAddr)
-	if listenAddr == "" {
-		listenAddr = defaultListenAddr
-	}
+	listenAddr = cmp.Or(listenAddr, defaultListenAddr)
 
 	p := &Provider{
 		baseDomain: baseDomain,
