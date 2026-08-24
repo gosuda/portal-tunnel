@@ -62,22 +62,32 @@ func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
 	if order%2 == 0 {
 		return 1, 1, false
 	}
-	baseP1, baseP2 := int(molsBaseM1), int(molsBaseM2)
-	p1, p2 := baseP1, baseP2
 	if variant {
-		p1, p2 = int(molsVariantM1), int(molsVariantM2)
-	}
-	if molsPairValid(order, p1, p2) {
-		if !variant || p1%order != baseP1%order || p2%order != baseP2%order {
+		baseM1, baseM2, baseOK := molsMultipliers(order, false)
+		if !baseOK {
+			return 1, 1, false
+		}
+		p1, p2 := int(molsVariantM1), int(molsVariantM2)
+		if molsPairValid(order, p1, p2) && (p1%order != baseM1%order || p2%order != baseM2%order) {
 			return p1, p2, true
 		}
+		for a := 1; a < order; a++ {
+			for b := 1; b < order; b++ {
+				if a != b && molsPairValid(order, a, b) && (a%order != baseM1%order || b%order != baseM2%order) {
+					return a, b, true
+				}
+			}
+		}
+		return 1, 1, false
+	}
+
+	p1, p2 := int(molsBaseM1), int(molsBaseM2)
+	if molsPairValid(order, p1, p2) {
+		return p1, p2, true
 	}
 	for a := 1; a < order; a++ {
-		for b := a + 1; b < order; b++ {
-			if molsPairValid(order, a, b) {
-				if variant && a%order == baseP1%order && b%order == baseP2%order {
-					continue
-				}
+		for b := 1; b < order; b++ {
+			if a != b && molsPairValid(order, a, b) {
 				return a, b, true
 			}
 		}

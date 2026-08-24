@@ -25,6 +25,20 @@ func TestMOLSScoreRange(t *testing.T) {
 	}
 }
 
+func TestMOLSMultipliersOrder3Distinct(t *testing.T) {
+	b1, b2, baseOK := molsMultipliers(3, false)
+	if !baseOK {
+		t.Fatalf("molsMultipliers(3, false) returned ok=false")
+	}
+	v1, v2, varOK := molsMultipliers(3, true)
+	if !varOK {
+		t.Fatalf("molsMultipliers(3, true) returned ok=false")
+	}
+	if b1%3 == v1%3 && b2%3 == v2%3 {
+		t.Fatalf("order=3 variant multipliers (%d,%d) match base (%d,%d) mod 3", v1, v2, b1, b2)
+	}
+}
+
 // TestMOLSScoreRowPermutation checks that each row of the MOLS score grid is
 // duplicate-free for any grid order. Rows are indexed by ingress i; columns by
 // candidate j.
