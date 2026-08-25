@@ -1,13 +1,16 @@
 package discovery
 
-// MOLS selection ranks relays on an NxN MOLS grid sized to the current relay
-// pool, with a non-invasive adaptive partition over local load telemetry.
+// MOLS selection ranks relays on a dynamic NxN MOLS grid sized to the current
+// relay pool, with a non-invasive adaptive partition over local load telemetry.
 // Multipliers are chosen per grid order so m1, m2, and m1-m2 stay coprime to
 // the order; even orders admit no such pair and fall back to a single-square
 // (1,1) score, which remains deterministic and duplicate-free per row.
 // The grid is rebuilt on every selection from the eligible pool, so a node
 // that was evicted or filtered out simply shrinks the grid (N+1 -> N) and the
 // remaining indexes are recomputed mechanically; no stale entries can linger.
+// Because order := len(autoPool), adding, removing, or filtering a relay recomputes
+// all folded indexes and can substantially reshuffle future rankings. This dynamic
+// order trade-off ensures zero stale entries without requiring a fixed grid size.
 //
 // Ordering Pipeline:
 //   1. Filter: Apply ban, dead, expiry, and protocol compatibility gates.
@@ -67,13 +70,16 @@ func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
 		if !baseOK {
 			return 1, 1, false
 		}
+		differsFromBase := func(a, b int) bool {
+			return a%order != baseM1%order || b%order != baseM2%order
+		}
 		p1, p2 := int(molsVariantM1), int(molsVariantM2)
-		if molsPairValid(order, p1, p2) && (p1%order != baseM1%order || p2%order != baseM2%order) {
+		if molsPairValid(order, p1, p2) && differsFromBase(p1, p2) {
 			return p1, p2, true
 		}
 		for a := 1; a < order; a++ {
 			for b := 1; b < order; b++ {
-				if a != b && molsPairValid(order, a, b) && (a%order != baseM1%order || b%order != baseM2%order) {
+				if a != b && molsPairValid(order, a, b) && differsFromBase(a, b) {
 					return a, b, true
 				}
 			}
