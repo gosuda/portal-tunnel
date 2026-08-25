@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
@@ -53,9 +54,9 @@ func TestCSPRAmountToAtomic(t *testing.T) {
 	}
 }
 
-// The facilitator token is a credential for talking to the facilitator; it
-// must never survive into the normalized payment that is exposed onward.
-func TestNewCasperPaymentDoesNotRetainFacilitatorToken(t *testing.T) {
+// The facilitator token is a server-side credential: the payment challenge a
+// client receives must never disclose it, in the body or in any header.
+func TestPaymentChallengeDoesNotDiscloseFacilitatorToken(t *testing.T) {
 	payment, err := NewCasperPayment(types.X402Payment{
 		Testnet:          true,
 		Asset:            testWCSPRAsset,
@@ -66,8 +67,22 @@ func TestNewCasperPaymentDoesNotRetainFacilitatorToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCasperPayment: %v", err)
 	}
-	if payment.payment.FacilitatorToken != "" {
-		t.Fatal("facilitator token retained in normalized payment")
+
+	req := httptest.NewRequest(http.MethodGet, "https://public.example/paid", nil)
+	rec := httptest.NewRecorder()
+	if _, ok := payment.Settle(context.Background(), rec, req); ok {
+		t.Fatal("Settle() without payment = ok, want challenge")
+	}
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPaymentRequired)
+	}
+
+	exposed := rec.Body.String()
+	for name, values := range rec.Header() {
+		exposed += name + ": " + strings.Join(values, ",") + "\n"
+	}
+	if strings.Contains(exposed, testFacilitatorToken) {
+		t.Fatal("payment challenge disclosed the facilitator token")
 	}
 }
 

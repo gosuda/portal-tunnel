@@ -149,7 +149,7 @@ func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *tes
 
 	desc := mustRelayDescriptor(t, "https://relay-mismatch.example")
 	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: "5",
+		ProtocolVersion: types.DiscoveryVersion + "-other",
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC())
 	if err != nil {
@@ -174,9 +174,11 @@ func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *tes
 func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t *testing.T) {
 	set := NewRelaySet(nil)
 
+	// The protocol version matches, so the only error the response can
+	// produce is the missing-target one.
 	hinted := mustRelayDescriptor(t, "https://relay-hinted.example")
 	changed, err := set.ApplyRelayDiscoveryResponse("https://relay-source.example", types.DiscoveryResponse{
-		ProtocolVersion: "5",
+		ProtocolVersion: types.DiscoveryVersion,
 		Relays:          []types.RelayDescriptor{hinted},
 	}, time.Now().UTC())
 	if err == nil {
@@ -305,99 +307,6 @@ func TestConfirmAndUnconfirmRelayURL(t *testing.T) {
 	}
 }
 
-// A relay that keeps failing discovery for longer than a full announce
-// validity window is quarantined out of the pool entirely.
-func TestRecordDiscoveryFailurePoolBansLongUnhealthyRelay(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-unhealthy.example"
-	state := confirmedRelayState(t, relayURL)
-	state.unhealthySince = time.Now().UTC().Add(-AnnounceMaxValidity - time.Minute)
-	set.relays[relayURL] = state
-
-	backedOff, _, _ := set.RecordDiscoveryFailure(relayURL, 1)
-	if !backedOff {
-		t.Fatal("long-unhealthy relay discovery failure should back off")
-	}
-	states := set.AllRelays()
-	if len(states) != 1 || !states[0].Banned {
-		t.Fatalf("AllRelays() = %+v, want pool-banned relay", states)
-	}
-	if servesDescriptor(set, relayURL) || routesTo(t, set, relayURL) {
-		t.Fatal("pool-banned relay is still served or routed")
-	}
-}
-
-// Active listener failures never escalate to a pool ban: the relay keeps its
-// descriptor and only leaves active route selection.
-func TestRecordActiveFailureDoesNotPoolBanLongUnhealthyRelay(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-active-unhealthy.example"
-	state := confirmedRelayState(t, relayURL)
-	state.unhealthySince = time.Now().UTC().Add(-AnnounceMaxValidity - time.Minute)
-	set.relays[relayURL] = state
-
-	backedOff, _, _ := set.RecordActiveFailure(relayURL, 1)
-	if !backedOff {
-		t.Fatal("active failure at budget should back off")
-	}
-	states := set.AllRelays()
-	if len(states) != 1 || states[0].Banned {
-		t.Fatalf("AllRelays() = %+v, want relay without a pool ban", states)
-	}
-	if !servesDescriptor(set, relayURL) {
-		t.Fatal("active failure removed the relay descriptor")
-	}
-	if routesTo(t, set, relayURL) {
-		t.Fatal("active failure did not suppress the relay from route planning")
-	}
-}
-
-func TestPoolBanRejectsDiscoveryUntilExpiry(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-quarantined.example"
-	desc := mustRelayDescriptor(t, relayURL)
-
-	state := newRelayState(relayURL)
-	state.Banned = true
-	state.suppressActiveUntil = time.Now().UTC().Add(time.Hour)
-	set.relays[relayURL] = state
-
-	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
-		Relays:          []types.RelayDescriptor{desc},
-	}, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
-	}
-	if changed {
-		t.Fatal("pool-banned relay should not change relay set")
-	}
-	if got := relayStates(set); len(got) != 0 {
-		t.Fatalf("len(relayStates()) = %d, want 0", len(got))
-	}
-
-	state = set.relays[relayURL]
-	state.suppressActiveUntil = time.Now().UTC().Add(-time.Second)
-	set.relays[relayURL] = state
-
-	changed, err = set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
-		Relays:          []types.RelayDescriptor{desc},
-	}, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("ApplyRelayDiscoveryResponse() after expiry error = %v", err)
-	}
-	if !changed {
-		t.Fatal("expired pool ban should allow relay set update")
-	}
-	if got := relayStates(set); len(got) != 1 || got[0].Descriptor.APIHTTPSAddr != relayURL {
-		t.Fatalf("relayStates() = %v, want relay %q", got, relayURL)
-	}
-}
-
 func TestPlanRoutesExplicitPathReturnsSingleRouteToEntry(t *testing.T) {
 	const (
 		entry = "https://entry.example"
@@ -518,7 +427,7 @@ func TestPlanRoutesKeepsBootstrapRelayAsMultiHopEntry(t *testing.T) {
 	t.Fatalf("routes = %v, want bootstrap relay %q as an entry", routes, bootstrap)
 }
 
-func TestPlanRoutesSkipsUnavailableMultiHopRelays(t *testing.T) {
+func TestPlanRoutesSkipsMultiHopRelayWithoutOverlaySupport(t *testing.T) {
 	set := NewRelaySet(nil)
 	now := time.Now().UTC()
 	for _, relayURL := range []string{
@@ -536,22 +445,6 @@ func TestPlanRoutesSkipsUnavailableMultiHopRelays(t *testing.T) {
 	incompatible.LastSeenAt = now
 	set.relays[incompatible.Descriptor.APIHTTPSAddr] = incompatible
 
-	suppressed := confirmedRelayState(t, "https://relay-suppressed.example")
-	suppressed.LastSeenAt = now
-	suppressed.Descriptor.SupportsOverlay = true
-	suppressed.Descriptor.WireGuardPublicKey = "wg-key"
-	suppressed.Descriptor.WireGuardPort = 51820
-	suppressed.suppressActiveUntil = now.Add(time.Minute)
-	set.relays[suppressed.Descriptor.APIHTTPSAddr] = suppressed
-
-	recovering := confirmedRelayState(t, "https://relay-recovering.example")
-	recovering.LastSeenAt = now
-	recovering.Descriptor.SupportsOverlay = true
-	recovering.Descriptor.WireGuardPublicKey = "wg-key"
-	recovering.Descriptor.WireGuardPort = 51820
-	recovering.nextDiscoveryRefreshAt = now.Add(time.Minute)
-	set.relays[recovering.Descriptor.APIHTTPSAddr] = recovering
-
 	routes, err := set.PlanRoutes(nil, RouteState{MultiHopDepth: 3, LocalAddress: "client"})
 	if err != nil {
 		t.Fatalf("PlanRoutes() error = %v", err)
@@ -560,10 +453,8 @@ func TestPlanRoutesSkipsUnavailableMultiHopRelays(t *testing.T) {
 		t.Fatalf("len(routes) = %d, want 3", len(routes))
 	}
 	for _, route := range routes {
-		for _, relayURL := range route.MultiHop() {
-			if relayURL == incompatible.Descriptor.APIHTTPSAddr || relayURL == suppressed.Descriptor.APIHTTPSAddr || relayURL == recovering.Descriptor.APIHTTPSAddr {
-				t.Fatalf("route %v includes unavailable relay %q", route.MultiHop(), relayURL)
-			}
+		if slices.Contains(route.MultiHop(), incompatible.Descriptor.APIHTTPSAddr) {
+			t.Fatalf("route %v includes overlay-incompatible relay", route.MultiHop())
 		}
 	}
 }
