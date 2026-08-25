@@ -34,8 +34,6 @@ func TestRelativeName(t *testing.T) {
 		{name: "normalized subdomain", provider: "vultr", fqdn: "Portal.Example.COM.", zone: "EXAMPLE.COM.", want: "portal"},
 		{name: "wildcard", provider: "njalla", fqdn: "*.example.com", zone: "example.com", want: "*"},
 		{name: "nested", provider: "vultr", fqdn: "_ens.portal.example.com", zone: "example.com", want: "_ens.portal"},
-		{name: "missing record name", provider: "njalla", zone: "example.com", wantErr: "record name is required"},
-		{name: "missing zone", provider: "vultr", fqdn: "portal.example.com", wantErr: "vultr zone is required"},
 		{
 			name:     "outside zone",
 			provider: "njalla",

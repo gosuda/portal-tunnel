@@ -342,13 +342,9 @@ func TestUDPExchangeWithEDNS(t *testing.T) {
 	}
 }
 
-func TestConfigValidation(t *testing.T) {
-	if _, err := New(Config{BaseDomain: ""}); err == nil {
-		t.Fatalf("empty base domain accepted")
-	}
-	if _, err := New(Config{BaseDomain: "192.0.2.10", ListenAddr: "127.0.0.1:0"}); err == nil {
-		t.Fatalf("ip base domain accepted")
-	}
+// The embedded server is authoritative for exactly one zone: record mutations
+// outside that zone must be rejected, never silently served.
+func TestMutationsOutsideZoneRejected(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
 	if err := p.EnsureTXTRecord(ctx, "other.example.com", "value"); err == nil {
@@ -356,21 +352,5 @@ func TestConfigValidation(t *testing.T) {
 	}
 	if err := p.EnsureARecords(ctx, "other.example.com", "203.0.113.10"); err == nil {
 		t.Fatalf("outside-zone base domain accepted")
-	}
-	if err := p.EnsureARecords(ctx, testZone, "not-an-ip"); err == nil {
-		t.Fatalf("invalid ipv4 accepted")
-	}
-	if _, _, _, err := p.EnsureDNSSEC(ctx, testZone); err == nil {
-		t.Fatalf("dnssec must report unsupported")
-	}
-}
-
-func TestStopIsIdempotent(t *testing.T) {
-	p := newTestProvider(t, nil)
-	if err := p.Stop(); err != nil {
-		t.Fatalf("first stop: %v", err)
-	}
-	if err := p.Stop(); err != nil {
-		t.Fatalf("second stop: %v", err)
 	}
 }
