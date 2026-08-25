@@ -126,6 +126,20 @@ func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *htt
 
 func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) {
 	t.Helper()
+	writeManualCertificate(t, keyDir, baseDomain, []string{baseDomain, "*." + baseDomain})
+}
+
+func writeManualTenantCertificate(t *testing.T, keyDir, baseDomain string) {
+	t.Helper()
+	tenantDir := filepath.Join(keyDir, "tenant")
+	if err := os.MkdirAll(tenantDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(tenant) error = %v", err)
+	}
+	writeManualCertificate(t, tenantDir, "*."+baseDomain, []string{"*." + baseDomain})
+}
+
+func writeManualCertificate(t *testing.T, keyDir, commonName string, dnsNames []string) {
+	t.Helper()
 
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -136,11 +150,11 @@ func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) {
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(now.UnixNano()),
 		Subject: pkix.Name{
-			CommonName: baseDomain,
+			CommonName: commonName,
 		},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(90 * 24 * time.Hour),
-		DNSNames:              []string{baseDomain, "*." + baseDomain},
+		DNSNames:              dnsNames,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
@@ -378,6 +392,32 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 	if envelope.Data.X402.Enabled {
 		t.Fatalf("DomainResponse.X402.Enabled = true, want false")
 	}
+
+	materialsResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathV1KeylessMaterials)
+	if err != nil {
+		t.Fatalf("GET keyless materials error = %v", err)
+	}
+	defer materialsResp.Body.Close()
+	var materialsEnvelope types.APIEnvelope[types.KeylessMaterials]
+	if err := json.NewDecoder(materialsResp.Body).Decode(&materialsEnvelope); err != nil {
+		t.Fatalf("decode keyless materials response: %v", err)
+	}
+	if materialsResp.StatusCode != http.StatusOK || !materialsEnvelope.OK {
+		t.Fatalf("GET keyless materials status/envelope = %d/%+v, want success", materialsResp.StatusCode, materialsEnvelope)
+	}
+	if materialsEnvelope.Data.KeyID != keyless.TenantKeyID {
+		t.Fatalf("keyless materials key id = %q, want %q", materialsEnvelope.Data.KeyID, keyless.TenantKeyID)
+	}
+	tenantCert, err := utils.ParseCertificatePEM(materialsEnvelope.Data.CertificateChain)
+	if err != nil {
+		t.Fatalf("parse tenant certificate: %v", err)
+	}
+	if tenantCert.VerifyHostname("localhost") == nil {
+		t.Fatal("tenant certificate unexpectedly covers relay apex")
+	}
+	if err := tenantCert.VerifyHostname("lease.localhost"); err != nil {
+		t.Fatalf("tenant certificate does not cover lease hostname: %v", err)
+	}
 }
 
 func TestRegisterLeaseIncludesSNIPortForPublicIngress(t *testing.T) {
@@ -420,6 +460,7 @@ func TestServerStartUsesManualCertificateWithoutACMEProvider(t *testing.T) {
 
 	keyDir := t.TempDir()
 	writeManualRelayCertificate(t, keyDir, "portal.example.com")
+	writeManualTenantCertificate(t, keyDir, "portal.example.com")
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://portal.example.com",

@@ -56,10 +56,10 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 	utils.InvalidRequestError(err).Write(w)
 }
 
-func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
+func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiTLS, tenantTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
 	var keylessSignerHandler http.Handler
-	if len(apiTLS.KeyPEM) > 0 {
-		signer, err := keyless.NewSigner(apiTLS.KeyPEM)
+	if len(tenantTLS.KeyPEM) > 0 {
+		signer, err := keyless.NewSigner(tenantTLS.CertPEM, tenantTLS.KeyPEM)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("configure api signer: %w", err)
 		}
@@ -119,6 +119,12 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 				return
 			}
 			s.handleRelayDiscoveryAnnounce(w, r)
+		case types.PathV1KeylessMaterials:
+			if keylessSignerHandler == nil {
+				http.NotFound(w, r)
+				return
+			}
+			keylessSignerHandler.ServeHTTP(w, r)
 		case types.PathV1Sign:
 			if keylessSignerHandler == nil {
 				http.NotFound(w, r)

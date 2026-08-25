@@ -25,8 +25,8 @@ Run the relay with a single Docker command:
 
 ```bash
 mkdir -p ./relay-data
-# Optional: place fullchain.pem/privatekey.pem in ./relay-data to use a manual
-# certificate instead of ACME.
+# Optional manual TLS: place the API pair in ./relay-data and a distinct
+# wildcard-only pair in ./relay-data/tenant. Managed ACME creates both.
 docker run -d \
   --name portal-relay \
   --restart unless-stopped \

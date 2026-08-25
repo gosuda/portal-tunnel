@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -156,15 +157,19 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
 			}
 		case <-renewTicker.C:
-			_, _, manual, err := m.manualCertificateOverride()
-			if err != nil || manual || !m.shouldRenew() {
-				continue
-			}
 			renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err = m.provision(renewCtx)
+			_, _, apiManual, apiErr := m.manualCertificateOverride()
+			if apiErr == nil && !apiManual && m.shouldRenew() {
+				apiErr = m.provision(renewCtx)
+			}
+			tenantDir := filepath.Join(m.cfg.KeyDir, tenantKeyDirName)
+			var tenantErr error
+			if !certificateMaterialIsManual(tenantDir) && m.shouldRenewTenant() {
+				tenantErr = m.provisionTenant(renewCtx)
+			}
 			cancel()
-			if err != nil {
-				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
+			if err := errors.Join(apiErr, tenantErr); err != nil {
+				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificates")
 			}
 		}
 	}

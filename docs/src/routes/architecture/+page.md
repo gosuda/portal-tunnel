@@ -166,14 +166,14 @@ UDP client
 
 - Relay terminates admin/API TLS on the root host and exposes `/v1/sign` for tenant-side keyless signing.
 - Control-plane HTTP (`/sdk/*`), reverse-session establishment (`/sdk/connect`), and tenant TLS are separate connections with different trust boundaries.
-- Relay API TLS, SDK relay-client TLS, SDK tenant-server TLS, and QUIC tunnel TLS are distinct configs even when they reuse the same relay certificate material.
+- Relay API TLS and tenant keyless TLS use separate certificate keys. The API key is never registered with `/v1/sign`.
 - Relay does not terminate tenant TLS. It peeks ClientHello for SNI and bridges raw encrypted bytes after routing.
 - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
 - In keyless TLS, the relay performs certificate private-key signing through `/v1/sign`, but the SDK/tunnel endpoint still runs the TLS server handshake and derives tenant TLS session keys locally.
 - `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` are authorized by lease existence plus a relay-issued lease access token.
 - `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay identity key and used for the rest of the lease lifecycle.
 - Relay URLs must use `https://`.
-- HTTP/2 stays disabled on the admin/API TLS listener. Keyless TLS certificate sharing and `/sdk/connect` both depend on the current HTTP/1.1-only transport contract.
+- HTTP/2 stays disabled on the admin/API TLS listener. The keyless signer and `/sdk/connect` depend on the current HTTP/1.1-only transport contract.
 - WireGuard, when enabled, is relay-to-relay overlay transport only. It carries multi-hop relay forwarding and overlay discovery, but it is not used for direct tenant TLS termination, public UDP ingress, or `/sdk/*` control-plane traffic.
 
 ### Reverse Session Protocol
@@ -201,7 +201,7 @@ UDP client
 - ENS gasless automation reuses `ACME_DNS_PROVIDER` for DNSSEC and ENS TXT sync when the selected provider supports DNSSEC.
 - Relay stores its state under `IDENTITY_PATH`, including `identity.json`, `policy.json`, and certificate material. Tunnel and demo-app identities still use `IDENTITY_PATH` / `--identity-path` as a direct JSON file path.
 - Managed non-localhost ACME keeps both root and wildcard DNS A records in sync.
-- Relay certificate material lives under `IDENTITY_PATH` as `fullchain.pem` and `privatekey.pem`.
+- Relay API certificate material lives under `IDENTITY_PATH` as `fullchain.pem` and `privatekey.pem`. Tenant wildcard signer material lives under `IDENTITY_PATH/tenant/` with the same filenames.
 - Localhost uses the development certificate path instead of public managed/manual certificate setup.
 
 ## Connection Model

@@ -1,6 +1,7 @@
 package acme
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -159,6 +160,57 @@ func TestEnsureCertificateGeneratesLocalDevelopmentMaterial(t *testing.T) {
 	if !covered {
 		t.Fatal("certCoversDomains() = false, want true")
 	}
+}
+
+func TestEnsureTenantTLSMaterialUsesDistinctWildcardKey(t *testing.T) {
+	t.Parallel()
+
+	manager, err := NewManager(Config{
+		BaseDomain: "localhost",
+		KeyDir:     t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	apiCertPEM, _, err := manager.EnsureTLSMaterial(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureTLSMaterial() error = %v", err)
+	}
+	tenantCertPEM, tenantKeyPEM, err := manager.EnsureTenantTLSMaterial(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureTenantTLSMaterial() error = %v", err)
+	}
+	if len(tenantKeyPEM) == 0 {
+		t.Fatal("EnsureTenantTLSMaterial() returned empty private key")
+	}
+
+	apiCert, err := x509.ParseCertificate(pemBlockBytes(t, apiCertPEM))
+	if err != nil {
+		t.Fatalf("parse api certificate: %v", err)
+	}
+	tenantCert, err := x509.ParseCertificate(pemBlockBytes(t, tenantCertPEM))
+	if err != nil {
+		t.Fatalf("parse tenant certificate: %v", err)
+	}
+	if bytes.Equal(apiCert.RawSubjectPublicKeyInfo, tenantCert.RawSubjectPublicKeyInfo) {
+		t.Fatal("api and tenant certificates use the same public key")
+	}
+	if tenantCert.VerifyHostname("localhost") == nil {
+		t.Fatal("tenant certificate unexpectedly covers relay apex")
+	}
+	if err := tenantCert.VerifyHostname("lease.localhost"); err != nil {
+		t.Fatalf("tenant certificate does not cover lease hostname: %v", err)
+	}
+}
+
+func pemBlockBytes(t *testing.T, data []byte) []byte {
+	t.Helper()
+	block, _ := pem.Decode(data)
+	if block == nil {
+		t.Fatal("PEM block is missing")
+	}
+	return block.Bytes
 }
 
 func TestEnsureTLSMaterialUsesManualCertificateWithDefaultEmbeddedProvider(t *testing.T) {

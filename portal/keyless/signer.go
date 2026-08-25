@@ -1,7 +1,10 @@
 package keyless
 
 import (
+	"bytes"
 	"context"
+	"crypto"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,26 +14,35 @@ import (
 
 	ksigner "github.com/gosuda/keyless_tls/relay/signer"
 	"github.com/gosuda/keyless_tls/relay/signrpc"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
-	RelayKeyID         = "relay-cert"
+	// TenantKeyID is the only private key identifier exposed by the keyless signer.
+	TenantKeyID        = "tenant-wildcard"
 	defaultAllowedSkew = 5 * time.Minute
 )
 
 type Signer struct {
-	service *ksigner.Service
-	keyID   string
+	service          *ksigner.Service
+	keyID            string
+	certificateChain []byte
 }
 
-func NewSigner(keyPEM []byte) (*Signer, error) {
-	signingKey, err := ksigner.ParsePrivateKeyPEM(keyPEM)
+func NewSigner(certPEM, keyPEM []byte) (*Signer, error) {
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		return nil, fmt.Errorf("parse keyless signing key: %w", err)
+		return nil, fmt.Errorf("parse tenant keyless keypair: %w", err)
+	}
+	signingKey, ok := pair.PrivateKey.(crypto.Signer)
+	if !ok {
+		return nil, errors.New("tenant keyless private key does not implement crypto.Signer")
 	}
 
 	store := ksigner.NewStaticKeyStore()
-	if err := store.Put(RelayKeyID, signingKey); err != nil {
+	if err := store.Put(TenantKeyID, signingKey); err != nil {
 		return nil, fmt.Errorf("register keyless signing key: %w", err)
 	}
 
@@ -39,7 +51,8 @@ func NewSigner(keyPEM []byte) (*Signer, error) {
 			Store:       store,
 			AllowedSkew: defaultAllowedSkew,
 		},
-		keyID: RelayKeyID,
+		keyID:            TenantKeyID,
+		certificateChain: bytes.Clone(certPEM),
 	}, nil
 }
 
@@ -57,8 +70,47 @@ func (s *Signer) Sign(ctx context.Context, req *signrpc.SignRequest) (*signrpc.S
 	return s.service.Sign(ctx, req)
 }
 
+// ValidateMaterialSeparation ensures the tenant signer cannot authenticate the relay apex or unrelated names.
+func ValidateMaterialSeparation(hostname string, apiCertPEM, tenantCertPEM []byte) error {
+	hostname = utils.NormalizeHostname(hostname)
+	if hostname == "" {
+		return errors.New("relay hostname is required")
+	}
+	apiCert, err := utils.ParseCertificatePEM(apiCertPEM)
+	if err != nil {
+		return fmt.Errorf("parse api certificate: %w", err)
+	}
+	tenantCert, err := utils.ParseCertificatePEM(tenantCertPEM)
+	if err != nil {
+		return fmt.Errorf("parse tenant certificate: %w", err)
+	}
+	if bytes.Equal(apiCert.RawSubjectPublicKeyInfo, tenantCert.RawSubjectPublicKeyInfo) {
+		return errors.New("api and tenant certificates must use different public keys")
+	}
+	if tenantCert.IsCA {
+		return errors.New("tenant certificate must not be a certificate authority")
+	}
+	if tenantCert.VerifyHostname(hostname) == nil {
+		return fmt.Errorf("tenant certificate must not cover relay hostname %q", hostname)
+	}
+	wildcard := "*." + hostname
+	if len(tenantCert.DNSNames) != 1 || !strings.EqualFold(strings.TrimSpace(tenantCert.DNSNames[0]), wildcard) || len(tenantCert.IPAddresses) != 0 {
+		return fmt.Errorf("tenant certificate must cover only %q", wildcard)
+	}
+	return nil
+}
+
 func (s *Signer) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc(types.PathV1KeylessMaterials, func(w http.ResponseWriter, r *http.Request) {
+		if !utils.RequireMethod(w, r, http.MethodGet) {
+			return
+		}
+		utils.WriteAPIData(w, http.StatusOK, types.KeylessMaterials{
+			KeyID:            s.keyID,
+			CertificateChain: bytes.Clone(s.certificateChain),
+		})
+	})
 	mux.HandleFunc(signrpc.SignPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)

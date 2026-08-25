@@ -146,6 +146,7 @@ Casper facilitator.
 |--------|------|------|----------|
 | `GET` | `/discovery` | None | `DiscoveryResponse` |
 | `POST` | `/discovery/announce` | Signed descriptor | `DiscoveryAnnounceResponse` |
+| `GET` | `/v1/keyless/materials` | None | `KeylessMaterials` |
 | `POST` | `/v1/sign` | Lease token header | keyless signer response |
 
 ## Shared Types

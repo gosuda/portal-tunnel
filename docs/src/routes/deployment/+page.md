@@ -89,10 +89,13 @@ To override ACME with a manually managed certificate, place these files in
 ```text
 fullchain.pem
 privatekey.pem
+tenant/fullchain.pem
+tenant/privatekey.pem
 ```
 
-The certificate must cover the Portal root hostname. A wildcard certificate is
-also required when wildcard tunnel names terminate TLS at Portal.
+The root certificate must cover the Portal hostname. The tenant certificate must
+cover only the corresponding wildcard name and must use a different key. Managed
+ACME, including the embedded DNS provider, creates and renews both pairs automatically.
 
 ## Deploy
 
