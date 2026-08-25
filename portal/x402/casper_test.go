@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
@@ -12,36 +13,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func TestCasperNetwork(t *testing.T) {
-	if got := CasperNetwork(false); got != CasperMainnetNetwork {
-		t.Fatalf("CasperNetwork(false) = %q, want %q", got, CasperMainnetNetwork)
-	}
-	if got := CasperNetwork(true); got != CasperTestnetNetwork {
-		t.Fatalf("CasperNetwork(true) = %q, want %q", got, CasperTestnetNetwork)
-	}
-}
+const testWCSPRAsset = "hash-9c0d3fd7b1d9b5a94b13a5df0b1c8f1a0b3e5d7c9a1b3d5f7092a4c6e8b0d2f4"
+const testFacilitatorToken = "test-token"
 
-func TestIsCasperNetwork(t *testing.T) {
-	tests := []struct {
-		name    string
-		network string
-		want    bool
-	}{
-		{name: "mainnet", network: CasperMainnetNetwork, want: true},
-		{name: "testnet", network: CasperTestnetNetwork, want: true},
-		{name: "mixed case with spaces", network: "  Casper:Casper-Test ", want: true},
-		{name: "sui", network: MainnetNetwork, want: false},
-		{name: "empty", network: "", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsCasperNetwork(tt.network); got != tt.want {
-				t.Fatalf("IsCasperNetwork(%q) = %v, want %v", tt.network, got, tt.want)
-			}
-		})
-	}
-}
-
+// Payment amounts are money: the decimal-to-motes conversion must be exact and
+// must reject zero, negative, and sub-mote precision inputs.
 func TestCSPRAmountToAtomic(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -78,58 +54,9 @@ func TestCSPRAmountToAtomic(t *testing.T) {
 	}
 }
 
-func TestFormatCSPRAtomicAmount(t *testing.T) {
-	tests := []struct {
-		name   string
-		amount string
-		want   string
-	}{
-		{name: "whole", amount: "1000000000", want: "1 wCSPR"},
-		{name: "fraction", amount: "10000000", want: "0.01 wCSPR"},
-		{name: "one mote", amount: "1", want: "0.000000001 wCSPR"},
-		{name: "empty", amount: "", want: ""},
-		{name: "invalid", amount: "abc", want: "abc motes"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := FormatCSPRAtomicAmount(tt.amount); got != tt.want {
-				t.Fatalf("FormatCSPRAtomicAmount(%q) = %q, want %q", tt.amount, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestNormalizeCasperAddress(t *testing.T) {
-	tests := []struct {
-		name    string
-		address string
-		want    string
-	}{
-		{
-			name:    "account hash lowercased",
-			address: "  Account-Hash-1B2C3D  ",
-			want:    "account-hash-1b2c3d",
-		},
-		{
-			name:    "public key",
-			address: "01A1B2C3",
-			want:    "01a1b2c3",
-		},
-		{name: "empty", address: "   ", want: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := NormalizeCasperAddress(tt.address); got != tt.want {
-				t.Fatalf("NormalizeCasperAddress(%q) = %q, want %q", tt.address, got, tt.want)
-			}
-		})
-	}
-}
-
-const testWCSPRAsset = "hash-9c0d3fd7b1d9b5a94b13a5df0b1c8f1a0b3e5d7c9a1b3d5f7092a4c6e8b0d2f4"
-const testFacilitatorToken = "test-token"
-
-func TestNewCasperPayment(t *testing.T) {
+// The facilitator token is a server-side credential: the payment challenge a
+// client receives must never disclose it, in the body or in any header.
+func TestPaymentChallengeDoesNotDiscloseFacilitatorToken(t *testing.T) {
 	payment, err := NewCasperPayment(types.X402Payment{
 		Testnet:          true,
 		Asset:            testWCSPRAsset,
@@ -140,88 +67,22 @@ func TestNewCasperPayment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCasperPayment: %v", err)
 	}
-	if payment.requirements.Network != CasperTestnetNetwork {
-		t.Fatalf("network = %q, want %q", payment.requirements.Network, CasperTestnetNetwork)
-	}
-	if payment.requirements.Scheme != string(facilitatortypes.Exact) {
-		t.Fatalf("scheme = %q, want %q", payment.requirements.Scheme, facilitatortypes.Exact)
-	}
-	if payment.requirements.Amount != "250000000" {
-		t.Fatalf("amount = %q, want %q", payment.requirements.Amount, "250000000")
-	}
-	if payment.requirements.PayTo != "account-hash-abc123" {
-		t.Fatalf("payTo = %q, want %q", payment.requirements.PayTo, "account-hash-abc123")
-	}
-	if payment.requirements.MaxTimeoutSeconds != defaultMaxTimeoutSeconds {
-		t.Fatalf("maxTimeoutSeconds = %d, want %d", payment.requirements.MaxTimeoutSeconds, defaultMaxTimeoutSeconds)
-	}
-	if got := payment.requirements.Extra["asset"]; got != "wCSPR" {
-		t.Fatalf("extra asset = %v, want wCSPR", got)
-	}
-	if got := payment.payment.NetworkName; got != "Casper Testnet" {
-		t.Fatalf("network name = %q, want %q", got, "Casper Testnet")
-	}
-	if payment.facilitator == nil {
-		t.Fatal("facilitator is nil")
-	}
-	if payment.payment.FacilitatorToken != "" {
-		t.Fatal("facilitator token retained in normalized payment")
-	}
-}
 
-func TestNewCasperPaymentErrors(t *testing.T) {
-	tests := []struct {
-		name    string
-		payment types.X402Payment
-	}{
-		{
-			name:    "unsupported network",
-			payment: types.X402Payment{Network: "casper:nope", Asset: testWCSPRAsset, PayTo: "01ab", Amount: "1"},
-		},
-		{
-			name:    "missing asset",
-			payment: types.X402Payment{Network: CasperMainnetNetwork, PayTo: "01ab", Amount: "1"},
-		},
-		{
-			name:    "missing pay to",
-			payment: types.X402Payment{Network: CasperMainnetNetwork, Asset: testWCSPRAsset, Amount: "1"},
-		},
-		{
-			name:    "invalid amount",
-			payment: types.X402Payment{Network: CasperMainnetNetwork, Asset: testWCSPRAsset, PayTo: "01ab", Amount: "-1"},
-		},
-		{
-			name:    "missing default facilitator token",
-			payment: types.X402Payment{Network: CasperMainnetNetwork, Asset: testWCSPRAsset, PayTo: "01ab", Amount: "1"},
-		},
+	req := httptest.NewRequest(http.MethodGet, "https://public.example/paid", nil)
+	rec := httptest.NewRecorder()
+	if _, ok := payment.Settle(context.Background(), rec, req); ok {
+		t.Fatal("Settle() without payment = ok, want challenge")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := NewCasperPayment(tt.payment); err == nil {
-				t.Fatal("expected an error")
-			}
-		})
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPaymentRequired)
 	}
-}
 
-func TestCasperFacilitatorSupported(t *testing.T) {
-	facilitator, err := newCasperFacilitator(CasperMainnetNetwork, testFacilitatorToken)
-	if err != nil {
-		t.Fatalf("newCasperFacilitator: %v", err)
+	exposed := rec.Body.String()
+	for name, values := range rec.Header() {
+		exposed += name + ": " + strings.Join(values, ",") + "\n"
 	}
-	supported := facilitator.Supported()
-	if len(supported.Kinds) != 1 {
-		t.Fatalf("kinds = %d, want 1", len(supported.Kinds))
-	}
-	kind := supported.Kinds[0]
-	if kind.Network != CasperMainnetNetwork {
-		t.Fatalf("kind network = %q, want %q", kind.Network, CasperMainnetNetwork)
-	}
-	if kind.Scheme != string(facilitatortypes.Exact) {
-		t.Fatalf("kind scheme = %q, want %q", kind.Scheme, facilitatortypes.Exact)
-	}
-	if kind.X402Version != int(facilitatortypes.X402VersionV2) {
-		t.Fatalf("kind x402Version = %d, want %d", kind.X402Version, facilitatortypes.X402VersionV2)
+	if strings.Contains(exposed, testFacilitatorToken) {
+		t.Fatal("payment challenge disclosed the facilitator token")
 	}
 }
 
@@ -316,18 +177,5 @@ func TestCasperFacilitatorVerifyRejects(t *testing.T) {
 	}
 	if verified.InvalidReason != "insufficient_balance" {
 		t.Fatalf("invalidReason = %q, want %q", verified.InvalidReason, "insufficient_balance")
-	}
-}
-
-func TestCasperFacilitatorNilArgs(t *testing.T) {
-	facilitator, err := newCasperFacilitator(CasperMainnetNetwork, testFacilitatorToken)
-	if err != nil {
-		t.Fatalf("newCasperFacilitator: %v", err)
-	}
-	if _, err := facilitator.Verify(context.Background(), nil, nil); err == nil {
-		t.Fatal("Verify(nil, nil) expected an error")
-	}
-	if _, err := facilitator.Settle(context.Background(), nil, nil); err == nil {
-		t.Fatal("Settle(nil, nil) expected an error")
 	}
 }

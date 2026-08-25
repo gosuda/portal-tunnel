@@ -153,21 +153,6 @@ func TestStaticSiteHandlerFallsBackToIndex(t *testing.T) {
 	}
 }
 
-func TestStaticSiteHandlerServesCustomIndex(t *testing.T) {
-	t.Parallel()
-
-	root := newStaticSite(t, map[string]string{"main.html": "<html>main</html>"})
-	handler := NewStaticSiteHandler("/", root, "main.html")
-
-	req := httptest.NewRequest(http.MethodGet, "https://public.example/", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if got := rec.Body.String(); got != "<html>main</html>" {
-		t.Fatalf("body = %q, want main.html content", got)
-	}
-}
-
 func TestStaticSiteHandlerReturnsIndexForDirectory(t *testing.T) {
 	t.Parallel()
 

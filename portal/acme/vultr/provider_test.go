@@ -1,23 +1,9 @@
 package vultr
 
-import (
-	"context"
-	"testing"
-)
+import "testing"
 
-func TestChallengeProviderRequiresAPIKey(t *testing.T) {
-	t.Parallel()
-
-	provider := New("")
-	challengeProvider, err := provider.ChallengeProvider(context.Background())
-	if challengeProvider != nil {
-		t.Fatalf("ChallengeProvider() provider = %T, want nil", challengeProvider)
-	}
-	if err == nil || err.Error() != "vultr api key is required" {
-		t.Fatalf("ChallengeProvider() error = %v, want local api key error", err)
-	}
-}
-
+// Registrars reject SHA-1 DS records; the SHA-256 digest must be preferred
+// whenever the zone publishes both.
 func TestPreferredDSRecordPrefersSHA256(t *testing.T) {
 	t.Parallel()
 

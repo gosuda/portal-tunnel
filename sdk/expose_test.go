@@ -105,13 +105,6 @@ func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {
 	if got := exposure.ActiveRelayURLs(); len(got) != 1 || got[0] != relayB {
 		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", got, relayB)
 	}
-
-	exposure.mu.RLock()
-	_, listenerExists := exposure.relayListeners[relayA]
-	exposure.mu.RUnlock()
-	if listenerExists {
-		t.Fatal("banned relay listener still exists in exposure.listeners")
-	}
 }
 
 func TestRunListenerAcceptLoopRemovesMultiHopListenerByIngressRelay(t *testing.T) {
@@ -131,8 +124,8 @@ func TestRunListenerAcceptLoopRemovesMultiHopListenerByIngressRelay(t *testing.T
 
 	exposure.runListenerAcceptLoop(relayListener)
 
-	if _, ok := exposure.relayListeners[entry]; ok {
-		t.Fatal("terminated multi-hop listener remains keyed by ingress relay")
+	if got := exposure.ActiveRelayURLs(); len(got) != 0 {
+		t.Fatalf("ActiveRelayURLs() = %v, want terminated multi-hop listener removed", got)
 	}
 }
 
@@ -181,19 +174,8 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 		t.Fatal("stale relay listener was not closed")
 	}
 
-	knownRelayURLs := exposure.ActiveRelayURLs()
-	exposure.mu.RLock()
-	_, relayAExists := exposure.relayListeners[relayA]
-	_, relayBExists := exposure.relayListeners[relayB]
-	exposure.mu.RUnlock()
-	if len(knownRelayURLs) != 1 || knownRelayURLs[0] != relayB {
-		t.Fatalf("knownRelayURLs = %v, want [%q]", knownRelayURLs, relayB)
-	}
-	if relayAExists {
-		t.Fatal("stale relay listener still exists in exposure.listeners")
-	}
-	if !relayBExists {
-		t.Fatal("active relay listener missing from exposure.listeners")
+	if got := exposure.ActiveRelayURLs(); len(got) != 1 || got[0] != relayB {
+		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", got, relayB)
 	}
 }
 

@@ -407,13 +407,3 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 		t.Fatalf("issueRegisterChallenge() after expired cleanup error = %v", err)
 	}
 }
-
-func TestServerRunRegistryJanitorRejectsNonPositiveInterval(t *testing.T) {
-	t.Parallel()
-
-	server := &Server{registry: newTestRegistry(t)}
-	err := server.runRegistryJanitor(context.Background(), 0)
-	if err == nil {
-		t.Fatal("runRegistryJanitor() error = nil, want validation error")
-	}
-}

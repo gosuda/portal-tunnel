@@ -8,16 +8,17 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// relayStates returns the non-banned relay states as seen through the public
+// AllRelays view.
 func relayStates(set *RelaySet) []RelayState {
-	set.mu.RLock()
-	defer set.mu.RUnlock()
-	states := make([]RelayState, 0, len(set.relays))
-	for _, state := range set.relays {
+	states := set.AllRelays()
+	out := make([]RelayState, 0, len(states))
+	for _, state := range states {
 		if !state.Banned {
-			states = append(states, state)
+			out = append(out, state)
 		}
 	}
-	return states
+	return out
 }
 
 func mustRelayDescriptor(t *testing.T, relayURL string) types.RelayDescriptor {
@@ -42,98 +43,104 @@ func bootstrapRelayState(relayURL string) RelayState {
 	return state
 }
 
-func TestApplyRelayDiscoveryResponsePreservesBootstrapFlag(t *testing.T) {
-	set := NewRelaySet([]string{"https://relay-a.example"})
-
-	desc := mustRelayDescriptor(t, "https://relay-a.example")
+// mustApplyAuthoritative ingests the descriptor as a successful authoritative
+// discovery response from the relay itself, promoting it to RelayVerified.
+func mustApplyAuthoritative(t *testing.T, set *RelaySet, desc types.RelayDescriptor) {
+	t.Helper()
 	if _, err := set.ApplyRelayDiscoveryResponse(desc.APIHTTPSAddr, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC()); err != nil {
-		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+		t.Fatalf("ApplyRelayDiscoveryResponse(%q) error = %v", desc.APIHTTPSAddr, err)
 	}
+}
 
-	states := relayStates(set)
-	if len(states) != 1 {
-		t.Fatalf("len(relayStates()) = %d, want 1", len(states))
+// servesDescriptor reports whether the set currently gossips relayURL onward.
+func servesDescriptor(set *RelaySet, relayURL string) bool {
+	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
+		if desc.APIHTTPSAddr == relayURL {
+			return true
+		}
 	}
-	if !states[0].Bootstrap {
-		t.Fatal("bootstrap relay lost bootstrap flag after discovery update")
+	return false
+}
+
+// routesTo reports whether automatic single-hop route planning selects relayURL.
+func routesTo(t *testing.T, set *RelaySet, relayURL string) bool {
+	t.Helper()
+	routes, err := set.PlanRoutes(nil, RouteState{LocalAddress: "client"})
+	if err != nil {
+		t.Fatalf("PlanRoutes() error = %v", err)
+	}
+	for _, route := range routes {
+		if route.ListenerRelayURL() == relayURL {
+			return true
+		}
+	}
+	return false
+}
+
+func TestApplyRelayDiscoveryResponsePreservesBootstrapFlag(t *testing.T) {
+	relayURL := "https://relay-a.example"
+	set := NewRelaySet([]string{relayURL})
+
+	mustApplyAuthoritative(t, set, mustRelayDescriptor(t, relayURL))
+
+	if got := set.BootstrapRelayURLs(); len(got) != 1 || got[0] != relayURL {
+		t.Fatalf("BootstrapRelayURLs() = %v, want bootstrap relay to survive discovery update", got)
 	}
 }
 
 func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
 	set := NewRelaySet(nil)
 
-	now := time.Now().UTC()
+	// Ingest a descriptor that was valid when it arrived but has since
+	// expired: sign and apply it in the past, then read in the present.
 	relayURL := "https://relay-stale.example"
-	state := confirmedRelayState(t, relayURL)
-	state.Descriptor.ExpiresAt = now.Add(-time.Minute)
-	state.LastSeenAt = now.Add(-6 * time.Hour)
-	state.Descriptor.SupportsUDP = true
-	state.Descriptor.SupportsTCP = true
+	issuedAt := time.Now().UTC().Truncate(time.Microsecond).Add(-DiscoveryDescriptorTTL - time.Minute)
+	desc := mustSignedDescriptor(t, mustSigningIdentity(t), relayURL, issuedAt)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{desc},
+	}, issuedAt.Add(time.Second)); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
 
-	set.mu.Lock()
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	descriptors := set.Descriptors(types.RelayDescriptor{})
-	if len(descriptors) != 0 {
-		t.Fatalf("len(Descriptors(empty)) = %d, want 0", len(descriptors))
+	if descriptors := set.Descriptors(types.RelayDescriptor{}); len(descriptors) != 0 {
+		t.Fatalf("Descriptors(expired) = %v, want empty", descriptors)
 	}
 }
 
-func TestDescriptorsDropsDeadRelayDescriptor(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-dead.example"
-	state := confirmedRelayState(t, relayURL)
-	state.Dead = true
-
-	set.mu.Lock()
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	descriptors := set.Descriptors(types.RelayDescriptor{})
-	if len(descriptors) != 0 {
-		t.Fatalf("len(Descriptors(dead)) = %d, want 0", len(descriptors))
-	}
-}
-
-func TestDescriptorsKeepsRelayDuringTransientDiscoveryFailure(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-unstable.example"
-	state := confirmedRelayState(t, relayURL)
-	state.discoveryFailures = 1
-
-	set.mu.Lock()
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	descriptors := set.Descriptors(types.RelayDescriptor{})
-	if len(descriptors) != 1 {
-		t.Fatalf("len(Descriptors(transient failure)) = %d, want 1", len(descriptors))
-	}
-	if descriptors[0].APIHTTPSAddr != relayURL {
-		t.Fatalf("Descriptors(transient failure)[0] = %q, want %q", descriptors[0].APIHTTPSAddr, relayURL)
-	}
-}
-
-func TestDescriptorsDropsBannedRelayDescriptor(t *testing.T) {
+// A banned relay stops being served to peers, stops being selected for new
+// routes, and cannot re-enter through a later gossip announce.
+func TestBannedRelayStopsServingAndRouting(t *testing.T) {
 	set := NewRelaySet(nil)
 
 	relayURL := "https://relay-banned.example"
-	state := confirmedRelayState(t, relayURL)
-	state.Banned = true
+	desc := mustRelayDescriptor(t, relayURL)
+	mustApplyAuthoritative(t, set, desc)
+	if !servesDescriptor(set, relayURL) || !routesTo(t, set, relayURL) {
+		t.Fatal("verified relay should serve and route before the ban")
+	}
 
-	set.mu.Lock()
-	set.relays[relayURL] = state
-	set.mu.Unlock()
+	set.BanRelayURL(relayURL)
 
-	descriptors := set.Descriptors(types.RelayDescriptor{})
-	if len(descriptors) != 0 {
-		t.Fatalf("len(Descriptors(banned)) = %d, want 0", len(descriptors))
+	if servesDescriptor(set, relayURL) {
+		t.Fatal("banned relay is still gossiped to peers")
+	}
+	if routesTo(t, set, relayURL) {
+		t.Fatal("banned relay is still selected for new routes")
+	}
+
+	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{desc},
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+	if changed || servesDescriptor(set, relayURL) {
+		t.Fatal("gossip announce re-admitted a banned relay")
 	}
 }
 
@@ -142,7 +149,7 @@ func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *tes
 
 	desc := mustRelayDescriptor(t, "https://relay-mismatch.example")
 	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: "5",
+		ProtocolVersion: types.DiscoveryVersion + "-other",
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC())
 	if err != nil {
@@ -167,9 +174,11 @@ func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *tes
 func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t *testing.T) {
 	set := NewRelaySet(nil)
 
+	// The protocol version matches, so the only error the response can
+	// produce is the missing-target one.
 	hinted := mustRelayDescriptor(t, "https://relay-hinted.example")
 	changed, err := set.ApplyRelayDiscoveryResponse("https://relay-source.example", types.DiscoveryResponse{
-		ProtocolVersion: "5",
+		ProtocolVersion: types.DiscoveryVersion,
 		Relays:          []types.RelayDescriptor{hinted},
 	}, time.Now().UTC())
 	if err == nil {
@@ -191,384 +200,110 @@ func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t
 	}
 }
 
-func TestApplyRelayDiscoveryResponseClearsDiscoveryRetryOnAuthoritativeSuccess(t *testing.T) {
+// Discovery-failure lifecycle: a transient failure does not remove an
+// otherwise usable relay, exhausting the failure budget does, a gossip hint
+// does not revive it, and a direct authoritative success does.
+func TestDiscoveryFailureLifecycle(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+		budget = 3
+	)
 	set := NewRelaySet(nil)
+	descA := mustRelayDescriptor(t, relayA)
+	mustApplyAuthoritative(t, set, descA)
+	mustApplyAuthoritative(t, set, mustRelayDescriptor(t, relayB))
 
-	relayURL := "https://relay-source.example"
-	desc := mustRelayDescriptor(t, relayURL)
-	set.mu.Lock()
-	state := RelayState{
-		Descriptor:             desc,
-		LastSeenAt:             time.Now().UTC(),
-		discoveryFailures:      defaultRecoveryFailures,
-		nextDiscoveryRefreshAt: time.Now().UTC().Add(time.Minute),
-		activeFailures:         1,
-		suppressActiveUntil:    time.Now().UTC().Add(time.Minute),
-	}
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
-		Relays:          []types.RelayDescriptor{desc},
-	}, time.Now().UTC()); err != nil {
-		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	set.RecordDiscoveryFailure(relayA, budget)
+	if !servesDescriptor(set, relayA) || !routesTo(t, set, relayA) {
+		t.Fatal("a transient discovery failure removed an otherwise usable relay")
 	}
 
-	set.mu.RLock()
-	refreshed := set.relays[relayURL]
-	set.mu.RUnlock()
-	if refreshed.discoveryFailures != 0 {
-		t.Fatalf("discoveryFailures = %d, want 0", refreshed.discoveryFailures)
+	for range budget - 1 {
+		set.RecordDiscoveryFailure(relayA, budget)
 	}
-	if !refreshed.nextDiscoveryRefreshAt.IsZero() {
-		t.Fatalf("nextDiscoveryRefreshAt = %v, want zero time", refreshed.nextDiscoveryRefreshAt)
+	if servesDescriptor(set, relayA) || routesTo(t, set, relayA) {
+		t.Fatal("relay with exhausted discovery budget is still served or routed")
 	}
-	if refreshed.activeFailures != 1 {
-		t.Fatalf("activeFailures = %d, want 1", refreshed.activeFailures)
+	if !servesDescriptor(set, relayB) || !routesTo(t, set, relayB) {
+		t.Fatal("healthy relay was affected by another relay's discovery failures")
 	}
-	if refreshed.suppressActiveUntil.IsZero() {
-		t.Fatal("suppressActiveUntil was cleared by discovery success")
-	}
-}
-
-func TestApplyRelayDiscoveryResponsePreservesDiscoveryRetryOnHint(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-hinted.example"
-	desc := mustRelayDescriptor(t, relayURL)
-	nextDiscoveryRefreshAt := time.Now().UTC().Add(time.Minute)
-	set.mu.Lock()
-	state := RelayState{
-		Descriptor:             desc,
-		LastSeenAt:             time.Now().UTC(),
-		nextDiscoveryRefreshAt: nextDiscoveryRefreshAt,
-	}
-	set.relays[relayURL] = state
-	set.mu.Unlock()
 
 	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
-		Relays:          []types.RelayDescriptor{desc},
+		Relays:          []types.RelayDescriptor{descA},
 	}, time.Now().UTC()); err != nil {
-		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+		t.Fatalf("ApplyRelayDiscoveryResponse(hint) error = %v", err)
+	}
+	if servesDescriptor(set, relayA) || routesTo(t, set, relayA) {
+		t.Fatal("a gossip hint revived a dead relay; only authoritative contact may")
 	}
 
-	set.mu.RLock()
-	refreshed := set.relays[relayURL]
-	set.mu.RUnlock()
-	if !refreshed.nextDiscoveryRefreshAt.Equal(nextDiscoveryRefreshAt) {
-		t.Fatalf("nextDiscoveryRefreshAt = %v, want %v", refreshed.nextDiscoveryRefreshAt, nextDiscoveryRefreshAt)
-	}
-}
-
-func TestConfirmRelayURLMarksRelayConfirmedWithoutChangingAggregateDescriptor(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-confirmed.example"
-	state := RelayState{
-		Descriptor: mustRelayDescriptor(t, relayURL),
-		LastSeenAt: time.Now().UTC(),
-	}
-
-	set.mu.Lock()
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	set.ConfirmRelayURL(relayURL)
-
-	set.mu.RLock()
-	confirmed := set.relays[relayURL]
-	set.mu.RUnlock()
-	if !confirmed.Confirmed {
-		t.Fatal("relay should become locally confirmed after listener success")
-	}
-	if confirmed.Descriptor.APIHTTPSAddr != relayURL {
-		t.Fatalf("descriptor api_https_addr = %q, want %q", confirmed.Descriptor.APIHTTPSAddr, relayURL)
+	mustApplyAuthoritative(t, set, descA)
+	if !servesDescriptor(set, relayA) || !routesTo(t, set, relayA) {
+		t.Fatal("authoritative discovery success did not revive the relay")
 	}
 }
 
-func TestConfirmRelayURLResetsActiveFailures(t *testing.T) {
-	relayURL := "https://error.io"
+// Active-failure lifecycle: a listener failure suppresses the relay from new
+// routes without banning it or hiding its descriptor, a later discovery
+// success does not forgive the failure, and a successful listener
+// confirmation does.
+func TestActiveFailureLifecycle(t *testing.T) {
+	const relayA = "https://relay-a.example"
 	set := NewRelaySet(nil)
-	state := RelayState{
-		Descriptor: types.RelayDescriptor{
-			APIHTTPSAddr: relayURL,
-		},
-		activeFailures:      5,
-		suppressActiveUntil: time.Now().UTC().Add(time.Minute),
-	}
-	set.mu.Lock()
-	set.relays[relayURL] = state
-	set.mu.Unlock()
+	desc := mustRelayDescriptor(t, relayA)
+	mustApplyAuthoritative(t, set, desc)
 
-	set.ConfirmRelayURL(relayURL)
-
-	set.mu.RLock()
-	state = set.relays[relayURL]
-	set.mu.RUnlock()
-	if !state.Confirmed {
-		t.Fatal("relay should be confirmed")
-	}
-	if state.activeFailures != 0 {
-		t.Fatalf("activeFailures = %d, want 0", state.activeFailures)
-	}
-	if !state.suppressActiveUntil.IsZero() {
-		t.Fatalf("suppressActiveUntil = %v, want zero", state.suppressActiveUntil)
-	}
-}
-
-func TestUnconfirmRelayURLClearsLocalConfirmationOnly(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-confirmed.example"
-	state := confirmedRelayState(t, relayURL)
-
-	set.mu.Lock()
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	set.UnconfirmRelayURL(relayURL)
-
-	set.mu.RLock()
-	unconfirmed := set.relays[relayURL]
-	set.mu.RUnlock()
-	if unconfirmed.Confirmed {
-		t.Fatal("relay should lose local confirmation after listener failure")
-	}
-}
-
-func TestRecordDiscoveryFailureBackoff(t *testing.T) {
-	relayURL := "https://discovery-error.example"
-	set := NewRelaySet(nil)
-	set.mu.Lock()
-	set.relays[relayURL] = confirmedRelayState(t, relayURL)
-	set.mu.Unlock()
-	budget := 3
-
-	start := time.Now()
-	for i := range budget {
-		backedOff, _, _ := set.RecordDiscoveryFailure(relayURL, budget)
-		if i < budget-1 && backedOff {
-			t.Fatal("discovery failure backed off before budget")
-		}
-	}
-
-	set.mu.RLock()
-	state := set.relays[relayURL]
-	set.mu.RUnlock()
-	if !state.nextDiscoveryRefreshAt.After(start) {
-		t.Fatal("discovery retry timer was not scheduled")
-	}
-	if !state.suppressActiveUntil.IsZero() {
-		t.Fatalf("suppressActiveUntil = %v, want zero", state.suppressActiveUntil)
-	}
-}
-
-func TestRecordDiscoveryFailureMarksDeadAndRevivesOnAuthoritativeSuccess(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	deadURL := "https://relay-dead.example"
-	aliveURL := "https://relay-alive.example"
-	deadDesc := mustRelayDescriptor(t, deadURL)
-
-	set.mu.Lock()
-	set.relays[deadURL] = RelayState{
-		Descriptor: deadDesc,
-		Confirmed:  true,
-		LastSeenAt: time.Now().UTC(),
-	}
-	set.relays[aliveURL] = confirmedRelayState(t, aliveURL)
-	set.mu.Unlock()
-
-	budget := 3
-	for range budget {
-		set.RecordDiscoveryFailure(deadURL, budget)
-	}
-
-	set.mu.RLock()
-	dead := set.relays[deadURL]
-	set.mu.RUnlock()
-	if !dead.Dead {
-		t.Fatal("relay was not marked dead after exhausting discovery failure budget")
-	}
-
-	routes, err := set.PlanRoutes(nil, RouteState{LocalAddress: "client", ExplicitRelayURLs: []string{deadURL}})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-	if len(routes) == 0 {
-		t.Fatal("alive relay was excluded from route planning")
-	}
-	for _, route := range routes {
-		if route.ListenerRelayURL() == deadURL {
-			t.Fatal("dead relay was included in route planning")
-		}
-	}
-
-	if _, err := set.ApplyRelayDiscoveryResponse(deadURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
-		Relays:          []types.RelayDescriptor{deadDesc},
-	}, time.Now().UTC()); err != nil {
-		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
-	}
-
-	set.mu.RLock()
-	revived := set.relays[deadURL]
-	set.mu.RUnlock()
-	if revived.Dead {
-		t.Fatal("dead mark was not cleared after authoritative discovery success")
-	}
-
-	routes, err = set.PlanRoutes(nil, RouteState{LocalAddress: "client"})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-	found := false
-	for _, route := range routes {
-		if route.ListenerRelayURL() == deadURL {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("revived relay was not re-included in route planning")
-	}
-}
-
-func TestRecordActiveFailureBackoff(t *testing.T) {
-	relayURL := "https://active-error.example"
-	set := NewRelaySet(nil)
-	set.mu.Lock()
-	set.relays[relayURL] = confirmedRelayState(t, relayURL)
-	set.mu.Unlock()
-	start := time.Now()
-
-	backedOff, _, _ := set.RecordActiveFailure(relayURL, 1)
+	backedOff, _, _ := set.RecordActiveFailure(relayA, 1)
 	if !backedOff {
-		t.Fatal("active failure should back off at budget")
+		t.Fatal("active failure at budget should back off")
 	}
-	set.mu.RLock()
-	state := set.relays[relayURL]
-	set.mu.RUnlock()
-	if !state.suppressActiveUntil.After(start) {
-		t.Fatal("active suppression timer was not scheduled")
+	if routesTo(t, set, relayA) {
+		t.Fatal("suppressed relay is still selected for new routes")
 	}
-	if !state.nextDiscoveryRefreshAt.IsZero() {
-		t.Fatalf("nextDiscoveryRefreshAt = %v, want zero", state.nextDiscoveryRefreshAt)
+	if !servesDescriptor(set, relayA) {
+		t.Fatal("active failure hid the relay descriptor from peers")
+	}
+	if states := set.AllRelays(); len(states) != 1 || states[0].Banned {
+		t.Fatalf("AllRelays() = %+v, want relay retained without a ban", states)
+	}
+
+	mustApplyAuthoritative(t, set, desc)
+	if routesTo(t, set, relayA) {
+		t.Fatal("discovery success forgave active listener failures")
+	}
+
+	set.ConfirmRelayURL(relayA)
+	if !routesTo(t, set, relayA) {
+		t.Fatal("listener confirmation did not restore the relay to route planning")
 	}
 }
 
-func TestRecordDiscoveryFailurePoolBansLongUnhealthyRelay(t *testing.T) {
+// Listener confirmation is local state layered on top of discovery: discovery
+// alone never confirms a relay, ConfirmRelayURL does, and UnconfirmRelayURL
+// clears only the confirmation while keeping the relay as a candidate.
+func TestConfirmAndUnconfirmRelayURL(t *testing.T) {
+	const relayA = "https://relay-a.example"
 	set := NewRelaySet(nil)
+	mustApplyAuthoritative(t, set, mustRelayDescriptor(t, relayA))
 
-	relayURL := "https://relay-unhealthy.example"
-	state := confirmedRelayState(t, relayURL)
-	state.unhealthySince = time.Now().UTC().Add(-AnnounceMaxValidity - time.Minute)
-
-	set.mu.Lock()
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	backedOff, reason, failures := set.RecordDiscoveryFailure(relayURL, 1)
-	if !backedOff || reason != "unhealthy" {
-		t.Fatalf("RecordDiscoveryFailure() = (%v, %q), want unhealthy pool ban", backedOff, reason)
-	}
-	if failures != 1 {
-		t.Fatalf("failure count = %d, want 1", failures)
+	if confirmed := set.ConfirmedRelays(); len(confirmed) != 0 {
+		t.Fatalf("ConfirmedRelays() = %v, want empty before listener success", confirmed)
 	}
 
-	set.mu.RLock()
-	quarantined := set.relays[relayURL]
-	set.mu.RUnlock()
-	if !quarantined.Banned {
-		t.Fatal("unhealthy relay was not pool-banned")
-	}
-	if quarantined.hasObservedDescriptor() {
-		t.Fatal("unhealthy relay descriptor should be removed from active relay pool")
-	}
-	if !quarantined.suppressActiveUntil.After(time.Now().UTC().Add(relayPoolBanTTL - time.Minute)) {
-		t.Fatalf("pool ban until = %v, want about %v from now", quarantined.suppressActiveUntil, relayPoolBanTTL)
-	}
-}
-
-func TestRecordActiveFailureDoesNotPoolBanLongUnhealthyRelay(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-active-unhealthy.example"
-	state := confirmedRelayState(t, relayURL)
-	state.unhealthySince = time.Now().UTC().Add(-AnnounceMaxValidity - time.Minute)
-
-	set.mu.Lock()
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	backedOff, reason, failures := set.RecordActiveFailure(relayURL, 1)
-	if !backedOff || reason != "active" {
-		t.Fatalf("RecordActiveFailure() = (%v, %q), want active backoff", backedOff, reason)
-	}
-	if failures != 1 {
-		t.Fatalf("failure count = %d, want 1", failures)
+	set.ConfirmRelayURL(relayA)
+	confirmed := set.ConfirmedRelays()
+	if len(confirmed) != 1 || confirmed[0].Descriptor.APIHTTPSAddr != relayA {
+		t.Fatalf("ConfirmedRelays() = %v, want [%q]", confirmed, relayA)
 	}
 
-	set.mu.RLock()
-	activeBackoff := set.relays[relayURL]
-	set.mu.RUnlock()
-	if activeBackoff.Banned {
-		t.Fatal("active failure should not pool-ban relay")
+	set.UnconfirmRelayURL(relayA)
+	if confirmed := set.ConfirmedRelays(); len(confirmed) != 0 {
+		t.Fatalf("ConfirmedRelays() = %v, want empty after listener failure", confirmed)
 	}
-	if !activeBackoff.hasObservedDescriptor() {
-		t.Fatal("active failure should not remove relay descriptor")
-	}
-	if activeBackoff.suppressActiveUntil.IsZero() {
-		t.Fatal("active failure should schedule active suppression")
-	}
-}
-
-func TestPoolBanRejectsDiscoveryUntilExpiry(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-quarantined.example"
-	desc := mustRelayDescriptor(t, relayURL)
-
-	set.mu.Lock()
-	state := newRelayState(relayURL)
-	state.Banned = true
-	state.suppressActiveUntil = time.Now().UTC().Add(time.Hour)
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
-		Relays:          []types.RelayDescriptor{desc},
-	}, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
-	}
-	if changed {
-		t.Fatal("pool-banned relay should not change relay set")
-	}
-	if got := relayStates(set); len(got) != 0 {
-		t.Fatalf("len(relayStates()) = %d, want 0", len(got))
-	}
-
-	set.mu.Lock()
-	state = set.relays[relayURL]
-	state.suppressActiveUntil = time.Now().UTC().Add(-time.Second)
-	set.relays[relayURL] = state
-	set.mu.Unlock()
-
-	changed, err = set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
-		Relays:          []types.RelayDescriptor{desc},
-	}, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("ApplyRelayDiscoveryResponse() after expiry error = %v", err)
-	}
-	if !changed {
-		t.Fatal("expired pool ban should allow relay set update")
-	}
-	if got := relayStates(set); len(got) != 1 || got[0].Descriptor.APIHTTPSAddr != relayURL {
-		t.Fatalf("relayStates() = %v, want relay %q", got, relayURL)
+	if states := relayStates(set); len(states) != 1 || states[0].Descriptor.APIHTTPSAddr != relayA {
+		t.Fatalf("relayStates() = %v, want relay retained as candidate", states)
 	}
 }
 
@@ -692,7 +427,7 @@ func TestPlanRoutesKeepsBootstrapRelayAsMultiHopEntry(t *testing.T) {
 	t.Fatalf("routes = %v, want bootstrap relay %q as an entry", routes, bootstrap)
 }
 
-func TestPlanRoutesSkipsUnavailableMultiHopRelays(t *testing.T) {
+func TestPlanRoutesSkipsMultiHopRelayWithoutOverlaySupport(t *testing.T) {
 	set := NewRelaySet(nil)
 	now := time.Now().UTC()
 	for _, relayURL := range []string{
@@ -710,22 +445,6 @@ func TestPlanRoutesSkipsUnavailableMultiHopRelays(t *testing.T) {
 	incompatible.LastSeenAt = now
 	set.relays[incompatible.Descriptor.APIHTTPSAddr] = incompatible
 
-	suppressed := confirmedRelayState(t, "https://relay-suppressed.example")
-	suppressed.LastSeenAt = now
-	suppressed.Descriptor.SupportsOverlay = true
-	suppressed.Descriptor.WireGuardPublicKey = "wg-key"
-	suppressed.Descriptor.WireGuardPort = 51820
-	suppressed.suppressActiveUntil = now.Add(time.Minute)
-	set.relays[suppressed.Descriptor.APIHTTPSAddr] = suppressed
-
-	recovering := confirmedRelayState(t, "https://relay-recovering.example")
-	recovering.LastSeenAt = now
-	recovering.Descriptor.SupportsOverlay = true
-	recovering.Descriptor.WireGuardPublicKey = "wg-key"
-	recovering.Descriptor.WireGuardPort = 51820
-	recovering.nextDiscoveryRefreshAt = now.Add(time.Minute)
-	set.relays[recovering.Descriptor.APIHTTPSAddr] = recovering
-
 	routes, err := set.PlanRoutes(nil, RouteState{MultiHopDepth: 3, LocalAddress: "client"})
 	if err != nil {
 		t.Fatalf("PlanRoutes() error = %v", err)
@@ -734,10 +453,8 @@ func TestPlanRoutesSkipsUnavailableMultiHopRelays(t *testing.T) {
 		t.Fatalf("len(routes) = %d, want 3", len(routes))
 	}
 	for _, route := range routes {
-		for _, relayURL := range route.MultiHop() {
-			if relayURL == incompatible.Descriptor.APIHTTPSAddr || relayURL == suppressed.Descriptor.APIHTTPSAddr || relayURL == recovering.Descriptor.APIHTTPSAddr {
-				t.Fatalf("route %v includes unavailable relay %q", route.MultiHop(), relayURL)
-			}
+		if slices.Contains(route.MultiHop(), incompatible.Descriptor.APIHTTPSAddr) {
+			t.Fatalf("route %v includes overlay-incompatible relay", route.MultiHop())
 		}
 	}
 }
@@ -767,24 +484,9 @@ func TestPlanRoutesSkipsMultiHopRelayWithoutRequiredTransport(t *testing.T) {
 		t.Fatalf("PlanRoutes() error = %v", err)
 	}
 	for _, route := range routes {
-		for _, relayURL := range route.MultiHop() {
-			if relayURL == "https://relay-d.example" {
-				t.Fatalf("TCP-incompatible relay appears in multi-hop route %v", route.MultiHop())
-			}
+		if slices.Contains(route.MultiHop(), "https://relay-d.example") {
+			t.Fatalf("TCP-incompatible relay appears in multi-hop route %v", route.MultiHop())
 		}
-	}
-}
-
-func TestBuildMOLSPathsWrapsAtEndOfRankedRelays(t *testing.T) {
-	routes, err := buildMOLSPaths([]string{"a", "b", "c", "d"}, 3, 4)
-	if err != nil {
-		t.Fatalf("buildMOLSPaths() error = %v", err)
-	}
-	if len(routes) != 4 {
-		t.Fatalf("len(routes) = %d, want 4", len(routes))
-	}
-	if got, want := routes[3].MultiHop(), []string{"d", "a", "b"}; !slices.Equal(got, want) {
-		t.Fatalf("last path = %v, want %v", got, want)
 	}
 }
 

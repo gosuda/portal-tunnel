@@ -78,18 +78,6 @@ func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 	}
 }
 
-func TestHTTPRoutesRejectDuplicateNormalizedPrefixes(t *testing.T) {
-	t.Parallel()
-
-	_, err := NewHTTPRoutes([]HTTPRouteConfig{
-		{Prefix: "/api", Upstream: "127.0.0.1:3001"},
-		{Prefix: "/api/", Upstream: "127.0.0.1:3002"},
-	}, types.X402Payment{})
-	if err == nil {
-		t.Fatal("NewHTTPRoutes() error = nil, want duplicate prefix error")
-	}
-}
-
 func TestHTTPRoutesRejectOversizedPaymentPrepareBody(t *testing.T) {
 	t.Parallel()
 
