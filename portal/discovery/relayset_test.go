@@ -94,12 +94,17 @@ func TestApplyRelayDiscoveryResponsePreservesBootstrapFlag(t *testing.T) {
 func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
 	set := NewRelaySet(nil)
 
-	now := time.Now().UTC()
+	// Ingest a descriptor that was valid when it arrived but has since
+	// expired: sign and apply it in the past, then read in the present.
 	relayURL := "https://relay-stale.example"
-	state := confirmedRelayState(t, relayURL)
-	state.Descriptor.ExpiresAt = now.Add(-time.Minute)
-	state.LastSeenAt = now.Add(-6 * time.Hour)
-	set.relays[relayURL] = state
+	issuedAt := time.Now().UTC().Truncate(time.Microsecond).Add(-DiscoveryDescriptorTTL - time.Minute)
+	desc := mustSignedDescriptor(t, mustSigningIdentity(t), relayURL, issuedAt)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{desc},
+	}, issuedAt.Add(time.Second)); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
 
 	if descriptors := set.Descriptors(types.RelayDescriptor{}); len(descriptors) != 0 {
 		t.Fatalf("Descriptors(expired) = %v, want empty", descriptors)
