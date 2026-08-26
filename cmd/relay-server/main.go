@@ -188,6 +188,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 			DNSProvider:        cfg.ACMEDNSProvider,
 			ENSGaslessEnabled:  cfg.ENSGaslessEnabled,
 			EmbeddedDNSPort:    cfg.EmbeddedDNSPort,
+			CloudflareToken:    cfg.CloudflareToken,
 			GCPProjectID:       cfg.GCPProjectID,
 			GCPManagedZone:     cfg.GCPManagedZone,
 			HetznerAPIToken:    cfg.HetznerAPIToken,
