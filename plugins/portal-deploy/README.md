@@ -1,12 +1,12 @@
 # Portal Deploy plugin
 
-`portal-deploy` is a skills-only plugin for Codex, Claude Code, and Cursor. It teaches an agent to inspect a local app, choose the appropriate Portal tunnel mode, configure explicitly requested x402 paid routes, verify the public endpoint and payment challenge, and hand off the tunnel lifecycle safely.
+`portal-deploy` is a skills-only plugin for Codex, Claude Code, and Cursor. It teaches an agent to inspect a local app, choose the appropriate Portal tunnel mode, configure explicitly requested x402 paid routes, verify the public endpoint and payment challenge, and hand off the tunnel lifecycle safely. When a real Portal task encounters friction, it can retain sanitized local evidence and route an approved low-risk improvement through an upstream issue and PR.
 
 Portal exposes a service that remains on the local machine. This plugin does not turn Portal into a cloud build or hosting platform.
 
 ## Layout
 
-One shared skill, three host manifests. Do not copy `SKILL.md` per host.
+Shared skills, three host manifests. Do not copy `SKILL.md` per host.
 
 ```text
 plugins/portal-deploy/
@@ -14,13 +14,22 @@ plugins/portal-deploy/
 ├── .claude-plugin/plugin.json     # Claude Code plugin manifest
 ├── .cursor-plugin/plugin.json     # Cursor plugin manifest
 ├── skills/portal-expose/
-│   ├── SKILL.md                   # Shared Open Agent Skill
+│   ├── SKILL.md                   # Expose and verify Portal services
 │   ├── agents/openai.yaml         # Codex skill UI metadata
 │   └── references/
+│       ├── feedback-evidence.md
 │       ├── portal-cli.md
 │       ├── game-hosting.md
 │       ├── safety-and-verification.md
 │       └── x402.md
+├── skills/portal-feedback/
+│   ├── SKILL.md                   # Turn approved friction into issues and PRs
+│   ├── agents/openai.yaml
+│   └── references/
+│       ├── evidence-packet.schema.json
+│       ├── finding.schema.json
+│       ├── verification-attempt.schema.json
+│       └── issue-and-pr-loop.md
 ├── skills/portal-relay/
 │   └── SKILL.md                   # Run a public Portal relay
 └── README.md
@@ -34,7 +43,7 @@ Repository-root catalogs, each pointing at this same plugin directory:
 | Claude Code | `.claude-plugin/marketplace.json` | `portal-tunnel` |
 | Cursor | `.cursor-plugin/marketplace.json` | `portal-tunnel` |
 
-Install unit is the plugin `portal-deploy`. Agent invocation units are the skills `portal-expose` and `portal-relay`.
+Install unit is the plugin `portal-deploy`. Agent invocation units are the skills `portal-expose`, `portal-feedback`, and `portal-relay`.
 
 ## Local Codex setup
 
@@ -99,8 +108,11 @@ Public listing is a Git repository submitted at [cursor.com/marketplace/publish]
 - `Create a temporary Portal preview for the frontend on port 5173.`
 - `Keep this service available through a persistent Portal agent tunnel.`
 - `Serve this trusted static site through Portal.`
+- `Review the Portal friction recorded by my last tunnel attempt.`
+- `Show the Portal feedback inbox and prepare the next issue brief.`
+- `Approve this Portal feedback finding and carry the low-risk fix through a PR.`
 
-The skill should not trigger for deploying a Portal relay, normal cloud hosting, or publishing the plugin itself.
+`portal-expose` should not trigger for deploying a Portal relay, normal cloud hosting, or publishing the plugin. `portal-feedback` should trigger only for stored Portal friction or explicit feedback operations, not for an ordinary exposure request.
 
 ## Marketplace review cases
 
@@ -112,12 +124,17 @@ Positive:
 - Run this app as a persistent Portal tunnel.
 - Serve this trusted static site through Portal.
 - Create a temporary Portal preview for the frontend on port 5173.
+- Review the friction packet from the last failed Portal Agent setup.
+- Show pending Portal feedback findings.
+- Retry the blocked publication for this Portal feedback finding.
 
 Negative:
 
 - Deploy a Portal relay with this plugin.
 - Publish this plugin to a marketplace.
 - Host this app on generic cloud hosting.
+- Expose this app through Portal. (`portal-expose`, not `portal-feedback`.)
+- Explain a Portal error without creating upstream artifacts.
 
 ## Development validation
 
@@ -126,6 +143,8 @@ From the repository root:
 ```sh
 python3 /path/to/skill-creator/scripts/quick_validate.py \
   plugins/portal-deploy/skills/portal-expose
+python3 /path/to/skill-creator/scripts/quick_validate.py \
+  plugins/portal-deploy/skills/portal-feedback
 python3 /path/to/plugin-creator/scripts/validate_plugin.py \
   plugins/portal-deploy
 claude plugin validate ./plugins/portal-deploy --strict

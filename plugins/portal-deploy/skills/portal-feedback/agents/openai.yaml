@@ -1,0 +1,4 @@
+interface:
+  display_name: "Improve Portal from Agent Feedback"
+  short_description: "Turn Portal friction into issues and PRs"
+  default_prompt: "Use $portal-feedback to review sanitized Portal friction, prepare the approval brief, and carry approved low-risk work through a verified PR."

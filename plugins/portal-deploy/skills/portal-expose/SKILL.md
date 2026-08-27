@@ -8,7 +8,7 @@ license: MIT
 
 Portal publishes a service that is already running on the user's machine. It does not build the app or move it to a cloud host. Treat a successful tunnel as dependent on both the local app and the Portal process or agent remaining available.
 
-Read `references/portal-cli.md` when choosing commands or persistent-agent configuration. Read `references/x402.md` whenever the user requests x402 or a paid route. Read `references/safety-and-verification.md` before exposing a nontrivial project, a service with authentication, or any non-HTTP port. Read `references/game-hosting.md` whenever the user asks to host, publish, or share a game server — it covers game-specific ports, protocol identification, relay raw-transport prerequisites, and raw-endpoint verification.
+Read `references/portal-cli.md` when choosing commands or persistent-agent configuration. Read `references/x402.md` whenever the user requests x402 or a paid route. Read `references/safety-and-verification.md` before exposing a nontrivial project, a service with authentication, or any non-HTTP port. Read `references/game-hosting.md` whenever the user asks to host, publish, or share a game server; it covers game-specific ports, protocol identification, relay raw-transport prerequisites, and raw-endpoint verification. Read `references/feedback-evidence.md` at the start of every Portal operation so one user task shares one run identity and friction can be captured without retaining ordinary successful runs.
 
 ## Choose the Mode
 
@@ -25,6 +25,8 @@ Use the smallest mode that satisfies the request:
 Default to a temporary preview when the user says only "share", "preview", or "deploy locally". Do not install an OS service unless the user asks for a persistent, managed, or restart-surviving tunnel and accepts that `portal agent run` without `--foreground` installs a per-user launchd or systemd unit.
 
 ## Workflow
+
+Start the in-memory experience trace before step 1. Feedback capture must never delay, change, or weaken the requested Portal result.
 
 ### 1. Inspect the Project
 
@@ -81,6 +83,7 @@ Before executing, show the exact public target and any important exposure conseq
 - For raw TCP or UDP, protocol-probe the allocated `tcp_addr`/`udp_addr` without mutating application data. A successful local port open is not enough.
 - When a browser-capable tool is available and the app has UI, load the primary page and check for an obvious render or runtime failure. Do not log in or submit data unless the user requested it.
 - Re-check the local health endpoint if the public request fails so the handoff distinguishes app failure from tunnel or relay failure.
+- Treat Portal readiness and the public probe as separate validations. A reported-ready URL that fails externally is a feedback `state_mismatch`, not a successful deployment.
 
 ### 7. Hand Off the Result
 
@@ -97,6 +100,8 @@ Report:
 - Anything that remains temporary, unavailable, or unverified.
 
 Do not call the result permanent when the local machine, app process, or foreground tunnel must remain running.
+
+Before discarding the trace, apply `references/feedback-evidence.md`: persist sanitized friction packets, correlate them through `portal-feedback`, or evaluate a matching post-release closure candidate. A normal successful run with no closure candidate leaves no feedback artifact.
 
 ## Failure Rules
 

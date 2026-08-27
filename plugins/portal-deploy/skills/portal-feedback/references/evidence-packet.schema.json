@@ -1,0 +1,868 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Portal feedback evidence packet",
+  "description": "One sanitized friction packet written by portal-expose to runs/<run-id>/<packet-id>.json. This schema asserts every structurally expressible constraint. Before persistence the skill also checks UTF-8 byte lengths, collapsed-whitespace lengths, timestamp ordering, UUID version, the defect source condition, immutable URL revisions, and cross-record consistency.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "packet_id",
+    "run_id",
+    "origin",
+    "started_at",
+    "ended_at",
+    "operation",
+    "mode",
+    "requested_outcome",
+    "environment",
+    "commands",
+    "validations",
+    "signals",
+    "diagnostic_command_count",
+    "classification",
+    "mechanism",
+    "source_refs",
+    "redactions",
+    "defect_qualification"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Evidence packet schema version. Unknown future versions are never read and never promote.",
+      "type": "integer",
+      "const": 1
+    },
+    "packet_id": {
+      "description": "Canonical lowercase UUIDv4, distinct per packet within one run.",
+      "$ref": "#/$defs/uuid_v4"
+    },
+    "run_id": {
+      "description": "Canonical lowercase UUIDv4 shared by every packet and command of one experience run.",
+      "$ref": "#/$defs/uuid_v4"
+    },
+    "origin": {
+      "description": "Whether the run was real Portal use or a synthetic replay. A replay never casts a promotion vote.",
+      "enum": [
+        "real",
+        "replay"
+      ]
+    },
+    "started_at": {
+      "$ref": "#/$defs/utc_rfc3339"
+    },
+    "ended_at": {
+      "description": "Not before started_at; ordering is checked by the skill.",
+      "$ref": "#/$defs/utc_rfc3339"
+    },
+    "operation": {
+      "enum": [
+        "install",
+        "expose",
+        "agent_run",
+        "restart",
+        "stop",
+        "inspect",
+        "update"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "foreground",
+        "managed",
+        "not_applicable"
+      ]
+    },
+    "requested_outcome": {
+      "description": "One line, 1 to 512 UTF-8 bytes after whitespace collapse.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\r\\n]*$"
+    },
+    "environment": {
+      "$ref": "#/$defs/environment"
+    },
+    "commands": {
+      "description": "Sanitized command records for Portal-related top-level actions.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/command_record"
+      }
+    },
+    "validations": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/validation_record"
+      }
+    },
+    "signals": {
+      "description": "Unique nonempty subset of the four friction signals.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/friction_signal"
+      }
+    },
+    "diagnostic_command_count": {
+      "description": "Excess diagnostic invocations only.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 64
+    },
+    "classification": {
+      "enum": [
+        "defect",
+        "ux-friction",
+        "needs-review"
+      ]
+    },
+    "mechanism": {
+      "$ref": "#/$defs/mechanism"
+    },
+    "source_refs": {
+      "description": "Immutable source references; a defect requires at least one.",
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/source_ref"
+      }
+    },
+    "redactions": {
+      "description": "Unique set of redaction categories applied to this packet.",
+      "type": "array",
+      "maxItems": 7,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/redaction_category"
+      }
+    },
+    "user_correction": {
+      "description": "Optional summary of the user correction; never verbatim conversation text.",
+      "type": "string",
+      "maxLength": 512
+    },
+    "defect_qualification": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "reproduction_count"
+          ],
+          "properties": {
+            "method": {
+              "enum": [
+                "reproduced_command",
+                "static_contract_violation"
+              ]
+            },
+            "reproduction_count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "A defect requires at least one immutable source reference.",
+      "if": {
+        "properties": {
+          "classification": {
+            "const": "defect"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source_refs": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "classification": {
+            "const": "defect"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "defect_qualification": {
+            "not": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "defect_qualification": {
+            "properties": {
+              "method": {
+                "const": "reproduced_command"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "defect_qualification": {
+            "properties": {
+              "reproduction_count": {
+                "minimum": 2
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "signals": {
+            "contains": {
+              "const": "excess_diagnosis"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "diagnostic_command_count": {
+            "minimum": 3
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "signals": {
+            "contains": {
+              "const": "user_correction"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "user_correction"
+        ],
+        "properties": {
+          "user_correction": {
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "signals": {
+            "contains": {
+              "const": "state_mismatch"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "validations": {
+            "contains": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "http",
+                    "hostname",
+                    "identity"
+                  ]
+                },
+                "passed": {
+                  "const": false
+                }
+              }
+            },
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "signals": {
+            "contains": {
+              "const": "objective_failure"
+            }
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "commands": {
+                "contains": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "termination": {
+                          "enum": [
+                            "timeout",
+                            "signal",
+                            "not_started"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "termination": {
+                          "const": "exited"
+                        },
+                        "exit_code": {
+                          "not": {
+                            "const": 0
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "minContains": 1
+              }
+            }
+          },
+          {
+            "properties": {
+              "validations": {
+                "contains": {
+                  "properties": {
+                    "passed": {
+                      "const": false
+                    }
+                  }
+                },
+                "minContains": 1
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "uuid_v4": {
+      "description": "Canonical lowercase UUIDv4.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256_hex": {
+      "description": "Full lowercase SHA-256 hex digest.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commit_sha": {
+      "description": "Lowercase 40-hex Git commit SHA-1.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "utc_rfc3339": {
+      "description": "RFC 3339 timestamp in UTC (Z offset only).",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "url": {
+      "description": "Absolute http(s) URL without whitespace.",
+      "type": "string",
+      "pattern": "^https?://\\S+$"
+    },
+    "friction_signal": {
+      "enum": [
+        "objective_failure",
+        "state_mismatch",
+        "user_correction",
+        "excess_diagnosis"
+      ]
+    },
+    "redaction_category": {
+      "enum": [
+        "home_path",
+        "authorization",
+        "cookie",
+        "query_string",
+        "named_secret",
+        "identity_material",
+        "scanner_match"
+      ]
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "portal_version",
+        "os",
+        "arch",
+        "service_manager",
+        "source_revision"
+      ],
+      "properties": {
+        "portal_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "Installed Portal version, or null when Portal could not run."
+        },
+        "os": {
+          "enum": [
+            "linux",
+            "darwin",
+            "windows"
+          ]
+        },
+        "arch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "service_manager": {
+          "enum": [
+            "systemd",
+            "launchd",
+            "windows_service",
+            "none"
+          ]
+        },
+        "source_revision": {
+          "description": "Portal source commit when known.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "command_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "argv",
+        "duration_ms",
+        "termination",
+        "exit_code",
+        "signal",
+        "stdout_summary",
+        "stderr_summary"
+      ],
+      "properties": {
+        "argv": {
+          "description": "Sanitized argument vector.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "termination": {
+          "enum": [
+            "exited",
+            "timeout",
+            "signal",
+            "not_started"
+          ]
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "signal": {
+          "description": "Signal number when termination is signal.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "stdout_summary": {
+          "description": "Collapsed-whitespace excerpt that proves the signal.",
+          "type": "string",
+          "maxLength": 1024
+        },
+        "stderr_summary": {
+          "description": "Collapsed-whitespace excerpt that proves the signal.",
+          "type": "string",
+          "maxLength": 1024
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "termination": {
+                "const": "exited"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "exit_code": {
+                "type": "integer"
+              },
+              "signal": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "termination": {
+                "const": "signal"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "exit_code": {
+                "type": "null"
+              },
+              "signal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "termination": {
+                "enum": [
+                  "timeout",
+                  "not_started"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "exit_code": {
+                "type": "null"
+              },
+              "signal": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "validation_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "contract_code",
+        "expected",
+        "observed",
+        "passed"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "service",
+            "http",
+            "hostname",
+            "identity",
+            "process",
+            "protocol"
+          ]
+        },
+        "contract_code": {
+          "enum": [
+            "service_active",
+            "process_running",
+            "process_stopped",
+            "http_200_399",
+            "http_auth_401",
+            "http_auth_403",
+            "http_x402_402",
+            "hostname_stable",
+            "identity_reused",
+            "protocol_nonmutating"
+          ]
+        },
+        "expected": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "observed": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "service"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "contract_code": {
+                "enum": [
+                  "service_active"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "http"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "contract_code": {
+                "enum": [
+                  "http_200_399",
+                  "http_auth_401",
+                  "http_auth_403",
+                  "http_x402_402"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "hostname"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "contract_code": {
+                "enum": [
+                  "hostname_stable"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "identity"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "contract_code": {
+                "enum": [
+                  "identity_reused"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "process"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "contract_code": {
+                "enum": [
+                  "process_running",
+                  "process_stopped"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "protocol"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "contract_code": {
+                "enum": [
+                  "protocol_nonmutating"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "mechanism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "error_or_expectation",
+        "corrective_action",
+        "source_symbol_or_contract"
+      ],
+      "properties": {
+        "component": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "error_or_expectation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "corrective_action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "source_symbol_or_contract": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        }
+      }
+    },
+    "source_ref": {
+      "description": "Immutable source reference: a code location in gosuda/portal-tunnel, or a documented contract at an immutable revision.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "commit",
+            "path",
+            "line_range",
+            "url"
+          ],
+          "properties": {
+            "repository": {
+              "const": "gosuda/portal-tunnel"
+            },
+            "commit": {
+              "$ref": "#/$defs/commit_sha"
+            },
+            "path": {
+              "description": "Repository-relative path.",
+              "type": "string",
+              "minLength": 1
+            },
+            "line_range": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "start_line",
+                "end_line"
+              ],
+              "properties": {
+                "start_line": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "end_line": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "url": {
+              "description": "Commit-pinned URL.",
+              "$ref": "#/$defs/url"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "commit",
+            "url",
+            "section"
+          ],
+          "properties": {
+            "repository": {
+              "const": "gosuda/portal-tunnel"
+            },
+            "commit": {
+              "$ref": "#/$defs/commit_sha"
+            },
+            "url": {
+              "description": "Commit-pinned URL.",
+              "$ref": "#/$defs/url"
+            },
+            "section": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}

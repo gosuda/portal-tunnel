@@ -1,0 +1,2004 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Portal feedback finding record",
+  "description": "The authoritative record stored at findings/<finding-id>.json. Every field is always present; a field unavailable in the current state is explicitly null. Evidence packets are immutable after persistence; reclassification updates assessment fields only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "finding_id",
+    "mechanism_digest",
+    "canonical_signature",
+    "state",
+    "effective_classification",
+    "assessment_at",
+    "assessment_reason",
+    "impact_category",
+    "created_at",
+    "updated_at",
+    "next_action",
+    "requested_outcome_class",
+    "resume_state",
+    "due_at",
+    "brief",
+    "brief_revision_digest",
+    "scope_digest",
+    "existing_issue_url",
+    "new_issue_url",
+    "pr_url",
+    "branch",
+    "base_revision",
+    "head_sha",
+    "merge_sha",
+    "release_tag",
+    "blocker_code",
+    "blocker_summary",
+    "evidence",
+    "assessment_source_refs",
+    "approval_history",
+    "duplicate_result",
+    "rejection_history",
+    "replaced_lock_nonces",
+    "patched_replay_attempt_id",
+    "patched_replay_record_digest",
+    "real_use_attempt_id",
+    "real_use_record_digest",
+    "patched_replay_metrics",
+    "real_use_metrics"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "finding_id": {
+      "description": "Full 64-character lowercase SHA-256 digest of the UTF-8 canonical signature; no truncated identifier exists.",
+      "$ref": "#/$defs/sha256_hex"
+    },
+    "mechanism_digest": {
+      "description": "Full SHA-256 digest of the normalized mechanism; ux-friction promotion and reopen decisions compare it.",
+      "$ref": "#/$defs/sha256_hex"
+    },
+    "canonical_signature": {
+      "description": "Component, operation, error-or-expectation, corrective-action, and source-symbol-or-contract joined by single newlines after normalization.",
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "$ref": "#/$defs/finding_state"
+    },
+    "effective_classification": {
+      "description": "Classification after any evidence-backed reclassification; the original run counts under the new classification.",
+      "enum": [
+        "defect",
+        "ux-friction",
+        "needs-review"
+      ]
+    },
+    "assessment_at": {
+      "$ref": "#/$defs/utc_rfc3339"
+    },
+    "assessment_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "impact_category": {
+      "description": "Order: efficiency < usability < availability < correctness < security.",
+      "enum": [
+        "efficiency",
+        "usability",
+        "availability",
+        "correctness",
+        "security"
+      ]
+    },
+    "created_at": {
+      "$ref": "#/$defs/utc_rfc3339"
+    },
+    "updated_at": {
+      "$ref": "#/$defs/utc_rfc3339"
+    },
+    "next_action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requested_outcome_class": {
+      "description": "SHA-256 of the RFC 8785 requested-outcome object over operation, mode, and deduplicated contracts sorted by kind then contract_code.",
+      "$ref": "#/$defs/sha256_hex"
+    },
+    "resume_state": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "enum": [
+            "candidate",
+            "needs_review",
+            "awaiting_approval",
+            "deferred",
+            "rejected",
+            "approved",
+            "publication_pending",
+            "linked_existing",
+            "issue_filed",
+            "implementation_checkpoint",
+            "maintainer_queue",
+            "implementing",
+            "pr_publication_pending",
+            "pr_filed",
+            "merged_waiting_release",
+            "waiting_real_use",
+            "closed",
+            "regressed"
+          ]
+        }
+      ]
+    },
+    "due_at": {
+      "description": "Defer due time; inbox skips the finding until then.",
+      "$ref": "#/$defs/nullable_utc_rfc3339"
+    },
+    "brief": {
+      "description": "Persisted decision-ready brief; non-null from awaiting_approval onward.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/brief_object"
+        }
+      ]
+    },
+    "brief_revision_digest": {
+      "description": "SHA-256 of the RFC 8785 brief object; non-null from awaiting_approval onward.",
+      "$ref": "#/$defs/nullable_sha256_hex"
+    },
+    "scope_digest": {
+      "description": "SHA-256 of the RFC 8785 authorization object; non-null from awaiting_approval onward.",
+      "$ref": "#/$defs/nullable_sha256_hex"
+    },
+    "existing_issue_url": {
+      "description": "Open or unresolved duplicate match.",
+      "$ref": "#/$defs/nullable_url"
+    },
+    "new_issue_url": {
+      "description": "Issue created for this finding.",
+      "$ref": "#/$defs/nullable_url"
+    },
+    "pr_url": {
+      "description": "Pull request filed for this finding.",
+      "$ref": "#/$defs/nullable_url"
+    },
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "base_revision": {
+      "$ref": "#/$defs/nullable_commit_sha"
+    },
+    "head_sha": {
+      "$ref": "#/$defs/nullable_commit_sha"
+    },
+    "merge_sha": {
+      "description": "Maintainer merge commit.",
+      "$ref": "#/$defs/nullable_commit_sha"
+    },
+    "release_tag": {
+      "description": "Release tag whose commit contains the merge SHA.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "blocker_code": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "blocker_summary": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "evidence": {
+      "description": "Packets correlated into this finding; immutable after persistence.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "packet_path",
+          "packet_digest",
+          "run_id",
+          "votes"
+        ],
+        "properties": {
+          "packet_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "packet_digest": {
+            "$ref": "#/$defs/sha256_hex"
+          },
+          "run_id": {
+            "$ref": "#/$defs/uuid_v4"
+          },
+          "votes": {
+            "description": "Whether that run casts a promotion vote for this finding.",
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "assessment_source_refs": {
+      "description": "Immutable source references backing the current assessment.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source_ref"
+      }
+    },
+    "approval_history": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/approval_record"
+      }
+    },
+    "duplicate_result": {
+      "$ref": "#/$defs/duplicate_result"
+    },
+    "rejection_history": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rejection_record"
+      }
+    },
+    "replaced_lock_nonces": {
+      "description": "Nonces of stale locks replaced before a mutation.",
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/uuid_v4"
+      }
+    },
+    "patched_replay_attempt_id": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/uuid_v4"
+        }
+      ]
+    },
+    "patched_replay_record_digest": {
+      "$ref": "#/$defs/nullable_sha256_hex"
+    },
+    "real_use_attempt_id": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/uuid_v4"
+        }
+      ]
+    },
+    "real_use_record_digest": {
+      "$ref": "#/$defs/nullable_sha256_hex"
+    },
+    "patched_replay_metrics": {
+      "description": "Required once the finding waits for real use.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/metric_object"
+        }
+      ]
+    },
+    "real_use_metrics": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/metric_object"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "Brief and both digests must be non-null from awaiting_approval onward.",
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "awaiting_approval",
+              "approved",
+              "deferred",
+              "rejected",
+              "publication_pending",
+              "linked_existing",
+              "issue_filed",
+              "implementation_checkpoint",
+              "maintainer_queue",
+              "implementing",
+              "pr_publication_pending",
+              "pr_filed",
+              "merged_waiting_release",
+              "waiting_real_use",
+              "closed",
+              "regressed"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "brief": {
+            "not": {
+              "type": "null"
+            }
+          },
+          "brief_revision_digest": {
+            "type": "string"
+          },
+          "scope_digest": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "$comment": "blocked needs blocker code, blocker summary, and resume state.",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "blocked"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "blocker_code": {
+            "type": "string"
+          },
+          "blocker_summary": {
+            "type": "string"
+          },
+          "resume_state": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "$comment": "pr_filed needs the PR URL and head SHA.",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "pr_filed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "pr_url": {
+            "type": "string"
+          },
+          "head_sha": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "$comment": "waiting_real_use needs merge SHA, containing release tag, and patched replay metrics.",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "waiting_real_use"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "merge_sha": {
+            "type": "string"
+          },
+          "release_tag": {
+            "type": "string"
+          },
+          "patched_replay_metrics": {
+            "not": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "publication_pending",
+              "linked_existing",
+              "issue_filed",
+              "implementation_checkpoint",
+              "maintainer_queue",
+              "implementing",
+              "pr_publication_pending",
+              "pr_filed",
+              "merged_waiting_release",
+              "waiting_real_use",
+              "closed",
+              "regressed"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "approval_history": {
+            "contains": {
+              "properties": {
+                "action": {
+                  "const": "approve"
+                }
+              }
+            },
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "deferred"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "due_at": {
+            "not": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "linked_existing"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "existing_issue_url": {
+            "not": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "issue_filed",
+              "implementation_checkpoint",
+              "maintainer_queue",
+              "implementing",
+              "pr_publication_pending",
+              "pr_filed",
+              "merged_waiting_release",
+              "waiting_real_use",
+              "closed",
+              "regressed"
+            ]
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "existing_issue_url": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "new_issue_url": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "implementing",
+              "pr_publication_pending",
+              "pr_filed",
+              "merged_waiting_release",
+              "waiting_real_use",
+              "closed"
+            ]
+          }
+        }
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "branch": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "pr_publication_pending",
+              "pr_filed",
+              "merged_waiting_release",
+              "waiting_real_use",
+              "closed"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "head_sha": {
+            "not": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "merged_waiting_release",
+              "waiting_real_use",
+              "closed"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "merge_sha": {
+            "not": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "waiting_real_use",
+              "closed"
+            ]
+          }
+        }
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "release_tag": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "patched_replay_attempt_id": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "patched_replay_record_digest": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "patched_replay_metrics": {
+                "allOf": [
+                  {
+                    "not": {
+                      "type": "null"
+                    }
+                  },
+                  {
+                    "properties": {
+                      "requested_outcome_reached": {
+                        "const": true
+                      },
+                      "original_signal_absent": {
+                        "const": true
+                      },
+                      "human_correction_count": {
+                        "const": 0
+                      },
+                      "state_mismatch_count": {
+                        "const": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "closed"
+          }
+        }
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "real_use_attempt_id": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "real_use_record_digest": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "real_use_metrics": {
+                "allOf": [
+                  {
+                    "not": {
+                      "type": "null"
+                    }
+                  },
+                  {
+                    "properties": {
+                      "requested_outcome_reached": {
+                        "const": true
+                      },
+                      "original_signal_absent": {
+                        "const": true
+                      },
+                      "human_correction_count": {
+                        "const": 0
+                      },
+                      "state_mismatch_count": {
+                        "const": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "state": {
+                "enum": [
+                  "publication_pending",
+                  "linked_existing",
+                  "issue_filed",
+                  "implementation_checkpoint",
+                  "maintainer_queue",
+                  "implementing",
+                  "pr_publication_pending",
+                  "pr_filed",
+                  "merged_waiting_release",
+                  "waiting_real_use",
+                  "closed",
+                  "regressed"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "blocked"
+              },
+              "resume_state": {
+                "enum": [
+                  "publication_pending",
+                  "linked_existing",
+                  "issue_filed",
+                  "implementation_checkpoint",
+                  "maintainer_queue",
+                  "implementing",
+                  "pr_publication_pending",
+                  "pr_filed",
+                  "merged_waiting_release",
+                  "waiting_real_use",
+                  "closed",
+                  "regressed"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "approval_history": {
+            "contains": {
+              "required": [
+                "action"
+              ],
+              "properties": {
+                "action": {
+                  "const": "approve"
+                }
+              }
+            },
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "state": {
+                "enum": [
+                  "linked_existing"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "blocked"
+              },
+              "resume_state": {
+                "enum": [
+                  "linked_existing"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "existing_issue_url": {
+            "not": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "state": {
+                "enum": [
+                  "issue_filed",
+                  "implementation_checkpoint",
+                  "maintainer_queue",
+                  "implementing",
+                  "pr_publication_pending",
+                  "pr_filed",
+                  "merged_waiting_release",
+                  "waiting_real_use",
+                  "closed",
+                  "regressed"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "blocked"
+              },
+              "resume_state": {
+                "enum": [
+                  "issue_filed",
+                  "implementation_checkpoint",
+                  "maintainer_queue",
+                  "implementing",
+                  "pr_publication_pending",
+                  "pr_filed",
+                  "merged_waiting_release",
+                  "waiting_real_use",
+                  "closed",
+                  "regressed"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "existing_issue_url": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "new_issue_url": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "state": {
+                "enum": [
+                  "implementing",
+                  "pr_publication_pending",
+                  "pr_filed",
+                  "merged_waiting_release",
+                  "waiting_real_use",
+                  "closed"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "blocked"
+              },
+              "resume_state": {
+                "enum": [
+                  "implementing",
+                  "pr_publication_pending",
+                  "pr_filed",
+                  "merged_waiting_release",
+                  "waiting_real_use",
+                  "closed"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "branch": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "state": {
+                "enum": [
+                  "pr_publication_pending",
+                  "pr_filed",
+                  "merged_waiting_release",
+                  "waiting_real_use",
+                  "closed"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "blocked"
+              },
+              "resume_state": {
+                "enum": [
+                  "pr_publication_pending",
+                  "pr_filed",
+                  "merged_waiting_release",
+                  "waiting_real_use",
+                  "closed"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "head_sha": {
+            "not": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "state": {
+                "enum": [
+                  "merged_waiting_release",
+                  "waiting_real_use",
+                  "closed"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "blocked"
+              },
+              "resume_state": {
+                "enum": [
+                  "merged_waiting_release",
+                  "waiting_real_use",
+                  "closed"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "merge_sha": {
+            "not": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "state": {
+                "enum": [
+                  "waiting_real_use",
+                  "closed"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "blocked"
+              },
+              "resume_state": {
+                "enum": [
+                  "waiting_real_use",
+                  "closed"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "release_tag": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "patched_replay_attempt_id": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "patched_replay_record_digest": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "patched_replay_metrics": {
+                "allOf": [
+                  {
+                    "not": {
+                      "type": "null"
+                    }
+                  },
+                  {
+                    "properties": {
+                      "requested_outcome_reached": {
+                        "const": true
+                      },
+                      "original_signal_absent": {
+                        "const": true
+                      },
+                      "human_correction_count": {
+                        "const": 0
+                      },
+                      "state_mismatch_count": {
+                        "const": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "state": {
+                "enum": [
+                  "closed"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "blocked"
+              },
+              "resume_state": {
+                "enum": [
+                  "closed"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "real_use_attempt_id": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "real_use_record_digest": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "real_use_metrics": {
+                "allOf": [
+                  {
+                    "not": {
+                      "type": "null"
+                    }
+                  },
+                  {
+                    "properties": {
+                      "requested_outcome_reached": {
+                        "const": true
+                      },
+                      "original_signal_absent": {
+                        "const": true
+                      },
+                      "human_correction_count": {
+                        "const": 0
+                      },
+                      "state_mismatch_count": {
+                        "const": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "awaiting_approval",
+              "approved",
+              "deferred",
+              "rejected",
+              "publication_pending",
+              "linked_existing",
+              "issue_filed",
+              "implementation_checkpoint",
+              "maintainer_queue",
+              "implementing",
+              "pr_publication_pending",
+              "pr_filed",
+              "merged_waiting_release",
+              "waiting_real_use",
+              "closed",
+              "regressed"
+            ]
+          },
+          "effective_classification": {
+            "const": "defect"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "evidence": {
+            "contains": {
+              "required": [
+                "votes"
+              ],
+              "properties": {
+                "votes": {
+                  "const": true
+                }
+              }
+            },
+            "minContains": 1
+          },
+          "assessment_source_refs": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "awaiting_approval",
+              "approved",
+              "deferred",
+              "rejected",
+              "publication_pending",
+              "linked_existing",
+              "issue_filed",
+              "implementation_checkpoint",
+              "maintainer_queue",
+              "implementing",
+              "pr_publication_pending",
+              "pr_filed",
+              "merged_waiting_release",
+              "waiting_real_use",
+              "closed",
+              "regressed"
+            ]
+          },
+          "effective_classification": {
+            "const": "ux-friction"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "evidence": {
+            "contains": {
+              "required": [
+                "votes"
+              ],
+              "properties": {
+                "votes": {
+                  "const": true
+                }
+              }
+            },
+            "minContains": 2
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "effective_classification": {
+            "const": "needs-review"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "state": {
+            "enum": [
+              "candidate",
+              "needs_review",
+              "blocked"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "uuid_v4": {
+      "description": "Canonical lowercase UUIDv4.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256_hex": {
+      "description": "Full lowercase SHA-256 hex digest.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullable_sha256_hex": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/sha256_hex"
+        }
+      ]
+    },
+    "commit_sha": {
+      "description": "Lowercase 40-hex Git commit SHA-1.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "nullable_commit_sha": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/commit_sha"
+        }
+      ]
+    },
+    "utc_rfc3339": {
+      "description": "RFC 3339 timestamp in UTC (Z offset only).",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "nullable_utc_rfc3339": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/utc_rfc3339"
+        }
+      ]
+    },
+    "url": {
+      "description": "Absolute http(s) URL without whitespace.",
+      "type": "string",
+      "pattern": "^https?://\\S+$"
+    },
+    "nullable_url": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/url"
+        }
+      ]
+    },
+    "finding_state": {
+      "enum": [
+        "candidate",
+        "needs_review",
+        "awaiting_approval",
+        "deferred",
+        "rejected",
+        "approved",
+        "publication_pending",
+        "linked_existing",
+        "issue_filed",
+        "implementation_checkpoint",
+        "maintainer_queue",
+        "implementing",
+        "pr_publication_pending",
+        "pr_filed",
+        "merged_waiting_release",
+        "waiting_real_use",
+        "closed",
+        "regressed",
+        "blocked"
+      ]
+    },
+    "brief_object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "summary",
+        "expected_behavior",
+        "actual_behavior",
+        "acceptance_boundary",
+        "implementation_scope",
+        "evidence_packet_digests",
+        "source_refs",
+        "duplicate_status",
+        "risk_classification",
+        "proposed_public_actions"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expected_behavior": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "actual_behavior": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "acceptance_boundary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "implementation_scope": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "evidence_packet_digests": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/sha256_hex"
+          }
+        },
+        "source_refs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/source_ref"
+          }
+        },
+        "duplicate_status": {
+          "enum": [
+            "no_match",
+            "matched"
+          ]
+        },
+        "risk_classification": {
+          "enum": [
+            "low_risk",
+            "restricted"
+          ]
+        },
+        "proposed_public_actions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/public_action"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "duplicate_status": {
+                "const": "matched"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "proposed_public_actions": {
+                "items": {
+                  "enum": [
+                    "create_pr_linked_existing",
+                    "reopen_issue",
+                    "comment_issue"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "duplicate_status": {
+                "const": "no_match"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "proposed_public_actions": {
+                "items": {
+                  "enum": [
+                    "create_issue",
+                    "create_pr"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "risk_classification": {
+                "const": "restricted"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "proposed_public_actions": {
+                "not": {
+                  "contains": {
+                    "enum": ["create_pr", "create_pr_linked_existing"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "source_ref": {
+      "description": "Immutable source reference: a code location in gosuda/portal-tunnel, or a documented contract at an immutable revision.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "commit",
+            "path",
+            "line_range",
+            "url"
+          ],
+          "properties": {
+            "repository": {
+              "const": "gosuda/portal-tunnel"
+            },
+            "commit": {
+              "$ref": "#/$defs/commit_sha"
+            },
+            "path": {
+              "description": "Repository-relative path.",
+              "type": "string",
+              "minLength": 1
+            },
+            "line_range": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "start_line",
+                "end_line"
+              ],
+              "properties": {
+                "start_line": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "end_line": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "url": {
+              "description": "Commit-pinned URL.",
+              "$ref": "#/$defs/url"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "commit",
+            "url",
+            "section"
+          ],
+          "properties": {
+            "repository": {
+              "const": "gosuda/portal-tunnel"
+            },
+            "commit": {
+              "$ref": "#/$defs/commit_sha"
+            },
+            "url": {
+              "description": "Commit-pinned URL.",
+              "$ref": "#/$defs/url"
+            },
+            "section": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "metric_object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested_outcome_reached",
+        "original_signal_absent",
+        "human_correction_count",
+        "diagnostic_command_count",
+        "state_mismatch_count",
+        "elapsed_ms"
+      ],
+      "properties": {
+        "requested_outcome_reached": {
+          "type": "boolean"
+        },
+        "original_signal_absent": {
+          "type": "boolean"
+        },
+        "human_correction_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostic_command_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "state_mismatch_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "approval_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "timestamp",
+        "brief_revision_digest",
+        "scope_digest",
+        "approved_public_actions"
+      ],
+      "properties": {
+        "action": {
+          "description": "Action selected at a checkpoint.",
+          "enum": [
+            "approve",
+            "reject",
+            "defer",
+            "approve_implementation",
+            "hand_off",
+            "reject_implementation"
+          ]
+        },
+        "timestamp": {
+          "$ref": "#/$defs/utc_rfc3339"
+        },
+        "host_session_id": {
+          "description": "Host session ID when available.",
+          "type": "string",
+          "minLength": 1
+        },
+        "brief_revision_digest": {
+          "$ref": "#/$defs/sha256_hex"
+        },
+        "scope_digest": {
+          "$ref": "#/$defs/sha256_hex"
+        },
+        "approved_public_actions": {
+          "description": "Public actions authorized by this approval.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/public_action"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "approve",
+                  "approve_implementation"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "approved_public_actions": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "reject",
+                  "defer",
+                  "hand_off",
+                  "reject_implementation"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "approved_public_actions": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "rejection_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timestamp",
+        "reason",
+        "brief_revision_digest"
+      ],
+      "properties": {
+        "timestamp": {
+          "$ref": "#/$defs/utc_rfc3339"
+        },
+        "reason": {
+          "description": "Bounded rejection reason.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "brief_revision_digest": {
+          "$ref": "#/$defs/sha256_hex"
+        }
+      }
+    },
+    "duplicate_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "searched_at",
+        "queries",
+        "matched_url",
+        "matched_artifact_state",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "not_searched",
+            "no_match",
+            "matched",
+            "incomplete"
+          ]
+        },
+        "searched_at": {
+          "$ref": "#/$defs/nullable_utc_rfc3339"
+        },
+        "queries": {
+          "description": "Up to three search query strings.",
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "matched_url": {
+          "$ref": "#/$defs/nullable_url"
+        },
+        "matched_artifact_state": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "open",
+            "closed",
+            "merged",
+            "unresolved",
+            null
+          ]
+        },
+        "reason": {
+          "description": "Bounded reason, for example an incomplete search explanation.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "not_searched"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "searched_at": {
+                "type": "null"
+              },
+              "queries": {
+                "maxItems": 0
+              },
+              "matched_url": {
+                "type": "null"
+              },
+              "matched_artifact_state": {
+                "type": "null"
+              },
+              "reason": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "no_match"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "searched_at": {
+                "type": "string"
+              },
+              "queries": {
+                "minItems": 3
+              },
+              "matched_url": {
+                "type": "null"
+              },
+              "matched_artifact_state": {
+                "type": "null"
+              },
+              "reason": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "matched"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "searched_at": {
+                "type": "string"
+              },
+              "queries": {
+                "minItems": 1
+              },
+              "matched_url": {
+                "type": "string"
+              },
+              "matched_artifact_state": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "incomplete"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "searched_at": {
+                "type": "string"
+              },
+              "queries": {
+                "minItems": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "public_action": {
+      "enum": [
+        "create_issue",
+        "create_pr",
+        "create_pr_linked_existing",
+        "reopen_issue",
+        "comment_issue"
+      ]
+    }
+  }
+}
