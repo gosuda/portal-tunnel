@@ -31,3 +31,16 @@ func TestSystemdUnitWorkingDirectoryIsAbsoluteAndUnquoted(t *testing.T) {
 		t.Fatalf("ExecStart should stay shell-quoted:\n%s", unit)
 	}
 }
+
+func TestSystemdUnitWorkingDirectoryEscapesSpecifiers(t *testing.T) {
+	t.Parallel()
+
+	unit := systemdUnit(Definition{
+		Executable: "/home/user/.local/bin/portal",
+		WorkingDir: "/home/user/foo%bar",
+	})
+
+	if !strings.Contains(unit, "WorkingDirectory=/home/user/foo%%bar\n") {
+		t.Fatalf("WorkingDirectory must escape systemd specifiers:\n%s", unit)
+	}
+}
