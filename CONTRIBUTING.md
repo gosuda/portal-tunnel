@@ -1,6 +1,6 @@
 # Contributing
 
-`AGENTS.md` is the core implementation and architecture guide. This file is contribution policy. The merge bar for agent-facing code is [#346](https://github.com/gosuda/portal-tunnel/issues/346).
+`AGENTS.md` is the core implementation guide. Architecture, product behavior, and design rationale belong in `docs/architecture.md` and `docs/adr/README.md`. This file is contribution policy. The merge bar for agent-facing changes is [#346](https://github.com/gosuda/portal-tunnel/issues/346).
 
 ## Pull requests
 
@@ -12,4 +12,4 @@ Agents may file issues, reviews, and small PRs without prior assignment when the
 
 Every repeated agent instruction is a candidate accessibility bug. Fix the Portal surface and delete the instruction. Do not document another workaround.
 
-Protocol, cryptography, trust, identity, transport, and architecture stay under `AGENTS.md`. Do not add a plugin workflow engine, finding store, or feedback CLI ([#331](https://github.com/gosuda/portal-tunnel/issues/331)).
+Core semantic changes require stronger justification under [#346](https://github.com/gosuda/portal-tunnel/issues/346) and the repository's architecture rules. Generic feedback orchestration stays outside this repository ([#331](https://github.com/gosuda/portal-tunnel/issues/331)).
