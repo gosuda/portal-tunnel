@@ -4,13 +4,18 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit SHA to build. Leave empty to build the workflow branch.
+        required: false
 
 env:
   REGISTRY: ghcr.io
   PLATFORMS: linux/amd64,linux/arm64
 
 concurrency:
-  group: cd-${{ github.ref }}
+  group: cd-${{ github.ref }}-${{ inputs.ref || 'default' }}
   cancel-in-progress: true
 
 jobs:
@@ -20,9 +25,28 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      safe_ref: ${{ steps.ref.outputs.safe_ref }}
+      short_sha: ${{ steps.ref.outputs.short_sha }}
     steps:
-      - name: Checkout code
+      - name: Checkout selected ref
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Prepare ref metadata
+        id: ref
+        shell: bash
+        env:
+          BUILD_REF: ${{ inputs.ref || github.ref_name }}
+        run: |
+          safe_ref="$(printf '%s' "$BUILD_REF" | tr '[:upper:]' '[:lower:]' | tr '/:@' '---' | tr -cd 'a-z0-9._-')"
+          if [ -z "$safe_ref" ]; then
+            safe_ref="selected-ref"
+          fi
+          safe_ref="${safe_ref:0:80}"
+          echo "safe_ref=$safe_ref" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
@@ -37,27 +61,29 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Extract metadata
-        id: meta
+      - name: Extract portal image metadata
+        id: portal_meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/gosuda/portal
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,enable=true,prefix=sha-,suffix=,format=short
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}},enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,enable=${{ github.event_name == 'push' }},prefix=sha-,format=short
+            type=raw,value=branch-${{ steps.ref.outputs.safe_ref }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=branch-${{ steps.ref.outputs.safe_ref }}-${{ steps.ref.outputs.short_sha }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
-      - name: Build and push Docker image
+      - name: Build and push portal image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           platforms: ${{ env.PLATFORMS }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.portal_meta.outputs.tags }}
+          labels: ${{ steps.portal_meta.outputs.labels }}
           cache-from: type=gha,scope=portal
           cache-to: type=gha,mode=max,scope=portal
 
@@ -67,13 +93,15 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/gosuda/portal-tunnel
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,enable=true,prefix=sha-,suffix=,format=short
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}},enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,enable=${{ github.event_name == 'push' }},prefix=sha-,format=short
+            type=raw,value=branch-${{ steps.ref.outputs.safe_ref }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=branch-${{ steps.ref.outputs.safe_ref }}-${{ steps.ref.outputs.short_sha }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
-      - name: Build and push tunnel Docker image
+      - name: Build and push tunnel image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -85,16 +113,18 @@ jobs:
           cache-from: type=gha,scope=portal-tunnel
           cache-to: type=gha,mode=max,scope=portal-tunnel
 
-  release-binaries:
-    name: Build and Release Tunnel Binaries
-    if: startsWith(github.ref, 'refs/tags/v')
+  release-artifacts:
+    name: Build Release Artifacts
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-push
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      - name: Checkout code
+      - name: Checkout selected ref
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -102,25 +132,45 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build tunnel binaries
+      - name: Build artifacts
         shell: bash
         run: |
-          make build-tunnel
           mkdir -p release
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            make build-frontend
+          fi
+
+          make build-tunnel
           cp cmd/relay-server/dist/tunnel/portal-* release/
           cp cmd/portal-tunnel/installer/install.sh release/install.sh
           cp cmd/portal-tunnel/installer/install.ps1 release/install.ps1
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            for GOARCH in amd64 arm64; do
+              out="release/relay-server-linux-${GOARCH}"
+              echo " - ${out}"
+              CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH}" go build -trimpath -ldflags "-s -w" -o "${out}" ./cmd/relay-server
+            done
+          fi
 
       - name: Generate SHA256 checksums
         shell: bash
         run: |
           cd release
-          sha256sum portal-* > checksums.txt
-          while read -r sum file; do
+          : > checksums.txt
+          for file in *; do
+            [ "$file" = "checksums.txt" ] && continue
+            case "$file" in
+              *.sha256) continue ;;
+            esac
+            sum="$(sha256sum "$file" | cut -d' ' -f1)"
+            printf '%s  %s\n' "$sum" "$file" >> checksums.txt
             printf '%s  %s\n' "$sum" "$file" > "${file}.sha256"
-          done < checksums.txt
+          done
 
       - name: Publish GitHub release assets
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -132,3 +182,11 @@ jobs:
               --generate-notes \
               --title "${GITHUB_REF_NAME}"
           fi
+
+      - name: Upload branch artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: portal-${{ needs.build-and-push.outputs.safe_ref }}-${{ needs.build-and-push.outputs.short_sha }}
+          path: release/*
+          if-no-files-found: error
