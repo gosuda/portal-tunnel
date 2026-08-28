@@ -11,7 +11,7 @@ func TestWriteFlagDefaultsListsRegisteredFlags(t *testing.T) {
 	t.Cleanup(ResetEnvRegistry)
 	t.Setenv("IDENTITY_PATH", "/private/runtime/identity.json")
 	t.Setenv("ADMIN_TOKEN", "admin-token-secret")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "aws-secret-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "runtime-aws-credential")
 
 	var buf bytes.Buffer
 	var identityPath string
@@ -21,7 +21,7 @@ func TestWriteFlagDefaultsListsRegisteredFlags(t *testing.T) {
 	StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
 	StringFlagEnv(fs, &adminToken, "admin-token", "", "admin bearer token", "ADMIN_TOKEN")
 	StringFlagEnv(fs, &awsSecretAccessKey, "aws-secret-access-key", "", "AWS secret access key", "AWS_SECRET_ACCESS_KEY")
-	if identityPath != "/private/runtime/identity.json" || adminToken != "admin-token-secret" || awsSecretAccessKey != "aws-secret-access-key" {
+	if identityPath != "/private/runtime/identity.json" || adminToken != "admin-token-secret" || awsSecretAccessKey != "runtime-aws-credential" {
 		t.Fatal("environment values were not resolved into flag targets")
 	}
 
@@ -34,7 +34,7 @@ func TestWriteFlagDefaultsListsRegisteredFlags(t *testing.T) {
 			t.Fatalf("help missing %q\n%s", want, got)
 		}
 	}
-	for _, secret := range []string{"/private/runtime/identity.json", "admin-token-secret", "aws-secret-access-key"} {
+	for _, secret := range []string{"/private/runtime/identity.json", "admin-token-secret", "runtime-aws-credential"} {
 		if strings.Contains(got, secret) {
 			t.Fatalf("help contains environment value %q\n%s", secret, got)
 		}
