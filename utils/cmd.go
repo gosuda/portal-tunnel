@@ -523,3 +523,16 @@ func WriteCommandUsage(w io.Writer, usage []string, examples []string) {
 		fmt.Fprintln(w, "  "+strings.TrimSpace(line))
 	}
 }
+
+// WriteFlagDefaults prints the registered flags. Custom Usage printers replace
+// FlagSet defaults, so --help would otherwise list examples and omit the flags
+// agents need (identity-path, relays, api-port).
+func WriteFlagDefaults(w io.Writer, fs *flag.FlagSet) {
+	if w == nil || fs == nil {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Flags:")
+	fs.SetOutput(w)
+	fs.PrintDefaults()
+}

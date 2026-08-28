@@ -85,7 +85,20 @@ func resolveRelayServerConfig(args []string) (relayServerConfig, error) {
 
 	cfg := relayServerConfig{}
 	fs := utils.NewFlagSet("relay-server", printRootUsage)
+	registerRelayServerFlags(fs, &cfg)
 
+	if err := utils.ParseFlagSet(fs, args, printRootUsage); err != nil {
+		return relayServerConfig{}, err
+	}
+	if err := utils.RequireNoArgs(fs.Args(), "relay-server"); err != nil {
+		printRootUsage(os.Stderr)
+		return relayServerConfig{}, err
+	}
+	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
+	return cfg, nil
+}
+
+func registerRelayServerFlags(fs *flag.FlagSet, cfg *relayServerConfig) {
 	utils.StringFlagEnv(fs, &cfg.PortalURL, "portal-url", "https://localhost", "portal base URL", "PORTAL_URL")
 	utils.StringFlagEnv(fs, &cfg.FrontendDir, "frontend-dir", "", "custom SPA directory containing index.html; embedded frontend is used when empty", "PORTAL_FRONTEND_DIR")
 	utils.StringFlagEnv(fs, &cfg.IdentityPath, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")
@@ -126,16 +139,6 @@ func resolveRelayServerConfig(args []string) (relayServerConfig, error) {
 	utils.StringFlagEnv(fs, &cfg.AWSDNSSECKMSKeyARN, "aws-dnssec-kms-key-arn", "", "AWS KMS key ARN used to create a Route53 DNSSEC key-signing key when needed", "AWS_DNSSEC_KMS_KEY_ARN")
 	utils.StringFlagEnv(fs, &cfg.VultrAPIKey, "vultr-api-key", "", "Vultr API key for DNS automation (required when acme-dns-provider=vultr)", "VULTR_API_KEY")
 	utils.StringFlagEnv(fs, &cfg.NjallaToken, "njalla-token", "", "Njalla API token for DNS automation (required when acme-dns-provider=njalla)", "NJALLA_TOKEN")
-
-	if err := utils.ParseFlagSet(fs, args, printRootUsage); err != nil {
-		return relayServerConfig{}, err
-	}
-	if err := utils.RequireNoArgs(fs.Args(), "relay-server"); err != nil {
-		printRootUsage(os.Stderr)
-		return relayServerConfig{}, err
-	}
-	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
-	return cfg, nil
 }
 
 func runServeCommand(args []string) error {
@@ -275,4 +278,7 @@ func printRootUsage(w io.Writer) {
 			"relay-server help",
 		},
 	)
+	fs := utils.NewFlagSet("relay-server", nil)
+	registerRelayServerFlags(fs, &relayServerConfig{})
+	utils.WriteFlagDefaults(w, fs)
 }
