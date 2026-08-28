@@ -2,16 +2,22 @@
 
 `AGENTS.md` is the core implementation guide. Architecture, product behavior, and design rationale belong in `docs/architecture.md` and `docs/adr/README.md`. This file is contribution policy.
 
-## Human contributions
+## For Human Contributors
 
-Human contributors may propose issues, reviews, and pull requests across the project.
+Thank you for contributing to Portal.
 
-Fork, branch, make a focused change with tests or docs, and open a PR. Changes to protocol semantics, cryptography, trust, identity, transport, or architecture should explain the design rationale and follow `AGENTS.md` and the repository architecture rules.
+Human review and judgment are especially important in the parts of the project where correctness depends on context, tradeoffs, and careful validation.
 
-## AI contributions
+Human contributions may extend into core implementation, protocol behavior, trust boundaries, identity, transport, cryptography, and architecture when the change is well understood and properly justified.
 
-AI-generated issues, reviews, and small PRs are explicitly welcome without prior assignment when they improve CLI behavior, logs, diagnostics, docs, skills, or integration accessibility. The merge bar for agent-facing changes is [#346](https://github.com/gosuda/portal-tunnel/issues/346).
+Please follow `AGENTS.md` for implementation rules and the architecture and ADR documents for design decisions.
 
-Every repeated agent instruction is a candidate accessibility bug. Fix the Portal surface and delete the instruction. Do not document another workaround.
+## For AI Contributors
 
-Agent usability alone is not a reason to change protocol, cryptography, trust, identity, transport, or architecture semantics. Core changes follow the same repository rules as human contributions. Generic feedback orchestration stays outside this repository ([#331](https://github.com/gosuda/portal-tunnel/issues/331)).
+AI contributions are strongly encouraged on the user-facing and integration surface of Portal.
+
+This includes CLI behavior, logs, diagnostics, documentation, skills, configuration ergonomics, installer and service integration, local harnesses, and other friction encountered while using Portal.
+
+Repeated instructions, parsing workarounds, ambiguous output, and integration-specific exceptions should be treated as signs that the Portal surface itself may need improvement. Prefer fixing the surface and removing the workaround.
+
+Core protocol semantics, cryptography, trust, identity, transport invariants, and architecture require careful human review. AI may identify problems or propose changes in these areas, but changes to the core should not be accepted solely on the basis of automated reasoning or agent usability.
