@@ -8,7 +8,7 @@ license: MIT
 
 Portal publishes a service that is already running on the user's machine. It does not build the app or move it to a cloud host. Treat a successful tunnel as dependent on both the local app and the Portal process or agent remaining available.
 
-Read `references/portal-cli.md` when choosing commands or persistent-agent configuration. Read `references/x402.md` whenever the user requests x402 or a paid route. Read `references/safety-and-verification.md` before exposing a nontrivial project, a service with authentication, or any non-HTTP port. Read `references/game-hosting.md` whenever the user asks to host, publish, or share a game server — it covers game-specific ports, protocol identification, relay raw-transport prerequisites, and raw-endpoint verification.
+Run the workflow in order. Open a reference only when that branch is taken: `references/x402.md` for a paid route, `references/safety-and-verification.md` for an authenticated, sensitive/high-risk, or non-HTTP service, `references/game-hosting.md` for a game server, `references/portal-cli.md` when choosing persistent-agent configuration. Use the installed `portal` CLI for flags.
 
 ## Choose the Mode
 
@@ -50,7 +50,7 @@ For x402, do not guess the protected path, payment methods, amount, network, rec
 
 - Run `portal version` when `portal` is available.
 - If Portal is missing, present the official install method and request approval before running it because installation writes outside the project. Never execute an installer from an unknown relay or third-party URL.
-- Do not assume a hard-coded latest release or stale flags. Use the installed version and the checked-in Portal reference as the compatibility baseline.
+- Do not assume a hard-coded latest release or stale flags. Use the installed Portal version as the compatibility baseline.
 
 ### 4. Build the Command or Agent Config
 
@@ -72,7 +72,7 @@ Before executing, show the exact public target and any important exposure conseq
 - Create or update only the selected agent config, then start it with `portal agent run --config <path>` after the user accepts OS-service installation, or `portal agent run --foreground --config <path>` when the current session should own the process. `--foreground` opens the interactive dashboard when stdin and stdout are TTYs. Run that command in a non-TTY managed session so logs stay capturable and the TUI does not start.
 - Do not run `portal agent dashboard`. It is an interactive TUI. Give the user that command in the handoff.
 - Capture bounded output. Redact tokens, identity material, signed payloads, and credentials.
-- HTTP tunnels are ready when a public URL is emitted. Raw TCP/UDP tunnels log `raw transport endpoints allocated` with `tcp_addr` and/or `udp_addr` instead of `service ready at <URL>`. Do not wait for an HTTPS URL on a raw transport.
+- HTTP tunnels are ready on the `service ready at https://...` line, not the first `https://` in relay logs. Raw TCP/UDP tunnels log `raw transport endpoints allocated` with `tcp_addr` and/or `udp_addr` instead. Do not wait for an HTTPS URL on a raw transport.
 
 ### 6. Verify the Public Endpoint
 
@@ -97,6 +97,8 @@ Report:
 - Anything that remains temporary, unavailable, or unverified.
 
 Do not call the result permanent when the local machine, app process, or foreground tunnel must remain running.
+
+If Portal-specific friction materially affected the task, report one sanitized sentence (command, expected versus actual). Do not initiate GitHub feedback handling, write feedback files, or query extra relays unless the user explicitly requests that follow-up.
 
 ## Failure Rules
 
