@@ -100,6 +100,16 @@ Do not call the result permanent when the local machine, app process, or foregro
 
 If Portal-specific friction materially affected the task, report one sanitized sentence (command, expected versus actual). Do not initiate GitHub feedback handling, write feedback files, or query extra relays unless the user explicitly requests that follow-up.
 
+## Loopback Relay Variant
+
+Use this variant only when the user asks to expose through a relay running on this machine. The relay must already be running; the client never starts one. Do not consult or fall back to the public registry in this mode.
+
+- Run the client and the relay from the same Portal checkout or release. This pairing is for local development and test harnesses only; production users expose through their relay's public deployment. A mixed pair (for example an installed release against a worktree relay) can register hostnames the relay's SNI router never matches, and the tunnel stalls while the client retries silently.
+- Point the client only at the relay's admin port: `portal expose <loopback-target> --name <name> --identity-path <absolute-path-outside-repo> --relays https://127.0.0.1:<api-port> --discovery=false`. When port 443 is unavailable, start the same-tree relay on unprivileged ports (`relay-server --api-port <api-port> --sni-port <sni-port>`); the emitted URL then carries the SNI port.
+- Treat the tunnel as ready only when the log prints the line starting `service ready at` carrying `public_url`. Listener or added-relay `https://` URLs in the same output describe relay listeners, not tenant readiness.
+- Verify the emitted `public_url` itself with one bounded request. `*.localhost` often resolves to `::1` first, so use `curl -sk --ipv4 --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' <public-url>` and accept the app's real status (401 or 403 means reachable and protected).
+- Stop and report instead of improvising when a required fact is missing: no relay admin URL or port, no identity path outside the repository, or no `service ready at` line within a bounded wait. Do not substitute registry relays or start extra relays to unblock the run.
+
 ## Failure Rules
 
 - Local app unhealthy: stop before exposing it and report the failing check.
