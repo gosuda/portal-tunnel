@@ -419,6 +419,9 @@ func LeaseHostname(name, rootHost string) (string, error) {
 	if rootHost == "" {
 		return "", errors.New("root host is required")
 	}
+	if ip := net.ParseIP(rootHost); ip != nil && ip.IsLoopback() {
+		rootHost = "localhost"
+	}
 	return label + "." + rootHost, nil
 }
 
