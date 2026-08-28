@@ -47,6 +47,7 @@ jobs:
           safe_ref="${safe_ref:0:80}"
           echo "safe_ref=$safe_ref" >> "$GITHUB_OUTPUT"
           echo "short_sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
@@ -74,6 +75,10 @@ jobs:
             type=sha,enable=${{ github.event_name == 'push' }},prefix=sha-,format=short
             type=raw,value=branch-${{ steps.ref.outputs.safe_ref }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=raw,value=branch-${{ steps.ref.outputs.safe_ref }}-${{ steps.ref.outputs.short_sha }},enable=${{ github.event_name == 'workflow_dispatch' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.ref.outputs.commit_sha }}
+            org.opencontainers.image.ref.name=${{ inputs.ref || github.ref_name }}
 
       - name: Build and push portal image
         uses: docker/build-push-action@v6
@@ -100,6 +105,10 @@ jobs:
             type=sha,enable=${{ github.event_name == 'push' }},prefix=sha-,format=short
             type=raw,value=branch-${{ steps.ref.outputs.safe_ref }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=raw,value=branch-${{ steps.ref.outputs.safe_ref }}-${{ steps.ref.outputs.short_sha }},enable=${{ github.event_name == 'workflow_dispatch' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.ref.outputs.commit_sha }}
+            org.opencontainers.image.ref.name=${{ inputs.ref || github.ref_name }}
 
       - name: Build and push tunnel image
         uses: docker/build-push-action@v6
