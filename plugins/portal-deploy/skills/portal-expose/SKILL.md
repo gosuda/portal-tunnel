@@ -8,7 +8,7 @@ license: MIT
 
 Portal publishes a service that is already running on the user's machine. It does not build the app or move it to a cloud host. Treat a successful tunnel as dependent on both the local app and the Portal process or agent remaining available.
 
-Run the workflow in order. Open a reference only when that branch is taken: `references/x402.md` for a paid route, `references/safety-and-verification.md` for a nontrivial, authenticated, or non-HTTP service, `references/game-hosting.md` for a game server, `references/portal-cli.md` when choosing persistent-agent configuration. Use the installed `portal` CLI for flags.
+Run the workflow in order. Open a reference only when that branch is taken: `references/x402.md` for a paid route, `references/safety-and-verification.md` for an authenticated, sensitive/high-risk, or non-HTTP service, `references/game-hosting.md` for a game server, `references/portal-cli.md` when choosing persistent-agent configuration. Use the installed `portal` CLI for flags.
 
 ## Choose the Mode
 
@@ -50,7 +50,7 @@ For x402, do not guess the protected path, payment methods, amount, network, rec
 
 - Run `portal version` when `portal` is available.
 - If Portal is missing, present the official install method and request approval before running it because installation writes outside the project. Never execute an installer from an unknown relay or third-party URL.
-- Do not assume a hard-coded latest release or stale flags. Use the installed version and the checked-in Portal reference as the compatibility baseline.
+- Do not assume a hard-coded latest release or stale flags. Use the installed Portal version as the compatibility baseline.
 
 ### 4. Build the Command or Agent Config
 
@@ -98,7 +98,7 @@ Report:
 
 Do not call the result permanent when the local machine, app process, or foreground tunnel must remain running.
 
-If Portal-specific friction materially affected the task, report one sanitized sentence (command, expected versus actual). Do not open GitHub, write feedback files, or query extra relays.
+If Portal-specific friction materially affected the task, report one sanitized sentence (command, expected versus actual). Do not initiate GitHub feedback handling, write feedback files, or query extra relays unless the user explicitly requests that follow-up.
 
 ## Failure Rules
 
