@@ -709,9 +709,10 @@ func writeCommentWrapped(w io.Writer, text string) {
 // Setting only the file's own keys is not enough. A relay variable absent from
 // the file would stay inherited from the shell, and a higher-priority alias in
 // the shell would beat a value the file does supply — process AWS_REGION over
-// file AWS_DEFAULT_REGION, for instance. Either way the report would describe a
-// configuration different from the one Compose is going to deploy, which is the
-// opposite of what checking a file is for.
+// file AWS_DEFAULT_REGION, for instance. The report would then describe a mix
+// of file and shell, not the file against relay defaults. Isolation is for
+// that mix. It does not reproduce Compose; Compose injects its own defaults.
+// For that environment run the command inside the container.
 func applyEnvFileInIsolation(entries []envFileEntry) (func(), error) {
 	// A first pass populates the registry, which is how the set of names the
 	// deployment understands is known at all.
