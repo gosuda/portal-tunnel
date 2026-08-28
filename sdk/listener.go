@@ -239,7 +239,7 @@ func (l *listener) run(ctx context.Context) {
 		if udpAddr != "" || tcpAddr != "" {
 			event.Msg("raw transport endpoints allocated")
 		} else if publicURL != "" {
-			event.Msg("service ready at " + publicURL)
+			logHTTPReady(l.identity.Address, publicURL, l.route.ListenerRelayURL())
 		} else {
 			event.Msg("relay listener registered")
 		}
@@ -276,6 +276,16 @@ func (l *listener) run(ctx context.Context) {
 		_ = l.Close()
 		return
 	}
+}
+
+func logHTTPReady(address, publicURL, relayURL string) {
+	event := log.Info().
+		Str("address", address).
+		Str("public_url", publicURL)
+	if relayURL != "" {
+		event = event.Str("relay_url", relayURL)
+	}
+	event.Msg("service ready at " + publicURL)
 }
 
 func (l *listener) Close() error {
