@@ -7,11 +7,11 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: ["**"]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -67,12 +67,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build multi-architecture tunnel image
+      - name: Build tunnel image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: cmd/portal-tunnel/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: false
-          cache-from: type=gha,scope=portal-tunnel
-          cache-to: type=gha,mode=max,scope=portal-tunnel
+          cache-from: type=gha,scope=portal-tunnel-ci
+          cache-to: type=gha,mode=max,scope=portal-tunnel-ci
