@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
@@ -136,9 +137,7 @@ func acmeFeature(cfg relayServerConfig) feature {
 	// server, so reporting "disabled" here would describe a relay that is in
 	// fact serving its own zone and answering ACME challenges from it.
 	provider := strings.ToLower(strings.TrimSpace(cfg.ACMEDNSProvider))
-	if provider == "" {
-		provider = acme.TypeEmbedded
-	}
+	provider = cmp.Or(provider, acme.TypeEmbedded)
 	if provider == acme.TypeEmbedded {
 		f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
 		f.Detail = fmt.Sprintf(
@@ -197,9 +196,7 @@ func ensGaslessFeature(cfg relayServerConfig) feature {
 	// unset ACME_DNS_PROVIDER selects, so this is the combination an operator
 	// reaches by turning ENS on and changing nothing else.
 	provider := strings.ToLower(strings.TrimSpace(cfg.ACMEDNSProvider))
-	if provider == "" {
-		provider = acme.TypeEmbedded
-	}
+	provider = cmp.Or(provider, acme.TypeEmbedded)
 	if provider == acme.TypeEmbedded {
 		f.State, f.By = stateBlocked, "ENS_GASLESS_ENABLED=true"
 		f.Missing = "ACME_DNS_PROVIDER=" + provider +
@@ -376,7 +373,9 @@ func loadEnvFile(path string) ([]envFileEntry, error) {
 		}
 		// Compose does not expand values read from an env file, so neither do we.
 		value = strings.TrimSpace(value)
-		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+		doubleQuoted := len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"'
+		singleQuoted := len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\''
+		if doubleQuoted || singleQuoted {
 			value = value[1 : len(value)-1]
 		}
 		entries = append(entries, envFileEntry{Name: name, Value: value})
@@ -709,9 +708,10 @@ func writeCommentWrapped(w io.Writer, text string) {
 // Setting only the file's own keys is not enough. A relay variable absent from
 // the file would stay inherited from the shell, and a higher-priority alias in
 // the shell would beat a value the file does supply — process AWS_REGION over
-// file AWS_DEFAULT_REGION, for instance. Either way the report would describe a
-// configuration different from the one Compose is going to deploy, which is the
-// opposite of what checking a file is for.
+// file AWS_DEFAULT_REGION, for instance. The report would then describe a mix
+// of file and shell, not the file against relay defaults. Isolation is for
+// that mix. It does not reproduce Compose; Compose injects its own defaults.
+// For that environment run the command inside the container.
 func applyEnvFileInIsolation(entries []envFileEntry) (func(), error) {
 	// A first pass populates the registry, which is how the set of names the
 	// deployment understands is known at all.
