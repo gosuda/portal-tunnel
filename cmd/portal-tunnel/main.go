@@ -80,12 +80,7 @@ type exposeFlags struct {
 	metricsAddr          string
 }
 
-func runExposeCommand(args []string) error {
-	installer.StartUpdateCheck(types.ReleaseVersion)
-
-	flags := exposeFlags{}
-	fs := utils.NewFlagSet("expose", printExposeUsage)
-
+func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	utils.StringFlagEnv(fs, &flags.multiHopCSV, "multi-hop", "", "Ordered multi-hop relay API URLs, comma-separated", "MULTI_HOP")
 	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
@@ -113,7 +108,14 @@ func runExposeCommand(args []string) error {
 	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry", "MAX_ACTIVE_RELAYS")
 	utils.IntFlagEnv(fs, &flags.multiHopDepth, "multi-hop-depth", 0, nil, "Automatically create multi-hop routes at this hop count for every eligible entry relay; 0 or 1 disables multi-hop", "MULTI_HOP_DEPTH")
 	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
+}
 
+func runExposeCommand(args []string) error {
+	installer.StartUpdateCheck(types.ReleaseVersion)
+
+	flags := exposeFlags{}
+	fs := utils.NewFlagSet("expose", printExposeUsage)
+	registerExposeFlags(fs, &flags)
 	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -435,6 +437,15 @@ func printExposeUsage(w io.Writer) {
 			"portal expose 3000 --multi-hop-depth 3",
 		},
 	)
+	fs := utils.NewFlagSet("expose", nil)
+	registerExposeFlags(fs, &exposeFlags{})
+	utils.WriteFlagDefaults(w, fs)
+	utils.WriteHelpSection(w, "Loopback", []string{
+		"portal expose 127.0.0.1:8080 --identity-path /absolute/path/outside/repo/identity.json --relays https://127.0.0.1:4017 --discovery=false",
+	})
+	utils.WriteHelpSection(w, "Ready", []string{
+		"On success the process logs a line starting with: service ready at",
+	})
 }
 
 func printListUsage(w io.Writer) {

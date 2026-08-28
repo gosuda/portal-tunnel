@@ -224,7 +224,9 @@ func StringFlag(fs *flag.FlagSet, target *string, name, fallback, usage string) 
 func StringFlagEnv(fs *flag.FlagSet, target *string, name, fallback, usage string, envNames ...string) {
 	value, setBy := resolveStringEnv(fallback, envNames...)
 	registerEnvVar(name, usage, fallback, value, setBy, envNames)
-	ensureFlagSet(fs).StringVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet := ensureFlagSet(fs)
+	flagSet.StringVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = fallback
 }
 
 func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string) {
@@ -234,13 +236,17 @@ func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage 
 func BoolFlagEnv(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string, envNames ...string) {
 	value, setBy := resolveBoolEnv(fallback, envNames...)
 	registerEnvVar(name, usage, strconv.FormatBool(fallback), strconv.FormatBool(value), setBy, envNames)
-	ensureFlagSet(fs).BoolVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet := ensureFlagSet(fs)
+	flagSet.BoolVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = strconv.FormatBool(fallback)
 }
 
 func IntFlagEnv(fs *flag.FlagSet, target *int, name string, fallback int, parse IntEnvParser, usage string, envNames ...string) {
 	value, setBy := resolveIntEnv(fallback, parse, envNames...)
 	registerEnvVar(name, usage, strconv.Itoa(fallback), strconv.Itoa(value), setBy, envNames)
-	ensureFlagSet(fs).IntVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet := ensureFlagSet(fs)
+	flagSet.IntVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = strconv.Itoa(fallback)
 }
 
 func RepeatedStringFlag(fs *flag.FlagSet, target *[]string, name, usage string) {
@@ -520,6 +526,30 @@ func WriteCommandUsage(w io.Writer, usage []string, examples []string) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Examples:")
 	for _, line := range examples {
+		fmt.Fprintln(w, "  "+strings.TrimSpace(line))
+	}
+}
+
+// WriteFlagDefaults prints the registered flags. Custom Usage printers replace
+// FlagSet defaults, so --help would otherwise list examples and omit the flags
+// agents need (identity-path, relays, api-port).
+func WriteFlagDefaults(w io.Writer, fs *flag.FlagSet) {
+	if w == nil || fs == nil {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Flags:")
+	fs.SetOutput(w)
+	fs.PrintDefaults()
+}
+
+func WriteHelpSection(w io.Writer, heading string, lines []string) {
+	if w == nil || strings.TrimSpace(heading) == "" || len(lines) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, strings.TrimSpace(heading)+":")
+	for _, line := range lines {
 		fmt.Fprintln(w, "  "+strings.TrimSpace(line))
 	}
 }
