@@ -441,7 +441,7 @@ func printExposeUsage(w io.Writer) {
 	registerExposeFlags(fs, &exposeFlags{})
 	utils.WriteFlagDefaults(w, fs)
 	utils.WriteHelpSection(w, "Loopback", []string{
-		"portal expose 127.0.0.1:8080 --relays https://127.0.0.1:4017 --discovery=false",
+		"portal expose 127.0.0.1:8080 --identity-path /absolute/path/outside/repo/identity.json --relays https://127.0.0.1:4017 --discovery=false",
 	})
 	utils.WriteHelpSection(w, "Ready", []string{
 		"On success the process logs a line starting with: service ready at",

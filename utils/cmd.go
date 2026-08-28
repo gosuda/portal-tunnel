@@ -224,7 +224,9 @@ func StringFlag(fs *flag.FlagSet, target *string, name, fallback, usage string) 
 func StringFlagEnv(fs *flag.FlagSet, target *string, name, fallback, usage string, envNames ...string) {
 	value, setBy := resolveStringEnv(fallback, envNames...)
 	registerEnvVar(name, usage, fallback, value, setBy, envNames)
-	ensureFlagSet(fs).StringVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet := ensureFlagSet(fs)
+	flagSet.StringVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = fallback
 }
 
 func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string) {
@@ -234,13 +236,17 @@ func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage 
 func BoolFlagEnv(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string, envNames ...string) {
 	value, setBy := resolveBoolEnv(fallback, envNames...)
 	registerEnvVar(name, usage, strconv.FormatBool(fallback), strconv.FormatBool(value), setBy, envNames)
-	ensureFlagSet(fs).BoolVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet := ensureFlagSet(fs)
+	flagSet.BoolVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = strconv.FormatBool(fallback)
 }
 
 func IntFlagEnv(fs *flag.FlagSet, target *int, name string, fallback int, parse IntEnvParser, usage string, envNames ...string) {
 	value, setBy := resolveIntEnv(fallback, parse, envNames...)
 	registerEnvVar(name, usage, strconv.Itoa(fallback), strconv.Itoa(value), setBy, envNames)
-	ensureFlagSet(fs).IntVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet := ensureFlagSet(fs)
+	flagSet.IntVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = strconv.Itoa(fallback)
 }
 
 func RepeatedStringFlag(fs *flag.FlagSet, target *[]string, name, usage string) {
