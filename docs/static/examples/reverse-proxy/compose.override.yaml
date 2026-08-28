@@ -1,14 +1,6 @@
-# Port arrangement for running Portal behind a containerised nginx.
-#
-# Save as docker-compose.override.yml next to the bundled docker-compose.yml.
-# Compose loads that name automatically.
-#
-# Only nginx publishes host ports. Portal keeps its TCP listeners on the Compose
-# network, where nginx reaches them as portal:443 and portal:4017, so nothing
-# competes for :443 on the host and no loopback mapping is needed.
-#
-# SNI_PORT stays 443 inside the container. Portal reaches its own API listener
-# through its SNI router, and that port is what goes into the ECH HTTPS record.
+# Portal behind a containerised nginx.
+# Save as docker-compose.override.yml next to docker-compose.yml.
+# Only nginx publishes host TCP ports; Portal stays on the Compose network.
 
 services:
   nginx:
@@ -18,46 +10,23 @@ services:
       - "443:443"
     networks:
       edge:
-        # Only needed when the root host is terminated and Portal is therefore
-        # configured with TRUST_PROXY_HEADERS=true. Compose assigns container
-        # addresses dynamically, so TRUSTED_PROXY_CIDRS pointing at whatever
-        # nginx happened to get would stop matching the next time the container
-        # is recreated. Portal would then ignore the forwarded address and apply
-        # IP bans and rate limits to nginx instead of to visitors -- silently,
-        # because everything still works.
-        #
-        # Set TRUSTED_PROXY_CIDRS=172.31.240.2/32 to match.
+        # Stable source address for TRUSTED_PROXY_CIDRS=172.31.240.2/32 when
+        # root-host termination enables TRUST_PROXY_HEADERS.
         ipv4_address: 172.31.240.2
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./sites-enabled:/etc/nginx/sites-enabled:ro
-      # The relay's own ACME writes fullchain.pem and privatekey.pem under
-      # IDENTITY_PATH, which the base file binds from ./.portal-certs. nginx
-      # reads them and never writes. Mounting a separate ./certs would leave it
-      # looking at an empty directory and failing to start with
-      # "cannot load certificate".
-      #
-      # Only the terminate-the-root-host variant needs this; the default
-      # pass-through config has no ssl listener of its own.
+      # Needed only by the optional root-host termination block in nginx.conf.
       - ./.portal-certs:/etc/nginx/certs:ro
       - acme-webroot:/var/www/acme
     restart: unless-stopped
 
   portal:
-    # !override replaces the base ports list instead of appending to it.
-    # Without it Compose merges both entries and still tries to bind :443.
-    # Requires Docker Compose 2.24.4 or newer; check with `docker compose version`.
-    #
-    # This list must carry EVERY mapping the deployment had enabled. The base
-    # file publishes TCP 443 and the WireGuard port, and comments out three more
-    # that a deployment may have turned on. Replacing the list drops anything
-    # left out, silently, and existing tunnels stop working.
+    # !override is required so the base 443/tcp publication is removed.
+    # Requires Docker Compose 2.24.4+. Preserve every optional mapping that the
+    # deployment already uses; omitted mappings are dropped.
     ports: !override
       - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
-      # TCP 443 is deliberately absent: nginx owns it, and Portal is reached
-      # over the Compose network instead.
-      #
-      # Uncomment whichever of these the deployment already had enabled.
       # - "443:443/udp"
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}"
@@ -68,12 +37,7 @@ volumes:
   acme-webroot: {}
 
 networks:
-  # A named network with its own IPAM, because Compose's implicit default
-  # network does not accept ipv4_address. Both services join it, so nginx still
-  # reaches portal:443 and portal:4017 by name.
-  #
-  # Check that this subnet does not overlap anything already on the host:
-  #   docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
+  # Check that this subnet does not overlap an existing Docker network before use.
   edge:
     ipam:
       config:
