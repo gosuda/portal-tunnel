@@ -158,6 +158,9 @@ func NormalizeRelayURL(raw string) (string, error) {
 	if parsed.Host == "" {
 		return "", fmt.Errorf("relay url host is empty: %q", raw)
 	}
+	if strings.EqualFold(parsed.Scheme, "http") && IsLocalRelayHost(parsed.Hostname()) {
+		parsed.Scheme = "https"
+	}
 	if !strings.EqualFold(parsed.Scheme, "https") {
 		return "", fmt.Errorf("relay url must use https: %q", raw)
 	}
