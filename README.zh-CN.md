@@ -188,10 +188,7 @@ https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json
 
 ## 贡献
 
-1. Fork 这个仓库。
-2. 创建功能分支（`git checkout -b feature/amazing-feature`）。
-3. 用聚焦的测试或文档完成修改。
-4. 打开 pull request。
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证
 

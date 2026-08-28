@@ -229,10 +229,7 @@ relay, open a pull request to add your relay URL to `registry.json`.
 
 ## Contributing
 
-1. Fork the repository.
-2. Create a feature branch (`git checkout -b feature/amazing-feature`).
-3. Make the change with focused tests or docs.
-4. Open a pull request.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
