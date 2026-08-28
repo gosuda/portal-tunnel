@@ -88,8 +88,12 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.APIPort = utils.IntOrDefault(cfg.APIPort, 4017)
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
 	cfg.WireGuardPort = utils.IntOrDefault(cfg.WireGuardPort, overlay.DefaultListenPort)
-	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
-	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
+	listenHost := ""
+	if utils.IsLocalRelayHost(utils.PortalRootHost(cfg.PortalURL)) {
+		listenHost = "127.0.0.1"
+	}
+	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, net.JoinHostPort(listenHost, fmt.Sprintf("%d", cfg.APIPort)))
+	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, net.JoinHostPort(listenHost, fmt.Sprintf("%d", cfg.SNIPort)))
 	if cfg.PProfEnabled {
 		cfg.PProfListenAddr = utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
 	}
