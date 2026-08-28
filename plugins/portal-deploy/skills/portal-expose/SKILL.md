@@ -72,7 +72,7 @@ Before executing, show the exact public target and any important exposure conseq
 - Create or update only the selected agent config, then start it with `portal agent run --config <path>` after the user accepts OS-service installation, or `portal agent run --foreground --config <path>` when the current session should own the process. `--foreground` opens the interactive dashboard when stdin and stdout are TTYs. Run that command in a non-TTY managed session so logs stay capturable and the TUI does not start.
 - Do not run `portal agent dashboard`. It is an interactive TUI. Give the user that command in the handoff.
 - Capture bounded output. Redact tokens, identity material, signed payloads, and credentials.
-- HTTP tunnels are ready on the `service ready at https://...` line, not the first `https://` in relay logs. Raw TCP/UDP tunnels log `raw transport endpoints allocated` with `tcp_addr` and/or `udp_addr` instead. Do not wait for an HTTPS URL on a raw transport.
+- HTTP tunnels are ready on a log event with field `public_url`. The message still starts with `service ready at`. Relay `https://` values in `listener_relays` / `added_relays` are not ready. Raw TCP/UDP tunnels log `raw transport endpoints allocated` with `tcp_addr` and/or `udp_addr` instead. Do not wait for an HTTPS URL on a raw transport.
 
 ### 6. Verify the Public Endpoint
 
