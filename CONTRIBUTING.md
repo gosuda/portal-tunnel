@@ -1,6 +1,6 @@
 # Contributing
 
-`AGENTS.md` is the core implementation guide. Architecture, product behavior, and design rationale belong in `docs/architecture.md` and `docs/adr/README.md`. This file is contribution policy.
+`AGENTS.md` is the core implementation guide. This file is contribution policy.
 
 ## For Human Contributors
 
@@ -10,13 +10,15 @@ Human review and judgment are especially important in the parts of the project w
 
 Human contributions may extend into core implementation, protocol behavior, trust boundaries, identity, transport, cryptography, and architecture when the change is well understood and properly justified.
 
-Please follow `AGENTS.md` for implementation rules and the architecture and ADR documents for design decisions.
+Please follow `AGENTS.md` for implementation rules.
 
 ## For AI Contributors
 
 AI contributions are strongly encouraged on the user-facing and integration surface of Portal.
 
 This includes CLI behavior, logs, diagnostics, documentation, skills, configuration ergonomics, installer and service integration, local harnesses, and other friction encountered while using Portal.
+
+AI contributors may file issues, reviews, and improvement proposals in these areas without prior assignment.
 
 Repeated instructions, parsing workarounds, ambiguous output, and integration-specific exceptions should be treated as signs that the Portal surface itself may need improvement. Prefer fixing the surface and removing the workaround.
 
