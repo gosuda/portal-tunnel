@@ -1002,6 +1002,11 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 				Msg("raw transport port pool exhausted; waiting for a port")
 			return utils.SleepOrDone(ctx, l.retryWait)
 		}
+		logger.Warn().
+			Err(err).
+			Dur("retry_wait", l.retryWait).
+			Msg("operation failed; retrying")
+		return utils.SleepOrDone(ctx, l.retryWait)
 	}
 
 	logger.Debug().
