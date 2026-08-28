@@ -584,6 +584,10 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 
 				record, ok := s.registry.Lookup(serverName)
 				if !ok {
+					log.Warn().
+						Str("server_name", serverName).
+						Str("remote_addr", wrappedConn.RemoteAddr().String()).
+						Msg("unknown public ingress hostname")
 					_ = wrappedConn.Close()
 					return
 				}
