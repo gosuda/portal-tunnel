@@ -536,3 +536,14 @@ func WriteFlagDefaults(w io.Writer, fs *flag.FlagSet) {
 	fs.SetOutput(w)
 	fs.PrintDefaults()
 }
+
+func WriteHelpSection(w io.Writer, heading string, lines []string) {
+	if w == nil || strings.TrimSpace(heading) == "" || len(lines) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, strings.TrimSpace(heading)+":")
+	for _, line := range lines {
+		fmt.Fprintln(w, "  "+strings.TrimSpace(line))
+	}
+}

@@ -440,6 +440,12 @@ func printExposeUsage(w io.Writer) {
 	fs := utils.NewFlagSet("expose", nil)
 	registerExposeFlags(fs, &exposeFlags{})
 	utils.WriteFlagDefaults(w, fs)
+	utils.WriteHelpSection(w, "Loopback", []string{
+		"portal expose 127.0.0.1:8080 --relays https://127.0.0.1:4017 --discovery=false",
+	})
+	utils.WriteHelpSection(w, "Ready", []string{
+		"On success the process logs a line starting with: service ready at",
+	})
 }
 
 func printListUsage(w io.Writer) {

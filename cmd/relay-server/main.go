@@ -281,4 +281,11 @@ func printRootUsage(w io.Writer) {
 	fs := utils.NewFlagSet("relay-server", nil)
 	registerRelayServerFlags(fs, &relayServerConfig{})
 	utils.WriteFlagDefaults(w, fs)
+	utils.WriteHelpSection(w, "Loopback", []string{
+		"relay-server --portal-url https://127.0.0.1:4017 --api-port 4017 --sni-port 8443",
+		"portal expose 127.0.0.1:8080 --relays https://127.0.0.1:4017 --discovery=false",
+	})
+	utils.WriteHelpSection(w, "Ready", []string{
+		"On success the process logs a line starting with: service ready at",
+	})
 }

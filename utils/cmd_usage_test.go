@@ -31,3 +31,25 @@ func TestWriteFlagDefaultsNilIsNoop(t *testing.T) {
 		t.Fatalf("nil FlagSet should print nothing, got %q", buf.String())
 	}
 }
+
+func TestWriteHelpSectionLoopbackAndReady(t *testing.T) {
+	var buf bytes.Buffer
+	WriteHelpSection(&buf, "Loopback", []string{
+		"portal expose 127.0.0.1:8080 --relays https://127.0.0.1:4017 --discovery=false",
+	})
+	WriteHelpSection(&buf, "Ready", []string{
+		"On success the process logs a line starting with: service ready at",
+	})
+	got := buf.String()
+	for _, want := range []string{
+		"Loopback:",
+		"--relays https://127.0.0.1:4017",
+		"--discovery=false",
+		"Ready:",
+		"service ready at",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("help missing %q\n%s", want, got)
+		}
+	}
+}
