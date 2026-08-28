@@ -5,7 +5,7 @@ description: How the portal-tunnel client CLI (cmd/portal-tunnel) is structured 
 
 # portal-tunnel client CLI
 
-Entrypoint `cmd/portal-tunnel/main.go`. Subcommands are dispatched by the repo's own `utils.RunCommands` (std `flag` package, NOT cobra/urfave). Commands: `expose`, `agent {run,dashboard,stop,restart}`, `list`, `update`, `version`, `help`. Flags are defined in code (`main.go`, `agent.go`); `--help` prints usage + examples but does NOT enumerate flags — read the source for the authoritative list.
+Entrypoint `cmd/portal-tunnel/main.go`. Subcommands are dispatched by the repo's own `utils.RunCommands` (std `flag` package, NOT cobra/urfave). Commands: `expose`, `agent {run,dashboard,stop,restart}`, `list`, `update`, `version`, `help`. Flags are defined in code (`main.go`, `agent.go`). Run command-specific `--help` first; if the installed build does not enumerate flags, read the source for the authoritative list.
 
 ## expose (main.go ~85-110)
 Publishes a local service. Key flags (many have env fallbacks, shown in `ENV`):
@@ -34,6 +34,7 @@ portal expose --serve ./site --name my-app
 portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173
 portal expose 3000 --udp --udp-addr 127.0.0.1:5353
 portal expose 3000 --relays https://portal.example.com --discovery=false
+portal expose 127.0.0.1:8080 --identity-path <absolute-path-outside-repo>/identity.json --relays https://127.0.0.1:<api-port> --discovery=false  # loopback relay from the same checkout/release
 portal expose 3000 --multi-hop-depth 3
 ```
 
