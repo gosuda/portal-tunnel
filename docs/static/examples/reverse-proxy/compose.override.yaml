@@ -1,0 +1,44 @@
+# Portal behind a containerised nginx.
+# Save as docker-compose.override.yml next to docker-compose.yml.
+# Only nginx publishes host TCP ports; Portal stays on the Compose network.
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      edge:
+        # Stable source address for TRUSTED_PROXY_CIDRS=172.31.240.2/32 when
+        # root-host termination enables TRUST_PROXY_HEADERS.
+        ipv4_address: 172.31.240.2
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./sites-enabled:/etc/nginx/sites-enabled:ro
+      # Needed only by the optional root-host termination block in nginx.conf.
+      - ./.portal-certs:/etc/nginx/certs:ro
+      - acme-webroot:/var/www/acme
+    restart: unless-stopped
+
+  portal:
+    # !override is required so the base 443/tcp publication is removed.
+    # Requires Docker Compose 2.24.4+. Preserve every optional mapping that the
+    # deployment already uses; omitted mappings are dropped.
+    ports: !override
+      - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
+      # - "443:443/udp"
+      # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
+      # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}"
+      # - "${PPROF_PORT:-6060}:${PPROF_PORT:-6060}"
+    networks: [edge]
+
+volumes:
+  acme-webroot: {}
+
+networks:
+  # Check that this subnet does not overlap an existing Docker network before use.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.31.240.0/24
