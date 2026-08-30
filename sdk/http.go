@@ -20,6 +20,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// RunHTTP serves HTTP traffic from the relay listener or local address using the provided handler.
 func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
 	if relayListener == nil && localAddr == "" {
 		return errors.New("relay listener or local address is required")

@@ -16,7 +16,10 @@ import (
 	"time"
 )
 
+// CommandFunc is a function that processes command-line arguments and returns an error.
 type CommandFunc func([]string) error
+
+// IntEnvParser parses an integer from an environment variable with a fallback default.
 type IntEnvParser func(string, int) int
 type boolFlagValue interface{ IsBoolFlag() bool }
 

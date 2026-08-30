@@ -40,6 +40,7 @@ type Exposure struct {
 	connSeq   atomic.Uint64
 }
 
+// ExposeConfig holds the configuration for exposing a local service through the portal tunnel.
 type ExposeConfig struct {
 	RelayURLs []string
 	Discovery bool

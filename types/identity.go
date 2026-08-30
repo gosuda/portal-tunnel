@@ -12,6 +12,7 @@ const (
 	RelayPolicyFilename   = "policy.json"
 )
 
+// Identity represents a tunnel client or relay identity with cryptographic keys.
 type Identity struct {
 	Name           string `json:"name,omitempty"`
 	Address        string `json:"address,omitempty"`
@@ -34,6 +35,7 @@ func (i Identity) Copy() Identity {
 	}
 }
 
+// RelayIdentity extends Identity with relay-specific keys for overlay networking.
 type RelayIdentity struct {
 	Identity
 	WireGuardPublicKey       string `json:"-"`
@@ -59,6 +61,7 @@ func (i Identity) Key() string {
 	return name + IdentityKeySeparator + address
 }
 
+// LeaseMetadata holds descriptive metadata for a tunnel lease.
 type LeaseMetadata struct {
 	Description string   `json:"description,omitempty"`
 	Owner       string   `json:"owner,omitempty"`
@@ -77,6 +80,7 @@ func (m LeaseMetadata) Copy() LeaseMetadata {
 	}
 }
 
+// Lease represents an active tunnel lease registered with a relay.
 type Lease struct {
 	Name        string        `json:"name,omitempty"`
 	ExpiresAt   time.Time     `json:"expires_at"`
@@ -91,6 +95,7 @@ type Lease struct {
 	Ready       int           `json:"ready"`
 }
 
+// PolicyLease extends Lease with policy enforcement state and client IP information.
 type PolicyLease struct {
 	Lease
 	IdentityKey string `json:"identity_key,omitempty"`
@@ -104,6 +109,7 @@ type PolicyLease struct {
 	IsIPBanned  bool   `json:"is_ip_banned"`
 }
 
+// RelayDescriptor contains relay discovery metadata signed by the relay's identity.
 type RelayDescriptor struct {
 	Address            string    `json:"address"`
 	Version            string    `json:"version"`

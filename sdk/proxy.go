@@ -16,6 +16,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// ProxyExposure runs the TCP/UDP proxy for the given exposure until the context is canceled.
 func ProxyExposure(ctx context.Context, exposure *Exposure) error {
 	defer exposure.Close()
 	if len(exposure.ActiveRelayURLs()) == 0 {

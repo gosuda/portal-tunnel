@@ -32,6 +32,7 @@ const (
 	defaultMITMProbeTimeout  = 30 * time.Second
 )
 
+// MITMProbeReport contains the results of a man-in-the-middle detection probe.
 type MITMProbeReport struct {
 	RelayURL    string
 	PublicURL   string

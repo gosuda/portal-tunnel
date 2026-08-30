@@ -61,6 +61,7 @@ const (
 	RelayVerified
 )
 
+// PercentileTracker tracks RTT samples and computes percentiles for relay latency analysis.
 type PercentileTracker struct {
 	samples []float64
 }
@@ -84,6 +85,7 @@ func (pt *PercentileTracker) Get(p float64) time.Duration {
 	return time.Duration(val)
 }
 
+// RelayState holds runtime telemetry and eligibility state for a single relay.
 type RelayState struct {
 	Descriptor types.RelayDescriptor
 	Bootstrap  bool
@@ -266,6 +268,7 @@ func (state RelayState) eligibleForMultiHop(routeState RouteState, now time.Time
 		(state.nextDiscoveryRefreshAt.IsZero() || !state.nextDiscoveryRefreshAt.After(now))
 }
 
+// RouteState describes the client's routing requirements for relay selection.
 type RouteState struct {
 	ExplicitRelayURLs []string
 	// ActiveRelayURLs holds currently active connected relay URLs to enable

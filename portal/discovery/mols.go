@@ -201,6 +201,8 @@ func selectConfirmed(states []RelayState) []RelayState {
 	return out
 }
 
+// RankRelayPool ranks the autoPool of relay states using MOLS selection for the given local address.
+// The returned slice contains relay URLs ordered by MOLS-derived priority with saturation partitioning.
 func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 	if len(autoPool) == 0 {
 		return nil

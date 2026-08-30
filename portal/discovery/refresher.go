@@ -25,11 +25,13 @@ const (
 	maxConcurrentOverlayDial = 8
 )
 
+// OverlayRuntime defines the interface for relay discovery and overlay peer synchronization.
 type OverlayRuntime interface {
 	DiscoverRelay(context.Context, types.RelayDescriptor) (types.DiscoveryResponse, error)
 	Sync([]types.RelayDescriptor) error
 }
 
+// Refresher periodically polls relay discovery endpoints and updates the relay set.
 type Refresher struct {
 	relaySet               *RelaySet
 	httpClient             *http.Client
@@ -39,6 +41,7 @@ type Refresher struct {
 	lastAnnounceMu         sync.Mutex
 }
 
+// NewRefresher creates a new Refresher for the given relay set and overlay runtime.
 func NewRefresher(relaySet *RelaySet, overlay OverlayRuntime) *Refresher {
 	return &Refresher{
 		relaySet: relaySet,
