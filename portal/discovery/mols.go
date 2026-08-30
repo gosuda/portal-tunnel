@@ -35,6 +35,7 @@ const (
 	molsFallbackRTTThreshold   = 2 * time.Second
 	molsMinActiveNodes         = 2
 	defaultMaxActiveRelays     = 3
+	molsP2CPressureDelta       = 0.3
 )
 
 func molsScore(i, j, m1, m2, order int) int {
@@ -105,7 +106,8 @@ func molsCongestionScore(i, j, m1, m2, order int) int {
 	return (order*order + 1) - molsScore(i, (order-1)-j, m1, m2, order)
 }
 
-// hashToGridIndex maps an identity string to a stable FNV-1a hash. Callers
+// hashToGridIndex maps an identity string to a stable FNV-1a hash with a 2nd-stage
+// bit-mixing cascade (avalanche diffusion to eliminate clustering). Callers
 // fold it into the current grid order with % order; the folded index is not
 // stable across orders, so it is recomputed whenever the pool size changes.
 func hashToGridIndex(s string) uint32 {
@@ -114,6 +116,11 @@ func hashToGridIndex(s string) uint32 {
 		h ^= uint32(s[i])
 		h *= 16777619
 	}
+	h ^= h >> 16
+	h *= 0x85ebca6b
+	h ^= h >> 13
+	h *= 0xc2b2ae35
+	h ^= h >> 16
 	return h
 }
 
@@ -286,16 +293,32 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 			return 0
 		})
 
-		tierOut := make([]string, 0, len(candidates))
-		for _, candidate := range candidates {
-			if !candidate.state.IsSaturated {
-				tierOut = append(tierOut, candidate.state.Descriptor.APIHTTPSAddr)
-			}
-		}
+		var nonSaturated []molsCandidate
+		var saturated []molsCandidate
 		for _, candidate := range candidates {
 			if candidate.state.IsSaturated {
-				tierOut = append(tierOut, candidate.state.Descriptor.APIHTTPSAddr)
+				saturated = append(saturated, candidate)
+			} else {
+				nonSaturated = append(nonSaturated, candidate)
 			}
+		}
+
+		// P2C pressure optimization: If candidate 0 has significantly higher
+		// pressure than candidate 1, swap them to relieve node pressure without herd effect.
+		if len(nonSaturated) >= 2 {
+			p0 := nonSaturated[0].state.Pressure()
+			p1 := nonSaturated[1].state.Pressure()
+			if p0-p1 > molsP2CPressureDelta {
+				nonSaturated[0], nonSaturated[1] = nonSaturated[1], nonSaturated[0]
+			}
+		}
+
+		tierOut := make([]string, 0, len(candidates))
+		for _, candidate := range nonSaturated {
+			tierOut = append(tierOut, candidate.state.Descriptor.APIHTTPSAddr)
+		}
+		for _, candidate := range saturated {
+			tierOut = append(tierOut, candidate.state.Descriptor.APIHTTPSAddr)
 		}
 		return tierOut
 	}
@@ -327,8 +350,41 @@ func SelectPriority(states []RelayState, routeState RouteState) []string {
 	if maxActive <= 0 {
 		maxActive = defaultMaxActiveRelays
 	}
-	if len(auto) > maxActive {
-		auto = auto[:maxActive]
-	}
+	auto = applyActiveStickiness(auto, routeState.ActiveRelayURLs, maxActive)
 	return append(explicit, auto...)
+}
+
+// applyActiveStickiness preserves currently active relays that remain in the
+// ranked eligible pool to avoid connection churn.
+func applyActiveStickiness(ranked []string, activeRelayURLs []string, maxActive int) []string {
+	if len(activeRelayURLs) == 0 || len(ranked) <= maxActive {
+		if len(ranked) > maxActive {
+			return ranked[:maxActive]
+		}
+		return ranked
+	}
+	activeSet := make(map[string]struct{}, len(activeRelayURLs))
+	for _, u := range activeRelayURLs {
+		activeSet[u] = struct{}{}
+	}
+	selected := make([]string, 0, maxActive)
+	for _, u := range ranked {
+		if _, isActive := activeSet[u]; isActive {
+			selected = append(selected, u)
+			if len(selected) == maxActive {
+				break
+			}
+		}
+	}
+	if len(selected) < maxActive {
+		for _, u := range ranked {
+			if !slices.Contains(selected, u) {
+				selected = append(selected, u)
+				if len(selected) == maxActive {
+					break
+				}
+			}
+		}
+	}
+	return selected
 }

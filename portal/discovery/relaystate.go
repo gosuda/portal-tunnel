@@ -200,6 +200,22 @@ func (state *RelayState) EvaluateSaturation() {
 	state.IsSaturated = saturated == 1
 }
 
+// Pressure computes the normalized pressure index using tail latency ratio
+// (P90/P50 inflation) and load momentum (EWMALoad + beta * LoadDelta).
+func (state RelayState) Pressure() float64 {
+	p50 := float64(state.RTTTracker.Get(0.50))
+	p90 := float64(state.RTTTracker.Get(0.90))
+
+	var tailInflation float64
+	if p50 > 0 && p90 > p50 {
+		tailInflation = (p90 - p50) / p50
+	}
+
+	const beta = 0.5
+	loadMomentum := state.EWMALoad + (beta * state.LoadDelta)
+	return tailInflation + loadMomentum
+}
+
 func (state *RelayState) UpdateEWMARTT(newRTT time.Duration) {
 	const alpha = 0.3
 	state.RTTDelta = absDuration(newRTT - state.DiscoveryRTT)
@@ -252,6 +268,9 @@ func (state RelayState) eligibleForMultiHop(routeState RouteState, now time.Time
 
 type RouteState struct {
 	ExplicitRelayURLs []string
+	// ActiveRelayURLs holds currently active connected relay URLs to enable
+	// connection-level stickiness and prevent listener churn during ranking updates.
+	ActiveRelayURLs []string
 	// MaxActiveRelays caps auto-selected listener entries. Zero or negative
 	// values use the selection default of 3. Multi-hop paths may use further
 	// eligible relays as non-entry hops.

@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -99,6 +100,77 @@ func TestMOLSSelectPriorityKeepsUnobservedAutoSeed(t *testing.T) {
 	selected := SelectPriority([]RelayState{bootstrapRelayState(relayURL)}, RouteState{})
 	if len(selected) != 1 || selected[0] != relayURL {
 		t.Fatalf("SelectPriority(unobserved seed) = %v, want [%q]", selected, relayURL)
+	}
+}
+
+func TestHashToGridIndexDistribution(t *testing.T) {
+	const buckets = 7
+	counts := make(map[int]int, buckets)
+	for i := 0; i < 1000; i++ {
+		addr := fmt.Sprintf("192.168.1.%d:8080", i)
+		idx := int(hashToGridIndex(addr) % buckets)
+		counts[idx]++
+	}
+	// Every bucket must receive at least some items without starving
+	for b := 0; b < buckets; b++ {
+		if counts[b] == 0 {
+			t.Errorf("bucket %d received 0 items", b)
+		}
+	}
+}
+
+func TestMOLSP2CPressurePromotion(t *testing.T) {
+	relayA := confirmedRelayState(t, "https://relay-a.example")
+	relayB := confirmedRelayState(t, "https://relay-b.example")
+
+	// relayA: High load momentum and tail inflation (P90=100ms, P50=10ms)
+	relayA.LoadFactor = 0.75
+	relayA.EWMALoad = 0.75
+	relayA.LoadDelta = 0.2
+	for i := 0; i < 90; i++ {
+		relayA.RTTTracker.Add(10 * time.Millisecond)
+	}
+	for i := 0; i < 10; i++ {
+		relayA.RTTTracker.Add(100 * time.Millisecond)
+	}
+
+	// relayB: Low load and uniform RTT (P90=20ms, P50=20ms)
+	relayB.LoadFactor = 0.1
+	relayB.EWMALoad = 0.1
+	for i := 0; i < 100; i++ {
+		relayB.RTTTracker.Add(20 * time.Millisecond)
+	}
+
+	if relayA.Pressure() <= relayB.Pressure()+molsP2CPressureDelta {
+		t.Fatalf("relayA pressure (%.2f) should exceed relayB pressure (%.2f) + delta (%.2f)",
+			relayA.Pressure(), relayB.Pressure(), molsP2CPressureDelta)
+	}
+}
+
+func TestMOLSSelectPriorityActiveStickiness(t *testing.T) {
+	relays := make([]RelayState, 10)
+	for i := range relays {
+		relays[i] = confirmedRelayState(t, fmt.Sprintf("https://relay-stick-%d.example", i))
+	}
+
+	// First selection without active relays
+	firstPick := SelectPriority(relays, RouteState{MaxActiveRelays: 2})
+	if len(firstPick) != 2 {
+		t.Fatalf("len(firstPick) = %d, want 2", len(firstPick))
+	}
+
+	// Suppose relay 9 was currently connected and is healthy
+	activeRelay := "https://relay-stick-9.example"
+	secondPick := SelectPriority(relays, RouteState{
+		ActiveRelayURLs: []string{activeRelay},
+		MaxActiveRelays: 2,
+	})
+
+	if len(secondPick) != 2 {
+		t.Fatalf("len(secondPick) = %d, want 2", len(secondPick))
+	}
+	if !slices.Contains(secondPick, activeRelay) {
+		t.Fatalf("secondPick %v should contain activeRelay %q due to stickiness", secondPick, activeRelay)
 	}
 }
 

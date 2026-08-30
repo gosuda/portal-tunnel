@@ -491,9 +491,7 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 	if maxActive <= 0 {
 		maxActive = defaultMaxActiveRelays
 	}
-	if len(ranked) > maxActive {
-		ranked = ranked[:maxActive]
-	}
+	ranked = applyActiveStickiness(ranked, routeState.ActiveRelayURLs, maxActive)
 	routes := make([]Route, 0, len(ranked)+len(routeState.ExplicitRelayURLs))
 	for _, relayURL := range routeState.ExplicitRelayURLs {
 		eligible := true
