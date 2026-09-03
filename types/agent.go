@@ -1,6 +1,5 @@
 package types
 
-// AgentStatusResponse contains the current status of the portal-tunnel agent daemon.
 type AgentStatusResponse struct {
 	ConfigPath    string              `json:"config_path,omitempty"`
 	ControlAddr   string              `json:"control_addr"`
@@ -8,7 +7,6 @@ type AgentStatusResponse struct {
 	Tunnels       []AgentTunnelStatus `json:"tunnels,omitempty"`
 }
 
-// AgentTunnelStatus represents the runtime state of a single managed tunnel.
 type AgentTunnelStatus struct {
 	ID              string             `json:"id"`
 	Name            string             `json:"name,omitempty"`
@@ -30,7 +28,6 @@ type AgentTunnelStatus struct {
 	Relays          []AgentRelayStatus `json:"relays,omitempty"`
 }
 
-// AgentHTTPRoute defines an HTTP routing rule for paid or public endpoints.
 type AgentHTTPRoute struct {
 	Prefix   string   `json:"prefix"`
 	Upstream string   `json:"upstream"`
@@ -38,7 +35,6 @@ type AgentHTTPRoute struct {
 	Amount   string   `json:"amount,omitempty"`
 }
 
-// AgentRelayStatus reports the connection state and capabilities of a relay.
 type AgentRelayStatus struct {
 	RelayURL        string `json:"relay_url"`
 	PublicURL       string `json:"public_url,omitempty"`
@@ -52,7 +48,6 @@ type AgentRelayStatus struct {
 	SupportsTCP     bool   `json:"supports_tcp"`
 }
 
-// AgentTunnelRequest describes a tunnel configuration submitted to the agent API.
 type AgentTunnelRequest struct {
 	ID              string           `json:"id"`
 	Name            string           `json:"name,omitempty"`
@@ -69,17 +64,14 @@ type AgentTunnelRequest struct {
 	X402Endpoints   []string         `json:"x402_endpoints,omitempty"`
 }
 
-// AgentRelayRequest identifies a relay by URL for add/remove operations.
 type AgentRelayRequest struct {
 	RelayURL string `json:"relay_url"`
 }
 
-// AgentMultiHopRequest configures explicit multi-hop relay paths.
 type AgentMultiHopRequest struct {
 	Relays []string `json:"relays"`
 }
 
-// AgentTunnelUpdateRequest applies partial updates to a running tunnel's configuration.
 type AgentTunnelUpdateRequest struct {
 	MaxActiveRelays *int                  `json:"max_active_relays,omitempty"`
 	Metadata        *AgentMetadataRequest `json:"metadata,omitempty"`
@@ -90,7 +82,6 @@ func (r AgentTunnelUpdateRequest) Empty() bool {
 		(r.Metadata == nil || r.Metadata.Empty())
 }
 
-// AgentMetadataRequest holds partial metadata updates for a tunnel.
 type AgentMetadataRequest struct {
 	Description *string   `json:"description,omitempty"`
 	Owner       *string   `json:"owner,omitempty"`

@@ -61,7 +61,6 @@ const (
 	RelayVerified
 )
 
-// PercentileTracker tracks RTT samples and computes percentiles for relay latency analysis.
 type PercentileTracker struct {
 	samples []float64
 }
@@ -85,7 +84,6 @@ func (pt *PercentileTracker) Get(p float64) time.Duration {
 	return time.Duration(val)
 }
 
-// RelayState holds runtime telemetry and eligibility state for a single relay.
 type RelayState struct {
 	Descriptor types.RelayDescriptor
 	Bootstrap  bool
@@ -147,7 +145,6 @@ func (state RelayState) effectiveRTT() time.Duration {
 	return rtt
 }
 
-// fixedLoad converts a floating-point load factor to a fixed-point integer scaled by relayMetricScale.
 func fixedLoad(load float64) uint32 {
 	if load <= 0 {
 		return 0
@@ -186,7 +183,6 @@ func (state *RelayState) UpdateLoad(loadFixed uint32) {
 	state.StoreLoadFactor(loadFixed)
 }
 
-// inheritAdaptiveTelemetry copies adaptive telemetry state from an existing relay entry to preserve load and RTT history.
 func (state *RelayState) inheritAdaptiveTelemetry(existing RelayState) {
 	load := atomic.LoadUint32(&existing.loadFixed)
 	if load == 0 && existing.LoadFactor != 0 {
@@ -260,7 +256,6 @@ func absDuration(value time.Duration) time.Duration {
 	return value
 }
 
-// newRelayState creates a minimal RelayState with the given relay URL.
 func newRelayState(relayURL string) RelayState {
 	return RelayState{
 		Descriptor: types.RelayDescriptor{
@@ -269,7 +264,6 @@ func newRelayState(relayURL string) RelayState {
 	}
 }
 
-// hasObservedDescriptor reports whether a relay descriptor has been observed via discovery.
 func (state RelayState) hasObservedDescriptor() bool {
 	return !state.LastSeenAt.IsZero()
 }
@@ -287,7 +281,6 @@ func (state RelayState) eligibleForMultiHop(routeState RouteState, now time.Time
 		(state.nextDiscoveryRefreshAt.IsZero() || !state.nextDiscoveryRefreshAt.After(now))
 }
 
-// RouteState describes the client's routing requirements for relay selection.
 type RouteState struct {
 	ExplicitRelayURLs []string
 	// ActiveRelayURLs holds currently active connected relay URLs to enable
@@ -308,7 +301,6 @@ type RouteState struct {
 	SelectionEpoch uint64
 }
 
-// supportsRequiredTransports reports whether the relay supports the UDP and TCP transports required by the route.
 func (state RelayState) supportsRequiredTransports(routeState RouteState, now time.Time) bool {
 	if !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) {
 		return true

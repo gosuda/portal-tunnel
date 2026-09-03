@@ -67,7 +67,6 @@ const (
 	upsertIgnored
 )
 
-// NewRelaySet creates a new RelaySet initialized with the given bootstrap relay URLs.
 func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 	set := &RelaySet{
 		relays:   make(map[string]RelayState),
@@ -392,13 +391,11 @@ func (s *RelaySet) ConfirmedRelays() []RelayState {
 	return selectConfirmed(s.currentRelayStates(time.Now().UTC()))
 }
 
-// Route represents a planned relay path with optional multi-hop routing.
 type Route struct {
 	path     []string
 	explicit bool
 }
 
-// NewRoute creates a new Route with the given path and explicit flag.
 func NewRoute(path []string, explicit bool) Route {
 	return Route{
 		path:     append([]string(nil), path...),

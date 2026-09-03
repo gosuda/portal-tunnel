@@ -18,7 +18,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// APIErrorResponse represents a structured API error for HTTP responses.
 type APIErrorResponse struct {
 	Status  int
 	Code    string
@@ -29,14 +28,12 @@ func (resp APIErrorResponse) Write(w http.ResponseWriter) {
 	WriteAPIError(w, resp.Status, resp.Code, resp.Message)
 }
 
-// WriteAPIData writes a successful API response with JSON-encoded data.
 func WriteAPIData(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(types.APIEnvelope[any]{OK: true, Data: data})
 }
 
-// WriteAPIError writes an API error response with the given status code and error details.
 func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -46,7 +43,6 @@ func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-// WritePaymentJSON writes a JSON response for x402 payment interactions.
 func WritePaymentJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -54,7 +50,6 @@ func WritePaymentJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-// SetPaymentResponseHeaders sets x402 payment response headers with the settlement data.
 func SetPaymentResponseHeaders(header http.Header, settled *facilitatortypes.PaymentSettleResponse) {
 	if header == nil || settled == nil {
 		return
@@ -68,7 +63,6 @@ func SetPaymentResponseHeaders(header http.Header, settled *facilitatortypes.Pay
 	header.Set(types.HeaderXPaymentResponse, encoded)
 }
 
-// StripPaymentHeaders removes all x402 payment headers from the given header map.
 func StripPaymentHeaders(header http.Header) {
 	header.Del(types.HeaderXPayment)
 	header.Del(types.HeaderPaymentSignature)
@@ -78,7 +72,6 @@ func StripPaymentHeaders(header http.Header) {
 	header.Del(types.HeaderXPaymentResponse)
 }
 
-// HandleAPICORS handles CORS preflight requests and sets CORS headers.
 func HandleAPICORS(w http.ResponseWriter, r *http.Request) bool {
 	header := w.Header()
 	header.Set("Access-Control-Allow-Origin", "*")
@@ -92,7 +85,6 @@ func HandleAPICORS(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// MethodNotAllowedError returns a standard HTTP 405 Method Not Allowed error response.
 func MethodNotAllowedError() APIErrorResponse {
 	return APIErrorResponse{
 		Status:  http.StatusMethodNotAllowed,
@@ -101,7 +93,6 @@ func MethodNotAllowedError() APIErrorResponse {
 	}
 }
 
-// InvalidRequestError wraps an error into an HTTP 400 Bad Request response.
 func InvalidRequestError(err error) APIErrorResponse {
 	return APIErrorResponse{
 		Status:  http.StatusBadRequest,
@@ -110,7 +101,6 @@ func InvalidRequestError(err error) APIErrorResponse {
 	}
 }
 
-// RequireMethod validates that the request uses the specified HTTP method and writes an error if not.
 func RequireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	if r.Method == method {
 		return true
@@ -145,7 +135,6 @@ func PublicURLForPath(r *http.Request, path string) string {
 	return scheme + "://" + host + path
 }
 
-// ResolveAPIURL resolves a relative API path against a base URL.
 func ResolveAPIURL(baseURL *url.URL, path string) *url.URL {
 	ref := &url.URL{Path: path}
 	if baseURL == nil {
@@ -171,7 +160,6 @@ func httpDo(ctx context.Context, client *http.Client, method, rawURL string, bod
 	return client.Do(req)
 }
 
-// HTTPDoJSON performs an HTTP request with JSON payload and decodes the JSON response.
 func HTTPDoJSON(ctx context.Context, client *http.Client, method, rawURL string, payload any, headers http.Header, out any) error {
 	body, reqHeaders, err := httpJSONRequest(payload, headers)
 	if err != nil {
@@ -190,7 +178,6 @@ func HTTPDoJSON(ctx context.Context, client *http.Client, method, rawURL string,
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// HTTPDoAPIPath performs an HTTP request to a path relative to the base URL with JSON payload.
 func HTTPDoAPIPath(ctx context.Context, client *http.Client, baseURL *url.URL, method, path string, payload any, headers http.Header, out any) error {
 	body, reqHeaders, err := httpJSONRequest(payload, headers)
 	if err != nil {
@@ -221,7 +208,6 @@ func HTTPDoAPIPath(ctx context.Context, client *http.Client, baseURL *url.URL, m
 	return nil
 }
 
-// DecodeAPIData decodes an API envelope response body into the output value.
 func DecodeAPIData(body []byte, out any) error {
 	var envelope types.APIEnvelope[json.RawMessage]
 	if err := json.Unmarshal(body, &envelope); err != nil {
@@ -242,7 +228,6 @@ func DecodeAPIData(body []byte, out any) error {
 	return json.Unmarshal(envelope.Data, out)
 }
 
-// DecodeAPIRequestError decodes an HTTP error response into an APIRequestError.
 func DecodeAPIRequestError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	var envelope types.APIEnvelope[json.RawMessage]
@@ -266,7 +251,6 @@ func DecodeAPIRequestError(resp *http.Response) error {
 	}
 }
 
-// DecodeJSONRequest decodes a JSON request body into the specified type and writes errors to the response.
 func DecodeJSONRequest[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (T, bool) {
 	dst, err := decodeJSONRequestBody[T](w, r, maxBytes)
 	if err != nil {
@@ -279,7 +263,6 @@ func DecodeJSONRequest[T any](w http.ResponseWriter, r *http.Request, maxBytes i
 	return dst, true
 }
 
-// DecodeJSONRequestAs decodes a JSON request body with a custom error response for invalid JSON.
 func DecodeJSONRequestAs[T any](w http.ResponseWriter, r *http.Request, maxBytes int64, invalid APIErrorResponse) (T, bool) {
 	dst, err := decodeJSONRequestBody[T](w, r, maxBytes)
 	if err != nil {
