@@ -343,6 +343,18 @@ func RankRelayPool(autoPool []RelayState, localAddress string, epoch uint64) []s
 	return append(activeURLs, fallbackURLs...)
 }
 
+// Selection Policy Hierarchy (Canonized Invariants):
+//
+//	Stage 1 - Eligibility: Drop dead, banned, expired, or transport-mismatched relays (filterCandidatePool).
+//	Stage 2 - Hard Health Gate: Partition relays into Active vs Fallback tiers (effectiveRTT > 2s).
+//	          Saturated relays are demoted behind all non-saturated candidates within each tier.
+//	Stage 3 - P2C Pressure Choice: Local comparison between candidate 0 and 1 in the active tier.
+//	          If p0 - p1 > molsP2CPressureDelta, swap 0 and 1 to balance surging queues.
+//	Stage 4 - Asymmetric Stickiness: Retain currently active listener connections ONLY if they remain in the healthy tier
+//	          (non-saturated and non-fallback). Saturated or failing relays are strictly evicted without zombie resurrection.
+//	Stage 5 - Deterministic MOLS Geometry: Structural Latin-square spreading acts as the underlying anchor,
+//	          with SelectionEpoch salt providing deterministic rotation across connection retry cycles.
+//
 // SelectPriority returns the ordered relay URLs for a client using MOLS selection with explicit relays prepended.
 func SelectPriority(states []RelayState, routeState RouteState) []string {
 	if len(states) == 0 {

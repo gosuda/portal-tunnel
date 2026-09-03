@@ -3,6 +3,7 @@ package discovery
 import (
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -369,6 +370,133 @@ func TestMOLSP2CLocalChoiceTopTwo(t *testing.T) {
 	// Verify that the result contains all 3 and preserves valid pool ordering
 	if ranked[0] == "https://relay-0.example" && r0.Pressure()-r1.Pressure() > molsP2CPressureDelta {
 		t.Fatalf("relay-0 should have been swapped with relay-1 due to P2C local choice")
+	}
+}
+
+func TestMOLSP2CActiveSetMembershipChange(t *testing.T) {
+	now := time.Now().UTC()
+
+	// r0 is initially preferred by MOLS over r1
+	r0 := confirmedRelayState(t, "https://relay-0.example")
+	r0.DiscoveryRTT = 25 * time.Millisecond
+	r0.DiscoveryRTTAt = now
+
+	r1 := confirmedRelayState(t, "https://relay-1.example")
+	r1.DiscoveryRTT = 30 * time.Millisecond
+	r1.DiscoveryRTTAt = now
+
+	// Baseline: under balanced loads, MOLS order decides the initial winner and loser
+	relaysBaseline := []RelayState{r0, r1}
+	basePicks := RankRelayPool(relaysBaseline, "client-addr", 0)
+	if len(basePicks) < 2 {
+		t.Fatalf("expected at least 2 ranked picks, got %d", len(basePicks))
+	}
+	initialWinner := basePicks[0]
+	initialLoser := basePicks[1]
+
+	var winnerState, loserState RelayState
+	if r0.Descriptor.APIHTTPSAddr == initialWinner {
+		winnerState = r0
+		loserState = r1
+	} else {
+		winnerState = r1
+		loserState = r0
+	}
+
+	// Overload the initial winner with surging load and tail inflation
+	winnerOverloaded := winnerState
+	winnerOverloaded.LoadFactor = 0.75
+	winnerOverloaded.EWMALoad = 0.75
+	winnerOverloaded.LoadDelta = 0.35
+	for i := 0; i < 90; i++ {
+		winnerOverloaded.RTTTracker.Add(10 * time.Millisecond)
+	}
+	for i := 0; i < 10; i++ {
+		winnerOverloaded.RTTTracker.Add(150 * time.Millisecond)
+	}
+
+	loserIdle := loserState
+	loserIdle.LoadFactor = 0.10
+	loserIdle.EWMALoad = 0.10
+
+	relaysLoaded := []RelayState{winnerOverloaded, loserIdle}
+	// Under MaxActiveRelays = 1, P2C swap MUST replace the active-set member from winner to loser
+	newPicks := SelectPriority(relaysLoaded, RouteState{
+		MaxActiveRelays: 1,
+		LocalAddress:    "client-addr",
+	})
+	if len(newPicks) != 1 {
+		t.Fatalf("expected 1 pick, got %d", len(newPicks))
+	}
+	if newPicks[0] == initialWinner {
+		t.Fatalf("P2C failed to change active set membership: overloaded relay %s remained active", initialWinner)
+	}
+	if newPicks[0] != initialLoser {
+		t.Fatalf("expected initial loser %s to take the active slot, got %s", initialLoser, newPicks[0])
+	}
+}
+
+func TestMOLSConcurrentRefreshAndFailureLifecycle(t *testing.T) {
+	now := time.Now().UTC()
+	set := NewRelaySet(nil)
+	const numRelays = 6
+
+	for i := 0; i < numRelays; i++ {
+		u := fmt.Sprintf("https://relay-conc-%d.example", i)
+		st := confirmedRelayState(t, u)
+		st.Descriptor.SupportsOverlay = true
+		st.Descriptor.WireGuardPublicKey = fmt.Sprintf("wg-key-%d", i)
+		st.Descriptor.WireGuardPort = 51820
+		st.Descriptor.ExpiresAt = now.Add(time.Hour)
+		st.LastSeenAt = now
+		set.relays[u] = st
+	}
+
+	failingRelay := "https://relay-conc-0.example"
+	var wg sync.WaitGroup
+
+	// Concurrently plan routes (multi-hop and single-hop)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				routes, err := set.PlanRoutes(nil, RouteState{
+					MultiHopDepth:   2,
+					MaxActiveRelays: 2,
+					LocalAddress:    fmt.Sprintf("client-%d-%d", id, j),
+				})
+				if err == nil && len(routes) > 0 {
+					_ = routes[0].ListenerRelayURL()
+				}
+			}
+		}(i)
+	}
+
+	// Concurrently record failures on the failing relay
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			set.RecordActiveFailure(failingRelay, 0)
+		}
+	}()
+
+	wg.Wait()
+
+	// After 10 consecutive failures, failingRelay should have accumulated significant
+	// virtual latency penalty and should be demoted, not appearing in top active routes.
+	routes, err := set.PlanRoutes(nil, RouteState{
+		MaxActiveRelays: 2,
+		LocalAddress:    "client-verify",
+	})
+	if err != nil {
+		t.Fatalf("PlanRoutes failed: %v", err)
+	}
+	for _, r := range routes {
+		if r.ListenerRelayURL() == failingRelay {
+			t.Fatalf("failing relay %s should not be active after repeated failures", failingRelay)
+		}
 	}
 }
 
