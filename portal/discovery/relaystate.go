@@ -126,7 +126,24 @@ const (
 	relayMetricScale         = 10000
 	relaySaturationEnterLoad = 8000
 	relaySaturationExitLoad  = 6000
+
+	failurePenaltyRTT = 300 * time.Millisecond
+	maxFailurePenalty = 3 * time.Second
 )
+
+// effectiveRTT computes the relay's RTT with a virtual latency penalty applied for active and discovery failures.
+func (state RelayState) effectiveRTT() time.Duration {
+	rtt := state.DiscoveryRTT
+	failures := state.activeFailures + state.discoveryFailures
+	if failures > 0 {
+		penalty := time.Duration(failures) * failurePenaltyRTT
+		if penalty > maxFailurePenalty {
+			penalty = maxFailurePenalty
+		}
+		rtt += penalty
+	}
+	return rtt
+}
 
 func fixedLoad(load float64) uint32 {
 	if load <= 0 {
@@ -147,12 +164,17 @@ func (state *RelayState) StoreLoadFactor(loadFixed uint32) {
 	state.LoadFactor = float64(loadFixed) / relayMetricScale
 }
 
+// UpdateLoad updates the relay's load telemetry with exponential weighted moving average and positive delta tracking.
 func (state *RelayState) UpdateLoad(loadFixed uint32) {
 	if loadFixed > relayMetricScale {
 		loadFixed = relayMetricScale
 	}
 	load := float64(loadFixed) / relayMetricScale
-	state.LoadDelta = absFloat(load - state.LoadFactor)
+	delta := load - state.LoadFactor
+	if delta < 0 {
+		delta = 0
+	}
+	state.LoadDelta = delta
 	if state.EWMALoad == 0 {
 		state.EWMALoad = load
 	} else {
@@ -200,6 +222,22 @@ func (state *RelayState) EvaluateSaturation() {
 	state.IsSaturated = saturated == 1
 }
 
+// Pressure computes the normalized pressure index using tail latency ratio
+// (P90/P50 inflation) and load momentum (EWMALoad + beta * LoadDelta).
+func (state RelayState) Pressure() float64 {
+	p50 := float64(state.RTTTracker.Get(0.50))
+	p90 := float64(state.RTTTracker.Get(0.90))
+
+	var tailInflation float64
+	if p50 > 0 && p90 > p50 {
+		tailInflation = (p90 - p50) / p50
+	}
+
+	const beta = 0.5
+	loadMomentum := state.EWMALoad + (beta * state.LoadDelta)
+	return tailInflation + loadMomentum
+}
+
 func (state *RelayState) UpdateEWMARTT(newRTT time.Duration) {
 	const alpha = 0.3
 	state.RTTDelta = absDuration(newRTT - state.DiscoveryRTT)
@@ -212,13 +250,6 @@ func (state *RelayState) UpdateEWMARTT(newRTT time.Duration) {
 }
 
 func absDuration(value time.Duration) time.Duration {
-	if value < 0 {
-		return -value
-	}
-	return value
-}
-
-func absFloat(value float64) float64 {
 	if value < 0 {
 		return -value
 	}
@@ -252,6 +283,9 @@ func (state RelayState) eligibleForMultiHop(routeState RouteState, now time.Time
 
 type RouteState struct {
 	ExplicitRelayURLs []string
+	// ActiveRelayURLs holds currently active connected relay URLs to enable
+	// connection-level stickiness and prevent listener churn during ranking updates.
+	ActiveRelayURLs []string
 	// MaxActiveRelays caps auto-selected listener entries. Zero or negative
 	// values use the selection default of 3. Multi-hop paths may use further
 	// eligible relays as non-entry hops.
@@ -262,6 +296,9 @@ type RouteState struct {
 	// LocalAddress is the ingress identity address used by MOLS route selection to
 	// derive a deterministic row index into the MOLS grid.
 	LocalAddress string
+	// SelectionEpoch allows rotating the deterministic MOLS ranking across retry cycles
+	// or time epochs to escape pathological node pairings.
+	SelectionEpoch uint64
 }
 
 func (state RelayState) supportsRequiredTransports(routeState RouteState, now time.Time) bool {

@@ -706,6 +706,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	cfg := e.Config()
 	routes, err := e.relaySet.PlanRoutes(append([]string(nil), cfg.MultiHop...), discovery.RouteState{
 		ExplicitRelayURLs: append([]string(nil), cfg.RelayURLs...),
+		ActiveRelayURLs:   e.ActiveRelayURLs(),
 		MaxActiveRelays:   cfg.MaxActiveRelays,
 		MultiHopDepth:     cfg.MultiHopDepth,
 		RequireUDP:        cfg.UDPEnabled,

@@ -21,6 +21,7 @@ import (
 	"cmp"
 	"math"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -31,14 +32,41 @@ const (
 	molsVariantM2 uint8 = 11
 
 	molsCongestionRTTThreshold = 500 * time.Millisecond
-	molsCVThreshold            = 0.5
+	molsCVThreshold            = 0.6
 	molsFallbackRTTThreshold   = 2 * time.Second
 	molsMinActiveNodes         = 2
 	defaultMaxActiveRelays     = 3
+	molsP2CPressureDelta       = 0.3
 )
 
-func molsScore(i, j, m1, m2, order int) int {
-	return ((m1*i+j)%order)*order + ((m2*i + j) % order) + 1
+// molsScore computes the MOLS grid score for position (i, j) using multipliers m1 and m2.
+// When m1 and m2 form a valid orthogonal pair, the client's 2D grid coordinates (row, col)
+// project target positions across both Latin squares:
+//
+//	Square 1 (m1): Primary target t1 = (m1*row + col) % order
+//	Square 2 (m2): Secondary target t2 = (m2*row + col) % order
+//
+// Relay column j receives its ranking score via proximity to both targets, ensuring
+// that displaced clients disperse across diverse secondary nodes rather than collapsing
+// onto a single cyclic successor (herd elimination).
+func molsScore(row, col, j, m1, m2, order int, ok bool) int {
+	if !ok || order <= 1 {
+		return ((m1*row+j)%order)*order + 1
+	}
+	t1 := (m1*row + col) % order
+	t2 := (m2*row + col) % order
+
+	d1 := (j - t1 + order) % order
+	d2 := (j - t2 + order) % order
+
+	bonus := 0
+	if j == t1 {
+		bonus += 2 * order * order
+	}
+	if j == t2 {
+		bonus += order * order
+	}
+	return bonus + (order-d1)*order + (order - d2) + 1
 }
 
 // molsPairValid reports whether m1, m2, and m1-m2 are all coprime to order,
@@ -101,11 +129,14 @@ func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
 	return 1, 1, false
 }
 
-func molsCongestionScore(i, j, m1, m2, order int) int {
-	return (order*order + 1) - molsScore(i, (order-1)-j, m1, m2, order)
+// molsCongestionScore inverts the MOLS score to prioritize low-latency relays during congestion.
+func molsCongestionScore(row, col, j, m1, m2, order int, ok bool) int {
+	maxScore := 3*order*order + order*order + order + 1
+	return maxScore - molsScore(row, col, (order-1)-j, m1, m2, order, ok)
 }
 
-// hashToGridIndex maps an identity string to a stable FNV-1a hash. Callers
+// hashToGridIndex maps an identity string to a stable FNV-1a hash with a 2nd-stage
+// bit-mixing cascade (avalanche diffusion to eliminate clustering). Callers
 // fold it into the current grid order with % order; the folded index is not
 // stable across orders, so it is recomputed whenever the pool size changes.
 func hashToGridIndex(s string) uint32 {
@@ -114,9 +145,15 @@ func hashToGridIndex(s string) uint32 {
 		h ^= uint32(s[i])
 		h *= 16777619
 	}
+	h ^= h >> 16
+	h *= 0x85ebca6b
+	h ^= h >> 13
+	h *= 0xc2b2ae35
+	h ^= h >> 16
 	return h
 }
 
+// molsRTTStats computes the mean RTT and coefficient of variation across relay states.
 func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
 	var count int
 	var sum float64
@@ -125,7 +162,7 @@ func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
 			continue
 		}
 		count++
-		sum += float64(state.DiscoveryRTT)
+		sum += float64(state.effectiveRTT())
 	}
 	if count == 0 {
 		return 0, 0
@@ -139,7 +176,7 @@ func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
 		if state.DiscoveryRTTAt.IsZero() {
 			continue
 		}
-		d := float64(state.DiscoveryRTT) - avg
+		d := float64(state.effectiveRTT()) - avg
 		sq += d * d
 	}
 	stddev := math.Sqrt(sq / float64(count))
@@ -149,8 +186,9 @@ func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
 	return time.Duration(avg), cv
 }
 
+// isRelayFallback reports whether the relay's effective RTT exceeds the fallback threshold.
 func isRelayFallback(state RelayState) bool {
-	return !state.DiscoveryRTTAt.IsZero() && state.DiscoveryRTT > molsFallbackRTTThreshold
+	return !state.DiscoveryRTTAt.IsZero() && state.effectiveRTT() > molsFallbackRTTThreshold
 }
 
 type molsCandidate struct {
@@ -159,6 +197,7 @@ type molsCandidate struct {
 	seq   int
 }
 
+// betterMOLSCandidate reports whether candidate a should be ranked higher than b using MOLS score and tiebreakers.
 func betterMOLSCandidate(a, b molsCandidate) bool {
 	if a.score != b.score {
 		return a.score > b.score
@@ -174,6 +213,7 @@ func betterMOLSCandidate(a, b molsCandidate) bool {
 	return a.seq < b.seq
 }
 
+// selectAggregate filters relay states to exclude banned relays.
 func selectAggregate(states []RelayState) []RelayState {
 	out := make([]RelayState, 0, len(states))
 	for _, state := range states {
@@ -184,6 +224,7 @@ func selectAggregate(states []RelayState) []RelayState {
 	return out
 }
 
+// selectConfirmed filters relay states to include only confirmed relays.
 func selectConfirmed(states []RelayState) []RelayState {
 	out := make([]RelayState, 0)
 	for _, state := range states {
@@ -194,7 +235,9 @@ func selectConfirmed(states []RelayState) []RelayState {
 	return out
 }
 
-func RankRelayPool(autoPool []RelayState, localAddress string) []string {
+// RankRelayPool ranks the autoPool of relay states using MOLS selection for the given local address and epoch.
+// The returned slice contains relay URLs ordered by MOLS-derived priority with saturation partitioning.
+func RankRelayPool(autoPool []RelayState, localAddress string, epoch uint64) []string {
 	if len(autoPool) == 0 {
 		return nil
 	}
@@ -204,8 +247,14 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 	nonLinear := cv > molsCVThreshold
 
 	order := len(autoPool)
-	m1, m2, _ := molsMultipliers(order, nonLinear)
-	ingressRow := int(hashToGridIndex(localAddress) % uint32(order))
+	m1, m2, ok := molsMultipliers(order, nonLinear)
+	ingressKey := localAddress
+	if epoch > 0 {
+		ingressKey = localAddress + "#" + strconv.FormatUint(epoch, 10)
+	}
+	ingressHash := hashToGridIndex(ingressKey)
+	ingressRow := int(ingressHash % uint32(order))
+	ingressCol := int((ingressHash >> 16) % uint32(order))
 
 	type relayHash struct {
 		url  string
@@ -233,9 +282,9 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 	scoreFor := func(state RelayState) int {
 		col := relayCols[state.Descriptor.APIHTTPSAddr]
 		if congested {
-			return molsCongestionScore(ingressRow, col, m1, m2, order)
+			return molsCongestionScore(ingressRow, ingressCol, col, m1, m2, order, ok)
 		}
-		return molsScore(ingressRow, col, m1, m2, order)
+		return molsScore(ingressRow, ingressCol, col, m1, m2, order, ok)
 	}
 
 	activeStates := make([]RelayState, 0, len(autoPool))
@@ -250,13 +299,12 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 
 	if len(activeStates) < molsMinActiveNodes && len(fallbackStates) > 0 {
 		slices.SortFunc(fallbackStates, func(a, b RelayState) int {
-			if a.DiscoveryRTT < b.DiscoveryRTT {
-				return -1
+			aRTT := a.effectiveRTT()
+			bRTT := b.effectiveRTT()
+			if aRTT != bRTT {
+				return cmp.Compare(aRTT, bRTT)
 			}
-			if a.DiscoveryRTT > b.DiscoveryRTT {
-				return 1
-			}
-			return 0
+			return cmp.Compare(a.Descriptor.APIHTTPSAddr, b.Descriptor.APIHTTPSAddr)
 		})
 		promote := min(molsMinActiveNodes-len(activeStates), len(fallbackStates))
 		activeStates = append(activeStates, fallbackStates[:promote]...)
@@ -286,16 +334,37 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 			return 0
 		})
 
-		tierOut := make([]string, 0, len(candidates))
-		for _, candidate := range candidates {
-			if !candidate.state.IsSaturated {
-				tierOut = append(tierOut, candidate.state.Descriptor.APIHTTPSAddr)
-			}
-		}
+		var nonSaturated []molsCandidate
+		var saturated []molsCandidate
 		for _, candidate := range candidates {
 			if candidate.state.IsSaturated {
-				tierOut = append(tierOut, candidate.state.Descriptor.APIHTTPSAddr)
+				saturated = append(saturated, candidate)
+			} else {
+				nonSaturated = append(nonSaturated, candidate)
 			}
+		}
+
+		// P2C pressure optimization:
+		// Compare candidate 0 and 1. If p0 - p1 > molsP2CPressureDelta, candidate 0
+		// is significantly overloaded. To achieve real load-shedding under active listener
+		// quotas (such as the default MaxActiveRelays = 3), candidate 0 yields its active slot
+		// and is demoted behind non-saturated candidates, enabling warm reserve candidates
+		// to enter the active set while preserving local client-specific MOLS ordering.
+		if len(nonSaturated) >= 2 {
+			p0 := nonSaturated[0].state.Pressure()
+			p1 := nonSaturated[1].state.Pressure()
+			if p0-p1 > molsP2CPressureDelta {
+				overloaded := nonSaturated[0]
+				nonSaturated = append(nonSaturated[1:], overloaded)
+			}
+		}
+
+		tierOut := make([]string, 0, len(candidates))
+		for _, candidate := range nonSaturated {
+			tierOut = append(tierOut, candidate.state.Descriptor.APIHTTPSAddr)
+		}
+		for _, candidate := range saturated {
+			tierOut = append(tierOut, candidate.state.Descriptor.APIHTTPSAddr)
 		}
 		return tierOut
 	}
@@ -305,7 +374,19 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 	return append(activeURLs, fallbackURLs...)
 }
 
-// SelectPriority returns the ordered relay URLs for a client using MOLS selection.
+// Selection Policy Hierarchy (Canonized Invariants):
+//
+//	Stage 1 - Eligibility: Drop dead, banned, expired, or transport-mismatched relays (filterCandidatePool).
+//	Stage 2 - Hard Health Gate: Partition relays into Active vs Fallback tiers (effectiveRTT > 2s).
+//	          Saturated relays are demoted behind all non-saturated candidates within each tier.
+//	Stage 3 - P2C Pressure Choice: Local comparison between candidate 0 and 1 in the active tier.
+//	          If p0 - p1 > molsP2CPressureDelta, swap 0 and 1 to balance surging queues.
+//	Stage 4 - Asymmetric Stickiness: Retain currently active listener connections ONLY if they remain in the healthy tier
+//	          (non-saturated and non-fallback). Saturated or failing relays are strictly evicted without zombie resurrection.
+//	Stage 5 - Deterministic MOLS Geometry: Structural Latin-square spreading acts as the underlying anchor,
+//	          with SelectionEpoch salt providing deterministic rotation across connection retry cycles.
+//
+// SelectPriority returns the ordered relay URLs for a client using MOLS selection with explicit relays prepended.
 func SelectPriority(states []RelayState, routeState RouteState) []string {
 	if len(states) == 0 {
 		return nil
@@ -322,13 +403,94 @@ func SelectPriority(states []RelayState, routeState RouteState) []string {
 		}
 		explicit = append(explicit, relayURL)
 	}
-	auto := RankRelayPool(filterCandidatePool(states, routeState, now, false), routeState.LocalAddress)
+	auto := RankRelayPool(filterCandidatePool(states, routeState, now, false), routeState.LocalAddress, routeState.SelectionEpoch)
 	maxActive := routeState.MaxActiveRelays
 	if maxActive <= 0 {
 		maxActive = defaultMaxActiveRelays
 	}
+	auto = applyActiveStickiness(auto, routeState.ActiveRelayURLs, states, maxActive)
 	if len(auto) > maxActive {
 		auto = auto[:maxActive]
 	}
 	return append(explicit, auto...)
+}
+
+// applyActiveStickiness reorders the ranked candidates so that eligible healthy sticky
+// relays occupy the first maxActive positions without dropping remaining pool candidates.
+//
+// Priority cascade:
+//
+//	Layer 1: Sticky relays — preserves currently active connections ONLY if they remain in
+//	         the healthy tier (not saturated and not in fallback) to avoid zombie resurrection.
+//	Layer 2: Warm healthy candidates — fills remaining slots using top-ranked MOLS candidates.
+//	Trailing: Remaining ranked candidates are preserved to support multi-hop path building.
+func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []RelayState, maxActive int) []string {
+	if len(ranked) == 0 || maxActive <= 0 {
+		return ranked
+	}
+	if len(activeRelayURLs) == 0 {
+		return ranked
+	}
+
+	stateMap := make(map[string]RelayState, len(states))
+	for _, s := range states {
+		stateMap[s.Descriptor.APIHTTPSAddr] = s
+	}
+
+	// Stickiness is ONLY granted to healthy nodes: non-saturated and non-fallback.
+	// Degraded/saturated nodes must migrate out rather than being resurrected.
+	activeSet := make(map[string]struct{}, len(activeRelayURLs))
+	for _, u := range activeRelayURLs {
+		if s, ok := stateMap[u]; ok {
+			s.EvaluateSaturation()
+			if s.IsSaturated || isRelayFallback(s) {
+				continue
+			}
+			activeSet[u] = struct{}{}
+		}
+	}
+
+	// Active quota boundary: only candidates ranked within the eligible active quota
+	// (top maxActive in the ranked pool) can exercise stickiness. Candidates demoted
+	// outside the active quota (e.g. by P2C pressure demotion or saturation tiering)
+	// cannot be promoted back over healthier candidates.
+	selected := make([]string, 0, len(ranked))
+
+	// Layer 1: Retain currently active sticky connections in their established priority order.
+	// Preserves unaffected healthy listener connections across dynamic MOLS grid re-anchoring (N -> N-1),
+	// directly preventing global reconnection storms while strictly evicting saturated, fallback,
+	// or overloaded (Pressure > 0.5) nodes.
+	for _, u := range activeRelayURLs {
+		if len(selected) >= maxActive {
+			break
+		}
+		if _, isActive := activeSet[u]; !isActive {
+			continue
+		}
+		s, ok := stateMap[u]
+		if !ok || s.Pressure() > 0.5 {
+			continue
+		}
+		if slices.Contains(ranked, u) && !slices.Contains(selected, u) {
+			selected = append(selected, u)
+		}
+	}
+
+	// Layer 2: Fill remaining quota slots with top-ranked candidates from ranked pool
+	for _, u := range ranked {
+		if len(selected) >= maxActive {
+			break
+		}
+		if !slices.Contains(selected, u) {
+			selected = append(selected, u)
+		}
+	}
+
+	// Trailing: Preserve remaining reserve candidates in their ranked order
+	for _, u := range ranked {
+		if !slices.Contains(selected, u) {
+			selected = append(selected, u)
+		}
+	}
+	return selected
 }

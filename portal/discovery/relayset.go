@@ -478,19 +478,15 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 		}
 	}
 
-	ranked := RankRelayPool(filterCandidatePool(states, routeState, now, routeState.MultiHopDepth > 1), routeState.LocalAddress)
-	if routeState.MultiHopDepth > 1 {
-		maxActive := routeState.MaxActiveRelays
-		if maxActive <= 0 {
-			maxActive = defaultMaxActiveRelays
-		}
-		return buildMOLSPaths(ranked, routeState.MultiHopDepth, maxActive)
-	}
-
+	ranked := RankRelayPool(filterCandidatePool(states, routeState, now, routeState.MultiHopDepth > 1), routeState.LocalAddress, routeState.SelectionEpoch)
 	maxActive := routeState.MaxActiveRelays
 	if maxActive <= 0 {
 		maxActive = defaultMaxActiveRelays
 	}
+	if routeState.MultiHopDepth > 1 {
+		return buildMOLSPaths(ranked, routeState.MultiHopDepth, maxActive)
+	}
+	ranked = applyActiveStickiness(ranked, routeState.ActiveRelayURLs, states, maxActive)
 	if len(ranked) > maxActive {
 		ranked = ranked[:maxActive]
 	}
