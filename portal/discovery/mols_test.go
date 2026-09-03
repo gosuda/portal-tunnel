@@ -510,6 +510,43 @@ func TestMOLSAntiCascadeDispersion(t *testing.T) {
 	})
 }
 
+// TestMOLSDualOrthogonalPairDispersion verifies that when MOLS has a valid orthogonal pair
+// (e.g. N=7), the 2nd-choice ranking across clients sharing the same primary relay
+// is genuinely dispersed across multiple distinct relays via the second Latin square (m2),
+// rather than collapsing into a single cyclic successor (herd elimination).
+func TestMOLSDualOrthogonalPairDispersion(t *testing.T) {
+	const numRelays = 7
+	now := time.Now().UTC()
+	relays := make([]RelayState, numRelays)
+	for i := 0; i < numRelays; i++ {
+		relays[i] = confirmedRelayState(t, fmt.Sprintf("https://relay-pair-%d.example", i))
+		relays[i].DiscoveryRTT = 20 * time.Millisecond
+		relays[i].DiscoveryRTTAt = now
+	}
+
+	const numClients = 700
+	secByPrim := make(map[string]map[string]int)
+	for i := 0; i < numClients; i++ {
+		clientAddr := fmt.Sprintf("client-pair-%d.example", i)
+		ranked := RankRelayPool(relays, clientAddr, 0)
+		p := ranked[0]
+		s := ranked[1]
+		if secByPrim[p] == nil {
+			secByPrim[p] = make(map[string]int)
+		}
+		secByPrim[p][s]++
+	}
+
+	// Under true dual-orthogonal MOLS, every primary relay must see its secondary choices
+	// dispersed across multiple distinct relays (at least 4 out of the 6 alternatives).
+	for prim, secs := range secByPrim {
+		if len(secs) < 4 {
+			t.Fatalf("Primary %s has insufficient secondary dispersion (%d distinct 2nd choices, want >= 4): %v",
+				prim, len(secs), secs)
+		}
+	}
+}
+
 func TestMOLSConcurrentRefreshAndFailureLifecycle(t *testing.T) {
 	now := time.Now().UTC()
 	set := NewRelaySet(nil)

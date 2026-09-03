@@ -40,8 +40,33 @@ const (
 )
 
 // molsScore computes the MOLS grid score for position (i, j) using multipliers m1 and m2.
-func molsScore(i, j, m1, m2, order int) int {
-	return ((m1*i+j)%order)*order + ((m2*i + j) % order) + 1
+// When m1 and m2 form a valid orthogonal pair, the client's 2D grid coordinates (row, col)
+// project target positions across both Latin squares:
+//
+//	Square 1 (m1): Primary target t1 = (m1*row + col) % order
+//	Square 2 (m2): Secondary target t2 = (m2*row + col) % order
+//
+// Relay column j receives its ranking score via proximity to both targets, ensuring
+// that displaced clients disperse across diverse secondary nodes rather than collapsing
+// onto a single cyclic successor (herd elimination).
+func molsScore(row, col, j, m1, m2, order int, ok bool) int {
+	if !ok || order <= 1 {
+		return ((m1*row+j)%order)*order + 1
+	}
+	t1 := (m1*row + col) % order
+	t2 := (m2*row + col) % order
+
+	d1 := (j - t1 + order) % order
+	d2 := (j - t2 + order) % order
+
+	bonus := 0
+	if j == t1 {
+		bonus += 2 * order * order
+	}
+	if j == t2 {
+		bonus += order * order
+	}
+	return bonus + (order-d1)*order + (order - d2) + 1
 }
 
 // molsPairValid reports whether m1, m2, and m1-m2 are all coprime to order,
@@ -105,8 +130,9 @@ func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
 }
 
 // molsCongestionScore inverts the MOLS score to prioritize low-latency relays during congestion.
-func molsCongestionScore(i, j, m1, m2, order int) int {
-	return (order*order + 1) - molsScore(i, (order-1)-j, m1, m2, order)
+func molsCongestionScore(row, col, j, m1, m2, order int, ok bool) int {
+	maxScore := 3*order*order + order*order + order + 1
+	return maxScore - molsScore(row, col, (order-1)-j, m1, m2, order, ok)
 }
 
 // hashToGridIndex maps an identity string to a stable FNV-1a hash with a 2nd-stage
@@ -221,12 +247,14 @@ func RankRelayPool(autoPool []RelayState, localAddress string, epoch uint64) []s
 	nonLinear := cv > molsCVThreshold
 
 	order := len(autoPool)
-	m1, m2, _ := molsMultipliers(order, nonLinear)
+	m1, m2, ok := molsMultipliers(order, nonLinear)
 	ingressKey := localAddress
 	if epoch > 0 {
 		ingressKey = localAddress + "#" + strconv.FormatUint(epoch, 10)
 	}
-	ingressRow := int(hashToGridIndex(ingressKey) % uint32(order))
+	ingressHash := hashToGridIndex(ingressKey)
+	ingressRow := int(ingressHash % uint32(order))
+	ingressCol := int((ingressHash >> 16) % uint32(order))
 
 	type relayHash struct {
 		url  string
@@ -254,9 +282,9 @@ func RankRelayPool(autoPool []RelayState, localAddress string, epoch uint64) []s
 	scoreFor := func(state RelayState) int {
 		col := relayCols[state.Descriptor.APIHTTPSAddr]
 		if congested {
-			return molsCongestionScore(ingressRow, col, m1, m2, order)
+			return molsCongestionScore(ingressRow, ingressCol, col, m1, m2, order, ok)
 		}
-		return molsScore(ingressRow, col, m1, m2, order)
+		return molsScore(ingressRow, ingressCol, col, m1, m2, order, ok)
 	}
 
 	activeStates := make([]RelayState, 0, len(autoPool))
