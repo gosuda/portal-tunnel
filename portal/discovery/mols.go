@@ -39,6 +39,7 @@ const (
 	molsP2CPressureDelta       = 0.3
 )
 
+// molsScore computes the MOLS grid score for position (i, j) using multipliers m1 and m2.
 func molsScore(i, j, m1, m2, order int) int {
 	return ((m1*i+j)%order)*order + ((m2*i + j) % order) + 1
 }
@@ -103,6 +104,7 @@ func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
 	return 1, 1, false
 }
 
+// molsCongestionScore inverts the MOLS score to prioritize low-latency relays during congestion.
 func molsCongestionScore(i, j, m1, m2, order int) int {
 	return (order*order + 1) - molsScore(i, (order-1)-j, m1, m2, order)
 }
@@ -125,6 +127,7 @@ func hashToGridIndex(s string) uint32 {
 	return h
 }
 
+// molsRTTStats computes the mean RTT and coefficient of variation across relay states.
 func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
 	var count int
 	var sum float64
@@ -157,6 +160,7 @@ func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
 	return time.Duration(avg), cv
 }
 
+// isRelayFallback reports whether the relay's effective RTT exceeds the fallback threshold.
 func isRelayFallback(state RelayState) bool {
 	return !state.DiscoveryRTTAt.IsZero() && state.effectiveRTT() > molsFallbackRTTThreshold
 }
@@ -167,6 +171,7 @@ type molsCandidate struct {
 	seq   int
 }
 
+// betterMOLSCandidate reports whether candidate a should be ranked higher than b using MOLS score and tiebreakers.
 func betterMOLSCandidate(a, b molsCandidate) bool {
 	if a.score != b.score {
 		return a.score > b.score
@@ -182,6 +187,7 @@ func betterMOLSCandidate(a, b molsCandidate) bool {
 	return a.seq < b.seq
 }
 
+// selectAggregate filters relay states to exclude banned relays.
 func selectAggregate(states []RelayState) []RelayState {
 	out := make([]RelayState, 0, len(states))
 	for _, state := range states {
@@ -192,6 +198,7 @@ func selectAggregate(states []RelayState) []RelayState {
 	return out
 }
 
+// selectConfirmed filters relay states to include only confirmed relays.
 func selectConfirmed(states []RelayState) []RelayState {
 	out := make([]RelayState, 0)
 	for _, state := range states {
@@ -350,7 +357,7 @@ func RankRelayPool(autoPool []RelayState, localAddress string, epoch uint64) []s
 	return append(activeURLs, fallbackURLs...)
 }
 
-// SelectPriority returns the ordered relay URLs for a client using MOLS selection.
+// SelectPriority returns the ordered relay URLs for a client using MOLS selection with explicit relays prepended.
 func SelectPriority(states []RelayState, routeState RouteState) []string {
 	if len(states) == 0 {
 		return nil

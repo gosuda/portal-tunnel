@@ -278,6 +278,7 @@ func (r *Refresher) refreshOverlay(ctx context.Context) error {
 	return nil
 }
 
+// parallel executes fn concurrently for each item with a concurrency limit, returning the first error encountered.
 func parallel[T any](items []T, limit int, fn func(T) error) error {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, limit)
