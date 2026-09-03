@@ -206,3 +206,123 @@ func TestHRWMonotonicityZeroChurn(t *testing.T) {
 			len(displacedSecondaries), displacedSecondaries)
 	}
 }
+
+// TestHRWCapacityWeightingPreventsOverload verifies that relays with high telemetry pressure
+// receive lower capacity weight and absorb fewer client connections.
+func TestHRWCapacityWeightingPreventsOverload(t *testing.T) {
+	const numRelays = 5
+	const numClients = 500
+	now := time.Now().UTC()
+
+	relays := make([]RelayState, numRelays)
+	for i := 0; i < numRelays; i++ {
+		relays[i] = confirmedRelayState(t, fmt.Sprintf("https://relay-cap-%d.example", i))
+		relays[i].DiscoveryRTT = 20 * time.Millisecond
+		relays[i].DiscoveryRTTAt = now
+	}
+
+	// Make relay 0 heavily loaded (Pressure ~ 0.8)
+	relays[0].UpdateLoad(8000)
+	relays[0].DiscoveryRTT = 600 * time.Millisecond
+
+	counts := make(map[string]int)
+	for i := 0; i < numClients; i++ {
+		c := fmt.Sprintf("client-%04d", i)
+		ranked := RankRelayPool(relays, c)
+		counts[ranked[0]]++
+	}
+
+	r0Count := counts[relays[0].Descriptor.APIHTTPSAddr]
+	// Normal average is 100 per relay. Saturated/pressurized relay 0 should receive significantly fewer connections
+	if r0Count > 60 {
+		t.Fatalf("Capacity weighting failed: pressurized relay 0 received %d connections (want <= 60)", r0Count)
+	}
+}
+
+// TestHRWActiveStickinessPreventsReshuffle verifies that existing active listeners
+// maintain zero churn across relay departures and pressure changes.
+func TestHRWActiveStickinessPreventsReshuffle(t *testing.T) {
+	const numRelays = 7
+	const numClients = 700
+	now := time.Now().UTC()
+
+	relays := make([]RelayState, numRelays)
+	for i := 0; i < numRelays; i++ {
+		relays[i] = confirmedRelayState(t, fmt.Sprintf("https://relay-sticky-%d.example", i))
+		relays[i].DiscoveryRTT = 20 * time.Millisecond
+		relays[i].DiscoveryRTTAt = now
+	}
+
+	initialPicks := make(map[string]string)
+	for i := 0; i < numClients; i++ {
+		c := fmt.Sprintf("client-%04d", i)
+		ranked := SelectPriority(relays, RouteState{
+			LocalAddress:    c,
+			MaxActiveRelays: 3,
+		})
+		initialPicks[c] = ranked[0]
+	}
+
+	// Drop relay 0
+	surviving := make([]RelayState, 0, numRelays-1)
+	for _, r := range relays {
+		if r.Descriptor.APIHTTPSAddr != relays[0].Descriptor.APIHTTPSAddr {
+			surviving = append(surviving, r)
+		}
+	}
+
+	unaffectedMoved := 0
+	for i := 0; i < numClients; i++ {
+		c := fmt.Sprintf("client-%04d", i)
+		orig := initialPicks[c]
+		if orig == relays[0].Descriptor.APIHTTPSAddr {
+			continue
+		}
+		rankedAfter := SelectPriority(surviving, RouteState{
+			LocalAddress:    c,
+			MaxActiveRelays: 3,
+			ActiveRelayURLs: []string{orig},
+		})
+		if rankedAfter[0] != orig {
+			unaffectedMoved++
+		}
+	}
+
+	if unaffectedMoved != 0 {
+		t.Fatalf("Active stickiness failed: %d unaffected clients moved", unaffectedMoved)
+	}
+}
+
+// TestHRWMultiHopDecorrelation verifies that PlanHRWMultiHopPaths generates
+// decorrelated multi-hop paths without duplicate relays in any single circuit.
+func TestHRWMultiHopDecorrelation(t *testing.T) {
+	candidates := []string{
+		"https://relay-1.example",
+		"https://relay-2.example",
+		"https://relay-3.example",
+		"https://relay-4.example",
+		"https://relay-5.example",
+	}
+
+	routes, err := PlanHRWMultiHopPaths(candidates, "client-test-address", 3, 3)
+	if err != nil {
+		t.Fatalf("PlanHRWMultiHopPaths failed: %v", err)
+	}
+	if len(routes) != 3 {
+		t.Fatalf("len(routes) = %d, want 3", len(routes))
+	}
+
+	for idx, route := range routes {
+		hops := route.MultiHop()
+		if len(hops) != 3 {
+			t.Fatalf("route[%d] has %d hops, want 3", idx, len(hops))
+		}
+		seen := make(map[string]bool)
+		for _, r := range hops {
+			if seen[r] {
+				t.Fatalf("route[%d] has duplicate relay %s in circuit: %v", idx, r, hops)
+			}
+			seen[r] = true
+		}
+	}
+}
