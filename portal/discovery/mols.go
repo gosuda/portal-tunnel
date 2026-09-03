@@ -422,21 +422,27 @@ func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []R
 		}
 	}
 
+	// Active quota boundary: only candidates ranked within the eligible active quota
+	// (top maxActive in the ranked pool) can exercise stickiness. Candidates demoted
+	// outside the active quota (e.g. by P2C pressure demotion or saturation tiering)
+	// cannot be promoted back over healthier candidates.
+	quotaLen := min(len(ranked), maxActive)
+	eligibleQuota := ranked[:quotaLen]
+
 	selected := make([]string, 0, len(ranked))
-	// Layer 1: Retain currently active sticky relays that remain healthy (capped at maxActive)
-	for _, u := range ranked {
+	// Layer 1: Retain currently active sticky relays among the eligible quota candidates
+	for _, u := range eligibleQuota {
 		if _, isActive := activeSet[u]; isActive {
 			selected = append(selected, u)
-			if len(selected) == maxActive {
-				break
-			}
 		}
 	}
-	// Layer 2 & Trailing: Append remaining candidates preserving their relative MOLS ranking
-	for _, u := range ranked {
+	// Layer 2: Fill remaining quota slots with top-ranked candidates from eligible quota
+	for _, u := range eligibleQuota {
 		if !slices.Contains(selected, u) {
 			selected = append(selected, u)
 		}
 	}
+	// Trailing: Preserve remaining reserve candidates in their ranked order
+	selected = append(selected, ranked[quotaLen:]...)
 	return selected
 }

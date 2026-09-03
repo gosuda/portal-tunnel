@@ -416,8 +416,10 @@ func TestMOLSP2CActiveSetMembershipChangeDefaultQuota(t *testing.T) {
 		}
 	}
 
-	// Under default MaxActiveRelays = 3, overloaded top candidate MUST be evicted from active set
+	// Under default MaxActiveRelays = 3 with ActiveRelayURLs POPULATED (production path),
+	// overloaded top candidate MUST be evicted from active set despite active stickiness.
 	newPicks := SelectPriority(loadedRelays, RouteState{
+		ActiveRelayURLs: basePicks,              // Simulates active connections in Exposure.reconcileRelayListeners
 		MaxActiveRelays: defaultMaxActiveRelays, // 3
 		LocalAddress:    clientAddr,
 	})
