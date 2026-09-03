@@ -642,3 +642,76 @@ func BenchmarkMOLSSelectPriorityMassiveScale(b *testing.B) {
 		SelectPriority(relayStates, routeState)
 	}
 }
+
+// TestMOLSResilientStickinessPreventsReshuffleStorm verifies that when a relay dies (N=7 -> N=6),
+// active listener connections on unaffected healthy relays are preserved (0% churn).
+func TestMOLSResilientStickinessPreventsReshuffleStorm(t *testing.T) {
+	const numRelays = 7
+	const numClients = 700
+	now := time.Now().UTC()
+
+	relays := make([]RelayState, numRelays)
+	for i := 0; i < numRelays; i++ {
+		relays[i] = confirmedRelayState(t, fmt.Sprintf("https://relay-storm-%d.example", i))
+		relays[i].DiscoveryRTT = 20 * time.Millisecond
+		relays[i].DiscoveryRTTAt = now
+		relays[i].LoadFactor = 0.10
+		relays[i].EWMALoad = 0.10
+	}
+
+	clients := make([]string, numClients)
+	for i := 0; i < numClients; i++ {
+		clients[i] = fmt.Sprintf("storm-client-%04d", i)
+	}
+
+	// Initial selection
+	initialActive := make(map[string][]string)
+	primaryCounts := make(map[string]int)
+	for _, c := range clients {
+		sel := SelectPriority(relays, RouteState{
+			MaxActiveRelays: defaultMaxActiveRelays,
+			LocalAddress:    c,
+		})
+		initialActive[c] = sel
+		primaryCounts[sel[0]]++
+	}
+
+	// Identify busiest relay to kill
+	busiest := ""
+	maxCnt := 0
+	for r, cnt := range primaryCounts {
+		if cnt > maxCnt {
+			maxCnt = cnt
+			busiest = r
+		}
+	}
+
+	surviving := make([]RelayState, 0, numRelays-1)
+	for _, r := range relays {
+		if r.Descriptor.APIHTTPSAddr != busiest {
+			surviving = append(surviving, r)
+		}
+	}
+
+	unaffectedMoved := 0
+	unaffectedTotal := 0
+	for _, c := range clients {
+		origP1 := initialActive[c][0]
+		if origP1 != busiest {
+			unaffectedTotal++
+			newPicks := SelectPriority(surviving, RouteState{
+				ActiveRelayURLs: initialActive[c],
+				MaxActiveRelays: defaultMaxActiveRelays,
+				LocalAddress:    c,
+			})
+			if newPicks[0] != origP1 {
+				unaffectedMoved++
+			}
+		}
+	}
+
+	if unaffectedMoved != 0 {
+		t.Fatalf("Resilient stickiness failed to prevent reshuffle storm: %d / %d unaffected clients re-routed",
+			unaffectedMoved, unaffectedTotal)
+	}
+}

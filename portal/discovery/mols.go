@@ -454,23 +454,43 @@ func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []R
 	// (top maxActive in the ranked pool) can exercise stickiness. Candidates demoted
 	// outside the active quota (e.g. by P2C pressure demotion or saturation tiering)
 	// cannot be promoted back over healthier candidates.
-	quotaLen := min(len(ranked), maxActive)
-	eligibleQuota := ranked[:quotaLen]
-
 	selected := make([]string, 0, len(ranked))
-	// Layer 1: Retain currently active sticky relays among the eligible quota candidates
-	for _, u := range eligibleQuota {
-		if _, isActive := activeSet[u]; isActive {
+
+	// Layer 1: Retain currently active sticky connections in their established priority order.
+	// Preserves unaffected healthy listener connections across dynamic MOLS grid re-anchoring (N -> N-1),
+	// directly preventing global reconnection storms while strictly evicting saturated, fallback,
+	// or overloaded (Pressure > 0.5) nodes.
+	for _, u := range activeRelayURLs {
+		if len(selected) >= maxActive {
+			break
+		}
+		if _, isActive := activeSet[u]; !isActive {
+			continue
+		}
+		s, ok := stateMap[u]
+		if !ok || s.Pressure() > 0.5 {
+			continue
+		}
+		if slices.Contains(ranked, u) && !slices.Contains(selected, u) {
 			selected = append(selected, u)
 		}
 	}
-	// Layer 2: Fill remaining quota slots with top-ranked candidates from eligible quota
-	for _, u := range eligibleQuota {
+
+	// Layer 2: Fill remaining quota slots with top-ranked candidates from ranked pool
+	for _, u := range ranked {
+		if len(selected) >= maxActive {
+			break
+		}
 		if !slices.Contains(selected, u) {
 			selected = append(selected, u)
 		}
 	}
+
 	// Trailing: Preserve remaining reserve candidates in their ranked order
-	selected = append(selected, ranked[quotaLen:]...)
+	for _, u := range ranked {
+		if !slices.Contains(selected, u) {
+			selected = append(selected, u)
+		}
+	}
 	return selected
 }
