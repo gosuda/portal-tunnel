@@ -133,3 +133,76 @@ func BenchmarkMOLSSelectPriorityMassiveScale(b *testing.B) {
 		SelectPriority(relayStates, routeState)
 	}
 }
+
+// TestHRWMonotonicityZeroChurn verifies that when a relay is removed from the candidate pool,
+// 100% of clients that were NOT using the removed relay maintain their existing primary choice (0% churn).
+func TestHRWMonotonicityZeroChurn(t *testing.T) {
+	const numRelays = 7
+	const numClients = 700
+	now := time.Now().UTC()
+
+	relays := make([]RelayState, numRelays)
+	for i := 0; i < numRelays; i++ {
+		relays[i] = confirmedRelayState(t, fmt.Sprintf("https://relay-hrw-%d.example", i))
+		relays[i].DiscoveryRTT = 20 * time.Millisecond
+		relays[i].DiscoveryRTTAt = now
+	}
+
+	clients := make([]string, numClients)
+	for i := 0; i < numClients; i++ {
+		clients[i] = fmt.Sprintf("client-%04d", i)
+	}
+
+	initialPrimary := make(map[string]string)
+	primaryCounts := make(map[string]int)
+	for _, c := range clients {
+		ranked := RankRelayPool(relays, c)
+		initialPrimary[c] = ranked[0]
+		primaryCounts[ranked[0]]++
+	}
+
+	// Identify busiest relay to drop
+	busiest := ""
+	maxCount := 0
+	for r, cnt := range primaryCounts {
+		if cnt > maxCount {
+			maxCount = cnt
+			busiest = r
+		}
+	}
+
+	surviving := make([]RelayState, 0, numRelays-1)
+	for _, r := range relays {
+		if r.Descriptor.APIHTTPSAddr != busiest {
+			surviving = append(surviving, r)
+		}
+	}
+
+	unaffectedMoved := 0
+	unaffectedTotal := 0
+	displacedSecondaries := make(map[string]int)
+
+	for _, c := range clients {
+		orig := initialPrimary[c]
+		rankedAfter := RankRelayPool(surviving, c)
+		if orig != busiest {
+			unaffectedTotal++
+			if rankedAfter[0] != orig {
+				unaffectedMoved++
+			}
+		} else {
+			displacedSecondaries[rankedAfter[0]]++
+		}
+	}
+
+	// Invariant 1: Minimal disruption property of HRW guarantees 0 unaffected clients churn.
+	if unaffectedMoved != 0 {
+		t.Fatalf("HRW monotonicity violation: %d / %d unaffected clients were reshuffled", unaffectedMoved, unaffectedTotal)
+	}
+
+	// Invariant 2: Displaced clients disperse across survivors without herd collapse onto a single replacement.
+	if len(displacedSecondaries) < numRelays-2 {
+		t.Fatalf("HRW herd dispersion violation: displaced clients only reached %d survivors: %v",
+			len(displacedSecondaries), displacedSecondaries)
+	}
+}
