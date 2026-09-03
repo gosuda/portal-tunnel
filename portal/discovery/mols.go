@@ -408,13 +408,26 @@ func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []R
 		stateMap[s.Descriptor.APIHTTPSAddr] = s
 	}
 
-	// Stickiness is ONLY granted to healthy nodes: non-saturated and non-fallback.
-	// Degraded/saturated nodes must migrate out rather than being resurrected.
+	// Compute baseline minimum pressure among active eligible candidates
+	minPressure := math.MaxFloat64
+	for _, s := range states {
+		if !s.IsSaturated && !isRelayFallback(s) {
+			if p := s.Pressure(); p < minPressure {
+				minPressure = p
+			}
+		}
+	}
+
+	// Stickiness is ONLY granted to healthy nodes: non-saturated, non-fallback,
+	// and without significantly elevated pressure (to allow load-shedding migration).
 	activeSet := make(map[string]struct{}, len(activeRelayURLs))
 	for _, u := range activeRelayURLs {
 		if s, ok := stateMap[u]; ok {
 			s.EvaluateSaturation()
 			if s.IsSaturated || isRelayFallback(s) {
+				continue
+			}
+			if minPressure != math.MaxFloat64 && s.Pressure()-minPressure > molsP2CPressureDelta {
 				continue
 			}
 			activeSet[u] = struct{}{}

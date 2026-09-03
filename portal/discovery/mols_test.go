@@ -336,3 +336,75 @@ func BenchmarkMOLSSelectPriorityMassiveScale(b *testing.B) {
 		SelectPriority(relayStates, routeState)
 	}
 }
+
+func TestMOLSPressureEvictionAndHealthyStickiness(t *testing.T) {
+	now := time.Now().UTC()
+	// R0: High pressure active relay
+	r0 := confirmedRelayState(t, "https://relay-0.example")
+	r0.LoadFactor = 0.8
+	r0.EWMALoad = 0.8
+	r0.LoadDelta = 0.3
+	r0.DiscoveryRTT = 30 * time.Millisecond
+	r0.DiscoveryRTTAt = now
+	for i := 0; i < 90; i++ {
+		r0.RTTTracker.Add(10 * time.Millisecond)
+	}
+	for i := 0; i < 10; i++ {
+		r0.RTTTracker.Add(150 * time.Millisecond)
+	}
+
+	// R1, R2, R3, R4: Healthy idle relays
+	healthyRelays := make([]RelayState, 4)
+	for i := range healthyRelays {
+		url := fmt.Sprintf("https://relay-%d.example", i+1)
+		st := confirmedRelayState(t, url)
+		st.LoadFactor = 0.1
+		st.EWMALoad = 0.1
+		st.DiscoveryRTT = 40 * time.Millisecond
+		st.DiscoveryRTTAt = now
+		for j := 0; j < 100; j++ {
+			st.RTTTracker.Add(20 * time.Millisecond)
+		}
+		healthyRelays[i] = st
+	}
+
+	// R5: Saturated relay
+	r5 := confirmedRelayState(t, "https://relay-5.example")
+	r5.IsSaturated = true
+	r5.LoadFactor = 0.95
+
+	allRelays := []RelayState{r0, healthyRelays[0], healthyRelays[1], healthyRelays[2], healthyRelays[3], r5}
+
+	// RouteState with MaxActiveRelays = 3, ActiveRelayURLs = [R0, R1, R2]
+	rs := RouteState{
+		ActiveRelayURLs: []string{
+			"https://relay-0.example",
+			"https://relay-1.example",
+			"https://relay-2.example",
+		},
+		MaxActiveRelays: 3,
+		LocalAddress:    "client-test-addr",
+	}
+
+	selected := SelectPriority(allRelays, rs)
+
+	// 1. High-pressure r0 MUST be evicted from active set (membership migration)
+	if slices.Contains(selected, "https://relay-0.example") {
+		t.Fatalf("high-pressure relay-0 was NOT evicted from active set: %v", selected)
+	}
+
+	// 2. Saturated r5 MUST NOT be resurrected
+	if slices.Contains(selected, "https://relay-5.example") {
+		t.Fatalf("saturated relay-5 was resurrected: %v", selected)
+	}
+
+	// 3. Healthy active relays (relay-1, relay-2) MUST be preserved by stickiness
+	if !slices.Contains(selected, "https://relay-1.example") || !slices.Contains(selected, "https://relay-2.example") {
+		t.Fatalf("healthy active relays were not preserved by stickiness: %v", selected)
+	}
+
+	// 4. Exactly MaxActiveRelays (3) selected
+	if len(selected) != 3 {
+		t.Fatalf("expected 3 selected relays, got %d: %v", len(selected), selected)
+	}
+}
