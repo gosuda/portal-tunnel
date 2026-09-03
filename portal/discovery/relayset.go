@@ -483,10 +483,10 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 	if maxActive <= 0 {
 		maxActive = defaultMaxActiveRelays
 	}
-	ranked = applyActiveStickiness(ranked, routeState.ActiveRelayURLs, states, maxActive)
 	if routeState.MultiHopDepth > 1 {
 		return buildMOLSPaths(ranked, routeState.MultiHopDepth, maxActive)
 	}
+	ranked = applyActiveStickiness(ranked, routeState.ActiveRelayURLs, states, maxActive)
 	if len(ranked) > maxActive {
 		ranked = ranked[:maxActive]
 	}

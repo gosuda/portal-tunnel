@@ -273,13 +273,10 @@ func RankRelayPool(autoPool []RelayState, localAddress string, epoch uint64) []s
 		slices.SortFunc(fallbackStates, func(a, b RelayState) int {
 			aRTT := a.effectiveRTT()
 			bRTT := b.effectiveRTT()
-			if aRTT < bRTT {
-				return -1
+			if aRTT != bRTT {
+				return cmp.Compare(aRTT, bRTT)
 			}
-			if aRTT > bRTT {
-				return 1
-			}
-			return 0
+			return cmp.Compare(a.Descriptor.APIHTTPSAddr, b.Descriptor.APIHTTPSAddr)
 		})
 		promote := min(molsMinActiveNodes-len(activeStates), len(fallbackStates))
 		activeStates = append(activeStates, fallbackStates[:promote]...)
@@ -319,27 +316,16 @@ func RankRelayPool(autoPool []RelayState, localAddress string, epoch uint64) []s
 			}
 		}
 
-		// Pressure-aware partitioning: Candidates with significantly elevated pressure
-		// (pressure difference > molsP2CPressureDelta compared to minimum pressure) are
-		// demoted behind low-pressure candidates so they are pushed outside the MaxActiveRelays
-		// quota, achieving real active-set membership migration.
+		// P2C pressure optimization: compare candidate 0 and 1, swap only when
+		// p0 - p1 > molsP2CPressureDelta, and preserve the rest of the MOLS order.
+		// This keeps the pressure correction local to the client's distinct candidate pair
+		// rather than collapsing into a global pressure ordering.
 		if len(nonSaturated) >= 2 {
-			minPressure := nonSaturated[0].state.Pressure()
-			for _, c := range nonSaturated[1:] {
-				if p := c.state.Pressure(); p < minPressure {
-					minPressure = p
-				}
+			p0 := nonSaturated[0].state.Pressure()
+			p1 := nonSaturated[1].state.Pressure()
+			if p0-p1 > molsP2CPressureDelta {
+				nonSaturated[0], nonSaturated[1] = nonSaturated[1], nonSaturated[0]
 			}
-			var lowPressure []molsCandidate
-			var highPressure []molsCandidate
-			for _, c := range nonSaturated {
-				if c.state.Pressure()-minPressure > molsP2CPressureDelta {
-					highPressure = append(highPressure, c)
-				} else {
-					lowPressure = append(lowPressure, c)
-				}
-			}
-			nonSaturated = append(lowPressure, highPressure...)
 		}
 
 		tierOut := make([]string, 0, len(candidates))
@@ -408,29 +394,13 @@ func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []R
 		stateMap[s.Descriptor.APIHTTPSAddr] = s
 	}
 
-	// Compute baseline minimum pressure among selectable candidates (ranked pool only)
-	minPressure := math.MaxFloat64
-	for _, u := range ranked {
-		if s, ok := stateMap[u]; ok {
-			s.EvaluateSaturation()
-			if !s.IsSaturated && !isRelayFallback(s) {
-				if p := s.Pressure(); p < minPressure {
-					minPressure = p
-				}
-			}
-		}
-	}
-
-	// Stickiness is ONLY granted to healthy nodes: non-saturated, non-fallback,
-	// and without significantly elevated pressure (to allow load-shedding migration).
+	// Stickiness is ONLY granted to healthy nodes: non-saturated and non-fallback.
+	// Degraded/saturated nodes must migrate out rather than being resurrected.
 	activeSet := make(map[string]struct{}, len(activeRelayURLs))
 	for _, u := range activeRelayURLs {
 		if s, ok := stateMap[u]; ok {
 			s.EvaluateSaturation()
 			if s.IsSaturated || isRelayFallback(s) {
-				continue
-			}
-			if minPressure != math.MaxFloat64 && s.Pressure()-minPressure > molsP2CPressureDelta {
 				continue
 			}
 			activeSet[u] = struct{}{}
