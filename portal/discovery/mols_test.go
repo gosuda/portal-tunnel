@@ -408,3 +408,42 @@ func TestMOLSPressureEvictionAndHealthyStickiness(t *testing.T) {
 		t.Fatalf("expected 3 selected relays, got %d: %v", len(selected), selected)
 	}
 }
+
+func TestMOLSSkipsIneligibleRelaysWhenComputingPressureBaseline(t *testing.T) {
+	now := time.Now().UTC()
+
+	// Ineligible banned relay with artificially low pressure (0.0)
+	banned := confirmedRelayState(t, "https://relay-banned.example")
+	banned.Banned = true
+	banned.LoadFactor = 0.0
+	banned.EWMALoad = 0.0
+
+	// Eligible active relay with moderate pressure (0.35)
+	active := confirmedRelayState(t, "https://relay-active.example")
+	active.LoadFactor = 0.35
+	active.EWMALoad = 0.35
+	active.DiscoveryRTT = 50 * time.Millisecond
+	active.DiscoveryRTTAt = now
+
+	// Eligible peer with same moderate pressure (0.35)
+	peer := confirmedRelayState(t, "https://relay-peer.example")
+	peer.LoadFactor = 0.35
+	peer.EWMALoad = 0.35
+	peer.DiscoveryRTT = 50 * time.Millisecond
+	peer.DiscoveryRTTAt = now
+
+	relays := []RelayState{banned, active, peer}
+	rs := RouteState{
+		ActiveRelayURLs: []string{"https://relay-active.example"},
+		MaxActiveRelays: 1,
+		LocalAddress:    "client-baseline-test",
+	}
+
+	selected := SelectPriority(relays, rs)
+
+	// If banned relay distorted minPressure to 0.0, active (0.35) would be evicted (> 0.30 delta).
+	// Because banned is excluded from ranked pool, baseline is 0.35, so active MUST be preserved.
+	if len(selected) != 1 || selected[0] != "https://relay-active.example" {
+		t.Fatalf("active relay should be preserved by stickiness, got %v", selected)
+	}
+}

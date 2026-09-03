@@ -408,12 +408,15 @@ func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []R
 		stateMap[s.Descriptor.APIHTTPSAddr] = s
 	}
 
-	// Compute baseline minimum pressure among active eligible candidates
+	// Compute baseline minimum pressure among selectable candidates (ranked pool only)
 	minPressure := math.MaxFloat64
-	for _, s := range states {
-		if !s.IsSaturated && !isRelayFallback(s) {
-			if p := s.Pressure(); p < minPressure {
-				minPressure = p
+	for _, u := range ranked {
+		if s, ok := stateMap[u]; ok {
+			s.EvaluateSaturation()
+			if !s.IsSaturated && !isRelayFallback(s) {
+				if p := s.Pressure(); p < minPressure {
+					minPressure = p
+				}
 			}
 		}
 	}
