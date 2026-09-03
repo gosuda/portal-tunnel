@@ -316,15 +316,18 @@ func RankRelayPool(autoPool []RelayState, localAddress string, epoch uint64) []s
 			}
 		}
 
-		// P2C pressure optimization: compare candidate 0 and 1, swap only when
-		// p0 - p1 > molsP2CPressureDelta, and preserve the rest of the MOLS order.
-		// This keeps the pressure correction local to the client's distinct candidate pair
-		// rather than collapsing into a global pressure ordering.
+		// P2C pressure optimization:
+		// Compare candidate 0 and 1. If p0 - p1 > molsP2CPressureDelta, candidate 0
+		// is significantly overloaded. To achieve real load-shedding under active listener
+		// quotas (such as the default MaxActiveRelays = 3), candidate 0 yields its active slot
+		// and is demoted behind non-saturated candidates, enabling warm reserve candidates
+		// to enter the active set while preserving local client-specific MOLS ordering.
 		if len(nonSaturated) >= 2 {
 			p0 := nonSaturated[0].state.Pressure()
 			p1 := nonSaturated[1].state.Pressure()
 			if p0-p1 > molsP2CPressureDelta {
-				nonSaturated[0], nonSaturated[1] = nonSaturated[1], nonSaturated[0]
+				overloaded := nonSaturated[0]
+				nonSaturated = append(nonSaturated[1:], overloaded)
 			}
 		}
 

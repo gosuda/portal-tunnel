@@ -366,74 +366,146 @@ func TestMOLSP2CLocalChoiceTopTwo(t *testing.T) {
 	if len(ranked) != 3 {
 		t.Fatalf("expected 3 ranked relays, got %d", len(ranked))
 	}
-	// Pressure difference between r0 and r1 triggers local P2C swap of index 0 and 1
-	// Verify that the result contains all 3 and preserves valid pool ordering
+	// Pressure difference between r0 and r1 triggers local P2C demotion of overloaded candidate 0
 	if ranked[0] == "https://relay-0.example" && r0.Pressure()-r1.Pressure() > molsP2CPressureDelta {
-		t.Fatalf("relay-0 should have been swapped with relay-1 due to P2C local choice")
+		t.Fatalf("relay-0 should have yielded its top slot due to P2C local choice")
 	}
 }
 
-func TestMOLSP2CActiveSetMembershipChange(t *testing.T) {
+func TestMOLSP2CActiveSetMembershipChangeDefaultQuota(t *testing.T) {
 	now := time.Now().UTC()
-
-	// r0 is initially preferred by MOLS over r1
-	r0 := confirmedRelayState(t, "https://relay-0.example")
-	r0.DiscoveryRTT = 25 * time.Millisecond
-	r0.DiscoveryRTTAt = now
-
-	r1 := confirmedRelayState(t, "https://relay-1.example")
-	r1.DiscoveryRTT = 30 * time.Millisecond
-	r1.DiscoveryRTTAt = now
-
-	// Baseline: under balanced loads, MOLS order decides the initial winner and loser
-	relaysBaseline := []RelayState{r0, r1}
-	basePicks := RankRelayPool(relaysBaseline, "client-addr", 0)
-	if len(basePicks) < 2 {
-		t.Fatalf("expected at least 2 ranked picks, got %d", len(basePicks))
-	}
-	initialWinner := basePicks[0]
-	initialLoser := basePicks[1]
-
-	var winnerState, loserState RelayState
-	if r0.Descriptor.APIHTTPSAddr == initialWinner {
-		winnerState = r0
-		loserState = r1
-	} else {
-		winnerState = r1
-		loserState = r0
+	const numRelays = 4 // 3 active + 1 reserve under default MaxActiveRelays = 3
+	relays := make([]RelayState, numRelays)
+	for i := 0; i < numRelays; i++ {
+		st := confirmedRelayState(t, fmt.Sprintf("https://relay-quota-%d.example", i))
+		st.DiscoveryRTT = 25 * time.Millisecond
+		st.DiscoveryRTTAt = now
+		st.LoadFactor = 0.10
+		st.EWMALoad = 0.10
+		relays[i] = st
 	}
 
-	// Overload the initial winner with surging load and tail inflation
-	winnerOverloaded := winnerState
-	winnerOverloaded.LoadFactor = 0.75
-	winnerOverloaded.EWMALoad = 0.75
-	winnerOverloaded.LoadDelta = 0.35
-	for i := 0; i < 90; i++ {
-		winnerOverloaded.RTTTracker.Add(10 * time.Millisecond)
-	}
-	for i := 0; i < 10; i++ {
-		winnerOverloaded.RTTTracker.Add(150 * time.Millisecond)
-	}
-
-	loserIdle := loserState
-	loserIdle.LoadFactor = 0.10
-	loserIdle.EWMALoad = 0.10
-
-	relaysLoaded := []RelayState{winnerOverloaded, loserIdle}
-	// Under MaxActiveRelays = 1, P2C swap MUST replace the active-set member from winner to loser
-	newPicks := SelectPriority(relaysLoaded, RouteState{
-		MaxActiveRelays: 1,
-		LocalAddress:    "client-addr",
+	// Baseline: under balanced loads, MOLS determines initial order
+	clientAddr := "client-quota-test"
+	basePicks := SelectPriority(relays, RouteState{
+		MaxActiveRelays: defaultMaxActiveRelays, // 3
+		LocalAddress:    clientAddr,
 	})
-	if len(newPicks) != 1 {
-		t.Fatalf("expected 1 pick, got %d", len(newPicks))
+	if len(basePicks) != defaultMaxActiveRelays {
+		t.Fatalf("expected %d base picks, got %d", defaultMaxActiveRelays, len(basePicks))
 	}
-	if newPicks[0] == initialWinner {
-		t.Fatalf("P2C failed to change active set membership: overloaded relay %s remained active", initialWinner)
+
+	rankedBase := RankRelayPool(relays, clientAddr, 0)
+	topCandidateURL := rankedBase[0]
+	reserveCandidateURL := rankedBase[3] // 4th candidate (reserve slot)
+
+	// Overload the top candidate with surging load and tail inflation
+	loadedRelays := make([]RelayState, len(relays))
+	for i, r := range relays {
+		loadedRelays[i] = r
+		if r.Descriptor.APIHTTPSAddr == topCandidateURL {
+			loadedRelays[i].LoadFactor = 0.75
+			loadedRelays[i].EWMALoad = 0.75
+			loadedRelays[i].LoadDelta = 0.35
+			for j := 0; j < 90; j++ {
+				loadedRelays[i].RTTTracker.Add(10 * time.Millisecond)
+			}
+			for j := 0; j < 10; j++ {
+				loadedRelays[i].RTTTracker.Add(150 * time.Millisecond)
+			}
+		}
 	}
-	if newPicks[0] != initialLoser {
-		t.Fatalf("expected initial loser %s to take the active slot, got %s", initialLoser, newPicks[0])
+
+	// Under default MaxActiveRelays = 3, overloaded top candidate MUST be evicted from active set
+	newPicks := SelectPriority(loadedRelays, RouteState{
+		MaxActiveRelays: defaultMaxActiveRelays, // 3
+		LocalAddress:    clientAddr,
+	})
+	if len(newPicks) != defaultMaxActiveRelays {
+		t.Fatalf("expected %d new picks, got %d", defaultMaxActiveRelays, len(newPicks))
 	}
+
+	// Invariant 1: Overloaded relay is evicted outside the active listener quota
+	if slices.Contains(newPicks, topCandidateURL) {
+		t.Fatalf("overloaded relay %s was NOT evicted from active set: %v", topCandidateURL, newPicks)
+	}
+
+	// Invariant 2: Reserve candidate steps into the active listener set
+	if !slices.Contains(newPicks, reserveCandidateURL) {
+		t.Fatalf("reserve relay %s did not enter active set: %v", reserveCandidateURL, newPicks)
+	}
+}
+
+func TestMOLSAntiCascadeDispersion(t *testing.T) {
+	testDispersion := func(t *testing.T, numRelays int) {
+		now := time.Now().UTC()
+		relays := make([]RelayState, numRelays)
+		for i := 0; i < numRelays; i++ {
+			relays[i] = confirmedRelayState(t, fmt.Sprintf("https://relay-%d-%d.example", numRelays, i))
+			relays[i].DiscoveryRTT = 20 * time.Millisecond
+			relays[i].DiscoveryRTTAt = now
+		}
+
+		const numClients = 700
+		clientsByPrimary := make(map[string][]string)
+		for i := 0; i < numClients; i++ {
+			clientAddr := fmt.Sprintf("client-%d-%d.example", numRelays, i)
+			ranked := RankRelayPool(relays, clientAddr, 0)
+			primary := ranked[0]
+			clientsByPrimary[primary] = append(clientsByPrimary[primary], clientAddr)
+		}
+
+		// Find the primary relay serving the largest group of clients
+		var targetPrimary string
+		var targetClients []string
+		for p, cs := range clientsByPrimary {
+			if len(cs) > len(targetClients) {
+				targetPrimary = p
+				targetClients = cs
+			}
+		}
+
+		// Simulate primary relay failure (drop from candidate pool)
+		survivingRelays := make([]RelayState, 0, numRelays-1)
+		for _, r := range relays {
+			if r.Descriptor.APIHTTPSAddr != targetPrimary {
+				survivingRelays = append(survivingRelays, r)
+			}
+		}
+
+		// Measure replacement distribution for displaced clients
+		replacementCounts := make(map[string]int)
+		for _, clientAddr := range targetClients {
+			ranked := RankRelayPool(survivingRelays, clientAddr, 0)
+			replacement := ranked[0]
+			replacementCounts[replacement]++
+		}
+
+		// Anti-cascade Invariant 1: Displaced clients MUST NOT collapse onto a single secondary
+		if len(replacementCounts) <= 1 {
+			t.Fatalf("N=%d: All displaced clients collapsed onto a single replacement: %v", numRelays, replacementCounts)
+		}
+
+		// Anti-cascade Invariant 2: No single surviving relay should absorb an overwhelming monopoly (>50%)
+		for repl, count := range replacementCounts {
+			fraction := float64(count) / float64(len(targetClients))
+			if fraction > 0.50 {
+				t.Fatalf("N=%d: Replacement relay %s absorbed %.1f%% (>50%%) of displaced traffic: %v", numRelays, repl, fraction*100, replacementCounts)
+			}
+		}
+	}
+
+	t.Run("PrimeOrder_N7", func(t *testing.T) {
+		testDispersion(t, 7)
+	})
+
+	t.Run("EvenOrder_N8", func(t *testing.T) {
+		testDispersion(t, 8)
+	})
+
+	t.Run("EvenOrder_N6", func(t *testing.T) {
+		testDispersion(t, 6)
+	})
 }
 
 func TestMOLSConcurrentRefreshAndFailureLifecycle(t *testing.T) {
