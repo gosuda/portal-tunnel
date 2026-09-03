@@ -128,7 +128,23 @@ const (
 	relayMetricScale         = 10000
 	relaySaturationEnterLoad = 8000
 	relaySaturationExitLoad  = 6000
+
+	failurePenaltyRTT = 300 * time.Millisecond
+	maxFailurePenalty = 3 * time.Second
 )
+
+func (state RelayState) effectiveRTT() time.Duration {
+	rtt := state.DiscoveryRTT
+	failures := state.activeFailures + state.discoveryFailures
+	if failures > 0 {
+		penalty := time.Duration(failures) * failurePenaltyRTT
+		if penalty > maxFailurePenalty {
+			penalty = maxFailurePenalty
+		}
+		rtt += penalty
+	}
+	return rtt
+}
 
 func fixedLoad(load float64) uint32 {
 	if load <= 0 {
@@ -154,7 +170,11 @@ func (state *RelayState) UpdateLoad(loadFixed uint32) {
 		loadFixed = relayMetricScale
 	}
 	load := float64(loadFixed) / relayMetricScale
-	state.LoadDelta = absFloat(load - state.LoadFactor)
+	delta := load - state.LoadFactor
+	if delta < 0 {
+		delta = 0
+	}
+	state.LoadDelta = delta
 	if state.EWMALoad == 0 {
 		state.EWMALoad = load
 	} else {
@@ -236,13 +256,6 @@ func absDuration(value time.Duration) time.Duration {
 	return value
 }
 
-func absFloat(value float64) float64 {
-	if value < 0 {
-		return -value
-	}
-	return value
-}
-
 func newRelayState(relayURL string) RelayState {
 	return RelayState{
 		Descriptor: types.RelayDescriptor{
@@ -284,6 +297,9 @@ type RouteState struct {
 	// LocalAddress is the ingress identity address used by MOLS route selection to
 	// derive a deterministic row index into the MOLS grid.
 	LocalAddress string
+	// SelectionEpoch allows rotating the deterministic MOLS ranking across retry cycles
+	// or time epochs to escape pathological node pairings.
+	SelectionEpoch uint64
 }
 
 func (state RelayState) supportsRequiredTransports(routeState RouteState, now time.Time) bool {

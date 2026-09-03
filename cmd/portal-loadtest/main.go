@@ -64,7 +64,7 @@ func main() {
 	picks := make(map[string]int, *relays) // relay URL → count of clients that picked it first
 	for i := 0; i < *clients; i++ {
 		localAddr := fmt.Sprintf("synthetic-client-%d", i)
-		outputURLs := discovery.RankRelayPool(relayStates, localAddr)
+		outputURLs := discovery.RankRelayPool(relayStates, localAddr, 0)
 		if len(outputURLs) == 0 {
 			// All relays were filtered; skip this client.
 			continue

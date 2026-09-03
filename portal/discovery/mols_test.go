@@ -145,6 +145,13 @@ func TestMOLSP2CPressurePromotion(t *testing.T) {
 		t.Fatalf("relayA pressure (%.2f) should exceed relayB pressure (%.2f) + delta (%.2f)",
 			relayA.Pressure(), relayB.Pressure(), molsP2CPressureDelta)
 	}
+
+	// Behavioral assertion: In SelectPriority with MaxActiveRelays=1, low-pressure relayB
+	// must be promoted over high-pressure relayA regardless of initial MOLS order.
+	selected := SelectPriority([]RelayState{relayA, relayB}, RouteState{MaxActiveRelays: 1})
+	if len(selected) != 1 || selected[0] != "https://relay-b.example" {
+		t.Fatalf("SelectPriority with pressure delta = %v, want [%q]", selected, "https://relay-b.example")
+	}
 }
 
 func TestMOLSSelectPriorityActiveStickiness(t *testing.T) {
@@ -174,6 +181,130 @@ func TestMOLSSelectPriorityActiveStickiness(t *testing.T) {
 	}
 }
 
+func TestMOLSSelectPriorityEpochRotation(t *testing.T) {
+	relays := make([]RelayState, 10)
+	for i := range relays {
+		relays[i] = confirmedRelayState(t, fmt.Sprintf("https://relay-epoch-%d.example", i))
+	}
+
+	routeStateEpoch0 := RouteState{LocalAddress: "192.168.1.50:5000", SelectionEpoch: 0}
+	routeStateEpoch1 := RouteState{LocalAddress: "192.168.1.50:5000", SelectionEpoch: 1}
+
+	rank0a := SelectPriority(relays, routeStateEpoch0)
+	rank0b := SelectPriority(relays, routeStateEpoch0)
+	// Deterministic for same epoch
+	if !slices.Equal(rank0a, rank0b) {
+		t.Fatalf("rank0a != rank0b: %v vs %v", rank0a, rank0b)
+	}
+
+	rank1 := SelectPriority(relays, routeStateEpoch1)
+	// Rotation should yield a different primary ranking for non-trivial pool
+	if slices.Equal(rank0a, rank1) {
+		t.Fatalf("rank1 should differ from rank0, got identical %v", rank1)
+	}
+}
+
+func TestMOLSVirtualLatencyPenalty(t *testing.T) {
+	now := time.Now().UTC()
+	relayA := confirmedRelayState(t, "https://relay-a.example")
+	relayA.DiscoveryRTT = 50 * time.Millisecond
+	relayA.DiscoveryRTTAt = now
+	// 7 failures * 300ms = 2.1s penalty => EffectiveRTT = 2.15s (> 2s fallback threshold)
+	relayA.activeFailures = 7
+
+	relayB := confirmedRelayState(t, "https://relay-b.example")
+	relayB.DiscoveryRTT = 100 * time.Millisecond
+	relayB.DiscoveryRTTAt = now
+
+	relayC := confirmedRelayState(t, "https://relay-c.example")
+	relayC.DiscoveryRTT = 120 * time.Millisecond
+	relayC.DiscoveryRTTAt = now
+
+	relays := []RelayState{relayA, relayB, relayC}
+	selected := SelectPriority(relays, RouteState{MaxActiveRelays: 2})
+
+	// relayA should be demoted to fallback tier due to virtual latency, so active picks should be B and C
+	if slices.Contains(selected, "https://relay-a.example") {
+		t.Fatalf("selected %v should not contain relayA in top 2 due to virtual latency penalty", selected)
+	}
+	if len(selected) != 2 {
+		t.Fatalf("len(selected) = %d, want 2", len(selected))
+	}
+}
+
+func TestMOLSStickinessDoesNotResurrectSaturatedOrFallback(t *testing.T) {
+	now := time.Now().UTC()
+	activeSaturated := confirmedRelayState(t, "https://active-sat.example")
+	activeSaturated.IsSaturated = true
+	activeSaturated.LoadFactor = 0.95
+
+	activeFallback := confirmedRelayState(t, "https://active-fb.example")
+	activeFallback.DiscoveryRTT = 3 * time.Second
+	activeFallback.DiscoveryRTTAt = now
+
+	healthyA := confirmedRelayState(t, "https://healthy-a.example")
+	healthyA.DiscoveryRTT = 50 * time.Millisecond
+	healthyA.DiscoveryRTTAt = now
+
+	healthyB := confirmedRelayState(t, "https://healthy-b.example")
+	healthyB.DiscoveryRTT = 60 * time.Millisecond
+	healthyB.DiscoveryRTTAt = now
+
+	relays := []RelayState{activeSaturated, activeFallback, healthyA, healthyB}
+
+	// ActiveRelayURLs includes the saturated and fallback relays.
+	// Stickiness MUST NOT resurrect them over the healthy candidates.
+	selected := SelectPriority(relays, RouteState{
+		ActiveRelayURLs: []string{"https://active-sat.example", "https://active-fb.example"},
+		MaxActiveRelays: 2,
+	})
+
+	if len(selected) != 2 {
+		t.Fatalf("len(selected) = %d, want 2", len(selected))
+	}
+	for _, u := range selected {
+		if u == "https://active-sat.example" || u == "https://active-fb.example" {
+			t.Fatalf("selected %v should not contain demoted relays despite stickiness", selected)
+		}
+	}
+}
+
+func TestMOLSMultiHopEntryStickiness(t *testing.T) {
+	now := time.Now().UTC()
+	set := NewRelaySet(nil)
+	var activeEntry string
+	for i := 0; i < 5; i++ {
+		url := fmt.Sprintf("https://relay-mh-%d.example", i)
+		st := confirmedRelayState(t, url)
+		st.Descriptor.SupportsOverlay = true
+		st.Descriptor.ExpiresAt = now.Add(time.Hour)
+		st.Descriptor.WireGuardPublicKey = "wg-key"
+		st.Descriptor.WireGuardPort = 51820
+		st.LastSeenAt = now
+		set.relays[url] = st
+		if i == 4 {
+			activeEntry = url
+		}
+	}
+
+	routes, err := set.PlanRoutes(nil, RouteState{
+		ActiveRelayURLs: []string{activeEntry},
+		MultiHopDepth:   2,
+		MaxActiveRelays: 2,
+		LocalAddress:    "client",
+	})
+	if err != nil {
+		t.Fatalf("PlanRoutes failed: %v", err)
+	}
+	if len(routes) == 0 {
+		t.Fatalf("routes is empty")
+	}
+	// The first entry hop should preserve the active entry relay due to stickiness
+	if entry := routes[0].ListenerRelayURL(); entry != activeEntry {
+		t.Fatalf("first entry hop = %q, want activeEntry %q due to stickiness", entry, activeEntry)
+	}
+}
+
 func BenchmarkMOLSRankRelayPool(b *testing.B) {
 	localAddr := "test-client-address"
 	relays := make([]RelayState, 100)
@@ -188,7 +319,7 @@ func BenchmarkMOLSRankRelayPool(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		RankRelayPool(relays, localAddr)
+		RankRelayPool(relays, localAddr, 0)
 	}
 }
 
