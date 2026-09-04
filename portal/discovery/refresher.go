@@ -185,10 +185,6 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 	if state.Bootstrap {
 		recoveryFailures = 0
 	}
-	if policy, ok := r.overlay.(interface{ RecordDiscoveryFailures() bool }); ok && !policy.RecordDiscoveryFailures() {
-		recoveryFailures = 0
-	}
-
 	baseURL, err := url.Parse(relayURL)
 	if err != nil {
 		if recoveryFailures > 0 {
@@ -332,6 +328,9 @@ func (r *Refresher) refreshOneOverlay(ctx context.Context, state RelayState) (bo
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
+		}
+		if policy, ok := r.overlay.(interface{ RecordDiscoveryFailures() bool }); ok && !policy.RecordDiscoveryFailures() {
+			recoveryFailures = 0
 		}
 		if recoveryFailures > 0 {
 			r.logDiscoveryFailure(relay.APIHTTPSAddr, relay.APIHTTPSAddr, recoveryFailures, err)
