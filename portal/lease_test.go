@@ -179,6 +179,8 @@ func TestLeaseRegistryHopRouteCanExposeECHAndPlainSNIFallback(t *testing.T) {
 		ForwardRelay: types.RelayDescriptor{
 			APIHTTPSAddr:       "https://next.example.com",
 			WireGuardPublicKey: wgPublic,
+			WireGuardPort:      51820,
+			SupportsOverlay:    true,
 		},
 		ForwardToken: "hpt_forward",
 		FirstSeenAt:  now,
