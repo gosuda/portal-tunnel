@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	DefaultIVNPDiscoveryPort  = 7777
-	DefaultIVNPHopPort        = 7778
+	defaultIVNPDiscoveryPort  = 7777
+	defaultIVNPHopPort        = 7778
 	defaultIVNPRequestTimeout = 30 * time.Second
 )
 
@@ -144,12 +144,12 @@ func (o *IVNP) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create ivnp application destination: %w", err)
 	}
-	discoveryListener, err := endpoint.ListenI2P(ctx, fmt.Sprintf(":%d", DefaultIVNPDiscoveryPort))
+	discoveryListener, err := endpoint.ListenI2P(ctx, fmt.Sprintf(":%d", defaultIVNPDiscoveryPort))
 	if err != nil {
 		_ = endpoint.Close()
 		return fmt.Errorf("listen for ivnp discovery: %w", err)
 	}
-	hopListener, err := endpoint.ListenI2P(ctx, fmt.Sprintf(":%d", DefaultIVNPHopPort))
+	hopListener, err := endpoint.ListenI2P(ctx, fmt.Sprintf(":%d", defaultIVNPHopPort))
 	if err != nil {
 		_ = discoveryListener.Close()
 		_ = endpoint.Close()
@@ -226,13 +226,21 @@ func (o *IVNP) handleHopStream(ctx context.Context, conn net.Conn) {
 	o.hopHandler(ctx, stream)
 }
 
+func normalizeIVNPDestination(destination string) (string, error) {
+	destination = strings.ToLower(strings.TrimSpace(destination))
+	if destination == "" {
+		return "", errors.New("next hop ivnp destination is required")
+	}
+	return destination, nil
+}
+
 func (o *IVNP) OpenHopStream(ctx context.Context, destination, token string) (net.Conn, error) {
 	if o == nil || !o.ready.Load() {
 		return nil, errors.New("ivnp overlay is not ready")
 	}
-	destination = strings.ToLower(strings.TrimSpace(destination))
-	if destination == "" {
-		return nil, errors.New("next hop ivnp destination is required")
+	destination, err := normalizeIVNPDestination(destination)
+	if err != nil {
+		return nil, err
 	}
 	o.mu.Lock()
 	network := o.network
@@ -240,7 +248,7 @@ func (o *IVNP) OpenHopStream(ctx context.Context, destination, token string) (ne
 	if network == nil {
 		return nil, net.ErrClosed
 	}
-	conn, err := network.DialI2P(ctx, net.JoinHostPort(destination, fmt.Sprintf("%d", DefaultIVNPHopPort)))
+	conn, err := network.DialI2P(ctx, net.JoinHostPort(destination, fmt.Sprintf("%d", defaultIVNPHopPort)))
 	if err != nil {
 		return nil, err
 	}
@@ -260,15 +268,12 @@ func (o *IVNP) DiscoverRelay(ctx context.Context, relay types.RelayDescriptor) (
 	}
 	o.mu.Lock()
 	client := o.client
-	local := o.local
-	o.local = nil
-	o.network = nil
 	o.mu.Unlock()
 	if client == nil {
 		return types.DiscoveryResponse{}, net.ErrClosed
 	}
 	var response types.DiscoveryResponse
-	baseURL := &url.URL{Scheme: "http", Host: net.JoinHostPort(relay.IVNPDestination, fmt.Sprintf("%d", DefaultIVNPDiscoveryPort))}
+	baseURL := &url.URL{Scheme: "http", Host: net.JoinHostPort(relay.IVNPDestination, fmt.Sprintf("%d", defaultIVNPDiscoveryPort))}
 	if err := utils.HTTPDoAPIPath(ctx, client, baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &response); err != nil {
 		return types.DiscoveryResponse{}, err
 	}
@@ -296,6 +301,9 @@ func (o *IVNP) Shutdown(ctx context.Context) error {
 	hopListener := o.hopListener
 	discoveryServer := o.discoveryServer
 	client := o.client
+	local := o.local
+	o.local = nil
+	o.network = nil
 	o.mu.Unlock()
 	var shutdownErr error
 	if discoveryServer != nil {

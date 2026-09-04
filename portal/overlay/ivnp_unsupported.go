@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	DefaultIVNPDiscoveryPort = 7777
-	DefaultIVNPHopPort       = 7778
+	defaultIVNPDiscoveryPort = 7777
+	defaultIVNPHopPort       = 7778
 )
 
 type IVNP struct{}
