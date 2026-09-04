@@ -872,11 +872,11 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 		<-ctx.Done()
 		return nil
 	}
-	var discoveryOverlay discovery.OverlayRuntime = s.overlay
+	refresher := discovery.NewRefresher(s.relaySet, s.overlay)
+	var ivnpRefresher *discovery.Refresher
 	if s.ivnpOverlay != nil {
-		discoveryOverlay = s.ivnpOverlay
+		ivnpRefresher = discovery.NewRefresher(s.relaySet, s.ivnpOverlay)
 	}
-	refresher := discovery.NewRefresher(s.relaySet, discoveryOverlay)
 	ticker := time.NewTicker(discovery.DiscoveryPollInterval)
 	defer ticker.Stop()
 
@@ -891,6 +891,14 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 				return nil
 			}
 			return err
+		}
+		if ivnpRefresher != nil {
+			if err := ivnpRefresher.Refresh(ctx, &self); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
+			}
 		}
 		if ctx.Err() != nil {
 			return nil
