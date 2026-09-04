@@ -53,6 +53,7 @@ func (f feature) needsAttention() bool {
 func evaluateFeatures(cfg relayServerConfig) []feature {
 	return []feature{
 		discoveryFeature(cfg),
+		ivnpFeature(cfg),
 		acmeFeature(cfg),
 		ensGaslessFeature(cfg),
 		leaseTransportFeature("udp-transport", "UDP_ENABLED", cfg.UDPEnabled, cfg),
@@ -64,6 +65,26 @@ func evaluateFeatures(cfg relayServerConfig) []feature {
 		x402Feature(cfg),
 		pprofFeature(cfg),
 	}
+}
+
+func ivnpFeature(cfg relayServerConfig) feature {
+	f := feature{Name: "ivnp-overlay"}
+	if !cfg.IVNPEnabled {
+		f.State, f.By = stateDisabled, "IVNP_ENABLED=false"
+		return f
+	}
+	if !cfg.DiscoveryEnabled {
+		f.State, f.By = stateBlocked, "IVNP_ENABLED=true"
+		f.Missing = "DISCOVERY=true is required because IVNP carries the relay discovery and hop protocols"
+		return f
+	}
+	f.State, f.By = stateEnabled, "IVNP_ENABLED=true"
+	if path := strings.TrimSpace(cfg.IVNPConfigPath); path != "" {
+		f.Detail = "config=" + path
+	} else {
+		f.Detail = "config=IDENTITY_PATH/ivnp.conf"
+	}
+	return f
 }
 
 func frontendFeature(cfg relayServerConfig) feature {

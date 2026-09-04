@@ -110,6 +110,7 @@ type RelayDescriptor struct {
 	IssuedAt           time.Time `json:"issued_at"`
 	ExpiresAt          time.Time `json:"expires_at"`
 	APIHTTPSAddr       string    `json:"api_https_addr"`
+	IVNPDestination    string    `json:"ivnp_destination,omitempty"`
 	WireGuardPublicKey string    `json:"wireguard_public_key,omitempty"`
 	WireGuardPort      int       `json:"wireguard_port,omitempty"`
 	SupportsOverlay    bool      `json:"supports_overlay,omitempty"`
@@ -121,6 +122,14 @@ type RelayDescriptor struct {
 }
 
 func (desc RelayDescriptor) HasOverlayPeer() bool {
+	return desc.SupportsOverlay && (desc.HasIVNPPeer() || desc.HasWireGuardPeer())
+}
+
+func (desc RelayDescriptor) HasIVNPPeer() bool {
+	return strings.TrimSpace(desc.IVNPDestination) != ""
+}
+
+func (desc RelayDescriptor) HasWireGuardPeer() bool {
 	return desc.SupportsOverlay &&
 		strings.TrimSpace(desc.WireGuardPublicKey) != "" &&
 		desc.WireGuardPort > 0 &&
@@ -139,6 +148,7 @@ func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
 		IssuedAtUnixNano   int64   `json:"issued_at_unix_nano"`
 		ExpiresAtUnixNano  int64   `json:"expires_at_unix_nano"`
 		APIHTTPSAddr       string  `json:"api_https_addr"`
+		IVNPDestination    string  `json:"ivnp_destination"`
 		WireGuardPublicKey string  `json:"wireguard_public_key"`
 		WireGuardPort      int     `json:"wireguard_port"`
 		SupportsOverlay    bool    `json:"supports_overlay"`
@@ -152,6 +162,7 @@ func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
 		IssuedAtUnixNano:   desc.IssuedAt.UTC().UnixNano(),
 		ExpiresAtUnixNano:  desc.ExpiresAt.UTC().UnixNano(),
 		APIHTTPSAddr:       desc.APIHTTPSAddr,
+		IVNPDestination:    desc.IVNPDestination,
 		WireGuardPublicKey: desc.WireGuardPublicKey,
 		WireGuardPort:      desc.WireGuardPort,
 		SupportsOverlay:    desc.SupportsOverlay,

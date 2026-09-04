@@ -433,7 +433,7 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "hop route rate limit exceeded")
 		return
 	}
-	if s.overlay == nil || s.relaySet == nil {
+	if (s.overlay == nil && s.ivnpOverlay == nil) || s.relaySet == nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
 		return
 	}
@@ -480,7 +480,7 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !forwardRelay.HasOverlayPeer() {
-		utils.InvalidRequestError(errors.New("forward relay wireguard overlay metadata is required")).Write(w)
+		utils.InvalidRequestError(errors.New("forward relay overlay metadata is required")).Write(w)
 		return
 	}
 	route.ForwardRelay = forwardRelay
@@ -488,9 +488,11 @@ func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
 		utils.InvalidRequestError(fmt.Errorf("forward relay: %w", err)).Write(w)
 		return
 	}
-	if err := s.overlay.Sync(s.relaySet.OverlayPeerDescriptor()); err != nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-		return
+	if s.overlay != nil {
+		if err := s.overlay.Sync(s.relaySet.OverlayPeerDescriptor()); err != nil {
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+			return
+		}
 	}
 	record, err := s.registry.RegisterHopRoute(&route, now)
 	if err != nil {

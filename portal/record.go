@@ -26,10 +26,10 @@ type leaseRecord struct {
 	ECHDNSHostname string
 	Metadata       types.LeaseMetadata
 
-	hopToken           string
-	hopNextOverlayIPv4 string
-	hopNextToken       string
-	registerChallenge  *auth.RegisterChallenge
+	hopToken          string
+	hopNextRelay      types.RelayDescriptor
+	hopNextToken      string
+	registerChallenge *auth.RegisterChallenge
 
 	datagram *transport.RelayDatagram
 	udpPorts *transport.PortAllocator
@@ -85,13 +85,12 @@ func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
 	return other.Hostname != "" && r.HostnameHash != "" && utils.HostnameHash(other.Hostname) == r.HostnameHash
 }
 
-func (r *leaseRecord) nextHop() (string, string, bool) {
+func (r *leaseRecord) nextHop() (types.RelayDescriptor, string, bool) {
 	if r == nil {
-		return "", "", false
+		return types.RelayDescriptor{}, "", false
 	}
-	overlayIPv4 := r.hopNextOverlayIPv4
 	forwardToken := r.hopNextToken
-	return overlayIPv4, forwardToken, overlayIPv4 != "" || forwardToken != ""
+	return r.hopNextRelay, forwardToken, r.hopNextRelay.HasOverlayPeer() || forwardToken != ""
 }
 
 func (r *leaseRecord) isExpired(now time.Time) bool {

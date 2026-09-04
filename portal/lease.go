@@ -499,7 +499,6 @@ func (r *leaseRegistry) RegisterHopRoute(route *types.HopRoute, now time.Time) (
 	echConfigList := bytes.Clone(route.ECHConfigList)
 	publicHostname := utils.NormalizeHostname(route.PublicHostname)
 	matchToken := route.MatchToken
-	overlayIPv4, overlayErr := identity.DeriveWireGuardOverlayIPv4(route.ForwardRelay.WireGuardPublicKey)
 	forwardToken := route.ForwardToken
 	expiresAt := route.ExpiresAt.UTC()
 	hasPublicMatcher := routeHostname != "" || hostnameHash != ""
@@ -513,8 +512,8 @@ func (r *leaseRegistry) RegisterHopRoute(route *types.HopRoute, now time.Time) (
 		return nil, errors.New("route and token matchers are mutually exclusive")
 	case matchToken == "" && routeHostname == "":
 		return nil, errors.New("route hostname or token matcher is required")
-	case overlayErr != nil:
-		return nil, fmt.Errorf("forward relay overlay ipv4: %w", overlayErr)
+	case !route.ForwardRelay.HasOverlayPeer():
+		return nil, errors.New("forward relay overlay metadata is required")
 	case forwardToken == "":
 		return nil, errors.New("forward token is required")
 	}
@@ -558,16 +557,16 @@ func (r *leaseRegistry) RegisterHopRoute(route *types.HopRoute, now time.Time) (
 			Name:    name,
 			Address: ownerKey,
 		},
-		Hostname:           routeHostname,
-		HostnameHash:       hostnameHash,
-		ECHConfigList:      echConfigList,
-		ECHDNSHostname:     publicHostname,
-		Metadata:           route.Metadata.Copy(),
-		FirstSeenAt:        route.FirstSeenAt.UTC(),
-		ExpiresAt:          expiresAt,
-		hopToken:           matchToken,
-		hopNextOverlayIPv4: overlayIPv4,
-		hopNextToken:       forwardToken,
+		Hostname:       routeHostname,
+		HostnameHash:   hostnameHash,
+		ECHConfigList:  echConfigList,
+		ECHDNSHostname: publicHostname,
+		Metadata:       route.Metadata.Copy(),
+		FirstSeenAt:    route.FirstSeenAt.UTC(),
+		ExpiresAt:      expiresAt,
+		hopToken:       matchToken,
+		hopNextRelay:   route.ForwardRelay,
+		hopNextToken:   forwardToken,
 	}
 	switch {
 	case record.isPublicEntry():

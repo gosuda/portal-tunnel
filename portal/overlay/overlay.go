@@ -2,10 +2,8 @@ package overlay
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -265,15 +263,7 @@ func (o *Overlay) OpenHopStream(ctx context.Context, overlayIPv4, token string) 
 		}
 	}
 
-	payload := []byte(token)
-	if len(payload) > maxHopTokenBytes {
-		_ = next.Close()
-		return nil, errors.New("next hop token is too large")
-	}
-	frame := make([]byte, 4+len(payload))
-	binary.BigEndian.PutUint32(frame[:4], uint32(len(payload)))
-	copy(frame[4:], payload)
-	if _, err := next.Write(frame); err != nil {
+	if err := writeHopToken(next, token); err != nil {
 		_ = next.Close()
 		return nil, err
 	}
@@ -365,37 +355,10 @@ func (o *Overlay) serveHopSession(ctx context.Context, conn net.Conn) {
 			return
 		}
 		go func(stream *yamux.Stream) {
-			_ = stream.SetReadDeadline(time.Now().Add(defaultTokenTimeout))
-			var size [4]byte
-			if _, err := io.ReadFull(stream, size[:]); err != nil {
+			hopStream, err := readHopStream(stream)
+			if err != nil {
 				_ = stream.Close()
 				return
-			}
-			n := binary.BigEndian.Uint32(size[:])
-			if n == 0 || n > uint32(maxHopTokenBytes) {
-				_ = stream.Close()
-				return
-			}
-			payload := make([]byte, n)
-			if _, err := io.ReadFull(stream, payload); err != nil {
-				_ = stream.Close()
-				return
-			}
-			_ = stream.SetReadDeadline(time.Time{})
-
-			token := strings.TrimSpace(string(payload))
-			if token == "" {
-				_ = stream.Close()
-				return
-			}
-			remoteAddr := ""
-			if stream.RemoteAddr() != nil {
-				remoteAddr = stream.RemoteAddr().String()
-			}
-			hopStream := HopStream{
-				Conn:       stream,
-				Token:      token,
-				RemoteAddr: remoteAddr,
 			}
 			handlerPtr := o.streamHandler.Load()
 			if handlerPtr != nil && *handlerPtr != nil {
@@ -465,7 +428,7 @@ func (o *Overlay) DiscoverRelay(ctx context.Context, relay types.RelayDescriptor
 	if o == nil || o.stack == nil {
 		return types.DiscoveryResponse{}, errors.New("overlay is not initialized")
 	}
-	if !relay.HasOverlayPeer() {
+	if !relay.HasWireGuardPeer() {
 		return types.DiscoveryResponse{}, errors.New("relay wireguard overlay metadata is required")
 	}
 	overlayIPv4, err := identity.DeriveWireGuardOverlayIPv4(relay.WireGuardPublicKey)
@@ -491,7 +454,7 @@ func (o *Overlay) Sync(relays []types.RelayDescriptor) error {
 
 	peers := make([]types.RelayDescriptor, 0, len(relays))
 	for _, desc := range relays {
-		if !desc.HasOverlayPeer() {
+		if !desc.HasWireGuardPeer() {
 			continue
 		}
 		if desc.WireGuardPublicKey == o.cfg.PublicKey {
@@ -504,6 +467,10 @@ func (o *Overlay) Sync(relays []types.RelayDescriptor) error {
 	})
 	return o.stack.ApplyPeers(peers)
 }
+
+func (o *Overlay) CanDiscover(relay types.RelayDescriptor) bool { return relay.HasWireGuardPeer() }
+
+func (o *Overlay) MeasureDiscoveryRTT() bool { return true }
 
 func hopYamuxConfig() *yamux.Config {
 	cfg := yamux.DefaultConfig()

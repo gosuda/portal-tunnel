@@ -174,7 +174,7 @@ UDP client
 - `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay identity key and used for the rest of the lease lifecycle.
 - Relay URLs must use `https://`.
 - HTTP/2 stays disabled on the admin/API TLS listener. Keyless TLS certificate sharing and `/sdk/connect` both depend on the current HTTP/1.1-only transport contract.
-- WireGuard, when enabled, is relay-to-relay overlay transport only. It carries multi-hop relay forwarding and overlay discovery, but it is not used for direct tenant TLS termination, public UDP ingress, or `/sdk/*` control-plane traffic.
+- IVNP, when enabled, is the preferred relay-to-relay overlay. It owns I2P peer reachability and internal path construction while Portal authenticates discovery descriptors and hop route tokens. WireGuard remains a direct relay fallback during migration. Neither overlay is used for direct tenant TLS termination, public UDP ingress, or tunnel-client reverse backhaul.
 
 ### Reverse Session Protocol
 
@@ -291,14 +291,16 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 <Mermaid code={udpQuicDiagram} />
 
-## WireGuard Overlay and Discovery
+## Relay Overlay and Discovery
 
 - Discovery bootstraps from public HTTPS relay URLs, then expands through relay-to-relay `/discovery` polling and periodic self-announces to bootstrap relays through `/discovery/announce`.
 - SDK exposures consume relay discovery results to choose relays, but they do not announce themselves and do not serve `/discovery`.
-- Discovery descriptors are signed relay self-descriptions. They bind relay routing metadata such as `api_https_addr`, `supports_overlay`, `wireguard_public_key`, and `wireguard_port` to the relay identity. Lease access tokens remain separate and authorize tenant lease operations only.
+- Discovery descriptors are signed relay self-descriptions. They bind relay routing metadata such as `api_https_addr`, `supports_overlay`, `ivnp_destination`, and optional WireGuard metadata to the relay identity. Lease access tokens remain separate and authorize tenant lease operations only.
 - `/discovery/announce` accepts only signed relay descriptors. Loopback or localhost relay descriptors are rejected because they cannot join the public discovery mesh.
-- The overlay peer API is plain HTTP on the WireGuard network, not public Internet HTTP. It serves the same discovery payload shape used by public `/discovery`.
-- Overlay failure affects inter-relay discovery, mesh synchronization, and multi-hop relay forwarding. Direct tenant TLS routing, keyless TLS, register/renew/connect, and public UDP ingress do not depend on the WireGuard transport path.
+- The overlay peer API serves the same Portal-owned discovery payload as public `/discovery`. With IVNP it is carried on the relay's persistent I2P application destination; Portal does not put relay descriptors into I2P NetDB records.
+- IVNP discovery runs at a slower cadence than public HTTPS polling, and its latency is not recorded as public relay ingress RTT for MOLS ranking.
+- Authenticated hop streams prefer IVNP when both relays advertise destinations and fall back to the direct WireGuard path while migration is in progress.
+- Overlay failure affects inter-relay discovery and multi-hop relay forwarding. Direct tenant TLS routing, keyless TLS, register/renew/connect, and public UDP ingress do not depend on the relay overlay.
 
 ## Control Plane Flow
 
@@ -361,7 +363,7 @@ The relay signs handshake digests via `/v1/sign` but never receives tenant TLS t
 - One canonical raw TCP reverse transport
 - Dedicated TCP port allocation for non-TLS services with raw TCP bridging
 - Raw public UDP exposure with an internal QUIC datagram backhaul
-- Optional WireGuard relay overlay for relay discovery, peer synchronization, and multi-hop relay forwarding
+- Optional IVNP relay overlay for NAT-independent relay discovery and authenticated relay-to-relay forwarding, with WireGuard direct fallback during migration
 - SNI-based routing with root-host fallback
 - End-to-end tenant TLS with relay-backed keyless signing
 - Traffic-triggered detect-only MITM self-probing for probable relay-side TLS termination

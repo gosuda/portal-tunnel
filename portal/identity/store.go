@@ -35,6 +35,7 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	desc.Address = strings.TrimSpace(desc.Address)
 	desc.Version = strings.TrimSpace(desc.Version)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
+	desc.IVNPDestination = strings.ToLower(strings.TrimSpace(desc.IVNPDestination))
 	desc.WireGuardPublicKey = strings.TrimSpace(desc.WireGuardPublicKey)
 	if desc.Version == "" {
 		desc.Version = types.DiscoveryVersion
@@ -68,6 +69,17 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	if desc.WireGuardPort < 0 || desc.WireGuardPort > 65535 {
 		return types.RelayDescriptor{}, errors.New("wireguard_port is invalid")
 	}
+	if desc.IVNPDestination != "" {
+		label, ok := strings.CutSuffix(desc.IVNPDestination, ".b32.i2p")
+		if !ok || len(label) != 52 {
+			return types.RelayDescriptor{}, errors.New("ivnp_destination is invalid")
+		}
+		for _, character := range label {
+			if (character < 'a' || character > 'z') && (character < '2' || character > '7') {
+				return types.RelayDescriptor{}, errors.New("ivnp_destination is invalid")
+			}
+		}
+	}
 	if desc.ActiveConnections < 0 {
 		return types.RelayDescriptor{}, errors.New("active_connections is invalid")
 	}
@@ -82,12 +94,12 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 		return types.RelayDescriptor{}, fmt.Errorf("unsupported relay descriptor version %q", desc.Version)
 	case desc.APIHTTPSAddr == "":
 		return types.RelayDescriptor{}, errors.New("api_https_addr is required")
-	case desc.SupportsOverlay && desc.WireGuardPublicKey == "":
-		return types.RelayDescriptor{}, errors.New("wireguard_public_key is required when supports_overlay is set")
-	case desc.SupportsOverlay && desc.WireGuardPort == 0:
-		return types.RelayDescriptor{}, errors.New("wireguard_port is required when supports_overlay is set")
-	case !desc.SupportsOverlay && (desc.WireGuardPublicKey != "" || desc.WireGuardPort != 0):
-		return types.RelayDescriptor{}, errors.New("supports_overlay is required when wireguard metadata is set")
+	case desc.SupportsOverlay && !desc.HasOverlayPeer():
+		return types.RelayDescriptor{}, errors.New("ivnp or wireguard metadata is required when supports_overlay is set")
+	case (desc.WireGuardPublicKey == "") != (desc.WireGuardPort == 0):
+		return types.RelayDescriptor{}, errors.New("wireguard_public_key and wireguard_port must be provided together")
+	case !desc.SupportsOverlay && (desc.IVNPDestination != "" || desc.WireGuardPublicKey != "" || desc.WireGuardPort != 0):
+		return types.RelayDescriptor{}, errors.New("supports_overlay is required when overlay metadata is set")
 	case desc.ExpiresAt.IsZero():
 		return types.RelayDescriptor{}, errors.New("expires_at is required")
 	case desc.IssuedAt.After(desc.ExpiresAt):

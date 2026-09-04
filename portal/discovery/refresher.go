@@ -37,6 +37,7 @@ type Refresher struct {
 	directRecoveryFailures int
 	lastAnnounceSuccess    map[string]bool
 	lastAnnounceMu         sync.Mutex
+	nextOverlayRefreshAt   time.Time
 }
 
 func NewRefresher(relaySet *RelaySet, overlay OverlayRuntime) *Refresher {
@@ -184,6 +185,9 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 	if state.Bootstrap {
 		recoveryFailures = 0
 	}
+	if policy, ok := r.overlay.(interface{ RecordDiscoveryFailures() bool }); ok && !policy.RecordDiscoveryFailures() {
+		recoveryFailures = 0
+	}
 
 	baseURL, err := url.Parse(relayURL)
 	if err != nil {
@@ -237,6 +241,14 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 
 func (r *Refresher) refreshOverlay(ctx context.Context) error {
 	now := time.Now().UTC()
+	if !r.nextOverlayRefreshAt.IsZero() && now.Before(r.nextOverlayRefreshAt) {
+		return nil
+	}
+	if cadence, ok := r.overlay.(interface{ DiscoveryInterval() time.Duration }); ok {
+		if interval := cadence.DiscoveryInterval(); interval > 0 {
+			r.nextOverlayRefreshAt = now.Add(interval)
+		}
+	}
 	states := r.relaySet.overlayPeerRelayStates(now)
 	if len(states) == 0 {
 		return nil
@@ -250,6 +262,13 @@ func (r *Refresher) refreshOverlay(ctx context.Context) error {
 	}
 
 	candidates := r.relaySet.overlayRefreshCandidates(now)
+	if checker, ok := r.overlay.(interface {
+		CanDiscover(types.RelayDescriptor) bool
+	}); ok {
+		candidates = slices.DeleteFunc(candidates, func(state RelayState) bool {
+			return !checker.CanDiscover(state.Descriptor)
+		})
+	}
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -328,7 +347,13 @@ func (r *Refresher) refreshOneOverlay(ctx context.Context, state RelayState) (bo
 		}
 		return false, nil
 	}
-	r.relaySet.RecordDiscoveryRTT(relay.APIHTTPSAddr, time.Since(startedAt), measuredAt)
+	measureRTT := true
+	if policy, ok := r.overlay.(interface{ MeasureDiscoveryRTT() bool }); ok {
+		measureRTT = policy.MeasureDiscoveryRTT()
+	}
+	if measureRTT {
+		r.relaySet.RecordDiscoveryRTT(relay.APIHTTPSAddr, time.Since(startedAt), measuredAt)
+	}
 	return changed, nil
 }
 

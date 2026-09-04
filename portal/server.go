@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,7 @@ const (
 	defaultClientHelloWait  = 2 * time.Second
 	defaultControlBodyLimit = 4 << 20
 	defaultHopOpenRetryWait = 250 * time.Millisecond
+	defaultIVNPHopAttempt   = 4 * time.Second
 	DefaultPProfListenAddr  = "127.0.0.1:6060"
 )
 
@@ -43,6 +45,8 @@ type ServerConfig struct {
 	IdentityPath      string
 	Bootstraps        []string
 	DiscoveryEnabled  bool
+	IVNPEnabled       bool
+	IVNPConfigPath    string
 	WireGuardPort     int
 	APIPort           int
 	SNIPort           int
@@ -67,6 +71,15 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
 	if cfg.IdentityPath == "" {
 		return ServerConfig{}, errors.New("identity path is required")
+	}
+	if cfg.IVNPEnabled {
+		if !cfg.DiscoveryEnabled {
+			return ServerConfig{}, errors.New("ivnp overlay requires relay discovery")
+		}
+		cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
+		if cfg.IVNPConfigPath == "" {
+			cfg.IVNPConfigPath = filepath.Join(cfg.IdentityPath, "ivnp.conf")
+		}
 	}
 
 	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
@@ -140,6 +153,7 @@ type Server struct {
 	quicBackhaul  *quic.Listener
 
 	overlay         *overlay.Overlay
+	ivnpOverlay     *overlay.IVNP
 	relaySet        *discovery.RelaySet
 	announceLimiter *discovery.AnnounceLimiter
 	registry        *leaseRegistry
@@ -245,6 +259,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	var pprofListener net.Listener
 	var pprofServer *http.Server
 	var ov *overlay.Overlay
+	var ivnpOverlay *overlay.IVNP
 	var quicBackhaul *quic.Listener
 	defer func() {
 		if started {
@@ -253,6 +268,9 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		_ = acmeManager.Stop(ctx)
 		if ov != nil {
 			_ = ov.Shutdown(context.Background())
+		}
+		if ivnpOverlay != nil {
+			_ = ivnpOverlay.Shutdown(context.Background())
 		}
 		if apiServer != nil {
 			_ = apiServer.Close()
@@ -313,6 +331,12 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 			return err
 		}
 	}
+	if s.relaySet != nil && cfg.IVNPEnabled {
+		ivnpOverlay, err = s.startIVNPOverlay()
+		if err != nil {
+			return err
+		}
+	}
 	if cfg.UDPEnabled {
 		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
 		if err != nil {
@@ -331,6 +355,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.cancel = cancel
 	s.group = group
 	s.overlay = ov
+	s.ivnpOverlay = ivnpOverlay
 	s.quicBackhaul = quicBackhaul
 	started = true
 
@@ -341,6 +366,9 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	group.Go(func() error { return s.runPublicIngress(groupCtx) })
 	if s.overlay != nil {
 		group.Go(func() error { return s.overlay.Serve(groupCtx) })
+	}
+	if s.ivnpOverlay != nil {
+		group.Go(func() error { return s.ivnpOverlay.Serve(groupCtx) })
 	}
 	if s.quicBackhaul != nil {
 		group.Go(s.runQUICBackhaulListener)
@@ -366,7 +394,8 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		Int("max_port", cfg.MaxPort).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
 		Bool("wireguard_enabled", s.overlay != nil).
-		Bool("multihop_enabled", s.overlay != nil).
+		Bool("ivnp_enabled", s.ivnpOverlay != nil).
+		Bool("multihop_enabled", s.overlay != nil || s.ivnpOverlay != nil).
 		Bool("udp_enabled", s.quicBackhaul != nil).
 		Bool("tcp_enabled", s.supportsTCP()).
 		Bool("api_ech_enabled", len(apiTLS.EncryptedClientHelloKeys) > 0).
@@ -460,6 +489,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 		if s.overlay != nil {
 			if err := s.overlay.Shutdown(ctx); err != nil && shutdownErr == nil {
+				shutdownErr = err
+			}
+		}
+		if s.ivnpOverlay != nil {
+			if err := s.ivnpOverlay.Shutdown(ctx); err != nil && shutdownErr == nil {
 				shutdownErr = err
 			}
 		}
@@ -612,12 +646,12 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	if record.isExpired(time.Now()) {
 		return errLeaseNotFound
 	}
-	if overlayIPv4, forwardToken, hasNextHop := record.nextHop(); hasNextHop {
+	if forwardRelay, forwardToken, hasNextHop := record.nextHop(); hasNextHop {
 		switch {
-		case s.overlay == nil:
+		case s.overlay == nil && s.ivnpOverlay == nil:
 			return errors.New("relay overlay is unavailable")
-		case overlayIPv4 == "":
-			return errors.New("next hop overlay ipv4 is required")
+		case !forwardRelay.HasOverlayPeer():
+			return errors.New("next hop overlay metadata is required")
 		case forwardToken == "":
 			return errors.New("next hop token is required")
 		}
@@ -628,7 +662,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		var lastErr error
 		for {
 			var err error
-			next, err = s.overlay.OpenHopStream(openCtx, overlayIPv4, forwardToken)
+			next, err = s.openHopStream(openCtx, forwardRelay, forwardToken)
 			if err == nil {
 				break
 			}
@@ -657,6 +691,34 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	}
 	s.proxy.bridge(conn, session, record.Key(), s.registry.policy.BPSManager())
 	return nil
+}
+
+func (s *Server) openHopStream(ctx context.Context, relay types.RelayDescriptor, token string) (net.Conn, error) {
+	var errs []error
+	if s.ivnpOverlay != nil && relay.HasIVNPPeer() {
+		ivnpCtx, cancel := context.WithTimeout(ctx, defaultIVNPHopAttempt)
+		conn, err := s.ivnpOverlay.OpenHopStream(ivnpCtx, relay.IVNPDestination, token)
+		cancel()
+		if err == nil {
+			return conn, nil
+		}
+		errs = append(errs, fmt.Errorf("ivnp: %w", err))
+	}
+	if s.overlay != nil && relay.HasWireGuardPeer() {
+		overlayIPv4, err := identity.DeriveWireGuardOverlayIPv4(relay.WireGuardPublicKey)
+		if err == nil {
+			var conn net.Conn
+			conn, err = s.overlay.OpenHopStream(ctx, overlayIPv4, token)
+			if err == nil {
+				return conn, nil
+			}
+		}
+		errs = append(errs, fmt.Errorf("wireguard: %w", err))
+	}
+	if len(errs) == 0 {
+		return nil, errors.New("next hop has no locally available overlay transport")
+	}
+	return nil, errors.Join(errs...)
 }
 
 func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration) error {
@@ -759,31 +821,10 @@ func (s *Server) startOverlay() (*overlay.Overlay, error) {
 		PrivateKey: s.identity.WireGuardPrivateKey,
 		PublicKey:  s.identity.WireGuardPublicKey,
 		ListenPort: cfg.WireGuardPort,
-	}, peerMux, nil)
+	}, peerMux, s.handleHopStream)
 	if err != nil {
 		return nil, fmt.Errorf("start wireguard overlay: %w", err)
 	}
-
-	ov.SetStreamHandler(func(ctx context.Context, stream overlay.HopStream) {
-		s.registry.mu.RLock()
-		record := s.registry.recordByHopToken(stream.Token, time.Now())
-		s.registry.mu.RUnlock()
-		if record == nil {
-			log.Warn().Str("remote_addr", stream.RemoteAddr).Msg("hop stream rejected")
-			_ = stream.Conn.Close()
-			return
-		}
-		hopRole := "exit"
-		if record.isHopMiddle() {
-			hopRole = "middle"
-		}
-		log.Info().Str("remote_addr", stream.RemoteAddr).Str("hop_role", hopRole).Msg("hop stream received")
-
-		if err := s.bridgeLeaseConn(ctx, stream.Conn, record); err != nil {
-			log.Warn().Err(err).Str("remote_addr", stream.RemoteAddr).Msg("hop stream bridge failed")
-			_ = stream.Conn.Close()
-		}
-	})
 
 	if err := ov.Sync(s.relaySet.OverlayPeerDescriptor()); err != nil {
 		_ = ov.Shutdown(context.Background())
@@ -793,12 +834,49 @@ func (s *Server) startOverlay() (*overlay.Overlay, error) {
 	return ov, nil
 }
 
+func (s *Server) startIVNPOverlay() (*overlay.IVNP, error) {
+	cfg := s.config()
+	peerMux := http.NewServeMux()
+	peerMux.HandleFunc(types.PathRoot, s.handleRoot)
+	peerMux.HandleFunc(types.PathHealthz, s.handleHealthz)
+	peerMux.HandleFunc(types.PathDiscovery, s.handleRelayDiscovery)
+	ivnpOverlay, err := overlay.NewIVNP(cfg.IVNPConfigPath, peerMux, s.handleHopStream)
+	if err != nil {
+		return nil, fmt.Errorf("start ivnp overlay: %w", err)
+	}
+	return ivnpOverlay, nil
+}
+
+func (s *Server) handleHopStream(ctx context.Context, stream overlay.HopStream) {
+	s.registry.mu.RLock()
+	record := s.registry.recordByHopToken(stream.Token, time.Now())
+	s.registry.mu.RUnlock()
+	if record == nil {
+		log.Warn().Str("remote_addr", stream.RemoteAddr).Msg("hop stream rejected")
+		_ = stream.Conn.Close()
+		return
+	}
+	hopRole := "exit"
+	if record.isHopMiddle() {
+		hopRole = "middle"
+	}
+	log.Info().Str("remote_addr", stream.RemoteAddr).Str("hop_role", hopRole).Msg("hop stream received")
+	if err := s.bridgeLeaseConn(ctx, stream.Conn, record); err != nil {
+		log.Warn().Err(err).Str("remote_addr", stream.RemoteAddr).Msg("hop stream bridge failed")
+		_ = stream.Conn.Close()
+	}
+}
+
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	if s.relaySet == nil {
 		<-ctx.Done()
 		return nil
 	}
-	refresher := discovery.NewRefresher(s.relaySet, s.overlay)
+	var discoveryOverlay discovery.OverlayRuntime = s.overlay
+	if s.ivnpOverlay != nil {
+		discoveryOverlay = s.ivnpOverlay
+	}
+	refresher := discovery.NewRefresher(s.relaySet, discoveryOverlay)
 	ticker := time.NewTicker(discovery.DiscoveryPollInterval)
 	defer ticker.Stop()
 
@@ -843,6 +921,11 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 		wireGuardPort = cfg.ListenPort
 		supportsOverlay = true
 	}
+	ivnpDestination := ""
+	if s.ivnpOverlay != nil {
+		ivnpDestination = s.ivnpOverlay.Destination()
+		supportsOverlay = supportsOverlay || ivnpDestination != ""
+	}
 
 	return auth.SignRelayDescriptor(types.RelayDescriptor{
 		Address:            s.identity.Address,
@@ -850,6 +933,7 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 		IssuedAt:           now,
 		ExpiresAt:          now.Add(discovery.DiscoveryDescriptorTTL),
 		APIHTTPSAddr:       cfg.PortalURL,
+		IVNPDestination:    ivnpDestination,
 		WireGuardPublicKey: wireGuardPublicKey,
 		WireGuardPort:      wireGuardPort,
 		SupportsOverlay:    supportsOverlay,

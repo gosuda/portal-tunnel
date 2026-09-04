@@ -40,6 +40,8 @@ type relayServerConfig struct {
 	IdentityPath       string
 	Bootstraps         string
 	DiscoveryEnabled   bool
+	IVNPEnabled        bool
+	IVNPConfigPath     string
 	WireGuardPort      int
 	APIPort            int
 	SNIPort            int
@@ -104,6 +106,8 @@ func registerRelayServerFlags(fs *flag.FlagSet, cfg *relayServerConfig) {
 	utils.StringFlagEnv(fs, &cfg.IdentityPath, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "bootstrap relay API URLs; merged with bootstrap relays when discovery is enabled", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
+	utils.BoolFlagEnv(fs, &cfg.IVNPEnabled, "ivnp-enabled", false, "enable the embedded IVNP relay overlay", "IVNP_ENABLED")
+	utils.StringFlagEnv(fs, &cfg.IVNPConfigPath, "ivnp-config", "", "IVNP configuration path; defaults to IDENTITY_PATH/ivnp.conf", "IVNP_CONFIG")
 	utils.IntFlagEnv(fs, &cfg.WireGuardPort, "wireguard-port", overlay.DefaultListenPort, utils.ParsePortNumber, "public and listen UDP port for relay overlay", "WIREGUARD_PORT")
 
 	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
@@ -179,6 +183,8 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		IdentityPath:      cfg.IdentityPath,
 		Bootstraps:        utils.SplitCSV(cfg.Bootstraps),
 		DiscoveryEnabled:  cfg.DiscoveryEnabled,
+		IVNPEnabled:       cfg.IVNPEnabled,
+		IVNPConfigPath:    cfg.IVNPConfigPath,
 		WireGuardPort:     cfg.WireGuardPort,
 		APIPort:           cfg.APIPort,
 		SNIPort:           cfg.SNIPort,

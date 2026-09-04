@@ -55,6 +55,7 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | `API_PORT` | `4017` | int | Admin/API server listen port |
 | `SNI_PORT` | `443` | int | TCP SNI router listen port; non-standard values are intended for local testing, while the bundled public deployment requires `443` |
 | `WIREGUARD_PORT` | `51820` | int | Public and listen UDP port for relay discovery overlay |
+| `IVNP_CONFIG` | `IDENTITY_PATH/ivnp.conf` | string | Embedded IVNP router configuration path when the IVNP overlay is enabled |
 
 ### Transport
 
@@ -70,6 +71,7 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
+| `IVNP_ENABLED` | `false` | bool | Carry relay discovery and authenticated relay-to-relay hop streams over embedded IVNP/I2P; requires `DISCOVERY=true` |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
 | `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
 
