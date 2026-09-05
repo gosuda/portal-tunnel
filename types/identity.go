@@ -105,6 +105,7 @@ type RelayDescriptor struct {
 	Version           string    `json:"version"`
 	IssuedAt          time.Time `json:"issued_at"`
 	ExpiresAt         time.Time `json:"expires_at"`
+	IVNPDestination   string    `json:"ivnp_destination,omitempty"`
 	APIHTTPSAddr      string    `json:"api_https_addr"`
 	SupportsUDP       bool      `json:"supports_udp,omitempty"`
 	SupportsTCP       bool      `json:"supports_tcp,omitempty"`
@@ -124,6 +125,7 @@ func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
 		Version           string  `json:"version"`
 		IssuedAtUnixNano  int64   `json:"issued_at_unix_nano"`
 		ExpiresAtUnixNano int64   `json:"expires_at_unix_nano"`
+		IVNPDestination   string  `json:"ivnp_destination"`
 		APIHTTPSAddr      string  `json:"api_https_addr"`
 		SupportsUDP       bool    `json:"supports_udp"`
 		SupportsTCP       bool    `json:"supports_tcp"`
@@ -135,6 +137,7 @@ func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
 		IssuedAtUnixNano:  desc.IssuedAt.UTC().UnixNano(),
 		ExpiresAtUnixNano: desc.ExpiresAt.UTC().UnixNano(),
 		APIHTTPSAddr:      desc.APIHTTPSAddr,
+		IVNPDestination:   desc.IVNPDestination,
 		SupportsUDP:       desc.SupportsUDP,
 		SupportsTCP:       desc.SupportsTCP,
 		ActiveConnections: desc.ActiveConnections,

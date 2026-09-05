@@ -304,7 +304,6 @@ Pass-through is the default in the example for that reason.
 services:
   portal:
     ports: !override
-      - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
 ```
 
 `!override` replaces the base `ports` list rather than appending to it; without
@@ -312,7 +311,7 @@ it Compose merges both and still tries to bind `443`. It requires Docker Compose
 2.24.4 or newer.
 
 Because it *replaces*, this list must carry **every mapping the deployment had
-enabled**. The bundled file publishes TCP 443 and the WireGuard port and
+enabled**. The bundled file publishes TCP 443 and the embedded DNS ports and
 comments out three more — `443/udp` for QUIC backhaul, the `MIN_PORT`–`MAX_PORT`
 UDP range, and the same range for raw TCP leases. Anything left out here stops
 being published, silently, and tunnels that used it stop working.

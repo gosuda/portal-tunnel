@@ -20,10 +20,10 @@ const coreFeatures = [
       "Use discovered public relays or run your own without a central account or operator.",
   },
   {
-    eyebrow: "Multi-hop",
-    title: "Multihop Routing (like Tor)",
+    eyebrow: "Relay overlay",
+    title: "Optional IVNP connectivity",
     description:
-      "Route through multiple relays so each hop sees only its neighbors, not the full path.",
+      "Connect relays through IVNP while keeping public HTTPS and the default tunnel backhaul direct.",
   },
   {
     eyebrow: "Payments",

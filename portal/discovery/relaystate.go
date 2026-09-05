@@ -25,7 +25,7 @@ const (
 	// MaxAnnouncedRelaysPerIdentity bounds how many unverified announced
 	// entries one signing identity may hold. Overflow recycles that
 	// identity's own oldest entries, so an unauthenticated announce or
-	// hop-route flood cannot use the identity's slots to push other relays
+	// overlay admission flood cannot use the identity's slots to push other relays
 	// toward the global-cap eviction.
 	MaxAnnouncedRelaysPerIdentity = 4
 
@@ -49,8 +49,8 @@ type RelayTrust uint8
 
 const (
 	// RelayCandidate marks a descriptor admitted from untrusted input.
-	// Candidates still serve overlay routing for the hop route that brought
-	// them in and remain refresh-poll targets, but they are excluded from
+	// Candidates can serve authenticated overlay exchanges and remain
+	// refresh-poll targets, but they are excluded from
 	// Descriptors(), automatic route selection, and this relay's own gossip
 	// output until promoted.
 	RelayCandidate RelayTrust = iota
@@ -88,7 +88,7 @@ type RelayState struct {
 	Descriptor types.RelayDescriptor
 	Bootstrap  bool
 	// Trust classifies how the entry entered the set. Descriptors from
-	// untrusted input (/sdk/hop, /discovery/announce, or gossiped discovery
+	// untrusted input (overlay exchanges, /discovery/announce, or gossiped discovery
 	// content) are admitted as RelayCandidate and stay out of Descriptors()
 	// and automatic route selection until a direct authoritative probe of
 	// that exact relay promotes them to RelayVerified.

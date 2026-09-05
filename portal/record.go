@@ -2,6 +2,7 @@ package portal
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -14,6 +15,7 @@ import (
 )
 
 type leaseRecord struct {
+	relayBinding atomic.Pointer[relayBinding]
 	types.Identity
 	ExpiresAt      time.Time
 	FirstSeenAt    time.Time

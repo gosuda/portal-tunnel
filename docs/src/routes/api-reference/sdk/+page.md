@@ -71,8 +71,7 @@ which are configured locally by the tunnel process.
 | `udp_enabled` | `boolean` | no | request UDP transport |
 | `tcp_enabled` | `boolean` | no | request dedicated TCP port |
 
-Overlay-only fields are also accepted by relay-to-relay clients:
-`hop_token`, `route_hostname`, `hostname_hash`, and `ech_config_list`.
+ECH-enabled clients also send `route_hostname`, `hostname_hash`, and `ech_config_list`.
 
 `RegisterChallengeResponse`:
 
@@ -155,6 +154,4 @@ tenant bytes between the browser side and the SDK side.
 
 ## Relay Overlay
 
-`/sdk/hop` is reserved for relay-to-relay overlay routing. It accepts
-`POST` and `DELETE` with a signed `HopRoute` body and returns `HopRouteResponse`
-or `{}`. Normal SDK clients should not call it directly.
+`PUT /sdk/relay` attaches an existing SNI lease to a remote lease owned by the same tenant. `DELETE /sdk/relay` clears that attachment. Both require the local lease access token in `X-Portal-Access-Token`. See the [IVNP overlay API](/ivnp-overlay) for the request, expiry, and TLS requirements.

@@ -91,7 +91,7 @@ Agent wallet access is intentionally narrow:
 - when `allowed_wallets` is empty, any wallet can sign in to the loopback auth
   endpoint.
 - wallet-authenticated requests can read `/agent/status`.
-- config mutation, tunnel changes, relay changes, shutdown, and multi-hop edits
+- config mutation, tunnel changes, relay changes, shutdown
   still require the bearer token in `<state_dir>/agent-endpoint.json`.
 
 Example:

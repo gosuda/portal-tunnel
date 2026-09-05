@@ -56,6 +56,7 @@ export const guidesNavigation: NavSection[] = [
 		title: 'Guides',
 		items: [
 			{ title: 'Self-Hosting', href: '/self-hosting' },
+			{ title: 'IVNP Relay Overlay', href: '/ivnp-overlay' },
 			{ title: 'Portal Agent', href: '/portal-agent' },
 			{ title: 'TCP/UDP Tunneling', href: '/tcp-udp-tunneling' },
 			{ title: 'Game Server Hosting', href: '/game-server-hosting' },

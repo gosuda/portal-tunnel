@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"encoding/base32"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,14 @@ func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 }
 
 func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
+	desc.IVNPDestination = strings.TrimSpace(strings.ToLower(desc.IVNPDestination))
+	if desc.IVNPDestination != "" {
+		host := strings.TrimSuffix(desc.IVNPDestination, ".b32.i2p")
+		decoded, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(host))
+		if !strings.HasSuffix(desc.IVNPDestination, ".b32.i2p") || len(host) != 52 || err != nil || len(decoded) != 32 || strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(decoded)) != host {
+			return types.RelayDescriptor{}, errors.New("ivnp_destination must be a canonical b32.i2p destination")
+		}
+	}
 	desc.Address = strings.TrimSpace(desc.Address)
 	desc.Version = strings.TrimSpace(desc.Version)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)

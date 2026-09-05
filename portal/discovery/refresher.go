@@ -24,6 +24,9 @@ const (
 )
 
 type Refresher struct {
+	// DiscoverOverlay exchanges catalogs without measuring public ingress health.
+	DiscoverOverlay        func(context.Context, types.RelayDescriptor) (types.DiscoveryResponse, error)
+	nextOverlayRefresh     map[string]time.Time
 	relaySet               *RelaySet
 	httpClient             *http.Client
 	directRecoveryFailures int
@@ -56,7 +59,63 @@ func (r *Refresher) Refresh(ctx context.Context, self *types.RelayDescriptor) er
 			return err
 		}
 	}
+	if r.DiscoverOverlay != nil {
+		return r.refreshOverlay(ctx)
+	}
 	return nil
+}
+
+// Overlay polls are slower than public HTTPS probes and have independent retry
+// state. An overlay failure must not evict a healthy public relay or affect MOLS.
+func (r *Refresher) refreshOverlay(ctx context.Context) error {
+	now := time.Now().UTC()
+	states := r.relaySet.currentRelayStates(now)
+	if r.nextOverlayRefresh == nil {
+		r.nextOverlayRefresh = make(map[string]time.Time)
+	}
+	live := make(map[string]bool, len(states))
+	var candidates []RelayState
+	for _, state := range states {
+		desc := state.Descriptor
+		key := desc.APIHTTPSAddr + "/" + desc.IVNPDestination
+		live[key] = true
+		if state.Banned || desc.IVNPDestination == "" || !desc.ExpiresAt.After(now) || r.nextOverlayRefresh[key].After(now) {
+			continue
+		}
+		candidates = append(candidates, state)
+	}
+	for key := range r.nextOverlayRefresh {
+		if !live[key] {
+			delete(r.nextOverlayRefresh, key)
+		}
+	}
+	slices.SortFunc(candidates, func(a, b RelayState) int {
+		left := r.nextOverlayRefresh[a.Descriptor.APIHTTPSAddr+"/"+a.Descriptor.IVNPDestination]
+		right := r.nextOverlayRefresh[b.Descriptor.APIHTTPSAddr+"/"+b.Descriptor.IVNPDestination]
+		return left.Compare(right)
+	})
+	if len(candidates) > maxConcurrentRefresh {
+		candidates = candidates[:maxConcurrentRefresh]
+	}
+	for _, state := range candidates {
+		r.nextOverlayRefresh[state.Descriptor.APIHTTPSAddr+"/"+state.Descriptor.IVNPDestination] = now.Add(2 * time.Minute)
+	}
+	return parallel(candidates, 4, func(state RelayState) error {
+		resp, err := r.DiscoverOverlay(ctx, state.Descriptor)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			log.Debug().Err(err).Str("relay", state.Descriptor.APIHTTPSAddr).Msg("IVNP discovery unavailable")
+			return nil
+		}
+		if resp.ProtocolVersion != types.DiscoveryVersion {
+			return nil
+		}
+		// Gossip admission only: reaching I2P does not verify HTTPS reachability.
+		_, err = r.relaySet.ApplyRelayDiscoveryResponse("", resp, time.Now().UTC())
+		return err
+	})
 }
 
 func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDescriptor) error {

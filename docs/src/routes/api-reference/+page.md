@@ -86,8 +86,7 @@ configured admin token.
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
 | `GET` | `/sdk/connect` | lease token header | none | hijacked stream |
 
-`/sdk/hop` is a relay-to-relay overlay route endpoint. It is not used by normal
-SDK clients.
+`PUT /sdk/relay` and `DELETE /sdk/relay` manage an optional lease-bound IVNP attachment. They require the local lease token. See [IVNP overlay](/ivnp-overlay).
 
 ### Admin
 

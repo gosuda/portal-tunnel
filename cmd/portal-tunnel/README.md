@@ -149,9 +149,7 @@ Common `portal expose` flags:
 --name               Public hostname prefix; auto-generated when omitted
 --relays             Additional relay API URLs, comma-separated
 --discovery          Include registry relays and relay discovery expansion
---max-active-relays  Maximum auto-selected single-hop relays; multi-hop uses every eligible relay as an entry
---multi-hop          Ordered multi-hop relay API URLs, comma-separated
---multi-hop-depth    Automatically create this-depth multi-hop routes for every eligible entry relay
+--max-active-relays  Maximum auto-selected public relays
 --ban-mitm           Ban relay when the MITM self-probe detects termination
 --ech                Enable ECH hostname privacy for TLS stream tunnels (disabled by default)
 --identity-path      Identity JSON file path; created automatically when missing
@@ -186,7 +184,7 @@ portal agent stop
 portal agent restart
 ```
 
-The dashboard can edit basic tunnel settings, relays, and multi-hop routes. Add
+The dashboard can edit basic tunnel settings, relays, and public relay selection. Add
 Tunnel opens a small form for name, target or HTTP routes, x402 payment settings,
 relays, discovery, and max active relays. After creation, routed HTTP paths,
 route-level x402 amounts, payment network, and discovery mode are read-only in
@@ -206,8 +204,6 @@ restart the agent or tunnel to change them.
   `--x402-pay-to`. Sui is the default; Casper additionally requires
   `--x402-network casper:...` and the wCSPR contract in `--x402-asset`.
   The default CSPR.cloud facilitator also requires `CSPR_CLOUD_API_KEY`.
-- `--multi-hop` cannot be combined with `--multi-hop-depth`.
-- Multi-hop currently supports only the default SNI TLS stream transport.
 - `--tcp` and `--udp` require matching relay transport support.
 
 ## More Docs

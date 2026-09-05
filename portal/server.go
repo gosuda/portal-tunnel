@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
+
 	"github.com/gosuda/keyless_tls/relay/l4"
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
@@ -37,6 +39,7 @@ const (
 )
 
 type ServerConfig struct {
+	IVNPConfig        string
 	PortalURL         string
 	IdentityPath      string
 	Bootstraps        []string
@@ -117,6 +120,7 @@ func (cfg ServerConfig) hasLeasePortRange() bool {
 }
 
 type Server struct {
+	overlay      *overlay.Runtime
 	cancel       context.CancelFunc
 	group        *errgroup.Group
 	shutdownOnce sync.Once
@@ -141,6 +145,10 @@ type Server struct {
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
+	cfg.IVNPConfig = strings.TrimSpace(cfg.IVNPConfig)
+	if cfg.IVNPConfig != "" && !cfg.DiscoveryEnabled {
+		return nil, errors.New("ivnp-config requires discovery to advertise the relay destination")
+	}
 	cfg, err := normalizeServerConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -239,12 +247,16 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	var apiCloser io.Closer
 	var pprofListener net.Listener
 	var pprofServer *http.Server
+	var ov *overlay.Runtime
 	var quicBackhaul *quic.Listener
 	defer func() {
 		if started {
 			return
 		}
 		_ = acmeManager.Stop(ctx)
+		if ov != nil {
+			_ = ov.Close()
+		}
 		if apiServer != nil {
 			_ = apiServer.Close()
 		}
@@ -298,6 +310,12 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		}
 	}
 
+	if cfg.IVNPConfig != "" {
+		ov, err = overlay.New(serverCtx, cfg.IVNPConfig, func() (types.RelayDescriptor, error) { return s.newSelfDescriptor(time.Now().UTC()) }, s.relaySet.AdmitOverlayPeer, http.HandlerFunc(s.handleOverlay))
+		if err != nil {
+			return fmt.Errorf("start IVNP overlay: %w", err)
+		}
+	}
 	if cfg.UDPEnabled {
 		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
 		if err != nil {
@@ -315,10 +333,14 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.acmeManager = acmeManager
 	s.cancel = cancel
 	s.group = group
+	s.overlay = ov
 	s.quicBackhaul = quicBackhaul
 	started = true
 
 	group.Go(s.runAPIServer)
+	if s.overlay != nil {
+		group.Go(s.overlay.Serve)
+	}
 	if s.pprofServer != nil {
 		group.Go(s.runPProfServer)
 	}
@@ -436,6 +458,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			if err := s.pprofServer.Shutdown(ctx); err != nil && shutdownErr == nil {
 				shutdownErr = err
 			}
+		}
+		if s.overlay != nil {
+			shutdownErr = errors.Join(shutdownErr, s.overlay.Close())
 		}
 		if s.apiTLSClose != nil {
 			_ = s.apiTLSClose.Close()
@@ -582,7 +607,7 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 	}
 }
 
-func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord) error {
+func (s *Server) bridgeLocalLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord) error {
 	if record.isExpired(time.Now()) {
 		return errLeaseNotFound
 	}
@@ -695,6 +720,9 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 		return nil
 	}
 	refresher := discovery.NewRefresher(s.relaySet)
+	if s.overlay != nil {
+		refresher.DiscoverOverlay = s.overlay.DiscoverRelay
+	}
 	ticker := time.NewTicker(discovery.DiscoveryPollInterval)
 	defer ticker.Stop()
 
@@ -730,7 +758,12 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 	}
 	cfg := s.config()
 
+	var destination string
+	if s.overlay != nil {
+		destination = s.overlay.Destination()
+	}
 	return auth.SignRelayDescriptor(types.RelayDescriptor{
+		IVNPDestination:   destination,
 		Address:           s.identity.Address,
 		Version:           types.DiscoveryVersion,
 		IssuedAt:          now,

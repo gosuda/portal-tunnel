@@ -60,3 +60,12 @@ const (
 	PathAgentAuthLogout    = PathAgentPrefix + "/auth/logout"
 	PathAgentAuthStatus    = PathAgentPrefix + "/auth/status"
 )
+
+// Relay overlay paths are reachable only through the authenticated I2P listener.
+const (
+	PathRelayConnect      = "/relay/connect"
+	PathRelayLease        = "/relay/lease"
+	PathSDKRelay          = PathSDKPrefix + "/relay"
+	HeaderRelayDescriptor = "X-Portal-Relay-Descriptor"
+	RelayOverlayPort      = "7777"
+)

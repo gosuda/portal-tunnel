@@ -295,7 +295,7 @@ func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allo
 		}
 	}
 	// Shared untrusted-ingestion invariant: whichever path admitted the
-	// descriptor (announce, hop route, or gossiped discovery response), a
+	// descriptor (announce, overlay exchange, or gossiped discovery response), a
 	// single signing identity never holds more unverified entries than the
 	// per-identity cap. Confirmed entries are never evicted by this cap.
 	s.enforceIdentityCapLocked(address)
@@ -728,8 +728,8 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 	s.relays[relayURL] = state
 }
 
-// InsertCandidate ingests a single descriptor from untrusted input (/sdk/hop
-// or the announce endpoint) as a RelayCandidate. The full validation
+// InsertCandidate ingests a single descriptor from untrusted input (overlay
+// exchanges or the announce endpoint) as a RelayCandidate. The full validation
 // pipeline runs inline:
 //
 //  1. The descriptor signature is verified against the recovered public key
@@ -746,8 +746,8 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 //     URL-takeover guard, plus the per-identity candidate cap shared by
 //     every untrusted ingestion path.
 //
-// Candidates serve overlay routing for the hop route that brought them in
-// and remain refresh-poll targets, but they stay out of Descriptors() and
+// Candidates can serve authenticated overlay exchanges and remain
+// refresh-poll targets, but they stay out of Descriptors() and
 // automatic route planning until a direct authoritative probe of that exact
 // relay promotes them to RelayVerified via ApplyRelayDiscoveryResponse.
 func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) error {
@@ -958,4 +958,21 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 	state.suppressActiveUntil = now.Add(backoff)
 	s.relays[relayURL] = state
 	return true, "active", state.activeFailures
+}
+
+// AdmitOverlayPeer applies catalog admission without asserting public ingress health.
+func (s *RelaySet) AdmitOverlayPeer(desc types.RelayDescriptor) error {
+	if desc.IVNPDestination == "" {
+		return errors.New("relay has no IVNP destination")
+	}
+	if err := s.InsertCandidate(desc, time.Now().UTC()); err != nil {
+		return err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	current, ok := s.relays[desc.APIHTTPSAddr]
+	if !ok || current.Banned || current.Descriptor.Address != desc.Address || current.Descriptor.IVNPDestination != desc.IVNPDestination {
+		return errors.New("overlay descriptor superseded or not admitted")
+	}
+	return nil
 }

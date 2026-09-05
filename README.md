@@ -37,10 +37,6 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
   after real traffic begins. It compares TLS keying material exported on both
   sides and treats a mismatch as suspected relay-side TLS termination.
 
-- **Multi-Hop Relay Routing** - Chain multiple relays together so no single
-  relay knows both the origin and the destination. Use `--multi-hop-depth 3` to
-  select a three-hop route automatically.
-
 - **No Accounts, No API Keys** - Authentication uses SIWE-compatible signing
   with a locally generated secp256k1 key pair. No email, no registration, no
   vendor lock-in.
@@ -62,7 +58,7 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
 | SNI hiding (ECH) | **Yes** | No | No | No |
 | MITM self-probe | **Built-in** | No | No | No |
 | Multi-relay failover | **Yes** | Managed | Built-in | No |
-| Multi-hop routing | **Yes** | No | No | No |
+| Optional relay overlay | **IVNP** | No | No | No |
 | Account required | **No** | Yes | Yes | No |
 | Native x402 payments | **Yes** | No | No | No |
 
@@ -127,8 +123,6 @@ portal expose --name paid-app \
 # Raw TCP port (Minecraft, databases, SSH)
 portal expose localhost:25565 --name minecraft --tcp
 
-# Three-hop route for maximum anonymity
-portal expose 3000 --multi-hop-depth 3
 ```
 
 See [CLI Reference](cmd/portal-tunnel/README.md) for the full route syntax and
@@ -139,7 +133,7 @@ helper endpoints.
 
 Use Portal Agent directly when tunnels should keep running outside your terminal.
 It runs as a local OS service, keeps every tunnel in one TOML config alive, and
-provides a dashboard for relay and multi-hop management.
+provides a dashboard for public relay management.
 
 ```bash
 portal agent run --config config.toml
@@ -190,20 +184,13 @@ When ECH is enabled, the relay also cannot see the actual tenant hostname. It
 routes by an opaque token derived from the tunnel identity, while the real SNI
 stays inside the ECH-protected ClientHello.
 
-## How Multi-Hop Routing Works
+## Optional Relay Overlay
 
-```text
-Browser
-  -> Entry relay  (sees only the opaque route hostname)
-  -> Middle relay (sees only the next-hop token)
-  -> Exit relay   (sees only the reverse session token)
-  -> Portal tunnel
-  -> Local service
-```
-
-Each relay in the chain knows only its immediate neighbors. No single relay
-holds the full path. Tenant TLS still terminates only on your side, so no relay
-in the chain receives tenant TLS plaintext.
+Relay operators can enable IVNP for authenticated relay exchanges. I2P owns
+internal routing; Portal owns relay admission and lease authorization. The
+standard tunnel client keeps its direct reverse backhaul. See the
+[overlay guide](docs/src/routes/ivnp-overlay/+page.md) for configuration and the
+lease binding API.
 
 ## Public Relay Registry
 

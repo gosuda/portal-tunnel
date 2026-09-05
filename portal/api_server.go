@@ -103,6 +103,8 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 			s.handleRenew(w, r)
 		case types.PathSDKUnregister:
 			s.handleUnregister(w, r)
+		case types.PathSDKRelay:
+			s.handleRelayBinding(w, r)
 		case types.PathSDKConnect:
 			s.handleConnect(w, r)
 		case types.PathDiscovery:

@@ -26,9 +26,9 @@
 		},
 		{
 			eyebrow: 'Mesh',
-			title: 'Relay pools and multi-hop',
+			title: 'Relay pools and IVNP',
 			description:
-				'Use discovered relays for failover or chain relays to split path visibility.'
+				'Select public relays for failover and optionally connect relays through IVNP.'
 		},
 		{
 			eyebrow: 'Ops',

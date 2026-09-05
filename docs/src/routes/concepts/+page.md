@@ -130,26 +130,13 @@ The relay allocates a UDP port and carries datagrams over the tunnel backhaul to
 the local UDP target. The positional target is still used for stream traffic;
 `--udp-addr` selects the local UDP service.
 
-## Multi-Relay And Multi-Hop
+## Public Relay Selection
 
 With discovery enabled, Portal starts from the public registry plus explicit
 relays, then expands through relay discovery. Explicit relays are always kept
 connected separately from the auto-selected relay pool.
 
-Use a fixed ordered route:
-
-```bash
-portal expose 3000 --multi-hop https://entry.example.com,https://exit.example.com
-```
-
-Or ask Portal to choose one route of a given depth:
-
-```bash
-portal expose 3000 --multi-hop-depth 3
-```
-
-Multi-hop currently applies to the default SNI TLS stream transport. It is not
-combined with UDP or dedicated raw TCP port mode.
+An optional [IVNP relay overlay](/ivnp-overlay) handles internal routing between relays. Portal does not select intermediate routers.
 
 ## MITM Self-Probe
 

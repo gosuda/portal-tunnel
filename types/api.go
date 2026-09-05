@@ -212,3 +212,14 @@ type IPPolicyUpdate struct {
 	IP       string `json:"ip"`
 	IsBanned bool   `json:"is_banned"`
 }
+
+// RelayBinding attaches one existing public lease to one remote reverse backhaul.
+// It never describes an intermediate path. The receiving relay must own a local lease.
+type RelayBinding struct {
+	Relay       RelayDescriptor `json:"relay"`
+	AccessToken string          `json:"access_token"`
+}
+type RelayLeaseResponse struct {
+	Identity  Identity  `json:"identity"`
+	ExpiresAt time.Time `json:"expires_at"`
+}

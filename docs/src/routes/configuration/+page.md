@@ -54,7 +54,6 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
 | `API_PORT` | `4017` | int | Admin/API server listen port |
 | `SNI_PORT` | `443` | int | TCP SNI router listen port; non-standard values are intended for local testing, while the bundled public deployment requires `443` |
-| `WIREGUARD_PORT` | `51820` | int | Public and listen UDP port for relay discovery overlay |
 
 ### Transport
 
@@ -70,6 +69,7 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
+| `IVNP_CONFIG` | empty | path | Optional IVNP router configuration; requires DISCOVERY and Linux/macOS |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
 | `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
 
@@ -174,9 +174,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 |------|---------|------|---------|-------------|
 | `--relays` | | string | _(registry)_ | Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https) |
 | `--discovery` | | bool | `true` | Include public registry relays and discover additional relay bootstraps |
-| `--multi-hop` | `MULTI_HOP` | string | | Ordered multi-hop relay API URLs, comma-separated |
-| `--multi-hop-depth` | `MULTI_HOP_DEPTH` | int | `0` | Automatically create this-depth multi-hop routes for every eligible entry relay; 0 or 1 disables multi-hop |
-| `--max-active-relays` | `MAX_ACTIVE_RELAYS` | int | `3` | Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry; explicit relays are always included |
+| `--max-active-relays` | `MAX_ACTIVE_RELAYS` | int | `3` | Maximum auto-selected public relays to keep connected; explicit relays are always included |
 | `--ban-mitm` | `BAN_MITM` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 
 ### Identity
@@ -295,8 +293,6 @@ Tunnel fields mirror `portal expose` flags:
 | `http_routes` | table array | HTTP route mappings; cannot be combined with `target` or `udp` |
 | `relays` | string array | Explicit relay API URLs |
 | `discovery` | bool | Include registry and relay discovery expansion |
-| `multi_hop` | string array | Ordered multi-hop relay path |
-| `multi_hop_depth` | int | Automatically create this-depth multi-hop routes for every eligible entry relay |
 | `ech` | bool | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
@@ -355,8 +351,6 @@ Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors
 | `private_key` | string | secp256k1 private key hex; keep secret |
 | `mnemonic` | string | BIP-39 mnemonic used to derive the secp256k1 identity key; keep secret |
 | `derivation_path` | string | EVM derivation path for `mnemonic`; defaults to `m/44'/60'/0'/0/0` |
-| `wireguard_public_key` | string | Relay-only WireGuard overlay public key when discovery is enabled |
-| `wireguard_private_key` | string | Relay-only WireGuard overlay private key when discovery is enabled |
 | `encrypted_client_hello_seed` | string | Relay-only HKDF salt for deriving the ECH HPKE private key; generated automatically when missing; keep secret |
 
 When `mnemonic` is present, Portal derives the private key at `derivation_path`
