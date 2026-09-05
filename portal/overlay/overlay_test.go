@@ -61,7 +61,7 @@ func testDestination(value byte) string {
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(strings.Repeat(string([]byte{value}), 32)))) + ".b32.i2p"
 }
 
-func testRuntime(t *testing.T, name, local, remote string, handler http.HandlerFunc) (*Runtime, types.RelayDescriptor) {
+func testRuntime(t *testing.T, name, local, remote, dialAddress string, handler http.HandlerFunc) (*Runtime, types.RelayDescriptor) {
 	t.Helper()
 	signer, err := identity.ResolveSecp256k1Identity("")
 	if err != nil {
@@ -81,7 +81,7 @@ func testRuntime(t *testing.T, name, local, remote string, handler http.HandlerF
 		t.Fatal(err)
 	}
 	catalog := discovery.NewRelaySet(nil)
-	o := &Runtime{ctx: context.Background(), listener: endpointListener{Listener: listener, remote: remote}, destination: local, release: func() error { return nil }, self: func() (types.RelayDescriptor, error) { return desc, nil }, admit: catalog.AdmitOverlayPeer, handler: handler, conns: make(map[*trackedConn]struct{})}
+	o := NewWithTransport(context.Background(), testNetwork{address: dialAddress, remote: remote}, endpointListener{Listener: listener, remote: remote}, local, func() error { return nil }, func() (types.RelayDescriptor, error) { return desc, nil }, catalog.AdmitOverlayPeer, handler)
 	done := make(chan error, 1)
 	go func() { done <- o.Serve() }()
 	t.Cleanup(func() {
@@ -101,7 +101,7 @@ func testRuntime(t *testing.T, name, local, remote string, handler http.HandlerF
 func TestAuthenticatedExchangeRetainsNetworkAndBufferedStream(t *testing.T) {
 	aHost, bHost := testDestination(1), testDestination(2)
 	var bDesc types.RelayDescriptor
-	b, bDescriptor := testRuntime(t, "b", bHost, aHost, func(w http.ResponseWriter, r *http.Request) {
+	b, bDescriptor := testRuntime(t, "b", bHost, aHost, "", func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case types.PathDiscovery:
 			utils.WriteAPIData(w, http.StatusOK, types.DiscoveryResponse{ProtocolVersion: types.DiscoveryVersion, Relays: []types.RelayDescriptor{bDesc}})
@@ -121,8 +121,7 @@ func TestAuthenticatedExchangeRetainsNetworkAndBufferedStream(t *testing.T) {
 		}
 	})
 	bDesc = bDescriptor
-	a, _ := testRuntime(t, "a", aHost, bHost, http.NotFound)
-	a.network = testNetwork{address: b.listener.Addr().String(), remote: bHost}
+	a, _ := testRuntime(t, "a", aHost, bHost, b.listener.Addr().String(), http.NotFound)
 	for range 2 {
 		resp, err := a.DiscoverRelay(context.Background(), bDesc)
 		if err != nil || len(resp.Relays) != 1 {
@@ -161,14 +160,12 @@ func TestAuthenticatedExchangeRetainsNetworkAndBufferedStream(t *testing.T) {
 func TestOverlayRejectsWrongDestinationAndHonorsCancellation(t *testing.T) {
 	aHost, bHost := testDestination(3), testDestination(4)
 	entered := make(chan struct{}, 1)
-	b, bDesc := testRuntime(t, "b", bHost, aHost, func(w http.ResponseWriter, r *http.Request) { entered <- struct{}{}; <-r.Context().Done() })
-	a, _ := testRuntime(t, "a", aHost, bHost, http.NotFound)
-	a.network = testNetwork{address: b.listener.Addr().String(), remote: aHost}
+	b, bDesc := testRuntime(t, "b", bHost, aHost, "", func(w http.ResponseWriter, r *http.Request) { entered <- struct{}{}; <-r.Context().Done() })
+	a, _ := testRuntime(t, "a", aHost, bHost, b.listener.Addr().String(), http.NotFound)
 	if c, err := a.OpenStream(context.Background(), bDesc, "token"); err == nil {
 		_ = c.Close()
 		t.Fatal("wrong I2P destination accepted")
 	}
-	a.network = testNetwork{address: b.listener.Addr().String(), remote: bHost}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)

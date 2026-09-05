@@ -48,8 +48,13 @@ func New(ctx context.Context, configPath string, self func() (types.RelayDescrip
 	if err != nil {
 		return nil, err
 	}
-	o := &Runtime{ctx: ctx, handler: handler, network: network, listener: listener, destination: destination, release: release, self: self, admit: admit, conns: make(map[*trackedConn]struct{})}
-	return o, nil
+	return NewWithTransport(ctx, network, listener, destination, release, self, admit, handler), nil
+}
+
+// NewWithTransport constructs a runtime around an explicit transport boundary.
+// It is useful for alternate IVNP implementations and deterministic tests.
+func NewWithTransport(ctx context.Context, network network, listener net.Listener, destination string, release func() error, self func() (types.RelayDescriptor, error), admit func(types.RelayDescriptor) error, handler http.Handler) *Runtime {
+	return &Runtime{ctx: ctx, handler: handler, network: network, listener: listener, destination: destination, release: release, self: self, admit: admit, conns: make(map[*trackedConn]struct{})}
 }
 
 func (o *Runtime) Destination() string { return o.destination }
