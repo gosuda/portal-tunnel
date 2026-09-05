@@ -38,9 +38,6 @@ const (
 	agentDashboardActionDeleteTunnel
 	agentDashboardActionConnectRelay
 	agentDashboardActionDisconnectRelay
-	agentDashboardActionAddHop
-	agentDashboardActionApplyHop
-	agentDashboardActionClearHop
 	agentDashboardActionApplySettings
 	agentDashboardActionFocusSettingsField
 	agentDashboardActionFocusAddTunnelField
@@ -53,7 +50,6 @@ const (
 	agentDashboardPaneTunnels agentDashboardPane = iota
 	agentDashboardPaneSettings
 	agentDashboardPaneRelays
-	agentDashboardPaneMultiHop
 	agentDashboardPaneCount
 )
 
@@ -100,9 +96,6 @@ type agentDashboardModel struct {
 	selectedRelayURL string
 	activePane       agentDashboardPane
 	relayAttempts    map[string]bool
-
-	routeDraft    []string
-	draftTunnelID string
 
 	addingTunnel     bool
 	addFocus         int
@@ -289,8 +282,6 @@ func (m agentDashboardModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateRelayKeys(msg)
 	case agentDashboardPaneSettings:
 		return m.updateSettingsKeys(msg)
-	case agentDashboardPaneMultiHop:
-		return m.updateMultiHopKeys(msg)
 	default:
 		m.setActivePane(agentDashboardPaneTunnels)
 		return m, nil
@@ -344,22 +335,6 @@ func (m agentDashboardModel) updateRelayKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		return m.disconnectSelectedRelay()
 	case "o":
 		return m.openRelayTunnelURL("", "")
-	}
-	return m, nil
-}
-
-func (m agentDashboardModel) updateMultiHopKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "up":
-		m.selectRelayOffset(-1)
-	case "down":
-		m.selectRelayOffset(1)
-	case "enter", "a":
-		return m.addSelectedHop()
-	case "p":
-		return m.applyRoute()
-	case "c", "delete":
-		return m.clearRoute()
 	}
 	return m, nil
 }
@@ -434,12 +409,6 @@ func (m agentDashboardModel) runAction(action agentDashboardAction, tunnelID, re
 		return m.connectSelectedRelay()
 	case agentDashboardActionDisconnectRelay:
 		return m.disconnectSelectedRelay()
-	case agentDashboardActionAddHop:
-		return m.addSelectedHop()
-	case agentDashboardActionApplyHop:
-		return m.applyRoute()
-	case agentDashboardActionClearHop:
-		return m.clearRoute()
 	case agentDashboardActionApplySettings:
 		return m.applySettingsEdit()
 	case agentDashboardActionOpenTunnelURL:
@@ -489,8 +458,6 @@ func (m *agentDashboardModel) selectTunnelIndex(index int) {
 	}
 	tunnelID := m.status.Tunnels[index].ID
 	if m.selectedTunnelID != tunnelID {
-		m.routeDraft = nil
-		m.draftTunnelID = ""
 	}
 	m.selectedTunnelID = tunnelID
 	m.selectedRelayURL = ""
@@ -577,8 +544,6 @@ func (m *agentDashboardModel) clampSelection() {
 	if len(m.status.Tunnels) == 0 {
 		m.selectedTunnelID = ""
 		m.selectedRelayURL = ""
-		m.routeDraft = nil
-		m.draftTunnelID = ""
 		m.clearSettingsDraft()
 		return
 	}
@@ -586,8 +551,6 @@ func (m *agentDashboardModel) clampSelection() {
 	tunnelIndex := m.selectedTunnelIndex()
 	tunnelID := m.status.Tunnels[tunnelIndex].ID
 	if m.selectedTunnelID != tunnelID {
-		m.routeDraft = nil
-		m.draftTunnelID = ""
 	}
 	m.selectedTunnelID = tunnelID
 	m.ensureSettingsDraft(m.status.Tunnels[tunnelIndex])
@@ -1267,7 +1230,7 @@ func (m agentDashboardModel) disconnectSelectedRelay() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if relay.Banned || !relayDashboardActive(tunnel, relay) || slices.Contains(m.displayedRoute(tunnel), relay.RelayURL) {
+	if relay.Banned || !relayDashboardActive(tunnel, relay) {
 		return m, nil
 	}
 	m.clearRelayAttempt(tunnel.ID, relay.RelayURL)
@@ -1291,65 +1254,6 @@ func (m agentDashboardModel) openRelayTunnelURL(tunnelID, relayURL string) (tea.
 	return m, agentDashboardRun(func(context.Context) error {
 		return openDashboardURL(publicURL)
 	})
-}
-
-func (m agentDashboardModel) addSelectedHop() (tea.Model, tea.Cmd) {
-	tunnel, relay, ok := m.selectedTunnelRelay()
-	if !ok {
-		return m, nil
-	}
-	if !relay.SupportsOverlay {
-		return m, nil
-	}
-	m.ensureRouteDraft(tunnel)
-	if slices.Contains(m.routeDraft, relay.RelayURL) {
-		return m, nil
-	}
-	m.routeDraft = append(m.routeDraft, relay.RelayURL)
-	return m, nil
-}
-
-func (m agentDashboardModel) applyRoute() (tea.Model, tea.Cmd) {
-	tunnel, ok := m.selectedTunnelStatus()
-	if !ok {
-		return m, nil
-	}
-	route := m.displayedRoute(tunnel)
-	if len(route) < 2 {
-		return m, nil
-	}
-	m.routeDraft = nil
-	m.draftTunnelID = ""
-	return m, agentDashboardRun(func(ctx context.Context) error {
-		return SetMultiHop(ctx, m.stateDir, tunnel.ID, route)
-	})
-}
-
-func (m agentDashboardModel) clearRoute() (tea.Model, tea.Cmd) {
-	tunnel, ok := m.selectedTunnelStatus()
-	if !ok {
-		return m, nil
-	}
-	m.routeDraft = nil
-	m.draftTunnelID = ""
-	return m, agentDashboardRun(func(ctx context.Context) error {
-		return SetMultiHop(ctx, m.stateDir, tunnel.ID, nil)
-	})
-}
-
-func (m *agentDashboardModel) ensureRouteDraft(tunnel types.AgentTunnelStatus) {
-	if m.draftTunnelID == tunnel.ID {
-		return
-	}
-	m.draftTunnelID = tunnel.ID
-	m.routeDraft = append([]string(nil), tunnel.MultiHop...)
-}
-
-func (m agentDashboardModel) displayedRoute(tunnel types.AgentTunnelStatus) []string {
-	if m.draftTunnelID == tunnel.ID {
-		return append([]string(nil), m.routeDraft...)
-	}
-	return append([]string(nil), tunnel.MultiHop...)
 }
 
 func agentDashboardFetchStatus(stateDir string) tea.Cmd {
@@ -1544,7 +1448,6 @@ func (m agentDashboardModel) renderTunnelPane(width, height int) agentDashboardV
 	relayLimit := m.relayRowsForHeight(tunnel, max(1, height-len(pane.lines)))
 	m.renderRelaysSection(&pane, width, relayLimit, tunnel)
 	pane.addLine("")
-	m.renderRouteSection(&pane, width, max(1, height-len(pane.lines)), tunnel)
 	pane.clip(height)
 	return pane
 }
@@ -1553,9 +1456,7 @@ func (m agentDashboardModel) relayRowsForHeight(tunnel types.AgentTunnelStatus, 
 	if len(tunnel.Relays) == 0 {
 		return 0
 	}
-	routeRows := len(m.displayedRoute(tunnel))
-	routeReserve := min(max(5, routeRows+4), 9)
-	relayRows := height - routeReserve - 4
+	relayRows := height - 4
 	if relayRows < agentDashboardMinRelayRows {
 		relayRows = min(agentDashboardMinRelayRows, len(tunnel.Relays))
 	}
@@ -1565,7 +1466,7 @@ func (m agentDashboardModel) relayRowsForHeight(tunnel types.AgentTunnelStatus, 
 func (m agentDashboardModel) renderRelaysSection(pane *agentDashboardView, width, maxRows int, tunnel types.AgentTunnelStatus) {
 	relay, hasRelay := m.selectedRelayStatus()
 	connectDisabled := !hasRelay || relay.Banned || relayDashboardActive(tunnel, relay) || m.relayDashboardConnecting(tunnel, relay)
-	disconnectDisabled := !hasRelay || relay.Banned || !relayDashboardActive(tunnel, relay) || slices.Contains(m.displayedRoute(tunnel), relay.RelayURL)
+	disconnectDisabled := !hasRelay || relay.Banned || !relayDashboardActive(tunnel, relay)
 
 	pane.addSectionTitle(width, agentDashboardPaneRelays, "Relays", m.activePane == agentDashboardPaneRelays)
 	pane.addButtons(width,
@@ -1700,45 +1601,6 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 	}
 	if paidRouteCount == 0 && len(pane.lines)-startLine < height {
 		pane.addStyled(width, agentDashboardMutedStyle, "no paid routes")
-	}
-}
-
-func (m agentDashboardModel) renderRouteSection(pane *agentDashboardView, width, height int, tunnel types.AgentTunnelStatus) {
-	if height <= 0 {
-		return
-	}
-	route := m.displayedRoute(tunnel)
-	relay, hasRelay := m.selectedRelayStatus()
-	inRoute := hasRelay && slices.Contains(route, relay.RelayURL)
-	canAdd := hasRelay && relay.SupportsOverlay && !inRoute
-
-	startLine := len(pane.lines)
-	pane.addSectionTitle(width, agentDashboardPaneMultiHop, "Multi-hop", m.activePane == agentDashboardPaneMultiHop)
-	pane.addButtons(width,
-		agentDashboardButton{label: "Add Hop", action: agentDashboardActionAddHop, disabled: !canAdd},
-		agentDashboardButton{label: "Apply", action: agentDashboardActionApplyHop, disabled: len(route) < 2},
-		agentDashboardButton{label: "Clear", action: agentDashboardActionClearHop, disabled: len(route) == 0},
-	)
-
-	if hasRelay {
-		pane.addText(width, "Selected relay: "+relayDashboardURL(relay))
-	} else {
-		pane.addStyled(width, agentDashboardMutedStyle, "no relays")
-	}
-
-	routeLabel := "Multi-hop:"
-	if m.draftTunnelID == tunnel.ID {
-		routeLabel += " draft"
-	}
-	if len(route) == 0 {
-		routeLabel = "Multi-hop: none"
-	}
-	pane.addText(width, routeLabel)
-	for i, relayURL := range route {
-		if len(pane.lines)-startLine >= height {
-			return
-		}
-		pane.addText(width, fmt.Sprintf("%d. %s", i+1, relayURL))
 	}
 }
 
@@ -2051,7 +1913,7 @@ func relayDashboardActive(tunnel types.AgentTunnelStatus, relay types.AgentRelay
 }
 
 func relayDashboardConnected(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) bool {
-	return relay.PublicURL != "" || slices.Contains(tunnel.MultiHop, relay.RelayURL)
+	return relay.PublicURL != ""
 }
 
 func agentDashboardHTTPRouteSummary(route types.AgentHTTPRoute) string {
@@ -2184,17 +2046,6 @@ func (m agentDashboardModel) relayDashboardMode(tunnel types.AgentTunnelStatus, 
 		modes = append(modes, "connecting...")
 	} else if m.relayDashboardFailed(tunnel, relay) {
 		modes = append(modes, "failed")
-	}
-	for i, relayURL := range tunnel.MultiHop {
-		if relayURL != relay.RelayURL {
-			continue
-		}
-		if i == 0 {
-			modes = append(modes, "hop-entry")
-		} else {
-			modes = append(modes, "hop-relay")
-		}
-		break
 	}
 	if len(modes) > 0 {
 		return strings.Join(modes, ",")

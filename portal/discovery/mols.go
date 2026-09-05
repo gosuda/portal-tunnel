@@ -393,17 +393,15 @@ func SelectPriority(states []RelayState, routeState RouteState) []string {
 	}
 	now := time.Now().UTC()
 	explicit := make([]string, 0, len(routeState.ExplicitRelayURLs))
-	for _, state := range states {
-		relayURL := state.Descriptor.APIHTTPSAddr
-		if state.Banned || !slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
-			continue
+	for _, relayURL := range routeState.ExplicitRelayURLs {
+		for _, state := range states {
+			if state.Descriptor.APIHTTPSAddr == relayURL && !state.Banned && !state.Dead && state.supportsRequiredTransports(routeState, now) {
+				explicit = append(explicit, relayURL)
+				break
+			}
 		}
-		if !state.supportsRequiredTransports(routeState, now) {
-			continue
-		}
-		explicit = append(explicit, relayURL)
 	}
-	auto := RankRelayPool(filterCandidatePool(states, routeState, now, false), routeState.LocalAddress, routeState.SelectionEpoch)
+	auto := RankRelayPool(filterCandidatePool(states, routeState, now), routeState.LocalAddress, routeState.SelectionEpoch)
 	maxActive := routeState.MaxActiveRelays
 	if maxActive <= 0 {
 		maxActive = defaultMaxActiveRelays
@@ -423,7 +421,7 @@ func SelectPriority(states []RelayState, routeState RouteState) []string {
 //	Layer 1: Sticky relays — preserves currently active connections ONLY if they remain in
 //	         the healthy tier (not saturated and not in fallback) to avoid zombie resurrection.
 //	Layer 2: Warm healthy candidates — fills remaining slots using top-ranked MOLS candidates.
-//	Trailing: Remaining ranked candidates are preserved to support multi-hop path building.
+//	Trailing: Remaining ranked candidates retain their priority order.
 func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []RelayState, maxActive int) []string {
 	if len(ranked) == 0 || maxActive <= 0 {
 		return ranked

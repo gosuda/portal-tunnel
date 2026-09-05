@@ -26,10 +26,7 @@ type leaseRecord struct {
 	ECHDNSHostname string
 	Metadata       types.LeaseMetadata
 
-	hopToken           string
-	hopNextOverlayIPv4 string
-	hopNextToken       string
-	registerChallenge  *auth.RegisterChallenge
+	registerChallenge *auth.RegisterChallenge
 
 	datagram *transport.RelayDatagram
 	udpPorts *transport.PortAllocator
@@ -39,7 +36,7 @@ type leaseRecord struct {
 }
 
 func (r *leaseRecord) isPublicEntry() bool {
-	return r != nil && r.hopToken == "" && r.Hostname != ""
+	return r != nil && r.Hostname != ""
 }
 
 func (r *leaseRecord) ensGaslessDNSHostname() string {
@@ -59,16 +56,6 @@ func (r *leaseRecord) hasECHDNSRecord() bool {
 	return r.isPublicEntry() && len(r.ECHConfigList) > 0 && r.ECHDNSHostname != ""
 }
 
-func (r *leaseRecord) isHopMiddle() bool {
-	_, _, hasNextHop := r.nextHop()
-	return r != nil && r.Hostname == "" && r.hopToken != "" && hasNextHop
-}
-
-func (r *leaseRecord) isHopExit() bool {
-	_, _, hasNextHop := r.nextHop()
-	return r != nil && r.hopToken != "" && !hasNextHop
-}
-
 func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
 	if r == nil || other == nil {
 		return false
@@ -83,15 +70,6 @@ func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
 		return true
 	}
 	return other.Hostname != "" && r.HostnameHash != "" && utils.HostnameHash(other.Hostname) == r.HostnameHash
-}
-
-func (r *leaseRecord) nextHop() (string, string, bool) {
-	if r == nil {
-		return "", "", false
-	}
-	overlayIPv4 := r.hopNextOverlayIPv4
-	forwardToken := r.hopNextToken
-	return overlayIPv4, forwardToken, overlayIPv4 != "" || forwardToken != ""
 }
 
 func (r *leaseRecord) isExpired(now time.Time) bool {

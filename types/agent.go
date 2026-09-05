@@ -18,7 +18,6 @@ type AgentTunnelStatus struct {
 	MaxActiveRelays int                `json:"max_active_relays,omitempty"`
 	ECH             bool               `json:"ech,omitempty"`
 	Metadata        LeaseMetadata      `json:"metadata"`
-	MultiHop        []string           `json:"multi_hop,omitempty"`
 	X402PayTo       string             `json:"x402_pay_to,omitempty"`
 	X402Testnet     bool               `json:"x402_testnet,omitempty"`
 	X402Network     string             `json:"x402_network,omitempty"`
@@ -66,10 +65,6 @@ type AgentTunnelRequest struct {
 
 type AgentRelayRequest struct {
 	RelayURL string `json:"relay_url"`
-}
-
-type AgentMultiHopRequest struct {
-	Relays []string `json:"relays"`
 }
 
 type AgentTunnelUpdateRequest struct {

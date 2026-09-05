@@ -81,13 +81,13 @@ func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {
 	exposure.relayListeners = map[string]*listener{
 		relayA: {
 			relayURL: relayURL,
-			route:    discovery.NewRoute([]string{relayA}, true),
+			route:    discovery.Route{RelayURL: relayA, Explicit: true},
 			cancel:   func() { close(relayAClosed) },
 			doneCh:   relayAClosed,
 		},
 		relayB: {
 			relayURL: relayBURL,
-			route:    discovery.NewRoute([]string{relayB}, true),
+			route:    discovery.Route{RelayURL: relayB, Explicit: true},
 		},
 	}
 
@@ -107,7 +107,7 @@ func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {
 	}
 }
 
-func TestRunListenerAcceptLoopRemovesMultiHopListenerByIngressRelay(t *testing.T) {
+func TestRunListenerAcceptLoopRemovesListenerRelay(t *testing.T) {
 	const (
 		entry = "https://entry.example"
 		exit  = "https://exit.example"
@@ -118,14 +118,14 @@ func TestRunListenerAcceptLoopRemovesMultiHopListenerByIngressRelay(t *testing.T
 	}
 	relayListener := &listener{
 		relayURL: exitURL,
-		route:    discovery.NewRoute([]string{entry, exit}, false),
+		route:    discovery.Route{RelayURL: entry, Explicit: false},
 	}
 	exposure := &Exposure{relayListeners: map[string]*listener{entry: relayListener}}
 
 	exposure.runListenerAcceptLoop(relayListener)
 
 	if got := exposure.ActiveRelayURLs(); len(got) != 0 {
-		t.Fatalf("ActiveRelayURLs() = %v, want terminated multi-hop listener removed", got)
+		t.Fatalf("ActiveRelayURLs() = %v, want terminated listener removed", got)
 	}
 }
 
@@ -153,13 +153,13 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	exposure.relayListeners = map[string]*listener{
 		relayA: {
 			relayURL: relayAURL,
-			route:    discovery.NewRoute([]string{relayA}, true),
+			route:    discovery.Route{RelayURL: relayA, Explicit: true},
 			cancel:   func() { close(relayAClosed) },
 			doneCh:   relayAClosed,
 		},
 		relayB: {
 			relayURL: relayBURL,
-			route:    discovery.NewRoute([]string{relayB}, true),
+			route:    discovery.Route{RelayURL: relayB, Explicit: true},
 		},
 	}
 
@@ -214,10 +214,7 @@ func TestExposureRemoveRelayStopsRunningListener(t *testing.T) {
 	if got := exposure.Config().RelayURLs; len(got) != 0 {
 		t.Fatalf("RelayURLs = %v, want empty", got)
 	}
-	routes, err := exposure.relaySet.PlanRoutes(nil, discovery.RouteState{})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
+	routes := exposure.relaySet.SelectRelays(discovery.RouteState{})
 	if len(routes) != 0 {
 		t.Fatalf("PlanRoutes() = %v, want empty", routes)
 	}
@@ -237,7 +234,7 @@ func TestExposureListenerSelfExitKeepsExplicitRelayConfigured(t *testing.T) {
 
 	l := &listener{
 		relayURL: relayAURL,
-		route:    discovery.NewRoute([]string{relayA}, true),
+		route:    discovery.Route{RelayURL: relayA, Explicit: true},
 	}
 	exposure := &Exposure{
 		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: []string{relayA}}, ExposeConfig.snapshot),
@@ -270,7 +267,7 @@ func TestListenerRetryBudgetDropsAutoSelectedRelayWithoutPoolBan(t *testing.T) {
 	relaySet := mustRelaySet(t, relayA)
 	listener := &listener{
 		relayURL:   relayAURL,
-		route:      discovery.NewRoute([]string{relayA}, false),
+		route:      discovery.Route{RelayURL: relayA, Explicit: false},
 		relaySet:   relaySet,
 		retryCount: 1,
 	}
@@ -279,10 +276,7 @@ func TestListenerRetryBudgetDropsAutoSelectedRelayWithoutPoolBan(t *testing.T) {
 		t.Fatal("waitRetry() = true after retry budget was exhausted")
 	}
 
-	routes, err := relaySet.PlanRoutes(nil, discovery.RouteState{})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
+	routes := relaySet.SelectRelays(discovery.RouteState{})
 	if len(routes) != 0 {
 		t.Fatalf("PlanRoutes() = %v, want no active routes", routes)
 	}
@@ -314,7 +308,7 @@ func TestExposureReconcileSkipsUnchangedRoutes(t *testing.T) {
 		relayURL: relayAURL,
 		cancel:   func() { close(closed) },
 		doneCh:   closed,
-		route:    discovery.NewRoute([]string{relayA}, true),
+		route:    discovery.Route{RelayURL: relayA, Explicit: true},
 	}
 
 	// First reconcile records the current route snapshot and closes nothing.
@@ -362,11 +356,11 @@ func TestExposureSnapshotExcludesDeadRelayListener(t *testing.T) {
 	exposure.relayListeners = map[string]*listener{
 		relayA: {
 			relayURL: relayAURL,
-			route:    discovery.NewRoute([]string{relayA}, true),
+			route:    discovery.Route{RelayURL: relayA, Explicit: true},
 		},
 		relayB: {
 			relayURL: relayBURL,
-			route:    discovery.NewRoute([]string{relayB}, true),
+			route:    discovery.Route{RelayURL: relayB, Explicit: true},
 		},
 	}
 
