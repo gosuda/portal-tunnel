@@ -80,10 +80,10 @@ func TestOverlayRefreshHasIndependentCadenceAndHealth(t *testing.T) {
 		calls++
 		return types.DiscoveryResponse{}, errors.New("overlay unavailable")
 	}
-	if err := refresh.refreshOverlay(context.Background()); err != nil {
+	if err := refresh.Refresh(context.Background(), &desc); err != nil {
 		t.Fatal(err)
 	}
-	if err := refresh.refreshOverlay(context.Background()); err != nil {
+	if err := refresh.Refresh(context.Background(), &desc); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
