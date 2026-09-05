@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +34,6 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	desc.Address = strings.TrimSpace(desc.Address)
 	desc.Version = strings.TrimSpace(desc.Version)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
-	desc.WireGuardPublicKey = strings.TrimSpace(desc.WireGuardPublicKey)
 	if desc.Version == "" {
 		desc.Version = types.DiscoveryVersion
 	}
@@ -60,14 +58,6 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 		}
 		desc.Address = normalized
 	}
-	if desc.WireGuardPublicKey != "" {
-		if err := ValidateWireGuardPublicKey(desc.WireGuardPublicKey); err != nil {
-			return types.RelayDescriptor{}, err
-		}
-	}
-	if desc.WireGuardPort < 0 || desc.WireGuardPort > 65535 {
-		return types.RelayDescriptor{}, errors.New("wireguard_port is invalid")
-	}
 	if desc.ActiveConnections < 0 {
 		return types.RelayDescriptor{}, errors.New("active_connections is invalid")
 	}
@@ -82,12 +72,6 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 		return types.RelayDescriptor{}, fmt.Errorf("unsupported relay descriptor version %q", desc.Version)
 	case desc.APIHTTPSAddr == "":
 		return types.RelayDescriptor{}, errors.New("api_https_addr is required")
-	case desc.SupportsOverlay && desc.WireGuardPublicKey == "":
-		return types.RelayDescriptor{}, errors.New("wireguard_public_key is required when supports_overlay is set")
-	case desc.SupportsOverlay && desc.WireGuardPort == 0:
-		return types.RelayDescriptor{}, errors.New("wireguard_port is required when supports_overlay is set")
-	case !desc.SupportsOverlay && (desc.WireGuardPublicKey != "" || desc.WireGuardPort != 0):
-		return types.RelayDescriptor{}, errors.New("supports_overlay is required when wireguard metadata is set")
 	case desc.ExpiresAt.IsZero():
 		return types.RelayDescriptor{}, errors.New("expires_at is required")
 	case desc.IssuedAt.After(desc.ExpiresAt):
@@ -95,17 +79,6 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	}
 
 	return desc, nil
-}
-
-func RelayWireGuardEndpoint(desc types.RelayDescriptor) (string, error) {
-	host := utils.PortalRootHost(desc.APIHTTPSAddr)
-	if host == "" {
-		return "", errors.New("api_https_addr host is required")
-	}
-	if desc.WireGuardPort <= 0 || desc.WireGuardPort > 65535 {
-		return "", errors.New("wireguard_port is invalid")
-	}
-	return net.JoinHostPort(host, fmt.Sprintf("%d", desc.WireGuardPort)), nil
 }
 
 func ResolveRelayStateDir(path string) string {
@@ -208,35 +181,7 @@ func normalizeStoredRelayIdentity(identity types.RelayIdentity) (types.RelayIden
 		return types.RelayIdentity{}, err
 	}
 	normalized.Identity = baseIdentity
-	normalized.WireGuardPublicKey = strings.TrimSpace(normalized.WireGuardPublicKey)
-	normalized.WireGuardPrivateKey = strings.TrimSpace(normalized.WireGuardPrivateKey)
 	normalized.EncryptedClientHelloSeed = strings.TrimSpace(normalized.EncryptedClientHelloSeed)
-
-	switch {
-	case normalized.WireGuardPrivateKey != "":
-		privateKey, err := NormalizeWireGuardPrivateKey(normalized.WireGuardPrivateKey)
-		if err != nil {
-			return types.RelayIdentity{}, fmt.Errorf("normalize wireguard private key: %w", err)
-		}
-		publicKey, err := WireGuardPublicKeyFromPrivate(privateKey)
-		if err != nil {
-			return types.RelayIdentity{}, fmt.Errorf("derive wireguard public key: %w", err)
-		}
-		if configuredPublicKey := strings.TrimSpace(normalized.WireGuardPublicKey); configuredPublicKey != "" {
-			if err := ValidateWireGuardPublicKey(configuredPublicKey); err != nil {
-				return types.RelayIdentity{}, err
-			}
-			if configuredPublicKey != publicKey {
-				return types.RelayIdentity{}, errors.New("identity wireguard public key does not match private key")
-			}
-		}
-		normalized.WireGuardPrivateKey = privateKey
-		normalized.WireGuardPublicKey = publicKey
-	case normalized.WireGuardPublicKey != "":
-		if err := ValidateWireGuardPublicKey(normalized.WireGuardPublicKey); err != nil {
-			return types.RelayIdentity{}, err
-		}
-	}
 
 	return normalized, nil
 }
@@ -253,8 +198,6 @@ type storedIdentity struct {
 
 type storedRelayIdentity struct {
 	storedIdentity
-	WireGuardPublicKey       string `json:"wireguard_public_key,omitempty"`
-	WireGuardPrivateKey      string `json:"wireguard_private_key,omitempty"`
 	EncryptedClientHelloSeed string `json:"encrypted_client_hello_seed,omitempty"`
 }
 
@@ -310,8 +253,6 @@ func saveRelayIdentity(path string, identity types.RelayIdentity) error {
 	storedBaseIdentity := storedIdentityFromIdentity(normalized.Identity)
 	if err := utils.WriteJSONFile(path, storedRelayIdentity{
 		storedIdentity:           storedBaseIdentity,
-		WireGuardPublicKey:       normalized.WireGuardPublicKey,
-		WireGuardPrivateKey:      normalized.WireGuardPrivateKey,
 		EncryptedClientHelloSeed: normalized.EncryptedClientHelloSeed,
 	}, 0o600); err != nil {
 		return fmt.Errorf("write identity file: %w", err)
@@ -358,8 +299,6 @@ func loadRelayIdentity(path string) (types.RelayIdentity, error) {
 			DerivationPath: payload.DerivationPath,
 			TokenSecret:    payload.TokenSecret,
 		},
-		WireGuardPublicKey:       payload.WireGuardPublicKey,
-		WireGuardPrivateKey:      payload.WireGuardPrivateKey,
 		EncryptedClientHelloSeed: payload.EncryptedClientHelloSeed,
 	})
 }
@@ -507,7 +446,7 @@ func ResolveListenerIdentity(baseIdentity types.Identity, target, identityPath, 
 	return resolved, created, nil
 }
 
-func LoadOrCreateRelayIdentity(path, rootHost string, discoveryEnabled bool) (types.RelayIdentity, error) {
+func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, error) {
 	path = resolveRelayIdentityPath(path)
 	if path == "" {
 		return types.RelayIdentity{}, errors.New("identity path is required")
@@ -526,7 +465,7 @@ func LoadOrCreateRelayIdentity(path, rootHost string, discoveryEnabled bool) (ty
 			stored.Name = rootHost
 		}
 
-		if err := populateRelayIdentity(&stored, discoveryEnabled); err != nil {
+		if err := populateRelayIdentity(&stored); err != nil {
 			return types.RelayIdentity{}, err
 		}
 		if err := saveRelayIdentity(path, stored); err != nil {
@@ -560,7 +499,7 @@ func LoadOrCreateRelayIdentity(path, rootHost string, discoveryEnabled bool) (ty
 		return types.RelayIdentity{}, err
 	}
 
-	if err := populateRelayIdentity(&created, discoveryEnabled); err != nil {
+	if err := populateRelayIdentity(&created); err != nil {
 		return types.RelayIdentity{}, err
 	}
 	if err := saveRelayIdentity(path, created); err != nil {
@@ -573,7 +512,7 @@ func LoadOrCreateRelayIdentity(path, rootHost string, discoveryEnabled bool) (ty
 	return loaded, nil
 }
 
-func populateRelayIdentity(identity *types.RelayIdentity, discoveryEnabled bool) error {
+func populateRelayIdentity(identity *types.RelayIdentity) error {
 	if identity == nil {
 		return errors.New("relay identity is required")
 	}
@@ -582,15 +521,6 @@ func populateRelayIdentity(identity *types.RelayIdentity, discoveryEnabled bool)
 		return err
 	}
 	identity.Identity = baseIdentity
-
-	if discoveryEnabled && strings.TrimSpace(identity.WireGuardPrivateKey) == "" {
-		var err error
-		wireGuardPrivateKey, err := GenerateWireGuardPrivateKey()
-		if err != nil {
-			return fmt.Errorf("generate relay wireguard private key: %w", err)
-		}
-		identity.WireGuardPrivateKey = wireGuardPrivateKey
-	}
 
 	if strings.TrimSpace(identity.EncryptedClientHelloSeed) == "" {
 		identity.EncryptedClientHelloSeed = utils.RandomID("")

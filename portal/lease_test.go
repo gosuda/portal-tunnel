@@ -17,7 +17,7 @@ import (
 
 func newTestRegistry(t *testing.T) *leaseRegistry {
 	t.Helper()
-	relay, err := identity.LoadOrCreateRelayIdentity(t.TempDir(), "example.com", false)
+	relay, err := identity.LoadOrCreateRelayIdentity(t.TempDir(), "example.com")
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}

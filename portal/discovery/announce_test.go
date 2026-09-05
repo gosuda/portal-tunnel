@@ -232,14 +232,11 @@ func mustSignedOverlayDescriptor(t *testing.T, signing types.Identity, relayURL 
 		t.Fatalf("identity.NewLocalAuthority() error = %v", err)
 	}
 	signed, err := auth.SignRelayDescriptor(types.RelayDescriptor{
-		Address:            signing.Address,
-		Version:            types.DiscoveryVersion,
-		IssuedAt:           issuedAt,
-		ExpiresAt:          issuedAt.Add(DiscoveryDescriptorTTL),
-		APIHTTPSAddr:       relayURL,
-		WireGuardPublicKey: "3dpOqFgLYqlt/5hKsy653evfDxl7PjHUtTXLzcwkqxo=",
-		WireGuardPort:      51820,
-		SupportsOverlay:    true,
+		Address:      signing.Address,
+		Version:      types.DiscoveryVersion,
+		IssuedAt:     issuedAt,
+		ExpiresAt:    issuedAt.Add(DiscoveryDescriptorTTL),
+		APIHTTPSAddr: relayURL,
 	}, authority)
 	if err != nil {
 		t.Fatalf("SignRelayDescriptor() error = %v", err)
@@ -262,16 +259,6 @@ func TestInsertCandidateHiddenUntilDirectProbe(t *testing.T) {
 			t.Fatal("candidate relay must stay out of Descriptors() until directly probed")
 		}
 	}
-	overlayPeer := false
-	for _, desc := range set.OverlayPeerDescriptor() {
-		if desc.APIHTTPSAddr == relayURL {
-			overlayPeer = true
-		}
-	}
-	if !overlayPeer {
-		t.Fatal("candidate relay must remain an overlay peer for its hop route")
-	}
-
 	// The real promotion path: the refresher polls the relay itself and
 	// ApplyRelayDiscoveryResponse verifies the target's own descriptor.
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{

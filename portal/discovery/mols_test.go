@@ -514,9 +514,6 @@ func TestMOLSConcurrentRefreshAndFailureLifecycle(t *testing.T) {
 	for i := 0; i < numRelays; i++ {
 		u := fmt.Sprintf("https://relay-conc-%d.example", i)
 		st := confirmedRelayState(t, u)
-		st.Descriptor.SupportsOverlay = true
-		st.Descriptor.WireGuardPublicKey = fmt.Sprintf("wg-key-%d", i)
-		st.Descriptor.WireGuardPort = 51820
 		st.Descriptor.ExpiresAt = now.Add(time.Hour)
 		st.LastSeenAt = now
 		set.relays[u] = st

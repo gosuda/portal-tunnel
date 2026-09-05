@@ -140,7 +140,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	}
 
 	if cfg.Discovery {
-		refresher := discovery.NewRefresher(exposure.relaySet, nil)
+		refresher := discovery.NewRefresher(exposure.relaySet)
 		if err := refresher.Refresh(ctx, nil); err != nil {
 			_ = exposure.Close()
 			return nil, fmt.Errorf("discover relays: %w", err)
@@ -341,7 +341,6 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 			snap.Explicit = slices.Contains(cfg.RelayURLs, relayURL)
 			snap.Bootstrap = state.Bootstrap
 			snap.Banned = state.Banned
-			snap.SupportsOverlay = relay.SupportsOverlay
 			snap.SupportsUDP = relay.SupportsUDP
 			snap.SupportsTCP = relay.SupportsTCP
 			relayByURL[relayURL] = snap
@@ -591,7 +590,7 @@ func (e *Exposure) Close() error {
 }
 
 func (e *Exposure) runDiscoveryLoop(ctx context.Context) {
-	refresher := discovery.NewRefresher(e.relaySet, nil)
+	refresher := discovery.NewRefresher(e.relaySet)
 	ticker := time.NewTicker(discovery.DiscoveryPollInterval)
 	defer ticker.Stop()
 
