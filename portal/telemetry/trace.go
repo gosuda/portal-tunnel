@@ -13,7 +13,7 @@ type SelectionTrace struct {
 	// any external API.
 	ClientHash uint32
 
-	// Mode is "priority" or "multihop", matching the calling method.
+	// Mode identifies the public relay selection policy.
 	Mode string
 
 	// Pool snapshot at selection time.

@@ -7,7 +7,6 @@
 //
 //	-clients N      number of synthetic clients (default 100)
 //	-relays  K      number of synthetic relays (default 5)
-//	-multi-hop D    multi-hop depth (0 = priority/single-hop; ≥2 = multi-hop)
 //
 // Output: per-relay top-pick histogram, chi-square statistic against the
 // uniform expected distribution N/K, and a p-value.

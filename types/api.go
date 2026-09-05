@@ -1,8 +1,6 @@
 package types
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -70,7 +68,6 @@ type RegisterChallengeRequest struct {
 	TTL           int           `json:"ttl,omitempty"`
 	UDPEnabled    bool          `json:"udp_enabled,omitempty"`
 	TCPEnabled    bool          `json:"tcp_enabled,omitempty"`
-	HopToken      string        `json:"hop_token,omitempty"`
 	RouteHostname string        `json:"route_hostname,omitempty"`
 	HostnameHash  string        `json:"hostname_hash,omitempty"`
 	ECHConfigList []byte        `json:"ech_config_list,omitempty"`
@@ -123,64 +120,6 @@ type RenewResponse struct {
 
 type UnregisterRequest struct {
 	AccessToken string `json:"access_token"`
-}
-
-type HopRoute struct {
-	OwnerPublicKey string          `json:"owner_public_key,omitempty"`
-	RelayURL       string          `json:"relay_url"`
-	PublicHostname string          `json:"public_hostname,omitempty"`
-	RouteHostname  string          `json:"route_hostname,omitempty"`
-	HostnameHash   string          `json:"hostname_hash,omitempty"`
-	ECHConfigList  []byte          `json:"ech_config_list,omitempty"`
-	MatchToken     string          `json:"match_token,omitempty"`
-	Metadata       LeaseMetadata   `json:"metadata"`
-	ForwardRelay   RelayDescriptor `json:"forward_relay"`
-	ForwardToken   string          `json:"forward_token"`
-	FirstSeenAt    time.Time       `json:"first_seen_at"`
-	ExpiresAt      time.Time       `json:"expires_at"`
-	Signature      string          `json:"signature,omitempty"`
-}
-
-type HopRouteResponse struct {
-	AccessToken string `json:"access_token,omitempty"`
-	SNIPort     int    `json:"sni_port,omitempty"`
-}
-
-func HopRouteBytes(method string, route HopRoute) ([]byte, error) {
-	forwardRelay, err := CanonicalBytes(route.ForwardRelay)
-	if err != nil {
-		return nil, err
-	}
-	payload := struct {
-		Purpose             string          `json:"purpose"`
-		Method              string          `json:"method"`
-		OwnerPublicKey      string          `json:"owner_public_key"`
-		RelayURL            string          `json:"relay_url"`
-		PublicHostname      string          `json:"public_hostname"`
-		RouteHostname       string          `json:"route_hostname"`
-		HostnameHash        string          `json:"hostname_hash"`
-		ECHConfigList       string          `json:"ech_config_list"`
-		MatchToken          string          `json:"match_token"`
-		ForwardRelay        json.RawMessage `json:"forward_relay"`
-		ForwardToken        string          `json:"forward_token"`
-		FirstSeenAtUnixNano int64           `json:"first_seen_at_unix_nano"`
-		ExpiresAtUnixNano   int64           `json:"expires_at_unix_nano"`
-	}{
-		Purpose:             "portal hop route v1",
-		Method:              strings.ToUpper(strings.TrimSpace(method)),
-		OwnerPublicKey:      strings.TrimSpace(route.OwnerPublicKey),
-		RelayURL:            strings.TrimSpace(route.RelayURL),
-		PublicHostname:      strings.TrimSpace(route.PublicHostname),
-		RouteHostname:       strings.TrimSpace(route.RouteHostname),
-		HostnameHash:        strings.TrimSpace(route.HostnameHash),
-		ECHConfigList:       base64.StdEncoding.EncodeToString(route.ECHConfigList),
-		MatchToken:          strings.TrimSpace(route.MatchToken),
-		ForwardRelay:        json.RawMessage(forwardRelay),
-		ForwardToken:        strings.TrimSpace(route.ForwardToken),
-		FirstSeenAtUnixNano: route.FirstSeenAt.UTC().UnixNano(),
-		ExpiresAtUnixNano:   route.ExpiresAt.UTC().UnixNano(),
-	}
-	return json.Marshal(payload)
 }
 
 type DomainResponse struct {

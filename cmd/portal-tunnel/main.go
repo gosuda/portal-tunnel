@@ -51,7 +51,6 @@ func main() {
 
 type exposeFlags struct {
 	relayCSV             string
-	multiHopCSV          string
 	discovery            bool
 	banMITM              bool
 	identityPath         string
@@ -76,13 +75,11 @@ type exposeFlags struct {
 	tcp                  bool
 	ech                  bool
 	maxActiveRelays      int
-	multiHopDepth        int
 	metricsAddr          string
 }
 
 func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
-	utils.StringFlagEnv(fs, &flags.multiHopCSV, "multi-hop", "", "Ordered multi-hop relay API URLs, comma-separated", "MULTI_HOP")
 	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
 	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
@@ -105,8 +102,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
 	utils.BoolFlagEnv(fs, &flags.ech, "ech", false, "Enable ECH hostname privacy for the default TLS stream transport", "ECH_ENABLED")
-	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry", "MAX_ACTIVE_RELAYS")
-	utils.IntFlagEnv(fs, &flags.multiHopDepth, "multi-hop-depth", 0, nil, "Automatically create multi-hop routes at this hop count for every eligible entry relay; 0 or 1 disables multi-hop", "MULTI_HOP_DEPTH")
+	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
 }
 
@@ -239,8 +235,6 @@ func runExposeCommand(args []string) error {
 		UDPEnabled:      flags.udp,
 		TCPEnabled:      flags.tcp,
 		ECH:             flags.ech,
-		MultiHop:        utils.SplitCSV(flags.multiHopCSV),
-		MultiHopDepth:   flags.multiHopDepth,
 		BanMITM:         flags.banMITM,
 		MaxActiveRelays: flags.maxActiveRelays,
 		Metadata: types.LeaseMetadata{
@@ -433,8 +427,6 @@ func printExposeUsage(w io.Writer) {
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal expose 3000 --ban-mitm",
 			"portal expose 3000 --relays https://portal.example.com --discovery=false",
-			"portal expose 3000 --multi-hop https://entry.example.com,https://transit.example.com,https://exit.example.com",
-			"portal expose 3000 --multi-hop-depth 3",
 		},
 	)
 	fs := utils.NewFlagSet("expose", nil)

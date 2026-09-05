@@ -44,7 +44,7 @@ func TestTerminalRelayFailureTargetsTheReportingRelay(t *testing.T) {
 		exit  = "https://exit.example"
 	)
 	listener := &listener{
-		route:    discovery.NewRoute([]string{entry, exit}, false),
+		route:    discovery.Route{RelayURL: entry, Explicit: false},
 		relaySet: mustRelaySet(t, entry, exit),
 	}
 	err := &relayRegistrationError{
@@ -55,66 +55,13 @@ func TestTerminalRelayFailureTargetsTheReportingRelay(t *testing.T) {
 		t.Fatal("terminal relay error was not handled")
 	}
 
-	routes, planErr := listener.relaySet.PlanRoutes(nil, discovery.RouteState{})
-	if planErr != nil {
-		t.Fatalf("PlanRoutes() error = %v", planErr)
-	}
+	routes := listener.relaySet.SelectRelays(discovery.RouteState{})
 	for _, route := range routes {
-		if route.ListenerRelayURL() == exit {
+		if route.RelayURL == exit {
 			t.Fatal("incompatible exit relay remains active")
 		}
-		if route.ListenerRelayURL() != entry {
-			t.Fatalf("unexpected remaining relay %q", route.ListenerRelayURL())
+		if route.RelayURL != entry {
+			t.Fatalf("unexpected remaining relay %q", route.RelayURL)
 		}
-	}
-}
-
-func TestNewListenerUsesMultiHopExitForControl(t *testing.T) {
-	entry := "https://entry.example"
-	exit := "https://exit.example"
-	route := discovery.NewRoute([]string{entry, "https://middle.example", exit}, false)
-	entryURL, controlURL, err := routeRelayURLs(route)
-	if err != nil {
-		t.Fatalf("routeRelayURLs() error = %v", err)
-	}
-
-	if got := controlURL; got != exit {
-		t.Fatalf("control relay = %q, want %q", got, exit)
-	}
-	if got := entryURL; got != entry {
-		t.Fatalf("route entry = %q, want %q", got, entry)
-	}
-}
-
-func TestBuildHopRoutesUsesPublicHostnameWithoutECH(t *testing.T) {
-	listener := &listener{
-		identity: types.Identity{
-			Name:        "demo",
-			Address:     "0x1234",
-			TokenSecret: "test-token-secret",
-		},
-	}
-	hopPath := []types.RelayDescriptor{
-		{APIHTTPSAddr: "https://entry.example.com"},
-		{APIHTTPSAddr: "https://exit.example.com"},
-	}
-
-	routes, exitHopToken, err := listener.buildHopRoutes(hopPath, "demo.example.com", "", nil)
-	if err != nil {
-		t.Fatalf("buildHopRoutes() error = %v", err)
-	}
-	if len(routes) != 1 {
-		t.Fatalf("buildHopRoutes() routes = %d, want 1", len(routes))
-	}
-	if exitHopToken == "" {
-		t.Fatal("buildHopRoutes() exit hop token is empty")
-	}
-
-	entry := routes[0]
-	if entry.RouteHostname != "demo.example.com" {
-		t.Fatalf("entry RouteHostname = %q, want public hostname", entry.RouteHostname)
-	}
-	if entry.PublicHostname != "" || entry.HostnameHash != "" || len(entry.ECHConfigList) != 0 {
-		t.Fatalf("entry ECH fields = PublicHostname %q, HostnameHash %q, ECHConfigList %x; want empty", entry.PublicHostname, entry.HostnameHash, entry.ECHConfigList)
 	}
 }

@@ -139,18 +139,6 @@ func (r *leaseRegistry) recordByKey(key string, now time.Time) *leaseRecord {
 	return nil
 }
 
-func (r *leaseRegistry) recordByHopToken(token string, now time.Time) *leaseRecord {
-	for _, record := range r.records {
-		if record == nil || record.isExpired(now) {
-			continue
-		}
-		if (record.isHopMiddle() || record.isHopExit()) && record.hopToken == token {
-			return record
-		}
-	}
-	return nil
-}
-
 func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, reportedIP string) (*leaseRecord, types.RegisterResponse, error) {
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
@@ -169,16 +157,9 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 
 	identityKey := leaseIdentity.Key()
-	hopToken := strings.TrimSpace(req.HopToken)
 	routeHostname := utils.NormalizeHostname(req.RouteHostname)
 	hostnameHash := strings.TrimSpace(req.HostnameHash)
 	echConfigList := bytes.Clone(req.ECHConfigList)
-	isHopLease := hopToken != ""
-	hasPortTransport := req.UDPEnabled || req.TCPEnabled
-	hasRouteMatcher := routeHostname != "" || hostnameHash != ""
-	if isHopLease && (hasPortTransport || hasRouteMatcher) {
-		return nil, types.RegisterResponse{}, errTransportMismatch
-	}
 	if hostnameHash != "" && routeHostname == "" {
 		return nil, types.RegisterResponse{}, errors.New("hostname hash requires route hostname")
 	}
@@ -226,7 +207,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 
 	hostname := routeHostname
-	if hostname == "" && !isHopLease {
+	if hostname == "" {
 		hostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {
 			return nil, types.RegisterResponse{}, err
@@ -253,7 +234,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		LastSeenAt:     issuedAt,
 		ClientIP:       clientIP,
 		ReportedIP:     utils.SanitizeReportedIP(reportedIP),
-		hopToken:       hopToken,
 		stream:         stream,
 	}
 
@@ -326,13 +306,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			r.mu.Unlock()
 			record.Close()
 			return nil, types.RegisterResponse{}, errHostnameConflict
-		}
-		isHopRecord := existing.isHopMiddle() || existing.isHopExit()
-		sameHopToken := hopToken != "" && existing.hopToken == hopToken
-		if isHopRecord && sameHopToken && existingKey != identityKey {
-			r.mu.Unlock()
-			record.Close()
-			return nil, types.RegisterResponse{}, errors.New("hop token conflict")
 		}
 	}
 	if record.datagram != nil {
@@ -484,179 +457,6 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 	}
 	r.mu.Unlock()
 	return nil, errLeaseNotFound
-}
-
-func (r *leaseRegistry) RegisterHopRoute(route *types.HopRoute, now time.Time) (*leaseRecord, error) {
-	if route == nil {
-		return nil, errors.New("hop route is required")
-	}
-	ownerKey, err := identity.AddressFromCompressedPublicKeyHex(route.OwnerPublicKey)
-	if err != nil {
-		return nil, err
-	}
-	routeHostname := route.RouteHostname
-	hostnameHash := route.HostnameHash
-	echConfigList := bytes.Clone(route.ECHConfigList)
-	publicHostname := utils.NormalizeHostname(route.PublicHostname)
-	matchToken := route.MatchToken
-	overlayIPv4, overlayErr := identity.DeriveWireGuardOverlayIPv4(route.ForwardRelay.WireGuardPublicKey)
-	forwardToken := route.ForwardToken
-	expiresAt := route.ExpiresAt.UTC()
-	hasPublicMatcher := routeHostname != "" || hostnameHash != ""
-
-	switch {
-	case r == nil:
-		return nil, errFeatureUnavailable
-	case !expiresAt.After(now):
-		return nil, errors.New("route expiry must be in the future")
-	case matchToken != "" && hasPublicMatcher:
-		return nil, errors.New("route and token matchers are mutually exclusive")
-	case matchToken == "" && routeHostname == "":
-		return nil, errors.New("route hostname or token matcher is required")
-	case overlayErr != nil:
-		return nil, fmt.Errorf("forward relay overlay ipv4: %w", overlayErr)
-	case forwardToken == "":
-		return nil, errors.New("forward token is required")
-	}
-	if routeHostname != "" {
-		routeLabel, routeBase, ok := strings.Cut(routeHostname, ".")
-		normalizedRouteLabel, labelErr := utils.NormalizeDNSLabel(routeLabel)
-		if !ok || labelErr != nil || normalizedRouteLabel != routeLabel || routeBase != r.rootHostname {
-			return nil, errors.New("route hostname must be a child of relay root hostname")
-		}
-	}
-	if hostnameHash != "" {
-		if publicHostname == "" {
-			return nil, errors.New("hostname hash requires public hostname")
-		}
-		if !utils.HostnameMatchesBaseDomain(publicHostname, r.rootHostname) {
-			return nil, errors.New("public hostname must be a child of relay root hostname")
-		}
-		if utils.HostnameHash(publicHostname) != hostnameHash {
-			return nil, errors.New("hostname hash does not match public hostname")
-		}
-	}
-	if len(echConfigList) > 0 {
-		if publicHostname == "" || routeHostname == "" || hostnameHash == "" {
-			return nil, errors.New("ech config list requires public hostname, route hostname, and hostname hash")
-		}
-		echConfigList, err = keyless.NormalizeEncryptedClientHelloConfigList(echConfigList)
-		if err != nil {
-			return nil, err
-		}
-	}
-	name := routeHostname
-	if label, _, ok := strings.Cut(name, "."); ok {
-		name = label
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	record := &leaseRecord{
-		Identity: types.Identity{
-			Name:    name,
-			Address: ownerKey,
-		},
-		Hostname:           routeHostname,
-		HostnameHash:       hostnameHash,
-		ECHConfigList:      echConfigList,
-		ECHDNSHostname:     publicHostname,
-		Metadata:           route.Metadata.Copy(),
-		FirstSeenAt:        route.FirstSeenAt.UTC(),
-		ExpiresAt:          expiresAt,
-		hopToken:           matchToken,
-		hopNextOverlayIPv4: overlayIPv4,
-		hopNextToken:       forwardToken,
-	}
-	switch {
-	case record.isPublicEntry():
-		for _, existing := range r.records {
-			if existing == nil || !existing.isPublicEntry() || existing.isExpired(now) {
-				continue
-			}
-			if !existing.routesOverlap(record) {
-				continue
-			}
-			if existing.stream != nil || !strings.EqualFold(existing.Address, record.Address) {
-				return nil, errHostnameConflict
-			}
-		}
-		for i, existing := range r.records {
-			if existing == nil || existing.stream != nil || !existing.isPublicEntry() || !strings.EqualFold(existing.Address, record.Address) {
-				continue
-			}
-			if existing.routesOverlap(record) {
-				r.records[i] = record
-				return record, nil
-			}
-		}
-		r.records = append(r.records, record)
-		return record, nil
-	case record.isHopMiddle():
-		if existing := r.recordByHopToken(record.hopToken, now); existing != nil {
-			if !existing.isHopMiddle() || !strings.EqualFold(existing.Address, record.Address) {
-				return nil, errors.New("hop token conflict")
-			}
-		}
-		for i, existing := range r.records {
-			if existing != nil && existing.isHopMiddle() &&
-				existing.hopToken == record.hopToken &&
-				strings.EqualFold(existing.Address, record.Address) {
-				r.records[i] = record
-				return record, nil
-			}
-		}
-		r.records = append(r.records, record)
-		return record, nil
-	default:
-		return nil, errors.New("invalid hop route")
-	}
-}
-
-func (r *leaseRegistry) DeleteHopRoute(route *types.HopRoute) (*leaseRecord, error) {
-	if r == nil || route == nil {
-		return nil, nil
-	}
-	ownerKey, err := identity.AddressFromCompressedPublicKeyHex(route.OwnerPublicKey)
-	if err != nil {
-		return nil, fmt.Errorf("delete hop route owner key: %w", err)
-	}
-	routeHostname := route.RouteHostname
-	hostnameHash := route.HostnameHash
-	token := route.MatchToken
-
-	var deleted *leaseRecord
-	r.mu.Lock()
-	for i := 0; i < len(r.records); i++ {
-		record := r.records[i]
-		if record == nil || record.stream != nil {
-			continue
-		}
-		deleteRecord := false
-		if routeHostname != "" || hostnameHash != "" {
-			deleteRecord = record.isPublicEntry() && strings.EqualFold(record.Address, ownerKey)
-			if routeHostname != "" {
-				deleteRecord = deleteRecord && record.Hostname == routeHostname
-			}
-			if hostnameHash != "" {
-				deleteRecord = deleteRecord && record.HostnameHash == hostnameHash
-			}
-		}
-		if token != "" {
-			deleteRecord = deleteRecord || record.isHopMiddle() &&
-				record.hopToken == token &&
-				strings.EqualFold(record.Address, ownerKey)
-		}
-		if deleteRecord {
-			deleted = record
-			r.deleteRecord(i)
-			break
-		}
-	}
-	r.mu.Unlock()
-	deleted.Close()
-	return deleted, nil
 }
 
 func (r *leaseRegistry) promoteECHDNS(record *leaseRecord, manager *acme.Manager, sniPort int) {
@@ -817,10 +617,6 @@ func (r *leaseRegistry) verifySigningAccessToken(token string) error {
 			}
 			return nil
 		}
-		_, _, hasNextHop := record.nextHop()
-		if record.stream == nil && record.isPublicEntry() && hasNextHop {
-			return nil
-		}
 	}
 	return errUnauthorized
 }
@@ -957,12 +753,6 @@ func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 	}
 	if record.stream != nil {
 		lease.Ready = record.stream.ReadyCount()
-	} else if record.isPublicEntry() {
-		_, _, hasNextHop := record.nextHop()
-		if !hasNextHop {
-			return lease
-		}
-		lease.Ready = 1
 	}
 	return lease
 }

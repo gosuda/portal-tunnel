@@ -9,12 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -139,41 +137,6 @@ func TestRelayDiscoveryEnabledServesDiscoveryEnvelope(t *testing.T) {
 	}
 	if !envelope.OK || envelope.Data.ProtocolVersion != types.DiscoveryVersion {
 		t.Fatalf("discovery envelope = %+v, want ok discovery response", envelope)
-	}
-}
-
-func TestHandleHopRateLimited(t *testing.T) {
-	t.Parallel()
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:    "https://portal.example.com",
-		IdentityPath: tempIdentityPath(t),
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-	server.announceLimiter = discovery.NewAnnounceLimiter(1, 2)
-
-	statuses := make([]int, 3)
-	for i := range statuses {
-		req := httptest.NewRequest(http.MethodPost, types.PathSDKHop, strings.NewReader(`{}`))
-		req.RemoteAddr = "192.0.2.1:1234"
-		rec := httptest.NewRecorder()
-		server.handleHop(rec, req)
-		statuses[i] = rec.Code
-	}
-	if statuses[0] == http.StatusTooManyRequests || statuses[1] == http.StatusTooManyRequests {
-		t.Fatalf("first statuses = %d/%d, want within burst budget", statuses[0], statuses[1])
-	}
-	if statuses[2] != http.StatusTooManyRequests {
-		t.Fatalf("third status = %d, want %d", statuses[2], http.StatusTooManyRequests)
-	}
-	deleteReq := httptest.NewRequest(http.MethodDelete, types.PathSDKHop, strings.NewReader(`{}`))
-	deleteReq.RemoteAddr = "192.0.2.1:1234"
-	deleteRec := httptest.NewRecorder()
-	server.handleHop(deleteRec, deleteReq)
-	if deleteRec.Code == http.StatusTooManyRequests {
-		t.Fatalf("DELETE after exhausted POST burst = %d, want cleanup to bypass the POST-only limiter", deleteRec.Code)
 	}
 }
 
