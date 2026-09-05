@@ -1972,9 +1972,6 @@ func (m agentDashboardModel) settingsChanged(tunnel types.AgentTunnelStatus) boo
 
 func relayDashboardFeatures(relay types.AgentRelayStatus) string {
 	var features []string
-	if relay.SupportsOverlay {
-		features = append(features, "overlay")
-	}
 	if relay.SupportsUDP {
 		features = append(features, "udp")
 	}
