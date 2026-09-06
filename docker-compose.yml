@@ -30,6 +30,10 @@ services:
 
       API_PORT: 4017
       SNI_PORT: 443
+      # Optional canonical-portal redirect; also publish 80:80 under ports when enabled.
+      HTTP_REDIRECT_ENABLED: ${HTTP_REDIRECT_ENABLED:-false}
+      HTTP_REDIRECT_ADDR: ${HTTP_REDIRECT_ADDR:-:80}
+      HTTP_REDIRECT_HSTS: ${HTTP_REDIRECT_HSTS:-false}
       WIREGUARD_PORT: ${WIREGUARD_PORT:-51820}
 
       # Shared lease port range.

@@ -9,6 +9,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"net/netip"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +49,7 @@ type ServerConfig struct {
 	WireGuardPort     int
 	APIPort           int
 	SNIPort           int
+	HTTPRedirect      types.HTTPRedirectConfig
 	APIListenAddr     string
 	SNIListenAddr     string
 	TrustProxyHeaders bool
@@ -62,12 +66,58 @@ type ServerConfig struct {
 	ACME              acme.Config
 }
 
+// NormalizeHTTPRedirectConfig validates redirect settings without resolving names
+// or binding sockets. Listener availability is checked only when the server starts.
+func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string) (types.HTTPRedirectConfig, error) {
+	if !cfg.Enabled {
+		return cfg, nil
+	}
+	target, err := url.Parse(strings.TrimSpace(portalURL))
+	if err != nil {
+		return types.HTTPRedirectConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
+	}
+	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
+	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
+		return types.HTTPRedirectConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
+	}
+	if port := target.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return types.HTTPRedirectConfig{}, errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
+		}
+	}
+	cfg.Addr = utils.StringOrDefault(strings.TrimSpace(cfg.Addr), types.DefaultHTTPRedirectAddr)
+	host, port, err := net.SplitHostPort(cfg.Addr)
+	if err != nil {
+		return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR must be a host:port address: %w", err)
+	}
+	if strings.ContainsAny(host, " \t\r\n/#?@\\") {
+		return types.HTTPRedirectConfig{}, errors.New("http redirect HTTP_REDIRECT_ADDR has an invalid host")
+	}
+	if strings.Contains(host, ":") {
+		if _, err := netip.ParseAddr(host); err != nil {
+			return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR has an invalid IP address: %w", err)
+		}
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 0 || n > 65535 {
+		return types.HTTPRedirectConfig{}, errors.New("http redirect HTTP_REDIRECT_ADDR port must be between 0 and 65535")
+	}
+	return cfg, nil
+}
+
 func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
 	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
 	if cfg.IdentityPath == "" {
 		return ServerConfig{}, errors.New("identity path is required")
 	}
+
+	redirect, err := NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
+	if err != nil {
+		return ServerConfig{}, err
+	}
+	cfg.HTTPRedirect = redirect
 
 	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
 	if err != nil {
@@ -131,13 +181,15 @@ type Server struct {
 	acmeManager *acme.Manager
 	proxy       proxy
 
-	apiListener   net.Listener
-	sniListener   net.Listener
-	apiServer     *http.Server
-	apiTLSClose   io.Closer
-	pprofListener net.Listener
-	pprofServer   *http.Server
-	quicBackhaul  *quic.Listener
+	apiListener      net.Listener
+	sniListener      net.Listener
+	apiServer        *http.Server
+	apiTLSClose      io.Closer
+	redirectListener net.Listener
+	redirectServer   *http.Server
+	pprofListener    net.Listener
+	pprofServer      *http.Server
+	quicBackhaul     *quic.Listener
 
 	overlay         *overlay.Overlay
 	relaySet        *discovery.RelaySet
@@ -242,6 +294,8 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	var sniListener net.Listener
 	var apiServer *http.Server
 	var apiCloser io.Closer
+	var redirectListener net.Listener
+	var redirectServer *http.Server
 	var pprofListener net.Listener
 	var pprofServer *http.Server
 	var ov *overlay.Overlay
@@ -256,6 +310,12 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		}
 		if apiServer != nil {
 			_ = apiServer.Close()
+		}
+		if redirectServer != nil {
+			_ = redirectServer.Close()
+		}
+		if redirectListener != nil {
+			_ = redirectListener.Close()
 		}
 		if pprofServer != nil {
 			_ = pprofServer.Close()
@@ -289,6 +349,26 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiMux, apiTLS)
 	if err != nil {
 		return err
+	}
+	if cfg.HTTPRedirect.Enabled {
+		redirectListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.HTTPRedirect.Addr)
+		if err != nil {
+			return fmt.Errorf("listen http redirect: %w", err)
+		}
+		redirectServer = &http.Server{
+			DisableGeneralOptionsHandler: true,
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if cfg.HTTPRedirect.HSTS {
+					w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+				}
+				// Canonical portal only: never forward request hosts, paths, or queries.
+				http.Redirect(w, r, cfg.PortalURL, http.StatusMovedPermanently)
+			}),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       30 * time.Second,
+		}
 	}
 	if cfg.PProfEnabled {
 		pprofListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.PProfListenAddr)
@@ -325,6 +405,8 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.sniListener = sniListener
 	s.apiServer = apiServer
 	s.apiTLSClose = apiCloser
+	s.redirectListener = redirectListener
+	s.redirectServer = redirectServer
 	s.pprofListener = pprofListener
 	s.pprofServer = pprofServer
 	s.acmeManager = acmeManager
@@ -335,6 +417,15 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	started = true
 
 	group.Go(s.runAPIServer)
+	if s.redirectServer != nil {
+		group.Go(func() error {
+			err := s.redirectServer.Serve(s.redirectListener)
+			if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		})
+	}
 	if s.pprofServer != nil {
 		group.Go(s.runPProfServer)
 	}
@@ -371,6 +462,9 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		Bool("tcp_enabled", s.supportsTCP()).
 		Bool("api_ech_enabled", len(apiTLS.EncryptedClientHelloKeys) > 0).
 		Bool("pprof_enabled", s.pprofServer != nil)
+	if s.redirectListener != nil {
+		logEvent = logEvent.Str("http_redirect_addr", s.redirectListener.Addr().String())
+	}
 	if s.pprofListener != nil {
 		logEvent = logEvent.Str("pprof_addr", utils.HostPortOrLoopback(s.pprofListener.Addr().String()))
 	}
@@ -452,6 +546,16 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			if err := s.apiServer.Shutdown(ctx); err != nil && shutdownErr == nil {
 				shutdownErr = err
 			}
+		}
+		if s.redirectServer != nil {
+			if err := s.redirectServer.Shutdown(ctx); err != nil {
+				_ = s.redirectServer.Close()
+				if shutdownErr == nil {
+					shutdownErr = err
+				}
+			}
+			// Shutdown can precede the Serve goroutine registering its listener.
+			_ = s.redirectListener.Close()
 		}
 		if s.pprofServer != nil {
 			if err := s.pprofServer.Shutdown(ctx); err != nil && shutdownErr == nil {

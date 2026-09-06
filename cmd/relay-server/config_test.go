@@ -1,10 +1,15 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 // writeEnvFile writes lines to a temporary env file and returns its path.
@@ -37,6 +42,105 @@ func resolveWithEnvFile(t *testing.T, path string) relayServerConfig {
 		t.Fatalf("resolve config: %v", err)
 	}
 	return cfg
+}
+
+func TestHTTPRedirectEnvironment(t *testing.T) {
+	cfg := resolveWithEnvFile(t, writeEnvFile(t,
+		types.HTTPRedirectEnabledEnv+"=true", "HTTP_REDIRECT_ADDR=127.0.0.1:18080", "HTTP_REDIRECT_HSTS=true"))
+	if !cfg.HTTPRedirect.Enabled || cfg.HTTPRedirect.Addr != "127.0.0.1:18080" || !cfg.HTTPRedirect.HSTS {
+		t.Fatalf("redirect environment not resolved: %+v", cfg)
+	}
+	f := featureByName(t, cfg, types.HTTPRedirectFeatureName)
+	if f.State != stateEnabled || !strings.Contains(f.Detail, "browsers ignore") {
+		t.Fatalf("redirect capability report=%+v", f)
+	}
+	cfg = resolveWithEnvFile(t, writeEnvFile(t))
+	if cfg.HTTPRedirect.Enabled || cfg.HTTPRedirect.HSTS || cfg.HTTPRedirect.Addr != types.DefaultHTTPRedirectAddr {
+		t.Fatalf("unexpected redirect defaults: %+v", cfg)
+	}
+}
+
+func TestHTTPRedirectReportMatchesServerValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		target  string
+		addr    string
+		enabled bool
+		blocked bool
+	}{
+		{name: "HTTPS", target: "HTTPS://localhost:4017/base/?q=discarded#fragment", addr: "127.0.0.1:0", enabled: true},
+		{name: "mixed case", target: "hTtPs://localhost:4017", addr: "[::1]:0", enabled: true},
+		{name: "default address", target: "https://localhost:4017", enabled: true},
+		{name: "trimmed address", target: " https://localhost:4017/ ", addr: " 127.0.0.1:18080 ", enabled: true},
+		{name: "DNS deferred", target: "https://localhost:4017", addr: "does-not-resolve.invalid:80", enabled: true},
+		{name: "HTTP", target: "http://relay.example", addr: "127.0.0.1:0", enabled: true, blocked: true},
+		{name: "loopback HTTP", target: "http://localhost:4017", enabled: true, blocked: true},
+		{name: "relative target", target: "//relay.example", enabled: true, blocked: true},
+		{name: "credentials", target: "https://user:pass@relay.example", enabled: true, blocked: true},
+		{name: "empty root", target: "https://./", enabled: true, blocked: true},
+		{name: "zero target port", target: "https://relay.example:0", enabled: true, blocked: true},
+		{name: "high target port", target: "https://relay.example:65536", enabled: true, blocked: true},
+		{name: "nonnumeric target port", target: "https://relay.example:bad", enabled: true, blocked: true},
+		{name: "missing listen port", target: "https://localhost:4017", addr: "127.0.0.1", enabled: true, blocked: true},
+		{name: "empty listen port", target: "https://localhost:4017", addr: "127.0.0.1:", enabled: true, blocked: true},
+		{name: "nonnumeric listen port", target: "https://localhost:4017", addr: ":bad", enabled: true, blocked: true},
+		{name: "negative listen port", target: "https://localhost:4017", addr: ":-1", enabled: true, blocked: true},
+		{name: "high listen port", target: "https://localhost:4017", addr: ":65536", enabled: true, blocked: true},
+		{name: "invalid listen host", target: "https://localhost:4017", addr: "bad host:80", enabled: true, blocked: true},
+		{name: "invalid IPv6", target: "https://localhost:4017", addr: "[gg::1]:80", enabled: true, blocked: true},
+		{name: "disabled", target: "http://localhost:4017", addr: "invalid ignored address"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := resolveWithEnvFile(t, writeEnvFile(t,
+				"PORTAL_URL="+tc.target, "HTTP_REDIRECT_ADDR="+tc.addr,
+				types.HTTPRedirectEnabledEnv+"="+strconv.FormatBool(tc.enabled)))
+			f := featureByName(t, cfg, types.HTTPRedirectFeatureName)
+			want := stateDisabled
+			if tc.enabled {
+				want = stateEnabled
+			}
+			if tc.blocked {
+				want = stateBlocked
+			}
+			if f.State != want {
+				t.Fatalf("redirect report=%+v, want state %s", f, want)
+			}
+			_, err := portal.NewServer(portal.ServerConfig{
+				PortalURL: cfg.PortalURL, IdentityPath: t.TempDir(), HTTPRedirect: cfg.HTTPRedirect,
+			})
+			if tc.blocked {
+				if err == nil || f.Missing != err.Error() {
+					t.Fatalf("report reason=%q, NewServer error=%v", f.Missing, err)
+				}
+			} else if err != nil || f.Missing != "" {
+				t.Fatalf("report=%+v, NewServer error=%v", f, err)
+			}
+			if tc.enabled && !tc.blocked && !strings.Contains(f.Detail, "listener binding occurs at startup") {
+				t.Fatalf("report must distinguish configuration from readiness: %+v", f)
+			}
+		})
+	}
+}
+
+func TestHTTPRedirectReportDoesNotBind(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	cfg := resolveWithEnvFile(t, writeEnvFile(t,
+		"PORTAL_URL=https://localhost:4017", types.HTTPRedirectEnabledEnv+"=true",
+		"HTTP_REDIRECT_ADDR="+occupied.Addr().String()))
+	f := featureByName(t, cfg, types.HTTPRedirectFeatureName)
+	if f.State != stateEnabled || f.Missing != "" {
+		t.Fatalf("occupied address must not block configuration reporting: %+v", f)
+	}
+	_, err = portal.NewServer(portal.ServerConfig{
+		PortalURL: cfg.PortalURL, IdentityPath: t.TempDir(), HTTPRedirect: cfg.HTTPRedirect,
+	})
+	if err != nil {
+		t.Fatalf("NewServer must defer binding until Start: %v", err)
+	}
 }
 
 func featureByName(t *testing.T, cfg relayServerConfig, name string) feature {

@@ -16,8 +16,10 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	portalx402 "github.com/gosuda/portal-tunnel/v2/portal/x402"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -36,7 +38,7 @@ const (
 
 type feature struct {
 	Name string
-	// State is what the feature is actually doing, not what was requested.
+	// State reflects validated configuration, not listener readiness.
 	State featureState
 	// By is the setting that produced the state, e.g. "DISCOVERY=true".
 	By string
@@ -63,7 +65,27 @@ func evaluateFeatures(cfg relayServerConfig) []feature {
 		proxyHeaderFeature(cfg),
 		x402Feature(cfg),
 		pprofFeature(cfg),
+		httpRedirectFeature(cfg),
 	}
+}
+
+func httpRedirectFeature(cfg relayServerConfig) feature {
+	f := feature{Name: types.HTTPRedirectFeatureName, State: stateDisabled, By: types.HTTPRedirectEnabledEnv + "=false"}
+	if !cfg.HTTPRedirect.Enabled {
+		return f
+	}
+	f.By = types.HTTPRedirectEnabledEnv + "=true"
+	redirect, err := portal.NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
+	if err != nil {
+		f.State, f.Missing = stateBlocked, err.Error()
+		return f
+	}
+	f.State = stateEnabled
+	f.Detail = "addr=" + redirect.Addr + "; canonical PORTAL_URL only; configuration valid; listener binding occurs at startup"
+	if redirect.HSTS {
+		f.Detail += "; HSTS header requested (browsers ignore it over HTTP)"
+	}
+	return f
 }
 
 func frontendFeature(cfg relayServerConfig) feature {

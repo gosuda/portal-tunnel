@@ -41,6 +41,7 @@ type relayServerConfig struct {
 	Bootstraps         string
 	DiscoveryEnabled   bool
 	WireGuardPort      int
+	HTTPRedirect       types.HTTPRedirectConfig
 	APIPort            int
 	SNIPort            int
 	TrustProxyHeaders  bool
@@ -106,6 +107,9 @@ func registerRelayServerFlags(fs *flag.FlagSet, cfg *relayServerConfig) {
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
 	utils.IntFlagEnv(fs, &cfg.WireGuardPort, "wireguard-port", overlay.DefaultListenPort, utils.ParsePortNumber, "public and listen UDP port for relay overlay", "WIREGUARD_PORT")
 
+	utils.BoolFlagEnv(fs, &cfg.HTTPRedirect.Enabled, "http-redirect-enabled", false, "enable HTTP redirects to the canonical HTTPS portal URL (not tenant hosts)", types.HTTPRedirectEnabledEnv)
+	utils.StringFlagEnv(fs, &cfg.HTTPRedirect.Addr, "http-redirect-addr", types.DefaultHTTPRedirectAddr, "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
+	utils.BoolFlagEnv(fs, &cfg.HTTPRedirect.HSTS, "http-redirect-hsts", false, "include HSTS max-age=31536000 on redirects; browsers ignore HSTS received over HTTP", "HTTP_REDIRECT_HSTS")
 	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
 	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 443, utils.ParsePortNumber, "TCP SNI router port number", "SNI_PORT")
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
@@ -176,6 +180,7 @@ func runServeCommand(args []string) error {
 func runServer(ctx context.Context, cfg relayServerConfig) error {
 	server, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:         cfg.PortalURL,
+		HTTPRedirect:      cfg.HTTPRedirect,
 		IdentityPath:      cfg.IdentityPath,
 		Bootstraps:        utils.SplitCSV(cfg.Bootstraps),
 		DiscoveryEnabled:  cfg.DiscoveryEnabled,
