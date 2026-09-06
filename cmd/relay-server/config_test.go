@@ -39,6 +39,22 @@ func resolveWithEnvFile(t *testing.T, path string) relayServerConfig {
 	return cfg
 }
 
+func TestHTTPRedirectEnvironment(t *testing.T) {
+	cfg := resolveWithEnvFile(t, writeEnvFile(t,
+		"HTTP_REDIRECT_ENABLED=true", "HTTP_REDIRECT_ADDR=127.0.0.1:18080", "HTTP_REDIRECT_HSTS=true"))
+	if !cfg.HTTPRedirectEnabled || cfg.HTTPRedirectAddr != "127.0.0.1:18080" || !cfg.HTTPRedirectHSTS {
+		t.Fatalf("redirect environment not resolved: %+v", cfg)
+	}
+	f := featureByName(t, cfg, "http-redirect")
+	if f.State != stateEnabled || !strings.Contains(f.Detail, "browsers ignore") {
+		t.Fatalf("redirect capability report=%+v", f)
+	}
+	cfg = resolveWithEnvFile(t, writeEnvFile(t))
+	if cfg.HTTPRedirectEnabled || cfg.HTTPRedirectHSTS || cfg.HTTPRedirectAddr != ":80" {
+		t.Fatalf("unexpected redirect defaults: %+v", cfg)
+	}
+}
+
 func featureByName(t *testing.T, cfg relayServerConfig, name string) feature {
 	t.Helper()
 	for _, f := range evaluateFeatures(cfg) {

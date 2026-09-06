@@ -35,27 +35,30 @@ func main() {
 }
 
 type relayServerConfig struct {
-	PortalURL          string
-	FrontendDir        string
-	IdentityPath       string
-	Bootstraps         string
-	DiscoveryEnabled   bool
-	WireGuardPort      int
-	APIPort            int
-	SNIPort            int
-	TrustProxyHeaders  bool
-	TrustedProxyCIDRs  string
-	UDPEnabled         bool
-	TCPEnabled         bool
-	LandingPageEnabled bool
-	MinPort            int
-	MaxPort            int
-	AdminToken         string
-	PProfEnabled       bool
-	PProfAddr          string
-	X402Enabled        bool
-	X402Testnet        bool
-	X402PayTo          string
+	PortalURL           string
+	FrontendDir         string
+	IdentityPath        string
+	Bootstraps          string
+	DiscoveryEnabled    bool
+	WireGuardPort       int
+	HTTPRedirectEnabled bool
+	HTTPRedirectAddr    string
+	HTTPRedirectHSTS    bool
+	APIPort             int
+	SNIPort             int
+	TrustProxyHeaders   bool
+	TrustedProxyCIDRs   string
+	UDPEnabled          bool
+	TCPEnabled          bool
+	LandingPageEnabled  bool
+	MinPort             int
+	MaxPort             int
+	AdminToken          string
+	PProfEnabled        bool
+	PProfAddr           string
+	X402Enabled         bool
+	X402Testnet         bool
+	X402PayTo           string
 
 	ACMEDNSProvider    string
 	ENSGaslessEnabled  bool
@@ -106,6 +109,9 @@ func registerRelayServerFlags(fs *flag.FlagSet, cfg *relayServerConfig) {
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
 	utils.IntFlagEnv(fs, &cfg.WireGuardPort, "wireguard-port", overlay.DefaultListenPort, utils.ParsePortNumber, "public and listen UDP port for relay overlay", "WIREGUARD_PORT")
 
+	utils.BoolFlagEnv(fs, &cfg.HTTPRedirectEnabled, "http-redirect-enabled", false, "enable HTTP redirects to the canonical HTTPS portal URL (not tenant hosts)", "HTTP_REDIRECT_ENABLED")
+	utils.StringFlagEnv(fs, &cfg.HTTPRedirectAddr, "http-redirect-addr", ":80", "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
+	utils.BoolFlagEnv(fs, &cfg.HTTPRedirectHSTS, "http-redirect-hsts", false, "include HSTS max-age=31536000 on redirects; browsers ignore HSTS received over HTTP", "HTTP_REDIRECT_HSTS")
 	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
 	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 443, utils.ParsePortNumber, "TCP SNI router port number", "SNI_PORT")
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
@@ -175,24 +181,27 @@ func runServeCommand(args []string) error {
 
 func runServer(ctx context.Context, cfg relayServerConfig) error {
 	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:         cfg.PortalURL,
-		IdentityPath:      cfg.IdentityPath,
-		Bootstraps:        utils.SplitCSV(cfg.Bootstraps),
-		DiscoveryEnabled:  cfg.DiscoveryEnabled,
-		WireGuardPort:     cfg.WireGuardPort,
-		APIPort:           cfg.APIPort,
-		SNIPort:           cfg.SNIPort,
-		TrustProxyHeaders: cfg.TrustProxyHeaders,
-		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
-		UDPEnabled:        cfg.UDPEnabled,
-		TCPEnabled:        cfg.TCPEnabled,
-		MinPort:           cfg.MinPort,
-		MaxPort:           cfg.MaxPort,
-		PProfEnabled:      cfg.PProfEnabled,
-		PProfListenAddr:   cfg.PProfAddr,
-		X402Enabled:       cfg.X402Enabled,
-		X402Testnet:       cfg.X402Testnet,
-		X402PayTo:         cfg.X402PayTo,
+		PortalURL:           cfg.PortalURL,
+		HTTPRedirectEnabled: cfg.HTTPRedirectEnabled,
+		HTTPRedirectAddr:    cfg.HTTPRedirectAddr,
+		HTTPRedirectHSTS:    cfg.HTTPRedirectHSTS,
+		IdentityPath:        cfg.IdentityPath,
+		Bootstraps:          utils.SplitCSV(cfg.Bootstraps),
+		DiscoveryEnabled:    cfg.DiscoveryEnabled,
+		WireGuardPort:       cfg.WireGuardPort,
+		APIPort:             cfg.APIPort,
+		SNIPort:             cfg.SNIPort,
+		TrustProxyHeaders:   cfg.TrustProxyHeaders,
+		TrustedProxyCIDRs:   cfg.TrustedProxyCIDRs,
+		UDPEnabled:          cfg.UDPEnabled,
+		TCPEnabled:          cfg.TCPEnabled,
+		MinPort:             cfg.MinPort,
+		MaxPort:             cfg.MaxPort,
+		PProfEnabled:        cfg.PProfEnabled,
+		PProfListenAddr:     cfg.PProfAddr,
+		X402Enabled:         cfg.X402Enabled,
+		X402Testnet:         cfg.X402Testnet,
+		X402PayTo:           cfg.X402PayTo,
 		ACME: acme.Config{
 			KeyDir:             cfg.IdentityPath,
 			DNSProvider:        cfg.ACMEDNSProvider,

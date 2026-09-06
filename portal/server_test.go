@@ -114,6 +114,148 @@ func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *htt
 	return client
 }
 
+func TestHTTPRedirectTargetValidation(t *testing.T) {
+	for _, target := range []string{"http://localhost:4017", "http://relay.example", "//relay.example", "https://user:pass@relay.example", "https://relay.example:65536", "https://relay.example:bad", "https:///missing-host"} {
+		t.Run(target, func(t *testing.T) {
+			_, err := normalizeServerConfig(ServerConfig{PortalURL: target, IdentityPath: t.TempDir(), HTTPRedirectEnabled: true})
+			if err == nil {
+				t.Fatal("expected invalid redirect target to fail")
+			}
+		})
+	}
+	cfg, err := normalizeServerConfig(ServerConfig{PortalURL: "http://localhost:4017", IdentityPath: t.TempDir()})
+	if err != nil || cfg.PortalURL != "https://localhost:4017" {
+		t.Fatalf("disabled redirect changed loopback behavior: cfg=%+v err=%v", cfg, err)
+	}
+}
+
+func TestHTTPRedirectLifecycle(t *testing.T) {
+	for _, hsts := range []bool{false, true} {
+		t.Run(strconv.FormatBool(hsts), func(t *testing.T) {
+			server, err := NewServer(ServerConfig{
+				PortalURL:    "https://localhost:4017/base/?configured=discarded#fragment",
+				IdentityPath: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
+				APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
+				HTTPRedirectEnabled: true, HTTPRedirectAddr: "127.0.0.1:0", HTTPRedirectHSTS: hsts,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := server.Start(ctx, nil); err != nil {
+				t.Fatal(err)
+			}
+			client := newTestClient(t, cancel, server)
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			addr := server.redirectListener.Addr().String()
+			for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodOptions} {
+				req, err := http.NewRequest(method, "http://"+addr+"//tenant/path?secret=discarded", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if method == http.MethodOptions {
+					req.URL.Path = "*"
+					req.URL.RawQuery = ""
+				}
+				req.Host = "attacker.example"
+				req.Header.Set("X-Forwarded-Host", "other-attacker.example")
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != "https://localhost:4017/base" {
+					t.Fatalf("%s: status=%d Location=%q", method, resp.StatusCode, resp.Header.Get("Location"))
+				}
+				wantHSTS := ""
+				if hsts {
+					wantHSTS = "max-age=31536000"
+				}
+				if got := resp.Header.Get("Strict-Transport-Security"); got != wantHSTS {
+					t.Fatalf("HSTS=%q, want %q", got, wantHSTS)
+				}
+			}
+			cancel()
+			if err := server.Wait(); err != nil {
+				t.Fatal(err)
+			}
+			listener, err := net.Listen("tcp", addr)
+			if err != nil {
+				t.Fatalf("redirect port not released: %v", err)
+			}
+			listener.Close()
+		})
+	}
+}
+
+func TestHTTPRedirectPartialStartupCleanup(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	probe.Close()
+	server, err := NewServer(ServerConfig{
+		PortalURL: "https://localhost:4017", IdentityPath: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
+		APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
+		HTTPRedirectEnabled: true, HTTPRedirectAddr: addr,
+		PProfEnabled: true, PProfListenAddr: occupied.Addr().String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "listen pprof") {
+		if err == nil {
+			server.Shutdown(context.Background())
+		}
+		t.Fatalf("Start error=%v, want later pprof bind failure", err)
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("partial startup leaked redirect listener: %v", err)
+	}
+	listener.Close()
+}
+
+func TestHTTPRedirectBindFailure(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	server, err := NewServer(ServerConfig{
+		PortalURL: "https://localhost:4017", IdentityPath: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
+		APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
+		HTTPRedirectEnabled: true, HTTPRedirectAddr: occupied.Addr().String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "listen http redirect") {
+		if err == nil {
+			server.Shutdown(context.Background())
+		}
+		t.Fatalf("Start error=%v, want redirect bind failure", err)
+	}
+	// Retry the same owner: failed startup must not leave live server state.
+	server.cfg.UpdateCopy(func(cfg *ServerConfig) { cfg.HTTPRedirectAddr = "127.0.0.1:0" })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := server.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := server.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRelayDiscoveryEnabledServesDiscoveryEnvelope(t *testing.T) {
 	t.Parallel()
 
@@ -202,6 +344,10 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	}
 
 	client := newTestClient(t, cancel, server)
+
+	if server.redirectListener != nil || server.redirectServer != nil {
+		t.Fatal("HTTP redirect listener must be disabled by default")
+	}
 
 	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
 	if err != nil {

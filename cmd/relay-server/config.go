@@ -63,7 +63,20 @@ func evaluateFeatures(cfg relayServerConfig) []feature {
 		proxyHeaderFeature(cfg),
 		x402Feature(cfg),
 		pprofFeature(cfg),
+		httpRedirectFeature(cfg),
 	}
+}
+
+func httpRedirectFeature(cfg relayServerConfig) feature {
+	f := feature{Name: "http-redirect", State: stateDisabled, By: "HTTP_REDIRECT_ENABLED=false"}
+	if cfg.HTTPRedirectEnabled {
+		f.State, f.By = stateEnabled, "HTTP_REDIRECT_ENABLED=true"
+		f.Detail = "addr=" + cfg.HTTPRedirectAddr + "; canonical PORTAL_URL only; target validation and binding occur at startup"
+		if cfg.HTTPRedirectHSTS {
+			f.Detail += "; HSTS header requested (browsers ignore it over HTTP)"
+		}
+	}
+	return f
 }
 
 func frontendFeature(cfg relayServerConfig) feature {
