@@ -46,7 +46,10 @@ func makeKeyDirectory(dir string) error {
 	}
 	rollback := func(cause error) error {
 		// Walk back from the leaf and remove only empty directories whose Mkdir
-		// succeeded here. Never remove a racing creator's directory or contents.
+		// succeeded here, once per entry. Cooperating EEXIST callers never gain
+		// rollback ownership; their children make parent removal fail. External
+		// namespace replacement must not race initialization: pathname removal
+		// cannot atomically compare ownership against a janitor or operator.
 		for _, entry := range missing {
 			if !entry.created {
 				continue

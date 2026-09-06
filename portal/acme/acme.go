@@ -147,7 +147,7 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if err != nil {
 		return "", "", err
 	}
-	if err := m.syncDNS(ctx); err != nil {
+	if _, err := m.syncDNS(ctx); err != nil {
 		return "", "", fmt.Errorf("ensure dns records: %w", err)
 	}
 	if manual {

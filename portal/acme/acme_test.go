@@ -29,6 +29,7 @@ import (
 
 	"github.com/miekg/dns"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -253,11 +254,15 @@ func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing
 				t.Fatalf("EnsureTLSMaterial() returned unusable certificate: %v", err)
 			}
 			publicIP := "203.0.113.10"
+			var wantRetryRequests, wantRecoveryRequests int32
 			if discoveryOutage {
 				publicIP = ""
+				// One failed retry visits the same endpoints as startup;
+				// recovery needs only the first successful endpoint.
+				wantRetryRequests = requests.Load()
+				wantRecoveryRequests = 1
 			}
 			assertManualEmbeddedDNS(t, manager, cfg, publicIP)
-			startupRequests := requests.Load()
 
 			synctest.Test(t, func(t *testing.T) {
 				// synctest advances time only when every select channel belongs
@@ -276,25 +281,29 @@ func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing
 				manager.Start(context.Background())
 				synctest.Wait()
 
+				beforeRetryRequests := requests.Load()
+
 				<-time.After(10*time.Minute - time.Second)
 				synctest.Wait()
-				if got := requests.Load(); got != startupRequests {
-					t.Fatalf("discovery requests before retry tick = %d, want %d", got, startupRequests)
+				if got := requests.Load(); got != beforeRetryRequests {
+					t.Fatalf("discovery requests before retry tick = %d, want %d", got, beforeRetryRequests)
 				}
 				<-time.After(time.Second)
 				synctest.Wait()
-				if got := requests.Load(); discoveryOutage && got <= startupRequests {
-					t.Fatalf("discovery requests after failed retry = %d, want more than %d", got, startupRequests)
-				} else if !discoveryOutage && got != startupRequests {
-					t.Fatalf("healthy initialization retried discovery: requests = %d, want %d", got, startupRequests)
+				if got := requests.Load() - beforeRetryRequests; got != wantRetryRequests {
+					t.Fatalf("discovery requests during retry = %d, want %d for one discovery when needed", got, wantRetryRequests)
 				}
 				assertManualEmbeddedDNS(t, manager, cfg, publicIP)
 
 				// Recovery must come from Start's existing retry ticker, not a
 				// second EnsureTLSMaterial call or a private synchronization API.
 				utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{requests: &requests}}
+				beforeRecoveryRequests := requests.Load()
 				<-time.After(10 * time.Minute)
 				synctest.Wait()
+				if got := requests.Load() - beforeRecoveryRequests; got != wantRecoveryRequests {
+					t.Fatalf("discovery requests during recovery retry = %d, want %d for pending base initialization", got, wantRecoveryRequests)
+				}
 				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
 				initializedRequests := requests.Load()
 
@@ -306,20 +315,132 @@ func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing
 				}}
 				<-time.After(160*time.Minute - time.Second)
 				synctest.Wait()
-				if got := requests.Load(); got != initializedRequests {
-					t.Fatalf("successful initialization retried before normal refresh: requests = %d, want %d", got, initializedRequests)
+				wantRequests := initializedRequests
+				if got := requests.Load(); got != wantRequests {
+					t.Fatalf("discovery requests before normal refresh = %d, want %d without healthy base retries", got, wantRequests)
 				}
 				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
 
 				<-time.After(time.Second)
 				synctest.Wait()
-				if got := requests.Load(); got != initializedRequests+1 {
-					t.Fatalf("discovery requests after three-hour refresh = %d, want %d", got, initializedRequests+1)
+				wantRequests++
+				if got := requests.Load(); got != wantRequests {
+					t.Fatalf("discovery requests after three-hour refresh = %d, want %d", got, wantRequests)
 				}
 				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.20")
 			})
 		})
 	}
+}
+
+func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *testing.T) {
+	originalClient := utils.DefaultHTTPClient
+	t.Cleanup(func() { utils.DefaultHTTPClient = originalClient })
+
+	var requests atomic.Int32
+	outageTransport := publicIPv4Transport{
+		err:      errors.New("public IPv4 discovery is unavailable"),
+		requests: &requests,
+	}
+	utils.DefaultHTTPClient = &http.Client{Transport: outageTransport}
+
+	const baseDomain = "portal.example.com"
+	keyDir := t.TempDir()
+	if err := writeManualRelayCertificate(t, keyDir, baseDomain); err != nil {
+		t.Fatal(err)
+	}
+	// Real DNS listeners stay outside the virtual-time maintenance fixture.
+	manager, cfg := newEmbeddedDNSManager(t, Config{
+		BaseDomain:        baseDomain,
+		KeyDir:            keyDir,
+		ENSGaslessEnabled: true,
+		ENSGaslessAddress: "0x1234567890123456789012345678901234567890",
+	})
+	certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureTLSMaterial(): %v", err)
+	}
+	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+		t.Fatalf("EnsureTLSMaterial() returned unusable certificate: %v", err)
+	}
+	assertManualEmbeddedDNS(t, manager, cfg, "")
+	failedDiscoveryRequests := requests.Load()
+
+	synctest.Test(t, func(t *testing.T) {
+		// Re-home only the unused lifecycle channels into the bubble; exercise
+		// public commands and lifecycle while DNS answers use the real listeners.
+		manager.stopCh = make(chan struct{})
+		manager.echCommands = make(chan echDNSCommand, cap(manager.echCommands))
+		manager.ensCommands = make(chan ensDNSCommand, cap(manager.ensCommands))
+		defer func() {
+			if err := manager.Stop(context.Background()); err != nil {
+				t.Errorf("Stop(): %v", err)
+			}
+		}()
+		manager.Start(context.Background())
+		synctest.Wait()
+
+		assertTrackedAddresses := func(publicIP string) {
+			addr := net.JoinHostPort("127.0.0.1", fmt.Sprint(cfg.EmbeddedDNSPort))
+			for _, network := range []string{"udp", "tcp"} {
+				client := &dns.Client{Net: network, Timeout: time.Second}
+				for _, hostname := range []string{"ech." + baseDomain, "ens." + baseDomain} {
+					assertEmbeddedDNSAddress(t, client, addr, hostname, publicIP)
+				}
+			}
+		}
+		// Publish both tracked records while discovery works, without retrying
+		// pending base initialization. No failed command remains to cause its
+		// own discovery when the short retry flushes pending commands.
+		utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{ip: "203.0.113.30", requests: &requests}}
+		_, echConfigList, err := keyless.EncryptedClientHelloMaterials("dns-retry-test", baseDomain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.SyncECHConfig(context.Background(), "ech."+baseDomain, echConfigList, 443); err != nil {
+			t.Fatalf("SyncECHConfig(): %v", err)
+		}
+		if err := manager.SyncENSGaslessHostname(context.Background(), "ens."+baseDomain, cfg.ENSGaslessAddress); err != nil {
+			t.Fatalf("SyncENSGaslessHostname(): %v", err)
+		}
+		synctest.Wait()
+		assertTrackedAddresses("203.0.113.30")
+		assertManualEmbeddedDNS(t, manager, cfg, "")
+
+		utils.DefaultHTTPClient = &http.Client{Transport: outageTransport}
+		beforeRetryRequests := requests.Load()
+		<-time.After(10 * time.Minute)
+		synctest.Wait()
+		// One failed discovery visits the same endpoints as startup; tracked A
+		// work must not start a second discovery after base initialization defers.
+		if got := requests.Load() - beforeRetryRequests; got != failedDiscoveryRequests {
+			t.Fatalf("discovery requests during failed retry = %d, want %d for one discovery", got, failedDiscoveryRequests)
+		}
+		assertManualEmbeddedDNS(t, manager, cfg, "")
+		assertTrackedAddresses("203.0.113.30")
+
+		utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{requests: &requests}}
+		beforeRecoveryRequests := requests.Load()
+		<-time.After(10 * time.Minute)
+		synctest.Wait()
+		if got := requests.Load() - beforeRecoveryRequests; got != 1 {
+			t.Fatalf("discovery requests during recovery retry = %d, want one shared by base and tracked records", got)
+		}
+		assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
+		assertTrackedAddresses("203.0.113.10")
+
+		// After recovery, only tracked records follow a changed public address
+		// on the short ticker. The healthy base must no longer remain pending.
+		utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{ip: "203.0.113.20", requests: &requests}}
+		beforeTrackedRetryRequests := requests.Load()
+		<-time.After(10 * time.Minute)
+		synctest.Wait()
+		if got := requests.Load() - beforeTrackedRetryRequests; got != 1 {
+			t.Fatalf("discovery requests during tracked retry = %d, want one without healthy base retry", got)
+		}
+		assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
+		assertTrackedAddresses("203.0.113.20")
+	})
 }
 
 func assertManualEmbeddedDNS(t *testing.T, manager *Manager, cfg Config, publicIP string) {

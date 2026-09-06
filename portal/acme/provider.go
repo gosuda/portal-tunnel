@@ -82,18 +82,20 @@ func newDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 	}
 }
 
-func (m *Manager) syncDNS(ctx context.Context) error {
+// syncDNS returns the discovered address even if base-record updates fail, so
+// tracked-record maintenance can reuse it without repeating discovery.
+func (m *Manager) syncDNS(ctx context.Context) (string, error) {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
-		return nil
+		return "", nil
 	}
 	_, _, manual, err := m.manualCertificateOverride()
 	if err != nil {
-		return err
+		return "", err
 	}
 	// Manual certificates bypass external A-record management, but the embedded
 	// authoritative zone still needs its address before it can serve the relay.
 	if manual && m.dns.Name() != TypeEmbedded {
-		return nil
+		return "", nil
 	}
 	publicIP, err := utils.ResolvePublicIPv4(ctx)
 	if err != nil {
@@ -104,15 +106,15 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 			m.pendingDNSAddress = true
 			m.commandMu.Unlock()
 			log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("defer embedded DNS address initialization until the next DNS retry; using manual certificate")
-			return nil
+			return "", nil
 		}
-		return fmt.Errorf("detect public ip: %w", err)
+		return "", fmt.Errorf("detect public ip: %w", err)
 	}
 	if err := m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP); err != nil {
-		return err
+		return publicIP, err
 	}
 	m.commandMu.Lock()
 	m.pendingDNSAddress = false
 	m.commandMu.Unlock()
-	return nil
+	return publicIP, nil
 }
