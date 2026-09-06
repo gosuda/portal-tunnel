@@ -147,6 +147,8 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		case <-retryTicker.C:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
 			err := syncChangedARecords(syncCtx)
+			// Embedded signing remains pending: it does not authenticate the
+			// parent chain and must not suppress DNSSEC synchronization.
 			if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
 				err = errors.Join(err, m.syncENSDNSSEC(syncCtx))
 			}

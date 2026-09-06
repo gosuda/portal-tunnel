@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,7 +35,10 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 		PrivateKey string
 	}
 	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, nil, fmt.Errorf("stat dnssec key: %w", err)
+		}
 		private, err := key.Generate(256)
 		if err != nil {
 			return nil, nil, err
@@ -54,13 +58,15 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			return nil, nil, err
 		}
-		// Exclusive creation prevents simultaneous starts from replacing a key. A
-		// partial write fails closed on subsequent starts, rather than rotating it.
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		// Restrict permissions before writing any private material, and publish
+		// only a complete, synced file. Link never replaces an existing key.
+		f, err := os.CreateTemp(filepath.Dir(path), ".dnssec-key-*")
 		if err != nil {
 			return nil, nil, fmt.Errorf("create dnssec key: %w", err)
 		}
-		if err := restrictKeyPermissions(path); err != nil {
+		tmp := f.Name()
+		defer func() { _ = os.Remove(tmp) }()
+		if err := restrictKeyPermissions(tmp); err != nil {
 			_ = f.Close()
 			return nil, nil, fmt.Errorf("restrict dnssec key permissions: %w", err)
 		}
@@ -70,10 +76,19 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 		if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
 			return nil, nil, fmt.Errorf("persist dnssec key: %w", err)
 		}
-		return key, private.(crypto.Signer), nil
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("stat dnssec key: %w", err)
+		if err = os.Link(tmp, path); err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return nil, nil, fmt.Errorf("publish dnssec key: %w", err)
+			}
+			// A simultaneous start won publication. Load its completed key using
+			// the same fail-closed checks as any other persisted key.
+			info, err = os.Lstat(path)
+			if err != nil {
+				return nil, nil, fmt.Errorf("stat published dnssec key: %w", err)
+			}
+		} else {
+			return key, private.(crypto.Signer), nil
+		}
 	}
 	if !info.Mode().IsRegular() {
 		return nil, nil, errors.New("dnssec key must be a regular file, not a symlink")
@@ -96,8 +111,16 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	if !os.SameFile(info, opened) {
 		return nil, nil, errors.New("dnssec key changed while opening")
 	}
+	const maxKeyFileSize = 16 * 1024
+	data, err := io.ReadAll(io.LimitReader(f, maxKeyFileSize+1))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read dnssec key: %w", err)
+	}
+	if len(data) > maxKeyFileSize {
+		return nil, nil, errors.New("dnssec key exceeds maximum file size")
+	}
 	var stored storedKey
-	decoder := json.NewDecoder(io.LimitReader(f, 16384))
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&stored); err != nil {
 		return nil, nil, fmt.Errorf("decode dnssec key: %w", err)
@@ -124,7 +147,7 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 		return nil, nil, fmt.Errorf("parse dnssec private key: %w", err)
 	}
 	signer, ok := private.(*ecdsa.PrivateKey)
-	if !ok {
+	if !ok || signer.Curve != elliptic.P256() {
 		return nil, nil, errors.New("invalid dnssec private key")
 	}
 	if _, err := signer.Bytes(); err != nil {

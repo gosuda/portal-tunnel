@@ -138,15 +138,6 @@ func acmeFeature(cfg relayServerConfig) feature {
 	// fact serving its own zone and answering ACME challenges from it.
 	provider := strings.ToLower(strings.TrimSpace(cfg.ACMEDNSProvider))
 	provider = cmp.Or(provider, acme.TypeEmbedded)
-	if provider == acme.TypeEmbedded {
-		f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
-		f.Detail = fmt.Sprintf(
-			"the relay serves its own zone on port %d; delegate the base domain with an NS record and open 53/tcp+udp. "+
-				"Manual fullchain.pem and privatekey.pem under IDENTITY_PATH are used instead when present",
-			cfg.EmbeddedDNSPort)
-		return f
-	}
-
 	// acme.NewManager returns before it builds a DNS provider when the base
 	// domain is local-only, so managed issuance cannot run however well the
 	// provider is configured. Reporting it as enabled here would describe an
@@ -159,10 +150,19 @@ func acmeFeature(cfg relayServerConfig) feature {
 		return f
 	}
 
+	if provider == acme.TypeEmbedded {
+		f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
+		f.Detail = fmt.Sprintf(
+			"the relay serves its own zone on port %d; delegate the base domain with an NS record and open 53/tcp+udp. "+
+				"Valid manual fullchain.pem and privatekey.pem under IDENTITY_PATH override issuance only when neither acme-account.key nor acme-registration.json exists; DNS/ECH management continues",
+			cfg.EmbeddedDNSPort)
+		return f
+	}
+
 	required, supported := dnsProviderCredential[provider]
 	if !supported {
 		f.State, f.By = stateBlocked, "ACME_DNS_PROVIDER="+provider
-		f.Missing = "unsupported provider; use cloudflare, gcloud, hetzner, njalla, route53 or vultr"
+		f.Missing = "unsupported provider; use embedded, cloudflare, gcloud, hetzner, njalla, route53 or vultr"
 		return f
 	}
 
@@ -203,8 +203,16 @@ func ensGaslessFeature(cfg relayServerConfig) feature {
 		f.Missing = "the DNS provider it shares with ACME is blocked: " + acmeState.Missing
 		return f
 	}
+	if provider == acme.TypeHetzner || provider == acme.TypeNjalla {
+		f.State, f.By = stateBlocked, "ENS_GASLESS_ENABLED=true"
+		f.Missing = provider + " does not support ENS DNSSEC automation; use embedded, cloudflare, gcloud, route53 or vultr"
+		return f
+	}
 	f.State, f.By = stateEnabled, "ENS_GASLESS_ENABLED=true"
 	f.Detail = "DNSSEC and ENS TXT automation through " + provider
+	if provider == acme.TypeEmbedded {
+		f.Detail += "; publish the startup DS at the parent after delegation is reachable; local signing does not verify the parent chain"
+	}
 	return f
 }
 

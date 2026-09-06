@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"testing"
@@ -27,6 +28,7 @@ func TestPercentileTrackerInterpolation(t *testing.T) {
 		{name: "zero percentile", samples: []time.Duration{10, 20}, p: 0},
 		{name: "negative percentile", samples: []time.Duration{10, 20}, p: -0.1},
 		{name: "excess percentile", samples: []time.Duration{10, 20}, p: 1.1},
+		{name: "NaN percentile", samples: []time.Duration{10, 20}, p: math.NaN()},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var tracker PercentileTracker

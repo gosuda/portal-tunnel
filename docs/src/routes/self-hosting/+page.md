@@ -25,8 +25,9 @@ Run the relay with a single Docker command:
 
 ```bash
 mkdir -p ./relay-data
-# Optional: place fullchain.pem/privatekey.pem in ./relay-data to use a manual
-# certificate instead of ACME.
+# Optional: place valid fullchain.pem/privatekey.pem in ./relay-data to use a
+# manual certificate, only if neither acme-account.key nor acme-registration.json
+# is present. Embedded DNS and ECH management still run.
 docker run -d \
   --name portal-relay \
   --restart unless-stopped \

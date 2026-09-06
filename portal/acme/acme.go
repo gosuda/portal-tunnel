@@ -144,12 +144,11 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if err != nil {
 		return "", "", err
 	}
-	if manual {
-		return certFile, keyFile, nil
-	}
-
 	if err := m.syncDNS(ctx); err != nil {
 		return "", "", fmt.Errorf("ensure dns records: %w", err)
+	}
+	if manual {
+		return certFile, keyFile, nil
 	}
 
 	certFile, keyFile, err = m.TLSFiles()

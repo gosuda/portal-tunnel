@@ -68,6 +68,9 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if cfg.IdentityPath == "" {
 		return ServerConfig{}, errors.New("identity path is required")
 	}
+	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
+		cfg.ACME.KeyDir = cfg.IdentityPath
+	}
 
 	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
 	if err != nil {

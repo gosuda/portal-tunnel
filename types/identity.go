@@ -10,6 +10,7 @@ const (
 	IdentityKeySeparator  = ":"
 	RelayIdentityFilename = "identity.json"
 	RelayPolicyFilename   = "policy.json"
+	DNSSECKeyFileName     = "dnssec-csk.json"
 )
 
 type Identity struct {

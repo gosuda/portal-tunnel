@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,10 +181,10 @@ func TestHandleHopRateLimited(t *testing.T) {
 func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	t.Parallel()
 
+	identityPath := tempIdentityPath(t)
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://localhost:4017",
-		IdentityPath:  tempIdentityPath(t),
-		ACME:          acme.Config{KeyDir: t.TempDir()},
+		IdentityPath:  identityPath,
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
 		MinPort:       40000,
@@ -202,6 +203,11 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	}
 
 	client := newTestClient(t, cancel, server)
+	for _, name := range []string{"fullchain.pem", "privatekey.pem"} {
+		if !utils.FileExists(filepath.Join(identityPath, name)) {
+			t.Fatalf("Start() did not persist %s under IDENTITY_PATH with an omitted ACME.KeyDir", name)
+		}
+	}
 
 	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
 	if err != nil {
@@ -235,10 +241,11 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 	t.Parallel()
 
+	keyDir := t.TempDir()
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://localhost:4017",
 		IdentityPath:  tempIdentityPath(t),
-		ACME:          acme.Config{KeyDir: t.TempDir()},
+		ACME:          acme.Config{KeyDir: keyDir},
 		SNIPort:       4443,
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
@@ -255,6 +262,11 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 	}
 
 	client := newTestClient(t, cancel, server)
+	for _, name := range []string{"fullchain.pem", "privatekey.pem"} {
+		if !utils.FileExists(filepath.Join(keyDir, name)) {
+			t.Fatalf("Start() did not preserve explicit ACME.KeyDir for %s", name)
+		}
+	}
 
 	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathSDKDomain)
 	if err != nil {

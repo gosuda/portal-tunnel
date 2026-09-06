@@ -123,11 +123,11 @@ func (p *Provider) writeResponse(w dns.ResponseWriter, query, m *dns.Msg) {
 		size = udpResponseSize(query)
 	}
 	if edns := query.IsEdns0(); edns != nil {
-		m.SetEdns0(uint16(udpResponseSize(query)), edns.Do())
 		if edns.Version() != 0 {
 			m.Rcode = dns.RcodeBadVers
-			m.Answer, m.Ns = nil, nil
+			m.Answer, m.Ns, m.Extra = nil, nil, nil
 		}
+		m.SetEdns0(uint16(udpResponseSize(query)), edns.Do())
 	}
 	m.Truncate(size)
 	if err := w.WriteMsg(m); err != nil {

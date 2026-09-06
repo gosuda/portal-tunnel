@@ -79,7 +79,7 @@ func (pt *PercentileTracker) Get(p float64) time.Duration {
 		return time.Duration(pt.samples[0])
 	}
 	percent := p * 100
-	if percent <= 0 || percent > 100 {
+	if !(percent > 0 && percent <= 100) {
 		return 0
 	}
 

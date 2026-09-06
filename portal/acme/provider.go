@@ -2,6 +2,7 @@ package acme
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/njalla"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/route53"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/vultr"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -51,10 +53,14 @@ func NewDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 	}
 	switch providerType {
 	case "", TypeEmbedded:
+		keyDir := strings.TrimSpace(cfg.KeyDir)
+		if keyDir == "" {
+			return nil, errors.New("acme key directory is required")
+		}
 		return embedded.New(embedded.Config{
 			BaseDomain: cfg.BaseDomain,
 			ListenAddr: fmt.Sprintf(":%d", cfg.EmbeddedDNSPort),
-			KeyPath:    filepath.Join(cfg.KeyDir, "dnssec-csk.json"),
+			KeyPath:    filepath.Join(keyDir, types.DNSSECKeyFileName),
 		})
 	case TypeCloudflare:
 		return cloudflare.New(cfg.CloudflareToken), nil
@@ -87,16 +93,18 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
-	if err != nil {
-		return fmt.Errorf("detect public ip: %w", err)
-	}
 	_, _, manual, err := m.manualCertificateOverride()
 	if err != nil {
 		return err
 	}
-	if manual {
+	// Manual certificates bypass external A-record management, but the embedded
+	// authoritative zone still needs its address before it can serve the relay.
+	if manual && m.dns.Name() != TypeEmbedded {
 		return nil
+	}
+	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	if err != nil {
+		return fmt.Errorf("detect public ip: %w", err)
 	}
 	return m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP)
 }

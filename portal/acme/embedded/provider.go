@@ -359,7 +359,8 @@ func (p *Provider) DeleteHTTPSRecord(_ context.Context, name string) error {
 }
 
 // EnsureDNSSEC exports the SHA-256 DS for the parent zone. Signing is active
-// locally; this does not claim that the parent has published the DS.
+// locally, but the state remains pending because parent-chain validation is
+// not performed here. Local signing alone must not mark ENS as verified.
 func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
 		return "", "", "", errors.New("embedded dns provider is nil")
@@ -367,8 +368,8 @@ func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, ds
 	if utils.NormalizeBaseDomain(baseDomain) != p.baseDomain {
 		return "", "", "", fmt.Errorf("domain %q is not embedded dns zone %q", baseDomain, p.baseDomain)
 	}
-	return "active", p.key.ToDS(dns.SHA256).String(),
-		"Publish this DS at the parent zone alongside the NS delegation; signing is active locally but parent DS publication is not verified. Preserve the DNSSEC key file across restarts and migrations.", nil
+	return "pending", p.key.ToDS(dns.SHA256).String(),
+		"Publish this DS at the parent zone after NS/glue delegation is reachable; signing is active locally but Portal does not verify the parent DNSSEC chain, so ENS status remains unverified. Preserve the DNSSEC key file across restarts and migrations.", nil
 }
 
 func (p *Provider) zoneHostname(name string) (string, error) {

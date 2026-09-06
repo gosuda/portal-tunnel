@@ -59,7 +59,7 @@ ACME_DNS_PROVIDER=
 EMBEDDED_DNS_PORT=53
 ```
 
-Embedded DNS logs the DS to publish at the parent zone after NS/glue delegation is reachable. Persist `IDENTITY_PATH/dnssec-csk.json` with the identity volume across container replacement and backup/restore; replacing this key without coordinating the parent DS breaks DNSSEC validation. See [Embedded DNS](/configuration#embedded-dns) for the complete DNSSEC setup and key-storage requirements. Manual certificate overrides remain supported.
+Embedded DNS logs its DS as soon as the local DNS listeners start; startup does not check delegation. After NS/glue delegation is reachable, publish the DS printed at startup at the parent zone. Persist `IDENTITY_PATH/dnssec-csk.json` with the identity volume across container replacement and backup/restore; replacing this key without coordinating the parent DS breaks DNSSEC validation. See [Embedded DNS](/configuration#embedded-dns) for the complete DNSSEC setup and key-storage requirements. Manual certificate overrides remain supported.
 
 `LANDING_PAGE_ENABLED` supplies the initial value. Changes made from the admin
 dashboard are stored in `IDENTITY_PATH/policy.json` and survive restarts.
@@ -291,7 +291,7 @@ When a DNS provider is configured, Portal publishes an `HTTPS` record carrying
 listener**. An nginx terminator has neither, so ECH-capable clients that read
 the record can fail the connection before any request arrives.
 
-An empty `ACME_DNS_PROVIDER` selects embedded DNS; it does not disable ECH publication. Manual certificate overrides likewise do not disable DNS/ECH management. For a public relay with managed DNS, pass the root host through: terminating it elsewhere breaks the ECH it advertises.
+An empty `ACME_DNS_PROVIDER` selects embedded DNS; it does not disable ECH publication. Valid manual certificates override issuance only when neither `acme-account.key` nor `acme-registration.json` exists in `IDENTITY_PATH`. Embedded DNS still initializes and refreshes its synthesized A records, and the selected provider still publishes ECH records; external providers therefore still need API access for that publication. For a public relay with managed DNS, pass the root host through: terminating it elsewhere breaks the ECH it advertises.
 
 Pass-through is the default in the example for that reason.
 
