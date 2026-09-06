@@ -425,6 +425,11 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if destination := r.Header.Get(types.HeaderIVNPDestination); destination != "" {
+		s.connectThroughIVNP(w, r, destination, token)
+		return
+	}
+
 	lease, err := s.registry.admitLeaseByToken(token, false)
 	if err != nil {
 		writeAPIErrorResponse(w, err)

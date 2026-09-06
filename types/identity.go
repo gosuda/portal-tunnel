@@ -107,6 +107,7 @@ type RelayDescriptor struct {
 	IssuedAt          time.Time `json:"issued_at"`
 	ExpiresAt         time.Time `json:"expires_at"`
 	APIHTTPSAddr      string    `json:"api_https_addr"`
+	IVNPDestination   string    `json:"ivnp_destination,omitempty"`
 	SupportsUDP       bool      `json:"supports_udp,omitempty"`
 	SupportsTCP       bool      `json:"supports_tcp,omitempty"`
 	ActiveConnections int64     `json:"active_connections,omitempty"`
@@ -117,8 +118,8 @@ type RelayDescriptor struct {
 // CanonicalBytes returns the deterministic byte representation of a relay
 // descriptor used for signing and signature verification.
 //
-// The encoding is JSON over a fixed struct schema (no maps, no omitempty),
-// which guarantees field order and presence regardless of input variation.
+// The optional IVNP extension is omitted when absent so direct-only version 9
+// descriptors retain their canonical encoding.
 func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
 	canonical := struct {
 		Address           string  `json:"address"`
@@ -130,6 +131,7 @@ func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
 		SupportsTCP       bool    `json:"supports_tcp"`
 		ActiveConnections int64   `json:"active_connections"`
 		TCPBPS            float64 `json:"tcp_bps"`
+		IVNPDestination   string  `json:"ivnp_destination,omitempty"`
 	}{
 		Address:           desc.Address,
 		Version:           desc.Version,
@@ -140,6 +142,7 @@ func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
 		SupportsTCP:       desc.SupportsTCP,
 		ActiveConnections: desc.ActiveConnections,
 		TCPBPS:            desc.TCPBPS,
+		IVNPDestination:   desc.IVNPDestination,
 	}
 	return json.Marshal(canonical)
 }

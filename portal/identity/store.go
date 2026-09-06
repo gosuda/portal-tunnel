@@ -34,6 +34,13 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	desc.Address = strings.TrimSpace(desc.Address)
 	desc.Version = strings.TrimSpace(desc.Version)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
+	if desc.IVNPDestination != "" {
+		var err error
+		desc.IVNPDestination, err = utils.NormalizeIVNPDestination(desc.IVNPDestination)
+		if err != nil {
+			return types.RelayDescriptor{}, err
+		}
+	}
 	if desc.Version == "" {
 		desc.Version = types.DiscoveryVersion
 	}

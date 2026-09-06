@@ -394,6 +394,10 @@ func (s *RelaySet) ConfirmedRelays() []RelayState {
 type Route struct {
 	RelayURL string
 	Explicit bool
+	// GatewayURL is the selected HTTPS reverse-connect endpoint. The public
+	// lease remains at RelayURL; IngressDestination is its IVNP destination.
+	GatewayURL         string
+	IngressDestination string
 }
 
 func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
@@ -420,9 +424,44 @@ func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
 	}
 
 	ranked := SelectPriority(states, routeState)
+	var gateways []string
+	var ivnpRelays = make(map[string]types.RelayDescriptor)
+	if routeState.IVNP {
+		if routeState.RequireUDP {
+			return nil
+		}
+		var candidates []RelayState
+		for _, state := range states {
+			desc, err := s.IVNPRelay(state.Descriptor.IVNPDestination)
+			if err != nil || desc.APIHTTPSAddr != state.Descriptor.APIHTTPSAddr {
+				continue
+			}
+			ivnpRelays[desc.APIHTTPSAddr] = desc
+			candidates = append(candidates, state)
+		}
+		gateways = RankRelayPool(candidates, routeState.LocalAddress, routeState.SelectionEpoch)
+	}
 	routes := make([]Route, 0, len(ranked))
 	for _, relayURL := range ranked {
-		routes = append(routes, Route{RelayURL: relayURL, Explicit: slices.Contains(routeState.ExplicitRelayURLs, relayURL)})
+		route := Route{RelayURL: relayURL, Explicit: slices.Contains(routeState.ExplicitRelayURLs, relayURL)}
+		if routeState.IVNP {
+			ingress, ok := ivnpRelays[relayURL]
+			if !ok {
+				continue
+			}
+			for _, gateway := range gateways {
+				if ivnpRelays[gateway].Address == ingress.Address || ivnpRelays[gateway].IVNPDestination == ingress.IVNPDestination {
+					continue
+				}
+				route.GatewayURL = gateway
+				route.IngressDestination = ingress.IVNPDestination
+				break
+			}
+			if route.GatewayURL == "" {
+				continue
+			}
+		}
+		routes = append(routes, route)
 	}
 	return routes
 }

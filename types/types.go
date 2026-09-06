@@ -10,7 +10,13 @@ import (
 )
 
 const (
-	HeaderAccessToken      = "X-Portal-Access-Token"
+	HeaderAccessToken = "X-Portal-Access-Token"
+	// HeaderIVNPDestination selects the ingress destination for a reverse
+	// connection carried through a gateway. It is never forwarded recursively.
+	HeaderIVNPDestination  = "X-Portal-IVNP-Destination"
+	IVNPStreamPort         = "4017"
+	IVNPReverseAccepted    = byte(1)
+	IVNPTokenLimit         = 4096
 	HeaderXPayment         = "X-PAYMENT"
 	HeaderPaymentSignature = "PAYMENT-SIGNATURE"
 	HeaderPaymentRequired  = "PAYMENT-REQUIRED"

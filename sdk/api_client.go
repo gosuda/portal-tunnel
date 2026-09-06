@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -30,18 +31,18 @@ const (
 
 var errRelayIncompatible = errors.New("relay is incompatible")
 
-// relayRegistrationError records the exact relay that rejected a registration
+// relayEndpointError records the exact relay that rejected an operation
 // operation.
-type relayRegistrationError struct {
+type relayEndpointError struct {
 	relayURL string
 	err      error
 }
 
-func (err *relayRegistrationError) Error() string {
-	return fmt.Sprintf("register relay at %s: %v", err.relayURL, err.err)
+func (err *relayEndpointError) Error() string {
+	return fmt.Sprintf("relay endpoint %s: %v", err.relayURL, err.err)
 }
 
-func (err *relayRegistrationError) Unwrap() error {
+func (err *relayEndpointError) Unwrap() error {
 	return err.err
 }
 
@@ -55,6 +56,7 @@ func (l *listener) resetTransport() {
 	l.httpClient = nil
 	l.httpTransport = nil
 	l.tlsConfig = nil
+	l.gatewayTLS = nil
 }
 
 func (l *listener) initHTTPTransport(ctx context.Context) error {
@@ -82,6 +84,20 @@ func (l *listener) initHTTPTransport(ctx context.Context) error {
 	}
 
 	l.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
+	if l.route.GatewayURL != "" {
+		gatewayURL, err := url.Parse(l.route.GatewayURL)
+		if err != nil {
+			httpTransport.CloseIdleConnections()
+			return err
+		}
+		gatewayTLS, _, gatewayTransport, err := utils.NewHTTPTLSClient(bootstrapCtx, gatewayURL, l.requestTimeout)
+		if err != nil {
+			httpTransport.CloseIdleConnections()
+			return &relayEndpointError{relayURL: l.route.GatewayURL, err: err}
+		}
+		gatewayTransport.CloseIdleConnections()
+		l.gatewayTLS = gatewayTLS
+	}
 
 	l.httpClient = httpClient
 	l.httpTransport = httpTransport
