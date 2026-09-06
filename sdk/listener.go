@@ -66,8 +66,8 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 	if !isTerminalRelayError(err) {
 		return false
 	}
-	relayURL := l.route.ListenerRelayURL()
-	var registrationErr *relayRegistrationError
+	relayURL := l.route.RelayURL
+	var registrationErr *relayEndpointError
 	if errors.As(err, &registrationErr) && registrationErr.relayURL != "" {
 		relayURL = registrationErr.relayURL
 	}
@@ -116,42 +116,24 @@ type listener struct {
 	httpClient    *http.Client
 	httpTransport *http.Transport
 	tlsConfig     *tls.Config
+	gatewayTLS    *tls.Config
 
 	releaseVersion string
 
 	lease *utils.Snapshot[listenerSnapshot]
 }
 
-// routeRelayURLs returns the public ingress relay and the relay that owns the
-// lease and reverse stream. Multi-hop ingress forwards from entry to exit.
-func routeRelayURLs(route discovery.Route) (entryURL, controlURL string, err error) {
-	entryURL, err = utils.NormalizeRelayURL(route.ListenerRelayURL())
-	if err != nil {
-		return "", "", err
-	}
-	controlURL = entryURL
-	if multiHop := route.MultiHop(); len(multiHop) > 0 {
-		controlURL, err = utils.NormalizeRelayURL(multiHop[len(multiHop)-1])
-		if err != nil {
-			return "", "", err
-		}
-	}
-	return entryURL, controlURL, nil
-}
-
-// newListener creates one relay listener. Multi-hop public ingress starts at
-// the route entry, while lease control and the reverse stream terminate at
-// the route exit.
+// newListener creates one public relay listener.
 // Only local config validation fails immediately; relay startup runs in the background until ready.
 func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig) (*listener, error) {
 	listenerCtx, cancel := context.WithCancel(ctx)
 
-	entryRelayURL, controlURL, err := routeRelayURLs(route)
+	entryRelayURL, err := utils.NormalizeRelayURL(route.RelayURL)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-	relayurl, err := url.Parse(controlURL)
+	relayurl, err := url.Parse(entryRelayURL)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("parse relay url: %w", err)
@@ -160,7 +142,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		cancel:         cancel,
 		doneCh:         listenerCtx.Done(),
 		relayURL:       relayurl,
-		route:          route.WithListenerRelayURL(entryRelayURL),
+		route:          route,
 		metadata:       cfg.Metadata,
 		identity:       cfg.Identity.Copy(),
 		relaySet:       cfg.relaySet,
@@ -175,6 +157,10 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		leaseTTL:       defaultLeaseTTL,
 		renewBefore:    defaultRenewBefore,
 		lease:          utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
+	}
+	l.route.RelayURL = entryRelayURL
+	if route.GatewayURL != "" && l.retryCount == 0 {
+		l.retryCount = 10
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l, cfg.BanMITM)
 	l.stream = transport.NewClientStream(defaultReadyTarget, defaultHandshakeTimeout)
@@ -239,7 +225,7 @@ func (l *listener) run(ctx context.Context) {
 		if udpAddr != "" || tcpAddr != "" {
 			event.Msg("raw transport endpoints allocated")
 		} else if publicURL != "" {
-			logHTTPReady(l.identity.Address, publicURL, l.route.ListenerRelayURL())
+			logHTTPReady(l.identity.Address, publicURL, l.route.RelayURL)
 		} else {
 			event.Msg("relay listener registered")
 		}
@@ -306,7 +292,7 @@ func (l *listener) Close() error {
 
 		if lease != nil && lease.hostname != "" && l.identity.Key() != "" && lease.accessToken != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			closeErr = errors.Join(closeErr, l.unregisterLease(ctx, lease.accessToken, lease.hopRoutes))
+			closeErr = errors.Join(closeErr, l.unregisterLease(ctx, lease.accessToken))
 			cancel()
 		}
 		if lease != nil && lease.tlsCloser != nil {
@@ -318,23 +304,20 @@ func (l *listener) Close() error {
 }
 
 type listenerSnapshot struct {
-	hostname            string
-	echConfigList       []byte
-	udpAddr             string
-	tcpAddr             string
-	accessToken         string
-	multihopAccessToken string
-	expiresAt           time.Time
-	sniPort             int
-	publicURLBase       *url.URL
-	tlsConfig           *tls.Config
-	tlsCloser           io.Closer
-	hopRoutes           []types.HopRoute
+	hostname      string
+	echConfigList []byte
+	udpAddr       string
+	tcpAddr       string
+	accessToken   string
+	expiresAt     time.Time
+	sniPort       int
+	publicURLBase *url.URL
+	tlsConfig     *tls.Config
+	tlsCloser     io.Closer
 }
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
 	s.echConfigList = bytes.Clone(s.echConfigList)
-	s.hopRoutes = append([]types.HopRoute(nil), s.hopRoutes...)
 	if s.publicURLBase != nil {
 		publicURLBase := *s.publicURLBase
 		s.publicURLBase = &publicURLBase
@@ -639,7 +622,14 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 	}
 }
 
-func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
+func (l *listener) openReverseSession(ctx context.Context) (_ net.Conn, resultErr error) {
+	if l.route.GatewayURL != "" {
+		defer func() {
+			if resultErr != nil {
+				resultErr = &relayEndpointError{relayURL: l.route.GatewayURL, err: resultErr}
+			}
+		}()
+	}
 	lease, ok := l.leaseSnapshot()
 	if !ok || lease.accessToken == "" {
 		return nil, errors.New("access token is not available")
@@ -648,23 +638,39 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 		return nil, errors.New("relay tls config is unavailable")
 	}
 
+	endpoint := l.relayURL
+	tlsConfig := l.tlsConfig
+	if l.route.GatewayURL != "" {
+		var err error
+		endpoint, err = url.Parse(l.route.GatewayURL)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig = l.gatewayTLS
+		if tlsConfig == nil {
+			return nil, errors.New("gateway tls config is unavailable")
+		}
+	}
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: l.dialTimeout},
-		Config:    l.tlsConfig.Clone(),
+		Config:    tlsConfig.Clone(),
 	}
 
-	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(l.relayURL.Host))
+	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(endpoint.Host))
 	if err != nil {
 		return nil, err
 	}
 
 	req := &http.Request{
 		Method: http.MethodGet,
-		URL:    utils.ResolveAPIURL(l.relayURL, types.PathSDKConnect),
-		Host:   l.relayURL.Host,
+		URL:    utils.ResolveAPIURL(endpoint, types.PathSDKConnect),
+		Host:   endpoint.Host,
 		Header: make(http.Header),
 	}
 	req.Header.Set(types.HeaderAccessToken, lease.accessToken)
+	if l.route.GatewayURL != "" {
+		req.Header.Set(types.HeaderIVNPDestination, l.route.IngressDestination)
+	}
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "raw")
 
@@ -804,20 +810,12 @@ func (l *listener) renewLease(ctx context.Context) error {
 		if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
 			return errLeaseRefreshRequired
 		}
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return &relayEndpointError{relayURL: l.relayURL.String(), err: err}
 	}
 
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
 	if resp.AccessToken == "" {
 		return errors.New("relay did not return renewed access token")
-	}
-	multihopAccessToken := resp.AccessToken
-	var entrySNIPort int
-	if len(lease.hopRoutes) > 0 {
-		multihopAccessToken, entrySNIPort, err = l.registerHopRoutes(requestCtx, resp.ExpiresAt, lease.hopRoutes)
-		if err != nil {
-			return err
-		}
 	}
 	if l.lease == nil {
 		return errLeaseRefreshRequired
@@ -829,10 +827,6 @@ func (l *listener) renewLease(ctx context.Context) error {
 		next := current
 		next.accessToken = resp.AccessToken
 		next.expiresAt = resp.ExpiresAt
-		next.multihopAccessToken = multihopAccessToken
-		if entrySNIPort > 0 {
-			next.sniPort = entrySNIPort
-		}
 		return next, true
 	})
 	if !updated {
@@ -843,64 +837,49 @@ func (l *listener) renewLease(ctx context.Context) error {
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err := l.initHTTPTransport(ctx); err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		var endpointErr *relayEndpointError
+		if errors.As(err, &endpointErr) {
+			return err
+		}
+		return &relayEndpointError{relayURL: l.relayURL.String(), err: err}
 	}
 
-	resp, hopRoutes, publicHostname, routeHostname, err := l.registerLease(ctx, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
+	resp, publicHostname, routeHostname, err := l.registerLease(ctx, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
 	if err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return &relayEndpointError{relayURL: l.relayURL.String(), err: err}
 	}
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
 	if resp.AccessToken == "" {
 		return errors.New("relay did not return access token")
 	}
 	if l.udpEnabled && !resp.UDPEnabled {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken, hopRoutes)
+		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return &types.APIRequestError{
 			Code:    types.APIErrorCodeFeatureUnavailable,
 			Message: "relay did not enable required udp support",
 		}
 	}
 	if l.udpEnabled && resp.SNIPort <= 0 {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken, hopRoutes)
+		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return errors.New("relay did not return sni port for udp transport")
-	}
-	multihopAccessToken := resp.AccessToken
-	sniPort := resp.SNIPort
-	if len(hopRoutes) > 0 {
-		multihopAccessToken, sniPort, err = l.registerHopRoutes(ctx, resp.ExpiresAt, hopRoutes)
-		if err != nil {
-			_ = l.unregisterLease(context.Background(), resp.AccessToken, hopRoutes)
-			return err
-		}
-	}
-	keylessURL := l.relayURL.String()
-	if multiHop := l.route.MultiHop(); len(multiHop) > 0 {
-		keylessURL = multiHop[0]
-	}
-	publicURLBase := l.relayURL
-	if normalizedKeylessURL, err := utils.NormalizeRelayURL(keylessURL); err == nil {
-		if parsedKeylessURL, parseErr := url.Parse(normalizedKeylessURL); parseErr == nil {
-			publicURLBase = parsedKeylessURL
-		}
 	}
 	echKeys, echConfigList, err := l.tenantECHMaterials(publicHostname, routeHostname)
 	if err != nil {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken, hopRoutes)
+		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return err
 	}
 
-	tlsConf, tenantTLSCloser, err := keyless.BuildClientTLSConfig(keylessURL, publicHostname, echKeys, func() http.Header {
+	tlsConf, tenantTLSCloser, err := keyless.BuildClientTLSConfig(l.relayURL.String(), publicHostname, echKeys, func() http.Header {
 		headers := http.Header{}
-		accessToken := multihopAccessToken
-		if snapshot, ok := l.leaseSnapshot(); ok && snapshot.multihopAccessToken != "" {
-			accessToken = snapshot.multihopAccessToken
+		accessToken := resp.AccessToken
+		if snapshot, ok := l.leaseSnapshot(); ok && snapshot.accessToken != "" {
+			accessToken = snapshot.accessToken
 		}
 		headers.Set(types.HeaderAccessToken, accessToken)
 		return headers
 	})
 	if err != nil {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken, hopRoutes)
+		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		if tenantTLSCloser != nil {
 			_ = tenantTLSCloser.Close()
 		}
@@ -908,25 +887,23 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	}
 
 	if ctx.Err() != nil {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken, hopRoutes)
+		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		if tenantTLSCloser != nil {
 			_ = tenantTLSCloser.Close()
 		}
 		return ctx.Err()
 	}
 	next := listenerSnapshot{
-		hostname:            publicHostname,
-		echConfigList:       echConfigList,
-		udpAddr:             resp.UDPAddr,
-		tcpAddr:             resp.TCPAddr,
-		accessToken:         resp.AccessToken,
-		expiresAt:           resp.ExpiresAt,
-		sniPort:             sniPort,
-		publicURLBase:       publicURLBase,
-		tlsConfig:           tlsConf,
-		tlsCloser:           tenantTLSCloser,
-		multihopAccessToken: multihopAccessToken,
-		hopRoutes:           hopRoutes,
+		hostname:      publicHostname,
+		echConfigList: echConfigList,
+		udpAddr:       resp.UDPAddr,
+		tcpAddr:       resp.TCPAddr,
+		accessToken:   resp.AccessToken,
+		expiresAt:     resp.ExpiresAt,
+		sniPort:       resp.SNIPort,
+		publicURLBase: l.relayURL,
+		tlsConfig:     tlsConf,
+		tlsCloser:     tenantTLSCloser,
 	}
 	oldLease := l.lease.Swap(next)
 	if oldLease.tlsCloser != nil {
@@ -935,7 +912,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")
 	}
-	entryURL := l.route.ListenerRelayURL()
+	entryURL := l.route.RelayURL
 	if l.relaySet != nil && entryURL != "" {
 		l.relaySet.ConfirmRelayURL(entryURL)
 	}
@@ -983,7 +960,14 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 	}
 
 	if l.retryCount > 0 && retries > l.retryCount {
-		entryURL := l.route.ListenerRelayURL()
+		entryURL := l.route.RelayURL
+		var endpointErr *relayEndpointError
+		if errors.As(err, &endpointErr) {
+			entryURL = endpointErr.relayURL
+		}
+		if operation == "reverse session connect" && l.route.GatewayURL != "" {
+			entryURL = l.route.GatewayURL
+		}
 		if l.relaySet != nil && entryURL != "" {
 			l.relaySet.UnconfirmRelayURL(entryURL)
 			l.relaySet.RecordActiveFailure(entryURL, 1)

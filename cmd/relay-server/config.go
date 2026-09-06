@@ -126,8 +126,8 @@ func discoveryFeature(cfg relayServerConfig) feature {
 		return f
 	}
 	f.State, f.By = stateEnabled, "DISCOVERY=true"
-	f.Detail = fmt.Sprintf("host=%s bootstraps=%d wireguard_port=%d",
-		host, len(bootstraps), cfg.WireGuardPort)
+	f.Detail = fmt.Sprintf("host=%s bootstraps=%d",
+		host, len(bootstraps))
 	return f
 }
 

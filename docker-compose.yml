@@ -10,7 +10,6 @@ services:
       - NET_BIND_SERVICE
     ports:
       - "443:443"
-      - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
       # Embedded authoritative DNS (the default DNS provider).
       - "${EMBEDDED_DNS_PORT:-53}:${EMBEDDED_DNS_PORT:-53}/tcp"
       - "${EMBEDDED_DNS_PORT:-53}:${EMBEDDED_DNS_PORT:-53}/udp"
@@ -30,7 +29,6 @@ services:
 
       API_PORT: 4017
       SNI_PORT: 443
-      WIREGUARD_PORT: ${WIREGUARD_PORT:-51820}
 
       # Shared lease port range.
       MIN_PORT: ${MIN_PORT:-40000}

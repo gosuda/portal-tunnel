@@ -26,7 +26,6 @@ services:
     # Requires Docker Compose 2.24.4+. Preserve every optional mapping that the
     # deployment already uses; omitted mappings are dropped.
     ports: !override
-      - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
       # - "443:443/udp"
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}"

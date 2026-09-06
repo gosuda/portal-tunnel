@@ -392,70 +392,15 @@ func (s *RelaySet) ConfirmedRelays() []RelayState {
 }
 
 type Route struct {
-	path     []string
-	explicit bool
+	RelayURL string
+	Explicit bool
+	// GatewayURL is the selected HTTPS reverse-connect endpoint. The public
+	// lease remains at RelayURL; IngressDestination is its IVNP destination.
+	GatewayURL         string
+	IngressDestination string
 }
 
-func NewRoute(path []string, explicit bool) Route {
-	return Route{
-		path:     append([]string(nil), path...),
-		explicit: explicit,
-	}
-}
-
-func (r Route) Explicit() bool {
-	return r.explicit
-}
-
-// ListenerRelayURL returns the entry relay URL for this route.
-// For single-hop routes this is the sole relay; for multi-hop
-// routes it is the first hop the local listener connects to.
-func (r Route) ListenerRelayURL() string {
-	if len(r.path) == 0 {
-		return ""
-	}
-	return r.path[0]
-}
-
-// ExitRelayURL returns the final relay URL in the path.
-func (r Route) ExitRelayURL() string {
-	if len(r.path) == 0 {
-		return ""
-	}
-	return r.path[len(r.path)-1]
-}
-
-func (r Route) MultiHop() []string {
-	if len(r.path) <= 1 {
-		return nil
-	}
-	return append([]string(nil), r.path...)
-}
-
-func (r Route) Equal(other Route) bool {
-	return r.explicit == other.explicit && slices.Equal(r.path, other.path)
-}
-
-// WithListenerRelayURL returns a new Route with the entry relay URL
-// replaced by the normalized value. This is used after URL normalization
-// so the path and the listener target remain consistent.
-func (r Route) WithListenerRelayURL(relayURL string) Route {
-	if len(r.path) == 0 {
-		return NewRoute([]string{relayURL}, r.explicit)
-	}
-	path := append([]string(nil), r.path...)
-	path[0] = relayURL
-	return Route{path: path, explicit: r.explicit}
-}
-
-func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]Route, error) {
-	if len(explicitPath) > 0 {
-		if len(explicitPath) == 1 {
-			return nil, fmt.Errorf("multi-hop requires at least entry and exit relay urls")
-		}
-		return []Route{NewRoute(explicitPath, true)}, nil
-	}
-
+func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
 	now := time.Now().UTC()
 	states := s.currentRelayStates(now)
 	if len(routeState.ExplicitRelayURLs) > 0 {
@@ -478,46 +423,52 @@ func (s *RelaySet) PlanRoutes(explicitPath []string, routeState RouteState) ([]R
 		}
 	}
 
-	ranked := RankRelayPool(filterCandidatePool(states, routeState, now, routeState.MultiHopDepth > 1), routeState.LocalAddress, routeState.SelectionEpoch)
-	maxActive := routeState.MaxActiveRelays
-	if maxActive <= 0 {
-		maxActive = defaultMaxActiveRelays
-	}
-	if routeState.MultiHopDepth > 1 {
-		return buildMOLSPaths(ranked, routeState.MultiHopDepth, maxActive)
-	}
-	ranked = applyActiveStickiness(ranked, routeState.ActiveRelayURLs, states, maxActive)
-	if len(ranked) > maxActive {
-		ranked = ranked[:maxActive]
-	}
-	routes := make([]Route, 0, len(ranked)+len(routeState.ExplicitRelayURLs))
-	for _, relayURL := range routeState.ExplicitRelayURLs {
-		eligible := true
+	ranked := SelectPriority(states, routeState)
+	var gateways []string
+	var ivnpRelays = make(map[string]types.RelayDescriptor)
+	if routeState.IVNP {
+		if routeState.RequireUDP {
+			return nil
+		}
+		var candidates []RelayState
 		for _, state := range states {
-			if state.Descriptor.APIHTTPSAddr != relayURL {
+			desc, err := s.IVNPRelay(state.Descriptor.IVNPDestination)
+			if err != nil || desc.APIHTTPSAddr != state.Descriptor.APIHTTPSAddr {
 				continue
 			}
-			unavailable := state.Banned || state.Dead || !state.supportsRequiredTransports(routeState, now)
-			if unavailable {
-				eligible = false
+			ivnpRelays[desc.APIHTTPSAddr] = desc
+			candidates = append(candidates, state)
+		}
+		gateways = RankRelayPool(candidates, routeState.LocalAddress, routeState.SelectionEpoch)
+	}
+	routes := make([]Route, 0, len(ranked))
+	for _, relayURL := range ranked {
+		route := Route{RelayURL: relayURL, Explicit: slices.Contains(routeState.ExplicitRelayURLs, relayURL)}
+		if routeState.IVNP {
+			ingress, ok := ivnpRelays[relayURL]
+			if !ok {
+				continue
+			}
+			for _, gateway := range gateways {
+				if ivnpRelays[gateway].Address == ingress.Address || ivnpRelays[gateway].IVNPDestination == ingress.IVNPDestination {
+					continue
+				}
+				route.GatewayURL = gateway
+				route.IngressDestination = ingress.IVNPDestination
 				break
 			}
+			if route.GatewayURL == "" {
+				continue
+			}
 		}
-		if !eligible {
-			continue
-		}
-		routes = append(routes, NewRoute([]string{relayURL}, true))
+		routes = append(routes, route)
 	}
-	for _, relayURL := range ranked {
-		routes = append(routes, NewRoute([]string{relayURL}, false))
-	}
-	return routes, nil
+	return routes
 }
 
 // filterCandidatePool returns the auto-selected relay pool eligible for MOLS
-// ranking. When requireOverlay is true, only relays with observed descriptors,
-// valid expiry, and overlay peer support are admitted.
-func filterCandidatePool(states []RelayState, routeState RouteState, now time.Time, requireOverlay bool) []RelayState {
+// ranking, keeping public transport eligibility separate from overlay reachability.
+func filterCandidatePool(states []RelayState, routeState RouteState, now time.Time) []RelayState {
 	pool := make([]RelayState, 0, len(states))
 	for _, state := range states {
 		relayURL := state.Descriptor.APIHTTPSAddr
@@ -525,20 +476,12 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 			// A bootstrap URL configured by the operator stays eligible as
 			// a URL-only single-hop fallback until a direct probe verifies
 			// it, but a descriptor squatted on a bootstrap URL by an
-			// untrusted candidate is not eligible at all, and unverified
-			// bootstrap entries never join multi-hop paths.
-			if requireOverlay || !state.Bootstrap || state.hasObservedDescriptor() {
+			// untrusted candidate is not eligible at all.
+			if !state.Bootstrap || state.hasObservedDescriptor() {
 				continue
 			}
 		}
-		if !requireOverlay && slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
-			continue
-		}
-		if requireOverlay {
-			if !state.eligibleForMultiHop(routeState, now) {
-				continue
-			}
-			pool = append(pool, state)
+		if slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
 			continue
 		}
 		if state.Banned || state.Dead {
@@ -558,97 +501,6 @@ func filterCandidatePool(states []RelayState, routeState RouteState, now time.Ti
 		pool = append(pool, state)
 	}
 	return pool
-}
-
-// buildMOLSPaths constructs loop-free paths from a ranked pool. Paths wrap
-// around the whole pool, while maxEntries independently bounds listener and
-// public-ingress fan-out.
-func buildMOLSPaths(ranked []string, depth, maxEntries int) ([]Route, error) {
-	if len(ranked) < depth {
-		return nil, fmt.Errorf("multi-hop-depth %d requires at least %d candidates, got %d", depth, depth, len(ranked))
-	}
-	n := len(ranked)
-	if maxEntries <= 0 || maxEntries > n {
-		maxEntries = n
-	}
-	routes := make([]Route, 0, maxEntries)
-	for start := 0; start < maxEntries; start++ {
-		path := make([]string, 0, depth)
-		for i := range depth {
-			path = append(path, ranked[(start+i)%n])
-		}
-		routes = append(routes, NewRoute(path, false))
-	}
-	return routes, nil
-}
-
-func (s *RelaySet) overlayRefreshCandidates(now time.Time) []RelayState {
-	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
-	}
-	states := s.overlayPeerRelayStates(now)
-	out := make([]RelayState, 0, len(states))
-	for _, state := range states {
-		if !state.nextDiscoveryRefreshAt.IsZero() && state.nextDiscoveryRefreshAt.After(now) {
-			continue
-		}
-		out = append(out, state)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func (s *RelaySet) overlayPeerRelayStates(now time.Time) []RelayState {
-	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
-	}
-	states := s.currentRelayStates(now)
-	out := make([]RelayState, 0, len(states))
-	for _, state := range states {
-		if state.Banned || !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) || !state.Descriptor.HasOverlayPeer() {
-			continue
-		}
-		out = append(out, state)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func (s *RelaySet) OverlayPeerDescriptor() []types.RelayDescriptor {
-	states := s.overlayPeerRelayStates(time.Now().UTC())
-	if len(states) == 0 {
-		return nil
-	}
-	out := make([]types.RelayDescriptor, 0, len(states))
-	for _, state := range states {
-		out = append(out, state.Descriptor)
-	}
-	return out
-}
-
-func (s *RelaySet) OverlayRelayDescriptor(relayURL string, now time.Time) (types.RelayDescriptor, bool) {
-	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
-	}
-	relayURL = strings.TrimSpace(relayURL)
-
-	s.mu.RLock()
-	state := s.relays[relayURL]
-	s.mu.RUnlock()
-	if state.Banned || !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) || !state.Descriptor.HasOverlayPeer() {
-		return types.RelayDescriptor{}, false
-	}
-	return state.Descriptor, true
 }
 
 // BootstrapRelayURLs returns configured bootstrap discovery endpoints that

@@ -270,47 +270,6 @@ func TestMOLSStickinessDoesNotResurrectSaturatedOrFallback(t *testing.T) {
 	}
 }
 
-func TestMOLSMultiHopBypassesSingleHopStickiness(t *testing.T) {
-	now := time.Now().UTC()
-	set := NewRelaySet(nil)
-	var activeEntry string
-	for i := 0; i < 5; i++ {
-		url := fmt.Sprintf("https://relay-mh-%d.example", i)
-		st := confirmedRelayState(t, url)
-		st.Descriptor.SupportsOverlay = true
-		st.Descriptor.ExpiresAt = now.Add(time.Hour)
-		st.Descriptor.WireGuardPublicKey = "wg-key"
-		st.Descriptor.WireGuardPort = 51820
-		st.LastSeenAt = now
-		set.relays[url] = st
-		if i == 4 {
-			activeEntry = url
-		}
-	}
-
-	routes, err := set.PlanRoutes(nil, RouteState{
-		ActiveRelayURLs: []string{activeEntry},
-		MultiHopDepth:   2,
-		MaxActiveRelays: 2,
-		LocalAddress:    "client",
-	})
-	if err != nil {
-		t.Fatalf("PlanRoutes failed: %v", err)
-	}
-	if len(routes) == 0 {
-		t.Fatalf("routes is empty")
-	}
-	// Multi-hop routing bypasses single-hop ActiveRelayURLs stickiness to preserve route-level path generation
-	expectedRoutes, _ := set.PlanRoutes(nil, RouteState{
-		MultiHopDepth:   2,
-		MaxActiveRelays: 2,
-		LocalAddress:    "client",
-	})
-	if routes[0].ListenerRelayURL() != expectedRoutes[0].ListenerRelayURL() {
-		t.Fatalf("multi-hop route should follow pure buildMOLSPaths ordering")
-	}
-}
-
 func TestMOLSFallbackSortURLTieBreaker(t *testing.T) {
 	now := time.Now().UTC()
 	// Create two fallback relays with identical effectiveRTT
@@ -555,9 +514,6 @@ func TestMOLSConcurrentRefreshAndFailureLifecycle(t *testing.T) {
 	for i := 0; i < numRelays; i++ {
 		u := fmt.Sprintf("https://relay-conc-%d.example", i)
 		st := confirmedRelayState(t, u)
-		st.Descriptor.SupportsOverlay = true
-		st.Descriptor.WireGuardPublicKey = fmt.Sprintf("wg-key-%d", i)
-		st.Descriptor.WireGuardPort = 51820
 		st.Descriptor.ExpiresAt = now.Add(time.Hour)
 		st.LastSeenAt = now
 		set.relays[u] = st
@@ -566,19 +522,18 @@ func TestMOLSConcurrentRefreshAndFailureLifecycle(t *testing.T) {
 	failingRelay := "https://relay-conc-0.example"
 	var wg sync.WaitGroup
 
-	// Concurrently plan routes (multi-hop and single-hop)
+	// Concurrently select public relays.
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				routes, err := set.PlanRoutes(nil, RouteState{
-					MultiHopDepth:   2,
+				routes := set.SelectRelays(RouteState{
 					MaxActiveRelays: 2,
 					LocalAddress:    fmt.Sprintf("client-%d-%d", id, j),
 				})
-				if err == nil && len(routes) > 0 {
-					_ = routes[0].ListenerRelayURL()
+				if len(routes) > 0 {
+					_ = routes[0].RelayURL
 				}
 			}
 		}(i)
@@ -597,15 +552,12 @@ func TestMOLSConcurrentRefreshAndFailureLifecycle(t *testing.T) {
 
 	// After 10 consecutive failures, failingRelay should have accumulated significant
 	// virtual latency penalty and should be demoted, not appearing in top active routes.
-	routes, err := set.PlanRoutes(nil, RouteState{
+	routes := set.SelectRelays(RouteState{
 		MaxActiveRelays: 2,
 		LocalAddress:    "client-verify",
 	})
-	if err != nil {
-		t.Fatalf("PlanRoutes failed: %v", err)
-	}
 	for _, r := range routes {
-		if r.ListenerRelayURL() == failingRelay {
+		if r.RelayURL == failingRelay {
 			t.Fatalf("failing relay %s should not be active after repeated failures", failingRelay)
 		}
 	}

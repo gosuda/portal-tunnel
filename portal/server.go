@@ -11,19 +11,20 @@ import (
 	"net/http/pprof"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
+	"gosuda.org/ivnp"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
-	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -34,16 +35,15 @@ const (
 	defaultClaimTimeout     = 10 * time.Second
 	defaultClientHelloWait  = 2 * time.Second
 	defaultControlBodyLimit = 4 << 20
-	defaultHopOpenRetryWait = 250 * time.Millisecond
 	DefaultPProfListenAddr  = "127.0.0.1:6060"
 )
 
 type ServerConfig struct {
+	IVNPConfigPath    string
 	PortalURL         string
 	IdentityPath      string
 	Bootstraps        []string
 	DiscoveryEnabled  bool
-	WireGuardPort     int
 	APIPort           int
 	SNIPort           int
 	APIListenAddr     string
@@ -63,6 +63,9 @@ type ServerConfig struct {
 }
 
 func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
+	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
+		return ServerConfig{}, errors.New("ivnp requires HTTPS relay discovery")
+	}
 	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
 	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
 	if cfg.IdentityPath == "" {
@@ -87,7 +90,6 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 
 	cfg.APIPort = utils.IntOrDefault(cfg.APIPort, 4017)
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
-	cfg.WireGuardPort = utils.IntOrDefault(cfg.WireGuardPort, overlay.DefaultListenPort)
 	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
 	if cfg.PProfEnabled {
@@ -121,6 +123,12 @@ func (cfg ServerConfig) hasLeasePortRange() bool {
 }
 
 type Server struct {
+	ivnpNode     *ivnp.Node
+	ivnpEndpoint ivnp.DestinationEndpoint
+	ivnpListener net.Listener
+	ivnpReady    atomic.Bool
+	ivnpSlots    chan struct{}
+	ivnpContext  context.Context
 	cancel       context.CancelFunc
 	group        *errgroup.Group
 	shutdownOnce sync.Once
@@ -139,7 +147,6 @@ type Server struct {
 	pprofServer   *http.Server
 	quicBackhaul  *quic.Listener
 
-	overlay         *overlay.Overlay
 	relaySet        *discovery.RelaySet
 	announceLimiter *discovery.AnnounceLimiter
 	registry        *leaseRegistry
@@ -151,7 +158,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 
-	relayIdentity, err := identity.LoadOrCreateRelayIdentity(cfg.IdentityPath, utils.PortalRootHost(cfg.PortalURL), cfg.DiscoveryEnabled)
+	relayIdentity, err := identity.LoadOrCreateRelayIdentity(cfg.IdentityPath, utils.PortalRootHost(cfg.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
@@ -244,16 +251,13 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	var apiCloser io.Closer
 	var pprofListener net.Listener
 	var pprofServer *http.Server
-	var ov *overlay.Overlay
 	var quicBackhaul *quic.Listener
 	defer func() {
 		if started {
 			return
 		}
+		s.closeIVNP()
 		_ = acmeManager.Stop(ctx)
-		if ov != nil {
-			_ = ov.Shutdown(context.Background())
-		}
 		if apiServer != nil {
 			_ = apiServer.Close()
 		}
@@ -307,12 +311,6 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		}
 	}
 
-	if s.relaySet != nil && strings.TrimSpace(s.identity.WireGuardPrivateKey) != "" {
-		ov, err = s.startOverlay()
-		if err != nil {
-			return err
-		}
-	}
 	if cfg.UDPEnabled {
 		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
 		if err != nil {
@@ -321,6 +319,11 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		}
 	}
 
+	if cfg.IVNPConfigPath != "" {
+		if err := s.startIVNP(serverCtx); err != nil {
+			return fmt.Errorf("start ivnp: %w", err)
+		}
+	}
 	s.apiListener = wrappedAPIListener
 	s.sniListener = sniListener
 	s.apiServer = apiServer
@@ -330,18 +333,17 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.acmeManager = acmeManager
 	s.cancel = cancel
 	s.group = group
-	s.overlay = ov
 	s.quicBackhaul = quicBackhaul
 	started = true
 
 	group.Go(s.runAPIServer)
+	if s.ivnpListener != nil {
+		group.Go(func() error { return s.runIVNP(groupCtx) })
+	}
 	if s.pprofServer != nil {
 		group.Go(s.runPProfServer)
 	}
 	group.Go(func() error { return s.runPublicIngress(groupCtx) })
-	if s.overlay != nil {
-		group.Go(func() error { return s.overlay.Serve(groupCtx) })
-	}
 	if s.quicBackhaul != nil {
 		group.Go(s.runQUICBackhaulListener)
 	}
@@ -365,8 +367,6 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		Int("min_port", cfg.MinPort).
 		Int("max_port", cfg.MaxPort).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
-		Bool("wireguard_enabled", s.overlay != nil).
-		Bool("multihop_enabled", s.overlay != nil).
 		Bool("udp_enabled", s.quicBackhaul != nil).
 		Bool("tcp_enabled", s.supportsTCP()).
 		Bool("api_ech_enabled", len(apiTLS.EncryptedClientHelloKeys) > 0).
@@ -434,6 +434,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if s.cancel != nil {
 			s.cancel()
 		}
+		s.closeIVNP()
 
 		records := s.registry.CloseAll()
 		for _, record := range records {
@@ -455,11 +456,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 		if s.pprofServer != nil {
 			if err := s.pprofServer.Shutdown(ctx); err != nil && shutdownErr == nil {
-				shutdownErr = err
-			}
-		}
-		if s.overlay != nil {
-			if err := s.overlay.Shutdown(ctx); err != nil && shutdownErr == nil {
 				shutdownErr = err
 			}
 		}
@@ -612,37 +608,6 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	if record.isExpired(time.Now()) {
 		return errLeaseNotFound
 	}
-	if overlayIPv4, forwardToken, hasNextHop := record.nextHop(); hasNextHop {
-		switch {
-		case s.overlay == nil:
-			return errors.New("relay overlay is unavailable")
-		case overlayIPv4 == "":
-			return errors.New("next hop overlay ipv4 is required")
-		case forwardToken == "":
-			return errors.New("next hop token is required")
-		}
-
-		openCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-		defer cancel()
-		var next net.Conn
-		var lastErr error
-		for {
-			var err error
-			next, err = s.overlay.OpenHopStream(openCtx, overlayIPv4, forwardToken)
-			if err == nil {
-				break
-			}
-			lastErr = err
-			if errors.Is(err, net.ErrClosed) {
-				return fmt.Errorf("open next hop stream: %w", err)
-			}
-			if !utils.SleepOrDone(openCtx, defaultHopOpenRetryWait) {
-				return fmt.Errorf("open next hop stream within %s: %w", defaultClaimTimeout, errors.Join(lastErr, openCtx.Err()))
-			}
-		}
-		s.proxy.bridge(conn, next, "", nil)
-		return nil
-	}
 	if record.stream == nil {
 		return errors.New("lease stream is not ready")
 	}
@@ -746,59 +711,12 @@ func (s *Server) handleQUICBackhaulConn(conn *quic.Conn) {
 		Msg("quic backhaul connected")
 }
 
-func (s *Server) startOverlay() (*overlay.Overlay, error) {
-	cfg := s.config()
-	peerMux := http.NewServeMux()
-	peerMux.HandleFunc(types.PathRoot, s.handleRoot)
-	peerMux.HandleFunc(types.PathHealthz, s.handleHealthz)
-	if cfg.DiscoveryEnabled {
-		peerMux.HandleFunc(types.PathDiscovery, s.handleRelayDiscovery)
-	}
-
-	ov, err := overlay.NewOverlay(overlay.Config{
-		PrivateKey: s.identity.WireGuardPrivateKey,
-		PublicKey:  s.identity.WireGuardPublicKey,
-		ListenPort: cfg.WireGuardPort,
-	}, peerMux, nil)
-	if err != nil {
-		return nil, fmt.Errorf("start wireguard overlay: %w", err)
-	}
-
-	ov.SetStreamHandler(func(ctx context.Context, stream overlay.HopStream) {
-		s.registry.mu.RLock()
-		record := s.registry.recordByHopToken(stream.Token, time.Now())
-		s.registry.mu.RUnlock()
-		if record == nil {
-			log.Warn().Str("remote_addr", stream.RemoteAddr).Msg("hop stream rejected")
-			_ = stream.Conn.Close()
-			return
-		}
-		hopRole := "exit"
-		if record.isHopMiddle() {
-			hopRole = "middle"
-		}
-		log.Info().Str("remote_addr", stream.RemoteAddr).Str("hop_role", hopRole).Msg("hop stream received")
-
-		if err := s.bridgeLeaseConn(ctx, stream.Conn, record); err != nil {
-			log.Warn().Err(err).Str("remote_addr", stream.RemoteAddr).Msg("hop stream bridge failed")
-			_ = stream.Conn.Close()
-		}
-	})
-
-	if err := ov.Sync(s.relaySet.OverlayPeerDescriptor()); err != nil {
-		_ = ov.Shutdown(context.Background())
-		return nil, fmt.Errorf("sync wireguard peers: %w", err)
-	}
-
-	return ov, nil
-}
-
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	if s.relaySet == nil {
 		<-ctx.Done()
 		return nil
 	}
-	refresher := discovery.NewRefresher(s.relaySet, s.overlay)
+	refresher := discovery.NewRefresher(s.relaySet)
 	ticker := time.NewTicker(discovery.DiscoveryPollInterval)
 	defer ticker.Stop()
 
@@ -834,28 +752,20 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 	}
 	cfg := s.config()
 
-	var wireGuardPublicKey string
-	var wireGuardPort int
-	supportsOverlay := false
-	if s.overlay != nil {
-		cfg := s.overlay.Config()
-		wireGuardPublicKey = cfg.PublicKey
-		wireGuardPort = cfg.ListenPort
-		supportsOverlay = true
+	ivnpDestination := ""
+	if s.ivnpReady.Load() {
+		ivnpDestination = s.ivnpEndpoint.B32()
 	}
-
 	return auth.SignRelayDescriptor(types.RelayDescriptor{
-		Address:            s.identity.Address,
-		Version:            types.DiscoveryVersion,
-		IssuedAt:           now,
-		ExpiresAt:          now.Add(discovery.DiscoveryDescriptorTTL),
-		APIHTTPSAddr:       cfg.PortalURL,
-		WireGuardPublicKey: wireGuardPublicKey,
-		WireGuardPort:      wireGuardPort,
-		SupportsOverlay:    supportsOverlay,
-		SupportsUDP:        s.supportsUDP(),
-		SupportsTCP:        s.supportsTCP(),
-		ActiveConnections:  s.proxy.activeConnectionCount(),
-		TCPBPS:             s.proxy.currentTCPBPS(now),
+		IVNPDestination:   ivnpDestination,
+		Address:           s.identity.Address,
+		Version:           types.DiscoveryVersion,
+		IssuedAt:          now,
+		ExpiresAt:         now.Add(discovery.DiscoveryDescriptorTTL),
+		APIHTTPSAddr:      cfg.PortalURL,
+		SupportsUDP:       s.supportsUDP(),
+		SupportsTCP:       s.supportsTCP(),
+		ActiveConnections: s.proxy.activeConnectionCount(),
+		TCPBPS:            s.proxy.currentTCPBPS(now),
 	}, s.authority)
 }

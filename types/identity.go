@@ -36,16 +36,12 @@ func (i Identity) Copy() Identity {
 
 type RelayIdentity struct {
 	Identity
-	WireGuardPublicKey       string `json:"-"`
-	WireGuardPrivateKey      string `json:"-"`
 	EncryptedClientHelloSeed string `json:"-"`
 }
 
 func (i RelayIdentity) Copy() RelayIdentity {
 	return RelayIdentity{
 		Identity:                 i.Identity.Copy(),
-		WireGuardPublicKey:       i.WireGuardPublicKey,
-		WireGuardPrivateKey:      i.WireGuardPrivateKey,
 		EncryptedClientHelloSeed: i.EncryptedClientHelloSeed,
 	}
 }
@@ -105,60 +101,47 @@ type PolicyLease struct {
 }
 
 type RelayDescriptor struct {
-	Address            string    `json:"address"`
-	Version            string    `json:"version"`
-	IssuedAt           time.Time `json:"issued_at"`
-	ExpiresAt          time.Time `json:"expires_at"`
-	APIHTTPSAddr       string    `json:"api_https_addr"`
-	WireGuardPublicKey string    `json:"wireguard_public_key,omitempty"`
-	WireGuardPort      int       `json:"wireguard_port,omitempty"`
-	SupportsOverlay    bool      `json:"supports_overlay,omitempty"`
-	SupportsUDP        bool      `json:"supports_udp,omitempty"`
-	SupportsTCP        bool      `json:"supports_tcp,omitempty"`
-	ActiveConnections  int64     `json:"active_connections,omitempty"`
-	TCPBPS             float64   `json:"tcp_bps,omitempty"`
-	Signature          string    `json:"signature,omitempty"`
-}
-
-func (desc RelayDescriptor) HasOverlayPeer() bool {
-	return desc.SupportsOverlay &&
-		strings.TrimSpace(desc.WireGuardPublicKey) != "" &&
-		desc.WireGuardPort > 0 &&
-		desc.WireGuardPort <= 65535
+	Address           string    `json:"address"`
+	Version           string    `json:"version"`
+	IssuedAt          time.Time `json:"issued_at"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	APIHTTPSAddr      string    `json:"api_https_addr"`
+	IVNPDestination   string    `json:"ivnp_destination,omitempty"`
+	SupportsUDP       bool      `json:"supports_udp,omitempty"`
+	SupportsTCP       bool      `json:"supports_tcp,omitempty"`
+	ActiveConnections int64     `json:"active_connections,omitempty"`
+	TCPBPS            float64   `json:"tcp_bps,omitempty"`
+	Signature         string    `json:"signature,omitempty"`
 }
 
 // CanonicalBytes returns the deterministic byte representation of a relay
 // descriptor used for signing and signature verification.
 //
-// The encoding is JSON over a fixed struct schema (no maps, no omitempty),
-// which guarantees field order and presence regardless of input variation.
+// The optional IVNP extension is omitted when absent so direct-only version 9
+// descriptors retain their canonical encoding.
 func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
 	canonical := struct {
-		Address            string  `json:"address"`
-		Version            string  `json:"version"`
-		IssuedAtUnixNano   int64   `json:"issued_at_unix_nano"`
-		ExpiresAtUnixNano  int64   `json:"expires_at_unix_nano"`
-		APIHTTPSAddr       string  `json:"api_https_addr"`
-		WireGuardPublicKey string  `json:"wireguard_public_key"`
-		WireGuardPort      int     `json:"wireguard_port"`
-		SupportsOverlay    bool    `json:"supports_overlay"`
-		SupportsUDP        bool    `json:"supports_udp"`
-		SupportsTCP        bool    `json:"supports_tcp"`
-		ActiveConnections  int64   `json:"active_connections"`
-		TCPBPS             float64 `json:"tcp_bps"`
+		Address           string  `json:"address"`
+		Version           string  `json:"version"`
+		IssuedAtUnixNano  int64   `json:"issued_at_unix_nano"`
+		ExpiresAtUnixNano int64   `json:"expires_at_unix_nano"`
+		APIHTTPSAddr      string  `json:"api_https_addr"`
+		SupportsUDP       bool    `json:"supports_udp"`
+		SupportsTCP       bool    `json:"supports_tcp"`
+		ActiveConnections int64   `json:"active_connections"`
+		TCPBPS            float64 `json:"tcp_bps"`
+		IVNPDestination   string  `json:"ivnp_destination,omitempty"`
 	}{
-		Address:            desc.Address,
-		Version:            desc.Version,
-		IssuedAtUnixNano:   desc.IssuedAt.UTC().UnixNano(),
-		ExpiresAtUnixNano:  desc.ExpiresAt.UTC().UnixNano(),
-		APIHTTPSAddr:       desc.APIHTTPSAddr,
-		WireGuardPublicKey: desc.WireGuardPublicKey,
-		WireGuardPort:      desc.WireGuardPort,
-		SupportsOverlay:    desc.SupportsOverlay,
-		SupportsUDP:        desc.SupportsUDP,
-		SupportsTCP:        desc.SupportsTCP,
-		ActiveConnections:  desc.ActiveConnections,
-		TCPBPS:             desc.TCPBPS,
+		Address:           desc.Address,
+		Version:           desc.Version,
+		IssuedAtUnixNano:  desc.IssuedAt.UTC().UnixNano(),
+		ExpiresAtUnixNano: desc.ExpiresAt.UTC().UnixNano(),
+		APIHTTPSAddr:      desc.APIHTTPSAddr,
+		SupportsUDP:       desc.SupportsUDP,
+		SupportsTCP:       desc.SupportsTCP,
+		ActiveConnections: desc.ActiveConnections,
+		TCPBPS:            desc.TCPBPS,
+		IVNPDestination:   desc.IVNPDestination,
 	}
 	return json.Marshal(canonical)
 }

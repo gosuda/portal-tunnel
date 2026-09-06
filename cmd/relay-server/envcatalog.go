@@ -45,7 +45,6 @@ var externalEnvVars = map[string]externalEnvVar{
 // report can say that changing one moves more than the relay.
 var alsoConsumedBy = map[string]string{
 	"IDENTITY_PATH":       "compose mounts ./.portal-certs at this path",
-	"WIREGUARD_PORT":      "compose publishes this UDP port",
 	"MIN_PORT":            "compose publishes this port range when the mapping is uncommented",
 	"MAX_PORT":            "compose publishes this port range when the mapping is uncommented",
 	"PORTAL_FRONTEND_DIR": "compose has a matching read-only mount to uncomment when replacing the SPA",

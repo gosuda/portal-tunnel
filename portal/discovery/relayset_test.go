@@ -1,7 +1,6 @@
 package discovery
 
 import (
-	"slices"
 	"testing"
 	"time"
 
@@ -68,12 +67,9 @@ func servesDescriptor(set *RelaySet, relayURL string) bool {
 // routesTo reports whether automatic single-hop route planning selects relayURL.
 func routesTo(t *testing.T, set *RelaySet, relayURL string) bool {
 	t.Helper()
-	routes, err := set.PlanRoutes(nil, RouteState{LocalAddress: "client"})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
+	routes := set.SelectRelays(RouteState{LocalAddress: "client"})
 	for _, route := range routes {
-		if route.ListenerRelayURL() == relayURL {
+		if route.RelayURL == relayURL {
 			return true
 		}
 	}
@@ -307,189 +303,6 @@ func TestConfirmAndUnconfirmRelayURL(t *testing.T) {
 	}
 }
 
-func TestPlanRoutesExplicitPathReturnsSingleRouteToEntry(t *testing.T) {
-	const (
-		entry = "https://entry.example"
-		mid   = "https://middle.example"
-		exit  = "https://exit.example"
-	)
-
-	routes, err := NewRelaySet(nil).PlanRoutes([]string{entry, mid, exit}, RouteState{})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-	if len(routes) != 1 {
-		t.Fatalf("len(routes) = %d, want 1", len(routes))
-	}
-	route := routes[0]
-	if !route.Explicit() {
-		t.Fatal("route.Explicit() = false, want true")
-	}
-	if got := route.ListenerRelayURL(); got != entry {
-		t.Fatalf("ListenerRelayURL() = %q, want %q", got, entry)
-	}
-	path := route.MultiHop()
-	if len(path) != 3 || path[0] != entry || path[1] != mid || path[2] != exit {
-		t.Fatalf("MultiHop() = %v, want [%q %q %q]", path, entry, mid, exit)
-	}
-}
-
-func TestPlanRoutesBuildsMultiHopPathsForEveryRequestedEntryRelay(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	for _, relayURL := range []string{
-		"https://relay-a.example", "https://relay-b.example",
-		"https://relay-c.example", "https://relay-d.example",
-	} {
-		state := confirmedRelayState(t, relayURL)
-		state.LastSeenAt = now
-		state.Descriptor.SupportsOverlay = true
-		state.Descriptor.WireGuardPublicKey = "wg-key"
-		state.Descriptor.WireGuardPort = 51820
-		set.relays[relayURL] = state
-	}
-
-	routes, err := set.PlanRoutes(nil, RouteState{MultiHopDepth: 3, MaxActiveRelays: 4, LocalAddress: "client"})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-	if len(routes) != 4 {
-		t.Fatalf("len(routes) = %d, want 4; every relay should be an entry point", len(routes))
-	}
-	entries := make(map[string]bool, len(routes))
-	for _, route := range routes {
-		if path := route.MultiHop(); len(path) != 3 || route.ListenerRelayURL() != path[0] {
-			t.Fatalf("route = %v, want three-hop path from its entry relay", path)
-		}
-		entries[route.ListenerRelayURL()] = true
-	}
-	if len(entries) != 4 {
-		t.Fatalf("entry relays = %v, want all four relays", entries)
-	}
-}
-
-func TestPlanRoutesCapsMultiHopListenerEntries(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	for _, relayURL := range []string{
-		"https://relay-a.example", "https://relay-b.example", "https://relay-c.example", "https://relay-d.example",
-	} {
-		state := confirmedRelayState(t, relayURL)
-		state.LastSeenAt = now
-		state.Descriptor.SupportsOverlay = true
-		state.Descriptor.WireGuardPublicKey = "wg-key"
-		state.Descriptor.WireGuardPort = 51820
-		set.relays[relayURL] = state
-	}
-
-	routes, err := set.PlanRoutes(nil, RouteState{MultiHopDepth: 3, MaxActiveRelays: 2, LocalAddress: "client"})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-	if len(routes) != 2 {
-		t.Fatalf("len(routes) = %d, want 2 capped listener entries", len(routes))
-	}
-	for _, route := range routes {
-		if len(route.MultiHop()) != 3 {
-			t.Fatalf("route %v does not retain a complete three-hop path", route.MultiHop())
-		}
-	}
-}
-
-func TestPlanRoutesKeepsBootstrapRelayAsMultiHopEntry(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	const bootstrap = "https://relay-bootstrap.example"
-	for _, relayURL := range []string{
-		bootstrap, "https://relay-b.example", "https://relay-c.example",
-	} {
-		state := confirmedRelayState(t, relayURL)
-		state.LastSeenAt = now
-		state.Descriptor.SupportsOverlay = true
-		state.Descriptor.WireGuardPublicKey = "wg-key"
-		state.Descriptor.WireGuardPort = 51820
-		set.relays[relayURL] = state
-	}
-
-	routes, err := set.PlanRoutes(nil, RouteState{
-		ExplicitRelayURLs: []string{bootstrap},
-		MultiHopDepth:     3,
-		LocalAddress:      "client",
-	})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-	for _, route := range routes {
-		if route.ListenerRelayURL() == bootstrap {
-			return
-		}
-	}
-	t.Fatalf("routes = %v, want bootstrap relay %q as an entry", routes, bootstrap)
-}
-
-func TestPlanRoutesSkipsMultiHopRelayWithoutOverlaySupport(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	for _, relayURL := range []string{
-		"https://relay-a.example", "https://relay-b.example", "https://relay-c.example",
-	} {
-		state := confirmedRelayState(t, relayURL)
-		state.LastSeenAt = now
-		state.Descriptor.SupportsOverlay = true
-		state.Descriptor.WireGuardPublicKey = "wg-key"
-		state.Descriptor.WireGuardPort = 51820
-		set.relays[relayURL] = state
-	}
-
-	incompatible := confirmedRelayState(t, "https://relay-incompatible.example")
-	incompatible.LastSeenAt = now
-	set.relays[incompatible.Descriptor.APIHTTPSAddr] = incompatible
-
-	routes, err := set.PlanRoutes(nil, RouteState{MultiHopDepth: 3, LocalAddress: "client"})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-	if len(routes) != 3 {
-		t.Fatalf("len(routes) = %d, want 3", len(routes))
-	}
-	for _, route := range routes {
-		if slices.Contains(route.MultiHop(), incompatible.Descriptor.APIHTTPSAddr) {
-			t.Fatalf("route %v includes overlay-incompatible relay", route.MultiHop())
-		}
-	}
-}
-
-func TestPlanRoutesSkipsMultiHopRelayWithoutRequiredTransport(t *testing.T) {
-	set := NewRelaySet(nil)
-	now := time.Now().UTC()
-	for _, relayURL := range []string{
-		"https://relay-a.example", "https://relay-b.example", "https://relay-c.example", "https://relay-d.example",
-	} {
-		state := confirmedRelayState(t, relayURL)
-		state.LastSeenAt = now
-		state.Descriptor.SupportsOverlay = true
-		state.Descriptor.SupportsTCP = relayURL != "https://relay-d.example"
-		state.Descriptor.WireGuardPublicKey = "wg-key"
-		state.Descriptor.WireGuardPort = 51820
-		set.relays[relayURL] = state
-	}
-
-	routes, err := set.PlanRoutes(nil, RouteState{
-		MultiHopDepth:   3,
-		RequireTCP:      true,
-		MaxActiveRelays: 3,
-		LocalAddress:    "client",
-	})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
-	for _, route := range routes {
-		if slices.Contains(route.MultiHop(), "https://relay-d.example") {
-			t.Fatalf("TCP-incompatible relay appears in multi-hop route %v", route.MultiHop())
-		}
-	}
-}
-
 func TestPlanRoutesSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 	const relayURL = "https://relay-udp-disabled.example"
 	set := NewRelaySet(nil)
@@ -497,13 +310,10 @@ func TestPlanRoutesSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 	state.Descriptor.SupportsUDP = false
 	set.relays[relayURL] = state
 
-	routes, err := set.PlanRoutes(nil, RouteState{
+	routes := set.SelectRelays(RouteState{
 		ExplicitRelayURLs: []string{relayURL},
 		RequireUDP:        true,
 	})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
 	if len(routes) != 0 {
 		t.Fatalf("PlanRoutes() = %v, want no UDP-incompatible explicit route", routes)
 	}
@@ -512,20 +322,17 @@ func TestPlanRoutesSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 func TestPlanRoutesIncludesExplicitRelayMissingFromSet(t *testing.T) {
 	const relayURL = "https://relay-explicit.example"
 
-	routes, err := NewRelaySet(nil).PlanRoutes(nil, RouteState{
+	routes := NewRelaySet(nil).SelectRelays(RouteState{
 		ExplicitRelayURLs: []string{relayURL},
 	})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
 	if len(routes) != 1 {
 		t.Fatalf("len(routes) = %d, want 1", len(routes))
 	}
 	route := routes[0]
-	if !route.Explicit() {
-		t.Fatal("route.Explicit() = false, want true")
+	if !route.Explicit {
+		t.Fatal("route.Explicit = false, want true")
 	}
-	if got := route.ListenerRelayURL(); got != relayURL {
+	if got := route.RelayURL; got != relayURL {
 		t.Fatalf("ListenerRelayURL() = %q, want %q", got, relayURL)
 	}
 }

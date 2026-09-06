@@ -54,7 +54,6 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
 | `API_PORT` | `4017` | int | Admin/API server listen port |
 | `SNI_PORT` | `443` | int | TCP SNI router listen port; non-standard values are intended for local testing, while the bundled public deployment requires `443` |
-| `WIREGUARD_PORT` | `51820` | int | Public and listen UDP port for relay discovery overlay |
 
 ### Transport
 
@@ -355,8 +354,6 @@ Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors
 | `private_key` | string | secp256k1 private key hex; keep secret |
 | `mnemonic` | string | BIP-39 mnemonic used to derive the secp256k1 identity key; keep secret |
 | `derivation_path` | string | EVM derivation path for `mnemonic`; defaults to `m/44'/60'/0'/0/0` |
-| `wireguard_public_key` | string | Relay-only WireGuard overlay public key when discovery is enabled |
-| `wireguard_private_key` | string | Relay-only WireGuard overlay private key when discovery is enabled |
 | `encrypted_client_hello_seed` | string | Relay-only HKDF salt for deriving the ECH HPKE private key; generated automatically when missing; keep secret |
 
 When `mnemonic` is present, Portal derives the private key at `derivation_path`
