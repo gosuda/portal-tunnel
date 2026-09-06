@@ -380,18 +380,34 @@ func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *te
 		manager.Start(context.Background())
 		synctest.Wait()
 
-		assertTrackedAddresses := func(publicIP string) {
+		assertTrackedDNS := func(publicIP string) {
 			addr := net.JoinHostPort("127.0.0.1", fmt.Sprint(cfg.EmbeddedDNSPort))
 			for _, network := range []string{"udp", "tcp"} {
 				client := &dns.Client{Net: network, Timeout: time.Second}
-				for _, hostname := range []string{"ech." + baseDomain, "ens." + baseDomain} {
-					assertEmbeddedDNSAddress(t, client, addr, hostname, publicIP)
+				for _, record := range []struct {
+					hostname string
+					qtype    uint16
+				}{
+					{"ech." + baseDomain, dns.TypeHTTPS},
+					{"ens." + baseDomain, dns.TypeTXT},
+				} {
+					assertEmbeddedDNSAddress(t, client, addr, record.hostname, publicIP)
+					query := new(dns.Msg)
+					query.SetQuestion(dns.Fqdn(record.hostname), record.qtype)
+					answer, _, err := client.Exchange(query, addr)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !answer.Authoritative || answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 || answer.Answer[0].Header().Rrtype != record.qtype {
+						t.Fatalf("%s %s %s = %v, want published tracked record", network, dns.TypeToString[record.qtype], record.hostname, answer)
+					}
 				}
 			}
 		}
-		// Publish both tracked records while discovery works, without retrying
-		// pending base initialization. No failed command remains to cause its
-		// own discovery when the short retry flushes pending commands.
+		// Publish HTTPS/TXT while discovery works, without retrying pending base
+		// initialization. Embedded EnsureARecord only validates: all A answers
+		// depend on the shared address set by EnsureARecords, so they stay absent.
+		// No failed command remains to trigger its own retry discovery.
 		utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{ip: "203.0.113.30", requests: &requests}}
 		_, echConfigList, err := keyless.EncryptedClientHelloMaterials("dns-retry-test", baseDomain)
 		if err != nil {
@@ -404,7 +420,7 @@ func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *te
 			t.Fatalf("SyncENSGaslessHostname(): %v", err)
 		}
 		synctest.Wait()
-		assertTrackedAddresses("203.0.113.30")
+		assertTrackedDNS("")
 		assertManualEmbeddedDNS(t, manager, cfg, "")
 
 		utils.DefaultHTTPClient = &http.Client{Transport: outageTransport}
@@ -417,7 +433,7 @@ func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *te
 			t.Fatalf("discovery requests during failed retry = %d, want %d for one discovery", got, failedDiscoveryRequests)
 		}
 		assertManualEmbeddedDNS(t, manager, cfg, "")
-		assertTrackedAddresses("203.0.113.30")
+		assertTrackedDNS("")
 
 		utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{requests: &requests}}
 		beforeRecoveryRequests := requests.Load()
@@ -427,10 +443,11 @@ func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *te
 			t.Fatalf("discovery requests during recovery retry = %d, want one shared by base and tracked records", got)
 		}
 		assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
-		assertTrackedAddresses("203.0.113.10")
+		assertTrackedDNS("203.0.113.10")
 
-		// After recovery, only tracked records follow a changed public address
-		// on the short ticker. The healthy base must no longer remain pending.
+		// Tracked maintenance still discovers the changed address, but embedded
+		// per-host updates cannot change zone-wide synthesis. All A answers keep
+		// the initialized address; a still-pending base retry would change them.
 		utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{ip: "203.0.113.20", requests: &requests}}
 		beforeTrackedRetryRequests := requests.Load()
 		<-time.After(10 * time.Minute)
@@ -439,7 +456,7 @@ func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *te
 			t.Fatalf("discovery requests during tracked retry = %d, want one without healthy base retry", got)
 		}
 		assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
-		assertTrackedAddresses("203.0.113.20")
+		assertTrackedDNS("203.0.113.10")
 	})
 }
 
