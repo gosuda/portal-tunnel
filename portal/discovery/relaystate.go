@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"math"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -79,7 +80,7 @@ func (pt *PercentileTracker) Get(p float64) time.Duration {
 		return time.Duration(pt.samples[0])
 	}
 	percent := p * 100
-	if percent <= 0 || percent > 100 {
+	if math.IsNaN(percent) || math.IsInf(percent, 0) || percent <= 0 || percent > 100 {
 		return 0
 	}
 
