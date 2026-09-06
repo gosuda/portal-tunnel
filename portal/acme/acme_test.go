@@ -226,6 +226,14 @@ func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing
 	originalClient := utils.DefaultHTTPClient
 	t.Cleanup(func() { utils.DefaultHTTPClient = originalClient })
 
+	// Calibrate one successful discovery separately from manager request counts.
+	var calibrationRequests atomic.Int32
+	utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{requests: &calibrationRequests}}
+	if _, err := utils.ResolvePublicIPv4(context.Background()); err != nil {
+		t.Fatalf("calibrate successful public IPv4 discovery: %v", err)
+	}
+	successfulDiscoveryRequests := calibrationRequests.Load()
+
 	for _, discoveryOutage := range []bool{false, true} {
 		t.Run(fmt.Sprintf("discovery_outage=%t", discoveryOutage), func(t *testing.T) {
 			var requests atomic.Int32
@@ -257,10 +265,9 @@ func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing
 			var wantRetryRequests, wantRecoveryRequests int32
 			if discoveryOutage {
 				publicIP = ""
-				// One failed retry visits the same endpoints as startup;
-				// recovery needs only the first successful endpoint.
+				// Both failed retry and recovery cost one discovery operation.
 				wantRetryRequests = requests.Load()
-				wantRecoveryRequests = 1
+				wantRecoveryRequests = successfulDiscoveryRequests
 			}
 			assertManualEmbeddedDNS(t, manager, cfg, publicIP)
 
@@ -323,7 +330,7 @@ func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing
 
 				<-time.After(time.Second)
 				synctest.Wait()
-				wantRequests++
+				wantRequests += successfulDiscoveryRequests
 				if got := requests.Load(); got != wantRequests {
 					t.Fatalf("discovery requests after three-hour refresh = %d, want %d", got, wantRequests)
 				}
@@ -336,6 +343,14 @@ func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing
 func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *testing.T) {
 	originalClient := utils.DefaultHTTPClient
 	t.Cleanup(func() { utils.DefaultHTTPClient = originalClient })
+
+	// Calibrate before installing the outage transport, using a separate counter.
+	var calibrationRequests atomic.Int32
+	utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{requests: &calibrationRequests}}
+	if _, err := utils.ResolvePublicIPv4(context.Background()); err != nil {
+		t.Fatalf("calibrate successful public IPv4 discovery: %v", err)
+	}
+	successfulDiscoveryRequests := calibrationRequests.Load()
 
 	var requests atomic.Int32
 	outageTransport := publicIPv4Transport{
@@ -439,8 +454,8 @@ func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *te
 		beforeRecoveryRequests := requests.Load()
 		<-time.After(10 * time.Minute)
 		synctest.Wait()
-		if got := requests.Load() - beforeRecoveryRequests; got != 1 {
-			t.Fatalf("discovery requests during recovery retry = %d, want one shared by base and tracked records", got)
+		if got := requests.Load() - beforeRecoveryRequests; got != successfulDiscoveryRequests {
+			t.Fatalf("discovery requests during recovery retry = %d, want %d for one discovery shared by base and tracked records", got, successfulDiscoveryRequests)
 		}
 		assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
 		assertTrackedDNS("203.0.113.10")
@@ -452,8 +467,8 @@ func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *te
 		beforeTrackedRetryRequests := requests.Load()
 		<-time.After(10 * time.Minute)
 		synctest.Wait()
-		if got := requests.Load() - beforeTrackedRetryRequests; got != 1 {
-			t.Fatalf("discovery requests during tracked retry = %d, want one without healthy base retry", got)
+		if got := requests.Load() - beforeTrackedRetryRequests; got != successfulDiscoveryRequests {
+			t.Fatalf("discovery requests during tracked retry = %d, want %d for one discovery without healthy base retry", got, successfulDiscoveryRequests)
 		}
 		assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
 		assertTrackedDNS("203.0.113.10")
