@@ -10,6 +10,8 @@ import (
 )
 
 const (
+	DefaultHTTPRedirectAddr = ":80"
+
 	HeaderAccessToken      = "X-Portal-Access-Token"
 	HeaderXPayment         = "X-PAYMENT"
 	HeaderPaymentSignature = "PAYMENT-SIGNATURE"

@@ -76,7 +76,7 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 
 	if cfg.HTTPRedirectEnabled {
 		target, err := url.Parse(cfg.PortalURL)
-		if err != nil || target.Scheme != "https" || target.Hostname() == "" || target.User != nil || target.Opaque != "" || strings.HasSuffix(target.Host, ":") {
+		if err != nil || !strings.EqualFold(target.Scheme, "https") || target.Hostname() == "" || target.User != nil || target.Opaque != "" || strings.HasSuffix(target.Host, ":") {
 			return ServerConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
 		}
 		if port := target.Port(); port != "" {
@@ -85,7 +85,7 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 				return ServerConfig{}, errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
 			}
 		}
-		cfg.HTTPRedirectAddr = utils.StringOrDefault(strings.TrimSpace(cfg.HTTPRedirectAddr), ":80")
+		cfg.HTTPRedirectAddr = utils.StringOrDefault(strings.TrimSpace(cfg.HTTPRedirectAddr), types.DefaultHTTPRedirectAddr)
 	}
 
 	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)

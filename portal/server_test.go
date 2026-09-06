@@ -117,26 +117,32 @@ func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *htt
 func TestHTTPRedirectTargetValidation(t *testing.T) {
 	for _, target := range []string{"http://localhost:4017", "http://relay.example", "//relay.example", "https://user:pass@relay.example", "https://relay.example:65536", "https://relay.example:bad", "https:///missing-host"} {
 		t.Run(target, func(t *testing.T) {
-			_, err := normalizeServerConfig(ServerConfig{PortalURL: target, IdentityPath: t.TempDir(), HTTPRedirectEnabled: true})
+			_, err := NewServer(ServerConfig{PortalURL: target, IdentityPath: t.TempDir(), HTTPRedirectEnabled: true})
 			if err == nil {
 				t.Fatal("expected invalid redirect target to fail")
 			}
 		})
 	}
-	cfg, err := normalizeServerConfig(ServerConfig{PortalURL: "http://localhost:4017", IdentityPath: t.TempDir()})
-	if err != nil || cfg.PortalURL != "https://localhost:4017" {
-		t.Fatalf("disabled redirect changed loopback behavior: cfg=%+v err=%v", cfg, err)
+	if _, err := NewServer(ServerConfig{PortalURL: "HTTPS://relay.example", IdentityPath: t.TempDir(), HTTPRedirectEnabled: true}); err != nil {
+		t.Fatalf("uppercase HTTPS redirect target rejected: %v", err)
+	}
+	if _, err := NewServer(ServerConfig{PortalURL: "http://localhost:4017", IdentityPath: t.TempDir()}); err != nil {
+		t.Fatalf("disabled redirect changed loopback behavior: err=%v", err)
 	}
 }
 
 func TestHTTPRedirectLifecycle(t *testing.T) {
 	for _, hsts := range []bool{false, true} {
 		t.Run(strconv.FormatBool(hsts), func(t *testing.T) {
+			probe, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil { t.Fatal(err) }
+			addr := probe.Addr().String()
+			probe.Close()
 			server, err := NewServer(ServerConfig{
 				PortalURL:    "https://localhost:4017/base/?configured=discarded#fragment",
 				IdentityPath: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
 				APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
-				HTTPRedirectEnabled: true, HTTPRedirectAddr: "127.0.0.1:0", HTTPRedirectHSTS: hsts,
+				HTTPRedirectEnabled: true, HTTPRedirectAddr: addr, HTTPRedirectHSTS: hsts,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -148,7 +154,6 @@ func TestHTTPRedirectLifecycle(t *testing.T) {
 			}
 			client := newTestClient(t, cancel, server)
 			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-			addr := server.redirectListener.Addr().String()
 			for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodOptions} {
 				req, err := http.NewRequest(method, "http://"+addr+"//tenant/path?secret=discarded", nil)
 				if err != nil {
@@ -243,8 +248,8 @@ func TestHTTPRedirectBindFailure(t *testing.T) {
 		}
 		t.Fatalf("Start error=%v, want redirect bind failure", err)
 	}
-	// Retry the same owner: failed startup must not leave live server state.
-	server.cfg.UpdateCopy(func(cfg *ServerConfig) { cfg.HTTPRedirectAddr = "127.0.0.1:0" })
+	// Retry the same owner after releasing the occupied address.
+	occupied.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := server.Start(ctx, nil); err != nil {
@@ -344,10 +349,6 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	}
 
 	client := newTestClient(t, cancel, server)
-
-	if server.redirectListener != nil || server.redirectServer != nil {
-		t.Fatal("HTTP redirect listener must be disabled by default")
-	}
 
 	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
 	if err != nil {

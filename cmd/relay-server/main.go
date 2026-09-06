@@ -110,7 +110,7 @@ func registerRelayServerFlags(fs *flag.FlagSet, cfg *relayServerConfig) {
 	utils.IntFlagEnv(fs, &cfg.WireGuardPort, "wireguard-port", overlay.DefaultListenPort, utils.ParsePortNumber, "public and listen UDP port for relay overlay", "WIREGUARD_PORT")
 
 	utils.BoolFlagEnv(fs, &cfg.HTTPRedirectEnabled, "http-redirect-enabled", false, "enable HTTP redirects to the canonical HTTPS portal URL (not tenant hosts)", "HTTP_REDIRECT_ENABLED")
-	utils.StringFlagEnv(fs, &cfg.HTTPRedirectAddr, "http-redirect-addr", ":80", "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
+	utils.StringFlagEnv(fs, &cfg.HTTPRedirectAddr, "http-redirect-addr", types.DefaultHTTPRedirectAddr, "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
 	utils.BoolFlagEnv(fs, &cfg.HTTPRedirectHSTS, "http-redirect-hsts", false, "include HSTS max-age=31536000 on redirects; browsers ignore HSTS received over HTTP", "HTTP_REDIRECT_HSTS")
 	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
 	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 443, utils.ParsePortNumber, "TCP SNI router port number", "SNI_PORT")
