@@ -10,7 +10,7 @@ The migration is split into commits in one PR:
 
 1. Remove Portal multi-hop routes, SDK orchestration, hop tokens, and CLI/agent
    route controls. Public relay selection and direct reverse backhaul remain.
-2. Remove WireGuard discovery transport, peer synchronization, metadata, and
+2. Remove the legacy relay peer transport, synchronization, metadata, and
    configuration. HTTPS discovery remains the standalone baseline.
 3. Add an optional IVNP relay overlay with authenticated Portal exchanges.
 

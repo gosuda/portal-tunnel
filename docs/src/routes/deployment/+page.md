@@ -36,7 +36,7 @@ belongs to something else on the host, see
 - A public Linux server with Docker and Docker Compose.
 - A public hostname such as `portal.example.com`.
 - A one-time NS delegation at the parent zone: `NS portal.example.com -> ns.portal.example.com` with a glue `A` record pointing at the relay public IP. See the [Configuration Reference](/configuration#embedded-dns) for the canonical embedded DNS details.
-- Inbound `443/tcp`, `53/tcp` + `53/udp` for the embedded authoritative DNS, and `51820/udp` when the overlay is enabled.
+- Inbound `443/tcp`, `53/tcp` + `53/udp` for the embedded authoritative DNS.
 - Certificates for the root and wildcard names are issued automatically via ACME DNS-01 against the embedded authoritative DNS.
 
 ## Configuration
@@ -123,7 +123,6 @@ The Compose stack publishes:
 |---|---|
 | `443/tcp` | Portal HTTPS, SPA, APIs, and SNI tunnel ingress |
 | `53/tcp` + `53/udp` | Embedded authoritative DNS for the delegated relay zone |
-| `51820/udp` | Relay discovery overlay |
 | configured lease range | Optional UDP and raw TCP leases |
 
 Port `80/tcp` is not required. Operators who need HTTP-to-HTTPS redirects may
@@ -297,25 +296,6 @@ the record can fail the connection before any request arrives.
 | empty (manual certificates) | may be terminated, which is what recovers client addresses |
 
 Pass-through is the default in the example for that reason.
-
-### Publishing Portal's ports
-
-```yaml
-services:
-  portal:
-    ports: !override
-      - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
-```
-
-`!override` replaces the base `ports` list rather than appending to it; without
-it Compose merges both and still tries to bind `443`. It requires Docker Compose
-2.24.4 or newer.
-
-Because it *replaces*, this list must carry **every mapping the deployment had
-enabled**. The bundled file publishes TCP 443 and the WireGuard port and
-comments out three more — `443/udp` for QUIC backhaul, the `MIN_PORT`–`MAX_PORT`
-UDP range, and the same range for raw TCP leases. Anything left out here stops
-being published, silently, and tunnels that used it stop working.
 
 ### Sharing a Compose project with unrelated services
 

@@ -15,7 +15,6 @@ Entrypoint `cmd/relay-server/main.go`, dispatched by `utils.RunCommands` (`""`/`
 | `IDENTITY_PATH` | `./.portal-certs` | identity/cert + `policy.json` dir (`--identity-path`) |
 | `API_PORT` | `4017` | HTTPS API + frontend (`--api-port`) |
 | `SNI_PORT` | `443` | public SNI ingress (`--sni-port`) — cannot bind unprivileged; override locally |
-| `WIREGUARD_PORT` | `51820` | (`--wireguard-port`) |
 | `EMBEDDED_DNS_PORT` | `53` | embedded authoritative DNS (`--embedded-dns-port`) — default provider; needs 53/tcp+udp and `CAP_NET_BIND_SERVICE` in containers |
 | `ADMIN_TOKEN` | empty | bearer token for admin/policy APIs (`--admin-token`) |
 | `LANDING_PAGE_ENABLED` | `false` | (`--landing-page-enabled`) |
@@ -38,5 +37,5 @@ Root-host trees that must never fall through to the SPA: `types.ReservedRootPref
 
 ## Config embedding & Docker
 - `config.toml` (version/protocol) and `registry.json` (default relays) are embedded via `manifest.go` and parsed in `types/types.go`.
-- `docker-compose.yml` runs `ghcr.io/gosuda/portal:2`, publishes TCP 443 + TCP/UDP 53 (embedded DNS, `cap_add: NET_BIND_SERVICE`) + UDP WireGuard port, and passes the above env vars.
+- `docker-compose.yml` runs `ghcr.io/gosuda/portal:2`, publishes TCP 443 + TCP/UDP 53 (embedded DNS, `cap_add: NET_BIND_SERVICE`), and passes the above env vars.
 - `Dockerfile`: Node 22 stage builds the frontend into `cmd/relay-server/dist/app`, then `make build-server-bin` compiles the Go relay.
