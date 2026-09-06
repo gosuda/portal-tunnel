@@ -114,7 +114,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
 	}
 
-	acmeDNS, err := NewDNSProvider(cfg.DNSProvider, cfg)
+	acmeDNS, err := newDNSProvider(cfg.DNSProvider, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create acme dns provider: %w", err)
 	}

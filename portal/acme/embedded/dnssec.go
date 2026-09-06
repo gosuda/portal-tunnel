@@ -55,11 +55,11 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		if err := makeKeyDirectory(filepath.Dir(path)); err != nil {
 			return nil, nil, err
 		}
 		// Restrict permissions before writing any private material, and publish
-		// only a complete, synced file. Link never replaces an existing key.
+		// only a complete, synced file without replacing an existing key.
 		f, err := os.CreateTemp(filepath.Dir(path), ".dnssec-key-*")
 		if err != nil {
 			return nil, nil, fmt.Errorf("create dnssec key: %w", err)
@@ -76,7 +76,7 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 		if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
 			return nil, nil, fmt.Errorf("persist dnssec key: %w", err)
 		}
-		if err = os.Link(tmp, path); err != nil {
+		if err = publishKeyFile(tmp, path); err != nil {
 			if !errors.Is(err, os.ErrExist) {
 				return nil, nil, fmt.Errorf("publish dnssec key: %w", err)
 			}
@@ -87,6 +87,11 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 				return nil, nil, fmt.Errorf("stat published dnssec key: %w", err)
 			}
 		} else {
+			// Keep durability errors separate from publication's ErrExist: a
+			// failed sync must never be mistaken for another creator winning.
+			if err := syncKeyPublication(path); err != nil {
+				return nil, nil, fmt.Errorf("sync published dnssec key: %w", err)
+			}
 			return key, private.(crypto.Signer), nil
 		}
 	}
@@ -160,6 +165,12 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	}
 	if err := sig.Verify(loaded, []dns.RR{loaded}); err != nil {
 		return nil, nil, fmt.Errorf("dnssec public/private key mismatch: %w", err)
+	}
+	// This includes both publication losers and keys found by the first stat:
+	// another process may have made the complete file visible but not yet
+	// persisted its name. Never export its key or DS before our own flush.
+	if err := syncKeyPublication(path); err != nil {
+		return nil, nil, fmt.Errorf("sync published dnssec key: %w", err)
 	}
 	return loaded, signer, nil
 }

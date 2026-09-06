@@ -2,7 +2,6 @@ package acme
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -45,7 +44,7 @@ type DNSProvider interface {
 	EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error)
 }
 
-func NewDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
+func newDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 	providerType = strings.ToLower(strings.TrimSpace(providerType))
 	switch providerType {
 	case TypeCloudflare, TypeGCloud, TypeHetzner, TypeNjalla, TypeRoute53, TypeVultr:
@@ -53,14 +52,10 @@ func NewDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 	}
 	switch providerType {
 	case "", TypeEmbedded:
-		keyDir := strings.TrimSpace(cfg.KeyDir)
-		if keyDir == "" {
-			return nil, errors.New("acme key directory is required")
-		}
 		return embedded.New(embedded.Config{
 			BaseDomain: cfg.BaseDomain,
 			ListenAddr: fmt.Sprintf(":%d", cfg.EmbeddedDNSPort),
-			KeyPath:    filepath.Join(keyDir, types.DNSSECKeyFileName),
+			KeyPath:    filepath.Join(cfg.KeyDir, types.DNSSECKeyFileName),
 		})
 	case TypeCloudflare:
 		return cloudflare.New(cfg.CloudflareToken), nil
@@ -104,6 +99,12 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 	}
 	publicIP, err := utils.ResolvePublicIPv4(ctx)
 	if err != nil {
+		if manual && m.dns.Name() == TypeEmbedded && ctx.Err() == nil {
+			// The embedded zone can serve without A records. Keep the usable
+			// certificate and let the existing managed-DNS ticker retry discovery.
+			log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("defer embedded DNS address initialization until the next managed DNS sync; using manual certificate")
+			return nil
+		}
 		return fmt.Errorf("detect public ip: %w", err)
 	}
 	return m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP)

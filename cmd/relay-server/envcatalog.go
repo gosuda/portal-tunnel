@@ -68,8 +68,8 @@ var pinnedByTopology = map[string]struct {
 // list because there is nothing to require.
 //
 // The keys are acme's own exported constants rather than repeated strings, so
-// a provider added there cannot silently go unreported here: acme.NewDNSProvider
-// decides what is supported, and this map only adds the credential each one
+// a provider added there cannot silently go unreported here: acme.NewManager
+// owns provider construction, and this map only adds the credential each one
 // needs, which is knowledge the report owns.
 var dnsProviderCredential = map[string][]string{
 	// The embedded server is the default and needs no credentials: it answers
