@@ -112,6 +112,9 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if cfg.IdentityPath == "" {
 		return ServerConfig{}, errors.New("identity path is required")
 	}
+	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
+		cfg.ACME.KeyDir = cfg.IdentityPath
+	}
 
 	redirect, err := NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
 	if err != nil {

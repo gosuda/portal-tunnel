@@ -206,37 +206,73 @@ func TestEnvFileIsolationRestoresEnvironment(t *testing.T) {
 // acme.NewManager returns before building a DNS provider for a local-only base
 // domain, so a configured provider still yields no managed issuance.
 func TestACMEFeatureBlockedForLocalHost(t *testing.T) {
-	cfg := relayServerConfig{
-		PortalURL:       "https://localhost",
-		ACMEDNSProvider: "cloudflare",
-		CloudflareToken: "token",
-	}
+	for _, provider := range []string{"", "embedded", "cloudflare"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := relayServerConfig{
+				PortalURL:       "https://localhost",
+				ACMEDNSProvider: provider,
+				CloudflareToken: "token",
+			}
 
-	f := featureByName(t, cfg, "acme")
-	if f.State != stateBlocked {
-		t.Fatalf("acme state = %q, want %q", f.State, stateBlocked)
-	}
-	if !strings.Contains(f.Missing, "local-only") {
-		t.Fatalf("acme missing = %q, want it to name the local-only host", f.Missing)
+			f := featureByName(t, cfg, "acme")
+			if f.State != stateBlocked {
+				t.Fatalf("acme state = %q, want %q", f.State, stateBlocked)
+			}
+			if !strings.Contains(f.Missing, "local-only") {
+				t.Fatalf("acme missing = %q, want it to name the local-only host", f.Missing)
+			}
+		})
 	}
 }
 
 // ens-gasless drives the same provider, so it must inherit the blocked state
 // rather than repeating half of the check.
 func TestENSGaslessFollowsBlockedACME(t *testing.T) {
-	cfg := relayServerConfig{
-		PortalURL:         "https://localhost",
-		ACMEDNSProvider:   "cloudflare",
-		CloudflareToken:   "token",
-		ENSGaslessEnabled: true,
-	}
+	for _, provider := range []string{"", "embedded", "cloudflare"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := relayServerConfig{
+				PortalURL:         "https://localhost",
+				ACMEDNSProvider:   provider,
+				CloudflareToken:   "token",
+				ENSGaslessEnabled: true,
+			}
 
-	f := featureByName(t, cfg, "ens-gasless")
-	if f.State != stateBlocked {
-		t.Fatalf("ens-gasless state = %q, want %q", f.State, stateBlocked)
+			f := featureByName(t, cfg, "ens-gasless")
+			if f.State != stateBlocked {
+				t.Fatalf("ens-gasless state = %q, want %q", f.State, stateBlocked)
+			}
+			if !strings.Contains(f.Missing, "local-only") {
+				t.Fatalf("ens-gasless missing = %q, want the ACME reason propagated", f.Missing)
+			}
+		})
 	}
-	if !strings.Contains(f.Missing, "local-only") {
-		t.Fatalf("ens-gasless missing = %q, want the ACME reason propagated", f.Missing)
+}
+
+func TestENSGaslessBlockedForUnsupportedDNSSECProvider(t *testing.T) {
+	for _, provider := range []string{"hetzner", "njalla"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := relayServerConfig{
+				PortalURL:         "https://relay.example.com",
+				ACMEDNSProvider:   provider,
+				ENSGaslessEnabled: true,
+			}
+			if provider == "hetzner" {
+				cfg.HetznerAPIToken = "token"
+			} else {
+				cfg.NjallaToken = "token"
+			}
+			if f := featureByName(t, cfg, "acme"); f.State != stateEnabled {
+				t.Fatalf("acme state = %q, want managed DNS to remain enabled", f.State)
+			}
+			f := featureByName(t, cfg, "ens-gasless")
+			if f.State != stateBlocked || !strings.Contains(f.Missing, "DNSSEC") {
+				t.Fatalf("ens-gasless = %+v, want blocked for missing DNSSEC support", f)
+			}
+			cfg.ENSGaslessEnabled = false
+			if f := featureByName(t, cfg, "ens-gasless"); f.State != stateDisabled {
+				t.Fatalf("ens-gasless state = %q, want disabled when not requested", f.State)
+			}
+		})
 	}
 }
 
@@ -363,32 +399,43 @@ func TestACMEFeatureReportsEmbeddedWhenUnset(t *testing.T) {
 	}
 }
 
-// The embedded server cannot manage zone DNSSEC yet, and it is what an operator
-// gets by enabling ENS and changing nothing else.
-func TestENSGaslessBlockedOnEmbeddedProvider(t *testing.T) {
+// Embedded DNS signs the ENS TXT records; publishing its DS remains an
+// explicit parent-zone operation rather than an API-credential requirement.
+func TestENSGaslessEnabledOnEmbeddedProvider(t *testing.T) {
 	path := writeEnvFile(t,
 		"PORTAL_URL=https://relay.example.com",
 		"ENS_GASLESS_ENABLED=true")
 	cfg := resolveWithEnvFile(t, path)
 
 	f := ensGaslessFeature(cfg)
-	if f.State != stateBlocked {
-		t.Fatalf("ens-gasless state = %q, want blocked on the embedded provider", f.State)
+	if f.State != stateEnabled {
+		t.Fatalf("ens-gasless state = %q, want enabled on the embedded provider", f.State)
 	}
-	if !strings.Contains(f.Missing, "DNSSEC") {
-		t.Fatalf("missing = %q, want it to name the DNSSEC limitation", f.Missing)
+	if !strings.Contains(f.Detail, "embedded") {
+		t.Fatalf("detail = %q, want it to name the embedded provider", f.Detail)
 	}
 }
 
 func TestENSGaslessEnabledOnManagedProvider(t *testing.T) {
-	path := writeEnvFile(t,
-		"PORTAL_URL=https://relay.example.com",
-		"ACME_DNS_PROVIDER=cloudflare",
-		"CLOUDFLARE_TOKEN=token",
-		"ENS_GASLESS_ENABLED=true")
-	cfg := resolveWithEnvFile(t, path)
+	for _, provider := range []string{"cloudflare", "gcloud", "route53", "vultr"} {
+		t.Run(provider, func(t *testing.T) {
+			values := []string{
+				"PORTAL_URL=https://relay.example.com",
+				"ACME_DNS_PROVIDER=" + provider,
+				"ENS_GASLESS_ENABLED=true",
+			}
+			switch provider {
+			case "cloudflare":
+				values = append(values, "CLOUDFLARE_TOKEN=token")
+			case "vultr":
+				values = append(values, "VULTR_API_KEY=token")
+			}
+			path := writeEnvFile(t, values...)
+			cfg := resolveWithEnvFile(t, path)
 
-	if f := ensGaslessFeature(cfg); f.State != stateEnabled {
-		t.Fatalf("ens-gasless state = %q (%s), want enabled", f.State, f.Missing)
+			if f := ensGaslessFeature(cfg); f.State != stateEnabled {
+				t.Fatalf("ens-gasless state = %q (%s), want enabled", f.State, f.Missing)
+			}
+		})
 	}
 }

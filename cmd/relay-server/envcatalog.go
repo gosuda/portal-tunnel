@@ -67,10 +67,9 @@ var pinnedByTopology = map[string]struct {
 // chain (an instance role, application default credentials) map to an empty
 // list because there is nothing to require.
 //
-// The keys are acme's own exported constants rather than repeated strings, so
-// a provider added there cannot silently go unreported here: acme.NewDNSProvider
-// decides what is supported, and this map only adds the credential each one
-// needs, which is knowledge the report owns.
+// Keys reuse acme's exported constants, but additions are not checked for
+// completeness automatically. Keep this credential catalog synchronized with
+// the provider construction owned by acme.NewManager.
 var dnsProviderCredential = map[string][]string{
 	// The embedded server is the default and needs no credentials: it answers
 	// from the relay itself rather than through a provider API.

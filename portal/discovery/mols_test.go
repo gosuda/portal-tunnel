@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"testing"
@@ -9,6 +10,55 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+func TestPercentileTrackerInterpolation(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		samples []time.Duration
+		p       float64
+		want    time.Duration
+	}{
+		{name: "empty", p: 0.5},
+		{name: "singleton", samples: []time.Duration{7}, p: 0.9, want: 7},
+		{name: "singleton preserves bounds behavior", samples: []time.Duration{7}, p: 0, want: 7},
+		{name: "median", samples: []time.Duration{40, 10, 30, 20}, p: 0.5, want: 25},
+		{name: "tail interpolation", samples: []time.Duration{40, 10, 30, 20}, p: 0.9, want: 37},
+		{name: "duration truncation", samples: []time.Duration{1, 4}, p: 0.5, want: 2},
+		{name: "maximum", samples: []time.Duration{40, 10, 30, 20}, p: 1, want: 40},
+		{name: "zero percentile", samples: []time.Duration{10, 20}, p: 0},
+		{name: "negative percentile", samples: []time.Duration{10, 20}, p: -0.1},
+		{name: "excess percentile", samples: []time.Duration{10, 20}, p: 1.1},
+		{name: "NaN percentile", samples: []time.Duration{10, 20}, p: math.NaN()},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var tracker PercentileTracker
+			for _, sample := range tt.samples {
+				tracker.Add(sample)
+			}
+			if got := tracker.Get(tt.p); got != tt.want {
+				t.Fatalf("Get(%g) = %v, want %v", tt.p, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPercentileTrackerQueryPreservesRollingWindow(t *testing.T) {
+	var tracker PercentileTracker
+	tracker.Add(1000)
+	for sample := time.Duration(1); sample < 100; sample++ {
+		tracker.Add(sample)
+	}
+	if got := tracker.Get(1); got != 1000 {
+		t.Fatalf("initial maximum = %v, want 1000ns", got)
+	}
+	tracker.Add(100)
+	if got := tracker.Get(1); got != 100 {
+		t.Fatalf("maximum after evicting oldest sample = %v, want 100ns", got)
+	}
+	if got := tracker.Get(0.5); got != 50 {
+		t.Fatalf("rolling median = %v, want 50ns", got)
+	}
+}
 
 // TestMOLSSelectPriorityKeepsExplicitRelaysOutsideAutoLimit verifies that
 // explicit relays are always included, outside of MaxActiveRelays.

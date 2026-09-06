@@ -25,8 +25,9 @@ Run the relay with a single Docker command:
 
 ```bash
 mkdir -p ./relay-data
-# Optional: place fullchain.pem/privatekey.pem in ./relay-data to use a manual
-# certificate instead of ACME.
+# Optional: place valid fullchain.pem/privatekey.pem in ./relay-data to use a
+# manual certificate, only if neither acme-account.key nor acme-registration.json
+# is present. Embedded DNS and ECH management still run.
 docker run -d \
   --name portal-relay \
   --restart unless-stopped \
@@ -43,6 +44,14 @@ docker run -d \
 
 Replace `relay.example.com` with your domain. Keep the generated
 `ADMIN_TOKEN`; it is required for relay admin and policy access.
+
+With a manual certificate and embedded DNS, a temporary public-IPv4 discovery
+failure does not block startup. Before the first successful discovery, A records
+remain uninitialized; the existing ten-minute DNS retry loop retries pending
+address initialization. After a successful A-record sync, normal refreshes use
+the three-hour DNS synchronization loop rather than every retry tick. Later
+discovery failures retain the last known addresses and resume pending retries.
+Errors applying A-record updates still propagate; only discovery failure is deferred.
 
 ## Docker Compose Setup
 
@@ -145,14 +154,13 @@ management UI:
 | `A` | `ns.relay.example.com` | `<your server IP>` (glue) |
 No wildcard record is needed: the relay synthesizes answers for every tunnel
 hostname. The nameserver name is fixed to `ns.<your relay domain>`; publish the
-matching glue `A` record at the parent zone as shown above.
+matching glue `A` record at the parent zone as shown above. After verifying the delegation, publish the DS exported in the startup log at the parent zone to establish DNSSEC trust. Preserve `IDENTITY_PATH/dnssec-csk.json` in the persistent identity volume; see the [DNSSEC configuration reference](/configuration#embedded-dns) for key permissions, parent setup, and recovery requirements.
 
 ## TLS with ACME
 
 Certificates are issued automatically via ACME DNS-01 against the embedded
 authoritative DNS server — no DNS provider credentials are required once the
-delegation above is in place. To use an external DNS provider instead, set
-`ACME_DNS_PROVIDER`:
+delegation above is in place. External managed backends are deprecated and receive no new features; they remain supported until removal in a future major release. Operators may retain any vendor for the parent zone and delegate only the relay namespace. For an existing external-backend deployment, the retained settings are:
 
 ```yaml
 environment:

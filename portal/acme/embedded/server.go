@@ -5,74 +5,115 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
 )
 
-// ServeDNS answers authoritatively for the relay zone. Recursion is never
-// performed: queries outside the zone are refused and unknown names resolve
-// through wildcard-style A synthesis instead of NXDOMAIN.
+// ServeDNS answers from one signed zone snapshot; it never performs recursion.
 func (p *Provider) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Compress = true
-	m.Authoritative = true
-
-	if r.Opcode != dns.OpcodeQuery || len(r.Question) == 0 {
+	if r.Opcode != dns.OpcodeQuery {
 		m.Rcode = dns.RcodeNotImplemented
 		p.writeResponse(w, r, m)
 		return
 	}
-
+	if len(r.Question) != 1 {
+		m.Rcode = dns.RcodeFormatError
+		p.writeResponse(w, r, m)
+		return
+	}
 	question := r.Question[0]
-	name := strings.ToLower(question.Name)
-	if !dns.IsSubDomain(p.zone, name) {
+	name := dns.CanonicalName(question.Name)
+	if question.Qclass != dns.ClassINET || !dns.IsSubDomain(p.zone, name) {
 		m.Rcode = dns.RcodeRefused
 		p.writeResponse(w, r, m)
 		return
 	}
-
-	p.answer(m, name, question.Qtype)
+	if question.Qtype == dns.TypeANY {
+		m.Authoritative = true
+		m.Rcode = dns.RcodeNotImplemented
+		p.writeResponse(w, r, m)
+		return
+	}
+	z, err := p.signedZone(time.Now())
+	if err != nil {
+		m.Rcode = dns.RcodeServerFailure
+		log.Error().Err(err).Msg("sign embedded dns zone")
+		p.writeResponse(w, r, m)
+		return
+	}
+	m.Authoritative = true
+	edns := r.IsEdns0()
+	do := edns != nil && edns.Do()
+	p.answer(m, z, name, question.Qtype, do)
 	p.writeResponse(w, r, m)
 }
 
-func (p *Provider) answer(m *dns.Msg, name string, qtype uint16) {
-	switch qtype {
-	case dns.TypeA:
-		if ip := p.publicIPv4(); ip != nil {
-			m.Answer = append(m.Answer, p.aRR(name, ip))
+func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, do bool) {
+	source := name
+	sets, exists := z.records[name]
+	var nextCloser string
+	if !exists {
+		// Walk to the closest existing ancestor, not merely the apex: explicit
+		// records and empty non-terminals both block more distant wildcards.
+		closest := name
+		for z.records[closest] == nil {
+			nextCloser = closest
+			closest = parentName(closest)
 		}
-	case dns.TypeNS:
-		if name == p.zone {
-			m.Answer = append(m.Answer, p.nsRR())
-			if dns.IsSubDomain(p.zone, p.nsName) {
-				if ip := p.publicIPv4(); ip != nil {
-					m.Extra = append(m.Extra, p.aRR(p.nsName, ip))
-				}
+		source = "*." + closest
+		sets, exists = z.records[source]
+	}
+	if exists {
+		if qtype == dns.TypeRRSIG {
+			// RRSIG is directly queryable even without DO (RFC 4035 section 3.1.1).
+			types := make([]uint16, 0, len(sets))
+			for typ := range sets {
+				types = append(types, typ)
+			}
+			slices.Sort(types)
+			for _, typ := range types {
+				sig := dns.Copy(sets[typ].signature)
+				sig.Header().Name = name
+				m.Answer = append(m.Answer, sig)
+			}
+		} else {
+			m.Answer = appendRRSet(m.Answer, sets[qtype], name, do)
+		}
+	} else {
+		m.Rcode = dns.RcodeNameError
+	}
+	if len(m.Answer) == 0 {
+		m.Ns = appendRRSet(m.Ns, z.records[p.zone][dns.TypeSOA], "", do)
+	}
+	if do {
+		proofs := make(map[string]bool)
+		addProof := func(set signedRRSet) {
+			owner := set.records[0].Header().Name
+			if !proofs[owner] {
+				m.Ns = appendRRSet(m.Ns, set, "", true)
+				proofs[owner] = true
 			}
 		}
-	case dns.TypeSOA:
-		if name == p.zone {
-			m.Answer = append(m.Answer, p.soaRR())
+		if nextCloser != "" {
+			addProof(z.denial(nextCloser))
 		}
-	case dns.TypeTXT:
-		for _, value := range p.txtValues(name) {
-			m.Answer = append(m.Answer, p.txtRR(name, value))
+		if len(m.Answer) == 0 {
+			// Exact/wildcard NODATA proves the missing type at its actual owner.
+			// NXDOMAIN additionally proves that the closest-encloser wildcard is
+			// absent. Together with next-closer denial this covers deep names too.
+			addProof(z.denial(source))
 		}
-	case dns.TypeHTTPS:
-		if record := p.httpsValue(name); record.value != nil {
-			m.Answer = append(m.Answer, p.httpsRR(name, record))
-		}
-	case dns.TypeANY:
-		m.Rcode = dns.RcodeNotImplemented
-		return
 	}
-
-	if len(m.Answer) == 0 && m.Rcode == dns.RcodeSuccess {
-		m.Ns = append(m.Ns, p.soaRR())
+	if qtype == dns.TypeNS && name == p.zone {
+		m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeA], "", do)
 	}
 }
 
@@ -80,9 +121,13 @@ func (p *Provider) writeResponse(w dns.ResponseWriter, query, m *dns.Msg) {
 	size := dns.MaxMsgSize
 	if strings.HasPrefix(w.LocalAddr().Network(), "udp") {
 		size = udpResponseSize(query)
-		if query.IsEdns0() != nil {
-			m.SetEdns0(uint16(size), false)
+	}
+	if edns := query.IsEdns0(); edns != nil {
+		if edns.Version() != 0 {
+			m.Rcode = dns.RcodeBadVers
+			m.Answer, m.Ns, m.Extra = nil, nil, nil
 		}
+		m.SetEdns0(uint16(udpResponseSize(query)), edns.Do())
 	}
 	m.Truncate(size)
 	if err := w.WriteMsg(m); err != nil {
@@ -100,28 +145,6 @@ func udpResponseSize(query *dns.Msg) int {
 	return size
 }
 
-func (p *Provider) publicIPv4() net.IP {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if p.ipv4 == nil {
-		return nil
-	}
-	return append(net.IP(nil), p.ipv4...)
-}
-
-func (p *Provider) txtValues(name string) []string {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return append([]string(nil), p.txt[name]...)
-}
-
-func (p *Provider) httpsValue(name string) httpsRecordValue {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	record := p.https[name]
-	return httpsRecordValue{priority: record.priority, value: record.value}
-}
-
 func (p *Provider) aRR(name string, ip net.IP) *dns.A {
 	return &dns.A{
 		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: recordTTL},
@@ -136,15 +159,12 @@ func (p *Provider) nsRR() *dns.NS {
 	}
 }
 
-func (p *Provider) soaRR() *dns.SOA {
-	p.mu.RLock()
-	serial := p.serial
-	p.mu.RUnlock()
+func (p *Provider) soaRRLocked() *dns.SOA {
 	return &dns.SOA{
 		Hdr:     dns.RR_Header{Name: p.zone, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: recordTTL},
 		Ns:      p.nsName,
 		Mbox:    "hostmaster." + p.zone,
-		Serial:  serial,
+		Serial:  p.serial,
 		Refresh: soaRefresh,
 		Retry:   soaRetry,
 		Expire:  soaExpire,

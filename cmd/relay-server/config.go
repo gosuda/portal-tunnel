@@ -160,15 +160,6 @@ func acmeFeature(cfg relayServerConfig) feature {
 	// fact serving its own zone and answering ACME challenges from it.
 	provider := strings.ToLower(strings.TrimSpace(cfg.ACMEDNSProvider))
 	provider = cmp.Or(provider, acme.TypeEmbedded)
-	if provider == acme.TypeEmbedded {
-		f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
-		f.Detail = fmt.Sprintf(
-			"the relay serves its own zone on port %d; delegate the base domain with an NS record and open 53/tcp+udp. "+
-				"Manual fullchain.pem and privatekey.pem under IDENTITY_PATH are used instead when present",
-			cfg.EmbeddedDNSPort)
-		return f
-	}
-
 	// acme.NewManager returns before it builds a DNS provider when the base
 	// domain is local-only, so managed issuance cannot run however well the
 	// provider is configured. Reporting it as enabled here would describe an
@@ -181,10 +172,19 @@ func acmeFeature(cfg relayServerConfig) feature {
 		return f
 	}
 
+	if provider == acme.TypeEmbedded {
+		f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
+		f.Detail = fmt.Sprintf(
+			"the relay serves its own zone on port %d; delegate the base domain with an NS record and open 53/tcp+udp. "+
+				"Valid manual fullchain.pem and privatekey.pem under IDENTITY_PATH override issuance only when neither acme-account.key nor acme-registration.json exists; DNS/ECH management continues",
+			cfg.EmbeddedDNSPort)
+		return f
+	}
+
 	required, supported := dnsProviderCredential[provider]
 	if !supported {
 		f.State, f.By = stateBlocked, "ACME_DNS_PROVIDER="+provider
-		f.Missing = "unsupported provider; use cloudflare, gcloud, hetzner, njalla, route53 or vultr"
+		f.Missing = "unsupported provider; use embedded, cloudflare, gcloud, hetzner, njalla, route53 or vultr"
 		return f
 	}
 
@@ -201,7 +201,7 @@ func acmeFeature(cfg relayServerConfig) feature {
 	}
 
 	f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
-	f.Detail = "managed issuance and renewal under IDENTITY_PATH"
+	f.Detail = "deprecated external DNS backend (removal in a future major release); prefer NS delegation to embedded; managed issuance and renewal under IDENTITY_PATH"
 	if len(required) == 0 {
 		f.Detail += "; credentials come from the ambient provider chain"
 	}
@@ -214,17 +214,8 @@ func ensGaslessFeature(cfg relayServerConfig) feature {
 		f.State, f.By = stateDisabled, "ENS_GASLESS_ENABLED=false"
 		return f
 	}
-	// The embedded server cannot manage zone DNSSEC yet, and it is what an
-	// unset ACME_DNS_PROVIDER selects, so this is the combination an operator
-	// reaches by turning ENS on and changing nothing else.
 	provider := strings.ToLower(strings.TrimSpace(cfg.ACMEDNSProvider))
 	provider = cmp.Or(provider, acme.TypeEmbedded)
-	if provider == acme.TypeEmbedded {
-		f.State, f.By = stateBlocked, "ENS_GASLESS_ENABLED=true"
-		f.Missing = "ACME_DNS_PROVIDER=" + provider +
-			" cannot manage zone DNSSEC yet; ENS gasless automation needs one of the managed providers"
-		return f
-	}
 	// ENS gasless drives the same provider ACME does, so it cannot work when
 	// that provider cannot. Repeating only the "is it set" half of the check
 	// here would report this as enabled while acme is blocked, which is exactly
@@ -234,8 +225,16 @@ func ensGaslessFeature(cfg relayServerConfig) feature {
 		f.Missing = "the DNS provider it shares with ACME is blocked: " + acmeState.Missing
 		return f
 	}
+	if provider == acme.TypeHetzner || provider == acme.TypeNjalla {
+		f.State, f.By = stateBlocked, "ENS_GASLESS_ENABLED=true"
+		f.Missing = provider + " does not support ENS DNSSEC automation; use embedded, cloudflare, gcloud, route53 or vultr"
+		return f
+	}
 	f.State, f.By = stateEnabled, "ENS_GASLESS_ENABLED=true"
 	f.Detail = "DNSSEC and ENS TXT automation through " + provider
+	if provider == acme.TypeEmbedded {
+		f.Detail += "; publish the startup DS at the parent after delegation is reachable; local signing does not verify the parent chain"
+	}
 	return f
 }
 

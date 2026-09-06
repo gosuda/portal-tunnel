@@ -31,16 +31,8 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		activeECHARecords[command.hostname] = struct{}{}
 	}
 	lastPublicIP := ""
-	syncChangedARecords := func(ctx context.Context) error {
-		if len(activeECHARecords) == 0 && !m.cfg.ENSGaslessEnabled {
-			return nil
-		}
-
-		publicIP, err := utils.ResolvePublicIPv4(ctx)
-		if err != nil {
-			return fmt.Errorf("detect public ip: %w", err)
-		}
-		if publicIP == lastPublicIP {
+	syncChangedARecords := func(ctx context.Context, publicIP string) error {
+		if publicIP == "" || publicIP == lastPublicIP {
 			return nil
 		}
 
@@ -139,14 +131,29 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			}
 		case <-dnsTicker.C:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err := m.syncDNS(syncCtx)
+			_, err := m.syncDNS(syncCtx)
 			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync managed dns records")
 			}
 		case <-retryTicker.C:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err := syncChangedARecords(syncCtx)
+			m.commandMu.RLock()
+			pendingDNSAddress := m.pendingDNSAddress
+			m.commandMu.RUnlock()
+			var publicIP string
+			var err error
+			if pendingDNSAddress {
+				publicIP, err = m.syncDNS(syncCtx)
+			} else if len(activeECHARecords) > 0 || m.cfg.ENSGaslessEnabled {
+				publicIP, err = utils.ResolvePublicIPv4(syncCtx)
+			}
+			if !pendingDNSAddress && err != nil {
+				err = fmt.Errorf("detect public ip: %w", err)
+			}
+			err = errors.Join(err, syncChangedARecords(syncCtx, publicIP))
+			// Embedded signing remains pending: it does not authenticate the
+			// parent chain and must not suppress DNSSEC synchronization.
 			if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
 				err = errors.Join(err, m.syncENSDNSSEC(syncCtx))
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"net"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,13 +12,14 @@ import (
 	"github.com/miekg/dns"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const testZone = "portal.example.com"
 
 func newTestProvider(t *testing.T, mutate func(*Config)) *Provider {
 	t.Helper()
-	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0"}
+	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: filepath.Join(t.TempDir(), types.DNSSECKeyFileName)}
 	if mutate != nil {
 		mutate(&cfg)
 	}
@@ -188,7 +190,7 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 		t.Fatalf("cleanup: %v", err)
 	}
 	resp = exchange(t, p, "tcp", dns.TypeTXT, info.EffectiveFQDN)
-	requireRcode(t, resp, dns.RcodeSuccess)
+	requireRcode(t, resp, dns.RcodeNameError)
 	if len(resp.Answer) != 0 {
 		t.Fatalf("txt survived cleanup")
 	}
@@ -197,6 +199,9 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 func TestHTTPSRecordRoundTrip(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
+	if err := p.EnsureARecords(ctx, testZone, "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	}
 	name := "tunnel." + testZone
 	ech := []byte{0x00, 0x08, 0xfe, 0x0d, 0x00, 0x20, 0x00, 0x01, 0x41, 0x42}
 	svcParams := `ech="` + base64.StdEncoding.EncodeToString(ech) + `" port=8443`
@@ -323,6 +328,33 @@ func TestQueryBoundaries(t *testing.T) {
 	}
 	if resp.Rcode != dns.RcodeNotImplemented {
 		t.Fatalf("ANY rcode %s, want NOTIMP", dns.RcodeToString[resp.Rcode])
+	}
+}
+
+func TestUnsupportedEDNSVersionContainsOnlyOPT(t *testing.T) {
+	p := newTestProvider(t, nil)
+	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	}
+	for _, network := range []string{"tcp", "udp"} {
+		for _, do := range []bool{false, true} {
+			query := new(dns.Msg)
+			query.SetQuestion(dns.Fqdn(testZone), dns.TypeNS)
+			query.SetEdns0(1232, do)
+			query.IsEdns0().SetVersion(1)
+			response, _, err := (&dns.Client{Net: network}).Exchange(query, p.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireRcode(t, response, dns.RcodeBadVers)
+			if len(response.Answer) != 0 || len(response.Ns) != 0 || len(response.Extra) != 1 || response.Truncated {
+				t.Fatalf("%s DO=%t: BADVERS must contain only OPT: %v", network, do, response)
+			}
+			opt := response.IsEdns0()
+			if opt == nil || opt.Version() != 0 || opt.ExtendedRcode() != dns.RcodeBadVers || opt.Do() != do {
+				t.Fatalf("%s DO=%t: invalid BADVERS OPT: %v", network, do, opt)
+			}
+		}
 	}
 }
 

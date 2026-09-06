@@ -1,10 +1,9 @@
 package discovery
 
 import (
+	"slices"
 	"sync/atomic"
 	"time"
-
-	"github.com/montanaflynn/stats"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -76,12 +75,27 @@ func (pt *PercentileTracker) Get(p float64) time.Duration {
 	if len(pt.samples) == 0 {
 		return 0
 	}
-	// stats.Percentile uses a highly optimized internal implementation
-	val, err := stats.Percentile(pt.samples, p*100)
-	if err != nil {
+	if len(pt.samples) == 1 {
+		return time.Duration(pt.samples[0])
+	}
+	percent := p * 100
+	if !(percent > 0 && percent <= 100) {
 		return 0
 	}
-	return time.Duration(val)
+
+	// Sort a bounded scratch copy so querying a percentile preserves the
+	// arrival order used to evict samples. Interpolate between closest ranks.
+	var scratch [100]float64
+	samples := scratch[:len(pt.samples)]
+	copy(samples, pt.samples)
+	slices.Sort(samples)
+	rank := (percent / 100) * float64(len(samples)-1)
+	k := int(rank)
+	value := samples[k]
+	if k+1 < len(samples) {
+		value += (rank - float64(k)) * (samples[k+1] - samples[k])
+	}
+	return time.Duration(value)
 }
 
 type RelayState struct {
