@@ -73,7 +73,9 @@ func requireDenial(t *testing.T, m *dns.Msg, name string) {
 	for _, nsec := range denialRecords(m) {
 		start, end := compareDNSNames(nsec.Hdr.Name, name), compareDNSNames(name, nsec.NextDomain)
 		wraps := compareDNSNames(nsec.Hdr.Name, nsec.NextDomain) >= 0
-		if start < 0 && end < 0 || wraps && (start < 0 || end < 0) {
+		insideInterval := start < 0 && end < 0
+		insideWrappedInterval := wraps && (start < 0 || end < 0)
+		if insideInterval || insideWrappedInterval {
 			return
 		}
 	}

@@ -21,25 +21,38 @@ func (p *Provider) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	m.Compress = true
 	if r.Opcode != dns.OpcodeQuery {
 		m.Rcode = dns.RcodeNotImplemented
-	} else if len(r.Question) != 1 {
-		m.Rcode = dns.RcodeFormatError
-	} else {
-		question := r.Question[0]
-		name := dns.CanonicalName(question.Name)
-		if question.Qclass != dns.ClassINET || !dns.IsSubDomain(p.zone, name) {
-			m.Rcode = dns.RcodeRefused
-		} else if question.Qtype == dns.TypeANY {
-			m.Authoritative = true
-			m.Rcode = dns.RcodeNotImplemented
-		} else if z, err := p.signedZone(time.Now()); err != nil {
-			m.Rcode = dns.RcodeServerFailure
-			log.Error().Err(err).Msg("sign embedded dns zone")
-		} else {
-			m.Authoritative = true
-			do := r.IsEdns0() != nil && r.IsEdns0().Do()
-			p.answer(m, z, name, question.Qtype, do)
-		}
+		p.writeResponse(w, r, m)
+		return
 	}
+	if len(r.Question) != 1 {
+		m.Rcode = dns.RcodeFormatError
+		p.writeResponse(w, r, m)
+		return
+	}
+	question := r.Question[0]
+	name := dns.CanonicalName(question.Name)
+	if question.Qclass != dns.ClassINET || !dns.IsSubDomain(p.zone, name) {
+		m.Rcode = dns.RcodeRefused
+		p.writeResponse(w, r, m)
+		return
+	}
+	if question.Qtype == dns.TypeANY {
+		m.Authoritative = true
+		m.Rcode = dns.RcodeNotImplemented
+		p.writeResponse(w, r, m)
+		return
+	}
+	z, err := p.signedZone(time.Now())
+	if err != nil {
+		m.Rcode = dns.RcodeServerFailure
+		log.Error().Err(err).Msg("sign embedded dns zone")
+		p.writeResponse(w, r, m)
+		return
+	}
+	m.Authoritative = true
+	edns := r.IsEdns0()
+	do := edns != nil && edns.Do()
+	p.answer(m, z, name, question.Qtype, do)
 	p.writeResponse(w, r, m)
 }
 

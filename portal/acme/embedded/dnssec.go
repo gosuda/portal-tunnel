@@ -110,7 +110,12 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 		return nil, nil, fmt.Errorf("parse dnskey: %w", err)
 	}
 	loaded, ok := rr.(*dns.DNSKEY)
-	if !ok || loaded.Hdr.Name != zone || loaded.Hdr.Class != dns.ClassINET || loaded.Flags != key.Flags || loaded.Protocol != key.Protocol || loaded.Algorithm != key.Algorithm {
+	if !ok {
+		return nil, nil, errors.New("dnssec key does not match zone or supported CSK parameters")
+	}
+	matchesZone := loaded.Hdr.Name == zone && loaded.Hdr.Class == dns.ClassINET
+	matchesCSK := loaded.Flags == key.Flags && loaded.Protocol == key.Protocol && loaded.Algorithm == key.Algorithm
+	if !matchesZone || !matchesCSK {
 		return nil, nil, errors.New("dnssec key does not match zone or supported CSK parameters")
 	}
 	loaded.Hdr.Ttl = recordTTL
@@ -119,8 +124,11 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 		return nil, nil, fmt.Errorf("parse dnssec private key: %w", err)
 	}
 	signer, ok := private.(*ecdsa.PrivateKey)
-	if !ok || signer.D == nil || signer.D.Sign() <= 0 || signer.D.Cmp(signer.Curve.Params().N) >= 0 {
+	if !ok {
 		return nil, nil, errors.New("invalid dnssec private key")
+	}
+	if _, err := signer.Bytes(); err != nil {
+		return nil, nil, fmt.Errorf("invalid dnssec private key: %w", err)
 	}
 	// The BIND parser does not check that the public and private keys match.
 	sig := &dns.RRSIG{KeyTag: loaded.KeyTag(), SignerName: zone, Algorithm: loaded.Algorithm, Inception: 1, Expiration: 2}
