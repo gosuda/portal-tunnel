@@ -99,11 +99,20 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 	if err != nil {
 		if manual && m.dns.Name() == TypeEmbedded && ctx.Err() == nil {
 			// The embedded zone can serve without A records. Keep the usable
-			// certificate and let the existing managed-DNS ticker retry discovery.
-			log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("defer embedded DNS address initialization until the next managed DNS sync; using manual certificate")
+			// certificate and let the existing short retry ticker initialize it.
+			m.commandMu.Lock()
+			m.pendingDNSAddress = true
+			m.commandMu.Unlock()
+			log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("defer embedded DNS address initialization until the next DNS retry; using manual certificate")
 			return nil
 		}
 		return fmt.Errorf("detect public ip: %w", err)
 	}
-	return m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP)
+	if err := m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP); err != nil {
+		return err
+	}
+	m.commandMu.Lock()
+	m.pendingDNSAddress = false
+	m.commandMu.Unlock()
+	return nil
 }

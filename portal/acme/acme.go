@@ -59,6 +59,9 @@ type Manager struct {
 	ensStatus    *utils.Snapshot[types.ENSStatus]
 	echCommands  chan echDNSCommand
 	ensCommands  chan ensDNSCommand
+
+	// pendingDNSAddress is guarded by commandMu and cleared only after A-record synchronization.
+	pendingDNSAddress bool
 }
 
 func NewManager(cfg Config) (*Manager, error) {

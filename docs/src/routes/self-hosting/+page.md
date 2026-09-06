@@ -47,9 +47,11 @@ Replace `relay.example.com` with your domain. Keep the generated
 
 With a manual certificate and embedded DNS, a temporary public-IPv4 discovery
 failure does not block startup. Before the first successful discovery, A records
-remain uninitialized; the existing three-hour DNS synchronization loop retries
-discovery. Later discovery failures retain the last known addresses. Errors
-applying A-record updates still propagate; only discovery failure is deferred.
+remain uninitialized; the existing ten-minute DNS retry loop retries pending
+address initialization. After a successful A-record sync, normal refreshes use
+the three-hour DNS synchronization loop rather than every retry tick. Later
+discovery failures retain the last known addresses and resume pending retries.
+Errors applying A-record updates still propagate; only discovery failure is deferred.
 
 ## Docker Compose Setup
 

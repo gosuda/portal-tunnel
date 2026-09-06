@@ -1,6 +1,7 @@
 package acme
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -23,6 +24,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/miekg/dns"
@@ -144,16 +146,22 @@ func TestNewManagerRejectsEmptyKeyDirectory(t *testing.T) {
 // Public-IP discovery is the only external dependency in this manual-certificate
 // scenario. DNS answers below still travel through the real embedded listeners.
 type publicIPv4Transport struct {
-	err error
+	err      error
+	ip       string
+	requests *atomic.Int32
 }
 
 func (transport publicIPv4Transport) RoundTrip(*http.Request) (*http.Response, error) {
+	if transport.requests != nil {
+		transport.requests.Add(1)
+	}
 	if transport.err != nil {
 		return nil, transport.err
 	}
+	ip := cmp.Or(transport.ip, "203.0.113.10")
 	return &http.Response{
 		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader("203.0.113.10")),
+		Body:       io.NopCloser(strings.NewReader(ip)),
 		Header:     make(http.Header),
 	}, nil
 }
@@ -210,6 +218,107 @@ func TestManualEmbeddedCertificateServesDNSAndKeepsENSPending(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing.T) {
+	originalClient := utils.DefaultHTTPClient
+	t.Cleanup(func() { utils.DefaultHTTPClient = originalClient })
+
+	for _, discoveryOutage := range []bool{false, true} {
+		t.Run(fmt.Sprintf("discovery_outage=%t", discoveryOutage), func(t *testing.T) {
+			var requests atomic.Int32
+			transport := publicIPv4Transport{requests: &requests}
+			if discoveryOutage {
+				transport.err = errors.New("public IPv4 discovery is unavailable")
+			}
+			utils.DefaultHTTPClient = &http.Client{Transport: transport}
+
+			const baseDomain = "portal.example.com"
+			keyDir := t.TempDir()
+			if err := writeManualRelayCertificate(t, keyDir, baseDomain); err != nil {
+				t.Fatal(err)
+			}
+			// Keep real DNS listeners outside the fake-time bubble so idle
+			// network goroutines do not prevent the maintenance clock advancing.
+			manager, cfg := newEmbeddedDNSManager(t, Config{
+				BaseDomain: baseDomain,
+				KeyDir:     keyDir,
+			})
+			certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
+			if err != nil {
+				t.Fatalf("EnsureTLSMaterial(): %v", err)
+			}
+			if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+				t.Fatalf("EnsureTLSMaterial() returned unusable certificate: %v", err)
+			}
+			publicIP := "203.0.113.10"
+			if discoveryOutage {
+				publicIP = ""
+			}
+			assertManualEmbeddedDNS(t, manager, cfg, publicIP)
+			startupRequests := requests.Load()
+
+			synctest.Test(t, func(t *testing.T) {
+				// synctest advances time only when every select channel belongs
+				// to its bubble, making the idle maintenance loop durably blocked.
+				// The manager has not started or accepted commands, so re-home
+				// only these empty lifecycle channels, not the real DNS listeners.
+				// Operations and assertions use public lifecycle and DNS wire.
+				manager.stopCh = make(chan struct{})
+				manager.echCommands = make(chan echDNSCommand, cap(manager.echCommands))
+				manager.ensCommands = make(chan ensDNSCommand, cap(manager.ensCommands))
+				defer func() {
+					if err := manager.Stop(context.Background()); err != nil {
+						t.Errorf("Stop(): %v", err)
+					}
+				}()
+				manager.Start(context.Background())
+				synctest.Wait()
+
+				<-time.After(10*time.Minute - time.Second)
+				synctest.Wait()
+				if got := requests.Load(); got != startupRequests {
+					t.Fatalf("discovery requests before retry tick = %d, want %d", got, startupRequests)
+				}
+				<-time.After(time.Second)
+				synctest.Wait()
+				if got := requests.Load(); discoveryOutage && got <= startupRequests {
+					t.Fatalf("discovery requests after failed retry = %d, want more than %d", got, startupRequests)
+				} else if !discoveryOutage && got != startupRequests {
+					t.Fatalf("healthy initialization retried discovery: requests = %d, want %d", got, startupRequests)
+				}
+				assertManualEmbeddedDNS(t, manager, cfg, publicIP)
+
+				// Recovery must come from Start's existing retry ticker, not a
+				// second EnsureTLSMaterial call or a private synchronization API.
+				utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{requests: &requests}}
+				<-time.After(10 * time.Minute)
+				synctest.Wait()
+				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
+				initializedRequests := requests.Load()
+
+				// A new advertised address must wait for the normal refresh;
+				// neither successful startup nor a recovered retry stays pending.
+				utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{
+					ip:       "203.0.113.20",
+					requests: &requests,
+				}}
+				<-time.After(160*time.Minute - time.Second)
+				synctest.Wait()
+				if got := requests.Load(); got != initializedRequests {
+					t.Fatalf("successful initialization retried before normal refresh: requests = %d, want %d", got, initializedRequests)
+				}
+				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
+
+				<-time.After(time.Second)
+				synctest.Wait()
+				if got := requests.Load(); got != initializedRequests+1 {
+					t.Fatalf("discovery requests after three-hour refresh = %d, want %d", got, initializedRequests+1)
+				}
+				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.20")
+			})
+		})
 	}
 }
 

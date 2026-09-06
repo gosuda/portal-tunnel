@@ -49,8 +49,11 @@ func TestDNSSECKeyPublicationSyncFailure(t *testing.T) {
 		}
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
-		t.Fatalf("did not reach completed key publication: %v", err)
+	if err != nil {
+		t.Fatalf("read published key after directory sync failure: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("published key is empty after directory sync failure")
 	}
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -63,7 +66,11 @@ func TestDNSSECKeyPublicationSyncFailure(t *testing.T) {
 	if err != nil || ds != key.ToDS(dns.SHA256).String() {
 		t.Fatalf("restart did not expose a usable key and DS: %q (%v)", ds, err)
 	}
-	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, data) {
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read published key after restart: %v", err)
+	}
+	if !bytes.Equal(after, data) {
 		t.Fatal("restart changed the key after a publication sync failure")
 	}
 	entries, err := os.ReadDir(dir)
@@ -101,17 +108,62 @@ func TestDNSSECKeyDirectoryDurability(t *testing.T) {
 
 	// Creating a directory tree does require persisting each new entry,
 	// including the entry in the first pre-existing parent.
-	path := filepath.Join(parent, "new", "nested", types.DNSSECKeyFileName)
-	p, err := New(Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: path})
-	if err == nil {
-		_ = p.Stop()
-		t.Fatal("exposed a key inside an unpersisted directory tree")
+	created := filepath.Join(parent, "new")
+	path := filepath.Join(created, "nested", types.DNSSECKeyFileName)
+	for range 2 {
+		p, err := New(Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: path})
+		if err == nil {
+			_ = p.Stop()
+			t.Fatal("exposed a key inside an unpersisted directory tree")
+		}
+		if !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("expected new directory entry sync failure: %v", err)
+		}
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("published a key before persisting its directory tree: %v", err)
+		}
+		if _, err := os.Lstat(created); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("failed initialization left an unpersisted directory for the next retry to trust: %v", err)
+		}
 	}
-	if !errors.Is(err, os.ErrPermission) {
-		t.Fatalf("expected new directory entry sync failure: %v", err)
+
+	// Once the storage boundary becomes flushable, retry must need no manual
+	// directory cleanup and must publish one stable key and parent DS.
+	if err := os.Chmod(parent, 0700); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("published a key before persisting its directory tree: %v", err)
+	p := newTestProvider(t, func(cfg *Config) { cfg.KeyPath = path })
+	response := dnssecExchange(t, p, "tcp", testZone, dns.TypeDNSKEY, 1232)
+	key := response.Answer[0].(*dns.DNSKEY)
+	verifySection(t, key, response.Answer)
+	_, ds, _, err := p.EnsureDNSSEC(context.Background(), testZone)
+	if err != nil || ds != key.ToDS(dns.SHA256).String() {
+		t.Fatalf("retry did not publish a usable key and DS: %q (%v)", ds, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read key after directory creation retry: %v", err)
+	}
+	restarted := newTestProvider(t, func(cfg *Config) { cfg.KeyPath = path })
+	response = dnssecExchange(t, restarted, "tcp", testZone, dns.TypeDNSKEY, 1232)
+	verifySection(t, key, response.Answer)
+	_, restartedDS, _, err := restarted.EnsureDNSSEC(context.Background(), testZone)
+	if err != nil || restartedDS != ds {
+		t.Fatalf("restart changed the DS after directory creation retry: %q => %q (%v)", ds, restartedDS, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read key after directory retry and restart: %v", err)
+	}
+	if !bytes.Equal(after, data) {
+		t.Fatal("restart changed the key after directory creation retry")
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != types.DNSSECKeyFileName {
+		t.Fatalf("directory creation retry left temporary files: %v", entries)
 	}
 }
 
