@@ -313,6 +313,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		if started {
 			return
 		}
+		cancel()
 		s.closeIVNP()
 		_ = acmeManager.Stop(ctx)
 		if apiServer != nil {
@@ -330,6 +331,9 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		if pprofListener != nil {
 			_ = pprofListener.Close()
 		}
+		if quicBackhaul != nil {
+			_ = quicBackhaul.Close()
+		}
 		if apiCloser != nil {
 			_ = apiCloser.Close()
 		}
@@ -339,7 +343,6 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		if apiListener != nil {
 			_ = apiListener.Close()
 		}
-		cancel()
 	}()
 	var listenConfig net.ListenConfig
 

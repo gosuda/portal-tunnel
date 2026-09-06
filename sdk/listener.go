@@ -41,6 +41,20 @@ type listenerConfig struct {
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
 
+// ivnpRouteError preserves an end-to-end reverse-route failure without blaming
+// either relay's public endpoint. Unwrap retains retry and terminal semantics.
+type ivnpRouteError struct {
+	err error
+}
+
+func (err *ivnpRouteError) Error() string {
+	return fmt.Sprintf("ivnp reverse route: %v", err.err)
+}
+
+func (err *ivnpRouteError) Unwrap() error {
+	return err.err
+}
+
 // shouldDropRelayFromActivePool is deliberately limited to errors that prove
 // the relay cannot serve this client. Transport failures, including EOF, must
 // be retried so a transient close cannot quarantine a relay for days.
@@ -70,6 +84,10 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 	var registrationErr *relayEndpointError
 	if errors.As(err, &registrationErr) && registrationErr.relayURL != "" {
 		relayURL = registrationErr.relayURL
+	}
+	var routeErr *ivnpRouteError
+	if errors.As(err, &routeErr) {
+		relayURL = ""
 	}
 	if l.relaySet != nil && relayURL != "" {
 		l.relaySet.UnconfirmRelayURL(relayURL)
@@ -552,6 +570,9 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 				Msg("tenant tls handshake failed")
 			retries = 0
 		default:
+			if l.route.GatewayURL != "" {
+				err = &ivnpRouteError{err: err}
+			}
 			retries++
 			if !l.waitRetry(ctx, "reverse session connect", err, retries, sessionSlot) {
 				return err
@@ -623,10 +644,18 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 }
 
 func (l *listener) openReverseSession(ctx context.Context) (_ net.Conn, resultErr error) {
+	var failedEndpoint string
 	if l.route.GatewayURL != "" {
 		defer func() {
-			if resultErr != nil {
-				resultErr = &relayEndpointError{relayURL: l.route.GatewayURL, err: resultErr}
+			if resultErr == nil {
+				return
+			}
+			if ctx.Err() != nil {
+				resultErr = ctx.Err()
+			} else if failedEndpoint != "" {
+				resultErr = &relayEndpointError{relayURL: failedEndpoint, err: resultErr}
+			} else {
+				resultErr = &ivnpRouteError{err: resultErr}
 			}
 		}()
 	}
@@ -656,6 +685,7 @@ func (l *listener) openReverseSession(ctx context.Context) (_ net.Conn, resultEr
 		Config:    tlsConfig.Clone(),
 	}
 
+	failedEndpoint = l.route.GatewayURL
 	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(endpoint.Host))
 	if err != nil {
 		return nil, err
@@ -685,6 +715,9 @@ func (l *listener) openReverseSession(ctx context.Context) (_ net.Conn, resultEr
 		_ = conn.Close()
 		return nil, err
 	}
+	// A response proves the gateway HTTPS exchange worked. Its reverse error
+	// describes this route, not the public health of the gateway or ingress.
+	failedEndpoint = ""
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
@@ -965,8 +998,9 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		if errors.As(err, &endpointErr) {
 			entryURL = endpointErr.relayURL
 		}
-		if operation == "reverse session connect" && l.route.GatewayURL != "" {
-			entryURL = l.route.GatewayURL
+		var routeErr *ivnpRouteError
+		if errors.As(err, &routeErr) {
+			entryURL = ""
 		}
 		if l.relaySet != nil && entryURL != "" {
 			l.relaySet.UnconfirmRelayURL(entryURL)

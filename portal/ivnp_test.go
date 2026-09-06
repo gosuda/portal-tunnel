@@ -38,7 +38,8 @@ type ivnpTestEndpoint struct {
 	network *dataplane.StreamingTunnelTunnelNetwork
 }
 
-func (e *ivnpTestEndpoint) B32() string { return e.network.B32() }
+func (e *ivnpTestEndpoint) B32() string                         { return e.network.B32() }
+func (e *ivnpTestEndpoint) WaitReady(ctx context.Context) error { return ctx.Err() }
 func (e *ivnpTestEndpoint) DialI2P(ctx context.Context, addr string) (net.Conn, error) {
 	return e.network.DialI2P(ctx, addr)
 }
