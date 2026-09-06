@@ -96,8 +96,15 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	if !os.SameFile(info, opened) {
 		return nil, nil, errors.New("dnssec key changed while opening")
 	}
+	data, err := io.ReadAll(io.LimitReader(f, 16385))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read dnssec key: %w", err)
+	}
+	if len(data) > 16384 {
+		return nil, nil, errors.New("dnssec key exceeds maximum size")
+	}
 	var stored storedKey
-	decoder := json.NewDecoder(io.LimitReader(f, 16384))
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&stored); err != nil {
 		return nil, nil, fmt.Errorf("decode dnssec key: %w", err)
