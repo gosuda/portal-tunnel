@@ -367,7 +367,7 @@ func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, ds
 	if utils.NormalizeBaseDomain(baseDomain) != p.baseDomain {
 		return "", "", "", fmt.Errorf("domain %q is not embedded dns zone %q", baseDomain, p.baseDomain)
 	}
-	return "active", p.key.ToDS(dns.SHA256).String(),
+	return "pending", p.key.ToDS(dns.SHA256).String(),
 		"Publish this DS at the parent zone alongside the NS delegation; signing is active locally but parent DS publication is not verified. Preserve the DNSSEC key file across restarts and migrations.", nil
 }
 
