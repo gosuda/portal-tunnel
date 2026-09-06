@@ -592,11 +592,6 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 	return nil, auth.ErrRegisterChallengeNotFound
 }
 
-func (r *leaseRegistry) issueLeaseAccessToken(record *leaseRecord, now time.Time) (string, error) {
-	token, _, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, record.Identity, record.ExpiresAt.Sub(now))
-	return token, err
-}
-
 func (r *leaseRegistry) verifySigningAccessToken(token string) error {
 	now := time.Now().UTC()
 	claims, err := auth.VerifyLeaseAccessToken(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)

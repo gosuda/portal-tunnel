@@ -457,8 +457,6 @@ func (m *agentDashboardModel) selectTunnelIndex(index int) {
 		return
 	}
 	tunnelID := m.status.Tunnels[index].ID
-	if m.selectedTunnelID != tunnelID {
-	}
 	m.selectedTunnelID = tunnelID
 	m.selectedRelayURL = ""
 	if len(m.status.Tunnels[index].Relays) > 0 {
@@ -550,8 +548,6 @@ func (m *agentDashboardModel) clampSelection() {
 
 	tunnelIndex := m.selectedTunnelIndex()
 	tunnelID := m.status.Tunnels[tunnelIndex].ID
-	if m.selectedTunnelID != tunnelID {
-	}
 	m.selectedTunnelID = tunnelID
 	m.ensureSettingsDraft(m.status.Tunnels[tunnelIndex])
 
