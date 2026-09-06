@@ -9,14 +9,6 @@ import (
 	"path/filepath"
 )
 
-// Temporary file creation uses mode 0600; loading separately rejects permissive
-// existing files rather than silently changing administrator-owned permissions.
-func restrictKeyPermissions(string) error { return nil }
-
-func createKeyTempFile(dir string) (*os.File, error) {
-	return os.CreateTemp(dir, ".dnssec-key-*")
-}
-
 func publishKeyFile(tmp, path string) error {
 	return os.Link(tmp, path)
 }

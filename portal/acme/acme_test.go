@@ -254,6 +254,7 @@ func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing
 				BaseDomain: baseDomain,
 				KeyDir:     keyDir,
 			})
+			beforeEnsureRequests := requests.Load()
 			certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
 			if err != nil {
 				t.Fatalf("EnsureTLSMaterial(): %v", err)
@@ -266,7 +267,7 @@ func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing
 			if discoveryOutage {
 				publicIP = ""
 				// Both failed retry and recovery cost one discovery operation.
-				wantRetryRequests = requests.Load()
+				wantRetryRequests = requests.Load() - beforeEnsureRequests
 				wantRecoveryRequests = successfulDiscoveryRequests
 			}
 			assertManualEmbeddedDNS(t, manager, cfg, publicIP)
@@ -371,6 +372,7 @@ func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *te
 		ENSGaslessEnabled: true,
 		ENSGaslessAddress: "0x1234567890123456789012345678901234567890",
 	})
+	beforeEnsureRequests := requests.Load()
 	certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
 	if err != nil {
 		t.Fatalf("EnsureTLSMaterial(): %v", err)
@@ -379,7 +381,7 @@ func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *te
 		t.Fatalf("EnsureTLSMaterial() returned unusable certificate: %v", err)
 	}
 	assertManualEmbeddedDNS(t, manager, cfg, "")
-	failedDiscoveryRequests := requests.Load()
+	failedDiscoveryRequests := requests.Load() - beforeEnsureRequests
 
 	synctest.Test(t, func(t *testing.T) {
 		// Re-home only the unused lifecycle channels into the bubble; exercise
