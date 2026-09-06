@@ -7,6 +7,7 @@ package embedded
 import (
 	"cmp"
 	"context"
+	"crypto"
 	"errors"
 	"fmt"
 	"net"
@@ -41,6 +42,9 @@ type Config struct {
 	BaseDomain string
 	// ListenAddr is the UDP/TCP listen address. Defaults to :53.
 	ListenAddr string
+	// KeyPath is the persistent CSK file. It is required; losing this file
+	// requires replacing the DS at the parent before validation can resume.
+	KeyPath string
 }
 
 // Provider is an authoritative-only DNS server for the relay zone plus the
@@ -60,6 +64,9 @@ type Provider struct {
 	txt    map[string][]string
 	https  map[string]httpsRecordValue
 	serial uint32
+	key    *dns.DNSKEY
+	signer crypto.Signer
+	signed *signedZone
 
 	udpServer *dns.Server
 	tcpServer *dns.Server
@@ -81,6 +88,9 @@ func New(cfg Config) (*Provider, error) {
 	if baseDomain == "" {
 		return nil, errors.New("embedded dns base domain is required")
 	}
+	if _, valid := dns.IsDomainName(dns.Fqdn(baseDomain)); !valid {
+		return nil, fmt.Errorf("invalid embedded dns zone %q", baseDomain)
+	}
 	if net.ParseIP(baseDomain) != nil {
 		return nil, fmt.Errorf("embedded dns base domain %q must be a hostname", baseDomain)
 	}
@@ -94,6 +104,16 @@ func New(cfg Config) (*Provider, error) {
 		txt:        make(map[string][]string),
 		https:      make(map[string]httpsRecordValue),
 		ready:      make(chan struct{}),
+	}
+
+	var err error
+	p.key, p.signer, err = loadSigningKey(cfg.KeyPath, p.zone)
+	if err != nil {
+		return nil, fmt.Errorf("initialize embedded dnssec: %w", err)
+	}
+	p.bumpSerialLocked()
+	if _, err := p.signedZone(time.Now()); err != nil {
+		return nil, fmt.Errorf("sign embedded dns zone: %w", err)
 	}
 
 	packetConn, listener, err := listenDNS(listenAddr)
@@ -124,6 +144,8 @@ func New(cfg Config) (*Provider, error) {
 		return nil, fmt.Errorf("embedded dns listeners on %s did not start within %s", p.listenAddr, listenStartTimeout)
 	}
 
+	_, ds, message, _ := p.EnsureDNSSEC(context.Background(), p.baseDomain)
+	log.Info().Str("ds_record", ds).Str("key_path", cfg.KeyPath).Msg(message)
 	log.Info().
 		Str("listen_addr", p.listenAddr).
 		Str("zone", p.zone).
@@ -336,18 +358,26 @@ func (p *Provider) DeleteHTTPSRecord(_ context.Context, name string) error {
 	return nil
 }
 
-// EnsureDNSSEC is not supported by the embedded provider yet.
-func (p *Provider) EnsureDNSSEC(context.Context, string) (state, dsRecord, message string, err error) {
+// EnsureDNSSEC exports the SHA-256 DS for the parent zone. Signing is active
+// locally; this does not claim that the parent has published the DS.
+func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
 		return "", "", "", errors.New("embedded dns provider is nil")
 	}
-	return "", "", "", errors.New("embedded dns provider does not support dnssec yet")
+	if utils.NormalizeBaseDomain(baseDomain) != p.baseDomain {
+		return "", "", "", fmt.Errorf("domain %q is not embedded dns zone %q", baseDomain, p.baseDomain)
+	}
+	return "active", p.key.ToDS(dns.SHA256).String(),
+		"Publish this DS at the parent zone alongside the NS delegation; signing is active locally but parent DS publication is not verified. Preserve the DNSSEC key file across restarts and migrations.", nil
 }
 
 func (p *Provider) zoneHostname(name string) (string, error) {
 	name = utils.NormalizeHostname(name)
 	if name == "" {
 		return "", errors.New("record name is required")
+	}
+	if _, valid := dns.IsDomainName(dns.Fqdn(name)); !valid {
+		return "", fmt.Errorf("invalid dns record name %q", name)
 	}
 	if !utils.HostnameMatchesBaseDomain(name, p.baseDomain) {
 		return "", fmt.Errorf("hostname %q is outside embedded dns zone %q", name, p.baseDomain)

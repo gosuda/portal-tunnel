@@ -259,20 +259,20 @@ func TestACMEFeatureReportsEmbeddedWhenUnset(t *testing.T) {
 	}
 }
 
-// The embedded server cannot manage zone DNSSEC yet, and it is what an operator
-// gets by enabling ENS and changing nothing else.
-func TestENSGaslessBlockedOnEmbeddedProvider(t *testing.T) {
+// Embedded DNS signs the ENS TXT records; publishing its DS remains an
+// explicit parent-zone operation rather than an API-credential requirement.
+func TestENSGaslessEnabledOnEmbeddedProvider(t *testing.T) {
 	path := writeEnvFile(t,
 		"PORTAL_URL=https://relay.example.com",
 		"ENS_GASLESS_ENABLED=true")
 	cfg := resolveWithEnvFile(t, path)
 
 	f := ensGaslessFeature(cfg)
-	if f.State != stateBlocked {
-		t.Fatalf("ens-gasless state = %q, want blocked on the embedded provider", f.State)
+	if f.State != stateEnabled {
+		t.Fatalf("ens-gasless state = %q, want enabled on the embedded provider", f.State)
 	}
-	if !strings.Contains(f.Missing, "DNSSEC") {
-		t.Fatalf("missing = %q, want it to name the DNSSEC limitation", f.Missing)
+	if !strings.Contains(f.Detail, "embedded") {
+		t.Fatalf("detail = %q, want it to name the embedded provider", f.Detail)
 	}
 }
 

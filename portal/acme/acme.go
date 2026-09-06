@@ -114,10 +114,6 @@ func NewManager(cfg Config) (*Manager, error) {
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
 	}
 
-	if cfg.ENSGaslessEnabled && cfg.DNSProvider == TypeEmbedded {
-		return nil, errors.New("ens gasless automation is not supported by the embedded dns provider yet")
-	}
-
 	acmeDNS, err := NewDNSProvider(cfg.DNSProvider, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create acme dns provider: %w", err)

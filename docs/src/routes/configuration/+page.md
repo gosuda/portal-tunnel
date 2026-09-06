@@ -93,13 +93,21 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync, the relay ECH record, opt-in tunnel ECH records, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` is used when present |
-| `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames; not supported with `ACME_DNS_PROVIDER=embedded` yet |
+| `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames; embedded DNS signs the records, and the operator publishes its DS at the parent zone |
 
 ### Embedded DNS
 
 > This section is the canonical reference for embedded DNS configuration. The deployment and self-hosting guides link here rather than restating the details.
 
-Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` pointing at the relay public IP) and open `53/tcp` + `53/udp`. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A answers for the apex and every covered name are synthesized from the relay public IPv4; ACME DNS-01 TXT and tunnel ECH HTTPS records are served directly. ENS gasless automation (zone DNSSEC) is not supported yet.
+Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` pointing at the relay public IP) and open `53/tcp` + `53/udp`. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A answers for the apex and every covered name are synthesized from the relay public IPv4; ACME DNS-01 TXT and tunnel ECH HTTPS records are served directly. DNSSEC signing is always enabled; ENS TXT automation remains opt-in with `ENS_GASLESS_ENABLED=true`.
+
+The relay automatically generates a single ECDSA P-256 CSK (DNSSEC algorithm 13) in `IDENTITY_PATH/dnssec-csk.json`. Preserve and back up this file with the identity volume across restarts, container replacement, and migration: deleting or replacing it changes the DNSKEY and breaks validation against an existing parent DS. On Unix the key is created with mode `0600` (new directories `0700`); permissive existing keys, symlinks, malformed keys, and keys for another zone fail startup rather than triggering automatic replacement. On Windows a protected DACL limits the file to the running account and SYSTEM. Keep the containing directory private to that account on every platform.
+
+After NS/glue delegation is reachable, copy the `ds_record` from the relay startup log into a **DS record at the parent zone** for the delegated domain. `EnsureDNSSEC()` exports the same full DS record (SHA-256 digest, digest type 2); with ENS enabled it is also exposed in ENS status. Configure the key tag, algorithm, digest type, and digest exactly as exported. Parent DS publication is manual and not asserted by the local `active` signing state. The parent must itself have a valid DNSSEC chain to a trust anchor for public validation. Verify delegation and signatures before publishing the DS, and never publish the CSK private file. Losing the key requires coordinated parent DS replacement; automatic rollover is not implemented.
+
+Authoritative RRsets, including apex DNSKEY and denial-of-existence NSEC records, are signed. Signatures last 24 hours, tolerate five minutes of clock skew, and refresh before answering after 12 hours; keep the host clock synchronized. A finite wildcard zone preserves synthesized addresses even below explicit TXT/HTTPS owners and their ancestors. When no public IPv4 is configured yet, genuinely absent names return authenticated NXDOMAIN; existing owners without the requested type return NODATA. DNSSEC records accompany responses only when requested with EDNS DO (or queried directly), and large UDP responses require TCP retry.
+
+External managed providers (`cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, `vultr`) are deprecated, emit configuration warnings, and receive no new features. Their implementations and settings remain supported in this release; removal is reserved for a future major release. Keep any vendor as the **parent** DNS provider and delegate only the relay subdomain to embedded DNS. Manual/external certificate ownership remains supported via `fullchain.pem` and `privatekey.pem`; it does not require vendor API credentials.
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
@@ -376,7 +384,7 @@ Relay policy settings are stored at `IDENTITY_PATH/policy.json`.
 
 Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, the relay root HTTPS/ECH record, tenant A and HTTPS/ECH records for tunnels with `ech = true`, and optional ENS gasless DNS records. The default `ech = false` tunnel mode does not create tenant ECH DNS records.
 
-When this variable is empty the relay server falls back to manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH`.
+An empty value selects `embedded`, the canonical managed backend; see [Embedded DNS](#embedded-dns) for NS/glue delegation, DS setup, and persistent signing-key requirements. The external providers below are deprecated but remain available until a future major release. Valid manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH` take precedence over managed certificate issuance regardless of provider selection.
 
 For ENS gasless behavior and wallet authentication details, see [Wallet and ENS](/wallet-and-ens).
 

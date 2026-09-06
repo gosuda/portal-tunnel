@@ -179,7 +179,7 @@ func acmeFeature(cfg relayServerConfig) feature {
 	}
 
 	f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
-	f.Detail = "managed issuance and renewal under IDENTITY_PATH"
+	f.Detail = "deprecated external DNS backend (removal in a future major release); prefer NS delegation to embedded; managed issuance and renewal under IDENTITY_PATH"
 	if len(required) == 0 {
 		f.Detail += "; credentials come from the ambient provider chain"
 	}
@@ -192,17 +192,8 @@ func ensGaslessFeature(cfg relayServerConfig) feature {
 		f.State, f.By = stateDisabled, "ENS_GASLESS_ENABLED=false"
 		return f
 	}
-	// The embedded server cannot manage zone DNSSEC yet, and it is what an
-	// unset ACME_DNS_PROVIDER selects, so this is the combination an operator
-	// reaches by turning ENS on and changing nothing else.
 	provider := strings.ToLower(strings.TrimSpace(cfg.ACMEDNSProvider))
 	provider = cmp.Or(provider, acme.TypeEmbedded)
-	if provider == acme.TypeEmbedded {
-		f.State, f.By = stateBlocked, "ENS_GASLESS_ENABLED=true"
-		f.Missing = "ACME_DNS_PROVIDER=" + provider +
-			" cannot manage zone DNSSEC yet; ENS gasless automation needs one of the managed providers"
-		return f
-	}
 	// ENS gasless drives the same provider ACME does, so it cannot work when
 	// that provider cannot. Repeating only the "is it set" half of the check
 	// here would report this as enabled while acme is blocked, which is exactly

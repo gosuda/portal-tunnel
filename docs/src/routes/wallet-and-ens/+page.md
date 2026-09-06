@@ -139,20 +139,19 @@ only prepares DNSSEC-backed DNS records for ENS-aware clients.
 Requirements:
 
 - public relay domain, not `localhost`
-- `ACME_DNS_PROVIDER=cloudflare`, `gcloud`, `route53`, or `vultr`
-- provider credentials with DNS write access
+- `ACME_DNS_PROVIDER=embedded` (the default), with NS/glue delegation to the relay
+- the embedded signing key persisted under `IDENTITY_PATH`; no DNS API credentials
 - `ENS_GASLESS_ENABLED=true`
 - DNSSEC active at the parent zone
 
-Hetzner and Njalla are supported for managed ACME DNS automation, but not for ENS gasless automation because Portal does not automate DNSSEC signing for those providers.
+Embedded DNS signs the ENS TXT records and exports a DS in the startup log and ENS status; publish that DS at the parent zone. Local signing state does not verify parent publication. See [Embedded DNS](/configuration#embedded-dns) for the trust chain and key-persistence requirements. Cloudflare, Google Cloud DNS, Route53, and Vultr remain compatible but deprecated managed backends until a future major release. Hetzner and Njalla remain supported for managed ACME, but not ENS gasless automation because Portal does not automate their DNSSEC signing.
 
 Example:
 
 ```bash
 PORTAL_URL=https://portal.example.com
 IDENTITY_PATH=/portal-certs
-ACME_DNS_PROVIDER=cloudflare
-CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
+ACME_DNS_PROVIDER=embedded
 ENS_GASLESS_ENABLED=true
 ```
 
@@ -212,8 +211,8 @@ Expected TXT records start with `ENS1`.
 
 `ENS_GASLESS_ENABLED=true` fails at startup:
 
-- set `ACME_DNS_PROVIDER`
-- provide the provider credentials
+- leave `ACME_DNS_PROVIDER` unset or set `embedded`, and verify the persisted signing key is readable only by the relay account
+- verify NS/glue delegation and publish the exported DS at the parent; deprecated external backends still require their credentials
 - use a public `PORTAL_URL`, not localhost
 
 `ens.verified` stays false:

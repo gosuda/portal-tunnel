@@ -53,11 +53,13 @@ BOOTSTRAPS=
 
 # Embedded authoritative DNS is the default provider and needs no API
 # credentials once the NS delegation above is in place. External providers
-# (cloudflare, gcloud, hetzner, njalla, route53, vultr) remain available by
-# setting ACME_DNS_PROVIDER explicitly.
+# (cloudflare, gcloud, hetzner, njalla, route53, vultr) are deprecated but
+# remain available until a future major release when selected explicitly.
 ACME_DNS_PROVIDER=
 EMBEDDED_DNS_PORT=53
 ```
+
+Embedded DNS logs the DS to publish at the parent zone after NS/glue delegation is reachable. Persist `IDENTITY_PATH/dnssec-csk.json` with the identity volume across container replacement and backup/restore; replacing this key without coordinating the parent DS breaks DNSSEC validation. See [Embedded DNS](/configuration#embedded-dns) for the complete DNSSEC setup and key-storage requirements. Manual certificate overrides remain supported.
 
 `LANDING_PAGE_ENABLED` supplies the initial value. Changes made from the admin
 dashboard are stored in `IDENTITY_PATH/policy.json` and survive restarts.
@@ -289,12 +291,7 @@ When a DNS provider is configured, Portal publishes an `HTTPS` record carrying
 listener**. An nginx terminator has neither, so ECH-capable clients that read
 the record can fail the connection before any request arrives.
 
-`SyncECHConfig` is a no-op when no DNS provider is configured, so:
-
-| `ACME_DNS_PROVIDER` | Root host |
-|---|---|
-| set (managed issuance) | pass through — terminating breaks the ECH it advertises |
-| empty (manual certificates) | may be terminated, which is what recovers client addresses |
+An empty `ACME_DNS_PROVIDER` selects embedded DNS; it does not disable ECH publication. Manual certificate overrides likewise do not disable DNS/ECH management. For a public relay with managed DNS, pass the root host through: terminating it elsewhere breaks the ECH it advertises.
 
 Pass-through is the default in the example for that reason.
 

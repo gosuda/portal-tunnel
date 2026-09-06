@@ -3,9 +3,11 @@ package acme
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-acme/lego/v4/challenge"
+	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/cloudflare"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/embedded"
@@ -42,11 +44,17 @@ type DNSProvider interface {
 }
 
 func NewDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
-	switch strings.ToLower(strings.TrimSpace(providerType)) {
-	case TypeEmbedded:
+	providerType = strings.ToLower(strings.TrimSpace(providerType))
+	switch providerType {
+	case TypeCloudflare, TypeGCloud, TypeHetzner, TypeNjalla, TypeRoute53, TypeVultr:
+		log.Warn().Str("dns_provider", providerType).Msg("external managed DNS providers are deprecated and will be removed in a future major release; delegate the relay subdomain via NS to the embedded provider instead (no DNS API credentials required)")
+	}
+	switch providerType {
+	case "", TypeEmbedded:
 		return embedded.New(embedded.Config{
 			BaseDomain: cfg.BaseDomain,
 			ListenAddr: fmt.Sprintf(":%d", cfg.EmbeddedDNSPort),
+			KeyPath:    filepath.Join(cfg.KeyDir, "dnssec-csk.json"),
 		})
 	case TypeCloudflare:
 		return cloudflare.New(cfg.CloudflareToken), nil

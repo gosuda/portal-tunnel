@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"net"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ const testZone = "portal.example.com"
 
 func newTestProvider(t *testing.T, mutate func(*Config)) *Provider {
 	t.Helper()
-	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0"}
+	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: filepath.Join(t.TempDir(), "dnssec-csk.json")}
 	if mutate != nil {
 		mutate(&cfg)
 	}
@@ -188,7 +189,7 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 		t.Fatalf("cleanup: %v", err)
 	}
 	resp = exchange(t, p, "tcp", dns.TypeTXT, info.EffectiveFQDN)
-	requireRcode(t, resp, dns.RcodeSuccess)
+	requireRcode(t, resp, dns.RcodeNameError)
 	if len(resp.Answer) != 0 {
 		t.Fatalf("txt survived cleanup")
 	}
@@ -197,6 +198,9 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 func TestHTTPSRecordRoundTrip(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
+	if err := p.EnsureARecords(ctx, testZone, "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	}
 	name := "tunnel." + testZone
 	ech := []byte{0x00, 0x08, 0xfe, 0x0d, 0x00, 0x20, 0x00, 0x01, 0x41, 0x42}
 	svcParams := `ech="` + base64.StdEncoding.EncodeToString(ech) + `" port=8443`

@@ -145,14 +145,13 @@ management UI:
 | `A` | `ns.relay.example.com` | `<your server IP>` (glue) |
 No wildcard record is needed: the relay synthesizes answers for every tunnel
 hostname. The nameserver name is fixed to `ns.<your relay domain>`; publish the
-matching glue `A` record at the parent zone as shown above.
+matching glue `A` record at the parent zone as shown above. After verifying the delegation, publish the DS exported in the startup log at the parent zone to establish DNSSEC trust. Preserve `IDENTITY_PATH/dnssec-csk.json` in the persistent identity volume; see the [DNSSEC configuration reference](/configuration#embedded-dns) for key permissions, parent setup, and recovery requirements.
 
 ## TLS with ACME
 
 Certificates are issued automatically via ACME DNS-01 against the embedded
 authoritative DNS server — no DNS provider credentials are required once the
-delegation above is in place. To use an external DNS provider instead, set
-`ACME_DNS_PROVIDER`:
+delegation above is in place. External managed backends are deprecated and receive no new features; they remain supported until removal in a future major release. Operators may retain any vendor for the parent zone and delegate only the relay namespace. For an existing external-backend deployment, the retained settings are:
 
 ```yaml
 environment:
