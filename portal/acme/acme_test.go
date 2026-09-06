@@ -18,8 +18,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -174,22 +176,11 @@ func TestManualEmbeddedCertificateServesDNSAndKeepsENSPending(t *testing.T) {
 				if err := writeManualRelayCertificate(t, keyDir, baseDomain); err != nil {
 					t.Fatal(err)
 				}
-				port := tempEmbeddedDNSPort(t)
-				cfg := Config{
+				manager, cfg := newEmbeddedDNSManager(t, Config{
 					BaseDomain:        baseDomain,
 					KeyDir:            keyDir,
-					EmbeddedDNSPort:   port,
 					ENSGaslessEnabled: ensEnabled,
 					ENSGaslessAddress: "0x1234567890123456789012345678901234567890",
-				}
-				manager, err := NewManager(cfg)
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(func() {
-					if err := manager.Stop(context.Background()); err != nil {
-						t.Errorf("Stop(): %v", err)
-					}
 				})
 				certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
 				if err != nil {
@@ -419,21 +410,44 @@ func TestEnsureTLSMaterialRejectsDNSRecordUpdateFailure(t *testing.T) {
 	}
 }
 
-func tempEmbeddedDNSPort(t *testing.T) int {
+func newEmbeddedDNSManager(t *testing.T, cfg Config) (*Manager, Config) {
 	t.Helper()
 
-	listener, err := net.Listen("tcp", ":0")
-	if err != nil {
-		t.Fatalf("allocate DNS probe port: %v", err)
+	addressInUse := syscall.EADDRINUSE
+	if runtime.GOOS == "windows" {
+		// Winsock bind returns WSAEADDRINUSE, not syscall.EADDRINUSE.
+		addressInUse = syscall.Errno(10048)
 	}
-	defer listener.Close()
-	port := listener.Addr().(*net.TCPAddr).Port
-	packet, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		t.Fatalf("allocate UDP DNS probe port: %v", err)
+	const attempts = 5
+	var lastErr error
+	for range attempts {
+		listener, err := net.Listen("tcp", ":0")
+		if err != nil {
+			t.Fatalf("allocate DNS probe port: %v", err)
+		}
+		cfg.EmbeddedDNSPort = listener.Addr().(*net.TCPAddr).Port
+		if err := listener.Close(); err != nil {
+			t.Fatalf("release DNS probe port: %v", err)
+		}
+		// Exercise the public configured-port path. Another listener can take
+		// either protocol's port before NewManager binds it; retry only that race.
+		manager, err := NewManager(cfg)
+		if err == nil {
+			t.Cleanup(func() {
+				if err := manager.Stop(context.Background()); err != nil {
+					t.Errorf("Stop(): %v", err)
+				}
+			})
+			return manager, cfg
+		}
+		var bindErr *os.SyscallError
+		if !errors.As(err, &bindErr) || bindErr.Syscall != "bind" || !errors.Is(bindErr, addressInUse) {
+			t.Fatalf("NewManager(): %v", err)
+		}
+		lastErr = err
 	}
-	defer packet.Close()
-	return port
+	t.Fatalf("NewManager() could not bind a DNS port after %d attempts: %v", attempts, lastErr)
+	return nil, cfg
 }
 
 func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) error {

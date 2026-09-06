@@ -2,13 +2,22 @@ package embedded
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/sys/windows"
 )
 
 func makeKeyDirectory(dir string) error {
-	return os.MkdirAll(dir, 0700)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	// An inherited directory DELETE_CHILD grant can bypass the key-file DACL.
+	// Protect the actual key directory before creating any key files;
+	// leave ancestors untouched, since they may hold unrelated application data.
+	// Administrators and untrusted ancestor owners remain outside this boundary.
+	return restrictKeyACL(dir, "")
 }
 
 func publishKeyFile(tmp, path string) error {
@@ -42,21 +51,44 @@ func syncKeyPublication(path string) error {
 	return errors.Join(syncErr, closeErr)
 }
 
-// POSIX mode bits do not restrict access on Windows. Disable inherited grants
-// and allow only the service account and SYSTEM to access the private key.
 func restrictKeyPermissions(path string) error {
+	// Existing keys bypass makeKeyDirectory. Protect their containing directory
+	// too, before reading the key or exposing its DNSKEY and DS.
+	return restrictKeyACL(filepath.Dir(path), path)
+}
+
+// POSIX mode bits do not restrict access on Windows. Both DACLs exclude parent
+// grants and allow only the service account and SYSTEM. Directory ACEs must
+// propagate to children so existing inherited certificate files remain usable;
+// the protected key-file DACL retains its non-inheritable ACEs.
+func restrictKeyACL(dir, key string) error {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return err
 	}
-	descriptor, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;SY)(A;;FA;;;" + user.User.Sid.String() + ")")
-	if err != nil {
-		return err
+	serviceSID := user.User.Sid.String()
+	for _, target := range [...]struct {
+		path        string
+		inheritance string
+	}{
+		{dir, "OICI"},
+		{key, ""},
+	} {
+		if target.path == "" {
+			continue
+		}
+		descriptor, err := windows.SecurityDescriptorFromString("D:P(A;" + target.inheritance + ";FA;;;SY)(A;" + target.inheritance + ";FA;;;" + serviceSID + ")")
+		if err != nil {
+			return err
+		}
+		dacl, _, err := descriptor.DACL()
+		if err != nil {
+			return err
+		}
+		if err := windows.SetNamedSecurityInfo(target.path, windows.SE_FILE_OBJECT,
+			windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+			return fmt.Errorf("restrict dnssec key path %q permissions: %w", target.path, err)
+		}
 	}
-	dacl, _, err := descriptor.DACL()
-	if err != nil {
-		return err
-	}
-	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+	return nil
 }

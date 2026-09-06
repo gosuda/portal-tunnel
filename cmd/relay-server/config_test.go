@@ -150,9 +150,12 @@ func TestENSGaslessBlockedForUnsupportedDNSSECProvider(t *testing.T) {
 			cfg := relayServerConfig{
 				PortalURL:         "https://relay.example.com",
 				ACMEDNSProvider:   provider,
-				HetznerAPIToken:   "token",
-				NjallaToken:       "token",
 				ENSGaslessEnabled: true,
+			}
+			if provider == "hetzner" {
+				cfg.HetznerAPIToken = "token"
+			} else {
+				cfg.NjallaToken = "token"
 			}
 			if f := featureByName(t, cfg, "acme"); f.State != stateEnabled {
 				t.Fatalf("acme state = %q, want managed DNS to remain enabled", f.State)
@@ -312,12 +315,18 @@ func TestENSGaslessEnabledOnEmbeddedProvider(t *testing.T) {
 func TestENSGaslessEnabledOnManagedProvider(t *testing.T) {
 	for _, provider := range []string{"cloudflare", "gcloud", "route53", "vultr"} {
 		t.Run(provider, func(t *testing.T) {
-			path := writeEnvFile(t,
+			values := []string{
 				"PORTAL_URL=https://relay.example.com",
-				"ACME_DNS_PROVIDER="+provider,
-				"CLOUDFLARE_TOKEN=token",
-				"VULTR_API_KEY=token",
-				"ENS_GASLESS_ENABLED=true")
+				"ACME_DNS_PROVIDER=" + provider,
+				"ENS_GASLESS_ENABLED=true",
+			}
+			switch provider {
+			case "cloudflare":
+				values = append(values, "CLOUDFLARE_TOKEN=token")
+			case "vultr":
+				values = append(values, "VULTR_API_KEY=token")
+			}
+			path := writeEnvFile(t, values...)
 			cfg := resolveWithEnvFile(t, path)
 
 			if f := ensGaslessFeature(cfg); f.State != stateEnabled {
