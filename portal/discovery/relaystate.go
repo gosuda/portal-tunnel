@@ -269,6 +269,7 @@ func (state RelayState) hasObservedDescriptor() bool {
 }
 
 type RouteState struct {
+	IVNP              bool
 	ExplicitRelayURLs []string
 	// ActiveRelayURLs holds currently active connected relay URLs to enable
 	// connection-level stickiness and prevent listener churn during ranking updates.

@@ -67,7 +67,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 		return false
 	}
 	relayURL := l.route.RelayURL
-	var registrationErr *relayRegistrationError
+	var registrationErr *relayEndpointError
 	if errors.As(err, &registrationErr) && registrationErr.relayURL != "" {
 		relayURL = registrationErr.relayURL
 	}
@@ -116,6 +116,7 @@ type listener struct {
 	httpClient    *http.Client
 	httpTransport *http.Transport
 	tlsConfig     *tls.Config
+	gatewayTLS    *tls.Config
 
 	releaseVersion string
 
@@ -141,7 +142,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		cancel:         cancel,
 		doneCh:         listenerCtx.Done(),
 		relayURL:       relayurl,
-		route:          discovery.Route{RelayURL: entryRelayURL, Explicit: route.Explicit},
+		route:          route,
 		metadata:       cfg.Metadata,
 		identity:       cfg.Identity.Copy(),
 		relaySet:       cfg.relaySet,
@@ -156,6 +157,10 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		leaseTTL:       defaultLeaseTTL,
 		renewBefore:    defaultRenewBefore,
 		lease:          utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
+	}
+	l.route.RelayURL = entryRelayURL
+	if route.GatewayURL != "" && l.retryCount == 0 {
+		l.retryCount = 10
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l, cfg.BanMITM)
 	l.stream = transport.NewClientStream(defaultReadyTarget, defaultHandshakeTimeout)
@@ -617,7 +622,14 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 	}
 }
 
-func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
+func (l *listener) openReverseSession(ctx context.Context) (_ net.Conn, resultErr error) {
+	if l.route.GatewayURL != "" {
+		defer func() {
+			if resultErr != nil {
+				resultErr = &relayEndpointError{relayURL: l.route.GatewayURL, err: resultErr}
+			}
+		}()
+	}
 	lease, ok := l.leaseSnapshot()
 	if !ok || lease.accessToken == "" {
 		return nil, errors.New("access token is not available")
@@ -626,23 +638,39 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 		return nil, errors.New("relay tls config is unavailable")
 	}
 
+	endpoint := l.relayURL
+	tlsConfig := l.tlsConfig
+	if l.route.GatewayURL != "" {
+		var err error
+		endpoint, err = url.Parse(l.route.GatewayURL)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig = l.gatewayTLS
+		if tlsConfig == nil {
+			return nil, errors.New("gateway tls config is unavailable")
+		}
+	}
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: l.dialTimeout},
-		Config:    l.tlsConfig.Clone(),
+		Config:    tlsConfig.Clone(),
 	}
 
-	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(l.relayURL.Host))
+	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(endpoint.Host))
 	if err != nil {
 		return nil, err
 	}
 
 	req := &http.Request{
 		Method: http.MethodGet,
-		URL:    utils.ResolveAPIURL(l.relayURL, types.PathSDKConnect),
-		Host:   l.relayURL.Host,
+		URL:    utils.ResolveAPIURL(endpoint, types.PathSDKConnect),
+		Host:   endpoint.Host,
 		Header: make(http.Header),
 	}
 	req.Header.Set(types.HeaderAccessToken, lease.accessToken)
+	if l.route.GatewayURL != "" {
+		req.Header.Set(types.HeaderIVNPDestination, l.route.IngressDestination)
+	}
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "raw")
 
@@ -782,7 +810,7 @@ func (l *listener) renewLease(ctx context.Context) error {
 		if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
 			return errLeaseRefreshRequired
 		}
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return &relayEndpointError{relayURL: l.relayURL.String(), err: err}
 	}
 
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
@@ -809,12 +837,16 @@ func (l *listener) renewLease(ctx context.Context) error {
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err := l.initHTTPTransport(ctx); err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		var endpointErr *relayEndpointError
+		if errors.As(err, &endpointErr) {
+			return err
+		}
+		return &relayEndpointError{relayURL: l.relayURL.String(), err: err}
 	}
 
 	resp, publicHostname, routeHostname, err := l.registerLease(ctx, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
 	if err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return &relayEndpointError{relayURL: l.relayURL.String(), err: err}
 	}
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
 	if resp.AccessToken == "" {
@@ -929,6 +961,13 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 
 	if l.retryCount > 0 && retries > l.retryCount {
 		entryURL := l.route.RelayURL
+		var endpointErr *relayEndpointError
+		if errors.As(err, &endpointErr) {
+			entryURL = endpointErr.relayURL
+		}
+		if operation == "reverse session connect" && l.route.GatewayURL != "" {
+			entryURL = l.route.GatewayURL
+		}
 		if l.relaySet != nil && entryURL != "" {
 			l.relaySet.UnconfirmRelayURL(entryURL)
 			l.relaySet.RecordActiveFailure(entryURL, 1)

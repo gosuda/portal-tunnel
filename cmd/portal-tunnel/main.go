@@ -50,6 +50,7 @@ func main() {
 }
 
 type exposeFlags struct {
+	ivnp                 bool
 	relayCSV             string
 	discovery            bool
 	banMITM              bool
@@ -81,6 +82,7 @@ type exposeFlags struct {
 func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
+	utils.BoolFlag(fs, &flags.ivnp, "ivnp", false, "Carry reverse TCP streams through a discovery-selected IVNP gateway")
 	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &flags.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
@@ -225,6 +227,7 @@ func runExposeCommand(args []string) error {
 	}
 
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+		IVNP:            flags.ivnp,
 		RelayURLs:       utils.SplitCSV(flags.relayCSV),
 		Discovery:       flags.discovery,
 		Identity:        types.Identity{Name: flags.name},

@@ -34,6 +34,7 @@ func main() {
 }
 
 type relayServerConfig struct {
+	IVNPConfigPath     string
 	PortalURL          string
 	FrontendDir        string
 	IdentityPath       string
@@ -102,6 +103,7 @@ func registerRelayServerFlags(fs *flag.FlagSet, cfg *relayServerConfig) {
 	utils.StringFlagEnv(fs, &cfg.IdentityPath, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "bootstrap relay API URLs; merged with bootstrap relays when discovery is enabled", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
+	utils.StringFlagEnv(fs, &cfg.IVNPConfigPath, "ivnp-config", "", "optional IVNP router configuration file; requires discovery", "IVNP_CONFIG")
 
 	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
 	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 443, utils.ParsePortNumber, "TCP SNI router port number", "SNI_PORT")
@@ -172,6 +174,7 @@ func runServeCommand(args []string) error {
 
 func runServer(ctx context.Context, cfg relayServerConfig) error {
 	server, err := portal.NewServer(portal.ServerConfig{
+		IVNPConfigPath:    cfg.IVNPConfigPath,
 		PortalURL:         cfg.PortalURL,
 		IdentityPath:      cfg.IdentityPath,
 		Bootstraps:        utils.SplitCSV(cfg.Bootstraps),

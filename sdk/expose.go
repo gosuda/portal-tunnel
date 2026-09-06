@@ -41,6 +41,9 @@ type Exposure struct {
 }
 
 type ExposeConfig struct {
+	// IVNP carries reverse TCP streams through a discovery-selected gateway.
+	// Public lease operations still use the ingress relay. Requires Discovery.
+	IVNP      bool
 	RelayURLs []string
 	Discovery bool
 
@@ -78,6 +81,9 @@ func (cfg ExposeConfig) snapshot() ExposeConfig {
 // Expose creates relay listeners for the selected relay pool and exposes a
 // dynamic listener hub for accepting traffic from all of them.
 func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
+	if cfg.IVNP && (!cfg.Discovery || cfg.UDPEnabled) {
+		return nil, errors.New("ivnp requires discovery and does not carry UDP backhaul")
+	}
 	explicitRelayURLs, err := utils.NormalizeRelayURLs(cfg.RelayURLs...)
 	if err != nil {
 		return nil, err
@@ -616,6 +622,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	}
 	cfg := e.Config()
 	routes := e.relaySet.SelectRelays(discovery.RouteState{
+		IVNP:              cfg.IVNP,
 		ExplicitRelayURLs: append([]string(nil), cfg.RelayURLs...),
 		ActiveRelayURLs:   e.ActiveRelayURLs(),
 		MaxActiveRelays:   cfg.MaxActiveRelays,

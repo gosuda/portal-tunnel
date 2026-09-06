@@ -11,12 +11,14 @@ import (
 	"net/http/pprof"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
+	"gosuda.org/ivnp"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
@@ -37,6 +39,7 @@ const (
 )
 
 type ServerConfig struct {
+	IVNPConfigPath    string
 	PortalURL         string
 	IdentityPath      string
 	Bootstraps        []string
@@ -60,6 +63,9 @@ type ServerConfig struct {
 }
 
 func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
+	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
+		return ServerConfig{}, errors.New("ivnp requires HTTPS relay discovery")
+	}
 	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
 	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
 	if cfg.IdentityPath == "" {
@@ -117,6 +123,12 @@ func (cfg ServerConfig) hasLeasePortRange() bool {
 }
 
 type Server struct {
+	ivnpNode     *ivnp.Node
+	ivnpEndpoint ivnp.DestinationEndpoint
+	ivnpListener net.Listener
+	ivnpReady    atomic.Bool
+	ivnpSlots    chan struct{}
+	ivnpContext  context.Context
 	cancel       context.CancelFunc
 	group        *errgroup.Group
 	shutdownOnce sync.Once
@@ -244,6 +256,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		if started {
 			return
 		}
+		s.closeIVNP()
 		_ = acmeManager.Stop(ctx)
 		if apiServer != nil {
 			_ = apiServer.Close()
@@ -306,6 +319,11 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		}
 	}
 
+	if cfg.IVNPConfigPath != "" {
+		if err := s.startIVNP(serverCtx); err != nil {
+			return fmt.Errorf("start ivnp: %w", err)
+		}
+	}
 	s.apiListener = wrappedAPIListener
 	s.sniListener = sniListener
 	s.apiServer = apiServer
@@ -319,6 +337,9 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	started = true
 
 	group.Go(s.runAPIServer)
+	if s.ivnpListener != nil {
+		group.Go(func() error { return s.runIVNP(groupCtx) })
+	}
 	if s.pprofServer != nil {
 		group.Go(s.runPProfServer)
 	}
@@ -413,6 +434,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if s.cancel != nil {
 			s.cancel()
 		}
+		s.closeIVNP()
 
 		records := s.registry.CloseAll()
 		for _, record := range records {
@@ -730,7 +752,12 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 	}
 	cfg := s.config()
 
+	ivnpDestination := ""
+	if s.ivnpReady.Load() {
+		ivnpDestination = s.ivnpEndpoint.B32()
+	}
 	return auth.SignRelayDescriptor(types.RelayDescriptor{
+		IVNPDestination:   ivnpDestination,
 		Address:           s.identity.Address,
 		Version:           types.DiscoveryVersion,
 		IssuedAt:          now,
