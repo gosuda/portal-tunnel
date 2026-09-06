@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -379,4 +380,42 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 	if server.config().DiscoveryEnabled {
 		t.Fatal("cfg.DiscoveryEnabled = true, want false without configured discovery service")
 	}
+}
+
+func TestServerStartIVNPFailureReleasesQUICPort(t *testing.T) {
+	t.Parallel()
+	probe, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.LocalAddr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(ServerConfig{
+		PortalURL:        "https://localhost:4017",
+		IdentityPath:     tempIdentityPath(t),
+		ACME:             acme.Config{KeyDir: t.TempDir()},
+		APIListenAddr:    "127.0.0.1:0",
+		SNIListenAddr:    addr,
+		DiscoveryEnabled: true,
+		IVNPConfigPath:   filepath.Join(t.TempDir(), "missing.conf"),
+		UDPEnabled:       true,
+		MinPort:          40000,
+		MaxPort:          40000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := server.Start(ctx, nil); err == nil {
+		_ = server.Shutdown(ctx)
+		t.Fatal("Start succeeded with a missing IVNP config")
+	}
+	listener, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		t.Fatalf("failed startup retained QUIC port: %v", err)
+	}
+	_ = listener.Close()
 }

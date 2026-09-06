@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"gosuda.org/ivnp"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -27,6 +29,9 @@ func (s *Server) startIVNP(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Portal's embedded router uses one-hop I2P tunnels, including when the
+	// supplied config requests a different length.
+	cfg.Tunnel.Hops = 1
 	s.ivnpNode, err = ivnp.New(cfg, ivnp.Options{})
 	if err != nil {
 		return err
@@ -34,31 +39,38 @@ func (s *Server) startIVNP(ctx context.Context) error {
 	if err := s.ivnpNode.Start(ctx); err != nil {
 		return err
 	}
-	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	s.ivnpEndpoint, err = s.ivnpNode.DestinationController().CreateDestination(readyCtx, ivnp.DestinationSpec{})
+	s.ivnpEndpoint, err = s.ivnpNode.DestinationController().CreateDestination(ctx, ivnp.DestinationSpec{})
 	if err != nil {
 		return err
 	}
-	ready, ok := s.ivnpEndpoint.(ivnp.ReadyDestinationEndpoint)
-	if !ok {
-		return errors.New("ivnp endpoint does not report readiness")
-	}
-	if err := ready.WaitReady(readyCtx); err != nil {
-		return err
-	}
-	// Listener lifetime is the server's context, not the readiness timeout.
+	// Reserve the stream port before advertising readiness. IVNP publishes its
+	// LeaseSet and builds tunnels while the public HTTPS relay starts serving.
 	s.ivnpListener, err = s.relaySet.ListenIVNP(ctx, s.ivnpEndpoint, ":"+types.IVNPStreamPort)
 	if err != nil {
 		return err
 	}
 	s.ivnpSlots = make(chan struct{}, 128)
-	s.ivnpReady.Store(true)
 	return nil
 }
 
 func (s *Server) runIVNP(ctx context.Context) error {
 	defer s.ivnpReady.Store(false)
+	ready, ok := s.ivnpEndpoint.(ivnp.ReadyDestinationEndpoint)
+	if !ok {
+		return errors.New("ivnp endpoint does not report readiness")
+	}
+	log.Info().Msg("ivnp publishing and warming up in background")
+	if err := ready.WaitReady(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return fmt.Errorf("wait for ivnp readiness: %w", err)
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
+	s.ivnpReady.Store(true)
+	log.Info().Str("destination", s.ivnpEndpoint.B32()).Msg("ivnp relay ready")
 	for {
 		conn, err := s.ivnpListener.Accept()
 		if err != nil {

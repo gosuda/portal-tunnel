@@ -521,5 +521,5 @@ gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C
 gopkg.in/yaml.v3 v3.0.0-20200615113413-eeeca48fe776/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-gosuda.org/ivnp v0.0.0-20260906113531-95d76218a2aa h1:eQzm0Qt5f7yxSiyl+ELq1mQAnfYR7GXr2yhDpI6O/vs=
-gosuda.org/ivnp v0.0.0-20260906113531-95d76218a2aa/go.mod h1:4JAzKDAm2lqNws+yqgfuZFO6bbYMzoJLV0CK3wJxQ7g=
+gosuda.org/ivnp v0.0.0-20260906144716-8abfdef36b48 h1:0qeN7KvSwtWhzIdEM2SRRgWwOa/V5YeQSpaGhGLzU9w=
+gosuda.org/ivnp v0.0.0-20260906144716-8abfdef36b48/go.mod h1:4JAzKDAm2lqNws+yqgfuZFO6bbYMzoJLV0CK3wJxQ7g=

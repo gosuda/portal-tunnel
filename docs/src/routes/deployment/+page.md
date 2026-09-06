@@ -62,6 +62,90 @@ EMBEDDED_DNS_PORT=53
 `LANDING_PAGE_ENABLED` supplies the initial value. Changes made from the admin
 dashboard are stored in `IDENTITY_PATH/policy.json` and survive restarts.
 
+### Optional IVNP Overlay
+
+IVNP is disabled when `IVNP_CONFIG` is empty, including in the bundled Compose
+defaults. To enable it, set `DISCOVERY=true` and use a publicly reachable
+`PORTAL_URL`. Compose forwards `IVNP_CONFIG` to the relay; its value must be a
+**container path to an existing IVNP configuration file**, not a host path.
+Portal does not generate that file.
+
+Use the existing `./.portal-certs` volume rather than adding another mount. With
+the default `IDENTITY_PATH=/portal-certs`, prepare a dedicated directory on the
+Linux host:
+
+```bash
+mkdir -p ./.portal-certs/ivnp/data/state
+```
+
+Create `./.portal-certs/ivnp/ivnp.conf` with this minimal embedded-router
+configuration (IVNP's INI-style format):
+
+```ini
+[paths]
+data_dir = /portal-certs/ivnp/data
+state_dir = /portal-certs/ivnp/data/state
+state_path = /portal-certs/ivnp/data/state/router.state
+key_path = /portal-certs/ivnp/data/state/router.keys
+
+[sam]
+enabled = false
+
+[addressbook]
+enabled = false
+```
+
+Portal uses the embedded destination API, so this example disables the separate
+SAM listener and hostname address book. Portal runs its embedded IVNP router
+with **one-hop I2P tunnels**, overriding `[tunnel] hops` in the supplied config.
+This trades anonymity margin for lower latency; it is not a Portal relay-chain
+length. Other transport, reseed and tunnel settings remain under IVNP config
+control. No router or management ports are published by Compose. Review any
+additional listeners in an existing configuration before enabling them, and
+allow the router's outbound reseed and transport connections through your
+firewall.
+
+The image runs as the distroless `nonroot` user (UID/GID `65532:65532`). IVNP
+requires its config and private state to be owned by that user, not merely
+readable. After saving the file, set ownership and private permissions:
+
+```bash
+sudo chown -R 65532:65532 ./.portal-certs/ivnp
+sudo chmod 700 ./.portal-certs/ivnp ./.portal-certs/ivnp/data ./.portal-certs/ivnp/data/state
+sudo chmod 600 ./.portal-certs/ivnp/ivnp.conf
+```
+
+The parent `./.portal-certs` directory must also be traversable by the container
+user and writable for Portal's own identity and certificate files. Keep IVNP
+config and private files as regular files, not symlinks or hard links. When
+copying existing router state, retain owner-only permissions (`600` for private
+files) and do not share its state/key paths with another running router.
+
+Then set these values in `.env`:
+
+```dotenv
+DISCOVERY=true
+IVNP_CONFIG=/portal-certs/ivnp/ivnp.conf
+```
+
+The config is read from `/portal-certs/ivnp/ivnp.conf`; data and caches stay under
+`/portal-certs/ivnp/data`, and writable router state, keys and associated state
+files stay under `/portal-certs/ivnp/data/state`. All persist on the host under
+`./.portal-certs/ivnp`. If you change `IDENTITY_PATH`, update `IVNP_CONFIG` and
+every absolute path in the router config to match the new container mount
+point. Explicit relative paths in IVNP config resolve against its containing
+directory, but the omitted `data_dir` default is `./data` relative to the
+process working directory; set it explicitly as above. If reusing a config
+with address-book files or bootstrap RouterInfo files, those paths must also
+refer to readable files inside the container, with any writable address-book
+state kept under the mounted directory.
+
+Public HTTPS continues serving while IVNP publishes its destination and warms
+routes in the background. Discovery advertises the IVNP destination only after
+readiness, not merely because a config was supplied. Cold-start reseeding and
+tunnel construction can take several minutes; an HTTPS health check succeeding
+does not mean the IVNP destination is ready yet.
+
 ## Custom Community Frontend
 
 Portal serves the official embedded SPA when `PORTAL_FRONTEND_DIR` is empty.
