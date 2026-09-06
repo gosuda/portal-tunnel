@@ -23,10 +23,22 @@ func TestDNSSECKeyWriteFailure(t *testing.T) {
 	if path := os.Getenv(childPathEnv); path != "" {
 		// A subprocess contains the process-wide limit and signal disposition.
 		// Permit one byte so this exercises a partial write, not just creation.
-		signal.Ignore(unix.SIGXFSZ)
-		if err := unix.Setrlimit(unix.RLIMIT_FSIZE, &unix.Rlimit{Cur: 1, Max: 1}); err != nil {
+		var original unix.Rlimit
+		if err := unix.Getrlimit(unix.RLIMIT_FSIZE, &original); err != nil {
 			t.Fatal(err)
 		}
+		limited := original
+		limited.Cur = 1
+		signal.Ignore(unix.SIGXFSZ)
+		if err := unix.Setrlimit(unix.RLIMIT_FSIZE, &limited); err != nil {
+			t.Fatal(err)
+		}
+		// Keep the hard limit intact and restore before the test binary writes coverage.
+		t.Cleanup(func() {
+			if err := unix.Setrlimit(unix.RLIMIT_FSIZE, &original); err != nil {
+				t.Errorf("restore file-size limit: %v", err)
+			}
+		})
 		p, err := New(Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: path})
 		if err == nil {
 			_ = p.Stop()
