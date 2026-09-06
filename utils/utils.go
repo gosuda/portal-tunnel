@@ -9,10 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"net/url"
 	"path"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -136,46 +134,6 @@ func isPlainDNSLabel(label string) bool {
 		return false
 	}
 	return true
-}
-
-// NormalizeHTTPRedirectConfig validates redirect settings without resolving names
-// or binding sockets. Listener availability is checked only when the server starts.
-func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string) (types.HTTPRedirectConfig, error) {
-	if !cfg.Enabled {
-		return cfg, nil
-	}
-	target, err := url.Parse(strings.TrimSpace(portalURL))
-	if err != nil {
-		return types.HTTPRedirectConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
-	}
-	hasHTTPSOrigin := target.Scheme == "https" && NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
-	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
-		return types.HTTPRedirectConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
-	}
-	if port := target.Port(); port != "" {
-		n, err := strconv.Atoi(port)
-		if err != nil || n < 1 || n > 65535 {
-			return types.HTTPRedirectConfig{}, errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
-		}
-	}
-	cfg.Addr = StringOrDefault(strings.TrimSpace(cfg.Addr), types.DefaultHTTPRedirectAddr)
-	host, port, err := net.SplitHostPort(cfg.Addr)
-	if err != nil {
-		return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR must be a host:port address: %w", err)
-	}
-	if strings.ContainsAny(host, " \t\r\n/#?@\\") {
-		return types.HTTPRedirectConfig{}, errors.New("http redirect HTTP_REDIRECT_ADDR has an invalid host")
-	}
-	if strings.Contains(host, ":") {
-		if _, err := netip.ParseAddr(host); err != nil {
-			return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR has an invalid IP address: %w", err)
-		}
-	}
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 0 || n > 65535 {
-		return types.HTTPRedirectConfig{}, errors.New("http redirect HTTP_REDIRECT_ADDR port must be between 0 and 65535")
-	}
-	return cfg, nil
 }
 
 func NormalizeRelayURL(raw string) (string, error) {

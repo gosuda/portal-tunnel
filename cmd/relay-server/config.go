@@ -16,6 +16,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	portalx402 "github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -74,7 +75,7 @@ func httpRedirectFeature(cfg relayServerConfig) feature {
 		return f
 	}
 	f.By = types.HTTPRedirectEnabledEnv + "=true"
-	redirect, err := utils.NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
+	redirect, err := portal.NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
 	if err != nil {
 		f.State, f.Missing = stateBlocked, err.Error()
 		return f
