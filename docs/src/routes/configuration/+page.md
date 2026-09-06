@@ -70,9 +70,16 @@ paths and queries are discarded; this does not implement per-tenant redirects.
 Existing URL normalization retains a configured base path, removes trailing
 slashes and the legacy `/relay` suffix, and drops configured queries/fragments.
 Enabling redirects requires an explicit absolute HTTPS `PORTAL_URL` without
-credentials and with a valid port. Disabled mode preserves existing loopback
-HTTP-to-HTTPS URL normalization. Bind failures fail startup; shutdown releases
-the listener. The listener uses bounded read, write, and idle timeouts.
+credentials and with a valid port; HTTPS scheme spelling is case-insensitive.
+The listen address must use `host:port` syntax (bracket IPv6 addresses) with a
+numeric port from 0 to 65535; port 0 requests an automatically assigned port.
+`relay-server config` reports invalid targets or listen-address syntax as
+`blocked`. Reporting only validates configuration: it does not resolve listen
+hosts or bind sockets, so `enabled` is not a readiness check. Bind failures,
+including occupied ports or unavailable hosts, still fail startup.
+Disabled mode preserves existing loopback HTTP-to-HTTPS URL normalization.
+Shutdown releases the listener. The listener uses bounded read, write, and idle
+timeouts.
 
 **Browsers ignore HSTS received over HTTP.** This optional insecure-response
 header does not protect clients or establish HSTS. Effective HSTS must be served

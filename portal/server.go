@@ -9,8 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,30 +39,28 @@ const (
 )
 
 type ServerConfig struct {
-	PortalURL           string
-	IdentityPath        string
-	Bootstraps          []string
-	DiscoveryEnabled    bool
-	WireGuardPort       int
-	APIPort             int
-	SNIPort             int
-	HTTPRedirectEnabled bool
-	HTTPRedirectAddr    string
-	HTTPRedirectHSTS    bool
-	APIListenAddr       string
-	SNIListenAddr       string
-	TrustProxyHeaders   bool
-	TrustedProxyCIDRs   string
-	UDPEnabled          bool
-	TCPEnabled          bool
-	MinPort             int
-	MaxPort             int
-	PProfEnabled        bool
-	PProfListenAddr     string
-	X402Enabled         bool
-	X402Testnet         bool
-	X402PayTo           string
-	ACME                acme.Config
+	PortalURL         string
+	IdentityPath      string
+	Bootstraps        []string
+	DiscoveryEnabled  bool
+	WireGuardPort     int
+	APIPort           int
+	SNIPort           int
+	HTTPRedirect      types.HTTPRedirectConfig
+	APIListenAddr     string
+	SNIListenAddr     string
+	TrustProxyHeaders bool
+	TrustedProxyCIDRs string
+	UDPEnabled        bool
+	TCPEnabled        bool
+	MinPort           int
+	MaxPort           int
+	PProfEnabled      bool
+	PProfListenAddr   string
+	X402Enabled       bool
+	X402Testnet       bool
+	X402PayTo         string
+	ACME              acme.Config
 }
 
 func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
@@ -74,23 +70,11 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		return ServerConfig{}, errors.New("identity path is required")
 	}
 
-	if cfg.HTTPRedirectEnabled {
-		target, err := url.Parse(cfg.PortalURL)
-		if err != nil {
-			return ServerConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
-		}
-		hasHTTPSOrigin := target.Scheme == "https" && target.Hostname() != "" && target.Opaque == ""
-		if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
-			return ServerConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
-		}
-		if port := target.Port(); port != "" {
-			n, err := strconv.Atoi(port)
-			if err != nil || n < 1 || n > 65535 {
-				return ServerConfig{}, errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
-			}
-		}
-		cfg.HTTPRedirectAddr = utils.StringOrDefault(strings.TrimSpace(cfg.HTTPRedirectAddr), ":80")
+	redirect, err := utils.NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
+	if err != nil {
+		return ServerConfig{}, err
 	}
+	cfg.HTTPRedirect = redirect
 
 	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
 	if err != nil {
@@ -323,15 +307,15 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	if err != nil {
 		return err
 	}
-	if cfg.HTTPRedirectEnabled {
-		redirectListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.HTTPRedirectAddr)
+	if cfg.HTTPRedirect.Enabled {
+		redirectListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.HTTPRedirect.Addr)
 		if err != nil {
 			return fmt.Errorf("listen http redirect: %w", err)
 		}
 		redirectServer = &http.Server{
 			DisableGeneralOptionsHandler: true,
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if cfg.HTTPRedirectHSTS {
+				if cfg.HTTPRedirect.HSTS {
 					w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 				}
 				// Canonical portal only: never forward request hosts, paths, or queries.
