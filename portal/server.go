@@ -76,7 +76,11 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 
 	if cfg.HTTPRedirectEnabled {
 		target, err := url.Parse(cfg.PortalURL)
-		if err != nil || target.Scheme != "https" || target.Hostname() == "" || target.User != nil || target.Opaque != "" || strings.HasSuffix(target.Host, ":") {
+		if err != nil {
+			return ServerConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
+		}
+		hasHTTPSOrigin := target.Scheme == "https" && target.Hostname() != "" && target.Opaque == ""
+		if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
 			return ServerConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
 		}
 		if port := target.Port(); port != "" {
