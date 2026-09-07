@@ -12,6 +12,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // RelaySet owns the shared relay discovery view: configured bootstrap relay URLs,
@@ -398,10 +399,26 @@ type Route struct {
 	// lease remains at RelayURL; IngressDestination is its IVNP destination.
 	GatewayURL         string
 	IngressDestination string
+	// GatewayDestination binds the reverse capability to the gateway peer.
+	GatewayDestination string
 }
 
 func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
 	now := time.Now().UTC()
+	normalizedExplicit := make([]string, 0, len(routeState.ExplicitRelayURLs))
+	seenExplicit := make(map[string]struct{}, len(routeState.ExplicitRelayURLs))
+	for _, relayURL := range routeState.ExplicitRelayURLs {
+		normalizedURL, err := utils.NormalizeRelayURL(relayURL)
+		if err != nil {
+			continue
+		}
+		if _, ok := seenExplicit[normalizedURL]; ok {
+			continue
+		}
+		seenExplicit[normalizedURL] = struct{}{}
+		normalizedExplicit = append(normalizedExplicit, normalizedURL)
+	}
+	routeState.ExplicitRelayURLs = normalizedExplicit
 	states := s.currentRelayStates(now)
 	if len(routeState.ExplicitRelayURLs) > 0 {
 		seen := make(map[string]struct{}, len(states))
@@ -423,7 +440,6 @@ func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
 		}
 	}
 
-	ranked := SelectPriority(states, routeState)
 	var gateways []string
 	var ivnpRelays = make(map[string]types.RelayDescriptor)
 	if routeState.IVNP {
@@ -439,8 +455,10 @@ func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
 			ivnpRelays[desc.APIHTTPSAddr] = desc
 			candidates = append(candidates, state)
 		}
+		states = candidates
 		gateways = RankRelayPool(candidates, routeState.LocalAddress, routeState.SelectionEpoch)
 	}
+	ranked := SelectPriority(states, routeState)
 	routes := make([]Route, 0, len(ranked))
 	for _, relayURL := range ranked {
 		route := Route{RelayURL: relayURL, Explicit: slices.Contains(routeState.ExplicitRelayURLs, relayURL)}
@@ -455,6 +473,7 @@ func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
 				}
 				route.GatewayURL = gateway
 				route.IngressDestination = ingress.IVNPDestination
+				route.GatewayDestination = ivnpRelays[gateway].IVNPDestination
 				break
 			}
 			if route.GatewayURL == "" {

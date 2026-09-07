@@ -386,6 +386,36 @@ func (r *leaseRegistry) admitLeaseByToken(token string, requireDatagram bool) (*
 	return record, nil
 }
 
+func (r *leaseRegistry) admitReverseAccessToken(token, ingressDestination, peerDestination string) (*leaseRecord, error) {
+	if r == nil {
+		return nil, errFeatureUnavailable
+	}
+	claims, err := auth.VerifyReverseAccessToken(
+		token,
+		r.tokenAuthority.Identity().PublicKey,
+		r.tokenIssuer,
+		ingressDestination,
+		peerDestination,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		return nil, errUnauthorized
+	}
+	r.mu.RLock()
+	record := r.recordByKey(claims.Identity.Key(), time.Now().UTC())
+	r.mu.RUnlock()
+	if record == nil {
+		return nil, errLeaseNotFound
+	}
+	if !r.policy.IsIdentityRoutable(record.Key()) {
+		return nil, errLeaseRejected
+	}
+	if record.stream == nil {
+		return nil, errTransportMismatch
+	}
+	return record, nil
+}
+
 func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.RenewResponse, error) {
 	if r == nil {
 		return types.RenewResponse{}, errFeatureUnavailable

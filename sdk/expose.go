@@ -315,7 +315,7 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 
 	relayByURL := make(map[string]types.AgentRelayStatus, len(listeners))
 	for _, listener := range listeners {
-		relayURL := listener.route.RelayURL
+		relayURL := listener.routeSnapshot().RelayURL
 		explicit := slices.Contains(cfg.RelayURLs, relayURL)
 		snap := types.AgentRelayStatus{
 			RelayURL:   relayURL,
@@ -644,8 +644,15 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	staleListeners := make(map[string]*listener)
 	for relayURL, listener := range e.relayListeners {
 		route, wanted := routesByRelay[relayURL]
-		if wanted && listener != nil && listener.route == route {
-			continue
+		if wanted && listener != nil {
+			current := listener.routeSnapshot()
+			if current == route {
+				continue
+			}
+			if current.RelayURL == route.RelayURL {
+				listener.updateRoute(route)
+				continue
+			}
 		}
 		staleListeners[relayURL] = listener
 		delete(e.relayListeners, relayURL)
@@ -744,7 +751,7 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 		return
 	}
 
-	relayURL := listener.route.RelayURL
+	relayURL := listener.routeSnapshot().RelayURL
 	if listener.udpEnabled {
 		go func() {
 			for {

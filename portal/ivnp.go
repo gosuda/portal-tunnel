@@ -16,6 +16,7 @@ import (
 
 	"gosuda.org/ivnp"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -49,7 +50,8 @@ func (s *Server) startIVNP(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.ivnpSlots = make(chan struct{}, 128)
+	s.ivnpInboundSlots = make(chan struct{}, 128)
+	s.ivnpOutboundSlots = make(chan struct{}, 128)
 	return nil
 }
 
@@ -57,14 +59,28 @@ func (s *Server) runIVNP(ctx context.Context) error {
 	defer s.ivnpReady.Store(false)
 	ready, ok := s.ivnpEndpoint.(ivnp.ReadyDestinationEndpoint)
 	if !ok {
-		return errors.New("ivnp endpoint does not report readiness")
+		log.Error().Msg("ivnp endpoint does not report readiness; overlay disabled")
+		return nil
 	}
 	log.Info().Msg("ivnp publishing and warming up in background")
-	if err := ready.WaitReady(ctx); err != nil {
-		if ctx.Err() != nil {
-			return nil
+	for {
+		if err := ready.WaitReady(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			log.Warn().Err(err).Msg("ivnp readiness failed; retrying without stopping public ingress")
+			timer := time.NewTimer(30 * time.Second)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return nil
+			case <-timer.C:
+			}
+			continue
 		}
-		return fmt.Errorf("wait for ivnp readiness: %w", err)
+		break
 	}
 	if ctx.Err() != nil {
 		return nil
@@ -80,8 +96,8 @@ func (s *Server) runIVNP(ctx context.Context) error {
 			return err
 		}
 		select {
-		case s.ivnpSlots <- struct{}{}:
-			go func() { defer func() { <-s.ivnpSlots }(); s.acceptIVNPReverse(conn) }()
+		case s.ivnpInboundSlots <- struct{}{}:
+			go func() { defer func() { <-s.ivnpInboundSlots }(); s.acceptIVNPReverse(conn) }()
 		default:
 			_ = conn.SetDeadline(time.Now())
 			_ = conn.Close()
@@ -106,16 +122,22 @@ func (s *Server) acceptIVNPReverse(conn net.Conn) {
 	if _, err := io.ReadFull(conn, token); err != nil {
 		return
 	}
-	lease, err := s.registry.admitLeaseByToken(string(token), false)
+	peerDestination, err := transport.IVNPPeerDestination(conn)
 	if err != nil {
 		_, _ = conn.Write([]byte{0})
 		return
 	}
-	if _, err := conn.Write([]byte{types.IVNPReverseAccepted}); err != nil {
+	lease, err := s.registry.admitReverseAccessToken(string(token), s.ivnpEndpoint.B32(), peerDestination)
+	if err != nil {
+		_, _ = conn.Write([]byte{0})
+		return
+	}
+	if err := lease.stream.OfferConn(conn); err != nil {
+		_, _ = conn.Write([]byte{types.IVNPReverseCapacity})
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	if err := lease.stream.OfferConn(conn); err != nil {
+	if _, err := conn.Write([]byte{types.IVNPReverseAccepted}); err != nil {
 		return
 	}
 	accepted = true
@@ -138,29 +160,33 @@ func (s *Server) closeIVNP() {
 // connectThroughIVNP attaches an SDK socket to the ingress's existing reverse
 // queue. The ingress alone validates its token, owns its lease, and claims the
 // stream. The gateway owns only these paired live connections.
-func (s *Server) connectThroughIVNP(w http.ResponseWriter, r *http.Request, destination, token string) {
+func (s *Server) connectThroughIVNP(w http.ResponseWriter, r *http.Request, destination, token, clientIP string) {
 	if !s.ivnpReady.Load() {
 		writeAPIErrorResponse(w, errFeatureUnavailable)
-		return
-	}
-	select {
-	case s.ivnpSlots <- struct{}{}:
-		defer func() { <-s.ivnpSlots }()
-	default:
-		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "ivnp reverse capacity exhausted")
 		return
 	}
 	if token == "" || len(token) > types.IVNPTokenLimit {
 		writeAPIErrorResponse(w, errUnauthorized)
 		return
 	}
-	ingress, err := s.relaySet.IVNPRelay(destination)
+	destination, err := utils.NormalizeIVNPDestination(destination)
 	if err != nil || destination == s.ivnpEndpoint.B32() {
 		writeAPIErrorResponse(w, errUnauthorized)
 		return
 	}
+	if s.ivnpAdmission != nil && !s.ivnpAdmission.Allow(clientIP) {
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "ivnp reverse admission rate limit exceeded")
+		return
+	}
+	select {
+	case s.ivnpOutboundSlots <- struct{}{}:
+		defer func() { <-s.ivnpOutboundSlots }()
+	default:
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "ivnp reverse capacity exhausted")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), defaultClaimTimeout)
-	upstream, err := s.relaySet.DialIVNP(ctx, s.ivnpEndpoint, destination, types.IVNPStreamPort)
+	upstream, err := transport.DialIVNP(ctx, s.ivnpEndpoint, destination, types.IVNPStreamPort)
 	cancel()
 	if err != nil {
 		writeAPIErrorResponse(w, errFeatureUnavailable)
@@ -180,7 +206,15 @@ func (s *Server) connectThroughIVNP(w http.ResponseWriter, r *http.Request, dest
 		return
 	}
 	var response [1]byte
-	if _, err := io.ReadFull(upstream, response[:]); err != nil || response[0] != types.IVNPReverseAccepted {
+	if _, err := io.ReadFull(upstream, response[:]); err != nil {
+		writeAPIErrorResponse(w, errFeatureUnavailable)
+		return
+	}
+	if response[0] == types.IVNPReverseCapacity {
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "ivnp reverse capacity exhausted")
+		return
+	}
+	if response[0] != types.IVNPReverseAccepted {
 		writeAPIErrorResponse(w, errUnauthorized)
 		return
 	}
@@ -205,7 +239,7 @@ func (s *Server) connectThroughIVNP(w http.ResponseWriter, r *http.Request, dest
 	}
 	_ = downstream.SetDeadline(time.Time{})
 	_ = upstream.SetDeadline(time.Time{})
-	s.proxy.bridge(&bufferedIVNPConn{Conn: downstream, reader: buffered.Reader}, upstream, ingress.Address, s.registry.policy.BPSManager())
+	s.proxy.bridge(&bufferedIVNPConn{Conn: downstream, reader: buffered.Reader}, upstream, "", s.registry.policy.BPSManager())
 }
 
 type bufferedIVNPConn struct {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base32"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -56,7 +58,9 @@ func (l *listener) resetTransport() {
 	l.httpClient = nil
 	l.httpTransport = nil
 	l.tlsConfig = nil
+	l.routeMu.Lock()
 	l.gatewayTLS = nil
+	l.routeMu.Unlock()
 }
 
 func (l *listener) initHTTPTransport(ctx context.Context) error {
@@ -84,25 +88,47 @@ func (l *listener) initHTTPTransport(ctx context.Context) error {
 	}
 
 	l.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
-	if l.route.GatewayURL != "" {
-		gatewayURL, err := url.Parse(l.route.GatewayURL)
-		if err != nil {
+	route := l.routeSnapshot()
+	if route.GatewayURL != "" {
+		if _, err := l.gatewayTLSForRoute(bootstrapCtx, route); err != nil {
 			httpTransport.CloseIdleConnections()
-			return err
+			return &relayEndpointError{relayURL: route.GatewayURL, err: err}
 		}
-		gatewayTLS, _, gatewayTransport, err := utils.NewHTTPTLSClient(bootstrapCtx, gatewayURL, l.requestTimeout)
-		if err != nil {
-			httpTransport.CloseIdleConnections()
-			return &relayEndpointError{relayURL: l.route.GatewayURL, err: err}
-		}
-		gatewayTransport.CloseIdleConnections()
-		l.gatewayTLS = gatewayTLS
 	}
 
 	l.httpClient = httpClient
 	l.httpTransport = httpTransport
 	l.tlsConfig = tlsConfig
 	return nil
+}
+
+func (l *listener) gatewayTLSForRoute(ctx context.Context, route discovery.Route) (*tls.Config, error) {
+	if route.GatewayURL == "" {
+		return nil, errors.New("gateway route is unavailable")
+	}
+	l.routeMu.RLock()
+	if l.route.GatewayURL == route.GatewayURL && l.gatewayTLS != nil {
+		config := l.gatewayTLS.Clone()
+		l.routeMu.RUnlock()
+		return config, nil
+	}
+	l.routeMu.RUnlock()
+
+	gatewayURL, err := url.Parse(route.GatewayURL)
+	if err != nil {
+		return nil, err
+	}
+	gatewayTLS, _, gatewayTransport, err := utils.NewHTTPTLSClient(ctx, gatewayURL, l.requestTimeout)
+	if err != nil {
+		return nil, err
+	}
+	gatewayTransport.CloseIdleConnections()
+	l.routeMu.Lock()
+	if l.route.GatewayURL == route.GatewayURL {
+		l.gatewayTLS = gatewayTLS
+	}
+	l.routeMu.Unlock()
+	return gatewayTLS.Clone(), nil
 }
 
 func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnabled, tcpEnabled bool) (types.RegisterResponse, string, string, error) {
@@ -203,4 +229,19 @@ func (l *listener) unregisterLease(ctx context.Context, accessToken string) erro
 		AccessToken: accessToken,
 	}, nil, nil)
 	return err
+}
+
+func (l *listener) issueReverseAccessToken(ctx context.Context, accessToken string, route discovery.Route) (string, error) {
+	var resp types.ReverseTokenResponse
+	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKReverseToken, types.ReverseTokenRequest{
+		AccessToken:        accessToken,
+		IngressDestination: route.IngressDestination,
+		GatewayDestination: route.GatewayDestination,
+	}, nil, &resp); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(resp.AccessToken) == "" {
+		return "", errors.New("relay did not return reverse access token")
+	}
+	return strings.TrimSpace(resp.AccessToken), nil
 }

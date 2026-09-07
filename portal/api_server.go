@@ -103,6 +103,8 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 			s.handleRenew(w, r)
 		case types.PathSDKUnregister:
 			s.handleUnregister(w, r)
+		case types.PathSDKReverseToken:
+			s.handleReverseToken(w, r)
 		case types.PathSDKConnect:
 			s.handleConnect(w, r)
 		case types.PathDiscovery:
@@ -410,6 +412,54 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 }
 
+func (s *Server) handleReverseToken(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if _, ok := s.extractAllowedClientIP(w, r); !ok {
+		return
+	}
+	req, ok := utils.DecodeJSONRequest[types.ReverseTokenRequest](w, r, defaultControlBodyLimit)
+	if !ok {
+		return
+	}
+	if s.ivnpEndpoint == nil {
+		writeAPIErrorResponse(w, errFeatureUnavailable)
+		return
+	}
+	ingressDestination, err := utils.NormalizeIVNPDestination(req.IngressDestination)
+	if err != nil || ingressDestination != s.ivnpEndpoint.B32() {
+		writeAPIErrorResponse(w, errUnauthorized)
+		return
+	}
+	gatewayDestination, err := utils.NormalizeIVNPDestination(req.GatewayDestination)
+	if err != nil {
+		writeAPIErrorResponse(w, errUnauthorized)
+		return
+	}
+	lease, err := s.registry.admitLeaseByToken(req.AccessToken, false)
+	if err != nil {
+		writeAPIErrorResponse(w, err)
+		return
+	}
+	token, claims, err := auth.IssueReverseAccessToken(
+		s.registry.tokenAuthority,
+		s.registry.tokenIssuer,
+		lease.Identity,
+		ingressDestination,
+		gatewayDestination,
+		defaultClaimTimeout,
+	)
+	if err != nil {
+		writeAPIErrorResponse(w, err)
+		return
+	}
+	utils.WriteAPIData(w, http.StatusOK, types.ReverseTokenResponse{
+		AccessToken: token,
+		ExpiresAt:   claims.Expiry.Time().UTC(),
+	})
+}
+
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
@@ -426,7 +476,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if destination := r.Header.Get(types.HeaderIVNPDestination); destination != "" {
-		s.connectThroughIVNP(w, r, destination, token)
+		s.connectThroughIVNP(w, r, destination, token, clientIP)
 		return
 	}
 

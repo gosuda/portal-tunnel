@@ -94,7 +94,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 	}
 
 	report := MITMProbeReport{
-		RelayURL:  l.route.RelayURL,
+		RelayURL:  l.routeSnapshot().RelayURL,
 		PublicURL: publicURL,
 		Address:   l.identity.Address,
 	}
@@ -186,7 +186,7 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	}
 
 	dialHost := parsedURL.Host
-	entryRelayURL, err := url.Parse(l.route.RelayURL)
+	entryRelayURL, err := url.Parse(l.routeSnapshot().RelayURL)
 	if err != nil {
 		return "", fmt.Errorf("parse ingress relay url: %w", err)
 	}

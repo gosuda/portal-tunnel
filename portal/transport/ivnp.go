@@ -45,7 +45,12 @@ func DialIVNP(ctx context.Context, endpoint ivnp.DestinationEndpoint, destinatio
 		return nil, err
 	}
 	peer, err := IVNPPeerDestination(conn)
-	if err != nil || peer != destination {
+	if err != nil {
+		_ = conn.SetDeadline(time.Now())
+		_ = conn.Close()
+		return nil, err
+	}
+	if peer != destination {
 		_ = conn.SetDeadline(time.Now())
 		_ = conn.Close()
 		return nil, errors.New("ivnp authenticated peer does not match dial target")

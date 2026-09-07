@@ -18,7 +18,21 @@ import (
 )
 
 func TestIVNPReverseExecutesSelectedGateway(t *testing.T) {
+	ingressServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != types.PathSDKReverseToken {
+			http.NotFound(w, r)
+			return
+		}
+		utils.WriteAPIData(w, http.StatusOK, types.ReverseTokenResponse{AccessToken: "reverse-token"})
+	}))
+	defer ingressServer.Close()
 	gateway := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(types.HeaderAccessToken); got != "reverse-token" {
+			t.Errorf("gateway access token = %q, want scoped reverse token", got)
+		}
+		if got := r.Header.Get(types.HeaderIVNPDestination); got != "selected.b32.i2p" {
+			t.Errorf("gateway ingress destination = %q", got)
+		}
 		conn, buffered, err := w.(http.Hijacker).Hijack()
 		if err != nil {
 			return
@@ -29,11 +43,12 @@ func TestIVNPReverseExecutesSelectedGateway(t *testing.T) {
 		_ = buffered.Flush()
 	}))
 	defer gateway.Close()
-	ingress, _ := url.Parse("https://ingress.example")
+	ingress, _ := url.Parse(ingressServer.URL)
 	l := &listener{
 		relayURL:  ingress,
-		route:     discovery.Route{RelayURL: ingress.String(), GatewayURL: gateway.URL, IngressDestination: "selected.b32.i2p"},
+		route:     discovery.Route{RelayURL: ingress.String(), GatewayURL: gateway.URL, IngressDestination: "selected.b32.i2p", GatewayDestination: "gateway.b32.i2p"},
 		tlsConfig: &tls.Config{}, gatewayTLS: gateway.Client().Transport.(*http.Transport).TLSClientConfig,
+		httpClient:  ingressServer.Client(),
 		dialTimeout: time.Second,
 		lease:       utils.NewSnapshot(listenerSnapshot{accessToken: "ingress-token"}, listenerSnapshot.snapshot),
 	}
@@ -97,7 +112,11 @@ func TestIVNPReverseFailureKeepsHealthyRelaysEligible(t *testing.T) {
 				_ = buffered.Flush()
 			}))
 			defer gateway.Close()
-			ingress, _ := url.Parse("https://ingress.example")
+			ingressServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				utils.WriteAPIData(w, http.StatusOK, types.ReverseTokenResponse{AccessToken: "reverse-token"})
+			}))
+			defer ingressServer.Close()
+			ingress, _ := url.Parse(ingressServer.URL)
 			relaySet := mustRelaySet(t, ingress.String(), gateway.URL)
 			relaySet.ConfirmRelayURL(ingress.String())
 			relaySet.ConfirmRelayURL(gateway.URL)
@@ -105,10 +124,11 @@ func TestIVNPReverseFailureKeepsHealthyRelaysEligible(t *testing.T) {
 			defer cancel()
 			l := &listener{
 				relayURL:    ingress,
-				route:       discovery.Route{RelayURL: ingress.String(), GatewayURL: gateway.URL, IngressDestination: "selected.b32.i2p"},
+				route:       discovery.Route{RelayURL: ingress.String(), GatewayURL: gateway.URL, IngressDestination: "selected.b32.i2p", GatewayDestination: "gateway.b32.i2p"},
 				relaySet:    relaySet,
 				tlsConfig:   &tls.Config{},
 				gatewayTLS:  gateway.Client().Transport.(*http.Transport).TLSClientConfig,
+				httpClient:  ingressServer.Client(),
 				dialTimeout: time.Second,
 				retryCount:  10,
 				stream:      transport.NewClientStream(1, time.Second),

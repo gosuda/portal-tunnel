@@ -176,15 +176,17 @@ func (cfg ServerConfig) hasLeasePortRange() bool {
 }
 
 type Server struct {
-	ivnpNode     *ivnp.Node
-	ivnpEndpoint ivnp.DestinationEndpoint
-	ivnpListener net.Listener
-	ivnpReady    atomic.Bool
-	ivnpSlots    chan struct{}
-	ivnpContext  context.Context
-	cancel       context.CancelFunc
-	group        *errgroup.Group
-	shutdownOnce sync.Once
+	ivnpNode          *ivnp.Node
+	ivnpEndpoint      ivnp.DestinationEndpoint
+	ivnpListener      net.Listener
+	ivnpReady         atomic.Bool
+	ivnpInboundSlots  chan struct{}
+	ivnpOutboundSlots chan struct{}
+	ivnpAdmission     *discovery.AnnounceLimiter
+	ivnpContext       context.Context
+	cancel            context.CancelFunc
+	group             *errgroup.Group
+	shutdownOnce      sync.Once
 
 	cfg         *utils.Snapshot[ServerConfig]
 	identity    types.RelayIdentity
@@ -242,6 +244,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		registry:        registry,
 		relaySet:        relaySet,
 		announceLimiter: discovery.NewAnnounceLimiter(0, 0),
+		ivnpAdmission:   discovery.NewAnnounceLimiter(600, 60),
 	}
 	server.registry.proxy = &server.proxy
 	return server, nil

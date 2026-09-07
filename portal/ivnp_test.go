@@ -71,7 +71,13 @@ func TestIVNPReverseBackhaul(t *testing.T) {
 				record.Close()
 			}
 		})
-		servers[i] = &Server{registry: registry, relaySet: discovery.NewRelaySet(nil), ivnpEndpoint: &ivnpTestEndpoint{network: network}, ivnpSlots: make(chan struct{}, 4)}
+		servers[i] = &Server{
+			registry:          registry,
+			relaySet:          discovery.NewRelaySet(nil),
+			ivnpEndpoint:      &ivnpTestEndpoint{network: network},
+			ivnpInboundSlots:  make(chan struct{}, 4),
+			ivnpOutboundSlots: make(chan struct{}, 4),
+		}
 		servers[i].ivnpReady.Store(true)
 		servers[i].ivnpContext = ctx
 		now := time.Now().UTC()
@@ -105,6 +111,17 @@ func TestIVNPReverseBackhaul(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reverseToken, _, err := auth.IssueReverseAccessToken(
+		ingress.registry.tokenAuthority,
+		ingress.registry.tokenIssuer,
+		registered.Identity,
+		descriptors[0].IVNPDestination,
+		descriptors[1].IVNPDestination,
+		defaultClaimTimeout,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, invalidToken := range []string{"", "invalid"} {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, gatewayHTTP.URL+types.PathSDKConnect, nil)
@@ -128,7 +145,7 @@ func TestIVNPReverseBackhaul(t *testing.T) {
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	req, _ := http.NewRequest(http.MethodGet, gatewayHTTP.URL+types.PathSDKConnect, nil)
 	req.Header.Set(types.HeaderIVNPDestination, descriptors[0].IVNPDestination)
-	req.Header.Set(types.HeaderAccessToken, registered.AccessToken)
+	req.Header.Set(types.HeaderAccessToken, reverseToken)
 	if err := req.Write(conn); err != nil {
 		t.Fatal(err)
 	}

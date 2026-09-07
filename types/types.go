@@ -16,6 +16,7 @@ const (
 	HeaderIVNPDestination  = "X-Portal-IVNP-Destination"
 	IVNPStreamPort         = "4017"
 	IVNPReverseAccepted    = byte(1)
+	IVNPReverseCapacity    = byte(2)
 	IVNPTokenLimit         = 4096
 	HeaderXPayment         = "X-PAYMENT"
 	HeaderPaymentSignature = "PAYMENT-SIGNATURE"

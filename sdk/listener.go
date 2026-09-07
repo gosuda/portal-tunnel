@@ -40,6 +40,7 @@ type listenerConfig struct {
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
+var errIVNPRouteRefresh = errors.New("ivnp route refresh required")
 
 // ivnpRouteError preserves an end-to-end reverse-route failure without blaming
 // either relay's public endpoint. Unwrap retains retry and terminal semantics.
@@ -80,7 +81,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 	if !isTerminalRelayError(err) {
 		return false
 	}
-	relayURL := l.route.RelayURL
+	relayURL := l.routeSnapshot().RelayURL
 	var registrationErr *relayEndpointError
 	if errors.As(err, &registrationErr) && registrationErr.relayURL != "" {
 		relayURL = registrationErr.relayURL
@@ -110,6 +111,7 @@ type listener struct {
 	cancel    context.CancelFunc
 	doneCh    <-chan struct{}
 	closeOnce sync.Once
+	routeMu   sync.RWMutex
 
 	relayURL       *url.URL
 	route          discovery.Route
@@ -139,6 +141,21 @@ type listener struct {
 	releaseVersion string
 
 	lease *utils.Snapshot[listenerSnapshot]
+}
+
+func (l *listener) routeSnapshot() discovery.Route {
+	l.routeMu.RLock()
+	defer l.routeMu.RUnlock()
+	return l.route
+}
+
+func (l *listener) updateRoute(route discovery.Route) {
+	l.routeMu.Lock()
+	if l.route.GatewayURL != route.GatewayURL || l.route.GatewayDestination != route.GatewayDestination {
+		l.gatewayTLS = nil
+	}
+	l.route = route
+	l.routeMu.Unlock()
 }
 
 // newListener creates one public relay listener.
@@ -243,7 +260,7 @@ func (l *listener) run(ctx context.Context) {
 		if udpAddr != "" || tcpAddr != "" {
 			event.Msg("raw transport endpoints allocated")
 		} else if publicURL != "" {
-			logHTTPReady(l.identity.Address, publicURL, l.route.RelayURL)
+			logHTTPReady(l.identity.Address, publicURL, l.routeSnapshot().RelayURL)
 		} else {
 			event.Msg("relay listener registered")
 		}
@@ -498,41 +515,61 @@ func (l *listener) runLease(ctx context.Context) error {
 		}
 		return errLeaseRefreshRequired
 	}
-	leaseCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	errCh := make(chan error, max(l.readyTarget, 1)+1)
-	if l.stream != nil && l.readyTarget > 0 {
-		for sessionSlot := range l.readyTarget {
-			sessionSlot++
-			go func() {
-				if err := l.runReverseSessionLoop(leaseCtx, lease.tlsConfig, sessionSlot); err != nil {
-					select {
-					case errCh <- err:
-					case <-leaseCtx.Done():
-					}
-				}
-			}()
-		}
-	}
-	if l.udpEnabled {
-		go l.runDatagramLoop(leaseCtx)
-	}
+	leaseCtx, cancelLease := context.WithCancel(ctx)
+	defer cancelLease()
+	leaseErrCh := make(chan error, 1)
 	go func() {
 		if err := l.runRenewLoop(leaseCtx); err != nil {
 			select {
-			case errCh <- err:
+			case leaseErrCh <- err:
 			case <-leaseCtx.Done():
 			}
 		}
 	}()
+	if l.udpEnabled {
+		go l.runDatagramLoop(leaseCtx)
+	}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-errCh:
-		cancel()
-		return err
+	for {
+		previousRoute := l.routeSnapshot()
+		reverseCtx, cancelReverse := context.WithCancel(leaseCtx)
+		reverseErrCh := make(chan error, max(l.readyTarget, 1))
+		if l.stream != nil && l.readyTarget > 0 {
+			for sessionSlot := range l.readyTarget {
+				sessionSlot++
+				go func() {
+					if err := l.runReverseSessionLoop(reverseCtx, lease.tlsConfig, sessionSlot); err != nil {
+						select {
+						case reverseErrCh <- err:
+						case <-reverseCtx.Done():
+						}
+					}
+				}()
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			cancelReverse()
+			return ctx.Err()
+		case err := <-leaseErrCh:
+			cancelReverse()
+			return err
+		case err := <-reverseErrCh:
+			cancelReverse()
+			if !errors.Is(err, errIVNPRouteRefresh) {
+				return err
+			}
+			for previousRoute == l.routeSnapshot() {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case err := <-leaseErrCh:
+					return err
+				case <-time.After(500 * time.Millisecond):
+				}
+			}
+		}
 	}
 }
 
@@ -550,6 +587,10 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 			}
 			retries++
 			if !l.waitRetry(ctx, "reverse session connect", err, retries, sessionSlot) {
+				var routeErr *ivnpRouteError
+				if errors.As(err, &routeErr) {
+					return fmt.Errorf("%w: %w", errIVNPRouteRefresh, err)
+				}
 				return err
 			}
 			continue
@@ -570,11 +611,15 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 				Msg("tenant tls handshake failed")
 			retries = 0
 		default:
-			if l.route.GatewayURL != "" {
+			if l.routeSnapshot().GatewayURL != "" {
 				err = &ivnpRouteError{err: err}
 			}
 			retries++
 			if !l.waitRetry(ctx, "reverse session connect", err, retries, sessionSlot) {
+				var routeErr *ivnpRouteError
+				if errors.As(err, &routeErr) {
+					return fmt.Errorf("%w: %w", errIVNPRouteRefresh, err)
+				}
 				return err
 			}
 		}
@@ -644,8 +689,9 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 }
 
 func (l *listener) openReverseSession(ctx context.Context) (_ net.Conn, resultErr error) {
+	route := l.routeSnapshot()
 	var failedEndpoint string
-	if l.route.GatewayURL != "" {
+	if route.GatewayURL != "" {
 		defer func() {
 			if resultErr == nil {
 				return
@@ -669,15 +715,15 @@ func (l *listener) openReverseSession(ctx context.Context) (_ net.Conn, resultEr
 
 	endpoint := l.relayURL
 	tlsConfig := l.tlsConfig
-	if l.route.GatewayURL != "" {
+	if route.GatewayURL != "" {
 		var err error
-		endpoint, err = url.Parse(l.route.GatewayURL)
+		endpoint, err = url.Parse(route.GatewayURL)
 		if err != nil {
 			return nil, err
 		}
-		tlsConfig = l.gatewayTLS
-		if tlsConfig == nil {
-			return nil, errors.New("gateway tls config is unavailable")
+		tlsConfig, err = l.gatewayTLSForRoute(ctx, route)
+		if err != nil {
+			return nil, err
 		}
 	}
 	dialer := &tls.Dialer{
@@ -685,7 +731,7 @@ func (l *listener) openReverseSession(ctx context.Context) (_ net.Conn, resultEr
 		Config:    tlsConfig.Clone(),
 	}
 
-	failedEndpoint = l.route.GatewayURL
+	failedEndpoint = route.GatewayURL
 	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(endpoint.Host))
 	if err != nil {
 		return nil, err
@@ -697,9 +743,17 @@ func (l *listener) openReverseSession(ctx context.Context) (_ net.Conn, resultEr
 		Host:   endpoint.Host,
 		Header: make(http.Header),
 	}
-	req.Header.Set(types.HeaderAccessToken, lease.accessToken)
-	if l.route.GatewayURL != "" {
-		req.Header.Set(types.HeaderIVNPDestination, l.route.IngressDestination)
+	accessToken := lease.accessToken
+	if route.GatewayURL != "" {
+		accessToken, err = l.issueReverseAccessToken(ctx, lease.accessToken, route)
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	}
+	req.Header.Set(types.HeaderAccessToken, accessToken)
+	if route.GatewayURL != "" {
+		req.Header.Set(types.HeaderIVNPDestination, route.IngressDestination)
 	}
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "raw")
@@ -945,7 +999,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")
 	}
-	entryURL := l.route.RelayURL
+	entryURL := l.routeSnapshot().RelayURL
 	if l.relaySet != nil && entryURL != "" {
 		l.relaySet.ConfirmRelayURL(entryURL)
 	}
@@ -993,14 +1047,14 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 	}
 
 	if l.retryCount > 0 && retries > l.retryCount {
-		entryURL := l.route.RelayURL
+		entryURL := l.routeSnapshot().RelayURL
 		var endpointErr *relayEndpointError
 		if errors.As(err, &endpointErr) {
 			entryURL = endpointErr.relayURL
 		}
 		var routeErr *ivnpRouteError
 		if errors.As(err, &routeErr) {
-			entryURL = ""
+			entryURL = l.routeSnapshot().GatewayURL
 		}
 		if l.relaySet != nil && entryURL != "" {
 			l.relaySet.UnconfirmRelayURL(entryURL)

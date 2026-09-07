@@ -11,12 +11,14 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // IVNPRelay resolves an authenticated destination against the current HTTPS
 // verified catalog. It does not admit peers supplied by a stream or NetDB.
 func (s *RelaySet) IVNPRelay(destination string) (types.RelayDescriptor, error) {
-	if s == nil || destination == "" {
+	destination, err := utils.NormalizeIVNPDestination(destination)
+	if err != nil || s == nil {
 		return types.RelayDescriptor{}, errors.New("ivnp relay is not admitted")
 	}
 	now := time.Now().UTC()
@@ -46,43 +48,31 @@ func (s *RelaySet) IVNPRelay(destination string) (types.RelayDescriptor, error) 
 	return admitted, nil
 }
 
-// DialIVNP uses already selected relay reachability; it never chooses a route
-// or falls back to a different Portal relay when the selection is invalid.
+// DialIVNP reaches the destination selected by the caller. The authenticated
+// IVNP peer is checked by the transport; route authorization is bound to the
+// reverse capability at the receiving relay rather than re-decided from a
+// potentially stale local HTTPS catalog.
 func (s *RelaySet) DialIVNP(ctx context.Context, endpoint ivnp.DestinationEndpoint, destination, port string) (net.Conn, error) {
-	selected, err := s.IVNPRelay(destination)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := transport.DialIVNP(ctx, endpoint, destination, port)
-	if err != nil {
-		return nil, err
-	}
-	current, err := s.IVNPRelay(destination)
-	if err != nil || current.Address != selected.Address {
-		_ = conn.SetDeadline(time.Now())
-		_ = conn.Close()
-		return nil, errors.New("ivnp relay admission changed during dial")
-	}
-	return conn, nil
+	return transport.DialIVNP(ctx, endpoint, destination, port)
 }
 
-// ListenIVNP gates accepted streams using IVNP-authenticated identity and the
-// existing relay catalog. The caller owns endpoint readiness and lifetime, and
-// must close the returned listener. Listen does not imply I2P readiness.
+// ListenIVNP gates accepted streams using IVNP-authenticated identity. The
+// reverse capability performs the route authorization after the peer identity
+// is known, so this listener does not require a mutually converged HTTPS
+// catalog. The caller owns endpoint readiness and lifetime.
 func (s *RelaySet) ListenIVNP(ctx context.Context, endpoint ivnp.DestinationEndpoint, address string) (net.Listener, error) {
-	if s == nil || endpoint == nil {
-		return nil, errors.New("ivnp endpoint and relay catalog are required")
+	if endpoint == nil {
+		return nil, errors.New("ivnp endpoint is required")
 	}
 	listener, err := endpoint.ListenI2P(ctx, address)
 	if err != nil {
 		return nil, err
 	}
-	return &ivnpRelayListener{Listener: listener, relays: s}, nil
+	return &ivnpRelayListener{Listener: listener}, nil
 }
 
 type ivnpRelayListener struct {
 	net.Listener
-	relays *RelaySet
 }
 
 func (l *ivnpRelayListener) Accept() (net.Conn, error) {
@@ -91,11 +81,7 @@ func (l *ivnpRelayListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		destination, err := transport.IVNPPeerDestination(conn)
-		if err == nil {
-			_, err = l.relays.IVNPRelay(destination)
-		}
-		if err == nil {
+		if _, err := transport.IVNPPeerDestination(conn); err == nil {
 			return conn, nil
 		}
 		// IVNP Close waits for a Streaming CLOSE acknowledgement. Rejected
