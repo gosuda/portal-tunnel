@@ -34,7 +34,6 @@ func main() {
 }
 
 type relayServerConfig struct {
-	IVNPConfigPath     string
 	PortalURL          string
 	FrontendDir        string
 	IdentityPath       string
@@ -104,7 +103,6 @@ func registerRelayServerFlags(fs *flag.FlagSet, cfg *relayServerConfig) {
 	utils.StringFlagEnv(fs, &cfg.IdentityPath, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "bootstrap relay API URLs; merged with bootstrap relays when discovery is enabled", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
-	utils.StringFlagEnv(fs, &cfg.IVNPConfigPath, "ivnp-config", "", "optional IVNP router configuration file; requires discovery", "IVNP_CONFIG")
 
 	utils.BoolFlagEnv(fs, &cfg.HTTPRedirect.Enabled, "http-redirect-enabled", false, "enable HTTP redirects to the canonical HTTPS portal URL (not tenant hosts)", types.HTTPRedirectEnabledEnv)
 	utils.StringFlagEnv(fs, &cfg.HTTPRedirect.Addr, "http-redirect-addr", types.DefaultHTTPRedirectAddr, "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
@@ -178,7 +176,6 @@ func runServeCommand(args []string) error {
 
 func runServer(ctx context.Context, cfg relayServerConfig) error {
 	server, err := portal.NewServer(portal.ServerConfig{
-		IVNPConfigPath:    cfg.IVNPConfigPath,
 		PortalURL:         cfg.PortalURL,
 		HTTPRedirect:      cfg.HTTPRedirect,
 		IdentityPath:      cfg.IdentityPath,

@@ -122,17 +122,6 @@ type UnregisterRequest struct {
 	AccessToken string `json:"access_token"`
 }
 
-type ReverseTokenRequest struct {
-	AccessToken        string `json:"access_token"`
-	IngressDestination string `json:"ingress_destination"`
-	GatewayDestination string `json:"gateway_destination"`
-}
-
-type ReverseTokenResponse struct {
-	AccessToken string    `json:"access_token"`
-	ExpiresAt   time.Time `json:"expires_at"`
-}
-
 type DomainResponse struct {
 	ProtocolVersion string              `json:"protocol_version"`
 	ReleaseVersion  string              `json:"release_version"`

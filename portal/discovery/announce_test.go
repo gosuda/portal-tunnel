@@ -225,31 +225,12 @@ func TestInsertCandidatePerIdentityCapKeepsConfirmedEntries(t *testing.T) {
 	}
 }
 
-func mustSignedOverlayDescriptor(t *testing.T, signing types.Identity, relayURL string, issuedAt time.Time) types.RelayDescriptor {
-	t.Helper()
-	authority, err := identity.NewLocalAuthority(signing)
-	if err != nil {
-		t.Fatalf("identity.NewLocalAuthority() error = %v", err)
-	}
-	signed, err := auth.SignRelayDescriptor(types.RelayDescriptor{
-		Address:      signing.Address,
-		Version:      types.DiscoveryVersion,
-		IssuedAt:     issuedAt,
-		ExpiresAt:    issuedAt.Add(DiscoveryDescriptorTTL),
-		APIHTTPSAddr: relayURL,
-	}, authority)
-	if err != nil {
-		t.Fatalf("SignRelayDescriptor() error = %v", err)
-	}
-	return signed
-}
-
 func TestInsertCandidateHiddenUntilDirectProbe(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	relayURL := "https://hop-forward.example"
-	descriptor := mustSignedOverlayDescriptor(t, signing, relayURL, now)
+	descriptor := mustSignedDescriptor(t, signing, relayURL, now)
 
 	if err := set.InsertCandidate(descriptor, now); err != nil {
 		t.Fatalf("InsertCandidate() error = %v", err)
@@ -284,7 +265,7 @@ func TestFilterCandidatePoolExcludesCandidatesUntilVerified(t *testing.T) {
 	other := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	candidate := RelayState{
-		Descriptor: mustSignedOverlayDescriptor(t, signing, "https://candidate.example", now),
+		Descriptor: mustSignedDescriptor(t, signing, "https://candidate.example", now),
 		LastSeenAt: now,
 	}
 	verified := RelayState{

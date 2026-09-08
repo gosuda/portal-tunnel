@@ -47,7 +47,7 @@ func TestTerminalRelayFailureTargetsTheReportingRelay(t *testing.T) {
 		route:    discovery.Route{RelayURL: entry, Explicit: false},
 		relaySet: mustRelaySet(t, entry, exit),
 	}
-	err := &relayEndpointError{
+	err := &relayRegistrationError{
 		relayURL: exit,
 		err:      fmt.Errorf("%w: unsupported protocol", errRelayIncompatible),
 	}

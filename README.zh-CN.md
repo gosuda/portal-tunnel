@@ -27,8 +27,6 @@ Portal 是一个本地隧道运行时和中继网络。它通过自托管或公�
 
 - **内置 MITM 检测** - Portal 会在真实流量开始后主动自探测自己的连接。它会比较两端导出的 TLS 密钥材料，并把不匹配视为疑似中继侧 TLS 终止。
 
-- **多跳中继路由** - 将多个中继串联起来，使单个中继无法同时知道来源和目的地。使用 `--multi-hop-depth 3` 可以自动选择三跳路由。
-
 - **无账户，无 API Key** - 身份认证使用本地生成的 secp256k1 密钥对进行 SIWE 兼容签名。无需邮箱，无需注册，也没有厂商锁定。
 
 - **原生 x402 支付** - Routed HTTP 路径可以在代理前要求 Sui gasless USDC x402 支付。浏览器应用可以导入 `/x402/client.js`，原生客户端可以直接调用 `/x402/prepare` 并发送 `X-PAYMENT`。
@@ -45,7 +43,6 @@ Portal 是一个本地隧道运行时和中继网络。它通过自托管或公�
 | SNI 隐藏 (ECH) | **是** | 否 | 否 | 否 |
 | MITM 自探测 | **内置** | 否 | 否 | 否 |
 | 多中继故障切换 | **是** | 托管 | 内置 | 否 |
-| 多跳路由 | **是** | 否 | 否 | 否 |
 | 需要账户 | **否** | 是 | 是 | 否 |
 | 原生 x402 支付 | **是** | 否 | 否 | 否 |
 
@@ -88,8 +85,6 @@ portal expose --name paid-app \
 # 原始 TCP 端口（Minecraft、数据库、SSH）
 portal expose localhost:25565 --name minecraft --tcp
 
-# 三跳路由，获得更高匿名性
-portal expose 3000 --multi-hop-depth 3
 ```
 
 对于付费路由，支付策略运行在隧道进程内，而不是中继上。默认使用 Sui mainnet；加上 `--x402-testnet` 可切换到 Sui testnet，这个选择与中继自身的支付设置无关。隧道会在同一个公共 origin 上提供 `/x402/client.js` 和 `/x402/prepare`。浏览器前端可以导入 `/x402/client.js` 并调用 `x402Fetch()`；原生客户端可以直接调用 `/x402/prepare`，用自己的 Sui 运行时签名返回的交易，并发送签名后的 `X-PAYMENT`。
@@ -110,7 +105,7 @@ npx skills add gosuda/portal-tunnel --skill portal-expose
 
 ### 使用 Portal Agent 持续运行隧道
 
-当隧道需要在终端之外持续运行时，使用 `portal agent run`。它会作为本地 OS 服务运行，在一个 TOML 配置中保持所有隧道在线，并提供用于中继和多跳管理的 dashboard。
+当隧道需要在终端之外持续运行时，使用 `portal agent run`。它会作为本地 OS 服务运行，在一个 TOML 配置中保持所有隧道在线，并提供用于公共中继管理的 dashboard。
 
 ```bash
 portal agent run --config config.toml
@@ -151,19 +146,6 @@ Browser
 5. 握手完成后，中继继续转发密文，无法访问明文。
 
 启用 ECH 时，中继也看不到真实租户主机名。它会通过从隧道身份派生出的不透明 token 进行路由，而真实 SNI 保留在 ECH 保护的 ClientHello 中。
-
-## 多跳路由如何工作
-
-```text
-Browser
-  -> Entry relay  (只看到不透明 route hostname)
-  -> Middle relay (只看到 next-hop token)
-  -> Exit relay   (只看到 reverse session token)
-  -> Portal tunnel
-  -> Local service
-```
-
-链中的每个中继只知道自己的直接相邻节点。没有任何单个中继掌握完整路径。租户 TLS 仍然只在你这边终止，因此链中的任何中继都不会收到租户 TLS 明文。
 
 ## 公共中继 Registry
 

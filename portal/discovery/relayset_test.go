@@ -303,7 +303,7 @@ func TestConfirmAndUnconfirmRelayURL(t *testing.T) {
 	}
 }
 
-func TestPlanRoutesSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
+func TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 	const relayURL = "https://relay-udp-disabled.example"
 	set := NewRelaySet(nil)
 	state := confirmedRelayState(t, relayURL)
@@ -315,11 +315,11 @@ func TestPlanRoutesSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 		RequireUDP:        true,
 	})
 	if len(routes) != 0 {
-		t.Fatalf("PlanRoutes() = %v, want no UDP-incompatible explicit route", routes)
+		t.Fatalf("SelectRelays() = %v, want no UDP-incompatible explicit route", routes)
 	}
 }
 
-func TestPlanRoutesIncludesExplicitRelayMissingFromSet(t *testing.T) {
+func TestSelectRelaysIncludesExplicitRelayMissingFromSet(t *testing.T) {
 	const relayURL = "https://relay-explicit.example"
 
 	routes := NewRelaySet(nil).SelectRelays(RouteState{
@@ -333,6 +333,6 @@ func TestPlanRoutesIncludesExplicitRelayMissingFromSet(t *testing.T) {
 		t.Fatal("route.Explicit = false, want true")
 	}
 	if got := route.RelayURL; got != relayURL {
-		t.Fatalf("ListenerRelayURL() = %q, want %q", got, relayURL)
+		t.Fatalf("route.RelayURL = %q, want %q", got, relayURL)
 	}
 }

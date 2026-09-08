@@ -71,9 +71,6 @@ which are configured locally by the tunnel process.
 | `udp_enabled` | `boolean` | no | request UDP transport |
 | `tcp_enabled` | `boolean` | no | request dedicated TCP port |
 
-Overlay-only fields are also accepted by relay-to-relay clients:
-`hop_token`, `route_hostname`, `hostname_hash`, and `ech_config_list`.
-
 `RegisterChallengeResponse`:
 
 | Field | Type |
@@ -152,9 +149,3 @@ standard JSON error envelope.
 The SDK keeps several ready reverse streams open. When an end user connects to
 the lease hostname, the relay claims one ready stream and bridges encrypted
 tenant bytes between the browser side and the SDK side.
-
-## Relay Overlay
-
-`/sdk/hop` is reserved for relay-to-relay overlay routing. It accepts
-`POST` and `DELETE` with a signed `HopRoute` body and returns `HopRouteResponse`
-or `{}`. Normal SDK clients should not call it directly.

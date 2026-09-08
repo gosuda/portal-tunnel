@@ -94,7 +94,7 @@ var SelectionDurationSeconds = promauto.NewHistogram(
 )
 
 // SelectionSkippedTotal counts relays excluded from selection by reason.
-// reason ∈ {expired, require_udp, require_tcp, suppressed, banned, no_descriptor, no_overlay_peer}.
+// reason ∈ {expired, require_udp, require_tcp, suppressed, banned, no_descriptor}.
 var SelectionSkippedTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "portal_discovery_selection_skipped_total",

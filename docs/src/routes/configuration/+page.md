@@ -223,9 +223,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 |------|---------|------|---------|-------------|
 | `--relays` | | string | _(registry)_ | Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https) |
 | `--discovery` | | bool | `true` | Include public registry relays and discover additional relay bootstraps |
-| `--multi-hop` | `MULTI_HOP` | string | | Ordered multi-hop relay API URLs, comma-separated |
-| `--multi-hop-depth` | `MULTI_HOP_DEPTH` | int | `0` | Automatically create this-depth multi-hop routes for every eligible entry relay; 0 or 1 disables multi-hop |
-| `--max-active-relays` | `MAX_ACTIVE_RELAYS` | int | `3` | Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry; explicit relays are always included |
+| `--max-active-relays` | `MAX_ACTIVE_RELAYS` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
 | `--ban-mitm` | `BAN_MITM` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 
 ### Identity
@@ -344,8 +342,6 @@ Tunnel fields mirror `portal expose` flags:
 | `http_routes` | table array | HTTP route mappings; cannot be combined with `target` or `udp` |
 | `relays` | string array | Explicit relay API URLs |
 | `discovery` | bool | Include registry and relay discovery expansion |
-| `multi_hop` | string array | Ordered multi-hop relay path |
-| `multi_hop_depth` | int | Automatically create this-depth multi-hop routes for every eligible entry relay |
 | `ech` | bool | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |

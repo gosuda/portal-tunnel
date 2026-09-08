@@ -20,10 +20,10 @@ const coreFeatures = [
       "Use discovered public relays or run your own without a central account or operator.",
   },
   {
-    eyebrow: "Multi-hop",
-    title: "Multihop Routing (like Tor)",
+    eyebrow: "Failover",
+    title: "Resilient relay pools",
     description:
-      "Route through multiple relays so each hop sees only its neighbors, not the full path.",
+      "Keep connections to discovered or explicit relays so services survive relay failures.",
   },
   {
     eyebrow: "Payments",

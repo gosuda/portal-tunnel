@@ -216,7 +216,7 @@ func TestExposureRemoveRelayStopsRunningListener(t *testing.T) {
 	}
 	routes := exposure.relaySet.SelectRelays(discovery.RouteState{})
 	if len(routes) != 0 {
-		t.Fatalf("PlanRoutes() = %v, want empty", routes)
+		t.Fatalf("SelectRelays() = %v, want empty", routes)
 	}
 	relays := exposure.relaySet.AllRelays()
 	if len(relays) != 1 || relays[0].Descriptor.APIHTTPSAddr != relayA || relays[0].Banned {
@@ -278,7 +278,7 @@ func TestListenerRetryBudgetDropsAutoSelectedRelayWithoutPoolBan(t *testing.T) {
 
 	routes := relaySet.SelectRelays(discovery.RouteState{})
 	if len(routes) != 0 {
-		t.Fatalf("PlanRoutes() = %v, want no active routes", routes)
+		t.Fatalf("SelectRelays() = %v, want no active routes", routes)
 	}
 
 	relays := relaySet.AllRelays()

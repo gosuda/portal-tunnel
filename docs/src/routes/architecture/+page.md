@@ -174,7 +174,6 @@ UDP client
 - `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay identity key and used for the rest of the lease lifecycle.
 - Relay URLs must use `https://`.
 - HTTP/2 stays disabled on the admin/API TLS listener. Keyless TLS certificate sharing and `/sdk/connect` both depend on the current HTTP/1.1-only transport contract.
-- Relay-to-relay overlay transport, when enabled, is separate from direct tenant TLS termination, public UDP ingress, and `/sdk/*` control-plane traffic.
 
 ### Reverse Session Protocol
 
@@ -291,13 +290,12 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 <Mermaid code={udpQuicDiagram} />
 
-## Relay Discovery and Overlay Boundary
+## Relay Discovery Boundary
 
 - Discovery bootstraps from public HTTPS relay URLs, then expands through relay-to-relay `/discovery` polling and periodic self-announces to bootstrap relays through `/discovery/announce`.
 - SDK exposures consume relay discovery results to choose relays, but they do not announce themselves and do not serve `/discovery`.
-- Discovery descriptors are signed relay self-descriptions. They bind relay routing metadata such as `api_https_addr` and `supports_overlay` to the relay identity. Lease access tokens remain separate and authorize tenant lease operations only.
+- Discovery descriptors are signed relay self-descriptions. They bind public relay metadata such as `api_https_addr` and transport support to the relay identity. Lease access tokens remain separate and authorize tenant lease operations only.
 - `/discovery/announce` accepts only signed relay descriptors. Loopback or localhost relay descriptors are rejected because they cannot join the public discovery mesh.
-- Overlay reachability does not establish Portal admission or public ingress health. Direct tenant TLS routing, keyless TLS, register/renew/connect, and public UDP ingress do not depend on the overlay transport path.
 
 ## Control Plane Flow
 

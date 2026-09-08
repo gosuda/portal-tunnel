@@ -37,7 +37,6 @@ const (
 	PathSDKRegister          = PathSDKPrefix + "/register"
 	PathSDKRenew             = PathSDKPrefix + "/renew"
 	PathSDKUnregister        = PathSDKPrefix + "/unregister"
-	PathSDKReverseToken      = PathSDKPrefix + "/reverse-token"
 	PathSDKConnect           = PathSDKPrefix + "/connect"
 
 	PathDiscovery         = "/discovery"

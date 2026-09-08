@@ -48,8 +48,7 @@ type RelayTrust uint8
 
 const (
 	// RelayCandidate marks a descriptor admitted from untrusted input.
-	// Candidates still serve overlay routing for the hop route that brought
-	// them in and remain refresh-poll targets, but they are excluded from
+	// Candidates remain refresh-poll targets, but they are excluded from
 	// Descriptors(), automatic route selection, and this relay's own gossip
 	// output until promoted.
 	RelayCandidate RelayTrust = iota
@@ -102,7 +101,7 @@ type RelayState struct {
 	Descriptor types.RelayDescriptor
 	Bootstrap  bool
 	// Trust classifies how the entry entered the set. Descriptors from
-	// untrusted input (/sdk/hop, /discovery/announce, or gossiped discovery
+	// untrusted input (/discovery/announce or gossiped discovery
 	// content) are admitted as RelayCandidate and stay out of Descriptors()
 	// and automatic route selection until a direct authoritative probe of
 	// that exact relay promotes them to RelayVerified.
@@ -283,7 +282,6 @@ func (state RelayState) hasObservedDescriptor() bool {
 }
 
 type RouteState struct {
-	IVNP              bool
 	ExplicitRelayURLs []string
 	// ActiveRelayURLs holds currently active connected relay URLs to enable
 	// connection-level stickiness and prevent listener churn during ranking updates.
