@@ -2,6 +2,8 @@ package acme
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -162,5 +164,89 @@ func TestENSGaslessAddressChangeLeavesOneRecord(t *testing.T) {
 
 	if !slices.Contains(zone.txtValues(host), challengeValue) {
 		t.Fatalf("TXT records = %v, want the DNS-01 record left untouched", zone.txtValues(host))
+	}
+}
+
+// Disabling the feature must let the relay withdraw what it published; gating
+// removal on the same flag leaves the zone frozen with no path back.
+func TestENSGaslessLeaseRemovalRunsWhenDisabled(t *testing.T) {
+	const host = "lease.portal.example.com"
+
+	zone := newFakeZone()
+	manager := newTestENSManager(Config{
+		BaseDomain:        "portal.example.com",
+		KeyDir:            t.TempDir(),
+		ENSGaslessEnabled: false,
+	}, zone)
+
+	// State a previous run left behind while the feature was still enabled.
+	ctx := context.Background()
+	if err := zone.EnsureTXTRecord(ctx, host, gaslessENSTXTPrefix+"resolver 0x3333"); err != nil {
+		t.Fatalf("seed ENS record: %v", err)
+	}
+	if err := zone.EnsureARecord(ctx, host, "203.0.113.10"); err != nil {
+		t.Fatalf("seed A record: %v", err)
+	}
+
+	if err := manager.DeleteENSGaslessHostname(ctx, host); err != nil {
+		t.Fatalf("DeleteENSGaslessHostname(): %v", err)
+	}
+
+	var command ensDNSCommand
+	select {
+	case command = <-manager.ensCommands:
+	default:
+		t.Fatal("DeleteENSGaslessHostname() queued nothing; every published record would stay orphaned")
+	}
+	if err := manager.applyENSCommand(ctx, command); err != nil {
+		t.Fatalf("applyENSCommand(): %v", err)
+	}
+
+	if ens := ensTXTValues(t, zone, host); len(ens) != 0 {
+		t.Fatalf("ENS1 records = %v, want them withdrawn", ens)
+	}
+	if zone.hasARecord(host) {
+		t.Fatalf("A record for %s survived the removal", host)
+	}
+}
+
+// The startup reconcile is the only thing that reaches hostnames tracked by an
+// earlier run, so it has to keep running after the feature is switched off.
+func TestENSGaslessReconcileRunsWhenDisabled(t *testing.T) {
+	const host = "lease.portal.example.com"
+
+	keyDir := t.TempDir()
+	trackedPath := filepath.Join(keyDir, ensGaslessHostnamesFileName)
+	if err := utils.WriteJSONFile(trackedPath, []string{host}, 0o600); err != nil {
+		t.Fatalf("seed tracked hostnames: %v", err)
+	}
+
+	ctx := context.Background()
+	zone := newFakeZone()
+	if err := zone.EnsureTXTRecord(ctx, host, gaslessENSTXTPrefix+"resolver 0x4444"); err != nil {
+		t.Fatalf("seed ENS record: %v", err)
+	}
+	if err := zone.EnsureARecord(ctx, host, "203.0.113.11"); err != nil {
+		t.Fatalf("seed A record: %v", err)
+	}
+
+	manager := newTestENSManager(Config{
+		BaseDomain:        "portal.example.com",
+		KeyDir:            keyDir,
+		ENSGaslessEnabled: false,
+	}, zone)
+
+	if err := manager.reconcileTrackedENSGaslessHostnames(ctx); err != nil {
+		t.Fatalf("reconcileTrackedENSGaslessHostnames(): %v", err)
+	}
+
+	if ens := ensTXTValues(t, zone, host); len(ens) != 0 {
+		t.Fatalf("ENS1 records = %v, want them withdrawn", ens)
+	}
+	if zone.hasARecord(host) {
+		t.Fatalf("A record for %s survived the reconcile", host)
+	}
+	if _, err := os.Stat(trackedPath); !os.IsNotExist(err) {
+		t.Fatalf("tracked hostnames file still present (stat err = %v), want it cleared", err)
 	}
 }
