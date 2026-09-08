@@ -131,7 +131,10 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 }
 
 func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string) error {
-	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	// Removal is deliberately not gated on ENSGaslessEnabled. Turning the feature
+	// off must still converge the zone; gating the delete path orphans every
+	// record the relay published, with no way back short of editing DNS by hand.
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
@@ -203,7 +206,10 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 }
 
 func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error {
-	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	// Removal is deliberately not gated on ENSGaslessEnabled. Turning the feature
+	// off must still converge the zone; gating the delete path orphans every
+	// record the relay published, with no way back short of editing DNS by hand.
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
