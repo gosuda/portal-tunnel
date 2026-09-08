@@ -13,7 +13,7 @@ related, but they do not all mean "connect a browser wallet".
 | Surface | Key material | Purpose |
 |---------|--------------|---------|
 | Tunnel identity | Local `identity.json` secp256k1 private key, or BIP-39 mnemonic plus derivation path | Signs SIWE lease registration challenges |
-| Relay identity | Relay `IDENTITY_PATH/identity.json` secp256k1 private key, or BIP-39 mnemonic plus derivation path | Signs relay descriptors, lease access tokens, and ENS base-domain address |
+| Relay identity | Relay `IDENTITY_PATH/identity.json` secp256k1 private key, or BIP-39 mnemonic plus derivation path | Signs relay descriptors, lease tokens, reverse capabilities, and ENS base-domain address |
 | Relay admin token | `ADMIN_TOKEN` | Signs in to `/admin` and authorizes relay policy changes |
 | Agent wallet | Optional browser wallet allowlist | Reads loopback agent status through `/agent/status` |
 | ENS gasless DNS | DNSSEC plus `ENS1 ...` TXT records | Lets ENS-aware clients resolve the relay domain and lease hostnames to Portal identities |
@@ -27,9 +27,10 @@ Tunnel registration always uses a SIWE challenge internally:
 3. The relay returns a SIWE message with statement `Register a portal lease`.
 4. The tunnel signs that message with the local identity private key using
    Ethereum `personal_sign` semantics.
-5. The relay verifies the signature and returns a lease-scoped access token.
-6. The access token is used for renew, unregister, reverse connect, keyless
-   signing access, and UDP backhaul authentication.
+5. The relay verifies the signature and returns a lease-scoped access token and
+   a generic reverse endpoint with a reverse-only capability.
+6. The access token is used for renew, unregister, keyless signing access, and
+   UDP backhaul authentication. Reverse streams use only the separate capability.
 
 This does not require MetaMask or a user wallet. It is accountless identity
 proof based on the local tunnel key. `identity.json` may store a raw

@@ -4,11 +4,47 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+func TestValidateDirectReverseEndpoint(t *testing.T) {
+	t.Parallel()
+	relayURL, err := url.Parse("https://relay.example")
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+	leaseExpiry := time.Now().UTC().Add(time.Minute)
+	endpoint := types.ReverseEndpoint{
+		URL:        "https://relay.example/sdk/connect",
+		Capability: " reverse-capability ",
+		ExpiresAt:  leaseExpiry,
+	}
+	validated, err := validateDirectReverseEndpoint(endpoint, relayURL, leaseExpiry)
+	if err != nil {
+		t.Fatalf("validateDirectReverseEndpoint() error = %v", err)
+	}
+	if validated.Capability != "reverse-capability" {
+		t.Fatalf("validated capability = %q", validated.Capability)
+	}
+
+	for name, invalid := range map[string]types.ReverseEndpoint{
+		"other origin": {URL: "https://gateway.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry},
+		"wrong path":   {URL: "https://relay.example/sdk/renew", Capability: "cap", ExpiresAt: leaseExpiry},
+		"lease bound":  {URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry.Add(time.Second)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := validateDirectReverseEndpoint(invalid, relayURL, leaseExpiry); err == nil {
+				t.Fatal("validateDirectReverseEndpoint() error = nil")
+			}
+		})
+	}
+}
 
 func TestOnlyExplicitIncompatibilityDropsRelayFromActivePool(t *testing.T) {
 	if shouldDropRelayFromActivePool(errors.New("connection closed")) {

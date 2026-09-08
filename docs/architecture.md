@@ -10,9 +10,9 @@ admission, expiry, health, and load remain Portal responsibilities.
 
 The current runtime has no relay-to-relay data plane. The former Portal-owned
 multi-hop route model and WireGuard relay mesh have been removed. An optional
-relay overlay must not be added back until it can live behind the ownership
-boundary defined by ADR 0001 without changing the generic SDK listener,
-discovery route, or lease lifecycle.
+relay overlay must live behind the ownership boundary defined by ADR 0001. The
+SDK consumes a generic reverse endpoint with a reverse-only capability;
+discovery routes and lease lifecycle contain no overlay topology.
 
 See [ADR index](adr/README.md) for the relay overlay migration decision and
 [the site architecture documentation](src/routes/architecture/+page.md) for the

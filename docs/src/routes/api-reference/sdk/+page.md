@@ -15,8 +15,10 @@ that switches to a raw stream after a successful HTTP/1.1 response.
 1. `GET /sdk/domain` checks relay compatibility, optional ENS support, and optional relay-owned Sui x402 control-plane facilitator support.
 2. `POST /sdk/register/challenge` creates a SIWE challenge for the requested identity.
 3. The SDK signs the returned `siwe_message`.
-4. `POST /sdk/register` exchanges the signature for a lease `access_token`.
-5. The SDK keeps the lease alive with `/sdk/renew` and opens reverse streams with `/sdk/connect`.
+4. `POST /sdk/register` exchanges the signature for a lease `access_token` and
+   a generic `reverse_endpoint`.
+5. The SDK keeps the lease alive with `/sdk/renew` and opens reverse streams at
+   the returned endpoint using its opaque capability.
 6. `POST /sdk/unregister` removes the lease.
 
 ## Endpoints
@@ -28,7 +30,7 @@ that switches to a raw stream after a successful HTTP/1.1 response.
 | `POST` | `/sdk/register` | SIWE signature body | `RegisterRequest` | `RegisterResponse` |
 | `POST` | `/sdk/renew` | lease token body | `RenewRequest` | `RenewResponse` |
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
-| `GET` | `/sdk/connect` | lease token header | none | hijacked stream |
+| `GET` | `/sdk/connect` | reverse capability header | none | hijacked stream |
 
 ## Domain
 
@@ -96,13 +98,26 @@ which are configured locally by the tunnel process.
 |-------|------|-------|
 | `identity` | `Identity` | normalized lease identity |
 | `expires_at` | `string` | lease expiry |
-| `access_token` | `string` | token for renew, unregister, connect, and signer access |
+| `access_token` | `string` | token for renew, unregister, signer access, and direct datagram backhaul |
+| `reverse_endpoint` | `ReverseEndpoint` | URL, opaque reverse-only capability, and expiry for `/sdk/connect` |
 | `sni_port` | `number` | omitted when not needed |
 | `udp_addr`, `tcp_addr` | `string` | omitted when transport is disabled |
 | `udp_enabled`, `tcp_enabled` | `boolean` | active transport flags |
 
 The response does not include a separate `hostname` field. The public hostname
 is derived from the registered identity and relay root domain.
+
+`ReverseEndpoint`:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `url` | `string` | HTTPS reverse-stream endpoint; currently `/sdk/connect` on the registered relay |
+| `capability` | `string` | opaque, reverse-only, and bound to this lease instance |
+| `expires_at` | `string` | never later than the owning lease expiry |
+
+The reverse capability is not accepted by renew, unregister, signer, or
+datagram endpoints. The lease `access_token` is not accepted by the reverse
+endpoint.
 
 ## Renew And Unregister
 
@@ -121,6 +136,7 @@ is derived from the registered identity and relay root domain.
 |-------|------|
 | `expires_at` | `string` |
 | `access_token` | `string` |
+| `reverse_endpoint` | `ReverseEndpoint` |
 
 `UnregisterRequest`:
 
@@ -139,10 +155,10 @@ Requirements:
 | Requirement | Value |
 |-------------|-------|
 | HTTP version | HTTP/1.1 |
-| Header | `X-Portal-Access-Token: <lease access_token>` |
+| Header | `X-Portal-Reverse-Capability: <opaque capability>` |
 | Connection | keep-alive capable connection that supports hijack |
 
-On success, the relay writes `HTTP/1.1 200 OK` and hijacks the TCP connection.
+On success, the relay writes `HTTP/1.1 101 Switching Protocols` and hijacks the TCP connection.
 There is no JSON response body. Before the hijack, failures still use the
 standard JSON error envelope.
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,7 @@ type leaseRegistry struct {
 	sniPort        int
 	tokenAuthority identity.Authority
 	tokenIssuer    string
+	reverseURL     string
 	policy         *policy.Runtime
 	udpPorts       *transport.PortAllocator
 	tcpPorts       *transport.PortAllocator
@@ -54,6 +56,10 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 	if strings.TrimSpace(tokenIdentity.PublicKey) == "" {
 		return nil, errors.New("lease token authority public key is required")
 	}
+	issuerURL, err := url.Parse(strings.TrimSpace(tokenIssuer))
+	if err != nil || issuerURL.Host == "" {
+		return nil, errors.New("lease token issuer must be an absolute URL")
+	}
 	runtime, err := policy.NewRuntime(udpEnabled, tcpPortEnabled, trustProxyHeaders, rawTrustedProxyCIDRs)
 	if err != nil {
 		return nil, err
@@ -65,6 +71,7 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 		sniPort:        sniPort,
 		tokenAuthority: tokenAuthority,
 		tokenIssuer:    tokenIssuer,
+		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
 		policy:         runtime,
 		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
@@ -220,10 +227,16 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
+	leaseID := utils.RandomID("lease_")
+	reverseEndpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt)
+	if err != nil {
+		return nil, types.RegisterResponse{}, err
+	}
 
 	stream := transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit)
 	record := &leaseRecord{
 		Identity:       leaseIdentity,
+		id:             leaseID,
 		Hostname:       hostname,
 		HostnameHash:   hostnameHash,
 		ECHConfigList:  echConfigList,
@@ -346,12 +359,13 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 
 	resp := types.RegisterResponse{
-		Identity:    record.Identity,
-		ExpiresAt:   record.ExpiresAt,
-		AccessToken: accessToken,
-		SNIPort:     r.sniPort,
-		UDPEnabled:  record.datagram != nil,
-		TCPEnabled:  record.tcpPort != nil,
+		Identity:        record.Identity,
+		ExpiresAt:       record.ExpiresAt,
+		AccessToken:     accessToken,
+		ReverseEndpoint: reverseEndpoint,
+		SNIPort:         r.sniPort,
+		UDPEnabled:      record.datagram != nil,
+		TCPEnabled:      record.tcpPort != nil,
 	}
 	if record.datagram != nil {
 		resp.UDPAddr = fmt.Sprintf("%s:%d", r.rootHostname, record.datagram.UDPPort())
@@ -371,10 +385,32 @@ func (r *leaseRegistry) admitLeaseByToken(token string, requireDatagram bool) (*
 	if err != nil {
 		return nil, errUnauthorized
 	}
+	return r.admitLeaseIdentity(claims.Identity.Key(), "", now, requireDatagram)
+}
+
+func (r *leaseRegistry) admitReverseCapability(token string) (*leaseRecord, error) {
+	if r == nil {
+		return nil, errFeatureUnavailable
+	}
+	now := time.Now().UTC()
+	claims, err := auth.VerifyReverseCapability(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
+	if err != nil {
+		return nil, errUnauthorized
+	}
+	return r.admitLeaseIdentity(claims.Identity.Key(), claims.LeaseID, now, false)
+}
+
+func (r *leaseRegistry) admitLeaseIdentity(key, leaseID string, now time.Time, requireDatagram bool) (*leaseRecord, error) {
 	r.mu.RLock()
-	record := r.recordByKey(claims.Identity.Key(), now)
+	record := r.recordByKey(key, now)
+	if record != nil && leaseID != "" && record.id != leaseID {
+		record = nil
+	}
 	r.mu.RUnlock()
 	if record == nil {
+		if leaseID != "" {
+			return nil, errUnauthorized
+		}
 		return nil, errLeaseNotFound
 	}
 	if !r.policy.IsIdentityRoutable(record.Key()) {
@@ -409,7 +445,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}
 
 	now := time.Now()
-	expiresAt := now.Add(ttl)
+	expiresAt := now.Add(ttl).UTC().Truncate(time.Second)
 	record.ExpiresAt = expiresAt
 	record.LastSeenAt = now
 	if strings.TrimSpace(clientIP) != "" {
@@ -421,6 +457,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	record.Metadata = req.Metadata.Copy()
 	r.policy.IPFilter().RegisterIdentityIP(leaseKey, clientIP)
 	recordIdentity := record.Identity
+	leaseID := record.id
 	r.mu.Unlock()
 
 	nextAccessToken, _, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, recordIdentity, ttl)
@@ -428,9 +465,27 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 
+	reverseEndpoint, err := r.issueReverseEndpoint(recordIdentity, leaseID, expiresAt)
+	if err != nil {
+		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
+	}
+
 	return types.RenewResponse{
-		ExpiresAt:   expiresAt,
-		AccessToken: nextAccessToken,
+		ExpiresAt:       expiresAt,
+		AccessToken:     nextAccessToken,
+		ReverseEndpoint: reverseEndpoint,
+	}, nil
+}
+
+func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time) (types.ReverseEndpoint, error) {
+	capability, claims, err := auth.IssueReverseCapability(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, expiresAt)
+	if err != nil {
+		return types.ReverseEndpoint{}, err
+	}
+	return types.ReverseEndpoint{
+		URL:        r.reverseURL,
+		Capability: capability,
+		ExpiresAt:  claims.Expiry.Time().UTC(),
 	}, nil
 }
 

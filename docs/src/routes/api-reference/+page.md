@@ -53,7 +53,8 @@ HTTP 404 outside the envelope.
 |------|---------|----------------|
 | None | public and challenge endpoints | no credential |
 | Admin bearer | admin API | `Authorization: Bearer <access_token>` |
-| Lease token header | tunnel stream and keyless signer | `X-Portal-Access-Token: <access_token>` |
+| Lease token header | keyless signer and datagram backhaul | `X-Portal-Access-Token: <access_token>` |
+| Reverse capability header | reverse stream | `X-Portal-Reverse-Capability: <capability>` |
 | Lease token body | lease renew/unregister | JSON field `access_token` |
 | Signed descriptor | relay discovery announce | signed `RelayDescriptor` body |
 
@@ -83,7 +84,7 @@ configured admin token.
 | `POST` | `/sdk/register` | SIWE signature body | `RegisterRequest` | `RegisterResponse` |
 | `POST` | `/sdk/renew` | lease token body | `RenewRequest` | `RenewResponse` |
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
-| `GET` | `/sdk/connect` | lease token header | none | hijacked stream |
+| `GET` | `/sdk/connect` | reverse capability header | none | hijacked stream |
 
 ### Admin
 

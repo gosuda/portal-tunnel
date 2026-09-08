@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -161,6 +162,12 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, "", "", errors.New("relay returned mismatched lease identity")
 	}
+	reverseEndpoint, err := validateDirectReverseEndpoint(resp.ReverseEndpoint, l.relayURL, resp.ExpiresAt)
+	if err != nil {
+		_ = l.unregisterLease(context.Background(), resp.AccessToken)
+		return types.RegisterResponse{}, "", "", err
+	}
+	resp.ReverseEndpoint = reverseEndpoint
 	return resp, publicHostname, routeHostname, nil
 }
 
@@ -170,7 +177,35 @@ func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, 
 	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRenew, req, nil, &resp); err != nil {
 		return types.RenewResponse{}, err
 	}
+	reverseEndpoint, err := validateDirectReverseEndpoint(resp.ReverseEndpoint, l.relayURL, resp.ExpiresAt)
+	if err != nil {
+		return types.RenewResponse{}, err
+	}
+	resp.ReverseEndpoint = reverseEndpoint
 	return resp, nil
+}
+
+func validateDirectReverseEndpoint(endpoint types.ReverseEndpoint, relayURL *url.URL, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {
+	endpoint.URL = strings.TrimSpace(endpoint.URL)
+	endpoint.Capability = strings.TrimSpace(endpoint.Capability)
+	if relayURL == nil || endpoint.URL == "" || endpoint.Capability == "" {
+		return types.ReverseEndpoint{}, errors.New("relay returned incomplete reverse endpoint")
+	}
+	parsed, err := url.Parse(endpoint.URL)
+	if err != nil || parsed.Host == "" || !strings.EqualFold(parsed.Scheme, "https") {
+		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.EscapedPath() != types.PathSDKConnect {
+		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint target")
+	}
+	if !strings.EqualFold(parsed.Scheme, relayURL.Scheme) || !strings.EqualFold(parsed.Host, relayURL.Host) {
+		return types.ReverseEndpoint{}, errors.New("direct reverse endpoint must use the registered relay origin")
+	}
+	if !endpoint.ExpiresAt.After(time.Now().UTC()) || endpoint.ExpiresAt.After(leaseExpiresAt) {
+		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint expiry")
+	}
+	endpoint.URL = parsed.String()
+	return endpoint, nil
 }
 
 func newRenewRequest(ttl time.Duration, accessToken, reportedIP string, metadata types.LeaseMetadata) types.RenewRequest {

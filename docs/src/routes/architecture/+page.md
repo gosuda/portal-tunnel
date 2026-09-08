@@ -48,9 +48,9 @@ const tlsStreamDiagram = `sequenceDiagram
     SDK->>Relay: POST /sdk/register/challenge
     Relay->>SDK: SIWE challenge message
     SDK->>Relay: POST /sdk/register (signed)
-    Relay->>SDK: access_token + lease info
+    Relay->>SDK: access_token + reverse_endpoint + lease info
 
-    SDK->>Relay: GET /sdk/connect (HTTP/1.1 hijack)
+    SDK->>Relay: GET reverse_endpoint.url (reverse capability)
     Relay->>SDK: connection hijacked, 0x00 keepalives
     Note over Relay: Session queued in per-lease stream ready queue
 
@@ -68,7 +68,7 @@ const tcpPortDiagram = `sequenceDiagram
 
     SDK->>Relay: POST /sdk/register (tcp_enabled=true, signed SIWE)
     Note over Relay: Validates TCP plane enabled, allocates port from MIN_PORT-MAX_PORT
-    Relay->>SDK: tcp_addr + access_token
+    Relay->>SDK: tcp_addr + access_token + reverse_endpoint
 
     SDK->>Relay: GET /sdk/connect (reverse session, HTTP/1.1 hijack)
     Note over Relay: Session queued in per-lease stream ready queue
@@ -114,7 +114,7 @@ const registrationDiagram = `sequenceDiagram
     Note over Relay: Validates SIWE signature, checks name availability
     Note over Relay: Creates lease, publishes route at name.relay-host
     Note over Relay: Allocates TCP/UDP ports if requested
-    Relay->>SDK: access_token (ES256K JWT) + lease info (tcp_addr?, udp_addr?, sni_port?)`
+    Relay->>SDK: access_token + reverse_endpoint + lease info (tcp_addr?, udp_addr?, sni_port?)`
 </script>
 
 <div class="not-prose mb-8 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
@@ -170,8 +170,8 @@ UDP client
 - Relay does not terminate tenant TLS. It peeks ClientHello for SNI and bridges raw encrypted bytes after routing.
 - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
 - In keyless TLS, the relay performs certificate private-key signing through `/v1/sign`, but the SDK/tunnel endpoint still runs the TLS server handshake and derives tenant TLS session keys locally.
-- `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` are authorized by lease existence plus a relay-issued lease access token.
-- `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay identity key and used for the rest of the lease lifecycle.
+- `/sdk/renew` and `/sdk/unregister` are authorized by lease existence plus a relay-issued lease access token. `/sdk/connect` uses a separate reverse-only capability returned as part of a generic reverse endpoint.
+- `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues separate ES256K JWTs for lease operations and reverse connection establishment.
 - Relay URLs must use `https://`.
 - HTTP/2 stays disabled on the admin/API TLS listener. Keyless TLS certificate sharing and `/sdk/connect` both depend on the current HTTP/1.1-only transport contract.
 
@@ -305,7 +305,7 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 - Caller signs the returned SIWE message with the identity secp256k1 key (`personal_sign`).
 - `name` must be a valid single DNS label; the relay publishes the lease at `<name>.<root host>`.
 - Registration reserves the hostname and publishes the route immediately; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`.
-- On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay identity key, used for the rest of the lease lifecycle.
+- On success, the relay issues a lease-scoped ES256K JWT access token for lease operations and a separate reverse-only capability for the returned reverse endpoint.
 - UDP registration requires server `UDP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and admin enablement. Failures: `udp_disabled` (403), `udp_capacity_exceeded` (503), `udp_port_exhausted` (503).
 - TCP port registration has equivalent three-condition gating. Failures: `tcp_port_disabled` (403), `tcp_port_capacity_exceeded` (503), `tcp_port_exhausted` (503).
 - `PORTAL_URL` is normalized to its host component only; path/query segments are ignored for routing.
@@ -314,14 +314,17 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 ### 2. Reverse Connect
 
-- `GET /sdk/connect` (HTTP/1.1 only, `X-Portal-Access-Token` header).
-- Relay validates: lease exists and is not expired; access token signature, issuer, audience, identity, and expiry are all valid.
+- `GET reverse_endpoint.url` (currently `/sdk/connect`, HTTP/1.1 only) with the
+  `X-Portal-Reverse-Capability` header.
+- Relay validates that the lease exists and is routable, and that the capability
+  signature, issuer, reverse-only audience, identity, and expiry are valid.
 - After claim, relay writes `0x02` before switching the session into tenant TLS passthrough.
 - After hijack, the connection becomes a broker-managed reverse session.
 
 ### 3. Renew
 
-- `POST /sdk/renew` with `access_token`. Extends lease TTL and returns a refreshed token.
+- `POST /sdk/renew` with `access_token`. Extends lease TTL and returns refreshed
+  lease and reverse credentials.
 
 ### 4. Unregister
 

@@ -1,6 +1,6 @@
 # Relay overlay ownership
 
-Status: proposed after resetting the first IVNP implementation.
+Status: accepted after resetting the first IVNP implementation.
 
 ## Context
 
@@ -42,11 +42,15 @@ hop count, discover IVNP middle routers, or construct an intermediate path.
 The SDK-facing contract is a generic reverse endpoint. It contains a URL, an
 opaque reverse-only capability, and an expiry. It does not expose IVNP
 destinations, ingress/gateway topology, or overlay-specific error types.
+The capability is also bound to one lease instance, so replacing a lease
+invalidates credentials issued for the previous instance.
 
-The ingress overlay implementation selects a gateway and issues the endpoint.
-The capability is short-lived and bound to the ingress lease, ingress
-destination, and selected gateway. It cannot mutate, renew, or delete the
-lease. The ingress lease bearer token is never sent to the gateway.
+In direct mode the ingress lease registry issues an endpoint for itself. When
+the overlay is enabled, the ingress overlay implementation selects a gateway
+and replaces only that endpoint issuance. Its delegated capability is
+short-lived and bound to the ingress lease, ingress destination, and selected
+gateway. It cannot mutate, renew, or delete the lease. The ingress lease bearer
+token is never sent to the gateway.
 
 The gateway validates the capability before reserving overlay capacity or
 dialing. The capability carries the signed endpoint evidence required to reach

@@ -419,13 +419,13 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := strings.TrimSpace(r.Header.Get(types.HeaderAccessToken))
+	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
 	clientIP, ok := s.extractAllowedClientIP(w, r)
 	if !ok {
 		return
 	}
 
-	lease, err := s.registry.admitLeaseByToken(token, false)
+	lease, err := s.registry.admitReverseCapability(capability)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return

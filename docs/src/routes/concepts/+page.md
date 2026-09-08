@@ -159,8 +159,8 @@ On first run, Portal creates a local secp256k1 identity at `identity.json` unles
 you pass another `--identity-path`.
 
 Lease registration uses challenge signing. After registration, the relay issues
-a lease-scoped access token used for renew, unregister, reverse connect, and
-datagram authentication.
+a lease-scoped access token for lease operations, signing, and datagram
+authentication, plus a separate reverse-only capability for reverse streams.
 
 Reusing the same identity path keeps the same tunnel identity across runs.
 

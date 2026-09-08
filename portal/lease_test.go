@@ -56,6 +56,21 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if record.Hostname != "demo.example.com" || record.HostnameHash != "" || len(record.ECHConfigList) != 0 || record.ECHDNSHostname != "" {
 		t.Fatalf("Register() plaintext SNI record = %#v, want public hostname without ECH material", record)
 	}
+	if registered.ReverseEndpoint.URL != "https://example.com/sdk/connect" || registered.ReverseEndpoint.Capability == "" {
+		t.Fatalf("Register() reverse endpoint = %#v", registered.ReverseEndpoint)
+	}
+	if !registered.ReverseEndpoint.ExpiresAt.Equal(registered.ExpiresAt) {
+		t.Fatalf("Register() reverse expiry = %v, want %v", registered.ReverseEndpoint.ExpiresAt, registered.ExpiresAt)
+	}
+	if admitted, err := registry.admitReverseCapability(registered.ReverseEndpoint.Capability); err != nil || admitted != record {
+		t.Fatalf("admitReverseCapability() = %v, %v, want registered lease", admitted, err)
+	}
+	if _, err := registry.admitReverseCapability(registered.AccessToken); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("admitReverseCapability(lease token) error = %v, want unauthorized", err)
+	}
+	if _, err := registry.admitLeaseByToken(registered.ReverseEndpoint.Capability, false); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("admitLeaseByToken(reverse capability) error = %v, want unauthorized", err)
+	}
 
 	lookedUp, ok := registry.Lookup("demo.example.com")
 	if !ok || lookedUp != record {
@@ -78,6 +93,12 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if renewed.AccessToken == "" {
 		t.Fatal("Renew() access token is empty")
 	}
+	if renewed.ReverseEndpoint.Capability == "" || renewed.ReverseEndpoint.Capability == registered.ReverseEndpoint.Capability {
+		t.Fatal("Renew() did not rotate the reverse capability")
+	}
+	if !renewed.ReverseEndpoint.ExpiresAt.Equal(renewed.ExpiresAt) {
+		t.Fatalf("Renew() reverse expiry = %v, want %v", renewed.ReverseEndpoint.ExpiresAt, renewed.ExpiresAt)
+	}
 	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "203.0.113.11" {
 		t.Fatalf("Renew() did not register client IP for lease")
 	}
@@ -95,6 +116,30 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "" {
 		t.Fatalf("Unregister() lease IP = %q, want empty", got)
+	}
+}
+
+func TestReverseCapabilityIsBoundToLeaseInstance(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	leaseIdentity := newTestLeaseIdentity(t, "replace")
+	first, firstResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.10", "")
+	if err != nil {
+		t.Fatalf("first Register() error = %v", err)
+	}
+	second, secondResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.11", "")
+	if err != nil {
+		t.Fatalf("second Register() error = %v", err)
+	}
+	if first == second || first.id == second.id {
+		t.Fatal("replacement reused the previous lease instance")
+	}
+	if _, err := registry.admitReverseCapability(firstResponse.ReverseEndpoint.Capability); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old reverse capability error = %v, want unauthorized", err)
+	}
+	if admitted, err := registry.admitReverseCapability(secondResponse.ReverseEndpoint.Capability); err != nil || admitted != second {
+		t.Fatalf("new reverse capability = %v, %v, want replacement lease", admitted, err)
 	}
 }
 

@@ -79,15 +79,24 @@ type RegisterChallengeResponse struct {
 	SIWEMessage string    `json:"siwe_message"`
 }
 
+// ReverseEndpoint authorizes one class of operation: opening reverse streams.
+// Capability is opaque to SDK callers and cannot mutate the owning lease.
+type ReverseEndpoint struct {
+	URL        string    `json:"url"`
+	Capability string    `json:"capability"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
 type RegisterResponse struct {
-	Identity    Identity  `json:"identity"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	AccessToken string    `json:"access_token"`
-	SNIPort     int       `json:"sni_port,omitempty"`
-	UDPAddr     string    `json:"udp_addr,omitempty"`
-	UDPEnabled  bool      `json:"udp_enabled,omitempty"`
-	TCPAddr     string    `json:"tcp_addr,omitempty"`
-	TCPEnabled  bool      `json:"tcp_enabled,omitempty"`
+	Identity        Identity        `json:"identity"`
+	ExpiresAt       time.Time       `json:"expires_at"`
+	AccessToken     string          `json:"access_token"`
+	ReverseEndpoint ReverseEndpoint `json:"reverse_endpoint"`
+	SNIPort         int             `json:"sni_port,omitempty"`
+	UDPAddr         string          `json:"udp_addr,omitempty"`
+	UDPEnabled      bool            `json:"udp_enabled,omitempty"`
+	TCPAddr         string          `json:"tcp_addr,omitempty"`
+	TCPEnabled      bool            `json:"tcp_enabled,omitempty"`
 }
 
 type DiscoveryResponse struct {
@@ -114,8 +123,9 @@ type RenewRequest struct {
 }
 
 type RenewResponse struct {
-	ExpiresAt   time.Time `json:"expires_at"`
-	AccessToken string    `json:"access_token"`
+	ExpiresAt       time.Time       `json:"expires_at"`
+	AccessToken     string          `json:"access_token"`
+	ReverseEndpoint ReverseEndpoint `json:"reverse_endpoint"`
 }
 
 type UnregisterRequest struct {

@@ -15,6 +15,7 @@ import (
 
 type leaseRecord struct {
 	types.Identity
+	id             string
 	ExpiresAt      time.Time
 	FirstSeenAt    time.Time
 	LastSeenAt     time.Time

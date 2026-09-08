@@ -304,6 +304,7 @@ type listenerSnapshot struct {
 	udpAddr       string
 	tcpAddr       string
 	accessToken   string
+	reverse       types.ReverseEndpoint
 	expiresAt     time.Time
 	sniPort       int
 	publicURLBase *url.URL
@@ -619,8 +620,11 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 
 func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 	lease, ok := l.leaseSnapshot()
-	if !ok || lease.accessToken == "" {
-		return nil, errors.New("access token is not available")
+	if !ok || lease.reverse.Capability == "" {
+		return nil, errors.New("reverse capability is not available")
+	}
+	if !lease.reverse.ExpiresAt.After(time.Now().UTC()) {
+		return nil, errLeaseRefreshRequired
 	}
 	if l.tlsConfig == nil {
 		return nil, errors.New("relay tls config is unavailable")
@@ -631,18 +635,22 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 		Config:    l.tlsConfig.Clone(),
 	}
 
-	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(l.relayURL.Host))
+	reverseURL, err := url.Parse(lease.reverse.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parse reverse endpoint: %w", err)
+	}
+	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(reverseURL.Host))
 	if err != nil {
 		return nil, err
 	}
 
 	req := &http.Request{
 		Method: http.MethodGet,
-		URL:    utils.ResolveAPIURL(l.relayURL, types.PathSDKConnect),
-		Host:   l.relayURL.Host,
+		URL:    reverseURL,
+		Host:   reverseURL.Host,
 		Header: make(http.Header),
 	}
-	req.Header.Set(types.HeaderAccessToken, lease.accessToken)
+	req.Header.Set(types.HeaderReverseCapability, lease.reverse.Capability)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "raw")
 
@@ -798,6 +806,7 @@ func (l *listener) renewLease(ctx context.Context) error {
 		}
 		next := current
 		next.accessToken = resp.AccessToken
+		next.reverse = resp.ReverseEndpoint
 		next.expiresAt = resp.ExpiresAt
 		return next, true
 	})
@@ -867,6 +876,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		udpAddr:       resp.UDPAddr,
 		tcpAddr:       resp.TCPAddr,
 		accessToken:   resp.AccessToken,
+		reverse:       resp.ReverseEndpoint,
 		expiresAt:     resp.ExpiresAt,
 		sniPort:       resp.SNIPort,
 		publicURLBase: l.relayURL,
