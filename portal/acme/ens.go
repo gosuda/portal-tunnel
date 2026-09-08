@@ -187,6 +187,13 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		}
 	}
 	value := gaslessENSTXTPrefix + defaultENSGaslessResolver + " " + strings.TrimSpace(command.address)
+	// EnsureTXTRecord appends whenever the value differs, which DNS-01 needs and
+	// ENS does not: a hostname carries exactly one ENS1 record. Drop the previous
+	// one so an address change replaces it instead of stacking on top of it. The
+	// prefix keeps ACME challenge records out of scope.
+	if err := m.dns.DeleteTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix); err != nil {
+		return err
+	}
 	if err := m.dns.EnsureTXTRecord(ctx, command.hostname, value); err != nil {
 		return err
 	}
