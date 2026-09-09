@@ -153,6 +153,14 @@ func (r *leaseRegistry) recordByKey(key string, now time.Time) *leaseRecord {
 	return nil
 }
 
+func (r *leaseRegistry) recordByLease(key, leaseID string, now time.Time) *leaseRecord {
+	record := r.recordByKey(key, now)
+	if record == nil || record.id != leaseID {
+		return nil
+	}
+	return record
+}
+
 func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, reportedIP string) (*leaseRecord, types.RegisterResponse, error) {
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
@@ -228,13 +236,13 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		}
 	}
 
-	accessToken, claims, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, leaseIdentity, ttl)
+	leaseID := utils.RandomID("lease_")
+	accessToken, claims, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, ttl)
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
 	}
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
-	leaseID := utils.RandomID("lease_")
 
 	stream := transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit)
 	record := &leaseRecord{
@@ -405,7 +413,7 @@ func (r *leaseRegistry) admitLeaseByToken(token string, requireDatagram bool) (*
 	if err != nil {
 		return nil, errUnauthorized
 	}
-	return r.admitLeaseIdentity(claims.Identity.Key(), "", now, requireDatagram)
+	return r.admitLeaseIdentity(claims.Identity.Key(), claims.LeaseID, now, requireDatagram)
 }
 
 func (r *leaseRegistry) admitReverseCapability(token string) (*leaseRecord, error) {
@@ -422,16 +430,10 @@ func (r *leaseRegistry) admitReverseCapability(token string) (*leaseRecord, erro
 
 func (r *leaseRegistry) admitLeaseIdentity(key, leaseID string, now time.Time, requireDatagram bool) (*leaseRecord, error) {
 	r.mu.RLock()
-	record := r.recordByKey(key, now)
-	if record != nil && leaseID != "" && record.id != leaseID {
-		record = nil
-	}
+	record := r.recordByLease(key, leaseID, now)
 	r.mu.RUnlock()
 	if record == nil {
-		if leaseID != "" {
-			return nil, errUnauthorized
-		}
-		return nil, errLeaseNotFound
+		return nil, errUnauthorized
 	}
 	if !r.policy.IsIdentityRoutable(record.Key()) {
 		return nil, errLeaseRejected
@@ -458,10 +460,10 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	leaseKey := claims.Identity.Key()
 	reportedIP := utils.SanitizeReportedIP(req.ReportedIP)
 	r.mu.Lock()
-	record := r.recordByKey(leaseKey, time.Time{})
+	record := r.recordByLease(leaseKey, claims.LeaseID, time.Time{})
 	if record == nil {
 		r.mu.Unlock()
-		return types.RenewResponse{}, errLeaseNotFound
+		return types.RenewResponse{}, errUnauthorized
 	}
 
 	now := time.Now()
@@ -480,7 +482,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	leaseID := record.id
 	r.mu.Unlock()
 
-	nextAccessToken, _, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, recordIdentity, ttl)
+	nextAccessToken, _, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, recordIdentity, leaseID, ttl)
 	if err != nil {
 		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
@@ -490,8 +492,8 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 	r.mu.RLock()
-	current := r.recordByKey(leaseKey, time.Now().UTC())
-	active := current != nil && current.id == leaseID
+	current := r.recordByLease(leaseKey, leaseID, time.Now().UTC())
+	active := current != nil
 	r.mu.RUnlock()
 	if !active {
 		if r.reverseOverlay != nil {
@@ -542,10 +544,10 @@ func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest)
 		return types.ReverseEndpoint{}, errUnauthorized
 	}
 	r.mu.RLock()
-	record := r.recordByKey(claims.Identity.Key(), now)
+	record := r.recordByLease(claims.Identity.Key(), claims.LeaseID, now)
 	if record == nil {
 		r.mu.RUnlock()
-		return types.ReverseEndpoint{}, errLeaseNotFound
+		return types.ReverseEndpoint{}, errUnauthorized
 	}
 	leaseIdentity := record.Identity
 	leaseID := record.id
@@ -556,8 +558,8 @@ func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest)
 		return types.ReverseEndpoint{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 	r.mu.RLock()
-	current := r.recordByKey(claims.Identity.Key(), time.Now().UTC())
-	active := current != nil && current.id == leaseID
+	current := r.recordByLease(claims.Identity.Key(), leaseID, time.Now().UTC())
+	active := current != nil
 	r.mu.RUnlock()
 	if !active {
 		if r.reverseOverlay != nil {
@@ -579,8 +581,13 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 	r.mu.Lock()
 
 	key := strings.TrimSpace(claims.Identity.Key())
-	for i, record := range r.records {
-		if record == nil || record.stream == nil || record.Key() != key {
+	record := r.recordByLease(key, claims.LeaseID, time.Time{})
+	if record == nil {
+		r.mu.Unlock()
+		return nil, errUnauthorized
+	}
+	for i, current := range r.records {
+		if current != record {
 			continue
 		}
 		r.deleteRecord(i)
@@ -736,18 +743,14 @@ func (r *leaseRegistry) verifySigningAccessToken(token string) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, record := range r.records {
-		if record == nil || record.isExpired(now) || record.Key() != claims.Identity.Key() {
-			continue
-		}
-		if record.stream != nil && record.isPublicEntry() {
-			if !r.policy.IsIdentityRoutable(record.Key()) {
-				return errLeaseRejected
-			}
-			return nil
-		}
+	record := r.recordByLease(claims.Identity.Key(), claims.LeaseID, now)
+	if record == nil || !record.isPublicEntry() {
+		return errUnauthorized
 	}
-	return errUnauthorized
+	if !r.policy.IsIdentityRoutable(record.Key()) {
+		return errLeaseRejected
+	}
+	return nil
 }
 
 func (r *leaseRegistry) Touch(key, clientIP string, now time.Time) {

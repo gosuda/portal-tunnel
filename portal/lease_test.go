@@ -129,7 +129,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 }
 
-func TestReverseCapabilityIsBoundToLeaseInstance(t *testing.T) {
+func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t)
@@ -148,8 +148,35 @@ func TestReverseCapabilityIsBoundToLeaseInstance(t *testing.T) {
 	if _, err := registry.admitReverseCapability(firstResponse.ReverseEndpoint.Capability); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old reverse capability error = %v, want unauthorized", err)
 	}
+	if _, err := registry.admitLeaseByToken(firstResponse.AccessToken, false); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token admission error = %v, want unauthorized", err)
+	}
+	if _, err := registry.Renew(types.RenewRequest{AccessToken: firstResponse.AccessToken}, "203.0.113.12"); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token renew error = %v, want unauthorized", err)
+	}
+	if _, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token reverse refresh error = %v, want unauthorized", err)
+	}
+	if err := registry.verifySigningAccessToken(firstResponse.AccessToken); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token signing error = %v, want unauthorized", err)
+	}
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token unregister error = %v, want unauthorized", err)
+	}
+	if second.ClientIP != "203.0.113.11" {
+		t.Fatalf("replacement lease client ip = %q after old token operations, want unchanged", second.ClientIP)
+	}
+	if lookedUp, ok := registry.Lookup("replace.example.com"); !ok || lookedUp != second {
+		t.Fatalf("replacement lease after old token operations = %v, %v, want active", lookedUp, ok)
+	}
 	if admitted, err := registry.admitReverseCapability(secondResponse.ReverseEndpoint.Capability); err != nil || admitted != second {
 		t.Fatalf("new reverse capability = %v, %v, want replacement lease", admitted, err)
+	}
+	if admitted, err := registry.admitLeaseByToken(secondResponse.AccessToken, false); err != nil || admitted != second {
+		t.Fatalf("new access token = %v, %v, want replacement lease", admitted, err)
+	}
+	if err := registry.verifySigningAccessToken(secondResponse.AccessToken); err != nil {
+		t.Fatalf("new access token signing error = %v", err)
 	}
 }
 

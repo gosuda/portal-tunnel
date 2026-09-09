@@ -184,7 +184,7 @@ UDP client
 - Relay does not terminate tenant TLS. It peeks ClientHello for SNI and bridges raw encrypted bytes after routing.
 - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
 - In keyless TLS, the relay performs certificate private-key signing through `/v1/sign`, but the SDK/tunnel endpoint still runs the TLS server handshake and derives tenant TLS session keys locally.
-- `/sdk/renew` and `/sdk/unregister` are authorized by lease existence plus a relay-issued lease access token. `/sdk/connect` uses a separate reverse-only capability returned as part of a generic reverse endpoint.
+- Lease operations require a relay-issued access token whose identity and lease ID both match the active lease instance. `/sdk/connect` uses a separate reverse-only capability returned as part of a generic reverse endpoint.
 - `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues separate signed credentials for lease operations and reverse connection establishment.
 - Relay URLs must use `https://`.
 - HTTP/2 stays disabled on the admin/API TLS listener. Keyless TLS certificate sharing and `/sdk/connect` both depend on the current HTTP/1.1-only transport contract.

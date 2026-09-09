@@ -255,7 +255,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			OfferReverse: func(identityKey, leaseID string, conn net.Conn, ready func() error) error {
 				lease, err := registry.admitLeaseIdentity(identityKey, leaseID, time.Now().UTC(), false)
 				if err != nil {
-					return fmt.Errorf("%w: %v", overlay.ErrLeaseUnavailable, err)
+					return fmt.Errorf("%w: %w", overlay.ErrLeaseUnavailable, err)
 				}
 				return lease.stream.OfferConnReady(conn, ready)
 			},

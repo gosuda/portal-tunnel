@@ -23,7 +23,7 @@ const (
 type LeaseAccessTokenClaims struct {
 	jwt.Claims
 	Identity types.Identity `json:"identity"`
-	LeaseID  string         `json:"lease_id,omitempty"`
+	LeaseID  string         `json:"lease_id"`
 }
 
 type es256kOpaqueSigner struct {
@@ -72,23 +72,23 @@ func (v *es256kOpaqueVerifier) VerifyPayload(payload []byte, signature []byte, a
 	return nil
 }
 
-func IssueLeaseAccessToken(authority identity.Authority, issuer string, leaseIdentity types.Identity, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {
-	return issueIdentityToken(authority, issuer, leaseIdentity, leaseAccessTokenAudience, "", time.Now().UTC().Add(ttl))
+func IssueLeaseAccessToken(authority identity.Authority, issuer string, leaseIdentity types.Identity, leaseID string, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {
+	return issueIdentityToken(authority, issuer, leaseIdentity, leaseAccessTokenAudience, leaseID, time.Now().UTC().Add(ttl))
 }
 
 // IssueReverseCapability creates a token that can open reverse streams but
 // cannot authorize lease renewal, removal, signing, or datagram backhaul.
 func IssueReverseCapability(authority identity.Authority, issuer string, leaseIdentity types.Identity, leaseID string, expiresAt time.Time) (string, LeaseAccessTokenClaims, error) {
-	leaseID = strings.TrimSpace(leaseID)
-	if leaseID == "" {
-		return "", LeaseAccessTokenClaims{}, errors.New("reverse capability lease id is required")
-	}
 	return issueIdentityToken(authority, issuer, leaseIdentity, reverseCapabilityAudience, leaseID, expiresAt)
 }
 
 func issueIdentityToken(authority identity.Authority, issuer string, leaseIdentity types.Identity, audience, leaseID string, expiresAt time.Time) (string, LeaseAccessTokenClaims, error) {
 	if authority == nil {
 		return "", LeaseAccessTokenClaims{}, errors.New("lease token signing authority is required")
+	}
+	leaseID = strings.TrimSpace(leaseID)
+	if leaseID == "" {
+		return "", LeaseAccessTokenClaims{}, errors.New("lease id is required")
 	}
 	normalizedIdentity, err := identity.NormalizeIdentity(leaseIdentity)
 	if err != nil {
@@ -137,15 +137,7 @@ func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, now time.Time) (
 
 // VerifyReverseCapability accepts only the reverse capability audience.
 func VerifyReverseCapability(token, publicKeyHex, issuer string, now time.Time) (LeaseAccessTokenClaims, error) {
-	claims, err := verifyIdentityToken(token, publicKeyHex, issuer, reverseCapabilityAudience, now)
-	if err != nil {
-		return LeaseAccessTokenClaims{}, err
-	}
-	claims.LeaseID = strings.TrimSpace(claims.LeaseID)
-	if claims.LeaseID == "" {
-		return LeaseAccessTokenClaims{}, errors.New("reverse capability lease id is required")
-	}
-	return claims, nil
+	return verifyIdentityToken(token, publicKeyHex, issuer, reverseCapabilityAudience, now)
 }
 
 func verifyIdentityToken(token, publicKeyHex, issuer, audience string, now time.Time) (LeaseAccessTokenClaims, error) {
@@ -171,6 +163,10 @@ func verifyIdentityToken(token, publicKeyHex, issuer, audience string, now time.
 		return LeaseAccessTokenClaims{}, errors.New("token identity does not match subject")
 	}
 	claims.Identity = normalizedClaimsIdentity
+	claims.LeaseID = strings.TrimSpace(claims.LeaseID)
+	if claims.LeaseID == "" {
+		return LeaseAccessTokenClaims{}, errors.New("lease id is required")
+	}
 	if err := claims.ValidateWithLeeway(jwt.Expected{
 		Issuer:      strings.TrimSpace(issuer),
 		AnyAudience: jwt.Audience{audience},
