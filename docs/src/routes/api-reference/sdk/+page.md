@@ -29,6 +29,7 @@ that switches to a raw stream after a successful HTTP/1.1 response.
 | `POST` | `/sdk/register/challenge` | None | `RegisterChallengeRequest` | `RegisterChallengeResponse` |
 | `POST` | `/sdk/register` | SIWE signature body | `RegisterRequest` | `RegisterResponse` |
 | `POST` | `/sdk/renew` | lease token body | `RenewRequest` | `RenewResponse` |
+| `POST` | `/sdk/reverse` | lease token body | `ReverseEndpointRequest` | `ReverseEndpoint` |
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
 | `GET` | `/sdk/connect` | reverse capability header | none | hijacked stream |
 
@@ -111,7 +112,7 @@ is derived from the registered identity and relay root domain.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `url` | `string` | HTTPS reverse-stream endpoint; currently `/sdk/connect` on the registered relay |
+| `url` | `string` | HTTPS `/sdk/connect` endpoint on the ingress relay or its selected gateway |
 | `capability` | `string` | opaque, reverse-only, and bound to this lease instance |
 | `expires_at` | `string` | never later than the owning lease expiry |
 
@@ -137,6 +138,11 @@ endpoint.
 | `expires_at` | `string` |
 | `access_token` | `string` |
 | `reverse_endpoint` | `ReverseEndpoint` |
+
+`POST /sdk/reverse` rotates only the reverse endpoint. It does not renew or
+replace the lease. The request contains `access_token` and may include the
+generic `failed_url`; the latter lets the ingress avoid the failed endpoint
+when another gateway or the direct path is available.
 
 `UnregisterRequest`:
 

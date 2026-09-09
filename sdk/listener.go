@@ -116,6 +116,10 @@ type listener struct {
 	httpClient    *http.Client
 	httpTransport *http.Transport
 	tlsConfig     *tls.Config
+	reverseTLSMu  sync.Mutex
+	reverseTLSURL string
+	reverseTLS    *tls.Config
+	reverseMu     sync.Mutex
 
 	releaseVersion string
 
@@ -521,10 +525,18 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 
 	var retries int
 	for {
+		lease, _ := l.leaseSnapshot()
 		conn, err := l.openReverseSession(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
 				return nil
+			}
+			if l.isAlternateReverseEndpoint(lease.reverse.URL) {
+				l.refreshReverseEndpointAfterFailure(ctx, lease.reverse.Capability)
+				if !l.waitRetry(ctx, "reverse endpoint connect", err, 1, sessionSlot) {
+					return nil
+				}
+				continue
 			}
 			retries++
 			if !l.waitRetry(ctx, "reverse session connect", err, retries, sessionSlot) {
@@ -548,12 +560,24 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 				Msg("tenant tls handshake failed")
 			retries = 0
 		default:
+			if l.isAlternateReverseEndpoint(lease.reverse.URL) {
+				l.refreshReverseEndpointAfterFailure(ctx, lease.reverse.Capability)
+				if !l.waitRetry(ctx, "reverse endpoint session", err, 1, sessionSlot) {
+					return nil
+				}
+				continue
+			}
 			retries++
 			if !l.waitRetry(ctx, "reverse session connect", err, retries, sessionSlot) {
 				return err
 			}
 		}
 	}
+}
+
+func (l *listener) isAlternateReverseEndpoint(rawURL string) bool {
+	endpoint, err := url.Parse(strings.TrimSpace(rawURL))
+	return err == nil && l.relayURL != nil && (!strings.EqualFold(endpoint.Scheme, l.relayURL.Scheme) || !strings.EqualFold(endpoint.Host, l.relayURL.Host))
 }
 
 func (l *listener) runDatagramLoop(ctx context.Context) {
@@ -630,14 +654,17 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 		return nil, errors.New("relay tls config is unavailable")
 	}
 
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: l.dialTimeout},
-		Config:    l.tlsConfig.Clone(),
-	}
-
 	reverseURL, err := url.Parse(lease.reverse.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse reverse endpoint: %w", err)
+	}
+	reverseTLS, err := l.reverseTLSConfig(ctx, reverseURL)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: l.dialTimeout},
+		Config:    reverseTLS,
 	}
 	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(reverseURL.Host))
 	if err != nil {
@@ -674,6 +701,58 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 	}
 
 	return wrapBufferedConn(conn, reader), nil
+}
+
+func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tls.Config, error) {
+	if endpoint == nil || endpoint.Hostname() == "" {
+		return nil, errors.New("reverse endpoint hostname is unavailable")
+	}
+	if strings.EqualFold(endpoint.Host, l.relayURL.Host) {
+		return l.tlsConfig.Clone(), nil
+	}
+	key := strings.ToLower(endpoint.Scheme + "://" + endpoint.Host)
+	l.reverseTLSMu.Lock()
+	defer l.reverseTLSMu.Unlock()
+	if l.reverseTLS != nil && l.reverseTLSURL == key {
+		return l.reverseTLS.Clone(), nil
+	}
+	tlsConfig, _, transport, err := utils.NewHTTPTLSClient(ctx, endpoint, l.dialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	transport.CloseIdleConnections()
+	l.reverseTLSURL = key
+	l.reverseTLS = tlsConfig.Clone()
+	return tlsConfig, nil
+}
+
+func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, failedCapability string) {
+	l.reverseMu.Lock()
+	defer l.reverseMu.Unlock()
+	lease, ok := l.leaseSnapshot()
+	if !ok || lease.accessToken == "" || failedCapability == "" {
+		return
+	}
+	if lease.reverse.Capability != failedCapability {
+		return
+	}
+	endpoint, err := url.Parse(lease.reverse.URL)
+	if err != nil || strings.EqualFold(endpoint.Host, l.relayURL.Host) {
+		return
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	next, err := l.requestReverseEndpoint(requestCtx, lease.accessToken, lease.reverse.URL, lease.expiresAt)
+	if err != nil || l.lease == nil {
+		return
+	}
+	_, _ = l.lease.UpdateIf(func(current listenerSnapshot) (listenerSnapshot, bool) {
+		if current.accessToken != lease.accessToken || current.reverse.Capability != failedCapability {
+			return current, false
+		}
+		current.reverse = next
+		return current, true
+	})
 }
 
 func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, error) {

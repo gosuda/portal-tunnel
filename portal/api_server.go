@@ -101,6 +101,8 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 			s.handleRegister(w, r)
 		case types.PathSDKRenew:
 			s.handleRenew(w, r)
+		case types.PathSDKReverse:
+			s.handleReverseEndpoint(w, r)
 		case types.PathSDKUnregister:
 			s.handleUnregister(w, r)
 		case types.PathSDKConnect:
@@ -410,6 +412,25 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 }
 
+func (s *Server) handleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if _, ok := s.extractAllowedClientIP(w, r); !ok {
+		return
+	}
+	req, ok := utils.DecodeJSONRequest[types.ReverseEndpointRequest](w, r, defaultControlBodyLimit)
+	if !ok {
+		return
+	}
+	endpoint, err := s.registry.RefreshReverseEndpoint(req)
+	if err != nil {
+		writeAPIErrorResponse(w, err)
+		return
+	}
+	utils.WriteAPIData(w, http.StatusOK, endpoint)
+}
+
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
@@ -422,6 +443,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
 	clientIP, ok := s.extractAllowedClientIP(w, r)
 	if !ok {
+		return
+	}
+	if s.overlay != nil && s.overlay.Handles(capability) {
+		s.overlay.HandleConnect(w, r, capability)
 		return
 	}
 

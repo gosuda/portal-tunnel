@@ -8,11 +8,11 @@ Relay selection returns public relay priorities. Portal does not construct an
 ordered list of intermediate relays. Explicit relay URLs, transport eligibility,
 admission, expiry, health, and load remain Portal responsibilities.
 
-The current runtime has no relay-to-relay data plane. The former Portal-owned
-multi-hop route model and WireGuard relay mesh have been removed. An optional
-relay overlay must live behind the ownership boundary defined by ADR 0001. The
-SDK consumes a generic reverse endpoint with a reverse-only capability;
-discovery routes and lease lifecycle contain no overlay topology.
+The former Portal-owned multi-hop route model and WireGuard relay mesh have
+been removed. When configured, one relay overlay runtime carries reverse TCP
+streams through an IVNP gateway; direct reverse transport remains the fallback.
+The SDK consumes the same generic reverse endpoint in both cases. Discovery
+routes and the lease lifecycle contain no overlay topology.
 
 See [ADR index](adr/README.md) for the relay overlay migration decision and
 [the site architecture documentation](src/routes/architecture/+page.md) for the

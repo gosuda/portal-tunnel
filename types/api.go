@@ -128,6 +128,11 @@ type RenewResponse struct {
 	ReverseEndpoint ReverseEndpoint `json:"reverse_endpoint"`
 }
 
+type ReverseEndpointRequest struct {
+	AccessToken string `json:"access_token"`
+	FailedURL   string `json:"failed_url,omitempty"`
+}
+
 type UnregisterRequest struct {
 	AccessToken string `json:"access_token"`
 }

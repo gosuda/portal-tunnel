@@ -50,6 +50,7 @@ LANDING_PAGE_ENABLED=false
 
 DISCOVERY=false
 BOOTSTRAPS=
+IVNP_CONFIG=
 
 # Embedded authoritative DNS is the default provider and needs no API
 # credentials once the NS delegation above is in place. External providers
@@ -63,6 +64,11 @@ Embedded DNS logs its DS as soon as the local DNS listeners start; startup does 
 
 `LANDING_PAGE_ENABLED` supplies the initial value. Changes made from the admin
 dashboard are stored in `IDENTITY_PATH/policy.json` and survive restarts.
+
+To enable the optional relay overlay, set `DISCOVERY=true`, mount an existing
+IVNP router configuration and its writable state, and set `IVNP_CONFIG` to the
+container path. Invalid overlay configuration fails startup. A runtime overlay
+failure leaves public ingress and direct reverse transport running.
 
 ## Custom Community Frontend
 

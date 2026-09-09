@@ -25,6 +25,7 @@ services:
       PORTAL_FRONTEND_DIR: ${PORTAL_FRONTEND_DIR:-}
       BOOTSTRAPS: ${BOOTSTRAPS:-}
       DISCOVERY: ${DISCOVERY:-false}
+      IVNP_CONFIG: ${IVNP_CONFIG:-}
       IDENTITY_PATH: ${IDENTITY_PATH:-/portal-certs}
 
       API_PORT: 4017

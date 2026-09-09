@@ -115,6 +115,20 @@ const registrationDiagram = `sequenceDiagram
     Note over Relay: Creates lease, publishes route at name.relay-host
     Note over Relay: Allocates TCP/UDP ports if requested
     Relay->>SDK: access_token + reverse_endpoint + lease info (tcp_addr?, udp_addr?, sni_port?)`
+
+const overlayDiagram = `sequenceDiagram
+    participant SDK as SDK / portal-tunnel
+    participant Gateway as Selected gateway
+    participant Ingress as Public ingress relay
+
+    Ingress->>SDK: reverse_endpoint (gateway URL + delegated capability)
+    SDK->>Gateway: GET /sdk/connect (capability)
+    Note over Gateway: Verify ingress signature and gateway binding
+    Gateway->>Ingress: IVNP stream (same capability)
+    Note over Ingress: Verify IVNP peer, capability, and lease instance
+    Ingress->>Gateway: Admit stream to existing lease queue
+    Gateway->>SDK: HTTP 101; bridge SDK socket to IVNP
+    Note over SDK,Ingress: SDK contract and public lease stay unchanged`
 </script>
 
 <div class="not-prose mb-8 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
@@ -171,7 +185,7 @@ UDP client
 - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
 - In keyless TLS, the relay performs certificate private-key signing through `/v1/sign`, but the SDK/tunnel endpoint still runs the TLS server handshake and derives tenant TLS session keys locally.
 - `/sdk/renew` and `/sdk/unregister` are authorized by lease existence plus a relay-issued lease access token. `/sdk/connect` uses a separate reverse-only capability returned as part of a generic reverse endpoint.
-- `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues separate ES256K JWTs for lease operations and reverse connection establishment.
+- `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues separate signed credentials for lease operations and reverse connection establishment.
 - Relay URLs must use `https://`.
 - HTTP/2 stays disabled on the admin/API TLS listener. Keyless TLS certificate sharing and `/sdk/connect` both depend on the current HTTP/1.1-only transport contract.
 
@@ -211,6 +225,7 @@ Portal has three distinct network roles:
   - `POST /sdk/register/challenge`
   - `POST /sdk/register`
   - `POST /sdk/renew`
+  - `POST /sdk/reverse`
   - `POST /sdk/unregister`
   - `GET /sdk/domain`
 - **Reverse session connection**
@@ -248,6 +263,16 @@ Shared wire types, API envelope, error codes, path constants, and transport fram
 Result: the relay decides routing, but tenant TLS termination still happens at the SDK/tunnel side.
 
 <Mermaid code={tlsStreamDiagram} />
+
+### Optional relay overlay
+
+With `IVNP_CONFIG` enabled, the ingress may return a gateway URL in the same
+`reverse_endpoint` contract. The SDK neither selects the gateway nor sees an
+IVNP destination. A failed gateway is reported through `POST /sdk/reverse`; the
+ingress rotates to another admitted gateway or returns the direct endpoint
+without replacing the lease.
+
+<Mermaid code={overlayDiagram} />
 
 ### Tenant TLS Self-Probe Detection
 
@@ -316,8 +341,10 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 - `GET reverse_endpoint.url` (currently `/sdk/connect`, HTTP/1.1 only) with the
   `X-Portal-Reverse-Capability` header.
-- Relay validates that the lease exists and is routable, and that the capability
-  signature, issuer, reverse-only audience, identity, and expiry are valid.
+- Direct endpoints validate the lease instance and reverse-only capability.
+  Overlay gateways validate the ingress-signed delegated capability before
+  dialing IVNP; the ingress then verifies the authenticated gateway peer and
+  lease instance before admitting the stream.
 - After claim, relay writes `0x02` before switching the session into tenant TLS passthrough.
 - After hijack, the connection becomes a broker-managed reverse session.
 
@@ -325,6 +352,9 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 - `POST /sdk/renew` with `access_token`. Extends lease TTL and returns refreshed
   lease and reverse credentials.
+
+`POST /sdk/reverse` replaces only a failed reverse endpoint. Gateway replacement
+therefore preserves the ingress lease and public hostname.
 
 ### 4. Unregister
 

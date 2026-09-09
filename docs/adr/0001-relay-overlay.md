@@ -8,7 +8,7 @@ Portal's multi-hop route model and WireGuard relay mesh have been removed. The
 remaining system has one simple path: a tunnel client registers a lease with a
 public relay and opens a direct reverse connection to that same relay.
 
-IVNP remains a candidate for optional relay-to-relay reachability and internal
+IVNP provides optional relay-to-relay reachability and owns its internal
 multi-hop routing. The first implementation proved that gateway/ingress
 separation, delegated authorization, failure isolation, and route replacement
 are real requirements. It also spread those requirements through the generic

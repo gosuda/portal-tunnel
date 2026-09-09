@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"testing"
 	"time"
 
@@ -12,35 +11,34 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func TestValidateDirectReverseEndpoint(t *testing.T) {
+func TestValidateReverseEndpoint(t *testing.T) {
 	t.Parallel()
-	relayURL, err := url.Parse("https://relay.example")
-	if err != nil {
-		t.Fatalf("url.Parse() error = %v", err)
-	}
 	leaseExpiry := time.Now().UTC().Add(time.Minute)
 	endpoint := types.ReverseEndpoint{
 		URL:        "https://relay.example/sdk/connect",
 		Capability: " reverse-capability ",
 		ExpiresAt:  leaseExpiry,
 	}
-	validated, err := validateDirectReverseEndpoint(endpoint, relayURL, leaseExpiry)
+	validated, err := validateReverseEndpoint(endpoint, leaseExpiry)
 	if err != nil {
-		t.Fatalf("validateDirectReverseEndpoint() error = %v", err)
+		t.Fatalf("validateReverseEndpoint() error = %v", err)
 	}
 	if validated.Capability != "reverse-capability" {
 		t.Fatalf("validated capability = %q", validated.Capability)
 	}
+	endpoint.URL = "https://gateway.example/sdk/connect"
+	if _, err := validateReverseEndpoint(endpoint, leaseExpiry); err != nil {
+		t.Fatalf("gateway reverse endpoint rejected: %v", err)
+	}
 
 	for name, invalid := range map[string]types.ReverseEndpoint{
-		"other origin": {URL: "https://gateway.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry},
-		"wrong path":   {URL: "https://relay.example/sdk/renew", Capability: "cap", ExpiresAt: leaseExpiry},
-		"lease bound":  {URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry.Add(time.Second)},
+		"wrong path":  {URL: "https://relay.example/sdk/renew", Capability: "cap", ExpiresAt: leaseExpiry},
+		"lease bound": {URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry.Add(time.Second)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := validateDirectReverseEndpoint(invalid, relayURL, leaseExpiry); err == nil {
-				t.Fatal("validateDirectReverseEndpoint() error = nil")
+			if _, err := validateReverseEndpoint(invalid, leaseExpiry); err == nil {
+				t.Fatal("validateReverseEndpoint() error = nil")
 			}
 		})
 	}

@@ -110,6 +110,7 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 |----------|---------|------|-------------|
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
+| `IVNP_CONFIG` | `""` | path | Optional IVNP router configuration; enables the relay overlay and requires `DISCOVERY=true` |
 | `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
 
 ### Payments

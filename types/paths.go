@@ -36,6 +36,7 @@ const (
 	PathSDKRegisterChallenge = PathSDKPrefix + "/register/challenge"
 	PathSDKRegister          = PathSDKPrefix + "/register"
 	PathSDKRenew             = PathSDKPrefix + "/renew"
+	PathSDKReverse           = PathSDKPrefix + "/reverse"
 	PathSDKUnregister        = PathSDKPrefix + "/unregister"
 	PathSDKConnect           = PathSDKPrefix + "/connect"
 

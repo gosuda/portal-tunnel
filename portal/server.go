@@ -26,6 +26,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -40,6 +41,7 @@ const (
 )
 
 type ServerConfig struct {
+	IVNPConfigPath    string
 	PortalURL         string
 	IdentityPath      string
 	Bootstraps        []string
@@ -104,6 +106,10 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 }
 
 func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
+	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
+	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
+		return ServerConfig{}, errors.New("relay overlay requires discovery")
+	}
 	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
 	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
 	if cfg.IdentityPath == "" {
@@ -193,6 +199,7 @@ type Server struct {
 	relaySet        *discovery.RelaySet
 	announceLimiter *discovery.AnnounceLimiter
 	registry        *leaseRegistry
+	overlay         *overlay.Runtime
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -232,6 +239,35 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		announceLimiter: discovery.NewAnnounceLimiter(0, 0),
 	}
 	server.registry.proxy = &server.proxy
+	if cfg.IVNPConfigPath != "" {
+		server.overlay, err = overlay.New(overlay.Config{
+			ConfigPath: cfg.IVNPConfigPath,
+			Authority:  relayAuthority,
+			Descriptors: func() []types.RelayDescriptor {
+				states := server.relaySet.ConfirmedRelays()
+				descriptors := make([]types.RelayDescriptor, 0, len(states))
+				for _, state := range states {
+					descriptors = append(descriptors, state.Descriptor)
+				}
+				return descriptors
+			},
+			SelfDescriptor: server.newSelfDescriptor,
+			OfferReverse: func(identityKey, leaseID string, conn net.Conn, ready func() error) error {
+				lease, err := registry.admitLeaseIdentity(identityKey, leaseID, time.Now().UTC(), false)
+				if err != nil {
+					return fmt.Errorf("%w: %v", overlay.ErrLeaseUnavailable, err)
+				}
+				return lease.stream.OfferConnReady(conn, ready)
+			},
+			Bridge: func(left, right net.Conn) {
+				server.proxy.bridge(left, right, "", registry.policy.BPSManager())
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		registry.reverseOverlay = server.overlay
+	}
 	return server, nil
 }
 
@@ -301,6 +337,10 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		if started {
 			return
 		}
+		cancel()
+		if s.overlay != nil {
+			s.overlay.Close()
+		}
 		_ = acmeManager.Stop(ctx)
 		if apiServer != nil {
 			_ = apiServer.Close()
@@ -317,6 +357,9 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		if pprofListener != nil {
 			_ = pprofListener.Close()
 		}
+		if quicBackhaul != nil {
+			_ = quicBackhaul.Close()
+		}
 		if apiCloser != nil {
 			_ = apiCloser.Close()
 		}
@@ -326,7 +369,6 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		if apiListener != nil {
 			_ = apiListener.Close()
 		}
-		cancel()
 	}()
 	var listenConfig net.ListenConfig
 
@@ -388,6 +430,11 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 			quicBackhaul = nil
 		}
 	}
+	if s.overlay != nil {
+		if err := s.overlay.Start(serverCtx); err != nil {
+			return fmt.Errorf("start relay overlay: %w", err)
+		}
+	}
 
 	s.apiListener = wrappedAPIListener
 	s.sniListener = sniListener
@@ -423,6 +470,15 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	group.Go(func() error { return s.runRegistryJanitor(groupCtx, 5*time.Second) })
 	if cfg.DiscoveryEnabled {
 		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
+	}
+	if s.overlay != nil {
+		group.Go(func() error {
+			if err := s.overlay.Run(groupCtx); err != nil && groupCtx.Err() == nil {
+				log.Error().Err(err).Msg("relay overlay stopped; direct reverse transport remains available")
+				s.overlay.Close()
+			}
+			return nil
+		})
 	}
 	s.acmeManager.Start(serverCtx)
 	group.Go(func() error {
@@ -509,6 +565,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownOnce.Do(func() {
 		if s.cancel != nil {
 			s.cancel()
+		}
+		if s.overlay != nil {
+			s.overlay.Close()
 		}
 
 		records := s.registry.CloseAll()
@@ -837,12 +896,17 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 	}
 	cfg := s.config()
 
+	ivnpDestination := ""
+	if s.overlay != nil {
+		ivnpDestination = s.overlay.Destination()
+	}
 	return auth.SignRelayDescriptor(types.RelayDescriptor{
 		Address:           s.identity.Address,
 		Version:           types.DiscoveryVersion,
 		IssuedAt:          now,
 		ExpiresAt:         now.Add(discovery.DiscoveryDescriptorTTL),
 		APIHTTPSAddr:      cfg.PortalURL,
+		IVNPDestination:   ivnpDestination,
 		SupportsUDP:       s.supportsUDP(),
 		SupportsTCP:       s.supportsTCP(),
 		ActiveConnections: s.proxy.activeConnectionCount(),

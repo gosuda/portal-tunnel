@@ -99,6 +99,16 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if !renewed.ReverseEndpoint.ExpiresAt.Equal(renewed.ExpiresAt) {
 		t.Fatalf("Renew() reverse expiry = %v, want %v", renewed.ReverseEndpoint.ExpiresAt, renewed.ExpiresAt)
 	}
+	refreshed, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: renewed.AccessToken})
+	if err != nil {
+		t.Fatalf("RefreshReverseEndpoint() error = %v", err)
+	}
+	if refreshed.Capability == renewed.ReverseEndpoint.Capability || refreshed.URL != renewed.ReverseEndpoint.URL {
+		t.Fatalf("RefreshReverseEndpoint() = %#v, want rotated direct capability", refreshed)
+	}
+	if admitted, err := registry.admitReverseCapability(refreshed.Capability); err != nil || admitted != record {
+		t.Fatalf("refreshed reverse capability = %v, %v, want registered lease", admitted, err)
+	}
 	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "203.0.113.11" {
 		t.Fatalf("Renew() did not register client IP for lease")
 	}

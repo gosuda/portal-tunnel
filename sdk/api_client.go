@@ -162,7 +162,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, "", "", errors.New("relay returned mismatched lease identity")
 	}
-	reverseEndpoint, err := validateDirectReverseEndpoint(resp.ReverseEndpoint, l.relayURL, resp.ExpiresAt)
+	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
 	if err != nil {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, "", "", err
@@ -177,7 +177,7 @@ func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, 
 	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRenew, req, nil, &resp); err != nil {
 		return types.RenewResponse{}, err
 	}
-	reverseEndpoint, err := validateDirectReverseEndpoint(resp.ReverseEndpoint, l.relayURL, resp.ExpiresAt)
+	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
 	if err != nil {
 		return types.RenewResponse{}, err
 	}
@@ -185,21 +185,27 @@ func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, 
 	return resp, nil
 }
 
-func validateDirectReverseEndpoint(endpoint types.ReverseEndpoint, relayURL *url.URL, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {
+func (l *listener) requestReverseEndpoint(ctx context.Context, accessToken, failedURL string, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {
+	var endpoint types.ReverseEndpoint
+	req := types.ReverseEndpointRequest{AccessToken: accessToken, FailedURL: failedURL}
+	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKReverse, req, nil, &endpoint); err != nil {
+		return types.ReverseEndpoint{}, err
+	}
+	return validateReverseEndpoint(endpoint, leaseExpiresAt)
+}
+
+func validateReverseEndpoint(endpoint types.ReverseEndpoint, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {
 	endpoint.URL = strings.TrimSpace(endpoint.URL)
 	endpoint.Capability = strings.TrimSpace(endpoint.Capability)
-	if relayURL == nil || endpoint.URL == "" || endpoint.Capability == "" {
+	if endpoint.URL == "" || endpoint.Capability == "" {
 		return types.ReverseEndpoint{}, errors.New("relay returned incomplete reverse endpoint")
 	}
 	parsed, err := url.Parse(endpoint.URL)
 	if err != nil || parsed.Host == "" || !strings.EqualFold(parsed.Scheme, "https") {
 		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint URL")
 	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.EscapedPath() != types.PathSDKConnect {
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.EscapedPath() != types.PathSDKConnect {
 		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint target")
-	}
-	if !strings.EqualFold(parsed.Scheme, relayURL.Scheme) || !strings.EqualFold(parsed.Host, relayURL.Host) {
-		return types.ReverseEndpoint{}, errors.New("direct reverse endpoint must use the registered relay origin")
 	}
 	if !endpoint.ExpiresAt.After(time.Now().UTC()) || endpoint.ExpiresAt.After(leaseExpiresAt) {
 		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint expiry")

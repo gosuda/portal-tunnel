@@ -16,7 +16,7 @@ The relay owns:
 - lease registration and renewal
 - public hostname and port routing
 - SNI route lookup for the default stream path
-- relay discovery and relay-to-relay forwarding
+- relay discovery
 - admin policy such as approval, bans, and transport limits
 
 The tunnel process owns:
@@ -27,6 +27,10 @@ The tunnel process owns:
 - UDP target forwarding
 - identity keys and lease signing
 - MITM self-probe validation
+
+When configured, the relay's single overlay runtime owns gateway selection,
+delegated reverse authorization, IVNP forwarding, and gateway replacement.
+Those concerns are not part of SDK relay selection or the lease model.
 
 This split is why Portal can use public relays without giving relay operators
 tenant plaintext.
