@@ -126,7 +126,15 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `TRUST_PROXY_HEADERS` | `false` | bool | Trust `X-Forwarded-*` and `X-Real-IP` headers from trusted proxies |
-| `TRUSTED_PROXY_CIDRS` | `""` | string | Trusted proxy CIDR allowlist for forwarded headers (comma-separated); defaults to private/loopback ranges when `TRUST_PROXY_HEADERS` is enabled |
+| `TRUSTED_PROXY_CIDRS` | `""` | string | Explicit trusted proxy CIDR allowlist for forwarded headers (comma-separated); empty trusts no proxies and uses socket addresses even with `TRUST_PROXY_HEADERS=true` |
+
+When upgrading a deployment that used `TRUST_PROXY_HEADERS=true` with an empty
+`TRUSTED_PROXY_CIDRS`, set the proxy's fixed address explicitly (`/32` for IPv4,
+`/128` for IPv6). Private and loopback addresses are no longer trusted implicitly.
+Without an allowlist, IP bans and source limits apply to the socket peer, which
+is the proxy when one sits in front. The trusted proxy must overwrite
+`X-Forwarded-For` and `X-Real-IP` with the client address; see the
+[reverse-proxy trust boundary](/deployment#client-addresses-and-the-trust-boundary).
 
 ### TLS
 

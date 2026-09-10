@@ -245,6 +245,7 @@ If you do, **overwrite `X-Forwarded-For` rather than appending to it**:
 
 ```nginx
 proxy_set_header X-Forwarded-For $remote_addr;    # not $proxy_add_x_forwarded_for
+proxy_set_header X-Real-IP $remote_addr;
 ```
 
 `$proxy_add_x_forwarded_for` keeps whatever the visitor sent and appends the
@@ -253,9 +254,11 @@ peer. Portal trusts the *first* entry, so a request carrying
 is read as `10.0.0.9` — an `/api/policy/ips` bypass. `$remote_addr` has already
 been restored from the PROXY header, so it is both correct and unspoofable.
 
-Set `TRUSTED_PROXY_CIDRS` to **the proxy's own address as a `/32`**, not the
-default private ranges. The default trusts every RFC 1918 address, which on a
-Docker host means every container.
+Enable `TRUST_PROXY_HEADERS` and set `TRUSTED_PROXY_CIDRS` to **the proxy's own
+address as a `/32`** (`/128` for IPv6). An empty allowlist trusts no proxies,
+including private and loopback peers, and Portal uses the socket address.
+Do not allowlist an entire private subnet: on a Docker host that would let
+other containers choose their client address and bypass IP bans and source limits.
 
 That address has to be *fixed*. Compose assigns container addresses
 dynamically, so a `/32` matching whatever nginx got today stops matching the
