@@ -168,6 +168,53 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	return nil
 }
 
+// DeleteARecordValue removes publicIPv4 while preserving other A values.
+func (p *Provider) DeleteARecordValue(ctx context.Context, name, publicIPv4 string) error {
+	if p == nil {
+		return errors.New("route53 provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+		return err
+	}
+	client, err := newClient(ctx, p.cfg)
+	if err != nil {
+		return err
+	}
+	hostedZoneID, err := p.findHostedZoneID(ctx, client, name)
+	if err != nil {
+		return err
+	}
+	recordSet, err := getRecordSet(ctx, client, hostedZoneID, name, route53types.RRTypeA)
+	if err != nil || recordSet == nil {
+		return err
+	}
+	publicIPv4 = strings.TrimSpace(publicIPv4)
+	remaining := make([]string, 0, len(recordSet.ResourceRecords))
+	for _, record := range recordSet.ResourceRecords {
+		value := aws.ToString(record.Value)
+		if strings.TrimSpace(value) != publicIPv4 {
+			remaining = append(remaining, value)
+		}
+	}
+	if len(remaining) == len(recordSet.ResourceRecords) {
+		return nil
+	}
+	if len(remaining) == 0 {
+		if err := deleteRecordSet(ctx, client, hostedZoneID, recordSet, "Managed by Portal ENS cleanup"); err != nil {
+			return fmt.Errorf("delete route53 A record %s value %s: %w", name, publicIPv4, err)
+		}
+		return nil
+	}
+	if err := upsertRecord(ctx, client, hostedZoneID, name, route53types.RRTypeA, remaining, "Managed by Portal ENS cleanup"); err != nil {
+		return fmt.Errorf("replace route53 A record %s: %w", name, err)
+	}
+	return nil
+}
+
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
 		return errors.New("route53 provider is nil")
@@ -220,6 +267,37 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	}
 	if err := deleteTXTRecords(ctx, client, hostedZoneID, name, matchPrefix); err != nil {
 		return fmt.Errorf("delete route53 TXT records %s: %w", name, err)
+	}
+	return nil
+}
+
+// ReplaceTXTRecords atomically replaces TXT values with matchPrefix.
+func (p *Provider) ReplaceTXTRecords(ctx context.Context, name, matchPrefix, value string) error {
+	if p == nil {
+		return errors.New("route53 provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	matchPrefix = strings.TrimSpace(matchPrefix)
+	if matchPrefix == "" {
+		return errors.New("txt record match prefix is required")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("txt record value is required")
+	}
+	client, err := newClient(ctx, p.cfg)
+	if err != nil {
+		return err
+	}
+	hostedZoneID, err := p.findHostedZoneID(ctx, client, name)
+	if err != nil {
+		return err
+	}
+	if err := replaceTXTRecords(ctx, client, hostedZoneID, name, matchPrefix, value); err != nil {
+		return fmt.Errorf("replace route53 TXT records %s: %w", name, err)
 	}
 	return nil
 }
@@ -474,6 +552,34 @@ func deleteTXTRecords(ctx context.Context, client *awsroute53.Client, hostedZone
 		return deleteRecordSet(ctx, client, hostedZoneID, recordSet, "Managed by Portal ENS cleanup")
 	}
 	return upsertRecord(ctx, client, hostedZoneID, name, route53types.RRTypeTxt, remaining, "Managed by Portal ENS cleanup")
+}
+
+func replaceTXTRecords(ctx context.Context, client *awsroute53.Client, hostedZoneID, name, matchPrefix, value string) error {
+	recordSet, err := getTXTRecordSet(ctx, client, hostedZoneID, name)
+	if err != nil {
+		return err
+	}
+	if recordSet == nil {
+		return upsertTXTRecord(ctx, client, hostedZoneID, name, value)
+	}
+	remaining := make([]string, 0, len(recordSet.ResourceRecords)+1)
+	matching := 0
+	desired := false
+	for _, record := range recordSet.ResourceRecords {
+		raw := aws.ToString(record.Value)
+		content := dnsrecord.TXTContent(raw)
+		if strings.HasPrefix(content, matchPrefix) {
+			matching++
+			desired = desired || content == value
+			continue
+		}
+		remaining = append(remaining, raw)
+	}
+	if matching == 1 && desired {
+		return nil
+	}
+	remaining = append(remaining, route53TXTValue(value))
+	return upsertRecord(ctx, client, hostedZoneID, name, route53types.RRTypeTxt, remaining, "Managed by Portal ENS")
 }
 
 func upsertRecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, name string, recordType route53types.RRType, values []string, comment string) error {

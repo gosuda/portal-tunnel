@@ -36,8 +36,12 @@ type DNSProvider interface {
 	EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error
 	EnsureARecord(ctx context.Context, name, publicIPv4 string) error
 	DeleteARecord(ctx context.Context, name string) error
+	// DeleteARecordValue preserves the record when its value no longer matches.
+	DeleteARecordValue(ctx context.Context, name, publicIPv4 string) error
 	EnsureTXTRecord(ctx context.Context, name, value string) error
 	DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error
+	// ReplaceTXTRecords leaves an existing matching value intact if replacement fails.
+	ReplaceTXTRecords(ctx context.Context, name, matchPrefix, value string) error
 	EnsureHTTPSRecord(ctx context.Context, name string, record dnsrecord.HTTPSRecord) error
 	DeleteHTTPSRecord(ctx context.Context, name string) error
 	EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error)

@@ -165,6 +165,56 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	return nil
 }
 
+// DeleteARecordValue removes publicIPv4 while preserving other A values.
+func (p *Provider) DeleteARecordValue(ctx context.Context, name, publicIPv4 string) error {
+	if p == nil {
+		return errors.New("gcloud provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+		return err
+	}
+	publicIPv4 = strings.TrimSpace(publicIPv4)
+
+	service, runtimeCfg, zone, err := p.newService(ctx, name)
+	if err != nil {
+		return err
+	}
+	existing, err := listRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, name, "A")
+	if err != nil {
+		return fmt.Errorf("list gcloud A records %s: %w", name, err)
+	}
+	remaining := make([]string, 0, len(existing))
+	removed := false
+	for _, recordSet := range existing {
+		for _, value := range recordSet.Rrdatas {
+			if strings.TrimSpace(value) == publicIPv4 {
+				removed = true
+				continue
+			}
+			remaining = append(remaining, value)
+		}
+	}
+	if !removed {
+		return nil
+	}
+	if len(remaining) == 0 {
+		if err := applyChange(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.Change{Deletions: existing}); err != nil {
+			return fmt.Errorf("delete gcloud A record %s value %s: %w", name, publicIPv4, err)
+		}
+		return nil
+	}
+	if err := replaceRecordSet(ctx, service, runtimeCfg.ProjectID, zone.Name, existing, &dns.ResourceRecordSet{
+		Name: fqdn(name), Type: "A", Ttl: recordTTL(existing), Rrdatas: remaining,
+	}); err != nil {
+		return fmt.Errorf("replace gcloud A record %s: %w", name, err)
+	}
+	return nil
+}
+
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
 		return errors.New("gcloud provider is nil")
@@ -285,6 +335,69 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 		Rrdatas: remaining,
 	}); err != nil {
 		return fmt.Errorf("delete gcloud TXT records %s: %w", name, err)
+	}
+	return nil
+}
+
+// ReplaceTXTRecords atomically replaces TXT values with matchPrefix.
+func (p *Provider) ReplaceTXTRecords(ctx context.Context, name, matchPrefix, value string) error {
+	if p == nil {
+		return errors.New("gcloud provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	matchPrefix = strings.TrimSpace(matchPrefix)
+	if matchPrefix == "" {
+		return errors.New("txt record match prefix is required")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("txt record value is required")
+	}
+
+	service, runtimeCfg, zone, err := p.newService(ctx, name)
+	if err != nil {
+		return err
+	}
+	existing, err := listRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, name, "TXT")
+	if err != nil {
+		return fmt.Errorf("list gcloud TXT records %s: %w", name, err)
+	}
+	values := make([]string, 0, len(existing)+1)
+	seen := make(map[string]struct{}, len(existing)+1)
+	matching := 0
+	for _, recordSet := range existing {
+		for _, raw := range recordSet.Rrdatas {
+			normalized := dnsrecord.TXTContent(raw)
+			if strings.HasPrefix(normalized, matchPrefix) {
+				matching++
+				continue
+			}
+			if normalized == "" {
+				continue
+			}
+			if _, ok := seen[normalized]; !ok {
+				seen[normalized] = struct{}{}
+				values = append(values, normalized)
+			}
+		}
+	}
+	if matching == 1 {
+		for _, recordSet := range existing {
+			for _, raw := range recordSet.Rrdatas {
+				if dnsrecord.TXTContent(raw) == value {
+					return nil
+				}
+			}
+		}
+	}
+	values = append(values, value)
+	if err := replaceRecordSet(ctx, service, runtimeCfg.ProjectID, zone.Name, existing, &dns.ResourceRecordSet{
+		Name: fqdn(name), Type: "TXT", Ttl: recordTTL(existing), Rrdatas: values,
+	}); err != nil {
+		return fmt.Errorf("replace gcloud TXT records %s: %w", name, err)
 	}
 	return nil
 }

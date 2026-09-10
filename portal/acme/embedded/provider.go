@@ -261,6 +261,17 @@ func (p *Provider) DeleteARecord(context.Context, string) error {
 	return nil
 }
 
+// DeleteARecordValue is a no-op because A answers are synthesized, not stored.
+func (p *Provider) DeleteARecordValue(_ context.Context, name, publicIPv4 string) error {
+	if p == nil {
+		return errors.New("embedded dns provider is nil")
+	}
+	if _, err := p.zoneHostname(name); err != nil {
+		return err
+	}
+	return utils.ValidateIPv4(publicIPv4)
+}
+
 func (p *Provider) EnsureTXTRecord(_ context.Context, name, value string) error {
 	if p == nil {
 		return errors.New("embedded dns provider is nil")
@@ -312,6 +323,46 @@ func (p *Provider) DeleteTXTRecords(_ context.Context, name, matchPrefix string)
 	} else {
 		p.txt[fqdn] = remaining
 	}
+	p.bumpSerialLocked()
+	return nil
+}
+
+// ReplaceTXTRecords atomically replaces TXT values with matchPrefix.
+func (p *Provider) ReplaceTXTRecords(_ context.Context, name, matchPrefix, value string) error {
+	if p == nil {
+		return errors.New("embedded dns provider is nil")
+	}
+	fqdn, err := p.zoneHostname(name)
+	if err != nil {
+		return err
+	}
+	matchPrefix = strings.TrimSpace(matchPrefix)
+	if matchPrefix == "" {
+		return errors.New("txt record match prefix is required")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("txt record value is required")
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	values := p.txt[fqdn]
+	matching := 0
+	desired := false
+	remaining := make([]string, 0, len(values)+1)
+	for _, existing := range values {
+		if strings.HasPrefix(existing, matchPrefix) {
+			matching++
+			desired = desired || existing == value
+			continue
+		}
+		remaining = append(remaining, existing)
+	}
+	if matching == 1 && desired {
+		return nil
+	}
+	p.txt[fqdn] = append(remaining, value)
 	p.bumpSerialLocked()
 	return nil
 }

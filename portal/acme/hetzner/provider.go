@@ -121,6 +121,28 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	return nil
 }
 
+// DeleteARecordValue removes publicIPv4 while preserving other A values.
+func (p *Provider) DeleteARecordValue(ctx context.Context, name, publicIPv4 string) error {
+	if p == nil {
+		return errors.New("hetzner provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+		return err
+	}
+	client, zone, err := p.clientAndZone(ctx, name)
+	if err != nil {
+		return err
+	}
+	if err := deleteRecordValue(ctx, client, zone, name, hcloud.ZoneRRSetTypeA, strings.TrimSpace(publicIPv4)); err != nil {
+		return fmt.Errorf("delete hetzner A record %s value %s: %w", name, publicIPv4, err)
+	}
+	return nil
+}
+
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
 		return errors.New("hetzner provider is nil")
@@ -163,6 +185,33 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	}
 	if err := deleteTXTRecords(ctx, client, zone, name, matchPrefix); err != nil {
 		return fmt.Errorf("delete hetzner TXT records %s: %w", name, err)
+	}
+	return nil
+}
+
+// ReplaceTXTRecords atomically replaces TXT values with matchPrefix.
+func (p *Provider) ReplaceTXTRecords(ctx context.Context, name, matchPrefix, value string) error {
+	if p == nil {
+		return errors.New("hetzner provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	matchPrefix = strings.TrimSpace(matchPrefix)
+	if matchPrefix == "" {
+		return errors.New("txt record match prefix is required")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("txt record value is required")
+	}
+	client, zone, err := p.clientAndZone(ctx, name)
+	if err != nil {
+		return err
+	}
+	if err := replaceTXTRecords(ctx, client, zone, name, matchPrefix, value); err != nil {
+		return fmt.Errorf("replace hetzner TXT records %s: %w", name, err)
 	}
 	return nil
 }
@@ -388,6 +437,38 @@ func deleteRRSet(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, 
 	return waitAction(ctx, client, result.Action)
 }
 
+func deleteRecordValue(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, fqdn string, recordType hcloud.ZoneRRSetType, value string) error {
+	recordName, err := relativeRecordName(fqdn, zone)
+	if err != nil {
+		return err
+	}
+	existing, _, err := client.Zone.GetRRSetByNameAndType(ctx, zone, recordName, recordType)
+	if err != nil || existing == nil {
+		return err
+	}
+	remaining := make([]hcloud.ZoneRRSetRecord, 0, len(existing.Records))
+	for _, record := range existing.Records {
+		if strings.TrimSpace(record.Value) != value {
+			remaining = append(remaining, record)
+		}
+	}
+	if len(remaining) == len(existing.Records) {
+		return nil
+	}
+	if len(remaining) == 0 {
+		result, _, err := client.Zone.DeleteRRSet(ctx, existing)
+		if err != nil {
+			return err
+		}
+		return waitAction(ctx, client, result.Action)
+	}
+	action, _, err := client.Zone.SetRRSetRecords(ctx, existing, hcloud.ZoneRRSetSetRecordsOpts{Records: remaining})
+	if err != nil {
+		return err
+	}
+	return waitAction(ctx, client, action)
+}
+
 func deleteTXTRecords(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, fqdn, matchPrefix string) error {
 	recordName, err := relativeRecordName(fqdn, zone)
 	if err != nil {
@@ -419,6 +500,50 @@ func deleteTXTRecords(ctx context.Context, client *hcloud.Client, zone *hcloud.Z
 		return waitAction(ctx, client, result.Action)
 	}
 
+	action, _, err := client.Zone.SetRRSetRecords(ctx, existing, hcloud.ZoneRRSetSetRecordsOpts{Records: remaining})
+	if err != nil {
+		return err
+	}
+	return waitAction(ctx, client, action)
+}
+
+func replaceTXTRecords(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, fqdn, matchPrefix, value string) error {
+	recordName, err := relativeRecordName(fqdn, zone)
+	if err != nil {
+		return err
+	}
+	existing, _, err := client.Zone.GetRRSetByNameAndType(ctx, zone, recordName, hcloud.ZoneRRSetTypeTXT)
+	if err != nil {
+		return err
+	}
+	formatted := zoneutil.FormatTXTRecord(value)
+	if existing == nil {
+		ttl := defaultRecordTTL
+		result, _, err := client.Zone.CreateRRSet(ctx, zone, hcloud.ZoneRRSetCreateOpts{
+			Name: recordName, Type: hcloud.ZoneRRSetTypeTXT, TTL: &ttl,
+			Records: []hcloud.ZoneRRSetRecord{{Value: formatted}},
+		})
+		if err != nil {
+			return err
+		}
+		return waitAction(ctx, client, result.Action)
+	}
+	remaining := make([]hcloud.ZoneRRSetRecord, 0, len(existing.Records)+1)
+	matching := 0
+	desired := false
+	for _, record := range existing.Records {
+		content := txtContent(record.Value)
+		if strings.HasPrefix(content, matchPrefix) {
+			matching++
+			desired = desired || content == value
+			continue
+		}
+		remaining = append(remaining, record)
+	}
+	if matching == 1 && desired {
+		return nil
+	}
+	remaining = append(remaining, hcloud.ZoneRRSetRecord{Value: formatted})
 	action, _, err := client.Zone.SetRRSetRecords(ctx, existing, hcloud.ZoneRRSetSetRecordsOpts{Records: remaining})
 	if err != nil {
 		return err

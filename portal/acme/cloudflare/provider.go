@@ -195,6 +195,42 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	return nil
 }
 
+// DeleteARecordValue removes only A records that still contain publicIPv4.
+func (p *Provider) DeleteARecordValue(ctx context.Context, name, publicIPv4 string) error {
+	if p == nil {
+		return errors.New("cloudflare provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if p.token == "" {
+		return errors.New("cloudflare token is required")
+	}
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+		return err
+	}
+	publicIPv4 = strings.TrimSpace(publicIPv4)
+
+	zoneID, err := p.findZoneID(ctx, name)
+	if err != nil {
+		return fmt.Errorf("find cloudflare zone: %w", err)
+	}
+	records, err := listDNSRecords(ctx, p.token, zoneID, name, "A")
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if !strings.EqualFold(record.Name, name) || strings.TrimSpace(record.Content) != publicIPv4 {
+			continue
+		}
+		if err := deleteDNSRecord(ctx, p.token, zoneID, record.ID); err != nil {
+			return fmt.Errorf("delete A record %s value %s: %w", name, publicIPv4, err)
+		}
+	}
+	return nil
+}
+
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
@@ -252,6 +288,60 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 		}
 		if err := deleteDNSRecord(ctx, p.token, zoneID, record.ID); err != nil {
 			return fmt.Errorf("delete TXT record %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// ReplaceTXTRecords replaces matching TXT records without removing the last
+// valid value before the replacement has been created.
+func (p *Provider) ReplaceTXTRecords(ctx context.Context, name, matchPrefix, value string) error {
+	if p == nil {
+		return errors.New("cloudflare provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if p.token == "" {
+		return errors.New("cloudflare token is required")
+	}
+	matchPrefix = strings.TrimSpace(matchPrefix)
+	if matchPrefix == "" {
+		return errors.New("txt record match prefix is required")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("txt record value is required")
+	}
+
+	zoneID, err := p.findZoneID(ctx, name)
+	if err != nil {
+		return fmt.Errorf("find cloudflare zone: %w", err)
+	}
+	records, err := listDNSRecords(ctx, p.token, zoneID, name, "TXT")
+	if err != nil {
+		return err
+	}
+	desiredID := ""
+	for _, record := range records {
+		if strings.EqualFold(record.Name, name) && strings.TrimSpace(record.Content) == value {
+			desiredID = record.ID
+			break
+		}
+	}
+	if desiredID == "" {
+		if err := createDNSRecord(ctx, p.token, zoneID, "TXT", name, value); err != nil {
+			return fmt.Errorf("create replacement TXT record %s: %w", name, err)
+		}
+	}
+	for _, record := range records {
+		content := strings.TrimSpace(record.Content)
+		if !strings.EqualFold(record.Name, name) || !strings.HasPrefix(content, matchPrefix) || record.ID == desiredID {
+			continue
+		}
+		if err := deleteDNSRecord(ctx, p.token, zoneID, record.ID); err != nil {
+			return fmt.Errorf("delete replaced TXT record %s: %w", name, err)
 		}
 	}
 	return nil

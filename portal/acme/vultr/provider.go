@@ -123,6 +123,38 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	return nil
 }
 
+// DeleteARecordValue removes only A records that still contain publicIPv4.
+func (p *Provider) DeleteARecordValue(ctx context.Context, name, publicIPv4 string) error {
+	if p == nil {
+		return errors.New("vultr provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+		return err
+	}
+	client, zone, err := p.clientAndZone(ctx, name)
+	if err != nil {
+		return err
+	}
+	records, err := listRecords(ctx, client, zone, name, "A")
+	if err != nil {
+		return err
+	}
+	publicIPv4 = strings.TrimSpace(publicIPv4)
+	for _, record := range records {
+		if strings.TrimSpace(record.Data) != publicIPv4 {
+			continue
+		}
+		if err := client.DomainRecord.Delete(ctx, zone, record.ID); err != nil {
+			return fmt.Errorf("delete vultr A record %s value %s: %w", name, publicIPv4, err)
+		}
+	}
+	return nil
+}
+
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
 		return errors.New("vultr provider is nil")
@@ -165,6 +197,33 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	}
 	if err := deleteRecords(ctx, client, zone, name, "TXT", matchPrefix); err != nil {
 		return fmt.Errorf("delete vultr TXT records %s: %w", name, err)
+	}
+	return nil
+}
+
+// ReplaceTXTRecords creates the replacement before deleting matching old values.
+func (p *Provider) ReplaceTXTRecords(ctx context.Context, name, matchPrefix, value string) error {
+	if p == nil {
+		return errors.New("vultr provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	matchPrefix = strings.TrimSpace(matchPrefix)
+	if matchPrefix == "" {
+		return errors.New("txt record match prefix is required")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("txt record value is required")
+	}
+	client, zone, err := p.clientAndZone(ctx, name)
+	if err != nil {
+		return err
+	}
+	if err := replaceTXTRecords(ctx, client, zone, name, matchPrefix, value); err != nil {
+		return fmt.Errorf("replace vultr TXT records %s: %w", name, err)
 	}
 	return nil
 }
@@ -393,6 +452,40 @@ func deleteRecords(ctx context.Context, client *govultr.Client, zone, fqdn, reco
 	}
 	for _, record := range existing {
 		if matchPrefix != "" && !strings.HasPrefix(dnsrecord.TXTContent(record.Data), matchPrefix) {
+			continue
+		}
+		if err := client.DomainRecord.Delete(ctx, zone, record.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func replaceTXTRecords(ctx context.Context, client *govultr.Client, zone, fqdn, matchPrefix, value string) error {
+	recordName, err := dnsrecord.RelativeName("vultr", fqdn, zone)
+	if err != nil {
+		return err
+	}
+	existing, err := listRecords(ctx, client, zone, fqdn, "TXT")
+	if err != nil {
+		return err
+	}
+	desiredID := ""
+	for _, record := range existing {
+		if dnsrecord.TXTContent(record.Data) == value {
+			desiredID = record.ID
+			break
+		}
+	}
+	if desiredID == "" {
+		if _, _, err := client.DomainRecord.Create(ctx, zone, &govultr.DomainRecordCreateReq{
+			Name: recordName, Type: "TXT", Data: value, TTL: defaultRecordTTL,
+		}); err != nil {
+			return err
+		}
+	}
+	for _, record := range existing {
+		if record.ID == desiredID || !strings.HasPrefix(dnsrecord.TXTContent(record.Data), matchPrefix) {
 			continue
 		}
 		if err := client.DomainRecord.Delete(ctx, zone, record.ID); err != nil {

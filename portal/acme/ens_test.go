@@ -2,12 +2,14 @@ package acme
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-acme/lego/v4/challenge"
 
@@ -18,13 +20,14 @@ import (
 // fakeZone models what the real providers do to a zone rather than which calls
 // they received, so a test can assert on the records an operator would see.
 //
-// EnsureTXTRecord appends when the value differs, matching cloudflare, njalla
-// and route53. DNS-01 depends on that, and it is also what lets ENS records
-// pile up, so a fake that replaced instead would hide the bug under test.
+// EnsureTXTRecord appends when the value differs, as DNS-01 requires, while
+// ReplaceTXTRecords models the explicit single-value ENS replacement contract.
 type fakeZone struct {
-	mu  sync.Mutex
-	txt map[string][]string
-	a   map[string]string
+	mu           sync.Mutex
+	txt          map[string][]string
+	a            map[string]string
+	txtMutations int
+	replaceErr   error
 }
 
 func newFakeZone() *fakeZone {
@@ -42,6 +45,18 @@ func (z *fakeZone) hasARecord(name string) bool {
 	defer z.mu.Unlock()
 	_, ok := z.a[name]
 	return ok
+}
+
+func (z *fakeZone) aValue(name string) string {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return z.a[name]
+}
+
+func (z *fakeZone) txtMutationCount() int {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return z.txtMutations
 }
 
 func (z *fakeZone) Name() string { return TypeEmbedded }
@@ -68,6 +83,15 @@ func (z *fakeZone) DeleteARecord(_ context.Context, name string) error {
 	return nil
 }
 
+func (z *fakeZone) DeleteARecordValue(_ context.Context, name, publicIPv4 string) error {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	if z.a[name] == publicIPv4 {
+		delete(z.a, name)
+	}
+	return nil
+}
+
 func (z *fakeZone) EnsureTXTRecord(_ context.Context, name, value string) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
@@ -75,6 +99,7 @@ func (z *fakeZone) EnsureTXTRecord(_ context.Context, name, value string) error 
 		return nil
 	}
 	z.txt[name] = append(z.txt[name], value)
+	z.txtMutations++
 	return nil
 }
 
@@ -88,10 +113,41 @@ func (z *fakeZone) DeleteTXTRecords(_ context.Context, name, matchPrefix string)
 		}
 	}
 	if len(kept) == 0 {
+		if len(z.txt[name]) > 0 {
+			z.txtMutations++
+		}
 		delete(z.txt, name)
 		return nil
 	}
+	if len(kept) != len(z.txt[name]) {
+		z.txtMutations++
+	}
 	z.txt[name] = kept
+	return nil
+}
+
+func (z *fakeZone) ReplaceTXTRecords(_ context.Context, name, matchPrefix, value string) error {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	if z.replaceErr != nil {
+		return z.replaceErr
+	}
+	matching := 0
+	desired := false
+	remaining := make([]string, 0, len(z.txt[name])+1)
+	for _, existing := range z.txt[name] {
+		if strings.HasPrefix(existing, matchPrefix) {
+			matching++
+			desired = desired || existing == value
+			continue
+		}
+		remaining = append(remaining, existing)
+	}
+	if matching == 1 && desired {
+		return nil
+	}
+	z.txt[name] = append(remaining, value)
+	z.txtMutations++
 	return nil
 }
 
@@ -153,6 +209,13 @@ func TestENSGaslessAddressChangeLeavesOneRecord(t *testing.T) {
 			t.Fatalf("applyENSCommand(%s): %v", address, err)
 		}
 	}
+	mutations := zone.txtMutationCount()
+	if err := manager.applyENSCommand(context.Background(), ensDNSCommand{hostname: host, address: second}); err != nil {
+		t.Fatalf("repeat applyENSCommand(%s): %v", second, err)
+	}
+	if got := zone.txtMutationCount(); got != mutations {
+		t.Fatalf("unchanged ENS record caused a provider mutation: %d -> %d", mutations, got)
+	}
 
 	ens := ensTXTValues(t, zone, host)
 	if len(ens) != 1 {
@@ -187,19 +250,24 @@ func TestENSGaslessLeaseRemovalRunsWhenDisabled(t *testing.T) {
 	if err := zone.EnsureARecord(ctx, host, "203.0.113.10"); err != nil {
 		t.Fatalf("seed A record: %v", err)
 	}
+	trackedPath := filepath.Join(manager.cfg.KeyDir, ensGaslessHostnamesFileName)
+	if err := utils.WriteJSONFile(trackedPath, map[string]string{host: "203.0.113.10"}, 0o600); err != nil {
+		t.Fatalf("seed tracked hostnames: %v", err)
+	}
+	manager.Start(ctx)
+	t.Cleanup(func() {
+		if err := manager.Stop(context.Background()); err != nil {
+			t.Errorf("Stop(): %v", err)
+		}
+	})
 
 	if err := manager.DeleteENSGaslessHostname(ctx, host); err != nil {
 		t.Fatalf("DeleteENSGaslessHostname(): %v", err)
 	}
 
-	var command ensDNSCommand
-	select {
-	case command = <-manager.ensCommands:
-	default:
-		t.Fatal("DeleteENSGaslessHostname() queued nothing; every published record would stay orphaned")
-	}
-	if err := manager.applyENSCommand(ctx, command); err != nil {
-		t.Fatalf("applyENSCommand(): %v", err)
+	deadline := time.Now().Add(2 * time.Second)
+	for (len(ensTXTValues(t, zone, host)) != 0 || zone.hasARecord(host)) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	if ens := ensTXTValues(t, zone, host); len(ens) != 0 {
@@ -217,7 +285,7 @@ func TestENSGaslessReconcileRunsWhenDisabled(t *testing.T) {
 
 	keyDir := t.TempDir()
 	trackedPath := filepath.Join(keyDir, ensGaslessHostnamesFileName)
-	if err := utils.WriteJSONFile(trackedPath, []string{host}, 0o600); err != nil {
+	if err := utils.WriteJSONFile(trackedPath, map[string]string{host: "203.0.113.11"}, 0o600); err != nil {
 		t.Fatalf("seed tracked hostnames: %v", err)
 	}
 
@@ -248,5 +316,71 @@ func TestENSGaslessReconcileRunsWhenDisabled(t *testing.T) {
 	}
 	if _, err := os.Stat(trackedPath); !os.IsNotExist(err) {
 		t.Fatalf("tracked hostnames file still present (stat err = %v), want it cleared", err)
+	}
+}
+
+func TestENSGaslessReconcilePreservesRepurposedARecord(t *testing.T) {
+	const host = "lease.portal.example.com"
+	keyDir := t.TempDir()
+	trackedPath := filepath.Join(keyDir, ensGaslessHostnamesFileName)
+	if err := utils.WriteJSONFile(trackedPath, map[string]string{host: "203.0.113.12"}, 0o600); err != nil {
+		t.Fatalf("seed tracked hostnames: %v", err)
+	}
+
+	zone := newFakeZone()
+	if err := zone.EnsureTXTRecord(context.Background(), host, gaslessENSTXTPrefix+"resolver 0x5555"); err != nil {
+		t.Fatalf("seed ENS record: %v", err)
+	}
+	if err := zone.EnsureARecord(context.Background(), host, "203.0.113.99"); err != nil {
+		t.Fatalf("seed repurposed A record: %v", err)
+	}
+	manager := newTestENSManager(Config{BaseDomain: "portal.example.com", KeyDir: keyDir}, zone)
+	if err := manager.reconcileTrackedENSGaslessHostnames(context.Background()); err != nil {
+		t.Fatalf("reconcileTrackedENSGaslessHostnames(): %v", err)
+	}
+	if got := zone.aValue(host); got != "203.0.113.99" {
+		t.Fatalf("repurposed A record = %q, want it preserved", got)
+	}
+}
+
+func TestENSGaslessReconcilePreservesLegacyUnownedARecord(t *testing.T) {
+	const host = "legacy.portal.example.com"
+	keyDir := t.TempDir()
+	trackedPath := filepath.Join(keyDir, ensGaslessHostnamesFileName)
+	if err := utils.WriteJSONFile(trackedPath, []string{host}, 0o600); err != nil {
+		t.Fatalf("seed legacy tracked hostnames: %v", err)
+	}
+
+	zone := newFakeZone()
+	if err := zone.EnsureARecord(context.Background(), host, "203.0.113.13"); err != nil {
+		t.Fatalf("seed A record: %v", err)
+	}
+	manager := newTestENSManager(Config{BaseDomain: "portal.example.com", KeyDir: keyDir}, zone)
+	if err := manager.reconcileTrackedENSGaslessHostnames(context.Background()); err != nil {
+		t.Fatalf("reconcileTrackedENSGaslessHostnames(): %v", err)
+	}
+	if got := zone.aValue(host); got != "203.0.113.13" {
+		t.Fatalf("legacy unowned A record = %q, want it preserved", got)
+	}
+}
+
+func TestENSGaslessReplacementFailurePreservesPreviousRecord(t *testing.T) {
+	const host = "portal.example.com"
+	zone := newFakeZone()
+	previous := gaslessENSTXTPrefix + defaultENSGaslessResolver + " 0x1111111111111111111111111111111111111111"
+	if err := zone.EnsureTXTRecord(context.Background(), host, previous); err != nil {
+		t.Fatalf("seed ENS record: %v", err)
+	}
+	zone.replaceErr = errors.New("provider unavailable")
+	manager := newTestENSManager(Config{BaseDomain: host, KeyDir: t.TempDir(), ENSGaslessEnabled: true}, zone)
+	err := manager.applyENSCommand(context.Background(), ensDNSCommand{
+		hostname: host,
+		address:  "0x2222222222222222222222222222222222222222",
+	})
+	if err == nil {
+		t.Fatal("applyENSCommand() error = nil, want provider failure")
+	}
+	if got := ensTXTValues(t, zone, host); !slices.Equal(got, []string{previous}) {
+		t.Fatalf("ENS records after failed replacement = %v, want %q", got, previous)
 	}
 }

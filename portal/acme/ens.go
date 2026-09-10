@@ -2,11 +2,11 @@ package acme
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
@@ -169,40 +169,45 @@ func (m *Manager) queueENSCommand(ctx context.Context, command ensDNSCommand) er
 
 func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) error {
 	if command.remove {
+		tracked, err := m.trackedENSGaslessHostnames()
+		if err != nil {
+			return err
+		}
 		if err := m.dns.DeleteTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix); err != nil {
 			return err
 		}
-		if err := m.dns.DeleteARecord(ctx, command.hostname); err != nil {
-			return err
+		if publicIP := tracked[command.hostname]; publicIP != "" {
+			if err := m.dns.DeleteARecordValue(ctx, command.hostname, publicIP); err != nil {
+				return err
+			}
 		}
-		return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
-			return slices.DeleteFunc(hostnames, func(hostname string) bool { return hostname == command.hostname })
+		return m.updateTrackedENSGaslessHostnames(func(hostnames map[string]string) {
+			delete(hostnames, command.hostname)
 		})
 	}
 
+	publicIP := ""
 	if command.hostname != m.cfg.BaseDomain {
-		publicIP, err := utils.ResolvePublicIPv4(ctx)
+		var err error
+		publicIP, err = utils.ResolvePublicIPv4(ctx)
 		if err != nil {
 			return fmt.Errorf("detect public ip: %w", err)
 		}
 		if err := m.dns.EnsureARecord(ctx, command.hostname, publicIP); err != nil {
 			return fmt.Errorf("ensure ens gasless A record for %s: %w", command.hostname, err)
 		}
+		if err := m.updateTrackedENSGaslessHostnames(func(hostnames map[string]string) {
+			hostnames[command.hostname] = publicIP
+		}); err != nil {
+			cleanupErr := m.dns.DeleteARecordValue(ctx, command.hostname, publicIP)
+			return errors.Join(fmt.Errorf("track ens gasless A record for %s: %w", command.hostname, err), cleanupErr)
+		}
 	}
 	value := gaslessENSTXTPrefix + defaultENSGaslessResolver + " " + strings.TrimSpace(command.address)
-	// EnsureTXTRecord appends whenever the value differs, which DNS-01 needs and
-	// ENS does not: a hostname carries exactly one ENS1 record. Drop the previous
-	// one so an address change replaces it instead of stacking on top of it. The
-	// prefix keeps ACME challenge records out of scope.
-	if err := m.dns.DeleteTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix); err != nil {
+	if err := m.dns.ReplaceTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix, value); err != nil {
 		return err
 	}
-	if err := m.dns.EnsureTXTRecord(ctx, command.hostname, value); err != nil {
-		return err
-	}
-	return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
-		return append(hostnames, command.hostname)
-	})
+	return nil
 }
 
 func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error {
@@ -214,20 +219,20 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 	}
 
 	var cleanupErr error
-	if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
-		remaining := hostnames[:0]
-		for _, hostname := range hostnames {
+	if err := m.updateTrackedENSGaslessHostnames(func(hostnames map[string]string) {
+		for hostname, publicIP := range hostnames {
 			if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
-				remaining = append(remaining, hostname)
 				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err))
 				continue
 			}
-			if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
-				remaining = append(remaining, hostname)
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless A record for %s: %w", hostname, err))
+			if publicIP != "" {
+				if err := m.dns.DeleteARecordValue(ctx, hostname, publicIP); err != nil {
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless A record for %s: %w", hostname, err))
+					continue
+				}
 			}
+			delete(hostnames, hostname)
 		}
-		return remaining
 	}); err != nil {
 		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("persist ens gasless hostnames: %w", err))
 	}
@@ -240,28 +245,65 @@ func (m *Manager) syncTrackedENSGaslessHostARecords(ctx context.Context, publicI
 		return err
 	}
 	var syncErr error
-	for _, hostname := range hostnames {
+	updated := make(map[string]string)
+	for hostname := range hostnames {
 		if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
 			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ens gasless A record for %s: %w", hostname, err))
+			continue
+		}
+		updated[hostname] = strings.TrimSpace(publicIP)
+	}
+	if len(updated) > 0 {
+		if err := m.updateTrackedENSGaslessHostnames(func(hostnames map[string]string) {
+			for hostname, managedIP := range updated {
+				hostnames[hostname] = managedIP
+			}
+		}); err != nil {
+			syncErr = errors.Join(syncErr, fmt.Errorf("persist ens gasless A records: %w", err))
 		}
 	}
 	return syncErr
 }
 
-func (m *Manager) trackedENSGaslessHostnames() ([]string, error) {
+func (m *Manager) trackedENSGaslessHostnames() (map[string]string, error) {
 	if m == nil {
 		return nil, nil
 	}
 
 	path := filepath.Join(m.cfg.KeyDir, ensGaslessHostnamesFileName)
-	var hostnames []string
-	if _, err := utils.ReadJSONFileIfExists(path, &hostnames); err != nil {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return make(map[string]string), nil
+	}
+	if err != nil {
 		return nil, err
 	}
-	return utils.NormalizeChildHostnames(hostnames, m.cfg.BaseDomain), nil
+
+	tracked := make(map[string]string)
+	if err := json.Unmarshal(raw, &tracked); err != nil {
+		var legacy []string
+		if legacyErr := json.Unmarshal(raw, &legacy); legacyErr != nil {
+			return nil, err
+		}
+		for _, hostname := range utils.NormalizeChildHostnames(legacy, m.cfg.BaseDomain) {
+			tracked[hostname] = ""
+		}
+	}
+	normalized := make(map[string]string, len(tracked))
+	for hostname, publicIP := range tracked {
+		hostname = utils.NormalizeHostname(hostname)
+		if hostname == "" || hostname == m.cfg.BaseDomain || !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+			continue
+		}
+		if utils.ValidateIPv4(publicIP) != nil {
+			publicIP = ""
+		}
+		normalized[hostname] = strings.TrimSpace(publicIP)
+	}
+	return normalized, nil
 }
 
-func (m *Manager) updateTrackedENSGaslessHostnames(update func([]string) []string) error {
+func (m *Manager) updateTrackedENSGaslessHostnames(update func(map[string]string)) error {
 	if m == nil {
 		return nil
 	}
@@ -272,7 +314,7 @@ func (m *Manager) updateTrackedENSGaslessHostnames(update func([]string) []strin
 		return err
 	}
 	if update != nil {
-		hostnames = utils.NormalizeChildHostnames(update(hostnames), m.cfg.BaseDomain)
+		update(hostnames)
 	}
 	if len(hostnames) == 0 {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
