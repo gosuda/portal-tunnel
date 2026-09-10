@@ -94,22 +94,23 @@ type listener struct {
 	doneCh    <-chan struct{}
 	closeOnce sync.Once
 
-	relayURL       *url.URL
-	route          discovery.Route
-	metadata       func() types.LeaseMetadata
-	identity       types.Identity
-	overlay        bool
-	relaySet       *discovery.RelaySet
-	udpEnabled     bool
-	tcpEnabled     bool
-	echEnabled     bool
-	dialTimeout    time.Duration
-	requestTimeout time.Duration
-	readyTarget    int
-	retryCount     int
-	retryWait      time.Duration
-	leaseTTL       time.Duration
-	renewBefore    time.Duration
+	relayURL          *url.URL
+	route             discovery.Route
+	metadata          func() types.LeaseMetadata
+	identity          types.Identity
+	overlay           bool
+	warnOverlayDirect sync.Once
+	relaySet          *discovery.RelaySet
+	udpEnabled        bool
+	tcpEnabled        bool
+	echEnabled        bool
+	dialTimeout       time.Duration
+	requestTimeout    time.Duration
+	readyTarget       int
+	retryCount        int
+	retryWait         time.Duration
+	leaseTTL          time.Duration
+	renewBefore       time.Duration
 
 	stream      *transport.ClientStream
 	datagram    *transport.ClientDatagram

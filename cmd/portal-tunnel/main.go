@@ -437,6 +437,7 @@ func printExposeUsage(w io.Writer) {
 	utils.WriteFlagDefaults(w, fs)
 	utils.WriteHelpSection(w, "Loopback", []string{
 		"portal expose 127.0.0.1:8080 --identity-path /absolute/path/outside/repo/identity.json --relays https://127.0.0.1:4017 --discovery=false",
+		"the local relay must advertise the same origin clients dial: PORTAL_URL=https://127.0.0.1:4017",
 	})
 	utils.WriteHelpSection(w, "Ready", []string{
 		"On success the process logs a line starting with: service ready at",
