@@ -110,8 +110,45 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 |----------|---------|------|-------------|
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
-| `IVNP_CONFIG` | `""` | path | Optional IVNP router configuration; enables the relay overlay and requires `DISCOVERY=true` |
+| `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the relay overlay and requires `DISCOVERY=true`; empty disables the overlay |
 | `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
+
+### IVNP overlay
+
+`IVNP_CONFIG` now points to a JSON object using the fields of IVNP's
+[`RouterConfig`](https://github.com/gosuda/IVNP/blob/2b4f760003c221a391a7487a24d4df7f41267268/API.md#2-static-configuration).
+Portal applies the file to `ivnp.DefaultRouterConfig()` and lets IVNP validate
+the resulting configuration. An existing file containing `{}` enables the
+overlay with IVNP's defaults: in-memory router state and a transient service
+destination. Unknown fields, invalid values, and legacy `ivnp.conf` syntax fail
+startup; replace the old file explicitly when upgrading. Runtime `Logger` and
+`Resolver` collaborators cannot be configured through this file.
+
+For explicit router persistence, mount a private writable directory and use:
+
+```json
+{
+  "Persistence": { "Directory": "/var/lib/portal/ivnp-router" }
+}
+```
+
+Relative persistence paths resolve from the relay process working directory.
+Use a dedicated embedded-router directory; an old daemon state directory with
+named application destinations is incompatible and must not be reused.
+Persistence preserves router state only. Portal creates a transient destination
+on each start and republishes its new address through relay discovery.
+
+Other JSON fields use the upstream Go types: addresses such as `NTCP2.Bind`
+are `"0.0.0.0:0"` strings, and durations are integer nanoseconds. Nested fields
+not supplied keep IVNP defaults; disabling a transport requires zeroing all its
+fields as required by IVNP validation. Portal uses
+`ivnp.DefaultDestinationConfig()` for its service; tunnel construction and
+internal routing remain IVNP-owned.
+
+Local router configuration and socket setup happen during startup. Destination
+creation waits for tunnels and confirmed publication in the background, while
+public ingress and direct reverse transport remain available. Shutdown explicitly
+closes the router and its destination resources, including pending connections.
 
 ### Payments
 

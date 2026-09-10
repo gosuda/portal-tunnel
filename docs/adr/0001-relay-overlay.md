@@ -70,6 +70,16 @@ The Portal server starts and stops the overlay runtime and supplies narrow
 admission and lease-stream interfaces. Overlay protocol framing, HTTP upgrade,
 bridging, and retry state do not live on `Server` or `leaseRecord`.
 
+The overlay embeds IVNP through `Router` and an explicitly created `Destination`.
+`IVNP_CONFIG` is a JSON override of the upstream `DefaultRouterConfig`; legacy
+daemon configuration files are not translated. IVNP validates the resulting
+configuration. Router state is in memory unless persistence is explicit, and
+the service destination is transient and republished through discovery on restart.
+The service uses `DefaultDestinationConfig`, with no Portal-owned tunnel policy.
+`NewDestination` waits for publication in the background after local router
+startup. Stream peer identity comes from the authenticated hash in IVNP's typed
+`RemoteAddr`, and router close cancels and joins destination construction and I/O.
+
 Discovery returns public relay priorities and signed relay descriptors. Its
 generic `Route` remains `{RelayURL, Explicit}`. It does not return an overlay
 execution plan or perform overlay dial/listen operations.

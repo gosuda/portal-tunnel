@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -15,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -23,6 +23,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"gosuda.org/ivnp"
+	"gosuda.org/ivnp/foundation"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
@@ -61,10 +62,14 @@ var ErrLeaseUnavailable = errors.New("overlay ingress lease is unavailable")
 type Runtime struct {
 	config Config
 
-	ctx           context.Context
-	node          *ivnp.Node
-	endpoint      ivnp.DestinationEndpoint
-	listener      net.Listener
+	ctx         context.Context
+	cancel      context.CancelFunc
+	router      *ivnp.Router
+	lifecycleMu sync.Mutex
+	endpoint    interface {
+		B32() string
+		DialContext(context.Context, string, string) (net.Conn, error)
+	}
 	ready         atomic.Bool
 	close         sync.Once
 	inbound       chan struct{}
@@ -98,61 +103,73 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if r == nil {
 		return errors.New("overlay runtime is unavailable")
 	}
-	cfg, err := ivnp.LoadConfig(r.config.ConfigPath)
+	file, err := os.Open(r.config.ConfigPath)
 	if err != nil {
 		return err
 	}
-	node, err := ivnp.New(cfg, ivnp.Options{})
+	defer file.Close()
+	defaults := ivnp.DefaultRouterConfig()
+	cfg := &defaults
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
+		return fmt.Errorf("decode IVNP RouterConfig JSON: %w", err)
+	}
+	if cfg == nil || cfg.Logger != nil || cfg.Resolver != nil {
+		return errors.New("IVNP configuration must be a JSON object without runtime Logger or Resolver values")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("IVNP configuration must contain exactly one JSON object")
+	}
+	router, err := ivnp.NewRouter(ctx, *cfg)
 	if err != nil {
 		return err
 	}
-	if err := node.Start(ctx); err != nil {
-		_ = node.Close()
-		_ = node.Wait()
-		return err
-	}
-	endpoint, err := node.DestinationController().CreateDestination(ctx, ivnp.DestinationSpec{})
-	if err != nil {
-		_ = node.Close()
-		_ = node.Wait()
-		return err
-	}
-	listener, err := endpoint.ListenI2P(ctx, ":"+streamPort)
-	if err != nil {
-		_ = endpoint.Close()
-		_ = node.Close()
-		_ = node.Wait()
-		return err
-	}
-	r.ctx = ctx
-	r.node = node
-	r.endpoint = endpoint
-	r.listener = listener
+	r.ctx, r.cancel = context.WithCancel(ctx)
+	r.router = router
 	return nil
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
-	if r == nil || r.endpoint == nil || r.listener == nil {
+	if r == nil || r.router == nil {
 		return errors.New("overlay runtime is not started")
 	}
-	ready, ok := r.endpoint.(ivnp.ReadyDestinationEndpoint)
-	if !ok {
-		return errors.New("ivnp endpoint does not report readiness")
-	}
-	if err := ready.WaitReady(ctx); err != nil {
-		if ctx.Err() != nil {
+	// Constructor contexts do not own IVNP resources after success. Close the
+	// router explicitly to cancel construction and join all destination I/O.
+	stop := context.AfterFunc(ctx, r.Close)
+	defer stop()
+	defer r.Close()
+	// NewDestination waits for tunnels and publication; keep it off the public
+	// server startup path so an unavailable overlay still permits direct traffic.
+	endpoint, err := r.router.NewDestination(r.ctx, ivnp.DefaultDestinationConfig())
+	if err != nil {
+		if r.ctx.Err() != nil {
 			return nil
 		}
 		return err
 	}
+	listener, err := endpoint.ListenContext(r.ctx, "i2p", ":"+streamPort)
+	if err != nil {
+		if r.ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	r.lifecycleMu.Lock()
+	if r.ctx.Err() != nil {
+		r.lifecycleMu.Unlock()
+		return nil
+	}
+	r.endpoint = endpoint
 	r.ready.Store(true)
+	r.lifecycleMu.Unlock()
 	defer r.ready.Store(false)
-	log.Info().Str("destination", r.endpoint.B32()).Msg("relay overlay ready")
+	log.Info().Str("destination", endpoint.B32()).Msg("relay overlay ready")
 
 	for {
-		conn, err := r.listener.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+			if r.ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
 			return err
@@ -178,20 +195,18 @@ func (r *Runtime) Close() {
 		return
 	}
 	r.close.Do(func() {
+		r.lifecycleMu.Lock()
 		r.ready.Store(false)
+		if r.cancel != nil {
+			r.cancel()
+		}
+		r.lifecycleMu.Unlock()
 		r.assignmentMu.Lock()
 		clear(r.assignments)
 		clear(r.failures)
 		r.assignmentMu.Unlock()
-		if r.listener != nil {
-			_ = r.listener.Close()
-		}
-		if r.endpoint != nil {
-			_ = r.endpoint.Close()
-		}
-		if r.node != nil {
-			_ = r.node.Close()
-			_ = r.node.Wait()
+		if r.router != nil {
+			_ = r.router.Close()
 		}
 	})
 }
@@ -517,7 +532,7 @@ func (r *Runtime) dial(ctx context.Context, destination string) (net.Conn, error
 	if err != nil {
 		return nil, err
 	}
-	conn, err := r.endpoint.DialI2P(ctx, net.JoinHostPort(destination, streamPort))
+	conn, err := r.endpoint.DialContext(ctx, "i2p", net.JoinHostPort(destination, streamPort))
 	if err != nil {
 		return nil, err
 	}
@@ -619,19 +634,13 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 }
 
 func peerDestination(conn net.Conn) (string, error) {
-	peer, ok := conn.(interface{ RemoteDestination() []byte })
-	if !ok {
+	// IVNP stream addresses carry the hash authenticated by its handshake.
+	// Require the typed address; a hostname on an arbitrary net.Addr is not proof.
+	peer, ok := conn.RemoteAddr().(ivnp.Addr)
+	if !ok || peer.Hash == (ivnp.Hash{}) || peer.Port == 0 {
 		return "", errors.New("overlay connection lacks peer identity")
 	}
-	encoded := peer.RemoteDestination()
-	if len(encoded) == 0 || len(encoded) > 4096 {
-		return "", errors.New("invalid overlay peer identity")
-	}
-	raw, err := ivnp.DecodeI2PBase64(encoded)
-	if err != nil {
-		return "", err
-	}
-	return ivnp.B32(sha256.Sum256(raw)), nil
+	return foundation.B32(peer.Hash), nil
 }
 
 type bufferedConn struct {

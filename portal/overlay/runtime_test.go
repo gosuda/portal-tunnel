@@ -4,14 +4,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"gosuda.org/ivnp"
+	"gosuda.org/ivnp/foundation"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
@@ -21,15 +25,14 @@ import (
 )
 
 type endpointStub struct {
-	ivnp.DestinationEndpoint
 	destination string
-	dial        func(context.Context, string) (net.Conn, error)
+	dial        func(context.Context, string, string) (net.Conn, error)
 }
 
 func (e endpointStub) B32() string { return e.destination }
 
-func (e endpointStub) DialI2P(ctx context.Context, address string) (net.Conn, error) {
-	return e.dial(ctx, address)
+func (e endpointStub) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return e.dial(ctx, network, address)
 }
 
 func testAuthority(t *testing.T, name string) identity.Authority {
@@ -46,7 +49,7 @@ func testAuthority(t *testing.T, name string) identity.Authority {
 }
 
 func testDestination(seed string) string {
-	return ivnp.B32(sha256.Sum256([]byte(seed)))
+	return foundation.B32(sha256.Sum256([]byte(seed)))
 }
 
 func testDescriptor(t *testing.T, authority identity.Authority, rawURL, destination string, connections int64) types.RelayDescriptor {
@@ -159,7 +162,7 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 	var dials int
 	gate.endpoint = endpointStub{
 		destination: testDestination("gateway"),
-		dial: func(context.Context, string) (net.Conn, error) {
+		dial: func(context.Context, string, string) (net.Conn, error) {
 			dials++
 			return nil, errors.New("dial failed")
 		},
@@ -198,7 +201,7 @@ func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 	var dials atomic.Int32
 	gate.endpoint = endpointStub{
 		destination: testDestination("gateway"),
-		dial: func(ctx context.Context, _ string) (net.Conn, error) {
+		dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			dials.Add(1)
 			entered <- struct{}{}
 			select {
@@ -280,4 +283,130 @@ func testGateway(t *testing.T) (*Runtime, string) {
 	}
 	runtime.ready.Store(true)
 	return runtime, capability
+}
+
+type peerConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c peerConn) RemoteAddr() net.Addr { return c.remote }
+
+func TestDialRequiresAuthenticatedIVNPPeer(t *testing.T) {
+	hash := sha256.Sum256([]byte("ingress"))
+	destination := foundation.B32(hash)
+	for _, tc := range []struct {
+		name   string
+		remote net.Addr
+		accept bool
+	}{
+		{name: "authenticated destination", remote: ivnp.Addr{Hash: hash, Port: 4017}, accept: true},
+		{name: "wrong destination", remote: ivnp.Addr{Hash: sha256.Sum256([]byte("other")), Port: 4017}},
+		{name: "missing identity", remote: ivnp.Addr{Port: 4017}},
+		{name: "unbound peer", remote: ivnp.Addr{Hash: hash}},
+		{name: "untrusted address text", remote: &net.UnixAddr{Net: "i2p", Name: destination + ":4017"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			local, remote := net.Pipe()
+			defer local.Close()
+			defer remote.Close()
+			if err := remote.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &Runtime{endpoint: endpointStub{
+				destination: testDestination("gateway"),
+				dial: func(_ context.Context, network, address string) (net.Conn, error) {
+					if network != "i2p" || address != net.JoinHostPort(destination, streamPort) {
+						t.Fatalf("dial = %q %q, want destination-owned I2P stream", network, address)
+					}
+					return peerConn{Conn: local, remote: tc.remote}, nil
+				},
+			}}
+			conn, err := runtime.dial(t.Context(), destination)
+			if tc.accept {
+				if err != nil || conn == nil {
+					t.Fatalf("authenticated dial = %v, %v", conn, err)
+				}
+				return
+			}
+			if err == nil || conn != nil {
+				t.Fatalf("untrusted dial = %v, %v", conn, err)
+			}
+			if _, err := remote.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+				t.Fatalf("rejected peer connection was not closed: %v", err)
+			}
+		})
+	}
+}
+
+func TestStartRejectsInvalidRouterConfiguration(t *testing.T) {
+	for _, content := range []string{
+		"", "null", "[router]\n", `{"Unknown":true}`, `{} {}`,
+		`{"NetworkID":256}`, `{"Logger":{}}`,
+	} {
+		t.Run(content, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "ivnp.json")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &Runtime{config: Config{ConfigPath: path}}
+			defer runtime.Close()
+			if err := runtime.Start(t.Context()); err == nil {
+				t.Fatal("invalid IVNP configuration was accepted")
+			}
+			if runtime.router != nil {
+				t.Fatal("invalid configuration started a router")
+			}
+		})
+	}
+}
+
+func TestUnavailableOverlayStartsAndShutsDownWithoutPeers(t *testing.T) {
+	for _, mode := range []string{"cancel run", "close runtime"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "ivnp.json")
+			config := `{"Bootstrap":{"ReseedURLs":[]},"NTCP2":{"Bind":"127.0.0.1:0"},"SSU2":{"Bind":"127.0.0.1:0"}}`
+			if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &Runtime{config: Config{ConfigPath: path}}
+			defer runtime.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			if err := runtime.Start(ctx); err != nil {
+				t.Fatalf("local startup without peers: %v", err)
+			}
+			if endpoint, useOverlay, err := runtime.IssueEndpoint(types.Identity{}, "", time.Time{}, ""); err != nil || useOverlay || endpoint.URL != "" {
+				t.Fatalf("unavailable overlay must retain direct fallback: %v, %v, %v", endpoint, useOverlay, err)
+			}
+			runCtx, cancelRun := context.WithCancel(ctx)
+			defer cancelRun()
+			done := make(chan error, 1)
+			go func() { done <- runtime.Run(runCtx) }()
+			if mode == "cancel run" {
+				cancelRun()
+			} else {
+				runtime.Close()
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("overlay shutdown: %v", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("shutdown did not cancel destination warmup")
+			}
+			if runtime.Destination() != "" || runtime.ctx.Err() == nil {
+				t.Fatal("shutdown left the overlay available")
+			}
+			if err := runtime.router.WaitReady(t.Context()); !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("shutdown did not close the IVNP router: %v", err)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("in-memory router wrote state beside configuration: %v, %v", entries, err)
+			}
+		})
+	}
 }
