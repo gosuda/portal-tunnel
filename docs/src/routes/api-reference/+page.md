@@ -53,10 +53,10 @@ HTTP 404 outside the envelope.
 |------|---------|----------------|
 | None | public and challenge endpoints | no credential |
 | Admin bearer | admin API | `Authorization: Bearer <access_token>` |
-| Lease token header | tunnel stream and keyless signer | `X-Portal-Access-Token: <access_token>` |
+| Lease token header | keyless signer and datagram backhaul | `X-Portal-Access-Token: <access_token>` |
+| Reverse capability header | reverse stream | `X-Portal-Reverse-Capability: <capability>` |
 | Lease token body | lease renew/unregister | JSON field `access_token` |
 | Signed descriptor | relay discovery announce | signed `RelayDescriptor` body |
-| Signed hop route | relay overlay route | signed `HopRoute` body |
 
 Admin auth and SDK lease auth issue different tokens and are not
 interchangeable. SDK lease registration uses SIWE; relay admin access uses the
@@ -83,11 +83,9 @@ configured admin token.
 | `POST` | `/sdk/register/challenge` | None | `RegisterChallengeRequest` | `RegisterChallengeResponse` |
 | `POST` | `/sdk/register` | SIWE signature body | `RegisterRequest` | `RegisterResponse` |
 | `POST` | `/sdk/renew` | lease token body | `RenewRequest` | `RenewResponse` |
+| `POST` | `/sdk/reverse` | lease token body | `ReverseEndpointRequest` | `ReverseEndpoint` |
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
-| `GET` | `/sdk/connect` | lease token header | none | hijacked stream |
-
-`/sdk/hop` is a relay-to-relay overlay route endpoint. It is not used by normal
-SDK clients.
+| `GET` | `/sdk/connect` | reverse capability header | none | hijacked stream |
 
 ### Admin
 

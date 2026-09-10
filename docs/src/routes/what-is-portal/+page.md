@@ -22,8 +22,8 @@ tenant plaintext or session keys.
   depending on the service.
 - **Self-hostable relays**: use the public registry, explicit relay URLs, or your
   own relay.
-- **Relay pools and multi-hop**: keep multiple relays connected or route through
-  an ordered relay chain.
+- **Relay pools and failover**: keep multiple public relays connected for
+  resilient service availability.
 - **Local identity**: lease ownership is proven with a locally stored secp256k1
   identity and challenge signing.
 

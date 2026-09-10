@@ -36,7 +36,7 @@ belongs to something else on the host, see
 - A public Linux server with Docker and Docker Compose.
 - A public hostname such as `portal.example.com`.
 - A one-time NS delegation at the parent zone: `NS portal.example.com -> ns.portal.example.com` with a glue `A` record pointing at the relay public IP. See the [Configuration Reference](/configuration#embedded-dns) for the canonical embedded DNS details.
-- Inbound `443/tcp`, `53/tcp` + `53/udp` for the embedded authoritative DNS, and `51820/udp` when the overlay is enabled.
+- Inbound `443/tcp`, `53/tcp` + `53/udp` for the embedded authoritative DNS.
 - Certificates for the root and wildcard names are issued automatically via ACME DNS-01 against the embedded authoritative DNS.
 
 ## Configuration
@@ -50,6 +50,7 @@ LANDING_PAGE_ENABLED=false
 
 DISCOVERY=false
 BOOTSTRAPS=
+IVNP_CONFIG=
 
 # Embedded authoritative DNS is the default provider and needs no API
 # credentials once the NS delegation above is in place. External providers
@@ -63,6 +64,16 @@ Embedded DNS logs its DS as soon as the local DNS listeners start; startup does 
 
 `LANDING_PAGE_ENABLED` supplies the initial value. Changes made from the admin
 dashboard are stored in `IDENTITY_PATH/policy.json` and survive restarts.
+
+To enable the optional relay overlay, set `DISCOVERY=true`, mount an IVNP
+`RouterConfig` JSON file, and set `IVNP_CONFIG` to its container path. A file
+containing `{}` uses in-memory router state and needs no writable state mount.
+Replace legacy `ivnp.conf` files with the new JSON format. For persistent router
+state, explicitly configure and mount a dedicated private directory as described
+in [IVNP overlay configuration](/configuration#ivnp-overlay).
+Invalid overlay configuration fails startup. Destination warmup runs in the
+background; a runtime overlay failure leaves public ingress and direct reverse
+transport running.
 
 ## Custom Community Frontend
 
@@ -125,7 +136,6 @@ The Compose stack publishes:
 |---|---|
 | `443/tcp` | Portal HTTPS, SPA, APIs, and SNI tunnel ingress |
 | `53/tcp` + `53/udp` | Embedded authoritative DNS for the delegated relay zone |
-| `51820/udp` | Relay discovery overlay |
 | configured lease range | Optional UDP and raw TCP leases |
 
 Port `80/tcp` is not required. Operators who need HTTP-to-HTTPS redirects may
@@ -240,6 +250,7 @@ If you do, **overwrite `X-Forwarded-For` rather than appending to it**:
 
 ```nginx
 proxy_set_header X-Forwarded-For $remote_addr;    # not $proxy_add_x_forwarded_for
+proxy_set_header X-Real-IP $remote_addr;
 ```
 
 `$proxy_add_x_forwarded_for` keeps whatever the visitor sent and appends the
@@ -248,9 +259,11 @@ peer. Portal trusts the *first* entry, so a request carrying
 is read as `10.0.0.9` — an `/api/policy/ips` bypass. `$remote_addr` has already
 been restored from the PROXY header, so it is both correct and unspoofable.
 
-Set `TRUSTED_PROXY_CIDRS` to **the proxy's own address as a `/32`**, not the
-default private ranges. The default trusts every RFC 1918 address, which on a
-Docker host means every container.
+Enable `TRUST_PROXY_HEADERS` and set `TRUSTED_PROXY_CIDRS` to **the proxy's own
+address as a `/32`** (`/128` for IPv6). An empty allowlist trusts no proxies,
+including private and loopback peers, and Portal uses the socket address.
+Do not allowlist an entire private subnet: on a Docker host that would let
+other containers choose their client address and bypass IP bans and source limits.
 
 That address has to be *fixed*. Compose assigns container addresses
 dynamically, so a `/32` matching whatever nginx got today stops matching the
@@ -294,25 +307,6 @@ the record can fail the connection before any request arrives.
 An empty `ACME_DNS_PROVIDER` selects embedded DNS; it does not disable ECH publication. Valid manual certificates override issuance only when neither `acme-account.key` nor `acme-registration.json` exists in `IDENTITY_PATH`. Embedded DNS still initializes and refreshes its synthesized A records, and the selected provider still publishes ECH records; external providers therefore still need API access for that publication. For a public relay with managed DNS, pass the root host through: terminating it elsewhere breaks the ECH it advertises.
 
 Pass-through is the default in the example for that reason.
-
-### Publishing Portal's ports
-
-```yaml
-services:
-  portal:
-    ports: !override
-      - "${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp"
-```
-
-`!override` replaces the base `ports` list rather than appending to it; without
-it Compose merges both and still tries to bind `443`. It requires Docker Compose
-2.24.4 or newer.
-
-Because it *replaces*, this list must carry **every mapping the deployment had
-enabled**. The bundled file publishes TCP 443 and the WireGuard port and
-comments out three more — `443/udp` for QUIC backhaul, the `MIN_PORT`–`MAX_PORT`
-UDP range, and the same range for raw TCP leases. Anything left out here stops
-being published, silently, and tunnels that used it stop working.
 
 ### Sharing a Compose project with unrelated services
 

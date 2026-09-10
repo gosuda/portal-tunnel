@@ -127,35 +127,6 @@ func (m *manager) DisconnectRelay(id, relayURL string) error {
 	return tunnel.DisconnectRelay(relayURL)
 }
 
-func (m *manager) SetMultiHop(id string, relayURLs []string) error {
-	id = strings.TrimSpace(id)
-	multiHop, err := utils.NormalizeRelayURLs(relayURLs...)
-	if err != nil {
-		return fmt.Errorf("normalize multi-hop relay url: %w", err)
-	}
-	if len(multiHop) != len(relayURLs) {
-		return errors.New("multi-hop relay url repeated")
-	}
-	if len(multiHop) == 1 {
-		return errors.New("multi-hop requires at least entry and exit relay urls")
-	}
-	if err := m.updateTunnelConfig(id, func(tunnel *TunnelConfig) error {
-		tunnel.MultiHop = append([]string(nil), multiHop...)
-		tunnel.MultiHopDepth = 0
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	m.mu.RLock()
-	tunnel := m.tunnels[id]
-	m.mu.RUnlock()
-	if tunnel == nil {
-		return fmt.Errorf("tunnel %q not found", id)
-	}
-	return tunnel.SetMultiHop(multiHop)
-}
-
 func (m *manager) UpdateTunnel(id string, req types.AgentTunnelUpdateRequest) error {
 	if req.Empty() {
 		return errors.New("tunnel update requires at least one field")
@@ -253,6 +224,7 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 		HTTPRoutes:      httpRoutes,
 		RelayURLs:       relayURLs,
 		Discovery:       &discovery,
+		Overlay:         req.Overlay,
 		MaxActiveRelays: req.MaxActiveRelays,
 		ECH:             req.ECH,
 		X402PayTo:       strings.TrimSpace(req.X402PayTo),
@@ -544,16 +516,6 @@ func (t *managedTunnel) DisconnectRelay(relayURL string) error {
 	return exposure.RemoveRelay(relayURL)
 }
 
-func (t *managedTunnel) SetMultiHop(relayURLs []string) error {
-	t.mu.RLock()
-	exposure := t.exposure
-	t.mu.RUnlock()
-	if exposure == nil {
-		return nil
-	}
-	return exposure.SetMultiHop(relayURLs)
-}
-
 func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays bool) error {
 	t.mu.RLock()
 	exposure := t.exposure
@@ -611,10 +573,10 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 		TargetAddr:      cfg.TargetAddr,
 		LastError:       lastError,
 		Discovery:       discovery,
+		Overlay:         cfg.Overlay,
 		MaxActiveRelays: cfg.MaxActiveRelays,
 		ECH:             cfg.ECH,
 		Metadata:        metadataFromTunnelConfig(cfg),
-		MultiHop:        append([]string(nil), cfg.MultiHop...),
 		X402PayTo:       strings.TrimSpace(cfg.X402PayTo),
 		X402Testnet:     cfg.X402Testnet,
 		X402Network:     cfg.X402Network,
@@ -639,9 +601,6 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 		if strings.TrimSpace(runtime.TargetAddr) != "" {
 			status.TargetAddr = runtime.TargetAddr
 		}
-		if cfg.MultiHopDepth > 1 && len(runtime.MultiHop) > 0 {
-			status.MultiHop = append([]string(nil), runtime.MultiHop...)
-		}
 		status.Relays = append([]types.AgentRelayStatus(nil), runtime.Relays...)
 		return status
 	}
@@ -652,7 +611,6 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 			Address:         snapshot.Address,
 			TargetAddr:      snapshot.TargetAddr,
 			MaxActiveRelays: snapshot.MaxActiveRelays,
-			MultiHop:        append([]string(nil), snapshot.MultiHop...),
 			Relays:          append([]types.AgentRelayStatus(nil), snapshot.Relays...),
 		}
 	}
@@ -660,7 +618,6 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 
 	status.Address = snapshot.Address
 	status.TargetAddr = snapshot.TargetAddr
-	status.MultiHop = append([]string(nil), snapshot.MultiHop...)
 	status.Relays = append([]types.AgentRelayStatus(nil), snapshot.Relays...)
 	return status
 }
@@ -707,6 +664,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:            append([]string(nil), cfg.RelayURLs...),
 		Discovery:            discovery,
+		Overlay:              cfg.Overlay,
 		Identity:             types.Identity{Name: cfg.Name},
 		IdentityPath:         cfg.IdentityPath,
 		IdentityJSON:         cfg.IdentityJSON,
@@ -715,8 +673,6 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		UDPEnabled:           cfg.UDPEnabled,
 		TCPEnabled:           cfg.TCPEnabled,
 		ECH:                  cfg.ECH,
-		MultiHop:             append([]string(nil), cfg.MultiHop...),
-		MultiHopDepth:        cfg.MultiHopDepth,
 		BanMITM:              banMITM,
 		MaxActiveRelays:      cfg.MaxActiveRelays,
 		Metadata:             metadataFromTunnelConfig(cfg),
@@ -737,7 +693,6 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		Address:         snapshot.Address,
 		TargetAddr:      snapshot.TargetAddr,
 		MaxActiveRelays: snapshot.MaxActiveRelays,
-		MultiHop:        append([]string(nil), snapshot.MultiHop...),
 		Relays:          append([]types.AgentRelayStatus(nil), snapshot.Relays...),
 	}
 	t.lastError = ""

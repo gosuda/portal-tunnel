@@ -60,7 +60,7 @@ For x402, do not guess the protected path, payment methods, amount, network, rec
 - Never print or commit identity JSON, control tokens, facilitator tokens, or wallet secrets.
 - With a user-selected relay on `portal expose`, pass `--relays <https-url> --discovery=false`. In persistent mode those flags are not accepted on `portal agent run`; put `relays = ["https://..."]` and `discovery = false` on the `[[tunnels]]` entry instead.
 - The MITM self-probe always runs. Without `--ban-mitm` / `ban_mitm = true`, a suspected TLS termination is only logged and the tunnel keeps serving. Do not claim the default path blocks a relay. Add `--ban-mitm` only when the user wants fail-closed handling. There is no flag that disables the probe.
-- Never add TCP, UDP, multi-hop, payment, or public metadata flags that the user did not request. `--hide` is the exception for listing: mention the default public listing, then add `--hide` or `hide = true` only when the user wants the tunnel unlisted.
+- Never add TCP, UDP, payment, or public metadata flags that the user did not request. `--hide` is the exception for listing: mention the default public listing, then add `--hide` or `hide = true` only when the user wants the tunnel unlisted.
 - For a paid route, follow `references/x402.md`. Keep payment policy on the smallest requested path, use an explicit network, and never place wallet or facilitator secrets in a command, log, committed file, or final response.
 
 Before executing, show the exact public target and any important exposure consequence when it is not already obvious from the user's request.

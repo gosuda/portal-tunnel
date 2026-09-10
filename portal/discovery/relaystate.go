@@ -48,8 +48,7 @@ type RelayTrust uint8
 
 const (
 	// RelayCandidate marks a descriptor admitted from untrusted input.
-	// Candidates still serve overlay routing for the hop route that brought
-	// them in and remain refresh-poll targets, but they are excluded from
+	// Candidates remain refresh-poll targets, but they are excluded from
 	// Descriptors(), automatic route selection, and this relay's own gossip
 	// output until promoted.
 	RelayCandidate RelayTrust = iota
@@ -102,7 +101,7 @@ type RelayState struct {
 	Descriptor types.RelayDescriptor
 	Bootstrap  bool
 	// Trust classifies how the entry entered the set. Descriptors from
-	// untrusted input (/sdk/hop, /discovery/announce, or gossiped discovery
+	// untrusted input (/discovery/announce or gossiped discovery
 	// content) are admitted as RelayCandidate and stay out of Descriptors()
 	// and automatic route selection until a direct authoritative probe of
 	// that exact relay promotes them to RelayVerified.
@@ -282,29 +281,14 @@ func (state RelayState) hasObservedDescriptor() bool {
 	return !state.LastSeenAt.IsZero()
 }
 
-// eligibleForMultiHop reports whether a relay can safely participate in every
-// role of an automatically planned multi-hop route.
-func (state RelayState) eligibleForMultiHop(routeState RouteState, now time.Time) bool {
-	return !state.Banned &&
-		!state.Dead &&
-		state.hasObservedDescriptor() &&
-		state.Descriptor.ExpiresAt.After(now) &&
-		state.Descriptor.HasOverlayPeer() &&
-		state.supportsRequiredTransports(routeState, now) &&
-		(state.suppressActiveUntil.IsZero() || !state.suppressActiveUntil.After(now)) &&
-		(state.nextDiscoveryRefreshAt.IsZero() || !state.nextDiscoveryRefreshAt.After(now))
-}
-
 type RouteState struct {
 	ExplicitRelayURLs []string
 	// ActiveRelayURLs holds currently active connected relay URLs to enable
 	// connection-level stickiness and prevent listener churn during ranking updates.
 	ActiveRelayURLs []string
 	// MaxActiveRelays caps auto-selected listener entries. Zero or negative
-	// values use the selection default of 3. Multi-hop paths may use further
-	// eligible relays as non-entry hops.
+	// values use the selection default of 3.
 	MaxActiveRelays int
-	MultiHopDepth   int
 	RequireUDP      bool
 	RequireTCP      bool
 	// LocalAddress is the ingress identity address used by MOLS route selection to

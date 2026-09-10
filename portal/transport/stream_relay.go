@@ -37,6 +37,16 @@ func NewRelayStream(identityKey string, idleInterval time.Duration, readyLimit i
 }
 
 func (b *RelayStream) OfferConn(conn net.Conn) error {
+	err := b.OfferConnReady(conn, nil)
+	if err != nil && conn != nil {
+		_ = conn.Close()
+	}
+	return err
+}
+
+// OfferConnReady transfers ownership only after ready succeeds while the queue
+// slot is reserved. The caller retains the connection when an error is returned.
+func (b *RelayStream) OfferConnReady(conn net.Conn, ready func() error) error {
 	if conn == nil {
 		return errors.New("reverse connection is required")
 	}
@@ -46,14 +56,18 @@ func (b *RelayStream) OfferConn(conn net.Conn) error {
 	if b.closedErr != nil {
 		err := b.closedErr
 		b.mu.Unlock()
-		_ = session.Close()
 		return err
 	}
 
 	if b.readyLimit > 0 && len(b.ready) >= b.readyLimit {
 		b.mu.Unlock()
-		_ = session.Close()
 		return errStreamFull
+	}
+	if ready != nil {
+		if err := ready(); err != nil {
+			b.mu.Unlock()
+			return err
+		}
 	}
 
 	session.StartIdle()

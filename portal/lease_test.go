@@ -17,7 +17,7 @@ import (
 
 func newTestRegistry(t *testing.T) *leaseRegistry {
 	t.Helper()
-	relay, err := identity.LoadOrCreateRelayIdentity(t.TempDir(), "example.com", false)
+	relay, err := identity.LoadOrCreateRelayIdentity(t.TempDir(), "example.com")
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
@@ -42,6 +42,71 @@ func newTestLeaseIdentity(t *testing.T, name string) types.Identity {
 	return testIdentity
 }
 
+type testReverseOverlay struct {
+	endpoint types.ReverseEndpoint
+	ok       bool
+	err      error
+	calls    int
+}
+
+func (o *testReverseOverlay) IssueEndpoint(types.Identity, string, time.Time, string) (types.ReverseEndpoint, bool, error) {
+	o.calls++
+	return o.endpoint, o.ok, o.err
+}
+
+func (o *testReverseOverlay) ForgetLease(string) {}
+
+func TestIssueReverseEndpointHonorsOverlayPreference(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	leaseIdentity := newTestLeaseIdentity(t, "demo")
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	overlayEndpoint := types.ReverseEndpoint{
+		URL:        "https://gateway.example/sdk/connect",
+		Capability: "overlay-capability",
+		ExpiresAt:  expiresAt,
+		Overlay:    true,
+	}
+	overlay := &testReverseOverlay{endpoint: overlayEndpoint, ok: true}
+	registry.reverseOverlay = overlay
+
+	direct, err := registry.issueReverseEndpoint(leaseIdentity, "lease_direct", expiresAt, false, "")
+	if err != nil || direct.URL != registry.reverseURL || overlay.calls != 0 {
+		t.Fatalf("direct endpoint = %#v, calls = %d, error = %v", direct, overlay.calls, err)
+	}
+
+	automatic, err := registry.issueReverseEndpoint(leaseIdentity, "lease_overlay", expiresAt, true, "")
+	if err != nil || automatic != overlayEndpoint || overlay.calls != 1 {
+		t.Fatalf("preferred overlay endpoint = %#v, calls = %d, error = %v", automatic, overlay.calls, err)
+	}
+
+	overlay.ok = false
+	automatic, err = registry.issueReverseEndpoint(leaseIdentity, "lease_fallback", expiresAt, true, "")
+	if err != nil || automatic.URL != registry.reverseURL {
+		t.Fatalf("overlay fallback endpoint = %#v, error = %v", automatic, err)
+	}
+}
+
+func TestRegisterOverlayPreferenceFallsBackToDirect(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	record, registered, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "overlay-fallback"),
+		Overlay:  true,
+	}, "203.0.113.10", "")
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if !record.Overlay {
+		t.Fatal("Register() did not preserve overlay preference")
+	}
+	if registered.ReverseEndpoint.Overlay || registered.ReverseEndpoint.URL != registry.reverseURL {
+		t.Fatalf("Register() reverse endpoint = %#v, want direct fallback", registered.ReverseEndpoint)
+	}
+}
+
 func TestLeaseRegistryLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -55,6 +120,24 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 	if record.Hostname != "demo.example.com" || record.HostnameHash != "" || len(record.ECHConfigList) != 0 || record.ECHDNSHostname != "" {
 		t.Fatalf("Register() plaintext SNI record = %#v, want public hostname without ECH material", record)
+	}
+	if record.Overlay {
+		t.Fatal("Register() enabled overlay by default")
+	}
+	if registered.ReverseEndpoint.URL != "https://example.com/sdk/connect" || registered.ReverseEndpoint.Capability == "" {
+		t.Fatalf("Register() reverse endpoint = %#v", registered.ReverseEndpoint)
+	}
+	if !registered.ReverseEndpoint.ExpiresAt.Equal(registered.ExpiresAt) {
+		t.Fatalf("Register() reverse expiry = %v, want %v", registered.ReverseEndpoint.ExpiresAt, registered.ExpiresAt)
+	}
+	if admitted, err := registry.admitReverseCapability(registered.ReverseEndpoint.Capability); err != nil || admitted != record {
+		t.Fatalf("admitReverseCapability() = %v, %v, want registered lease", admitted, err)
+	}
+	if _, err := registry.admitReverseCapability(registered.AccessToken); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("admitReverseCapability(lease token) error = %v, want unauthorized", err)
+	}
+	if _, err := registry.admitLeaseByToken(registered.ReverseEndpoint.Capability, false); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("admitLeaseByToken(reverse capability) error = %v, want unauthorized", err)
 	}
 
 	lookedUp, ok := registry.Lookup("demo.example.com")
@@ -78,6 +161,22 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if renewed.AccessToken == "" {
 		t.Fatal("Renew() access token is empty")
 	}
+	if renewed.ReverseEndpoint.Capability == "" || renewed.ReverseEndpoint.Capability == registered.ReverseEndpoint.Capability {
+		t.Fatal("Renew() did not rotate the reverse capability")
+	}
+	if !renewed.ReverseEndpoint.ExpiresAt.Equal(renewed.ExpiresAt) {
+		t.Fatalf("Renew() reverse expiry = %v, want %v", renewed.ReverseEndpoint.ExpiresAt, renewed.ExpiresAt)
+	}
+	refreshed, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: renewed.AccessToken})
+	if err != nil {
+		t.Fatalf("RefreshReverseEndpoint() error = %v", err)
+	}
+	if refreshed.Capability == renewed.ReverseEndpoint.Capability || refreshed.URL != renewed.ReverseEndpoint.URL {
+		t.Fatalf("RefreshReverseEndpoint() = %#v, want rotated direct capability", refreshed)
+	}
+	if admitted, err := registry.admitReverseCapability(refreshed.Capability); err != nil || admitted != record {
+		t.Fatalf("refreshed reverse capability = %v, %v, want registered lease", admitted, err)
+	}
 	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "203.0.113.11" {
 		t.Fatalf("Renew() did not register client IP for lease")
 	}
@@ -95,6 +194,57 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "" {
 		t.Fatalf("Unregister() lease IP = %q, want empty", got)
+	}
+}
+
+func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	leaseIdentity := newTestLeaseIdentity(t, "replace")
+	first, firstResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.10", "")
+	if err != nil {
+		t.Fatalf("first Register() error = %v", err)
+	}
+	second, secondResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.11", "")
+	if err != nil {
+		t.Fatalf("second Register() error = %v", err)
+	}
+	if first == second || first.id == second.id {
+		t.Fatal("replacement reused the previous lease instance")
+	}
+	if _, err := registry.admitReverseCapability(firstResponse.ReverseEndpoint.Capability); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old reverse capability error = %v, want unauthorized", err)
+	}
+	if _, err := registry.admitLeaseByToken(firstResponse.AccessToken, false); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token admission error = %v, want unauthorized", err)
+	}
+	if _, err := registry.Renew(types.RenewRequest{AccessToken: firstResponse.AccessToken}, "203.0.113.12"); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token renew error = %v, want unauthorized", err)
+	}
+	if _, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token reverse refresh error = %v, want unauthorized", err)
+	}
+	if err := registry.verifySigningAccessToken(firstResponse.AccessToken); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token signing error = %v, want unauthorized", err)
+	}
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token unregister error = %v, want unauthorized", err)
+	}
+	if second.ClientIP != "203.0.113.11" {
+		t.Fatalf("replacement lease client ip = %q after old token operations, want unchanged", second.ClientIP)
+	}
+	if lookedUp, ok := registry.Lookup("replace.example.com"); !ok || lookedUp != second {
+		t.Fatalf("replacement lease after old token operations = %v, %v, want active", lookedUp, ok)
+	}
+	if admitted, err := registry.admitReverseCapability(secondResponse.ReverseEndpoint.Capability); err != nil || admitted != second {
+		t.Fatalf("new reverse capability = %v, %v, want replacement lease", admitted, err)
+	}
+	if admitted, err := registry.admitLeaseByToken(secondResponse.AccessToken, false); err != nil || admitted != second {
+		t.Fatalf("new access token = %v, %v, want replacement lease", admitted, err)
+	}
+	if err := registry.verifySigningAccessToken(secondResponse.AccessToken); err != nil {
+		t.Fatalf("new access token signing error = %v", err)
 	}
 }
 
@@ -157,72 +307,6 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	}
 	if lookedUp, ok := registry.Lookup("victim.example.com"); ok {
 		t.Fatalf("Lookup(victim hostname) = %v, true; mismatched hash must not route", lookedUp)
-	}
-}
-
-func TestLeaseRegistryHopRouteCanExposeECHAndPlainSNIFallback(t *testing.T) {
-	t.Parallel()
-
-	registry := newTestRegistry(t)
-	owner := newTestLeaseIdentity(t, "multi-hop-owner")
-	wgPrivate, err := identity.GenerateWireGuardPrivateKey()
-	if err != nil {
-		t.Fatalf("identity.GenerateWireGuardPrivateKey() error = %v", err)
-	}
-	wgPublic, err := identity.WireGuardPublicKeyFromPrivate(wgPrivate)
-	if err != nil {
-		t.Fatalf("identity.WireGuardPublicKeyFromPrivate() error = %v", err)
-	}
-	now := time.Now()
-	baseRoute := types.HopRoute{
-		OwnerPublicKey: owner.PublicKey,
-		ForwardRelay: types.RelayDescriptor{
-			APIHTTPSAddr:       "https://next.example.com",
-			WireGuardPublicKey: wgPublic,
-		},
-		ForwardToken: "hpt_forward",
-		FirstSeenAt:  now,
-		ExpiresAt:    now.Add(time.Minute),
-	}
-	route := baseRoute
-	route.RouteHostname = "ech-demo.example.com"
-	route.PublicHostname = "demo.example.com"
-	route.HostnameHash = utils.HostnameHash("demo.example.com")
-	route.Metadata.Hide = true
-
-	if _, err := registry.RegisterHopRoute(&route, now); err != nil {
-		t.Fatalf("RegisterHopRoute() error = %v", err)
-	}
-	hashOnlyRoute := baseRoute
-	hashOnlyRoute.HostnameHash = utils.HostnameHash("hash-only.example.com")
-	if _, err := registry.RegisterHopRoute(&hashOnlyRoute, now); err == nil {
-		t.Fatal("RegisterHopRoute(hash only) error = nil, want error")
-	}
-	missingPublicRoute := baseRoute
-	missingPublicRoute.RouteHostname = "ech-missing-public.example.com"
-	missingPublicRoute.HostnameHash = utils.HostnameHash("missing-public.example.com")
-	if _, err := registry.RegisterHopRoute(&missingPublicRoute, now); err == nil {
-		t.Fatal("RegisterHopRoute(missing public hostname) error = nil, want error")
-	}
-	mismatchedRoute := baseRoute
-	mismatchedRoute.RouteHostname = "ech-attacker.example.com"
-	mismatchedRoute.PublicHostname = "attacker.example.com"
-	mismatchedRoute.HostnameHash = utils.HostnameHash("victim.example.com")
-	if _, err := registry.RegisterHopRoute(&mismatchedRoute, now); err == nil {
-		t.Fatal("RegisterHopRoute(mismatched hostname hash) error = nil, want error")
-	}
-	if lookedUp, ok := registry.Lookup("victim.example.com"); ok {
-		t.Fatalf("Lookup(victim hostname) = %v, true; mismatched hop hash must not route", lookedUp)
-	}
-	if _, ok := registry.Lookup("demo.example.com"); !ok {
-		t.Fatal("Lookup(plain route) = false, want true")
-	}
-	if _, ok := registry.Lookup(route.RouteHostname); !ok {
-		t.Fatal("Lookup(ech route) = false, want true")
-	}
-	leases := registry.PublicLeases(now)
-	if len(leases) != 0 {
-		t.Fatalf("PublicLeases() length = %d, want 0 for hostname-minimized hop routes", len(leases))
 	}
 }
 

@@ -87,9 +87,8 @@ not supported.
 |------|------|---------|-------------|
 | `--relays` | string | registry | Additional relay API URLs, comma-separated |
 | `--discovery` | bool | `true` | Include registry relays and relay discovery expansion |
-| `--max-active-relays` | int | `3` | Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry; explicit relays are always included |
-| `--multi-hop` | string | | Ordered multi-hop relay API URLs, comma-separated |
-| `--multi-hop-depth` | int | `0` | Automatically create this-depth multi-hop routes for every eligible entry relay; `0` or `1` disables multi-hop |
+| `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
+| `--overlay` | bool | `false` | Prefer IVNP overlay transport when available |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--ech` | bool | `false` | Enable ECH hostname privacy for TLS stream tunnels; plaintext-SNI routing remains available as fallback |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
@@ -112,12 +111,13 @@ not supported.
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
+Direct reverse transport is the default. `--overlay` asks the relay to use an
+IVNP overlay gateway when one is available and retains direct fallback.
+
 ### Constraints
 
 - `<target>` cannot be combined with `--http-route`.
 - `--http-route` cannot be combined with `--udp`.
-- Explicit `--multi-hop` cannot be combined with automatic `--multi-hop-depth`.
-- Multi-hop currently supports only the default SNI TLS stream transport.
 - `--tcp` and `--udp` require matching transport support on the relay.
 - Route payment amounts are part of `--http-route` and require a tunnel-owned
   `--x402-pay-to`.
@@ -166,18 +166,6 @@ Enable UDP alongside the default stream target:
 
 ```bash
 portal expose localhost:8080 --udp --udp-addr localhost:19132 --name game
-```
-
-Use an explicit multi-hop route:
-
-```bash
-portal expose 3000 --multi-hop https://entry.example.com,https://exit.example.com
-```
-
-Ask Portal to create three-hop routes for every eligible entry relay:
-
-```bash
-portal expose 3000 --multi-hop-depth 3
 ```
 
 Ban relays on MITM probe detection:
@@ -283,7 +271,7 @@ portal agent restart
 |---------|-------------|
 | `portal agent run` | Install or update and start the managed agent service |
 | `portal agent run --config config.toml --foreground` | Run the agent in the current terminal |
-| `portal agent dashboard` | Open the local TUI for tunnels, relays, multi-hop routes, and settings |
+| `portal agent dashboard` | Open the local TUI for tunnels, relays, and settings |
 | `portal agent stop` | Gracefully stop the agent and disable or stop the OS service |
 | `portal agent restart` | Stop the current agent if present, install or update the service, and start it again |
 

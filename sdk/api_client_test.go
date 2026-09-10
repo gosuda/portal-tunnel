@@ -4,11 +4,78 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+func TestValidateReverseEndpoint(t *testing.T) {
+	t.Parallel()
+	leaseExpiry := time.Now().UTC().Add(time.Minute)
+	endpoint := types.ReverseEndpoint{
+		URL:        "https://relay.example/sdk/connect",
+		Capability: " reverse-capability ",
+		ExpiresAt:  leaseExpiry,
+	}
+	validated, err := validateReverseEndpoint(endpoint, leaseExpiry)
+	if err != nil {
+		t.Fatalf("validateReverseEndpoint() error = %v", err)
+	}
+	if validated.Capability != "reverse-capability" {
+		t.Fatalf("validated capability = %q", validated.Capability)
+	}
+	endpoint.URL = "https://gateway.example/sdk/connect"
+	if _, err := validateReverseEndpoint(endpoint, leaseExpiry); err != nil {
+		t.Fatalf("gateway reverse endpoint rejected: %v", err)
+	}
+
+	for name, invalid := range map[string]types.ReverseEndpoint{
+		"wrong path":  {URL: "https://relay.example/sdk/renew", Capability: "cap", ExpiresAt: leaseExpiry},
+		"lease bound": {URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry.Add(time.Second)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := validateReverseEndpoint(invalid, leaseExpiry); err == nil {
+				t.Fatal("validateReverseEndpoint() error = nil")
+			}
+		})
+	}
+}
+
+func TestValidateReverseEndpointTransport(t *testing.T) {
+	t.Parallel()
+	relayURL, err := url.Parse("https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct := types.ReverseEndpoint{URL: "https://relay.example/sdk/connect"}
+	overlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect", Overlay: true}
+	legacyOverlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect"}
+
+	for name, test := range map[string]struct {
+		enabled  bool
+		endpoint types.ReverseEndpoint
+		wantErr  bool
+	}{
+		"direct":           {endpoint: direct},
+		"overlay disabled": {endpoint: overlay, wantErr: true},
+		"overlay enabled":  {enabled: true, endpoint: overlay},
+		"fallback direct":  {enabled: true, endpoint: direct},
+		"legacy overlay":   {endpoint: legacyOverlay, wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			listener := &listener{relayURL: relayURL, overlay: test.enabled}
+			err := listener.validateReverseEndpointTransport(test.endpoint)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateReverseEndpointTransport() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
 
 func TestOnlyExplicitIncompatibilityDropsRelayFromActivePool(t *testing.T) {
 	if shouldDropRelayFromActivePool(errors.New("connection closed")) {
@@ -44,7 +111,7 @@ func TestTerminalRelayFailureTargetsTheReportingRelay(t *testing.T) {
 		exit  = "https://exit.example"
 	)
 	listener := &listener{
-		route:    discovery.NewRoute([]string{entry, exit}, false),
+		route:    discovery.Route{RelayURL: entry, Explicit: false},
 		relaySet: mustRelaySet(t, entry, exit),
 	}
 	err := &relayRegistrationError{
@@ -55,66 +122,13 @@ func TestTerminalRelayFailureTargetsTheReportingRelay(t *testing.T) {
 		t.Fatal("terminal relay error was not handled")
 	}
 
-	routes, planErr := listener.relaySet.PlanRoutes(nil, discovery.RouteState{})
-	if planErr != nil {
-		t.Fatalf("PlanRoutes() error = %v", planErr)
-	}
+	routes := listener.relaySet.SelectRelays(discovery.RouteState{})
 	for _, route := range routes {
-		if route.ListenerRelayURL() == exit {
+		if route.RelayURL == exit {
 			t.Fatal("incompatible exit relay remains active")
 		}
-		if route.ListenerRelayURL() != entry {
-			t.Fatalf("unexpected remaining relay %q", route.ListenerRelayURL())
+		if route.RelayURL != entry {
+			t.Fatalf("unexpected remaining relay %q", route.RelayURL)
 		}
-	}
-}
-
-func TestNewListenerUsesMultiHopExitForControl(t *testing.T) {
-	entry := "https://entry.example"
-	exit := "https://exit.example"
-	route := discovery.NewRoute([]string{entry, "https://middle.example", exit}, false)
-	entryURL, controlURL, err := routeRelayURLs(route)
-	if err != nil {
-		t.Fatalf("routeRelayURLs() error = %v", err)
-	}
-
-	if got := controlURL; got != exit {
-		t.Fatalf("control relay = %q, want %q", got, exit)
-	}
-	if got := entryURL; got != entry {
-		t.Fatalf("route entry = %q, want %q", got, entry)
-	}
-}
-
-func TestBuildHopRoutesUsesPublicHostnameWithoutECH(t *testing.T) {
-	listener := &listener{
-		identity: types.Identity{
-			Name:        "demo",
-			Address:     "0x1234",
-			TokenSecret: "test-token-secret",
-		},
-	}
-	hopPath := []types.RelayDescriptor{
-		{APIHTTPSAddr: "https://entry.example.com"},
-		{APIHTTPSAddr: "https://exit.example.com"},
-	}
-
-	routes, exitHopToken, err := listener.buildHopRoutes(hopPath, "demo.example.com", "", nil)
-	if err != nil {
-		t.Fatalf("buildHopRoutes() error = %v", err)
-	}
-	if len(routes) != 1 {
-		t.Fatalf("buildHopRoutes() routes = %d, want 1", len(routes))
-	}
-	if exitHopToken == "" {
-		t.Fatal("buildHopRoutes() exit hop token is empty")
-	}
-
-	entry := routes[0]
-	if entry.RouteHostname != "demo.example.com" {
-		t.Fatalf("entry RouteHostname = %q, want public hostname", entry.RouteHostname)
-	}
-	if entry.PublicHostname != "" || entry.HostnameHash != "" || len(entry.ECHConfigList) != 0 {
-		t.Fatalf("entry ECH fields = PublicHostname %q, HostnameHash %q, ECHConfigList %x; want empty", entry.PublicHostname, entry.HostnameHash, entry.ECHConfigList)
 	}
 }

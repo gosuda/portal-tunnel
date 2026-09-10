@@ -16,7 +16,7 @@ The relay owns:
 - lease registration and renewal
 - public hostname and port routing
 - SNI route lookup for the default stream path
-- relay discovery and relay-to-relay forwarding
+- relay discovery
 - admin policy such as approval, bans, and transport limits
 
 The tunnel process owns:
@@ -27,6 +27,10 @@ The tunnel process owns:
 - UDP target forwarding
 - identity keys and lease signing
 - MITM self-probe validation
+
+When configured, the relay's single overlay runtime owns gateway selection,
+delegated reverse authorization, IVNP forwarding, and gateway replacement.
+Those concerns are not part of SDK relay selection or the lease model.
 
 This split is why Portal can use public relays without giving relay operators
 tenant plaintext.
@@ -130,26 +134,11 @@ The relay allocates a UDP port and carries datagrams over the tunnel backhaul to
 the local UDP target. The positional target is still used for stream traffic;
 `--udp-addr` selects the local UDP service.
 
-## Multi-Relay And Multi-Hop
+## Multi-Relay Selection
 
 With discovery enabled, Portal starts from the public registry plus explicit
 relays, then expands through relay discovery. Explicit relays are always kept
 connected separately from the auto-selected relay pool.
-
-Use a fixed ordered route:
-
-```bash
-portal expose 3000 --multi-hop https://entry.example.com,https://exit.example.com
-```
-
-Or ask Portal to choose one route of a given depth:
-
-```bash
-portal expose 3000 --multi-hop-depth 3
-```
-
-Multi-hop currently applies to the default SNI TLS stream transport. It is not
-combined with UDP or dedicated raw TCP port mode.
 
 ## MITM Self-Probe
 
@@ -174,8 +163,8 @@ On first run, Portal creates a local secp256k1 identity at `identity.json` unles
 you pass another `--identity-path`.
 
 Lease registration uses challenge signing. After registration, the relay issues
-a lease-scoped access token used for renew, unregister, reverse connect, and
-datagram authentication.
+a lease-scoped access token for lease operations, signing, and datagram
+authentication, plus a separate reverse-only capability for reverse streams.
 
 Reusing the same identity path keeps the same tunnel identity across runs.
 

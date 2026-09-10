@@ -15,10 +15,10 @@ type AgentTunnelStatus struct {
 	TargetAddr      string             `json:"target_addr,omitempty"`
 	LastError       string             `json:"last_error,omitempty"`
 	Discovery       bool               `json:"discovery"`
+	Overlay         bool               `json:"overlay"`
 	MaxActiveRelays int                `json:"max_active_relays,omitempty"`
 	ECH             bool               `json:"ech,omitempty"`
 	Metadata        LeaseMetadata      `json:"metadata"`
-	MultiHop        []string           `json:"multi_hop,omitempty"`
 	X402PayTo       string             `json:"x402_pay_to,omitempty"`
 	X402Testnet     bool               `json:"x402_testnet,omitempty"`
 	X402Network     string             `json:"x402_network,omitempty"`
@@ -36,16 +36,15 @@ type AgentHTTPRoute struct {
 }
 
 type AgentRelayStatus struct {
-	RelayURL        string `json:"relay_url"`
-	PublicURL       string `json:"public_url,omitempty"`
-	Version         string `json:"version,omitempty"`
-	Explicit        bool   `json:"explicit,omitempty"`
-	Connecting      bool   `json:"connecting"`
-	Bootstrap       bool   `json:"bootstrap"`
-	Banned          bool   `json:"banned"`
-	SupportsOverlay bool   `json:"supports_overlay"`
-	SupportsUDP     bool   `json:"supports_udp"`
-	SupportsTCP     bool   `json:"supports_tcp"`
+	RelayURL    string `json:"relay_url"`
+	PublicURL   string `json:"public_url,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Explicit    bool   `json:"explicit,omitempty"`
+	Connecting  bool   `json:"connecting"`
+	Bootstrap   bool   `json:"bootstrap"`
+	Banned      bool   `json:"banned"`
+	SupportsUDP bool   `json:"supports_udp"`
+	SupportsTCP bool   `json:"supports_tcp"`
 }
 
 type AgentTunnelRequest struct {
@@ -55,6 +54,7 @@ type AgentTunnelRequest struct {
 	HTTPRoutes      []AgentHTTPRoute `json:"http_routes,omitempty"`
 	RelayURLs       []string         `json:"relays,omitempty"`
 	Discovery       *bool            `json:"discovery,omitempty"`
+	Overlay         bool             `json:"overlay,omitempty"`
 	MaxActiveRelays int              `json:"max_active_relays,omitempty"`
 	ECH             bool             `json:"ech,omitempty"`
 	X402PayTo       string           `json:"x402_pay_to,omitempty"`
@@ -66,10 +66,6 @@ type AgentTunnelRequest struct {
 
 type AgentRelayRequest struct {
 	RelayURL string `json:"relay_url"`
-}
-
-type AgentMultiHopRequest struct {
-	Relays []string `json:"relays"`
 }
 
 type AgentTunnelUpdateRequest struct {

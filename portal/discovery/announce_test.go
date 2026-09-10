@@ -149,21 +149,6 @@ func TestInsertCandidateBlocksCrossIdentityTakeover(t *testing.T) {
 	}
 }
 
-func TestAnnounceLimiterAllowsBurstThenThrottles(t *testing.T) {
-	limiter := NewAnnounceLimiter(60, 5) // 1/sec sustained, burst 5
-	for i := range 5 {
-		if !limiter.Allow("10.0.0.1") {
-			t.Fatalf("burst[%d] should be allowed", i)
-		}
-	}
-	if limiter.Allow("10.0.0.1") {
-		t.Fatal("burst budget should be exhausted")
-	}
-	if !limiter.Allow("10.0.0.2") {
-		t.Fatal("different IP should have its own bucket")
-	}
-}
-
 func TestInsertCandidateCapsFloodPerSigningIdentity(t *testing.T) {
 	set := NewRelaySet(nil)
 	legit := mustSigningIdentity(t)
@@ -225,34 +210,12 @@ func TestInsertCandidatePerIdentityCapKeepsConfirmedEntries(t *testing.T) {
 	}
 }
 
-func mustSignedOverlayDescriptor(t *testing.T, signing types.Identity, relayURL string, issuedAt time.Time) types.RelayDescriptor {
-	t.Helper()
-	authority, err := identity.NewLocalAuthority(signing)
-	if err != nil {
-		t.Fatalf("identity.NewLocalAuthority() error = %v", err)
-	}
-	signed, err := auth.SignRelayDescriptor(types.RelayDescriptor{
-		Address:            signing.Address,
-		Version:            types.DiscoveryVersion,
-		IssuedAt:           issuedAt,
-		ExpiresAt:          issuedAt.Add(DiscoveryDescriptorTTL),
-		APIHTTPSAddr:       relayURL,
-		WireGuardPublicKey: "3dpOqFgLYqlt/5hKsy653evfDxl7PjHUtTXLzcwkqxo=",
-		WireGuardPort:      51820,
-		SupportsOverlay:    true,
-	}, authority)
-	if err != nil {
-		t.Fatalf("SignRelayDescriptor() error = %v", err)
-	}
-	return signed
-}
-
 func TestInsertCandidateHiddenUntilDirectProbe(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	relayURL := "https://hop-forward.example"
-	descriptor := mustSignedOverlayDescriptor(t, signing, relayURL, now)
+	descriptor := mustSignedDescriptor(t, signing, relayURL, now)
 
 	if err := set.InsertCandidate(descriptor, now); err != nil {
 		t.Fatalf("InsertCandidate() error = %v", err)
@@ -262,16 +225,6 @@ func TestInsertCandidateHiddenUntilDirectProbe(t *testing.T) {
 			t.Fatal("candidate relay must stay out of Descriptors() until directly probed")
 		}
 	}
-	overlayPeer := false
-	for _, desc := range set.OverlayPeerDescriptor() {
-		if desc.APIHTTPSAddr == relayURL {
-			overlayPeer = true
-		}
-	}
-	if !overlayPeer {
-		t.Fatal("candidate relay must remain an overlay peer for its hop route")
-	}
-
 	// The real promotion path: the refresher polls the relay itself and
 	// ApplyRelayDiscoveryResponse verifies the target's own descriptor.
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
@@ -297,7 +250,7 @@ func TestFilterCandidatePoolExcludesCandidatesUntilVerified(t *testing.T) {
 	other := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	candidate := RelayState{
-		Descriptor: mustSignedOverlayDescriptor(t, signing, "https://candidate.example", now),
+		Descriptor: mustSignedDescriptor(t, signing, "https://candidate.example", now),
 		LastSeenAt: now,
 	}
 	verified := RelayState{
@@ -306,7 +259,7 @@ func TestFilterCandidatePoolExcludesCandidatesUntilVerified(t *testing.T) {
 		LastSeenAt: now,
 	}
 
-	pool := filterCandidatePool([]RelayState{candidate, verified}, RouteState{}, now, false)
+	pool := filterCandidatePool([]RelayState{candidate, verified}, RouteState{}, now)
 	if len(pool) != 1 || pool[0].Descriptor.APIHTTPSAddr != "https://verified-candidate.example" {
 		t.Fatalf("filterCandidatePool() = %v, want only the verified entry", pool)
 	}
@@ -521,18 +474,15 @@ func TestBootstrapCandidateDescriptorStaysHidden(t *testing.T) {
 			t.Fatal("candidate descriptor squatted on a bootstrap URL must stay out of Descriptors()")
 		}
 	}
-	if pool := filterCandidatePool([]RelayState{state}, RouteState{}, now, false); len(pool) != 0 {
+	if pool := filterCandidatePool([]RelayState{state}, RouteState{}, now); len(pool) != 0 {
 		t.Fatalf("filterCandidatePool() = %v, want the squatted bootstrap excluded", pool)
 	}
 
-	// URL-only bootstrap entries keep their single-hop fallback role, but
-	// never join multi-hop paths.
+	// URL-only bootstrap entries remain eligible as a public relay fallback.
 	urlOnly := newRelayState("https://bootstrap-fallback.example")
 	urlOnly.Bootstrap = true
-	if pool := filterCandidatePool([]RelayState{urlOnly}, RouteState{}, now, false); len(pool) != 1 {
+	if pool := filterCandidatePool([]RelayState{urlOnly}, RouteState{}, now); len(pool) != 1 {
 		t.Fatal("URL-only bootstrap entry must remain a single-hop fallback candidate")
 	}
-	if pool := filterCandidatePool([]RelayState{urlOnly}, RouteState{}, now, true); len(pool) != 0 {
-		t.Fatal("URL-only bootstrap entry must not join multi-hop paths")
-	}
+
 }

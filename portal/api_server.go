@@ -101,10 +101,10 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 			s.handleRegister(w, r)
 		case types.PathSDKRenew:
 			s.handleRenew(w, r)
+		case types.PathSDKReverse:
+			s.handleReverseEndpoint(w, r)
 		case types.PathSDKUnregister:
 			s.handleUnregister(w, r)
-		case types.PathSDKHop:
-			s.handleHop(w, r)
 		case types.PathSDKConnect:
 			s.handleConnect(w, r)
 		case types.PathDiscovery:
@@ -347,10 +347,6 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		Path:   types.PathSDKRegister,
 	}).String()
 
-	if strings.TrimSpace(req.HopToken) != "" && s.overlay == nil {
-		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
-		return
-	}
 	if req.UDPEnabled && !s.supportsUDP() {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled,
 			"UDP transport is disabled on this relay")
@@ -416,115 +412,23 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 }
 
-func (s *Server) handleHop(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodPost, http.MethodDelete:
-	default:
-		utils.MethodNotAllowedError().Write(w)
+func (s *Server) handleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	clientIP, ok := s.extractAllowedClientIP(w, r)
+	if _, ok := s.extractAllowedClientIP(w, r); !ok {
+		return
+	}
+	req, ok := utils.DecodeJSONRequest[types.ReverseEndpointRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return
 	}
-	// Only the mutating POST consumes the announce budget: DELETE performs
-	// route and DNS cleanup only and must stay available after a POST burst.
-	if r.Method == http.MethodPost && !s.announceLimiter.Allow(clientIP) {
-		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "hop route rate limit exceeded")
-		return
-	}
-	if s.overlay == nil || s.relaySet == nil {
-		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
-		return
-	}
-
-	route, ok := utils.DecodeJSONRequest[types.HopRoute](w, r, defaultControlBodyLimit)
-	if !ok {
-		return
-	}
-	route, err := auth.VerifyHopRoute(r.Method, route)
-	if errors.Is(err, auth.ErrHopRouteSignatureInvalid) {
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "hop route signature is invalid")
-		return
-	}
-	if err != nil {
-		utils.InvalidRequestError(err).Write(w)
-		return
-	}
-	cfg := s.config()
-	if route.RelayURL != cfg.PortalURL {
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "hop route relay url does not match receiving relay")
-		return
-	}
-	if r.Method == http.MethodDelete {
-		record, err := s.registry.DeleteHopRoute(&route)
-		if err != nil {
-			utils.InvalidRequestError(err).Write(w)
-			return
-		}
-		dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-		record.deleteDNS(dnsCtx, s.acmeManager, true)
-		cancel()
-		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
-		return
-	}
-
-	now := time.Now().UTC()
-	if !route.ExpiresAt.UTC().After(now) {
-		utils.InvalidRequestError(errors.New("route expiry must be in the future")).Write(w)
-		return
-	}
-	forwardRelay, err := auth.VerifyRelayDescriptor(route.ForwardRelay)
-	if err != nil {
-		utils.InvalidRequestError(fmt.Errorf("forward relay: %w", err)).Write(w)
-		return
-	}
-	if !forwardRelay.HasOverlayPeer() {
-		utils.InvalidRequestError(errors.New("forward relay wireguard overlay metadata is required")).Write(w)
-		return
-	}
-	route.ForwardRelay = forwardRelay
-	if err := s.relaySet.InsertCandidate(forwardRelay, now); err != nil {
-		utils.InvalidRequestError(fmt.Errorf("forward relay: %w", err)).Write(w)
-		return
-	}
-	if err := s.overlay.Sync(s.relaySet.OverlayPeerDescriptor()); err != nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-		return
-	}
-	record, err := s.registry.RegisterHopRoute(&route, now)
+	endpoint, err := s.registry.RefreshReverseEndpoint(req)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-	err = record.syncENSGaslessDNS(dnsCtx, s.acmeManager)
-	cancel()
-	if err != nil {
-		removed, deleteErr := s.registry.DeleteHopRoute(&route)
-		err = errors.Join(err, deleteErr)
-		if removed == nil {
-			removed = record
-		}
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-		removed.deleteDNS(cleanupCtx, s.acmeManager, false)
-		cleanupCancel()
-		writeAPIErrorResponse(w, err)
-		return
-	}
-	s.registry.promoteECHDNS(record, s.acmeManager, cfg.SNIPort)
-	var accessToken string
-	if record.isPublicEntry() {
-		accessToken, err = s.registry.issueLeaseAccessToken(record, now)
-		if err != nil {
-			writeAPIErrorResponse(w, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError})
-			return
-		}
-	}
-	utils.WriteAPIData(w, http.StatusOK, types.HopRouteResponse{
-		AccessToken: accessToken,
-		SNIPort:     cfg.SNIPort,
-	})
+	utils.WriteAPIData(w, http.StatusOK, endpoint)
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -536,13 +440,17 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := strings.TrimSpace(r.Header.Get(types.HeaderAccessToken))
+	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
 	clientIP, ok := s.extractAllowedClientIP(w, r)
 	if !ok {
 		return
 	}
+	if s.overlay != nil && s.overlay.Handles(capability) {
+		s.overlay.HandleConnect(w, r, capability, clientIP)
+		return
+	}
 
-	lease, err := s.registry.admitLeaseByToken(token, false)
+	lease, err := s.registry.admitReverseCapability(capability)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return

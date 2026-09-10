@@ -158,7 +158,6 @@ Dashboard panes:
 | Tunnels | Add, select, and delete tunnels |
 | Settings | Edit max active relays and public metadata |
 | Relays | Connect or disconnect relays for the selected tunnel |
-| Multi-hop | Build and apply an ordered multi-hop route |
 
 Keyboard controls:
 
@@ -171,8 +170,6 @@ Keyboard controls:
 | `c` | Connect the selected relay in the Relays pane |
 | `d` | Disconnect the selected relay in the Relays pane |
 | `o` | Open the selected public tunnel URL |
-| `a` | Add the selected relay as a multi-hop hop |
-| `p` | Apply a drafted multi-hop route |
 | `esc` | Cancel input or return to the Tunnels pane |
 | `ctrl+c` | Exit the dashboard |
 
@@ -187,7 +184,7 @@ Each entry is `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]`. Fill `X402 Pa
 To` when any route has an amount. Sui uses `X402 Testnet`; Casper additionally
 uses `X402 Network`, `X402 Asset`, and optionally its facilitator in `X402 Endpoints`.
 The form also accepts explicit `Relays`,
-`Discovery`, and `Max Relays`; max relays caps auto-selected single-hop discovery relays
+`Discovery`, and `Max Relays`; max relays caps auto-selected discovery relays
 while explicit relays are still included.
 
 After creation, routed HTTP paths, x402 payment amounts, payment network, and
@@ -195,8 +192,8 @@ discovery mode are read-only in the Settings pane. To change routes, payment
 amounts, payment network, or discovery mode, edit `http_routes`,
 `x402_pay_to`, `x402_testnet`, `x402_network`, `x402_asset`, `x402_endpoints`,
 and `discovery` in `config.toml`, then restart
-the agent or tunnel. Other advanced options such as UDP, TCP, custom
-identity JSON, or explicit multi-hop defaults are also configured in
+the agent or tunnel. Other advanced options such as UDP, TCP, or custom
+identity JSON are also configured in
 `config.toml`.
 
 ## Tunnel Config Fields
@@ -211,13 +208,12 @@ Common fields:
 | `http_routes` | Routed HTTP mappings; cannot be combined with `target` or `udp` |
 | `relays` | Explicit relay API URLs |
 | `discovery` | Include registry and relay discovery expansion |
-| `max_active_relays` | Maximum auto-selected single-hop relays kept connected; multi-hop uses every eligible relay as an entry |
+| `max_active_relays` | Maximum auto-selected relays kept connected; explicit relays are always included |
+| `overlay` | Prefer IVNP overlay transport when available; defaults to direct and retains direct fallback |
 | `identity_path` | Tunnel identity JSON path |
 | `identity_json` | Identity JSON payload; persisted to `identity_path` when both are set |
 | `udp`, `udp_addr` | UDP transport settings |
 | `tcp` | Dedicated raw TCP port setting |
-| `multi_hop` | Explicit ordered multi-hop relay URLs |
-| `multi_hop_depth` | Automatically choose one multi-hop route with this depth |
 | `ech` | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
@@ -233,10 +229,6 @@ Constraints match `portal expose`:
 
 - `target` cannot be combined with `http_routes`.
 - `http_routes` cannot be combined with `udp`.
-- `multi_hop` requires at least two relay URLs.
-- `multi_hop` cannot be combined with `multi_hop_depth`.
-- Multi-hop currently supports only the default stream transport, not UDP or raw
-  TCP port mode.
 - `http_routes[].amount` requires `x402_pay_to`.
 - `http_routes[].methods` requires `http_routes[].amount`.
 
@@ -277,8 +269,6 @@ Control endpoints:
 | `DELETE` | `/agent/tunnels/{id}` | Bearer token | Delete a tunnel |
 | `POST` | `/agent/tunnels/{id}/relays` | Bearer token | Connect a relay |
 | `DELETE` | `/agent/tunnels/{id}/relays` | Bearer token | Disconnect a relay |
-| `POST` | `/agent/tunnels/{id}/multi-hop` | Bearer token | Apply a multi-hop route |
-| `DELETE` | `/agent/tunnels/{id}/multi-hop` | Bearer token | Clear multi-hop routing |
 
 Wallet auth endpoints also exist under `/agent/auth/*`. Wallet-authenticated
 requests are read-only and can only call `/agent/status`; mutating operations
@@ -312,8 +302,8 @@ portal agent run --config config.toml --foreground
 ```
 
 If a tunnel is stuck in `error`, check the selected tunnel row in the dashboard.
-Common causes are an invalid local target, a relay URL that cannot be reached, a
-transport disabled on the relay, or an invalid multi-hop route.
+Common causes are an invalid local target, a relay URL that cannot be reached,
+or a transport disabled on the relay.
 
 ## Next Steps
 

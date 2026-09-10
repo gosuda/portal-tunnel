@@ -26,9 +26,9 @@
 		},
 		{
 			eyebrow: 'Mesh',
-			title: 'Relay pools and multi-hop',
+			title: 'Relay pools and failover',
 			description:
-				'Use discovered relays for failover or chain relays to split path visibility.'
+				'Use discovered and explicit relays for resilient public connectivity.'
 		},
 		{
 			eyebrow: 'Ops',

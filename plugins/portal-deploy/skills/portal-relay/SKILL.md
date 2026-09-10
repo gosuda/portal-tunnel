@@ -24,7 +24,7 @@ Any Linux host with:
 
 - A **public IPv4 address** and the ability to open ports
 - **Docker and Docker Compose v2**
-- Open inbound: `443/tcp` (tunnel traffic), `53/tcp` + `53/udp` (embedded DNS), `51820/udp` (overlay, when discovery is enabled)
+- Open inbound: `443/tcp` (tunnel traffic), `53/tcp` + `53/udp` (embedded DNS)
 - A **domain name** you can delegate a subdomain of
 
 Bandwidth guidance: web/API tunnels are lightweight (tens of GB/month for typical use). Game hosting via TCP/UDP leases consumes more (hundreds of GB to TB/month). Any budget VPS, cloud instance, or home server with a static IP qualifies. Free-tier cloud instances (Oracle Ampere A1, for example) work well because the relay binary is a single Go process with minimal memory and CPU.
@@ -67,7 +67,7 @@ DISCOVERY=true
 
 The bundled `docker-compose.yml` in the repository already includes:
 - `cap_add: NET_BIND_SERVICE` (for binding port 53 as a nonroot container)
-- Published ports: `443/tcp`, `53/tcp`, `53/udp`, `51820/udp`
+- Published ports: `443/tcp`, `53/tcp`, `53/udp`
 
 ```sh
 docker compose pull

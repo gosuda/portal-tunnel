@@ -141,27 +141,6 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			utils.WriteAPIData(w, http.StatusAccepted, map[string]bool{"accepted": true})
-		case "multi-hop":
-			switch r.Method {
-			case http.MethodPost:
-				req, ok := utils.DecodeJSONRequest[types.AgentMultiHopRequest](w, r, controlRequestBodyLimit)
-				if !ok {
-					return
-				}
-				if err := s.manager.SetMultiHop(tunnelID, req.Relays); err != nil {
-					utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-					return
-				}
-			case http.MethodDelete:
-				if err := s.manager.SetMultiHop(tunnelID, nil); err != nil {
-					utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-					return
-				}
-			default:
-				utils.MethodNotAllowedError().Write(w)
-				return
-			}
-			utils.WriteAPIData(w, http.StatusAccepted, map[string]bool{"accepted": true})
 		default:
 			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeNotFound, "not found")
 		}
@@ -313,14 +292,6 @@ func ConnectRelay(ctx context.Context, stateDir, tunnelID, relayURL string) erro
 func DisconnectRelay(ctx context.Context, stateDir, tunnelID, relayURL string) error {
 	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/relays"
 	return controlRequest(ctx, stateDir, http.MethodDelete, path, types.AgentRelayRequest{RelayURL: relayURL}, nil)
-}
-
-func SetMultiHop(ctx context.Context, stateDir, tunnelID string, relayURLs []string) error {
-	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/multi-hop"
-	if relayURLs == nil {
-		return controlRequest(ctx, stateDir, http.MethodDelete, path, nil, nil)
-	}
-	return controlRequest(ctx, stateDir, http.MethodPost, path, types.AgentMultiHopRequest{Relays: relayURLs}, nil)
 }
 
 func UpdateTunnel(ctx context.Context, stateDir, tunnelID string, req types.AgentTunnelUpdateRequest) error {

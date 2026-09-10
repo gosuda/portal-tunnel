@@ -48,9 +48,9 @@ const tlsStreamDiagram = `sequenceDiagram
     SDK->>Relay: POST /sdk/register/challenge
     Relay->>SDK: SIWE challenge message
     SDK->>Relay: POST /sdk/register (signed)
-    Relay->>SDK: access_token + lease info
+    Relay->>SDK: access_token + reverse_endpoint + lease info
 
-    SDK->>Relay: GET /sdk/connect (HTTP/1.1 hijack)
+    SDK->>Relay: GET reverse_endpoint.url (reverse capability)
     Relay->>SDK: connection hijacked, 0x00 keepalives
     Note over Relay: Session queued in per-lease stream ready queue
 
@@ -68,7 +68,7 @@ const tcpPortDiagram = `sequenceDiagram
 
     SDK->>Relay: POST /sdk/register (tcp_enabled=true, signed SIWE)
     Note over Relay: Validates TCP plane enabled, allocates port from MIN_PORT-MAX_PORT
-    Relay->>SDK: tcp_addr + access_token
+    Relay->>SDK: tcp_addr + access_token + reverse_endpoint
 
     SDK->>Relay: GET /sdk/connect (reverse session, HTTP/1.1 hijack)
     Note over Relay: Session queued in per-lease stream ready queue
@@ -114,7 +114,21 @@ const registrationDiagram = `sequenceDiagram
     Note over Relay: Validates SIWE signature, checks name availability
     Note over Relay: Creates lease, publishes route at name.relay-host
     Note over Relay: Allocates TCP/UDP ports if requested
-    Relay->>SDK: access_token (ES256K JWT) + lease info (tcp_addr?, udp_addr?, sni_port?)`
+    Relay->>SDK: access_token + reverse_endpoint + lease info (tcp_addr?, udp_addr?, sni_port?)`
+
+const overlayDiagram = `sequenceDiagram
+    participant SDK as SDK / portal-tunnel
+    participant Gateway as Selected gateway
+    participant Ingress as Public ingress relay
+
+    Ingress->>SDK: reverse_endpoint (gateway URL + delegated capability)
+    SDK->>Gateway: GET /sdk/connect (capability)
+    Note over Gateway: Verify ingress signature and gateway binding
+    Gateway->>Ingress: IVNP stream (same capability)
+    Note over Ingress: Verify IVNP peer, capability, and lease instance
+    Ingress->>Gateway: Admit stream to existing lease queue
+    Gateway->>SDK: HTTP 101; bridge SDK socket to IVNP
+    Note over SDK,Ingress: SDK contract and public lease stay unchanged`
 </script>
 
 <div class="not-prose mb-8 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
@@ -170,11 +184,10 @@ UDP client
 - Relay does not terminate tenant TLS. It peeks ClientHello for SNI and bridges raw encrypted bytes after routing.
 - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
 - In keyless TLS, the relay performs certificate private-key signing through `/v1/sign`, but the SDK/tunnel endpoint still runs the TLS server handshake and derives tenant TLS session keys locally.
-- `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` are authorized by lease existence plus a relay-issued lease access token.
-- `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay identity key and used for the rest of the lease lifecycle.
+- Lease operations require a relay-issued access token whose identity and lease ID both match the active lease instance. `/sdk/connect` uses a separate reverse-only capability returned as part of a generic reverse endpoint.
+- `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues separate signed credentials for lease operations and reverse connection establishment.
 - Relay URLs must use `https://`.
 - HTTP/2 stays disabled on the admin/API TLS listener. Keyless TLS certificate sharing and `/sdk/connect` both depend on the current HTTP/1.1-only transport contract.
-- WireGuard, when enabled, is relay-to-relay overlay transport only. It carries multi-hop relay forwarding and overlay discovery, but it is not used for direct tenant TLS termination, public UDP ingress, or `/sdk/*` control-plane traffic.
 
 ### Reverse Session Protocol
 
@@ -212,6 +225,7 @@ Portal has three distinct network roles:
   - `POST /sdk/register/challenge`
   - `POST /sdk/register`
   - `POST /sdk/renew`
+  - `POST /sdk/reverse`
   - `POST /sdk/unregister`
   - `GET /sdk/domain`
 - **Reverse session connection**
@@ -228,7 +242,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ## Package Layout
 
-The relay runtime lives in `portal/` (server, route table, transport runtimes, ACME, keyless, auth, discovery, WireGuard overlay, policy).
+The relay runtime lives in `portal/` (server, route table, transport runtimes, ACME, keyless, auth, discovery, policy).
 The SDK client library lives in `sdk/` (listener, exposure, relay API client, MITM self-probe, transport clients).
 CLI entry points live in `cmd/relay-server` and `cmd/portal-tunnel`; they import `portal/` and `sdk/` respectively but never each other.
 Shared wire types, API envelope, error codes, path constants, and transport frame codec live in `types/`.
@@ -249,6 +263,18 @@ Shared wire types, API envelope, error codes, path constants, and transport fram
 Result: the relay decides routing, but tenant TLS termination still happens at the SDK/tunnel side.
 
 <Mermaid code={tlsStreamDiagram} />
+
+### Optional relay overlay
+
+With `IVNP_CONFIG` enabled, the ingress may return a gateway URL in the same
+`reverse_endpoint` contract. The SDK neither selects the gateway nor sees an
+IVNP destination. Direct transport is the default. A lease with `overlay=true`
+prefers an available overlay gateway and falls back to direct transport. A
+failed gateway is reported through `POST /sdk/reverse`; the ingress applies the
+lease's overlay preference while rotating the endpoint without replacing the
+lease.
+
+<Mermaid code={overlayDiagram} />
 
 ### Tenant TLS Self-Probe Detection
 
@@ -291,14 +317,12 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 <Mermaid code={udpQuicDiagram} />
 
-## WireGuard Overlay and Discovery
+## Relay Discovery Boundary
 
 - Discovery bootstraps from public HTTPS relay URLs, then expands through relay-to-relay `/discovery` polling and periodic self-announces to bootstrap relays through `/discovery/announce`.
 - SDK exposures consume relay discovery results to choose relays, but they do not announce themselves and do not serve `/discovery`.
-- Discovery descriptors are signed relay self-descriptions. They bind relay routing metadata such as `api_https_addr`, `supports_overlay`, `wireguard_public_key`, and `wireguard_port` to the relay identity. Lease access tokens remain separate and authorize tenant lease operations only.
+- Discovery descriptors are signed relay self-descriptions. They bind public relay metadata such as `api_https_addr` and transport support to the relay identity. Lease access tokens remain separate and authorize tenant lease operations only.
 - `/discovery/announce` accepts only signed relay descriptors. Loopback or localhost relay descriptors are rejected because they cannot join the public discovery mesh.
-- The overlay peer API is plain HTTP on the WireGuard network, not public Internet HTTP. It serves the same discovery payload shape used by public `/discovery`.
-- Overlay failure affects inter-relay discovery, mesh synchronization, and multi-hop relay forwarding. Direct tenant TLS routing, keyless TLS, register/renew/connect, and public UDP ingress do not depend on the WireGuard transport path.
 
 ## Control Plane Flow
 
@@ -308,7 +332,7 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 - Caller signs the returned SIWE message with the identity secp256k1 key (`personal_sign`).
 - `name` must be a valid single DNS label; the relay publishes the lease at `<name>.<root host>`.
 - Registration reserves the hostname and publishes the route immediately; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`.
-- On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay identity key, used for the rest of the lease lifecycle.
+- On success, the relay issues a lease-scoped ES256K JWT access token for lease operations and a separate reverse-only capability for the returned reverse endpoint.
 - UDP registration requires server `UDP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and admin enablement. Failures: `udp_disabled` (403), `udp_capacity_exceeded` (503), `udp_port_exhausted` (503).
 - TCP port registration has equivalent three-condition gating. Failures: `tcp_port_disabled` (403), `tcp_port_capacity_exceeded` (503), `tcp_port_exhausted` (503).
 - `PORTAL_URL` is normalized to its host component only; path/query segments are ignored for routing.
@@ -317,14 +341,27 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 ### 2. Reverse Connect
 
-- `GET /sdk/connect` (HTTP/1.1 only, `X-Portal-Access-Token` header).
-- Relay validates: lease exists and is not expired; access token signature, issuer, audience, identity, and expiry are all valid.
+- `GET reverse_endpoint.url` (currently `/sdk/connect`, HTTP/1.1 only) with the
+  `X-Portal-Reverse-Capability` header.
+- Direct endpoints validate the lease instance and reverse-only capability.
+  Overlay gateways validate the ingress-signed delegated capability before
+  dialing IVNP; the ingress then verifies the authenticated gateway peer and
+  lease instance before admitting the stream.
+- Overlay gateway requests are limited per source IP to 120/minute with a burst
+  of 16, before signature verification. At most 16 pending or bridged connections
+  per source share the gateway's 128 outbound slots. Exceeding either budget
+  returns HTTP 429. Source IP follows the configured trusted-proxy policy;
+  callers behind the same NAT share a budget.
 - After claim, relay writes `0x02` before switching the session into tenant TLS passthrough.
 - After hijack, the connection becomes a broker-managed reverse session.
 
 ### 3. Renew
 
-- `POST /sdk/renew` with `access_token`. Extends lease TTL and returns a refreshed token.
+- `POST /sdk/renew` with `access_token`. Extends lease TTL and returns refreshed
+  lease and reverse credentials.
+
+`POST /sdk/reverse` replaces only a failed reverse endpoint. Gateway replacement
+therefore preserves the ingress lease and public hostname.
 
 ### 4. Unregister
 
@@ -361,7 +398,6 @@ The relay signs handshake digests via `/v1/sign` but never receives tenant TLS t
 - One canonical raw TCP reverse transport
 - Dedicated TCP port allocation for non-TLS services with raw TCP bridging
 - Raw public UDP exposure with an internal QUIC datagram backhaul
-- Optional WireGuard relay overlay for relay discovery, peer synchronization, and multi-hop relay forwarding
 - SNI-based routing with root-host fallback
 - End-to-end tenant TLS with relay-backed keyless signing
 - Traffic-triggered detect-only MITM self-probing for probable relay-side TLS termination

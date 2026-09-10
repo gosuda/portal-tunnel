@@ -148,8 +148,8 @@ func discoveryFeature(cfg relayServerConfig) feature {
 		return f
 	}
 	f.State, f.By = stateEnabled, "DISCOVERY=true"
-	f.Detail = fmt.Sprintf("host=%s bootstraps=%d wireguard_port=%d",
-		host, len(bootstraps), cfg.WireGuardPort)
+	f.Detail = fmt.Sprintf("host=%s bootstraps=%d",
+		host, len(bootstraps))
 	return f
 }
 
@@ -279,7 +279,8 @@ func proxyHeaderFeature(cfg relayServerConfig) feature {
 	if cidrs := strings.TrimSpace(cfg.TrustedProxyCIDRs); cidrs != "" {
 		f.Detail = "trusted=" + cidrs
 	} else {
-		f.Detail = "trusted=default private and loopback ranges (TRUSTED_PROXY_CIDRS empty)"
+		f.State, f.By = stateDisabled, "TRUSTED_PROXY_CIDRS empty"
+		f.Detail = "no proxies are trusted; forwarded client addresses are ignored and client addresses come from the socket"
 	}
 	return f
 }

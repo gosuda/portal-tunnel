@@ -209,8 +209,8 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 	}
 
 	listener := &listener{
-		relayURL: exitURL,
-		route:    discovery.NewRoute([]string{entryURL.String(), exitURL.String()}, false),
+		relayURL: entryURL,
+		route:    discovery.Route{RelayURL: entryURL.String(), Explicit: false},
 		relaySet: mustRelaySet(t, entryURL.String(), exitURL.String()),
 		cancel: func() {
 			select {
@@ -229,16 +229,13 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 		Reason:   types.MITMProbeReasonExporterMismatch,
 	}, nil)
 
-	routes, err := listener.relaySet.PlanRoutes(nil, discovery.RouteState{})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
+	routes := listener.relaySet.SelectRelays(discovery.RouteState{})
 	for _, route := range routes {
-		if route.ListenerRelayURL() == entryURL.String() {
+		if route.RelayURL == entryURL.String() {
 			t.Fatal("ingress relay remains active after mitm detection")
 		}
-		if route.ListenerRelayURL() != exitURL.String() {
-			t.Fatalf("unexpected active relay after mitm detection: %q", route.ListenerRelayURL())
+		if route.RelayURL != exitURL.String() {
+			t.Fatalf("unexpected active relay after mitm detection: %q", route.RelayURL)
 		}
 	}
 	select {
@@ -268,13 +265,10 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 		Reason:   types.MITMProbeReasonExporterMismatch,
 	}, nil)
 
-	routes, err := listener.relaySet.PlanRoutes(nil, discovery.RouteState{})
-	if err != nil {
-		t.Fatalf("PlanRoutes() error = %v", err)
-	}
+	routes := listener.relaySet.SelectRelays(discovery.RouteState{})
 	activeRelayURLs := make([]string, 0, len(routes))
 	for _, route := range routes {
-		activeRelayURLs = append(activeRelayURLs, route.ListenerRelayURL())
+		activeRelayURLs = append(activeRelayURLs, route.RelayURL)
 	}
 	if len(activeRelayURLs) != 1 || activeRelayURLs[0] != relayURL.String() {
 		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", activeRelayURLs, relayURL.String())
@@ -294,7 +288,7 @@ func TestMITMProbeDialAddressUsesRelayHostForLocalRelay(t *testing.T) {
 
 	listener := &listener{
 		relayURL: relayURL,
-		route:    discovery.NewRoute([]string{relayURL.String()}, true),
+		route:    discovery.Route{RelayURL: relayURL.String(), Explicit: true},
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
@@ -315,7 +309,7 @@ func TestMITMProbeDialAddressUsesPublicURLForRemoteRelay(t *testing.T) {
 
 	listener := &listener{
 		relayURL: relayURL,
-		route:    discovery.NewRoute([]string{relayURL.String()}, true),
+		route:    discovery.Route{RelayURL: relayURL.String(), Explicit: true},
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 

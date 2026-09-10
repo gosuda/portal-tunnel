@@ -37,7 +37,7 @@ Tunnel ECH is optional and disabled by default. A normal stream tunnel uses its 
 
 Enable ECH for a CLI tunnel with `portal expose ... --ech` or set `ech = true` in a portal-agent tunnel. For ECH-enabled stream leases, the SDK derives an opaque route hostname and tenant ECH material from the tunnel identity. The relay receives the route hostname, a validated hash of the public fallback hostname, and the ECHConfigList. ECH-capable clients use the opaque route hostname as the outer SNI while the real tenant SNI remains inside the ECH-protected ClientHello handled by the SDK.
 
-ECH-enabled tunnels retain plaintext-SNI fallback routing. This lets clients that do not obtain or use the ECHConfigList connect through the public hostname without weakening tenant TLS passthrough. For multi-hop routes, the entry relay owns ECH and plaintext-SNI selection; later hops continue with hop tokens and passthrough forwarding.
+ECH-enabled tunnels retain plaintext-SNI fallback routing. This lets clients that do not obtain or use the ECHConfigList connect through the public hostname without weakening tenant TLS passthrough.
 
 When `ACME_DNS_PROVIDER` is configured, Portal publishes the relay root HTTPS/ECH record. For each ECH-enabled stream lease it also creates or updates the public hostname A record and HTTPS record containing the `ech` parameter. Portal does not create tenant ECH DNS records for the default `ECH=false` mode. It removes tenant A and HTTPS/ECH records when the owning ECH lease is removed and no active replacement requires the hostname. Successful ECH HTTPS operations are not periodically rewritten; failed create, update, and delete operations remain pending for retry. Active ECH hostname A records are updated when Portal observes that the relay public IPv4 has changed.
 
@@ -68,7 +68,7 @@ Raw TCP and UDP port transports do not add tenant TLS. Use application-level enc
 
 ## Identity
 
-Registration uses a SIWE challenge signed by the SDK's secp256k1 identity key. The key is loaded from `identity.json` either as a raw secp256k1 `private_key` or derived from a BIP-39 `mnemonic` and `derivation_path`. The relay then issues a lease-scoped ES256K access token used by renew, unregister, reverse connect, and QUIC datagram authentication.
+Registration uses a SIWE challenge signed by the SDK's secp256k1 identity key. The key is loaded from `identity.json` either as a raw secp256k1 `private_key` or derived from a BIP-39 `mnemonic` and `derivation_path`. The relay then issues a lease-scoped ES256K access token used by renew, unregister, keyless signing, and QUIC datagram authentication, plus a separate reverse-only capability for reverse streams.
 
 Relay admin token login and optional local agent wallet login are separate from
 lease registration. They do not replace the local tunnel identity used for

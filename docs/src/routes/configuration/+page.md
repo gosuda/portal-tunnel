@@ -54,7 +54,6 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
 | `API_PORT` | `4017` | int | Admin/API server listen port |
 | `SNI_PORT` | `443` | int | TCP SNI router listen port; non-standard values are intended for local testing, while the bundled public deployment requires `443` |
-| `WIREGUARD_PORT` | `51820` | int | Public and listen UDP port for relay discovery overlay |
 
 ### Optional HTTP redirect listener
 
@@ -111,7 +110,45 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 |----------|---------|------|-------------|
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
+| `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the relay overlay and requires `DISCOVERY=true`; empty disables the overlay |
 | `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
+
+### IVNP overlay
+
+`IVNP_CONFIG` now points to a JSON object using the fields of IVNP's
+[`RouterConfig`](https://github.com/gosuda/IVNP/blob/2b4f760003c221a391a7487a24d4df7f41267268/API.md#2-static-configuration).
+Portal applies the file to `ivnp.DefaultRouterConfig()` and lets IVNP validate
+the resulting configuration. An existing file containing `{}` enables the
+overlay with IVNP's defaults: in-memory router state and a transient service
+destination. Unknown fields, invalid values, and legacy `ivnp.conf` syntax fail
+startup; replace the old file explicitly when upgrading. Runtime `Logger` and
+`Resolver` collaborators cannot be configured through this file.
+
+For explicit router persistence, mount a private writable directory and use:
+
+```json
+{
+  "Persistence": { "Directory": "/var/lib/portal/ivnp-router" }
+}
+```
+
+Relative persistence paths resolve from the relay process working directory.
+Use a dedicated embedded-router directory; an old daemon state directory with
+named application destinations is incompatible and must not be reused.
+Persistence preserves router state only. Portal creates a transient destination
+on each start and republishes its new address through relay discovery.
+
+Other JSON fields use the upstream Go types: addresses such as `NTCP2.Bind`
+are `"0.0.0.0:0"` strings, and durations are integer nanoseconds. Nested fields
+not supplied keep IVNP defaults; disabling a transport requires zeroing all its
+fields as required by IVNP validation. Portal uses
+`ivnp.DefaultDestinationConfig()` for its service; tunnel construction and
+internal routing remain IVNP-owned.
+
+Local router configuration and socket setup happen during startup. Destination
+creation waits for tunnels and confirmed publication in the background, while
+public ingress and direct reverse transport remain available. Shutdown explicitly
+closes the router and its destination resources, including pending connections.
 
 ### Payments
 
@@ -126,7 +163,15 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `TRUST_PROXY_HEADERS` | `false` | bool | Trust `X-Forwarded-*` and `X-Real-IP` headers from trusted proxies |
-| `TRUSTED_PROXY_CIDRS` | `""` | string | Trusted proxy CIDR allowlist for forwarded headers (comma-separated); defaults to private/loopback ranges when `TRUST_PROXY_HEADERS` is enabled |
+| `TRUSTED_PROXY_CIDRS` | `""` | string | Explicit trusted proxy CIDR allowlist for forwarded headers (comma-separated); empty trusts no proxies and uses socket addresses even with `TRUST_PROXY_HEADERS=true` |
+
+When upgrading a deployment that used `TRUST_PROXY_HEADERS=true` with an empty
+`TRUSTED_PROXY_CIDRS`, set the proxy's fixed address explicitly (`/32` for IPv4,
+`/128` for IPv6). Private and loopback addresses are no longer trusted implicitly.
+Without an allowlist, IP bans and source limits apply to the socket peer, which
+is the proxy when one sits in front. The trusted proxy must overwrite
+`X-Forwarded-For` and `X-Real-IP` with the client address; see the
+[reverse-proxy trust boundary](/deployment#client-addresses-and-the-trust-boundary).
 
 ### TLS
 
@@ -224,9 +269,8 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 |------|---------|------|---------|-------------|
 | `--relays` | | string | _(registry)_ | Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https) |
 | `--discovery` | | bool | `true` | Include public registry relays and discover additional relay bootstraps |
-| `--multi-hop` | `MULTI_HOP` | string | | Ordered multi-hop relay API URLs, comma-separated |
-| `--multi-hop-depth` | `MULTI_HOP_DEPTH` | int | `0` | Automatically create this-depth multi-hop routes for every eligible entry relay; 0 or 1 disables multi-hop |
-| `--max-active-relays` | `MAX_ACTIVE_RELAYS` | int | `3` | Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry; explicit relays are always included |
+| `--max-active-relays` | `MAX_ACTIVE_RELAYS` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
+| `--overlay` | `OVERLAY_ENABLED` | bool | `false` | Prefer IVNP overlay transport when available; retains direct fallback |
 | `--ban-mitm` | `BAN_MITM` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 
 ### Identity
@@ -303,6 +347,7 @@ name = "myapp"
 target = "127.0.0.1:3000"
 relays = ["https://portal.example.com"]
 discovery = false
+overlay = true
 description = "Managed web tunnel"
 tags = ["web"]
 
@@ -345,8 +390,7 @@ Tunnel fields mirror `portal expose` flags:
 | `http_routes` | table array | HTTP route mappings; cannot be combined with `target` or `udp` |
 | `relays` | string array | Explicit relay API URLs |
 | `discovery` | bool | Include registry and relay discovery expansion |
-| `multi_hop` | string array | Ordered multi-hop relay path |
-| `multi_hop_depth` | int | Automatically create this-depth multi-hop routes for every eligible entry relay |
+| `overlay` | bool | Prefer IVNP overlay transport when available; defaults to direct and retains direct fallback |
 | `ech` | bool | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
@@ -405,8 +449,6 @@ Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors
 | `private_key` | string | secp256k1 private key hex; keep secret |
 | `mnemonic` | string | BIP-39 mnemonic used to derive the secp256k1 identity key; keep secret |
 | `derivation_path` | string | EVM derivation path for `mnemonic`; defaults to `m/44'/60'/0'/0/0` |
-| `wireguard_public_key` | string | Relay-only WireGuard overlay public key when discovery is enabled |
-| `wireguard_private_key` | string | Relay-only WireGuard overlay private key when discovery is enabled |
 | `encrypted_client_hello_seed` | string | Relay-only HKDF salt for deriving the ECH HPKE private key; generated automatically when missing; keep secret |
 
 When `mnemonic` is present, Portal derives the private key at `derivation_path`

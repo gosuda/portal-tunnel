@@ -46,14 +46,13 @@ type TunnelConfig struct {
 	HTTPRoutes           []HTTPRouteConfig `koanf:"http_routes"`
 	RelayURLs            []string          `koanf:"relays"`
 	Discovery            *bool             `koanf:"discovery"`
+	Overlay              bool              `koanf:"overlay"`
 	IdentityPath         string            `koanf:"identity_path"`
 	IdentityJSON         string            `koanf:"identity_json"`
 	UDPEnabled           bool              `koanf:"udp"`
 	UDPAddr              string            `koanf:"udp_addr"`
 	TCPEnabled           bool              `koanf:"tcp"`
 	ECH                  bool              `koanf:"ech"`
-	MultiHop             []string          `koanf:"multi_hop"`
-	MultiHopDepth        int               `koanf:"multi_hop_depth"`
 	BanMITM              *bool             `koanf:"ban_mitm"`
 	MaxActiveRelays      int               `koanf:"max_active_relays"`
 	Description          string            `koanf:"description"`
@@ -191,6 +190,9 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	if cfg.Discovery != nil {
 		out["discovery"] = *cfg.Discovery
 	}
+	if cfg.Overlay {
+		out["overlay"] = cfg.Overlay
+	}
 	addStringDocumentField(out, "identity_path", cfg.IdentityPath)
 	addStringDocumentField(out, "identity_json", cfg.IdentityJSON)
 	if cfg.UDPEnabled {
@@ -202,16 +204,6 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	}
 	if cfg.ECH {
 		out["ech"] = cfg.ECH
-	}
-	addStringSliceDocumentField(out, "multi_hop", cfg.MultiHop)
-	if cfg.MultiHopDepth != 0 {
-		out["multi_hop_depth"] = cfg.MultiHopDepth
-	}
-	if cfg.BanMITM != nil {
-		out["ban_mitm"] = *cfg.BanMITM
-	}
-	if cfg.MaxActiveRelays != 0 {
-		out["max_active_relays"] = cfg.MaxActiveRelays
 	}
 	addStringDocumentField(out, "description", cfg.Description)
 	addStringSliceDocumentField(out, "tags", cfg.Tags)
@@ -304,13 +296,6 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 			}
 			t.RelayURLs = relays
 		}
-		for idx, relayURL := range t.MultiHop {
-			normalized, err := utils.NormalizeRelayURL(relayURL)
-			if err != nil {
-				return fmt.Errorf("tunnel %q multi_hop: %w", t.ID, err)
-			}
-			t.MultiHop[idx] = normalized
-		}
 	}
 	return nil
 }
@@ -350,29 +335,6 @@ func (cfg TunnelConfig) Validate() error {
 	}
 	if len(cfg.HTTPRoutes) > 0 && cfg.UDPEnabled {
 		return fmt.Errorf("tunnel %q cannot combine udp and http_routes", cfg.ID)
-	}
-	if cfg.MultiHopDepth < 0 {
-		return fmt.Errorf("tunnel %q multi_hop_depth cannot be negative", cfg.ID)
-	}
-	if len(cfg.MultiHop) == 1 {
-		return fmt.Errorf("tunnel %q multi_hop requires at least entry and exit relays", cfg.ID)
-	}
-	if len(cfg.MultiHop) > 0 && cfg.MultiHopDepth > 1 {
-		return fmt.Errorf("tunnel %q cannot combine multi_hop and multi_hop_depth", cfg.ID)
-	}
-	multiHopEnabled := len(cfg.MultiHop) > 0 || cfg.MultiHopDepth > 1
-	nonStreamTransport := cfg.UDPEnabled || cfg.TCPEnabled
-	if multiHopEnabled && nonStreamTransport {
-		return fmt.Errorf("tunnel %q multi-hop supports only the default stream transport", cfg.ID)
-	}
-	if len(cfg.MultiHop) > 0 {
-		uniqueMultiHop, err := utils.NormalizeRelayURLs(cfg.MultiHop...)
-		if err != nil {
-			return fmt.Errorf("tunnel %q multi_hop: %w", cfg.ID, err)
-		}
-		if len(uniqueMultiHop) != len(cfg.MultiHop) {
-			return fmt.Errorf("tunnel %q multi_hop relay repeated", cfg.ID)
-		}
 	}
 	for _, route := range cfg.HTTPRoutes {
 		if strings.TrimSpace(route.Prefix) == "" || strings.TrimSpace(route.Upstream) == "" {
