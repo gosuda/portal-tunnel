@@ -268,9 +268,11 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 
 With `IVNP_CONFIG` enabled, the ingress may return a gateway URL in the same
 `reverse_endpoint` contract. The SDK neither selects the gateway nor sees an
-IVNP destination. A failed gateway is reported through `POST /sdk/reverse`; the
-ingress rotates to another admitted gateway or returns the direct endpoint
-without replacing the lease.
+IVNP destination. Each lease selects `auto`, `direct`, or `overlay` through its
+register challenge. `auto` prefers overlay and retains direct fallback,
+`direct` skips overlay selection, and `overlay` requires an overlay endpoint.
+A failed gateway is reported through `POST /sdk/reverse`; the ingress applies
+the lease's mode while rotating the endpoint without replacing the lease.
 
 <Mermaid code={overlayDiagram} />
 

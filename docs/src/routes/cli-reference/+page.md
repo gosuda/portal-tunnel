@@ -88,6 +88,7 @@ not supported.
 | `--relays` | string | registry | Additional relay API URLs, comma-separated |
 | `--discovery` | bool | `true` | Include registry relays and relay discovery expansion |
 | `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
+| `--reverse-mode` | string | `auto` | Reverse transport policy: `auto`, `direct`, or `overlay` |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--ech` | bool | `false` | Enable ECH hostname privacy for TLS stream tunnels; plaintext-SNI routing remains available as fallback |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
@@ -109,6 +110,10 @@ not supported.
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
+
+`--reverse-mode auto` prefers the relay's IVNP overlay and falls back to the
+direct reverse endpoint when it is unavailable. `direct` skips the overlay.
+`overlay` requires an overlay endpoint and fails instead of falling back.
 
 ### Constraints
 

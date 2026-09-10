@@ -36,6 +36,19 @@ func SplitCSV(raw string) []string {
 	return out
 }
 
+func NormalizeReverseMode(value types.ReverseMode) (types.ReverseMode, error) {
+	mode := types.ReverseMode(strings.ToLower(strings.TrimSpace(string(value))))
+	if mode == "" {
+		return types.ReverseModeAuto, nil
+	}
+	switch mode {
+	case types.ReverseModeAuto, types.ReverseModeDirect, types.ReverseModeOverlay:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("reverse mode must be auto, direct, or overlay, got %q", value)
+	}
+}
+
 func TrimHexPrefix(raw string) string {
 	hasHexPrefix := len(raw) >= 2 && raw[0] == '0'
 	if hasHexPrefix && (raw[1] == 'x' || raw[1] == 'X') {

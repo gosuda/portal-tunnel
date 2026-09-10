@@ -210,6 +210,10 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 	if err != nil {
 		return err
 	}
+	reverseMode, err := utils.NormalizeReverseMode(req.ReverseMode)
+	if err != nil {
+		return err
+	}
 	discovery := true
 	if req.Discovery != nil {
 		discovery = *req.Discovery
@@ -224,6 +228,7 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 		HTTPRoutes:      httpRoutes,
 		RelayURLs:       relayURLs,
 		Discovery:       &discovery,
+		ReverseMode:     reverseMode,
 		MaxActiveRelays: req.MaxActiveRelays,
 		ECH:             req.ECH,
 		X402PayTo:       strings.TrimSpace(req.X402PayTo),
@@ -572,6 +577,7 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 		TargetAddr:      cfg.TargetAddr,
 		LastError:       lastError,
 		Discovery:       discovery,
+		ReverseMode:     cfg.ReverseMode,
 		MaxActiveRelays: cfg.MaxActiveRelays,
 		ECH:             cfg.ECH,
 		Metadata:        metadataFromTunnelConfig(cfg),
@@ -662,6 +668,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:            append([]string(nil), cfg.RelayURLs...),
 		Discovery:            discovery,
+		ReverseMode:          cfg.ReverseMode,
 		Identity:             types.Identity{Name: cfg.Name},
 		IdentityPath:         cfg.IdentityPath,
 		IdentityJSON:         cfg.IdentityJSON,

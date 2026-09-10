@@ -41,8 +41,9 @@ type Exposure struct {
 }
 
 type ExposeConfig struct {
-	RelayURLs []string
-	Discovery bool
+	RelayURLs   []string
+	Discovery   bool
+	ReverseMode types.ReverseMode
 
 	Identity             types.Identity
 	IdentityPath         string
@@ -82,6 +83,10 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	if err != nil {
 		return nil, err
 	}
+	reverseMode, err := utils.NormalizeReverseMode(cfg.ReverseMode)
+	if err != nil {
+		return nil, err
+	}
 	x402PayTo := strings.TrimSpace(cfg.X402PayTo)
 
 	initialRouteCount := len(explicitRelayURLs)
@@ -117,6 +122,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	}
 	runtimeCfg := cfg.snapshot()
 	runtimeCfg.RelayURLs = append([]string(nil), explicitRelayURLs...)
+	runtimeCfg.ReverseMode = reverseMode
 	runtimeCfg.Identity = listenerIdentity.Copy()
 	runtimeCfg.TargetAddr = targetAddr
 	runtimeCfg.UDPAddr = udpAddr
@@ -371,6 +377,7 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 	return types.AgentTunnelStatus{
 		Address:         cfg.Identity.Address,
 		TargetAddr:      cfg.TargetAddr,
+		ReverseMode:     cfg.ReverseMode,
 		MaxActiveRelays: cfg.MaxActiveRelays,
 		Metadata:        cfg.Metadata,
 		Relays:          relays,
@@ -669,11 +676,12 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			retryCount = 0
 		}
 		listener, err := newListener(context.Background(), route, listenerConfig{
-			Identity:   cfg.Identity.Copy(),
-			UDPEnabled: cfg.UDPEnabled,
-			TCPEnabled: cfg.TCPEnabled,
-			ECH:        cfg.ECH,
-			BanMITM:    cfg.BanMITM,
+			Identity:    cfg.Identity.Copy(),
+			ReverseMode: cfg.ReverseMode,
+			UDPEnabled:  cfg.UDPEnabled,
+			TCPEnabled:  cfg.TCPEnabled,
+			ECH:         cfg.ECH,
+			BanMITM:     cfg.BanMITM,
 			Metadata: func() types.LeaseMetadata {
 				return e.Config().Metadata
 			},

@@ -26,6 +26,7 @@ type leaseRecord struct {
 	ECHConfigList  []byte
 	ECHDNSHostname string
 	Metadata       types.LeaseMetadata
+	ReverseMode    types.ReverseMode
 
 	registerChallenge *auth.RegisterChallenge
 

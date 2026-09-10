@@ -14,6 +14,7 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -46,6 +47,7 @@ type TunnelConfig struct {
 	HTTPRoutes           []HTTPRouteConfig `koanf:"http_routes"`
 	RelayURLs            []string          `koanf:"relays"`
 	Discovery            *bool             `koanf:"discovery"`
+	ReverseMode          types.ReverseMode `koanf:"reverse_mode"`
 	IdentityPath         string            `koanf:"identity_path"`
 	IdentityJSON         string            `koanf:"identity_json"`
 	UDPEnabled           bool              `koanf:"udp"`
@@ -189,6 +191,7 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	if cfg.Discovery != nil {
 		out["discovery"] = *cfg.Discovery
 	}
+	addStringDocumentField(out, "reverse_mode", string(cfg.ReverseMode))
 	addStringDocumentField(out, "identity_path", cfg.IdentityPath)
 	addStringDocumentField(out, "identity_json", cfg.IdentityJSON)
 	if cfg.UDPEnabled {
@@ -263,6 +266,11 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		t := &cfg.Tunnels[i]
 		t.ID = strings.TrimSpace(t.ID)
 		t.Name = strings.TrimSpace(t.Name)
+		reverseMode, err := utils.NormalizeReverseMode(t.ReverseMode)
+		if err != nil {
+			return fmt.Errorf("tunnel %q: %w", t.ID, err)
+		}
+		t.ReverseMode = reverseMode
 		t.X402Network = strings.ToLower(strings.TrimSpace(t.X402Network))
 		t.X402Asset = strings.TrimSpace(t.X402Asset)
 		t.X402Endpoints = compactStrings(t.X402Endpoints)

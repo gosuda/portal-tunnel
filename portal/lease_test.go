@@ -42,6 +42,54 @@ func newTestLeaseIdentity(t *testing.T, name string) types.Identity {
 	return testIdentity
 }
 
+type testReverseOverlay struct {
+	endpoint types.ReverseEndpoint
+	ok       bool
+	err      error
+	calls    int
+}
+
+func (o *testReverseOverlay) IssueEndpoint(types.Identity, string, time.Time, string) (types.ReverseEndpoint, bool, error) {
+	o.calls++
+	return o.endpoint, o.ok, o.err
+}
+
+func (o *testReverseOverlay) ForgetLease(string) {}
+
+func TestIssueReverseEndpointHonorsMode(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	leaseIdentity := newTestLeaseIdentity(t, "demo")
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	overlayEndpoint := types.ReverseEndpoint{
+		URL:        "https://gateway.example/sdk/connect",
+		Capability: "overlay-capability",
+		ExpiresAt:  expiresAt,
+	}
+	overlay := &testReverseOverlay{endpoint: overlayEndpoint, ok: true}
+	registry.reverseOverlay = overlay
+
+	direct, err := registry.issueReverseEndpoint(leaseIdentity, "lease_direct", expiresAt, types.ReverseModeDirect, "")
+	if err != nil || direct.URL != registry.reverseURL || overlay.calls != 0 {
+		t.Fatalf("direct endpoint = %#v, calls = %d, error = %v", direct, overlay.calls, err)
+	}
+
+	automatic, err := registry.issueReverseEndpoint(leaseIdentity, "lease_auto", expiresAt, types.ReverseModeAuto, "")
+	if err != nil || automatic != overlayEndpoint || overlay.calls != 1 {
+		t.Fatalf("auto endpoint = %#v, calls = %d, error = %v", automatic, overlay.calls, err)
+	}
+
+	overlay.ok = false
+	automatic, err = registry.issueReverseEndpoint(leaseIdentity, "lease_fallback", expiresAt, types.ReverseModeAuto, "")
+	if err != nil || automatic.URL != registry.reverseURL {
+		t.Fatalf("auto fallback endpoint = %#v, error = %v", automatic, err)
+	}
+	if _, err := registry.issueReverseEndpoint(leaseIdentity, "lease_overlay", expiresAt, types.ReverseModeOverlay, ""); err == nil {
+		t.Fatal("required overlay endpoint error = nil")
+	}
+}
+
 func TestLeaseRegistryLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -55,6 +103,9 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 	if record.Hostname != "demo.example.com" || record.HostnameHash != "" || len(record.ECHConfigList) != 0 || record.ECHDNSHostname != "" {
 		t.Fatalf("Register() plaintext SNI record = %#v, want public hostname without ECH material", record)
+	}
+	if record.ReverseMode != types.ReverseModeAuto {
+		t.Fatalf("Register() reverse mode = %q, want auto", record.ReverseMode)
 	}
 	if registered.ReverseEndpoint.URL != "https://example.com/sdk/connect" || registered.ReverseEndpoint.Capability == "" {
 		t.Fatalf("Register() reverse endpoint = %#v", registered.ReverseEndpoint)

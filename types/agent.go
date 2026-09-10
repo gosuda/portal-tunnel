@@ -15,6 +15,7 @@ type AgentTunnelStatus struct {
 	TargetAddr      string             `json:"target_addr,omitempty"`
 	LastError       string             `json:"last_error,omitempty"`
 	Discovery       bool               `json:"discovery"`
+	ReverseMode     ReverseMode        `json:"reverse_mode"`
 	MaxActiveRelays int                `json:"max_active_relays,omitempty"`
 	ECH             bool               `json:"ech,omitempty"`
 	Metadata        LeaseMetadata      `json:"metadata"`
@@ -53,6 +54,7 @@ type AgentTunnelRequest struct {
 	HTTPRoutes      []AgentHTTPRoute `json:"http_routes,omitempty"`
 	RelayURLs       []string         `json:"relays,omitempty"`
 	Discovery       *bool            `json:"discovery,omitempty"`
+	ReverseMode     ReverseMode      `json:"reverse_mode,omitempty"`
 	MaxActiveRelays int              `json:"max_active_relays,omitempty"`
 	ECH             bool             `json:"ech,omitempty"`
 	X402PayTo       string           `json:"x402_pay_to,omitempty"`
