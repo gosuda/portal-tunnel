@@ -84,6 +84,20 @@ func TestMOLSSelectPriorityKeepsExplicitRelaysOutsideAutoLimit(t *testing.T) {
 	}
 }
 
+func TestMOLSSelectPriorityDeduplicatesExplicitRelays(t *testing.T) {
+	relayURL := "https://relay-explicit.example"
+
+	selected := SelectPriority([]RelayState{
+		bootstrapRelayState(relayURL),
+	}, RouteState{
+		ExplicitRelayURLs: []string{relayURL, relayURL},
+	})
+
+	if len(selected) != 1 || selected[0] != relayURL {
+		t.Fatalf("SelectPriority() = %v, want one explicit relay %q", selected, relayURL)
+	}
+}
+
 // TestMOLSSelectPriorityMaxActiveRelaysLimitsAutoPool ensures that
 // MaxActiveRelays caps the auto pool (but not explicit relays).
 func TestMOLSSelectPriorityMaxActiveRelaysLimitsAutoPool(t *testing.T) {
