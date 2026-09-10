@@ -446,7 +446,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.overlay != nil && s.overlay.Handles(capability) {
-		s.overlay.HandleConnect(w, r, capability)
+		s.overlay.HandleConnect(w, r, capability, clientIP)
 		return
 	}
 

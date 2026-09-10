@@ -52,10 +52,13 @@ short-lived and bound to the ingress lease, ingress destination, and selected
 gateway. It cannot mutate, renew, or delete the lease. The ingress lease bearer
 token is never sent to the gateway.
 
-The gateway validates the capability before reserving overlay capacity or
-dialing. The capability carries the signed endpoint evidence required to reach
-the ingress, so execution does not require the gateway and ingress discovery
-catalogs to have converged. The ingress remains the final authority: it verifies
+The gateway applies a source-IP request budget before validating the capability,
+then reserves both per-source and global connection capacity before dialing.
+Signatures establish identity, not admission: caller-created ingress identities
+must share the source's budget. The capability carries the signed endpoint
+evidence required to reach the ingress, so execution does not require the gateway
+and ingress discovery catalogs to have converged. The ingress remains the final
+authority: it verifies
 the authenticated overlay peer and capability before offering the connection to
 the lease's reverse queue.
 

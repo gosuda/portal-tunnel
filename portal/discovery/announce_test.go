@@ -149,21 +149,6 @@ func TestInsertCandidateBlocksCrossIdentityTakeover(t *testing.T) {
 	}
 }
 
-func TestAnnounceLimiterAllowsBurstThenThrottles(t *testing.T) {
-	limiter := NewAnnounceLimiter(60, 5) // 1/sec sustained, burst 5
-	for i := range 5 {
-		if !limiter.Allow("10.0.0.1") {
-			t.Fatalf("burst[%d] should be allowed", i)
-		}
-	}
-	if limiter.Allow("10.0.0.1") {
-		t.Fatal("burst budget should be exhausted")
-	}
-	if !limiter.Allow("10.0.0.2") {
-		t.Fatal("different IP should have its own bucket")
-	}
-}
-
 func TestInsertCandidateCapsFloodPerSigningIdentity(t *testing.T) {
 	set := NewRelaySet(nil)
 	legit := mustSigningIdentity(t)

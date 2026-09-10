@@ -345,6 +345,11 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
   Overlay gateways validate the ingress-signed delegated capability before
   dialing IVNP; the ingress then verifies the authenticated gateway peer and
   lease instance before admitting the stream.
+- Overlay gateway requests are limited per source IP to 120/minute with a burst
+  of 16, before signature verification. At most 16 pending or bridged connections
+  per source share the gateway's 128 outbound slots. Exceeding either budget
+  returns HTTP 429. Source IP follows the configured trusted-proxy policy;
+  callers behind the same NAT share a budget.
 - After claim, relay writes `0x02` before switching the session into tenant TLS passthrough.
 - After hijack, the connection becomes a broker-managed reverse session.
 

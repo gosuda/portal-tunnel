@@ -26,19 +26,23 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
-	capabilityPrefix  = "ov1"
-	streamPort        = "4017"
-	capabilityLimit   = 16 << 10
-	connectionLimit   = 128
-	gatewayRetryDelay = 30 * time.Second
-	minimumGatewayTTL = 30 * time.Second
-	accepted          = byte(1)
-	capacity          = byte(2)
+	capabilityPrefix        = "ov1"
+	streamPort              = "4017"
+	capabilityLimit         = 16 << 10
+	connectionLimit         = 128
+	sourceConnectionLimit   = 16
+	sourceRequestsPerMinute = 120
+	sourceRequestBurst      = 16
+	gatewayRetryDelay       = 30 * time.Second
+	minimumGatewayTTL       = 30 * time.Second
+	accepted                = byte(1)
+	capacity                = byte(2)
 )
 
 type Config struct {
@@ -57,14 +61,17 @@ var ErrLeaseUnavailable = errors.New("overlay ingress lease is unavailable")
 type Runtime struct {
 	config Config
 
-	ctx      context.Context
-	node     *ivnp.Node
-	endpoint ivnp.DestinationEndpoint
-	listener net.Listener
-	ready    atomic.Bool
-	close    sync.Once
-	inbound  chan struct{}
-	outbound chan struct{}
+	ctx           context.Context
+	node          *ivnp.Node
+	endpoint      ivnp.DestinationEndpoint
+	listener      net.Listener
+	ready         atomic.Bool
+	close         sync.Once
+	inbound       chan struct{}
+	sourceLimiter *policy.SourceLimiter
+	admissionMu   sync.Mutex
+	outbound      int
+	activeSources map[string]int
 
 	assignmentMu sync.Mutex
 	assignments  map[string]string
@@ -73,15 +80,17 @@ type Runtime struct {
 
 func New(config Config) (*Runtime, error) {
 	config.ConfigPath = strings.TrimSpace(config.ConfigPath)
-	if config.ConfigPath == "" || config.Authority == nil || config.Descriptors == nil || config.SelfDescriptor == nil || config.OfferReverse == nil || config.Bridge == nil {
+	missingCallbacks := config.Descriptors == nil || config.SelfDescriptor == nil || config.OfferReverse == nil || config.Bridge == nil
+	if config.ConfigPath == "" || config.Authority == nil || missingCallbacks {
 		return nil, errors.New("overlay runtime configuration is incomplete")
 	}
 	return &Runtime{
-		config:      config,
-		inbound:     make(chan struct{}, connectionLimit),
-		outbound:    make(chan struct{}, connectionLimit),
-		assignments: make(map[string]string),
-		failures:    make(map[string]map[string]time.Time),
+		config:        config,
+		inbound:       make(chan struct{}, connectionLimit),
+		sourceLimiter: policy.NewSourceLimiter(sourceRequestsPerMinute, sourceRequestBurst),
+		activeSources: make(map[string]int),
+		assignments:   make(map[string]string),
+		failures:      make(map[string]map[string]time.Time),
 	}, nil
 }
 
@@ -365,9 +374,15 @@ func endpointOrigin(rawURL string) string {
 	return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
 }
 
-func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, capability string) {
+func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, capability, clientIP string) {
 	if r == nil || !r.ready.Load() {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay is unavailable")
+		return
+	}
+	// The server resolves clientIP using its trusted-proxy policy. Caller-chosen
+	// signing keys and lease IDs must not create fresh admission budgets.
+	if !r.sourceLimiter.Allow(clientIP) {
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay request rate exceeded")
 		return
 	}
 	claims, err := verifyCapability(capability, time.Now().UTC())
@@ -375,13 +390,29 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "reverse capability is invalid")
 		return
 	}
-	select {
-	case r.outbound <- struct{}{}:
-		defer func() { <-r.outbound }()
-	default:
+	r.admissionMu.Lock()
+	if r.activeSources[clientIP] >= sourceConnectionLimit {
+		r.admissionMu.Unlock()
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay source capacity exhausted")
+		return
+	}
+	if r.outbound >= connectionLimit {
+		r.admissionMu.Unlock()
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay capacity exhausted")
 		return
 	}
+	r.outbound++
+	r.activeSources[clientIP]++
+	r.admissionMu.Unlock()
+	defer func() {
+		r.admissionMu.Lock()
+		r.outbound--
+		r.activeSources[clientIP]--
+		if r.activeSources[clientIP] == 0 {
+			delete(r.activeSources, clientIP)
+		}
+		r.admissionMu.Unlock()
+	}()
 
 	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
 	upstream, err := r.dial(ctx, claims.Ingress.IVNPDestination)
@@ -577,7 +608,9 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 	claims.LeaseID = strings.TrimSpace(claims.LeaseID)
 	claims.GatewayAddress = strings.TrimSpace(claims.GatewayAddress)
 	claims.GatewayDestination, err = utils.NormalizeIVNPDestination(claims.GatewayDestination)
-	if err != nil || claims.Version != 1 || claims.LeaseID == "" || claims.GatewayAddress == "" || !claims.ExpiresAt.After(now) || claims.ExpiresAt.After(verifiedIngress.ExpiresAt) {
+	incomplete := claims.Version != 1 || claims.LeaseID == "" || claims.GatewayAddress == ""
+	invalidExpiry := !claims.ExpiresAt.After(now) || claims.ExpiresAt.After(verifiedIngress.ExpiresAt)
+	if err != nil || incomplete || invalidExpiry {
 		return capabilityClaims{}, errors.New("overlay capability is expired or incomplete")
 	}
 	claims.LeaseIdentity = leaseIdentity

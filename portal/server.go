@@ -197,7 +197,7 @@ type Server struct {
 	quicBackhaul     *quic.Listener
 
 	relaySet        *discovery.RelaySet
-	announceLimiter *discovery.AnnounceLimiter
+	announceLimiter *policy.SourceLimiter
 	registry        *leaseRegistry
 	overlay         *overlay.Runtime
 }
@@ -236,7 +236,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		authority:       relayAuthority,
 		registry:        registry,
 		relaySet:        relaySet,
-		announceLimiter: discovery.NewAnnounceLimiter(0, 0),
+		announceLimiter: policy.NewSourceLimiter(30, 60),
 	}
 	server.registry.proxy = &server.proxy
 	if cfg.IVNPConfigPath != "" {
@@ -244,12 +244,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			ConfigPath: cfg.IVNPConfigPath,
 			Authority:  relayAuthority,
 			Descriptors: func() []types.RelayDescriptor {
-				states := server.relaySet.ConfirmedRelays()
-				descriptors := make([]types.RelayDescriptor, 0, len(states))
-				for _, state := range states {
-					descriptors = append(descriptors, state.Descriptor)
-				}
-				return descriptors
+				return server.relaySet.Descriptors(types.RelayDescriptor{})
 			},
 			SelfDescriptor: server.newSelfDescriptor,
 			OfferReverse: func(identityKey, leaseID string, conn net.Conn, ready func() error) error {
