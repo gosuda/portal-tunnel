@@ -56,7 +56,7 @@ func (o *testReverseOverlay) IssueEndpoint(types.Identity, string, time.Time, st
 
 func (o *testReverseOverlay) ForgetLease(string) {}
 
-func TestIssueReverseEndpointHonorsMode(t *testing.T) {
+func TestIssueReverseEndpointHonorsOverlayPreference(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t)
@@ -66,27 +66,44 @@ func TestIssueReverseEndpointHonorsMode(t *testing.T) {
 		URL:        "https://gateway.example/sdk/connect",
 		Capability: "overlay-capability",
 		ExpiresAt:  expiresAt,
+		Overlay:    true,
 	}
 	overlay := &testReverseOverlay{endpoint: overlayEndpoint, ok: true}
 	registry.reverseOverlay = overlay
 
-	direct, err := registry.issueReverseEndpoint(leaseIdentity, "lease_direct", expiresAt, types.ReverseModeDirect, "")
+	direct, err := registry.issueReverseEndpoint(leaseIdentity, "lease_direct", expiresAt, false, "")
 	if err != nil || direct.URL != registry.reverseURL || overlay.calls != 0 {
 		t.Fatalf("direct endpoint = %#v, calls = %d, error = %v", direct, overlay.calls, err)
 	}
 
-	automatic, err := registry.issueReverseEndpoint(leaseIdentity, "lease_auto", expiresAt, types.ReverseModeAuto, "")
+	automatic, err := registry.issueReverseEndpoint(leaseIdentity, "lease_overlay", expiresAt, true, "")
 	if err != nil || automatic != overlayEndpoint || overlay.calls != 1 {
-		t.Fatalf("auto endpoint = %#v, calls = %d, error = %v", automatic, overlay.calls, err)
+		t.Fatalf("preferred overlay endpoint = %#v, calls = %d, error = %v", automatic, overlay.calls, err)
 	}
 
 	overlay.ok = false
-	automatic, err = registry.issueReverseEndpoint(leaseIdentity, "lease_fallback", expiresAt, types.ReverseModeAuto, "")
+	automatic, err = registry.issueReverseEndpoint(leaseIdentity, "lease_fallback", expiresAt, true, "")
 	if err != nil || automatic.URL != registry.reverseURL {
-		t.Fatalf("auto fallback endpoint = %#v, error = %v", automatic, err)
+		t.Fatalf("overlay fallback endpoint = %#v, error = %v", automatic, err)
 	}
-	if _, err := registry.issueReverseEndpoint(leaseIdentity, "lease_overlay", expiresAt, types.ReverseModeOverlay, ""); err == nil {
-		t.Fatal("required overlay endpoint error = nil")
+}
+
+func TestRegisterOverlayPreferenceFallsBackToDirect(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+	record, registered, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "overlay-fallback"),
+		Overlay:  true,
+	}, "203.0.113.10", "")
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if !record.Overlay {
+		t.Fatal("Register() did not preserve overlay preference")
+	}
+	if registered.ReverseEndpoint.Overlay || registered.ReverseEndpoint.URL != registry.reverseURL {
+		t.Fatalf("Register() reverse endpoint = %#v, want direct fallback", registered.ReverseEndpoint)
 	}
 }
 
@@ -104,8 +121,8 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if record.Hostname != "demo.example.com" || record.HostnameHash != "" || len(record.ECHConfigList) != 0 || record.ECHDNSHostname != "" {
 		t.Fatalf("Register() plaintext SNI record = %#v, want public hostname without ECH material", record)
 	}
-	if record.ReverseMode != types.ReverseModeAuto {
-		t.Fatalf("Register() reverse mode = %q, want auto", record.ReverseMode)
+	if record.Overlay {
+		t.Fatal("Register() enabled overlay by default")
 	}
 	if registered.ReverseEndpoint.URL != "https://example.com/sdk/connect" || registered.ReverseEndpoint.Capability == "" {
 		t.Fatalf("Register() reverse endpoint = %#v", registered.ReverseEndpoint)

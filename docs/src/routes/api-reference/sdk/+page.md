@@ -70,7 +70,7 @@ which are configured locally by the tunnel process.
 |-------|------|----------|-------|
 | `identity` | `Identity` | yes | `name` and `address` |
 | `metadata` | `LeaseMetadata` | no | public lease metadata |
-| `reverse_mode` | `string` | no | `auto` (default), `direct`, or `overlay` |
+| `overlay` | `boolean` | no | prefer IVNP overlay transport when available; defaults to `false` |
 | `ttl` | `number` | no | requested TTL in seconds |
 | `udp_enabled` | `boolean` | no | request UDP transport |
 | `tcp_enabled` | `boolean` | no | request dedicated TCP port |
@@ -116,16 +116,15 @@ is derived from the registered identity and relay root domain.
 | `url` | `string` | HTTPS `/sdk/connect` endpoint on the ingress relay or its selected gateway |
 | `capability` | `string` | opaque, reverse-only, and bound to this lease instance |
 | `expires_at` | `string` | never later than the owning lease expiry |
-| `mode` | `string` | selected transport: `direct` or `overlay` |
+| `overlay` | `boolean` | `true` when the selected endpoint uses the overlay |
 
 The reverse capability is not accepted by renew, unregister, signer, or
 datagram endpoints. The lease `access_token` is not accepted by the reverse
 endpoint.
 
-The relay preserves `reverse_mode` for the lease lifetime. `auto` prefers an
-available overlay gateway and falls back to the ingress relay's direct
-endpoint. `direct` skips overlay selection. `overlay` returns an error when no
-overlay endpoint can be issued, including during renewal or endpoint rotation.
+The relay preserves the `overlay` preference for the lease lifetime. By
+default it issues the ingress relay's direct endpoint. When `overlay` is true,
+it prefers an available overlay gateway and falls back to the direct endpoint.
 
 ## Renew And Unregister
 

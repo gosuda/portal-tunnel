@@ -118,12 +118,12 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	}
 
 	registerReq := types.RegisterChallengeRequest{
-		Identity:    l.identity,
-		Metadata:    l.metadataSnapshot(),
-		ReverseMode: l.reverseMode,
-		TTL:         int(ttl / time.Second),
-		UDPEnabled:  udpEnabled,
-		TCPEnabled:  tcpEnabled,
+		Identity:   l.identity,
+		Metadata:   l.metadataSnapshot(),
+		Overlay:    l.overlay,
+		TTL:        int(ttl / time.Second),
+		UDPEnabled: udpEnabled,
+		TCPEnabled: tcpEnabled,
 	}
 	if l.echEnabled {
 		registerReq.RouteHostname = routeHostname
@@ -168,7 +168,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, "", "", err
 	}
-	if err := l.validateReverseEndpointMode(reverseEndpoint); err != nil {
+	if err := l.validateReverseEndpointTransport(reverseEndpoint); err != nil {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, "", "", err
 	}
@@ -186,7 +186,7 @@ func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, 
 	if err != nil {
 		return types.RenewResponse{}, err
 	}
-	if err := l.validateReverseEndpointMode(reverseEndpoint); err != nil {
+	if err := l.validateReverseEndpointTransport(reverseEndpoint); err != nil {
 		return types.RenewResponse{}, err
 	}
 	resp.ReverseEndpoint = reverseEndpoint
@@ -203,30 +203,15 @@ func (l *listener) requestReverseEndpoint(ctx context.Context, accessToken, fail
 	if err != nil {
 		return types.ReverseEndpoint{}, err
 	}
-	if err := l.validateReverseEndpointMode(endpoint); err != nil {
+	if err := l.validateReverseEndpointTransport(endpoint); err != nil {
 		return types.ReverseEndpoint{}, err
 	}
 	return endpoint, nil
 }
 
-func (l *listener) validateReverseEndpointMode(endpoint types.ReverseEndpoint) error {
-	mode := endpoint.Mode
-	if mode == "" {
-		if l.isAlternateReverseEndpoint(endpoint.URL) {
-			mode = types.ReverseModeOverlay
-		} else {
-			mode = types.ReverseModeDirect
-		}
-	}
-	switch l.reverseMode {
-	case types.ReverseModeDirect:
-		if mode != types.ReverseModeDirect {
-			return errors.New("relay returned overlay endpoint for direct reverse mode")
-		}
-	case types.ReverseModeOverlay:
-		if mode != types.ReverseModeOverlay {
-			return errors.New("relay returned direct endpoint for overlay reverse mode")
-		}
+func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoint) error {
+	if !l.overlay && (endpoint.Overlay || l.isAlternateReverseEndpoint(endpoint.URL)) {
+		return errors.New("relay returned an overlay endpoint when overlay is disabled")
 	}
 	return nil
 }
@@ -234,7 +219,6 @@ func (l *listener) validateReverseEndpointMode(endpoint types.ReverseEndpoint) e
 func validateReverseEndpoint(endpoint types.ReverseEndpoint, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {
 	endpoint.URL = strings.TrimSpace(endpoint.URL)
 	endpoint.Capability = strings.TrimSpace(endpoint.Capability)
-	endpoint.Mode = types.ReverseMode(strings.ToLower(strings.TrimSpace(string(endpoint.Mode))))
 	if endpoint.URL == "" || endpoint.Capability == "" {
 		return types.ReverseEndpoint{}, errors.New("relay returned incomplete reverse endpoint")
 	}
@@ -247,9 +231,6 @@ func validateReverseEndpoint(endpoint types.ReverseEndpoint, leaseExpiresAt time
 	}
 	if !endpoint.ExpiresAt.After(time.Now().UTC()) || endpoint.ExpiresAt.After(leaseExpiresAt) {
 		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint expiry")
-	}
-	if endpoint.Mode != "" && endpoint.Mode != types.ReverseModeDirect && endpoint.Mode != types.ReverseModeOverlay {
-		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint mode")
 	}
 	endpoint.URL = parsed.String()
 	return endpoint, nil

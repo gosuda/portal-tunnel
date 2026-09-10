@@ -29,15 +29,15 @@ import (
 )
 
 type listenerConfig struct {
-	Identity    types.Identity
-	ReverseMode types.ReverseMode
-	UDPEnabled  bool
-	TCPEnabled  bool
-	ECH         bool
-	BanMITM     bool
-	Metadata    func() types.LeaseMetadata
-	RetryCount  int
-	relaySet    *discovery.RelaySet
+	Identity   types.Identity
+	Overlay    bool
+	UDPEnabled bool
+	TCPEnabled bool
+	ECH        bool
+	BanMITM    bool
+	Metadata   func() types.LeaseMetadata
+	RetryCount int
+	relaySet   *discovery.RelaySet
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -98,7 +98,7 @@ type listener struct {
 	route          discovery.Route
 	metadata       func() types.LeaseMetadata
 	identity       types.Identity
-	reverseMode    types.ReverseMode
+	overlay        bool
 	relaySet       *discovery.RelaySet
 	udpEnabled     bool
 	tcpEnabled     bool
@@ -150,7 +150,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		route:          discovery.Route{RelayURL: entryRelayURL, Explicit: route.Explicit},
 		metadata:       cfg.Metadata,
 		identity:       cfg.Identity.Copy(),
-		reverseMode:    cfg.ReverseMode,
+		overlay:        cfg.Overlay,
 		relaySet:       cfg.relaySet,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,

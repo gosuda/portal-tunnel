@@ -52,7 +52,7 @@ func main() {
 type exposeFlags struct {
 	relayCSV             string
 	discovery            bool
-	reverseMode          string
+	overlay              bool
 	banMITM              bool
 	identityPath         string
 	identityJSON         string
@@ -82,7 +82,7 @@ type exposeFlags struct {
 func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
-	utils.StringFlagEnv(fs, &flags.reverseMode, "reverse-mode", string(types.ReverseModeAuto), "Reverse transport mode: auto, direct, or overlay", "REVERSE_MODE")
+	utils.BoolFlagEnv(fs, &flags.overlay, "overlay", false, "Prefer IVNP overlay transport when available", "OVERLAY_ENABLED")
 	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &flags.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
@@ -229,7 +229,7 @@ func runExposeCommand(args []string) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(flags.relayCSV),
 		Discovery:       flags.discovery,
-		ReverseMode:     types.ReverseMode(flags.reverseMode),
+		Overlay:         flags.overlay,
 		Identity:        types.Identity{Name: flags.name},
 		IdentityPath:    flags.identityPath,
 		IdentityJSON:    flags.identityJSON,

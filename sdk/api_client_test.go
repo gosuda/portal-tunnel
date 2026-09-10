@@ -33,9 +33,8 @@ func TestValidateReverseEndpoint(t *testing.T) {
 	}
 
 	for name, invalid := range map[string]types.ReverseEndpoint{
-		"wrong path":   {URL: "https://relay.example/sdk/renew", Capability: "cap", ExpiresAt: leaseExpiry},
-		"lease bound":  {URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry.Add(time.Second)},
-		"invalid mode": {URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry, Mode: types.ReverseModeAuto},
+		"wrong path":  {URL: "https://relay.example/sdk/renew", Capability: "cap", ExpiresAt: leaseExpiry},
+		"lease bound": {URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry.Add(time.Second)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -46,35 +45,33 @@ func TestValidateReverseEndpoint(t *testing.T) {
 	}
 }
 
-func TestValidateReverseEndpointMode(t *testing.T) {
+func TestValidateReverseEndpointTransport(t *testing.T) {
 	t.Parallel()
 	relayURL, err := url.Parse("https://relay.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	direct := types.ReverseEndpoint{URL: "https://relay.example/sdk/connect", Mode: types.ReverseModeDirect}
-	overlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect", Mode: types.ReverseModeOverlay}
-	legacyDirect := types.ReverseEndpoint{URL: "https://relay.example/sdk/connect"}
+	direct := types.ReverseEndpoint{URL: "https://relay.example/sdk/connect"}
+	overlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect", Overlay: true}
+	legacyOverlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect"}
 
 	for name, test := range map[string]struct {
-		mode     types.ReverseMode
+		enabled  bool
 		endpoint types.ReverseEndpoint
 		wantErr  bool
 	}{
-		"auto direct":     {mode: types.ReverseModeAuto, endpoint: direct},
-		"auto overlay":    {mode: types.ReverseModeAuto, endpoint: overlay},
-		"direct direct":   {mode: types.ReverseModeDirect, endpoint: direct},
-		"direct overlay":  {mode: types.ReverseModeDirect, endpoint: overlay, wantErr: true},
-		"overlay overlay": {mode: types.ReverseModeOverlay, endpoint: overlay},
-		"overlay direct":  {mode: types.ReverseModeOverlay, endpoint: direct, wantErr: true},
-		"legacy direct":   {mode: types.ReverseModeDirect, endpoint: legacyDirect},
+		"direct":           {endpoint: direct},
+		"overlay disabled": {endpoint: overlay, wantErr: true},
+		"overlay enabled":  {enabled: true, endpoint: overlay},
+		"fallback direct":  {enabled: true, endpoint: direct},
+		"legacy overlay":   {endpoint: legacyOverlay, wantErr: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			listener := &listener{relayURL: relayURL, reverseMode: test.mode}
-			err := listener.validateReverseEndpointMode(test.endpoint)
+			listener := &listener{relayURL: relayURL, overlay: test.enabled}
+			err := listener.validateReverseEndpointTransport(test.endpoint)
 			if (err != nil) != test.wantErr {
-				t.Fatalf("validateReverseEndpointMode() error = %v, wantErr %v", err, test.wantErr)
+				t.Fatalf("validateReverseEndpointTransport() error = %v, wantErr %v", err, test.wantErr)
 			}
 		})
 	}

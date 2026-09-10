@@ -65,7 +65,7 @@ type RegisterRequest struct {
 type RegisterChallengeRequest struct {
 	Identity      Identity      `json:"identity"`
 	Metadata      LeaseMetadata `json:"metadata"`
-	ReverseMode   ReverseMode   `json:"reverse_mode,omitempty"`
+	Overlay       bool          `json:"overlay,omitempty"`
 	TTL           int           `json:"ttl,omitempty"`
 	UDPEnabled    bool          `json:"udp_enabled,omitempty"`
 	TCPEnabled    bool          `json:"tcp_enabled,omitempty"`
@@ -73,14 +73,6 @@ type RegisterChallengeRequest struct {
 	HostnameHash  string        `json:"hostname_hash,omitempty"`
 	ECHConfigList []byte        `json:"ech_config_list,omitempty"`
 }
-
-type ReverseMode string
-
-const (
-	ReverseModeAuto    ReverseMode = "auto"
-	ReverseModeDirect  ReverseMode = "direct"
-	ReverseModeOverlay ReverseMode = "overlay"
-)
 
 type RegisterChallengeResponse struct {
 	ChallengeID string    `json:"challenge_id"`
@@ -91,10 +83,10 @@ type RegisterChallengeResponse struct {
 // ReverseEndpoint authorizes one class of operation: opening reverse streams.
 // Capability is opaque to SDK callers and cannot mutate the owning lease.
 type ReverseEndpoint struct {
-	URL        string      `json:"url"`
-	Capability string      `json:"capability"`
-	ExpiresAt  time.Time   `json:"expires_at"`
-	Mode       ReverseMode `json:"mode,omitempty"`
+	URL        string    `json:"url"`
+	Capability string    `json:"capability"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Overlay    bool      `json:"overlay,omitempty"`
 }
 
 type RegisterResponse struct {

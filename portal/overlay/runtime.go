@@ -293,7 +293,7 @@ func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, ex
 		URL:        utils.ResolveAPIURL(gatewayURL, types.PathSDKConnect).String(),
 		Capability: capability,
 		ExpiresAt:  capabilityExpiry,
-		Mode:       types.ReverseModeOverlay,
+		Overlay:    true,
 	}, true, nil
 }
 

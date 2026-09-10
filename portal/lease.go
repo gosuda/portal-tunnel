@@ -169,10 +169,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
 	}
-	reverseMode, err := utils.NormalizeReverseMode(req.ReverseMode)
-	if err != nil {
-		return nil, types.RegisterResponse{}, err
-	}
 	if r.policy.IPFilter().IsIPBanned(clientIP) {
 		return nil, types.RegisterResponse{}, errIPBanned
 	}
@@ -257,7 +253,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		ECHConfigList:  echConfigList,
 		ECHDNSHostname: echDNSHostname,
 		Metadata:       req.Metadata.Copy(),
-		ReverseMode:    reverseMode,
+		Overlay:        req.Overlay,
 		ExpiresAt:      expiresAt,
 		FirstSeenAt:    issuedAt,
 		LastSeenAt:     issuedAt,
@@ -376,7 +372,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		}
 		replaced.Close()
 	}
-	reverseEndpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, reverseMode, "")
+	reverseEndpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, req.Overlay, "")
 	if err != nil {
 		r.mu.Lock()
 		for i, current := range r.records {
@@ -488,7 +484,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	r.policy.IPFilter().RegisterIdentityIP(leaseKey, clientIP)
 	recordIdentity := record.Identity
 	leaseID := record.id
-	reverseMode := record.ReverseMode
+	overlay := record.Overlay
 	r.mu.Unlock()
 
 	nextAccessToken, _, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, recordIdentity, leaseID, ttl)
@@ -496,7 +492,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 
-	reverseEndpoint, err := r.issueReverseEndpoint(recordIdentity, leaseID, expiresAt, reverseMode, "")
+	reverseEndpoint, err := r.issueReverseEndpoint(recordIdentity, leaseID, expiresAt, overlay, "")
 	if err != nil {
 		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
@@ -518,24 +514,15 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}, nil
 }
 
-func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, mode types.ReverseMode, failedURL string) (types.ReverseEndpoint, error) {
-	if mode != types.ReverseModeDirect && r.reverseOverlay != nil {
+func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, overlay bool, failedURL string) (types.ReverseEndpoint, error) {
+	if overlay && r.reverseOverlay != nil {
 		endpoint, ok, err := r.reverseOverlay.IssueEndpoint(leaseIdentity, leaseID, expiresAt, failedURL)
 		if err == nil && ok {
 			return endpoint, nil
 		}
-		if mode == types.ReverseModeOverlay {
-			if err != nil {
-				return types.ReverseEndpoint{}, fmt.Errorf("issue overlay reverse endpoint: %w", err)
-			}
-			return types.ReverseEndpoint{}, errors.New("overlay reverse transport is unavailable")
-		}
 		if err != nil {
 			log.Warn().Err(err).Str("lease", leaseIdentity.Key()).Msg("relay overlay endpoint unavailable; using direct reverse transport")
 		}
-	}
-	if mode == types.ReverseModeOverlay {
-		return types.ReverseEndpoint{}, errors.New("overlay reverse transport is unavailable")
 	}
 	capability, claims, err := auth.IssueReverseCapability(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, expiresAt)
 	if err != nil {
@@ -545,7 +532,6 @@ func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, lease
 		URL:        r.reverseURL,
 		Capability: capability,
 		ExpiresAt:  claims.Expiry.Time().UTC(),
-		Mode:       types.ReverseModeDirect,
 	}, nil
 }
 
@@ -567,9 +553,9 @@ func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest)
 	leaseIdentity := record.Identity
 	leaseID := record.id
 	expiresAt := record.ExpiresAt
-	reverseMode := record.ReverseMode
+	overlay := record.Overlay
 	r.mu.RUnlock()
-	endpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, reverseMode, strings.TrimSpace(req.FailedURL))
+	endpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, overlay, strings.TrimSpace(req.FailedURL))
 	if err != nil {
 		return types.ReverseEndpoint{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
@@ -671,11 +657,6 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	if r == nil {
 		return types.RegisterChallengeResponse{}, errFeatureUnavailable
 	}
-	reverseMode, err := utils.NormalizeReverseMode(req.ReverseMode)
-	if err != nil {
-		return types.RegisterChallengeResponse{}, err
-	}
-	req.ReverseMode = reverseMode
 	if len(req.ECHConfigList) > 0 {
 		echConfigList, err := keyless.NormalizeEncryptedClientHelloConfigList(req.ECHConfigList)
 		if err != nil {

@@ -108,8 +108,8 @@ Portal prints a public HTTPS URL for your local app instantly. More examples:
 # Custom name and relay
 portal expose 3000 --name myapp --relays https://portal.example.com --discovery=false
 
-# Require IVNP overlay transport (no direct fallback)
-portal expose 3000 --reverse-mode overlay
+# Prefer IVNP overlay transport when available
+portal expose 3000 --overlay
 
 # Mount frontend and API behind one URL
 portal expose --name myapp \

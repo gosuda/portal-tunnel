@@ -150,7 +150,7 @@ Common `portal expose` flags:
 --relays             Additional relay API URLs, comma-separated
 --discovery          Include registry relays and relay discovery expansion
 --max-active-relays  Maximum auto-selected relays; explicit relays are always included
---reverse-mode       Reverse transport policy: auto, direct, or overlay
+--overlay            Prefer IVNP overlay transport when available
 --ban-mitm           Ban relay when the MITM self-probe detects termination
 --ech                Enable ECH hostname privacy for TLS stream tunnels (disabled by default)
 --identity-path      Identity JSON file path; created automatically when missing
@@ -191,7 +191,7 @@ relays, discovery, and max active relays. After creation, routed HTTP paths,
 route-level x402 amounts, payment network, and discovery mode are read-only in
 the Settings pane. Edit `http_routes`, `x402_pay_to`, `x402_testnet`,
 `x402_network`, `x402_asset`, `x402_endpoints`, `x402_facilitator_token`,
-`discovery`, or `reverse_mode` in TOML, then restart the agent or tunnel to
+`discovery`, or `overlay` in TOML, then restart the agent or tunnel to
 change them.
 
 ## Constraints

@@ -9,8 +9,9 @@ ordered list of intermediate relays. Explicit relay URLs, transport eligibility,
 admission, expiry, health, and load remain Portal responsibilities.
 
 The former Portal-owned multi-hop route model and WireGuard relay mesh have
-been removed. When configured, one relay overlay runtime carries reverse TCP
-streams through an IVNP gateway; direct reverse transport remains the fallback.
+been removed. Direct reverse transport is the tunnel default. When a tunnel
+enables overlay and the relay has an available IVNP gateway, one relay overlay
+runtime carries its reverse TCP streams; direct transport remains the fallback.
 The SDK consumes the same generic reverse endpoint in both cases. Discovery
 routes and the lease lifecycle contain no overlay topology.
 
