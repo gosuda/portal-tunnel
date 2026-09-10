@@ -3,9 +3,13 @@ package keyless
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -55,7 +59,7 @@ func BuildClientTLSConfig(relayURL, hostname string, echKeys []tls.EncryptedClie
 
 	tlsConfig, err := keylesstls.NewServerTLSConfig(keylesstls.ServerTLSConfig{
 		CertPEM:                  certPEM,
-		Signer:                   remoteSigner,
+		Signer:                   newVerifyingSigner(remoteSigner),
 		NextProtos:               []string{"http/1.1"},
 		MinVersion:               MinTLSVersion(len(echKeys) > 0),
 		EncryptedClientHelloKeys: echKeys,
@@ -88,4 +92,52 @@ func VerifyCertificateHostname(certPEM []byte, hostname string) error {
 		return err
 	}
 	return leaf.VerifyHostname(hostname)
+}
+
+// verifyingSigner checks every remote signature against the public key pinned
+// from the relay's served certificate before handing it to crypto/tls. A
+// terminating proxy that presents one keypair while the relay signer holds
+// another otherwise surfaces only as an opaque TLS "bad signature" alert.
+type verifyingSigner struct {
+	inner *keylesstls.RemoteSigner
+}
+
+func newVerifyingSigner(inner *keylesstls.RemoteSigner) *verifyingSigner {
+	return &verifyingSigner{inner: inner}
+}
+
+func (v *verifyingSigner) Public() crypto.PublicKey { return v.inner.Public() }
+
+func (v *verifyingSigner) Close() error { return v.inner.Close() }
+
+func (v *verifyingSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	signature, err := v.inner.Sign(rand, digest, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifySignature(v.inner.Public(), digest, opts, signature); err != nil {
+		return nil, fmt.Errorf("relay signature does not match the pinned certificate (terminating proxy and relay signer keypairs differ): %w", err)
+	}
+	return signature, nil
+}
+
+func verifySignature(publicKey crypto.PublicKey, digest []byte, opts crypto.SignerOpts, signature []byte) error {
+	switch key := publicKey.(type) {
+	case *rsa.PublicKey:
+		if pss, ok := opts.(*rsa.PSSOptions); ok {
+			saltLength := pss.SaltLength
+			if saltLength <= 0 {
+				saltLength = rsa.PSSSaltLengthEqualsHash
+			}
+			return rsa.VerifyPSS(key, opts.HashFunc(), digest, signature, &rsa.PSSOptions{SaltLength: saltLength, Hash: opts.HashFunc()})
+		}
+		return rsa.VerifyPKCS1v15(key, opts.HashFunc(), digest, signature)
+	case *ecdsa.PublicKey:
+		if !ecdsa.VerifyASN1(key, digest, signature) {
+			return errors.New("ecdsa signature verification failed")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported pinned key type %T", publicKey)
+	}
 }
