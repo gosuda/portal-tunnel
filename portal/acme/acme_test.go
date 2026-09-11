@@ -29,7 +29,7 @@ import (
 
 	"github.com/miekg/dns"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
