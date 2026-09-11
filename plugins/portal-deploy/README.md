@@ -1,96 +1,81 @@
 # Portal Deploy plugin
 
-`portal-deploy` is a skills-only plugin for Codex, Claude Code, and Cursor. It teaches an agent to inspect a local app, choose the appropriate Portal tunnel mode, configure explicitly requested x402 paid routes, verify the public endpoint and payment challenge, and hand off the tunnel lifecycle safely.
-
-Portal exposes a service that remains on the local machine. This plugin does not turn Portal into a cloud build or hosting platform.
+`portal-deploy` is a portable, skills-only Agent Plugin for exposing and verifying local apps through Portal. Portal keeps the service on the local machine; this plugin does not turn Portal into a cloud build or hosting platform.
 
 ## Layout
 
-One shared skill, three host manifests. Do not copy `SKILL.md` per host.
+The root `plugin.json` is the single portable identity and metadata contract. Every host discovers the same `skills/` directory.
 
 ```text
 plugins/portal-deploy/
-├── .codex-plugin/plugin.json      # Codex plugin manifest
-├── .claude-plugin/plugin.json     # Claude Code plugin manifest
-├── .cursor-plugin/plugin.json     # Cursor plugin manifest
-├── skills/portal-expose/
-│   ├── SKILL.md                   # Shared Open Agent Skill
-│   ├── agents/openai.yaml         # Codex skill UI metadata
-│   └── references/
-│       ├── portal-cli.md
-│       ├── game-hosting.md
-│       ├── safety-and-verification.md
-│       └── x402.md
-├── skills/portal-relay/
-│   └── SKILL.md                   # Run a public Portal relay
-└── README.md
+|-- plugin.json                         # Agent Plugins v1 manifest
+|-- .codex-plugin/plugin.json           # Codex UI adapter
+|-- assets/logo.svg
+|-- skills/portal-expose/
+|   |-- SKILL.md
+|   |-- agents/openai.yaml              # OpenAI-specific skill UI metadata
+|   `-- references/
+|-- skills/portal-relay/SKILL.md
+`-- README.md
 ```
 
-Repository-root catalogs, each pointing at this same plugin directory:
+Cursor consumes the portable root manifest directly. Claude Code discovers `skills/` from the plugin root, so neither host needs a second per-plugin manifest.
 
-| Host | Catalog | Marketplace name |
-| --- | --- | --- |
-| Codex | `.agents/plugins/marketplace.json` | `portal-tunnel` |
-| Claude Code | `.claude-plugin/marketplace.json` | `portal-tunnel` |
-| Cursor | `.cursor-plugin/marketplace.json` | `portal-tunnel` |
+Two repository catalogs remain because Codex and Claude Code require different catalog locations when installing a plugin from a repository:
 
-Install unit is the plugin `portal-deploy`. Agent invocation units are the skills `portal-expose` and `portal-relay`.
+- `.agents/plugins/marketplace.json` for Codex
+- `.claude-plugin/marketplace.json` for Claude Code
 
-## Local Codex setup
+The Claude catalog contains only the required plugin name and source. Common metadata stays in the portable manifest instead of being copied into catalogs.
 
-From the `portal-tunnel` repository root:
+`AGENTS.md` remains repository development guidance. `llms.txt` remains the generic discovery entry point served by a Portal relay; neither belongs to the plugin package contract.
+
+## Codex
+
+From the repository root:
 
 ```sh
 codex plugin marketplace add .
 codex plugin add portal-deploy@portal-tunnel
 ```
 
-Start a new Codex task and invoke `$portal-expose`, or ask Codex to deploy or share a local app with Portal.
-
-After the repository is on GitHub:
+For the GitHub repository:
 
 ```sh
 codex plugin marketplace add gosuda/portal-tunnel
 codex plugin add portal-deploy@portal-tunnel
 ```
 
-## Local Claude Code setup
+Start a new task and invoke `$portal-expose` or `$portal-relay`.
 
-Validate and load directly during development:
+## Claude Code
+
+Load the plugin directory directly during development:
 
 ```sh
 claude plugin validate ./plugins/portal-deploy --strict
 claude --plugin-dir ./plugins/portal-deploy
 ```
 
-Or install through the repository marketplace:
-
-```sh
-claude plugin marketplace add .
-claude plugin install portal-deploy@portal-tunnel
-```
-
-Run `/reload-plugins` when Claude Code asks for it. Invoke the skill as `/portal-deploy:portal-expose`.
-
-After the repository is on GitHub:
+For persistent repository installation:
 
 ```sh
 claude plugin marketplace add gosuda/portal-tunnel
 claude plugin install portal-deploy@portal-tunnel
 ```
 
-## Local Cursor setup
+Invoke `/portal-deploy:portal-expose` or `/portal-deploy:portal-relay`.
 
-Symlink the plugin for development, then reload the window:
+## Cursor
+
+Cursor supports the root Agent Plugins manifest without a `.cursor-plugin` adapter. Symlink the plugin directory for local development, then reload the window:
 
 ```sh
 mkdir -p ~/.cursor/plugins/local
 ln -s "$(pwd)/plugins/portal-deploy" ~/.cursor/plugins/local/portal-deploy
 ```
 
-Restart Cursor or run **Developer: Reload Window**. The skill appears as `/portal-expose`.
-
-Public listing is a Git repository submitted at [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish). Team marketplaces import the same `.cursor-plugin/marketplace.json`.
+The skills appear as `/portal-expose` and `/portal-relay`.
 
 ## Example prompts
 
@@ -98,9 +83,7 @@ Public listing is a Git repository submitted at [cursor.com/marketplace/publish]
 - `Expose this app with Portal, protect GET /paid with x402, and verify the payment challenge.`
 - `Create a temporary Portal preview for the frontend on port 5173.`
 - `Keep this service available through a persistent Portal agent tunnel.`
-- `Serve this trusted static site through Portal.`
-
-The skill should not trigger for deploying a Portal relay, normal cloud hosting, or publishing the plugin itself.
+- `Run a public Portal relay and verify its health endpoint.`
 
 ## Marketplace review cases
 
@@ -115,7 +98,7 @@ Positive:
 
 Negative:
 
-- Deploy a Portal relay with this plugin.
+- Deploy a Portal relay with the app-exposure skill.
 - Publish this plugin to a marketplace.
 - Host this app on generic cloud hosting.
 
@@ -126,21 +109,12 @@ From the repository root:
 ```sh
 python3 /path/to/skill-creator/scripts/quick_validate.py \
   plugins/portal-deploy/skills/portal-expose
+python3 /path/to/skill-creator/scripts/quick_validate.py \
+  plugins/portal-deploy/skills/portal-relay
 python3 /path/to/plugin-creator/scripts/validate_plugin.py \
   plugins/portal-deploy
 claude plugin validate ./plugins/portal-deploy --strict
 claude plugin validate . --strict
-python3 -c 'import json,pathlib; [
-  json.loads(pathlib.Path(p).read_text())
-  for p in [
-    "plugins/portal-deploy/.codex-plugin/plugin.json",
-    "plugins/portal-deploy/.claude-plugin/plugin.json",
-    "plugins/portal-deploy/.cursor-plugin/plugin.json",
-    ".agents/plugins/marketplace.json",
-    ".claude-plugin/marketplace.json",
-    ".cursor-plugin/marketplace.json",
-  ]
-]'
 ```
 
-No MCP server, hook, background monitor, or credential is bundled. The active Codex, Claude Code, or Cursor host remains responsible for command approvals, sandboxing, and network access.
+No MCP server, hook, background monitor, or credential is bundled. The active host remains responsible for command approvals, sandboxing, and network access.
