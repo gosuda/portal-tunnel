@@ -336,3 +336,77 @@ func TestSelectRelaysIncludesExplicitRelayMissingFromSet(t *testing.T) {
 		t.Fatalf("route.RelayURL = %q, want %q", got, relayURL)
 	}
 }
+
+func TestProtocolMismatchKeepsOlderRelayVisibleWithoutRouting(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-old.example"
+	desc := mustRelayDescriptor(t, relayURL)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion + "-older",
+		Relays:          []types.RelayDescriptor{desc},
+	}, time.Now().UTC()); err == nil {
+		t.Fatal("ApplyRelayDiscoveryResponse() should keep reporting the protocol mismatch")
+	}
+
+	known := set.KnownIncompatibleRelays()
+	if len(known) != 1 || known[0].URL != relayURL || known[0].ProtocolVersion != types.DiscoveryVersion+"-older" {
+		t.Fatalf("KnownIncompatibleRelays() = %+v, want one entry for %q", known, relayURL)
+	}
+	if known[0].LastSeenAt.IsZero() {
+		t.Fatal("KnownIncompatibleRelays() entry should carry LastSeenAt")
+	}
+
+	if servesDescriptor(set, relayURL) {
+		t.Fatal("incompatible relay must not be served as a routable descriptor")
+	}
+	if routesTo(t, set, relayURL) {
+		t.Fatal("incompatible relay must not be selected for routes")
+	}
+	for _, state := range relayStates(set) {
+		if state.Descriptor.APIHTTPSAddr == relayURL && state.Trust == RelayVerified {
+			t.Fatal("incompatible relay must not become a verified descriptor")
+		}
+	}
+}
+
+func TestKnownIncompatibleRelaysExpireAfterRetention(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-old.example"
+	desc := mustRelayDescriptor(t, relayURL)
+	observedAt := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion + "-older",
+		Relays:          []types.RelayDescriptor{desc},
+	}, observedAt); err == nil {
+		t.Fatal("expected protocol mismatch error")
+	}
+	if known := set.knownIncompatibleRelaysAt(observedAt); len(known) != 1 {
+		t.Fatalf("knownIncompatibleRelaysAt(fresh) = %+v, want one entry", known)
+	}
+	if known := set.knownIncompatibleRelaysAt(observedAt.Add(incompatibleRelayRetention + time.Minute)); len(known) != 0 {
+		t.Fatalf("knownIncompatibleRelaysAt(stale) = %+v, want empty", known)
+	}
+}
+
+func TestCompatibleAuthoritativeDiscoveryClearsIncompatibleRelay(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-upgraded.example"
+	desc := mustRelayDescriptor(t, relayURL)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion + "-older",
+		Relays:          []types.RelayDescriptor{desc},
+	}, time.Now().UTC()); err == nil {
+		t.Fatal("expected protocol mismatch error")
+	}
+	if known := set.KnownIncompatibleRelays(); len(known) != 1 {
+		t.Fatalf("KnownIncompatibleRelays() = %+v, want one entry before upgrade", known)
+	}
+
+	mustApplyAuthoritative(t, set, desc)
+	if known := set.KnownIncompatibleRelays(); len(known) != 0 {
+		t.Fatalf("KnownIncompatibleRelays() = %+v, want empty after compatible discovery", known)
+	}
+}

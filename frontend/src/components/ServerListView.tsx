@@ -16,7 +16,7 @@ import { FloatingActionBar } from "@/components/FloatingActionBar";
 import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
-import type { DiscoveryResponse, DomainResponse, RelayDescriptor } from "@/types/api";
+import type { DiscoveryResponse, DomainResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
 import {
   Dialog,
   DialogContent,
@@ -26,7 +26,7 @@ import {
 
 type ListServer = BaseServer | AdminServer;
 
-interface KnownRelay {
+export interface KnownRelay {
   relayURL: string;
   isCurrent: boolean;
 }
@@ -99,6 +99,34 @@ function normalizeKnownRelays(
   });
 
   return knownRelays;
+}
+
+export function mergeIncompatibleRelays(
+  knownRelays: KnownRelay[],
+  incompatible: IncompatibleRelayEntry[] | undefined,
+  currentRelayURL: string
+): KnownRelay[] {
+  if (!incompatible?.length) {
+    return knownRelays;
+  }
+
+  const seen = new Set(knownRelays.map((relay) => relay.relayURL));
+  const merged = [...knownRelays];
+
+  incompatible.forEach((entry) => {
+    const relayURL = normalizeRelayURL(entry.url);
+    if (relayURL === "" || seen.has(relayURL)) {
+      return;
+    }
+
+    seen.add(relayURL);
+    merged.push({
+      relayURL,
+      isCurrent: relayURL === currentRelayURL,
+    });
+  });
+
+  return merged;
 }
 
 function relayReleaseLabel(
@@ -303,8 +331,9 @@ export function ServerListView({
       try {
         const discovery =
           await apiClient.get<DiscoveryResponse>(BROWSER_API_PATHS.discovery);
-        nextKnownRelays = normalizeKnownRelays(
-          discovery?.relays,
+        nextKnownRelays = mergeIncompatibleRelays(
+          normalizeKnownRelays(discovery?.relays, currentRelayURL),
+          discovery?.incompatible_relays,
           currentRelayURL
         );
       } catch {

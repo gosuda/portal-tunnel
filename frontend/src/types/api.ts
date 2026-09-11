@@ -116,8 +116,15 @@ export interface RelayDescriptor {
   api_https_addr?: string;
 }
 
+export interface IncompatibleRelayEntry {
+  url: string;
+  protocol_version?: string;
+  last_seen_at?: string;
+}
+
 export interface DiscoveryResponse {
   relays?: RelayDescriptor[];
+  incompatible_relays?: IncompatibleRelayEntry[];
 }
 
 export interface LeasePolicyUpdate {
