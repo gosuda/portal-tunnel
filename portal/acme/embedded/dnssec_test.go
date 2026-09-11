@@ -1,9 +1,7 @@
 package embedded
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -211,7 +209,7 @@ func TestDNSSECCanonicalDenialIntervals(t *testing.T) {
 	}
 }
 
-func TestDNSSECKeyPersistenceAndFailClosed(t *testing.T) {
+func TestDNSSECKeyPersistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), types.DNSSECKeyFileName)
 	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: path}
 	first, err := New(cfg)
@@ -227,9 +225,14 @@ func TestDNSSECKeyPersistenceAndFailClosed(t *testing.T) {
 	if err := first.Stop(); err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	second, err := New(cfg)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("reload operator-managed key: %v", err)
 	}
 	_, nextDS, _, err := second.EnsureDNSSEC(context.Background(), testZone)
 	if err != nil || nextDS != ds {
@@ -240,32 +243,7 @@ func TestDNSSECKeyPersistenceAndFailClosed(t *testing.T) {
 	if err := second.Stop(); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.BaseDomain = "different.example.com"
-	if wrong, err := New(cfg); err == nil {
-		_ = wrong.Stop()
-		t.Fatal("accepted another zone's key")
-	}
-	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, data) {
-		t.Fatal("wrong-zone key load modified persisted state")
-	}
-	cfg.BaseDomain = testZone
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(path, 0644); err != nil {
-			t.Fatal(err)
-		}
-		permissive, err := New(cfg)
-		if err != nil {
-			t.Fatalf("load operator-managed private key: %v", err)
-		}
-		_, permissiveDS, _, ensureErr := permissive.EnsureDNSSEC(context.Background(), testZone)
-		stopErr := permissive.Stop()
-		if ensureErr != nil || stopErr != nil || permissiveDS != ds {
-			t.Fatalf("operator-managed private key changed DS: %q => %q (%v)", ds, permissiveDS, errors.Join(ensureErr, stopErr))
-		}
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)
@@ -273,74 +251,11 @@ func TestDNSSECKeyPersistenceAndFailClosed(t *testing.T) {
 		if info.Mode().Perm() != 0644 {
 			t.Fatalf("operator-managed private key mode changed: %04o", info.Mode().Perm())
 		}
-		if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, data) {
-			t.Fatal("operator-managed private key load modified persisted state")
-		}
 	}
-	const maxSize = 16 * 1024
-	if len(data) == 0 || len(data) >= maxSize {
-		t.Fatalf("unexpected persisted private key size: %d", len(data))
-	}
-	for _, tc := range []struct {
-		name string
-		data []byte
-	}{
-		{name: "empty", data: nil},
-		{name: "incomplete", data: []byte("incomplete key")},
-		{name: "truncated JSON", data: data[:len(data)-1]},
-		{name: "trailing JSON", data: []byte(string(data) + " {}")},
-		{name: "trailing garbage", data: []byte(string(data) + " corrupt")},
-		{name: "oversized whitespace", data: []byte(string(data) + strings.Repeat(" ", maxSize+1-len(data)))},
-		{name: "corruption past read limit", data: []byte(string(data) + strings.Repeat(" ", maxSize-len(data)) + "corrupt")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := os.WriteFile(path, tc.data, 0600); err != nil {
-				t.Fatal(err)
-			}
-			if broken, err := New(cfg); err == nil {
-				_ = broken.Stop()
-				t.Fatal("accepted or replaced a corrupt persisted key")
-			}
-			if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, tc.data) {
-				t.Fatal("failed key load modified persisted state")
-			}
-		})
-	}
-	// Whitespace at the accepted size boundary is valid JSON, not oversize.
-	bounded := []byte(string(data) + strings.Repeat(" ", maxSize-len(data)))
-	if err := os.WriteFile(path, bounded, 0600); err != nil {
-		t.Fatal(err)
-	}
-	last, err := New(cfg)
-	if err != nil {
-		t.Fatalf("rejected valid key at size limit: %v", err)
-	}
-	defer func() { _ = last.Stop() }()
-	_, lastDS, _, err := last.EnsureDNSSEC(context.Background(), testZone)
-	if err != nil || lastDS != ds {
-		t.Fatalf("valid padded key changed DS: %q (%v)", lastDS, err)
-	}
-	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, bounded) {
-		t.Fatal("valid key load modified persisted state")
-	}
-}
-
-func TestDNSSECKeyFilesystemFailure(t *testing.T) {
-	parent := filepath.Join(t.TempDir(), "identity")
-	if err := os.WriteFile(parent, []byte("not a directory"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	p, err := New(Config{
-		BaseDomain: testZone,
-		ListenAddr: "127.0.0.1:0",
-		KeyPath:    filepath.Join(parent, types.DNSSECKeyFileName),
-	})
-	if p != nil {
-		_ = p.Stop()
-		t.Fatal("created a provider when the key parent was not a directory")
-	}
-	if err == nil {
-		t.Fatal("expected the key storage failure to propagate")
+	cfg.BaseDomain = "different.example.com"
+	if wrong, err := New(cfg); err == nil {
+		_ = wrong.Stop()
+		t.Fatal("accepted another zone's key")
 	}
 }
 

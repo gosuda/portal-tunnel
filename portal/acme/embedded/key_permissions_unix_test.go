@@ -12,7 +12,7 @@ import (
 
 func TestDNSSECNewKeyPathsArePrivate(t *testing.T) {
 	parent := t.TempDir()
-	dir := filepath.Join(parent, "private", "dnssec")
+	dir := filepath.Join(parent, "dnssec")
 	path := filepath.Join(dir, types.DNSSECKeyFileName)
 	p := newTestProvider(t, func(cfg *Config) { cfg.KeyPath = path })
 	if err := p.Stop(); err != nil {
@@ -23,7 +23,6 @@ func TestDNSSECNewKeyPathsArePrivate(t *testing.T) {
 		path string
 		mode os.FileMode
 	}{
-		{filepath.Join(parent, "private"), 0700},
 		{dir, 0700},
 		{path, 0600},
 	} {

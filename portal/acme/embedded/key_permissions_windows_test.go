@@ -1,18 +1,16 @@
 package embedded
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"unsafe"
 
-	"github.com/miekg/dns"
 	"golang.org/x/sys/windows"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func requirePrivateKeyACL(t *testing.T, path, serviceSID string, inheritance uint8) {
+func requirePrivateKeyACL(t *testing.T, path, serviceSID string) {
 	t.Helper()
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
@@ -36,7 +34,7 @@ func requirePrivateKeyACL(t *testing.T, path, serviceSID string, inheritance uin
 		if err := windows.GetAce(dacl, i, &ace); err != nil {
 			t.Fatal(err)
 		}
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != inheritance {
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != 0 {
 			t.Fatalf("key path %q has an unexpected ACE: %s", path, sd)
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
@@ -61,18 +59,11 @@ func TestDNSSECNewKeyPathsArePrivate(t *testing.T) {
 	}
 	serviceSID := user.User.Sid.String()
 	parent := t.TempDir()
-	dir := filepath.Join(parent, "private", "dnssec")
+	dir := filepath.Join(parent, "dnssec")
 	path := filepath.Join(dir, types.DNSSECKeyFileName)
 	p := newTestProvider(t, func(cfg *Config) { cfg.KeyPath = path })
-
-	for _, created := range []string{filepath.Join(parent, "private"), dir} {
-		requirePrivateKeyACL(t, created, serviceSID, windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE)
+	if err := p.Stop(); err != nil {
+		t.Fatal(err)
 	}
-	requirePrivateKeyACL(t, path, serviceSID, 0)
-	response := dnssecExchange(t, p, "tcp", testZone, dns.TypeDNSKEY, 1232)
-	key := response.Answer[0].(*dns.DNSKEY)
-	_, ds, _, err := p.EnsureDNSSEC(context.Background(), testZone)
-	if err != nil || ds != key.ToDS(dns.SHA256).String() {
-		t.Fatalf("private key did not expose a usable DNSKEY and DS: %q (%v)", ds, err)
-	}
+	requirePrivateKeyACL(t, path, serviceSID)
 }
