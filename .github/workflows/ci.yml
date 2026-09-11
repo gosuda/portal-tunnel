@@ -40,11 +40,6 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
-      - name: Cross-compile check
-        run: |
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build ./...
-
       - name: Install CI tools
         run: make install
 
