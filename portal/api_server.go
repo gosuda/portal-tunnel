@@ -15,9 +15,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -287,7 +286,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	challenge, err := s.registry.consumeVerifiedRegisterChallenge(req)
 	if err != nil {
 		switch {
-		case errors.Is(err, auth.ErrRegisterChallengeInvalidSignature):
+		case errors.Is(err, identity.ErrRegisterChallengeInvalidSignature):
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
 		default:
 			utils.InvalidRequestError(err).Write(w)
