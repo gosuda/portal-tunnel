@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -13,7 +14,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -193,6 +196,12 @@ func TestHTTPRedirectLifecycle(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				// Connection-per-request: with keep-alive pooling the transport
+				// races a speculative dial against parking the reused
+				// connection, and the losing dial sits silent on the server as
+				// StateNew, holding redirectServer.Shutdown() open until its 5s
+				// deadline. This test checks response semantics, not pooling.
+				req.Close = true
 				if method == http.MethodOptions {
 					req.URL.Path = "*"
 					req.URL.RawQuery = ""
@@ -590,5 +599,46 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 	}
 	if server.config().DiscoveryEnabled {
 		t.Fatal("cfg.DiscoveryEnabled = true, want false without configured discovery service")
+	}
+}
+
+func TestRelayDiscoveryServesIncompatibleRelays(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL:        "https://portal.example.com",
+		IdentityPath:     tempIdentityPath(t),
+		DiscoveryEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	relaySet := discovery.NewRelaySet(nil)
+	relayURL := "https://relay-old.example"
+	_, err = relaySet.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion + "-older",
+	}, time.Now().UTC())
+	if !errors.Is(err, discovery.ErrProtocolMismatch) {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v, want ErrProtocolMismatch", err)
+	}
+	server.relaySet = relaySet
+
+	req := httptest.NewRequest(http.MethodGet, types.PathDiscovery, nil)
+	rec := httptest.NewRecorder()
+	server.handleRelayDiscovery(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET relay discovery status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var envelope types.APIEnvelope[types.DiscoveryResponse]
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("json.Decode() error = %v", err)
+	}
+	if len(envelope.Data.IncompatibleRelays) != 1 || envelope.Data.IncompatibleRelays[0].URL != relayURL {
+		t.Fatalf("IncompatibleRelays = %+v, want one entry for %q", envelope.Data.IncompatibleRelays, relayURL)
+	}
+	if envelope.Data.IncompatibleRelays[0].ProtocolVersion == "" {
+		t.Fatal("IncompatibleRelays[0].ProtocolVersion is empty, want observed protocol version")
 	}
 }

@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -207,6 +208,13 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 	measuredAt := time.Now().UTC()
 
 	if _, err := r.relaySet.ApplyRelayDiscoveryResponse(relayURL, resp, measuredAt); err != nil {
+		if errors.Is(err, ErrProtocolMismatch) {
+			// The relay answered; protocol incompatibility is visibility
+			// metadata, not a health failure. Keep polling it without
+			// accumulating discovery failures or pool bans.
+			log.Debug().Err(err).Str("relay", relayURL).Msg("discovery protocol mismatch; relay kept visible as incompatible")
+			return nil
+		}
 		if recoveryFailures > 0 {
 			r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
 		}

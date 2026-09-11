@@ -102,9 +102,20 @@ type RegisterResponse struct {
 }
 
 type DiscoveryResponse struct {
-	ProtocolVersion string            `json:"protocol_version"`
-	GeneratedAt     time.Time         `json:"generated_at"`
-	Relays          []RelayDescriptor `json:"relays"`
+	ProtocolVersion    string                   `json:"protocol_version"`
+	GeneratedAt        time.Time                `json:"generated_at"`
+	Relays             []RelayDescriptor        `json:"relays"`
+	IncompatibleRelays []IncompatibleRelayEntry `json:"incompatible_relays,omitempty"`
+}
+
+// IncompatibleRelayEntry describes a relay the serving relay contacted
+// directly whose discovery protocol version is incompatible with its own.
+// Such relays stay visible during rolling upgrades but never become
+// routable descriptors.
+type IncompatibleRelayEntry struct {
+	URL             string    `json:"url"`
+	ProtocolVersion string    `json:"protocol_version"`
+	LastSeenAt      time.Time `json:"last_seen_at"`
 }
 
 type DiscoveryAnnounceRequest struct {

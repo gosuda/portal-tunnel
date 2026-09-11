@@ -162,9 +162,10 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.WriteAPIData(w, http.StatusOK, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
-		GeneratedAt:     now,
-		Relays:          s.relaySet.Descriptors(self),
+		ProtocolVersion:    types.DiscoveryVersion,
+		GeneratedAt:        now,
+		Relays:             s.relaySet.Descriptors(self),
+		IncompatibleRelays: s.relaySet.KnownIncompatibleRelays(),
 	})
 }
 

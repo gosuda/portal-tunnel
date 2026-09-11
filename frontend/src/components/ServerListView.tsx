@@ -16,7 +16,7 @@ import { FloatingActionBar } from "@/components/FloatingActionBar";
 import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
-import type { DiscoveryResponse, DomainResponse, RelayDescriptor } from "@/types/api";
+import type { DiscoveryResponse, DomainResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
 import {
   Dialog,
   DialogContent,
@@ -26,9 +26,10 @@ import {
 
 type ListServer = BaseServer | AdminServer;
 
-interface KnownRelay {
+export interface KnownRelay {
   relayURL: string;
   isCurrent: boolean;
+  protocolVersion?: string;
 }
 
 type RelayReleaseVersions = Record<string, string | null>;
@@ -101,15 +102,48 @@ function normalizeKnownRelays(
   return knownRelays;
 }
 
-function relayReleaseLabel(
+export function mergeIncompatibleRelays(
+  knownRelays: KnownRelay[],
+  incompatible: IncompatibleRelayEntry[] | undefined,
+  currentRelayURL: string
+): KnownRelay[] {
+  if (!incompatible?.length) {
+    return knownRelays;
+  }
+
+  const seen = new Set(knownRelays.map((relay) => relay.relayURL));
+  const merged = [...knownRelays];
+
+  incompatible.forEach((entry) => {
+    const relayURL = normalizeRelayURL(entry.url);
+    if (relayURL === "" || seen.has(relayURL)) {
+      return;
+    }
+    seen.add(relayURL);
+    merged.push({
+      relayURL,
+      isCurrent: relayURL === currentRelayURL,
+      protocolVersion: entry.protocol_version?.trim() || undefined,
+    });
+  });
+
+  return merged;
+}
+
+export function relayReleaseLabel(
   versions: RelayReleaseVersions,
-  relayURL: string
+  relay: KnownRelay
 ): string {
-  const version = versions[relayURL];
+  const version = versions[relay.relayURL];
   if (version === undefined || version === null) {
     return "loading...";
   }
-  return version || "offline";
+  if (!version) {
+    return relay.protocolVersion
+      ? `discovery ${relay.protocolVersion}`
+      : "offline";
+  }
+  return version;
 }
 
 interface ServerListViewProps {
@@ -303,8 +337,9 @@ export function ServerListView({
       try {
         const discovery =
           await apiClient.get<DiscoveryResponse>(BROWSER_API_PATHS.discovery);
-        nextKnownRelays = normalizeKnownRelays(
-          discovery?.relays,
+        nextKnownRelays = mergeIncompatibleRelays(
+          normalizeKnownRelays(discovery?.relays, currentRelayURL),
+          discovery?.incompatible_relays,
           currentRelayURL
         );
       } catch {
@@ -894,7 +929,7 @@ export function ServerListView({
                               <span className="rounded-sm bg-secondary/70 px-2.5 py-1 font-mono text-[11px] font-medium text-text-muted ring-1 ring-border">
                                 {relayReleaseLabel(
                                   relayReleaseVersions,
-                                  relay.relayURL
+                                  relay
                                 )}
                               </span>
                             </div>
