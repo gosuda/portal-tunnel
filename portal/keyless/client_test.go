@@ -41,8 +41,8 @@ func TestVerifyRemoteSignerRejectsSwappedKeypair(t *testing.T) {
 			if err == nil {
 				t.Fatal("verifyRemoteSigner() = nil, want keypair mismatch failure")
 			}
-			if !errors.Is(err, ErrSignerKeyMismatch) {
-				t.Fatalf("error should match ErrSignerKeyMismatch, got: %v", err)
+			if !errors.Is(err, errSignerKeyMismatch) {
+				t.Fatalf("error should match errSignerKeyMismatch, got: %v", err)
 			}
 		})
 	}
@@ -57,8 +57,8 @@ func TestVerifyRemoteSignerRejectsTamperedSignature(t *testing.T) {
 			if err == nil {
 				t.Fatal("verifyRemoteSigner() = nil, want tampered signature failure")
 			}
-			if !errors.Is(err, ErrSignerKeyMismatch) {
-				t.Fatalf("error should match ErrSignerKeyMismatch, got: %v", err)
+			if !errors.Is(err, errSignerKeyMismatch) {
+				t.Fatalf("error should match errSignerKeyMismatch, got: %v", err)
 			}
 		})
 	}
@@ -74,7 +74,7 @@ func TestVerifyRemoteSignerPropagatesSignError(t *testing.T) {
 	if !strings.Contains(err.Error(), "sign self-test challenge") {
 		t.Fatalf("error should name the sign step, got: %v", err)
 	}
-	if errors.Is(err, ErrSignerKeyMismatch) {
+	if errors.Is(err, errSignerKeyMismatch) {
 		t.Fatal("sign-RPC failure must not be classified as a keypair mismatch")
 	}
 }
@@ -92,7 +92,7 @@ func TestVerifyRemoteSignerUnsupportedKey(t *testing.T) {
 	if !strings.Contains(err.Error(), "not supported by the keyless sign protocol") {
 		t.Fatalf("error should name the protocol limitation, got: %v", err)
 	}
-	if errors.Is(err, ErrSignerKeyMismatch) {
+	if errors.Is(err, errSignerKeyMismatch) {
 		t.Fatal("unsupported key type must not be classified as a keypair mismatch")
 	}
 }

@@ -1033,18 +1033,6 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		return false
 	}
 
-	// A signer/certificate keypair mismatch is a relay-side configuration
-	// error that retrying cannot fix (though a relay-side repair or cert
-	// rotation can); it must stay visible on every attempt instead of
-	// collapsing into debug-level retry noise after the first.
-	if errors.Is(err, keyless.ErrSignerKeyMismatch) {
-		logger.Error().
-			Err(err).
-			Dur("retry_wait", l.retryWait).
-			Msg("relay keyless signer does not match its served certificate; tenant TLS cannot work on this relay until its terminating proxy and signer share one keypair")
-		return utils.SleepOrDone(ctx, l.retryWait)
-	}
-
 	if retries == 1 {
 		transport := ""
 		switch {

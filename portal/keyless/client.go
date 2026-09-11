@@ -100,13 +100,15 @@ func VerifyCertificateHostname(certPEM []byte, hostname string) error {
 	return leaf.VerifyHostname(hostname)
 }
 
-// ErrSignerKeyMismatch reports that the relay's /v1/sign endpoint returned a
-// signature that does not verify against the certificate pinned from the
-// relay's HTTPS endpoint: the terminating proxy and the relay's keyless
-// signer hold different keypairs, so tenant TLS cannot succeed until they
-// share one (#377). Sign-RPC failures are not this error; only a returned
-// signature that fails verification is.
-var ErrSignerKeyMismatch = errors.New("keyless signer key does not match the pinned relay certificate (terminating proxy and relay signer keypairs differ)")
+// errSignerKeyMismatch reports the verified fact that the relay's /v1/sign
+// endpoint returned a signature that does not verify against the certificate
+// pinned from the relay's HTTPS endpoint. In #377 the cause was a terminating
+// proxy and the relay signer holding different keypairs, but the check itself
+// cannot distinguish that from any other signer/certificate divergence, so
+// the error only states the mismatch and points operators at the known cause
+// as something to check. Sign-RPC failures are not this error; only a
+// returned signature that fails verification is.
+var errSignerKeyMismatch = errors.New("keyless signer does not match the pinned relay certificate; check whether a terminating proxy and the relay signer use different keypairs")
 
 // verifyRemoteSigner probes signer with a one-off random challenge and checks
 // the returned signature against pinned, the public key of the certificate the
@@ -135,7 +137,7 @@ func verifyRemoteSigner(signer crypto.Signer, pinned crypto.PublicKey) error {
 			return fmt.Errorf("sign self-test challenge: %w", err)
 		}
 		if err := rsa.VerifyPSS(key, crypto.SHA256, digest[:], signature, opts); err != nil {
-			return fmt.Errorf("%w: %w", ErrSignerKeyMismatch, err)
+			return fmt.Errorf("%w: %w", errSignerKeyMismatch, err)
 		}
 	case *ecdsa.PublicKey:
 		signature, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
@@ -143,7 +145,7 @@ func verifyRemoteSigner(signer crypto.Signer, pinned crypto.PublicKey) error {
 			return fmt.Errorf("sign self-test challenge: %w", err)
 		}
 		if !ecdsa.VerifyASN1(key, digest[:], signature) {
-			return fmt.Errorf("%w: ecdsa signature verification failed", ErrSignerKeyMismatch)
+			return fmt.Errorf("%w: ecdsa signature verification failed", errSignerKeyMismatch)
 		}
 	default:
 		return fmt.Errorf("key type %T not supported by the keyless sign protocol", pinned)
