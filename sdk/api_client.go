@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -210,8 +212,21 @@ func (l *listener) requestReverseEndpoint(ctx context.Context, accessToken, fail
 }
 
 func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoint) error {
-	if !l.overlay && (endpoint.Overlay || l.isAlternateReverseEndpoint(endpoint.URL)) {
-		return errors.New("relay returned an overlay endpoint when overlay is disabled")
+	if !l.overlay {
+		if endpoint.Overlay {
+			return errors.New("relay returned an overlay reverse endpoint but overlay is disabled")
+		}
+		if l.isAlternateReverseEndpoint(endpoint.URL) {
+			return fmt.Errorf("relay reverse endpoint %s does not match the relay URL; align the relay's PORTAL_URL with the address clients dial", endpoint.URL)
+		}
+		return nil
+	}
+	if !endpoint.Overlay && !l.isAlternateReverseEndpoint(endpoint.URL) {
+		l.warnOverlayDirect.Do(func() {
+			log.Warn().
+				Str("relay_url", l.route.RelayURL).
+				Msg("overlay requested but the relay serves a direct reverse endpoint; continuing without overlay forwarding")
+		})
 	}
 	return nil
 }

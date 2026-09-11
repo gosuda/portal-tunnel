@@ -162,6 +162,15 @@ The `/admin` request must return the SPA entry rather than `404`. Registered
 subdomains must continue to reach their tunnel targets through the same public
 443 listener.
 
+## Upgrading
+
+Clients and relays perform an exact protocol version match. v2.4.0 ships
+protocol version 9 for both the tunnel handshake and discovery, so v2.3.x
+clients are rejected by v2.4.0+ relays (`relay sdk protocol version mismatch`)
+and vice versa. Upgrade relays and the tunnel clients that dial them together:
+a relay upgraded first rejects every older client until the clients catch up
+(`portal update`).
+
 ## Running Behind an Existing Reverse Proxy
 
 Portal expects to own public `443/tcp`. On a host that already serves other
