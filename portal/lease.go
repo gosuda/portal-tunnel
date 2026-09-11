@@ -15,12 +15,11 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/internal/transport"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
-	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -237,7 +236,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 
 	leaseID := utils.RandomID("lease_")
-	accessToken, claims, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, ttl)
+	accessToken, claims, err := identity.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, ttl)
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
 	}
@@ -413,7 +412,7 @@ func (r *leaseRegistry) admitLeaseByToken(token string, requireDatagram bool) (*
 		return nil, errFeatureUnavailable
 	}
 	now := time.Now().UTC()
-	claims, err := auth.VerifyLeaseAccessToken(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
+	claims, err := identity.VerifyLeaseAccessToken(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
 	if err != nil {
 		return nil, errUnauthorized
 	}
@@ -425,7 +424,7 @@ func (r *leaseRegistry) admitReverseCapability(token string) (*leaseRecord, erro
 		return nil, errFeatureUnavailable
 	}
 	now := time.Now().UTC()
-	claims, err := auth.VerifyReverseCapability(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
+	claims, err := identity.VerifyReverseCapability(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
 	if err != nil {
 		return nil, errUnauthorized
 	}
@@ -452,7 +451,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	if r == nil {
 		return types.RenewResponse{}, errFeatureUnavailable
 	}
-	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, time.Now().UTC())
+	claims, err := identity.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, time.Now().UTC())
 	if err != nil {
 		return types.RenewResponse{}, errUnauthorized
 	}
@@ -487,7 +486,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	overlay := record.Overlay
 	r.mu.Unlock()
 
-	nextAccessToken, _, err := auth.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, recordIdentity, leaseID, ttl)
+	nextAccessToken, _, err := identity.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, recordIdentity, leaseID, ttl)
 	if err != nil {
 		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
@@ -524,7 +523,7 @@ func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, lease
 			log.Warn().Err(err).Str("lease", leaseIdentity.Key()).Msg("relay overlay endpoint unavailable; using direct reverse transport")
 		}
 	}
-	capability, claims, err := auth.IssueReverseCapability(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, expiresAt)
+	capability, claims, err := identity.IssueReverseCapability(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, expiresAt)
 	if err != nil {
 		return types.ReverseEndpoint{}, err
 	}
@@ -540,7 +539,7 @@ func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest)
 		return types.ReverseEndpoint{}, errFeatureUnavailable
 	}
 	now := time.Now().UTC()
-	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
+	claims, err := identity.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
 	if err != nil {
 		return types.ReverseEndpoint{}, errUnauthorized
 	}
@@ -576,7 +575,7 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 	if r == nil {
 		return nil, errFeatureUnavailable
 	}
-	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, time.Now().UTC())
+	claims, err := identity.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, time.Now().UTC())
 	if err != nil {
 		return nil, errUnauthorized
 	}
@@ -666,7 +665,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	}
 
 	now := time.Now().UTC()
-	challenge, err := auth.NewRegisterChallenge(req, domain, uri, now, defaultRegisterChallengeTTL)
+	challenge, err := identity.NewRegisterChallenge(req, domain, uri, now, defaultRegisterChallengeTTL)
 	if err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}
@@ -706,10 +705,10 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	}, nil
 }
 
-func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterRequest) (*auth.RegisterChallenge, error) {
+func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterRequest) (*identity.RegisterChallenge, error) {
 	challengeID := strings.TrimSpace(req.ChallengeID)
 	if challengeID == "" {
-		return nil, auth.ErrRegisterChallengeNotFound
+		return nil, identity.ErrRegisterChallengeNotFound
 	}
 
 	now := time.Now().UTC()
@@ -723,7 +722,7 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 		challenge := record.registerChallenge
 		if challenge.Expired(now) {
 			r.deleteRecord(i)
-			return nil, auth.ErrRegisterChallengeExpired
+			return nil, identity.ErrRegisterChallengeExpired
 		}
 		if err := challenge.Verify(req, now); err != nil {
 			return nil, err
@@ -732,12 +731,12 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 		r.deleteRecord(i)
 		return challenge, nil
 	}
-	return nil, auth.ErrRegisterChallengeNotFound
+	return nil, identity.ErrRegisterChallengeNotFound
 }
 
 func (r *leaseRegistry) verifySigningAccessToken(token string) error {
 	now := time.Now().UTC()
-	claims, err := auth.VerifyLeaseAccessToken(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
+	claims, err := identity.VerifyLeaseAccessToken(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
 	if err != nil {
 		return errUnauthorized
 	}

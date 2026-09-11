@@ -1,4 +1,4 @@
-package auth
+package identity
 
 import (
 	"cmp"
@@ -10,7 +10,6 @@ import (
 
 	"github.com/spruceid/siwe-go"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -62,7 +61,7 @@ func NewWalletAuthenticator(cfg WalletAuthConfig) (*WalletAuthenticator, error) 
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
-		address, err := identity.NormalizeEVMAddress(raw)
+		address, err := NormalizeEVMAddress(raw)
 		if err != nil {
 			return nil, fmt.Errorf("wallet address: %w", err)
 		}
@@ -88,7 +87,7 @@ func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeReques
 	if a == nil {
 		return types.WalletAuthChallengeResponse{}, ErrWalletAuthUnauthorized
 	}
-	address, err := identity.NormalizeEVMAddress(req.Address)
+	address, err := NormalizeEVMAddress(req.Address)
 	if err != nil {
 		return types.WalletAuthChallengeResponse{}, err
 	}
@@ -166,7 +165,7 @@ func (a *WalletAuthenticator) Login(req types.WalletAuthLoginRequest, now time.T
 	if _, err := message.Verify(strings.TrimSpace(req.SIWESignature), &domain, &nonce, &verifiedAt); err != nil {
 		return "", "", ErrWalletAuthInvalidSignature
 	}
-	address, err := identity.NormalizeEVMAddress(message.GetAddress().Hex())
+	address, err := NormalizeEVMAddress(message.GetAddress().Hex())
 	if err != nil {
 		return "", "", ErrWalletAuthInvalidSignature
 	}

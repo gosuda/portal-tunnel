@@ -1,8 +1,8 @@
-.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean load-test check-env-example env-reference
+.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean load-test check-env-example env-reference check-boundaries
 
 .DEFAULT_GOAL := help
 
-GO_PACKAGES := . ./cmd/... ./portal/... ./sdk/... ./types/... ./utils/...
+GO_PACKAGES := . ./cmd/... ./internal/... ./portal/... ./sdk/... ./types/... ./utils/...
 GO_BUILD_FLAGS := -trimpath -ldflags "-s -w"
 GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
 GOIMPORTS_VERSION := v0.49.0
@@ -159,3 +159,8 @@ load-test:
 
 %:
 	@:
+
+# Enforce the #382 package ownership rule: portal and sdk meet through
+# internal/ and types/, never through each other.
+check-boundaries:
+	go run ./cmd/boundarycheck

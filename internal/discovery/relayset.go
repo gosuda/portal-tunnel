@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -826,7 +826,7 @@ func (s *RelaySet) enforceIdentityCapLocked(address string) {
 }
 
 func verifyFreshRelayDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayDescriptor, error) {
-	verified, err := auth.VerifyRelayDescriptor(desc)
+	verified, err := identity.VerifyRelayDescriptor(desc)
 	if err != nil {
 		return types.RelayDescriptor{}, err
 	}

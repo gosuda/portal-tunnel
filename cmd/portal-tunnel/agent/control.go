@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -35,7 +35,7 @@ type endpoint struct {
 type controlHandler struct {
 	manager  *manager
 	token    string
-	auth     *auth.WalletAuthenticator
+	auth     *identity.WalletAuthenticator
 	shutdown func()
 }
 
@@ -256,9 +256,9 @@ func agentAuthURI(r *http.Request, endpointPath string) string {
 
 func writeAgentWalletAuthError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, auth.ErrWalletAuthUnauthorized):
+	case errors.Is(err, identity.ErrWalletAuthUnauthorized):
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
-	case errors.Is(err, auth.ErrWalletAuthChallengeNotFound), errors.Is(err, auth.ErrWalletAuthChallengeExpired), errors.Is(err, auth.ErrWalletAuthInvalidSignature):
+	case errors.Is(err, identity.ErrWalletAuthChallengeNotFound), errors.Is(err, identity.ErrWalletAuthChallengeExpired), errors.Is(err, identity.ErrWalletAuthInvalidSignature):
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, err.Error())
 	default:
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())

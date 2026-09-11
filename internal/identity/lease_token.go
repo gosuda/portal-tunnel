@@ -1,4 +1,4 @@
-package auth
+package identity
 
 import (
 	"errors"
@@ -9,7 +9,6 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -27,7 +26,7 @@ type LeaseAccessTokenClaims struct {
 }
 
 type es256kOpaqueSigner struct {
-	authority identity.Authority
+	authority Authority
 }
 
 func (s *es256kOpaqueSigner) Public() *jose.JSONWebKey {
@@ -63,8 +62,8 @@ func (v *es256kOpaqueVerifier) VerifyPayload(payload []byte, signature []byte, a
 	if v == nil || v.publicKey == nil {
 		return errors.New("verification key is required")
 	}
-	if err := identity.VerifySHA256Secp256k1Raw64(payload, signature, v.publicKey); err != nil {
-		if errors.Is(err, identity.ErrSecp256k1SignatureInvalid) {
+	if err := VerifySHA256Secp256k1Raw64(payload, signature, v.publicKey); err != nil {
+		if errors.Is(err, ErrSecp256k1SignatureInvalid) {
 			return errors.New("token signature is invalid")
 		}
 		return err
@@ -72,17 +71,17 @@ func (v *es256kOpaqueVerifier) VerifyPayload(payload []byte, signature []byte, a
 	return nil
 }
 
-func IssueLeaseAccessToken(authority identity.Authority, issuer string, leaseIdentity types.Identity, leaseID string, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {
+func IssueLeaseAccessToken(authority Authority, issuer string, leaseIdentity types.Identity, leaseID string, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {
 	return issueIdentityToken(authority, issuer, leaseIdentity, leaseAccessTokenAudience, leaseID, time.Now().UTC().Add(ttl))
 }
 
 // IssueReverseCapability creates a token that can open reverse streams but
 // cannot authorize lease renewal, removal, signing, or datagram backhaul.
-func IssueReverseCapability(authority identity.Authority, issuer string, leaseIdentity types.Identity, leaseID string, expiresAt time.Time) (string, LeaseAccessTokenClaims, error) {
+func IssueReverseCapability(authority Authority, issuer string, leaseIdentity types.Identity, leaseID string, expiresAt time.Time) (string, LeaseAccessTokenClaims, error) {
 	return issueIdentityToken(authority, issuer, leaseIdentity, reverseCapabilityAudience, leaseID, expiresAt)
 }
 
-func issueIdentityToken(authority identity.Authority, issuer string, leaseIdentity types.Identity, audience, leaseID string, expiresAt time.Time) (string, LeaseAccessTokenClaims, error) {
+func issueIdentityToken(authority Authority, issuer string, leaseIdentity types.Identity, audience, leaseID string, expiresAt time.Time) (string, LeaseAccessTokenClaims, error) {
 	if authority == nil {
 		return "", LeaseAccessTokenClaims{}, errors.New("lease token signing authority is required")
 	}
@@ -90,7 +89,7 @@ func issueIdentityToken(authority identity.Authority, issuer string, leaseIdenti
 	if leaseID == "" {
 		return "", LeaseAccessTokenClaims{}, errors.New("lease id is required")
 	}
-	normalizedIdentity, err := identity.NormalizeIdentity(leaseIdentity)
+	normalizedIdentity, err := NormalizeIdentity(leaseIdentity)
 	if err != nil {
 		return "", LeaseAccessTokenClaims{}, err
 	}
@@ -141,7 +140,7 @@ func VerifyReverseCapability(token, publicKeyHex, issuer string, now time.Time) 
 }
 
 func verifyIdentityToken(token, publicKeyHex, issuer, audience string, now time.Time) (LeaseAccessTokenClaims, error) {
-	publicKey, err := identity.ParseSecp256k1PublicKeyHex(publicKeyHex)
+	publicKey, err := ParseSecp256k1PublicKeyHex(publicKeyHex)
 	if err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
@@ -155,7 +154,7 @@ func verifyIdentityToken(token, publicKeyHex, issuer, audience string, now time.
 	if err := parsed.Claims(&es256kOpaqueVerifier{publicKey: publicKey}, &claims); err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
-	normalizedClaimsIdentity, err := identity.NormalizeIdentity(claims.Identity)
+	normalizedClaimsIdentity, err := NormalizeIdentity(claims.Identity)
 	if err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
