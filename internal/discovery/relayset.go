@@ -713,11 +713,16 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		}
 	}
 	s.enforceCapLocked()
-	if missingTarget {
-		return relaySetChanged, errors.New("target relay descriptor missing from relays")
-	}
+	// Protocol mismatch outranks a missing target descriptor: the response
+	// arrived over HTTPS and its protocol version is the observation this
+	// package records, so the refresher must classify it as a mismatch
+	// (ErrProtocolMismatch) rather than a health failure even when the older
+	// relay omits its own descriptor from the response.
 	if protocolMismatch && authoritative {
 		return relaySetChanged, fmt.Errorf("%w: relay=%q client=%q", ErrProtocolMismatch, resp.ProtocolVersion, types.DiscoveryVersion)
+	}
+	if missingTarget {
+		return relaySetChanged, errors.New("target relay descriptor missing from relays")
 	}
 	return relaySetChanged, nil
 }

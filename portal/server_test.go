@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -195,6 +196,12 @@ func TestHTTPRedirectLifecycle(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				// Connection-per-request: with keep-alive pooling the transport
+				// races a speculative dial against parking the reused
+				// connection, and the losing dial sits silent on the server as
+				// StateNew, holding redirectServer.Shutdown() open until its 5s
+				// deadline. This test checks response semantics, not pooling.
+				req.Close = true
 				if method == http.MethodOptions {
 					req.URL.Path = "*"
 					req.URL.RawQuery = ""
@@ -609,10 +616,11 @@ func TestRelayDiscoveryServesIncompatibleRelays(t *testing.T) {
 
 	relaySet := discovery.NewRelaySet(nil)
 	relayURL := "https://relay-old.example"
-	if _, err := relaySet.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+	_, err = relaySet.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion + "-older",
-	}, time.Now().UTC()); err == nil {
-		t.Fatal("expected protocol mismatch error")
+	}, time.Now().UTC())
+	if !errors.Is(err, discovery.ErrProtocolMismatch) {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v, want ErrProtocolMismatch", err)
 	}
 	server.relaySet = relaySet
 

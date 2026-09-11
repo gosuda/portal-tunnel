@@ -436,3 +436,19 @@ func TestKnownIncompatibleRelaysSuppressBannedRelay(t *testing.T) {
 		t.Fatalf("KnownIncompatibleRelays() = %+v, want empty after local ban", known)
 	}
 }
+
+func TestProtocolMismatchOutranksMissingTarget(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-old.example"
+	_, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion + "-older",
+		Relays:          nil,
+	}, time.Now().UTC())
+	if !errors.Is(err, ErrProtocolMismatch) {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v, want ErrProtocolMismatch even without a target descriptor", err)
+	}
+	if known := set.KnownIncompatibleRelays(); len(known) != 1 || known[0].URL != relayURL {
+		t.Fatalf("KnownIncompatibleRelays() = %+v, want one entry for %q", known, relayURL)
+	}
+}
