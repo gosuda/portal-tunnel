@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -342,11 +343,15 @@ func TestProtocolMismatchKeepsOlderRelayVisibleWithoutRouting(t *testing.T) {
 
 	relayURL := "https://relay-old.example"
 	desc := mustRelayDescriptor(t, relayURL)
-	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+	_, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion + "-older",
 		Relays:          []types.RelayDescriptor{desc},
-	}, time.Now().UTC()); err == nil {
+	}, time.Now().UTC())
+	if err == nil {
 		t.Fatal("ApplyRelayDiscoveryResponse() should keep reporting the protocol mismatch")
+	}
+	if !errors.Is(err, ErrProtocolMismatch) {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v, want ErrProtocolMismatch", err)
 	}
 
 	known := set.KnownIncompatibleRelays()
@@ -385,7 +390,7 @@ func TestKnownIncompatibleRelaysExpireAfterRetention(t *testing.T) {
 	if known := set.knownIncompatibleRelaysAt(observedAt); len(known) != 1 {
 		t.Fatalf("knownIncompatibleRelaysAt(fresh) = %+v, want one entry", known)
 	}
-	if known := set.knownIncompatibleRelaysAt(observedAt.Add(incompatibleRelayRetention + time.Minute)); len(known) != 0 {
+	if known := set.knownIncompatibleRelaysAt(observedAt.Add(AnnounceMaxValidity + time.Minute)); len(known) != 0 {
 		t.Fatalf("knownIncompatibleRelaysAt(stale) = %+v, want empty", known)
 	}
 }
@@ -408,5 +413,26 @@ func TestCompatibleAuthoritativeDiscoveryClearsIncompatibleRelay(t *testing.T) {
 	mustApplyAuthoritative(t, set, desc)
 	if known := set.KnownIncompatibleRelays(); len(known) != 0 {
 		t.Fatalf("KnownIncompatibleRelays() = %+v, want empty after compatible discovery", known)
+	}
+}
+
+func TestKnownIncompatibleRelaysSuppressBannedRelay(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-old.example"
+	desc := mustRelayDescriptor(t, relayURL)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion + "-older",
+		Relays:          []types.RelayDescriptor{desc},
+	}, time.Now().UTC()); err == nil {
+		t.Fatal("expected protocol mismatch error")
+	}
+	if known := set.KnownIncompatibleRelays(); len(known) != 1 {
+		t.Fatalf("KnownIncompatibleRelays() = %+v, want one entry before ban", known)
+	}
+
+	set.BanRelayURL(relayURL)
+	if known := set.KnownIncompatibleRelays(); len(known) != 0 {
+		t.Fatalf("KnownIncompatibleRelays() = %+v, want empty after local ban", known)
 	}
 }

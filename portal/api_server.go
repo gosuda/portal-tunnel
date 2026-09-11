@@ -161,21 +161,11 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	knownIncompatible := s.relaySet.KnownIncompatibleRelays()
-	incompatible := make([]types.IncompatibleRelayEntry, 0, len(knownIncompatible))
-	for _, info := range knownIncompatible {
-		incompatible = append(incompatible, types.IncompatibleRelayEntry{
-			URL:             info.URL,
-			ProtocolVersion: info.ProtocolVersion,
-			LastSeenAt:      info.LastSeenAt,
-		})
-	}
-
 	utils.WriteAPIData(w, http.StatusOK, types.DiscoveryResponse{
 		ProtocolVersion:    types.DiscoveryVersion,
 		GeneratedAt:        now,
 		Relays:             s.relaySet.Descriptors(self),
-		IncompatibleRelays: incompatible,
+		IncompatibleRelays: s.relaySet.KnownIncompatibleRelays(),
 	})
 }
 

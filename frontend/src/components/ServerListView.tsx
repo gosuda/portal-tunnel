@@ -29,6 +29,7 @@ type ListServer = BaseServer | AdminServer;
 export interface KnownRelay {
   relayURL: string;
   isCurrent: boolean;
+  protocolVersion?: string;
 }
 
 type RelayReleaseVersions = Record<string, string | null>;
@@ -118,26 +119,31 @@ export function mergeIncompatibleRelays(
     if (relayURL === "" || seen.has(relayURL)) {
       return;
     }
-
     seen.add(relayURL);
     merged.push({
       relayURL,
       isCurrent: relayURL === currentRelayURL,
+      protocolVersion: entry.protocol_version?.trim() || undefined,
     });
   });
 
   return merged;
 }
 
-function relayReleaseLabel(
+export function relayReleaseLabel(
   versions: RelayReleaseVersions,
-  relayURL: string
+  relay: KnownRelay
 ): string {
-  const version = versions[relayURL];
+  const version = versions[relay.relayURL];
   if (version === undefined || version === null) {
     return "loading...";
   }
-  return version || "offline";
+  if (!version) {
+    return relay.protocolVersion
+      ? `discovery ${relay.protocolVersion}`
+      : "offline";
+  }
+  return version;
 }
 
 interface ServerListViewProps {
@@ -923,7 +929,7 @@ export function ServerListView({
                               <span className="rounded-sm bg-secondary/70 px-2.5 py-1 font-mono text-[11px] font-medium text-text-muted ring-1 ring-border">
                                 {relayReleaseLabel(
                                   relayReleaseVersions,
-                                  relay.relayURL
+                                  relay
                                 )}
                               </span>
                             </div>

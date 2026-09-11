@@ -47,7 +47,7 @@ type RelaySet struct {
 	mu           sync.RWMutex
 	relays       map[string]RelayState
 	keyIndex     map[string]keyIndexEntry
-	incompatible map[string]incompatibleRelay
+	incompatible map[string]types.IncompatibleRelayEntry
 }
 
 // keyIndexEntry records the rollback anchor for a signing identity.
@@ -60,27 +60,11 @@ type keyIndexEntry struct {
 	TombstoneUntil time.Time
 }
 
-// incompatibleRelayRetention bounds how long a directly observed but
-// protocol-incompatible relay stays visible after its last observation.
-const incompatibleRelayRetention = 24 * time.Hour
-
-// incompatibleRelay is the internal record for a relay this node contacted
-// directly whose discovery protocol version does not match ours. It lives
-// outside s.relays on purpose: it never becomes a descriptor and is never
-// routed; it exists only to keep older relays visible during rolling
-// upgrades.
-type incompatibleRelay struct {
-	ProtocolVersion string
-	LastSeenAt      time.Time
-}
-
-// IncompatibleRelayInfo is the read-only view of a directly observed relay
-// whose discovery protocol version is incompatible with the local one.
-type IncompatibleRelayInfo struct {
-	URL             string
-	ProtocolVersion string
-	LastSeenAt      time.Time
-}
+// ErrProtocolMismatch reports that a discovery response came from a relay
+// whose discovery protocol version is incompatible with ours. The relay
+// answered and is reachable; callers must not treat this as a health
+// failure.
+var ErrProtocolMismatch = errors.New("relay discovery protocol version mismatch")
 
 type upsertResult int
 
@@ -94,7 +78,7 @@ func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 	set := &RelaySet{
 		relays:       make(map[string]RelayState),
 		keyIndex:     make(map[string]keyIndexEntry),
-		incompatible: make(map[string]incompatibleRelay),
+		incompatible: make(map[string]types.IncompatibleRelayEntry),
 	}
 	set.SetBootstrapRelayURLs(bootstrapRelayURLs)
 	return set
@@ -175,6 +159,8 @@ func (s *RelaySet) banFromPoolLocked(relayURL string, now time.Time) {
 	state.Banned = true
 	state.suppressActiveUntil = now.Add(relayPoolBanTTL)
 	s.relays[relayURL] = state
+	// A local ban outranks protocol-mismatch visibility.
+	delete(s.incompatible, relayURL)
 }
 
 func mergeLocalRelayState(record, existing RelayState) RelayState {
@@ -554,6 +540,8 @@ func (s *RelaySet) BanRelayURL(relayURL string) {
 	state.suppressActiveUntil = time.Time{}
 	state.Banned = true
 	s.relays[relayURL] = state
+	// A local ban outranks protocol-mismatch visibility.
+	delete(s.incompatible, relayURL)
 }
 
 func (s *RelaySet) DropRelayURLFromActivePool(relayURL string) {
@@ -729,7 +717,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		return relaySetChanged, errors.New("target relay descriptor missing from relays")
 	}
 	if protocolMismatch && authoritative {
-		return relaySetChanged, fmt.Errorf("relay discovery protocol version mismatch: relay=%q client=%q", resp.ProtocolVersion, types.DiscoveryVersion)
+		return relaySetChanged, fmt.Errorf("%w: relay=%q client=%q", ErrProtocolMismatch, resp.ProtocolVersion, types.DiscoveryVersion)
 	}
 	return relaySetChanged, nil
 }
@@ -746,18 +734,20 @@ func (s *RelaySet) recordIncompatibleRelayLocked(relayURL, protocolVersion strin
 		return
 	}
 	s.pruneIncompatibleLocked(now)
-	s.incompatible[relayURL] = incompatibleRelay{
+	s.incompatible[relayURL] = types.IncompatibleRelayEntry{
+		URL:             relayURL,
 		ProtocolVersion: protocolVersion,
 		LastSeenAt:      now,
 	}
 }
 
 // pruneIncompatibleLocked drops incompatible-relay entries whose last direct
-// observation is older than incompatibleRelayRetention. The caller must hold
+// observation is older than AnnounceMaxValidity, matching the window in which
+// descriptors from that observation could still matter. The caller must hold
 // s.mu for writing.
 func (s *RelaySet) pruneIncompatibleLocked(now time.Time) {
 	for relayURL, entry := range s.incompatible {
-		if now.Sub(entry.LastSeenAt) > incompatibleRelayRetention {
+		if now.Sub(entry.LastSeenAt) > AnnounceMaxValidity {
 			delete(s.incompatible, relayURL)
 		}
 	}
@@ -765,24 +755,27 @@ func (s *RelaySet) pruneIncompatibleLocked(now time.Time) {
 
 // KnownIncompatibleRelays returns directly observed relays whose discovery
 // protocol version is incompatible with the local one. Entries are sorted by
-// URL for stable output and expire after incompatibleRelayRetention without a
-// fresh observation. They are informational only and are never part of the
-// routable descriptor set.
-func (s *RelaySet) KnownIncompatibleRelays() []IncompatibleRelayInfo {
+// URL for stable output, expire (per AnnounceMaxValidity) without a fresh
+// observation, and are suppressed while the relay is locally banned: a local
+// ban outranks protocol-mismatch visibility. They are informational only and
+// are never part of the routable descriptor set.
+func (s *RelaySet) KnownIncompatibleRelays() []types.IncompatibleRelayEntry {
 	return s.knownIncompatibleRelaysAt(time.Now().UTC())
 }
 
-func (s *RelaySet) knownIncompatibleRelaysAt(now time.Time) []IncompatibleRelayInfo {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pruneIncompatibleLocked(now)
-	out := make([]IncompatibleRelayInfo, 0, len(s.incompatible))
+func (s *RelaySet) knownIncompatibleRelaysAt(now time.Time) []types.IncompatibleRelayEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]types.IncompatibleRelayEntry, 0, len(s.incompatible))
 	for relayURL, entry := range s.incompatible {
-		out = append(out, IncompatibleRelayInfo{
-			URL:             relayURL,
-			ProtocolVersion: entry.ProtocolVersion,
-			LastSeenAt:      entry.LastSeenAt,
-		})
+		if now.Sub(entry.LastSeenAt) > AnnounceMaxValidity {
+			continue
+		}
+		if state, ok := s.relays[relayURL]; ok && state.Banned {
+			continue
+		}
+		out = append(out, entry)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].URL < out[j].URL })
 	return out
