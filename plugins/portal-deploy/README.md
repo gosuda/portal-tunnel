@@ -21,12 +21,13 @@ plugins/portal-deploy/
 
 Cursor consumes the portable root manifest directly. Claude Code discovers `skills/` from the plugin root, so neither host needs a second per-plugin manifest.
 
-Two repository catalogs remain because Codex and Claude Code require different catalog locations when installing a plugin from a repository:
+Three repository catalogs remain because each host requires a different locator when the repository root, rather than `plugins/portal-deploy`, is used as the installation source:
 
 - `.agents/plugins/marketplace.json` for Codex
 - `.claude-plugin/marketplace.json` for Claude Code
+- `.cursor-plugin/marketplace.json` for Cursor
 
-The Claude catalog contains only the required plugin name and source. Common metadata stays in the portable manifest instead of being copied into catalogs.
+The Claude and Cursor catalogs contain only the required locator fields. Common metadata stays in the portable manifest instead of being copied into catalogs.
 
 `AGENTS.md` remains repository development guidance. `llms.txt` remains the generic discovery entry point served by a Portal relay; neither belongs to the plugin package contract.
 
@@ -68,7 +69,7 @@ Invoke `/portal-deploy:portal-expose` or `/portal-deploy:portal-relay`.
 
 ## Cursor
 
-Cursor supports the root Agent Plugins manifest without a `.cursor-plugin` adapter. Symlink the plugin directory for local development, then reload the window:
+Cursor supports the root Agent Plugins manifest without a per-plugin `.cursor-plugin/plugin.json` adapter. Symlink the plugin directory for local development, then reload the window:
 
 ```sh
 mkdir -p ~/.cursor/plugins/local
@@ -76,6 +77,8 @@ ln -s "$(pwd)/plugins/portal-deploy" ~/.cursor/plugins/local/portal-deploy
 ```
 
 The skills appear as `/portal-expose` and `/portal-relay`.
+
+When importing the whole `portal-tunnel` repository, `.cursor-plugin/marketplace.json` locates the nested `plugins/portal-deploy` plugin root.
 
 ## Example prompts
 

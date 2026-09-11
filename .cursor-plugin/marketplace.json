@@ -1,0 +1,12 @@
+{
+  "name": "portal-tunnel",
+  "owner": {
+    "name": "gosuda"
+  },
+  "plugins": [
+    {
+      "name": "portal-deploy",
+      "source": "./plugins/portal-deploy"
+    }
+  ]
+}
