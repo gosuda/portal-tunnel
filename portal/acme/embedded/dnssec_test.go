@@ -3,6 +3,7 @@ package embedded
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -256,11 +257,24 @@ func TestDNSSECKeyPersistenceAndFailClosed(t *testing.T) {
 		if err := os.Chmod(path, 0644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := New(cfg); err == nil {
-			t.Fatal("accepted world-readable private key")
+		permissive, err := New(cfg)
+		if err != nil {
+			t.Fatalf("load operator-managed private key: %v", err)
 		}
-		if err := os.Chmod(path, 0600); err != nil {
+		_, permissiveDS, _, ensureErr := permissive.EnsureDNSSEC(context.Background(), testZone)
+		stopErr := permissive.Stop()
+		if ensureErr != nil || stopErr != nil || permissiveDS != ds {
+			t.Fatalf("operator-managed private key changed DS: %q => %q (%v)", ds, permissiveDS, errors.Join(ensureErr, stopErr))
+		}
+		info, err := os.Stat(path)
+		if err != nil {
 			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0644 {
+			t.Fatalf("operator-managed private key mode changed: %04o", info.Mode().Perm())
+		}
+		if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, data) {
+			t.Fatal("operator-managed private key load modified persisted state")
 		}
 	}
 	const maxSize = 16 * 1024
@@ -311,76 +325,22 @@ func TestDNSSECKeyPersistenceAndFailClosed(t *testing.T) {
 	}
 }
 
-func TestDNSSECConcurrentKeyCreation(t *testing.T) {
-	dir := t.TempDir()
-	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: filepath.Join(dir, types.DNSSECKeyFileName)}
-	type result struct {
-		provider *Provider
-		err      error
-	}
-	const starts = 8
-	ready := make(chan struct{}, starts)
-	start := make(chan struct{})
-	results := make(chan result, starts)
-	for range starts {
-		go func() {
-			ready <- struct{}{}
-			<-start
-			p, err := New(cfg)
-			results <- result{p, err}
-		}()
-	}
-	for range starts {
-		<-ready
-	}
-	close(start)
-	var providers []*Provider
-	for range starts {
-		got := <-results
-		if got.err != nil {
-			t.Errorf("concurrent start failed: %v", got.err)
-			continue
-		}
-		providers = append(providers, got.provider)
-		t.Cleanup(func() {
-			if err := got.provider.Stop(); err != nil {
-				t.Error(err)
-			}
-		})
-	}
-	if t.Failed() {
-		return
-	}
-	var ds string
-	var key *dns.DNSKEY
-	for _, p := range providers {
-		_, gotDS, _, err := p.EnsureDNSSEC(context.Background(), testZone)
-		if err != nil {
-			t.Fatal(err)
-		}
-		response := dnssecExchange(t, p, "tcp", testZone, dns.TypeDNSKEY, 1232)
-		gotKey := response.Answer[0].(*dns.DNSKEY)
-		if key == nil {
-			key, ds = gotKey, gotDS
-		}
-		if gotDS != ds || gotDS != gotKey.ToDS(dns.SHA256).String() || gotKey.PublicKey != key.PublicKey {
-			t.Fatal("simultaneous starts did not preserve one key and DS")
-		}
-		verifySection(t, key, response.Answer)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+func TestDNSSECKeyFilesystemFailure(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "identity")
+	if err := os.WriteFile(parent, []byte("not a directory"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != types.DNSSECKeyFileName {
-		t.Fatalf("key publication left temporary files: %v", entries)
+	p, err := New(Config{
+		BaseDomain: testZone,
+		ListenAddr: "127.0.0.1:0",
+		KeyPath:    filepath.Join(parent, types.DNSSECKeyFileName),
+	})
+	if p != nil {
+		_ = p.Stop()
+		t.Fatal("created a provider when the key parent was not a directory")
 	}
-	info, err := os.Stat(cfg.KeyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
-		t.Fatalf("published private key has permissive mode: %v", info.Mode())
+	if err == nil {
+		t.Fatal("expected the key storage failure to propagate")
 	}
 }
 

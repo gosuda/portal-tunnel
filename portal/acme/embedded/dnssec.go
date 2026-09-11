@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -84,9 +83,6 @@ func loadSigningKey(path, zone string) (resultKey *dns.DNSKEY, resultSigner cryp
 				resultErr = errors.Join(resultErr, err)
 			}
 		}()
-		if err := restrictKeyPermissions(tmp); err != nil {
-			return nil, nil, fmt.Errorf("restrict dnssec key permissions: %w", errors.Join(err, f.Close()))
-		}
 		_, writeErr := f.Write(data)
 		syncErr := f.Sync()
 		closeErr := f.Close()
@@ -120,12 +116,6 @@ func loadSigningKey(path, zone string) (resultKey *dns.DNSKEY, resultSigner cryp
 	}
 	if !info.Mode().IsRegular() {
 		return nil, nil, errors.New("dnssec key must be a regular file, not a symlink")
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
-		return nil, nil, errors.New("dnssec private key permissions must be 0600 or stricter")
-	}
-	if err := restrictKeyPermissions(path); err != nil {
-		return nil, nil, fmt.Errorf("restrict dnssec key permissions: %w", err)
 	}
 	f, err := os.Open(path)
 	if err != nil {

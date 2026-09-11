@@ -9,6 +9,12 @@ import (
 	"path/filepath"
 )
 
+func createKeyTempFile(dir string) (*os.File, error) {
+	// os.CreateTemp creates the file with mode 0600 before any key material is
+	// written. Existing operator-managed directory permissions are left alone.
+	return os.CreateTemp(dir, ".dnssec-key-*")
+}
+
 func publishKeyFile(tmp, path string) error {
 	return os.Link(tmp, path)
 }
