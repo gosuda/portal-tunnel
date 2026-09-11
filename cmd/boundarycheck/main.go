@@ -8,8 +8,10 @@
 //	portal -X-> sdk, sdk -X-> portal, internal -X-> {portal, sdk}
 //	types -X-> {portal, sdk, internal}
 //
-// Scope: production imports only (go list .Imports); test files are out of
-// scope by design.
+// Scope: production and test imports (go list Imports, TestImports, and
+// XTestImports); imports made only by a package's external test package
+// are attributed to the package under test.
+
 package main
 
 import (
@@ -25,7 +27,7 @@ import (
 const modulePrefix = "github.com/gosuda/portal-tunnel/v2/"
 
 func main() {
-	out, err := exec.CommandContext(context.Background(), "go", "list", "-f", "{{.ImportPath}}\t{{join .Imports \" \"}}", "./...").Output()
+	out, err := exec.CommandContext(context.Background(), "go", "list", "-f", "{{.ImportPath}}\t{{join .Imports \" \"}} {{join .TestImports \" \"}} {{join .XTestImports \" \"}}", "./...").Output()
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
