@@ -16,7 +16,6 @@ import (
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -149,7 +148,7 @@ func (p *Payment) paymentPayloadFromRequest(w http.ResponseWriter, r *http.Reque
 	}
 
 	rawPayment := ""
-	for _, name := range []string{protocol.HeaderXPayment, protocol.HeaderPaymentSignature} {
+	for _, name := range []string{types.HeaderXPayment, types.HeaderPaymentSignature} {
 		if value := strings.TrimSpace(r.Header.Get(name)); value != "" {
 			rawPayment = value
 			break
@@ -263,8 +262,8 @@ func (p *Payment) writePaymentRequired(w http.ResponseWriter, r *http.Request, r
 	}
 	encoded := base64.StdEncoding.EncodeToString(raw)
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set(protocol.HeaderPaymentRequired, encoded)
-	w.Header().Set(protocol.HeaderXPaymentRequired, encoded)
+	w.Header().Set(types.HeaderPaymentRequired, encoded)
+	w.Header().Set(types.HeaderXPaymentRequired, encoded)
 	w.WriteHeader(http.StatusPaymentRequired)
 	_, _ = w.Write(raw)
 }

@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -26,23 +26,23 @@ type ensDNSCommand struct {
 	remove   bool
 }
 
-func newENSStatus(cfg Config, dns DNSProvider) protocol.ENSStatus {
+func newENSStatus(cfg Config, dns DNSProvider) types.ENSStatus {
 	provider := strings.TrimSpace(cfg.DNSProvider)
 	if dns != nil {
 		provider = dns.Name()
 	}
-	return protocol.ENSStatus{
+	return types.ENSStatus{
 		Enabled:  cfg.ENSGaslessEnabled && !utils.IsLocalRelayHost(cfg.BaseDomain),
 		Provider: provider,
 		Address:  strings.TrimSpace(cfg.ENSGaslessAddress),
 	}
 }
 
-func (m *Manager) ENSStatus() protocol.ENSStatus {
+func (m *Manager) ENSStatus() types.ENSStatus {
 	if m == nil {
-		return protocol.ENSStatus{}
+		return types.ENSStatus{}
 	}
-	status := protocol.ENSStatus{}
+	status := types.ENSStatus{}
 	if m.ensStatus != nil {
 		status = m.ensStatus.Load()
 	}

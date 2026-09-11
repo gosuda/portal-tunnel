@@ -1,16 +1,19 @@
-// Command boundarycheck enforces the package ownership rule (#382):
+// Command boundarycheck enforces the package ownership rule (#382, per
+// review): portal is the relay implementation, sdk is the public embeddable
+// client, internal holds the machinery they share, and types is the leaf
+// package owning the shared public wire contract.
 //
-//	portal -> internal, sdk -> internal
+//	portal -> internal, types    sdk -> internal, types
+//	internal -> types
 //	portal -X-> sdk, sdk -X-> portal, internal -X-> {portal, sdk}
-//
-// portal is the relay implementation, sdk is the public embeddable client,
-// and internal holds the protocol machinery they share. They meet through
-// internal/ and types/, never through each other's implementation packages.
-// cmd/ and the module root are composition roots and are unconstrained.
+//	types -X-> {portal, sdk, internal}
 //
 // One audited exception: the x402 payment machinery lives under portal/ per
 // the #382 layout while the sdk serves paywalled tunnel endpoints through
 // it, so sdk may import portal/x402 and nothing else under portal/.
+//
+// Scope: production imports only (go list .Imports); test files are out of
+// scope by design.
 package main
 
 import (
@@ -64,6 +67,8 @@ func main() {
 // area classifies a package path relative to the ownership rule.
 func area(path string) string {
 	switch {
+	case path == modulePrefix+"types" || strings.HasPrefix(path, modulePrefix+"types/"):
+		return "types"
 	case path == modulePrefix+"portal" || strings.HasPrefix(path, modulePrefix+"portal/"):
 		return "portal"
 	case path == modulePrefix+"sdk" || strings.HasPrefix(path, modulePrefix+"sdk/"):
@@ -88,6 +93,8 @@ func violation(pkg, imp string) string {
 		return fmt.Sprintf("portal must not import sdk: %s -> %s", pkg, imp)
 	case from == "internal" && (to == "portal" || to == "sdk"):
 		return fmt.Sprintf("internal must not import portal or sdk: %s -> %s", pkg, imp)
+	case from == "types" && (to == "portal" || to == "sdk" || to == "internal"):
+		return fmt.Sprintf("types must be a leaf contract package: %s -> %s", pkg, imp)
 	default:
 		return ""
 	}

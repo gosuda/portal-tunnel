@@ -19,7 +19,6 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -116,7 +115,7 @@ func TestIssueEndpointRotatesGatewayWithoutChangingLease(t *testing.T) {
 	second := testDescriptor(t, secondAuthority, "https://second.example", testDestination("second"), 2)
 	relays := discovery.NewRelaySet(nil)
 	for _, descriptor := range []types.RelayDescriptor{first, second} {
-		_, err := relays.ApplyRelayDiscoveryResponse(descriptor.APIHTTPSAddr, protocol.DiscoveryResponse{
+		_, err := relays.ApplyRelayDiscoveryResponse(descriptor.APIHTTPSAddr, types.DiscoveryResponse{
 			ProtocolVersion: types.DiscoveryVersion,
 			Relays:          []types.RelayDescriptor{descriptor},
 		}, time.Now().UTC())

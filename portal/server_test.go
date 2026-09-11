@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -152,7 +151,7 @@ func TestHTTPRedirectDisabledPreservesLoopback(t *testing.T) {
 		t.Fatalf("disabled redirect attempted to bind or changed loopback behavior: %v", err)
 	}
 	client := newTestClient(t, cancel, server)
-	resp, err := client.Get("https://" + apiAddr + protocol.PathHealthz)
+	resp, err := client.Get("https://" + apiAddr + types.PathHealthz)
 	if err != nil {
 		t.Fatalf("loopback API is not serving HTTPS: %v", err)
 	}
@@ -326,14 +325,14 @@ func TestRelayDiscoveryEnabledServesDiscoveryEnvelope(t *testing.T) {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, protocol.PathDiscovery, nil)
+	req := httptest.NewRequest(http.MethodGet, types.PathDiscovery, nil)
 	rec := httptest.NewRecorder()
 	server.handleRelayDiscovery(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET relay discovery status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var envelope types.APIEnvelope[protocol.DiscoveryResponse]
+	var envelope types.APIEnvelope[types.DiscoveryResponse]
 	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
 		t.Fatalf("json.Decode() error = %v", err)
 	}
@@ -373,7 +372,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		}
 	}
 
-	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + protocol.PathHealthz)
+	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
 	if err != nil {
 		t.Fatalf("GET /api/healthz error = %v", err)
 	}
@@ -391,7 +390,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		t.Fatalf("GET /api/healthz response = %+v, want ok status", healthEnvelope)
 	}
 
-	signResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + protocol.PathV1Sign)
+	signResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathV1Sign)
 	if err != nil {
 		t.Fatalf("GET /v1/sign error = %v", err)
 	}
@@ -432,7 +431,7 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 		}
 	}
 
-	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + protocol.PathSDKDomain)
+	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathSDKDomain)
 	if err != nil {
 		t.Fatalf("GET /sdk/domain error = %v", err)
 	}
@@ -447,7 +446,7 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 		t.Fatalf("read /sdk/domain response: %v", err)
 	}
 
-	var envelope types.APIEnvelope[protocol.DomainResponse]
+	var envelope types.APIEnvelope[types.DomainResponse]
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		t.Fatalf("decode /sdk/domain response: %v", err)
 	}
@@ -479,7 +478,7 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	record, _, err := server.registry.Register(protocol.RegisterChallengeRequest{
+	record, _, err := server.registry.Register(types.RegisterChallengeRequest{
 		Identity: types.Identity{
 			Name:    "Demo-App",
 			Address: server.identity.Address,
@@ -527,7 +526,7 @@ func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptedClientHelloMaterials() error = %v", err)
 	}
-	record, resp, err := server.registry.Register(protocol.RegisterChallengeRequest{
+	record, resp, err := server.registry.Register(types.RegisterChallengeRequest{
 		Identity: types.Identity{
 			Name:    "demo-ech",
 			Address: server.identity.Address,
@@ -580,7 +579,7 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 
 	client := newTestClient(t, cancel, server)
 
-	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + protocol.PathDiscovery)
+	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathDiscovery)
 	if err != nil {
 		t.Fatalf("GET relay discovery error = %v", err)
 	}

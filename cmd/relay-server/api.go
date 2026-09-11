@@ -20,7 +20,6 @@ import (
 	portaltunnel "github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -82,21 +81,21 @@ func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir st
 func (api *RelayAPI) Handler() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc(protocol.PathLLMs, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(types.PathLLMs, func(w http.ResponseWriter, r *http.Request) {
 		serveLLMs(w, r, api.server.PortalURL())
 	})
-	mux.HandleFunc(protocol.PathAdmin, api.serveAdmin)
-	mux.HandleFunc(protocol.PathAdminPrefix, api.serveAdmin)
-	mux.HandleFunc(protocol.PathPolicy, api.servePolicy)
-	mux.HandleFunc(protocol.PathPolicyPrefix, api.servePolicy)
-	mux.HandleFunc(protocol.PathState, api.servePublicState)
-	mux.HandleFunc(protocol.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(types.PathAdmin, api.serveAdmin)
+	mux.HandleFunc(types.PathAdminPrefix, api.serveAdmin)
+	mux.HandleFunc(types.PathPolicy, api.servePolicy)
+	mux.HandleFunc(types.PathPolicyPrefix, api.servePolicy)
+	mux.HandleFunc(types.PathState, api.servePublicState)
+	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
 		serveInstallScript(w, r, api.server.PortalURL(), false)
 	})
-	mux.HandleFunc(protocol.PathInstallPowerShell, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(types.PathInstallPowerShell, func(w http.ResponseWriter, r *http.Request) {
 		serveInstallScript(w, r, api.server.PortalURL(), true)
 	})
-	mux.HandleFunc(protocol.PathInstallBinPrefix, serveInstallBinary)
+	mux.HandleFunc(types.PathInstallBinPrefix, serveInstallBinary)
 	mux.HandleFunc("/", api.serveFrontend)
 
 	return mux
@@ -111,7 +110,7 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	api.policyMu.RLock()
 	landingPageEnabled := api.landingPageEnabled
 	api.policyMu.RUnlock()
-	utils.WriteAPIData(w, http.StatusOK, protocol.PublicStateResponse{
+	utils.WriteAPIData(w, http.StatusOK, types.PublicStateResponse{
 		Leases:             leases,
 		LandingPageEnabled: landingPageEnabled,
 	})
@@ -131,29 +130,29 @@ func (api *RelayAPI) loadPolicyState() error {
 
 func (api *RelayAPI) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(strings.TrimSpace(r.URL.Path), "/")
-	path = cmp.Or(path, protocol.PathRoot)
+	path = cmp.Or(path, types.PathRoot)
 
 	switch path {
-	case protocol.PathAdmin:
+	case types.PathAdmin:
 		http.NotFound(w, r)
 		return
-	case protocol.PathAdminAuthLogin:
+	case types.PathAdminAuthLogin:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
 		api.handleAdminLogin(w, r)
 		return
-	case protocol.PathAdminLogout:
+	case types.PathAdminLogout:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		return
-	case protocol.PathAdminAuthStatus:
+	case types.PathAdminAuthStatus:
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
-		utils.WriteAPIData(w, http.StatusOK, protocol.AdminAuthStatusResponse{
+		utils.WriteAPIData(w, http.StatusOK, types.AdminAuthStatusResponse{
 			Authenticated: api.authenticatedAdmin(r),
 		})
 		return
@@ -165,7 +164,7 @@ func (api *RelayAPI) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch path {
-	case protocol.PathAdmin + "/metrics":
+	case types.PathAdmin + "/metrics":
 		promhttp.Handler().ServeHTTP(w, r)
 		return
 	default:
@@ -175,7 +174,7 @@ func (api *RelayAPI) serveAdmin(w http.ResponseWriter, r *http.Request) {
 
 func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(strings.TrimSpace(r.URL.Path), "/")
-	path = cmp.Or(path, protocol.PathRoot)
+	path = cmp.Or(path, types.PathRoot)
 
 	if !api.authenticatedAdmin(r) {
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized")
@@ -186,7 +185,7 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 	invalidRequestBody := utils.InvalidRequestError(errors.New("invalid request body"))
 
 	switch path {
-	case protocol.PathPolicy:
+	case types.PathPolicy:
 		switch r.Method {
 		case http.MethodGet:
 			api.policyMu.RLock()
@@ -194,7 +193,7 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			api.policyMu.RUnlock()
 			utils.WriteAPIData(w, http.StatusOK, settings)
 		case http.MethodPost:
-			req, ok := utils.DecodeJSONRequestAs[protocol.PolicySettings](w, r, controlBodyLimit, invalidRequestBody)
+			req, ok := utils.DecodeJSONRequestAs[types.PolicySettings](w, r, controlBodyLimit, invalidRequestBody)
 			if !ok {
 				return
 			}
@@ -217,7 +216,7 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 			utils.MethodNotAllowedError().Write(w)
 		}
-	case protocol.PathPolicyState:
+	case types.PathPolicyState:
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
@@ -225,15 +224,15 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		settings := api.policySettings(runtime)
 		api.policyMu.RUnlock()
 		leases := api.server.PolicyLeases()
-		utils.WriteAPIData(w, http.StatusOK, protocol.PolicyStateResponse{
+		utils.WriteAPIData(w, http.StatusOK, types.PolicyStateResponse{
 			Policy: settings,
 			Leases: leases,
 		})
-	case protocol.PathPolicyLeases:
+	case types.PathPolicyLeases:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		req, ok := utils.DecodeJSONRequestAs[protocol.LeasePolicyUpdate](w, r, controlBodyLimit, invalidRequestBody)
+		req, ok := utils.DecodeJSONRequestAs[types.LeasePolicyUpdate](w, r, controlBodyLimit, invalidRequestBody)
 		if !ok {
 			return
 		}
@@ -255,11 +254,11 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
-	case protocol.PathPolicyIPs:
+	case types.PathPolicyIPs:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		req, ok := utils.DecodeJSONRequestAs[protocol.IPPolicyUpdate](w, r, controlBodyLimit, invalidRequestBody)
+		req, ok := utils.DecodeJSONRequestAs[types.IPPolicyUpdate](w, r, controlBodyLimit, invalidRequestBody)
 		if !ok {
 			return
 		}
@@ -288,22 +287,22 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (api *RelayAPI) policySettings(runtime *policy.Runtime) protocol.PolicySettings {
-	return protocol.PolicySettings{
+func (api *RelayAPI) policySettings(runtime *policy.Runtime) types.PolicySettings {
+	return types.PolicySettings{
 		ApprovalMode:       string(runtime.Approver().Mode()),
 		LandingPageEnabled: api.landingPageEnabled,
-		UDP: protocol.PolicyPortSettings{
+		UDP: types.PolicyPortSettings{
 			Enabled:   runtime.IsUDPEnabled(),
 			MaxLeases: runtime.UDPMaxLeases(),
 		},
-		TCPPort: protocol.PolicyPortSettings{
+		TCPPort: types.PolicyPortSettings{
 			Enabled:   runtime.IsTCPPortEnabled(),
 			MaxLeases: runtime.TCPPortMaxLeases(),
 		},
 	}
 }
 
-func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, runtime *policy.Runtime, req protocol.PolicySettings) bool {
+func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, runtime *policy.Runtime, req types.PolicySettings) bool {
 	if req.UDP.MaxLeases < 0 || req.TCPPort.MaxLeases < 0 {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
 		return false
@@ -333,7 +332,7 @@ func normalizePolicyIdentityKey(w http.ResponseWriter, raw string) (string, bool
 	return normalizedIdentity.Key(), true
 }
 
-func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, identityKey string, req protocol.LeasePolicyUpdate) bool {
+func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, identityKey string, req types.LeasePolicyUpdate) bool {
 	if req.IsBanned == nil && req.IsApproved == nil && req.IsDenied == nil && req.BPS == nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "lease policy update is empty")
 		return false
@@ -379,7 +378,7 @@ func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, iden
 }
 
 func (api *RelayAPI) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONRequestAs[protocol.AdminAuthLoginRequest](w, r, controlBodyLimit, utils.InvalidRequestError(errors.New("invalid request body")))
+	req, ok := utils.DecodeJSONRequestAs[types.AdminAuthLoginRequest](w, r, controlBodyLimit, utils.InvalidRequestError(errors.New("invalid request body")))
 	if !ok {
 		return
 	}
@@ -387,7 +386,7 @@ func (api *RelayAPI) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "invalid admin token")
 		return
 	}
-	utils.WriteAPIData(w, http.StatusOK, protocol.AdminAuthLoginResponse{
+	utils.WriteAPIData(w, http.StatusOK, types.AdminAuthLoginResponse{
 		AccessToken: api.adminToken,
 	})
 }
@@ -513,7 +512,7 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slug := strings.Trim(strings.TrimPrefix(r.URL.Path, protocol.PathInstallBinPrefix), "/")
+	slug := strings.Trim(strings.TrimPrefix(r.URL.Path, types.PathInstallBinPrefix), "/")
 	checksumRequest := strings.HasSuffix(slug, ".sha256")
 	if checksumRequest {
 		slug = strings.TrimSuffix(slug, ".sha256")

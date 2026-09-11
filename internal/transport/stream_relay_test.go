@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestOfferConnReadyWritesProtocolAckBeforeClaimMarker(t *testing.T) {
@@ -37,7 +37,7 @@ func TestOfferConnReadyWritesProtocolAckBeforeClaimMarker(t *testing.T) {
 		claimed <- conn
 	}()
 	var marker [1]byte
-	if _, err := client.Read(marker[:]); err != nil || marker[0] != protocol.MarkerTLSStart {
+	if _, err := client.Read(marker[:]); err != nil || marker[0] != types.MarkerTLSStart {
 		t.Fatalf("claim marker = %d, %v", marker[0], err)
 	}
 	_ = (<-claimed).Close()

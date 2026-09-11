@@ -15,7 +15,6 @@ import (
 
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -60,24 +59,24 @@ func SetPaymentResponseHeaders(header http.Header, settled *facilitatortypes.Pay
 		return
 	}
 	encoded := base64.StdEncoding.EncodeToString(raw)
-	header.Set(protocol.HeaderPaymentResponse, encoded)
-	header.Set(protocol.HeaderXPaymentResponse, encoded)
+	header.Set(types.HeaderPaymentResponse, encoded)
+	header.Set(types.HeaderXPaymentResponse, encoded)
 }
 
 func StripPaymentHeaders(header http.Header) {
-	header.Del(protocol.HeaderXPayment)
-	header.Del(protocol.HeaderPaymentSignature)
-	header.Del(protocol.HeaderPaymentRequired)
-	header.Del(protocol.HeaderXPaymentRequired)
-	header.Del(protocol.HeaderPaymentResponse)
-	header.Del(protocol.HeaderXPaymentResponse)
+	header.Del(types.HeaderXPayment)
+	header.Del(types.HeaderPaymentSignature)
+	header.Del(types.HeaderPaymentRequired)
+	header.Del(types.HeaderXPaymentRequired)
+	header.Del(types.HeaderPaymentResponse)
+	header.Del(types.HeaderXPaymentResponse)
 }
 
 func HandleAPICORS(w http.ResponseWriter, r *http.Request) bool {
 	header := w.Header()
 	header.Set("Access-Control-Allow-Origin", "*")
 	header.Set("Access-Control-Allow-Methods", "GET, HEAD, POST, DELETE, OPTIONS")
-	header.Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, "+protocol.HeaderAccessToken)
+	header.Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, "+types.HeaderAccessToken)
 	header.Set("Access-Control-Max-Age", "600")
 	if r.Method != http.MethodOptions {
 		return false

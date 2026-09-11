@@ -10,6 +10,20 @@ import (
 )
 
 const (
+	HeaderAccessToken       = "X-Portal-Access-Token"
+	HeaderReverseCapability = "X-Portal-Reverse-Capability"
+	HeaderXPayment          = "X-PAYMENT"
+	HeaderPaymentSignature  = "PAYMENT-SIGNATURE"
+	HeaderPaymentRequired   = "PAYMENT-REQUIRED"
+	HeaderXPaymentRequired  = "X-PAYMENT-REQUIRED"
+	HeaderPaymentResponse   = "PAYMENT-RESPONSE"
+	HeaderXPaymentResponse  = "X-PAYMENT-RESPONSE"
+	MarkerKeepalive         = byte(0x00)
+	MarkerRawStart          = byte(0x01)
+	MarkerTLSStart          = byte(0x02)
+)
+
+const (
 	DefaultHTTPRedirectAddr = ":80"
 	HTTPRedirectFeatureName = "http-redirect"
 	HTTPRedirectEnabledEnv  = "HTTP_REDIRECT_ENABLED"

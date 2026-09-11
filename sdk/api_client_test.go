@@ -9,14 +9,13 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestValidateReverseEndpoint(t *testing.T) {
 	t.Parallel()
 	leaseExpiry := time.Now().UTC().Add(time.Minute)
-	endpoint := protocol.ReverseEndpoint{
+	endpoint := types.ReverseEndpoint{
 		URL:        "https://relay.example/sdk/connect",
 		Capability: " reverse-capability ",
 		ExpiresAt:  leaseExpiry,
@@ -33,7 +32,7 @@ func TestValidateReverseEndpoint(t *testing.T) {
 		t.Fatalf("gateway reverse endpoint rejected: %v", err)
 	}
 
-	for name, invalid := range map[string]protocol.ReverseEndpoint{
+	for name, invalid := range map[string]types.ReverseEndpoint{
 		"wrong path":  {URL: "https://relay.example/sdk/renew", Capability: "cap", ExpiresAt: leaseExpiry},
 		"lease bound": {URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry.Add(time.Second)},
 	} {
@@ -52,13 +51,13 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	direct := protocol.ReverseEndpoint{URL: "https://relay.example/sdk/connect"}
-	overlay := protocol.ReverseEndpoint{URL: "https://gateway.example/sdk/connect", Overlay: true}
-	legacyOverlay := protocol.ReverseEndpoint{URL: "https://gateway.example/sdk/connect"}
+	direct := types.ReverseEndpoint{URL: "https://relay.example/sdk/connect"}
+	overlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect", Overlay: true}
+	legacyOverlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect"}
 
 	for name, test := range map[string]struct {
 		enabled  bool
-		endpoint protocol.ReverseEndpoint
+		endpoint types.ReverseEndpoint
 		wantErr  bool
 	}{
 		"direct":           {endpoint: direct},

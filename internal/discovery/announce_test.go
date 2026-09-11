@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -227,7 +226,7 @@ func TestInsertCandidateHiddenUntilDirectProbe(t *testing.T) {
 	}
 	// The real promotion path: the refresher polls the relay itself and
 	// ApplyRelayDiscoveryResponse verifies the target's own descriptor.
-	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, protocol.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now,
 		Relays:          []types.RelayDescriptor{descriptor},
@@ -275,7 +274,7 @@ func TestApplyRelayDiscoveryResponseAppliesIdentityCap(t *testing.T) {
 		url := fmt.Sprintf("https://gossip-%02d.example", i)
 		relays = append(relays, mustSignedDescriptor(t, signing, url, now.Add(time.Duration(i)*time.Second)))
 	}
-	if _, err := set.ApplyRelayDiscoveryResponse("", protocol.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now,
 		Relays:          relays,
@@ -310,7 +309,7 @@ func TestApplyRelayDiscoveryResponsePromotesOnlyTarget(t *testing.T) {
 		url := fmt.Sprintf("https://laundered-%d.example", i)
 		relays = append(relays, mustSignedDescriptor(t, identity, url, now.Add(time.Duration(i)*time.Second)))
 	}
-	if _, err := set.ApplyRelayDiscoveryResponse(sourceURL, protocol.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse(sourceURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now,
 		Relays:          relays,
@@ -327,7 +326,7 @@ func TestApplyRelayDiscoveryResponsePromotesOnlyTarget(t *testing.T) {
 	// its own direct probe.
 	launderedURL := "https://laundered-0.example"
 	launderedDescriptor := relays[1]
-	if _, err := set.ApplyRelayDiscoveryResponse(launderedURL, protocol.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse(launderedURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now,
 		Relays:          []types.RelayDescriptor{launderedDescriptor},
@@ -347,7 +346,7 @@ func TestGossipRefreshKeepsVerifiedTrust(t *testing.T) {
 	relayURL := "https://monotone.example"
 	descriptor := mustSignedDescriptor(t, signing, relayURL, now)
 
-	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, protocol.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now,
 		Relays:          []types.RelayDescriptor{descriptor},
@@ -355,7 +354,7 @@ func TestGossipRefreshKeepsVerifiedTrust(t *testing.T) {
 		t.Fatalf("ApplyRelayDiscoveryResponse(target) error = %v", err)
 	}
 	refreshed := mustSignedDescriptor(t, signing, relayURL, now.Add(time.Second))
-	if _, err := set.ApplyRelayDiscoveryResponse("", protocol.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now.Add(time.Second),
 		Relays:          []types.RelayDescriptor{refreshed},
@@ -380,7 +379,7 @@ func TestGlobalCapEvictsCandidatesBeforeVerified(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	verifiedDescriptor := mustSignedDescriptor(t, verified, "https://verified.example", now)
-	if _, err := set.ApplyRelayDiscoveryResponse("https://verified.example", protocol.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse("https://verified.example", types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now,
 		Relays:          []types.RelayDescriptor{verifiedDescriptor},
@@ -424,7 +423,7 @@ func TestTrustDoesNotTransferAcrossIdentityTakeover(t *testing.T) {
 	relayURL := "https://takeover.example"
 
 	firstDescriptor := mustSignedDescriptor(t, first, relayURL, now)
-	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, protocol.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now,
 		Relays:          []types.RelayDescriptor{firstDescriptor},

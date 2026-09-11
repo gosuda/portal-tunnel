@@ -10,7 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const defaultSessionWriteLimit = 5 * time.Second
@@ -80,11 +80,11 @@ func (b *RelayStream) OfferConnReady(conn net.Conn, ready func() error) error {
 }
 
 func (b *RelayStream) Claim(ctx context.Context) (net.Conn, error) {
-	return b.claimWithMarker(ctx, protocol.MarkerTLSStart)
+	return b.claimWithMarker(ctx, types.MarkerTLSStart)
 }
 
 func (b *RelayStream) claimRaw(ctx context.Context) (net.Conn, error) {
-	return b.claimWithMarker(ctx, protocol.MarkerRawStart)
+	return b.claimWithMarker(ctx, types.MarkerRawStart)
 }
 
 func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte) (net.Conn, error) {
@@ -268,7 +268,7 @@ func (s *relaySession) StartIdle() {
 }
 
 func (s *relaySession) Activate() error {
-	return s.activateWithMarker(protocol.MarkerTLSStart)
+	return s.activateWithMarker(types.MarkerTLSStart)
 }
 
 func (s *relaySession) activateWithMarker(marker byte) error {
@@ -352,7 +352,7 @@ func (s *relaySession) runKeepalive(stop <-chan struct{}, done chan<- struct{}) 
 			return
 		}
 		_ = s.conn.SetWriteDeadline(time.Now().Add(defaultSessionWriteLimit))
-		_, err := s.conn.Write([]byte{protocol.MarkerKeepalive})
+		_, err := s.conn.Write([]byte{types.MarkerKeepalive})
 		_ = s.conn.SetWriteDeadline(time.Time{})
 		s.mu.Unlock()
 		if err != nil {

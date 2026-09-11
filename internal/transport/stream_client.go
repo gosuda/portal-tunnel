@@ -9,7 +9,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 type ClientStream struct {
@@ -85,15 +85,15 @@ func (s *ClientStream) runSession(
 		_ = conn.SetReadDeadline(time.Time{})
 
 		switch marker[0] {
-		case protocol.MarkerKeepalive:
+		case types.MarkerKeepalive:
 			continue
-		case protocol.MarkerTLSStart:
+		case types.MarkerTLSStart:
 			if err := s.activate(ctx, conn, tlsConfig); err != nil {
 				_ = conn.Close()
 				return true, err
 			}
 			return true, nil
-		case protocol.MarkerRawStart:
+		case types.MarkerRawStart:
 			if err := s.activateRaw(ctx, conn); err != nil {
 				_ = conn.Close()
 				return true, err
