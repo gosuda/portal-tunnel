@@ -8,10 +8,6 @@
 //	portal -X-> sdk, sdk -X-> portal, internal -X-> {portal, sdk}
 //	types -X-> {portal, sdk, internal}
 //
-// One audited exception: the x402 payment machinery lives under portal/ per
-// the #382 layout while the sdk serves paywalled tunnel endpoints through
-// it, so sdk may import portal/x402 and nothing else under portal/.
-//
 // Scope: production imports only (go list .Imports); test files are out of
 // scope by design.
 package main
@@ -27,9 +23,6 @@ import (
 )
 
 const modulePrefix = "github.com/gosuda/portal-tunnel/v2/"
-
-// sdkAllowedPortalImport is the single exception to the sdk -X-> portal rule.
-const sdkAllowedPortalImport = modulePrefix + "portal/x402"
 
 func main() {
 	out, err := exec.CommandContext(context.Background(), "go", "list", "-f", "{{.ImportPath}}\t{{join .Imports \" \"}}", "./...").Output()
@@ -85,10 +78,8 @@ func violation(pkg, imp string) string {
 	switch {
 	case from == "" || to == "":
 		return ""
-	case from == "sdk" && to == "portal" && imp == sdkAllowedPortalImport:
-		return ""
 	case from == "sdk" && to == "portal":
-		return fmt.Sprintf("sdk must not import portal (except %s): %s -> %s", sdkAllowedPortalImport, pkg, imp)
+		return fmt.Sprintf("sdk must not import portal: %s -> %s", pkg, imp)
 	case from == "portal" && to == "sdk":
 		return fmt.Sprintf("portal must not import sdk: %s -> %s", pkg, imp)
 	case from == "internal" && (to == "portal" || to == "sdk"):

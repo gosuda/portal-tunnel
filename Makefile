@@ -161,7 +161,6 @@ load-test:
 	@:
 
 # Enforce the #382 package ownership rule: portal and sdk meet through
-# internal/ and types/, never through each other (audited exception:
-# sdk -> portal/x402).
+# internal/ and types/, never through each other.
 check-boundaries:
 	go run ./cmd/boundarycheck
