@@ -14,9 +14,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
+	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/telemetry"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )

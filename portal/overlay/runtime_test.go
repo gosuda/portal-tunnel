@@ -17,9 +17,8 @@ import (
 	"gosuda.org/ivnp"
 	"gosuda.org/ivnp/foundation"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -55,7 +54,7 @@ func testDestination(seed string) string {
 func testDescriptor(t *testing.T, authority identity.Authority, rawURL, destination string, connections int64) types.RelayDescriptor {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
-	descriptor, err := auth.SignRelayDescriptor(types.RelayDescriptor{
+	descriptor, err := identity.SignRelayDescriptor(types.RelayDescriptor{
 		Address:           authority.Identity().Address,
 		Version:           types.DiscoveryVersion,
 		IssuedAt:          now,

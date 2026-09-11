@@ -57,7 +57,7 @@ jobs:
           make vet
           make lint
           make test
-
+          make check-boundaries
       - name: Run frontend checks
         working-directory: frontend
         run: |

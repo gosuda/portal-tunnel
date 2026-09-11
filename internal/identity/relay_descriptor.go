@@ -1,4 +1,4 @@
-package auth
+package identity
 
 import (
 	"encoding/base64"
@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -16,7 +15,7 @@ import (
 // recoverable, so verifiers do not need to know the public key out of band;
 // they recover it from the signature and check it derives the descriptor's
 // Address field.
-func SignRelayDescriptor(desc types.RelayDescriptor, authority identity.Authority) (types.RelayDescriptor, error) {
+func SignRelayDescriptor(desc types.RelayDescriptor, authority Authority) (types.RelayDescriptor, error) {
 	if authority == nil {
 		return types.RelayDescriptor{}, errors.New("relay descriptor signing authority is required")
 	}
@@ -26,7 +25,7 @@ func SignRelayDescriptor(desc types.RelayDescriptor, authority identity.Authorit
 	}
 
 	desc.Signature = ""
-	normalized, err := identity.NormalizeRelayDescriptor(desc)
+	normalized, err := NormalizeRelayDescriptor(desc)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("normalize relay descriptor for signing: %w", err)
 	}
@@ -69,7 +68,7 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 
 	unsignedCopy := desc
 	unsignedCopy.Signature = ""
-	normalized, err := identity.NormalizeRelayDescriptor(unsignedCopy)
+	normalized, err := NormalizeRelayDescriptor(unsignedCopy)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: normalize: %w", err)
 	}
@@ -78,13 +77,13 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 		return types.RelayDescriptor{}, fmt.Errorf("canonicalize relay descriptor: %w", err)
 	}
 
-	publicKey, err := identity.RecoverSHA256Secp256k1Compact(canonical, signature)
+	publicKey, err := RecoverSHA256Secp256k1Compact(canonical, signature)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: %w", err)
 	}
 
 	publicKeyHex := hex.EncodeToString(publicKey.SerializeCompressed())
-	derivedAddress, err := identity.AddressFromCompressedPublicKeyHex(publicKeyHex)
+	derivedAddress, err := AddressFromCompressedPublicKeyHex(publicKeyHex)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("derive address from recovered key: %w", err)
 	}

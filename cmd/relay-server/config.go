@@ -16,9 +16,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	portalx402 "github.com/gosuda/portal-tunnel/v2/internal/x402"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	portalx402 "github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )

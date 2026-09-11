@@ -1,6 +1,7 @@
 services:
   portal:
     image: ghcr.io/gosuda/portal:2
+    pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile
