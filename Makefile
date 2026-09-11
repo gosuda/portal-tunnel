@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-GO_PACKAGES := . ./cmd/... ./portal/... ./sdk/... ./types/... ./utils/...
+GO_PACKAGES := . ./cmd/... ./internal/... ./portal/... ./sdk/... ./types/... ./utils/...
 GO_BUILD_FLAGS := -trimpath -ldflags "-s -w"
 GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
 GOIMPORTS_VERSION := v0.49.0
