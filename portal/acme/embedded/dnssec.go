@@ -3,15 +3,11 @@ package embedded
 import (
 	"bytes"
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -25,7 +21,7 @@ const signatureSkew = 5 * time.Minute
 
 // A single file binds the private key to its zone and DNSKEY. Never regenerate
 // an unreadable or malformed existing key: the parent DS may already trust it.
-func loadSigningKey(path, zone string) (resultKey *dns.DNSKEY, resultSigner crypto.Signer, resultErr error) {
+func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil, errors.New("dnssec key path is required")
 	}
@@ -34,11 +30,11 @@ func loadSigningKey(path, zone string) (resultKey *dns.DNSKEY, resultSigner cryp
 		DNSKEY     string
 		PrivateKey string
 	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, nil, fmt.Errorf("stat dnssec key: %w", err)
-		}
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, nil, fmt.Errorf("read dnssec key: %w", err)
+	}
+	if errors.Is(err, os.ErrNotExist) {
 		private, err := key.Generate(256)
 		if err != nil {
 			return nil, nil, err
@@ -51,110 +47,34 @@ func loadSigningKey(path, zone string) (resultKey *dns.DNSKEY, resultSigner cryp
 				return nil, nil, err
 			}
 		}
-		data, err := json.Marshal(storedKey{key.String(), key.PrivateKeyString(private)})
+		data, err = json.Marshal(storedKey{key.String(), key.PrivateKeyString(private)})
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := makeKeyDirectory(filepath.Dir(path)); err != nil {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			return nil, nil, err
 		}
-		// Restrict permissions before writing any private material, and publish
-		// only a complete, synced file without replacing an existing key.
-		f, err := createKeyTempFile(filepath.Dir(path))
+		f, err := os.CreateTemp(dir, ".dnssec-key-*")
 		if err != nil {
 			return nil, nil, fmt.Errorf("create dnssec key: %w", err)
 		}
 		tmp := f.Name()
-		removeTemp := func() error {
-			if tmp == "" {
-				return nil
-			}
-			name := tmp
-			tmp = ""
-			// Windows publication moves the file and has already removed this
-			// name. Unix publication leaves a second link that must be unlinked.
-			if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("remove temporary dnssec key: %w", err)
-			}
-			return nil
-		}
-		defer func() {
-			if err := removeTemp(); err != nil {
-				resultKey, resultSigner = nil, nil
-				resultErr = errors.Join(resultErr, err)
-			}
-		}()
-		if err := restrictKeyPermissions(tmp); err != nil {
-			return nil, nil, fmt.Errorf("restrict dnssec key permissions: %w", errors.Join(err, f.Close()))
-		}
+		defer func() { _ = os.Remove(tmp) }()
 		_, writeErr := f.Write(data)
 		syncErr := f.Sync()
 		closeErr := f.Close()
 		if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
 			return nil, nil, fmt.Errorf("persist dnssec key: %w", err)
 		}
-		publishErr := publishKeyFile(tmp, path)
-		if publishErr != nil && !errors.Is(publishErr, os.ErrExist) {
-			return nil, nil, fmt.Errorf("publish dnssec key: %w", publishErr)
+		if err := os.Rename(tmp, path); err != nil {
+			return nil, nil, fmt.Errorf("publish dnssec key: %w", err)
 		}
-		// The final directory flush must commit both the published name and the
-		// temporary name's removal before returning a key, including race losers.
-		if err := removeTemp(); err != nil {
-			return nil, nil, err
-		}
-		if publishErr != nil {
-			// A simultaneous start won publication. Load its completed key using
-			// the same fail-closed checks as any other persisted key.
-			info, err = os.Lstat(path)
-			if err != nil {
-				return nil, nil, fmt.Errorf("stat published dnssec key: %w", err)
-			}
-		} else {
-			// Keep durability errors separate from publication's ErrExist: a
-			// failed sync must never be mistaken for another creator winning.
-			if err := syncKeyPublication(path); err != nil {
-				return nil, nil, fmt.Errorf("sync published dnssec key: %w", err)
-			}
-			return key, private.(crypto.Signer), nil
-		}
-	}
-	if !info.Mode().IsRegular() {
-		return nil, nil, errors.New("dnssec key must be a regular file, not a symlink")
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
-		return nil, nil, errors.New("dnssec private key permissions must be 0600 or stricter")
-	}
-	if err := restrictKeyPermissions(path); err != nil {
-		return nil, nil, fmt.Errorf("restrict dnssec key permissions: %w", err)
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer f.Close()
-	opened, err := f.Stat()
-	if err != nil {
-		return nil, nil, err
-	}
-	if !os.SameFile(info, opened) {
-		return nil, nil, errors.New("dnssec key changed while opening")
-	}
-	const maxKeyFileSize = 16 * 1024
-	data, err := io.ReadAll(io.LimitReader(f, maxKeyFileSize+1))
-	if err != nil {
-		return nil, nil, fmt.Errorf("read dnssec key: %w", err)
-	}
-	if len(data) > maxKeyFileSize {
-		return nil, nil, errors.New("dnssec key exceeds maximum file size")
+		return key, private.(crypto.Signer), nil
 	}
 	var stored storedKey
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&stored); err != nil {
+	if err := json.Unmarshal(data, &stored); err != nil {
 		return nil, nil, fmt.Errorf("decode dnssec key: %w", err)
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return nil, nil, errors.New("unexpected trailing dnssec key data")
 	}
 	rr, err := dns.NewRR(stored.DNSKEY)
 	if err != nil {
@@ -174,12 +94,9 @@ func loadSigningKey(path, zone string) (resultKey *dns.DNSKEY, resultSigner cryp
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse dnssec private key: %w", err)
 	}
-	signer, ok := private.(*ecdsa.PrivateKey)
-	if !ok || signer.Curve != elliptic.P256() {
+	signer, ok := private.(crypto.Signer)
+	if !ok {
 		return nil, nil, errors.New("invalid dnssec private key")
-	}
-	if _, err := signer.Bytes(); err != nil {
-		return nil, nil, fmt.Errorf("invalid dnssec private key: %w", err)
 	}
 	// The BIND parser does not check that the public and private keys match.
 	sig := &dns.RRSIG{KeyTag: loaded.KeyTag(), SignerName: zone, Algorithm: loaded.Algorithm, Inception: 1, Expiration: 2}
@@ -188,12 +105,6 @@ func loadSigningKey(path, zone string) (resultKey *dns.DNSKEY, resultSigner cryp
 	}
 	if err := sig.Verify(loaded, []dns.RR{loaded}); err != nil {
 		return nil, nil, fmt.Errorf("dnssec public/private key mismatch: %w", err)
-	}
-	// This includes both publication losers and keys found by the first stat:
-	// another process may have made the complete file visible but not yet
-	// persisted its name. Never export its key or DS before our own flush.
-	if err := syncKeyPublication(path); err != nil {
-		return nil, nil, fmt.Errorf("sync published dnssec key: %w", err)
 	}
 	return loaded, signer, nil
 }

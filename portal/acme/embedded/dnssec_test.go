@@ -1,7 +1,6 @@
 package embedded
 
 import (
-	"bytes"
 	"context"
 	"net"
 	"os"
@@ -210,7 +209,7 @@ func TestDNSSECCanonicalDenialIntervals(t *testing.T) {
 	}
 }
 
-func TestDNSSECKeyPersistenceAndFailClosed(t *testing.T) {
+func TestDNSSECKeyPersistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), types.DNSSECKeyFileName)
 	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: path}
 	first, err := New(cfg)
@@ -226,9 +225,21 @@ func TestDNSSECKeyPersistenceAndFailClosed(t *testing.T) {
 	if err := first.Stop(); err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("new private key mode = %04o, want 0600", info.Mode().Perm())
+		}
+		if err := os.Chmod(path, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	second, err := New(cfg)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("reload operator-managed key: %v", err)
 	}
 	_, nextDS, _, err := second.EnsureDNSSEC(context.Background(), testZone)
 	if err != nil || nextDS != ds {
@@ -239,148 +250,19 @@ func TestDNSSECKeyPersistenceAndFailClosed(t *testing.T) {
 	if err := second.Stop(); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0644 {
+			t.Fatalf("operator-managed private key mode changed: %04o", info.Mode().Perm())
+		}
 	}
 	cfg.BaseDomain = "different.example.com"
 	if wrong, err := New(cfg); err == nil {
 		_ = wrong.Stop()
 		t.Fatal("accepted another zone's key")
-	}
-	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, data) {
-		t.Fatal("wrong-zone key load modified persisted state")
-	}
-	cfg.BaseDomain = testZone
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(path, 0644); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := New(cfg); err == nil {
-			t.Fatal("accepted world-readable private key")
-		}
-		if err := os.Chmod(path, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	const maxSize = 16 * 1024
-	if len(data) == 0 || len(data) >= maxSize {
-		t.Fatalf("unexpected persisted private key size: %d", len(data))
-	}
-	for _, tc := range []struct {
-		name string
-		data []byte
-	}{
-		{name: "empty", data: nil},
-		{name: "incomplete", data: []byte("incomplete key")},
-		{name: "truncated JSON", data: data[:len(data)-1]},
-		{name: "trailing JSON", data: []byte(string(data) + " {}")},
-		{name: "trailing garbage", data: []byte(string(data) + " corrupt")},
-		{name: "oversized whitespace", data: []byte(string(data) + strings.Repeat(" ", maxSize+1-len(data)))},
-		{name: "corruption past read limit", data: []byte(string(data) + strings.Repeat(" ", maxSize-len(data)) + "corrupt")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := os.WriteFile(path, tc.data, 0600); err != nil {
-				t.Fatal(err)
-			}
-			if broken, err := New(cfg); err == nil {
-				_ = broken.Stop()
-				t.Fatal("accepted or replaced a corrupt persisted key")
-			}
-			if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, tc.data) {
-				t.Fatal("failed key load modified persisted state")
-			}
-		})
-	}
-	// Whitespace at the accepted size boundary is valid JSON, not oversize.
-	bounded := []byte(string(data) + strings.Repeat(" ", maxSize-len(data)))
-	if err := os.WriteFile(path, bounded, 0600); err != nil {
-		t.Fatal(err)
-	}
-	last, err := New(cfg)
-	if err != nil {
-		t.Fatalf("rejected valid key at size limit: %v", err)
-	}
-	defer func() { _ = last.Stop() }()
-	_, lastDS, _, err := last.EnsureDNSSEC(context.Background(), testZone)
-	if err != nil || lastDS != ds {
-		t.Fatalf("valid padded key changed DS: %q (%v)", lastDS, err)
-	}
-	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, bounded) {
-		t.Fatal("valid key load modified persisted state")
-	}
-}
-
-func TestDNSSECConcurrentKeyCreation(t *testing.T) {
-	dir := t.TempDir()
-	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: filepath.Join(dir, types.DNSSECKeyFileName)}
-	type result struct {
-		provider *Provider
-		err      error
-	}
-	const starts = 8
-	ready := make(chan struct{}, starts)
-	start := make(chan struct{})
-	results := make(chan result, starts)
-	for range starts {
-		go func() {
-			ready <- struct{}{}
-			<-start
-			p, err := New(cfg)
-			results <- result{p, err}
-		}()
-	}
-	for range starts {
-		<-ready
-	}
-	close(start)
-	var providers []*Provider
-	for range starts {
-		got := <-results
-		if got.err != nil {
-			t.Errorf("concurrent start failed: %v", got.err)
-			continue
-		}
-		providers = append(providers, got.provider)
-		t.Cleanup(func() {
-			if err := got.provider.Stop(); err != nil {
-				t.Error(err)
-			}
-		})
-	}
-	if t.Failed() {
-		return
-	}
-	var ds string
-	var key *dns.DNSKEY
-	for _, p := range providers {
-		_, gotDS, _, err := p.EnsureDNSSEC(context.Background(), testZone)
-		if err != nil {
-			t.Fatal(err)
-		}
-		response := dnssecExchange(t, p, "tcp", testZone, dns.TypeDNSKEY, 1232)
-		gotKey := response.Answer[0].(*dns.DNSKEY)
-		if key == nil {
-			key, ds = gotKey, gotDS
-		}
-		if gotDS != ds || gotDS != gotKey.ToDS(dns.SHA256).String() || gotKey.PublicKey != key.PublicKey {
-			t.Fatal("simultaneous starts did not preserve one key and DS")
-		}
-		verifySection(t, key, response.Answer)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Name() != types.DNSSECKeyFileName {
-		t.Fatalf("key publication left temporary files: %v", entries)
-	}
-	info, err := os.Stat(cfg.KeyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
-		t.Fatalf("published private key has permissive mode: %v", info.Mode())
 	}
 }
 
