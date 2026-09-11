@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,20 @@ type leaseRegistry struct {
 	mu       sync.RWMutex
 }
 
+// buildReverseURL derives the /sdk/connect endpoint the tunnel dials back to for
+// the reverse session. It reuses the issuer origin but forces the relay's own SNI
+// port so the advertised host always matches the relay the tunnel connected to —
+// even when the operator's PORTAL_URL omits a non-default SNI port. When the issuer
+// already carries a port, that port is trusted as-is.
+func buildReverseURL(issuerURL *url.URL, sniPort int) string {
+	base := issuerURL
+	if issuerURL.Port() == "" && sniPort != 443 && sniPort != 80 {
+		base = issuerURL.Clone()
+		base.Host = net.JoinHostPort(issuerURL.Hostname(), strconv.Itoa(sniPort))
+	}
+	return utils.ResolveAPIURL(base, types.PathSDKConnect).String()
+}
+
 func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, rootHostname string, sniPort int, tokenAuthority identity.Authority, tokenIssuer string, trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*leaseRegistry, error) {
 	if tokenAuthority == nil {
 		return nil, errors.New("lease token authority is required")
@@ -75,7 +90,7 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 		sniPort:        sniPort,
 		tokenAuthority: tokenAuthority,
 		tokenIssuer:    tokenIssuer,
-		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
+		reverseURL: buildReverseURL(issuerURL, sniPort),
 		policy:         runtime,
 		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
