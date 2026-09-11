@@ -5,17 +5,15 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
-
-	"github.com/rs/zerolog/log"
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
 
@@ -60,9 +58,14 @@ func BuildClientTLSConfig(relayURL, hostname string, echKeys []tls.EncryptedClie
 		return nil, nil, fmt.Errorf("create keyless remote signer: %w", err)
 	}
 
+	if err := verifyRemoteSigner(remoteSigner, remoteSigner.Public()); err != nil {
+		_ = remoteSigner.Close()
+		return nil, nil, fmt.Errorf("keyless signer self-test against %s failed: %w", serverName, err)
+	}
+
 	tlsConfig, err := keylesstls.NewServerTLSConfig(keylesstls.ServerTLSConfig{
 		CertPEM:                  certPEM,
-		Signer:                   newVerifyingSigner(remoteSigner),
+		Signer:                   remoteSigner,
 		NextProtos:               []string{"http/1.1"},
 		MinVersion:               MinTLSVersion(len(echKeys) > 0),
 		EncryptedClientHelloKeys: echKeys,
@@ -97,39 +100,46 @@ func VerifyCertificateHostname(certPEM []byte, hostname string) error {
 	return leaf.VerifyHostname(hostname)
 }
 
-// verifyingSigner checks every remote signature against the public key pinned
-// from the relay's served certificate before handing it to crypto/tls. A
-// terminating proxy that presents one keypair while the relay signer holds
-// another otherwise surfaces only as an opaque TLS "bad signature" alert.
-type verifyingSigner struct {
-	inner      *keylesstls.RemoteSigner
-	warnedOnce sync.Once
-}
+// verifyRemoteSigner probes signer with a one-off random challenge and checks
+// the returned signature against pinned, the public key of the certificate the
+// relay served. The #377 failure mode — a terminating proxy presenting
+// certificate A while the relay's keyless signer holds keypair B — otherwise
+// surfaces only as an opaque TLS "bad signature" alert on every tenant
+// handshake. One probe at configuration time turns it into an actionable
+// startup error; healthy deployments pay a single extra /v1/sign round trip.
+func verifyRemoteSigner(signer crypto.Signer, pinned crypto.PublicKey) error {
+	challenge := make([]byte, 32)
+	if _, err := rand.Read(challenge); err != nil {
+		return fmt.Errorf("generate self-test challenge: %w", err)
+	}
+	digest := sha256.Sum256(challenge)
 
-func newVerifyingSigner(inner *keylesstls.RemoteSigner) *verifyingSigner {
-	return &verifyingSigner{inner: inner}
-}
+	// RSA keys probe with RSA-PSS / SHA-256 — the CertificateVerify scheme
+	// TLS 1.3 uses and the salt length the relay signer applies — and ECDSA
+	// keys with ECDSA / SHA-256. Other key types are rejected by the /v1/sign
+	// protocol itself.
+	var opts crypto.SignerOpts
+	switch pinned.(type) {
+	case *rsa.PublicKey:
+		opts = &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
+	case *ecdsa.PublicKey:
+		opts = crypto.SHA256
+	default:
+		return fmt.Errorf("unsupported pinned key type %T", pinned)
+	}
 
-func (v *verifyingSigner) Public() crypto.PublicKey { return v.inner.Public() }
-
-func (v *verifyingSigner) Close() error { return v.inner.Close() }
-
-func (v *verifyingSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
-	signature, err := v.inner.Sign(rand, digest, opts)
+	signature, err := signer.Sign(rand.Reader, digest[:], opts)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("sign self-test challenge: %w", err)
 	}
-	if err := verifySignature(v.inner.Public(), digest, opts, signature); err != nil {
-		v.warnedOnce.Do(func() {
-			log.Warn().
-				Err(err).
-				Msg("relay keyless signature does not match the pinned certificate; tenant TLS handshakes will keep failing until the relay's terminating proxy and signer share one keypair")
-		})
-		return nil, fmt.Errorf("relay signature does not match the pinned certificate (terminating proxy and relay signer keypairs differ): %w", err)
+	if err := verifySignature(pinned, digest[:], opts, signature); err != nil {
+		return fmt.Errorf("self-test signature does not match the pinned certificate (terminating proxy and relay signer keypairs differ; tenant TLS cannot succeed until they share one keypair): %w", err)
 	}
-	return signature, nil
+	return nil
 }
 
+// verifySignature checks a signature made for digest under opts against
+// publicKey, preserving RSA-PSS salt options.
 func verifySignature(publicKey crypto.PublicKey, digest []byte, opts crypto.SignerOpts, signature []byte) error {
 	switch key := publicKey.(type) {
 	case *rsa.PublicKey:
