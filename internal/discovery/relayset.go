@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -628,7 +629,7 @@ func (s *RelaySet) discoveryRelayStateLocked(
 	return RelayState{Descriptor: verified, LastSeenAt: now}, relayURL, true
 }
 
-func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.DiscoveryResponse, now time.Time) (relaySetChanged bool, err error) {
+func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp protocol.DiscoveryResponse, now time.Time) (relaySetChanged bool, err error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	} else {

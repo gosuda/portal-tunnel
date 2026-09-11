@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	portalx402 "github.com/gosuda/portal-tunnel/v2/portal/x402"
@@ -234,7 +235,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 			return fmt.Errorf("mount x402 facilitator: %w", err)
 		}
 		log.Info().
-			Str("path", types.PathX402Facilitator).
+			Str("path", protocol.PathX402Facilitator).
 			Str("network", x402Network).
 			Msg("relay-owned x402 facilitator enabled")
 	}

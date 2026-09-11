@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -47,14 +48,14 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	bearerAuthenticated := strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == s.token
 	walletAddress, walletAuthenticated := s.authenticatedWallet(r)
-	allowed := bearerAuthenticated || (walletAuthenticated && r.URL.Path == types.PathAgentStatus)
+	allowed := bearerAuthenticated || (walletAuthenticated && r.URL.Path == protocol.PathAgentStatus)
 	if !allowed {
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized")
 		return
 	}
 
 	switch {
-	case r.URL.Path == types.PathAgentStatus:
+	case r.URL.Path == protocol.PathAgentStatus:
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
@@ -63,7 +64,7 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			status.WalletAddress = walletAddress
 		}
 		utils.WriteAPIData(w, http.StatusOK, status)
-	case r.URL.Path == types.PathAgentShutdown:
+	case r.URL.Path == protocol.PathAgentShutdown:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
@@ -71,7 +72,7 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if s.shutdown != nil {
 			go s.shutdown()
 		}
-	case r.URL.Path == types.PathAgentTunnels:
+	case r.URL.Path == protocol.PathAgentTunnels:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
@@ -84,8 +85,8 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		utils.WriteAPIData(w, http.StatusAccepted, map[string]bool{"accepted": true})
-	case strings.HasPrefix(r.URL.Path, types.PathAgentTunnelsPrefix):
-		rest := strings.TrimPrefix(r.URL.Path, types.PathAgentTunnelsPrefix)
+	case strings.HasPrefix(r.URL.Path, protocol.PathAgentTunnelsPrefix):
+		rest := strings.TrimPrefix(r.URL.Path, protocol.PathAgentTunnelsPrefix)
 		tunnelID, action, ok := strings.Cut(rest, "/")
 		tunnelID, err := url.PathUnescape(tunnelID)
 		if err != nil || strings.TrimSpace(tunnelID) == "" {
@@ -151,26 +152,26 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {
-	case types.PathAgentAuthChallenge:
+	case protocol.PathAgentAuthChallenge:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return true
 		}
-		req, ok := utils.DecodeJSONRequest[types.WalletAuthChallengeRequest](w, r, controlRequestBodyLimit)
+		req, ok := utils.DecodeJSONRequest[protocol.WalletAuthChallengeRequest](w, r, controlRequestBodyLimit)
 		if !ok {
 			return true
 		}
-		resp, err := s.auth.IssueChallenge(req, agentAuthDomain(r), agentAuthURI(r, types.PathAgentAuthLogin), time.Now().UTC())
+		resp, err := s.auth.IssueChallenge(req, agentAuthDomain(r), agentAuthURI(r, protocol.PathAgentAuthLogin), time.Now().UTC())
 		if err != nil {
 			writeAgentWalletAuthError(w, err)
 			return true
 		}
 		utils.WriteAPIData(w, http.StatusCreated, resp)
 		return true
-	case types.PathAgentAuthLogin:
+	case protocol.PathAgentAuthLogin:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return true
 		}
-		req, ok := utils.DecodeJSONRequest[types.WalletAuthLoginRequest](w, r, controlRequestBodyLimit)
+		req, ok := utils.DecodeJSONRequest[protocol.WalletAuthLoginRequest](w, r, controlRequestBodyLimit)
 		if !ok {
 			return true
 		}
@@ -182,15 +183,15 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 		http.SetCookie(w, &http.Cookie{
 			Name:     agentCookieName,
 			Value:    token,
-			Path:     types.PathAgentPrefix,
+			Path:     protocol.PathAgentPrefix,
 			HttpOnly: true,
 			Secure:   true,
 			SameSite: http.SameSiteStrictMode,
 			MaxAge:   86400,
 		})
-		utils.WriteAPIData(w, http.StatusOK, types.WalletAuthLoginResponse{WalletAddress: walletAddress})
+		utils.WriteAPIData(w, http.StatusOK, protocol.WalletAuthLoginResponse{WalletAddress: walletAddress})
 		return true
-	case types.PathAgentAuthLogout:
+	case protocol.PathAgentAuthLogout:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return true
 		}
@@ -200,7 +201,7 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 		http.SetCookie(w, &http.Cookie{
 			Name:     agentCookieName,
 			Value:    "",
-			Path:     types.PathAgentPrefix,
+			Path:     protocol.PathAgentPrefix,
 			HttpOnly: true,
 			Secure:   true,
 			SameSite: http.SameSiteStrictMode,
@@ -208,12 +209,12 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 		})
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		return true
-	case types.PathAgentAuthStatus:
+	case protocol.PathAgentAuthStatus:
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return true
 		}
 		walletAddress, authenticated := s.authenticatedWallet(r)
-		utils.WriteAPIData(w, http.StatusOK, types.WalletAuthStatusResponse{
+		utils.WriteAPIData(w, http.StatusOK, protocol.WalletAuthStatusResponse{
 			Authenticated: authenticated,
 			WalletAddress: walletAddress,
 		})
@@ -267,35 +268,35 @@ func writeAgentWalletAuthError(w http.ResponseWriter, err error) {
 
 func Status(ctx context.Context, stateDir string) (types.AgentStatusResponse, error) {
 	var status types.AgentStatusResponse
-	err := controlRequest(ctx, stateDir, http.MethodGet, types.PathAgentStatus, nil, &status)
+	err := controlRequest(ctx, stateDir, http.MethodGet, protocol.PathAgentStatus, nil, &status)
 	return status, err
 }
 
 func Shutdown(ctx context.Context, stateDir string) error {
-	return controlRequest(ctx, stateDir, http.MethodPost, types.PathAgentShutdown, nil, nil)
+	return controlRequest(ctx, stateDir, http.MethodPost, protocol.PathAgentShutdown, nil, nil)
 }
 
 func AddTunnel(ctx context.Context, stateDir string, req types.AgentTunnelRequest) error {
-	return controlRequest(ctx, stateDir, http.MethodPost, types.PathAgentTunnels, req, nil)
+	return controlRequest(ctx, stateDir, http.MethodPost, protocol.PathAgentTunnels, req, nil)
 }
 
 func DeleteTunnel(ctx context.Context, stateDir, tunnelID string) error {
-	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID)
+	path := protocol.PathAgentTunnelsPrefix + url.PathEscape(tunnelID)
 	return controlRequest(ctx, stateDir, http.MethodDelete, path, nil, nil)
 }
 
 func ConnectRelay(ctx context.Context, stateDir, tunnelID, relayURL string) error {
-	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/relays"
+	path := protocol.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/relays"
 	return controlRequest(ctx, stateDir, http.MethodPost, path, types.AgentRelayRequest{RelayURL: relayURL}, nil)
 }
 
 func DisconnectRelay(ctx context.Context, stateDir, tunnelID, relayURL string) error {
-	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/relays"
+	path := protocol.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/relays"
 	return controlRequest(ctx, stateDir, http.MethodDelete, path, types.AgentRelayRequest{RelayURL: relayURL}, nil)
 }
 
 func UpdateTunnel(ctx context.Context, stateDir, tunnelID string, req types.AgentTunnelUpdateRequest) error {
-	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID)
+	path := protocol.PathAgentTunnelsPrefix + url.PathEscape(tunnelID)
 	return controlRequest(ctx, stateDir, http.MethodPatch, path, req, nil)
 }
 

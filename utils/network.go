@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -126,7 +127,7 @@ func SanitizeReportedIP(raw string) string {
 // Returns an empty string on any error (timeout, unreachable, bad response).
 func FetchRelayVersion(ctx context.Context, relayURL string) string {
 	client := NewHTTPClient(WithHTTPTimeout(3 * time.Second))
-	resp, err := httpDo(ctx, client, http.MethodGet, relayURL+types.PathSDKDomain, nil, nil)
+	resp, err := httpDo(ctx, client, http.MethodGet, relayURL+protocol.PathSDKDomain, nil, nil)
 	if err != nil {
 		return ""
 	}
@@ -134,7 +135,7 @@ func FetchRelayVersion(ctx context.Context, relayURL string) string {
 	if resp.StatusCode != http.StatusOK {
 		return ""
 	}
-	var envelope types.APIEnvelope[types.DomainResponse]
+	var envelope types.APIEnvelope[protocol.DomainResponse]
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil || !envelope.OK {
 		return ""
 	}

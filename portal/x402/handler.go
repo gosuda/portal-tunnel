@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -57,8 +58,8 @@ func NewUSDCPaymentHandler(payment types.X402Payment, protectedPath, protectedMe
 		return nil, fmt.Errorf("USDC payment protected path %q must start with /", protectedPath)
 	}
 	protectedPath = utils.NormalizeURLPath(protectedPath)
-	if protectedPath == types.X402PreparePath {
-		return nil, fmt.Errorf("USDC payment protected path cannot be %s", types.X402PreparePath)
+	if protectedPath == protocol.X402PreparePath {
+		return nil, fmt.Errorf("USDC payment protected path cannot be %s", protocol.X402PreparePath)
 	}
 
 	paid.payment.ResourcePath = protectedPath
@@ -89,7 +90,7 @@ func (h *USDCPaymentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		path = r.URL.Path
 	}
 	switch path {
-	case types.X402PreparePath:
+	case protocol.X402PreparePath:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}

@@ -26,6 +26,7 @@ import (
 	"gosuda.org/ivnp/foundation"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -233,36 +234,36 @@ func (r *Runtime) ForgetLease(leaseID string) {
 
 // IssueEndpoint returns false when direct reverse transport should be used.
 // failedURL excludes a failed gateway when the SDK requests replacement.
-func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, failedURL string) (types.ReverseEndpoint, bool, error) {
+func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, failedURL string) (protocol.ReverseEndpoint, bool, error) {
 	if r == nil || !r.ready.Load() {
-		return types.ReverseEndpoint{}, false, nil
+		return protocol.ReverseEndpoint{}, false, nil
 	}
 	now := time.Now().UTC()
 	leaseIdentity, err := identity.NormalizeIdentity(leaseIdentity)
 	leaseID = strings.TrimSpace(leaseID)
 	if err != nil || leaseID == "" || !expiresAt.After(now) {
-		return types.ReverseEndpoint{}, false, errors.New("overlay lease is invalid")
+		return protocol.ReverseEndpoint{}, false, errors.New("overlay lease is invalid")
 	}
 	ingress, err := r.config.SelfDescriptor(now)
 	if err != nil {
-		return types.ReverseEndpoint{}, false, err
+		return protocol.ReverseEndpoint{}, false, err
 	}
 	ingress, err = identity.VerifyRelayDescriptor(ingress)
 	if err != nil {
-		return types.ReverseEndpoint{}, false, err
+		return protocol.ReverseEndpoint{}, false, err
 	}
 	ingressDestination, err := utils.NormalizeIVNPDestination(ingress.IVNPDestination)
 	if err != nil || ingressDestination != r.Destination() {
-		return types.ReverseEndpoint{}, false, errors.New("overlay ingress descriptor is invalid")
+		return protocol.ReverseEndpoint{}, false, errors.New("overlay ingress descriptor is invalid")
 	}
 
 	candidates := r.gatewayCandidates(now, ingress.Address, ingressDestination)
 	if len(candidates) == 0 {
-		return types.ReverseEndpoint{}, false, nil
+		return protocol.ReverseEndpoint{}, false, nil
 	}
 	gateway, ok := r.selectGateway(leaseID, failedURL, candidates, now)
 	if !ok {
-		return types.ReverseEndpoint{}, false, nil
+		return protocol.ReverseEndpoint{}, false, nil
 	}
 	capabilityExpiry := expiresAt.UTC()
 	if ingress.ExpiresAt.Before(capabilityExpiry) {
@@ -282,14 +283,14 @@ func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, ex
 	}
 	capability, err := signCapability(r.config.Authority, claims)
 	if err != nil {
-		return types.ReverseEndpoint{}, false, err
+		return protocol.ReverseEndpoint{}, false, err
 	}
 	gatewayURL, err := url.Parse(gateway.APIHTTPSAddr)
 	if err != nil {
-		return types.ReverseEndpoint{}, false, err
+		return protocol.ReverseEndpoint{}, false, err
 	}
-	return types.ReverseEndpoint{
-		URL:        utils.ResolveAPIURL(gatewayURL, types.PathSDKConnect).String(),
+	return protocol.ReverseEndpoint{
+		URL:        utils.ResolveAPIURL(gatewayURL, protocol.PathSDKConnect).String(),
 		Capability: capability,
 		ExpiresAt:  capabilityExpiry,
 		Overlay:    true,

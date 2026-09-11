@@ -15,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -190,11 +191,11 @@ func (h *HTTPRoutes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		path = r.URL.Path
 	}
 	path = utils.NormalizeURLPath(path)
-	if path == types.X402ClientPath {
+	if path == protocol.X402ClientPath {
 		x402.ServeClientJS(w, r)
 		return
 	}
-	prepare := path == types.X402PreparePath
+	prepare := path == protocol.X402PreparePath
 	var paymentSender string
 	paymentMethod := http.MethodGet
 	if prepare {

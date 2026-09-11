@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 )
 
 //go:embed install.sh
@@ -49,7 +49,7 @@ func relayShellScript(portalURL, script string) string {
 	overrides := strings.Join([]string{
 		"BASE_URL=" + quoteShellValue(portalURL),
 		"RELAY_URL=" + quoteShellValue(portalURL),
-		"BIN_PATH_PREFIX=" + quoteShellValue(strings.Trim(types.PathInstallBinPrefix, "/")),
+		"BIN_PATH_PREFIX=" + quoteShellValue(strings.Trim(protocol.PathInstallBinPrefix, "/")),
 		"",
 	}, "\n")
 	return insertAfterShebang(script, overrides)
@@ -59,7 +59,7 @@ func relayPowerShellScript(portalURL, script string) string {
 	overrides := strings.Join([]string{
 		"$env:BASE_URL = " + quotePowerShellValue(portalURL),
 		"$env:RELAY_URL = " + quotePowerShellValue(portalURL),
-		"$env:BIN_PATH_PREFIX = " + quotePowerShellValue(strings.Trim(types.PathInstallBinPrefix, "/")),
+		"$env:BIN_PATH_PREFIX = " + quotePowerShellValue(strings.Trim(protocol.PathInstallBinPrefix, "/")),
 		"",
 	}, "\n")
 	return overrides + script

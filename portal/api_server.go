@@ -17,6 +17,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -90,40 +91,40 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 			return
 		}
 		switch strings.TrimSpace(r.URL.Path) {
-		case types.PathHealthz:
+		case protocol.PathHealthz:
 			s.handleHealthz(w, r)
-		case types.PathSDKDomain:
+		case protocol.PathSDKDomain:
 			s.handleDomain(w, r)
-		case types.PathSDKRegisterChallenge:
+		case protocol.PathSDKRegisterChallenge:
 			s.handleRegisterChallenge(w, r)
-		case types.PathSDKRegister:
+		case protocol.PathSDKRegister:
 			s.handleRegister(w, r)
-		case types.PathSDKRenew:
+		case protocol.PathSDKRenew:
 			s.handleRenew(w, r)
-		case types.PathSDKReverse:
+		case protocol.PathSDKReverse:
 			s.handleReverseEndpoint(w, r)
-		case types.PathSDKUnregister:
+		case protocol.PathSDKUnregister:
 			s.handleUnregister(w, r)
-		case types.PathSDKConnect:
+		case protocol.PathSDKConnect:
 			s.handleConnect(w, r)
-		case types.PathDiscovery:
+		case protocol.PathDiscovery:
 			if !s.config().DiscoveryEnabled {
 				base.ServeHTTP(w, r)
 				return
 			}
 			s.handleRelayDiscovery(w, r)
-		case types.PathDiscoveryAnnounce:
+		case protocol.PathDiscoveryAnnounce:
 			if !s.config().DiscoveryEnabled {
 				base.ServeHTTP(w, r)
 				return
 			}
 			s.handleRelayDiscoveryAnnounce(w, r)
-		case types.PathV1Sign:
+		case protocol.PathV1Sign:
 			if keylessSignerHandler == nil {
 				http.NotFound(w, r)
 				return
 			}
-			if err := s.registry.verifySigningAccessToken(r.Header.Get(types.HeaderAccessToken)); err != nil {
+			if err := s.registry.verifySigningAccessToken(r.Header.Get(protocol.HeaderAccessToken)); err != nil {
 				writeAPIErrorResponse(w, err)
 				return
 			}
@@ -161,7 +162,7 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.WriteAPIData(w, http.StatusOK, types.DiscoveryResponse{
+	utils.WriteAPIData(w, http.StatusOK, protocol.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now,
 		Relays:          s.relaySet.Descriptors(self),
@@ -185,7 +186,7 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	req, ok := utils.DecodeJSONRequest[types.DiscoveryAnnounceRequest](w, r, defaultControlBodyLimit)
+	req, ok := utils.DecodeJSONRequest[protocol.DiscoveryAnnounceRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return
 	}
@@ -238,7 +239,7 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		Str("source_ip", clientIP).
 		Msg("relay discovery announce accepted")
 
-	utils.WriteAPIData(w, http.StatusAccepted, types.DiscoveryAnnounceResponse{
+	utils.WriteAPIData(w, http.StatusAccepted, protocol.DiscoveryAnnounceResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		Accepted:        true,
 	})
@@ -253,14 +254,14 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	if cfg.X402Enabled {
 		baseURL := strings.TrimRight(cfg.PortalURL, "/")
 		network := x402.Network(cfg.X402Testnet)
-		x402Info.URL = baseURL + types.PathX402Facilitator
+		x402Info.URL = baseURL + protocol.PathX402Facilitator
 		x402Info.Network = network
 		x402Info.NetworkName = x402.NetworkDisplayName(network)
-		x402Info.SupportedURL = baseURL + types.X402SupportedPath
+		x402Info.SupportedURL = baseURL + protocol.X402SupportedPath
 		x402Info.PayTo = cfg.X402PayTo
 	}
 
-	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
+	utils.WriteAPIData(w, http.StatusOK, protocol.DomainResponse{
 		ProtocolVersion: types.SDKVersion,
 		ReleaseVersion:  types.ReleaseVersion,
 		ENS:             s.acmeManager.ENSStatus(),
@@ -278,7 +279,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, ok := utils.DecodeJSONRequest[types.RegisterRequest](w, r, defaultControlBodyLimit)
+	req, ok := utils.DecodeJSONRequest[protocol.RegisterRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return
 	}
@@ -303,7 +304,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	err = record.syncENSGaslessDNS(dnsCtx, s.acmeManager)
 	cancel()
 	if err != nil {
-		removed, _ := s.registry.Unregister(types.UnregisterRequest{AccessToken: resp.AccessToken})
+		removed, _ := s.registry.Unregister(protocol.UnregisterRequest{AccessToken: resp.AccessToken})
 		if removed == nil {
 			record.Close()
 			removed = record
@@ -329,7 +330,7 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	req, ok := utils.DecodeJSONRequest[types.RegisterChallengeRequest](w, r, defaultControlBodyLimit)
+	req, ok := utils.DecodeJSONRequest[protocol.RegisterChallengeRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return
 	}
@@ -343,7 +344,7 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 	registerURI := (&url.URL{
 		Scheme: scheme,
 		Host:   domain,
-		Path:   types.PathSDKRegister,
+		Path:   protocol.PathSDKRegister,
 	}).String()
 
 	if req.UDPEnabled && !s.supportsUDP() {
@@ -376,7 +377,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, ok := utils.DecodeJSONRequest[types.RenewRequest](w, r, defaultControlBodyLimit)
+	req, ok := utils.DecodeJSONRequest[protocol.RenewRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return
 	}
@@ -395,7 +396,7 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, ok := utils.DecodeJSONRequest[types.UnregisterRequest](w, r, defaultControlBodyLimit)
+	req, ok := utils.DecodeJSONRequest[protocol.UnregisterRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return
 	}
@@ -418,7 +419,7 @@ func (s *Server) handleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.extractAllowedClientIP(w, r); !ok {
 		return
 	}
-	req, ok := utils.DecodeJSONRequest[types.ReverseEndpointRequest](w, r, defaultControlBodyLimit)
+	req, ok := utils.DecodeJSONRequest[protocol.ReverseEndpointRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return
 	}
@@ -439,7 +440,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
+	capability := strings.TrimSpace(r.Header.Get(protocol.HeaderReverseCapability))
 	clientIP, ok := s.extractAllowedClientIP(w, r)
 	if !ok {
 		return

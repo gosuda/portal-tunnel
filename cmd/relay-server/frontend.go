@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 )
 
 const embeddedFrontendRoot = "dist/app"
@@ -66,7 +66,7 @@ func (api *RelayAPI) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestPath := path.Clean("/" + strings.TrimSpace(r.URL.Path))
-	for _, prefix := range types.ReservedRootPrefixes {
+	for _, prefix := range protocol.ReservedRootPrefixes {
 		if requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/") {
 			http.NotFound(w, r)
 			return

@@ -8,7 +8,7 @@ import (
 
 	"github.com/spruceid/siwe-go"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -21,14 +21,14 @@ var (
 type RegisterChallenge struct {
 	ChallengeID string
 	ExpiresAt   time.Time
-	Request     types.RegisterChallengeRequest
+	Request     protocol.RegisterChallengeRequest
 	SIWEMessage string
 
 	domain string
 	nonce  string
 }
 
-func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string, now time.Time, ttl time.Duration) (*RegisterChallenge, error) {
+func NewRegisterChallenge(req protocol.RegisterChallengeRequest, domain, uri string, now time.Time, ttl time.Duration) (*RegisterChallenge, error) {
 	normalizedIdentity, err := NormalizeIdentity(req.Identity)
 	if err != nil {
 		return nil, err
@@ -65,7 +65,7 @@ func (c *RegisterChallenge) Expired(now time.Time) bool {
 	return c == nil || now.After(c.ExpiresAt)
 }
 
-func (c *RegisterChallenge) Verify(req types.RegisterRequest, now time.Time) error {
+func (c *RegisterChallenge) Verify(req protocol.RegisterRequest, now time.Time) error {
 	if c == nil {
 		return ErrRegisterChallengeNotFound
 	}

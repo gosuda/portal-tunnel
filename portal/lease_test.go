@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/internal/transport"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -43,13 +44,13 @@ func newTestLeaseIdentity(t *testing.T, name string) types.Identity {
 }
 
 type testReverseOverlay struct {
-	endpoint types.ReverseEndpoint
+	endpoint protocol.ReverseEndpoint
 	ok       bool
 	err      error
 	calls    int
 }
 
-func (o *testReverseOverlay) IssueEndpoint(types.Identity, string, time.Time, string) (types.ReverseEndpoint, bool, error) {
+func (o *testReverseOverlay) IssueEndpoint(types.Identity, string, time.Time, string) (protocol.ReverseEndpoint, bool, error) {
 	o.calls++
 	return o.endpoint, o.ok, o.err
 }
@@ -62,7 +63,7 @@ func TestIssueReverseEndpointHonorsOverlayPreference(t *testing.T) {
 	registry := newTestRegistry(t)
 	leaseIdentity := newTestLeaseIdentity(t, "demo")
 	expiresAt := time.Now().UTC().Add(time.Minute)
-	overlayEndpoint := types.ReverseEndpoint{
+	overlayEndpoint := protocol.ReverseEndpoint{
 		URL:        "https://gateway.example/sdk/connect",
 		Capability: "overlay-capability",
 		ExpiresAt:  expiresAt,
@@ -92,7 +93,7 @@ func TestRegisterOverlayPreferenceFallsBackToDirect(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t)
-	record, registered, err := registry.Register(types.RegisterChallengeRequest{
+	record, registered, err := registry.Register(protocol.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "overlay-fallback"),
 		Overlay:  true,
 	}, "203.0.113.10", "")
@@ -112,7 +113,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 
 	registry := newTestRegistry(t)
 	runtime := registry.policy
-	record, registered, err := registry.Register(types.RegisterChallengeRequest{
+	record, registered, err := registry.Register(protocol.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "demo"),
 	}, "203.0.113.10", "")
 	if err != nil {
@@ -145,7 +146,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 		t.Fatalf("Lookup() = %v, %v, want registered lease", lookedUp, ok)
 	}
 
-	renewed, err := registry.Renew(types.RenewRequest{
+	renewed, err := registry.Renew(protocol.RenewRequest{
 		AccessToken: registered.AccessToken,
 		TTL:         int(time.Minute / time.Second),
 	}, "203.0.113.11")
@@ -167,7 +168,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if !renewed.ReverseEndpoint.ExpiresAt.Equal(renewed.ExpiresAt) {
 		t.Fatalf("Renew() reverse expiry = %v, want %v", renewed.ReverseEndpoint.ExpiresAt, renewed.ExpiresAt)
 	}
-	refreshed, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: renewed.AccessToken})
+	refreshed, err := registry.RefreshReverseEndpoint(protocol.ReverseEndpointRequest{AccessToken: renewed.AccessToken})
 	if err != nil {
 		t.Fatalf("RefreshReverseEndpoint() error = %v", err)
 	}
@@ -181,7 +182,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 		t.Fatalf("Renew() did not register client IP for lease")
 	}
 
-	removed, err := registry.Unregister(types.UnregisterRequest{AccessToken: renewed.AccessToken})
+	removed, err := registry.Unregister(protocol.UnregisterRequest{AccessToken: renewed.AccessToken})
 	if err != nil {
 		t.Fatalf("Unregister() error = %v", err)
 	}
@@ -202,11 +203,11 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 
 	registry := newTestRegistry(t)
 	leaseIdentity := newTestLeaseIdentity(t, "replace")
-	first, firstResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.10", "")
+	first, firstResponse, err := registry.Register(protocol.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.10", "")
 	if err != nil {
 		t.Fatalf("first Register() error = %v", err)
 	}
-	second, secondResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.11", "")
+	second, secondResponse, err := registry.Register(protocol.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.11", "")
 	if err != nil {
 		t.Fatalf("second Register() error = %v", err)
 	}
@@ -219,16 +220,16 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	if _, err := registry.admitLeaseByToken(firstResponse.AccessToken, false); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token admission error = %v, want unauthorized", err)
 	}
-	if _, err := registry.Renew(types.RenewRequest{AccessToken: firstResponse.AccessToken}, "203.0.113.12"); !errors.Is(err, errUnauthorized) {
+	if _, err := registry.Renew(protocol.RenewRequest{AccessToken: firstResponse.AccessToken}, "203.0.113.12"); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token renew error = %v, want unauthorized", err)
 	}
-	if _, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
+	if _, err := registry.RefreshReverseEndpoint(protocol.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token reverse refresh error = %v, want unauthorized", err)
 	}
 	if err := registry.verifySigningAccessToken(firstResponse.AccessToken); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token signing error = %v, want unauthorized", err)
 	}
-	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
+	if _, err := registry.Unregister(protocol.UnregisterRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token unregister error = %v, want unauthorized", err)
 	}
 	if second.ClientIP != "203.0.113.11" {
@@ -254,7 +255,7 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	registry := newTestRegistry(t)
 	routeHostname := "ech-auto-ech.example.com"
 	publicHostname := "auto-ech.example.com"
-	record, _, err := registry.Register(types.RegisterChallengeRequest{
+	record, _, err := registry.Register(protocol.RegisterChallengeRequest{
 		Identity:      newTestLeaseIdentity(t, "auto-ech"),
 		RouteHostname: routeHostname,
 		HostnameHash:  utils.HostnameHash(publicHostname),
@@ -291,14 +292,14 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 		t.Fatalf("PolicyLeases()[0] hostname = %q, want %q", policyLeases[0].Hostname, publicHostname)
 	}
 
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+	if _, _, err := registry.Register(protocol.RegisterChallengeRequest{
 		Identity:     newTestLeaseIdentity(t, "hash-only"),
 		HostnameHash: utils.HostnameHash("hash-only.example.com"),
 	}, "203.0.113.10", ""); err == nil {
 		t.Fatal("Register(fallback hash only) error = nil, want error")
 	}
 
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+	if _, _, err := registry.Register(protocol.RegisterChallengeRequest{
 		Identity:      newTestLeaseIdentity(t, "attacker"),
 		RouteHostname: "ech-attacker.example.com",
 		HostnameHash:  utils.HostnameHash("victim.example.com"),
@@ -328,12 +329,12 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 		t.Fatal("Lookup(multi-level wildcard) = true, want false")
 	}
 
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+	if _, _, err := registry.Register(protocol.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "conflict"),
 	}, "203.0.113.10", ""); err != nil {
 		t.Fatalf("Register(conflict first) error = %v", err)
 	}
-	_, _, err := registry.Register(types.RegisterChallengeRequest{
+	_, _, err := registry.Register(protocol.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "conflict"),
 	}, "203.0.113.11", "")
 	if !errors.Is(err, errHostnameConflict) {
@@ -349,7 +350,7 @@ func TestLeaseRegistryPolicyViewsUseRoutablePolicy(t *testing.T) {
 	if err := runtime.Approver().SetMode(policy.ModeManual); err != nil {
 		t.Fatalf("SetMode() error = %v", err)
 	}
-	record, _, err := registry.Register(types.RegisterChallengeRequest{
+	record, _, err := registry.Register(protocol.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "demo"),
 	}, "203.0.113.20", "")
 	if err != nil {
@@ -458,17 +459,17 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 	registry := newTestRegistry(t)
 	clientIP := "203.0.113.50"
 	for i := range defaultRegisterChallengeOutstandingPerIP {
-		_, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{
+		_, err := registry.issueRegisterChallenge(protocol.RegisterChallengeRequest{
 			Identity: newTestLeaseIdentity(t, fmt.Sprintf("demo-%d", i)),
-		}, "example.com", "https://example.com"+types.PathSDKRegister, clientIP)
+		}, "example.com", "https://example.com"+protocol.PathSDKRegister, clientIP)
 		if err != nil {
 			t.Fatalf("issueRegisterChallenge(%d) error = %v", i, err)
 		}
 	}
 
-	_, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{
+	_, err := registry.issueRegisterChallenge(protocol.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "overflow"),
-	}, "example.com", "https://example.com"+types.PathSDKRegister, clientIP)
+	}, "example.com", "https://example.com"+protocol.PathSDKRegister, clientIP)
 	if !errors.Is(err, errRegisterChallengePending) {
 		t.Fatalf("issueRegisterChallenge() error = %v, want pending limit", err)
 	}
@@ -484,9 +485,9 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 	}
 	registry.mu.Unlock()
 
-	_, err = registry.issueRegisterChallenge(types.RegisterChallengeRequest{
+	_, err = registry.issueRegisterChallenge(protocol.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "after-cleanup"),
-	}, "example.com", "https://example.com"+types.PathSDKRegister, clientIP)
+	}, "example.com", "https://example.com"+protocol.PathSDKRegister, clientIP)
 	if err != nil {
 		t.Fatalf("issueRegisterChallenge() after expired cleanup error = %v", err)
 	}

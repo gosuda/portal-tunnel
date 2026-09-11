@@ -10,7 +10,7 @@ import (
 
 	"github.com/spruceid/siwe-go"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -83,16 +83,16 @@ func NewWalletAuthenticator(cfg WalletAuthConfig) (*WalletAuthenticator, error) 
 	}, nil
 }
 
-func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeRequest, domain, uri string, now time.Time) (types.WalletAuthChallengeResponse, error) {
+func (a *WalletAuthenticator) IssueChallenge(req protocol.WalletAuthChallengeRequest, domain, uri string, now time.Time) (protocol.WalletAuthChallengeResponse, error) {
 	if a == nil {
-		return types.WalletAuthChallengeResponse{}, ErrWalletAuthUnauthorized
+		return protocol.WalletAuthChallengeResponse{}, ErrWalletAuthUnauthorized
 	}
 	address, err := NormalizeEVMAddress(req.Address)
 	if err != nil {
-		return types.WalletAuthChallengeResponse{}, err
+		return protocol.WalletAuthChallengeResponse{}, err
 	}
 	if !a.addressAllowed(address) {
-		return types.WalletAuthChallengeResponse{}, ErrWalletAuthUnauthorized
+		return protocol.WalletAuthChallengeResponse{}, ErrWalletAuthUnauthorized
 	}
 
 	challengeID := utils.RandomID("wac_")
@@ -106,7 +106,7 @@ func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeReques
 		"requestId":      challengeID,
 	})
 	if err != nil {
-		return types.WalletAuthChallengeResponse{}, fmt.Errorf("build wallet auth message: %w", err)
+		return protocol.WalletAuthChallengeResponse{}, fmt.Errorf("build wallet auth message: %w", err)
 	}
 
 	challenge := walletAuthChallenge{
@@ -122,14 +122,14 @@ func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeReques
 	a.challenges[challengeID] = challenge
 	a.mu.Unlock()
 
-	return types.WalletAuthChallengeResponse{
+	return protocol.WalletAuthChallengeResponse{
 		ChallengeID: challengeID,
 		ExpiresAt:   expiresAt,
 		SIWEMessage: challenge.SIWEMessage,
 	}, nil
 }
 
-func (a *WalletAuthenticator) Login(req types.WalletAuthLoginRequest, now time.Time) (string, string, error) {
+func (a *WalletAuthenticator) Login(req protocol.WalletAuthLoginRequest, now time.Time) (string, string, error) {
 	if a == nil {
 		return "", "", ErrWalletAuthUnauthorized
 	}

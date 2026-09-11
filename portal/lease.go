@@ -17,6 +17,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/internal/transport"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
@@ -41,7 +42,7 @@ type leaseRegistry struct {
 	tokenIssuer    string
 	reverseURL     string
 	reverseOverlay interface {
-		IssueEndpoint(types.Identity, string, time.Time, string) (types.ReverseEndpoint, bool, error)
+		IssueEndpoint(types.Identity, string, time.Time, string) (protocol.ReverseEndpoint, bool, error)
 		ForgetLease(string)
 	}
 	policy   *policy.Runtime
@@ -74,7 +75,7 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 		sniPort:        sniPort,
 		tokenAuthority: tokenAuthority,
 		tokenIssuer:    tokenIssuer,
-		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
+		reverseURL:     utils.ResolveAPIURL(issuerURL, protocol.PathSDKConnect).String(),
 		policy:         runtime,
 		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
@@ -160,16 +161,16 @@ func (r *leaseRegistry) recordByLease(key, leaseID string, now time.Time) *lease
 	return record
 }
 
-func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, reportedIP string) (*leaseRecord, types.RegisterResponse, error) {
+func (r *leaseRegistry) Register(req protocol.RegisterChallengeRequest, clientIP, reportedIP string) (*leaseRecord, protocol.RegisterResponse, error) {
 	if r == nil {
-		return nil, types.RegisterResponse{}, errFeatureUnavailable
+		return nil, protocol.RegisterResponse{}, errFeatureUnavailable
 	}
 	leaseIdentity, err := identity.NormalizeIdentity(req.Identity)
 	if err != nil {
-		return nil, types.RegisterResponse{}, err
+		return nil, protocol.RegisterResponse{}, err
 	}
 	if r.policy.IPFilter().IsIPBanned(clientIP) {
-		return nil, types.RegisterResponse{}, errIPBanned
+		return nil, protocol.RegisterResponse{}, errIPBanned
 	}
 
 	ttl := defaultLeaseTTL
@@ -182,33 +183,33 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	hostnameHash := strings.TrimSpace(req.HostnameHash)
 	echConfigList := bytes.Clone(req.ECHConfigList)
 	if hostnameHash != "" && routeHostname == "" {
-		return nil, types.RegisterResponse{}, errors.New("hostname hash requires route hostname")
+		return nil, protocol.RegisterResponse{}, errors.New("hostname hash requires route hostname")
 	}
 	if len(echConfigList) > 0 && routeHostname == "" {
-		return nil, types.RegisterResponse{}, errors.New("ech config list requires route hostname")
+		return nil, protocol.RegisterResponse{}, errors.New("ech config list requires route hostname")
 	}
 	publicHostname := ""
 	if routeHostname != "" {
 		routeLabel, routeBase, ok := strings.Cut(routeHostname, ".")
 		normalizedRouteLabel, labelErr := utils.NormalizeDNSLabel(routeLabel)
 		if !ok || labelErr != nil || normalizedRouteLabel != routeLabel || routeBase != r.rootHostname {
-			return nil, types.RegisterResponse{}, errors.New("route hostname must be a child of relay root hostname")
+			return nil, protocol.RegisterResponse{}, errors.New("route hostname must be a child of relay root hostname")
 		}
 
 		publicHostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {
-			return nil, types.RegisterResponse{}, err
+			return nil, protocol.RegisterResponse{}, err
 		}
 		expectedHostnameHash := utils.HostnameHash(publicHostname)
 		if hostnameHash != "" && hostnameHash != expectedHostnameHash {
-			return nil, types.RegisterResponse{}, errors.New("hostname hash does not match public hostname")
+			return nil, protocol.RegisterResponse{}, errors.New("hostname hash does not match public hostname")
 		}
 		hostnameHash = expectedHostnameHash
 	}
 	if len(echConfigList) > 0 {
 		echConfigList, err = keyless.NormalizeEncryptedClientHelloConfigList(echConfigList)
 		if err != nil {
-			return nil, types.RegisterResponse{}, err
+			return nil, protocol.RegisterResponse{}, err
 		}
 	}
 	echDNSHostname := ""
@@ -216,14 +217,14 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		echDNSHostname = publicHostname
 	}
 	if req.UDPEnabled && !r.policy.IsUDPEnabled() {
-		return nil, types.RegisterResponse{}, errUDPDisabled
+		return nil, protocol.RegisterResponse{}, errUDPDisabled
 	}
 	if req.TCPEnabled {
 		if !r.policy.IsTCPPortEnabled() {
-			return nil, types.RegisterResponse{}, errTCPPortDisabled
+			return nil, protocol.RegisterResponse{}, errTCPPortDisabled
 		}
 		if r.proxy == nil {
-			return nil, types.RegisterResponse{}, errors.New("tcp proxy is not available")
+			return nil, protocol.RegisterResponse{}, errors.New("tcp proxy is not available")
 		}
 	}
 
@@ -231,14 +232,14 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	if hostname == "" {
 		hostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {
-			return nil, types.RegisterResponse{}, err
+			return nil, protocol.RegisterResponse{}, err
 		}
 	}
 
 	leaseID := utils.RandomID("lease_")
 	accessToken, claims, err := identity.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, ttl)
 	if err != nil {
-		return nil, types.RegisterResponse{}, err
+		return nil, protocol.RegisterResponse{}, err
 	}
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
@@ -263,14 +264,14 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 
 	if req.UDPEnabled {
 		if r.udpPorts == nil {
-			return nil, types.RegisterResponse{}, errors.New("udp port allocation not available")
+			return nil, protocol.RegisterResponse{}, errors.New("udp port allocation not available")
 		}
 		port, err := r.udpPorts.Allocate(leaseIdentity.Name)
 		if err != nil {
 			if errors.Is(err, transport.ErrPortExhausted) {
-				return nil, types.RegisterResponse{}, errUDPPortExhausted
+				return nil, protocol.RegisterResponse{}, errUDPPortExhausted
 			}
-			return nil, types.RegisterResponse{}, err
+			return nil, protocol.RegisterResponse{}, err
 		}
 		record.datagram = transport.NewRelayDatagram(identityKey, port)
 		record.udpPorts = r.udpPorts
@@ -279,15 +280,15 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	if req.TCPEnabled {
 		if r.tcpPorts == nil {
 			record.Close()
-			return nil, types.RegisterResponse{}, errors.New("tcp port allocation not available")
+			return nil, protocol.RegisterResponse{}, errors.New("tcp port allocation not available")
 		}
 		port, err := r.tcpPorts.Allocate(leaseIdentity.Name)
 		if err != nil {
 			record.Close()
 			if errors.Is(err, transport.ErrPortExhausted) {
-				return nil, types.RegisterResponse{}, errTCPPortExhausted
+				return nil, protocol.RegisterResponse{}, errTCPPortExhausted
 			}
-			return nil, types.RegisterResponse{}, err
+			return nil, protocol.RegisterResponse{}, err
 		}
 		record.tcpPort = transport.NewRelayTCPPort(identityKey, port, stream, func(left, right net.Conn) {
 			r.proxy.bridge(left, right, identityKey, r.policy.BPSManager())
@@ -297,7 +298,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 
 	if err := record.Start(); err != nil {
 		record.Close()
-		return nil, types.RegisterResponse{}, err
+		return nil, protocol.RegisterResponse{}, err
 	}
 
 	var replaced *leaseRecord
@@ -329,21 +330,21 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		if existing.isPublicEntry() && existingKey != identityKey && existing.routesOverlap(record) {
 			r.mu.Unlock()
 			record.Close()
-			return nil, types.RegisterResponse{}, errHostnameConflict
+			return nil, protocol.RegisterResponse{}, errHostnameConflict
 		}
 	}
 	if record.datagram != nil {
 		if max := r.policy.UDPMaxLeases(); max > 0 && udpLeases >= max {
 			r.mu.Unlock()
 			record.Close()
-			return nil, types.RegisterResponse{}, errUDPCapacityExceeded
+			return nil, protocol.RegisterResponse{}, errUDPCapacityExceeded
 		}
 	}
 	if record.tcpPort != nil {
 		if max := r.policy.TCPPortMaxLeases(); max > 0 && tcpLeases >= max {
 			r.mu.Unlock()
 			record.Close()
-			return nil, types.RegisterResponse{}, errTCPPortCapacityExceeded
+			return nil, protocol.RegisterResponse{}, errTCPPortCapacityExceeded
 		}
 	}
 	for i := 0; i < len(r.records); i++ {
@@ -386,10 +387,10 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			r.reverseOverlay.ForgetLease(leaseID)
 		}
 		record.Close()
-		return nil, types.RegisterResponse{}, err
+		return nil, protocol.RegisterResponse{}, err
 	}
 
-	resp := types.RegisterResponse{
+	resp := protocol.RegisterResponse{
 		Identity:        record.Identity,
 		ExpiresAt:       record.ExpiresAt,
 		AccessToken:     accessToken,
@@ -447,13 +448,13 @@ func (r *leaseRegistry) admitLeaseIdentity(key, leaseID string, now time.Time, r
 	return record, nil
 }
 
-func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.RenewResponse, error) {
+func (r *leaseRegistry) Renew(req protocol.RenewRequest, clientIP string) (protocol.RenewResponse, error) {
 	if r == nil {
-		return types.RenewResponse{}, errFeatureUnavailable
+		return protocol.RenewResponse{}, errFeatureUnavailable
 	}
 	claims, err := identity.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, time.Now().UTC())
 	if err != nil {
-		return types.RenewResponse{}, errUnauthorized
+		return protocol.RenewResponse{}, errUnauthorized
 	}
 	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
@@ -466,7 +467,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	record := r.recordByLease(leaseKey, claims.LeaseID, time.Time{})
 	if record == nil {
 		r.mu.Unlock()
-		return types.RenewResponse{}, errUnauthorized
+		return protocol.RenewResponse{}, errUnauthorized
 	}
 
 	now := time.Now()
@@ -488,12 +489,12 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 
 	nextAccessToken, _, err := identity.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, recordIdentity, leaseID, ttl)
 	if err != nil {
-		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
+		return protocol.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 
 	reverseEndpoint, err := r.issueReverseEndpoint(recordIdentity, leaseID, expiresAt, overlay, "")
 	if err != nil {
-		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
+		return protocol.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 	r.mu.RLock()
 	current := r.recordByLease(leaseKey, leaseID, time.Now().UTC())
@@ -503,17 +504,17 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 		if r.reverseOverlay != nil {
 			r.reverseOverlay.ForgetLease(leaseID)
 		}
-		return types.RenewResponse{}, errLeaseNotFound
+		return protocol.RenewResponse{}, errLeaseNotFound
 	}
 
-	return types.RenewResponse{
+	return protocol.RenewResponse{
 		ExpiresAt:       expiresAt,
 		AccessToken:     nextAccessToken,
 		ReverseEndpoint: reverseEndpoint,
 	}, nil
 }
 
-func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, overlay bool, failedURL string) (types.ReverseEndpoint, error) {
+func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, overlay bool, failedURL string) (protocol.ReverseEndpoint, error) {
 	if overlay && r.reverseOverlay != nil {
 		endpoint, ok, err := r.reverseOverlay.IssueEndpoint(leaseIdentity, leaseID, expiresAt, failedURL)
 		if err == nil && ok {
@@ -525,29 +526,29 @@ func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, lease
 	}
 	capability, claims, err := identity.IssueReverseCapability(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, expiresAt)
 	if err != nil {
-		return types.ReverseEndpoint{}, err
+		return protocol.ReverseEndpoint{}, err
 	}
-	return types.ReverseEndpoint{
+	return protocol.ReverseEndpoint{
 		URL:        r.reverseURL,
 		Capability: capability,
 		ExpiresAt:  claims.Expiry.Time().UTC(),
 	}, nil
 }
 
-func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest) (types.ReverseEndpoint, error) {
+func (r *leaseRegistry) RefreshReverseEndpoint(req protocol.ReverseEndpointRequest) (protocol.ReverseEndpoint, error) {
 	if r == nil {
-		return types.ReverseEndpoint{}, errFeatureUnavailable
+		return protocol.ReverseEndpoint{}, errFeatureUnavailable
 	}
 	now := time.Now().UTC()
 	claims, err := identity.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
 	if err != nil {
-		return types.ReverseEndpoint{}, errUnauthorized
+		return protocol.ReverseEndpoint{}, errUnauthorized
 	}
 	r.mu.RLock()
 	record := r.recordByLease(claims.Identity.Key(), claims.LeaseID, now)
 	if record == nil {
 		r.mu.RUnlock()
-		return types.ReverseEndpoint{}, errUnauthorized
+		return protocol.ReverseEndpoint{}, errUnauthorized
 	}
 	leaseIdentity := record.Identity
 	leaseID := record.id
@@ -556,7 +557,7 @@ func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest)
 	r.mu.RUnlock()
 	endpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, overlay, strings.TrimSpace(req.FailedURL))
 	if err != nil {
-		return types.ReverseEndpoint{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
+		return protocol.ReverseEndpoint{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 	r.mu.RLock()
 	current := r.recordByLease(claims.Identity.Key(), leaseID, time.Now().UTC())
@@ -566,12 +567,12 @@ func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest)
 		if r.reverseOverlay != nil {
 			r.reverseOverlay.ForgetLease(leaseID)
 		}
-		return types.ReverseEndpoint{}, errLeaseNotFound
+		return protocol.ReverseEndpoint{}, errLeaseNotFound
 	}
 	return endpoint, nil
 }
 
-func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, error) {
+func (r *leaseRegistry) Unregister(req protocol.UnregisterRequest) (*leaseRecord, error) {
 	if r == nil {
 		return nil, errFeatureUnavailable
 	}
@@ -652,14 +653,14 @@ func (r *leaseRegistry) promoteECHDNS(record *leaseRecord, manager *acme.Manager
 	}()
 }
 
-func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeRequest, domain, uri, clientIP string) (types.RegisterChallengeResponse, error) {
+func (r *leaseRegistry) issueRegisterChallenge(req protocol.RegisterChallengeRequest, domain, uri, clientIP string) (protocol.RegisterChallengeResponse, error) {
 	if r == nil {
-		return types.RegisterChallengeResponse{}, errFeatureUnavailable
+		return protocol.RegisterChallengeResponse{}, errFeatureUnavailable
 	}
 	if len(req.ECHConfigList) > 0 {
 		echConfigList, err := keyless.NormalizeEncryptedClientHelloConfigList(req.ECHConfigList)
 		if err != nil {
-			return types.RegisterChallengeResponse{}, err
+			return protocol.RegisterChallengeResponse{}, err
 		}
 		req.ECHConfigList = echConfigList
 	}
@@ -667,7 +668,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	now := time.Now().UTC()
 	challenge, err := identity.NewRegisterChallenge(req, domain, uri, now, defaultRegisterChallengeTTL)
 	if err != nil {
-		return types.RegisterChallengeResponse{}, err
+		return protocol.RegisterChallengeResponse{}, err
 	}
 	clientIP = strings.ToLower(strings.TrimSpace(clientIP))
 	clientIP = cmp.Or(clientIP, "<unknown>")
@@ -690,7 +691,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 		i++
 	}
 	if pending >= defaultRegisterChallengeOutstandingPerIP {
-		return types.RegisterChallengeResponse{}, errRegisterChallengePending
+		return protocol.RegisterChallengeResponse{}, errRegisterChallengePending
 	}
 	r.records = append(r.records, &leaseRecord{
 		ExpiresAt:         challenge.ExpiresAt,
@@ -698,14 +699,14 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 		registerChallenge: challenge,
 	})
 
-	return types.RegisterChallengeResponse{
+	return protocol.RegisterChallengeResponse{
 		ChallengeID: challenge.ChallengeID,
 		ExpiresAt:   challenge.ExpiresAt,
 		SIWEMessage: challenge.SIWEMessage,
 	}, nil
 }
 
-func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterRequest) (*identity.RegisterChallenge, error) {
+func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req protocol.RegisterRequest) (*identity.RegisterChallenge, error) {
 	challengeID := strings.TrimSpace(req.ChallengeID)
 	if challengeID == "" {
 		return nil, identity.ErrRegisterChallengeNotFound

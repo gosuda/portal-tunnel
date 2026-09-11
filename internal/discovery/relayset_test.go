@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -46,7 +47,7 @@ func bootstrapRelayState(relayURL string) RelayState {
 // discovery response from the relay itself, promoting it to RelayVerified.
 func mustApplyAuthoritative(t *testing.T, set *RelaySet, desc types.RelayDescriptor) {
 	t.Helper()
-	if _, err := set.ApplyRelayDiscoveryResponse(desc.APIHTTPSAddr, types.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse(desc.APIHTTPSAddr, protocol.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC()); err != nil {
@@ -95,7 +96,7 @@ func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
 	relayURL := "https://relay-stale.example"
 	issuedAt := time.Now().UTC().Truncate(time.Microsecond).Add(-DiscoveryDescriptorTTL - time.Minute)
 	desc := mustSignedDescriptor(t, mustSigningIdentity(t), relayURL, issuedAt)
-	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, protocol.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		Relays:          []types.RelayDescriptor{desc},
 	}, issuedAt.Add(time.Second)); err != nil {
@@ -128,7 +129,7 @@ func TestBannedRelayStopsServingAndRouting(t *testing.T) {
 		t.Fatal("banned relay is still selected for new routes")
 	}
 
-	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+	changed, err := set.ApplyRelayDiscoveryResponse("", protocol.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC())
@@ -144,7 +145,7 @@ func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *tes
 	set := NewRelaySet(nil)
 
 	desc := mustRelayDescriptor(t, "https://relay-mismatch.example")
-	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+	changed, err := set.ApplyRelayDiscoveryResponse("", protocol.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion + "-other",
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC())
@@ -173,7 +174,7 @@ func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t
 	// The protocol version matches, so the only error the response can
 	// produce is the missing-target one.
 	hinted := mustRelayDescriptor(t, "https://relay-hinted.example")
-	changed, err := set.ApplyRelayDiscoveryResponse("https://relay-source.example", types.DiscoveryResponse{
+	changed, err := set.ApplyRelayDiscoveryResponse("https://relay-source.example", protocol.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		Relays:          []types.RelayDescriptor{hinted},
 	}, time.Now().UTC())
@@ -225,7 +226,7 @@ func TestDiscoveryFailureLifecycle(t *testing.T) {
 		t.Fatal("healthy relay was affected by another relay's discovery failures")
 	}
 
-	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+	if _, err := set.ApplyRelayDiscoveryResponse("", protocol.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		Relays:          []types.RelayDescriptor{descA},
 	}, time.Now().UTC()); err != nil {

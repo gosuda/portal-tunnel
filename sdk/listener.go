@@ -23,6 +23,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/internal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -311,7 +312,7 @@ type listenerSnapshot struct {
 	udpAddr       string
 	tcpAddr       string
 	accessToken   string
-	reverse       types.ReverseEndpoint
+	reverse       protocol.ReverseEndpoint
 	expiresAt     time.Time
 	sniPort       int
 	publicURLBase *url.URL
@@ -680,7 +681,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 		Host:   reverseURL.Host,
 		Header: make(http.Header),
 	}
-	req.Header.Set(types.HeaderReverseCapability, lease.reverse.Capability)
+	req.Header.Set(protocol.HeaderReverseCapability, lease.reverse.Capability)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "raw")
 
@@ -934,7 +935,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		if snapshot, ok := l.leaseSnapshot(); ok && snapshot.accessToken != "" {
 			accessToken = snapshot.accessToken
 		}
-		headers.Set(types.HeaderAccessToken, accessToken)
+		headers.Set(protocol.HeaderAccessToken, accessToken)
 		return headers
 	})
 	if err != nil {

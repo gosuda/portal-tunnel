@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -94,8 +95,8 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/static/style.css", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
-	mux.HandleFunc(types.X402ClientPath, x402.ServeClientJS)
-	mux.Handle(types.X402PreparePath, paidPhotoHandler)
+	mux.HandleFunc(protocol.X402ClientPath, x402.ServeClientJS)
+	mux.Handle(protocol.X402PreparePath, paidPhotoHandler)
 	mux.HandleFunc("/", handler.handleIndex)
 	mux.Handle(paidPhotoPath, paidPhotoHandler)
 	return mux, nil
@@ -133,7 +134,7 @@ func (h *paymentHandler) newPaymentPageData(r *http.Request) paymentPageData {
 		"asset":         h.asset,
 		"amount":        h.amount,
 		"payTo":         h.payTo,
-		"preparePath":   types.X402PreparePath,
+		"preparePath":   protocol.X402PreparePath,
 		"protectedPath": paidPhotoPath,
 	}
 	configJSON, err := json.Marshal(config)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -60,7 +61,7 @@ func (r *Refresher) Refresh(ctx context.Context, self *types.RelayDescriptor) er
 }
 
 func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDescriptor) error {
-	req := types.DiscoveryAnnounceRequest{
+	req := protocol.DiscoveryAnnounceRequest{
 		ProtocolVersion: types.DiscoveryVersion,
 		Descriptor:      descriptor,
 	}
@@ -81,7 +82,7 @@ func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDesc
 			}
 			return nil
 		}
-		if err := utils.HTTPDoAPIPath(ctx, r.httpClient, baseURL, http.MethodPost, types.PathDiscoveryAnnounce, req, nil, nil); err != nil {
+		if err := utils.HTTPDoAPIPath(ctx, r.httpClient, baseURL, http.MethodPost, protocol.PathDiscoveryAnnounce, req, nil, nil); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -188,8 +189,8 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 	}
 
 	startedAt := time.Now()
-	var resp types.DiscoveryResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
+	var resp protocol.DiscoveryResponse
+	if err := utils.HTTPDoAPIPath(ctx, client, baseURL, http.MethodGet, protocol.PathDiscovery, nil, nil, &resp); err != nil {
 		if closeClient != nil {
 			closeClient()
 		}

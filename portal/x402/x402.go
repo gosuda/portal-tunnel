@@ -11,7 +11,7 @@ import (
 	facilitatorcore "github.com/gosuda/x402-facilitator/facilitator"
 	suischeme "github.com/gosuda/x402-facilitator/scheme/sui"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 )
 
 const (
@@ -49,7 +49,7 @@ func MountFacilitator(mux *http.ServeMux, cfg FacilitatorConfig) error {
 	if err != nil {
 		return fmt.Errorf("create sui x402 facilitator: %w", err)
 	}
-	mux.Handle(types.PathX402Facilitator+"/", http.StripPrefix(types.PathX402Facilitator, facilitatorapi.NewServer(facilitator)))
+	mux.Handle(protocol.PathX402Facilitator+"/", http.StripPrefix(protocol.PathX402Facilitator, facilitatorapi.NewServer(facilitator)))
 	return nil
 }
 

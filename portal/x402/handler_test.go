@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -14,7 +15,7 @@ func TestUSDCPaymentHandlerRejectsOversizedPrepareBody(t *testing.T) {
 
 	handler := &USDCPaymentHandler{payment: &Payment{}}
 	body := `{"sender":"` + strings.Repeat("a", int(types.X402RequestBodyLimit)) + `"}`
-	req := httptest.NewRequest(http.MethodPost, types.X402PreparePath, strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, protocol.X402PreparePath, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

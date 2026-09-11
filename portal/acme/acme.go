@@ -12,7 +12,7 @@ import (
 	"github.com/go-acme/lego/v4/certificate"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
-	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/internal/protocol"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -56,7 +56,7 @@ type Manager struct {
 	dns          DNSProvider
 	startOnce    sync.Once
 	stopOnce     sync.Once
-	ensStatus    *utils.Snapshot[types.ENSStatus]
+	ensStatus    *utils.Snapshot[protocol.ENSStatus]
 	echCommands  chan echDNSCommand
 	ensCommands  chan ensDNSCommand
 
