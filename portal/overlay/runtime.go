@@ -25,8 +25,7 @@ import (
 	"gosuda.org/ivnp"
 	"gosuda.org/ivnp/foundation"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -248,7 +247,7 @@ func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, ex
 	if err != nil {
 		return types.ReverseEndpoint{}, false, err
 	}
-	ingress, err = auth.VerifyRelayDescriptor(ingress)
+	ingress, err = identity.VerifyRelayDescriptor(ingress)
 	if err != nil {
 		return types.ReverseEndpoint{}, false, err
 	}
@@ -302,7 +301,7 @@ func (r *Runtime) gatewayCandidates(now time.Time, ingressAddress, ingressDestin
 	seenAddresses := make(map[string]struct{})
 	seenDestinations := make(map[string]struct{})
 	for _, candidate := range r.config.Descriptors() {
-		verified, err := auth.VerifyRelayDescriptor(candidate)
+		verified, err := identity.VerifyRelayDescriptor(candidate)
 		if err != nil || !verified.ExpiresAt.After(now.Add(minimumGatewayTTL)) || strings.EqualFold(verified.Address, ingressAddress) {
 			continue
 		}
@@ -601,7 +600,7 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 	if err != nil || !bytes.Equal(canonical, payload) {
 		return capabilityClaims{}, errors.New("non-canonical overlay capability")
 	}
-	verifiedIngress, err := auth.VerifyRelayDescriptor(claims.Ingress)
+	verifiedIngress, err := identity.VerifyRelayDescriptor(claims.Ingress)
 	if err != nil {
 		return capabilityClaims{}, err
 	}

@@ -6,8 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -38,7 +37,7 @@ func mustSignedDescriptor(t *testing.T, signing types.Identity, relayURL string,
 	if err != nil {
 		t.Fatalf("identity.NewLocalAuthority() error = %v", err)
 	}
-	signed, err := auth.SignRelayDescriptor(types.RelayDescriptor{
+	signed, err := identity.SignRelayDescriptor(types.RelayDescriptor{
 		Address:      signing.Address,
 		Version:      types.DiscoveryVersion,
 		IssuedAt:     issuedAt,

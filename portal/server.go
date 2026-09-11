@@ -21,14 +21,13 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/internal/transport"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
-	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -895,7 +894,7 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 	if s.overlay != nil {
 		ivnpDestination = s.overlay.Destination()
 	}
-	return auth.SignRelayDescriptor(types.RelayDescriptor{
+	return identity.SignRelayDescriptor(types.RelayDescriptor{
 		Address:           s.identity.Address,
 		Version:           types.DiscoveryVersion,
 		IssuedAt:          now,
