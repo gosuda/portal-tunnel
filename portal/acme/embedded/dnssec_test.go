@@ -226,6 +226,13 @@ func TestDNSSECKeyPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("new private key mode = %04o, want 0600", info.Mode().Perm())
+		}
 		if err := os.Chmod(path, 0644); err != nil {
 			t.Fatal(err)
 		}

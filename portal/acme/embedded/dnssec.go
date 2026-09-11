@@ -1,6 +1,7 @@
 package embedded
 
 import (
+	"bytes"
 	"crypto"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,7 @@ const signatureSkew = 5 * time.Minute
 
 // A single file binds the private key to its zone and DNSKEY. Never regenerate
 // an unreadable or malformed existing key: the parent DS may already trust it.
-func loadSigningKey(path, zone string) (resultKey *dns.DNSKEY, resultSigner crypto.Signer, resultErr error) {
+func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil, errors.New("dnssec key path is required")
 	}
@@ -50,64 +51,26 @@ func loadSigningKey(path, zone string) (resultKey *dns.DNSKEY, resultSigner cryp
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := makeKeyDirectory(filepath.Dir(path)); err != nil {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			return nil, nil, err
 		}
-		// Restrict permissions before writing any private material, and publish
-		// only a complete, synced file without replacing an existing key.
-		f, err := createKeyTempFile(filepath.Dir(path))
+		f, err := os.CreateTemp(dir, ".dnssec-key-*")
 		if err != nil {
 			return nil, nil, fmt.Errorf("create dnssec key: %w", err)
 		}
 		tmp := f.Name()
-		removeTemp := func() error {
-			if tmp == "" {
-				return nil
-			}
-			name := tmp
-			tmp = ""
-			// Windows publication moves the file and has already removed this
-			// name. Unix publication leaves a second link that must be unlinked.
-			if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("remove temporary dnssec key: %w", err)
-			}
-			return nil
-		}
-		defer func() {
-			if err := removeTemp(); err != nil {
-				resultKey, resultSigner = nil, nil
-				resultErr = errors.Join(resultErr, err)
-			}
-		}()
+		defer func() { _ = os.Remove(tmp) }()
 		_, writeErr := f.Write(data)
 		syncErr := f.Sync()
 		closeErr := f.Close()
 		if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
 			return nil, nil, fmt.Errorf("persist dnssec key: %w", err)
 		}
-		publishErr := publishKeyFile(tmp, path)
-		if publishErr != nil && !errors.Is(publishErr, os.ErrExist) {
-			return nil, nil, fmt.Errorf("publish dnssec key: %w", publishErr)
+		if err := os.Rename(tmp, path); err != nil {
+			return nil, nil, fmt.Errorf("publish dnssec key: %w", err)
 		}
-		// The final directory flush must commit both the published name and the
-		// temporary name's removal before returning a key, including race losers.
-		if err := removeTemp(); err != nil {
-			return nil, nil, err
-		}
-		if publishErr != nil {
-			// A simultaneous start won publication. Load its completed key.
-			data, err = os.ReadFile(path)
-			if err != nil {
-				return nil, nil, fmt.Errorf("read published dnssec key: %w", err)
-			}
-		} else {
-			// Keep durability errors separate from publication's ErrExist: a
-			// failed sync must never be mistaken for another creator winning.
-			if err := syncKeyPublication(path); err != nil {
-				return nil, nil, fmt.Errorf("sync published dnssec key: %w", err)
-			}
-			return key, private.(crypto.Signer), nil
-		}
+		return key, private.(crypto.Signer), nil
 	}
 	var stored storedKey
 	if err := json.Unmarshal(data, &stored); err != nil {
