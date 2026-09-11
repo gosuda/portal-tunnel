@@ -406,6 +406,7 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 		}
 		if lease, ok := listener.leaseSnapshot(); ok {
 			snap.PublicURL = listener.publicURLForLease(lease)
+			snap.TCPAddr = lease.tcpAddr
 			snap.Connecting = snap.PublicURL == ""
 		}
 		if relayURL != "" {
@@ -528,6 +529,57 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 		}
 		if resolvedWithoutDatagram {
 			return nil, errors.New("relay did not expose udp")
+		}
+
+		select {
+		case <-e.done:
+			return nil, net.ErrClosed
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// ActiveTCPAddrs returns the public TCP addresses currently allocated for
+// this exposure, one per registered relay lease. Addresses are deduplicated
+// and sorted for stable output. The result is empty while no relay has
+// granted a TCP address yet.
+func (e *Exposure) ActiveTCPAddrs() []string {
+	e.mu.RLock()
+	addrs := make([]string, 0, len(e.relayListeners))
+	seen := make(map[string]struct{}, len(e.relayListeners))
+	for _, listener := range e.relayListeners {
+		lease, ok := listener.leaseSnapshot()
+		if !ok || lease.tcpAddr == "" {
+			continue
+		}
+		if _, dup := seen[lease.tcpAddr]; dup {
+			continue
+		}
+		seen[lease.tcpAddr] = struct{}{}
+		addrs = append(addrs, lease.tcpAddr)
+	}
+	e.mu.RUnlock()
+	slices.Sort(addrs)
+	return addrs
+}
+
+// WaitTCPReady blocks until the exposure has at least one allocated TCP
+// address, the exposure closes, or the context is canceled. It mirrors
+// WaitDatagramReady for raw-TCP consumers such as game servers.
+func (e *Exposure) WaitTCPReady(ctx context.Context) ([]string, error) {
+	if !e.Config().TCPEnabled {
+		return nil, errors.New("exposure does not have tcp enabled")
+	}
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		addrs := e.ActiveTCPAddrs()
+		if len(addrs) > 0 {
+			return addrs, nil
 		}
 
 		select {
