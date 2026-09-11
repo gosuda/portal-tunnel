@@ -84,6 +84,18 @@ func signingFixtures(t *testing.T, digest []byte) map[string]signFixture {
 		signature: pssSignature,
 	}
 
+	pssAutoOpts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthAuto, Hash: crypto.SHA256}
+	pssAutoSignature, err := rsa.SignPSS(rand.Reader, rsaKey, crypto.SHA256, digest, pssAutoOpts)
+	if err != nil {
+		t.Fatalf("sign pss auto salt: %v", err)
+	}
+	fixtures["rsa-pss-auto"] = signFixture{
+		public:    &rsaKey.PublicKey,
+		other:     &otherRSA.PublicKey,
+		opts:      pssAutoOpts,
+		signature: pssAutoSignature,
+	}
+
 	pkcsSignature, err := rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, digest)
 	if err != nil {
 		t.Fatalf("sign pkcs1v15: %v", err)

@@ -13,6 +13,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+
+	"github.com/rs/zerolog/log"
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
 
@@ -99,7 +102,8 @@ func VerifyCertificateHostname(certPEM []byte, hostname string) error {
 // terminating proxy that presents one keypair while the relay signer holds
 // another otherwise surfaces only as an opaque TLS "bad signature" alert.
 type verifyingSigner struct {
-	inner *keylesstls.RemoteSigner
+	inner      *keylesstls.RemoteSigner
+	warnedOnce sync.Once
 }
 
 func newVerifyingSigner(inner *keylesstls.RemoteSigner) *verifyingSigner {
@@ -116,6 +120,11 @@ func (v *verifyingSigner) Sign(rand io.Reader, digest []byte, opts crypto.Signer
 		return nil, err
 	}
 	if err := verifySignature(v.inner.Public(), digest, opts, signature); err != nil {
+		v.warnedOnce.Do(func() {
+			log.Warn().
+				Err(err).
+				Msg("relay keyless signature does not match the pinned certificate; tenant TLS handshakes will keep failing until the relay's terminating proxy and signer share one keypair")
+		})
 		return nil, fmt.Errorf("relay signature does not match the pinned certificate (terminating proxy and relay signer keypairs differ): %w", err)
 	}
 	return signature, nil
@@ -125,11 +134,7 @@ func verifySignature(publicKey crypto.PublicKey, digest []byte, opts crypto.Sign
 	switch key := publicKey.(type) {
 	case *rsa.PublicKey:
 		if pss, ok := opts.(*rsa.PSSOptions); ok {
-			saltLength := pss.SaltLength
-			if saltLength <= 0 {
-				saltLength = rsa.PSSSaltLengthEqualsHash
-			}
-			return rsa.VerifyPSS(key, opts.HashFunc(), digest, signature, &rsa.PSSOptions{SaltLength: saltLength, Hash: opts.HashFunc()})
+			return rsa.VerifyPSS(key, opts.HashFunc(), digest, signature, pss)
 		}
 		return rsa.VerifyPKCS1v15(key, opts.HashFunc(), digest, signature)
 	case *ecdsa.PublicKey:
