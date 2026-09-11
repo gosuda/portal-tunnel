@@ -58,7 +58,7 @@ func BuildClientTLSConfig(relayURL, hostname string, echKeys []tls.EncryptedClie
 		return nil, nil, fmt.Errorf("create keyless remote signer: %w", err)
 	}
 
-	if err := verifyRemoteSigner(remoteSigner, remoteSigner.Public()); err != nil {
+	if err := verifyRemoteSigner(remoteSigner); err != nil {
 		_ = remoteSigner.Close()
 		return nil, nil, fmt.Errorf("keyless signer self-test against %s failed: %w", serverName, err)
 	}
@@ -111,14 +111,15 @@ func VerifyCertificateHostname(certPEM []byte, hostname string) error {
 var errSignerKeyMismatch = errors.New("keyless signer does not match the pinned relay certificate; check whether a terminating proxy and the relay signer use different keypairs")
 
 // verifyRemoteSigner probes signer with a one-off random challenge and checks
-// the returned signature against pinned, the public key of the certificate the
-// relay served. The #377 failure mode — a terminating proxy presenting
-// certificate A while the relay's keyless signer holds keypair B — otherwise
-// surfaces only as an opaque TLS "bad signature" alert on every tenant
-// handshake. One probe at configuration time turns it into an actionable
-// startup error; healthy deployments pay a single extra /v1/sign round trip,
-// bounded by the signer's call timeout.
-func verifyRemoteSigner(signer crypto.Signer, pinned crypto.PublicKey) error {
+// the returned signature against the signer's advertised public key — for a
+// RemoteSigner, the key parsed from the pinned certificate. The #377 failure
+// mode — a terminating proxy presenting certificate A while the relay's
+// keyless signer holds keypair B — otherwise surfaces only as an opaque TLS
+// "bad signature" alert on every tenant handshake. One probe at configuration
+// time turns it into an actionable startup error; healthy deployments pay a
+// single extra /v1/sign round trip, bounded by the signer's call timeout.
+func verifyRemoteSigner(signer crypto.Signer) error {
+	pinned := signer.Public()
 	challenge := make([]byte, 32)
 	if _, err := rand.Read(challenge); err != nil {
 		return fmt.Errorf("generate self-test challenge: %w", err)

@@ -18,7 +18,7 @@ func TestVerifyRemoteSignerAcceptsMatchingKey(t *testing.T) {
 	for name, signer := range selfTestSigners(t) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if err := verifyRemoteSigner(signer, signer.Public()); err != nil {
+			if err := verifyRemoteSigner(signer); err != nil {
 				t.Fatalf("verifyRemoteSigner() error = %v", err)
 			}
 		})
@@ -37,7 +37,7 @@ func TestVerifyRemoteSignerRejectsSwappedKeypair(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			signer := swappedKeySigner{signWith: tc.swapped, present: tc.pinned.Public()}
-			err := verifyRemoteSigner(signer, signer.Public())
+			err := verifyRemoteSigner(signer)
 			if err == nil {
 				t.Fatal("verifyRemoteSigner() = nil, want keypair mismatch failure")
 			}
@@ -53,7 +53,7 @@ func TestVerifyRemoteSignerRejectsTamperedSignature(t *testing.T) {
 	for name, signer := range selfTestSigners(t) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			err := verifyRemoteSigner(tamperingSigner{inner: signer}, signer.Public())
+			err := verifyRemoteSigner(tamperingSigner{inner: signer})
 			if err == nil {
 				t.Fatal("verifyRemoteSigner() = nil, want tampered signature failure")
 			}
@@ -67,7 +67,7 @@ func TestVerifyRemoteSignerRejectsTamperedSignature(t *testing.T) {
 func TestVerifyRemoteSignerPropagatesSignError(t *testing.T) {
 	t.Parallel()
 	rsaKey := mustRSAKey(t)
-	err := verifyRemoteSigner(failingSigner{public: rsaKey.Public()}, rsaKey.Public())
+	err := verifyRemoteSigner(failingSigner{public: rsaKey.Public()})
 	if err == nil {
 		t.Fatal("verifyRemoteSigner() = nil, want sign error propagation")
 	}
@@ -85,7 +85,7 @@ func TestVerifyRemoteSignerUnsupportedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate ed25519 key: %v", err)
 	}
-	err = verifyRemoteSigner(priv, priv.Public())
+	err = verifyRemoteSigner(priv)
 	if err == nil {
 		t.Fatal("verifyRemoteSigner() = nil, want error for unsupported key type")
 	}
