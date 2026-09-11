@@ -7,127 +7,11 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 )
-
-func TestVerifySignatureAcceptsMatchingKey(t *testing.T) {
-	t.Parallel()
-	digest := sha256.Sum256([]byte("pt377 digest"))
-	for name, fixture := range signingFixtures(t, digest[:]) {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if err := verifySignature(fixture.public, digest[:], fixture.opts, fixture.signature); err != nil {
-				t.Fatalf("verifySignature() = %v, want nil", err)
-			}
-		})
-	}
-}
-
-func TestVerifySignatureRejectsWrongKey(t *testing.T) {
-	t.Parallel()
-	digest := sha256.Sum256([]byte("pt377 digest"))
-	for name, fixture := range signingFixtures(t, digest[:]) {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			err := verifySignature(fixture.other, digest[:], fixture.opts, fixture.signature)
-			if err == nil {
-				t.Fatal("verifySignature() = nil, want error for signature from a different key")
-			}
-		})
-	}
-}
-
-func TestVerifySignatureRejectsTamperedSignature(t *testing.T) {
-	t.Parallel()
-	digest := sha256.Sum256([]byte("pt377 digest"))
-	for name, fixture := range signingFixtures(t, digest[:]) {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			tampered := make([]byte, len(fixture.signature))
-			copy(tampered, fixture.signature)
-			tampered[len(tampered)-1] ^= 0xff
-			if err := verifySignature(fixture.public, digest[:], fixture.opts, tampered); err == nil {
-				t.Fatal("verifySignature() = nil, want error for tampered signature")
-			}
-		})
-	}
-}
-
-type signFixture struct {
-	public    crypto.PublicKey
-	other     crypto.PublicKey
-	opts      crypto.SignerOpts
-	signature []byte
-}
-
-func signingFixtures(t *testing.T, digest []byte) map[string]signFixture {
-	t.Helper()
-	fixtures := make(map[string]signFixture)
-
-	rsaKey := mustRSAKey(t)
-	otherRSA := mustRSAKey(t)
-	pssOpts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
-	pssSignature, err := rsa.SignPSS(rand.Reader, rsaKey, crypto.SHA256, digest, pssOpts)
-	if err != nil {
-		t.Fatalf("sign pss: %v", err)
-	}
-	fixtures["rsa-pss"] = signFixture{
-		public:    &rsaKey.PublicKey,
-		other:     &otherRSA.PublicKey,
-		opts:      pssOpts,
-		signature: pssSignature,
-	}
-
-	pssAutoOpts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthAuto, Hash: crypto.SHA256}
-	pssAutoSignature, err := rsa.SignPSS(rand.Reader, rsaKey, crypto.SHA256, digest, pssAutoOpts)
-	if err != nil {
-		t.Fatalf("sign pss auto salt: %v", err)
-	}
-	fixtures["rsa-pss-auto"] = signFixture{
-		public:    &rsaKey.PublicKey,
-		other:     &otherRSA.PublicKey,
-		opts:      pssAutoOpts,
-		signature: pssAutoSignature,
-	}
-
-	pkcsSignature, err := rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, digest)
-	if err != nil {
-		t.Fatalf("sign pkcs1v15: %v", err)
-	}
-	fixtures["rsa-pkcs1v15"] = signFixture{
-		public:    &rsaKey.PublicKey,
-		other:     &otherRSA.PublicKey,
-		opts:      crypto.SHA256,
-		signature: pkcsSignature,
-	}
-
-	ecdsaKey := mustECDSAKey(t)
-	otherECDSA := mustECDSAKey(t)
-	ecdsaSignature, err := ecdsa.SignASN1(rand.Reader, ecdsaKey, digest)
-	if err != nil {
-		t.Fatalf("sign ecdsa: %v", err)
-	}
-	fixtures["ecdsa"] = signFixture{
-		public:    &ecdsaKey.PublicKey,
-		other:     &otherECDSA.PublicKey,
-		opts:      crypto.SHA256,
-		signature: ecdsaSignature,
-	}
-
-	return fixtures
-}
-
-func TestVerifySignatureUnsupportedKey(t *testing.T) {
-	t.Parallel()
-	err := verifySignature(struct{ crypto.PublicKey }{}, nil, crypto.SHA256, nil)
-	if err == nil {
-		t.Fatal("verifySignature() = nil, want error for unsupported key type")
-	}
-}
 
 func TestVerifyRemoteSignerAcceptsMatchingKey(t *testing.T) {
 	t.Parallel()
@@ -140,6 +24,7 @@ func TestVerifyRemoteSignerAcceptsMatchingKey(t *testing.T) {
 		})
 	}
 }
+
 func TestVerifyRemoteSignerRejectsSwappedKeypair(t *testing.T) {
 	t.Parallel()
 	// Faithful to #377: RemoteSigner.Public() is parsed from the pinned
@@ -156,8 +41,8 @@ func TestVerifyRemoteSignerRejectsSwappedKeypair(t *testing.T) {
 			if err == nil {
 				t.Fatal("verifyRemoteSigner() = nil, want keypair mismatch failure")
 			}
-			if !strings.Contains(err.Error(), "keypairs differ") {
-				t.Fatalf("error should name the keypair mismatch, got: %v", err)
+			if !errors.Is(err, ErrSignerKeyMismatch) {
+				t.Fatalf("error should match ErrSignerKeyMismatch, got: %v", err)
 			}
 		})
 	}
@@ -171,6 +56,9 @@ func TestVerifyRemoteSignerRejectsTamperedSignature(t *testing.T) {
 			err := verifyRemoteSigner(tamperingSigner{inner: signer}, signer.Public())
 			if err == nil {
 				t.Fatal("verifyRemoteSigner() = nil, want tampered signature failure")
+			}
+			if !errors.Is(err, ErrSignerKeyMismatch) {
+				t.Fatalf("error should match ErrSignerKeyMismatch, got: %v", err)
 			}
 		})
 	}
@@ -186,6 +74,9 @@ func TestVerifyRemoteSignerPropagatesSignError(t *testing.T) {
 	if !strings.Contains(err.Error(), "sign self-test challenge") {
 		t.Fatalf("error should name the sign step, got: %v", err)
 	}
+	if errors.Is(err, ErrSignerKeyMismatch) {
+		t.Fatal("sign-RPC failure must not be classified as a keypair mismatch")
+	}
 }
 
 func TestVerifyRemoteSignerUnsupportedKey(t *testing.T) {
@@ -194,10 +85,15 @@ func TestVerifyRemoteSignerUnsupportedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate ed25519 key: %v", err)
 	}
-	if err := verifyRemoteSigner(priv, priv.Public()); err == nil {
+	err = verifyRemoteSigner(priv, priv.Public())
+	if err == nil {
 		t.Fatal("verifyRemoteSigner() = nil, want error for unsupported key type")
-	} else if !strings.Contains(err.Error(), "unsupported pinned key type") {
-		t.Fatalf("error should name the unsupported key type, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not supported by the keyless sign protocol") {
+		t.Fatalf("error should name the protocol limitation, got: %v", err)
+	}
+	if errors.Is(err, ErrSignerKeyMismatch) {
+		t.Fatal("unsupported key type must not be classified as a keypair mismatch")
 	}
 }
 

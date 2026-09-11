@@ -3,10 +3,13 @@ package sdk
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -287,6 +290,27 @@ func TestListenerRetryBudgetDropsAutoSelectedRelayWithoutPoolBan(t *testing.T) {
 	}
 	if got := relaySet.BootstrapRelayURLs(); len(got) != 1 || got[0] != relayA {
 		t.Fatalf("BootstrapRelayURLs() = %v, want [%q]", got, relayA)
+	}
+}
+
+func TestListenerWaitRetryKeepsSignerKeyMismatchRetrying(t *testing.T) {
+	relayURL, err := url.Parse("https://relay-a.example")
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+	listener := &listener{
+		relayURL:  relayURL,
+		route:     discovery.Route{RelayURL: "https://relay-a.example", Explicit: true},
+		retryWait: time.Millisecond,
+	}
+	mismatch := fmt.Errorf("keyless signer self-test against relay-a.example failed: %w", keyless.ErrSignerKeyMismatch)
+	// A mismatch must keep retrying — a relay-side repair or completed cert
+	// rotation can clear it — including on later attempts where ordinary
+	// registration failures drop to debug-level logging.
+	for retries := 1; retries <= 3; retries++ {
+		if !listener.waitRetry(context.Background(), "lease registration", mismatch, retries, 0) {
+			t.Fatalf("waitRetry() = false on attempt %d; signer key mismatch must keep retrying", retries)
+		}
 	}
 }
 
