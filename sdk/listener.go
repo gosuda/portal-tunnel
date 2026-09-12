@@ -541,10 +541,13 @@ func (l *listener) runLease(ctx context.Context) error {
 	defer cancel()
 
 	errCh := make(chan error, max(l.readyTarget, 1)+1)
+	var workers sync.WaitGroup
 	if l.stream != nil && l.readyTarget > 0 {
 		for sessionSlot := range l.readyTarget {
 			sessionSlot++
+			workers.Add(1)
 			go func() {
+				defer workers.Done()
 				if err := l.runReverseSessionLoop(leaseCtx, lease.tlsConfig, sessionSlot); err != nil {
 					select {
 					case errCh <- err:
@@ -555,9 +558,15 @@ func (l *listener) runLease(ctx context.Context) error {
 		}
 	}
 	if l.udpEnabled {
-		go l.runDatagramLoop(leaseCtx)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			l.runDatagramLoop(leaseCtx)
+		}()
 	}
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		if err := l.runRenewLoop(leaseCtx); err != nil {
 			select {
 			case errCh <- err:
@@ -568,9 +577,12 @@ func (l *listener) runLease(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		cancel()
+		workers.Wait()
 		return ctx.Err()
 	case err := <-errCh:
 		cancel()
+		workers.Wait()
 		return err
 	}
 }
