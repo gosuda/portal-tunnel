@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,6 +22,12 @@ import (
 // explicit local targets. Targets are a proxy concern, not part of the
 // exposure configuration, so callers pass them here instead.
 func ProxyWithTargets(ctx context.Context, exposure *Exposure, tcpTarget, udpTarget string) error {
+	if ctx == nil {
+		return errors.New("sdk: context is nil")
+	}
+	if exposure == nil {
+		return errors.New("sdk: exposure is nil")
+	}
 	defer exposure.Close()
 	if len(exposure.ActiveRelayURLs()) == 0 {
 		return errors.New("no relay URLs provided")
@@ -28,6 +35,12 @@ func ProxyWithTargets(ctx context.Context, exposure *Exposure, tcpTarget, udpTar
 
 	cfg := exposure.Config()
 	identity := cfg.Identity
+	if strings.TrimSpace(udpTarget) == "" && cfg.UDPEnabled {
+		udpTarget = cfg.UDPAddr
+		if strings.TrimSpace(udpTarget) == "" {
+			udpTarget = cfg.TargetAddr
+		}
+	}
 	normalizedTCP, err := utils.NormalizeLoopbackTarget(tcpTarget)
 	if err != nil {
 		return fmt.Errorf("invalid tcp target %q: %w", tcpTarget, err)
@@ -113,6 +126,19 @@ func ProxyWithTargets(ctx context.Context, exposure *Exposure, tcpTarget, udpTar
 
 	log.Info().Msg("tunnel shutdown complete")
 	return errors.Join(waitErr, udpErr, closeErr)
+}
+
+// ProxyExposure is the compatibility entry point for callers that still keep
+// proxy targets in ExposeConfig. New code should pass explicit targets to
+// ProxyWithTargets.
+//
+// Deprecated: use ProxyWithTargets.
+func ProxyExposure(ctx context.Context, exposure *Exposure) error {
+	if exposure == nil {
+		return errors.New("sdk: exposure is nil")
+	}
+	cfg := exposure.Config()
+	return ProxyWithTargets(ctx, exposure, cfg.TargetAddr, cfg.UDPAddr)
 }
 
 func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {

@@ -1,4 +1,5 @@
-package manifest
+// Package portal provides Portal's embedded build manifests.
+package portal
 
 import _ "embed"
 

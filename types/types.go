@@ -6,7 +6,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/manifest"
+	portaltunnel "github.com/gosuda/portal-tunnel/v2"
 )
 
 const (
@@ -56,13 +56,13 @@ func init() {
 			Discovery string `toml:"discovery"`
 		} `toml:"protocol"`
 	}
-	if err := toml.Unmarshal(manifest.ConfigTOML, &m); err != nil {
+	if err := toml.Unmarshal(portaltunnel.ConfigTOML, &m); err != nil {
 		panic(fmt.Errorf("unmarshal config TOML: %w", err))
 	}
 	var registry struct {
 		Relays []string `json:"relays"`
 	}
-	if err := json.Unmarshal(manifest.RegistryJSON, &registry); err != nil {
+	if err := json.Unmarshal(portaltunnel.RegistryJSON, &registry); err != nil {
 		panic(fmt.Errorf("unmarshal registry JSON: %w", err))
 	}
 	ReleaseVersion = m.Release.Version

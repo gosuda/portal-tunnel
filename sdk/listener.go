@@ -29,15 +29,16 @@ import (
 )
 
 type listenerConfig struct {
-	Identity   types.Identity
-	Overlay    bool
-	UDPEnabled bool
-	TCPEnabled bool
-	ECH        bool
-	BanMITM    bool
-	Metadata   func() types.LeaseMetadata
-	RetryCount int
-	relaySet   *discovery.RelaySet
+	Identity      types.Identity
+	Overlay       bool
+	UDPEnabled    bool
+	TCPEnabled    bool
+	ECH           bool
+	BanMITM       bool
+	Metadata      func() types.LeaseMetadata
+	RetryCount    int
+	relaySet      *discovery.RelaySet
+	statusChanged func(*listener, error)
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -85,6 +86,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 		Str("relay_url", relayURL).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
+	l.notifyStatusChanged(err)
 	_ = l.Close()
 	return true
 }
@@ -101,6 +103,7 @@ type listener struct {
 	overlay           bool
 	warnOverlayDirect sync.Once
 	relaySet          *discovery.RelaySet
+	statusChanged     func(*listener, error)
 	udpEnabled        bool
 	tcpEnabled        bool
 	echEnabled        bool
@@ -153,6 +156,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		identity:       cfg.Identity.Copy(),
 		overlay:        cfg.Overlay,
 		relaySet:       cfg.relaySet,
+		statusChanged:  cfg.statusChanged,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
 		echEnabled:     cfg.ECH,
@@ -174,6 +178,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 				Str("component", "sdk-quic-backhaul").
 				Str("address", l.identity.Address).
 				Msg("quic backhaul disconnected; waiting to reconnect")
+			l.notifyStatusChanged(nil)
 		})
 	}
 
@@ -186,6 +191,12 @@ func (l *listener) metadataSnapshot() types.LeaseMetadata {
 		return types.LeaseMetadata{}
 	}
 	return l.metadata()
+}
+
+func (l *listener) notifyStatusChanged(err error) {
+	if l != nil && l.statusChanged != nil {
+		l.statusChanged(l, err)
+	}
 }
 
 func (l *listener) run(ctx context.Context) {
@@ -203,6 +214,7 @@ func (l *listener) run(ctx context.Context) {
 			}
 			retries++
 			if !l.waitRetry(ctx, "lease registration", err, retries, 0) {
+				l.notifyStatusChanged(err)
 				_ = l.Close()
 				return
 			}
@@ -210,6 +222,7 @@ func (l *listener) run(ctx context.Context) {
 		}
 
 		retries = 0
+		l.notifyStatusChanged(nil)
 		publicURL := ""
 		udpAddr := ""
 		tcpAddr := ""
@@ -246,6 +259,7 @@ func (l *listener) run(ctx context.Context) {
 			if lease != nil && lease.tlsCloser != nil {
 				_ = lease.tlsCloser.Close()
 			}
+			l.notifyStatusChanged(nil)
 			l.resetTransport()
 			relayURL := l.relayURL.String()
 			log.Debug().
@@ -262,6 +276,7 @@ func (l *listener) run(ctx context.Context) {
 			Str("relay_url", relayURL).
 			Str("address", l.identity.Address).
 			Msg("listener connection retry budget exhausted; closing listener")
+		l.notifyStatusChanged(err)
 		_ = l.Close()
 		return
 	}
@@ -632,12 +647,14 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 			}
 			continue
 		}
+		l.notifyStatusChanged(nil)
 
 		select {
 		case <-ctx.Done():
 			l.datagram.Clear("lease stopped")
 			return
 		case <-recvDone:
+			l.notifyStatusChanged(nil)
 		}
 
 		if !utils.SleepOrDone(ctx, time.Second) {
@@ -1031,6 +1048,7 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 			Err(err).
 			Int("retry_count", l.retryCount).
 			Msg("retry budget exhausted")
+		l.notifyStatusChanged(err)
 		return false
 	}
 
