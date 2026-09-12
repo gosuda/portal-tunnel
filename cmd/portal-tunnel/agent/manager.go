@@ -14,7 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/exposeidentity"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -675,7 +675,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	}
 	x402FacilitatorToken := strings.TrimSpace(cfg.X402FacilitatorToken)
 	x402FacilitatorToken = cmp.Or(x402FacilitatorToken, strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
-	listenerIdentity, err := exposeidentity.Resolve(cfg.Name, cfg.TargetAddr, cfg.IdentityPath, cfg.IdentityJSON)
+	listenerIdentity, err := identity.LoadOrCreate(cfg.Name, cfg.TargetAddr, cfg.IdentityPath, cfg.IdentityJSON)
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}

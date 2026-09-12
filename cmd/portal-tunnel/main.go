@@ -19,8 +19,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/exposeidentity"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -227,7 +227,7 @@ func runExposeCommand(args []string) error {
 		}()
 	}
 
-	listenerIdentity, err := exposeidentity.Resolve(flags.name, flags.targetAddr, flags.identityPath, flags.identityJSON)
+	listenerIdentity, err := identity.LoadOrCreate(flags.name, flags.targetAddr, flags.identityPath, flags.identityJSON)
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
