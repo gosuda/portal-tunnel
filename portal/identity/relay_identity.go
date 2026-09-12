@@ -1,11 +1,14 @@
 package identity
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -49,9 +52,9 @@ type storedRelayIdentity struct {
 }
 
 // LoadOrCreateRelayIdentity loads the relay identity from the state dir, or
-// generates and persists a fresh one when the file does not exist. The file
-// is rewritten only when loading or generation actually changed its content;
-// an unchanged identity is not persisted again.
+// generates a fresh one when the file does not exist. The file is rewritten
+// only when loading or generation actually changed its content; an unchanged
+// identity is not persisted again.
 func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, error) {
 	path = resolveRelayIdentityPath(path)
 	if path == "" {
@@ -70,11 +73,13 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, erro
 	case err == nil:
 		decoded = relay
 	case errors.Is(err, os.ErrNotExist):
-		generated, genErr := ResolveSecp256k1Identity("")
+		privateKey, genErr := secp256k1.GeneratePrivateKey()
 		if genErr != nil {
-			return types.RelayIdentity{}, fmt.Errorf("generate identity: %w", genErr)
+			return types.RelayIdentity{}, fmt.Errorf("generate secp256k1 private key: %w", genErr)
 		}
-		relay = types.RelayIdentity{Identity: generated}
+		relay = types.RelayIdentity{Identity: types.Identity{
+			PrivateKey: hex.EncodeToString(privateKey.Serialize()),
+		}}
 	default:
 		return types.RelayIdentity{}, fmt.Errorf("load identity: %w", err)
 	}
@@ -82,15 +87,12 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, erro
 	if rootHost != "" {
 		relay.Name = rootHost
 	}
-	if err := populateRelayIdentity(&relay); err != nil {
-		return types.RelayIdentity{}, err
-	}
-	resolved, err := resolveRelayIdentity(relay)
+	resolved, err := canonicalizeRelayIdentity(relay)
 	if err != nil {
 		return types.RelayIdentity{}, err
 	}
 
-	if !relayIdentityEqual(decoded, resolved) {
+	if decoded != resolved {
 		if err := saveRelayIdentity(path, resolved); err != nil {
 			return types.RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
 		}
@@ -98,72 +100,45 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, erro
 	return resolved, nil
 }
 
-// populateRelayIdentity fills the token secret and ECH seed when missing.
-func populateRelayIdentity(identity *types.RelayIdentity) error {
-	if identity == nil {
-		return errors.New("relay identity is required")
-	}
-	baseIdentity, err := ensureTokenSecret(identity.Identity)
-	if err != nil {
-		return err
-	}
-	identity.Identity = baseIdentity
-
-	if strings.TrimSpace(identity.EncryptedClientHelloSeed) == "" {
-		identity.EncryptedClientHelloSeed = utils.RandomID("")
-	}
-
-	return nil
-}
-
-// resolveRelayIdentity applies the shared key-material resolution path to the
-// relay identity and trims the ECH seed. Relay names are hostnames, so the
-// DNS-label naming policy of Resolve does not apply.
-func resolveRelayIdentity(relay types.RelayIdentity) (types.RelayIdentity, error) {
-	resolved := relay.Copy()
-	baseIdentity, err := resolveKeyMaterial(resolved.Identity)
+// canonicalizeRelayIdentity fills the token secret and ECH seed when missing
+// and applies the shared key-material resolution path. Relay names are
+// hostnames, so the DNS-label naming policy of Resolve does not apply.
+func canonicalizeRelayIdentity(relay types.RelayIdentity) (types.RelayIdentity, error) {
+	baseIdentity, err := ensureTokenSecret(relay.Identity)
 	if err != nil {
 		return types.RelayIdentity{}, err
 	}
-	resolved.Identity = baseIdentity
-	resolved.EncryptedClientHelloSeed = strings.TrimSpace(resolved.EncryptedClientHelloSeed)
+	relay.Identity = baseIdentity
 
-	return resolved, nil
-}
-
-func relayIdentityEqual(a, b types.RelayIdentity) bool {
-	return a.Name == b.Name &&
-		a.Address == b.Address &&
-		a.PublicKey == b.PublicKey &&
-		a.PrivateKey == b.PrivateKey &&
-		a.Mnemonic == b.Mnemonic &&
-		a.DerivationPath == b.DerivationPath &&
-		a.TokenSecret == b.TokenSecret &&
-		a.EncryptedClientHelloSeed == b.EncryptedClientHelloSeed
-}
-
-// loadRelayIdentity decodes the relay identity file without resolving it;
-// LoadOrCreateRelayIdentity resolves once after applying its policy.
-func loadRelayIdentity(path string) (types.RelayIdentity, error) {
-	path = resolveRelayIdentityPath(path)
-	if path == "" {
-		return types.RelayIdentity{}, errors.New("identity path is required")
+	relay.EncryptedClientHelloSeed = strings.TrimSpace(relay.EncryptedClientHelloSeed)
+	if relay.EncryptedClientHelloSeed == "" {
+		relay.EncryptedClientHelloSeed = utils.RandomID("")
 	}
+
+	resolvedIdentity, err := resolveKeyMaterial(relay.Identity)
+	if err != nil {
+		return types.RelayIdentity{}, err
+	}
+	relay.Identity = resolvedIdentity
+
+	return relay, nil
+}
+
+// loadRelayIdentity decodes the relay identity file at the final file path
+// without resolving it; LoadOrCreateRelayIdentity resolves once after
+// applying its policy.
+func loadRelayIdentity(path string) (types.RelayIdentity, error) {
 	var payload storedRelayIdentity
 	if err := utils.ReadJSONFile(path, &payload); err != nil {
 		return types.RelayIdentity{}, fmt.Errorf("read identity file: %w", err)
 	}
 	return types.RelayIdentity{
-		Identity:                 storedIdentityToIdentity(payload.storedIdentity),
+		Identity:                 types.Identity(payload.storedIdentity),
 		EncryptedClientHelloSeed: payload.EncryptedClientHelloSeed,
 	}, nil
 }
 
 func saveRelayIdentity(path string, relay types.RelayIdentity) error {
-	path = resolveRelayIdentityPath(path)
-	if path == "" {
-		return errors.New("identity path is required")
-	}
 	if err := utils.WriteJSONFile(path, storedRelayIdentity{
 		storedIdentity:           storedIdentityFromIdentity(relay.Identity),
 		EncryptedClientHelloSeed: relay.EncryptedClientHelloSeed,

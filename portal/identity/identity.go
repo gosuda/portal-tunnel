@@ -1,10 +1,13 @@
 package identity
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -52,13 +55,17 @@ func Resolve(id types.Identity) (types.Identity, error) {
 	return ensureTokenSecret(resolved)
 }
 
-// Generate creates a fresh Portal identity for name with a new private key.
+// Generate creates a fresh Portal identity for name with a new private key,
+// passing the new key through Resolve exactly once.
 func Generate(name string) (types.Identity, error) {
-	signingIdentity, err := ResolveSecp256k1Identity("")
+	privateKey, err := secp256k1.GeneratePrivateKey()
 	if err != nil {
-		return types.Identity{}, fmt.Errorf("generate identity: %w", err)
+		return types.Identity{}, fmt.Errorf("generate secp256k1 private key: %w", err)
 	}
-	return Resolve(types.Identity{Name: name, PrivateKey: signingIdentity.PrivateKey})
+	return Resolve(types.Identity{
+		Name:       name,
+		PrivateKey: hex.EncodeToString(privateKey.Serialize()),
+	})
 }
 
 // Decode unmarshals an identity JSON document in the canonical identity file
@@ -73,7 +80,7 @@ func Decode(data []byte) (types.Identity, error) {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return types.Identity{}, fmt.Errorf("decode identity json: %w", err)
 	}
-	return storedIdentityToIdentity(payload), nil
+	return types.Identity(payload), nil
 }
 
 // Parse decodes an identity JSON document and resolves it through Resolve.
@@ -105,6 +112,7 @@ func Marshal(id types.Identity) ([]byte, error) {
 // one derivation path; each applies its own naming and policy on top.
 func resolveKeyMaterial(id types.Identity) (types.Identity, error) {
 	resolved := id.Copy()
+
 	resolved.Name = strings.TrimSpace(resolved.Name)
 	resolved.Address = strings.TrimSpace(resolved.Address)
 	resolved.PublicKey = strings.TrimSpace(resolved.PublicKey)
@@ -157,6 +165,9 @@ func resolveKeyMaterial(id types.Identity) (types.Identity, error) {
 	return resolved, nil
 }
 
+// storedIdentity is the canonical identity file format: the same fields as
+// types.Identity in the same order, so values convert directly. The JSON tags
+// control which fields are exposed in the at-rest format.
 type storedIdentity struct {
 	Name           string `json:"name,omitempty"`
 	Address        string `json:"address,omitempty"`
@@ -167,30 +178,12 @@ type storedIdentity struct {
 	TokenSecret    string `json:"token_secret,omitempty"`
 }
 
-func storedIdentityToIdentity(payload storedIdentity) types.Identity {
-	return types.Identity{
-		Name:           payload.Name,
-		Address:        payload.Address,
-		PublicKey:      payload.PublicKey,
-		PrivateKey:     payload.PrivateKey,
-		Mnemonic:       payload.Mnemonic,
-		DerivationPath: payload.DerivationPath,
-		TokenSecret:    payload.TokenSecret,
+// storedIdentityFromIdentity serializes a resolved identity, hiding the
+// derived private key when a mnemonic can regenerate it.
+func storedIdentityFromIdentity(id types.Identity) storedIdentity {
+	stored := storedIdentity(id)
+	if id.Mnemonic != "" {
+		stored.PrivateKey = ""
 	}
-}
-
-func storedIdentityFromIdentity(identity types.Identity) storedIdentity {
-	privateKey := identity.PrivateKey
-	if strings.TrimSpace(identity.Mnemonic) != "" {
-		privateKey = ""
-	}
-	return storedIdentity{
-		Name:           identity.Name,
-		Address:        identity.Address,
-		PublicKey:      identity.PublicKey,
-		PrivateKey:     privateKey,
-		Mnemonic:       identity.Mnemonic,
-		DerivationPath: identity.DerivationPath,
-		TokenSecret:    identity.TokenSecret,
-	}
+	return stored
 }

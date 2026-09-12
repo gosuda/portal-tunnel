@@ -9,11 +9,17 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func TestResolveDerivesAddressAndFillsTokenSecret(t *testing.T) {
-	generated, err := Generate("derive-check")
+func mustGenerate(t *testing.T, name string) types.Identity {
+	t.Helper()
+	generated, err := Generate(name)
 	if err != nil {
-		t.Fatalf("Generate: %v", err)
+		t.Fatalf("Generate %q: %v", name, err)
 	}
+	return generated
+}
+
+func TestResolveDerivesAddressAndFillsTokenSecret(t *testing.T) {
+	generated := mustGenerate(t, "derive-check")
 	if generated.Address == "" || generated.PublicKey == "" || generated.PrivateKey == "" || generated.TokenSecret == "" {
 		t.Fatalf("generated identity incomplete: %+v", generated)
 	}
@@ -27,45 +33,41 @@ func TestResolveDerivesAddressAndFillsTokenSecret(t *testing.T) {
 	}
 }
 
-func TestResolveRejectsMismatchedAddress(t *testing.T) {
-	generated, err := Generate("mismatch-check")
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
+func TestResolveRejectsInvalidIdentities(t *testing.T) {
+	generated := mustGenerate(t, "reject-check")
 	generated.Address = "0x0000000000000000000000000000000000000001"
-	if _, err := Resolve(generated); err == nil || !strings.Contains(err.Error(), "does not match private key") {
-		t.Fatalf("Resolve mismatched address: got %v", err)
-	}
-}
+	nameCheck := mustGenerate(t, "name-check")
+	nameCheck.Name = ""
 
-func TestResolveRejectsMissingKeyMaterial(t *testing.T) {
-	if _, err := Resolve(types.Identity{Name: "no-key"}); err == nil || !strings.Contains(err.Error(), "private key is required") {
-		t.Fatalf("Resolve without key material: got %v, want implicit generation rejected", err)
+	cases := []struct {
+		name    string
+		parse   bool
+		id      types.Identity
+		raw     string
+		wantErr string
+	}{
+		{"mismatched address", false, generated, "", "does not match private key"},
+		{"missing key material", false, types.Identity{Name: "no-key"}, "", "private key is required"},
+		{"empty name", false, nameCheck, "", "name"},
+		{"keyless document", true, types.Identity{}, `{"name":"foo"}`, "private key is required"},
+		{"invalid json", true, types.Identity{}, "not json", "decode identity json"},
+		{"empty input", true, types.Identity{}, "", "identity json is required"},
 	}
-}
-
-func TestParseRejectsKeylessDocument(t *testing.T) {
-	if _, err := Parse([]byte(`{"name":"foo"}`)); err == nil || !strings.Contains(err.Error(), "private key is required") {
-		t.Fatalf("Parse keyless document: got %v, want error instead of implicit generation", err)
-	}
-}
-
-func TestResolveRejectsEmptyName(t *testing.T) {
-	generated, err := Generate("name-check")
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	generated.Name = ""
-	if _, err := Resolve(generated); err == nil || !strings.Contains(err.Error(), "name") {
-		t.Fatalf("Resolve empty name: got %v", err)
+	for _, tc := range cases {
+		var err error
+		if tc.parse {
+			_, err = Parse([]byte(tc.raw))
+		} else {
+			_, err = Resolve(tc.id)
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Fatalf("%s: got %v, want error containing %q", tc.name, err, tc.wantErr)
+		}
 	}
 }
 
 func TestGenerateMarshalParseRoundTrip(t *testing.T) {
-	generated, err := Generate("round-trip")
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
+	generated := mustGenerate(t, "round-trip")
 
 	data, err := Marshal(generated)
 	if err != nil {
@@ -75,35 +77,19 @@ func TestGenerateMarshalParseRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if parsed.Name != generated.Name || parsed.Address != generated.Address ||
-		parsed.PublicKey != generated.PublicKey || parsed.PrivateKey != generated.PrivateKey ||
-		parsed.TokenSecret != generated.TokenSecret {
-		t.Fatalf("round trip mismatch:\n parsed %+v\ngenerated %+v", parsed, generated)
-	}
-
-	path := filepath.Join(t.TempDir(), "identity.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write identity file: %v", err)
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read identity file: %v", err)
-	}
-	loaded, err := Parse(raw)
-	if err != nil {
-		t.Fatalf("Parse file: %v", err)
-	}
-	if loaded.PrivateKey != generated.PrivateKey {
-		t.Fatalf("loaded private key mismatch")
+	if parsed != generated {
+		t.Fatalf("round trip mismatch:\n parsed   %+v\ngenerated %+v", parsed, generated)
 	}
 }
 
-func TestParseRejectsInvalidInput(t *testing.T) {
-	if _, err := Parse([]byte("not json")); err == nil || !strings.Contains(err.Error(), "decode identity json") {
-		t.Fatalf("Parse invalid json: got %v", err)
+func assertRelayReload(t *testing.T, dir string, want types.RelayIdentity) {
+	t.Helper()
+	reloaded, err := LoadOrCreateRelayIdentity(dir, want.Name)
+	if err != nil {
+		t.Fatalf("reload relay identity: %v", err)
 	}
-	if _, err := Parse(nil); err == nil || !strings.Contains(err.Error(), "identity json is required") {
-		t.Fatalf("Parse empty: got %v", err)
+	if reloaded.PrivateKey != want.PrivateKey || reloaded.EncryptedClientHelloSeed != want.EncryptedClientHelloSeed {
+		t.Fatalf("reloaded mismatch:\n reloaded %+v\n created %+v", reloaded, want)
 	}
 }
 
@@ -124,14 +110,9 @@ func TestLoadOrCreateRelayIdentityCreatesAndReloads(t *testing.T) {
 		t.Fatalf("identity file not written: %v", err)
 	}
 
-	reloaded, err := LoadOrCreateRelayIdentity(dir, "relay.example.com")
-	if err != nil {
-		t.Fatalf("LoadOrCreateRelayIdentity reload: %v", err)
-	}
-	if reloaded.PrivateKey != created.PrivateKey || reloaded.EncryptedClientHelloSeed != created.EncryptedClientHelloSeed {
-		t.Fatalf("reloaded relay identity mismatch:\n reloaded %+v\n created %+v", reloaded, created)
-	}
+	assertRelayReload(t, dir, created)
 }
+
 func TestLoadOrCreateRelayIdentitySkipsUnchangedWrite(t *testing.T) {
 	dir := t.TempDir()
 	created, err := LoadOrCreateRelayIdentity(dir, "relay.example.com")
@@ -145,11 +126,5 @@ func TestLoadOrCreateRelayIdentitySkipsUnchangedWrite(t *testing.T) {
 	}
 	defer func() { _ = os.Chmod(path, 0o600) }()
 
-	reloaded, err := LoadOrCreateRelayIdentity(dir, "relay.example.com")
-	if err != nil {
-		t.Fatalf("unchanged identity must not be rewritten: %v", err)
-	}
-	if reloaded.PrivateKey != created.PrivateKey || reloaded.EncryptedClientHelloSeed != created.EncryptedClientHelloSeed {
-		t.Fatalf("reloaded mismatch:\n reloaded %+v\n created %+v", reloaded, created)
-	}
+	assertRelayReload(t, dir, created)
 }
