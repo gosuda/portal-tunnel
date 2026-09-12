@@ -19,6 +19,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/internal/transport"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -40,15 +41,12 @@ type leaseRegistry struct {
 	tokenAuthority identity.Authority
 	tokenIssuer    string
 	reverseURL     string
-	reverseOverlay interface {
-		IssueEndpoint(types.Identity, string, time.Time, string) (types.ReverseEndpoint, bool, error)
-		ForgetLease(string)
-	}
-	policy   *policy.Runtime
-	udpPorts *transport.PortAllocator
-	tcpPorts *transport.PortAllocator
-	proxy    *proxy
-	mu       sync.RWMutex
+	overlay        *overlay.Runtime
+	policy         *policy.Runtime
+	udpPorts       *transport.PortAllocator
+	tcpPorts       *transport.PortAllocator
+	proxy          *proxy
+	mu             sync.RWMutex
 }
 
 func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, rootHostname string, sniPort int, tokenAuthority identity.Authority, tokenIssuer string, trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*leaseRegistry, error) {
@@ -89,8 +87,8 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 		if record != nil && record.stream != nil {
 			r.policy.ForgetIdentity(record.Key())
 		}
-		if record != nil && r.reverseOverlay != nil {
-			r.reverseOverlay.ForgetLease(record.id)
+		if record != nil && r.overlay != nil {
+			r.overlay.ForgetLease(record.id)
 		}
 	}
 	r.records = nil
@@ -366,8 +364,8 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	r.mu.Unlock()
 
 	if replaced != nil {
-		if r.reverseOverlay != nil {
-			r.reverseOverlay.ForgetLease(replaced.id)
+		if r.overlay != nil {
+			r.overlay.ForgetLease(replaced.id)
 		}
 		replaced.Close()
 	}
@@ -382,8 +380,8 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			}
 		}
 		r.mu.Unlock()
-		if r.reverseOverlay != nil {
-			r.reverseOverlay.ForgetLease(leaseID)
+		if r.overlay != nil {
+			r.overlay.ForgetLease(leaseID)
 		}
 		record.Close()
 		return nil, types.RegisterResponse{}, err
@@ -500,8 +498,8 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	active := current != nil
 	r.mu.RUnlock()
 	if !active {
-		if r.reverseOverlay != nil {
-			r.reverseOverlay.ForgetLease(leaseID)
+		if r.overlay != nil {
+			r.overlay.ForgetLease(leaseID)
 		}
 		return types.RenewResponse{}, errLeaseNotFound
 	}
@@ -514,8 +512,8 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 }
 
 func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, overlay bool, failedURL string) (types.ReverseEndpoint, error) {
-	if overlay && r.reverseOverlay != nil {
-		endpoint, ok, err := r.reverseOverlay.IssueEndpoint(leaseIdentity, leaseID, expiresAt, failedURL)
+	if overlay && r.overlay != nil {
+		endpoint, ok, err := r.overlay.IssueEndpoint(leaseIdentity, leaseID, expiresAt, failedURL)
 		if err == nil && ok {
 			return endpoint, nil
 		}
@@ -563,8 +561,8 @@ func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest)
 	active := current != nil
 	r.mu.RUnlock()
 	if !active {
-		if r.reverseOverlay != nil {
-			r.reverseOverlay.ForgetLease(leaseID)
+		if r.overlay != nil {
+			r.overlay.ForgetLease(leaseID)
 		}
 		return types.ReverseEndpoint{}, errLeaseNotFound
 	}
@@ -851,8 +849,8 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 }
 
 func (r *leaseRegistry) deleteRecord(i int) {
-	if record := r.records[i]; record != nil && r.reverseOverlay != nil {
-		r.reverseOverlay.ForgetLease(record.id)
+	if record := r.records[i]; record != nil && r.overlay != nil {
+		r.overlay.ForgetLease(record.id)
 	}
 	last := len(r.records) - 1
 	r.records[i] = r.records[last]

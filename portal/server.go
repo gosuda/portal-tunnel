@@ -260,7 +260,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		if err != nil {
 			return nil, err
 		}
-		registry.reverseOverlay = server.overlay
+		registry.overlay = server.overlay
 	}
 	return server, nil
 }

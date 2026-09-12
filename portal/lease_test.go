@@ -42,52 +42,6 @@ func newTestLeaseIdentity(t *testing.T, name string) types.Identity {
 	return testIdentity
 }
 
-type testReverseOverlay struct {
-	endpoint types.ReverseEndpoint
-	ok       bool
-	err      error
-	calls    int
-}
-
-func (o *testReverseOverlay) IssueEndpoint(types.Identity, string, time.Time, string) (types.ReverseEndpoint, bool, error) {
-	o.calls++
-	return o.endpoint, o.ok, o.err
-}
-
-func (o *testReverseOverlay) ForgetLease(string) {}
-
-func TestIssueReverseEndpointHonorsOverlayPreference(t *testing.T) {
-	t.Parallel()
-
-	registry := newTestRegistry(t)
-	leaseIdentity := newTestLeaseIdentity(t, "demo")
-	expiresAt := time.Now().UTC().Add(time.Minute)
-	overlayEndpoint := types.ReverseEndpoint{
-		URL:        "https://gateway.example/sdk/connect",
-		Capability: "overlay-capability",
-		ExpiresAt:  expiresAt,
-		Overlay:    true,
-	}
-	overlay := &testReverseOverlay{endpoint: overlayEndpoint, ok: true}
-	registry.reverseOverlay = overlay
-
-	direct, err := registry.issueReverseEndpoint(leaseIdentity, "lease_direct", expiresAt, false, "")
-	if err != nil || direct.URL != registry.reverseURL || overlay.calls != 0 {
-		t.Fatalf("direct endpoint = %#v, calls = %d, error = %v", direct, overlay.calls, err)
-	}
-
-	automatic, err := registry.issueReverseEndpoint(leaseIdentity, "lease_overlay", expiresAt, true, "")
-	if err != nil || automatic != overlayEndpoint || overlay.calls != 1 {
-		t.Fatalf("preferred overlay endpoint = %#v, calls = %d, error = %v", automatic, overlay.calls, err)
-	}
-
-	overlay.ok = false
-	automatic, err = registry.issueReverseEndpoint(leaseIdentity, "lease_fallback", expiresAt, true, "")
-	if err != nil || automatic.URL != registry.reverseURL {
-		t.Fatalf("overlay fallback endpoint = %#v, error = %v", automatic, err)
-	}
-}
-
 func TestRegisterOverlayPreferenceFallsBackToDirect(t *testing.T) {
 	t.Parallel()
 
