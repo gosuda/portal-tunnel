@@ -5,9 +5,15 @@ The SDK exposes one service through a dynamic relay pool. `Exposure` implements
 `Updates`, and `WaitReady`.
 
 ```go
+identity := types.Identity{
+	Name:       "my-service",
+	Address:    "0x...", // derived from PrivateKey by the identity owner
+	PublicKey:  "...",   // compressed secp256k1 public key
+	PrivateKey: "...",   // keep secret; load it from your application's store
+}
 exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 	RelayURLs: []string{"https://relay.example"},
-	Identity:  types.Identity{Name: "my-service"},
+	Identity:  identity,
 })
 if err != nil {
 	return err

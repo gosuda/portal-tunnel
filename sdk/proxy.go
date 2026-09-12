@@ -40,20 +40,20 @@ func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig
 		return errors.New("portal sdk: exposure is nil")
 	}
 	if ctx == nil {
-		return errors.Join(errors.New("portal sdk: context is nil"), exposure.Close())
+		return errors.New("portal sdk: context is nil")
 	}
 
 	var err error
 	if config.TCPTarget != "" {
 		config.TCPTarget, err = utils.NormalizeLoopbackTarget(config.TCPTarget)
 		if err != nil {
-			return errors.Join(err, exposure.Close())
+			return err
 		}
 	}
 	if config.UDPTarget != "" {
 		config.UDPTarget, err = utils.NormalizeLoopbackTarget(config.UDPTarget)
 		if err != nil {
-			return errors.Join(err, exposure.Close())
+			return err
 		}
 	}
 	workerCount := 0
@@ -64,7 +64,7 @@ func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig
 		workerCount++
 	}
 	if workerCount == 0 {
-		return errors.Join(errors.New("portal sdk: at least one proxy target is required"), exposure.Close())
+		return errors.New("portal sdk: at least one proxy target is required")
 	}
 
 	cfg := exposure.config()
@@ -147,7 +147,10 @@ func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr st
 			case errors.Is(err, ErrNoRelays):
 				return err
 			case errors.Is(err, context.Canceled):
-				return nil
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
 			case ctx.Err() != nil:
 				return ctx.Err()
 			case errors.Is(err, net.ErrClosed):

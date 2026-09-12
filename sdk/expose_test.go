@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,9 +26,9 @@ func newExposureStateTest(t *testing.T, relayURLs ...string) *Exposure {
 		cancel:         cancel,
 		done:           ctx.Done(),
 		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: relayURLs}, ExposeConfig.snapshot),
-		accepted:       make(chan net.Conn),
+		accepted:       make(chan net.Conn, 2),
 		relayListeners: make(map[string]*listener),
-		lifecycles:     make(map[string]relayLifecycle),
+		statuses:       make(map[string]RelayStatus),
 		stateChanged:   make(chan struct{}),
 		statusEvents:   make(chan RelayStatus, 4),
 		updates:        make(chan RelayStatus, 4),
@@ -36,10 +37,10 @@ func newExposureStateTest(t *testing.T, relayURLs ...string) *Exposure {
 	return exposure
 }
 
-func TestExposureWaitReadyUsesRelayLifecycle(t *testing.T) {
+func TestExposureWaitReadyUsesRelayStatus(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
-	exposure.setRelayLifecycle(relayURL, relayLifecycle{
+	exposure.setRelayStatus(relayURL, listenerStatus{
 		state:     RelayReady,
 		publicURL: "https://service.relay.example",
 	})
@@ -58,18 +59,62 @@ func TestExposureWaitReadyUsesRelayLifecycle(t *testing.T) {
 func TestExposureAcceptReturnsErrNoRelaysAfterTerminalFailures(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
-	exposure.setRelayLifecycle(relayURL, relayLifecycle{state: RelayFailed, err: errors.New("rejected")})
+	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: errors.New("rejected")})
 
 	if _, err := exposure.Accept(); !errors.Is(err, ErrNoRelays) {
 		t.Fatalf("Accept() error = %v, want ErrNoRelays", err)
 	}
 }
 
+func TestExposureAcceptDrainsQueuedConnectionBeforeNoRelays(t *testing.T) {
+	const relayURL = "https://relay.example"
+	exposure := newExposureStateTest(t, relayURL)
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+	exposure.accepted <- server
+	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: errors.New("rejected")})
+
+	conn, err := exposure.Accept()
+	if err != nil {
+		t.Fatalf("Accept() error = %v, want queued connection", err)
+	}
+	_ = conn.Close()
+}
+
+func TestExposeRejectsIncompleteIdentity(t *testing.T) {
+	_, err := Expose(context.Background(), ExposeConfig{
+		RelayURLs: []string{"https://relay.example"},
+		Identity:  types.Identity{Name: "svc"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "identity must include") {
+		t.Fatalf("Expose() error = %v, want incomplete identity error", err)
+	}
+}
+
+func TestProxyValidationDoesNotCloseExposure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	exposure := &Exposure{
+		cancel:         cancel,
+		done:           ctx.Done(),
+		accepted:       make(chan net.Conn, 1),
+		relayListeners: make(map[string]*listener),
+	}
+	if err := ProxyWithConfig(ctx, exposure, ProxyConfig{}); err == nil {
+		t.Fatal("ProxyWithConfig() succeeded without a target")
+	}
+	select {
+	case <-ctx.Done():
+		t.Fatal("ProxyWithConfig() closed exposure during validation")
+	default:
+	}
+	_ = exposure.Close()
+}
+
 func TestExposureWaitDatagramReadyDoesNotRequireStreamReadiness(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
 	exposure.cfg.UpdateCopy(func(cfg *ExposeConfig) { cfg.UDPEnabled = true })
-	exposure.setRelayLifecycle(relayURL, relayLifecycle{
+	exposure.setRelayStatus(relayURL, listenerStatus{
 		state:   RelayConnecting,
 		udpAddr: "relay.example:40000",
 	})
@@ -401,7 +446,7 @@ func TestExposureReconcileSkipsUnchangedRoutes(t *testing.T) {
 	}
 }
 
-func TestExposureSnapshotExcludesDeadRelayListener(t *testing.T) {
+func TestExposureSnapshotReflectsDeadRelayStatus(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
 		relayB = "https://relay-b.example"
@@ -432,21 +477,30 @@ func TestExposureSnapshotExcludesDeadRelayListener(t *testing.T) {
 			route:    discovery.Route{RelayURL: relayB, Explicit: true},
 		},
 	}
+	exposure.syncRelayStatuses(nil, exposure.config())
 
 	for range 3 {
 		relaySet.RecordDiscoveryFailure(relayA, 3)
 	}
+	exposure.syncRelayStatuses(nil, exposure.config())
 	relays := exposure.Relays()
 	foundRelayB := false
+	foundFailedRelayA := false
 	for _, relayStatus := range relays {
 		if relayStatus.RelayURL == relayB {
 			foundRelayB = true
 		}
 		if relayStatus.RelayURL == relayA {
-			t.Fatalf("Relays() included dead relay %q despite listener existing", relayA)
+			if relayStatus.State != RelayFailed {
+				t.Fatalf("Relays() state for dead relay = %s, want failed", relayStatus.State)
+			}
+			foundFailedRelayA = true
 		}
 	}
 	if !foundRelayB {
 		t.Fatalf("Relays() omitted active relay %q", relayB)
+	}
+	if !foundFailedRelayA {
+		t.Fatalf("Relays() omitted failed explicit relay %q", relayA)
 	}
 }

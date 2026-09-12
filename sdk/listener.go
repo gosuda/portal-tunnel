@@ -48,6 +48,7 @@ type listenerStatus struct {
 	publicURL string
 	udpAddr   string
 	tcpAddr   string
+	version   string
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -237,6 +238,7 @@ func (l *listener) reportAvailable() {
 		publicURL: l.publicURLForLease(lease),
 		udpAddr:   udpAddr,
 		tcpAddr:   lease.tcpAddr,
+		version:   l.releaseVersion,
 	})
 }
 
