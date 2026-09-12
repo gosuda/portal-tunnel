@@ -1,4 +1,4 @@
-package main
+package exposeidentity
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 func TestResolveExposeIdentityCreatesFileWhenAbsent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
 
-	resolved, err := resolveExposeIdentity("svc", "127.0.0.1:8080", path, "")
+	resolved, err := Resolve("svc", "127.0.0.1:8080", path, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestResolveExposeIdentityCreatesFileWhenAbsent(t *testing.T) {
 		t.Fatalf("identity file not written: %v", err)
 	}
 
-	reloaded, err := resolveExposeIdentity("", "127.0.0.1:8080", path, "")
+	reloaded, err := Resolve("", "127.0.0.1:8080", path, "")
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -32,14 +32,33 @@ func TestResolveExposeIdentityCreatesFileWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestResolveJSONWithoutPathIsEphemeral(t *testing.T) {
+	fresh, err := identity.Generate("json-name")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	freshData, err := identity.Marshal(fresh)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	resolved, err := Resolve("", "", "", string(freshData))
+	if err != nil {
+		t.Fatalf("json without path must stay in-memory: %v", err)
+	}
+	if resolved.PrivateKey != fresh.PrivateKey {
+		t.Fatal("json identity not used")
+	}
+}
+
 func TestResolveExposeIdentityNameOverridePersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
-	first, err := resolveExposeIdentity("old-name", "", path, "")
+	first, err := Resolve("old-name", "", path, "")
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 
-	renamed, err := resolveExposeIdentity("new-name", "", path, "")
+	renamed, err := Resolve("new-name", "", path, "")
 	if err != nil {
 		t.Fatalf("rename: %v", err)
 	}
@@ -47,7 +66,7 @@ func TestResolveExposeIdentityNameOverridePersists(t *testing.T) {
 		t.Fatalf("rename mismatch: %+v", renamed)
 	}
 
-	reloaded, err := resolveExposeIdentity("", "", path, "")
+	reloaded, err := Resolve("", "", path, "")
 	if err != nil {
 		t.Fatalf("after rename: %v", err)
 	}
@@ -58,7 +77,7 @@ func TestResolveExposeIdentityNameOverridePersists(t *testing.T) {
 
 func TestResolveExposeIdentityJSONOverridesFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
-	if _, err := resolveExposeIdentity("stored-name", "", path, ""); err != nil {
+	if _, err := Resolve("stored-name", "", path, ""); err != nil {
 		t.Fatalf("stored: %v", err)
 	}
 
@@ -71,7 +90,7 @@ func TestResolveExposeIdentityJSONOverridesFile(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	resolved, err := resolveExposeIdentity("", "", path, string(freshData))
+	resolved, err := Resolve("", "", path, string(freshData))
 	if err != nil {
 		t.Fatalf("json: %v", err)
 	}
@@ -94,7 +113,7 @@ func TestResolveExposeIdentityRejectsKeylessFile(t *testing.T) {
 		t.Fatalf("write keyless file: %v", err)
 	}
 
-	if _, err := resolveExposeIdentity("", "", path, ""); err == nil {
+	if _, err := Resolve("", "", path, ""); err == nil {
 		t.Fatal("keyless identity file must fail instead of generating a key")
 	}
 }
@@ -122,7 +141,7 @@ func TestResolveExposeIdentityNameOverrideFixesInvalidStoredName(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	resolved, err := resolveExposeIdentity("replacement", "", path, "")
+	resolved, err := Resolve("replacement", "", path, "")
 	if err != nil {
 		t.Fatalf("override: %v", err)
 	}
@@ -132,7 +151,7 @@ func TestResolveExposeIdentityNameOverrideFixesInvalidStoredName(t *testing.T) {
 }
 
 func TestResolveExposeIdentityWithoutPathGenerates(t *testing.T) {
-	resolved, err := resolveExposeIdentity("", "127.0.0.1:9999", "", "")
+	resolved, err := Resolve("", "127.0.0.1:9999", "", "")
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"reflect"
 	"slices"
@@ -15,7 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/exposeidentity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -676,7 +675,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	}
 	x402FacilitatorToken := strings.TrimSpace(cfg.X402FacilitatorToken)
 	x402FacilitatorToken = cmp.Or(x402FacilitatorToken, strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
-	listenerIdentity, err := resolveTunnelIdentity(cfg.Name, cfg.TargetAddr, cfg.IdentityPath, cfg.IdentityJSON)
+	listenerIdentity, err := exposeidentity.Resolve(cfg.Name, cfg.TargetAddr, cfg.IdentityPath, cfg.IdentityJSON)
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
@@ -770,99 +769,4 @@ func normalizeAgentMetadataTags(tags []string) []string {
 		return nil
 	}
 	return out
-}
-
-// resolveTunnelIdentity composes the tunnel-config identity fields the same
-// way the expose command composes its flags: an identity_json override wins,
-// then the identity file (created with a generated key when absent), then an
-// ephemeral generated identity.
-func resolveTunnelIdentity(name, target, identityPath, identityJSON string) (types.Identity, error) {
-	name = strings.TrimSpace(name)
-	identityPath = strings.TrimSpace(identityPath)
-
-	if raw := strings.TrimSpace(identityJSON); raw != "" {
-		decoded, err := identity.Decode([]byte(raw))
-		if err != nil {
-			return types.Identity{}, fmt.Errorf("decode identity json: %w", err)
-		}
-		return resolveNamedIdentity(decoded, name, identityPath, true)
-	}
-
-	if identityPath == "" {
-		defaultName, nameErr := defaultTunnelName(name, target)
-		if nameErr != nil {
-			return types.Identity{}, nameErr
-		}
-		return identity.Generate(defaultName)
-	}
-	data, err := os.ReadFile(identityPath)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
-		}
-		defaultName, nameErr := defaultTunnelName(name, target)
-		if nameErr != nil {
-			return types.Identity{}, nameErr
-		}
-		generated, genErr := identity.Generate(defaultName)
-		if genErr != nil {
-			return types.Identity{}, genErr
-		}
-		if writeErr := writeIdentityFile(identityPath, generated); writeErr != nil {
-			return types.Identity{}, writeErr
-		}
-		log.Info().
-			Str("identity_path", identityPath).
-			Str("address", generated.Address).
-			Msg("generated tunnel identity and saved it to disk")
-		return generated, nil
-	}
-
-	decoded, err := identity.Decode(data)
-	if err != nil {
-		return types.Identity{}, fmt.Errorf("decode identity file: %w", err)
-	}
-	return resolveNamedIdentity(decoded, name, identityPath, false)
-}
-
-// resolveNamedIdentity applies the explicit name override before validation,
-// resolves once through the canonical path, and persists only when the file
-// content would change.
-func resolveNamedIdentity(decoded types.Identity, name, path string, fromJSON bool) (types.Identity, error) {
-	persist := fromJSON
-	if name != "" && decoded.Name != name {
-		decoded.Name = name
-		persist = true
-	}
-	resolved, err := identity.Resolve(decoded)
-	if err != nil {
-		return types.Identity{}, err
-	}
-	if decoded.TokenSecret == "" {
-		persist = true
-	}
-	if persist && path != "" {
-		if err := writeIdentityFile(path, resolved); err != nil {
-			return types.Identity{}, err
-		}
-	}
-	return resolved, nil
-}
-
-func defaultTunnelName(name, target string) (string, error) {
-	if name = strings.TrimSpace(name); name != "" {
-		return name, nil
-	}
-	return utils.DefaultExposeName(target, utils.RandomID("agent_"))
-}
-
-func writeIdentityFile(path string, id types.Identity) error {
-	data, err := identity.Marshal(id)
-	if err != nil {
-		return err
-	}
-	if err := utils.EnsureParentDir(path); err != nil {
-		return err
-	}
-	return utils.WriteFileAtomic(path, data, 0o600)
 }

@@ -197,72 +197,37 @@ func printUsage(w io.Writer) {
 	)
 }
 
-// resolvePaymentIdentity composes the payment-app identity flags: an
-// --identity-json payload wins, then the identity file (created with a
-// generated key when absent).
+// resolvePaymentIdentity keeps the payment-app policy minimal: an
+// --identity-json payload parses as-is, an existing identity file is parsed,
+// and anything else generates a fresh identity (persisted when a path is
+// configured).
 func resolvePaymentIdentity(cfg paymentConfig) (types.Identity, error) {
-	name := strings.TrimSpace(cfg.name)
 	if raw := strings.TrimSpace(cfg.identityJSON); raw != "" {
-		decoded, err := identity.Decode([]byte(raw))
-		if err != nil {
-			return types.Identity{}, fmt.Errorf("decode identity json: %w", err)
-		}
-		return resolveNamedPaymentIdentity(decoded, name, cfg.identityPath, true)
+		return identity.Parse([]byte(raw))
 	}
-
-	data, err := os.ReadFile(cfg.identityPath)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
-		}
-		defaultName, nameErr := paymentName(name, cfg.addr)
-		if nameErr != nil {
-			return types.Identity{}, nameErr
-		}
-		generated, genErr := identity.Generate(defaultName)
-		if genErr != nil {
-			return types.Identity{}, genErr
-		}
-		if writeErr := writeIdentityFile(cfg.identityPath, generated); writeErr != nil {
-			return types.Identity{}, writeErr
-		}
-		log.Info().
-			Str("identity_path", cfg.identityPath).
-			Str("address", generated.Address).
-			Msg("generated tunnel identity and saved it to disk")
-		return generated, nil
+	if data, err := os.ReadFile(cfg.identityPath); err == nil {
+		return identity.Parse(data)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
 	}
-
-	decoded, err := identity.Decode(data)
-	if err != nil {
-		return types.Identity{}, fmt.Errorf("decode identity file: %w", err)
-	}
-	return resolveNamedPaymentIdentity(decoded, name, cfg.identityPath, false)
-}
-
-func resolveNamedPaymentIdentity(decoded types.Identity, name, path string, fromJSON bool) (types.Identity, error) {
-	persist := fromJSON
-	if name != "" && decoded.Name != name {
-		decoded.Name = name
-		persist = true
-	}
-	resolved, err := identity.Resolve(decoded)
+	name, err := paymentName(cfg.name, cfg.addr)
 	if err != nil {
 		return types.Identity{}, err
 	}
-	if decoded.TokenSecret == "" {
-		persist = true
+	generated, err := identity.Generate(name)
+	if err != nil {
+		return types.Identity{}, err
 	}
-	if persist {
-		if err := writeIdentityFile(path, resolved); err != nil {
+	if path := strings.TrimSpace(cfg.identityPath); path != "" {
+		if err := writeIdentityFile(path, generated); err != nil {
 			return types.Identity{}, err
 		}
 	}
-	return resolved, nil
+	return generated, nil
 }
 
 func paymentName(name, target string) (string, error) {
-	if name != "" {
+	if name = strings.TrimSpace(name); name != "" {
 		return name, nil
 	}
 	return utils.DefaultExposeName(target, utils.RandomID("payment_"))
