@@ -37,7 +37,9 @@ type AgentHTTPRoute struct {
 
 type AgentRelayStatus struct {
 	RelayURL    string `json:"relay_url"`
+	State       string `json:"state"`
 	PublicURL   string `json:"public_url,omitempty"`
+	Error       string `json:"error,omitempty"`
 	Version     string `json:"version,omitempty"`
 	Explicit    bool   `json:"explicit,omitempty"`
 	Connecting  bool   `json:"connecting"`

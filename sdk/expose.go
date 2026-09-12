@@ -36,9 +36,92 @@ type Exposure struct {
 	mu             sync.RWMutex
 	relayListeners map[string]*listener
 
+	// Canonical per-relay runtime state. This is the single authoritative
+	// source for relay readiness, failure, and removal. All public status
+	// and readiness APIs consume this map directly.
+	relayStateMu sync.RWMutex
+	relayStates  map[string]*relayRuntimeState
+
+	// notifyCh is closed and replaced on every canonical state change so
+	// that WaitReady and WaitDatagramReady can react to transitions
+	// without polling.
+	notifyMu sync.Mutex
+	notifyCh chan struct{}
+
+	// updatesSubs holds fan-out channels for Updates() subscribers.
+	updatesMu   sync.Mutex
+	updatesSubs map[chan RelayUpdate]struct{}
+
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
 }
+
+// RelayState is the canonical lifecycle state of a single relay runtime
+// owned by the SDK. It is the authoritative source for readiness, failure,
+// and removal; callers must not infer readiness from PublicURL alone.
+type RelayState string
+
+const (
+	// RelayStatePending is the initial state before registration begins.
+	RelayStatePending RelayState = "pending"
+	// RelayStateRegistering means the listener is actively registering a lease.
+	RelayStateRegistering RelayState = "registering"
+	// RelayStateReady means the relay has an active lease and is serving traffic.
+	RelayStateReady RelayState = "ready"
+	// RelayStateDatagramReady means the relay is ready and the UDP datagram
+	// backhaul is connected.
+	RelayStateDatagramReady RelayState = "datagram_ready"
+	// RelayStateFailed means the relay has terminally failed; the error is
+	// preserved in RelayStatus.Error.
+	RelayStateFailed RelayState = "failed"
+	// RelayStateRemoved means the relay was explicitly removed from the exposure.
+	RelayStateRemoved RelayState = "removed"
+)
+
+// RelayStatus is the canonical snapshot of a single relay runtime exposed by
+// the SDK. It is the single source of truth that the agent/dashboard and
+// external callers consume; wire projections such as types.AgentRelayStatus are
+// derived from it.
+type RelayStatus struct {
+	RelayURL    string
+	State       RelayState
+	PublicURL   string
+	Error       string
+	Version     string
+	Explicit    bool
+	Connecting  bool
+	Bootstrap   bool
+	Banned      bool
+	SupportsUDP bool
+	SupportsTCP bool
+}
+
+// relayRuntimeState is the canonical per-relay state owned by the SDK.
+// Each field is written by emitRelayEvent under relayStateMu and read by
+// Relays, Snapshot, WaitReady, and WaitDatagramReady.
+type relayRuntimeState struct {
+	state         RelayState
+	publicURL     string
+	err           error
+	udpAddr       string
+	datagramReady bool
+	version       string
+	explicit      bool
+}
+
+// RelayUpdate is emitted through Exposure.Updates() when a relay's
+// canonical state changes.
+type RelayUpdate struct {
+	RelayURL  string
+	State     RelayState
+	PublicURL string
+	Error     string
+}
+
+// ErrNoRelays indicates that the relay pool is exhausted: no relays are
+// available and discovery cannot yield new candidates. It is distinct
+// from a temporary zero-relay state where discovery is still active.
+var ErrNoRelays = errors.New("no relays available")
 
 type ExposeConfig struct {
 	RelayURLs []string
@@ -138,6 +221,9 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		datagrams:      make(chan types.DatagramFrame, max(initialRouteCount*32, 1)),
 		relaySet:       discovery.NewRelaySet(relaySetURLs),
 		relayListeners: make(map[string]*listener, initialRouteCount),
+		relayStates:    make(map[string]*relayRuntimeState, initialRouteCount),
+		notifyCh:       make(chan struct{}),
+		updatesSubs:    make(map[chan RelayUpdate]struct{}),
 	}
 
 	if cfg.Discovery {
@@ -165,6 +251,230 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	}()
 
 	return exposure, nil
+}
+
+// emitRelayEvent updates the canonical per-relay state and notifies all
+// waiters and Updates() subscribers. It is called by listener lifecycle
+// transitions and by reconcileRelayListeners for add/remove events.
+func (e *Exposure) emitRelayEvent(relayURL string, state RelayState, publicURL string, err error, udpAddr string, datagramReady bool, version string, explicit bool) {
+	if relayURL == "" {
+		return
+	}
+
+	e.relayStateMu.Lock()
+	if e.relayStates == nil {
+		e.relayStates = make(map[string]*relayRuntimeState)
+	}
+	rs, exists := e.relayStates[relayURL]
+	if !exists {
+		rs = &relayRuntimeState{}
+		e.relayStates[relayURL] = rs
+	}
+	rs.state = state
+	rs.publicURL = publicURL
+	rs.err = err
+	rs.udpAddr = udpAddr
+	rs.datagramReady = datagramReady
+	rs.version = version
+	rs.explicit = explicit
+	e.relayStateMu.Unlock()
+
+	// Wake up WaitReady / WaitDatagramReady.
+	e.notifyMu.Lock()
+	if e.notifyCh == nil {
+		e.notifyCh = make(chan struct{})
+	}
+	close(e.notifyCh)
+	e.notifyCh = make(chan struct{})
+	e.notifyMu.Unlock()
+
+	// Fan-out to Updates() subscribers.
+	update := RelayUpdate{
+		RelayURL:  relayURL,
+		State:     state,
+		PublicURL: publicURL,
+	}
+	if err != nil {
+		update.Error = err.Error()
+	}
+	e.updatesMu.Lock()
+	for ch := range e.updatesSubs {
+		select {
+		case ch <- update:
+		default:
+		}
+	}
+	e.updatesMu.Unlock()
+}
+
+// notifyChan returns the current notification channel. It is closed when
+// the canonical state changes.
+func (e *Exposure) notifyChan() chan struct{} {
+	e.notifyMu.Lock()
+	ch := e.notifyCh
+	if ch == nil {
+		ch = make(chan struct{})
+	}
+	e.notifyMu.Unlock()
+	return ch
+}
+
+// Relays returns a snapshot of all relay statuses derived from the
+// canonical per-relay state, merged with relay-set discovery metadata.
+// This is the single source of truth that Snapshot, the agent dashboard,
+// and external callers consume.
+// Relays returns a snapshot of all relay statuses derived from the
+// canonical per-relay state, merged with relay-set discovery metadata.
+// This is the single source of truth that the agent dashboard and
+// external callers consume.
+func (e *Exposure) Relays() []RelayStatus {
+	cfg := e.Config()
+
+	e.relayStateMu.RLock()
+	relayByURL := make(map[string]RelayStatus, len(e.relayStates))
+	for relayURL, rs := range e.relayStates {
+		snap := RelayStatus{
+			RelayURL:   relayURL,
+			State:      rs.state,
+			PublicURL:  rs.publicURL,
+			Version:    rs.version,
+			Explicit:   rs.explicit,
+			Connecting: rs.explicit && (rs.state == RelayStatePending || rs.state == RelayStateRegistering),
+		}
+		if rs.err != nil {
+			snap.Error = rs.err.Error()
+		}
+		relayByURL[relayURL] = snap
+	}
+	e.relayStateMu.RUnlock()
+
+	// Merge relay-set discovery state (banned, bootstrap, transport caps).
+	if e.relaySet != nil {
+		for _, state := range e.relaySet.AllRelays() {
+			relayURL := strings.TrimSpace(state.Descriptor.APIHTTPSAddr)
+			if relayURL == "" {
+				continue
+			}
+			if state.Dead {
+				delete(relayByURL, relayURL)
+				continue
+			}
+			snap := relayByURL[relayURL]
+			snap.RelayURL = relayURL
+			snap.Explicit = slices.Contains(cfg.RelayURLs, relayURL)
+			snap.Bootstrap = state.Bootstrap
+			snap.Banned = state.Banned
+			snap.SupportsUDP = state.Descriptor.SupportsUDP
+			snap.SupportsTCP = state.Descriptor.SupportsTCP
+			relayByURL[relayURL] = snap
+		}
+	}
+
+	relays := make([]RelayStatus, 0, len(relayByURL))
+	for _, snap := range relayByURL {
+		relays = append(relays, snap)
+	}
+	slices.SortFunc(relays, func(a, b RelayStatus) int {
+		aReady := a.State == RelayStateReady || a.State == RelayStateDatagramReady
+		bReady := b.State == RelayStateReady || b.State == RelayStateDatagramReady
+		if aReady != bReady {
+			if aReady {
+				return -1
+			}
+			return 1
+		}
+		if a.Connecting != b.Connecting {
+			if a.Connecting {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.RelayURL, b.RelayURL)
+	})
+	return relays
+}
+
+// Updates returns a channel that receives a RelayUpdate every time a
+// relay's canonical state changes. The channel is buffered; events are
+// dropped if the buffer is full. The channel is closed when the exposure
+// is closed.
+func (e *Exposure) Updates() <-chan RelayUpdate {
+	ch := make(chan RelayUpdate, 32)
+	e.updatesMu.Lock()
+	e.updatesSubs[ch] = struct{}{}
+	e.updatesMu.Unlock()
+	return ch
+}
+
+// WaitReady blocks until at least one relay reaches the ready or
+// datagramReady state, or returns ErrNoRelays when the relay pool is
+// exhausted (no relays and discovery is disabled, or all relays have
+// terminally failed and discovery cannot yield new candidates).
+func (e *Exposure) WaitReady(ctx context.Context) error {
+	for {
+		if e.closed() {
+			return net.ErrClosed
+		}
+
+		e.relayStateMu.RLock()
+		hasReady := false
+		hasPending := false
+		activeRelays := 0
+		for _, rs := range e.relayStates {
+			if rs.state == RelayStateRemoved {
+				continue
+			}
+			activeRelays++
+			switch rs.state {
+			case RelayStateReady, RelayStateDatagramReady:
+				hasReady = true
+			case RelayStatePending, RelayStateRegistering:
+				hasPending = true
+			}
+		}
+		e.relayStateMu.RUnlock()
+
+		if hasReady {
+			return nil
+		}
+
+		discovery := e.Config().Discovery
+		if activeRelays == 0 && !discovery {
+			return ErrNoRelays
+		}
+		if !hasPending && !discovery {
+			return ErrNoRelays
+		}
+
+		select {
+		case <-e.done:
+			return net.ErrClosed
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-e.notifyChan():
+		}
+	}
+}
+
+// removeRelayState deletes a relay from the canonical state map and
+// notifies waiters. Called when a relay is explicitly removed via
+// RemoveRelay or when reconcileRelayListeners drops a stale listener
+// that was never started.
+func (e *Exposure) removeRelayState(relayURL string) {
+	if relayURL == "" {
+		return
+	}
+	e.relayStateMu.Lock()
+	if e.relayStates != nil {
+		delete(e.relayStates, relayURL)
+	}
+	e.relayStateMu.Unlock()
+	e.notifyMu.Lock()
+	if e.notifyCh != nil {
+		close(e.notifyCh)
+		e.notifyCh = make(chan struct{})
+	}
+	e.notifyMu.Unlock()
 }
 
 // AddRelay attaches an explicit relay to the running exposure without
@@ -299,83 +609,30 @@ func (e *Exposure) Identity() types.Identity {
 
 func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 	cfg := e.Config()
-	e.mu.RLock()
-	listeners := make([]*listener, 0, len(e.relayListeners))
-	for _, listener := range e.relayListeners {
-		if listener != nil {
-			listeners = append(listeners, listener)
+	relays := e.Relays()
+	agentRelays := make([]types.AgentRelayStatus, len(relays))
+	for i, r := range relays {
+		agentRelays[i] = types.AgentRelayStatus{
+			RelayURL:    r.RelayURL,
+			State:       string(r.State),
+			PublicURL:   r.PublicURL,
+			Error:       r.Error,
+			Version:     r.Version,
+			Explicit:    r.Explicit,
+			Connecting:  r.Connecting,
+			Bootstrap:   r.Bootstrap,
+			Banned:      r.Banned,
+			SupportsUDP: r.SupportsUDP,
+			SupportsTCP: r.SupportsTCP,
 		}
 	}
-	e.mu.RUnlock()
-
-	relayByURL := make(map[string]types.AgentRelayStatus, len(listeners))
-	for _, listener := range listeners {
-		relayURL := listener.route.RelayURL
-		explicit := slices.Contains(cfg.RelayURLs, relayURL)
-		snap := types.AgentRelayStatus{
-			RelayURL:   relayURL,
-			Version:    listener.releaseVersion,
-			Explicit:   explicit,
-			Connecting: explicit,
-		}
-		if lease, ok := listener.leaseSnapshot(); ok {
-			snap.PublicURL = listener.publicURLForLease(lease)
-			snap.Connecting = snap.PublicURL == ""
-		}
-		if relayURL != "" {
-			relayByURL[relayURL] = snap
-		}
-	}
-	if e.relaySet != nil {
-		for _, state := range e.relaySet.AllRelays() {
-			relay := state.Descriptor
-			relayURL := strings.TrimSpace(relay.APIHTTPSAddr)
-			if relayURL == "" {
-				continue
-			}
-			if state.Dead {
-				delete(relayByURL, relayURL)
-				continue
-			}
-			snap := relayByURL[relayURL]
-			snap.RelayURL = relayURL
-			snap.Explicit = slices.Contains(cfg.RelayURLs, relayURL)
-			snap.Bootstrap = state.Bootstrap
-			snap.Banned = state.Banned
-			snap.SupportsUDP = relay.SupportsUDP
-			snap.SupportsTCP = relay.SupportsTCP
-			relayByURL[relayURL] = snap
-		}
-	}
-	relays := make([]types.AgentRelayStatus, 0, len(relayByURL))
-	for _, snap := range relayByURL {
-		relays = append(relays, snap)
-	}
-	slices.SortFunc(relays, func(a, b types.AgentRelayStatus) int {
-		aReady := a.PublicURL != ""
-		bReady := b.PublicURL != ""
-		if aReady != bReady {
-			if aReady {
-				return -1
-			}
-			return 1
-		}
-		if a.Connecting != b.Connecting {
-			if a.Connecting {
-				return -1
-			}
-			return 1
-		}
-		return strings.Compare(a.RelayURL, b.RelayURL)
-	})
-
 	return types.AgentTunnelStatus{
 		Address:         cfg.Identity.Address,
 		TargetAddr:      cfg.TargetAddr,
 		Overlay:         cfg.Overlay,
 		MaxActiveRelays: cfg.MaxActiveRelays,
 		Metadata:        cfg.Metadata,
-		Relays:          relays,
+		Relays:          agentRelays,
 	}
 }
 
@@ -411,36 +668,57 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 		return nil, errors.New("exposure does not have udp enabled")
 	}
 
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
 	for {
-		e.mu.RLock()
-		addrs := make([]string, 0, len(e.relayListeners))
+		if e.closed() {
+			return nil, net.ErrClosed
+		}
+
+		e.relayStateMu.RLock()
+		addrs := make([]string, 0)
 		seen := make(map[string]struct{})
-		resolvedWithoutDatagram := true
-		for _, listener := range e.relayListeners {
-			if listener == nil {
+		hasPending := false
+		hasReadyWithoutDatagram := false
+		activeRelays := 0
+		for _, rs := range e.relayStates {
+			if rs.state == RelayStateRemoved {
 				continue
 			}
-
-			udpAddr, ready, pending := listener.datagramReady()
-			if ready {
-				if _, ok := seen[udpAddr]; !ok {
-					seen[udpAddr] = struct{}{}
-					addrs = append(addrs, udpAddr)
+			activeRelays++
+			switch rs.state {
+			case RelayStateDatagramReady:
+				if rs.udpAddr != "" {
+					if _, ok := seen[rs.udpAddr]; !ok {
+						seen[rs.udpAddr] = struct{}{}
+						addrs = append(addrs, rs.udpAddr)
+					}
 				}
-			}
-			if pending {
-				resolvedWithoutDatagram = false
+			case RelayStateReady:
+				// A ready relay with a UDP address may still connect its
+				// datagram backhaul; one without a UDP address is resolved.
+				if rs.udpAddr != "" {
+					hasPending = true
+				} else {
+					hasReadyWithoutDatagram = true
+				}
+			case RelayStatePending, RelayStateRegistering:
+				hasPending = true
 			}
 		}
-		e.mu.RUnlock()
+		e.relayStateMu.RUnlock()
+
 		if len(addrs) > 0 {
 			return addrs, nil
 		}
-		if resolvedWithoutDatagram {
-			return nil, errors.New("relay did not expose udp")
+
+		discovery := e.Config().Discovery
+		if activeRelays == 0 && !discovery {
+			return nil, ErrNoRelays
+		}
+		if !hasPending && !discovery {
+			if hasReadyWithoutDatagram {
+				return nil, errors.New("relay did not expose udp")
+			}
+			return nil, ErrNoRelays
 		}
 
 		select {
@@ -448,7 +726,7 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 			return nil, net.ErrClosed
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-ticker.C:
+		case <-e.notifyChan():
 		}
 	}
 }
@@ -577,6 +855,31 @@ func (e *Exposure) Close() error {
 			}
 		}
 
+		// Emit removed events for all relays in the canonical state.
+		e.relayStateMu.Lock()
+		if e.relayStates != nil {
+			for relayURL := range e.relayStates {
+				e.relayStates[relayURL].state = RelayStateRemoved
+			}
+		}
+		e.relayStateMu.Unlock()
+		e.notifyMu.Lock()
+		if e.notifyCh != nil {
+			close(e.notifyCh)
+			e.notifyCh = make(chan struct{})
+		}
+		e.notifyMu.Unlock()
+
+		// Close all Updates() subscriber channels.
+		e.updatesMu.Lock()
+		if e.updatesSubs != nil {
+			for ch := range e.updatesSubs {
+				close(ch)
+				delete(e.updatesSubs, ch)
+			}
+		}
+		e.updatesMu.Unlock()
+
 		event := log.Debug().
 			Int("relay_count", len(relayListeners)).
 			Strs("relays", relayURLs)
@@ -660,6 +963,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		if listener == nil {
 			continue
 		}
+		e.emitRelayEvent(relayURL, RelayStateRemoved, "", nil, "", false, "", false)
 		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Warn().Err(err).Str("relay_url", relayURL).Msg("close stale relay listener")
 		}
@@ -682,6 +986,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			},
 			RetryCount: retryCount,
 			relaySet:   e.relaySet,
+			onEvent:    e.emitRelayEvent,
 		})
 		if err != nil {
 			if failOnError {

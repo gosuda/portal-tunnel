@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -95,7 +96,6 @@ type agentDashboardModel struct {
 	selectedTunnelID string
 	selectedRelayURL string
 	activePane       agentDashboardPane
-	relayAttempts    map[string]bool
 
 	addingTunnel     bool
 	addFocus         int
@@ -237,7 +237,6 @@ func (m agentDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.clampSelection()
 			m.ensureSelectedSettingsDraft()
-			m.syncRelayAttempts()
 			m.clampSidebarScroll()
 		}
 		return m, nil
@@ -607,84 +606,12 @@ func (m agentDashboardModel) selectedTunnelRelay() (types.AgentTunnelStatus, typ
 	return tunnel, relay, true
 }
 
-func (m *agentDashboardModel) trackRelayAttempt(tunnelID, relayURL string) {
-	key := agentDashboardRelayKey(tunnelID, relayURL)
-	if key == "" {
-		return
-	}
-	if m.relayAttempts == nil {
-		m.relayAttempts = make(map[string]bool)
-	}
-	m.relayAttempts[key] = false
-}
-
-func (m *agentDashboardModel) clearRelayAttempt(tunnelID, relayURL string) {
-	key := agentDashboardRelayKey(tunnelID, relayURL)
-	delete(m.relayAttempts, key)
-	if len(m.relayAttempts) == 0 {
-		m.relayAttempts = nil
-	}
-}
-
-func (m *agentDashboardModel) syncRelayAttempts() {
-	if len(m.relayAttempts) == 0 {
-		return
-	}
-	seen := make(map[string]struct{})
-	for _, tunnel := range m.status.Tunnels {
-		for _, relay := range tunnel.Relays {
-			key := agentDashboardRelayKey(tunnel.ID, relay.RelayURL)
-			if key == "" {
-				continue
-			}
-			seen[key] = struct{}{}
-			if _, ok := m.relayAttempts[key]; !ok {
-				continue
-			}
-			if relayDashboardConnected(tunnel, relay) {
-				delete(m.relayAttempts, key)
-				continue
-			}
-			if relay.Connecting {
-				m.relayAttempts[key] = false
-			} else {
-				m.relayAttempts[key] = true
-			}
-		}
-	}
-	for key := range m.relayAttempts {
-		if _, ok := seen[key]; !ok {
-			delete(m.relayAttempts, key)
-		}
-	}
-	if len(m.relayAttempts) == 0 {
-		m.relayAttempts = nil
-	}
-}
-
 func (m agentDashboardModel) relayDashboardFailed(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) bool {
-	if relayDashboardConnected(tunnel, relay) || relay.Connecting {
-		return false
-	}
-	failed, ok := m.relayAttempts[agentDashboardRelayKey(tunnel.ID, relay.RelayURL)]
-	return ok && failed
+	return relay.State == string(sdk.RelayStateFailed)
 }
 
 func (m agentDashboardModel) relayDashboardConnecting(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) bool {
-	if relayDashboardConnected(tunnel, relay) || relay.Connecting {
-		return relay.Connecting
-	}
-	failed, ok := m.relayAttempts[agentDashboardRelayKey(tunnel.ID, relay.RelayURL)]
-	return ok && !failed
-}
-
-func agentDashboardRelayKey(tunnelID, relayURL string) string {
-	tunnelID = strings.TrimSpace(tunnelID)
-	relayURL = strings.TrimSpace(relayURL)
-	if tunnelID == "" || relayURL == "" {
-		return ""
-	}
-	return tunnelID + "\x00" + relayURL
+	return relay.State == string(sdk.RelayStatePending) || relay.State == string(sdk.RelayStateRegistering)
 }
 
 func (m *agentDashboardModel) focusAddTunnelField(field int) {
@@ -1215,7 +1142,6 @@ func (m agentDashboardModel) connectSelectedRelay() (tea.Model, tea.Cmd) {
 	if relay.Banned || relayDashboardActive(tunnel, relay) || m.relayDashboardConnecting(tunnel, relay) {
 		return m, nil
 	}
-	m.trackRelayAttempt(tunnel.ID, relay.RelayURL)
 	return m, agentDashboardRun(func(ctx context.Context) error {
 		return ConnectRelay(ctx, m.stateDir, tunnel.ID, relay.RelayURL)
 	})
@@ -1229,7 +1155,6 @@ func (m agentDashboardModel) disconnectSelectedRelay() (tea.Model, tea.Cmd) {
 	if relay.Banned || !relayDashboardActive(tunnel, relay) {
 		return m, nil
 	}
-	m.clearRelayAttempt(tunnel.ID, relay.RelayURL)
 	return m, agentDashboardRun(func(ctx context.Context) error {
 		return DisconnectRelay(ctx, m.stateDir, tunnel.ID, relay.RelayURL)
 	})
@@ -1905,11 +1830,13 @@ func agentDashboardRelayStyle(selected bool, tunnel types.AgentTunnelStatus, rel
 }
 
 func relayDashboardActive(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) bool {
-	return relayDashboardConnected(tunnel, relay) || relay.Connecting
+	return relayDashboardConnected(tunnel, relay) ||
+		relay.State == string(sdk.RelayStatePending) ||
+		relay.State == string(sdk.RelayStateRegistering)
 }
 
 func relayDashboardConnected(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) bool {
-	return relay.PublicURL != ""
+	return relay.State == string(sdk.RelayStateReady) || relay.State == string(sdk.RelayStateDatagramReady)
 }
 
 func agentDashboardHTTPRouteSummary(route types.AgentHTTPRoute) string {
@@ -2032,18 +1959,18 @@ func relayDashboardRelayLabel(rawURL string) string {
 }
 
 func (m agentDashboardModel) relayDashboardMode(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) string {
-	var modes []string
-	if relay.PublicURL != "" {
-		modes = append(modes, "direct")
-	} else if relay.Connecting || m.relayDashboardConnecting(tunnel, relay) {
-		modes = append(modes, "connecting...")
-	} else if m.relayDashboardFailed(tunnel, relay) {
-		modes = append(modes, "failed")
+	switch relay.State {
+	case string(sdk.RelayStateReady), string(sdk.RelayStateDatagramReady):
+		return "direct"
+	case string(sdk.RelayStatePending), string(sdk.RelayStateRegistering):
+		return "connecting..."
+	case string(sdk.RelayStateFailed):
+		return "failed"
+	case string(sdk.RelayStateRemoved):
+		return "removed"
+	default:
+		return "-"
 	}
-	if len(modes) > 0 {
-		return strings.Join(modes, ",")
-	}
-	return "-"
 }
 
 func tunnelDashboardName(tunnel types.AgentTunnelStatus) string {

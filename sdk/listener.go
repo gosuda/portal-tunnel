@@ -28,6 +28,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// relayEventFunc is called by a listener when its canonical lifecycle state
+// changes. The Exposure sets this callback to update its canonical state
+// map and notify waiters.
+type relayEventFunc func(relayURL string, state RelayState, publicURL string, err error, udpAddr string, datagramReady bool, version string, explicit bool)
+
 type listenerConfig struct {
 	Identity   types.Identity
 	Overlay    bool
@@ -38,6 +43,7 @@ type listenerConfig struct {
 	Metadata   func() types.LeaseMetadata
 	RetryCount int
 	relaySet   *discovery.RelaySet
+	onEvent    relayEventFunc
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -85,6 +91,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 		Str("relay_url", relayURL).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
+	l.emitState(RelayStateFailed, "", err)
 	_ = l.Close()
 	return true
 }
@@ -101,6 +108,7 @@ type listener struct {
 	overlay           bool
 	warnOverlayDirect sync.Once
 	relaySet          *discovery.RelaySet
+	onEvent           relayEventFunc
 	udpEnabled        bool
 	tcpEnabled        bool
 	echEnabled        bool
@@ -153,6 +161,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		identity:       cfg.Identity.Copy(),
 		overlay:        cfg.Overlay,
 		relaySet:       cfg.relaySet,
+		onEvent:        cfg.onEvent,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
 		echEnabled:     cfg.ECH,
@@ -176,9 +185,30 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 				Msg("quic backhaul disconnected; waiting to reconnect")
 		})
 	}
-
+	l.emitState(RelayStatePending, "", nil)
 	go l.run(listenerCtx)
 	return l, nil
+}
+
+// emitState reports a lifecycle state transition to the Exposure via the
+// onEvent callback. If the callback is nil (e.g. in unit tests) this is a no-op.
+func (l *listener) emitState(state RelayState, publicURL string, err error) {
+	if l.onEvent == nil {
+		return
+	}
+	relayURL := l.route.RelayURL
+	udpAddr := ""
+	datagramReady := false
+	if lease, ok := l.leaseSnapshot(); ok {
+		udpAddr = lease.udpAddr
+	}
+	if l.datagram != nil && l.datagram.Connected() && udpAddr != "" {
+		datagramReady = true
+		if state == RelayStateReady {
+			state = RelayStateDatagramReady
+		}
+	}
+	l.onEvent(relayURL, state, publicURL, err, udpAddr, datagramReady, l.releaseVersion, l.route.Explicit)
 }
 
 func (l *listener) metadataSnapshot() types.LeaseMetadata {
@@ -192,6 +222,7 @@ func (l *listener) run(ctx context.Context) {
 	var retries int
 
 	for {
+		l.emitState(RelayStateRegistering, "", nil)
 		err := l.registerAndConfigure(ctx)
 		switch {
 		case err == nil:
@@ -203,6 +234,7 @@ func (l *listener) run(ctx context.Context) {
 			}
 			retries++
 			if !l.waitRetry(ctx, "lease registration", err, retries, 0) {
+				l.emitState(RelayStateFailed, "", err)
 				_ = l.Close()
 				return
 			}
@@ -218,6 +250,7 @@ func (l *listener) run(ctx context.Context) {
 			udpAddr = lease.udpAddr
 			tcpAddr = lease.tcpAddr
 		}
+		l.emitState(RelayStateReady, publicURL, nil)
 		event := log.Info().Str("address", l.identity.Address)
 		if udpAddr != "" {
 			event = event.Str("udp_addr", udpAddr)
@@ -262,6 +295,7 @@ func (l *listener) run(ctx context.Context) {
 			Str("relay_url", relayURL).
 			Str("address", l.identity.Address).
 			Msg("listener connection retry budget exhausted; closing listener")
+		l.emitState(RelayStateFailed, "", err)
 		_ = l.Close()
 		return
 	}
@@ -632,6 +666,12 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 			}
 			continue
 		}
+
+		publicURL := ""
+		if lease, ok := l.leaseSnapshot(); ok {
+			publicURL = l.publicURLForLease(lease)
+		}
+		l.emitState(RelayStateDatagramReady, publicURL, nil)
 
 		select {
 		case <-ctx.Done():
