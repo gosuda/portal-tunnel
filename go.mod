@@ -27,7 +27,6 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/quic-go/quic-go v0.59.0
 	github.com/rs/zerolog v1.34.0
-	github.com/spruceid/siwe-go v0.2.1
 	github.com/tyler-smith/go-bip39 v1.1.0
 	github.com/vultr/govultr/v3 v3.30.0
 	golang.org/x/crypto v0.55.0
@@ -78,7 +77,6 @@ require (
 	github.com/consensys/gnark-crypto v0.18.1 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.4.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/dchest/uniuri v1.2.0 // indirect
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.6 // indirect
@@ -126,7 +124,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
-	github.com/relvacode/iso8601 v1.1.1-0.20210511065120-b30b151cc433 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/samber/lo v1.49.1 // indirect
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect

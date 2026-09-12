@@ -2,13 +2,12 @@ package identity
 
 import (
 	"cmp"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/spruceid/siwe-go"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -44,9 +43,7 @@ type WalletAuthenticator struct {
 
 type walletAuthChallenge struct {
 	Address     string
-	Domain      string
 	ExpiresAt   time.Time
-	Nonce       string
 	SIWEMessage string
 }
 
@@ -96,25 +93,20 @@ func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeReques
 	}
 
 	challengeID := utils.RandomID("wac_")
-	nonce := siwe.GenerateNonce()
 	expiresAt := now.UTC().Add(defaultWalletAuthChallengeTTL)
-	message, err := siwe.InitMessage(domain, address, uri, nonce, map[string]any{
-		"statement":      a.statement,
-		"chainId":        1,
-		"issuedAt":       now.UTC().Format(time.RFC3339),
-		"expirationTime": expiresAt.UTC().Format(time.RFC3339),
-		"requestId":      challengeID,
-	})
+	message, err := (siweMessage{
+		domain: domain, address: address, uri: uri,
+		statement: a.statement, nonce: rand.Text(), requestID: challengeID,
+		issuedAt: now, expiresAt: expiresAt,
+	}).format()
 	if err != nil {
 		return types.WalletAuthChallengeResponse{}, fmt.Errorf("build wallet auth message: %w", err)
 	}
 
 	challenge := walletAuthChallenge{
 		Address:     address,
-		Domain:      strings.TrimSpace(domain),
 		ExpiresAt:   expiresAt,
-		Nonce:       nonce,
-		SIWEMessage: message.String(),
+		SIWEMessage: message,
 	}
 
 	a.mu.Lock()
@@ -151,25 +143,15 @@ func (a *WalletAuthenticator) Login(req types.WalletAuthLoginRequest, now time.T
 		a.mu.Unlock()
 		return "", "", ErrWalletAuthChallengeExpired
 	}
-	if strings.TrimSpace(req.SIWEMessage) != challenge.SIWEMessage {
+	if req.SIWEMessage != challenge.SIWEMessage {
 		return "", "", ErrWalletAuthInvalidSignature
 	}
 
-	message, err := siwe.ParseMessage(strings.TrimSpace(req.SIWEMessage))
-	if err != nil {
+	if err := verifySIWEMessage(challenge.SIWEMessage, req.SIWESignature, challenge.Address, challenge.ExpiresAt, now); err != nil {
 		return "", "", ErrWalletAuthInvalidSignature
 	}
-	domain := challenge.Domain
-	nonce := challenge.Nonce
-	verifiedAt := now.UTC()
-	if _, err := message.Verify(strings.TrimSpace(req.SIWESignature), &domain, &nonce, &verifiedAt); err != nil {
-		return "", "", ErrWalletAuthInvalidSignature
-	}
-	address, err := NormalizeEVMAddress(message.GetAddress().Hex())
-	if err != nil {
-		return "", "", ErrWalletAuthInvalidSignature
-	}
-	if !strings.EqualFold(address, challenge.Address) || !a.addressAllowed(address) {
+	address := challenge.Address
+	if !a.addressAllowed(address) {
 		return "", "", ErrWalletAuthUnauthorized
 	}
 
