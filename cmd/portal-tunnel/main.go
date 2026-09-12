@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"slices"
@@ -19,8 +20,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/identityfile"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -227,7 +228,7 @@ func runExposeCommand(args []string) error {
 		}()
 	}
 
-	listenerIdentity, err := identityfile.Resolve(flags.name, flags.targetAddr, flags.identityPath, flags.identityJSON)
+	listenerIdentity, err := resolveExposeIdentity(flags.name, flags.targetAddr, flags.identityPath, flags.identityJSON)
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
@@ -276,6 +277,101 @@ func runExposeCommand(args []string) error {
 		TCPTarget: flags.targetAddr,
 		UDPTarget: udpTarget,
 	})
+}
+
+// resolveExposeIdentity composes the --name, --identity-json, and
+// --identity-path flags into the identity handed to sdk.Expose. An explicit
+// --identity-json payload wins, then the identity file (created with a
+// generated key when absent), then an ephemeral generated identity.
+func resolveExposeIdentity(name, target, identityPath, identityJSON string) (types.Identity, error) {
+	name = strings.TrimSpace(name)
+	identityPath = strings.TrimSpace(identityPath)
+
+	if raw := strings.TrimSpace(identityJSON); raw != "" {
+		decoded, err := identity.Decode([]byte(raw))
+		if err != nil {
+			return types.Identity{}, fmt.Errorf("decode --identity-json: %w", err)
+		}
+		return resolveNamedIdentity(decoded, name, identityPath, true)
+	}
+
+	if identityPath == "" {
+		defaultName, nameErr := defaultExposeName(name, target)
+		if nameErr != nil {
+			return types.Identity{}, nameErr
+		}
+		return identity.Generate(defaultName)
+	}
+	data, err := os.ReadFile(identityPath)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
+		}
+		defaultName, nameErr := defaultExposeName(name, target)
+		if nameErr != nil {
+			return types.Identity{}, nameErr
+		}
+		generated, genErr := identity.Generate(defaultName)
+		if genErr != nil {
+			return types.Identity{}, genErr
+		}
+		if writeErr := writeIdentityFile(identityPath, generated); writeErr != nil {
+			return types.Identity{}, writeErr
+		}
+		log.Info().
+			Str("identity_path", identityPath).
+			Str("address", generated.Address).
+			Msg("generated tunnel identity and saved it to disk")
+		return generated, nil
+	}
+
+	decoded, err := identity.Decode(data)
+	if err != nil {
+		return types.Identity{}, fmt.Errorf("decode identity file: %w", err)
+	}
+	return resolveNamedIdentity(decoded, name, identityPath, false)
+}
+
+// resolveNamedIdentity applies the explicit name override before validation
+// so an invalid stored name can still be replaced, resolves once through the
+// canonical path, and persists only when the file content would change.
+func resolveNamedIdentity(decoded types.Identity, name, path string, fromJSON bool) (types.Identity, error) {
+	persist := fromJSON
+	if name != "" && decoded.Name != name {
+		decoded.Name = name
+		persist = true
+	}
+	resolved, err := identity.Resolve(decoded)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	if resolved.TokenSecret != decoded.TokenSecret && decoded.TokenSecret == "" {
+		persist = true
+	}
+	if persist && path != "" {
+		if err := writeIdentityFile(path, resolved); err != nil {
+			return types.Identity{}, err
+		}
+	}
+	return resolved, nil
+}
+
+func defaultExposeName(name, target string) (string, error) {
+	if name = strings.TrimSpace(name); name != "" {
+		return name, nil
+	}
+	return utils.DefaultExposeName(target, utils.RandomID("cli_"))
+}
+
+func writeIdentityFile(path string, id types.Identity) error {
+	data, err := identity.Marshal(id)
+	if err != nil {
+		return err
+	}
+	if err := utils.EnsureParentDir(path); err != nil {
+		return err
+	}
+	return utils.WriteFileAtomic(path, data, 0o600)
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {

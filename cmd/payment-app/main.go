@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -13,7 +14,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/identityfile"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -151,7 +152,7 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 		return err
 	}
 
-	listenerIdentity, err := identityfile.Resolve(cfg.name, cfg.addr, cfg.identityPath, cfg.identityJSON)
+	listenerIdentity, err := resolvePaymentIdentity(cfg)
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
@@ -194,4 +195,86 @@ func printUsage(w io.Writer) {
 			"payment-app --x402-testnet=false --x402-pay-to 0x... --x402-amount 0.01",
 		},
 	)
+}
+
+// resolvePaymentIdentity composes the payment-app identity flags: an
+// --identity-json payload wins, then the identity file (created with a
+// generated key when absent).
+func resolvePaymentIdentity(cfg paymentConfig) (types.Identity, error) {
+	name := strings.TrimSpace(cfg.name)
+	if raw := strings.TrimSpace(cfg.identityJSON); raw != "" {
+		decoded, err := identity.Decode([]byte(raw))
+		if err != nil {
+			return types.Identity{}, fmt.Errorf("decode identity json: %w", err)
+		}
+		return resolveNamedPaymentIdentity(decoded, name, cfg.identityPath, true)
+	}
+
+	data, err := os.ReadFile(cfg.identityPath)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
+		}
+		defaultName, nameErr := paymentName(name, cfg.addr)
+		if nameErr != nil {
+			return types.Identity{}, nameErr
+		}
+		generated, genErr := identity.Generate(defaultName)
+		if genErr != nil {
+			return types.Identity{}, genErr
+		}
+		if writeErr := writeIdentityFile(cfg.identityPath, generated); writeErr != nil {
+			return types.Identity{}, writeErr
+		}
+		log.Info().
+			Str("identity_path", cfg.identityPath).
+			Str("address", generated.Address).
+			Msg("generated tunnel identity and saved it to disk")
+		return generated, nil
+	}
+
+	decoded, err := identity.Decode(data)
+	if err != nil {
+		return types.Identity{}, fmt.Errorf("decode identity file: %w", err)
+	}
+	return resolveNamedPaymentIdentity(decoded, name, cfg.identityPath, false)
+}
+
+func resolveNamedPaymentIdentity(decoded types.Identity, name, path string, fromJSON bool) (types.Identity, error) {
+	persist := fromJSON
+	if name != "" && decoded.Name != name {
+		decoded.Name = name
+		persist = true
+	}
+	resolved, err := identity.Resolve(decoded)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	if decoded.TokenSecret == "" {
+		persist = true
+	}
+	if persist {
+		if err := writeIdentityFile(path, resolved); err != nil {
+			return types.Identity{}, err
+		}
+	}
+	return resolved, nil
+}
+
+func paymentName(name, target string) (string, error) {
+	if name != "" {
+		return name, nil
+	}
+	return utils.DefaultExposeName(target, utils.RandomID("payment_"))
+}
+
+func writeIdentityFile(path string, id types.Identity) error {
+	data, err := identity.Marshal(id)
+	if err != nil {
+		return err
+	}
+	if err := utils.EnsureParentDir(path); err != nil {
+		return err
+	}
+	return utils.WriteFileAtomic(path, data, 0o600)
 }

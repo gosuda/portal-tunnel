@@ -48,9 +48,10 @@ type storedRelayIdentity struct {
 	EncryptedClientHelloSeed string `json:"encrypted_client_hello_seed,omitempty"`
 }
 
-// LoadOrCreateRelayIdentity loads the relay identity from the state dir and
-// persists any change, or generates and persists a fresh identity when the
-// file does not exist yet.
+// LoadOrCreateRelayIdentity loads the relay identity from the state dir, or
+// generates and persists a fresh one when the file does not exist. The file
+// is rewritten only when loading or generation actually changed its content;
+// an unchanged identity is not persisted again.
 func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, error) {
 	path = resolveRelayIdentityPath(path)
 	if path == "" {
@@ -64,8 +65,10 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, erro
 	}
 
 	relay, err := loadRelayIdentity(path)
+	var decoded types.RelayIdentity
 	switch {
 	case err == nil:
+		decoded = relay
 	case errors.Is(err, os.ErrNotExist):
 		generated, genErr := ResolveSecp256k1Identity("")
 		if genErr != nil {
@@ -82,12 +85,20 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, erro
 	if err := populateRelayIdentity(&relay); err != nil {
 		return types.RelayIdentity{}, err
 	}
-	if err := saveRelayIdentity(path, relay); err != nil {
-		return types.RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
+	resolved, err := resolveRelayIdentity(relay)
+	if err != nil {
+		return types.RelayIdentity{}, err
 	}
-	return relay, nil
+
+	if !relayIdentityEqual(decoded, resolved) {
+		if err := saveRelayIdentity(path, resolved); err != nil {
+			return types.RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
+		}
+	}
+	return resolved, nil
 }
 
+// populateRelayIdentity fills the token secret and ECH seed when missing.
 func populateRelayIdentity(identity *types.RelayIdentity) error {
 	if identity == nil {
 		return errors.New("relay identity is required")
@@ -105,18 +116,34 @@ func populateRelayIdentity(identity *types.RelayIdentity) error {
 	return nil
 }
 
-func normalizeStoredRelayIdentity(identity types.RelayIdentity) (types.RelayIdentity, error) {
-	normalized := identity.Copy()
-	baseIdentity, err := normalizeStoredIdentity(normalized.Identity)
+// resolveRelayIdentity applies the shared key-material resolution path to the
+// relay identity and trims the ECH seed. Relay names are hostnames, so the
+// DNS-label naming policy of Resolve does not apply.
+func resolveRelayIdentity(relay types.RelayIdentity) (types.RelayIdentity, error) {
+	resolved := relay.Copy()
+	baseIdentity, err := resolveKeyMaterial(resolved.Identity)
 	if err != nil {
 		return types.RelayIdentity{}, err
 	}
-	normalized.Identity = baseIdentity
-	normalized.EncryptedClientHelloSeed = strings.TrimSpace(normalized.EncryptedClientHelloSeed)
+	resolved.Identity = baseIdentity
+	resolved.EncryptedClientHelloSeed = strings.TrimSpace(resolved.EncryptedClientHelloSeed)
 
-	return normalized, nil
+	return resolved, nil
 }
 
+func relayIdentityEqual(a, b types.RelayIdentity) bool {
+	return a.Name == b.Name &&
+		a.Address == b.Address &&
+		a.PublicKey == b.PublicKey &&
+		a.PrivateKey == b.PrivateKey &&
+		a.Mnemonic == b.Mnemonic &&
+		a.DerivationPath == b.DerivationPath &&
+		a.TokenSecret == b.TokenSecret &&
+		a.EncryptedClientHelloSeed == b.EncryptedClientHelloSeed
+}
+
+// loadRelayIdentity decodes the relay identity file without resolving it;
+// LoadOrCreateRelayIdentity resolves once after applying its policy.
 func loadRelayIdentity(path string) (types.RelayIdentity, error) {
 	path = resolveRelayIdentityPath(path)
 	if path == "" {
@@ -126,24 +153,20 @@ func loadRelayIdentity(path string) (types.RelayIdentity, error) {
 	if err := utils.ReadJSONFile(path, &payload); err != nil {
 		return types.RelayIdentity{}, fmt.Errorf("read identity file: %w", err)
 	}
-	return normalizeStoredRelayIdentity(types.RelayIdentity{
+	return types.RelayIdentity{
 		Identity:                 storedIdentityToIdentity(payload.storedIdentity),
 		EncryptedClientHelloSeed: payload.EncryptedClientHelloSeed,
-	})
+	}, nil
 }
 
-func saveRelayIdentity(path string, identity types.RelayIdentity) error {
+func saveRelayIdentity(path string, relay types.RelayIdentity) error {
 	path = resolveRelayIdentityPath(path)
 	if path == "" {
 		return errors.New("identity path is required")
 	}
-	normalized, err := normalizeStoredRelayIdentity(identity)
-	if err != nil {
-		return err
-	}
 	if err := utils.WriteJSONFile(path, storedRelayIdentity{
-		storedIdentity:           storedIdentityFromIdentity(normalized.Identity),
-		EncryptedClientHelloSeed: normalized.EncryptedClientHelloSeed,
+		storedIdentity:           storedIdentityFromIdentity(relay.Identity),
+		EncryptedClientHelloSeed: relay.EncryptedClientHelloSeed,
 	}, 0o600); err != nil {
 		return fmt.Errorf("write identity file: %w", err)
 	}

@@ -38,6 +38,18 @@ func TestResolveRejectsMismatchedAddress(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsMissingKeyMaterial(t *testing.T) {
+	if _, err := Resolve(types.Identity{Name: "no-key"}); err == nil || !strings.Contains(err.Error(), "private key is required") {
+		t.Fatalf("Resolve without key material: got %v, want implicit generation rejected", err)
+	}
+}
+
+func TestParseRejectsKeylessDocument(t *testing.T) {
+	if _, err := Parse([]byte(`{"name":"foo"}`)); err == nil || !strings.Contains(err.Error(), "private key is required") {
+		t.Fatalf("Parse keyless document: got %v, want error instead of implicit generation", err)
+	}
+}
+
 func TestResolveRejectsEmptyName(t *testing.T) {
 	generated, err := Generate("name-check")
 	if err != nil {
@@ -118,5 +130,26 @@ func TestLoadOrCreateRelayIdentityCreatesAndReloads(t *testing.T) {
 	}
 	if reloaded.PrivateKey != created.PrivateKey || reloaded.EncryptedClientHelloSeed != created.EncryptedClientHelloSeed {
 		t.Fatalf("reloaded relay identity mismatch:\n reloaded %+v\n created %+v", reloaded, created)
+	}
+}
+func TestLoadOrCreateRelayIdentitySkipsUnchangedWrite(t *testing.T) {
+	dir := t.TempDir()
+	created, err := LoadOrCreateRelayIdentity(dir, "relay.example.com")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	path := filepath.Join(dir, types.RelayIdentityFilename)
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatalf("chmod read-only: %v", err)
+	}
+	defer func() { _ = os.Chmod(path, 0o600) }()
+
+	reloaded, err := LoadOrCreateRelayIdentity(dir, "relay.example.com")
+	if err != nil {
+		t.Fatalf("unchanged identity must not be rewritten: %v", err)
+	}
+	if reloaded.PrivateKey != created.PrivateKey || reloaded.EncryptedClientHelloSeed != created.EncryptedClientHelloSeed {
+		t.Fatalf("reloaded mismatch:\n reloaded %+v\n created %+v", reloaded, created)
 	}
 }
