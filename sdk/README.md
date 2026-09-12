@@ -5,13 +5,9 @@ The SDK exposes one service through a dynamic relay pool. `Exposure` implements
 `Updates`, and `WaitReady`.
 
 ```go
-identity, err := sdk.GenerateIdentity("my-service")
-if err != nil {
-	return err
-}
 exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 	RelayURLs: []string{"https://relay.example"},
-	Identity:  identity,
+	Identity:  types.Identity{Name: "my-service"},
 })
 if err != nil {
 	return err
@@ -33,8 +29,9 @@ return server.Serve(exposure)
 `Updates` is a best-effort notification stream for one consumer. Use `Relays`
 for the authoritative, sorted point-in-time snapshot.
 
-Applications own identity persistence with `ParseIdentity` and
-`MarshalIdentity`. Local targets are separate from relay configuration:
+The SDK owns relay/lease lifecycle only. Pass a `types.Identity` to `Expose`;
+identity files are loaded and persisted by the CLI or agent, which own that
+storage policy. Local targets are separate from relay configuration:
 
 ```go
 return sdk.ProxyWithConfig(ctx, exposure, sdk.ProxyConfig{

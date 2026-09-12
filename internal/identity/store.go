@@ -324,25 +324,6 @@ func parseIdentityJSON(raw string) (types.Identity, error) {
 	})
 }
 
-// ParseIdentityJSON parses the persisted client identity format for SDK
-// callers while keeping validation in the identity owner.
-func ParseIdentityJSON(data []byte) (types.Identity, error) {
-	return parseIdentityJSON(string(data))
-}
-
-// MarshalIdentityJSON serializes a validated client identity in the same
-// format used by identity files.
-func MarshalIdentityJSON(value types.Identity) ([]byte, error) {
-	if strings.TrimSpace(value.PrivateKey) == "" && normalizeMnemonic(value.Mnemonic) == "" {
-		return nil, errors.New("identity private key or mnemonic is required")
-	}
-	normalized, err := resolveLeaseIdentity(value)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(storedIdentityFromIdentity(normalized))
-}
-
 func loadOrCreateIdentity(path string, identity types.Identity) (types.Identity, bool, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
