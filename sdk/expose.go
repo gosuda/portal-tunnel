@@ -505,8 +505,15 @@ func (e *Exposure) syncRelayStatuses(routes []discovery.Route, cfg ExposeConfig)
 			status.UDPAddr = current.UDPAddr
 			status.TCPAddr = current.TCPAddr
 			status.Version = current.Version
-			status.State = current.State
-			status.Err = current.Err
+			if dead[relayURL] {
+				status.State = RelayFailed
+				if current.State == RelayFailed {
+					status.Err = current.Err
+				}
+			} else {
+				status.State = current.State
+				status.Err = current.Err
+			}
 			if relayStatusEqual(current, status) {
 				continue
 			}
