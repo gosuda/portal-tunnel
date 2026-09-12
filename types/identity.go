@@ -10,7 +10,20 @@ const (
 	RelayIdentityFilename = "identity.json"
 	RelayPolicyFilename   = "policy.json"
 	DNSSECKeyFileName     = "dnssec-csk.json"
+	SIWEVersion            = "1"
+	SIWEChainID            = 1
 )
+
+type SIWEMessage struct {
+	Domain     string
+	Address    string
+	URI        string
+	Statement  string
+	Nonce      string
+	RequestID  string
+	IssuedAt   time.Time
+	ExpiresAt  time.Time
+}
 
 type Identity struct {
 	Name           string `json:"name,omitempty"`

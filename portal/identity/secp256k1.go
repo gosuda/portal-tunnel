@@ -141,14 +141,7 @@ func signEthereumPersonalMessage(message, privateKeyHex string) (string, error) 
 		return "", err
 	}
 
-	data := []byte(message)
-	prefix := []byte(fmt.Sprintf("\x19Ethereum Signed Message:\n%d", len(data)))
-	hasher := sha3.NewLegacyKeccak256()
-	_, _ = hasher.Write(prefix)
-	_, _ = hasher.Write(data)
-	hash := hasher.Sum(nil)
-
-	compactSignature := ecdsa.SignCompact(privateKey, hash, false)
+	compactSignature := ecdsa.SignCompact(privateKey, ethereumPersonalMessageHash(message), false)
 	if len(compactSignature) != 65 {
 		return "", errors.New("invalid compact signature length")
 	}
@@ -158,6 +151,44 @@ func signEthereumPersonalMessage(message, privateKeyHex string) (string, error) 
 	copy(signature[32:64], compactSignature[33:65])
 	signature[64] = compactSignature[0]
 	return "0x" + hex.EncodeToString(signature), nil
+}
+
+// ethereumPersonalMessageHash is the shared EIP-191 personal-sign digest for
+// both signing and recovery. The prefix counts UTF-8 bytes, not characters.
+func ethereumPersonalMessageHash(message string) []byte {
+	hasher := sha3.NewLegacyKeccak256()
+	_, _ = fmt.Fprintf(hasher, "\x19Ethereum Signed Message:\n%d", len(message))
+	_, _ = hasher.Write([]byte(message))
+	return hasher.Sum(nil)
+}
+
+func recoverEthereumPersonalMessage(message, signature string) (string, error) {
+	encoded := strings.TrimSpace(signature)
+	if len(encoded) != 2+compactSecp256k1SignatureSize*2 || !strings.HasPrefix(strings.ToLower(encoded), "0x") {
+		return "", ErrSecp256k1SignatureInvalid
+	}
+	raw, err := hex.DecodeString(encoded[2:])
+	if err != nil {
+		return "", ErrSecp256k1SignatureInvalid
+	}
+	// Ethereum signatures are r || s || v. Accept the personal_sign recovery
+	// values 27/28 and their normalized 0/1 forms, not transaction chain IDs.
+	v := raw[64]
+	switch v {
+	case 0, 1:
+		v += 27
+	case 27, 28:
+	default:
+		return "", ErrSecp256k1SignatureInvalid
+	}
+	compact := make([]byte, compactSecp256k1SignatureSize)
+	compact[0] = v
+	copy(compact[1:], raw[:64])
+	publicKey, _, err := ecdsa.RecoverCompact(compact, ethereumPersonalMessageHash(message))
+	if err != nil {
+		return "", ErrSecp256k1SignatureInvalid
+	}
+	return AddressFromCompressedPublicKeyHex(hex.EncodeToString(publicKey.SerializeCompressed()))
 }
 
 func ResolveSecp256k1Identity(rawPrivateKey string) (types.Identity, error) {
