@@ -52,9 +52,9 @@ func TestRegisterChallengeSIWE(t *testing.T) {
 
 func siweTestAuthority(t *testing.T, keyDigit string) LocalAuthority {
 	t.Helper()
-	authority, err := NewLocalAuthority(types.Identity{Name: "siwe-test", PrivateKey: strings.Repeat("0", 63) + keyDigit})
+	resolved, err := resolve(types.Identity{Name: "siwe-test", PrivateKey: strings.Repeat("0", 63) + keyDigit})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return authority
+	return NewLocalAuthority(resolved)
 }
