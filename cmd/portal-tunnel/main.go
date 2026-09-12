@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -226,15 +227,20 @@ func runExposeCommand(args []string) error {
 		}()
 	}
 
+	listenerIdentity, _, err := identity.ResolveListenerIdentity(
+		types.Identity{Name: flags.name},
+		flags.targetAddr,
+		flags.identityPath,
+		flags.identityJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("resolve identity: %w", err)
+	}
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(flags.relayCSV),
 		Discovery:       flags.discovery,
 		Overlay:         flags.overlay,
-		Identity:        types.Identity{Name: flags.name},
-		IdentityPath:    flags.identityPath,
-		IdentityJSON:    flags.identityJSON,
-		TargetAddr:      flags.targetAddr,
-		UDPAddr:         flags.udpAddr,
+		Identity:        listenerIdentity,
 		UDPEnabled:      flags.udp,
 		TCPEnabled:      flags.tcp,
 		ECH:             flags.ech,
@@ -257,11 +263,18 @@ func runExposeCommand(args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to start relays: %w", err)
 	}
+	udpTarget := ""
+	if flags.udp {
+		udpTarget = cmp.Or(flags.udpAddr, flags.targetAddr)
+	}
 	if len(httpRoutes) > 0 {
 		defer exposure.Close()
 		return exposure.RunHTTPRoutes(ctx, httpRoutes, "")
 	}
-	return sdk.ProxyExposure(ctx, exposure)
+	return sdk.ProxyWithConfig(ctx, exposure, sdk.ProxyConfig{
+		TCPTarget: flags.targetAddr,
+		UDPTarget: udpTarget,
+	})
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {

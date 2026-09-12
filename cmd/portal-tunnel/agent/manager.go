@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -609,7 +610,7 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 	if t.exposure == exposure {
 		t.runtime = types.AgentTunnelStatus{
 			Address:         snapshot.Address,
-			TargetAddr:      snapshot.TargetAddr,
+			TargetAddr:      cfg.TargetAddr,
 			MaxActiveRelays: snapshot.MaxActiveRelays,
 			Relays:          append([]types.AgentRelayStatus(nil), snapshot.Relays...),
 		}
@@ -617,7 +618,7 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 	t.mu.Unlock()
 
 	status.Address = snapshot.Address
-	status.TargetAddr = snapshot.TargetAddr
+	status.TargetAddr = cfg.TargetAddr
 	status.Relays = append([]types.AgentRelayStatus(nil), snapshot.Relays...)
 	return status
 }
@@ -661,15 +662,20 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	}
 	x402FacilitatorToken := strings.TrimSpace(cfg.X402FacilitatorToken)
 	x402FacilitatorToken = cmp.Or(x402FacilitatorToken, strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
+	listenerIdentity, _, err := identity.ResolveListenerIdentity(
+		types.Identity{Name: cfg.Name},
+		cfg.TargetAddr,
+		cfg.IdentityPath,
+		cfg.IdentityJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("resolve identity: %w", err)
+	}
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:            append([]string(nil), cfg.RelayURLs...),
 		Discovery:            discovery,
 		Overlay:              cfg.Overlay,
-		Identity:             types.Identity{Name: cfg.Name},
-		IdentityPath:         cfg.IdentityPath,
-		IdentityJSON:         cfg.IdentityJSON,
-		TargetAddr:           cfg.TargetAddr,
-		UDPAddr:              cfg.UDPAddr,
+		Identity:             listenerIdentity,
 		UDPEnabled:           cfg.UDPEnabled,
 		TCPEnabled:           cfg.TCPEnabled,
 		ECH:                  cfg.ECH,
@@ -691,7 +697,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.exposure = exposure
 	t.runtime = types.AgentTunnelStatus{
 		Address:         snapshot.Address,
-		TargetAddr:      snapshot.TargetAddr,
+		TargetAddr:      cfg.TargetAddr,
 		MaxActiveRelays: snapshot.MaxActiveRelays,
 		Relays:          append([]types.AgentRelayStatus(nil), snapshot.Relays...),
 	}
@@ -712,7 +718,14 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		}
 		err = exposure.RunHTTPRoutes(ctx, routes, "")
 	} else {
-		err = sdk.ProxyExposure(ctx, exposure)
+		udpTarget := ""
+		if cfg.UDPEnabled {
+			udpTarget = cmp.Or(cfg.UDPAddr, cfg.TargetAddr)
+		}
+		err = sdk.ProxyWithConfig(ctx, exposure, sdk.ProxyConfig{
+			TCPTarget: cfg.TargetAddr,
+			UDPTarget: udpTarget,
+		})
 	}
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return ctx.Err()

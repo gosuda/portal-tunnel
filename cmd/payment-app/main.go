@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -150,12 +151,19 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 		return err
 	}
 
+	listenerIdentity, _, err := identity.ResolveListenerIdentity(
+		types.Identity{Name: cfg.name},
+		"",
+		cfg.identityPath,
+		cfg.identityJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("resolve identity: %w", err)
+	}
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
 		Discovery:       cfg.discovery,
-		Identity:        types.Identity{Name: cfg.name},
-		IdentityPath:    cfg.identityPath,
-		IdentityJSON:    cfg.identityJSON,
+		Identity:        listenerIdentity,
 		BanMITM:         cfg.banMITM,
 		MaxActiveRelays: cfg.maxActiveRelays,
 		Metadata:        metadata,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,20 +15,66 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func ProxyExposure(ctx context.Context, exposure *Exposure) error {
+// ProxyConfig selects the local TCP and UDP targets that an exposure is
+// forwarded to. At least one target is required.
+type ProxyConfig struct {
+	TCPTarget string
+	UDPTarget string
+}
+
+// Proxy forwards tenant streams from the exposure to a local TCP target. It
+// blocks until the exposure ends and closes the exposure afterwards.
+func Proxy(ctx context.Context, exposure *Exposure, target string) error {
+	return ProxyWithConfig(ctx, exposure, ProxyConfig{TCPTarget: target})
+}
+
+// ProxyUDP forwards relayed datagrams from the exposure to a local UDP
+// target. It blocks until the exposure ends and closes the exposure
+// afterwards.
+func ProxyUDP(ctx context.Context, exposure *Exposure, target string) error {
+	return ProxyWithConfig(ctx, exposure, ProxyConfig{UDPTarget: target})
+}
+
+// ProxyWithConfig runs the TCP and UDP proxy loops for an exposure against
+// explicit local targets and closes the exposure after cancellation or the
+// first terminal proxy error. Local targets are a proxy concern, not part
+// of the exposure configuration, so callers pass them here instead.
+func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig) error {
+	if ctx == nil {
+		return errors.New("sdk: context is nil")
+	}
+	if exposure == nil {
+		return errors.New("sdk: exposure is nil")
+	}
+	if strings.TrimSpace(config.TCPTarget) == "" && strings.TrimSpace(config.UDPTarget) == "" {
+		return errors.New("sdk: at least one proxy target is required")
+	}
 	defer exposure.Close()
 	if len(exposure.ActiveRelayURLs()) == 0 {
 		return errors.New("no relay URLs provided")
 	}
 
-	cfg := exposure.Config()
-	identity := cfg.Identity
-	tcpTarget := cfg.TargetAddr
-	udpTarget := cfg.UDPAddr
+	if target := strings.TrimSpace(config.TCPTarget); target != "" {
+		normalized, err := utils.NormalizeLoopbackTarget(target)
+		if err != nil {
+			return fmt.Errorf("invalid tcp target %q: %w", target, err)
+		}
+		config.TCPTarget = normalized
+	}
+	if target := strings.TrimSpace(config.UDPTarget); target != "" {
+		normalized, err := utils.NormalizeLoopbackTarget(target)
+		if err != nil {
+			return fmt.Errorf("invalid udp target %q: %w", target, err)
+		}
+		config.UDPTarget = normalized
+	}
+	tcpTarget, udpTarget := config.TCPTarget, config.UDPTarget
 	udpEnabled := udpTarget != ""
 
+	identity := exposure.Config().Identity
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("tcp_target", tcpTarget).
@@ -60,9 +107,20 @@ func ProxyExposure(ctx context.Context, exposure *Exposure) error {
 		_ = exposure.Close()
 	}()
 
-	waitErr := proxyRelayConnections(ctx, exposure, tcpTarget, &connWG, &connCount)
-	if waitErr != nil {
-		_ = exposure.Close()
+	var waitErr error
+	if tcpTarget != "" {
+		waitErr = proxyRelayConnections(ctx, exposure, tcpTarget, &connWG, &connCount)
+		if waitErr != nil {
+			_ = exposure.Close()
+		}
+	} else {
+		// UDP-only proxying waits on the datagram plane or context end;
+		// proxyRelayConnections would block on the TCP accept path.
+		select {
+		case <-ctx.Done():
+		case waitErr = <-udpErrCh:
+			_ = exposure.Close()
+		}
 	}
 
 	var udpErr error

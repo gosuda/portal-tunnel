@@ -46,10 +46,6 @@ type ExposeConfig struct {
 	Overlay   bool
 
 	Identity             types.Identity
-	IdentityPath         string
-	IdentityJSON         string
-	TargetAddr           string
-	UDPAddr              string
 	UDPEnabled           bool
 	TCPEnabled           bool
 	ECH                  bool
@@ -79,6 +75,12 @@ func (cfg ExposeConfig) snapshot() ExposeConfig {
 // Expose creates relay listeners for the selected relay pool and exposes a
 // dynamic listener hub for accepting traffic from all of them.
 func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
+	if strings.TrimSpace(cfg.Identity.Name) == "" {
+		return nil, errors.New("sdk: identity name is required")
+	}
+	if strings.TrimSpace(cfg.Identity.PrivateKey) == "" && strings.TrimSpace(cfg.Identity.Mnemonic) == "" {
+		return nil, errors.New("sdk: resolved identity is required; use GenerateIdentity, ParseIdentity, or LoadIdentity")
+	}
 	explicitRelayURLs, err := utils.NormalizeRelayURLs(cfg.RelayURLs...)
 	if err != nil {
 		return nil, err
@@ -90,37 +92,13 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	if err != nil {
 		return nil, err
 	}
-	listenerIdentity, createdIdentity, err := identity.ResolveListenerIdentity(
-		cfg.Identity.Copy(),
-		cfg.TargetAddr,
-		cfg.IdentityPath,
-		cfg.IdentityJSON,
-	)
+	listenerIdentity, _, err := identity.ResolveListenerIdentity(cfg.Identity.Copy(), "", "", "")
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
-	}
-	if createdIdentity {
-		log.Info().
-			Str("identity_path", strings.TrimSpace(cfg.IdentityPath)).
-			Str("address", listenerIdentity.Address).
-			Msg("generated tunnel identity and saved it to disk")
-	}
-	targetAddr, err := utils.NormalizeLoopbackTarget(cfg.TargetAddr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid target value %q: %w", cfg.TargetAddr, err)
-	}
-	udpAddr := cfg.UDPAddr
-	if cfg.UDPEnabled {
-		udpAddr, err = utils.NormalizeLoopbackTarget(utils.StringOrDefault(udpAddr, targetAddr))
-		if err != nil {
-			return nil, fmt.Errorf("invalid --udp-addr value %q: %w", cfg.UDPAddr, err)
-		}
 	}
 	runtimeCfg := cfg.snapshot()
 	runtimeCfg.RelayURLs = append([]string(nil), explicitRelayURLs...)
 	runtimeCfg.Identity = listenerIdentity.Copy()
-	runtimeCfg.TargetAddr = targetAddr
-	runtimeCfg.UDPAddr = udpAddr
 	runtimeCfg.Metadata = cfg.Metadata.Copy()
 	runtimeCfg.X402PayTo = x402PayTo
 	runtimeCfg.X402Testnet = cfg.X402Testnet
@@ -371,7 +349,6 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 
 	return types.AgentTunnelStatus{
 		Address:         cfg.Identity.Address,
-		TargetAddr:      cfg.TargetAddr,
 		Overlay:         cfg.Overlay,
 		MaxActiveRelays: cfg.MaxActiveRelays,
 		Metadata:        cfg.Metadata,

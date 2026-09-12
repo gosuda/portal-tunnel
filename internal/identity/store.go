@@ -649,3 +649,29 @@ func normalizeUniqueStrings(inputs []string, normalize func(string) string) []st
 	}
 	return out
 }
+
+// GenerateIdentity creates a fresh lease identity for name without
+// persisting it.
+func GenerateIdentity(name string) (types.Identity, error) {
+	return resolveLeaseIdentity(types.Identity{Name: name})
+}
+
+// ParseIdentity decodes an identity JSON document in the same format
+// LoadIdentity reads and validates the result as a lease identity.
+func ParseIdentity(data []byte) (types.Identity, error) {
+	parsed, err := parseIdentityJSON(string(data))
+	if err != nil {
+		return types.Identity{}, err
+	}
+	return resolveLeaseIdentity(parsed)
+}
+
+// LoadIdentity reads an identity file from path and validates the result as
+// a lease identity.
+func LoadIdentity(path string) (types.Identity, error) {
+	loaded, err := loadIdentity(path)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	return resolveLeaseIdentity(loaded)
+}

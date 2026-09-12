@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
@@ -379,5 +380,31 @@ func TestExposureSnapshotExcludesDeadRelayListener(t *testing.T) {
 	}
 	if !foundRelayB {
 		t.Fatalf("Snapshot() omitted active relay %q", relayB)
+	}
+}
+
+func TestExposeRejectsUnresolvedIdentity(t *testing.T) {
+	if _, err := Expose(context.Background(), ExposeConfig{}); err == nil || !strings.Contains(err.Error(), "identity name is required") {
+		t.Fatalf("missing identity: got %v", err)
+	}
+	if _, err := Expose(context.Background(), ExposeConfig{Identity: types.Identity{Name: "svc"}}); err == nil || !strings.Contains(err.Error(), "resolved identity is required") {
+		t.Fatalf("name-only identity: got %v, want implicit generation rejected", err)
+	}
+}
+
+func TestExposeAcceptsResolvedIdentityWithoutPersistence(t *testing.T) {
+	resolved, err := GenerateIdentity("sdk-resolved")
+	if err != nil {
+		t.Fatalf("GenerateIdentity: %v", err)
+	}
+
+	exposure, err := Expose(context.Background(), ExposeConfig{Identity: resolved})
+	if err != nil {
+		t.Fatalf("Expose: %v", err)
+	}
+	defer exposure.Close()
+
+	if got := exposure.Identity().Address; got != resolved.Address {
+		t.Fatalf("identity address = %q, want %q", got, resolved.Address)
 	}
 }
