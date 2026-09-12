@@ -138,10 +138,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		return types.RegisterResponse{}, "", "", err
 	}
 
-	authority, err := identity.NewLocalAuthority(l.identity)
-	if err != nil {
-		return types.RegisterResponse{}, "", "", err
-	}
+	authority := identity.NewLocalAuthority(l.identity)
 	signature, err := authority.SignEthereumPersonalMessage(challenge.SIWEMessage)
 	if err != nil {
 		return types.RegisterResponse{}, "", "", err

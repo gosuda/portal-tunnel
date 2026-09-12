@@ -57,8 +57,11 @@ type relayIdentityFile struct {
 }
 
 // LoadOrCreateRelayIdentity loads relay state from disk or creates it during
-// relay startup. Persistence is kept here with the relay owner rather than in
-// the identity primitives package.
+// relay startup. The file is written by the relay itself, so a loaded
+// identity is trusted as-is; only the relay hostname is applied and a
+// missing ECH seed is filled, and the file is rewritten only when that
+// changed something. Persistence is kept here with the relay owner rather
+// than in the identity primitives package.
 func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, error) {
 	path = resolveRelayIdentityPath(path)
 	if path == "" {
@@ -75,6 +78,9 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, erro
 	created := errors.Is(err, os.ErrNotExist)
 	switch {
 	case err == nil:
+		if relay.Address == "" || relay.PublicKey == "" || relay.PrivateKey == "" {
+			return types.RelayIdentity{}, errors.New("relay identity file is incomplete")
+		}
 	case created:
 		generated, generateErr := portalidentity.Generate("relay")
 		if generateErr != nil {
@@ -85,49 +91,17 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, erro
 		return types.RelayIdentity{}, fmt.Errorf("load identity: %w", err)
 	}
 
+	stored := relay
 	if rootHost != "" {
 		relay.Name = rootHost
 	}
-	resolved, err := resolveRelayIdentity(relay)
-	if err != nil {
-		return types.RelayIdentity{}, err
-	}
-
-	if created {
-		if err := saveRelayIdentity(path, resolved); err != nil {
-			return types.RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
-		}
-	} else {
-		storedResolved := resolved
-		if strings.TrimSpace(storedResolved.Mnemonic) != "" {
-			storedResolved.PrivateKey = ""
-		}
-		if relay == storedResolved {
-			if err := os.Chmod(path, 0o600); err != nil {
-				return types.RelayIdentity{}, fmt.Errorf("secure identity file: %w", err)
-			}
-			return resolved, nil
-		}
-		if err := saveRelayIdentity(path, resolved); err != nil {
-			return types.RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
-		}
-	}
-	return resolved, nil
-}
-
-func resolveRelayIdentity(relay types.RelayIdentity) (types.RelayIdentity, error) {
-	name := relay.Name
-	identityInput := relay.Identity
-	identityInput.Name = "relay"
-	resolved, err := portalidentity.Resolve(identityInput)
-	if err != nil {
-		return types.RelayIdentity{}, err
-	}
-	resolved.Name = name
-	relay.Identity = resolved
-	relay.EncryptedClientHelloSeed = strings.TrimSpace(relay.EncryptedClientHelloSeed)
 	if relay.EncryptedClientHelloSeed == "" {
 		relay.EncryptedClientHelloSeed = utils.RandomID("")
+	}
+	if created || relay != stored {
+		if err := saveRelayIdentity(path, relay); err != nil {
+			return types.RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
+		}
 	}
 	return relay, nil
 }

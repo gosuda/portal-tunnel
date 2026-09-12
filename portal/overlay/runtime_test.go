@@ -41,11 +41,7 @@ func testAuthority(t *testing.T, name string) identity.Authority {
 		t.Fatal(err)
 	}
 	generated.Name = name
-	authority, err := identity.NewLocalAuthority(generated)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return authority
+	return identity.NewLocalAuthority(generated)
 }
 
 func testDestination(seed string) string {

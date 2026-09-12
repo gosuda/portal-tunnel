@@ -162,10 +162,8 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
 	}
-	leaseIdentity, err := identity.NormalizeIdentity(req.Identity)
-	if err != nil {
-		return nil, types.RegisterResponse{}, err
-	}
+	leaseIdentity := req.Identity
+	var err error
 	if r.policy.IPFilter().IsIPBanned(clientIP) {
 		return nil, types.RegisterResponse{}, errIPBanned
 	}
@@ -579,7 +577,7 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 	}
 	r.mu.Lock()
 
-	key := strings.TrimSpace(claims.Identity.Key())
+	key := claims.Identity.Key()
 	record := r.recordByLease(key, claims.LeaseID, time.Time{})
 	if record == nil {
 		r.mu.Unlock()

@@ -489,7 +489,7 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 
 	record, _, err := server.registry.Register(types.RegisterChallengeRequest{
 		Identity: types.Identity{
-			Name:    "Demo-App",
+			Name:    "demo-app",
 			Address: server.identity.Address,
 		},
 	}, "203.0.113.10", "")

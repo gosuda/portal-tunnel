@@ -211,10 +211,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
-	relayAuthority, err := identity.NewLocalAuthority(relayIdentity.Identity)
-	if err != nil {
-		return nil, fmt.Errorf("load relay authority: %w", err)
-	}
+	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
 	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, cfg.SNIPort, relayAuthority, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return nil, err

@@ -33,14 +33,15 @@ func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 	return normalized, nil
 }
 
-// Resolve returns the canonical Portal identity for id: it trims the fields,
+// resolve returns the canonical Portal identity for id: it trims the fields,
 // derives the private key from a mnemonic when provided, requires key
 // material, derives the public key and address from the private key exactly
 // once, verifies explicitly supplied address and public key against the
 // derived values exactly once, normalizes the name as a DNS label, and fills
-// the token secret when missing. Resolve never generates key material; use
-// Generate for that.
-func Resolve(id types.Identity) (types.Identity, error) {
+// the token secret when missing. It never generates key material; use
+// Generate for that. Valid identities leave the package only through Parse
+// and Generate; callers trust them from there on.
+func resolve(id types.Identity) (types.Identity, error) {
 	resolved, err := resolveKeyMaterial(id)
 	if err != nil {
 		return types.Identity{}, err
@@ -56,13 +57,13 @@ func Resolve(id types.Identity) (types.Identity, error) {
 }
 
 // Generate creates a fresh Portal identity for name with a new private key,
-// passing the new key through Resolve exactly once.
+// passing the new key through resolve exactly once.
 func Generate(name string) (types.Identity, error) {
 	privateKey, err := secp256k1.GeneratePrivateKey()
 	if err != nil {
 		return types.Identity{}, fmt.Errorf("generate secp256k1 private key: %w", err)
 	}
-	return Resolve(types.Identity{
+	return resolve(types.Identity{
 		Name:       name,
 		PrivateKey: hex.EncodeToString(privateKey.Serialize()),
 	})
@@ -80,25 +81,22 @@ func decode(data []byte) (types.Identity, error) {
 	return types.Identity(payload), nil
 }
 
-// Parse decodes an identity JSON document and resolves it through Resolve.
-// It never generates key material; a document without key material is an
-// error.
+// Parse decodes an identity JSON document and validates it once through
+// resolve. It never generates key material; a document without key material
+// is an error.
 func Parse(data []byte) (types.Identity, error) {
 	decoded, err := decode(data)
 	if err != nil {
 		return types.Identity{}, err
 	}
-	return Resolve(decoded)
+	return resolve(decoded)
 }
 
-// Marshal resolves id and encodes it in the canonical identity file format.
-// An identity carrying a mnemonic omits the derived private key.
+// Marshal serializes a valid identity in the canonical identity file format.
+// id must come from Generate or Parse; Marshal does not validate it. An
+// identity carrying a mnemonic omits the derived private key.
 func Marshal(id types.Identity) ([]byte, error) {
-	resolved, err := Resolve(id)
-	if err != nil {
-		return nil, err
-	}
-	return json.MarshalIndent(storedIdentityFromIdentity(resolved), "", "  ")
+	return json.MarshalIndent(storedIdentityFromIdentity(id), "", "  ")
 }
 
 // resolveKeyMaterial trims the identity fields, derives the private key from

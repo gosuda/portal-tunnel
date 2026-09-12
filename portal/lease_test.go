@@ -21,10 +21,7 @@ func newTestRegistry(t *testing.T) *leaseRegistry {
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
-	relayAuthority, err := identity.NewLocalAuthority(relay.Identity)
-	if err != nil {
-		t.Fatalf("identity.NewLocalAuthority() error = %v", err)
-	}
+	relayAuthority := identity.NewLocalAuthority(relay.Identity)
 	registry, err := newLeaseRegistry(false, false, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com", false, "")
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)

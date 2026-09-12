@@ -316,16 +316,20 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, runtime *policy.
 	return true
 }
 
+// normalizePolicyIdentityKey canonicalizes an untrusted admin-supplied
+// identity key into the runtime key form (lowercase name:address, as built
+// by types.Identity.Key). This is the only place policy keys are validated;
+// persisted policy state is trusted as-is.
 func normalizePolicyIdentityKey(w http.ResponseWriter, raw string) (string, bool) {
-	key := strings.TrimSpace(raw)
-	name, address, ok := strings.Cut(key, types.IdentityKeySeparator)
+	name, address, ok := strings.Cut(strings.TrimSpace(raw), types.IdentityKeySeparator)
+	name = strings.ToLower(strings.TrimSpace(name))
+	address = strings.ToLower(strings.TrimSpace(address))
 	if !ok || name == "" || address == "" {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid identity")
 		return "", false
 	}
-	return key, true
+	return name + types.IdentityKeySeparator + address, true
 }
-
 func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, identityKey string, req types.LeasePolicyUpdate) bool {
 	if req.IsBanned == nil && req.IsApproved == nil && req.IsDenied == nil && req.BPS == nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "lease policy update is empty")

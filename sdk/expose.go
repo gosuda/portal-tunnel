@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -126,13 +125,9 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		strings.TrimSpace(cfg.Identity.PrivateKey) == "" {
 		return nil, errors.New("portal sdk: identity must include address, public key, and private key")
 	}
-	listenerIdentity, err := identity.Resolve(cfg.Identity.Copy())
-	if err != nil {
-		return nil, fmt.Errorf("resolve identity: %w", err)
-	}
 	runtimeCfg := cfg.snapshot()
 	runtimeCfg.RelayURLs = append([]string(nil), explicitRelayURLs...)
-	runtimeCfg.Identity = listenerIdentity.Copy()
+	runtimeCfg.Identity = cfg.Identity.Copy()
 
 	exposureCtx, cancel := context.WithCancel(ctx)
 	exposure := &Exposure{

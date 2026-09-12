@@ -1,8 +1,10 @@
 package identity
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -16,66 +18,95 @@ func mustGenerate(t *testing.T, name string) types.Identity {
 	return generated
 }
 
-func TestResolveDerivesAddressAndFillsTokenSecret(t *testing.T) {
-	generated := mustGenerate(t, "derive-check")
-	if generated.Address == "" || generated.PublicKey == "" || generated.PrivateKey == "" || generated.TokenSecret == "" {
+func mustMarshal(t *testing.T, id types.Identity) []byte {
+	t.Helper()
+	data, err := Marshal(id)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	return data
+}
+
+func withJSONField(t *testing.T, data []byte, field string, value any) []byte {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	payload[field] = value
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return raw
+}
+
+func TestGenerateReturnsValidIdentity(t *testing.T) {
+	generated := mustGenerate(t, "generate-check")
+	if generated.Name != "generate-check" ||
+		generated.Address == "" || generated.PublicKey == "" ||
+		generated.PrivateKey == "" || generated.TokenSecret == "" {
 		t.Fatalf("generated identity incomplete: %+v", generated)
 	}
 
-	resolved, err := Resolve(types.Identity{Name: generated.Name, PrivateKey: generated.PrivateKey})
+	parsed, err := Parse(mustMarshal(t, generated))
 	if err != nil {
-		t.Fatalf("Resolve: %v", err)
+		t.Fatalf("Parse(Marshal(Generate())): %v", err)
 	}
-	if resolved.Address != generated.Address || resolved.PublicKey != generated.PublicKey {
-		t.Fatalf("Resolve derived mismatch:\n resolved %+v\ngenerated %+v", resolved, generated)
+	if parsed != generated {
+		t.Fatalf("round trip mismatch:\n parsed   %+v\ngenerated %+v", parsed, generated)
 	}
 }
 
-func TestResolveRejectsInvalidIdentities(t *testing.T) {
-	generated := mustGenerate(t, "reject-check")
-	generated.Address = "0x0000000000000000000000000000000000000001"
-	nameCheck := mustGenerate(t, "name-check")
-	nameCheck.Name = ""
+func TestParseRejectsInvalidStorageInput(t *testing.T) {
+	valid := mustMarshal(t, mustGenerate(t, "parse-check"))
 
 	cases := []struct {
 		name    string
-		parse   bool
-		id      types.Identity
-		raw     string
+		raw     func() []byte
 		wantErr string
 	}{
-		{"mismatched address", false, generated, "", "does not match private key"},
-		{"missing key material", false, types.Identity{Name: "no-key"}, "", "private key is required"},
-		{"empty name", false, nameCheck, "", "name"},
-		{"keyless document", true, types.Identity{}, `{"name":"foo"}`, "private key is required"},
-		{"invalid json", true, types.Identity{}, "not json", "decode identity json"},
-		{"empty input", true, types.Identity{}, "", "identity json is required"},
+		{"keyless document", func() []byte { return []byte(`{"name":"foo"}`) }, "private key is required"},
+		{"invalid json", func() []byte { return []byte("not json") }, "decode identity json"},
+		{"empty input", func() []byte { return nil }, "identity json is required"},
+		{
+			"mismatched address",
+			func() []byte { return withJSONField(t, valid, "address", "0x0000000000000000000000000000000000000001") },
+			"does not match private key",
+		},
+		{"empty name", func() []byte { return withJSONField(t, valid, "name", "") }, "name"},
+		{"derivation without mnemonic", func() []byte { return withJSONField(t, valid, "derivation_path", "m/44'/60'/0'/0/0") }, "derivation_path requires mnemonic"},
 	}
 	for _, tc := range cases {
-		var err error
-		if tc.parse {
-			_, err = Parse([]byte(tc.raw))
-		} else {
-			_, err = Resolve(tc.id)
-		}
-		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+		if _, err := Parse(tc.raw()); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 			t.Fatalf("%s: got %v, want error containing %q", tc.name, err, tc.wantErr)
 		}
 	}
 }
 
-func TestGenerateMarshalParseRoundTrip(t *testing.T) {
-	generated := mustGenerate(t, "round-trip")
+func TestMarshalSerializesValidIdentity(t *testing.T) {
+	data := mustMarshal(t, mustGenerate(t, "marshal-check"))
 
-	data, err := Marshal(generated)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
-	parsed, err := Parse(data)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
+	for _, field := range []string{"name", "address", "public_key", "private_key", "token_secret"} {
+		if _, ok := payload[field]; !ok {
+			t.Fatalf("marshaled identity missing field %q: %s", field, data)
+		}
 	}
-	if parsed != generated {
-		t.Fatalf("round trip mismatch:\n parsed   %+v\ngenerated %+v", parsed, generated)
+}
+
+func TestNewRegisterChallengeNormalizesWireIdentity(t *testing.T) {
+	generated := mustGenerate(t, "wire-check")
+	challenge, err := NewRegisterChallenge(types.RegisterChallengeRequest{
+		Identity: types.Identity{Name: "Demo-App", Address: generated.Address},
+	}, "portal.example.com", "https://portal.example.com", time.Now(), time.Minute)
+	if err != nil {
+		t.Fatalf("NewRegisterChallenge: %v", err)
+	}
+	if name := challenge.Request.Identity.Name; name != "demo-app" {
+		t.Fatalf("challenge identity name = %q, want %q", name, "demo-app")
 	}
 }

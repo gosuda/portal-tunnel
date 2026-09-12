@@ -14,12 +14,10 @@ type LocalAuthority struct {
 	identity types.Identity
 }
 
-func NewLocalAuthority(raw types.Identity) (LocalAuthority, error) {
-	normalized, err := resolveKeyMaterial(raw)
-	if err != nil {
-		return LocalAuthority{}, err
-	}
-	return LocalAuthority{identity: normalized}, nil
+// NewLocalAuthority wraps a resolved identity for signing. The identity must
+// already be valid; it is not re-derived here.
+func NewLocalAuthority(raw types.Identity) LocalAuthority {
+	return LocalAuthority{identity: raw}
 }
 
 func (a LocalAuthority) Identity() types.Identity {
