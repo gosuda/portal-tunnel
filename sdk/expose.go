@@ -16,7 +16,6 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
-	"github.com/gosuda/portal-tunnel/v2/internal/telemetry"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -29,8 +28,9 @@ type Exposure struct {
 
 	cfg *utils.Snapshot[ExposeConfig]
 
-	accepted  chan net.Conn
-	datagrams chan types.DatagramFrame
+	accepted       chan *relayConn
+	datagrams      chan types.DatagramFrame
+	tunnelObserver TunnelObserver
 
 	relaySet       *discovery.RelaySet
 	mu             sync.RWMutex
@@ -38,6 +38,33 @@ type Exposure struct {
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
+}
+
+// TunnelObserver reports per-relay tunnel connection lifecycle events. It
+// lets optional integrations such as metrics exporters observe tunnel
+// activity without the core SDK depending on them.
+type TunnelObserver struct {
+	// Opened is invoked with the relay URL when a tunnel connection is
+	// accepted through Exposure.Accept.
+	Opened func(relayURL string)
+	// Closed is invoked exactly once with the relay URL when a connection
+	// previously reported through Opened is closed.
+	Closed func(relayURL string)
+}
+
+// ExposeOption customizes an Exposure beyond its construction configuration.
+type ExposeOption func(*exposeOptions)
+
+type exposeOptions struct {
+	tunnelObserver TunnelObserver
+}
+
+// WithTunnelObserver registers per-relay tunnel connection notifications for
+// connections accepted through Exposure.Accept.
+func WithTunnelObserver(observer TunnelObserver) ExposeOption {
+	return func(opts *exposeOptions) {
+		opts.tunnelObserver = observer
+	}
 }
 
 type ExposeConfig struct {
@@ -78,7 +105,13 @@ func (cfg ExposeConfig) snapshot() ExposeConfig {
 
 // Expose creates relay listeners for the selected relay pool and exposes a
 // dynamic listener hub for accepting traffic from all of them.
-func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
+func Expose(ctx context.Context, cfg ExposeConfig, opts ...ExposeOption) (*Exposure, error) {
+	options := exposeOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
 	explicitRelayURLs, err := utils.NormalizeRelayURLs(cfg.RelayURLs...)
 	if err != nil {
 		return nil, err
@@ -134,10 +167,11 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		cancel:         cancel,
 		done:           exposureCtx.Done(),
 		cfg:            utils.NewSnapshot(runtimeCfg, ExposeConfig.snapshot),
-		accepted:       make(chan net.Conn, max(initialRouteCount*defaultReadyTarget*2, 1)),
+		accepted:       make(chan *relayConn, max(initialRouteCount*defaultReadyTarget*2, 1)),
 		datagrams:      make(chan types.DatagramFrame, max(initialRouteCount*32, 1)),
 		relaySet:       discovery.NewRelaySet(relaySetURLs),
 		relayListeners: make(map[string]*listener, initialRouteCount),
+		tunnelObserver: options.tunnelObserver,
 	}
 
 	if cfg.Discovery {
@@ -517,10 +551,17 @@ func (c *exposureConn) Close() error {
 	return closeErr
 }
 
+// relayConn carries the serving relay URL alongside a connection accepted
+// from a relay listener so the public Accept path can account per-relay
+// tunnel activity.
+type relayConn struct {
+	net.Conn
+	relayURL string
+}
+
 // tunnelCounterConn wraps a net.Conn and calls decr exactly once on the first
-// Close invocation to decrement the active_tunnels_per_relay gauge. Subsequent
-// Close calls are forwarded to the underlying conn but do not double-decrement.
-// Concurrency is guaranteed by sync.Once.
+// Close invocation. Subsequent Close calls are forwarded to the underlying
+// conn but do not re-invoke decr. Concurrency is guaranteed by sync.Once.
 type tunnelCounterConn struct {
 	net.Conn
 	once sync.Once
@@ -548,8 +589,22 @@ func (e *Exposure) Accept() (net.Conn, error) {
 			Str("remote_addr", conn.RemoteAddr().String()).
 			Msg("exposure connection accepted")
 
+		accepted := net.Conn(conn)
+		if obs := e.tunnelObserver; obs.Opened != nil || obs.Closed != nil {
+			relayURL := conn.relayURL
+			if obs.Opened != nil {
+				obs.Opened(relayURL)
+			}
+			if obs.Closed != nil {
+				accepted = &tunnelCounterConn{
+					Conn: conn,
+					decr: func() { obs.Closed(relayURL) },
+				}
+			}
+		}
+
 		return &exposureConn{
-			Conn:       conn,
+			Conn:       accepted,
 			id:         connID,
 			localAddr:  conn.LocalAddr().String(),
 			remoteAddr: conn.RemoteAddr().String(),
@@ -793,19 +848,13 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 			return
 		}
 
-		telemetry.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Inc()
-		wrappedConn := &tunnelCounterConn{
-			Conn: conn,
-			decr: func() {
-				telemetry.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Dec()
-			},
-		}
+		relayAccepted := &relayConn{Conn: conn, relayURL: relayURL}
 
 		select {
 		case <-e.done:
-			_ = wrappedConn.Close()
+			_ = relayAccepted.Close()
 			return
-		case e.accepted <- wrappedConn:
+		case e.accepted <- relayAccepted:
 		}
 	}
 }

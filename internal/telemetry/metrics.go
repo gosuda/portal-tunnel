@@ -74,7 +74,8 @@ var RTTSeconds = promauto.NewHistogramVec(
 )
 
 // ActiveTunnelsPerRelay is a gauge of tunnel count for each relay.
-// SDK-local measurement: tracks this process's tunnel distribution only.
+// Client-local measurement: wired by the portal-tunnel CLI through
+// sdk.WithTunnelObserver; the core SDK does not import this package.
 var ActiveTunnelsPerRelay = promauto.NewGaugeVec(
 	prometheus.GaugeOpts{
 		Name: "portal_discovery_active_tunnels_per_relay",

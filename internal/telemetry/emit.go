@@ -13,7 +13,7 @@ package telemetry
 //
 // Metrics NOT updated here (wired by later phases / other code paths):
 //   - relay_pool_size — set by RelaySet pool management.
-//   - active_tunnels_per_relay — incremented/decremented at tunnel accept/close.
+//   - active_tunnels_per_relay — wired by the client CLI via sdk.WithTunnelObserver.
 //   - failures_total — incremented on discovery/active failure events.
 func EmitFromTrace(t SelectionTrace) {
 	// --- relay_selected_total ---

@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"errors"
+	"net"
 	"net/url"
 	"testing"
 
@@ -379,5 +380,40 @@ func TestExposureSnapshotExcludesDeadRelayListener(t *testing.T) {
 	}
 	if !foundRelayB {
 		t.Fatalf("Snapshot() omitted active relay %q", relayB)
+	}
+}
+
+func TestTunnelObserverReportsAcceptAndClose(t *testing.T) {
+	var opened, closed []string
+	exposure := &Exposure{
+		accepted: make(chan *relayConn, 1),
+		tunnelObserver: TunnelObserver{
+			Opened: func(relayURL string) { opened = append(opened, relayURL) },
+			Closed: func(relayURL string) { closed = append(closed, relayURL) },
+		},
+	}
+	server, client := net.Pipe()
+	defer client.Close()
+	exposure.accepted <- &relayConn{Conn: server, relayURL: "https://relay.example"}
+
+	conn, err := exposure.Accept()
+	if err != nil {
+		t.Fatalf("Accept() error = %v", err)
+	}
+	if len(opened) != 1 || opened[0] != "https://relay.example" {
+		t.Fatalf("opened = %v, want one event for https://relay.example", opened)
+	}
+	if len(closed) != 0 {
+		t.Fatalf("closed = %v, want no events before Close", closed)
+	}
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if len(closed) != 1 || closed[0] != "https://relay.example" {
+		t.Fatalf("closed = %v, want exactly one event for https://relay.example", closed)
 	}
 }

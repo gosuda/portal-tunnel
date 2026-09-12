@@ -18,3 +18,28 @@ routes and the lease lifecycle contain no overlay topology.
 See [ADR index](adr/README.md) for the relay overlay migration decision and
 [the site architecture documentation](src/routes/architecture/+page.md) for the
 rest of the system.
+
+## Package boundary
+
+Ownership follows the client/relay split rather than the feature that
+happened to introduce the code:
+
+- `sdk` owns the Portal client network primitive: `Expose`, the `Exposure`
+  listener, the relay runtime it requires, and canonical status/readiness.
+- Adapter packages (for example HTTP serving, see #404) adapt an
+  already-created `Exposure` to another protocol or runtime.
+- Middleware packages compose policy over standard interfaces; application
+  payment policy is the x402 example in #405.
+- Extension/integration packages hold optional behavior with its own
+  dependency boundary, such as concrete metrics exporters.
+- `portal` owns the relay/server runtime: admission, leases, ingress,
+  ACME/DNS providers, and the IVNP overlay.
+- `internal` holds private protocol machinery genuinely shared by client and
+  relay; `types` holds wire/shared contracts; `cmd` composes the pieces.
+
+The core SDK must not import concrete telemetry/exporter implementations,
+application policy, or relay-only dependencies. Optional integrations observe
+the runtime through hooks such as `sdk.WithTunnelObserver` and are wired by
+the composing binary in `cmd`, keeping the `./sdk` dependency closure minimal.
+Identity persistence and local proxy targets leave tunnel construction in
+#403.

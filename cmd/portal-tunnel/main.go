@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/internal/telemetry"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -253,7 +254,10 @@ func runExposeCommand(args []string) error {
 		X402Asset:            flags.x402Asset,
 		X402Endpoints:        flags.x402Endpoints,
 		X402FacilitatorToken: flags.x402FacilitatorToken,
-	})
+	}, sdk.WithTunnelObserver(sdk.TunnelObserver{
+		Opened: func(relayURL string) { telemetry.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Inc() },
+		Closed: func(relayURL string) { telemetry.ActiveTunnelsPerRelay.WithLabelValues(relayURL).Dec() },
+	}))
 	if err != nil {
 		return fmt.Errorf("failed to start relays: %w", err)
 	}
