@@ -1,4 +1,4 @@
-package portaltunnel
+package manifest
 
 import _ "embed"
 

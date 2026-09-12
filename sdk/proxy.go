@@ -14,9 +14,13 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func ProxyExposure(ctx context.Context, exposure *Exposure) error {
+// ProxyWithTargets runs the TCP and UDP proxy loops for an exposure against
+// explicit local targets. Targets are a proxy concern, not part of the
+// exposure configuration, so callers pass them here instead.
+func ProxyWithTargets(ctx context.Context, exposure *Exposure, tcpTarget, udpTarget string) error {
 	defer exposure.Close()
 	if len(exposure.ActiveRelayURLs()) == 0 {
 		return errors.New("no relay URLs provided")
@@ -24,8 +28,15 @@ func ProxyExposure(ctx context.Context, exposure *Exposure) error {
 
 	cfg := exposure.Config()
 	identity := cfg.Identity
-	tcpTarget := cfg.TargetAddr
-	udpTarget := cfg.UDPAddr
+	normalizedTCP, err := utils.NormalizeLoopbackTarget(tcpTarget)
+	if err != nil {
+		return fmt.Errorf("invalid tcp target %q: %w", tcpTarget, err)
+	}
+	normalizedUDP, err := utils.NormalizeLoopbackTarget(udpTarget)
+	if err != nil {
+		return fmt.Errorf("invalid udp target %q: %w", udpTarget, err)
+	}
+	tcpTarget, udpTarget = normalizedTCP, normalizedUDP
 	udpEnabled := udpTarget != ""
 
 	log.Info().

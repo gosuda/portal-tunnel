@@ -712,7 +712,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		}
 		err = exposure.RunHTTPRoutes(ctx, routes, "")
 	} else {
-		err = sdk.ProxyExposure(ctx, exposure)
+		err = sdk.ProxyWithTargets(ctx, exposure, cfg.TargetAddr, cfg.UDPAddr)
 	}
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return ctx.Err()

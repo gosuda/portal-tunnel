@@ -17,9 +17,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
-	portaltunnel "github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/internal/manifest"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -583,6 +583,6 @@ func serveLLMs(w http.ResponseWriter, r *http.Request, portalURL string) {
 		return
 	}
 
-	body := strings.ReplaceAll(string(portaltunnel.LLMsTXT), "%s", portalURL)
+	body := strings.ReplaceAll(string(manifest.LLMsTXT), "%s", portalURL)
 	_, _ = w.Write([]byte(body))
 }

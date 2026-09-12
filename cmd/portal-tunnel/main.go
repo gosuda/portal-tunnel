@@ -261,7 +261,7 @@ func runExposeCommand(args []string) error {
 		defer exposure.Close()
 		return exposure.RunHTTPRoutes(ctx, httpRoutes, "")
 	}
-	return sdk.ProxyExposure(ctx, exposure)
+	return sdk.ProxyWithTargets(ctx, exposure, flags.targetAddr, flags.udpAddr)
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {
