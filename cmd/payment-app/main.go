@@ -205,9 +205,11 @@ func resolvePaymentIdentity(cfg paymentConfig) (types.Identity, error) {
 	if raw := strings.TrimSpace(cfg.identityJSON); raw != "" {
 		return identity.Parse([]byte(raw))
 	}
-	if data, err := os.ReadFile(cfg.identityPath); err == nil {
+	data, err := os.ReadFile(cfg.identityPath)
+	if err == nil {
 		return identity.Parse(data)
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
 		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
 	}
 	name, err := paymentName(cfg.name, cfg.addr)
