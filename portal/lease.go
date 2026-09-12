@@ -432,7 +432,10 @@ func (r *leaseRegistry) admitLeaseIdentity(key, leaseID string, now time.Time, r
 	record := r.recordByLease(key, leaseID, now)
 	r.mu.RUnlock()
 	if record == nil {
-		return nil, errUnauthorized
+		// The credential verified; the lease record is gone (expired or the
+		// relay restarted without it). That is a missing lease, not an
+		// authentication failure, so the client can re-register.
+		return nil, errLeaseNotFound
 	}
 	if !r.policy.IsIdentityRoutable(record.Key()) {
 		return nil, errLeaseRejected
@@ -462,7 +465,9 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	record := r.recordByLease(leaseKey, claims.LeaseID, time.Time{})
 	if record == nil {
 		r.mu.Unlock()
-		return types.RenewResponse{}, errUnauthorized
+		// Same semantics as admission: a verified token whose lease record
+		// is gone reports a missing lease so the client re-registers.
+		return types.RenewResponse{}, errLeaseNotFound
 	}
 
 	now := time.Now()
@@ -543,7 +548,7 @@ func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest)
 	record := r.recordByLease(claims.Identity.Key(), claims.LeaseID, now)
 	if record == nil {
 		r.mu.RUnlock()
-		return types.ReverseEndpoint{}, errUnauthorized
+		return types.ReverseEndpoint{}, errLeaseNotFound
 	}
 	leaseIdentity := record.Identity
 	leaseID := record.id
@@ -741,7 +746,10 @@ func (r *leaseRegistry) verifySigningAccessToken(token string) error {
 	defer r.mu.RUnlock()
 
 	record := r.recordByLease(claims.Identity.Key(), claims.LeaseID, now)
-	if record == nil || !record.isPublicEntry() {
+	if record == nil {
+		return errLeaseNotFound
+	}
+	if !record.isPublicEntry() {
 		return errUnauthorized
 	}
 	if !r.policy.IsIdentityRoutable(record.Key()) {

@@ -600,6 +600,13 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+			// A verified credential whose lease record is gone (relay
+			// restart, expiry) must leave the retry loop and re-register;
+			// ordinary transport errors below keep retrying.
+			if errors.Is(err, errLeaseRefreshRequired) ||
+				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
+				return errLeaseRefreshRequired
+			}
 			if l.isAlternateReverseEndpoint(lease.reverse.URL) {
 				l.refreshReverseEndpointAfterFailure(ctx, lease.reverse.Capability)
 				if !l.waitRetry(ctx, "reverse endpoint connect", err, 1, sessionSlot) {
