@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -38,6 +39,16 @@ type listenerConfig struct {
 	Metadata   func() types.LeaseMetadata
 	RetryCount int
 	relaySet   *discovery.RelaySet
+	Status     func(listenerStatus)
+}
+
+type listenerStatus struct {
+	state     RelayState
+	err       error
+	publicURL string
+	udpAddr   string
+	tcpAddr   string
+	version   string
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -85,6 +96,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 		Str("relay_url", relayURL).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
+	l.reportFailed(err)
 	_ = l.Close()
 	return true
 }
@@ -112,9 +124,11 @@ type listener struct {
 	leaseTTL          time.Duration
 	renewBefore       time.Duration
 
-	stream      *transport.ClientStream
-	datagram    *transport.ClientDatagram
-	mitmManager *mitmManager
+	stream        *transport.ClientStream
+	datagram      *transport.ClientDatagram
+	mitmManager   *mitmManager
+	status        func(listenerStatus)
+	readySessions atomic.Int32
 
 	httpClient    *http.Client
 	httpTransport *http.Transport
@@ -153,6 +167,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		identity:       cfg.Identity.Copy(),
 		overlay:        cfg.Overlay,
 		relaySet:       cfg.relaySet,
+		status:         cfg.Status,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
 		echEnabled:     cfg.ECH,
@@ -174,6 +189,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 				Str("component", "sdk-quic-backhaul").
 				Str("address", l.identity.Address).
 				Msg("quic backhaul disconnected; waiting to reconnect")
+			l.reportAvailable()
 		})
 	}
 
@@ -188,10 +204,65 @@ func (l *listener) metadataSnapshot() types.LeaseMetadata {
 	return l.metadata()
 }
 
+func (l *listener) report(status listenerStatus) {
+	if l != nil && l.status != nil {
+		l.status(status)
+	}
+}
+
+func (l *listener) reportConnecting() {
+	l.report(listenerStatus{state: RelayConnecting})
+}
+
+func (l *listener) reportStreamReady() {
+	l.readySessions.Add(1)
+	l.reportAvailable()
+}
+
+func (l *listener) reportStreamClosed() {
+	for {
+		current := l.readySessions.Load()
+		if current <= 0 {
+			return
+		}
+		if l.readySessions.CompareAndSwap(current, current-1) {
+			l.reportAvailable()
+			return
+		}
+	}
+}
+
+func (l *listener) reportAvailable() {
+	lease, ok := l.leaseSnapshot()
+	if !ok {
+		return
+	}
+	state := RelayConnecting
+	if l.readySessions.Load() > 0 {
+		state = RelayReady
+	}
+	udpAddr := ""
+	if l.datagram != nil && l.datagram.Connected() {
+		udpAddr = lease.udpAddr
+	}
+	l.report(listenerStatus{
+		state:     state,
+		publicURL: l.publicURLForLease(lease),
+		udpAddr:   udpAddr,
+		tcpAddr:   lease.tcpAddr,
+		version:   l.releaseVersion,
+	})
+}
+
+func (l *listener) reportFailed(err error) {
+	l.report(listenerStatus{state: RelayFailed, err: err})
+}
+
 func (l *listener) run(ctx context.Context) {
 	var retries int
 
 	for {
+		l.reportConnecting()
 		err := l.registerAndConfigure(ctx)
 		switch {
 		case err == nil:
@@ -203,6 +274,9 @@ func (l *listener) run(ctx context.Context) {
 			}
 			retries++
 			if !l.waitRetry(ctx, "lease registration", err, retries, 0) {
+				if ctx.Err() == nil {
+					l.reportFailed(err)
+				}
 				_ = l.Close()
 				return
 			}
@@ -262,6 +336,7 @@ func (l *listener) run(ctx context.Context) {
 			Str("relay_url", relayURL).
 			Str("address", l.identity.Address).
 			Msg("listener connection retry budget exhausted; closing listener")
+		l.reportFailed(err)
 		_ = l.Close()
 		return
 	}
@@ -421,28 +496,6 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 	return l.datagram.Send(frame.FlowID, frame.Payload)
 }
 
-func (l *listener) datagramReady() (string, bool, bool) {
-	if l.datagram == nil {
-		return "", false, false
-	}
-
-	hostname := ""
-	udpAddr := ""
-	if lease, ok := l.leaseSnapshot(); ok {
-		hostname = lease.hostname
-		udpAddr = lease.udpAddr
-	}
-	ready := l.datagram.Connected() && udpAddr != ""
-	closed := false
-	select {
-	case <-l.doneCh:
-		closed = true
-	default:
-	}
-	pending := !ready && !closed && (hostname == "" || udpAddr != "")
-	return udpAddr, ready, pending
-}
-
 func (l *listener) publicURLForLease(lease listenerSnapshot) string {
 	baseURL := lease.publicURLBase
 	if baseURL == nil {
@@ -488,10 +541,13 @@ func (l *listener) runLease(ctx context.Context) error {
 	defer cancel()
 
 	errCh := make(chan error, max(l.readyTarget, 1)+1)
+	var workers sync.WaitGroup
 	if l.stream != nil && l.readyTarget > 0 {
 		for sessionSlot := range l.readyTarget {
 			sessionSlot++
+			workers.Add(1)
 			go func() {
+				defer workers.Done()
 				if err := l.runReverseSessionLoop(leaseCtx, lease.tlsConfig, sessionSlot); err != nil {
 					select {
 					case errCh <- err:
@@ -502,9 +558,15 @@ func (l *listener) runLease(ctx context.Context) error {
 		}
 	}
 	if l.udpEnabled {
-		go l.runDatagramLoop(leaseCtx)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			l.runDatagramLoop(leaseCtx)
+		}()
 	}
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		if err := l.runRenewLoop(leaseCtx); err != nil {
 			select {
 			case errCh <- err:
@@ -515,9 +577,12 @@ func (l *listener) runLease(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		cancel()
+		workers.Wait()
 		return ctx.Err()
 	case err := <-errCh:
 		cancel()
+		workers.Wait()
 		return err
 	}
 }
@@ -548,8 +613,11 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 			}
 			continue
 		}
-
-		claimed, err := l.stream.RunSession(ctx, conn, tlsConfig)
+		l.reportStreamReady()
+		claimed, err := func() (bool, error) {
+			defer l.reportStreamClosed()
+			return l.stream.RunSession(ctx, conn, tlsConfig)
+		}()
 		switch {
 		case err == nil:
 			retries = 0
@@ -632,6 +700,7 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 			}
 			continue
 		}
+		l.reportAvailable()
 
 		select {
 		case <-ctx.Done():
@@ -685,6 +754,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "raw")
 
+	_ = conn.SetDeadline(time.Now().Add(defaultHandshakeTimeout))
 	if writeErr := req.Write(conn); writeErr != nil {
 		_ = conn.Close()
 		return nil, writeErr
@@ -704,6 +774,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 		return nil, apiErr
 	}
 
+	_ = conn.SetDeadline(time.Time{})
 	return wrapBufferedConn(conn, reader), nil
 }
 

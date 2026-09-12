@@ -223,7 +223,7 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, true)
 
-	listener.mitmManager.logResult(MITMProbeReport{
+	listener.mitmManager.logResult(mitmProbeReport{
 		RelayURL: entryURL.String(),
 		Detected: true,
 		Reason:   types.MITMProbeReasonExporterMismatch,
@@ -259,7 +259,7 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
-	listener.mitmManager.logResult(MITMProbeReport{
+	listener.mitmManager.logResult(mitmProbeReport{
 		RelayURL: relayURL.String(),
 		Detected: true,
 		Reason:   types.MITMProbeReasonExporterMismatch,

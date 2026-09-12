@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -137,12 +138,14 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 		Thumbnail:   cfg.thumbnail,
 		Hide:        cfg.hide,
 	}
+	listenerIdentity, err := resolveDemoIdentity(cfg)
+	if err != nil {
+		return err
+	}
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
 		Discovery:       cfg.discovery,
-		Identity:        types.Identity{Name: cfg.name},
-		IdentityPath:    cfg.identityPath,
-		IdentityJSON:    cfg.identityJSON,
+		Identity:        listenerIdentity,
 		BanMITM:         cfg.banMITM,
 		MaxActiveRelays: cfg.maxActiveRelays,
 		Metadata:        metadata,
@@ -157,7 +160,7 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 		return fmt.Errorf("invalid --addr value %q: %w", rawAddr, err)
 	}
 	defer exposure.Close()
-	err = exposure.RunHTTP(ctx, newHandler(), cfg.addr)
+	err = sdk.RunHTTP(ctx, exposure, newHandler(), cfg.addr)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			err = nil
@@ -173,12 +176,14 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 }
 
 func runUDPDemo(ctx context.Context, cfg demoConfig) error {
+	listenerIdentity, err := resolveDemoIdentity(cfg)
+	if err != nil {
+		return err
+	}
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
 		Discovery:       cfg.discovery,
-		Identity:        types.Identity{Name: cfg.name},
-		IdentityPath:    cfg.identityPath,
-		IdentityJSON:    cfg.identityJSON,
+		Identity:        listenerIdentity,
 		UDPEnabled:      true,
 		BanMITM:         cfg.banMITM,
 		MaxActiveRelays: cfg.maxActiveRelays,
@@ -195,17 +200,17 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	}
 	defer exposure.Close()
 
-	udpAddrs, err := exposure.WaitDatagramReady(ctx)
+	udpRelays, err := exposure.WaitDatagramReady(ctx)
 	if err != nil {
 		return fmt.Errorf("wait for udp readiness: %w", err)
 	}
-	for _, udpAddr := range udpAddrs {
-		log.Info().Str("udp_addr", udpAddr).Msg("demo udp relay ready")
+	for _, relay := range udpRelays {
+		log.Info().Str("udp_addr", relay.UDPAddr).Str("relay_url", relay.RelayURL).Msg("demo udp relay ready")
 	}
 
 	go runUDPEchoLoop(ctx, exposure)
 
-	if err := exposure.RunHTTP(ctx, newUDPInfoHandler(exposure), ""); err != nil {
+	if err := sdk.RunHTTP(ctx, exposure, newUDPInfoHandler(exposure), ""); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			err = nil
 		}
@@ -217,6 +222,25 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	}
 	log.Info().Msg("demo udp shutdown complete")
 	return nil
+}
+
+func resolveDemoIdentity(cfg demoConfig) (types.Identity, error) {
+	listenerIdentity, created, err := identity.ResolveListenerIdentity(
+		types.Identity{Name: cfg.name},
+		cfg.addr,
+		cfg.identityPath,
+		cfg.identityJSON,
+	)
+	if err != nil {
+		return types.Identity{}, fmt.Errorf("resolve identity: %w", err)
+	}
+	if created {
+		log.Info().
+			Str("identity_path", cfg.identityPath).
+			Str("address", listenerIdentity.Address).
+			Msg("generated tunnel identity and saved it to disk")
+	}
+	return listenerIdentity, nil
 }
 
 func runUDPEchoLoop(ctx context.Context, exposure *sdk.Exposure) {

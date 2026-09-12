@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -226,15 +227,27 @@ func runExposeCommand(args []string) error {
 		}()
 	}
 
+	listenerIdentity, createdIdentity, err := identity.ResolveListenerIdentity(
+		types.Identity{Name: flags.name},
+		flags.targetAddr,
+		flags.identityPath,
+		flags.identityJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("resolve identity: %w", err)
+	}
+	if createdIdentity {
+		log.Info().
+			Str("identity_path", strings.TrimSpace(flags.identityPath)).
+			Str("address", listenerIdentity.Address).
+			Msg("generated tunnel identity and saved it to disk")
+	}
+
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(flags.relayCSV),
 		Discovery:       flags.discovery,
 		Overlay:         flags.overlay,
-		Identity:        types.Identity{Name: flags.name},
-		IdentityPath:    flags.identityPath,
-		IdentityJSON:    flags.identityJSON,
-		TargetAddr:      flags.targetAddr,
-		UDPAddr:         flags.udpAddr,
+		Identity:        listenerIdentity,
 		UDPEnabled:      flags.udp,
 		TCPEnabled:      flags.tcp,
 		ECH:             flags.ech,
@@ -247,21 +260,33 @@ func runExposeCommand(args []string) error {
 			Thumbnail:   flags.thumbnail,
 			Hide:        flags.hide,
 		},
-		X402PayTo:            flags.x402PayTo,
-		X402Testnet:          flags.x402Testnet,
-		X402Network:          flags.x402Network,
-		X402Asset:            flags.x402Asset,
-		X402Endpoints:        flags.x402Endpoints,
-		X402FacilitatorToken: flags.x402FacilitatorToken,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start relays: %w", err)
 	}
 	if len(httpRoutes) > 0 {
 		defer exposure.Close()
-		return exposure.RunHTTPRoutes(ctx, httpRoutes, "")
+		handler, err := sdk.NewHTTPRoutes(httpRoutes, types.X402Payment{
+			Testnet:          flags.x402Testnet,
+			Network:          flags.x402Network,
+			Asset:            flags.x402Asset,
+			PayTo:            flags.x402PayTo,
+			Endpoints:        append([]string(nil), flags.x402Endpoints...),
+			FacilitatorToken: flags.x402FacilitatorToken,
+		})
+		if err != nil {
+			return err
+		}
+		return sdk.RunHTTP(ctx, exposure, handler, "")
 	}
-	return sdk.ProxyExposure(ctx, exposure)
+	udpTarget := ""
+	if flags.udp {
+		udpTarget = utils.StringOrDefault(flags.udpAddr, flags.targetAddr)
+	}
+	return sdk.ProxyWithConfig(ctx, exposure, sdk.ProxyConfig{
+		TCPTarget: flags.targetAddr,
+		UDPTarget: udpTarget,
+	})
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {

@@ -14,27 +14,71 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func ProxyExposure(ctx context.Context, exposure *Exposure) error {
-	defer exposure.Close()
-	if len(exposure.ActiveRelayURLs()) == 0 {
-		return errors.New("no relay URLs provided")
+// ProxyConfig selects local TCP and UDP targets.
+type ProxyConfig struct {
+	TCPTarget string
+	UDPTarget string
+}
+
+// Proxy copies tenant streams to a local TCP target.
+func Proxy(ctx context.Context, exposure *Exposure, target string) error {
+	return ProxyWithConfig(ctx, exposure, ProxyConfig{TCPTarget: target})
+}
+
+// ProxyUDP copies relayed datagrams to a local UDP target.
+func ProxyUDP(ctx context.Context, exposure *Exposure, target string) error {
+	return ProxyWithConfig(ctx, exposure, ProxyConfig{UDPTarget: target})
+}
+
+// ProxyWithConfig is the sole stream and datagram consumer and closes the
+// exposure when proxying stops.
+func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig) error {
+	if exposure == nil {
+		return errors.New("portal sdk: exposure is nil")
+	}
+	if ctx == nil {
+		return errors.New("portal sdk: context is nil")
 	}
 
-	cfg := exposure.Config()
+	var err error
+	if config.TCPTarget != "" {
+		config.TCPTarget, err = utils.NormalizeLoopbackTarget(config.TCPTarget)
+		if err != nil {
+			return err
+		}
+	}
+	if config.UDPTarget != "" {
+		config.UDPTarget, err = utils.NormalizeLoopbackTarget(config.UDPTarget)
+		if err != nil {
+			return err
+		}
+	}
+	workerCount := 0
+	if config.TCPTarget != "" {
+		workerCount++
+	}
+	if config.UDPTarget != "" {
+		workerCount++
+	}
+	if workerCount == 0 {
+		return errors.New("portal sdk: at least one proxy target is required")
+	}
+
+	cfg := exposure.config()
 	identity := cfg.Identity
-	tcpTarget := cfg.TargetAddr
-	udpTarget := cfg.UDPAddr
-	udpEnabled := udpTarget != ""
+	tcpTarget := config.TCPTarget
+	udpTarget := config.UDPTarget
 
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("tcp_target", tcpTarget).
 		Str("service_name", identity.Name).
-		Strs("relays", exposure.ActiveRelayURLs()).
+		Strs("relays", exposure.activeRelayURLs()).
 		Msg("starting portal tunnel; public URLs will be logged as relays become ready")
-	if udpEnabled {
+	if udpTarget != "" {
 		log.Info().
 			Str("udp_target", udpTarget).
 			Str("service_name", identity.Name).
@@ -43,42 +87,30 @@ func ProxyExposure(ctx context.Context, exposure *Exposure) error {
 
 	var connWG sync.WaitGroup
 	var connCount atomic.Int64
-	var udpErrCh chan error
-
-	if udpEnabled {
-		udpErrCh = make(chan error, 1)
-		go func() {
-			if err := runUDPProxy(ctx, exposure, udpTarget); err != nil && ctx.Err() == nil {
-				udpErrCh <- err
-				_ = exposure.Close()
-			}
-		}()
+	proxyCtx, cancel := context.WithCancel(ctx)
+	results := make(chan error, workerCount)
+	if tcpTarget != "" {
+		go func() { results <- proxyRelayConnections(proxyCtx, exposure, tcpTarget, &connWG, &connCount) }()
+	}
+	if udpTarget != "" {
+		go func() { results <- runUDPProxy(proxyCtx, exposure, udpTarget) }()
 	}
 
-	go func() {
-		<-ctx.Done()
-		_ = exposure.Close()
-	}()
-
-	waitErr := proxyRelayConnections(ctx, exposure, tcpTarget, &connWG, &connCount)
-	if waitErr != nil {
-		_ = exposure.Close()
+	var primary error
+	received := 0
+	select {
+	case <-ctx.Done():
+	case primary = <-results:
+		received = 1
 	}
-
-	var udpErr error
-	if udpErrCh != nil {
-		select {
-		case udpErr = <-udpErrCh:
-		default:
-		}
-	}
-
+	cancel()
 	closeErr := exposure.Close()
-	if waitErr != nil {
-		log.Error().Err(waitErr).Msg("relay supervisor exited with error")
-	}
-	if udpErr != nil {
-		log.Error().Err(udpErr).Msg("udp proxy exited with error")
+	for received < workerCount {
+		workerErr := <-results
+		received++
+		if primary == nil && workerErr != nil && !errors.Is(workerErr, context.Canceled) && !errors.Is(workerErr, net.ErrClosed) {
+			primary = workerErr
+		}
 	}
 	if closeErr != nil {
 		log.Warn().Err(closeErr).Msg("relay shutdown completed with cleanup errors")
@@ -101,7 +133,11 @@ func ProxyExposure(ctx context.Context, exposure *Exposure) error {
 	}
 
 	log.Info().Msg("tunnel shutdown complete")
-	return errors.Join(waitErr, udpErr, closeErr)
+	if ctx.Err() != nil {
+		primary = nil
+		closeErr = nil
+	}
+	return errors.Join(primary, closeErr)
 }
 
 func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {
@@ -109,12 +145,17 @@ func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr st
 		relayConn, err := exposure.Accept()
 		if err != nil {
 			switch {
+			case errors.Is(err, ErrNoRelays):
+				return err
 			case errors.Is(err, context.Canceled):
-				return nil
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
 			case ctx.Err() != nil:
 				return ctx.Err()
 			case errors.Is(err, net.ErrClosed):
-				return errors.New("all relay listeners stopped")
+				return net.ErrClosed
 			default:
 				return err
 			}
@@ -220,23 +261,24 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 // runUDPProxy waits for the exposure datagram plane and proxies it to the
 // configured local UDP target.
 func runUDPProxy(ctx context.Context, exposure *Exposure, udpTarget string) error {
-	udpAddrs, err := exposure.WaitDatagramReady(ctx)
+	udpRelays, err := exposure.WaitDatagramReady(ctx)
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			return ctx.Err()
 		}
 		return fmt.Errorf("wait for udp readiness: %w", err)
 	}
-	if len(udpAddrs) == 0 {
+	if len(udpRelays) == 0 {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		return errors.New("relay did not expose any UDP listeners")
 	}
 
-	for _, udpAddr := range udpAddrs {
+	for _, relay := range udpRelays {
 		log.Info().
-			Str("udp_addr", udpAddr).
+			Str("udp_addr", relay.UDPAddr).
+			Str("relay_url", relay.RelayURL).
 			Msg("UDP tunnel ready")
 	}
 

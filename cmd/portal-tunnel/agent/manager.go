@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -604,22 +605,35 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 		status.Relays = append([]types.AgentRelayStatus(nil), runtime.Relays...)
 		return status
 	}
-	snapshot := exposure.Snapshot()
+	relays := agentRelayStatuses(exposure.Relays())
 	t.mu.Lock()
 	if t.exposure == exposure {
-		t.runtime = types.AgentTunnelStatus{
-			Address:         snapshot.Address,
-			TargetAddr:      snapshot.TargetAddr,
-			MaxActiveRelays: snapshot.MaxActiveRelays,
-			Relays:          append([]types.AgentRelayStatus(nil), snapshot.Relays...),
-		}
+		t.runtime.Relays = append([]types.AgentRelayStatus(nil), relays...)
 	}
+	runtime = t.runtime
 	t.mu.Unlock()
 
-	status.Address = snapshot.Address
-	status.TargetAddr = snapshot.TargetAddr
-	status.Relays = append([]types.AgentRelayStatus(nil), snapshot.Relays...)
+	status.Address = runtime.Address
+	status.Relays = relays
 	return status
+}
+
+func agentRelayStatuses(relays []sdk.RelayStatus) []types.AgentRelayStatus {
+	statuses := make([]types.AgentRelayStatus, 0, len(relays))
+	for _, relay := range relays {
+		statuses = append(statuses, types.AgentRelayStatus{
+			RelayURL:    relay.RelayURL,
+			PublicURL:   relay.PublicURL,
+			Version:     relay.Version,
+			Explicit:    relay.Explicit,
+			Connecting:  relay.State == sdk.RelayConnecting,
+			Bootstrap:   relay.Bootstrap,
+			Banned:      relay.Banned,
+			SupportsUDP: relay.SupportsUDP,
+			SupportsTCP: relay.SupportsTCP,
+		})
+	}
+	return statuses
 }
 
 func (t *managedTunnel) runLoop(ctx context.Context) {
@@ -661,39 +675,43 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	}
 	x402FacilitatorToken := strings.TrimSpace(cfg.X402FacilitatorToken)
 	x402FacilitatorToken = cmp.Or(x402FacilitatorToken, strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
+	listenerIdentity, createdIdentity, err := identity.ResolveListenerIdentity(
+		types.Identity{Name: cfg.Name},
+		cfg.TargetAddr,
+		cfg.IdentityPath,
+		cfg.IdentityJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("resolve identity: %w", err)
+	}
+	if createdIdentity {
+		log.Info().
+			Str("identity_path", strings.TrimSpace(cfg.IdentityPath)).
+			Str("address", listenerIdentity.Address).
+			Msg("generated tunnel identity and saved it to disk")
+	}
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:            append([]string(nil), cfg.RelayURLs...),
-		Discovery:            discovery,
-		Overlay:              cfg.Overlay,
-		Identity:             types.Identity{Name: cfg.Name},
-		IdentityPath:         cfg.IdentityPath,
-		IdentityJSON:         cfg.IdentityJSON,
-		TargetAddr:           cfg.TargetAddr,
-		UDPAddr:              cfg.UDPAddr,
-		UDPEnabled:           cfg.UDPEnabled,
-		TCPEnabled:           cfg.TCPEnabled,
-		ECH:                  cfg.ECH,
-		BanMITM:              banMITM,
-		MaxActiveRelays:      cfg.MaxActiveRelays,
-		Metadata:             metadataFromTunnelConfig(cfg),
-		X402PayTo:            cfg.X402PayTo,
-		X402Testnet:          cfg.X402Testnet,
-		X402Network:          cfg.X402Network,
-		X402Asset:            cfg.X402Asset,
-		X402Endpoints:        append([]string(nil), cfg.X402Endpoints...),
-		X402FacilitatorToken: x402FacilitatorToken,
+		RelayURLs:       append([]string(nil), cfg.RelayURLs...),
+		Discovery:       discovery,
+		Overlay:         cfg.Overlay,
+		Identity:        listenerIdentity,
+		UDPEnabled:      cfg.UDPEnabled,
+		TCPEnabled:      cfg.TCPEnabled,
+		ECH:             cfg.ECH,
+		BanMITM:         banMITM,
+		MaxActiveRelays: cfg.MaxActiveRelays,
+		Metadata:        metadataFromTunnelConfig(cfg),
 	})
 	if err != nil {
 		return err
 	}
-	snapshot := exposure.Snapshot()
 	t.mu.Lock()
 	t.exposure = exposure
 	t.runtime = types.AgentTunnelStatus{
-		Address:         snapshot.Address,
-		TargetAddr:      snapshot.TargetAddr,
-		MaxActiveRelays: snapshot.MaxActiveRelays,
-		Relays:          append([]types.AgentRelayStatus(nil), snapshot.Relays...),
+		Address:         listenerIdentity.Address,
+		TargetAddr:      cfg.TargetAddr,
+		MaxActiveRelays: cfg.MaxActiveRelays,
+		Relays:          agentRelayStatuses(exposure.Relays()),
 	}
 	t.lastError = ""
 	t.mu.Unlock()
@@ -710,9 +728,27 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 				Amount:   route.Amount,
 			})
 		}
-		err = exposure.RunHTTPRoutes(ctx, routes, "")
+		handler, routeErr := sdk.NewHTTPRoutes(routes, types.X402Payment{
+			Testnet:          cfg.X402Testnet,
+			Network:          cfg.X402Network,
+			Asset:            cfg.X402Asset,
+			PayTo:            cfg.X402PayTo,
+			Endpoints:        append([]string(nil), cfg.X402Endpoints...),
+			FacilitatorToken: x402FacilitatorToken,
+		})
+		if routeErr != nil {
+			return routeErr
+		}
+		err = sdk.RunHTTP(ctx, exposure, handler, "")
 	} else {
-		err = sdk.ProxyExposure(ctx, exposure)
+		udpTarget := ""
+		if cfg.UDPEnabled {
+			udpTarget = utils.StringOrDefault(cfg.UDPAddr, cfg.TargetAddr)
+		}
+		err = sdk.ProxyWithConfig(ctx, exposure, sdk.ProxyConfig{
+			TCPTarget: cfg.TargetAddr,
+			UDPTarget: udpTarget,
+		})
 	}
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return ctx.Err()

@@ -32,7 +32,7 @@ const (
 	defaultMITMProbeTimeout  = 30 * time.Second
 )
 
-type MITMProbeReport struct {
+type mitmProbeReport struct {
 	RelayURL    string
 	PublicURL   string
 	Address     string
@@ -74,26 +74,26 @@ func (m *mitmManager) reset() {
 	m.mu.Unlock()
 }
 
-func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport, error) {
+func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport, error) {
 	l := m.listener
 	if l == nil || l.relayURL == nil {
-		return MITMProbeReport{}, errors.New("listener is not ready")
+		return mitmProbeReport{}, errors.New("listener is not ready")
 	}
 
 	lease, ok := l.leaseSnapshot()
 	if !ok {
-		return MITMProbeReport{}, errors.New("listener is not registered")
+		return mitmProbeReport{}, errors.New("listener is not registered")
 	}
 	if lease.hostname == "" {
-		return MITMProbeReport{}, errors.New("listener hostname is unavailable")
+		return mitmProbeReport{}, errors.New("listener hostname is unavailable")
 	}
 
 	publicURL := l.publicURLForLease(lease)
 	if publicURL == "" {
-		return MITMProbeReport{}, errors.New("listener is not registered")
+		return mitmProbeReport{}, errors.New("listener is not registered")
 	}
 
-	report := MITMProbeReport{
+	report := mitmProbeReport{
 		RelayURL:  l.route.RelayURL,
 		PublicURL: publicURL,
 		Address:   l.identity.Address,
@@ -225,7 +225,7 @@ func (m *mitmManager) maybeStart() {
 	}()
 }
 
-func (m *mitmManager) logResult(report MITMProbeReport, err error) {
+func (m *mitmManager) logResult(report mitmProbeReport, err error) {
 	l := m.listener
 	if l == nil {
 		return

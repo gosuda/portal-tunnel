@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -150,12 +151,25 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 		return err
 	}
 
+	listenerIdentity, createdIdentity, err := identity.ResolveListenerIdentity(
+		types.Identity{Name: cfg.name},
+		cfg.addr,
+		cfg.identityPath,
+		cfg.identityJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("resolve identity: %w", err)
+	}
+	if createdIdentity {
+		log.Info().
+			Str("identity_path", strings.TrimSpace(cfg.identityPath)).
+			Str("address", listenerIdentity.Address).
+			Msg("generated tunnel identity and saved it to disk")
+	}
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
 		Discovery:       cfg.discovery,
-		Identity:        types.Identity{Name: cfg.name},
-		IdentityPath:    cfg.identityPath,
-		IdentityJSON:    cfg.identityJSON,
+		Identity:        listenerIdentity,
 		BanMITM:         cfg.banMITM,
 		MaxActiveRelays: cfg.maxActiveRelays,
 		Metadata:        metadata,
@@ -165,7 +179,7 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	}
 	defer exposure.Close()
 
-	err = exposure.RunHTTP(ctx, handler, addr)
+	err = sdk.RunHTTP(ctx, exposure, handler, addr)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			err = nil
