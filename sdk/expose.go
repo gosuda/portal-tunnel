@@ -550,10 +550,7 @@ func (e *Exposure) readyRelays(datagram bool) ([]RelayStatus, <-chan struct{}) {
 	e.mu.RLock()
 	ready := make([]RelayStatus, 0, len(e.statuses))
 	for _, status := range e.statuses {
-		if datagram && status.UDPAddr == "" || !datagram && status.State != RelayReady {
-			continue
-		}
-		if status.State == RelayFailed {
+		if !relayReady(status, datagram) {
 			continue
 		}
 		ready = append(ready, status)
@@ -564,6 +561,16 @@ func (e *Exposure) readyRelays(datagram bool) ([]RelayStatus, <-chan struct{}) {
 		return strings.Compare(a.RelayURL, b.RelayURL)
 	})
 	return ready, changed
+}
+
+func relayReady(status RelayStatus, datagram bool) bool {
+	if status.State == RelayFailed {
+		return false
+	}
+	if datagram {
+		return status.UDPAddr != ""
+	}
+	return status.State == RelayReady
 }
 
 // Updates reports relay lifecycle changes. Relays is the authoritative
