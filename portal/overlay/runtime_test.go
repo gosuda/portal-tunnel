@@ -18,7 +18,7 @@ import (
 	"gosuda.org/ivnp/foundation"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -36,15 +36,12 @@ func (e endpointStub) DialContext(ctx context.Context, network, address string) 
 
 func testAuthority(t *testing.T, name string) identity.Authority {
 	t.Helper()
-	relay, err := identity.LoadOrCreateRelayIdentity(t.TempDir(), name+".example")
+	generated, err := identity.Generate("relay")
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := identity.NewLocalAuthority(relay.Identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return authority
+	generated.Name = name
+	return identity.NewLocalAuthority(generated)
 }
 
 func testDestination(seed string) string {

@@ -89,10 +89,6 @@ func issueIdentityToken(authority Authority, issuer string, leaseIdentity types.
 	if leaseID == "" {
 		return "", LeaseAccessTokenClaims{}, errors.New("lease id is required")
 	}
-	normalizedIdentity, err := NormalizeIdentity(leaseIdentity)
-	if err != nil {
-		return "", LeaseAccessTokenClaims{}, err
-	}
 
 	signer, err := jose.NewSigner(jose.SigningKey{
 		Algorithm: leaseTokenAlgorithm,
@@ -112,17 +108,16 @@ func issueIdentityToken(authority Authority, issuer string, leaseIdentity types.
 	claims := LeaseAccessTokenClaims{
 		Claims: jwt.Claims{
 			Issuer:    strings.TrimSpace(issuer),
-			Subject:   normalizedIdentity.Key(),
+			Subject:   leaseIdentity.Key(),
 			Audience:  jwt.Audience{audience},
 			ID:        utils.RandomID("tok_"),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 			Expiry:    jwt.NewNumericDate(expiresAt),
 		},
-		Identity: normalizedIdentity,
+		Identity: leaseIdentity,
 		LeaseID:  leaseID,
 	}
-
 	token, err := jwt.Signed(signer).Claims(claims).Serialize()
 	if err != nil {
 		return "", LeaseAccessTokenClaims{}, err
@@ -154,14 +149,6 @@ func verifyIdentityToken(token, publicKeyHex, issuer, audience string, now time.
 	if err := parsed.Claims(&es256kOpaqueVerifier{publicKey: publicKey}, &claims); err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
-	normalizedClaimsIdentity, err := NormalizeIdentity(claims.Identity)
-	if err != nil {
-		return LeaseAccessTokenClaims{}, err
-	}
-	if normalizedClaimsIdentity.Key() != claims.Subject {
-		return LeaseAccessTokenClaims{}, errors.New("token identity does not match subject")
-	}
-	claims.Identity = normalizedClaimsIdentity
 	claims.LeaseID = strings.TrimSpace(claims.LeaseID)
 	if claims.LeaseID == "" {
 		return LeaseAccessTokenClaims{}, errors.New("lease id is required")

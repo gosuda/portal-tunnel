@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/internal/transport"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -17,14 +17,11 @@ import (
 
 func newTestRegistry(t *testing.T) *leaseRegistry {
 	t.Helper()
-	relay, err := identity.LoadOrCreateRelayIdentity(t.TempDir(), "example.com")
+	relay, err := LoadOrCreateRelayIdentity(t.TempDir(), "example.com")
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
-	relayAuthority, err := identity.NewLocalAuthority(relay.Identity)
-	if err != nil {
-		t.Fatalf("identity.NewLocalAuthority() error = %v", err)
-	}
+	relayAuthority := identity.NewLocalAuthority(relay.Identity)
 	registry, err := newLeaseRegistry(false, false, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com", false, "")
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)

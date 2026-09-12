@@ -7,13 +7,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -58,7 +60,7 @@ func registerConnectivityFlags(fs *flag.FlagSet, cfg *demoConfig, defaultRelays 
 	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", true, "include bootstrap relays and enable discovery", "DISCOVERY")
 	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
+	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
 	utils.IntFlagEnv(fs, &cfg.maxActiveRelays, "max-active-relays", 3, nil, "maximum number of auto-selected relays to keep connected; explicit --relays are always included", "MAX_ACTIVE_RELAYS")
 	utils.StringFlag(fs, &cfg.owner, "owner", "PortalApp Developer", "lease owner")
 }
@@ -224,23 +226,51 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	return nil
 }
 
+// resolveDemoIdentity parses an inline identity or existing file. It generates
+// and persists an identity only when neither source exists.
 func resolveDemoIdentity(cfg demoConfig) (types.Identity, error) {
-	listenerIdentity, created, err := identity.ResolveListenerIdentity(
-		types.Identity{Name: cfg.name},
-		cfg.addr,
-		cfg.identityPath,
-		cfg.identityJSON,
-	)
+	if raw := strings.TrimSpace(cfg.identityJSON); raw != "" {
+		return identity.Parse([]byte(raw))
+	}
+	path := strings.TrimSpace(cfg.identityPath)
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return identity.Parse(data)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
+		}
+	}
+	name, err := demoName(cfg.name, cfg.addr)
 	if err != nil {
-		return types.Identity{}, fmt.Errorf("resolve identity: %w", err)
+		return types.Identity{}, err
 	}
-	if created {
-		log.Info().
-			Str("identity_path", cfg.identityPath).
-			Str("address", listenerIdentity.Address).
-			Msg("generated tunnel identity and saved it to disk")
+	generated, err := identity.Generate(name)
+	if err != nil {
+		return types.Identity{}, err
 	}
-	return listenerIdentity, nil
+	if path == "" {
+		return generated, nil
+	}
+	data, err := identity.Marshal(generated)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	if err := utils.EnsureParentDir(path); err != nil {
+		return types.Identity{}, err
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return types.Identity{}, fmt.Errorf("write identity file: %w", err)
+	}
+	return generated, nil
+}
+
+func demoName(name, target string) (string, error) {
+	if name = strings.TrimSpace(name); name != "" {
+		return name, nil
+	}
+	return utils.DefaultExposeName(target, utils.RandomID("demo_"))
 }
 
 func runUDPEchoLoop(ctx context.Context, exposure *sdk.Exposure) {

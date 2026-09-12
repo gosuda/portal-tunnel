@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // SignRelayDescriptor returns a copy of desc with its Signature field
@@ -92,4 +94,58 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 	}
 	normalized.Signature = rawSignature
 	return normalized, nil
+}
+
+// NormalizeRelayDescriptor validates and canonicalizes a relay descriptor:
+// trims fields, defaults the version, normalizes the API address and the
+// signer address, and rejects inconsistent or incomplete entries.
+func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
+	desc.Address = strings.TrimSpace(desc.Address)
+	desc.Version = strings.TrimSpace(desc.Version)
+	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
+	if desc.Version == "" {
+		desc.Version = types.DiscoveryVersion
+	}
+	if !desc.IssuedAt.IsZero() {
+		desc.IssuedAt = desc.IssuedAt.UTC()
+	}
+	if !desc.ExpiresAt.IsZero() {
+		desc.ExpiresAt = desc.ExpiresAt.UTC()
+	}
+
+	if desc.APIHTTPSAddr != "" {
+		normalized, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr)
+		if err != nil {
+			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
+		}
+		desc.APIHTTPSAddr = normalized
+	}
+	if desc.Address != "" {
+		normalized, err := NormalizeEVMAddress(desc.Address)
+		if err != nil {
+			return types.RelayDescriptor{}, fmt.Errorf("normalize address: %w", err)
+		}
+		desc.Address = normalized
+	}
+	if desc.ActiveConnections < 0 {
+		return types.RelayDescriptor{}, errors.New("active_connections is invalid")
+	}
+	if desc.TCPBPS < 0 || math.IsNaN(desc.TCPBPS) || math.IsInf(desc.TCPBPS, 0) {
+		return types.RelayDescriptor{}, errors.New("tcp_bps is invalid")
+	}
+
+	switch {
+	case desc.Address == "":
+		return types.RelayDescriptor{}, errors.New("address is required")
+	case desc.Version != types.DiscoveryVersion:
+		return types.RelayDescriptor{}, fmt.Errorf("unsupported relay descriptor version %q", desc.Version)
+	case desc.APIHTTPSAddr == "":
+		return types.RelayDescriptor{}, errors.New("api_https_addr is required")
+	case desc.ExpiresAt.IsZero():
+		return types.RelayDescriptor{}, errors.New("expires_at is required")
+	case desc.IssuedAt.After(desc.ExpiresAt):
+		return types.RelayDescriptor{}, errors.New("issued_at must be before expires_at")
+	}
+
+	return desc, nil
 }

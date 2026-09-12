@@ -20,7 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
-	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -86,7 +86,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.BoolFlagEnv(fs, &flags.overlay, "overlay", false, "Prefer IVNP overlay transport when available", "OVERLAY_ENABLED")
 	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &flags.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
+	utils.StringFlagEnv(fs, &flags.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
 	utils.StringFlag(fs, &flags.name, "name", "", "Public hostname prefix (single DNS label); auto-generated when omitted")
 	utils.StringFlag(fs, &flags.desc, "description", "", "Service description metadata")
 	utils.StringFlag(fs, &flags.tags, "tags", "", "Service tags metadata (comma-separated)")
@@ -227,20 +227,9 @@ func runExposeCommand(args []string) error {
 		}()
 	}
 
-	listenerIdentity, createdIdentity, err := identity.ResolveListenerIdentity(
-		types.Identity{Name: flags.name},
-		flags.targetAddr,
-		flags.identityPath,
-		flags.identityJSON,
-	)
+	listenerIdentity, err := identity.LoadOrCreate(flags.name, flags.targetAddr, flags.identityPath, flags.identityJSON)
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
-	}
-	if createdIdentity {
-		log.Info().
-			Str("identity_path", strings.TrimSpace(flags.identityPath)).
-			Str("address", listenerIdentity.Address).
-			Msg("generated tunnel identity and saved it to disk")
 	}
 
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{

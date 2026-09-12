@@ -22,10 +22,10 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/internal/transport"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -110,7 +110,7 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		return ServerConfig{}, errors.New("relay overlay requires discovery")
 	}
 	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
-	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
+	cfg.IdentityPath = ResolveRelayStateDir(cfg.IdentityPath)
 	if cfg.IdentityPath == "" {
 		return ServerConfig{}, errors.New("identity path is required")
 	}
@@ -207,14 +207,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 
-	relayIdentity, err := identity.LoadOrCreateRelayIdentity(cfg.IdentityPath, utils.PortalRootHost(cfg.PortalURL))
+	relayIdentity, err := LoadOrCreateRelayIdentity(cfg.IdentityPath, utils.PortalRootHost(cfg.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
-	relayAuthority, err := identity.NewLocalAuthority(relayIdentity.Identity)
-	if err != nil {
-		return nil, fmt.Errorf("load relay authority: %w", err)
-	}
+	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
 	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, cfg.SNIPort, relayAuthority, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return nil, err

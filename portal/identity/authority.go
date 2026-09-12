@@ -1,8 +1,6 @@
 package identity
 
 import (
-	"errors"
-
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -16,21 +14,10 @@ type LocalAuthority struct {
 	identity types.Identity
 }
 
-func NewLocalAuthority(raw types.Identity) (LocalAuthority, error) {
-	normalized, err := normalizeStoredIdentity(raw)
-	if err != nil {
-		return LocalAuthority{}, err
-	}
-	if normalized.PrivateKey == "" {
-		return LocalAuthority{}, errors.New("authority private key is required")
-	}
-	if normalized.PublicKey == "" {
-		return LocalAuthority{}, errors.New("authority public key is required")
-	}
-	if normalized.Address == "" {
-		return LocalAuthority{}, errors.New("authority address is required")
-	}
-	return LocalAuthority{identity: normalized}, nil
+// NewLocalAuthority wraps a resolved identity for signing. The identity must
+// already be valid; it is not re-derived here.
+func NewLocalAuthority(raw types.Identity) LocalAuthority {
+	return LocalAuthority{identity: raw}
 }
 
 func (a LocalAuthority) Identity() types.Identity {

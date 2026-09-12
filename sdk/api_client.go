@@ -14,7 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -138,10 +138,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		return types.RegisterResponse{}, "", "", err
 	}
 
-	authority, err := identity.NewLocalAuthority(l.identity)
-	if err != nil {
-		return types.RegisterResponse{}, "", "", err
-	}
+	authority := identity.NewLocalAuthority(l.identity)
 	signature, err := authority.SignEthereumPersonalMessage(challenge.SIWEMessage)
 	if err != nil {
 		return types.RegisterResponse{}, "", "", err
@@ -156,12 +153,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	}, nil, &resp); err != nil {
 		return types.RegisterResponse{}, "", "", err
 	}
-	registeredIdentity, err := identity.NormalizeIdentity(resp.Identity)
-	if err != nil {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		return types.RegisterResponse{}, "", "", err
-	}
-	if registeredIdentity.Key() != l.identity.Key() {
+	if resp.Identity.Key() != l.identity.Key() {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, "", "", errors.New("relay returned mismatched lease identity")
 	}

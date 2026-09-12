@@ -154,7 +154,7 @@ Common `portal expose` flags:
 --ban-mitm           Ban relay when the MITM self-probe detects termination
 --ech                Enable ECH hostname privacy for TLS stream tunnels (disabled by default)
 --identity-path      Identity JSON file path; created automatically when missing
---identity-json      Identity JSON payload; overrides --identity-path when set
+--identity-json      Identity JSON payload kept in memory; takes precedence over --identity-path
 --description        Service description metadata
 --tags               Service tags metadata, comma-separated
 --thumbnail          Service thumbnail URL metadata
