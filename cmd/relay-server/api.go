@@ -55,7 +55,7 @@ func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir st
 	if runtime == nil {
 		return nil, errors.New("relay api requires policy runtime")
 	}
-	policyStatePath := identity.ResolveRelayPolicyPath(identityPath)
+	policyStatePath := portal.ResolveRelayPolicyPath(identityPath)
 	if policyStatePath == "" {
 		return nil, errors.New("relay api requires identity path")
 	}

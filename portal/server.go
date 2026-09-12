@@ -110,7 +110,7 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		return ServerConfig{}, errors.New("relay overlay requires discovery")
 	}
 	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
-	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
+	cfg.IdentityPath = ResolveRelayStateDir(cfg.IdentityPath)
 	if cfg.IdentityPath == "" {
 		return ServerConfig{}, errors.New("identity path is required")
 	}
@@ -207,7 +207,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 
-	relayIdentity, err := identity.LoadOrCreateRelayIdentity(cfg.IdentityPath, utils.PortalRootHost(cfg.PortalURL))
+	relayIdentity, err := LoadOrCreateRelayIdentity(cfg.IdentityPath, utils.PortalRootHost(cfg.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}

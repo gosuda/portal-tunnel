@@ -36,11 +36,12 @@ func (e endpointStub) DialContext(ctx context.Context, network, address string) 
 
 func testAuthority(t *testing.T, name string) identity.Authority {
 	t.Helper()
-	relay, err := identity.LoadOrCreateRelayIdentity(t.TempDir(), name+".example")
+	generated, err := identity.Generate("relay")
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := identity.NewLocalAuthority(relay.Identity)
+	generated.Name = name
+	authority, err := identity.NewLocalAuthority(generated)
 	if err != nil {
 		t.Fatal(err)
 	}

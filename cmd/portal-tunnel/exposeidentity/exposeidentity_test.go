@@ -19,20 +19,13 @@ func mustGenerate(t *testing.T, name string) types.Identity {
 	return generated
 }
 
-func mustMarshal(t *testing.T, id types.Identity) string {
+func mustMarshal(t *testing.T, id types.Identity) []byte {
 	t.Helper()
 	data, err := identity.Marshal(id)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	return string(data)
-}
-
-func mustWrite(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	return data
 }
 
 func mustResolve(t *testing.T, name, target, path, rawJSON string) types.Identity {
@@ -54,64 +47,55 @@ func TestResolveCreatesPersistsAndReloads(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("identity file not written: %v", err)
 	}
-	if reloaded := mustResolve(t, "", "", path, ""); reloaded.PrivateKey != created.PrivateKey {
-		t.Fatal("reloaded private key mismatch")
+	if reloaded := mustResolve(t, "ignored", "", path, ""); reloaded.PrivateKey != created.PrivateKey || reloaded.Name != created.Name {
+		t.Fatalf("reloaded identity mismatch: %+v", reloaded)
 	}
 }
 
-func TestResolveJSONTakesPrecedenceAndPersists(t *testing.T) {
+func TestResolveJSONTakesPrecedenceWithoutPersistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
 	mustResolve(t, "stored-name", "", path, "")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read original identity: %v", err)
+	}
 
 	fresh := mustGenerate(t, "json-name")
-	if resolved := mustResolve(t, "", "", path, mustMarshal(t, fresh)); resolved.PrivateKey != fresh.PrivateKey {
+	if resolved := mustResolve(t, "ignored", "", path, string(mustMarshal(t, fresh))); resolved.PrivateKey != fresh.PrivateKey {
 		t.Fatal("json identity not used")
 	}
 
-	persisted, err := os.ReadFile(path)
+	current, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read persisted file: %v", err)
+		t.Fatalf("read identity after json resolve: %v", err)
 	}
-	var decoded struct {
-		PrivateKey string `json:"private_key"`
-	}
-	if err := json.Unmarshal(persisted, &decoded); err != nil {
-		t.Fatalf("decode persisted file: %v", err)
-	}
-	if decoded.PrivateKey != fresh.PrivateKey {
-		t.Fatal("json identity not persisted over the stored file")
+	if string(current) != string(original) {
+		t.Fatal("in-memory json identity changed the configured file")
 	}
 }
 
 func TestResolveWithoutPathStaysEphemeral(t *testing.T) {
-	if resolved := mustResolve(t, "", "127.0.0.1:9999", "", ""); resolved.Name == "" || resolved.PrivateKey == "" {
+	resolved := mustResolve(t, "", "127.0.0.1:9999", "", "")
+	if resolved.Name == "" || resolved.PrivateKey == "" {
 		t.Fatalf("generated identity incomplete: %+v", resolved)
 	}
-	fresh := mustGenerate(t, "json-name")
-	if resolved := mustResolve(t, "", "", "", mustMarshal(t, fresh)); resolved.PrivateKey != fresh.PrivateKey {
-		t.Fatal("json identity not used")
-	}
 }
 
-func TestResolveNameOverridePersists(t *testing.T) {
+func TestResolveNameOnlyAppliesWhenGenerating(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
-	first := mustResolve(t, "old-name", "", path, "")
+	first := mustResolve(t, "stored-name", "", path, "")
 
-	renamed := mustResolve(t, "new-name", "", path, "")
-	if renamed.Name != "new-name" || renamed.PrivateKey != first.PrivateKey {
-		t.Fatalf("rename mismatch: %+v", renamed)
-	}
-	if reloaded := mustResolve(t, "", "", path, ""); reloaded.Name != "new-name" {
-		t.Fatalf("renamed identity not persisted: %+v", reloaded)
+	reloaded := mustResolve(t, "new-name", "", path, "")
+	if reloaded.Name != first.Name || reloaded.PrivateKey != first.PrivateKey {
+		t.Fatalf("existing identity changed: %+v", reloaded)
 	}
 }
 
-func TestResolveNameOverrideFixesInvalidStoredName(t *testing.T) {
+func TestResolveRejectsInvalidExistingName(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
 	generated := mustGenerate(t, "valid")
-
 	var payload map[string]any
-	if err := json.Unmarshal([]byte(mustMarshal(t, generated)), &payload); err != nil {
+	if err := json.Unmarshal(mustMarshal(t, generated), &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	payload["name"] = ""
@@ -119,17 +103,20 @@ func TestResolveNameOverrideFixesInvalidStoredName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	mustWrite(t, path, string(raw))
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write identity: %v", err)
+	}
 
-	resolved := mustResolve(t, "replacement", "", path, "")
-	if resolved.Name != "replacement" || resolved.PrivateKey != generated.PrivateKey {
-		t.Fatalf("override mismatch: %+v", resolved)
+	if _, err := Resolve("replacement", "", path, ""); err == nil {
+		t.Fatal("invalid existing identity was silently changed")
 	}
 }
 
 func TestResolveRejectsKeylessFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
-	mustWrite(t, path, `{"name":"foo"}`)
+	if err := os.WriteFile(path, []byte(`{"name":"foo"}`), 0o600); err != nil {
+		t.Fatalf("write identity: %v", err)
+	}
 	if _, err := Resolve("", "", path, ""); err == nil {
 		t.Fatal("keyless identity file must fail instead of generating a key")
 	}

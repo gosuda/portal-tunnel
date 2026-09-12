@@ -1,8 +1,6 @@
 package identity
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -80,51 +78,4 @@ func TestGenerateMarshalParseRoundTrip(t *testing.T) {
 	if parsed != generated {
 		t.Fatalf("round trip mismatch:\n parsed   %+v\ngenerated %+v", parsed, generated)
 	}
-}
-
-func assertRelayReload(t *testing.T, dir string, want types.RelayIdentity) {
-	t.Helper()
-	reloaded, err := LoadOrCreateRelayIdentity(dir, want.Name)
-	if err != nil {
-		t.Fatalf("reload relay identity: %v", err)
-	}
-	if reloaded.PrivateKey != want.PrivateKey || reloaded.EncryptedClientHelloSeed != want.EncryptedClientHelloSeed {
-		t.Fatalf("reloaded mismatch:\n reloaded %+v\n created %+v", reloaded, want)
-	}
-}
-
-func TestLoadOrCreateRelayIdentityCreatesAndReloads(t *testing.T) {
-	dir := t.TempDir()
-
-	created, err := LoadOrCreateRelayIdentity(dir, "relay.example.com")
-	if err != nil {
-		t.Fatalf("LoadOrCreateRelayIdentity create: %v", err)
-	}
-	if created.Name != "relay.example.com" || created.Address == "" || created.PrivateKey == "" {
-		t.Fatalf("created relay identity incomplete: %+v", created)
-	}
-	if created.EncryptedClientHelloSeed == "" {
-		t.Fatal("relay identity missing ECH seed")
-	}
-	if _, err := os.Stat(filepath.Join(dir, types.RelayIdentityFilename)); err != nil {
-		t.Fatalf("identity file not written: %v", err)
-	}
-
-	assertRelayReload(t, dir, created)
-}
-
-func TestLoadOrCreateRelayIdentitySkipsUnchangedWrite(t *testing.T) {
-	dir := t.TempDir()
-	created, err := LoadOrCreateRelayIdentity(dir, "relay.example.com")
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	path := filepath.Join(dir, types.RelayIdentityFilename)
-	if err := os.Chmod(path, 0o444); err != nil {
-		t.Fatalf("chmod read-only: %v", err)
-	}
-	defer func() { _ = os.Chmod(path, 0o600) }()
-
-	assertRelayReload(t, dir, created)
 }

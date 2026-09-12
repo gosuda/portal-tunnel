@@ -15,7 +15,6 @@ import (
 	portalx402 "github.com/gosuda/portal-tunnel/v2/internal/x402"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -94,7 +93,7 @@ func resolveRelayServerConfig(args []string) (relayServerConfig, error) {
 		printRootUsage(os.Stderr)
 		return relayServerConfig{}, err
 	}
-	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
+	cfg.IdentityPath = portal.ResolveRelayStateDir(cfg.IdentityPath)
 	return cfg, nil
 }
 

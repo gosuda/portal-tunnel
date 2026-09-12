@@ -68,10 +68,7 @@ func Generate(name string) (types.Identity, error) {
 	})
 }
 
-// Decode unmarshals an identity JSON document in the canonical identity file
-// format without validating it. Callers that need to adjust fields before
-// validation decode, adjust, and pass the result to Resolve.
-func Decode(data []byte) (types.Identity, error) {
+func decode(data []byte) (types.Identity, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return types.Identity{}, errors.New("identity json is required")
 	}
@@ -87,7 +84,7 @@ func Decode(data []byte) (types.Identity, error) {
 // It never generates key material; a document without key material is an
 // error.
 func Parse(data []byte) (types.Identity, error) {
-	decoded, err := Decode(data)
+	decoded, err := decode(data)
 	if err != nil {
 		return types.Identity{}, err
 	}

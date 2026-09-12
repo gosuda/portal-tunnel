@@ -65,7 +65,7 @@ func run(args []string) error {
 	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", false, "include bootstrap relays and enable discovery", "DISCOVERY")
 	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
+	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
 	utils.IntFlagEnv(fs, &cfg.maxActiveRelays, "max-active-relays", 3, nil, "maximum number of auto-selected relays to keep connected; explicit --relays are always included", "MAX_ACTIVE_RELAYS")
 	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8093", "local payment app HTTP listen address (host:port or URL)")
 	utils.StringFlag(fs, &cfg.name, "name", "payment-app", "public hostname prefix (single DNS label)")
@@ -197,20 +197,21 @@ func printUsage(w io.Writer) {
 	)
 }
 
-// resolvePaymentIdentity keeps the payment-app policy minimal: an
-// --identity-json payload parses as-is, an existing identity file is parsed,
-// and anything else generates a fresh identity (persisted when a path is
-// configured).
+// resolvePaymentIdentity parses an inline identity or existing file. It
+// generates and persists an identity only when neither source exists.
 func resolvePaymentIdentity(cfg paymentConfig) (types.Identity, error) {
 	if raw := strings.TrimSpace(cfg.identityJSON); raw != "" {
 		return identity.Parse([]byte(raw))
 	}
-	data, err := os.ReadFile(cfg.identityPath)
-	if err == nil {
-		return identity.Parse(data)
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
+	path := strings.TrimSpace(cfg.identityPath)
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return identity.Parse(data)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
+		}
 	}
 	name, err := paymentName(cfg.name, cfg.addr)
 	if err != nil {
@@ -220,10 +221,18 @@ func resolvePaymentIdentity(cfg paymentConfig) (types.Identity, error) {
 	if err != nil {
 		return types.Identity{}, err
 	}
-	if path := strings.TrimSpace(cfg.identityPath); path != "" {
-		if err := writeIdentityFile(path, generated); err != nil {
-			return types.Identity{}, err
-		}
+	if path == "" {
+		return generated, nil
+	}
+	data, err := identity.Marshal(generated)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	if err := utils.EnsureParentDir(path); err != nil {
+		return types.Identity{}, err
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return types.Identity{}, fmt.Errorf("write identity file: %w", err)
 	}
 	return generated, nil
 }
@@ -233,15 +242,4 @@ func paymentName(name, target string) (string, error) {
 		return name, nil
 	}
 	return utils.DefaultExposeName(target, utils.RandomID("payment_"))
-}
-
-func writeIdentityFile(path string, id types.Identity) error {
-	data, err := identity.Marshal(id)
-	if err != nil {
-		return err
-	}
-	if err := utils.EnsureParentDir(path); err != nil {
-		return err
-	}
-	return utils.WriteFileAtomic(path, data, 0o600)
 }

@@ -66,6 +66,7 @@ type Exposure struct {
 	stateChanged   chan struct{}
 	statusEvents   chan RelayStatus
 	updates        chan RelayStatus
+	acceptLoops    sync.WaitGroup
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
@@ -801,6 +802,7 @@ func (e *Exposure) Close() error {
 				Strs("relays", relayURLs)
 		}
 		event.Msg("exposure closed")
+		e.acceptLoops.Wait()
 		e.drainAccepted()
 	})
 	return closeErr
@@ -941,24 +943,28 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			continue
 		}
 
-		select {
-		case <-e.done:
-			_ = listener.Close()
-			continue
-		default:
-		}
-
 		e.mu.Lock()
 		if _, exists := e.relayListeners[relayURL]; exists {
 			e.mu.Unlock()
 			_ = listener.Close()
 			continue
 		}
+		select {
+		case <-e.done:
+			e.mu.Unlock()
+			_ = listener.Close()
+			continue
+		default:
+		}
 		e.relayListeners[relayURL] = listener
+		e.acceptLoops.Add(1)
 		e.mu.Unlock()
 		addedRelayURLs = append(addedRelayURLs, relayURL)
 
-		go e.runListenerAcceptLoop(listener)
+		go func() {
+			defer e.acceptLoops.Done()
+			e.runListenerAcceptLoop(listener)
+		}()
 	}
 
 	if len(staleListeners) > 0 || len(addedRelayURLs) > 0 {
@@ -988,8 +994,12 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 	}
 
 	relayURL := listener.route.RelayURL
+	var workers sync.WaitGroup
+	defer workers.Wait()
 	if listener.udpEnabled {
+		workers.Add(1)
 		go func() {
+			defer workers.Done()
 			for {
 				frame, err := listener.acceptDatagram()
 				if err != nil {
