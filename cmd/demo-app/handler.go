@@ -69,7 +69,11 @@ func newUDPInfoHandler(exposure *sdk.Exposure) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		udpAddrs, _ := exposure.WaitDatagramReady(r.Context())
+		udpRelays, _ := exposure.WaitDatagramReady(r.Context())
+		udpAddrs := make([]string, 0, len(udpRelays))
+		for _, relay := range udpRelays {
+			udpAddrs = append(udpAddrs, relay.UDPAddr)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"message":   "demo-udp is running",
 			"udp_addrs": udpAddrs,

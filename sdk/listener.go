@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -38,6 +39,15 @@ type listenerConfig struct {
 	Metadata   func() types.LeaseMetadata
 	RetryCount int
 	relaySet   *discovery.RelaySet
+	Status     func(listenerStatus)
+}
+
+type listenerStatus struct {
+	state     RelayState
+	err       error
+	publicURL string
+	udpAddr   string
+	tcpAddr   string
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -85,6 +95,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 		Str("relay_url", relayURL).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
+	l.reportFailed(err)
 	_ = l.Close()
 	return true
 }
@@ -115,6 +126,8 @@ type listener struct {
 	stream      *transport.ClientStream
 	datagram    *transport.ClientDatagram
 	mitmManager *mitmManager
+	status      func(listenerStatus)
+	streamReady atomic.Bool
 
 	httpClient    *http.Client
 	httpTransport *http.Transport
@@ -153,6 +166,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		identity:       cfg.Identity.Copy(),
 		overlay:        cfg.Overlay,
 		relaySet:       cfg.relaySet,
+		status:         cfg.Status,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
 		echEnabled:     cfg.ECH,
@@ -174,6 +188,7 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 				Str("component", "sdk-quic-backhaul").
 				Str("address", l.identity.Address).
 				Msg("quic backhaul disconnected; waiting to reconnect")
+			l.reportAvailable()
 		})
 	}
 
@@ -188,10 +203,52 @@ func (l *listener) metadataSnapshot() types.LeaseMetadata {
 	return l.metadata()
 }
 
+func (l *listener) report(status listenerStatus) {
+	if l != nil && l.status != nil {
+		l.status(status)
+	}
+}
+
+func (l *listener) reportConnecting() {
+	l.streamReady.Store(false)
+	l.report(listenerStatus{state: RelayConnecting})
+}
+
+func (l *listener) reportStreamReady() {
+	l.streamReady.Store(true)
+	l.reportAvailable()
+}
+
+func (l *listener) reportAvailable() {
+	lease, ok := l.leaseSnapshot()
+	if !ok {
+		return
+	}
+	state := RelayConnecting
+	if l.streamReady.Load() {
+		state = RelayReady
+	}
+	udpAddr := ""
+	if l.datagram != nil && l.datagram.Connected() {
+		udpAddr = lease.udpAddr
+	}
+	l.report(listenerStatus{
+		state:     state,
+		publicURL: l.publicURLForLease(lease),
+		udpAddr:   udpAddr,
+		tcpAddr:   lease.tcpAddr,
+	})
+}
+
+func (l *listener) reportFailed(err error) {
+	l.report(listenerStatus{state: RelayFailed, err: err})
+}
+
 func (l *listener) run(ctx context.Context) {
 	var retries int
 
 	for {
+		l.reportConnecting()
 		err := l.registerAndConfigure(ctx)
 		switch {
 		case err == nil:
@@ -203,6 +260,9 @@ func (l *listener) run(ctx context.Context) {
 			}
 			retries++
 			if !l.waitRetry(ctx, "lease registration", err, retries, 0) {
+				if ctx.Err() == nil {
+					l.reportFailed(err)
+				}
 				_ = l.Close()
 				return
 			}
@@ -262,6 +322,7 @@ func (l *listener) run(ctx context.Context) {
 			Str("relay_url", relayURL).
 			Str("address", l.identity.Address).
 			Msg("listener connection retry budget exhausted; closing listener")
+		l.reportFailed(err)
 		_ = l.Close()
 		return
 	}
@@ -421,28 +482,6 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 	return l.datagram.Send(frame.FlowID, frame.Payload)
 }
 
-func (l *listener) datagramReady() (string, bool, bool) {
-	if l.datagram == nil {
-		return "", false, false
-	}
-
-	hostname := ""
-	udpAddr := ""
-	if lease, ok := l.leaseSnapshot(); ok {
-		hostname = lease.hostname
-		udpAddr = lease.udpAddr
-	}
-	ready := l.datagram.Connected() && udpAddr != ""
-	closed := false
-	select {
-	case <-l.doneCh:
-		closed = true
-	default:
-	}
-	pending := !ready && !closed && (hostname == "" || udpAddr != "")
-	return udpAddr, ready, pending
-}
-
 func (l *listener) publicURLForLease(lease listenerSnapshot) string {
 	baseURL := lease.publicURLBase
 	if baseURL == nil {
@@ -548,6 +587,7 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 			}
 			continue
 		}
+		l.reportStreamReady()
 
 		claimed, err := l.stream.RunSession(ctx, conn, tlsConfig)
 		switch {
@@ -632,6 +672,7 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 			}
 			continue
 		}
+		l.reportAvailable()
 
 		select {
 		case <-ctx.Done():

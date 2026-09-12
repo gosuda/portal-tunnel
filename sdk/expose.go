@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +20,43 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// ErrNoRelays indicates that every explicitly configured relay failed.
+var ErrNoRelays = errors.New("portal sdk: no relays available")
+
+// RelayState is the lifecycle state of one relay.
+type RelayState string
+
+const (
+	RelayIdle       RelayState = "idle"
+	RelayConnecting RelayState = "connecting"
+	RelayReady      RelayState = "ready"
+	RelayFailed     RelayState = "failed"
+)
+
+// RelayStatus is an immutable snapshot of one relay's externally visible state.
+type RelayStatus struct {
+	RelayURL    string
+	PublicURL   string
+	UDPAddr     string
+	TCPAddr     string
+	Version     string
+	State       RelayState
+	Err         error
+	Explicit    bool
+	Bootstrap   bool
+	Banned      bool
+	SupportsUDP bool
+	SupportsTCP bool
+}
+
+type relayLifecycle struct {
+	state     RelayState
+	err       error
+	publicURL string
+	udpAddr   string
+	tcpAddr   string
+}
+
 // Exposure owns the lifecycle of one or more relay listeners and accepts
 // traffic from all of them through one net.Listener.
 type Exposure struct {
@@ -35,99 +71,70 @@ type Exposure struct {
 	relaySet       *discovery.RelaySet
 	mu             sync.RWMutex
 	relayListeners map[string]*listener
+	lifecycles     map[string]relayLifecycle
+	stateChanged   chan struct{}
+	statusEvents   chan RelayStatus
+	updates        chan RelayStatus
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
 }
 
+var _ net.Listener = (*Exposure)(nil)
+
+// ExposeConfig contains relay and lease settings for an exposure.
 type ExposeConfig struct {
 	RelayURLs []string
 	Discovery bool
 	Overlay   bool
 
-	Identity             types.Identity
-	IdentityPath         string
-	IdentityJSON         string
-	TargetAddr           string
-	UDPAddr              string
-	UDPEnabled           bool
-	TCPEnabled           bool
-	ECH                  bool
-	BanMITM              bool
-	MaxActiveRelays      int
-	Metadata             types.LeaseMetadata
-	X402PayTo            string
-	X402Testnet          bool
-	X402Network          string
-	X402Asset            string
-	X402Endpoints        []string
-	X402FacilitatorToken string
+	Identity        types.Identity
+	UDPEnabled      bool
+	TCPEnabled      bool
+	ECH             bool
+	BanMITM         bool
+	MaxActiveRelays int
+	Metadata        types.LeaseMetadata
 }
 
 func (cfg ExposeConfig) snapshot() ExposeConfig {
 	cfg.RelayURLs = utils.CloneSlice(cfg.RelayURLs)
 	cfg.Identity = cfg.Identity.Copy()
 	cfg.Metadata = cfg.Metadata.Copy()
-	cfg.X402PayTo = strings.TrimSpace(cfg.X402PayTo)
-	cfg.X402Network = strings.ToLower(strings.TrimSpace(cfg.X402Network))
-	cfg.X402Asset = strings.TrimSpace(cfg.X402Asset)
-	cfg.X402Endpoints = utils.CloneSlice(cfg.X402Endpoints)
-	cfg.X402FacilitatorToken = strings.TrimSpace(cfg.X402FacilitatorToken)
 	return cfg
 }
 
 // Expose creates relay listeners for the selected relay pool and exposes a
 // dynamic listener hub for accepting traffic from all of them.
 func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
+	if ctx == nil {
+		return nil, errors.New("portal sdk: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	explicitRelayURLs, err := utils.NormalizeRelayURLs(cfg.RelayURLs...)
 	if err != nil {
 		return nil, err
 	}
-	x402PayTo := strings.TrimSpace(cfg.X402PayTo)
-
 	initialRouteCount := len(explicitRelayURLs)
+	if initialRouteCount == 0 && !cfg.Discovery {
+		return nil, errors.New("portal sdk: at least one relay or discovery is required")
+	}
 	relaySetURLs, err := utils.ResolvePortalRelayURLs(explicitRelayURLs, cfg.Discovery)
 	if err != nil {
 		return nil, err
 	}
-	listenerIdentity, createdIdentity, err := identity.ResolveListenerIdentity(
-		cfg.Identity.Copy(),
-		cfg.TargetAddr,
-		cfg.IdentityPath,
-		cfg.IdentityJSON,
-	)
+	if strings.TrimSpace(cfg.Identity.Name) == "" {
+		return nil, errors.New("portal sdk: identity name is required")
+	}
+	listenerIdentity, _, err := identity.ResolveListenerIdentity(cfg.Identity.Copy(), "", "", "")
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
-	}
-	if createdIdentity {
-		log.Info().
-			Str("identity_path", strings.TrimSpace(cfg.IdentityPath)).
-			Str("address", listenerIdentity.Address).
-			Msg("generated tunnel identity and saved it to disk")
-	}
-	targetAddr, err := utils.NormalizeLoopbackTarget(cfg.TargetAddr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid target value %q: %w", cfg.TargetAddr, err)
-	}
-	udpAddr := cfg.UDPAddr
-	if cfg.UDPEnabled {
-		udpAddr, err = utils.NormalizeLoopbackTarget(utils.StringOrDefault(udpAddr, targetAddr))
-		if err != nil {
-			return nil, fmt.Errorf("invalid --udp-addr value %q: %w", cfg.UDPAddr, err)
-		}
 	}
 	runtimeCfg := cfg.snapshot()
 	runtimeCfg.RelayURLs = append([]string(nil), explicitRelayURLs...)
 	runtimeCfg.Identity = listenerIdentity.Copy()
-	runtimeCfg.TargetAddr = targetAddr
-	runtimeCfg.UDPAddr = udpAddr
-	runtimeCfg.Metadata = cfg.Metadata.Copy()
-	runtimeCfg.X402PayTo = x402PayTo
-	runtimeCfg.X402Testnet = cfg.X402Testnet
-	runtimeCfg.X402Network = strings.ToLower(strings.TrimSpace(cfg.X402Network))
-	runtimeCfg.X402Asset = strings.TrimSpace(cfg.X402Asset)
-	runtimeCfg.X402Endpoints = utils.CloneSlice(cfg.X402Endpoints)
-	runtimeCfg.X402FacilitatorToken = strings.TrimSpace(cfg.X402FacilitatorToken)
 
 	exposureCtx, cancel := context.WithCancel(ctx)
 	exposure := &Exposure{
@@ -138,7 +145,12 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		datagrams:      make(chan types.DatagramFrame, max(initialRouteCount*32, 1)),
 		relaySet:       discovery.NewRelaySet(relaySetURLs),
 		relayListeners: make(map[string]*listener, initialRouteCount),
+		lifecycles:     make(map[string]relayLifecycle, initialRouteCount),
+		stateChanged:   make(chan struct{}),
+		statusEvents:   make(chan RelayStatus, max(initialRouteCount*4, 4)),
+		updates:        make(chan RelayStatus, max(initialRouteCount*4, 4)),
 	}
+	go exposure.runStatusUpdates(exposureCtx)
 
 	if cfg.Discovery {
 		refresher := discovery.NewRefresher(exposure.relaySet)
@@ -253,7 +265,7 @@ func (e *Exposure) UpdateMaxActiveRelays(maxActiveRelays int) error {
 	return e.reconcileRelayListeners(false)
 }
 
-func (e *Exposure) ActiveRelayURLs() []string {
+func (e *Exposure) activeRelayURLs() []string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	relayURLs := make([]string, 0, len(e.relayListeners))
@@ -265,6 +277,12 @@ func (e *Exposure) ActiveRelayURLs() []string {
 }
 
 func (e *Exposure) closed() bool {
+	if e == nil {
+		return true
+	}
+	if e.done == nil {
+		return false
+	}
 	select {
 	case <-e.done:
 		return true
@@ -274,7 +292,7 @@ func (e *Exposure) closed() bool {
 }
 
 func (e *Exposure) Addr() net.Addr {
-	identity := e.Config().Identity
+	identity := e.config().Identity
 	if identity.Address == "" {
 		return exposureAddr("portal:exposure")
 	}
@@ -286,19 +304,19 @@ type exposureAddr string
 func (a exposureAddr) Network() string { return "portal" }
 func (a exposureAddr) String() string  { return string(a) }
 
-func (e *Exposure) Config() ExposeConfig {
+func (e *Exposure) config() ExposeConfig {
 	if e == nil || e.cfg == nil {
 		return ExposeConfig{}
 	}
 	return e.cfg.Load()
 }
 
-func (e *Exposure) Identity() types.Identity {
-	return e.Config().Identity
-}
-
-func (e *Exposure) Snapshot() types.AgentTunnelStatus {
-	cfg := e.Config()
+// Relays returns a sorted point-in-time snapshot of the relay pool.
+func (e *Exposure) Relays() []RelayStatus {
+	if e == nil {
+		return nil
+	}
+	cfg := e.config()
 	e.mu.RLock()
 	listeners := make([]*listener, 0, len(e.relayListeners))
 	for _, listener := range e.relayListeners {
@@ -306,21 +324,32 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 			listeners = append(listeners, listener)
 		}
 	}
+	lifecycles := make(map[string]relayLifecycle, len(e.lifecycles))
+	for relayURL, lifecycle := range e.lifecycles {
+		lifecycles[relayURL] = lifecycle
+	}
 	e.mu.RUnlock()
 
-	relayByURL := make(map[string]types.AgentRelayStatus, len(listeners))
+	relayByURL := make(map[string]RelayStatus, len(listeners))
 	for _, listener := range listeners {
 		relayURL := listener.route.RelayURL
-		explicit := slices.Contains(cfg.RelayURLs, relayURL)
-		snap := types.AgentRelayStatus{
-			RelayURL:   relayURL,
-			Version:    listener.releaseVersion,
-			Explicit:   explicit,
-			Connecting: explicit,
+		snap := RelayStatus{
+			RelayURL: relayURL,
+			Version:  listener.releaseVersion,
+			Explicit: slices.Contains(cfg.RelayURLs, relayURL),
+			State:    RelayConnecting,
 		}
 		if lease, ok := listener.leaseSnapshot(); ok {
 			snap.PublicURL = listener.publicURLForLease(lease)
-			snap.Connecting = snap.PublicURL == ""
+			snap.UDPAddr = lease.udpAddr
+			snap.TCPAddr = lease.tcpAddr
+		}
+		if lifecycle, ok := lifecycles[relayURL]; ok {
+			snap.State = lifecycle.state
+			snap.Err = lifecycle.err
+			snap.PublicURL = lifecycle.publicURL
+			snap.UDPAddr = lifecycle.udpAddr
+			snap.TCPAddr = lifecycle.tcpAddr
 		}
 		if relayURL != "" {
 			relayByURL[relayURL] = snap
@@ -333,7 +362,7 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 			if relayURL == "" {
 				continue
 			}
-			if state.Dead {
+			if state.Dead && lifecycles[relayURL].state != RelayFailed {
 				delete(relayByURL, relayURL)
 				continue
 			}
@@ -344,43 +373,189 @@ func (e *Exposure) Snapshot() types.AgentTunnelStatus {
 			snap.Banned = state.Banned
 			snap.SupportsUDP = relay.SupportsUDP
 			snap.SupportsTCP = relay.SupportsTCP
+			if snap.State == "" {
+				snap.State = RelayIdle
+			}
 			relayByURL[relayURL] = snap
 		}
 	}
-	relays := make([]types.AgentRelayStatus, 0, len(relayByURL))
+	for relayURL, lifecycle := range lifecycles {
+		if _, exists := relayByURL[relayURL]; exists {
+			continue
+		}
+		relayByURL[relayURL] = RelayStatus{
+			RelayURL:  relayURL,
+			PublicURL: lifecycle.publicURL,
+			UDPAddr:   lifecycle.udpAddr,
+			TCPAddr:   lifecycle.tcpAddr,
+			State:     lifecycle.state,
+			Err:       lifecycle.err,
+			Explicit:  slices.Contains(cfg.RelayURLs, relayURL),
+		}
+	}
+	relays := make([]RelayStatus, 0, len(relayByURL))
 	for _, snap := range relayByURL {
 		relays = append(relays, snap)
 	}
-	slices.SortFunc(relays, func(a, b types.AgentRelayStatus) int {
-		aReady := a.PublicURL != ""
-		bReady := b.PublicURL != ""
+	slices.SortFunc(relays, func(a, b RelayStatus) int {
+		aReady := a.State == RelayReady
+		bReady := b.State == RelayReady
 		if aReady != bReady {
 			if aReady {
 				return -1
 			}
 			return 1
 		}
-		if a.Connecting != b.Connecting {
-			if a.Connecting {
+		aConnecting := a.State == RelayConnecting
+		bConnecting := b.State == RelayConnecting
+		if aConnecting != bConnecting {
+			if aConnecting {
 				return -1
 			}
 			return 1
 		}
 		return strings.Compare(a.RelayURL, b.RelayURL)
 	})
+	return relays
+}
 
-	return types.AgentTunnelStatus{
-		Address:         cfg.Identity.Address,
-		TargetAddr:      cfg.TargetAddr,
-		Overlay:         cfg.Overlay,
-		MaxActiveRelays: cfg.MaxActiveRelays,
-		Metadata:        cfg.Metadata,
-		Relays:          relays,
+func (e *Exposure) runStatusUpdates(ctx context.Context) {
+	defer close(e.updates)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case status := <-e.statusEvents:
+			select {
+			case e.updates <- status:
+			default:
+			}
+		}
+	}
+}
+
+func (e *Exposure) setRelayLifecycle(relayURL string, lifecycle relayLifecycle) {
+	if e == nil || relayURL == "" || e.closed() {
+		return
+	}
+	e.mu.Lock()
+	if e.lifecycles == nil {
+		e.lifecycles = make(map[string]relayLifecycle)
+	}
+	e.lifecycles[relayURL] = lifecycle
+	if e.stateChanged != nil {
+		close(e.stateChanged)
+	}
+	e.stateChanged = make(chan struct{})
+	e.mu.Unlock()
+
+	status := RelayStatus{
+		RelayURL:  relayURL,
+		PublicURL: lifecycle.publicURL,
+		UDPAddr:   lifecycle.udpAddr,
+		TCPAddr:   lifecycle.tcpAddr,
+		State:     lifecycle.state,
+		Err:       lifecycle.err,
+	}
+	for _, snapshot := range e.Relays() {
+		if snapshot.RelayURL == relayURL {
+			status = snapshot
+			break
+		}
+	}
+	select {
+	case <-e.done:
+	case e.statusEvents <- status:
+	default:
+	}
+}
+
+func (e *Exposure) noRelaysAvailable() bool {
+	if e == nil || e.cfg == nil {
+		return true
+	}
+	cfg := e.config()
+	if cfg.Discovery {
+		return false
+	}
+	if len(cfg.RelayURLs) == 0 {
+		return true
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, relayURL := range cfg.RelayURLs {
+		if e.lifecycles[relayURL].state != RelayFailed {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *Exposure) readyRelays(datagram bool) ([]RelayStatus, <-chan struct{}) {
+	e.mu.RLock()
+	ready := make([]RelayStatus, 0, len(e.lifecycles))
+	for relayURL, lifecycle := range e.lifecycles {
+		if datagram && lifecycle.udpAddr == "" || !datagram && lifecycle.state != RelayReady {
+			continue
+		}
+		ready = append(ready, RelayStatus{
+			RelayURL:  relayURL,
+			PublicURL: lifecycle.publicURL,
+			UDPAddr:   lifecycle.udpAddr,
+			TCPAddr:   lifecycle.tcpAddr,
+			State:     lifecycle.state,
+			Err:       lifecycle.err,
+		})
+	}
+	changed := e.stateChanged
+	e.mu.RUnlock()
+	slices.SortFunc(ready, func(a, b RelayStatus) int {
+		return strings.Compare(a.RelayURL, b.RelayURL)
+	})
+	return ready, changed
+}
+
+// Updates reports relay lifecycle changes. Relays is the authoritative
+// snapshot; slow consumers may miss intermediate updates.
+func (e *Exposure) Updates() <-chan RelayStatus {
+	if e == nil {
+		return nil
+	}
+	return e.updates
+}
+
+// WaitReady waits until at least one relay can accept tenant connections.
+func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
+	if e == nil {
+		return nil, net.ErrClosed
+	}
+	if ctx == nil {
+		return nil, errors.New("portal sdk: context is nil")
+	}
+	for {
+		ready, changed := e.readyRelays(false)
+		if len(ready) > 0 {
+			return ready, nil
+		}
+		if e.closed() {
+			return nil, net.ErrClosed
+		}
+		if e.noRelaysAvailable() {
+			return nil, ErrNoRelays
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-e.done:
+			return nil, net.ErrClosed
+		case <-changed:
+		}
 	}
 }
 
 func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
-	if !e.Config().UDPEnabled {
+	if !e.config().UDPEnabled {
 		return types.DatagramFrame{}, net.ErrClosed
 	}
 
@@ -393,7 +568,7 @@ func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
 }
 
 func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
-	if !e.Config().UDPEnabled {
+	if !e.config().UDPEnabled {
 		return net.ErrClosed
 	}
 
@@ -406,41 +581,23 @@ func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
 	return listener.sendDatagram(frame)
 }
 
-func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
-	if !e.Config().UDPEnabled {
+// WaitDatagramReady waits until at least one relay has an authenticated UDP
+// backhaul and returns the ready relay snapshots.
+func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error) {
+	if !e.config().UDPEnabled {
 		return nil, errors.New("exposure does not have udp enabled")
 	}
-
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
+	if ctx == nil {
+		return nil, errors.New("portal sdk: context is nil")
+	}
 
 	for {
-		e.mu.RLock()
-		addrs := make([]string, 0, len(e.relayListeners))
-		seen := make(map[string]struct{})
-		resolvedWithoutDatagram := true
-		for _, listener := range e.relayListeners {
-			if listener == nil {
-				continue
-			}
-
-			udpAddr, ready, pending := listener.datagramReady()
-			if ready {
-				if _, ok := seen[udpAddr]; !ok {
-					seen[udpAddr] = struct{}{}
-					addrs = append(addrs, udpAddr)
-				}
-			}
-			if pending {
-				resolvedWithoutDatagram = false
-			}
+		ready, changed := e.readyRelays(true)
+		if len(ready) > 0 {
+			return ready, nil
 		}
-		e.mu.RUnlock()
-		if len(addrs) > 0 {
-			return addrs, nil
-		}
-		if resolvedWithoutDatagram {
-			return nil, errors.New("relay did not expose udp")
+		if e.noRelaysAvailable() {
+			return nil, ErrNoRelays
 		}
 
 		select {
@@ -448,41 +605,9 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 			return nil, net.ErrClosed
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-ticker.C:
+		case <-changed:
 		}
 	}
-}
-
-// RunHTTPRoutes serves path-routed HTTP upstreams through the exposure.
-func (e *Exposure) RunHTTPRoutes(ctx context.Context, routes []HTTPRouteConfig, localAddr string) error {
-	cfg := e.Config()
-	handler, err := NewHTTPRoutes(routes, types.X402Payment{
-		Testnet:          cfg.X402Testnet,
-		Network:          cfg.X402Network,
-		Asset:            cfg.X402Asset,
-		PayTo:            cfg.X402PayTo,
-		Endpoints:        cfg.X402Endpoints,
-		FacilitatorToken: cfg.X402FacilitatorToken,
-	})
-	if err != nil {
-		return err
-	}
-	return e.RunHTTP(ctx, handler, localAddr)
-}
-
-func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr string) error {
-	if handler == nil {
-		handler = http.NotFoundHandler()
-	}
-
-	e.mu.RLock()
-	hasRelayListeners := len(e.relayListeners) > 0
-	e.mu.RUnlock()
-
-	if hasRelayListeners {
-		return RunHTTP(ctx, e, handler, localAddr)
-	}
-	return RunHTTP(ctx, nil, handler, localAddr)
 }
 
 type exposureConn struct {
@@ -533,27 +658,40 @@ func (c *tunnelCounterConn) Close() error {
 }
 
 func (e *Exposure) Accept() (net.Conn, error) {
-	select {
-	case <-e.done:
+	if e == nil {
 		return nil, net.ErrClosed
-	case conn := <-e.accepted:
-		if conn == nil {
-			return nil, net.ErrClosed
+	}
+	for {
+		e.mu.RLock()
+		changed := e.stateChanged
+		e.mu.RUnlock()
+		if e.noRelaysAvailable() {
+			return nil, ErrNoRelays
 		}
+		select {
+		case <-e.done:
+			return nil, net.ErrClosed
+		case <-changed:
+			continue
+		case conn := <-e.accepted:
+			if conn == nil {
+				return nil, net.ErrClosed
+			}
 
-		connID := e.connSeq.Add(1)
-		log.Debug().
-			Uint64("conn_id", connID).
-			Str("local_addr", conn.LocalAddr().String()).
-			Str("remote_addr", conn.RemoteAddr().String()).
-			Msg("exposure connection accepted")
+			connID := e.connSeq.Add(1)
+			log.Debug().
+				Uint64("conn_id", connID).
+				Str("local_addr", conn.LocalAddr().String()).
+				Str("remote_addr", conn.RemoteAddr().String()).
+				Msg("exposure connection accepted")
 
-		return &exposureConn{
-			Conn:       conn,
-			id:         connID,
-			localAddr:  conn.LocalAddr().String(),
-			remoteAddr: conn.RemoteAddr().String(),
-		}, nil
+			return &exposureConn{
+				Conn:       conn,
+				id:         connID,
+				localAddr:  conn.LocalAddr().String(),
+				remoteAddr: conn.RemoteAddr().String(),
+			}, nil
+		}
 	}
 }
 
@@ -616,10 +754,10 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	if e.relaySet == nil {
 		return errors.New("relay set is unavailable")
 	}
-	cfg := e.Config()
+	cfg := e.config()
 	routes := e.relaySet.SelectRelays(discovery.RouteState{
 		ExplicitRelayURLs: append([]string(nil), cfg.RelayURLs...),
-		ActiveRelayURLs:   e.ActiveRelayURLs(),
+		ActiveRelayURLs:   e.activeRelayURLs(),
 		MaxActiveRelays:   cfg.MaxActiveRelays,
 		RequireUDP:        cfg.UDPEnabled,
 		RequireTCP:        cfg.TCPEnabled,
@@ -637,6 +775,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 
 	e.mu.Lock()
 	staleListeners := make(map[string]*listener)
+	stateChanged := false
 	for relayURL, listener := range e.relayListeners {
 		route, wanted := routesByRelay[relayURL]
 		if wanted && listener != nil && listener.route == route {
@@ -644,6 +783,8 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		}
 		staleListeners[relayURL] = listener
 		delete(e.relayListeners, relayURL)
+		delete(e.lifecycles, relayURL)
+		stateChanged = true
 	}
 	missingRoutes := make([]discovery.Route, 0)
 	for _, route := range routes {
@@ -652,6 +793,12 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			continue
 		}
 		missingRoutes = append(missingRoutes, route)
+	}
+	if stateChanged {
+		if e.stateChanged != nil {
+			close(e.stateChanged)
+		}
+		e.stateChanged = make(chan struct{})
 	}
 	e.mu.Unlock()
 
@@ -666,6 +813,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	}
 	for _, route := range missingRoutes {
 		relayURL := route.RelayURL
+		e.setRelayLifecycle(relayURL, relayLifecycle{state: RelayConnecting})
 		retryCount := 10
 		if route.Explicit {
 			retryCount = 0
@@ -678,12 +826,22 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			ECH:        cfg.ECH,
 			BanMITM:    cfg.BanMITM,
 			Metadata: func() types.LeaseMetadata {
-				return e.Config().Metadata
+				return e.config().Metadata
+			},
+			Status: func(status listenerStatus) {
+				e.setRelayLifecycle(relayURL, relayLifecycle{
+					state:     RelayState(status.state),
+					err:       status.err,
+					publicURL: status.publicURL,
+					udpAddr:   status.udpAddr,
+					tcpAddr:   status.tcpAddr,
+				})
 			},
 			RetryCount: retryCount,
 			relaySet:   e.relaySet,
 		})
 		if err != nil {
+			e.setRelayLifecycle(relayURL, relayLifecycle{state: RelayFailed, err: err})
 			if failOnError {
 				return fmt.Errorf("listen %q: %w", relayURL, err)
 			}
