@@ -13,7 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/identityfile"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -225,22 +225,7 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 }
 
 func resolveDemoIdentity(cfg demoConfig) (types.Identity, error) {
-	listenerIdentity, created, err := identity.ResolveListenerIdentity(
-		types.Identity{Name: cfg.name},
-		cfg.addr,
-		cfg.identityPath,
-		cfg.identityJSON,
-	)
-	if err != nil {
-		return types.Identity{}, fmt.Errorf("resolve identity: %w", err)
-	}
-	if created {
-		log.Info().
-			Str("identity_path", cfg.identityPath).
-			Str("address", listenerIdentity.Address).
-			Msg("generated tunnel identity and saved it to disk")
-	}
-	return listenerIdentity, nil
+	return identityfile.Resolve(cfg.name, cfg.addr, cfg.identityPath, cfg.identityJSON)
 }
 
 func runUDPEchoLoop(ctx context.Context, exposure *sdk.Exposure) {

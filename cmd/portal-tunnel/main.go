@@ -19,8 +19,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/identityfile"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
-	"github.com/gosuda/portal-tunnel/v2/internal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -227,20 +227,9 @@ func runExposeCommand(args []string) error {
 		}()
 	}
 
-	listenerIdentity, createdIdentity, err := identity.ResolveListenerIdentity(
-		types.Identity{Name: flags.name},
-		flags.targetAddr,
-		flags.identityPath,
-		flags.identityJSON,
-	)
+	listenerIdentity, err := identityfile.Resolve(flags.name, flags.targetAddr, flags.identityPath, flags.identityJSON)
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
-	}
-	if createdIdentity {
-		log.Info().
-			Str("identity_path", strings.TrimSpace(flags.identityPath)).
-			Str("address", listenerIdentity.Address).
-			Msg("generated tunnel identity and saved it to disk")
 	}
 
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{

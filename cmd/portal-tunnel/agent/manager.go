@@ -14,7 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/identity"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/identityfile"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -675,20 +675,9 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	}
 	x402FacilitatorToken := strings.TrimSpace(cfg.X402FacilitatorToken)
 	x402FacilitatorToken = cmp.Or(x402FacilitatorToken, strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
-	listenerIdentity, createdIdentity, err := identity.ResolveListenerIdentity(
-		types.Identity{Name: cfg.Name},
-		cfg.TargetAddr,
-		cfg.IdentityPath,
-		cfg.IdentityJSON,
-	)
+	listenerIdentity, err := identityfile.Resolve(cfg.Name, cfg.TargetAddr, cfg.IdentityPath, cfg.IdentityJSON)
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
-	}
-	if createdIdentity {
-		log.Info().
-			Str("identity_path", strings.TrimSpace(cfg.IdentityPath)).
-			Str("address", listenerIdentity.Address).
-			Msg("generated tunnel identity and saved it to disk")
 	}
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:       append([]string(nil), cfg.RelayURLs...),
