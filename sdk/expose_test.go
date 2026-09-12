@@ -56,6 +56,44 @@ func TestExposureWaitReadyUsesRelayStatus(t *testing.T) {
 	}
 }
 
+func TestListenerReverseSessionReadinessTracksLiveSessions(t *testing.T) {
+	var states []RelayState
+	l := &listener{
+		status: func(status listenerStatus) {
+			states = append(states, status.state)
+		},
+		lease: utils.NewSnapshot(listenerSnapshot{
+			accessToken: "token",
+			hostname:    "service.relay.example",
+		}, listenerSnapshot.snapshot),
+	}
+
+	l.reportStreamReady()
+	l.reportStreamReady()
+	if got := l.readySessions.Load(); got != 2 {
+		t.Fatalf("ready session count = %d, want 2", got)
+	}
+	if got := states[len(states)-1]; got != RelayReady {
+		t.Fatalf("state after opening sessions = %q, want %q", got, RelayReady)
+	}
+
+	l.reportStreamClosed()
+	if got := l.readySessions.Load(); got != 1 {
+		t.Fatalf("ready session count after one close = %d, want 1", got)
+	}
+	if got := states[len(states)-1]; got != RelayReady {
+		t.Fatalf("state with one live session = %q, want %q", got, RelayReady)
+	}
+
+	l.reportStreamClosed()
+	if got := l.readySessions.Load(); got != 0 {
+		t.Fatalf("ready session count after final close = %d, want 0", got)
+	}
+	if got := states[len(states)-1]; got != RelayConnecting {
+		t.Fatalf("state after final close = %q, want %q", got, RelayConnecting)
+	}
+}
+
 func TestExposureAcceptReturnsErrNoRelaysAfterTerminalFailures(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)

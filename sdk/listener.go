@@ -124,11 +124,11 @@ type listener struct {
 	leaseTTL          time.Duration
 	renewBefore       time.Duration
 
-	stream      *transport.ClientStream
-	datagram    *transport.ClientDatagram
-	mitmManager *mitmManager
-	status      func(listenerStatus)
-	streamReady atomic.Bool
+	stream        *transport.ClientStream
+	datagram      *transport.ClientDatagram
+	mitmManager   *mitmManager
+	status        func(listenerStatus)
+	readySessions atomic.Int32
 
 	httpClient    *http.Client
 	httpTransport *http.Transport
@@ -211,13 +211,25 @@ func (l *listener) report(status listenerStatus) {
 }
 
 func (l *listener) reportConnecting() {
-	l.streamReady.Store(false)
 	l.report(listenerStatus{state: RelayConnecting})
 }
 
 func (l *listener) reportStreamReady() {
-	l.streamReady.Store(true)
+	l.readySessions.Add(1)
 	l.reportAvailable()
+}
+
+func (l *listener) reportStreamClosed() {
+	for {
+		current := l.readySessions.Load()
+		if current <= 0 {
+			return
+		}
+		if l.readySessions.CompareAndSwap(current, current-1) {
+			l.reportAvailable()
+			return
+		}
+	}
 }
 
 func (l *listener) reportAvailable() {
@@ -226,7 +238,7 @@ func (l *listener) reportAvailable() {
 		return
 	}
 	state := RelayConnecting
-	if l.streamReady.Load() {
+	if l.readySessions.Load() > 0 {
 		state = RelayReady
 	}
 	udpAddr := ""
@@ -590,8 +602,10 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 			continue
 		}
 		l.reportStreamReady()
-
-		claimed, err := l.stream.RunSession(ctx, conn, tlsConfig)
+		claimed, err := func() (bool, error) {
+			defer l.reportStreamClosed()
+			return l.stream.RunSession(ctx, conn, tlsConfig)
+		}()
 		switch {
 		case err == nil:
 			retries = 0
