@@ -134,7 +134,8 @@ func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig
 
 	log.Info().Msg("tunnel shutdown complete")
 	if ctx.Err() != nil {
-		return nil
+		primary = nil
+		closeErr = nil
 	}
 	return errors.Join(primary, closeErr)
 }
