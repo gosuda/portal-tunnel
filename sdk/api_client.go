@@ -153,12 +153,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	}, nil, &resp); err != nil {
 		return types.RegisterResponse{}, "", "", err
 	}
-	registeredIdentity, err := identity.NormalizeIdentity(resp.Identity)
-	if err != nil {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		return types.RegisterResponse{}, "", "", err
-	}
-	if registeredIdentity.Key() != l.identity.Key() {
+	if resp.Identity.Key() != l.identity.Key() {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, "", "", errors.New("relay returned mismatched lease identity")
 	}
