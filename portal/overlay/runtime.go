@@ -238,9 +238,8 @@ func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, ex
 		return types.ReverseEndpoint{}, false, nil
 	}
 	now := time.Now().UTC()
-	leaseIdentity, err := identity.NormalizeIdentity(leaseIdentity)
 	leaseID = strings.TrimSpace(leaseID)
-	if err != nil || leaseID == "" || !expiresAt.After(now) {
+	if leaseID == "" || !expiresAt.After(now) {
 		return types.ReverseEndpoint{}, false, errors.New("overlay lease is invalid")
 	}
 	ingress, err := r.config.SelfDescriptor(now)
@@ -616,10 +615,6 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 	if err != nil || !strings.EqualFold(address, verifiedIngress.Address) {
 		return capabilityClaims{}, errors.New("overlay capability signer does not match ingress")
 	}
-	leaseIdentity, err := identity.NormalizeIdentity(claims.LeaseIdentity)
-	if err != nil {
-		return capabilityClaims{}, err
-	}
 	claims.LeaseID = strings.TrimSpace(claims.LeaseID)
 	claims.GatewayAddress = strings.TrimSpace(claims.GatewayAddress)
 	claims.GatewayDestination, err = utils.NormalizeIVNPDestination(claims.GatewayDestination)
@@ -628,7 +623,6 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 	if err != nil || incomplete || invalidExpiry {
 		return capabilityClaims{}, errors.New("overlay capability is expired or incomplete")
 	}
-	claims.LeaseIdentity = leaseIdentity
 	claims.Ingress = verifiedIngress
 	return claims, nil
 }

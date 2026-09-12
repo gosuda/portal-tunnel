@@ -20,7 +20,6 @@ import (
 	portaltunnel "github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -318,18 +317,13 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, runtime *policy.
 }
 
 func normalizePolicyIdentityKey(w http.ResponseWriter, raw string) (string, bool) {
-	raw = strings.TrimSpace(raw)
-	name, address, ok := strings.Cut(raw, types.IdentityKeySeparator)
-	if !ok {
+	key := strings.TrimSpace(raw)
+	name, address, ok := strings.Cut(key, types.IdentityKeySeparator)
+	if !ok || name == "" || address == "" {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid identity")
 		return "", false
 	}
-	normalizedIdentity, err := identity.NormalizeIdentity(types.Identity{Name: name, Address: address})
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid identity")
-		return "", false
-	}
-	return normalizedIdentity.Key(), true
+	return key, true
 }
 
 func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, identityKey string, req types.LeasePolicyUpdate) bool {
@@ -483,22 +477,18 @@ func applyOptionalPolicy(enabled *bool, maxLeases *int, getEnabled func() bool, 
 }
 
 func (s persistedPolicyState) apply(api *RelayAPI) error {
-	server := api.server
-	runtime := server.PolicyRuntime()
+	runtime := api.server.PolicyRuntime()
 	if mode := strings.TrimSpace(s.ApprovalMode); mode != "" {
 		if err := runtime.Approver().SetMode(policy.Mode(mode)); err != nil {
 			return err
 		}
 	}
-	runtime.Approver().SetDecisions(
-		identity.NormalizeIdentityKeys(s.ApprovedIdentityKeys),
-		identity.NormalizeIdentityKeys(s.DeniedIdentityKeys),
-	)
-	runtime.SetBannedIdentityKeys(identity.NormalizeIdentityKeys(s.BannedIdentityKeys))
+	runtime.Approver().SetDecisions(s.ApprovedIdentityKeys, s.DeniedIdentityKeys)
+	runtime.SetBannedIdentityKeys(s.BannedIdentityKeys)
 	runtime.IPFilter().SetBannedIPs(s.BannedIPs)
-	runtime.BPSManager().SetIdentityBPSLimits(identity.NormalizeIdentityKeyBPS(s.IdentityBPS))
-	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, server.SetUDPPolicy)
-	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, server.SetTCPPortPolicy)
+	runtime.BPSManager().SetIdentityBPSLimits(s.IdentityBPS)
+	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, api.server.SetUDPPolicy)
+	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, api.server.SetTCPPortPolicy)
 	if s.LandingPageEnabled != nil {
 		api.landingPageEnabled = *s.LandingPageEnabled
 	}
