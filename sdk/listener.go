@@ -754,6 +754,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "raw")
 
+	_ = conn.SetDeadline(time.Now().Add(defaultHandshakeTimeout))
 	if writeErr := req.Write(conn); writeErr != nil {
 		_ = conn.Close()
 		return nil, writeErr
@@ -773,6 +774,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 		return nil, apiErr
 	}
 
+	_ = conn.SetDeadline(time.Time{})
 	return wrapBufferedConn(conn, reader), nil
 }
 
