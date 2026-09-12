@@ -164,20 +164,20 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	if first == second || first.id == second.id {
 		t.Fatal("replacement reused the previous lease instance")
 	}
-	if _, err := registry.admitReverseCapability(firstResponse.ReverseEndpoint.Capability); !errors.Is(err, errLeaseNotFound) {
-		t.Fatalf("old reverse capability error = %v, want lease not found", err)
+	if _, err := registry.admitReverseCapability(firstResponse.ReverseEndpoint.Capability); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old reverse capability error = %v, want unauthorized", err)
 	}
-	if _, err := registry.admitLeaseByToken(firstResponse.AccessToken, false); !errors.Is(err, errLeaseNotFound) {
-		t.Fatalf("old access token admission error = %v, want lease not found", err)
+	if _, err := registry.admitLeaseByToken(firstResponse.AccessToken, false); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token admission error = %v, want unauthorized", err)
 	}
-	if _, err := registry.Renew(types.RenewRequest{AccessToken: firstResponse.AccessToken}, "203.0.113.12"); !errors.Is(err, errLeaseNotFound) {
-		t.Fatalf("old access token renew error = %v, want lease not found", err)
+	if _, err := registry.Renew(types.RenewRequest{AccessToken: firstResponse.AccessToken}, "203.0.113.12"); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token renew error = %v, want unauthorized", err)
 	}
-	if _, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errLeaseNotFound) {
-		t.Fatalf("old access token reverse refresh error = %v, want lease not found", err)
+	if _, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token reverse refresh error = %v, want unauthorized", err)
 	}
-	if err := registry.verifySigningAccessToken(firstResponse.AccessToken); !errors.Is(err, errLeaseNotFound) {
-		t.Fatalf("old access token signing error = %v, want lease not found", err)
+	if err := registry.verifySigningAccessToken(firstResponse.AccessToken); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("old access token signing error = %v, want unauthorized", err)
 	}
 	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token unregister error = %v, want unauthorized", err)
@@ -482,6 +482,9 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	}
 	if _, err := restarted.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: resp.AccessToken}); !errors.Is(err, errLeaseNotFound) {
 		t.Fatalf("RefreshReverseEndpoint() after restart = %v, want lease not found", err)
+	}
+	if err := restarted.verifySigningAccessToken(resp.AccessToken); !errors.Is(err, errLeaseNotFound) {
+		t.Fatalf("verifySigningAccessToken() after restart = %v, want lease not found", err)
 	}
 
 	if _, err := restarted.admitReverseCapability("forged"); !errors.Is(err, errUnauthorized) {
