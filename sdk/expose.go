@@ -57,6 +57,7 @@ type Exposure struct {
 	reconcileMu    sync.Mutex
 	relayURLs      []string
 	relayListeners map[string]*listener
+	blockedRelays  map[string]error
 	statuses       map[string]RelayStatus
 	stateChanged   chan struct{}
 	statusEvents   chan RelayStatus
@@ -153,6 +154,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		accepted:       make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
 		datagrams:      make(chan types.DatagramFrame, max(len(relayURLs)*32, 1)),
 		relayListeners: make(map[string]*listener, len(relayURLs)),
+		blockedRelays:  make(map[string]error),
 		statuses:       make(map[string]RelayStatus, len(relayURLs)),
 		stateChanged:   make(chan struct{}),
 		statusEvents:   make(chan RelayStatus, max(len(relayURLs)*4, 4)),
@@ -188,6 +190,15 @@ func (e *Exposure) SetRelays(relays []string) error {
 
 func (e *Exposure) setRelays(relayURLs []string, failOnError bool) error {
 	e.mu.Lock()
+	desired := make(map[string]struct{}, len(relayURLs))
+	for _, relayURL := range relayURLs {
+		desired[relayURL] = struct{}{}
+	}
+	for relayURL := range e.blockedRelays {
+		if _, retained := desired[relayURL]; !retained {
+			delete(e.blockedRelays, relayURL)
+		}
+	}
 	e.relayURLs = append([]string(nil), relayURLs...)
 	e.mu.Unlock()
 	return e.reconcileRelayListeners(failOnError)
@@ -228,6 +239,7 @@ func (e *Exposure) RemoveRelay(relayURL string) error {
 		}
 	}
 	e.relayURLs = nextRelays
+	delete(e.blockedRelays, relayURL)
 	e.mu.Unlock()
 	return e.reconcileRelayListeners(false)
 }
@@ -351,6 +363,12 @@ func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
 	}
 	if update.err != nil {
 		status.Err = update.err
+		if errors.Is(update.err, errMITMDetected) {
+			if e.blockedRelays == nil {
+				e.blockedRelays = make(map[string]error)
+			}
+			e.blockedRelays[relayURL] = update.err
+		}
 	} else if update.state != RelayFailed {
 		status.Err = nil
 	}
@@ -772,6 +790,12 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	e.mu.RUnlock()
 	desired := make(map[string]struct{}, len(relayURLs))
 	for _, relayURL := range relayURLs {
+		e.mu.RLock()
+		_, blocked := e.blockedRelays[relayURL]
+		e.mu.RUnlock()
+		if blocked {
+			continue
+		}
 		desired[relayURL] = struct{}{}
 	}
 	e.syncRelayStatuses(relayURLs)

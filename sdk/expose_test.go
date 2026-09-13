@@ -311,6 +311,26 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	}
 }
 
+func TestExposureReconcileDoesNotRestartMITMBlockedRelay(t *testing.T) {
+	const relayURL = "https://relay.example"
+	exposure := newExposureStateTest(t, relayURL)
+	exposure.blockedRelays = map[string]error{relayURL: errMITMDetected}
+
+	if err := exposure.reconcileRelayListeners(false); err != nil {
+		t.Fatalf("reconcileRelayListeners() error = %v", err)
+	}
+	if got := exposure.activeRelayURLs(); len(got) != 0 {
+		t.Fatalf("active relay URLs = %v, want none", got)
+	}
+
+	if err := exposure.RemoveRelay(relayURL); err != nil {
+		t.Fatalf("RemoveRelay() error = %v", err)
+	}
+	if _, blocked := exposure.blockedRelays[relayURL]; blocked {
+		t.Fatal("removing relay did not clear its MITM block")
+	}
+}
+
 func TestExposureRemoveRelayStopsRunningListener(t *testing.T) {
 	const relayA = "https://relay-a.example"
 

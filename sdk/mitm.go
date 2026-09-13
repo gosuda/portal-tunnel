@@ -22,6 +22,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var errMITMDetected = errors.New("tls termination suspected by self-probe")
+
 const (
 	mitmProbeExporterLabel = "Portal-MITM-Probe-v1"
 	mitmProbePeekTimeout   = 100 * time.Millisecond
@@ -271,9 +273,8 @@ func (m *mitmManager) logResult(report mitmProbeReport, err error) {
 			Str("public_url", report.PublicURL).
 			Str("address", report.Address)
 		if m.ban {
-			detectionErr := errors.New("tls termination suspected by self-probe")
 			event.Msg("tls termination suspected by self-probe; closing listener")
-			l.reportFailed(detectionErr)
+			l.reportFailed(errMITMDetected)
 			_ = l.Close()
 			return
 		}
