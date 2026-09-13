@@ -1,15 +1,19 @@
 # AGENTS.md
 
 Keep this file short and behavioral.
-Architecture, product behavior, and design rationale belong in `docs/architecture.md` and `docs/adr/README.md`.
+Architecture documentation describes the current architecture. Issues and pull
+requests preserve refactoring, migration, and rejected-design history.
 
 ## Development Principles
 
 - Minimizing concepts, duplication, and ceremony.
+- Do not preserve implementation history in the codebase.
 - Prefer a single stable contract with one real owner.
 - Prefer local simplicity over premature or speculative abstraction.
 - Add indirection only when it removes real coupling or protects a real boundary.
-- Tests should protect real stable contracts and invariants, not drive the spec or exist only for regression prevention.
+- Tests protect stable public behavior, protocol invariants, and real lifecycle E2E behavior.
+- Do not add tests whose only purpose is to preserve an implementation, regression fix, call sequence, log output, retry count, file metadata, or temporary design.
+- When a refactor makes an implementation-coupled test obsolete, delete it rather than rewriting it around the new implementation.
 
 ## Project Principles
 
@@ -24,6 +28,8 @@ Architecture, product behavior, and design rationale belong in `docs/architectur
 - Keep stable shared contracts, constants, and public paths in `types/`, not in runtime or helpers.
 - Resolve complexity in the lowest coherent owner and expose only the minimum surface upward.
 - Shared runtime logic must live in one real owner and be reused, not mirrored.
+- Do not create ADRs for refactors, migrations, rejected approaches, or temporary implementation decisions.
+- Remove stale or superseded ADRs instead of maintaining them as historical artifacts.
 
 ## Verification
 
