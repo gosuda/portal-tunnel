@@ -120,19 +120,22 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		EncryptedClientHelloConfigList: bytes.Clone(lease.echConfigList),
 	}
 
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: l.dialTimeout},
-		Config:    probeTLSConf,
-	}
-	conn, err := dialer.DialContext(probeCtx, "tcp", dialAddr)
+	rawConn, err := (&net.Dialer{Timeout: l.dialTimeout}).DialContext(probeCtx, "tcp", dialAddr)
 	if err != nil {
 		return report, fmt.Errorf("dial mitm probe: %w", err)
 	}
-	defer conn.Close()
+	tlsConn := tls.Client(rawConn, probeTLSConf)
+	defer tlsConn.Close()
 
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
-		return report, errors.New("mitm probe connection is not tls")
+	// Reserve the nonce once the TCP connection exists but before the TLS
+	// handshake: the reverse side can hand the connection to Accept as soon
+	// as its handshake completes, which can race ahead of the probe side
+	// exporting keying material. Reserving after the TCP connect keeps the
+	// probe-inspection window off address resolution and connection setup.
+	resultCh, cleanupProbe := m.reserveProbe(nonceHex)
+	defer cleanupProbe()
+	if err := tlsConn.HandshakeContext(probeCtx); err != nil {
+		return report, fmt.Errorf("mitm probe tls handshake: %w", err)
 	}
 
 	clientState := tlsConn.ConnectionState()
@@ -141,8 +144,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	if err != nil {
 		return report, fmt.Errorf("export client probe keying material: %w", err)
 	}
-	resultCh, cleanupProbe := m.startProbe(nonceHex, expected)
-	defer cleanupProbe()
+	m.attachExpected(nonceHex, expected)
 
 	paddingLen := mitmProbePaddingMin
 	if paddingRange := mitmProbePaddingMax - mitmProbePaddingMin; paddingRange > 0 {
@@ -158,7 +160,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		return report, fmt.Errorf("generate probe frame: %w", err)
 	}
 	copy(frame, nonceRaw)
-	if _, err := conn.Write(frame); err != nil {
+	if _, err := tlsConn.Write(frame); err != nil {
 		return report, fmt.Errorf("write mitm probe: %w", err)
 	}
 
@@ -339,12 +341,16 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	return nil, true, nil
 }
 
-func (m *mitmManager) startProbe(nonce string, expected []byte) (<-chan string, func()) {
-	m.mu.Lock()
+// reserveProbe registers the probe nonce before the TLS dial so the reverse
+// side recognizes the connection even if Accept runs the moment the reverse
+// handshake completes. attachExpected arms the reservation afterwards; until
+// then the entry holds no exporter value and a completion attempt reports a
+// mismatch.
+func (m *mitmManager) reserveProbe(nonce string) (<-chan string, func()) {
 	state := &mitmProbePending{
-		expected: bytes.Clone(expected),
 		resultCh: make(chan string, 1),
 	}
+	m.mu.Lock()
 	m.pending[nonce] = state
 	m.mu.Unlock()
 
@@ -355,21 +361,32 @@ func (m *mitmManager) startProbe(nonce string, expected []byte) (<-chan string, 
 	}
 }
 
+// attachExpected arms a reserved probe with the exporter value the reverse
+// side must reproduce for the connection to count as untampered.
+func (m *mitmManager) attachExpected(nonce string, expected []byte) {
+	m.mu.Lock()
+	if state := m.pending[nonce]; state != nil {
+		state.expected = bytes.Clone(expected)
+	}
+	m.mu.Unlock()
+}
+
 func (m *mitmManager) completeProbe(nonce string, actual []byte) {
 	m.mu.Lock()
 	state := m.pending[nonce]
-	m.mu.Unlock()
 	if state == nil {
+		m.mu.Unlock()
 		return
 	}
-
 	reason := ""
 	if !bytes.Equal(state.expected, actual) {
 		reason = types.MITMProbeReasonExporterMismatch
 	}
+	resultCh := state.resultCh
+	m.mu.Unlock()
 
 	select {
-	case state.resultCh <- reason:
+	case resultCh <- reason:
 	default:
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"net"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,8 +41,9 @@ func TestMITMProbeConnMatchesExporter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client ExportKeyingMaterial() error = %v", err)
 	}
-	resultCh, cleanupProbe := listener.mitmManager.startProbe(nonceHex, expected)
+	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
 	defer cleanupProbe()
+	listener.mitmManager.attachExpected(nonceHex, expected)
 
 	handleDone := make(chan struct{})
 	go func() {
@@ -95,8 +97,9 @@ func TestMITMProbeConnDetectsExporterMismatch(t *testing.T) {
 		t.Fatalf("rand.Read() error = %v", err)
 	}
 	nonceHex := hex.EncodeToString(nonce)
-	resultCh, cleanupProbe := listener.mitmManager.startProbe(nonceHex, make([]byte, 32))
+	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
 	defer cleanupProbe()
+	listener.mitmManager.attachExpected(nonceHex, make([]byte, 32))
 
 	handleDone := make(chan struct{})
 	go func() {
@@ -135,6 +138,132 @@ func TestMITMProbeConnDetectsExporterMismatch(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for probe handler")
 	}
+}
+
+func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
+	listener := &listener{}
+	listener.mitmManager = newMITMManager(context.Background(), listener, false)
+
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("rand.Read() error = %v", err)
+	}
+	nonceHex := hex.EncodeToString(nonce)
+
+	// Production order from probeTLSPassthrough: the nonce is reserved
+	// once the TCP connection exists but before the TLS handshake, so the
+	// reservation is in place before the reverse handshake can complete.
+	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
+	defer cleanupProbe()
+
+	cert := newMITMProbeCertificate(t)
+	clientRaw, serverRaw := net.Pipe()
+	clientConn := tls.Client(clientRaw, &tls.Config{
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS13,
+		NextProtos:         []string{"http/1.1"},
+	})
+	signaling := &readSignalingConn{Conn: serverRaw, readStarted: make(chan struct{})}
+	serverConn := tls.Server(signaling, &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+		NextProtos:   []string{"http/1.1"},
+	})
+	defer closeMITMProbeTLSConn(clientConn)
+	defer closeMITMProbeTLSConn(serverConn)
+
+	type handleResult struct {
+		conn    net.Conn
+		handled bool
+		err     error
+	}
+	handleResultCh := make(chan handleResult, 1)
+	go func() {
+		if err := serverConn.HandshakeContext(context.Background()); err != nil {
+			handleResultCh <- handleResult{err: err}
+			return
+		}
+		// Accept fires the moment the reverse handshake completes. Arming the
+		// wrapper makes its next read — maybeHandleConn's peek — signal, so
+		// the probe side provably attaches the expected exporter only after
+		// the handler has entered its peek.
+		signaling.arm()
+		nextConn, handled, err := listener.mitmManager.maybeHandleConn(serverConn)
+		handleResultCh <- handleResult{conn: nextConn, handled: handled, err: err}
+	}()
+
+	if err := clientConn.HandshakeContext(context.Background()); err != nil {
+		t.Fatalf("client handshake error: %v", err)
+	}
+	select {
+	case <-signaling.readStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for maybeHandleConn to start reading; was the probe reservation removed?")
+	}
+
+	clientState := clientConn.ConnectionState()
+	expected, err := (&clientState).ExportKeyingMaterial(mitmProbeExporterLabel, nil, 32)
+	if err != nil {
+		t.Fatalf("client ExportKeyingMaterial() error = %v", err)
+	}
+	listener.mitmManager.attachExpected(nonceHex, expected)
+
+	frame := bytes.Clone(nonce)
+	frame = append(frame, bytes.Repeat([]byte{0xAB}, 128)...)
+	if _, err := clientConn.Write(frame); err != nil {
+		t.Fatalf("clientConn.Write() error = %v", err)
+	}
+	_ = clientConn.Close()
+
+	select {
+	case reason := <-resultCh:
+		if reason != "" {
+			t.Fatalf("probe reason = %q, want empty", reason)
+		}
+	case <-time.After(2 * time.Second):
+		select {
+		case result := <-handleResultCh:
+			t.Fatalf("timed out waiting for probe result; handler resolved first: handled=%v passthrough=%v err=%v", result.handled, result.conn != nil, result.err)
+		default:
+		}
+		t.Fatal("timed out waiting for probe result")
+	}
+
+	select {
+	case result := <-handleResultCh:
+		if result.err != nil {
+			t.Fatalf("maybeHandleConn() error = %v", result.err)
+		}
+		if !result.handled {
+			t.Fatal("maybeHandleConn() handled = false, want true: probe bypassed into normal traffic")
+		}
+		if result.conn != nil {
+			t.Fatal("maybeHandleConn() returned passthrough conn for probe")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for probe handler")
+	}
+}
+
+// readSignalingConn closes readStarted on the first Read after arm is
+// called. Reads before arming — the TLS handshake itself — do not signal.
+// Handshake reads and armed reads both happen on the goroutine that owns the
+// conn, so the flag needs no lock; the Once makes repeated armed reads a
+// single signal instead of a double close.
+type readSignalingConn struct {
+	net.Conn
+	readStarted chan struct{}
+	signalOnce  sync.Once
+	armed       bool
+}
+
+func (c *readSignalingConn) arm() { c.armed = true }
+
+func (c *readSignalingConn) Read(p []byte) (int, error) {
+	if c.armed {
+		c.signalOnce.Do(func() { close(c.readStarted) })
+	}
+	return c.Conn.Read(p)
 }
 
 func TestMITMProbeConnPassesThroughNormalTraffic(t *testing.T) {
