@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"net"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -150,7 +151,8 @@ func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
 	nonceHex := hex.EncodeToString(nonce)
 
 	// Production order from probeTLSPassthrough: the nonce is reserved
-	// before the dial, so the reservation exists before any handshake.
+	// once the TCP connection exists but before the TLS handshake, so the
+	// reservation is in place before the reverse handshake can complete.
 	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
 	defer cleanupProbe()
 
@@ -161,7 +163,8 @@ func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
 		MinVersion:         tls.VersionTLS13,
 		NextProtos:         []string{"http/1.1"},
 	})
-	serverConn := tls.Server(serverRaw, &tls.Config{
+	signaling := &readSignalingConn{Conn: serverRaw, readStarted: make(chan struct{})}
+	serverConn := tls.Server(signaling, &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
 		NextProtos:   []string{"http/1.1"},
@@ -175,24 +178,28 @@ func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
 		err     error
 	}
 	handleResultCh := make(chan handleResult, 1)
-	probeSide := make(chan struct{})
 	go func() {
 		if err := serverConn.HandshakeContext(context.Background()); err != nil {
 			handleResultCh <- handleResult{err: err}
 			return
 		}
-		close(probeSide)
-		// Accept fires the moment the reverse handshake completes — before
-		// the probe side has attached the expected exporter or written the
-		// nonce frame.
+		// Accept fires the moment the reverse handshake completes. Arming the
+		// wrapper makes its next read — maybeHandleConn's peek — signal, so
+		// the probe side provably attaches the expected exporter only after
+		// the handler has entered its peek.
+		signaling.arm()
 		nextConn, handled, err := listener.mitmManager.maybeHandleConn(serverConn)
 		handleResultCh <- handleResult{conn: nextConn, handled: handled, err: err}
 	}()
 
 	if err := clientConn.HandshakeContext(context.Background()); err != nil {
-		t.Fatalf("client handshake error = %v", err)
+		t.Fatalf("client handshake error: %v", err)
 	}
-	<-probeSide
+	select {
+	case <-signaling.readStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for maybeHandleConn to start reading; was the probe reservation removed?")
+	}
 
 	clientState := clientConn.ConnectionState()
 	expected, err := (&clientState).ExportKeyingMaterial(mitmProbeExporterLabel, nil, 32)
@@ -236,6 +243,27 @@ func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for probe handler")
 	}
+}
+
+// readSignalingConn closes readStarted on the first Read after arm is
+// called. Reads before arming — the TLS handshake itself — do not signal.
+// Handshake reads and armed reads both happen on the goroutine that owns the
+// conn, so the flag needs no lock; the Once makes repeated armed reads a
+// single signal instead of a double close.
+type readSignalingConn struct {
+	net.Conn
+	readStarted chan struct{}
+	signalOnce  sync.Once
+	armed       bool
+}
+
+func (c *readSignalingConn) arm() { c.armed = true }
+
+func (c *readSignalingConn) Read(p []byte) (int, error) {
+	if c.armed {
+		c.signalOnce.Do(func() { close(c.readStarted) })
+	}
+	return c.Conn.Read(p)
 }
 
 func TestMITMProbeConnPassesThroughNormalTraffic(t *testing.T) {

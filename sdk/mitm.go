@@ -108,12 +108,6 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	}
 	nonceHex := hex.EncodeToString(nonceRaw)
 
-	// Reserve the nonce before dialing: the reverse side can hand the
-	// connection to Accept as soon as its TLS handshake completes, which
-	// can race ahead of the probe side exporting keying material.
-	resultCh, cleanupProbe := m.reserveProbe(nonceHex)
-	defer cleanupProbe()
-
 	dialAddr, err := m.probeDialAddress(publicURL)
 	if err != nil {
 		return report, err
@@ -126,19 +120,22 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		EncryptedClientHelloConfigList: bytes.Clone(lease.echConfigList),
 	}
 
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: l.dialTimeout},
-		Config:    probeTLSConf,
-	}
-	conn, err := dialer.DialContext(probeCtx, "tcp", dialAddr)
+	rawConn, err := (&net.Dialer{Timeout: l.dialTimeout}).DialContext(probeCtx, "tcp", dialAddr)
 	if err != nil {
 		return report, fmt.Errorf("dial mitm probe: %w", err)
 	}
-	defer conn.Close()
+	tlsConn := tls.Client(rawConn, probeTLSConf)
+	defer tlsConn.Close()
 
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
-		return report, errors.New("mitm probe connection is not tls")
+	// Reserve the nonce once the TCP connection exists but before the TLS
+	// handshake: the reverse side can hand the connection to Accept as soon
+	// as its handshake completes, which can race ahead of the probe side
+	// exporting keying material. Reserving after the TCP connect keeps the
+	// probe-inspection window off address resolution and connection setup.
+	resultCh, cleanupProbe := m.reserveProbe(nonceHex)
+	defer cleanupProbe()
+	if err := tlsConn.HandshakeContext(probeCtx); err != nil {
+		return report, fmt.Errorf("mitm probe tls handshake: %w", err)
 	}
 
 	clientState := tlsConn.ConnectionState()
@@ -163,7 +160,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		return report, fmt.Errorf("generate probe frame: %w", err)
 	}
 	copy(frame, nonceRaw)
-	if _, err := conn.Write(frame); err != nil {
+	if _, err := tlsConn.Write(frame); err != nil {
 		return report, fmt.Errorf("write mitm probe: %w", err)
 	}
 
