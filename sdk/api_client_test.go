@@ -1,15 +1,19 @@
 package sdk
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func TestValidateReverseEndpoint(t *testing.T) {
@@ -130,5 +134,35 @@ func TestTerminalRelayFailureTargetsTheReportingRelay(t *testing.T) {
 		if route.RelayURL != entry {
 			t.Fatalf("unexpected remaining relay %q", route.RelayURL)
 		}
+	}
+}
+
+func TestRefreshReverseEndpointAfterFailureReportsMissingLease(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, "lease not found")
+	}))
+	defer server.Close()
+
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse relay URL: %v", err)
+	}
+	listener := &listener{
+		relayURL:   relayURL,
+		httpClient: server.Client(),
+		lease: utils.NewSnapshot(listenerSnapshot{
+			accessToken: "access-token",
+			reverse: types.ReverseEndpoint{
+				URL:        "https://gateway.example/sdk/connect",
+				Capability: "failed-capability",
+				ExpiresAt:  time.Now().UTC().Add(time.Minute),
+			},
+			expiresAt: time.Now().UTC().Add(time.Minute),
+		}, listenerSnapshot.snapshot),
+	}
+
+	err = listener.refreshReverseEndpointAfterFailure(context.Background(), "failed-capability")
+	if !errors.Is(err, errLeaseRefreshRequired) {
+		t.Fatalf("refreshReverseEndpointAfterFailure() error = %v, want lease refresh required", err)
 	}
 }

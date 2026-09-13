@@ -608,7 +608,9 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 				return errLeaseRefreshRequired
 			}
 			if l.isAlternateReverseEndpoint(lease.reverse.URL) {
-				l.refreshReverseEndpointAfterFailure(ctx, lease.reverse.Capability)
+				if err := l.refreshReverseEndpointAfterFailure(ctx, lease.reverse.Capability); err != nil {
+					return err
+				}
 				if !l.waitRetry(ctx, "reverse endpoint connect", err, 1, sessionSlot) {
 					return nil
 				}
@@ -640,7 +642,9 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 			retries = 0
 		default:
 			if l.isAlternateReverseEndpoint(lease.reverse.URL) {
-				l.refreshReverseEndpointAfterFailure(ctx, lease.reverse.Capability)
+				if err := l.refreshReverseEndpointAfterFailure(ctx, lease.reverse.Capability); err != nil {
+					return err
+				}
 				if !l.waitRetry(ctx, "reverse endpoint session", err, 1, sessionSlot) {
 					return nil
 				}
@@ -808,25 +812,31 @@ func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tl
 	return tlsConfig, nil
 }
 
-func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, failedCapability string) {
+func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, failedCapability string) error {
 	l.reverseMu.Lock()
 	defer l.reverseMu.Unlock()
 	lease, ok := l.leaseSnapshot()
 	if !ok || lease.accessToken == "" || failedCapability == "" {
-		return
+		return nil
 	}
 	if lease.reverse.Capability != failedCapability {
-		return
+		return nil
 	}
 	endpoint, err := url.Parse(lease.reverse.URL)
 	if err != nil || strings.EqualFold(endpoint.Host, l.relayURL.Host) {
-		return
+		return nil
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	next, err := l.requestReverseEndpoint(requestCtx, lease.accessToken, lease.reverse.URL, lease.expiresAt)
-	if err != nil || l.lease == nil {
-		return
+	if err != nil {
+		if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
+			return errLeaseRefreshRequired
+		}
+		return nil
+	}
+	if l.lease == nil {
+		return nil
 	}
 	_, _ = l.lease.UpdateIf(func(current listenerSnapshot) (listenerSnapshot, bool) {
 		if current.accessToken != lease.accessToken || current.reverse.Capability != failedCapability {
@@ -835,6 +845,7 @@ func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, faile
 		current.reverse = next
 		return current, true
 	})
+	return nil
 }
 
 func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, error) {
