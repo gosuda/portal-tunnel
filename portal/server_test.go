@@ -110,7 +110,7 @@ func ephemeralPortRange(t *testing.T) (lo, hi int) {
 	t.Helper()
 	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
 	if err != nil {
-		return 49152, 65535
+		return 49152, 65535 // assume the default dynamic range
 	}
 	fields := strings.Fields(string(data))
 	if len(fields) != 2 {
@@ -134,19 +134,33 @@ func ephemeralPortRange(t *testing.T) (lo, hi int) {
 func tempRedirectPort(t *testing.T) (net.Listener, string) {
 	t.Helper()
 	lo, hi := ephemeralPortRange(t)
-	start, end := 31000, 32100
-	if start <= hi && end >= lo {
-		start, end = hi+1, min(hi+1100, 65535)
-	}
-	for port := start; port <= end; port++ {
-		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-		if err != nil {
-			continue
+	searched := false
+	for _, band := range nonEphemeralBands(lo, hi) {
+		for port := band[0]; port <= band[1]; port++ {
+			searched = true
+			listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+			if err != nil {
+				continue
+			}
+			return listener, listener.Addr().String()
 		}
-		return listener, listener.Addr().String()
+	}
+	if !searched {
+		t.Skipf("no port outside the ephemeral range [%d, %d] on this host", lo, hi)
 	}
 	t.Fatalf("no free TCP port outside the ephemeral range [%d, %d]", lo, hi)
 	return nil, ""
+}
+
+// nonEphemeralBands returns candidate port bands outside [lo, hi]: the
+// preferred 31000..32100 band when it lies below the range, a band just
+// below the range, and a band just above it. Bands may be empty.
+func nonEphemeralBands(lo, hi int) [][2]int {
+	return [][2]int{
+		{31000, min(32100, lo-1)},
+		{max(1024, lo-1100), lo - 1},
+		{max(1024, hi+1), min(65535, hi+1100)},
+	}
 }
 
 func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *http.Client {
