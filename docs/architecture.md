@@ -23,5 +23,26 @@ CLI or agent callers, and routed HTTP payment settings belong to
 and discovery events update it, while `Relays`, `Updates`, and `WaitReady`
 read from that state. Agent status types are not part of the SDK contract.
 
+## Identity challenges
+
+`portal/identity` owns the EIP-4361 message model, formatting, and verification
+shared by tunnel registration and browser/admin wallet login, while the agent
+owns the wallet-login lifecycle. Portal emits version 1, chain ID 1 messages
+with LF separators. Nonces use `crypto/rand`; the existing secp256k1 and Keccak
+primitives own EIP-191 personal-sign hashing and signer recovery. Personal-sign
+signatures use `r || s || v`, with `v` in `0/1` or `27/28`.
+
+The server retains the exact challenge message, expected address, and expiry.
+Verification requires an exact message match, an unexpired challenge, and a
+signature recovering the expected address. It does not parse server-generated
+messages back into a second set of domain/nonce fields. The signed RFC3339
+expiration remains authoritative at second precision, including the existing
+inclusive cutoff. Registration challenge consumption and wallet allowlists,
+sessions, and challenge consumption remain with their respective owners.
+
+This supports Portal-issued EOA challenges, not arbitrary SIWE messages or
+contract-wallet verification. `siwe-go` is no longer required; `go-ethereum`
+remains an indirect dependency of the separate x402 payment integration.
+
 See [the site architecture documentation](src/routes/architecture/+page.md) for
 the rest of the system.
