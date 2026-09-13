@@ -378,6 +378,57 @@ func TestHTTPRedirectBindFailure(t *testing.T) {
 	listener.Close()
 }
 
+func TestNewServerValidatesLocalPublicOrigin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		portalURL  string
+		sniPort    int
+		wantErr    bool
+		wantOrigin string
+	}{
+		{"default port local", "https://localhost", 443, false, ""},
+		{"non-default local SNI port requires public port", "https://localhost", 8443, true, "https://localhost:8443"},
+		{"explicit local public port", "https://localhost:8443", 8443, false, ""},
+		{"loopback IP host", "https://127.0.0.1", 8443, true, "https://127.0.0.1:8443"},
+		{"IPv6 loopback host", "https://[::1]", 8443, true, "https://[::1]:8443"},
+		{"dot-localhost host", "https://relay.localhost", 8443, true, "https://relay.localhost:8443"},
+		{"remote NAT public port 443", "https://relay.example.com", 8443, false, ""},
+		{"remote external port differs from listener", "https://relay.example.com:9443", 8443, false, ""},
+		{"local SNI port 80 requires public port", "https://localhost", 80, true, "https://localhost:80"},
+		{"explicit local port 80", "https://localhost:80", 80, false, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := NewServer(ServerConfig{
+				PortalURL: tc.portalURL,
+				SNIPort:   tc.sniPort,
+				StateDir:  tempStateDir(t),
+			})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("NewServer() error = nil, want validation error")
+				}
+				msg := err.Error()
+				if !strings.Contains(msg, "PORTAL_URL") {
+					t.Fatalf("error %q does not mention PORTAL_URL", msg)
+				}
+				wantSNI := "SNI_PORT=" + strconv.Itoa(tc.sniPort)
+				if !strings.Contains(msg, wantSNI) {
+					t.Fatalf("error %q does not mention %s", msg, wantSNI)
+				}
+				if !strings.Contains(msg, tc.wantOrigin) {
+					t.Fatalf("error %q does not suggest origin %s", msg, tc.wantOrigin)
+				}
+			} else if err != nil {
+				t.Fatalf("NewServer() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
 func TestRelayDiscoveryEnabledServesDiscoveryEnvelope(t *testing.T) {
 	t.Parallel()
 

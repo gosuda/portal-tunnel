@@ -38,6 +38,20 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	apiPort := harnessPort(t)
+	sniPort := harnessPort(t)
+	relayURL := "https://127.0.0.1:" + strconv.Itoa(apiPort)
+	return newHarnessWithRelayURL(t, relayURL, portal.ServerConfig{
+		PortalURL:     relayURL,
+		StateDir:      t.TempDir(),
+		APIListenAddr: "127.0.0.1:" + strconv.Itoa(apiPort),
+		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(sniPort),
+		SNIPort:       sniPort,
+	})
+}
+
+func newHarnessWithRelayURL(t *testing.T, relayURL string, relayCfg portal.ServerConfig) *harness {
+	t.Helper()
 
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, marker)
@@ -49,17 +63,7 @@ func newHarness(t *testing.T) *harness {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	apiPort := harnessPort(t)
-	sniPort := harnessPort(t)
-	stateDir := t.TempDir()
-	relayURL := "https://127.0.0.1:" + strconv.Itoa(apiPort)
-	relay, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:     relayURL,
-		StateDir:      stateDir,
-		APIListenAddr: "127.0.0.1:" + strconv.Itoa(apiPort),
-		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(sniPort),
-		SNIPort:       sniPort,
-	})
+	relay, err := portal.NewServer(relayCfg)
 	if err != nil {
 		cancel()
 		service.Close()
@@ -97,8 +101,8 @@ func newHarness(t *testing.T) *harness {
 		server:      relay,
 		exposure:    exposure,
 		service:     service,
-		sniAddr:     "127.0.0.1:" + strconv.Itoa(sniPort),
-		certificate: filepath.Join(stateDir, "fullchain.pem"),
+		sniAddr:     relayCfg.SNIListenAddr,
+		certificate: filepath.Join(relayCfg.StateDir, "fullchain.pem"),
 		proxyDone:   make(chan error, 1),
 	}
 	go func() {
