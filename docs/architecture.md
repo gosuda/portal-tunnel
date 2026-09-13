@@ -23,6 +23,5 @@ CLI or agent callers, and routed HTTP payment settings belong to
 and discovery events update it, while `Relays`, `Updates`, and `WaitReady`
 read from that state. Agent status types are not part of the SDK contract.
 
-See [ADR index](adr/README.md) for the relay overlay migration decision and
-[the site architecture documentation](src/routes/architecture/+page.md) for the
-rest of the system.
+See [the site architecture documentation](src/routes/architecture/+page.md) for
+the rest of the system.
