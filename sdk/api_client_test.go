@@ -118,7 +118,15 @@ func TestTerminalRelayFailureClosesListener(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	listener := &listener{relayURL: entryURL, cancel: func() { close(done) }, doneCh: done}
+	var failure RelayFailure
+	listener := &listener{
+		relayURL: entryURL,
+		cancel:   func() { close(done) },
+		doneCh:   done,
+		status: func(status listenerStatus) {
+			failure = status.failure
+		},
+	}
 	err = &relayRegistrationError{
 		relayURL: exit,
 		err:      fmt.Errorf("%w: unsupported protocol", errRelayIncompatible),
@@ -131,6 +139,9 @@ func TestTerminalRelayFailureClosesListener(t *testing.T) {
 	case <-done:
 	default:
 		t.Fatal("listener remains open after terminal relay failure")
+	}
+	if failure != RelayFailureTerminal {
+		t.Fatalf("failure = %q, want terminal", failure)
 	}
 }
 

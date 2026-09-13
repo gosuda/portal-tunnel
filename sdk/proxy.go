@@ -144,8 +144,6 @@ func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr st
 		relayConn, err := exposure.Accept()
 		if err != nil {
 			switch {
-			case errors.Is(err, ErrNoRelays):
-				return err
 			case errors.Is(err, context.Canceled):
 				if ctx.Err() != nil {
 					return ctx.Err()

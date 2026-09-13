@@ -4,20 +4,111 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
-// Watch refreshes relay discovery and publishes the currently selected
-// concrete relay URLs. Discovery owns refresh and selection; the callback owns
-// what to do with the resulting membership.
-func Watch(
+// Controller owns discovery refresh, runtime feedback, and relay selection.
+type Controller struct {
+	relaySet *RelaySet
+	changed  chan struct{}
+
+	mu              sync.RWMutex
+	activeRelayURLs []string
+	failedRelays    map[string]struct{}
+}
+
+// NewController creates a discovery controller from bootstrap relay URLs.
+func NewController(bootstrapRelayURLs []string) *Controller {
+	return &Controller{
+		relaySet:     NewRelaySet(bootstrapRelayURLs),
+		changed:      make(chan struct{}, 1),
+		failedRelays: make(map[string]struct{}),
+	}
+}
+
+// ReportActive replaces the relay URLs that currently have live SDK listeners.
+func (c *Controller) ReportActive(relayURLs []string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	previous := c.activeRelayURLs
+	c.activeRelayURLs = append([]string(nil), relayURLs...)
+	for _, relayURL := range relayURLs {
+		delete(c.failedRelays, relayURL)
+	}
+	c.mu.Unlock()
+
+	for _, relayURL := range previous {
+		if !slices.Contains(relayURLs, relayURL) {
+			c.relaySet.UnconfirmRelayURL(relayURL)
+		}
+	}
+	for _, relayURL := range relayURLs {
+		c.relaySet.ConfirmRelayURL(relayURL)
+	}
+	c.signal()
+}
+
+// ReportFailure removes a failed relay from active selection with backoff.
+func (c *Controller) ReportFailure(relayURL string) {
+	if c == nil || relayURL == "" {
+		return
+	}
+	c.mu.Lock()
+	if _, reported := c.failedRelays[relayURL]; reported {
+		c.mu.Unlock()
+		return
+	}
+	c.failedRelays[relayURL] = struct{}{}
+	c.activeRelayURLs = slices.DeleteFunc(c.activeRelayURLs, func(active string) bool {
+		return active == relayURL
+	})
+	c.mu.Unlock()
+	c.relaySet.UnconfirmRelayURL(relayURL)
+	c.relaySet.RecordActiveFailure(relayURL, 1)
+	c.signal()
+}
+
+// Ban permanently excludes a relay from this controller's selections.
+func (c *Controller) Ban(relayURL string) {
+	if c == nil || relayURL == "" {
+		return
+	}
+	c.relaySet.BanRelayURL(relayURL)
+	c.mu.Lock()
+	c.activeRelayURLs = slices.DeleteFunc(c.activeRelayURLs, func(active string) bool {
+		return active == relayURL
+	})
+	c.mu.Unlock()
+	c.signal()
+}
+
+func (c *Controller) signal() {
+	select {
+	case c.changed <- struct{}{}:
+	default:
+	}
+}
+
+func (c *Controller) activeRelays() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return append([]string(nil), c.activeRelayURLs...)
+}
+
+// Watch refreshes discovery and publishes selected concrete relay URLs.
+func (c *Controller) Watch(
 	ctx context.Context,
-	bootstrapRelayURLs []string,
 	state func() RouteState,
 	onChange func([]string) error,
 ) error {
+	if c == nil {
+		return errors.New("relay discovery: controller is nil")
+	}
 	if ctx == nil {
 		return errors.New("relay discovery: context is nil")
 	}
@@ -28,40 +119,44 @@ func Watch(
 		return errors.New("relay discovery: change callback is nil")
 	}
 
-	relaySet := NewRelaySet(bootstrapRelayURLs)
-	refresher := NewRefresher(relaySet)
+	refresher := NewRefresher(c.relaySet)
 	ticker := time.NewTicker(DiscoveryPollInterval)
 	defer ticker.Stop()
 
 	var selected []string
 	published := false
+	refresh := true
 	for {
-		if err := refresher.Refresh(ctx, nil); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			log.Warn().Err(err).Msg("relay discovery refresh failed; will retry")
-		} else {
-			routeState := state()
-			routeState.ActiveRelayURLs = append([]string(nil), selected...)
-			routes := relaySet.SelectRelays(routeState)
-			next := make([]string, 0, len(routes))
-			for _, route := range routes {
-				next = append(next, route.RelayURL)
-			}
-			if !published || !slices.Equal(selected, next) {
-				if err := onChange(next); err != nil {
-					return err
+		if refresh {
+			if err := refresher.Refresh(ctx, nil); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
 				}
-				selected = next
-				published = true
+				log.Warn().Err(err).Msg("relay discovery refresh failed; will retry")
 			}
+		}
+		routeState := state()
+		routeState.ActiveRelayURLs = c.activeRelays()
+		routes := c.relaySet.SelectRelays(routeState)
+		next := make([]string, 0, len(routes))
+		for _, route := range routes {
+			next = append(next, route.RelayURL)
+		}
+		if !published || !slices.Equal(selected, next) {
+			if err := onChange(next); err != nil {
+				return err
+			}
+			selected = next
+			published = true
 		}
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			refresh = true
+		case <-c.changed:
+			refresh = false
 		}
 	}
 }

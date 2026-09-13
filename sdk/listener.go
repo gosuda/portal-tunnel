@@ -42,6 +42,7 @@ type listenerConfig struct {
 
 type listenerStatus struct {
 	state     RelayState
+	failure   RelayFailure
 	err       error
 	publicURL string
 	udpAddr   string
@@ -86,7 +87,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 		Str("relay_url", relayURL).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
-	l.reportFailed(err)
+	l.reportFailure(err, RelayFailureTerminal)
 	_ = l.Close()
 	return true
 }
@@ -241,7 +242,11 @@ func (l *listener) reportAvailable() {
 }
 
 func (l *listener) reportFailed(err error) {
-	l.report(listenerStatus{state: RelayFailed, err: err})
+	l.reportFailure(err, RelayFailureRuntime)
+}
+
+func (l *listener) reportFailure(err error, failure RelayFailure) {
+	l.report(listenerStatus{state: RelayFailed, failure: failure, err: err})
 }
 
 func (l *listener) run(ctx context.Context) {

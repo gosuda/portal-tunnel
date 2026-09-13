@@ -224,6 +224,9 @@ func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, re
 	if err != nil {
 		return nil, err
 	}
+	if len(relayURLs) == 0 {
+		return nil, errors.New("at least one relay or discovery is required")
+	}
 	opts = append(opts, sdk.WithMITMProtection(cfg.banMITM))
 	exposure, err := sdk.Expose(ctx, identity, relayURLs, opts...)
 	if err != nil {
@@ -237,8 +240,10 @@ func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, re
 		_ = exposure.Close()
 		return nil, err
 	}
+	controller := discovery.NewController(bootstrapRelayURLs)
+	go forwardDemoDiscoveryFeedback(ctx, exposure, controller)
 	go func() {
-		err := discovery.Watch(ctx, bootstrapRelayURLs, func() discovery.RouteState {
+		err := controller.Watch(ctx, func() discovery.RouteState {
 			return discovery.RouteState{
 				ExplicitRelayURLs: explicitRelayURLs,
 				MaxActiveRelays:   cfg.maxActiveRelays,
@@ -251,6 +256,37 @@ func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, re
 		}
 	}()
 	return exposure, nil
+}
+
+func forwardDemoDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, controller *discovery.Controller) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update := <-exposure.Updates():
+			if update.State == sdk.RelayFailed {
+				if update.Failure == sdk.RelayFailureMITM {
+					controller.Ban(update.RelayURL)
+				} else {
+					controller.ReportFailure(update.RelayURL)
+				}
+			}
+			statuses := exposure.Relays()
+			active := make([]string, 0, len(statuses))
+			for _, status := range statuses {
+				if status.Active() {
+					active = append(active, status.RelayURL)
+					continue
+				}
+				if status.Failure == sdk.RelayFailureMITM {
+					controller.Ban(status.RelayURL)
+				} else {
+					controller.ReportFailure(status.RelayURL)
+				}
+			}
+			controller.ReportActive(active)
+		}
+	}
 }
 
 // resolveDemoIdentity parses an inline identity or existing file. It generates

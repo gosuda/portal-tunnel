@@ -25,8 +25,7 @@ func newExposureStateTest(t *testing.T, relayURLs ...string) *Exposure {
 		relayListeners: make(map[string]*listener),
 		statuses:       make(map[string]RelayStatus),
 		stateChanged:   make(chan struct{}),
-		statusEvents:   make(chan RelayStatus, 4),
-		updates:        make(chan RelayStatus, 4),
+		updates:        make(chan RelayStatus, 1),
 	}
 	t.Cleanup(func() { _ = exposure.Close() })
 	return exposure
@@ -120,13 +119,26 @@ func TestListenerReverseSessionReadinessTracksLiveSessions(t *testing.T) {
 	}
 }
 
-func TestExposureAcceptReturnsErrNoRelaysAfterTerminalFailures(t *testing.T) {
+func TestExposureAcceptWaitsAfterTerminalFailures(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
 	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: errors.New("rejected")})
 
-	if _, err := exposure.Accept(); !errors.Is(err, ErrNoRelays) {
-		t.Fatalf("Accept() error = %v, want ErrNoRelays", err)
+	result := make(chan error, 1)
+	go func() {
+		_, err := exposure.Accept()
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("Accept() returned before Close: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	if err := exposure.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-result; !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Accept() error after Close = %v, want net.ErrClosed", err)
 	}
 }
 
@@ -149,6 +161,21 @@ func TestExposeRejectsIncompleteIdentity(t *testing.T) {
 	_, err := Expose(context.Background(), types.Identity{Name: "svc"}, []string{"https://relay.example"})
 	if err == nil || !strings.Contains(err.Error(), "identity must include") {
 		t.Fatalf("Expose() error = %v, want incomplete identity error", err)
+	}
+}
+
+func TestExposeAllowsEmptyInitialMembership(t *testing.T) {
+	exposure, err := Expose(context.Background(), types.Identity{
+		Name:       "svc",
+		Address:    "address",
+		PublicKey:  "public",
+		PrivateKey: "private",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	if err := exposure.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 
@@ -238,7 +265,7 @@ func TestExposureWaitTCPReadyUsesRelayStatus(t *testing.T) {
 	}
 }
 
-func TestExposureWaitTCPReadyReturnsAfterTerminalFailure(t *testing.T) {
+func TestExposureWaitTCPReadyWaitsAfterTerminalFailure(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
 	exposure.options.TCPEnabled = true
@@ -247,8 +274,10 @@ func TestExposureWaitTCPReadyReturnsAfterTerminalFailure(t *testing.T) {
 		err:   errors.New("tcp_port_disabled"),
 	})
 
-	if _, err := exposure.WaitTCPReady(context.Background()); !errors.Is(err, ErrNoRelays) {
-		t.Fatalf("WaitTCPReady() error = %v, want ErrNoRelays", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if _, err := exposure.WaitTCPReady(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitTCPReady() error = %v, want context deadline", err)
 	}
 }
 

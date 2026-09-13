@@ -16,9 +16,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// ErrNoRelays indicates that every explicitly configured relay failed.
-var ErrNoRelays = errors.New("portal sdk: no relays available")
-
 // RelayState is the lifecycle state of one relay.
 type RelayState string
 
@@ -29,6 +26,16 @@ const (
 	RelayFailed     RelayState = "failed"
 )
 
+// RelayFailure classifies why a relay listener stopped.
+type RelayFailure string
+
+const (
+	RelayFailureNone     RelayFailure = ""
+	RelayFailureRuntime  RelayFailure = "runtime"
+	RelayFailureTerminal RelayFailure = "terminal"
+	RelayFailureMITM     RelayFailure = "mitm"
+)
+
 // RelayStatus is an immutable snapshot of one relay's externally visible state.
 type RelayStatus struct {
 	RelayURL  string
@@ -37,7 +44,14 @@ type RelayStatus struct {
 	TCPAddr   string
 	Version   string
 	State     RelayState
+	Failure   RelayFailure
 	Err       error
+}
+
+// Active reports whether the relay currently has a usable registered listener.
+func (s RelayStatus) Active() bool {
+	return s.State != RelayFailed &&
+		(s.State == RelayReady || s.PublicURL != "" || s.UDPAddr != "" || s.TCPAddr != "")
 }
 
 // Exposure owns the lifecycle of one or more relay listeners and accepts
@@ -60,8 +74,8 @@ type Exposure struct {
 	blockedRelays  map[string]error
 	statuses       map[string]RelayStatus
 	stateChanged   chan struct{}
-	statusEvents   chan RelayStatus
 	updates        chan RelayStatus
+	updatesMu      sync.Mutex
 	acceptLoops    sync.WaitGroup
 
 	closeOnce sync.Once
@@ -132,9 +146,6 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err != nil {
 		return nil, err
 	}
-	if len(relayURLs) == 0 {
-		return nil, errors.New("portal sdk: at least one relay is required")
-	}
 	if strings.TrimSpace(identity.Name) == "" {
 		return nil, errors.New("portal sdk: identity name is required")
 	}
@@ -157,10 +168,8 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		blockedRelays:  make(map[string]error),
 		statuses:       make(map[string]RelayStatus, len(relayURLs)),
 		stateChanged:   make(chan struct{}),
-		statusEvents:   make(chan RelayStatus, max(len(relayURLs)*4, 4)),
-		updates:        make(chan RelayStatus, max(len(relayURLs)*4, 4)),
+		updates:        make(chan RelayStatus, 1),
 	}
-	go exposure.runStatusUpdates(exposureCtx)
 
 	if err := exposure.setRelays(relayURLs, true); err != nil {
 		_ = exposure.Close()
@@ -325,21 +334,6 @@ func (e *Exposure) Relays() []RelayStatus {
 	return relays
 }
 
-func (e *Exposure) runStatusUpdates(ctx context.Context) {
-	defer close(e.updates)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case status := <-e.statusEvents:
-			select {
-			case e.updates <- status:
-			default:
-			}
-		}
-	}
-}
-
 func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
 	if e == nil || relayURL == "" || e.closed() {
 		return
@@ -357,6 +351,11 @@ func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
 	status.RelayURL = relayURL
 	if update.state != "" {
 		status.State = update.state
+	}
+	if update.failure != "" {
+		status.Failure = update.failure
+	} else if update.state != RelayFailed {
+		status.Failure = RelayFailureNone
 	}
 	if update.version != "" {
 		status.Version = update.version
@@ -395,9 +394,29 @@ func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
 	}
 	e.mu.Unlock()
 
+	e.publishRelayStatus(status)
+}
+
+func (e *Exposure) publishRelayStatus(status RelayStatus) {
+	e.updatesMu.Lock()
+	defer e.updatesMu.Unlock()
 	select {
 	case <-e.done:
-	case e.statusEvents <- status:
+		return
+	default:
+	}
+	select {
+	case e.updates <- status:
+		return
+	default:
+	}
+	select {
+	case <-e.updates:
+	default:
+	}
+	select {
+	case <-e.done:
+	case e.updates <- status:
 	default:
 	}
 }
@@ -409,6 +428,7 @@ func relayStatusEqual(a, b RelayStatus) bool {
 		a.TCPAddr == b.TCPAddr &&
 		a.Version == b.Version &&
 		a.State == b.State &&
+		a.Failure == b.Failure &&
 		relayErrorsEqual(a.Err, b.Err)
 }
 
@@ -447,6 +467,7 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) {
 			status.TCPAddr = current.TCPAddr
 			status.Version = current.Version
 			status.State = current.State
+			status.Failure = current.Failure
 			status.Err = current.Err
 			if relayStatusEqual(current, status) {
 				continue
@@ -466,24 +487,6 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) {
 		e.notifyStateChangedLocked()
 	}
 	e.mu.Unlock()
-}
-
-func (e *Exposure) noRelaysAvailable() bool {
-	if e == nil {
-		return true
-	}
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if len(e.relayURLs) == 0 {
-		return true
-	}
-	for _, relayURL := range e.relayURLs {
-		status, ok := e.statuses[relayURL]
-		if !ok || status.State != RelayFailed {
-			return false
-		}
-	}
-	return true
 }
 
 func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <-chan struct{}) {
@@ -530,10 +533,6 @@ func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
 		if e.closed() {
 			return nil, net.ErrClosed
 		}
-		if e.noRelaysAvailable() {
-			return nil, ErrNoRelays
-		}
-
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -554,9 +553,6 @@ func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
 			return frame, nil
 		default:
 		}
-		if e.noRelaysAvailable() {
-			return types.DatagramFrame{}, ErrNoRelays
-		}
 		select {
 		case <-e.done:
 			return types.DatagramFrame{}, net.ErrClosed
@@ -570,10 +566,6 @@ func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
 	if !e.options.UDPEnabled {
 		return net.ErrClosed
 	}
-	if e.noRelaysAvailable() {
-		return ErrNoRelays
-	}
-
 	e.mu.RLock()
 	listener := e.relayListeners[frame.RelayURL]
 	e.mu.RUnlock()
@@ -600,10 +592,6 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error)
 		if len(ready) > 0 {
 			return ready, nil
 		}
-		if e.noRelaysAvailable() {
-			return nil, ErrNoRelays
-		}
-
 		select {
 		case <-e.done:
 			return nil, net.ErrClosed
@@ -631,10 +619,6 @@ func (e *Exposure) WaitTCPReady(ctx context.Context) ([]RelayStatus, error) {
 		if len(ready) > 0 {
 			return ready, nil
 		}
-		if e.noRelaysAvailable() {
-			return nil, ErrNoRelays
-		}
-
 		select {
 		case <-e.done:
 			return nil, net.ErrClosed
@@ -691,9 +675,6 @@ func (e *Exposure) Accept() (net.Conn, error) {
 		e.mu.RLock()
 		changed := e.stateChanged
 		e.mu.RUnlock()
-		if e.noRelaysAvailable() {
-			return nil, ErrNoRelays
-		}
 		select {
 		case <-e.done:
 			return nil, net.ErrClosed

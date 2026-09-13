@@ -165,6 +165,9 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	if err != nil {
 		return err
 	}
+	if len(relayURLs) == 0 {
+		return errors.New("at least one relay or discovery is required")
+	}
 	exposure, err := sdk.Expose(ctx, listenerIdentity, relayURLs,
 		sdk.WithMITMProtection(cfg.banMITM),
 		sdk.WithMetadata(metadata),
@@ -178,8 +181,10 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 		if resolveErr != nil {
 			return resolveErr
 		}
+		controller := discovery.NewController(bootstrapRelayURLs)
+		go forwardDiscoveryFeedback(ctx, exposure, controller)
 		go func() {
-			err := discovery.Watch(ctx, bootstrapRelayURLs, func() discovery.RouteState {
+			err := controller.Watch(ctx, func() discovery.RouteState {
 				return discovery.RouteState{
 					ExplicitRelayURLs: explicitRelayURLs,
 					MaxActiveRelays:   cfg.maxActiveRelays,
@@ -205,6 +210,37 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	}
 	log.Info().Msg("payment app shutdown complete")
 	return nil
+}
+
+func forwardDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, controller *discovery.Controller) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update := <-exposure.Updates():
+			if update.State == sdk.RelayFailed {
+				if update.Failure == sdk.RelayFailureMITM {
+					controller.Ban(update.RelayURL)
+				} else {
+					controller.ReportFailure(update.RelayURL)
+				}
+			}
+			statuses := exposure.Relays()
+			active := make([]string, 0, len(statuses))
+			for _, status := range statuses {
+				if status.Active() {
+					active = append(active, status.RelayURL)
+					continue
+				}
+				if status.Failure == sdk.RelayFailureMITM {
+					controller.Ban(status.RelayURL)
+				} else {
+					controller.ReportFailure(status.RelayURL)
+				}
+			}
+			controller.ReportActive(active)
+		}
+	}
 }
 
 func printUsage(w io.Writer) {

@@ -699,6 +699,9 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if len(relayURLs) == 0 {
+		return errors.New("at least one relay or discovery is required")
+	}
 	opts := []sdk.Option{
 		sdk.WithMITMProtection(banMITM),
 		sdk.WithMetadata(metadataFromTunnelConfig(cfg)),
@@ -725,8 +728,10 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 			_ = exposure.Close()
 			return resolveErr
 		}
+		controller := discoverypkg.NewController(bootstrapRelayURLs)
+		go forwardDiscoveryFeedback(ctx, exposure, controller)
 		go func() {
-			err := discoverypkg.Watch(ctx, bootstrapRelayURLs, func() discoverypkg.RouteState {
+			err := controller.Watch(ctx, func() discoverypkg.RouteState {
 				t.mu.RLock()
 				current := t.cfg
 				t.mu.RUnlock()
@@ -792,6 +797,37 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		return ctx.Err()
 	}
 	return err
+}
+
+func forwardDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, controller *discoverypkg.Controller) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update := <-exposure.Updates():
+			if update.State == sdk.RelayFailed {
+				if update.Failure == sdk.RelayFailureMITM {
+					controller.Ban(update.RelayURL)
+				} else {
+					controller.ReportFailure(update.RelayURL)
+				}
+			}
+			statuses := exposure.Relays()
+			active := make([]string, 0, len(statuses))
+			for _, status := range statuses {
+				if status.Active() {
+					active = append(active, status.RelayURL)
+					continue
+				}
+				if status.Failure == sdk.RelayFailureMITM {
+					controller.Ban(status.RelayURL)
+				} else {
+					controller.ReportFailure(status.RelayURL)
+				}
+			}
+			controller.ReportActive(active)
+		}
+	}
 }
 
 func metadataFromTunnelConfig(cfg TunnelConfig) types.LeaseMetadata {
