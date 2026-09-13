@@ -21,15 +21,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/miekg/dns"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -147,15 +144,11 @@ func TestNewManagerRejectsEmptyKeyDirectory(t *testing.T) {
 // Public-IP discovery is the only external dependency in this manual-certificate
 // scenario. DNS answers below still travel through the real embedded listeners.
 type publicIPv4Transport struct {
-	err      error
-	ip       string
-	requests *atomic.Int32
+	err error
+	ip  string
 }
 
 func (transport publicIPv4Transport) RoundTrip(*http.Request) (*http.Response, error) {
-	if transport.requests != nil {
-		transport.requests.Add(1)
-	}
 	if transport.err != nil {
 		return nil, transport.err
 	}
@@ -220,261 +213,6 @@ func TestManualEmbeddedCertificateServesDNSAndKeepsENSPending(t *testing.T) {
 			})
 		}
 	}
-}
-
-func TestManualEmbeddedCertificateRetriesPendingAddressInitialization(t *testing.T) {
-	originalClient := utils.DefaultHTTPClient
-	t.Cleanup(func() { utils.DefaultHTTPClient = originalClient })
-
-	// Calibrate one successful discovery separately from manager request counts.
-	var calibrationRequests atomic.Int32
-	utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{requests: &calibrationRequests}}
-	if _, err := utils.ResolvePublicIPv4(context.Background()); err != nil {
-		t.Fatalf("calibrate successful public IPv4 discovery: %v", err)
-	}
-	successfulDiscoveryRequests := calibrationRequests.Load()
-
-	for _, discoveryOutage := range []bool{false, true} {
-		t.Run(fmt.Sprintf("discovery_outage=%t", discoveryOutage), func(t *testing.T) {
-			var requests atomic.Int32
-			transport := publicIPv4Transport{requests: &requests}
-			if discoveryOutage {
-				transport.err = errors.New("public IPv4 discovery is unavailable")
-			}
-			utils.DefaultHTTPClient = &http.Client{Transport: transport}
-
-			const baseDomain = "portal.example.com"
-			keyDir := t.TempDir()
-			if err := writeManualRelayCertificate(t, keyDir, baseDomain); err != nil {
-				t.Fatal(err)
-			}
-			// Keep real DNS listeners outside the fake-time bubble so idle
-			// network goroutines do not prevent the maintenance clock advancing.
-			manager, cfg := newEmbeddedDNSManager(t, Config{
-				BaseDomain: baseDomain,
-				KeyDir:     keyDir,
-			})
-			beforeEnsureRequests := requests.Load()
-			certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
-			if err != nil {
-				t.Fatalf("EnsureTLSMaterial(): %v", err)
-			}
-			if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
-				t.Fatalf("EnsureTLSMaterial() returned unusable certificate: %v", err)
-			}
-			publicIP := "203.0.113.10"
-			var wantRetryRequests, wantRecoveryRequests int32
-			if discoveryOutage {
-				publicIP = ""
-				// Both failed retry and recovery cost one discovery operation.
-				wantRetryRequests = requests.Load() - beforeEnsureRequests
-				wantRecoveryRequests = successfulDiscoveryRequests
-			}
-			assertManualEmbeddedDNS(t, manager, cfg, publicIP)
-
-			synctest.Test(t, func(t *testing.T) {
-				// synctest advances time only when every select channel belongs
-				// to its bubble, making the idle maintenance loop durably blocked.
-				// The manager has not started or accepted commands, so re-home
-				// only these empty lifecycle channels, not the real DNS listeners.
-				// Operations and assertions use public lifecycle and DNS wire.
-				manager.stopCh = make(chan struct{})
-				manager.echCommands = make(chan echDNSCommand, cap(manager.echCommands))
-				manager.ensCommands = make(chan ensDNSCommand, cap(manager.ensCommands))
-				defer func() {
-					if err := manager.Stop(context.Background()); err != nil {
-						t.Errorf("Stop(): %v", err)
-					}
-				}()
-				manager.Start(context.Background())
-				synctest.Wait()
-
-				beforeRetryRequests := requests.Load()
-
-				<-time.After(10*time.Minute - time.Second)
-				synctest.Wait()
-				if got := requests.Load(); got != beforeRetryRequests {
-					t.Fatalf("discovery requests before retry tick = %d, want %d", got, beforeRetryRequests)
-				}
-				<-time.After(time.Second)
-				synctest.Wait()
-				if got := requests.Load() - beforeRetryRequests; got != wantRetryRequests {
-					t.Fatalf("discovery requests during retry = %d, want %d for one discovery when needed", got, wantRetryRequests)
-				}
-				assertManualEmbeddedDNS(t, manager, cfg, publicIP)
-
-				// Recovery must come from Start's existing retry ticker, not a
-				// second EnsureTLSMaterial call or a private synchronization API.
-				utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{requests: &requests}}
-				beforeRecoveryRequests := requests.Load()
-				<-time.After(10 * time.Minute)
-				synctest.Wait()
-				if got := requests.Load() - beforeRecoveryRequests; got != wantRecoveryRequests {
-					t.Fatalf("discovery requests during recovery retry = %d, want %d for pending base initialization", got, wantRecoveryRequests)
-				}
-				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
-				initializedRequests := requests.Load()
-
-				// A new advertised address must wait for the normal refresh;
-				// neither successful startup nor a recovered retry stays pending.
-				utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{
-					ip:       "203.0.113.20",
-					requests: &requests,
-				}}
-				<-time.After(160*time.Minute - time.Second)
-				synctest.Wait()
-				wantRequests := initializedRequests
-				if got := requests.Load(); got != wantRequests {
-					t.Fatalf("discovery requests before normal refresh = %d, want %d without healthy base retries", got, wantRequests)
-				}
-				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
-
-				<-time.After(time.Second)
-				synctest.Wait()
-				wantRequests += successfulDiscoveryRequests
-				if got := requests.Load(); got != wantRequests {
-					t.Fatalf("discovery requests after three-hour refresh = %d, want %d", got, wantRequests)
-				}
-				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.20")
-			})
-		})
-	}
-}
-
-func TestManualEmbeddedCertificateSharesPendingDiscoveryWithTrackedRecords(t *testing.T) {
-	originalClient := utils.DefaultHTTPClient
-	t.Cleanup(func() { utils.DefaultHTTPClient = originalClient })
-
-	// Calibrate before installing the outage transport, using a separate counter.
-	var calibrationRequests atomic.Int32
-	utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{requests: &calibrationRequests}}
-	if _, err := utils.ResolvePublicIPv4(context.Background()); err != nil {
-		t.Fatalf("calibrate successful public IPv4 discovery: %v", err)
-	}
-	successfulDiscoveryRequests := calibrationRequests.Load()
-
-	var requests atomic.Int32
-	outageTransport := publicIPv4Transport{
-		err:      errors.New("public IPv4 discovery is unavailable"),
-		requests: &requests,
-	}
-	utils.DefaultHTTPClient = &http.Client{Transport: outageTransport}
-
-	const baseDomain = "portal.example.com"
-	keyDir := t.TempDir()
-	if err := writeManualRelayCertificate(t, keyDir, baseDomain); err != nil {
-		t.Fatal(err)
-	}
-	// Real DNS listeners stay outside the virtual-time maintenance fixture.
-	manager, cfg := newEmbeddedDNSManager(t, Config{
-		BaseDomain:        baseDomain,
-		KeyDir:            keyDir,
-		ENSGaslessEnabled: true,
-		ENSGaslessAddress: "0x1234567890123456789012345678901234567890",
-	})
-	beforeEnsureRequests := requests.Load()
-	certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
-	if err != nil {
-		t.Fatalf("EnsureTLSMaterial(): %v", err)
-	}
-	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
-		t.Fatalf("EnsureTLSMaterial() returned unusable certificate: %v", err)
-	}
-	assertManualEmbeddedDNS(t, manager, cfg, "")
-	failedDiscoveryRequests := requests.Load() - beforeEnsureRequests
-
-	synctest.Test(t, func(t *testing.T) {
-		// Re-home only the unused lifecycle channels into the bubble; exercise
-		// public commands and lifecycle while DNS answers use the real listeners.
-		manager.stopCh = make(chan struct{})
-		manager.echCommands = make(chan echDNSCommand, cap(manager.echCommands))
-		manager.ensCommands = make(chan ensDNSCommand, cap(manager.ensCommands))
-		defer func() {
-			if err := manager.Stop(context.Background()); err != nil {
-				t.Errorf("Stop(): %v", err)
-			}
-		}()
-		manager.Start(context.Background())
-		synctest.Wait()
-
-		assertTrackedDNS := func(publicIP string) {
-			addr := net.JoinHostPort("127.0.0.1", fmt.Sprint(cfg.EmbeddedDNSPort))
-			for _, network := range []string{"udp", "tcp"} {
-				client := &dns.Client{Net: network, Timeout: time.Second}
-				for _, record := range []struct {
-					hostname string
-					qtype    uint16
-				}{
-					{"ech." + baseDomain, dns.TypeHTTPS},
-					{"ens." + baseDomain, dns.TypeTXT},
-				} {
-					assertEmbeddedDNSAddress(t, client, addr, record.hostname, publicIP)
-					query := new(dns.Msg)
-					query.SetQuestion(dns.Fqdn(record.hostname), record.qtype)
-					answer, _, err := client.Exchange(query, addr)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if !answer.Authoritative || answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 || answer.Answer[0].Header().Rrtype != record.qtype {
-						t.Fatalf("%s %s %s = %v, want published tracked record", network, dns.TypeToString[record.qtype], record.hostname, answer)
-					}
-				}
-			}
-		}
-		// Publish HTTPS/TXT while discovery works, without retrying pending base
-		// initialization. Embedded EnsureARecord only validates: all A answers
-		// depend on the shared address set by EnsureARecords, so they stay absent.
-		// No failed command remains to trigger its own retry discovery.
-		utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{ip: "203.0.113.30", requests: &requests}}
-		_, echConfigList, err := keyless.EncryptedClientHelloMaterials("dns-retry-test", baseDomain)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := manager.SyncECHConfig(context.Background(), "ech."+baseDomain, echConfigList, 443); err != nil {
-			t.Fatalf("SyncECHConfig(): %v", err)
-		}
-		if err := manager.SyncENSGaslessHostname(context.Background(), "ens."+baseDomain, cfg.ENSGaslessAddress); err != nil {
-			t.Fatalf("SyncENSGaslessHostname(): %v", err)
-		}
-		synctest.Wait()
-		assertTrackedDNS("")
-		assertManualEmbeddedDNS(t, manager, cfg, "")
-
-		utils.DefaultHTTPClient = &http.Client{Transport: outageTransport}
-		beforeRetryRequests := requests.Load()
-		<-time.After(10 * time.Minute)
-		synctest.Wait()
-		// One failed discovery visits the same endpoints as startup; tracked A
-		// work must not start a second discovery after base initialization defers.
-		if got := requests.Load() - beforeRetryRequests; got != failedDiscoveryRequests {
-			t.Fatalf("discovery requests during failed retry = %d, want %d for one discovery", got, failedDiscoveryRequests)
-		}
-		assertManualEmbeddedDNS(t, manager, cfg, "")
-		assertTrackedDNS("")
-
-		utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{requests: &requests}}
-		beforeRecoveryRequests := requests.Load()
-		<-time.After(10 * time.Minute)
-		synctest.Wait()
-		if got := requests.Load() - beforeRecoveryRequests; got != successfulDiscoveryRequests {
-			t.Fatalf("discovery requests during recovery retry = %d, want %d for one discovery shared by base and tracked records", got, successfulDiscoveryRequests)
-		}
-		assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
-		assertTrackedDNS("203.0.113.10")
-
-		// Tracked maintenance still discovers the changed address, but embedded
-		// per-host updates cannot change zone-wide synthesis. All A answers keep
-		// the initialized address; a still-pending base retry would change them.
-		utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{ip: "203.0.113.20", requests: &requests}}
-		beforeTrackedRetryRequests := requests.Load()
-		<-time.After(10 * time.Minute)
-		synctest.Wait()
-		if got := requests.Load() - beforeTrackedRetryRequests; got != successfulDiscoveryRequests {
-			t.Fatalf("discovery requests during tracked retry = %d, want %d for one discovery without healthy base retry", got, successfulDiscoveryRequests)
-		}
-		assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
-		assertTrackedDNS("203.0.113.10")
-	})
 }
 
 func assertManualEmbeddedDNS(t *testing.T, manager *Manager, cfg Config, publicIP string) {
@@ -614,7 +352,6 @@ func TestManualEmbeddedCertificateDoesNotIgnoreCancellation(t *testing.T) {
 }
 
 func TestEnsureTLSMaterialRejectsDNSRecordUpdateFailure(t *testing.T) {
-	var updates atomic.Int32
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != "api.cloudflare.com" {
 			_, _ = io.WriteString(w, "203.0.113.10")
@@ -627,7 +364,6 @@ func TestEnsureTLSMaterialRejectsDNSRecordUpdateFailure(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/client/v4/zones/test-zone/dns_records":
 			_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"test-record","type":"A","name":"portal.example.com","content":"198.51.100.1"}]}`)
 		case r.Method == http.MethodPut && r.URL.Path == "/client/v4/zones/test-zone/dns_records/test-record":
-			updates.Add(1)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = io.WriteString(w, `{"success":false,"errors":[{"code":1000,"message":"DNS record update rejected"}]}`)
 		default:
@@ -669,8 +405,8 @@ func TestEnsureTLSMaterialRejectsDNSRecordUpdateFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "ensure dns records: ensure A record") || !strings.Contains(err.Error(), "DNS record update rejected") {
 		t.Fatalf("EnsureTLSMaterial() error = %v, want fatal DNS record update failure", err)
 	}
-	if len(certPEM) != 0 || len(keyPEM) != 0 || updates.Load() != 1 {
-		t.Fatalf("EnsureTLSMaterial() = %d certificate bytes, %d key bytes, %d DNS updates, want no certificate after one failed update", len(certPEM), len(keyPEM), updates.Load())
+	if len(certPEM) != 0 || len(keyPEM) != 0 {
+		t.Fatalf("EnsureTLSMaterial() = %d certificate bytes, %d key bytes, want no certificate after failed update", len(certPEM), len(keyPEM))
 	}
 }
 

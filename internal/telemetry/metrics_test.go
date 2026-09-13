@@ -123,9 +123,8 @@ func TestEmitFromTrace_CardinalityCap(t *testing.T) {
 	}
 }
 
-// TestMetrics_NoPIILabels iterates every gathered metric family and every label
-// pair within and asserts that no label *name* equals "client_hash" or
-// "local_address". This is the Phase 1 regression defense for acceptance #4.
+// TestMetrics_NoPIILabels ensures exported metrics do not expose identity or
+// local-address labels.
 func TestMetrics_NoPIILabels(t *testing.T) {
 	mfs, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
