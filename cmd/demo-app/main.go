@@ -144,7 +144,7 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 	if err != nil {
 		return err
 	}
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+	exposure, err := sdk.ExposeLegacy(ctx, sdk.LegacyExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
 		Discovery:       cfg.discovery,
 		Identity:        listenerIdentity,
@@ -182,7 +182,7 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	if err != nil {
 		return err
 	}
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+	exposure, err := sdk.ExposeLegacy(ctx, sdk.LegacyExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
 		Discovery:       cfg.discovery,
 		Identity:        listenerIdentity,

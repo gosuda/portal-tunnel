@@ -232,7 +232,7 @@ func runExposeCommand(args []string) error {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
 
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+	exposure, err := sdk.ExposeLegacy(ctx, sdk.LegacyExposeConfig{
 		RelayURLs:       utils.SplitCSV(flags.relayCSV),
 		Discovery:       flags.discovery,
 		Overlay:         flags.overlay,

@@ -79,10 +79,7 @@ func newHarness(t *testing.T) *harness {
 		service.Close()
 		t.Fatalf("generate client identity: %v", err)
 	}
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs: []string{relayURL},
-		Identity:  clientIdentity,
-	})
+	exposure, err := sdk.Expose(ctx, clientIdentity, []string{relayURL})
 	if err != nil {
 		cancel()
 		_ = relay.Shutdown(context.Background())

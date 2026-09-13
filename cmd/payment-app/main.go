@@ -156,7 +156,7 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+	exposure, err := sdk.ExposeLegacy(ctx, sdk.LegacyExposeConfig{
 		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
 		Discovery:       cfg.discovery,
 		Identity:        listenerIdentity,

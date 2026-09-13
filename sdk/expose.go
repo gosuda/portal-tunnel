@@ -53,7 +53,7 @@ type Exposure struct {
 	cancel context.CancelFunc
 	done   <-chan struct{}
 
-	cfg *utils.Snapshot[ExposeConfig]
+	cfg *utils.Snapshot[exposureConfig]
 
 	accepted  chan net.Conn
 	datagrams chan types.DatagramFrame
@@ -73,12 +73,79 @@ type Exposure struct {
 
 var _ net.Listener = (*Exposure)(nil)
 
-// ExposeConfig contains relay and lease settings for an exposure.
-type ExposeConfig struct {
+type options struct {
+	UDPEnabled bool
+	TCPEnabled bool
+	ECH        bool
+	BanMITM    bool
+	Metadata   types.LeaseMetadata
+}
+
+// Option configures an optional capability of a relay-backed exposure.
+type Option func(*options)
+
+// WithUDP enables the datagram transport capability.
+func WithUDP() Option {
+	return func(opts *options) { opts.UDPEnabled = true }
+}
+
+// WithTCP enables public raw TCP port allocation.
+func WithTCP() Option {
+	return func(opts *options) { opts.TCPEnabled = true }
+}
+
+// WithECH enables ECH hostname privacy for TLS stream tunnels.
+func WithECH() Option {
+	return func(opts *options) { opts.ECH = true }
+}
+
+// WithMITMProtection controls relay MITM self-probing.
+func WithMITMProtection(enabled bool) Option {
+	return func(opts *options) { opts.BanMITM = enabled }
+}
+
+// WithMetadata sets the initial lease metadata.
+func WithMetadata(metadata types.LeaseMetadata) Option {
+	return func(opts *options) { opts.Metadata = metadata.Copy() }
+}
+
+type exposureConfig struct {
 	RelayURLs []string
 	Discovery bool
 	Overlay   bool
 
+	Identity        types.Identity
+	MaxActiveRelays int
+	options
+}
+
+func (cfg exposureConfig) snapshot() exposureConfig {
+	cfg.RelayURLs = utils.CloneSlice(cfg.RelayURLs)
+	cfg.Identity = cfg.Identity.Copy()
+	cfg.Metadata = cfg.Metadata.Copy()
+	return cfg
+}
+
+// Expose constructs a relay-backed network endpoint from an already-resolved
+// identity and concrete relay URLs. It never creates or persists keys.
+func Expose(ctx context.Context, identity types.Identity, relays []string, opts ...Option) (*Exposure, error) {
+	cfg := exposureConfig{RelayURLs: relays, Identity: identity}
+	for _, option := range opts {
+		if option == nil {
+			return nil, errors.New("portal sdk: option is nil")
+		}
+		option(&cfg.options)
+	}
+	return expose(ctx, cfg)
+}
+
+// LegacyExposeConfig preserves discovery and relay-selection inputs while
+// those responsibilities move out of Exposure.
+// Deprecated: use Expose with concrete relays and capability options.
+type LegacyExposeConfig struct {
+	RelayURLs       []string
+	Discovery       bool
+	Overlay         bool
 	Identity        types.Identity
 	UDPEnabled      bool
 	TCPEnabled      bool
@@ -88,17 +155,27 @@ type ExposeConfig struct {
 	Metadata        types.LeaseMetadata
 }
 
-func (cfg ExposeConfig) snapshot() ExposeConfig {
-	cfg.RelayURLs = utils.CloneSlice(cfg.RelayURLs)
-	cfg.Identity = cfg.Identity.Copy()
-	cfg.Metadata = cfg.Metadata.Copy()
-	return cfg
+// ExposeLegacy is the compatibility entry point for application runtimes that
+// still delegate discovery and relay-selection policy to Exposure.
+// Deprecated: resolve concrete relays and call Expose.
+func ExposeLegacy(ctx context.Context, legacy LegacyExposeConfig) (*Exposure, error) {
+	return expose(ctx, exposureConfig{
+		RelayURLs:       legacy.RelayURLs,
+		Discovery:       legacy.Discovery,
+		Overlay:         legacy.Overlay,
+		Identity:        legacy.Identity,
+		MaxActiveRelays: legacy.MaxActiveRelays,
+		options: options{
+			UDPEnabled: legacy.UDPEnabled,
+			TCPEnabled: legacy.TCPEnabled,
+			ECH:        legacy.ECH,
+			BanMITM:    legacy.BanMITM,
+			Metadata:   legacy.Metadata,
+		},
+	})
 }
 
-// Expose creates relay listeners for the selected relay pool and exposes a
-// dynamic listener hub for accepting traffic from all of them. Identity must
-// already be resolved by the caller; Expose never creates or persists keys.
-func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
+func expose(ctx context.Context, cfg exposureConfig) (*Exposure, error) {
 	if ctx == nil {
 		return nil, errors.New("portal sdk: context is nil")
 	}
@@ -133,7 +210,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	exposure := &Exposure{
 		cancel:         cancel,
 		done:           exposureCtx.Done(),
-		cfg:            utils.NewSnapshot(runtimeCfg, ExposeConfig.snapshot),
+		cfg:            utils.NewSnapshot(runtimeCfg, exposureConfig.snapshot),
 		accepted:       make(chan net.Conn, max(initialRouteCount*defaultReadyTarget*2, 1)),
 		datagrams:      make(chan types.DatagramFrame, max(initialRouteCount*32, 1)),
 		relaySet:       discovery.NewRelaySet(relaySetURLs),
@@ -186,7 +263,7 @@ func (e *Exposure) AddRelay(relayURL string) error {
 		return errors.New("exposure relay set is not initialized")
 	}
 
-	e.cfg.UpdateCopy(func(cfg *ExposeConfig) {
+	e.cfg.UpdateCopy(func(cfg *exposureConfig) {
 		if !slices.Contains(cfg.RelayURLs, relayURL) {
 			cfg.RelayURLs = append(cfg.RelayURLs, relayURL)
 		}
@@ -211,7 +288,7 @@ func (e *Exposure) RemoveRelay(relayURL string) error {
 		return errors.New("exposure relay set is not initialized")
 	}
 
-	e.cfg.UpdateCopy(func(cfg *ExposeConfig) {
+	e.cfg.UpdateCopy(func(cfg *exposureConfig) {
 		nextRelays := cfg.RelayURLs[:0]
 		for _, existing := range cfg.RelayURLs {
 			if existing != relayURL {
@@ -231,7 +308,7 @@ func (e *Exposure) UpdateMetadata(metadata types.LeaseMetadata) error {
 		return net.ErrClosed
 	}
 
-	e.cfg.UpdateCopy(func(cfg *ExposeConfig) {
+	e.cfg.UpdateCopy(func(cfg *exposureConfig) {
 		cfg.Metadata = metadata.Copy()
 	})
 	return nil
@@ -245,7 +322,7 @@ func (e *Exposure) UpdateMaxActiveRelays(maxActiveRelays int) error {
 		return net.ErrClosed
 	}
 
-	_, changed := e.cfg.UpdateIf(func(cfg ExposeConfig) (ExposeConfig, bool) {
+	_, changed := e.cfg.UpdateIf(func(cfg exposureConfig) (exposureConfig, bool) {
 		if cfg.MaxActiveRelays == maxActiveRelays {
 			return cfg, false
 		}
@@ -297,9 +374,9 @@ type exposureAddr string
 func (a exposureAddr) Network() string { return "portal" }
 func (a exposureAddr) String() string  { return string(a) }
 
-func (e *Exposure) config() ExposeConfig {
+func (e *Exposure) config() exposureConfig {
 	if e == nil || e.cfg == nil {
-		return ExposeConfig{}
+		return exposureConfig{}
 	}
 	return e.cfg.Load()
 }
@@ -437,7 +514,7 @@ func (e *Exposure) notifyStateChangedLocked() {
 	e.stateChanged = make(chan struct{})
 }
 
-func (e *Exposure) syncRelayStatuses(routes []discovery.Route, cfg ExposeConfig) {
+func (e *Exposure) syncRelayStatuses(routes []discovery.Route, cfg exposureConfig) {
 	desired := make(map[string]RelayStatus)
 	dead := make(map[string]bool)
 	if e.relaySet != nil {

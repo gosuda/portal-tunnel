@@ -680,7 +680,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+	exposure, err := sdk.ExposeLegacy(ctx, sdk.LegacyExposeConfig{
 		RelayURLs:       append([]string(nil), cfg.RelayURLs...),
 		Discovery:       discovery,
 		Overlay:         cfg.Overlay,
