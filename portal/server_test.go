@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -102,6 +103,66 @@ func tempLeasePortAvailable(port int) bool {
 	return true
 }
 
+// ephemeralPortRange reports the kernel range used for automatic port
+// allocation. A port outside it can only be taken by an explicit bind, so
+// freeing it never races bind(":0") in concurrent test binaries.
+func ephemeralPortRange(t *testing.T) (lo, hi int) {
+	t.Helper()
+	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
+	if err != nil {
+		return 49152, 65535 // assume the default dynamic range
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) != 2 {
+		t.Fatalf("parse ip_local_port_range: %q", data)
+	}
+	lo, err = strconv.Atoi(fields[0])
+	if err != nil {
+		t.Fatalf("parse ip_local_port_range lo: %v", err)
+	}
+	hi, err = strconv.Atoi(fields[1])
+	if err != nil {
+		t.Fatalf("parse ip_local_port_range hi: %v", err)
+	}
+	return lo, hi
+}
+
+// tempRedirectPort holds a TCP port that stays re-bindable after release.
+// Redirect tests free and re-bind the same address across startup phases,
+// and an ephemeral-range port can be stolen by any concurrent bind(":0")
+// between those phases.
+func tempRedirectPort(t *testing.T) (net.Listener, string) {
+	t.Helper()
+	lo, hi := ephemeralPortRange(t)
+	searched := false
+	for _, band := range nonEphemeralBands(lo, hi) {
+		for port := band[0]; port <= band[1]; port++ {
+			searched = true
+			listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+			if err != nil {
+				continue
+			}
+			return listener, listener.Addr().String()
+		}
+	}
+	if !searched {
+		t.Skipf("no port outside the ephemeral range [%d, %d] on this host", lo, hi)
+	}
+	t.Fatalf("no free TCP port outside the ephemeral range [%d, %d]", lo, hi)
+	return nil, ""
+}
+
+// nonEphemeralBands returns candidate port bands outside [lo, hi]: the
+// preferred 31000..32100 band when it lies below the range, a band just
+// below the range, and a band just above it. Bands may be empty.
+func nonEphemeralBands(lo, hi int) [][2]int {
+	return [][2]int{
+		{31000, min(32100, lo-1)},
+		{max(1024, lo-1100), lo - 1},
+		{max(1024, hi+1), min(65535, hi+1100)},
+	}
+}
+
 func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *http.Client {
 	t.Helper()
 	client := utils.NewHTTPClient(
@@ -167,9 +228,10 @@ func TestHTTPRedirectDisabledPreservesLoopback(t *testing.T) {
 func TestHTTPRedirectLifecycle(t *testing.T) {
 	for _, hsts := range []bool{false, true} {
 		t.Run(strconv.FormatBool(hsts), func(t *testing.T) {
-			port := tempLeasePort(t)
-			defer releaseTestLeasePort(port)
-			addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+			probe, addr := tempRedirectPort(t)
+			if err := probe.Close(); err != nil {
+				t.Fatal(err)
+			}
 			// net/url accepts HTTPS schemes regardless of their spelling.
 			scheme := "HTTPS"
 			if hsts {
@@ -243,12 +305,10 @@ func TestHTTPRedirectPartialStartupCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer occupied.Close()
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
+	probe, addr := tempRedirectPort(t)
+	if err := probe.Close(); err != nil {
 		t.Fatal(err)
 	}
-	addr := probe.Addr().String()
-	probe.Close()
 	server, err := NewServer(ServerConfig{
 		PortalURL: "https://localhost:4017", StateDir: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
@@ -272,15 +332,12 @@ func TestHTTPRedirectPartialStartupCleanup(t *testing.T) {
 }
 
 func TestHTTPRedirectBindFailure(t *testing.T) {
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	occupied, addr := tempRedirectPort(t)
 	defer occupied.Close()
 	server, err := NewServer(ServerConfig{
 		PortalURL: "https://localhost:4017", StateDir: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
-		HTTPRedirect: types.HTTPRedirectConfig{Enabled: true, Addr: occupied.Addr().String()},
+		HTTPRedirect: types.HTTPRedirectConfig{Enabled: true, Addr: addr},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -292,7 +349,6 @@ func TestHTTPRedirectBindFailure(t *testing.T) {
 		t.Fatalf("Start error=%v, want redirect bind failure", err)
 	}
 	// Retry the same server and configuration after releasing the occupied port.
-	addr := occupied.Addr().String()
 	if err := occupied.Close(); err != nil {
 		t.Fatal(err)
 	}
