@@ -442,3 +442,55 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 		t.Fatalf("issueRegisterChallenge() after expired cleanup error = %v", err)
 	}
 }
+
+func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
+	t.Parallel()
+
+	relay, err := LoadOrCreateRelayIdentity(t.TempDir(), "example.com")
+	if err != nil {
+		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
+	}
+	relayAuthority := identity.NewLocalAuthority(relay.Identity)
+	newRegistry := func() *leaseRegistry {
+		t.Helper()
+		registry, registryErr := newLeaseRegistry(false, false, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com", false, "")
+		if registryErr != nil {
+			t.Fatalf("newLeaseRegistry() error = %v", registryErr)
+		}
+		return registry
+	}
+	// The same relay identity in a fresh registry simulates a relay restart:
+	// tokens stay verifiable while the in-memory lease records are gone.
+	before, restarted := newRegistry(), newRegistry()
+
+	_, resp, err := before.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "restart")}, "203.0.113.10", "")
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if resp.AccessToken == "" || resp.ReverseEndpoint.Capability == "" {
+		t.Fatalf("register response missing credentials: %+v", resp)
+	}
+
+	if _, err := restarted.admitLeaseByToken(resp.AccessToken, false); !errors.Is(err, errLeaseNotFound) {
+		t.Fatalf("admitLeaseByToken() after restart = %v, want lease not found", err)
+	}
+	if _, err := restarted.admitReverseCapability(resp.ReverseEndpoint.Capability); !errors.Is(err, errLeaseNotFound) {
+		t.Fatalf("admitReverseCapability() after restart = %v, want lease not found", err)
+	}
+	if _, err := restarted.Renew(types.RenewRequest{AccessToken: resp.AccessToken}, "203.0.113.10"); !errors.Is(err, errLeaseNotFound) {
+		t.Fatalf("Renew() after restart = %v, want lease not found", err)
+	}
+	if _, err := restarted.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: resp.AccessToken}); !errors.Is(err, errLeaseNotFound) {
+		t.Fatalf("RefreshReverseEndpoint() after restart = %v, want lease not found", err)
+	}
+	if err := restarted.verifySigningAccessToken(resp.AccessToken); !errors.Is(err, errLeaseNotFound) {
+		t.Fatalf("verifySigningAccessToken() after restart = %v, want lease not found", err)
+	}
+
+	if _, err := restarted.admitReverseCapability("forged"); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("admitReverseCapability() forged = %v, want unauthorized", err)
+	}
+	if _, err := restarted.Renew(types.RenewRequest{AccessToken: "forged"}, "203.0.113.10"); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("Renew() forged = %v, want unauthorized", err)
+	}
+}
