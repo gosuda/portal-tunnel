@@ -67,8 +67,7 @@ func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig
 		return errors.New("portal sdk: at least one proxy target is required")
 	}
 
-	cfg := exposure.config()
-	identity := cfg.Identity
+	identity := exposure.identity
 	tcpTarget := config.TCPTarget
 	udpTarget := config.UDPTarget
 
