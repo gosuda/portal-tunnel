@@ -168,6 +168,38 @@ func TestExposureWaitDatagramReadyDoesNotRequireStreamReadiness(t *testing.T) {
 	}
 }
 
+func TestExposureWaitTCPReadyUsesRelayStatus(t *testing.T) {
+	const relayURL = "https://relay.example"
+	exposure := newExposureStateTest(t, relayURL)
+	exposure.cfg.UpdateCopy(func(cfg *ExposeConfig) { cfg.TCPEnabled = true })
+	exposure.setRelayStatus(relayURL, listenerStatus{
+		state:   RelayConnecting,
+		tcpAddr: "relay.example:40000",
+	})
+
+	ready, err := exposure.WaitTCPReady(context.Background())
+	if err != nil {
+		t.Fatalf("WaitTCPReady() error = %v", err)
+	}
+	if len(ready) != 1 || ready[0].RelayURL != relayURL || ready[0].TCPAddr != "relay.example:40000" {
+		t.Fatalf("WaitTCPReady() = %+v, want TCP-ready relay %q", ready, relayURL)
+	}
+}
+
+func TestExposureWaitTCPReadyReturnsAfterTerminalFailure(t *testing.T) {
+	const relayURL = "https://relay.example"
+	exposure := newExposureStateTest(t, relayURL)
+	exposure.cfg.UpdateCopy(func(cfg *ExposeConfig) { cfg.TCPEnabled = true })
+	exposure.setRelayStatus(relayURL, listenerStatus{
+		state: RelayFailed,
+		err:   errors.New("tcp_port_disabled"),
+	})
+
+	if _, err := exposure.WaitTCPReady(context.Background()); !errors.Is(err, ErrNoRelays) {
+		t.Fatalf("WaitTCPReady() error = %v, want ErrNoRelays", err)
+	}
+}
+
 func TestExposureConfigSnapshotsDoNotShareMutableState(t *testing.T) {
 	exposure := &Exposure{
 		cfg: utils.NewSnapshot(ExposeConfig{
