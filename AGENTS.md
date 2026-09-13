@@ -1,15 +1,21 @@
 # AGENTS.md
 
 Keep this file short and behavioral.
-Architecture, product behavior, and design rationale belong in `docs/architecture.md` and `docs/adr/README.md`.
+Architecture documentation should primarily describe the current architecture.
+Issues and pull requests preserve short-lived refactoring, migration, and
+rejected-design history.
 
 ## Development Principles
 
 - Minimizing concepts, duplication, and ceremony.
+- Do not keep historical artifacts that no longer explain or protect current behavior.
 - Prefer a single stable contract with one real owner.
 - Prefer local simplicity over premature or speculative abstraction.
 - Add indirection only when it removes real coupling or protects a real boundary.
-- Tests should protect real stable contracts and invariants, not drive the spec or exist only for regression prevention.
+- Tests protect stable public behavior, protocol and security invariants, and real lifecycle E2E behavior.
+- Keep a regression test when the regression reveals a contract or invariant that remains important.
+- Do not test incidental implementation details such as call sequence, log output, retry count, or file metadata unless they are themselves part of a stable contract.
+- When a refactor makes an implementation-coupled test obsolete, delete it if no enduring behavior or invariant would be left unprotected.
 
 ## Project Principles
 
@@ -24,6 +30,9 @@ Architecture, product behavior, and design rationale belong in `docs/architectur
 - Keep stable shared contracts, constants, and public paths in `types/`, not in runtime or helpers.
 - Resolve complexity in the lowest coherent owner and expose only the minimum surface upward.
 - Shared runtime logic must live in one real owner and be reused, not mirrored.
+- Use ADRs sparingly for stable, long-lived architecture or compatibility decisions.
+- Keep ordinary refactors, migrations, rejected approaches, and temporary implementation decisions in issues and pull requests unless they are needed to understand current operational compatibility.
+- Remove stale or superseded documentation that no longer helps explain the current system or its supported compatibility constraints.
 
 ## Verification
 

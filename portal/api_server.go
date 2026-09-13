@@ -15,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/internal/x402"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
@@ -196,7 +197,7 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	desc, err := identity.NormalizeRelayDescriptor(req.Descriptor)
+	desc, err := discovery.NormalizeRelayDescriptor(req.Descriptor)
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return

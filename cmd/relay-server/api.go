@@ -46,7 +46,7 @@ type RelayAPI struct {
 	landingPageEnabled bool
 }
 
-func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
+func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
 	if server == nil {
 		return nil, errors.New("relay api requires portal server")
 	}
@@ -54,9 +54,9 @@ func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir st
 	if runtime == nil {
 		return nil, errors.New("relay api requires policy runtime")
 	}
-	policyStatePath := portal.ResolveRelayPolicyPath(identityPath)
+	policyStatePath = strings.TrimSpace(policyStatePath)
 	if policyStatePath == "" {
-		return nil, errors.New("relay api requires identity path")
+		return nil, errors.New("relay api requires policy state path")
 	}
 	frontendFS, err := resolveFrontendFS(frontendDir)
 	if err != nil {
@@ -66,7 +66,7 @@ func NewRelayAPI(server *portal.Server, identityPath, adminToken, frontendDir st
 	api := &RelayAPI{
 		server:               server,
 		adminToken:           strings.TrimSpace(adminToken),
-		policyStatePath:      strings.TrimSpace(policyStatePath),
+		policyStatePath:      policyStatePath,
 		frontendFS:           frontendFS,
 		frontendCacheEnabled: strings.TrimSpace(frontendDir) == "",
 		landingPageEnabled:   landingPageEnabled,

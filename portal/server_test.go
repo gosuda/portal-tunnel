@@ -28,7 +28,7 @@ var (
 	testLeasePorts   = make(map[int]struct{})
 )
 
-func tempIdentityPath(t *testing.T) string {
+func tempStateDir(t *testing.T) string {
 	t.Helper()
 	return t.TempDir()
 }
@@ -121,7 +121,7 @@ func TestHTTPRedirectTargetValidation(t *testing.T) {
 	for _, target := range []string{"http://localhost:4017", "http://relay.example", "//relay.example", "https://user:pass@relay.example", "https://relay.example:0", "https://relay.example:65536", "https://relay.example:bad", "https://relay.example:", "https:///missing-host", "https://./"} {
 		t.Run(target, func(t *testing.T) {
 			_, err := NewServer(ServerConfig{
-				PortalURL: target, IdentityPath: t.TempDir(),
+				PortalURL: target, StateDir: t.TempDir(),
 				HTTPRedirect: types.HTTPRedirectConfig{Enabled: true},
 			})
 			if err == nil {
@@ -141,7 +141,7 @@ func TestHTTPRedirectDisabledPreservesLoopback(t *testing.T) {
 	defer releaseTestLeasePort(apiPort)
 	apiAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPort))
 	server, err := NewServer(ServerConfig{
-		PortalURL: "http://localhost:4017", IdentityPath: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
+		PortalURL: "http://localhost:4017", StateDir: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: apiAddr, SNIListenAddr: "127.0.0.1:0",
 		HTTPRedirect: types.HTTPRedirectConfig{Addr: occupied.Addr().String()},
 	})
@@ -176,8 +176,8 @@ func TestHTTPRedirectLifecycle(t *testing.T) {
 				scheme = "hTtPs"
 			}
 			server, err := NewServer(ServerConfig{
-				PortalURL:    scheme + "://localhost:4017/base/?configured=discarded#fragment",
-				IdentityPath: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
+				PortalURL: scheme + "://localhost:4017/base/?configured=discarded#fragment",
+				StateDir:  t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
 				APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
 				HTTPRedirect: types.HTTPRedirectConfig{Enabled: true, Addr: addr, HSTS: hsts},
 			})
@@ -250,7 +250,7 @@ func TestHTTPRedirectPartialStartupCleanup(t *testing.T) {
 	addr := probe.Addr().String()
 	probe.Close()
 	server, err := NewServer(ServerConfig{
-		PortalURL: "https://localhost:4017", IdentityPath: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
+		PortalURL: "https://localhost:4017", StateDir: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
 		HTTPRedirect: types.HTTPRedirectConfig{Enabled: true, Addr: addr},
 		PProfEnabled: true, PProfListenAddr: occupied.Addr().String(),
@@ -278,7 +278,7 @@ func TestHTTPRedirectBindFailure(t *testing.T) {
 	}
 	defer occupied.Close()
 	server, err := NewServer(ServerConfig{
-		PortalURL: "https://localhost:4017", IdentityPath: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
+		PortalURL: "https://localhost:4017", StateDir: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
 		HTTPRedirect: types.HTTPRedirectConfig{Enabled: true, Addr: occupied.Addr().String()},
 	})
@@ -327,7 +327,7 @@ func TestRelayDiscoveryEnabledServesDiscoveryEnvelope(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:        "https://portal.example.com",
-		IdentityPath:     tempIdentityPath(t),
+		StateDir:         tempStateDir(t),
 		DiscoveryEnabled: true,
 	})
 	if err != nil {
@@ -353,10 +353,10 @@ func TestRelayDiscoveryEnabledServesDiscoveryEnvelope(t *testing.T) {
 func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	t.Parallel()
 
-	identityPath := tempIdentityPath(t)
+	stateDir := tempStateDir(t)
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://localhost:4017",
-		IdentityPath:  identityPath,
+		StateDir:      stateDir,
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
 		MinPort:       40000,
@@ -376,7 +376,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 
 	client := newTestClient(t, cancel, server)
 	for _, name := range []string{"fullchain.pem", "privatekey.pem"} {
-		if !utils.FileExists(filepath.Join(identityPath, name)) {
+		if !utils.FileExists(filepath.Join(stateDir, name)) {
 			t.Fatalf("Start() did not persist %s under IDENTITY_PATH with an omitted ACME.KeyDir", name)
 		}
 	}
@@ -416,7 +416,7 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 	keyDir := t.TempDir()
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://localhost:4017",
-		IdentityPath:  tempIdentityPath(t),
+		StateDir:      tempStateDir(t),
 		ACME:          acme.Config{KeyDir: keyDir},
 		SNIPort:       4443,
 		APIListenAddr: "127.0.0.1:0",
@@ -477,11 +477,11 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
-		PortalURL:    "https://portal.example.com",
-		IdentityPath: tempIdentityPath(t),
-		MinPort:      40000,
-		MaxPort:      40000,
-		UDPEnabled:   true,
+		PortalURL:  "https://portal.example.com",
+		StateDir:   tempStateDir(t),
+		MinPort:    40000,
+		MaxPort:    40000,
+		UDPEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -516,13 +516,13 @@ func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
 
 	port := tempLeasePort(t)
 	server, err := NewServer(ServerConfig{
-		PortalURL:    "https://portal.example.com",
-		IdentityPath: tempIdentityPath(t),
-		SNIPort:      4443,
-		MinPort:      port,
-		MaxPort:      port,
-		UDPEnabled:   true,
-		TCPEnabled:   true,
+		PortalURL:  "https://portal.example.com",
+		StateDir:   tempStateDir(t),
+		SNIPort:    4443,
+		MinPort:    port,
+		MaxPort:    port,
+		UDPEnabled: true,
+		TCPEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -570,7 +570,7 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://localhost:4017",
-		IdentityPath:  tempIdentityPath(t),
+		StateDir:      tempStateDir(t),
 		ACME:          acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
@@ -607,7 +607,7 @@ func TestRelayDiscoveryServesIncompatibleRelays(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:        "https://portal.example.com",
-		IdentityPath:     tempIdentityPath(t),
+		StateDir:         tempStateDir(t),
 		DiscoveryEnabled: true,
 	})
 	if err != nil {

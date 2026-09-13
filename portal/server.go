@@ -11,6 +11,7 @@ import (
 	"net/http/pprof"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,7 +43,7 @@ const (
 type ServerConfig struct {
 	IVNPConfigPath    string
 	PortalURL         string
-	IdentityPath      string
+	StateDir          string
 	Bootstraps        []string
 	DiscoveryEnabled  bool
 	APIPort           int
@@ -110,12 +111,12 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		return ServerConfig{}, errors.New("relay overlay requires discovery")
 	}
 	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
-	cfg.IdentityPath = ResolveRelayStateDir(cfg.IdentityPath)
-	if cfg.IdentityPath == "" {
-		return ServerConfig{}, errors.New("identity path is required")
+	cfg.StateDir = strings.TrimSpace(cfg.StateDir)
+	if cfg.StateDir == "" {
+		return ServerConfig{}, errors.New("state directory is required")
 	}
 	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
-		cfg.ACME.KeyDir = cfg.IdentityPath
+		cfg.ACME.KeyDir = cfg.StateDir
 	}
 
 	redirect, err := NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
@@ -180,7 +181,7 @@ type Server struct {
 	shutdownOnce sync.Once
 
 	cfg         *utils.Snapshot[ServerConfig]
-	identity    types.RelayIdentity
+	identity    identity.RelayIdentity
 	authority   identity.Authority
 	acmeManager *acme.Manager
 	proxy       proxy
@@ -207,7 +208,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 
-	relayIdentity, err := LoadOrCreateRelayIdentity(cfg.IdentityPath, utils.PortalRootHost(cfg.PortalURL))
+	identityPath := filepath.Join(cfg.StateDir, types.RelayIdentityFilename)
+	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(cfg.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
@@ -544,9 +546,9 @@ func (s *Server) PolicyLeases() []types.PolicyLease {
 	return s.registry.PolicyLeases(time.Now())
 }
 
-func (s *Server) RelayIdentity() types.RelayIdentity {
+func (s *Server) RelayIdentity() identity.RelayIdentity {
 	if s == nil {
-		return types.RelayIdentity{}
+		return identity.RelayIdentity{}
 	}
 	return s.identity.Copy()
 }
@@ -891,7 +893,7 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 	if s.overlay != nil {
 		ivnpDestination = s.overlay.Destination()
 	}
-	return identity.SignRelayDescriptor(types.RelayDescriptor{
+	return discovery.SignRelayDescriptor(types.RelayDescriptor{
 		Address:           s.identity.Address,
 		Version:           types.DiscoveryVersion,
 		IssuedAt:          now,

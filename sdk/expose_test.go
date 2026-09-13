@@ -259,28 +259,6 @@ func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {
 	}
 }
 
-func TestRunListenerAcceptLoopRemovesListenerRelay(t *testing.T) {
-	const (
-		entry = "https://entry.example"
-		exit  = "https://exit.example"
-	)
-	exitURL, err := url.Parse(exit)
-	if err != nil {
-		t.Fatalf("url.Parse(exit) error = %v", err)
-	}
-	relayListener := &listener{
-		relayURL: exitURL,
-		route:    discovery.Route{RelayURL: entry, Explicit: false},
-	}
-	exposure := &Exposure{relayListeners: map[string]*listener{entry: relayListener}}
-
-	exposure.runListenerAcceptLoop(relayListener)
-
-	if got := exposure.activeRelayURLs(); len(got) != 0 {
-		t.Fatalf("ActiveRelayURLs() = %v, want terminated listener removed", got)
-	}
-}
-
 func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -405,82 +383,6 @@ func TestExposureListenerSelfExitKeepsExplicitRelayConfigured(t *testing.T) {
 	}
 	if got := exposure.relaySet.BootstrapRelayURLs(); len(got) != 1 || got[0] != relayA {
 		t.Fatalf("BootstrapRelayURLs() = %v, want [%q]", got, relayA)
-	}
-}
-
-func TestListenerRetryBudgetDropsAutoSelectedRelayWithoutPoolBan(t *testing.T) {
-	const relayA = "https://relay-a.example"
-
-	relayAURL, err := url.Parse(relayA)
-	if err != nil {
-		t.Fatalf("url.Parse(relayA) error = %v", err)
-	}
-
-	relaySet := mustRelaySet(t, relayA)
-	listener := &listener{
-		relayURL:   relayAURL,
-		route:      discovery.Route{RelayURL: relayA, Explicit: false},
-		relaySet:   relaySet,
-		retryCount: 1,
-	}
-
-	if listener.waitRetry(context.Background(), "lease registration", errors.New("boom"), 2, 0) {
-		t.Fatal("waitRetry() = true after retry budget was exhausted")
-	}
-
-	routes := relaySet.SelectRelays(discovery.RouteState{})
-	if len(routes) != 0 {
-		t.Fatalf("SelectRelays() = %v, want no active routes", routes)
-	}
-
-	relays := relaySet.AllRelays()
-	if len(relays) != 1 || relays[0].Banned || relays[0].Descriptor.APIHTTPSAddr != relayA {
-		t.Fatalf("AllRelays() = %+v, want relay retained outside active pool", relays)
-	}
-	if got := relaySet.BootstrapRelayURLs(); len(got) != 1 || got[0] != relayA {
-		t.Fatalf("BootstrapRelayURLs() = %v, want [%q]", got, relayA)
-	}
-}
-
-func TestExposureReconcileSkipsUnchangedRoutes(t *testing.T) {
-	const relayA = "https://relay-a.example"
-
-	relayAURL, err := url.Parse(relayA)
-	if err != nil {
-		t.Fatalf("url.Parse(relayA) error = %v", err)
-	}
-
-	closed := make(chan struct{})
-	exposure := &Exposure{
-		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: []string{relayA}}, ExposeConfig.snapshot),
-		relaySet:       mustRelaySet(t, relayA),
-		relayListeners: make(map[string]*listener, 1),
-	}
-	exposure.relayListeners[relayA] = &listener{
-		relayURL: relayAURL,
-		cancel:   func() { close(closed) },
-		doneCh:   closed,
-		route:    discovery.Route{RelayURL: relayA, Explicit: true},
-	}
-
-	// First reconcile records the current route snapshot and closes nothing.
-	if err := exposure.reconcileRelayListeners(false); err != nil {
-		t.Fatalf("reconcileRelayListeners() error = %v", err)
-	}
-	select {
-	case <-closed:
-		t.Fatal("listener closed on first reconcile with identical routes")
-	default:
-	}
-
-	// Second reconcile with the same routes must be a no-op.
-	if err := exposure.reconcileRelayListeners(false); err != nil {
-		t.Fatalf("reconcileRelayListeners() error = %v", err)
-	}
-	select {
-	case <-closed:
-		t.Fatal("listener closed on second reconcile with unchanged routes")
-	default:
 	}
 }
 

@@ -1,7 +1,6 @@
 // Package identity owns Portal identities: the single validation pipeline
 // behind Parse and Generate, the canonical identity file format, and the
-// client file lifecycle (LoadOrCreate). Relay identity persistence is owned
-// by the relay (portal.LoadOrCreateRelayIdentity).
+// client and relay identity lifecycles.
 package identity
 
 import (

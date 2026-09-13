@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -25,6 +26,7 @@ import (
 	"gosuda.org/ivnp"
 	"gosuda.org/ivnp/foundation"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -44,6 +46,20 @@ const (
 	accepted                = byte(1)
 	capacity                = byte(2)
 )
+
+func normalizeIVNPDestination(destination string) (string, error) {
+	destination = strings.ToLower(strings.TrimSpace(destination))
+	label, ok := strings.CutSuffix(destination, ".b32.i2p")
+	if !ok || len(label) != 52 {
+		return "", errors.New("ivnp destination must be a 32-byte b32.i2p hash")
+	}
+	encoding := base32.StdEncoding.WithPadding(base32.NoPadding)
+	raw, err := encoding.DecodeString(strings.ToUpper(label))
+	if err != nil || len(raw) != 32 || strings.ToLower(encoding.EncodeToString(raw)) != label {
+		return "", errors.New("invalid ivnp destination hash")
+	}
+	return destination, nil
+}
 
 type Config struct {
 	ConfigPath     string
@@ -246,11 +262,11 @@ func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, ex
 	if err != nil {
 		return types.ReverseEndpoint{}, false, err
 	}
-	ingress, err = identity.VerifyRelayDescriptor(ingress)
+	ingress, err = discovery.VerifyRelayDescriptor(ingress)
 	if err != nil {
 		return types.ReverseEndpoint{}, false, err
 	}
-	ingressDestination, err := utils.NormalizeIVNPDestination(ingress.IVNPDestination)
+	ingressDestination, err := normalizeIVNPDestination(ingress.IVNPDestination)
 	if err != nil || ingressDestination != r.Destination() {
 		return types.ReverseEndpoint{}, false, errors.New("overlay ingress descriptor is invalid")
 	}
@@ -300,11 +316,11 @@ func (r *Runtime) gatewayCandidates(now time.Time, ingressAddress, ingressDestin
 	seenAddresses := make(map[string]struct{})
 	seenDestinations := make(map[string]struct{})
 	for _, candidate := range r.config.Descriptors() {
-		verified, err := identity.VerifyRelayDescriptor(candidate)
+		verified, err := discovery.VerifyRelayDescriptor(candidate)
 		if err != nil || !verified.ExpiresAt.After(now.Add(minimumGatewayTTL)) || strings.EqualFold(verified.Address, ingressAddress) {
 			continue
 		}
-		destination, err := utils.NormalizeIVNPDestination(verified.IVNPDestination)
+		destination, err := normalizeIVNPDestination(verified.IVNPDestination)
 		if err != nil || destination != verified.IVNPDestination || destination == ingressDestination {
 			continue
 		}
@@ -527,7 +543,7 @@ func (r *Runtime) dial(ctx context.Context, destination string) (net.Conn, error
 	if r.endpoint == nil {
 		return nil, errors.New("overlay endpoint is unavailable")
 	}
-	destination, err := utils.NormalizeIVNPDestination(destination)
+	destination, err := normalizeIVNPDestination(destination)
 	if err != nil {
 		return nil, err
 	}
@@ -599,11 +615,11 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 	if err != nil || !bytes.Equal(canonical, payload) {
 		return capabilityClaims{}, errors.New("non-canonical overlay capability")
 	}
-	verifiedIngress, err := identity.VerifyRelayDescriptor(claims.Ingress)
+	verifiedIngress, err := discovery.VerifyRelayDescriptor(claims.Ingress)
 	if err != nil {
 		return capabilityClaims{}, err
 	}
-	verifiedIngress.IVNPDestination, err = utils.NormalizeIVNPDestination(verifiedIngress.IVNPDestination)
+	verifiedIngress.IVNPDestination, err = normalizeIVNPDestination(verifiedIngress.IVNPDestination)
 	if err != nil {
 		return capabilityClaims{}, err
 	}
@@ -617,7 +633,7 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 	}
 	claims.LeaseID = strings.TrimSpace(claims.LeaseID)
 	claims.GatewayAddress = strings.TrimSpace(claims.GatewayAddress)
-	claims.GatewayDestination, err = utils.NormalizeIVNPDestination(claims.GatewayDestination)
+	claims.GatewayDestination, err = normalizeIVNPDestination(claims.GatewayDestination)
 	incomplete := claims.Version != 1 || claims.LeaseID == "" || claims.GatewayAddress == ""
 	invalidExpiry := !claims.ExpiresAt.After(now) || claims.ExpiresAt.After(verifiedIngress.ExpiresAt)
 	if err != nil || incomplete || invalidExpiry {

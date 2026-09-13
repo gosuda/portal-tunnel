@@ -1,49 +1,15 @@
-package portal
+package identity
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
-	portalidentity "github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
-
-// ResolveRelayStateDir returns the relay state directory for path, accepting
-// either a directory or a path to the relay identity/policy file.
-func ResolveRelayStateDir(path string) string {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return ""
-	}
-	switch strings.ToLower(filepath.Base(trimmed)) {
-	case types.RelayIdentityFilename, types.RelayPolicyFilename:
-		return filepath.Dir(trimmed)
-	default:
-		return trimmed
-	}
-}
-
-// ResolveRelayPolicyPath returns the relay policy file inside the state dir.
-func ResolveRelayPolicyPath(path string) string {
-	stateDir := ResolveRelayStateDir(path)
-	if stateDir == "" {
-		return ""
-	}
-	return filepath.Join(stateDir, types.RelayPolicyFilename)
-}
-
-func resolveRelayIdentityPath(path string) string {
-	stateDir := ResolveRelayStateDir(path)
-	if stateDir == "" {
-		return ""
-	}
-	return filepath.Join(stateDir, types.RelayIdentityFilename)
-}
 
 type relayIdentityFile struct {
 	Name                     string `json:"name,omitempty"`
@@ -56,16 +22,27 @@ type relayIdentityFile struct {
 	EncryptedClientHelloSeed string `json:"encrypted_client_hello_seed,omitempty"`
 }
 
-// LoadOrCreateRelayIdentity loads relay state from disk or creates it during
-// relay startup. The file is written by the relay itself, so a loaded
-// identity is trusted as-is; only the relay hostname is applied and a
-// missing ECH seed is filled, and the file is rewritten only when that
-// changed something. Persistence is kept here with the relay owner rather
-// than in the identity primitives package.
-func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, error) {
-	path = resolveRelayIdentityPath(path)
+type RelayIdentity struct {
+	types.Identity
+	EncryptedClientHelloSeed string
+}
+
+func (i RelayIdentity) Copy() RelayIdentity {
+	return RelayIdentity{
+		Identity:                 i.Identity.Copy(),
+		EncryptedClientHelloSeed: i.EncryptedClientHelloSeed,
+	}
+}
+
+// LoadOrCreateRelayIdentity loads the relay identity from path or creates it
+// during relay startup. The file is written by the relay itself, so a
+// loaded identity is trusted as-is; only the relay hostname is applied and a
+// missing ECH seed is filled. The file is rewritten only when something
+// changed.
+func LoadOrCreateRelayIdentity(path, rootHost string) (RelayIdentity, error) {
+	path = strings.TrimSpace(path)
 	if path == "" {
-		return types.RelayIdentity{}, errors.New("identity path is required")
+		return RelayIdentity{}, errors.New("identity path is required")
 	}
 	rootHost = strings.TrimSpace(rootHost)
 	if normalizedRootHost := utils.PortalRootHost(rootHost); normalizedRootHost != "" {
@@ -79,16 +56,16 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, erro
 	switch {
 	case err == nil:
 		if relay.Address == "" || relay.PublicKey == "" || relay.PrivateKey == "" {
-			return types.RelayIdentity{}, errors.New("relay identity file is incomplete")
+			return RelayIdentity{}, errors.New("relay identity file is incomplete")
 		}
 	case created:
-		generated, generateErr := portalidentity.Generate("relay")
+		generated, generateErr := Generate("relay")
 		if generateErr != nil {
-			return types.RelayIdentity{}, fmt.Errorf("generate relay identity: %w", generateErr)
+			return RelayIdentity{}, fmt.Errorf("generate relay identity: %w", generateErr)
 		}
-		relay = types.RelayIdentity{Identity: generated}
+		relay = RelayIdentity{Identity: generated}
 	default:
-		return types.RelayIdentity{}, fmt.Errorf("load identity: %w", err)
+		return RelayIdentity{}, fmt.Errorf("load identity: %w", err)
 	}
 
 	stored := relay
@@ -100,22 +77,22 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (types.RelayIdentity, erro
 	}
 	if created || relay != stored {
 		if err := saveRelayIdentity(path, relay); err != nil {
-			return types.RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
+			return RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
 		}
 	}
 	return relay, nil
 }
 
-func loadRelayIdentityFile(path string) (types.RelayIdentity, error) {
+func loadRelayIdentityFile(path string) (RelayIdentity, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return types.RelayIdentity{}, err
+		return RelayIdentity{}, err
 	}
 	var payload relayIdentityFile
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return types.RelayIdentity{}, fmt.Errorf("decode identity file: %w", err)
+		return RelayIdentity{}, fmt.Errorf("decode identity file: %w", err)
 	}
-	return types.RelayIdentity{Identity: types.Identity{
+	return RelayIdentity{Identity: types.Identity{
 		Name:           payload.Name,
 		Address:        payload.Address,
 		PublicKey:      payload.PublicKey,
@@ -126,7 +103,7 @@ func loadRelayIdentityFile(path string) (types.RelayIdentity, error) {
 	}, EncryptedClientHelloSeed: payload.EncryptedClientHelloSeed}, nil
 }
 
-func saveRelayIdentity(path string, relay types.RelayIdentity) error {
+func saveRelayIdentity(path string, relay RelayIdentity) error {
 	privateKey := relay.PrivateKey
 	if strings.TrimSpace(relay.Mnemonic) != "" {
 		privateKey = ""

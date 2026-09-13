@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 
 func newTestRegistry(t *testing.T) *leaseRegistry {
 	t.Helper()
-	relay, err := LoadOrCreateRelayIdentity(t.TempDir(), "example.com")
+	relay, err := identity.LoadOrCreateRelayIdentity(filepath.Join(t.TempDir(), types.RelayIdentityFilename), "example.com")
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
@@ -446,7 +447,7 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	t.Parallel()
 
-	relay, err := LoadOrCreateRelayIdentity(t.TempDir(), "example.com")
+	relay, err := identity.LoadOrCreateRelayIdentity(filepath.Join(t.TempDir(), types.RelayIdentityFilename), "example.com")
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}

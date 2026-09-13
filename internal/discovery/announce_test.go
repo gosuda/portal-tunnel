@@ -34,7 +34,7 @@ func mustUnsignedDescriptor(t *testing.T, signing types.Identity, relayURL strin
 func mustSignedDescriptor(t *testing.T, signing types.Identity, relayURL string, issuedAt time.Time) types.RelayDescriptor {
 	t.Helper()
 	authority := identity.NewLocalAuthority(signing)
-	signed, err := identity.SignRelayDescriptor(types.RelayDescriptor{
+	signed, err := SignRelayDescriptor(types.RelayDescriptor{
 		Address:      signing.Address,
 		Version:      types.DiscoveryVersion,
 		IssuedAt:     issuedAt,
