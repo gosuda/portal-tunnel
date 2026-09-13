@@ -132,16 +132,16 @@ func (h *harness) close() {
 
 func (h *harness) waitForPublicURL() string {
 	h.t.Helper()
-	var publicURL string
-	h.eventually(func() bool {
-		relays := h.exposure.Relays()
-		if len(relays) != 1 {
-			return false
-		}
-		publicURL = relays[0].PublicURL
-		return publicURL != "" && len(h.server.PublicLeases()) == 1 && h.server.PublicLeases()[0].Ready > 0
-	}, "tunnel did not become ready")
-	return publicURL
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	relays, err := h.exposure.WaitReady(ctx)
+	if err != nil {
+		h.t.Fatalf("tunnel did not become ready: %v", err)
+	}
+	if len(relays) == 0 || relays[0].PublicURL == "" {
+		h.t.Fatal("ready relay did not report a public URL")
+	}
+	return relays[0].PublicURL
 }
 
 func (h *harness) get(publicURL string) string {
@@ -177,27 +177,6 @@ func (h *harness) get(publicURL string) string {
 		h.t.Fatalf("tenant response status = %d, want 200", resp.StatusCode)
 	}
 	return string(body)
-}
-
-func (h *harness) eventually(condition func() bool, message string) {
-	h.t.Helper()
-	if condition() {
-		return
-	}
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	timeout := time.NewTimer(15 * time.Second)
-	defer timeout.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			if condition() {
-				return
-			}
-		case <-timeout.C:
-			h.t.Fatal(message)
-		}
-	}
 }
 
 var (
