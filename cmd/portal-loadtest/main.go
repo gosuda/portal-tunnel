@@ -25,7 +25,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
