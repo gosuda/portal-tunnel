@@ -6,13 +6,27 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+const (
+	siweVersion = "1"
+	siweChainID = 1
+)
+
+type SIWEMessage struct {
+	Domain    string
+	Address   string
+	URI       string
+	Statement string
+	Nonce     string
+	RequestID string
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+}
 
 // FormatSIWEMessage formats the EIP-4361 subset Portal issues for registration
 // and wallet login. It is not a general SIWE formatter.
-func FormatSIWEMessage(m types.SIWEMessage) (string, error) {
+func FormatSIWEMessage(m SIWEMessage) (string, error) {
 	domain, err := url.Parse("https://" + m.Domain)
 	if err != nil || domain.Host == "" {
 		return "", errors.New("invalid siwe domain")
@@ -53,7 +67,7 @@ func FormatSIWEMessage(m types.SIWEMessage) (string, error) {
 		header += m.Statement + "\n"
 	}
 	return fmt.Sprintf("%s\nURI: %s\nVersion: %s\nChain ID: %d\nNonce: %s\nIssued At: %s\nExpiration Time: %s\nRequest ID: %s",
-		header, uri.String(), types.SIWEVersion, types.SIWEChainID, m.Nonce, m.IssuedAt.UTC().Format(time.RFC3339), m.ExpiresAt.UTC().Format(time.RFC3339), m.RequestID), nil
+		header, uri.String(), siweVersion, siweChainID, m.Nonce, m.IssuedAt.UTC().Format(time.RFC3339), m.ExpiresAt.UTC().Format(time.RFC3339), m.RequestID), nil
 }
 
 // VerifySIWEMessage verifies the stored challenge after the caller has matched

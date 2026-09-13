@@ -31,7 +31,7 @@ func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string
 
 	challengeID := utils.RandomID("rch_")
 	expiresAt := now.UTC().Add(ttl)
-	message, err := FormatSIWEMessage(types.SIWEMessage{
+	message, err := FormatSIWEMessage(SIWEMessage{
 		Domain: domain, Address: normalizedIdentity.Address, URI: uri,
 		Statement: "Register a portal lease", Nonce: rand.Text(), RequestID: challengeID,
 		IssuedAt: now, ExpiresAt: expiresAt,

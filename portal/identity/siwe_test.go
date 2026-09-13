@@ -4,15 +4,13 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestSIWEMessageFormat(t *testing.T) {
 	// EIP-4361's ABNF defines the literal field order and LF separators:
 	// https://eips.ethereum.org/EIPS/eip-4361#message-format
 	now := time.Date(2026, 9, 12, 12, 0, 0, 123456789, time.UTC)
-	message := types.SIWEMessage{
+	message := SIWEMessage{
 		Domain: "localhost:8443", Address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
 		URI: "https://localhost:8443/login", Statement: "Sign in to Portal",
 		Nonce: "32891756", RequestID: "wac_example", IssuedAt: now, ExpiresAt: now.Add(2 * time.Minute),
@@ -37,19 +35,19 @@ func TestSIWEMessageFormat(t *testing.T) {
 }
 
 func TestSIWEMessageRejectsInvalidFields(t *testing.T) {
-	for name, change := range map[string]func(*types.SIWEMessage){
-		"empty domain":       func(m *types.SIWEMessage) { m.Domain = "" },
-		"domain with path":   func(m *types.SIWEMessage) { m.Domain = "example.com/path" },
-		"domain with query":  func(m *types.SIWEMessage) { m.Domain = "example.com?" },
-		"relative URI":       func(m *types.SIWEMessage) { m.URI = "/login" },
-		"invalid address":    func(m *types.SIWEMessage) { m.Address = "0x1234" },
-		"statement new line": func(m *types.SIWEMessage) { m.Statement = "Sign in\nNonce: attacker" },
-		"short nonce":        func(m *types.SIWEMessage) { m.Nonce = "1234567" },
-		"invalid nonce":      func(m *types.SIWEMessage) { m.Nonce = "1234567_" },
-		"request ID line":    func(m *types.SIWEMessage) { m.RequestID = "id\r\nResources:" },
+	for name, change := range map[string]func(*SIWEMessage){
+		"empty domain":       func(m *SIWEMessage) { m.Domain = "" },
+		"domain with path":   func(m *SIWEMessage) { m.Domain = "example.com/path" },
+		"domain with query":  func(m *SIWEMessage) { m.Domain = "example.com?" },
+		"relative URI":       func(m *SIWEMessage) { m.URI = "/login" },
+		"invalid address":    func(m *SIWEMessage) { m.Address = "0x1234" },
+		"statement new line": func(m *SIWEMessage) { m.Statement = "Sign in\nNonce: attacker" },
+		"short nonce":        func(m *SIWEMessage) { m.Nonce = "1234567" },
+		"invalid nonce":      func(m *SIWEMessage) { m.Nonce = "1234567_" },
+		"request ID line":    func(m *SIWEMessage) { m.RequestID = "id\r\nResources:" },
 	} {
 		t.Run(name, func(t *testing.T) {
-			message := types.SIWEMessage{
+			message := SIWEMessage{
 				Domain: "example.com", Address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
 				URI: "https://example.com/login", Nonce: "32891756", RequestID: "wac_example",
 				IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute),

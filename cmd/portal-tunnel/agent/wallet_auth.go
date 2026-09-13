@@ -95,7 +95,7 @@ func (a *walletAuthenticator) issueChallenge(req types.WalletAuthChallengeReques
 
 	challengeID := utils.RandomID("wac_")
 	expiresAt := now.UTC().Add(defaultWalletAuthChallengeTTL)
-	message, err := identity.FormatSIWEMessage(types.SIWEMessage{
+	message, err := identity.FormatSIWEMessage(identity.SIWEMessage{
 		Domain: domain, Address: address, URI: uri,
 		Statement: a.statement, Nonce: rand.Text(), RequestID: challengeID,
 		IssuedAt: now, ExpiresAt: expiresAt,
