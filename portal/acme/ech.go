@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 

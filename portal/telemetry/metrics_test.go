@@ -9,7 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/telemetry"
+	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 )
 
 // metricFamilyByName gathers all metric families and returns the one with the

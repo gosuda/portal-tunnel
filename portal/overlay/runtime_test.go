@@ -17,7 +17,7 @@ import (
 	"gosuda.org/ivnp"
 	"gosuda.org/ivnp/foundation"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
