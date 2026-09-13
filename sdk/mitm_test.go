@@ -40,8 +40,9 @@ func TestMITMProbeConnMatchesExporter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client ExportKeyingMaterial() error = %v", err)
 	}
-	resultCh, cleanupProbe := listener.mitmManager.startProbe(nonceHex, expected)
+	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
 	defer cleanupProbe()
+	listener.mitmManager.attachExpected(nonceHex, expected)
 
 	handleDone := make(chan struct{})
 	go func() {
@@ -95,8 +96,9 @@ func TestMITMProbeConnDetectsExporterMismatch(t *testing.T) {
 		t.Fatalf("rand.Read() error = %v", err)
 	}
 	nonceHex := hex.EncodeToString(nonce)
-	resultCh, cleanupProbe := listener.mitmManager.startProbe(nonceHex, make([]byte, 32))
+	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
 	defer cleanupProbe()
+	listener.mitmManager.attachExpected(nonceHex, make([]byte, 32))
 
 	handleDone := make(chan struct{})
 	go func() {
@@ -132,6 +134,100 @@ func TestMITMProbeConnDetectsExporterMismatch(t *testing.T) {
 
 	select {
 	case <-handleDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for probe handler")
+	}
+}
+
+func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
+	listener := &listener{}
+	listener.mitmManager = newMITMManager(context.Background(), listener, false)
+
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("rand.Read() error = %v", err)
+	}
+	nonceHex := hex.EncodeToString(nonce)
+
+	// Production order from probeTLSPassthrough: the nonce is reserved
+	// before the dial, so the reservation exists before any handshake.
+	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
+	defer cleanupProbe()
+
+	cert := newMITMProbeCertificate(t)
+	clientRaw, serverRaw := net.Pipe()
+	clientConn := tls.Client(clientRaw, &tls.Config{
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS13,
+		NextProtos:         []string{"http/1.1"},
+	})
+	serverConn := tls.Server(serverRaw, &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+		NextProtos:   []string{"http/1.1"},
+	})
+	defer closeMITMProbeTLSConn(clientConn)
+	defer closeMITMProbeTLSConn(serverConn)
+
+	type handleResult struct {
+		conn    net.Conn
+		handled bool
+		err     error
+	}
+	handleResultCh := make(chan handleResult, 1)
+	probeSide := make(chan struct{})
+	go func() {
+		if err := serverConn.HandshakeContext(context.Background()); err != nil {
+			handleResultCh <- handleResult{err: err}
+			return
+		}
+		close(probeSide)
+		// Accept fires the moment the reverse handshake completes — before
+		// the probe side has attached the expected exporter or written the
+		// nonce frame.
+		nextConn, handled, err := listener.mitmManager.maybeHandleConn(serverConn)
+		handleResultCh <- handleResult{conn: nextConn, handled: handled, err: err}
+	}()
+
+	if err := clientConn.HandshakeContext(context.Background()); err != nil {
+		t.Fatalf("client handshake error = %v", err)
+	}
+	<-probeSide
+
+	clientState := clientConn.ConnectionState()
+	expected, err := (&clientState).ExportKeyingMaterial(mitmProbeExporterLabel, nil, 32)
+	if err != nil {
+		t.Fatalf("client ExportKeyingMaterial() error = %v", err)
+	}
+	listener.mitmManager.attachExpected(nonceHex, expected)
+
+	frame := bytes.Clone(nonce)
+	frame = append(frame, bytes.Repeat([]byte{0xAB}, 128)...)
+	if _, err := clientConn.Write(frame); err != nil {
+		t.Fatalf("clientConn.Write() error = %v", err)
+	}
+	_ = clientConn.Close()
+
+	select {
+	case reason := <-resultCh:
+		if reason != "" {
+			t.Fatalf("probe reason = %q, want empty", reason)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for probe result")
+	}
+
+	select {
+	case result := <-handleResultCh:
+		if result.err != nil {
+			t.Fatalf("maybeHandleConn() error = %v", result.err)
+		}
+		if !result.handled {
+			t.Fatal("maybeHandleConn() handled = false, want true: probe bypassed into normal traffic")
+		}
+		if result.conn != nil {
+			t.Fatal("maybeHandleConn() returned passthrough conn for probe")
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for probe handler")
 	}

@@ -108,6 +108,12 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	}
 	nonceHex := hex.EncodeToString(nonceRaw)
 
+	// Reserve the nonce before dialing: the reverse side can hand the
+	// connection to Accept as soon as its TLS handshake completes, which
+	// can race ahead of the probe side exporting keying material.
+	resultCh, cleanupProbe := m.reserveProbe(nonceHex)
+	defer cleanupProbe()
+
 	dialAddr, err := m.probeDialAddress(publicURL)
 	if err != nil {
 		return report, err
@@ -141,8 +147,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	if err != nil {
 		return report, fmt.Errorf("export client probe keying material: %w", err)
 	}
-	resultCh, cleanupProbe := m.startProbe(nonceHex, expected)
-	defer cleanupProbe()
+	m.attachExpected(nonceHex, expected)
 
 	paddingLen := mitmProbePaddingMin
 	if paddingRange := mitmProbePaddingMax - mitmProbePaddingMin; paddingRange > 0 {
@@ -339,12 +344,16 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	return nil, true, nil
 }
 
-func (m *mitmManager) startProbe(nonce string, expected []byte) (<-chan string, func()) {
-	m.mu.Lock()
+// reserveProbe registers the probe nonce before the TLS dial so the reverse
+// side recognizes the connection even if Accept runs the moment the reverse
+// handshake completes. attachExpected arms the reservation afterwards; until
+// then the entry holds no exporter value and a completion attempt reports a
+// mismatch.
+func (m *mitmManager) reserveProbe(nonce string) (<-chan string, func()) {
 	state := &mitmProbePending{
-		expected: bytes.Clone(expected),
 		resultCh: make(chan string, 1),
 	}
+	m.mu.Lock()
 	m.pending[nonce] = state
 	m.mu.Unlock()
 
@@ -355,21 +364,32 @@ func (m *mitmManager) startProbe(nonce string, expected []byte) (<-chan string, 
 	}
 }
 
+// attachExpected arms a reserved probe with the exporter value the reverse
+// side must reproduce for the connection to count as untampered.
+func (m *mitmManager) attachExpected(nonce string, expected []byte) {
+	m.mu.Lock()
+	if state := m.pending[nonce]; state != nil {
+		state.expected = bytes.Clone(expected)
+	}
+	m.mu.Unlock()
+}
+
 func (m *mitmManager) completeProbe(nonce string, actual []byte) {
 	m.mu.Lock()
 	state := m.pending[nonce]
-	m.mu.Unlock()
 	if state == nil {
+		m.mu.Unlock()
 		return
 	}
-
 	reason := ""
 	if !bytes.Equal(state.expected, actual) {
 		reason = types.MITMProbeReasonExporterMismatch
 	}
+	resultCh := state.resultCh
+	m.mu.Unlock()
 
 	select {
-	case state.resultCh <- reason:
+	case resultCh <- reason:
 	default:
 	}
 }
