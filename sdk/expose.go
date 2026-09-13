@@ -814,6 +814,9 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	}
 	missingRelayURLs := make([]string, 0)
 	for _, relayURL := range relayURLs {
+		if _, wanted := desired[relayURL]; !wanted {
+			continue
+		}
 		if _, exists := e.relayListeners[relayURL]; exists {
 			continue
 		}
