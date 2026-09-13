@@ -529,6 +529,57 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 	}
 }
 
+func TestNewServerRejectsPortalURLCredentialsWithoutEchoingThem(t *testing.T) {
+	_, err := NewServer(ServerConfig{
+		PortalURL: "https://user:secret@localhost",
+		StateDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("NewServer() error = nil, want credential rejection")
+	}
+	if strings.Contains(err.Error(), "user") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("NewServer() error exposes PORTAL_URL credentials: %q", err)
+	}
+}
+
+func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		portalURL      string
+		localSNIPort   int
+		wantPublicPort int
+	}{
+		{"default ports", "https://relay.example.com", 0, 443},
+		{"local bind override", "https://relay.example.com", 8443, 443},
+		{"explicit public port", "https://relay.example.com:9443", 443, 9443},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server, err := NewServer(ServerConfig{
+				PortalURL: tc.portalURL,
+				StateDir:  tempStateDir(t),
+				SNIPort:   tc.localSNIPort,
+			})
+			if err != nil {
+				t.Fatalf("NewServer() error = %v", err)
+			}
+			wantLocalPort := tc.localSNIPort
+			if wantLocalPort == 0 {
+				wantLocalPort = 443
+			}
+			if got := server.config().SNIPort; got != wantLocalPort {
+				t.Fatalf("ServerConfig.SNIPort = %d, want local port %d", got, wantLocalPort)
+			}
+			if got := server.publicPort; got != tc.wantPublicPort {
+				t.Fatalf("Server.publicPort = %d, want %d", got, tc.wantPublicPort)
+			}
+		})
+	}
+}
+
 func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	t.Parallel()
 
@@ -607,8 +658,8 @@ func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
 	}
 	t.Cleanup(record.Close)
 
-	if resp.SNIPort != server.config().SNIPort {
-		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, server.config().SNIPort)
+	if resp.SNIPort != 443 {
+		t.Fatalf("RegisterResponse.SNIPort = %d, want public PORTAL_URL port 443", resp.SNIPort)
 	}
 	if !resp.UDPEnabled || !resp.TCPEnabled || resp.UDPAddr == "" || resp.TCPAddr == "" {
 		t.Fatalf("RegisterResponse transports = %+v, want UDP and raw TCP endpoints", resp)

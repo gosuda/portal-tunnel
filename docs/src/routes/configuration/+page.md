@@ -49,11 +49,31 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `PORTAL_URL` | `https://localhost` | string | Public HTTPS origin of this relay server and embedded dashboard |
+| `PORTAL_URL` | `https://localhost` | string | Canonical public HTTPS origin, including the externally reachable port |
 | `PORTAL_FRONTEND_DIR` | `""` | string | Custom SPA directory containing `index.html`; empty uses the frontend embedded in the Portal binary |
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
 | `API_PORT` | `4017` | int | Admin/API server listen port |
-| `SNI_PORT` | `443` | int | TCP SNI router listen port; non-standard values are intended for local testing, while the bundled public deployment requires `443` |
+| `SNI_PORT` | `443` | int | Local TCP SNI router listen port; it does not change the public port advertised from `PORTAL_URL` |
+
+`PORTAL_URL` owns public semantics and `SNI_PORT` owns local bind semantics.
+Portal derives tenant URLs, reverse endpoints, QUIC connection metadata, and
+ECH HTTPS/SVCB ports from `PORTAL_URL`. For a direct listener on a non-default
+port, set both values explicitly:
+
+```text
+PORTAL_URL=https://localhost:8443
+SNI_PORT=8443
+```
+
+When a load balancer maps public port 443 to a local listener on 8443, use:
+
+```text
+PORTAL_URL=https://relay.example.com
+SNI_PORT=8443
+```
+
+Portal does not compare these ports because it cannot infer external NAT or
+load-balancer topology.
 
 ### Optional HTTP redirect listener
 
@@ -86,7 +106,7 @@ over HTTPS by the destination. This option does not change HTTPS or tenant
 policy and does not add `includeSubDomains` or `preload`.
 
 ```bash
-relay-server --portal-url https://localhost:14017 --api-port 14017 --sni-port 14443 --http-redirect-enabled --http-redirect-addr 127.0.0.1:18080
+relay-server --portal-url https://localhost:14443 --api-port 14017 --sni-port 14443 --http-redirect-enabled --http-redirect-addr 127.0.0.1:18080
 curl -i -H "Host: untrusted.example" "http://127.0.0.1:18080/ignored?secret=value"
 ```
 

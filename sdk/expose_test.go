@@ -56,6 +56,37 @@ func TestExposureWaitReadyUsesRelayStatus(t *testing.T) {
 	}
 }
 
+func TestPublicURLForLeaseUsesCanonicalRelayPort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		relayURL string
+		want     string
+	}{
+		{"default HTTPS port", "https://relay.example.com", "https://demo.relay.example.com"},
+		{"explicit default port", "https://relay.example.com:443", "https://demo.relay.example.com:443"},
+		{"explicit public port", "https://relay.example.com:9443", "https://demo.relay.example.com:9443"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			relayURL, err := url.Parse(tc.relayURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			l := &listener{relayURL: relayURL}
+			got := l.publicURLForLease(listenerSnapshot{
+				hostname:   "demo.relay.example.com",
+				publicPort: 8443,
+			})
+			if got != tc.want {
+				t.Fatalf("publicURLForLease() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestListenerReverseSessionReadinessTracksLiveSessions(t *testing.T) {
 	var states []RelayState
 	l := &listener{

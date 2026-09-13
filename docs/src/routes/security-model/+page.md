@@ -29,7 +29,7 @@ Relay API TLS is separate from tenant TLS:
 
 - Relay API HTTPS protects `/sdk/*`, `/discovery`, `/api/admin`, installers, and `/v1/sign`.
 - Tenant TLS protects end-user traffic for lease hostnames.
-- The internal QUIC datagram backhaul uses `SNI_PORT/udp` with ALPN `portal-tunnel`.
+- The QUIC datagram backhaul uses the public `PORTAL_URL` port with ALPN `portal-tunnel`; `SNI_PORT` controls the relay's corresponding local UDP listener.
 
 ## Tunnel ECH
 

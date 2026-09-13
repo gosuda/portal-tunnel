@@ -316,7 +316,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	s.registry.promoteECHDNS(record, s.acmeManager, s.config().SNIPort)
+	s.registry.promoteECHDNS(record, s.acmeManager, s.publicPort)
 
 	utils.WriteAPIData(w, http.StatusCreated, resp)
 }

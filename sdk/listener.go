@@ -389,7 +389,7 @@ type listenerSnapshot struct {
 	accessToken   string
 	reverse       types.ReverseEndpoint
 	expiresAt     time.Time
-	sniPort       int
+	publicPort    int
 	publicURLBase *url.URL
 	tlsConfig     *tls.Config
 	tlsCloser     io.Closer
@@ -513,14 +513,8 @@ func (l *listener) publicURLForLease(lease listenerSnapshot) string {
 	}
 
 	host := lease.hostname
-	sniPort := lease.sniPort
-	scheme := strings.ToLower(strings.TrimSpace(baseURL.Scheme))
-	usesDefaultPort := scheme == "https" && sniPort == 443 || scheme == "http" && sniPort == 80
-	if usesDefaultPort {
-		sniPort = 0
-	}
-	if sniPort > 0 {
-		host = net.JoinHostPort(lease.hostname, fmt.Sprintf("%d", sniPort))
+	if port := baseURL.Port(); port != "" {
+		host = net.JoinHostPort(lease.hostname, port)
 	}
 
 	return (&url.URL{
@@ -853,15 +847,15 @@ func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, err
 	if !ok || lease.accessToken == "" {
 		return nil, errors.New("access token is not available")
 	}
-	if lease.sniPort <= 0 {
-		return nil, errors.New("sni port is not available")
+	if lease.publicPort <= 0 {
+		return nil, errors.New("public port is not available")
 	}
 	if l.tlsConfig == nil {
 		return nil, errors.New("relay tls config is unavailable")
 	}
 	host := strings.TrimSpace(l.relayURL.Hostname())
 	host = cmp.Or(host, strings.TrimSpace(l.relayURL.Host))
-	dialAddr := net.JoinHostPort(host, fmt.Sprintf("%d", lease.sniPort))
+	dialAddr := net.JoinHostPort(host, fmt.Sprintf("%d", lease.publicPort))
 	return transport.DialQUICBackhaul(ctx, dialAddr, l.tlsConfig, lease.accessToken)
 }
 
@@ -1010,7 +1004,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	}
 	if l.udpEnabled && resp.SNIPort <= 0 {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		return errors.New("relay did not return sni port for udp transport")
+		return errors.New("relay did not return public port for udp transport")
 	}
 	echKeys, echConfigList, err := l.tenantECHMaterials(publicHostname, routeHostname)
 	if err != nil {
@@ -1050,7 +1044,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		accessToken:   resp.AccessToken,
 		reverse:       resp.ReverseEndpoint,
 		expiresAt:     resp.ExpiresAt,
-		sniPort:       resp.SNIPort,
+		publicPort:    resp.SNIPort,
 		publicURLBase: l.relayURL,
 		tlsConfig:     tlsConf,
 		tlsCloser:     tenantTLSCloser,

@@ -58,7 +58,7 @@ var pinnedByTopology = map[string]struct {
 	Reason string
 }{
 	"API_PORT": {"4017", "the SNI router forwards root-host traffic to the internal API listener on this port"},
-	"SNI_PORT": {"443", "this is the public port tunnel clients are told to reach"},
+	"SNI_PORT": {"443", "the SNI router listens on this fixed container port"},
 }
 
 // dnsProviderCredential maps each supported ACME_DNS_PROVIDER value to the

@@ -125,11 +125,11 @@ func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manag
 	return nil
 }
 
-func (r *leaseRecord) syncECHDNS(ctx context.Context, manager *acme.Manager, sniPort int) error {
+func (r *leaseRecord) syncECHDNS(ctx context.Context, manager *acme.Manager, publicPort int) error {
 	if r == nil || manager == nil || !r.hasECHDNSRecord() {
 		return nil
 	}
-	return manager.SyncECHConfig(ctx, r.ECHDNSHostname, r.ECHConfigList, sniPort)
+	return manager.SyncECHConfig(ctx, r.ECHDNSHostname, r.ECHConfigList, publicPort)
 }
 
 func (r *leaseRecord) deleteECHDNS(ctx context.Context, manager *acme.Manager) {

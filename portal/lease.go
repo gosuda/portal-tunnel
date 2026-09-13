@@ -37,7 +37,7 @@ const (
 type leaseRegistry struct {
 	records        []*leaseRecord
 	rootHostname   string
-	sniPort        int
+	publicPort     int
 	tokenAuthority identity.Authority
 	tokenIssuer    string
 	reverseURL     string
@@ -49,7 +49,7 @@ type leaseRegistry struct {
 	mu             sync.RWMutex
 }
 
-func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, rootHostname string, sniPort int, tokenAuthority identity.Authority, tokenIssuer string, trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*leaseRegistry, error) {
+func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, rootHostname string, publicPort int, tokenAuthority identity.Authority, tokenIssuer string, trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*leaseRegistry, error) {
 	if tokenAuthority == nil {
 		return nil, errors.New("lease token authority is required")
 	}
@@ -69,7 +69,7 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 	return &leaseRegistry{
 		records:        make([]*leaseRecord, 0),
 		rootHostname:   utils.NormalizeHostname(rootHostname),
-		sniPort:        sniPort,
+		publicPort:     publicPort,
 		tokenAuthority: tokenAuthority,
 		tokenIssuer:    tokenIssuer,
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
@@ -403,7 +403,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		ExpiresAt:       record.ExpiresAt,
 		AccessToken:     accessToken,
 		ReverseEndpoint: reverseEndpoint,
-		SNIPort:         r.sniPort,
+		SNIPort:         r.publicPort,
 		UDPEnabled:      record.datagram != nil,
 		TCPEnabled:      record.tcpPort != nil,
 	}
@@ -608,7 +608,7 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 	return nil, errLeaseNotFound
 }
 
-func (r *leaseRegistry) promoteECHDNS(record *leaseRecord, manager *acme.Manager, sniPort int) {
+func (r *leaseRegistry) promoteECHDNS(record *leaseRecord, manager *acme.Manager, publicPort int) {
 	if !record.hasECHDNSRecord() {
 		return
 	}
@@ -629,7 +629,7 @@ func (r *leaseRegistry) promoteECHDNS(record *leaseRecord, manager *acme.Manager
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
-		err := record.syncECHDNS(ctx, manager, sniPort)
+		err := record.syncECHDNS(ctx, manager, publicPort)
 		cancel()
 
 		if err != nil {

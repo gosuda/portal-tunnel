@@ -179,6 +179,7 @@ type Server struct {
 	cancel       context.CancelFunc
 	group        *errgroup.Group
 	shutdownOnce sync.Once
+	publicPort   int
 
 	cfg         *utils.Snapshot[ServerConfig]
 	identity    identity.RelayIdentity
@@ -207,6 +208,17 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	portalURL, err := url.Parse(cfg.PortalURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse normalized portal url: %w", err)
+	}
+	publicPort := 443
+	if port := portalURL.Port(); port != "" {
+		publicPort, err = strconv.Atoi(port)
+		if err != nil || publicPort < 1 || publicPort > 65535 {
+			return nil, errors.New("PORTAL_URL port must be between 1 and 65535")
+		}
+	}
 
 	identityPath := filepath.Join(cfg.StateDir, types.RelayIdentityFilename)
 	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(cfg.PortalURL))
@@ -214,7 +226,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
-	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, cfg.SNIPort, relayAuthority, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, relayAuthority, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +244,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		cfg:             utils.NewSnapshot(cfg, ServerConfig.snapshot),
 		identity:        relayIdentity,
 		authority:       relayAuthority,
+		publicPort:      publicPort,
 		registry:        registry,
 		relaySet:        relaySet,
 		announceLimiter: policy.NewSourceLimiter(30, 60),
@@ -651,7 +664,7 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 	}
 	if len(echKeys) > 0 {
 		apiTLS.EncryptedClientHelloKeys = echKeys
-		if err := manager.SyncECHConfig(ctx, s.identity.Name, echConfigList, cfg.SNIPort); err != nil {
+		if err := manager.SyncECHConfig(ctx, s.identity.Name, echConfigList, s.publicPort); err != nil {
 			log.Warn().
 				Err(err).
 				Str("hostname", s.identity.Name).

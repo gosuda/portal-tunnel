@@ -331,7 +331,8 @@ Prints the installed version string and exits.
 - `--tcp` requires relay TCP port transport, a valid `MIN_PORT`/`MAX_PORT`
   range, and TCP port transport enabled in the admin panel.
 - `--udp` requires relay UDP transport, a valid `MIN_PORT`/`MAX_PORT` range, UDP
-  enabled in the admin panel, and `SNI_PORT/udp` reachable for the QUIC backhaul.
+  enabled in the admin panel, and the public `PORTAL_URL` port reachable over
+  UDP for the QUIC backhaul.
 - Bare `portal [flags]` is not accepted; use `portal expose` explicitly.
 - Runtime `APP_*`, `RELAYS`, and `DEFAULT_RELAYS` environment variable fallbacks
   are not used.

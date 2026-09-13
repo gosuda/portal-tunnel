@@ -52,7 +52,7 @@ func newHarness(t *testing.T) *harness {
 	apiPort := harnessPort(t)
 	sniPort := harnessPort(t)
 	stateDir := t.TempDir()
-	relayURL := "https://127.0.0.1:" + strconv.Itoa(apiPort)
+	relayURL := "https://127.0.0.1:" + strconv.Itoa(sniPort)
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     relayURL,
 		StateDir:      stateDir,

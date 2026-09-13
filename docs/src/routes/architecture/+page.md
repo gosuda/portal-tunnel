@@ -87,9 +87,9 @@ const udpQuicDiagram = `sequenceDiagram
 
     SDK->>Relay: POST /sdk/register (udp_enabled=true, signed SIWE)
     Note over Relay: Allocates UDP port from MIN_PORT-MAX_PORT
-    Relay->>SDK: udp_addr + access_token + sni_port
+    Relay->>SDK: udp_addr + access_token + public port (legacy sni_port field)
 
-    SDK->>Relay: QUIC connect to sni_port (ALPN: portal-tunnel, DATAGRAM enabled)
+    SDK->>Relay: QUIC connect to public port (ALPN: portal-tunnel, DATAGRAM enabled)
     SDK->>Relay: Send access_token on first QUIC stream
     Note over Relay: Validates token, registers QUIC tunnel for lease
 
@@ -114,7 +114,7 @@ const registrationDiagram = `sequenceDiagram
     Note over Relay: Validates SIWE signature, checks name availability
     Note over Relay: Creates lease, publishes route at name.relay-host
     Note over Relay: Allocates TCP/UDP ports if requested
-    Relay->>SDK: access_token + reverse_endpoint + lease info (tcp_addr?, udp_addr?, sni_port?)`
+    Relay->>SDK: access_token + reverse_endpoint + lease info (tcp_addr?, udp_addr?, legacy sni_port?)`
 
 const overlayDiagram = `sequenceDiagram
     participant SDK as SDK / portal-tunnel
@@ -234,7 +234,7 @@ Portal has three distinct network roles:
   - hijacked into a long-lived raw TCP session
   - starts idle in the per-lease stream ready queue, then becomes the tenant data path when claimed
 - **Internal datagram tunnel**
-  - QUIC to the relay URL host plus the relay-advertised `sni_port` from `POST /sdk/register` with ALPN `portal-tunnel`
+  - QUIC to the relay URL host plus the canonical public port carried in the legacy `sni_port` field from `POST /sdk/register`, with ALPN `portal-tunnel`
   - authenticated by a first-stream control message carrying `access_token`
   - carries relay-to-SDK/tunnel datagram traffic only
 
@@ -306,7 +306,7 @@ Result: the relay allocates a dedicated TCP port per lease and bridges raw TCP w
 
 1. SDK/tunnel requests a register challenge with `udp_enabled=true`, signs the returned SIWE message, and completes registration.
 2. Relay validates that the datagram plane is enabled, allocates a UDP port, and creates a per-lease datagram runtime.
-3. Registration response includes `udp_addr`, `access_token`, and `sni_port`. The SDK dials QUIC to the relay on `sni_port`.
+3. Registration response includes `udp_addr`, `access_token`, and the canonical public port in the legacy `sni_port` field. The SDK dials QUIC to that public port; the relay may bind a different local `SNI_PORT` behind NAT or a load balancer.
 4. SDK opens a QUIC connection with ALPN `portal-tunnel` and DATAGRAM support enabled.
 5. Authentication: SDK sends `{access_token}` JSON on the first QUIC stream; relay validates before accepting the tunnel.
 6. External UDP client sends a packet to `udp_addr` -> relay assigns a flow ID -> QUIC DATAGRAM frame to SDK.

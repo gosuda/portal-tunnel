@@ -202,7 +202,8 @@ bind. Pick this topology or a host nginx reaching Portal over published ports â€
 not both.
 
 `SNI_PORT` stays `443` inside the container. Portal reaches its own API listener
-through its SNI router, and that port is what goes into the ECH `HTTPS` record.
+through its SNI router. The public port in `PORTAL_URL`, not this local listener
+setting, goes into the ECH `HTTPS` record.
 
 ### Lease hostnames must pass through, unmodified
 

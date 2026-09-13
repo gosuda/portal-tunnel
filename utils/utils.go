@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -147,22 +148,34 @@ func NormalizeRelayURL(raw string) (string, error) {
 
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return "", fmt.Errorf("parse relay url %q: %w", raw, err)
+		return "", errors.New("relay url is invalid")
 	}
 	if parsed.Host == "" && parsed.Path != "" && !strings.Contains(parsed.Path, "/") {
 		parsed, err = url.Parse("https://" + strings.TrimSpace(parsed.Path))
 		if err != nil {
-			return "", fmt.Errorf("parse relay url %q: %w", raw, err)
+			return "", errors.New("relay url is invalid")
 		}
 	}
 	if parsed.Host == "" {
-		return "", fmt.Errorf("relay url host is empty: %q", raw)
+		return "", errors.New("relay url host is empty")
+	}
+	if parsed.User != nil {
+		return "", errors.New("relay url must not include credentials")
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return "", errors.New("relay url has an invalid port")
+	}
+	if port := parsed.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", errors.New("relay url port must be between 1 and 65535")
+		}
 	}
 	if strings.EqualFold(parsed.Scheme, "http") && IsLocalRelayHost(parsed.Hostname()) {
 		parsed.Scheme = "https"
 	}
 	if !strings.EqualFold(parsed.Scheme, "https") {
-		return "", fmt.Errorf("relay url must use https: %q", raw)
+		return "", errors.New("relay url must use https")
 	}
 
 	parsed.RawQuery = ""
