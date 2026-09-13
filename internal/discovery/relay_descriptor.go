@@ -1,13 +1,15 @@
-package identity
+package discovery
 
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"strings"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -17,7 +19,7 @@ import (
 // recoverable, so verifiers do not need to know the public key out of band;
 // they recover it from the signature and check it derives the descriptor's
 // Address field.
-func SignRelayDescriptor(desc types.RelayDescriptor, authority Authority) (types.RelayDescriptor, error) {
+func SignRelayDescriptor(desc types.RelayDescriptor, authority identity.Authority) (types.RelayDescriptor, error) {
 	if authority == nil {
 		return types.RelayDescriptor{}, errors.New("relay descriptor signing authority is required")
 	}
@@ -36,7 +38,7 @@ func SignRelayDescriptor(desc types.RelayDescriptor, authority Authority) (types
 	}
 	desc = normalized
 
-	canonical, err := types.CanonicalBytes(desc)
+	canonical, err := canonicalRelayDescriptorBytes(desc)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("canonicalize relay descriptor: %w", err)
 	}
@@ -74,18 +76,18 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: normalize: %w", err)
 	}
-	canonical, err := types.CanonicalBytes(normalized)
+	canonical, err := canonicalRelayDescriptorBytes(normalized)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("canonicalize relay descriptor: %w", err)
 	}
 
-	publicKey, err := RecoverSHA256Secp256k1Compact(canonical, signature)
+	publicKey, err := identity.RecoverSHA256Secp256k1Compact(canonical, signature)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: %w", err)
 	}
 
 	publicKeyHex := hex.EncodeToString(publicKey.SerializeCompressed())
-	derivedAddress, err := AddressFromCompressedPublicKeyHex(publicKeyHex)
+	derivedAddress, err := identity.AddressFromCompressedPublicKeyHex(publicKeyHex)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("derive address from recovered key: %w", err)
 	}
@@ -121,7 +123,7 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 		desc.APIHTTPSAddr = normalized
 	}
 	if desc.Address != "" {
-		normalized, err := NormalizeEVMAddress(desc.Address)
+		normalized, err := identity.NormalizeEVMAddress(desc.Address)
 		if err != nil {
 			return types.RelayDescriptor{}, fmt.Errorf("normalize address: %w", err)
 		}
@@ -148,4 +150,31 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	}
 
 	return desc, nil
+}
+
+func canonicalRelayDescriptorBytes(desc types.RelayDescriptor) ([]byte, error) {
+	canonical := struct {
+		Address           string  `json:"address"`
+		Version           string  `json:"version"`
+		IssuedAtUnixNano  int64   `json:"issued_at_unix_nano"`
+		ExpiresAtUnixNano int64   `json:"expires_at_unix_nano"`
+		APIHTTPSAddr      string  `json:"api_https_addr"`
+		SupportsUDP       bool    `json:"supports_udp"`
+		SupportsTCP       bool    `json:"supports_tcp"`
+		ActiveConnections int64   `json:"active_connections"`
+		TCPBPS            float64 `json:"tcp_bps"`
+		IVNPDestination   string  `json:"ivnp_destination,omitempty"`
+	}{
+		Address:           desc.Address,
+		Version:           desc.Version,
+		IssuedAtUnixNano:  desc.IssuedAt.UTC().UnixNano(),
+		ExpiresAtUnixNano: desc.ExpiresAt.UTC().UnixNano(),
+		APIHTTPSAddr:      desc.APIHTTPSAddr,
+		SupportsUDP:       desc.SupportsUDP,
+		SupportsTCP:       desc.SupportsTCP,
+		ActiveConnections: desc.ActiveConnections,
+		TCPBPS:            desc.TCPBPS,
+		IVNPDestination:   desc.IVNPDestination,
+	}
+	return json.Marshal(canonical)
 }

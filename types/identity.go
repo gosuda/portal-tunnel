@@ -1,7 +1,6 @@
 package types
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
 )
@@ -101,36 +100,4 @@ type RelayDescriptor struct {
 	ActiveConnections int64     `json:"active_connections,omitempty"`
 	TCPBPS            float64   `json:"tcp_bps,omitempty"`
 	Signature         string    `json:"signature,omitempty"`
-}
-
-// CanonicalBytes returns the deterministic byte representation of a relay
-// descriptor used for signing and signature verification.
-//
-// The optional IVNP extension is omitted when absent so direct-only
-// descriptors keep their canonical encoding.
-func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
-	canonical := struct {
-		Address           string  `json:"address"`
-		Version           string  `json:"version"`
-		IssuedAtUnixNano  int64   `json:"issued_at_unix_nano"`
-		ExpiresAtUnixNano int64   `json:"expires_at_unix_nano"`
-		APIHTTPSAddr      string  `json:"api_https_addr"`
-		SupportsUDP       bool    `json:"supports_udp"`
-		SupportsTCP       bool    `json:"supports_tcp"`
-		ActiveConnections int64   `json:"active_connections"`
-		TCPBPS            float64 `json:"tcp_bps"`
-		IVNPDestination   string  `json:"ivnp_destination,omitempty"`
-	}{
-		Address:           desc.Address,
-		Version:           desc.Version,
-		IssuedAtUnixNano:  desc.IssuedAt.UTC().UnixNano(),
-		ExpiresAtUnixNano: desc.ExpiresAt.UTC().UnixNano(),
-		APIHTTPSAddr:      desc.APIHTTPSAddr,
-		SupportsUDP:       desc.SupportsUDP,
-		SupportsTCP:       desc.SupportsTCP,
-		ActiveConnections: desc.ActiveConnections,
-		TCPBPS:            desc.TCPBPS,
-		IVNPDestination:   desc.IVNPDestination,
-	}
-	return json.Marshal(canonical)
 }

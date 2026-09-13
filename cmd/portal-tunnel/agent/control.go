@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -35,7 +34,7 @@ type endpoint struct {
 type controlHandler struct {
 	manager  *manager
 	token    string
-	auth     *identity.WalletAuthenticator
+	auth     *walletAuthenticator
 	shutdown func()
 }
 
@@ -159,7 +158,7 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 		if !ok {
 			return true
 		}
-		resp, err := s.auth.IssueChallenge(req, agentAuthDomain(r), agentAuthURI(r, types.PathAgentAuthLogin), time.Now().UTC())
+		resp, err := s.auth.issueChallenge(req, agentAuthDomain(r), agentAuthURI(r, types.PathAgentAuthLogin), time.Now().UTC())
 		if err != nil {
 			writeAgentWalletAuthError(w, err)
 			return true
@@ -174,7 +173,7 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 		if !ok {
 			return true
 		}
-		token, walletAddress, err := s.auth.Login(req, time.Now().UTC())
+		token, walletAddress, err := s.auth.login(req, time.Now().UTC())
 		if err != nil {
 			writeAgentWalletAuthError(w, err)
 			return true
@@ -195,7 +194,7 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 			return true
 		}
 		if cookie, err := r.Cookie(agentCookieName); err == nil && cookie.Value != "" {
-			s.auth.DeleteSession(cookie.Value)
+			s.auth.deleteSession(cookie.Value)
 		}
 		http.SetCookie(w, &http.Cookie{
 			Name:     agentCookieName,
@@ -231,7 +230,7 @@ func (s *controlHandler) authenticatedWallet(r *http.Request) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return s.auth.ValidateSession(cookie.Value)
+	return s.auth.validateSession(cookie.Value)
 }
 
 func agentAuthDomain(r *http.Request) string {
@@ -256,9 +255,9 @@ func agentAuthURI(r *http.Request, endpointPath string) string {
 
 func writeAgentWalletAuthError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, identity.ErrWalletAuthUnauthorized):
+	case errors.Is(err, errWalletAuthUnauthorized):
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
-	case errors.Is(err, identity.ErrWalletAuthChallengeNotFound), errors.Is(err, identity.ErrWalletAuthChallengeExpired), errors.Is(err, identity.ErrWalletAuthInvalidSignature):
+	case errors.Is(err, errWalletAuthChallengeNotFound), errors.Is(err, errWalletAuthChallengeExpired), errors.Is(err, errWalletAuthInvalidSignature):
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, err.Error())
 	default:
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())

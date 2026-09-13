@@ -51,7 +51,7 @@ func testDestination(seed string) string {
 func testDescriptor(t *testing.T, authority identity.Authority, rawURL, destination string, connections int64) types.RelayDescriptor {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
-	descriptor, err := identity.SignRelayDescriptor(types.RelayDescriptor{
+	descriptor, err := discovery.SignRelayDescriptor(types.RelayDescriptor{
 		Address:           authority.Identity().Address,
 		Version:           types.DiscoveryVersion,
 		IssuedAt:          now,

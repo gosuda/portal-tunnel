@@ -893,7 +893,7 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 	if s.overlay != nil {
 		ivnpDestination = s.overlay.Destination()
 	}
-	return identity.SignRelayDescriptor(types.RelayDescriptor{
+	return discovery.SignRelayDescriptor(types.RelayDescriptor{
 		Address:           s.identity.Address,
 		Version:           types.DiscoveryVersion,
 		IssuedAt:          now,

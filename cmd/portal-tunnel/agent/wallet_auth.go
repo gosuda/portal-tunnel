@@ -1,4 +1,4 @@
-package identity
+package agent
 
 import (
 	"cmp"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/spruceid/siwe-go"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -20,19 +21,19 @@ const (
 )
 
 var (
-	ErrWalletAuthUnauthorized      = errors.New("wallet is not allowed")
-	ErrWalletAuthChallengeNotFound = errors.New("wallet auth challenge not found")
-	ErrWalletAuthChallengeExpired  = errors.New("wallet auth challenge expired")
-	ErrWalletAuthInvalidSignature  = errors.New("wallet auth signature is invalid")
+	errWalletAuthUnauthorized      = errors.New("wallet is not allowed")
+	errWalletAuthChallengeNotFound = errors.New("wallet auth challenge not found")
+	errWalletAuthChallengeExpired  = errors.New("wallet auth challenge expired")
+	errWalletAuthInvalidSignature  = errors.New("wallet auth signature is invalid")
 )
 
-type WalletAuthConfig struct {
+type walletAuthConfig struct {
 	AllowedAddresses []string
 	AllowAnyAddress  bool
 	Statement        string
 }
 
-type WalletAuthenticator struct {
+type walletAuthenticator struct {
 	allowed   map[string]struct{}
 	allowAny  bool
 	statement string
@@ -55,13 +56,13 @@ type walletAuthSession struct {
 	ExpiresAt time.Time
 }
 
-func NewWalletAuthenticator(cfg WalletAuthConfig) (*WalletAuthenticator, error) {
+func newWalletAuthenticator(cfg walletAuthConfig) (*walletAuthenticator, error) {
 	allowed := make(map[string]struct{}, len(cfg.AllowedAddresses))
 	for _, raw := range cfg.AllowedAddresses {
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
-		address, err := NormalizeEVMAddress(raw)
+		address, err := identity.NormalizeEVMAddress(raw)
 		if err != nil {
 			return nil, fmt.Errorf("wallet address: %w", err)
 		}
@@ -74,7 +75,7 @@ func NewWalletAuthenticator(cfg WalletAuthConfig) (*WalletAuthenticator, error) 
 	statement := strings.TrimSpace(cfg.Statement)
 	statement = cmp.Or(statement, "Sign in to Portal")
 
-	return &WalletAuthenticator{
+	return &walletAuthenticator{
 		allowed:    allowed,
 		allowAny:   cfg.AllowAnyAddress,
 		statement:  statement,
@@ -83,16 +84,16 @@ func NewWalletAuthenticator(cfg WalletAuthConfig) (*WalletAuthenticator, error) 
 	}, nil
 }
 
-func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeRequest, domain, uri string, now time.Time) (types.WalletAuthChallengeResponse, error) {
+func (a *walletAuthenticator) issueChallenge(req types.WalletAuthChallengeRequest, domain, uri string, now time.Time) (types.WalletAuthChallengeResponse, error) {
 	if a == nil {
-		return types.WalletAuthChallengeResponse{}, ErrWalletAuthUnauthorized
+		return types.WalletAuthChallengeResponse{}, errWalletAuthUnauthorized
 	}
-	address, err := NormalizeEVMAddress(req.Address)
+	address, err := identity.NormalizeEVMAddress(req.Address)
 	if err != nil {
 		return types.WalletAuthChallengeResponse{}, err
 	}
 	if !a.addressAllowed(address) {
-		return types.WalletAuthChallengeResponse{}, ErrWalletAuthUnauthorized
+		return types.WalletAuthChallengeResponse{}, errWalletAuthUnauthorized
 	}
 
 	challengeID := utils.RandomID("wac_")
@@ -129,13 +130,13 @@ func (a *WalletAuthenticator) IssueChallenge(req types.WalletAuthChallengeReques
 	}, nil
 }
 
-func (a *WalletAuthenticator) Login(req types.WalletAuthLoginRequest, now time.Time) (string, string, error) {
+func (a *walletAuthenticator) login(req types.WalletAuthLoginRequest, now time.Time) (string, string, error) {
 	if a == nil {
-		return "", "", ErrWalletAuthUnauthorized
+		return "", "", errWalletAuthUnauthorized
 	}
 	challengeID := strings.TrimSpace(req.ChallengeID)
 	if challengeID == "" {
-		return "", "", ErrWalletAuthChallengeNotFound
+		return "", "", errWalletAuthChallengeNotFound
 	}
 
 	a.mu.Lock()
@@ -143,34 +144,34 @@ func (a *WalletAuthenticator) Login(req types.WalletAuthLoginRequest, now time.T
 	challenge, ok := a.challenges[challengeID]
 	a.mu.Unlock()
 	if !ok {
-		return "", "", ErrWalletAuthChallengeNotFound
+		return "", "", errWalletAuthChallengeNotFound
 	}
 	if now.After(challenge.ExpiresAt) {
 		a.mu.Lock()
 		delete(a.challenges, challengeID)
 		a.mu.Unlock()
-		return "", "", ErrWalletAuthChallengeExpired
+		return "", "", errWalletAuthChallengeExpired
 	}
 	if strings.TrimSpace(req.SIWEMessage) != challenge.SIWEMessage {
-		return "", "", ErrWalletAuthInvalidSignature
+		return "", "", errWalletAuthInvalidSignature
 	}
 
 	message, err := siwe.ParseMessage(strings.TrimSpace(req.SIWEMessage))
 	if err != nil {
-		return "", "", ErrWalletAuthInvalidSignature
+		return "", "", errWalletAuthInvalidSignature
 	}
 	domain := challenge.Domain
 	nonce := challenge.Nonce
 	verifiedAt := now.UTC()
 	if _, err := message.Verify(strings.TrimSpace(req.SIWESignature), &domain, &nonce, &verifiedAt); err != nil {
-		return "", "", ErrWalletAuthInvalidSignature
+		return "", "", errWalletAuthInvalidSignature
 	}
-	address, err := NormalizeEVMAddress(message.GetAddress().Hex())
+	address, err := identity.NormalizeEVMAddress(message.GetAddress().Hex())
 	if err != nil {
-		return "", "", ErrWalletAuthInvalidSignature
+		return "", "", errWalletAuthInvalidSignature
 	}
 	if !strings.EqualFold(address, challenge.Address) || !a.addressAllowed(address) {
-		return "", "", ErrWalletAuthUnauthorized
+		return "", "", errWalletAuthUnauthorized
 	}
 
 	token := utils.RandomID("was_")
@@ -186,7 +187,7 @@ func (a *WalletAuthenticator) Login(req types.WalletAuthLoginRequest, now time.T
 	return token, address, nil
 }
 
-func (a *WalletAuthenticator) ValidateSession(token string) (string, bool) {
+func (a *walletAuthenticator) validateSession(token string) (string, bool) {
 	if a == nil {
 		return "", false
 	}
@@ -208,7 +209,7 @@ func (a *WalletAuthenticator) ValidateSession(token string) (string, bool) {
 	return session.Address, true
 }
 
-func (a *WalletAuthenticator) DeleteSession(token string) {
+func (a *walletAuthenticator) deleteSession(token string) {
 	if a == nil {
 		return
 	}
@@ -217,7 +218,7 @@ func (a *WalletAuthenticator) DeleteSession(token string) {
 	delete(a.sessions, strings.TrimSpace(token))
 }
 
-func (a *WalletAuthenticator) addressAllowed(address string) bool {
+func (a *walletAuthenticator) addressAllowed(address string) bool {
 	if a == nil {
 		return false
 	}
@@ -228,7 +229,7 @@ func (a *WalletAuthenticator) addressAllowed(address string) bool {
 	return ok
 }
 
-func (a *WalletAuthenticator) cleanupExpiredLocked(now time.Time) {
+func (a *walletAuthenticator) cleanupExpiredLocked(now time.Time) {
 	now = now.UTC()
 	for id, challenge := range a.challenges {
 		if now.After(challenge.ExpiresAt) {
