@@ -145,6 +145,15 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
 	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
+	// A portless portal URL advertises public port 443. On a local host nothing
+	// can translate that port to a non-default SNI listener, so every advertised
+	// endpoint would name an origin nothing serves and lease registration would
+	// fail far from the setting that caused it. Remote hosts keep NAT/LB
+	// freedom: an external port different from the SNI listener stays valid.
+	if portalURL, parseErr := url.Parse(cfg.PortalURL); parseErr == nil && portalURL.Port() == "" && cfg.SNIPort != 443 && utils.IsLocalRelayHost(portalURL.Hostname()) {
+		publicOrigin := url.URL{Scheme: "https", Host: net.JoinHostPort(portalURL.Hostname(), strconv.Itoa(cfg.SNIPort))}
+		return ServerConfig{}, fmt.Errorf("PORTAL_URL %s has no port but SNI_PORT=%d on local host %s; set PORTAL_URL=%s so the canonical public origin matches the SNI listener", cfg.PortalURL, cfg.SNIPort, portalURL.Hostname(), publicOrigin.String())
+	}
 	if cfg.PProfEnabled {
 		cfg.PProfListenAddr = utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
 	}

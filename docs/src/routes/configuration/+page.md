@@ -55,6 +55,11 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | `API_PORT` | `4017` | int | Admin/API server listen port |
 | `SNI_PORT` | `443` | int | TCP SNI router listen port; non-standard values are intended for local testing, while the bundled public deployment requires `443` |
 
+`PORTAL_URL` is the canonical public origin: a portless value implies public
+port `443`, and a non-default `SNI_PORT` on a local host must appear in
+`PORTAL_URL` or startup rejects the mismatch; NAT or load-balancer front-ends
+may use a different external origin.
+
 ### Optional HTTP redirect listener
 
 | Variable | Default | Type | Description |
