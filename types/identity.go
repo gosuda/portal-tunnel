@@ -35,18 +35,6 @@ func (i Identity) Copy() Identity {
 	}
 }
 
-type RelayIdentity struct {
-	Identity
-	EncryptedClientHelloSeed string `json:"-"`
-}
-
-func (i RelayIdentity) Copy() RelayIdentity {
-	return RelayIdentity{
-		Identity:                 i.Identity.Copy(),
-		EncryptedClientHelloSeed: i.EncryptedClientHelloSeed,
-	}
-}
-
 func (i Identity) Key() string {
 	name := strings.TrimSpace(strings.ToLower(i.Name))
 	address := strings.TrimSpace(strings.ToLower(i.Address))

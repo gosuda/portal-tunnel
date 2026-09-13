@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rs/zerolog"
@@ -36,7 +37,7 @@ type relayServerConfig struct {
 	IVNPConfigPath     string
 	PortalURL          string
 	FrontendDir        string
-	IdentityPath       string
+	StateDir           string
 	Bootstraps         string
 	DiscoveryEnabled   bool
 	HTTPRedirect       types.HTTPRedirectConfig
@@ -93,14 +94,14 @@ func resolveRelayServerConfig(args []string) (relayServerConfig, error) {
 		printRootUsage(os.Stderr)
 		return relayServerConfig{}, err
 	}
-	cfg.IdentityPath = portal.ResolveRelayStateDir(cfg.IdentityPath)
+	cfg.StateDir = strings.TrimSpace(cfg.StateDir)
 	return cfg, nil
 }
 
 func registerRelayServerFlags(fs *flag.FlagSet, cfg *relayServerConfig) {
 	utils.StringFlagEnv(fs, &cfg.PortalURL, "portal-url", "https://localhost", "portal base URL", "PORTAL_URL")
 	utils.StringFlagEnv(fs, &cfg.FrontendDir, "frontend-dir", "", "custom SPA directory containing index.html; embedded frontend is used when empty", "PORTAL_FRONTEND_DIR")
-	utils.StringFlagEnv(fs, &cfg.IdentityPath, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &cfg.StateDir, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "bootstrap relay API URLs; merged with bootstrap relays when discovery is enabled", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
 	utils.StringFlagEnv(fs, &cfg.IVNPConfigPath, "ivnp-config", "", "optional IVNP RouterConfig JSON file; {} uses in-memory defaults; requires discovery", "IVNP_CONFIG")
@@ -160,7 +161,7 @@ func runServeCommand(args []string) error {
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
-		Str("identity_path", cfg.IdentityPath).
+		Str("state_dir", cfg.StateDir).
 		Int("api_port", cfg.APIPort).
 		Int("sni_port", cfg.SNIPort).
 		Msg("starting relay server")
@@ -180,7 +181,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		IVNPConfigPath:    cfg.IVNPConfigPath,
 		PortalURL:         cfg.PortalURL,
 		HTTPRedirect:      cfg.HTTPRedirect,
-		IdentityPath:      cfg.IdentityPath,
+		StateDir:          cfg.StateDir,
 		Bootstraps:        utils.SplitCSV(cfg.Bootstraps),
 		DiscoveryEnabled:  cfg.DiscoveryEnabled,
 		APIPort:           cfg.APIPort,
@@ -197,7 +198,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		X402Testnet:       cfg.X402Testnet,
 		X402PayTo:         cfg.X402PayTo,
 		ACME: acme.Config{
-			KeyDir:             cfg.IdentityPath,
+			KeyDir:             cfg.StateDir,
 			DNSProvider:        cfg.ACMEDNSProvider,
 			ENSGaslessEnabled:  cfg.ENSGaslessEnabled,
 			EmbeddedDNSPort:    cfg.EmbeddedDNSPort,
@@ -219,7 +220,8 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		return fmt.Errorf("create relay server: %w", err)
 	}
 
-	relayAPI, err := NewRelayAPI(server, cfg.IdentityPath, cfg.AdminToken, cfg.FrontendDir, cfg.LandingPageEnabled)
+	policyPath := filepath.Join(cfg.StateDir, types.RelayPolicyFilename)
+	relayAPI, err := NewRelayAPI(server, policyPath, cfg.AdminToken, cfg.FrontendDir, cfg.LandingPageEnabled)
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}

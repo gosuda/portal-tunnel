@@ -1,14 +1,17 @@
-package portal
+package identity
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestLoadOrCreateRelayIdentityCreatesAndReloads(t *testing.T) {
 	dir := t.TempDir()
-	created, err := LoadOrCreateRelayIdentity(dir, "relay.example.com")
+	path := filepath.Join(dir, types.RelayIdentityFilename)
+	created, err := LoadOrCreateRelayIdentity(path, "relay.example.com")
 	if err != nil {
 		t.Fatalf("create relay identity: %v", err)
 	}
@@ -16,7 +19,7 @@ func TestLoadOrCreateRelayIdentityCreatesAndReloads(t *testing.T) {
 		t.Fatalf("created relay identity incomplete: %+v", created)
 	}
 
-	reloaded, err := LoadOrCreateRelayIdentity(dir, "relay.example.com")
+	reloaded, err := LoadOrCreateRelayIdentity(path, "relay.example.com")
 	if err != nil {
 		t.Fatalf("reload relay identity: %v", err)
 	}
@@ -27,11 +30,11 @@ func TestLoadOrCreateRelayIdentityCreatesAndReloads(t *testing.T) {
 
 func TestLoadOrCreateRelayIdentityPreservesUnchangedFile(t *testing.T) {
 	dir := t.TempDir()
-	created, err := LoadOrCreateRelayIdentity(dir, "relay.example.com")
+	path := filepath.Join(dir, types.RelayIdentityFilename)
+	created, err := LoadOrCreateRelayIdentity(path, "relay.example.com")
 	if err != nil {
 		t.Fatalf("create relay identity: %v", err)
 	}
-	path := filepath.Join(dir, "identity.json")
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read relay identity: %v", err)
@@ -41,14 +44,12 @@ func TestLoadOrCreateRelayIdentityPreservesUnchangedFile(t *testing.T) {
 		t.Fatalf("stat relay identity: %v", err)
 	}
 
-	if _, err := LoadOrCreateRelayIdentity(dir, created.Name); err != nil {
+	if _, err := LoadOrCreateRelayIdentity(path, created.Name); err != nil {
 		t.Fatalf("reload relay identity: %v", err)
 	}
-	after, err := os.ReadFile(path)
-	if err != nil {
+	if after, err := os.ReadFile(path); err != nil {
 		t.Fatalf("read reloaded relay identity: %v", err)
-	}
-	if string(after) != string(before) {
+	} else if string(after) != string(before) {
 		t.Fatal("unchanged relay identity was rewritten")
 	}
 	afterInfo, err := os.Stat(path)

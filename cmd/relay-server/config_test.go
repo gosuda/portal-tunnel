@@ -106,7 +106,7 @@ func TestHTTPRedirectReportMatchesServerValidation(t *testing.T) {
 				t.Fatalf("redirect report=%+v, want state %s", f, want)
 			}
 			_, err := portal.NewServer(portal.ServerConfig{
-				PortalURL: cfg.PortalURL, IdentityPath: t.TempDir(), HTTPRedirect: cfg.HTTPRedirect,
+				PortalURL: cfg.PortalURL, StateDir: t.TempDir(), HTTPRedirect: cfg.HTTPRedirect,
 			})
 			if tc.blocked {
 				if err == nil || f.Missing != err.Error() {
@@ -136,7 +136,7 @@ func TestHTTPRedirectReportDoesNotBind(t *testing.T) {
 		t.Fatalf("occupied address must not block configuration reporting: %+v", f)
 	}
 	_, err = portal.NewServer(portal.ServerConfig{
-		PortalURL: cfg.PortalURL, IdentityPath: t.TempDir(), HTTPRedirect: cfg.HTTPRedirect,
+		PortalURL: cfg.PortalURL, StateDir: t.TempDir(), HTTPRedirect: cfg.HTTPRedirect,
 	})
 	if err != nil {
 		t.Fatalf("NewServer must defer binding until Start: %v", err)
