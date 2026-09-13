@@ -549,11 +549,11 @@ func (e *Exposure) noRelaysAvailable() bool {
 	return !cfg.Discovery
 }
 
-func (e *Exposure) readyRelays(datagram bool) ([]RelayStatus, <-chan struct{}) {
+func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <-chan struct{}) {
 	e.mu.RLock()
 	ready := make([]RelayStatus, 0, len(e.statuses))
 	for _, status := range e.statuses {
-		if !relayReady(status, datagram) {
+		if !matches(status) {
 			continue
 		}
 		ready = append(ready, status)
@@ -564,16 +564,6 @@ func (e *Exposure) readyRelays(datagram bool) ([]RelayStatus, <-chan struct{}) {
 		return strings.Compare(a.RelayURL, b.RelayURL)
 	})
 	return ready, changed
-}
-
-func relayReady(status RelayStatus, datagram bool) bool {
-	if status.State == RelayFailed {
-		return false
-	}
-	if datagram {
-		return status.UDPAddr != ""
-	}
-	return status.State == RelayReady
 }
 
 // Updates reports relay lifecycle changes. Relays is the authoritative
@@ -594,7 +584,9 @@ func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
 		return nil, errors.New("portal sdk: context is nil")
 	}
 	for {
-		ready, changed := e.readyRelays(false)
+		ready, changed := e.readyRelays(func(status RelayStatus) bool {
+			return status.State == RelayReady
+		})
 		if len(ready) > 0 {
 			return ready, nil
 		}
@@ -665,7 +657,40 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error)
 	}
 
 	for {
-		ready, changed := e.readyRelays(true)
+		ready, changed := e.readyRelays(func(status RelayStatus) bool {
+			return status.State != RelayFailed && status.UDPAddr != ""
+		})
+		if len(ready) > 0 {
+			return ready, nil
+		}
+		if e.noRelaysAvailable() {
+			return nil, ErrNoRelays
+		}
+
+		select {
+		case <-e.done:
+			return nil, net.ErrClosed
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+// WaitTCPReady waits until at least one relay has allocated a public TCP
+// address and returns the ready relay snapshots.
+func (e *Exposure) WaitTCPReady(ctx context.Context) ([]RelayStatus, error) {
+	if !e.config().TCPEnabled {
+		return nil, errors.New("exposure does not have tcp enabled")
+	}
+	if ctx == nil {
+		return nil, errors.New("portal sdk: context is nil")
+	}
+
+	for {
+		ready, changed := e.readyRelays(func(status RelayStatus) bool {
+			return status.State != RelayFailed && status.TCPAddr != ""
+		})
 		if len(ready) > 0 {
 			return ready, nil
 		}
