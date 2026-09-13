@@ -21,7 +21,6 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
@@ -38,7 +37,6 @@ type listenerConfig struct {
 	BanMITM    bool
 	Metadata   func() types.LeaseMetadata
 	RetryCount int
-	relaySet   *discovery.RelaySet
 	Status     func(listenerStatus)
 }
 
@@ -78,18 +76,10 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 	if !isTerminalRelayError(err) {
 		return false
 	}
-	relayURL := l.route.RelayURL
+	relayURL := l.relayURL.String()
 	var registrationErr *relayRegistrationError
 	if errors.As(err, &registrationErr) && registrationErr.relayURL != "" {
 		relayURL = registrationErr.relayURL
-	}
-	if l.relaySet != nil && relayURL != "" {
-		l.relaySet.UnconfirmRelayURL(relayURL)
-		if shouldDropRelayFromActivePool(err) {
-			l.relaySet.DropRelayURLFromActivePool(relayURL)
-		} else {
-			l.relaySet.RecordActiveFailure(relayURL, 1)
-		}
 	}
 	log.Error().
 		Err(err).
@@ -107,12 +97,10 @@ type listener struct {
 	closeOnce sync.Once
 
 	relayURL          *url.URL
-	route             discovery.Route
 	metadata          func() types.LeaseMetadata
 	identity          types.Identity
 	overlay           bool
 	warnOverlayDirect sync.Once
-	relaySet          *discovery.RelaySet
 	udpEnabled        bool
 	tcpEnabled        bool
 	echEnabled        bool
@@ -145,10 +133,10 @@ type listener struct {
 
 // newListener creates one public relay listener.
 // Only local config validation fails immediately; relay startup runs in the background until ready.
-func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig) (*listener, error) {
+func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*listener, error) {
 	listenerCtx, cancel := context.WithCancel(ctx)
 
-	entryRelayURL, err := utils.NormalizeRelayURL(route.RelayURL)
+	entryRelayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -162,11 +150,9 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		cancel:         cancel,
 		doneCh:         listenerCtx.Done(),
 		relayURL:       relayurl,
-		route:          discovery.Route{RelayURL: entryRelayURL, Explicit: route.Explicit},
 		metadata:       cfg.Metadata,
 		identity:       cfg.Identity.Copy(),
 		overlay:        cfg.Overlay,
-		relaySet:       cfg.relaySet,
 		status:         cfg.Status,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
@@ -302,7 +288,7 @@ func (l *listener) run(ctx context.Context) {
 		if udpAddr != "" || tcpAddr != "" {
 			event.Msg("raw transport endpoints allocated")
 		} else if publicURL != "" {
-			logHTTPReady(l.identity.Address, publicURL, l.route.RelayURL)
+			logHTTPReady(l.identity.Address, publicURL, l.relayURL.String())
 		} else {
 			event.Msg("relay listener registered")
 		}
@@ -1056,10 +1042,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")
 	}
-	entryURL := l.route.RelayURL
-	if l.relaySet != nil && entryURL != "" {
-		l.relaySet.ConfirmRelayURL(entryURL)
-	}
 	if len(echConfigList) > 0 {
 		log.Debug().
 			Str("address", l.identity.Address).
@@ -1104,12 +1086,6 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 	}
 
 	if l.retryCount > 0 && retries > l.retryCount {
-		entryURL := l.route.RelayURL
-		if l.relaySet != nil && entryURL != "" {
-			l.relaySet.UnconfirmRelayURL(entryURL)
-			l.relaySet.RecordActiveFailure(entryURL, 1)
-			l.relaySet.DropRelayURLFromActivePool(entryURL)
-		}
 		logger.Error().
 			Err(err).
 			Int("retry_count", l.retryCount).

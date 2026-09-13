@@ -216,7 +216,7 @@ func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoi
 	if !endpoint.Overlay && !l.isAlternateReverseEndpoint(endpoint.URL) {
 		l.warnOverlayDirect.Do(func() {
 			log.Warn().
-				Str("relay_url", l.route.RelayURL).
+				Str("relay_url", l.relayURL.String()).
 				Msg("overlay requested but the relay serves a direct reverse endpoint; continuing without overlay forwarding")
 		})
 	}

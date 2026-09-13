@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	discoverypkg "github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -498,9 +499,16 @@ func (t *managedTunnel) Stop(ctx context.Context) error {
 }
 
 func (t *managedTunnel) ConnectRelay(relayURL string) error {
-	t.mu.RLock()
+	relayURL, err := utils.NormalizeRelayURL(relayURL)
+	if err != nil {
+		return err
+	}
+	t.mu.Lock()
+	if !slices.Contains(t.cfg.RelayURLs, relayURL) {
+		t.cfg.RelayURLs = append(t.cfg.RelayURLs, relayURL)
+	}
 	exposure := t.exposure
-	t.mu.RUnlock()
+	t.mu.Unlock()
 	if exposure == nil {
 		return nil
 	}
@@ -508,9 +516,20 @@ func (t *managedTunnel) ConnectRelay(relayURL string) error {
 }
 
 func (t *managedTunnel) DisconnectRelay(relayURL string) error {
-	t.mu.RLock()
+	relayURL, err := utils.NormalizeRelayURL(relayURL)
+	if err != nil {
+		return err
+	}
+	t.mu.Lock()
+	next := make([]string, 0, len(t.cfg.RelayURLs))
+	for _, existing := range t.cfg.RelayURLs {
+		if existing != relayURL {
+			next = append(next, existing)
+		}
+	}
+	t.cfg.RelayURLs = next
 	exposure := t.exposure
-	t.mu.RUnlock()
+	t.mu.Unlock()
 	if exposure == nil {
 		return nil
 	}
@@ -528,9 +547,6 @@ func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays boo
 	var err error
 	if updateMetadata {
 		err = errors.Join(err, exposure.UpdateMetadata(metadataFromTunnelConfig(cfg)))
-	}
-	if updateMaxActiveRelays {
-		err = errors.Join(err, exposure.UpdateMaxActiveRelays(cfg.MaxActiveRelays))
 	}
 	return err
 }
@@ -622,16 +638,11 @@ func agentRelayStatuses(relays []sdk.RelayStatus) []types.AgentRelayStatus {
 	statuses := make([]types.AgentRelayStatus, 0, len(relays))
 	for _, relay := range relays {
 		statuses = append(statuses, types.AgentRelayStatus{
-			RelayURL:    relay.RelayURL,
-			PublicURL:   relay.PublicURL,
-			TCPAddr:     relay.TCPAddr,
-			Version:     relay.Version,
-			Explicit:    relay.Explicit,
-			Connecting:  relay.State == sdk.RelayConnecting,
-			Bootstrap:   relay.Bootstrap,
-			Banned:      relay.Banned,
-			SupportsUDP: relay.SupportsUDP,
-			SupportsTCP: relay.SupportsTCP,
+			RelayURL:   relay.RelayURL,
+			PublicURL:  relay.PublicURL,
+			TCPAddr:    relay.TCPAddr,
+			Version:    relay.Version,
+			Connecting: relay.State == sdk.RelayConnecting,
 		})
 	}
 	return statuses
@@ -680,20 +691,57 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
-	exposure, err := sdk.ExposeLegacy(ctx, sdk.LegacyExposeConfig{
-		RelayURLs:       append([]string(nil), cfg.RelayURLs...),
-		Discovery:       discovery,
-		Overlay:         cfg.Overlay,
-		Identity:        listenerIdentity,
-		UDPEnabled:      cfg.UDPEnabled,
-		TCPEnabled:      cfg.TCPEnabled,
-		ECH:             cfg.ECH,
-		BanMITM:         banMITM,
-		MaxActiveRelays: cfg.MaxActiveRelays,
-		Metadata:        metadataFromTunnelConfig(cfg),
-	})
+	explicitRelayURLs, err := utils.NormalizeRelayURLs(cfg.RelayURLs...)
 	if err != nil {
 		return err
+	}
+	relayURLs, err := utils.ResolvePortalRelayURLs(explicitRelayURLs, discovery)
+	if err != nil {
+		return err
+	}
+	opts := []sdk.Option{
+		sdk.WithMITMProtection(banMITM),
+		sdk.WithMetadata(metadataFromTunnelConfig(cfg)),
+	}
+	if cfg.UDPEnabled {
+		opts = append(opts, sdk.WithUDP())
+	}
+	if cfg.TCPEnabled {
+		opts = append(opts, sdk.WithTCP())
+	}
+	if cfg.ECH {
+		opts = append(opts, sdk.WithECH())
+	}
+	if cfg.Overlay {
+		opts = append(opts, sdk.WithOverlay())
+	}
+	exposure, err := sdk.Expose(ctx, listenerIdentity, relayURLs, opts...)
+	if err != nil {
+		return err
+	}
+	if discovery {
+		bootstrapRelayURLs, resolveErr := utils.ResolvePortalRelayURLs(nil, true)
+		if resolveErr != nil {
+			_ = exposure.Close()
+			return resolveErr
+		}
+		go func() {
+			err := discoverypkg.Watch(ctx, bootstrapRelayURLs, func() discoverypkg.RouteState {
+				t.mu.RLock()
+				current := t.cfg
+				t.mu.RUnlock()
+				return discoverypkg.RouteState{
+					ExplicitRelayURLs: append([]string(nil), current.RelayURLs...),
+					MaxActiveRelays:   current.MaxActiveRelays,
+					RequireUDP:        current.UDPEnabled,
+					RequireTCP:        current.TCPEnabled,
+					LocalAddress:      listenerIdentity.Address,
+				}
+			}, exposure.SetRelays)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				log.Warn().Err(err).Msg("relay discovery stopped")
+			}
+		}()
 	}
 	t.mu.Lock()
 	t.exposure = exposure

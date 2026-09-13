@@ -18,15 +18,15 @@ routes and the lease lifecycle contain no overlay topology.
 The public SDK facade is centered on `sdk.Exposure`, a multi-relay
 `net.Listener`. `sdk.Expose` takes its required identity and concrete relay URLs
 directly; functional options cover only endpoint capabilities such as UDP, TCP,
-ECH, MITM protection, and initial lease metadata. Discovery, overlay selection,
-and relay-count policy are not options. Application runtimes that still depend
-on those legacy responsibilities use the explicitly deprecated
-`ExposeLegacy` compatibility path while ownership moves outward. Local TCP/UDP
-targets belong to `sdk.ProxyConfig`, identity file loading belongs to CLI or
-agent callers, and routed HTTP payment settings belong to `sdk.NewHTTPRoutes`.
-`Exposure` owns one canonical relay-status map; listener and discovery events
-update it, while `Relays`, `Updates`, and `WaitReady` read from that state.
-Agent status types are not part of the SDK contract.
+ECH, MITM protection, overlay routing, and initial lease metadata. Discovery
+and relay-count policy are not options: discovery refreshes and selects relays,
+then its caller applies that concrete membership through `Exposure.SetRelays`.
+The SDK never calls discovery and does not contain discovery policy. Local
+TCP/UDP targets belong to `sdk.ProxyConfig`, identity file loading belongs to
+CLI or agent callers, and routed HTTP payment settings belong to
+`sdk.NewHTTPRoutes`. `Exposure` owns one canonical relay-status map; listener
+events update it, while `Relays`, `Updates`, and `WaitReady` read from that
+state. Agent status types are not part of the SDK contract.
 
 ## Identity challenges
 

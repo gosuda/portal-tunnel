@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -156,18 +157,40 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
-	exposure, err := sdk.ExposeLegacy(ctx, sdk.LegacyExposeConfig{
-		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
-		Discovery:       cfg.discovery,
-		Identity:        listenerIdentity,
-		BanMITM:         cfg.banMITM,
-		MaxActiveRelays: cfg.maxActiveRelays,
-		Metadata:        metadata,
-	})
+	explicitRelayURLs, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.relayURLs)...)
+	if err != nil {
+		return err
+	}
+	relayURLs, err := utils.ResolvePortalRelayURLs(explicitRelayURLs, cfg.discovery)
+	if err != nil {
+		return err
+	}
+	exposure, err := sdk.Expose(ctx, listenerIdentity, relayURLs,
+		sdk.WithMITMProtection(cfg.banMITM),
+		sdk.WithMetadata(metadata),
+	)
 	if err != nil {
 		return fmt.Errorf("exposure listen error: %w", err)
 	}
 	defer exposure.Close()
+	if cfg.discovery {
+		bootstrapRelayURLs, resolveErr := utils.ResolvePortalRelayURLs(nil, true)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		go func() {
+			err := discovery.Watch(ctx, bootstrapRelayURLs, func() discovery.RouteState {
+				return discovery.RouteState{
+					ExplicitRelayURLs: explicitRelayURLs,
+					MaxActiveRelays:   cfg.maxActiveRelays,
+					LocalAddress:      listenerIdentity.Address,
+				}
+			}, exposure.SetRelays)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				log.Warn().Err(err).Msg("relay discovery stopped")
+			}
+		}()
+	}
 
 	err = sdk.RunHTTP(ctx, exposure, handler, addr)
 	if err != nil {

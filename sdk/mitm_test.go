@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -332,15 +331,8 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("url.Parse() error = %v", err)
 	}
-	exitURL, err := url.Parse("https://exit.example")
-	if err != nil {
-		t.Fatalf("url.Parse() error = %v", err)
-	}
-
 	listener := &listener{
 		relayURL: entryURL,
-		route:    discovery.Route{RelayURL: entryURL.String(), Explicit: false},
-		relaySet: mustRelaySet(t, entryURL.String(), exitURL.String()),
 		cancel: func() {
 			select {
 			case <-doneCh:
@@ -358,15 +350,6 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 		Reason:   types.MITMProbeReasonExporterMismatch,
 	}, nil)
 
-	routes := listener.relaySet.SelectRelays(discovery.RouteState{})
-	for _, route := range routes {
-		if route.RelayURL == entryURL.String() {
-			t.Fatal("ingress relay remains active after mitm detection")
-		}
-		if route.RelayURL != exitURL.String() {
-			t.Fatalf("unexpected active relay after mitm detection: %q", route.RelayURL)
-		}
-	}
 	select {
 	case <-listener.doneCh:
 	default:
@@ -383,7 +366,6 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 
 	listener := &listener{
 		relayURL: relayURL,
-		relaySet: mustRelaySet(t, relayURL.String()),
 		doneCh:   doneCh,
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
@@ -394,14 +376,6 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 		Reason:   types.MITMProbeReasonExporterMismatch,
 	}, nil)
 
-	routes := listener.relaySet.SelectRelays(discovery.RouteState{})
-	activeRelayURLs := make([]string, 0, len(routes))
-	for _, route := range routes {
-		activeRelayURLs = append(activeRelayURLs, route.RelayURL)
-	}
-	if len(activeRelayURLs) != 1 || activeRelayURLs[0] != relayURL.String() {
-		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", activeRelayURLs, relayURL.String())
-	}
 	select {
 	case <-listener.doneCh:
 		t.Fatal("listener.doneCh is closed, want open")
@@ -417,7 +391,6 @@ func TestMITMProbeDialAddressUsesRelayHostForLocalRelay(t *testing.T) {
 
 	listener := &listener{
 		relayURL: relayURL,
-		route:    discovery.Route{RelayURL: relayURL.String(), Explicit: true},
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
@@ -438,7 +411,6 @@ func TestMITMProbeDialAddressUsesPublicURLForRemoteRelay(t *testing.T) {
 
 	listener := &listener{
 		relayURL: relayURL,
-		route:    discovery.Route{RelayURL: relayURL.String(), Explicit: true},
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
