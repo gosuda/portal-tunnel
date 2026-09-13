@@ -1,10 +1,11 @@
-package identity
+package agent
 
 import (
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -14,7 +15,7 @@ func TestWalletAuthSIWE(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second).Add(500 * time.Millisecond)
 	for _, test := range []struct {
 		name           string
-		signer         LocalAuthority
+		signer         identity.LocalAuthority
 		suffix         string
 		delay          time.Duration
 		shortSig       bool
@@ -32,11 +33,11 @@ func TestWalletAuthSIWE(t *testing.T) {
 		{name: "different challenge", signer: owner, otherChallenge: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			auth, err := NewWalletAuthenticator(WalletAuthConfig{AllowedAddresses: []string{owner.Identity().Address}})
+			auth, err := newWalletAuthenticator(walletAuthConfig{AllowedAddresses: []string{owner.Identity().Address}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			challenge, err := auth.IssueChallenge(types.WalletAuthChallengeRequest{Address: owner.Identity().Address}, "example.com", "https://example.com/login", now)
+			challenge, err := auth.issueChallenge(types.WalletAuthChallengeRequest{Address: owner.Identity().Address}, "example.com", "https://example.com/login", now)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -45,7 +46,7 @@ func TestWalletAuthSIWE(t *testing.T) {
 			}
 			message := challenge.SIWEMessage + test.suffix
 			if test.otherChallenge {
-				other, err := auth.IssueChallenge(types.WalletAuthChallengeRequest{Address: owner.Identity().Address}, "example.com", "https://example.com/login", now)
+				other, err := auth.issueChallenge(types.WalletAuthChallengeRequest{Address: owner.Identity().Address}, "example.com", "https://example.com/login", now)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -59,7 +60,7 @@ func TestWalletAuthSIWE(t *testing.T) {
 				signature = "0x12"
 			}
 			request := types.WalletAuthLoginRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: message, SIWESignature: signature}
-			token, address, err := auth.Login(request, now.Add(test.delay))
+			token, address, err := auth.login(request, now.Add(test.delay))
 			if (err == nil) != test.valid {
 				t.Fatalf("Login() = %v; want valid=%v", err, test.valid)
 			}
@@ -72,10 +73,10 @@ func TestWalletAuthSIWE(t *testing.T) {
 			if token == "" || address != owner.Identity().Address {
 				t.Fatalf("Login() token/address = %q/%q", token, address)
 			}
-			if sessionAddress, ok := auth.ValidateSession(token); !ok || sessionAddress != address {
+			if sessionAddress, ok := auth.validateSession(token); !ok || sessionAddress != address {
 				t.Fatalf("ValidateSession() = %q, %v", sessionAddress, ok)
 			}
-			if _, _, err := auth.Login(request, now.Add(test.delay)); err == nil {
+			if _, _, err := auth.login(request, now.Add(test.delay)); err == nil {
 				t.Fatal("consumed wallet challenge accepted a second time")
 			}
 		})
@@ -85,11 +86,20 @@ func TestWalletAuthSIWE(t *testing.T) {
 func TestWalletAuthRejectsDisallowedChallenge(t *testing.T) {
 	owner := siweTestAuthority(t, "1")
 	other := siweTestAuthority(t, "2")
-	auth, err := NewWalletAuthenticator(WalletAuthConfig{AllowedAddresses: []string{owner.Identity().Address}})
+	auth, err := newWalletAuthenticator(walletAuthConfig{AllowedAddresses: []string{owner.Identity().Address}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := auth.IssueChallenge(types.WalletAuthChallengeRequest{Address: other.Identity().Address}, "example.com", "https://example.com/login", time.Now()); err == nil {
+	if _, err := auth.issueChallenge(types.WalletAuthChallengeRequest{Address: other.Identity().Address}, "example.com", "https://example.com/login", time.Now()); err == nil {
 		t.Fatal("disallowed wallet received a challenge")
 	}
+}
+
+func siweTestAuthority(t *testing.T, keyDigit string) identity.LocalAuthority {
+	t.Helper()
+	resolved, err := identity.ResolveSecp256k1Identity(strings.Repeat("0", 63) + keyDigit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity.NewLocalAuthority(resolved)
 }
