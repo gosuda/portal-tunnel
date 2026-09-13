@@ -214,6 +214,11 @@ func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
 			t.Fatalf("probe reason = %q, want empty", reason)
 		}
 	case <-time.After(2 * time.Second):
+		select {
+		case result := <-handleResultCh:
+			t.Fatalf("timed out waiting for probe result; handler resolved first: handled=%v passthrough=%v err=%v", result.handled, result.conn != nil, result.err)
+		default:
+		}
 		t.Fatal("timed out waiting for probe result")
 	}
 
