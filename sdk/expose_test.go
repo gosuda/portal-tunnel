@@ -179,6 +179,23 @@ func TestExposeRejectsEmptyInitialRelays(t *testing.T) {
 	}
 }
 
+// The string values are load-bearing beyond the sdk: discovery.FailureKind
+// deliberately mirrors this vocabulary so relay-failure classifications cross
+// the boundary with a plain conversion. Drifting a value would silently
+// misclassify failures at the discovery layer, so pin the literals.
+func TestRelayFailureVocabularyValues(t *testing.T) {
+	for value, want := range map[RelayFailure]string{
+		RelayFailureNone:     "",
+		RelayFailureRuntime:  "runtime",
+		RelayFailureTerminal: "terminal",
+		RelayFailureMITM:     "mitm",
+	} {
+		if string(value) != want {
+			t.Fatalf("RelayFailure value = %q, want %q", string(value), want)
+		}
+	}
+}
+
 func TestExposeOptionsContainOnlyEndpointCapabilities(t *testing.T) {
 	metadata := types.LeaseMetadata{Tags: []string{"initial"}}
 	var got options

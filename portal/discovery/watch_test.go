@@ -6,6 +6,22 @@ import (
 	"time"
 )
 
+// FailureKind's string values mirror sdk.RelayFailure so callers forward
+// classifications with a plain conversion (see the sdk-side value pin). If a
+// value drifts here or there, failures are silently misclassified, so both
+// sides pin the literals.
+func TestFailureKindVocabularyValues(t *testing.T) {
+	for value, want := range map[FailureKind]string{
+		FailureRuntime:  "runtime",
+		FailureTerminal: "terminal",
+		FailureMITM:     "mitm",
+	} {
+		if string(value) != want {
+			t.Fatalf("FailureKind value = %q, want %q", string(value), want)
+		}
+	}
+}
+
 func TestControllerReportRuntimeSuppressesRelay(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"

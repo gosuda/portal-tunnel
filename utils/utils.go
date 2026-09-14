@@ -379,32 +379,6 @@ func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
 	return FilterRelayURLs(merged, excluded), nil
 }
 
-func ExcludeLocalRelayURLs(inputs ...string) ([]string, error) {
-	normalized, err := NormalizeRelayURLs(inputs...)
-	if err != nil {
-		return nil, err
-	}
-	if len(normalized) == 0 {
-		return nil, nil
-	}
-
-	filtered := normalized[:0]
-	for _, input := range normalized {
-		parsed, err := url.Parse(input)
-		if err != nil {
-			return nil, fmt.Errorf("parse relay url %q: %w", input, err)
-		}
-		if IsLocalRelayHost(parsed.Hostname()) {
-			continue
-		}
-		filtered = append(filtered, input)
-	}
-	if len(filtered) == 0 {
-		return nil, nil
-	}
-	return filtered, nil
-}
-
 func LeaseHostname(name, rootHost string) (string, error) {
 	label, err := NormalizeDNSLabel(name)
 	if err != nil {
