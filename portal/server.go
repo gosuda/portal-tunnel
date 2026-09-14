@@ -142,6 +142,13 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.Bootstraps = utils.RemoveRelayURL(cfg.Bootstraps, selfRelayURL)
 
 	cfg.APIPort = utils.IntOrDefault(cfg.APIPort, 4017)
+	if cfg.SNIPort == 0 {
+		// SNI_PORT owns only the local bind. When PORTAL_URL names an explicit
+		// port, an unoverridden listener follows it so a single-setting
+		// deployment serves the port it advertises; mapping a different public
+		// port onto the local listener still sets SNI_PORT explicitly.
+		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
+	}
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
 	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
@@ -164,6 +171,25 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.UDPEnabled = cfg.UDPEnabled && cfg.hasLeasePortRange()
 	cfg.TCPEnabled = cfg.TCPEnabled && cfg.hasLeasePortRange()
 	return cfg, nil
+}
+
+// DefaultSNIPort returns the local SNI listener port for a deployment that
+// leaves SNI_PORT unset: the explicit PORTAL_URL port when the canonical
+// origin names one, otherwise 443.
+func DefaultSNIPort(portalURL string) int {
+	normalized, err := utils.NormalizeRelayURL(portalURL)
+	if err != nil {
+		return 443
+	}
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed.Port() == "" {
+		return 443
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return 443
+	}
+	return port
 }
 
 func (cfg ServerConfig) snapshot() ServerConfig {

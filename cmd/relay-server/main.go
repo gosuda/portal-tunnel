@@ -110,7 +110,7 @@ func registerRelayServerFlags(fs *flag.FlagSet, cfg *relayServerConfig) {
 	utils.StringFlagEnv(fs, &cfg.HTTPRedirect.Addr, "http-redirect-addr", types.DefaultHTTPRedirectAddr, "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
 	utils.BoolFlagEnv(fs, &cfg.HTTPRedirect.HSTS, "http-redirect-hsts", false, "include HSTS max-age=31536000 on redirects; browsers ignore HSTS received over HTTP", "HTTP_REDIRECT_HSTS")
 	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
-	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 443, utils.ParsePortNumber, "local TCP SNI router listen port", "SNI_PORT")
+	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 0, utils.ParsePortNumber, "local TCP SNI router listen port (0 follows the PORTAL_URL port when it names one, else 443)", "SNI_PORT")
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
 	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "explicit trusted proxy CIDR allowlist for forwarded headers, comma-separated; empty trusts no proxies", "TRUSTED_PROXY_CIDRS")
 
@@ -162,7 +162,7 @@ func runServeCommand(args []string) error {
 		Str("release_version", types.ReleaseVersion).
 		Str("state_dir", cfg.StateDir).
 		Int("api_port", cfg.APIPort).
-		Int("sni_port", cfg.SNIPort).
+		Int("sni_port", utils.IntOrDefault(cfg.SNIPort, portal.DefaultSNIPort(cfg.PortalURL))).
 		Msg("starting relay server")
 
 	// Report each capability with the setting that produced it, so a feature
@@ -286,7 +286,7 @@ func printRootUsage(w io.Writer) {
 	registerRelayServerFlags(fs, &relayServerConfig{})
 	utils.WriteFlagDefaults(w, fs)
 	utils.WriteHelpSection(w, "Loopback", []string{
-		"relay-server --portal-url https://127.0.0.1:8443 --api-port 4017 --sni-port 8443",
+		"relay-server --portal-url https://127.0.0.1:8443 --api-port 4017",
 		"portal expose 127.0.0.1:8080 --relays https://127.0.0.1:8443 --discovery=false",
 	})
 	utils.WriteHelpSection(w, "Ready", []string{
