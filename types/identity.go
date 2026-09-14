@@ -49,15 +49,23 @@ type LeaseMetadata struct {
 	Thumbnail   string   `json:"thumbnail,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Hide        bool     `json:"hide,omitempty"`
+	// PaymentEnabled and PaymentLabel make payment capability explicit lease
+	// state published to listings. The frontend renders these directly instead
+	// of inferring payment support from tags/description prose (that inference
+	// is being removed), so relays and apps declare intent unambiguously.
+	PaymentEnabled bool   `json:"payment_enabled,omitempty"`
+	PaymentLabel   string `json:"payment_label,omitempty"`
 }
 
 func (m LeaseMetadata) Copy() LeaseMetadata {
 	return LeaseMetadata{
-		Description: m.Description,
-		Owner:       m.Owner,
-		Thumbnail:   m.Thumbnail,
-		Tags:        append([]string(nil), m.Tags...),
-		Hide:        m.Hide,
+		Description:    m.Description,
+		Owner:          m.Owner,
+		Thumbnail:      m.Thumbnail,
+		Tags:           append([]string(nil), m.Tags...),
+		Hide:           m.Hide,
+		PaymentEnabled: m.PaymentEnabled,
+		PaymentLabel:   m.PaymentLabel,
 	}
 }
 
