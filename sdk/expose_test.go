@@ -604,24 +604,29 @@ func TestExposeDiscoveryRemoveRelayRoutesThroughDiscovery(t *testing.T) {
 	waitUntilRelayPresent(t, exposure, relayA)
 }
 
+// waitUntilRelayPresent polls membership driven by the exposure's
+// state-change notifications. The time.After tick only guards against a
+// missed notification between the condition check and the wait, so the
+// happy path never sleeps.
 func waitUntilRelayPresent(t *testing.T, exposure *Exposure, relayURL string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	for range 500 {
+		changed := exposure.relayStateChanged()
 		for _, r := range exposure.Relays() {
 			if r.RelayURL == relayURL {
 				return
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
+		waitRelayStateChanged(t, exposure, changed)
 	}
 	t.Fatalf("Relays() never contained %s after membership update", relayURL)
 }
 
+// waitUntilRelayAbsent is waitUntilRelayPresent with an inverted condition.
 func waitUntilRelayAbsent(t *testing.T, exposure *Exposure, relayURL string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	for range 500 {
+		changed := exposure.relayStateChanged()
 		found := false
 		for _, r := range exposure.Relays() {
 			if r.RelayURL == relayURL {
@@ -631,9 +636,24 @@ func waitUntilRelayAbsent(t *testing.T, exposure *Exposure, relayURL string) {
 		if !found {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		waitRelayStateChanged(t, exposure, changed)
 	}
 	t.Fatalf("Relays() still contains %s after membership update", relayURL)
+}
+
+func waitRelayStateChanged(t *testing.T, exposure *Exposure, changed <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-changed:
+	case <-time.After(10 * time.Millisecond):
+	case <-exposure.done:
+	}
+}
+
+func (e *Exposure) relayStateChanged() <-chan struct{} {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.stateChanged
 }
 
 func TestExposeSetMaxActiveRelaysDiscovery(t *testing.T) {
