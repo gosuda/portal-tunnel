@@ -27,13 +27,17 @@ const (
 )
 
 // RelayFailure classifies why a relay listener stopped.
-type RelayFailure string
+//
+// The canonical definition lives in types.RelayFailure; this alias keeps
+// existing sdk callers compiling. New code should reference types.RelayFailure
+// directly.
+type RelayFailure = types.RelayFailure
 
 const (
-	RelayFailureNone     RelayFailure = ""
-	RelayFailureRuntime  RelayFailure = "runtime"
-	RelayFailureTerminal RelayFailure = "terminal"
-	RelayFailureMITM     RelayFailure = "mitm"
+	RelayFailureNone     = types.RelayFailureNone
+	RelayFailureRuntime  = types.RelayFailureRuntime
+	RelayFailureTerminal = types.RelayFailureTerminal
+	RelayFailureMITM     = types.RelayFailureMITM
 )
 
 // RelayStatus is an immutable snapshot of one relay's externally visible state.
@@ -844,6 +848,12 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		}
 
 		e.mu.Lock()
+		if blockErr, blocked := e.blockedRelays[relayURL]; blocked {
+			e.mu.Unlock()
+			_ = listener.Close()
+			e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, failure: RelayFailureMITM, err: blockErr})
+			continue
+		}
 		if _, exists := e.relayListeners[relayURL]; exists {
 			e.mu.Unlock()
 			_ = listener.Close()

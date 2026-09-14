@@ -442,3 +442,49 @@ func TestExposureSetRelaysReplacesStatusMembership(t *testing.T) {
 		t.Fatalf("Relays() = %+v, want only relay B", relays)
 	}
 }
+
+// TestExposureReconcileClosesListenerWhenRelayBlockedDuringCreation covers the
+// TOCTOU window in reconcileRelayListeners: a relay that passes the blockedRelays
+// snapshot can become MITM-blocked while newListener runs. The install path must
+// re-check blockedRelays under e.mu and refuse to install the listener.
+//
+// A fully deterministic interleaving of the snapshot→newListener→install window
+// is impossible without a production hook in newListener, so this test covers
+// the postcondition directly: install a listener, block the relay (simulating
+// MITM detection during the creation window), then re-reconcile and assert the
+// listener is not retained.
+func TestExposureReconcileClosesListenerWhenRelayBlockedDuringCreation(t *testing.T) {
+	const relayURL = "https://relay.example"
+	exposure := newExposureStateTest(t, relayURL)
+
+	// First reconcile: relay is not blocked, so newListener succeeds and a
+	// listener is installed.
+	if err := exposure.reconcileRelayListeners(false); err != nil {
+		t.Fatalf("first reconcileRelayListeners() error = %v", err)
+	}
+	exposure.mu.RLock()
+	_, installed := exposure.relayListeners[relayURL]
+	exposure.mu.RUnlock()
+	if !installed {
+		t.Fatal("first reconcile did not install listener for unblocked relay")
+	}
+
+	// Simulate MITM detection during the creation window: the relay becomes
+	// blocked after the snapshot was taken.
+	exposure.setRelayStatus(relayURL, listenerStatus{
+		state:   RelayFailed,
+		failure: RelayFailureMITM,
+		err:     errMITMDetected,
+	})
+
+	// Second reconcile must not retain a listener for the blocked relay.
+	if err := exposure.reconcileRelayListeners(false); err != nil {
+		t.Fatalf("second reconcileRelayListeners() error = %v", err)
+	}
+	exposure.mu.RLock()
+	_, stillInstalled := exposure.relayListeners[relayURL]
+	exposure.mu.RUnlock()
+	if stillInstalled {
+		t.Fatal("listener retained for MITM-blocked relay")
+	}
+}
