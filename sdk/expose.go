@@ -1006,34 +1006,10 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			continue
 		}
 
-		e.mu.Lock()
-		if blockErr, blocked := e.blockedRelays[relayURL]; blocked {
-			e.mu.Unlock()
-			_ = listener.Close()
-			e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, failure: RelayFailureMITM, err: blockErr})
+		if !e.publishCreatedListener(relayURL, listener) {
 			continue
 		}
-		if _, exists := e.relayListeners[relayURL]; exists {
-			e.mu.Unlock()
-			_ = listener.Close()
-			continue
-		}
-		select {
-		case <-e.done:
-			e.mu.Unlock()
-			_ = listener.Close()
-			continue
-		default:
-		}
-		e.relayListeners[relayURL] = listener
-		e.acceptLoops.Add(1)
-		e.mu.Unlock()
 		addedRelayURLs = append(addedRelayURLs, relayURL)
-
-		go func() {
-			defer e.acceptLoops.Done()
-			e.runListenerAcceptLoop(listener)
-		}()
 	}
 
 	if len(staleListeners) > 0 || len(addedRelayURLs) > 0 {
@@ -1051,6 +1027,43 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			Msg("reconciled relay listeners")
 	}
 	return nil
+}
+
+// publishCreatedListener installs a freshly created listener for relayURL,
+// rechecking under e.mu the conditions that may have changed while the
+// listener was being created: a relay MITM-blocked in that window is closed
+// and recorded as a MITM failure instead of being published — a blocked
+// relay must never receive traffic. It reports whether the listener was
+// installed.
+func (e *Exposure) publishCreatedListener(relayURL string, listener *listener) bool {
+	e.mu.Lock()
+	if blockErr, blocked := e.blockedRelays[relayURL]; blocked {
+		e.mu.Unlock()
+		_ = listener.Close()
+		e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, failure: RelayFailureMITM, err: blockErr})
+		return false
+	}
+	if _, exists := e.relayListeners[relayURL]; exists {
+		e.mu.Unlock()
+		_ = listener.Close()
+		return false
+	}
+	select {
+	case <-e.done:
+		e.mu.Unlock()
+		_ = listener.Close()
+		return false
+	default:
+	}
+	e.relayListeners[relayURL] = listener
+	e.acceptLoops.Add(1)
+	e.mu.Unlock()
+
+	go func() {
+		defer e.acceptLoops.Done()
+		e.runListenerAcceptLoop(listener)
+	}()
+	return true
 }
 
 func (e *Exposure) runListenerAcceptLoop(listener *listener) {

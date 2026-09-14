@@ -443,11 +443,12 @@ func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 	}
 }
 
-// TestExposureReconcileExcludesRelayBlockedAfterInstall verifies that a relay
-// blocked (MITM) after its listener already exists is closed and not re-created
-// on the next reconcile.  This is an ordinary blocked-relay postcondition test;
-// it does not exercise the snapshot→newListener→install TOCTOU window, which
-// would require a production hook in newListener.
+// TestExposureReconcileExcludesRelayBlockedAfterInstall verifies the
+// end-to-end reconcile postcondition for blocked relays: a relay blocked
+// (MITM) after its listener already exists is closed and not re-created on
+// the next reconcile. The creation-window recheck itself is covered
+// deterministically at the publish boundary by
+// TestExposurePublishCreatedListenerClosesRelayBlockedDuringCreation.
 func TestExposureReconcileExcludesRelayBlockedAfterInstall(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
@@ -480,6 +481,61 @@ func TestExposureReconcileExcludesRelayBlockedAfterInstall(t *testing.T) {
 	exposure.mu.RUnlock()
 	if stillInstalled {
 		t.Fatal("listener retained for MITM-blocked relay")
+	}
+}
+
+// TestExposurePublishCreatedListenerClosesRelayBlockedDuringCreation covers
+// the install-time recheck deterministically at the publish boundary: a
+// relay that passed the desired-membership filter but is MITM-blocked by
+// the time its listener finishes creation must never be published — the
+// listener is closed and a MITM failure is recorded. The newListener call
+// itself contains no blocking I/O (relay startup runs in a background
+// goroutine), so the creation window cannot be held open by an external
+// dial target; the recheck contract is therefore exercised exactly where
+// it lives. Deleting the blockedRelays recheck inside publishCreatedListener
+// installs the listener and fails this test.
+func TestExposurePublishCreatedListenerClosesRelayBlockedDuringCreation(t *testing.T) {
+	const relayURL = "https://relay.example"
+	exposure := newExposureStateTest(t, relayURL)
+
+	relayURLParsed, err := url.Parse(relayURL)
+	if err != nil {
+		t.Fatalf("url.Parse(relayURL) error = %v", err)
+	}
+	listenerClosed := make(chan struct{})
+	created := &listener{
+		relayURL: relayURLParsed,
+		cancel:   func() { close(listenerClosed) },
+		doneCh:   listenerClosed,
+	}
+
+	// The relay was eligible when reconcile snapshotted desired membership;
+	// MITM detection lands while the listener is being created.
+	exposure.blockedRelays = map[string]error{relayURL: errMITMDetected}
+
+	if exposure.publishCreatedListener(relayURL, created) {
+		t.Fatal("publishCreatedListener() = true, want false for relay blocked during creation")
+	}
+	select {
+	case <-listenerClosed:
+	default:
+		t.Fatal("listener for relay blocked during creation was not closed")
+	}
+	if got := exposure.listenerRelayURLs(); len(got) != 0 {
+		t.Fatalf("listenerRelayURLs() = %v, want blocked relay not installed", got)
+	}
+	blockedStatusFound := false
+	for _, status := range exposure.Relays() {
+		if status.RelayURL != relayURL {
+			continue
+		}
+		blockedStatusFound = true
+		if status.State != RelayFailed || status.Failure != RelayFailureMITM {
+			t.Fatalf("status = %+v, want failed/MITM for relay blocked during creation", status)
+		}
+	}
+	if !blockedStatusFound {
+		t.Fatalf("Relays() = %+v, want a recorded status for relay blocked during creation", exposure.Relays())
 	}
 }
 
