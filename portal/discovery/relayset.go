@@ -1043,3 +1043,18 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 	s.relays[relayURL] = state
 	return true, "active", state.activeFailures
 }
+
+// IsSuppressed reports whether relayURL is currently excluded from active
+// selection due to a prior active-listener failure backoff. Callers use this
+// to avoid recording duplicate failures while a suppression is still in
+// effect; once the backoff expires the relay becomes eligible again and a
+// new failure records.
+func (s *RelaySet) IsSuppressed(relayURL string, now time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	state, ok := s.relays[relayURL]
+	if !ok {
+		return false
+	}
+	return !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now)
+}

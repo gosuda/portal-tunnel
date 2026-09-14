@@ -249,6 +249,7 @@ func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, re
 				MaxActiveRelays:   cfg.maxActiveRelays,
 				RequireUDP:        requireUDP,
 				LocalAddress:      identity.Address,
+				ActiveRelayURLs:   activeRelayURLs(exposure),
 			}
 		}, exposure.SetRelays)
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -269,26 +270,35 @@ func forwardDemoDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, c
 	}
 }
 
-// reportRelayStatuses feeds the current SDK relay statuses into the discovery
+// reportRelayStatuses feeds terminal relay failures into the discovery
 // controller: failed relays are banned (MITM) or reported for suppression
-// backoff, active relays form the controller's active set, and relays that are
-// still connecting or idle stay pending until they transition.
+// backoff. Connecting and idle relays are left untouched.
 func reportRelayStatuses(exposure *sdk.Exposure, controller *discovery.Controller) {
-	statuses := exposure.Relays()
-	active := make([]string, 0, len(statuses))
-	for _, status := range statuses {
-		switch {
-		case status.State == sdk.RelayFailed:
-			if status.Failure == sdk.RelayFailureMITM {
-				controller.Ban(status.RelayURL)
-			} else {
-				controller.ReportFailure(status.RelayURL)
-			}
-		case status.Active():
+	for _, status := range exposure.Relays() {
+		if status.State != sdk.RelayFailed {
+			continue
+		}
+		if status.Failure == sdk.RelayFailureMITM {
+			controller.Ban(status.RelayURL)
+		} else {
+			controller.ReportFailure(status.RelayURL)
+		}
+	}
+}
+
+// activeRelayURLs returns the relay URLs that currently have live SDK
+// listeners, derived from the exposure snapshot for RouteState stickiness.
+func activeRelayURLs(exposure *sdk.Exposure) []string {
+	if exposure == nil {
+		return nil
+	}
+	var active []string
+	for _, status := range exposure.Relays() {
+		if status.Active() {
 			active = append(active, status.RelayURL)
 		}
 	}
-	controller.ReportActive(active)
+	return active
 }
 
 // resolveDemoIdentity parses an inline identity or existing file. It generates

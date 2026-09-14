@@ -4,72 +4,42 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
-// Controller owns discovery refresh, runtime feedback, and relay selection.
+// Controller is a thin discovery selection and refresh layer. It owns no
+// relay runtime state: RelaySet owns failure/backoff/ban/candidate state,
+// Exposure owns runtime/listener state, and the Controller only refreshes
+// discovery, selects relays, and signals changes.
 type Controller struct {
 	relaySet *RelaySet
 	changed  chan struct{}
-
-	mu              sync.RWMutex
-	activeRelayURLs []string
-	failedRelays    map[string]struct{} // per selection episode: markers cleared on republish so a reselected relay's later failure reports again
 }
 
 // NewController creates a discovery controller from bootstrap relay URLs.
 func NewController(bootstrapRelayURLs []string) *Controller {
 	return &Controller{
-		relaySet:     NewRelaySet(bootstrapRelayURLs),
-		changed:      make(chan struct{}, 1),
-		failedRelays: make(map[string]struct{}),
+		relaySet: NewRelaySet(bootstrapRelayURLs),
+		changed:  make(chan struct{}, 1),
 	}
-}
-
-// ReportActive replaces the relay URLs that currently have live SDK listeners.
-func (c *Controller) ReportActive(relayURLs []string) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	previous := c.activeRelayURLs
-	c.activeRelayURLs = append([]string(nil), relayURLs...)
-	for _, relayURL := range relayURLs {
-		delete(c.failedRelays, relayURL)
-	}
-	c.mu.Unlock()
-
-	for _, relayURL := range previous {
-		if !slices.Contains(relayURLs, relayURL) {
-			c.relaySet.UnconfirmRelayURL(relayURL)
-		}
-	}
-	for _, relayURL := range relayURLs {
-		c.relaySet.ConfirmRelayURL(relayURL)
-	}
-	c.signal()
 }
 
 // ReportFailure removes a failed relay from active selection with backoff.
+// It applies the failure directly to RelaySet: UnconfirmRelayURL drops the
+// listener confirmation, and RecordActiveFailure applies backoff suppression.
+// Failures are deduped by RelaySet's own suppression state — once a relay is
+// suppressed, further RecordActiveFailure calls are skipped until the
+// suppression expires, at which point a new failure records again.
 func (c *Controller) ReportFailure(relayURL string) {
 	if c == nil || relayURL == "" {
 		return
 	}
-	c.mu.Lock()
-	if _, reported := c.failedRelays[relayURL]; reported {
-		c.mu.Unlock()
-		return
-	}
-	c.failedRelays[relayURL] = struct{}{}
-	c.activeRelayURLs = slices.DeleteFunc(c.activeRelayURLs, func(active string) bool {
-		return active == relayURL
-	})
-	c.mu.Unlock()
 	c.relaySet.UnconfirmRelayURL(relayURL)
-	c.relaySet.RecordActiveFailure(relayURL, 1)
+	if !c.relaySet.IsSuppressed(relayURL, time.Now().UTC()) {
+		c.relaySet.RecordActiveFailure(relayURL, 1)
+	}
 	c.signal()
 }
 
@@ -79,11 +49,6 @@ func (c *Controller) Ban(relayURL string) {
 		return
 	}
 	c.relaySet.BanRelayURL(relayURL)
-	c.mu.Lock()
-	c.activeRelayURLs = slices.DeleteFunc(c.activeRelayURLs, func(active string) bool {
-		return active == relayURL
-	})
-	c.mu.Unlock()
 	c.signal()
 }
 
@@ -92,23 +57,6 @@ func (c *Controller) signal() {
 	case c.changed <- struct{}{}:
 	default:
 	}
-}
-
-func (c *Controller) activeRelays() []string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return append([]string(nil), c.activeRelayURLs...)
-}
-
-// beginSelectionEpisode starts a new failure-dedupe episode for every relay in
-// the published selection set, clearing their failedRelays markers so a later
-// ReportFailure reports again even if the relay failed in a prior episode.
-func (c *Controller) beginSelectionEpisode(relayURLs []string) {
-	c.mu.Lock()
-	for _, relayURL := range relayURLs {
-		delete(c.failedRelays, relayURL)
-	}
-	c.mu.Unlock()
 }
 
 // Reconcile prompts the controller to re-evaluate its relay selection
@@ -124,6 +72,10 @@ func (c *Controller) Reconcile() {
 }
 
 // Watch refreshes discovery and publishes selected concrete relay URLs.
+// The state callback MUST supply the caller's current active relay URLs
+// (typically derived from the exposure's live relay statuses) via
+// RouteState.ActiveRelayURLs so selection preserves connection-level
+// stickiness and avoids listener churn.
 func (c *Controller) Watch(
 	ctx context.Context,
 	state func() RouteState,
@@ -159,7 +111,6 @@ func (c *Controller) Watch(
 			}
 		}
 		routeState := state()
-		routeState.ActiveRelayURLs = c.activeRelays()
 		routes := c.relaySet.SelectRelays(routeState)
 		next := make([]string, 0, len(routes))
 		for _, route := range routes {
@@ -171,7 +122,6 @@ func (c *Controller) Watch(
 			}
 			selected = next
 			published = true
-			c.beginSelectionEpisode(next)
 		}
 
 		select {
