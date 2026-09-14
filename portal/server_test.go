@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -566,10 +567,7 @@ func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewServer() error = %v", err)
 			}
-			wantLocalPort := tc.localSNIPort
-			if wantLocalPort == 0 {
-				wantLocalPort = 443
-			}
+			wantLocalPort := cmp.Or(tc.localSNIPort, 443)
 			if got := server.config().SNIPort; got != wantLocalPort {
 				t.Fatalf("ServerConfig.SNIPort = %d, want local port %d", got, wantLocalPort)
 			}
