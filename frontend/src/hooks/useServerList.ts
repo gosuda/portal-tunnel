@@ -49,32 +49,38 @@ export function useServerList() {
 
   useEffect(() => {
     let cancelled = false;
+    let timer: number | undefined;
 
+    // Serialize polls: the next request is scheduled only after the previous
+    // one settles, so a slow response can never arrive after a newer one and
+    // overwrite fresh state, and requests cannot accumulate under latency.
     const poll = async () => {
       try {
         const data = await apiClient.get<PublicStateResponse>(
           RELAY_API_PATHS.public.state
         );
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          setPublicState({
+            leases: Array.isArray(data?.leases) ? data.leases : [],
+            landingPageEnabled: data?.landing_page_enabled ?? false,
+          });
         }
-        setPublicState({
-          leases: Array.isArray(data?.leases) ? data.leases : [],
-          landingPageEnabled: data?.landing_page_enabled ?? false,
-        });
       } catch (error) {
         console.error("Failed to load public relay state", error);
+      } finally {
+        if (!cancelled) {
+          timer = window.setTimeout(() => {
+            void poll();
+          }, 1500);
+        }
       }
     };
 
     void poll();
-    const interval = window.setInterval(() => {
-      void poll();
-    }, 1500);
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      window.clearTimeout(timer);
     };
   }, []);
 

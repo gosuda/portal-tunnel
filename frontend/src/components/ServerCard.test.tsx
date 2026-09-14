@@ -105,3 +105,26 @@ describe("ServerCard raw transport endpoints", () => {
     }
   });
 });
+
+describe("ServerCard payment badge", () => {
+  // payment_enabled is the explicit capability flag; a leftover label alone
+  // must not re-enable the badge or disagree with the page-level paid count.
+  it("shows the badge for paymentEnabled with the default label fallback", () => {
+    renderCard({ paymentEnabled: true });
+
+    expect(screen.getByText("Paid app")).toBeTruthy();
+  });
+
+  it("shows the declared label when payment is enabled", () => {
+    renderCard({ paymentEnabled: true, paymentLabel: "x402 USDC" });
+
+    expect(screen.getByText("x402 USDC")).toBeTruthy();
+  });
+
+  it("does not show a badge from a payment label without paymentEnabled", () => {
+    renderCard({ paymentEnabled: false, paymentLabel: "x402 USDC" });
+
+    expect(screen.queryByText("x402 USDC")).toBeNull();
+    expect(screen.queryByText("Paid app")).toBeNull();
+  });
+});

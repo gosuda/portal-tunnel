@@ -23,6 +23,14 @@ interface AdminServerCardProps {
   onIPBanStatusChange: (ip: string, isBan: boolean) => void | Promise<void>;
 }
 
+const BPS_STEPS = [0, 10, 100, 1000, 10000, 100000, 1000000, 10000000];
+
+function bpsToSliderIndex(value: number): number {
+  if (value === 0) return 0;
+  const idx = BPS_STEPS.findIndex((step) => step >= value);
+  return idx === -1 ? BPS_STEPS.length - 1 : idx;
+}
+
 export function AdminServerCard({
   server,
   isSelected,
@@ -37,13 +45,6 @@ export function AdminServerCard({
   const [bpsInput, setBpsInput] = useState(server.bps.toString());
   const [sliderIndex, setSliderIndex] = useState(bpsToSliderIndex(server.bps));
 
-  const bpsSteps = [0, 10, 100, 1000, 10000, 100000, 1000000, 10000000];
-
-  function bpsToSliderIndex(value: number): number {
-    if (value === 0) return 0;
-    const idx = bpsSteps.findIndex((step) => step >= value);
-    return idx === -1 ? bpsSteps.length - 1 : idx;
-  }
 
   const runAsyncAdminAction = (action: () => void | Promise<void>) => {
     try {
@@ -100,7 +101,7 @@ export function AdminServerCard({
 
   const handleSliderChange = (idx: number) => {
     setSliderIndex(idx);
-    setBpsInput(bpsSteps[idx].toString());
+    setBpsInput(BPS_STEPS[idx].toString());
   };
 
   const handleBPSSave = () => {
@@ -242,7 +243,7 @@ export function AdminServerCard({
           <input
             type="range"
             min="0"
-            max={bpsSteps.length - 1}
+            max={BPS_STEPS.length - 1}
             value={sliderIndex}
             onChange={(event) => {
               const idx = parseInt(event.target.value, 10);
@@ -251,7 +252,7 @@ export function AdminServerCard({
             className="w-full h-2 bg-secondary rounded-md appearance-none cursor-pointer"
           />
           <div className="flex justify-between text-xs text-text-muted">
-            {bpsSteps.map((step, idx) => (
+            {BPS_STEPS.map((step, idx) => (
               <span
                 key={idx}
                 className={clsx(

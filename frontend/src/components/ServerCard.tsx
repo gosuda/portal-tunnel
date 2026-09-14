@@ -29,7 +29,7 @@ export function ServerCardBody({ server, topRight, footer }: ServerCardBodyProps
   const copyTimeoutRef = useRef<number | undefined>(undefined);
   const effectiveThumbnail = thumbnailFailed ? "" : server.thumbnail;
   const normalizedPaymentLabel = (server.paymentLabel ?? "").trim();
-  const showPaymentBadge = server.paymentEnabled || normalizedPaymentLabel !== "";
+  const showPaymentBadge = server.paymentEnabled === true;
   const effectivePaymentLabel = normalizedPaymentLabel || "Paid app";
   const endpoints = [
     ...(server.tcpAddr ? [{ protocol: "TCP", address: server.tcpAddr }] : []),
