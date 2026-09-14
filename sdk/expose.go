@@ -86,9 +86,9 @@ type Exposure struct {
 	// discovery is the relay-selection collaborator. It is nil when
 	// discovery is disabled, meaning Exposure owns membership directly.
 	// When non-nil, Exposure delegates relay selection to the controller
-	// and routes intent (AddRelay/RemoveRelay/SetMaxActiveRelays) through
-	// it as delta operations — the controller is the single owner of the
-	// explicit relay list.
+	// and forwards user intent (AddRelay/RemoveRelay/SetMaxActiveRelays)
+	// to it — the controller is the single owner of the explicit relay
+	// list and applies each intent atomically.
 	discovery *discovery.Controller
 
 	closeOnce sync.Once
@@ -297,11 +297,11 @@ func (e *Exposure) setRelays(relayURLs []string, failOnError bool) error {
 }
 
 // AddRelay adds one concrete relay without restarting the exposure.
-// When discovery is enabled, it forwards the intent to the controller as a
-// delta operation (AddExplicitRelay — concurrent add/remove calls serialize
-// there instead of racing whole-list snapshots) and clears any ban or
-// suppression on the relay so a re-added relay is immediately eligible;
-// re-selection republishes membership through the watch loop.
+// When discovery is enabled, it forwards the whole add intent to the
+// controller, which applies the explicit-list change and the eligibility
+// reset (ban and suppression cleared, so a re-added relay is immediately
+// selectable) as one atomic unit; re-selection republishes membership
+// through the watch loop.
 func (e *Exposure) AddRelay(relayURL string) error {
 	relayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
@@ -311,8 +311,7 @@ func (e *Exposure) AddRelay(relayURL string) error {
 		return net.ErrClosed
 	}
 	if e.discovery != nil {
-		e.discovery.AddExplicitRelay(relayURL)
-		e.discovery.Allow(relayURL)
+		e.discovery.AddRelay(relayURL)
 		return nil
 	}
 	e.mu.Lock()
@@ -325,11 +324,11 @@ func (e *Exposure) AddRelay(relayURL string) error {
 }
 
 // RemoveRelay removes one concrete relay without restarting the exposure.
-// When discovery is enabled, it forwards the intent to the controller as a
-// delta operation (RemoveExplicitRelay) and deactivates the relay — the
-// relay drops out of active selection while keeping its descriptor as a
-// candidate, so discovery does not immediately re-select it. Re-selection
-// republishes membership through the watch loop.
+// When discovery is enabled, it forwards the whole remove intent to the
+// controller, which applies the explicit-list change and the selection
+// deactivation (dropped from active selection, kept as a future candidate)
+// as one atomic unit; re-selection republishes membership through the
+// watch loop.
 func (e *Exposure) RemoveRelay(relayURL string) error {
 	relayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
@@ -339,8 +338,7 @@ func (e *Exposure) RemoveRelay(relayURL string) error {
 		return net.ErrClosed
 	}
 	if e.discovery != nil {
-		e.discovery.RemoveExplicitRelay(relayURL)
-		e.discovery.Deactivate(relayURL)
+		e.discovery.RemoveRelay(relayURL)
 		return nil
 	}
 	e.mu.Lock()

@@ -33,8 +33,11 @@ const (
 //
 // The Controller is the policy owner: callers set explicit relays, max
 // active relays, transport requirements, and local address via the Set*
-// methods; the Controller builds the selection state internally and
-// publishes concrete relay URLs through the Watch callback.
+// methods, and forward add/remove relay user intent through AddRelay /
+// RemoveRelay, which apply the explicit-list change together with the
+// matching eligibility change as one atomic unit; the Controller builds the
+// selection state internally and publishes concrete relay URLs through the
+// Watch callback.
 type Controller struct {
 	relaySet *RelaySet
 	changed  chan struct{}
@@ -76,30 +79,7 @@ func (c *Controller) Report(relayURL string, kind FailureKind) {
 	c.signal()
 }
 
-// Deactivate drops a relay out of active selection while keeping its
-// discovered descriptor as a candidate: the relay stays suppressed until
-// the recovery backoff expires, after which discovery may select it again.
-// Exposure.RemoveRelay routes an explicit disconnect here so a disconnected
-// relay is not immediately re-selected from the candidate pool.
-func (c *Controller) Deactivate(relayURL string) {
-	if c == nil || relayURL == "" {
-		return
-	}
-	c.relaySet.DeactivateRelayURL(relayURL)
-	c.signal()
-}
-
-// Allow clears a relay's ban and suppression so an explicitly re-added
-// relay is immediately eligible for selection again.
-func (c *Controller) Allow(relayURL string) {
-	if c == nil || relayURL == "" {
-		return
-	}
-	c.relaySet.AllowRelayURL(relayURL)
-	c.signal()
-}
-
-// SetExplicitRelays sets the explicit relay URLs for selection. The
+// SetExplicitRelays replaces the explicit relay URLs for selection. The
 // controller normalizes and stores a defensive copy, gives every URL a
 // durable RelaySet candidate state (so later failure reports stick for
 // custom relays that never entered through discovery), and signals the
@@ -113,19 +93,21 @@ func (c *Controller) SetExplicitRelays(urls []string) {
 		normalized = urls
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.explicitRelays = append([]string(nil), normalized...)
-	c.mu.Unlock()
 	for _, relayURL := range normalized {
 		c.relaySet.EnsureRelayURL(relayURL)
 	}
 	c.signal()
 }
 
-// AddExplicitRelay adds one explicit relay URL. The delta is applied under
-// the controller lock, so concurrent add/remove intent from the exposure
-// serializes here instead of publishing stale whole-list snapshots out of
-// order. The relay also gets a durable RelaySet candidate state.
-func (c *Controller) AddExplicitRelay(relayURL string) {
+// AddRelay applies one add-relay user intent as a single atomic unit: the
+// explicit-list change, the durable RelaySet candidate state, and the
+// eligibility reset (ban and suppression cleared, so a re-added relay is
+// immediately selectable) all serialize together under the controller lock.
+// A concurrent RemoveRelay can therefore never interleave a stale eligibility
+// reset past the removal — the final state always matches one serial order.
+func (c *Controller) AddRelay(relayURL string) {
 	if c == nil || relayURL == "" {
 		return
 	}
@@ -133,23 +115,26 @@ func (c *Controller) AddExplicitRelay(relayURL string) {
 		relayURL = normalized
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !slices.Contains(c.explicitRelays, relayURL) {
 		c.explicitRelays = append(c.explicitRelays, relayURL)
 		slices.Sort(c.explicitRelays)
 	}
-	c.mu.Unlock()
 	c.relaySet.EnsureRelayURL(relayURL)
+	c.relaySet.AllowRelayURL(relayURL)
 	c.signal()
 }
 
-// RemoveExplicitRelay removes one explicit relay URL. Like
-// AddExplicitRelay it is a delta operation: concurrent intent updates
-// serialize through the controller's lock.
-func (c *Controller) RemoveExplicitRelay(relayURL string) {
+// RemoveRelay applies one remove-relay user intent as a single atomic unit:
+// the explicit-list change and the selection deactivation (dropped from
+// active selection, kept as a future candidate) serialize together under
+// the controller lock, symmetric with AddRelay.
+func (c *Controller) RemoveRelay(relayURL string) {
 	if c == nil || relayURL == "" {
 		return
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	next := make([]string, 0, len(c.explicitRelays))
 	for _, existing := range c.explicitRelays {
 		if existing != relayURL {
@@ -157,7 +142,7 @@ func (c *Controller) RemoveExplicitRelay(relayURL string) {
 		}
 	}
 	c.explicitRelays = next
-	c.mu.Unlock()
+	c.relaySet.DeactivateRelayURL(relayURL)
 	c.signal()
 }
 

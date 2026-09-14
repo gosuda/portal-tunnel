@@ -2,14 +2,19 @@ package discovery
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 )
 
-// Deactivate must preserve the explicit-disconnect semantic: a relay the
-// user removed stays out of active selection (suppressed) while keeping its
-// verified descriptor as a future candidate.
-func TestControllerDeactivateDropsRelayFromSelection(t *testing.T) {
+// AddRelay and RemoveRelay each apply the whole user intent as one unit:
+// the explicit-list change plus the matching eligibility change.
+// RemoveRelay preserves the explicit-disconnect semantic (out of active
+// selection, verified descriptor kept as a future candidate); AddRelay
+// makes a re-added relay immediately selectable again without waiting out
+// the recovery backoff.
+func TestControllerRelayIntentOpsComposeAtomicUnits(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
 		relayB = "https://relay-b.example"
@@ -17,39 +22,70 @@ func TestControllerDeactivateDropsRelayFromSelection(t *testing.T) {
 	controller := NewController(nil)
 	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
 	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayB))
+	controller.SetExplicitRelays([]string{relayA, relayB})
 
-	controller.Deactivate(relayA)
+	controller.RemoveRelay(relayA)
 
-	routes := controller.relaySet.SelectRelays(routeState{
-		MaxActiveRelays: 1,
-	})
+	routes := controller.relaySet.SelectRelays(routeState{})
 	if len(routes) != 1 || routes[0].RelayURL != relayB {
-		t.Fatalf("selected routes = %+v, want only relay B after deactivation", routes)
+		t.Fatalf("selection after RemoveRelay = %+v, want only relay B", routes)
+	}
+
+	controller.AddRelay(relayA)
+
+	routes = controller.relaySet.SelectRelays(routeState{})
+	if len(routes) != 2 {
+		t.Fatalf("selection after AddRelay = %+v, want both relays eligible again", routes)
 	}
 }
 
-// Allow restores eligibility: a deactivated relay that is explicitly
-// re-added must be selectable again immediately, without waiting out the
-// recovery backoff.
-func TestControllerAllowClearsDeactivation(t *testing.T) {
-	const relayURL = "https://relay.example"
+// Concurrent AddRelay/RemoveRelay intents on the same relay must
+// linearize: the final state always matches one serial order, so the
+// relay is in the explicit list if and only if it is not suppressed. The
+// pre-atomicity shape — explicit-list change and eligibility change as
+// two separate critical sections — could end removed-but-allowed or
+// added-but-suppressed, which violates this invariant.
+func TestControllerRelayIntentOpsLinearizeUnderConcurrency(t *testing.T) {
+	const relayA = "https://relay-a.example"
 	controller := NewController(nil)
-	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayURL))
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
+	controller.SetExplicitRelays([]string{relayA})
 
-	controller.Deactivate(relayURL)
-	routes := controller.relaySet.SelectRelays(routeState{
-		MaxActiveRelays: 1,
-	})
-	if len(routes) != 0 {
-		t.Fatalf("selected routes = %+v, want deactivated relay excluded", routes)
+	intentLoops := []func(){
+		func() {
+			for i := range 25 {
+				if i%2 == 0 {
+					controller.AddRelay(relayA)
+				} else {
+					controller.RemoveRelay(relayA)
+				}
+			}
+		},
+		func() {
+			for i := range 25 {
+				if i%2 == 1 {
+					controller.AddRelay(relayA)
+				} else {
+					controller.RemoveRelay(relayA)
+				}
+			}
+		},
 	}
+	var wg sync.WaitGroup
+	for _, loop := range intentLoops {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			loop()
+		}()
+	}
+	wg.Wait()
 
-	controller.Allow(relayURL)
-	routes = controller.relaySet.SelectRelays(routeState{
-		MaxActiveRelays: 1,
-	})
-	if len(routes) != 1 || routes[0].RelayURL != relayURL {
-		t.Fatalf("selected routes = %+v, want relay selectable after allow", routes)
+	controller.mu.Lock()
+	inExplicit := slices.Contains(controller.explicitRelays, relayA)
+	controller.mu.Unlock()
+	if suppressed := controller.relaySet.IsSuppressed(relayA, time.Now().UTC()); inExplicit == suppressed {
+		t.Fatalf("relay A inExplicit=%v suppressed=%v; intent ops must linearize (inExplicit requires !suppressed)", inExplicit, suppressed)
 	}
 }
 
