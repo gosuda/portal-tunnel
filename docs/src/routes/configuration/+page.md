@@ -144,8 +144,8 @@ destination. Unknown fields, invalid values, and legacy `ivnp.conf` syntax fail
 startup; replace the old file explicitly when upgrading. Runtime `Logger` and
 `Resolver` collaborators cannot be configured through this file.
 
-This file configures IVNP's router; Portal applies it and owns only endpoint
-selection and authorization. See [IVNP overlay transport](/architecture#optional-relay-overlay).
+This file configures IVNP's router; Portal applies it, while IVNP owns
+destination reachability and path topology. See [IVNP overlay transport](/architecture#optional-relay-overlay).
 
 For explicit router persistence, mount a private writable directory and use:
 
