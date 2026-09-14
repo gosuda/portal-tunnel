@@ -150,7 +150,7 @@ Common `portal expose` flags:
 --relays             Additional relay API URLs, comma-separated
 --discovery          Include registry relays and relay discovery expansion
 --max-active-relays  Maximum auto-selected relays; explicit relays are always included
---overlay            Prefer IVNP overlay transport when available
+--overlay            Prefer IVNP overlay transport; direct reverse transport stays default and fallback
 --ban-mitm           Ban relay when the MITM self-probe detects termination
 --ech                Enable ECH hostname privacy for TLS stream tunnels (disabled by default)
 --identity-path      Identity JSON file path; created automatically when missing
@@ -173,6 +173,8 @@ Common `portal expose` flags:
 --udp-addr           Local UDP target
 --metrics-addr       Optional host:port for Prometheus /metrics
 ```
+
+`--overlay` selects IVNP-routed overlay transport: Portal selects and authorizes the public ingress and an eligible overlay gateway, then issues the delegated reverse capability; IVNP owns the gateway→ingress path and any internal hops it uses; the SDK sees only the same generic reverse endpoint. See [architecture documentation](../../docs/src/routes/architecture/+page.md) for details.
 
 ## Agent
 

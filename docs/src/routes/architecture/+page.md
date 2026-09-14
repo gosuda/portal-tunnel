@@ -124,7 +124,8 @@ const overlayDiagram = `sequenceDiagram
     Ingress->>SDK: reverse_endpoint (gateway URL + delegated capability)
     SDK->>Gateway: GET /sdk/connect (capability)
     Note over Gateway: Verify ingress signature and gateway binding
-    Gateway->>Ingress: IVNP stream (same capability)
+    Gateway->>Ingress: IVNP stream (same capability; internal multi-hop path)
+    Note over Gateway,Ingress: IVNP owns routers, tunnels, and hop ordering — opaque to Portal
     Note over Ingress: Verify IVNP peer, capability, and lease instance
     Ingress->>Gateway: Admit stream to existing lease queue
     Gateway->>SDK: HTTP 101; bridge SDK socket to IVNP
@@ -175,6 +176,7 @@ UDP client
 - Derive lease hostnames from the full normalized `PORTAL_URL` host, not from apex extraction.
 - Preserve explicit root-host fallback through SNI no-route handling to the admin/API listener.
 - Stream ingress is TLS-only. UDP exposure, when enabled, is raw UDP.
+- Overlay transport keeps endpoint policy in Portal and path ownership in IVNP; discovery routes and leases carry no overlay topology.
 
 ### TLS and Identity
 
@@ -273,6 +275,25 @@ prefers an available overlay gateway and falls back to direct transport. A
 failed gateway is reported through `POST /sdk/reverse`; the ingress applies the
 lease's overlay preference while rotating the endpoint without replacing the
 lease.
+
+The `Gateway → Ingress` edge is one logical Portal transport edge. IVNP may
+carry it over multiple internal I2P-style hops, but that internal topology is
+opaque to Portal. Portal-level explicit multi-hop routing and the former
+WireGuard relay mesh were removed; network-level multi-hop now lives inside
+IVNP, below Portal.
+
+Ownership split:
+
+- **Portal** — selects and authorizes the public ingress, selects an eligible
+  gateway, issues the delegated reverse capability, and owns lease, admission,
+  health, and fallback semantics.
+- **IVNP** — owns destination reachability, the gateway→ingress path, and
+  intermediate router selection and tunnel construction; may use multiple
+  internal network hops without exposing that topology to Portal.
+- **SDK** — receives the same generic reverse endpoint, selects no
+  intermediate hops, and sees no IVNP route topology.
+
+**Portal selects and authorizes endpoints. IVNP connects destinations. Portal does not own the path between them.**
 
 <Mermaid code={overlayDiagram} />
 

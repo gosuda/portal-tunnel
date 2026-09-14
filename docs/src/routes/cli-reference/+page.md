@@ -112,7 +112,8 @@ not supported.
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
 Direct reverse transport is the default. `--overlay` asks the relay to use an
-IVNP overlay gateway when one is available and retains direct fallback.
+IVNP overlay gateway when one is available and retains direct fallback. See
+[IVNP overlay transport](/architecture#optional-relay-overlay).
 
 ### Constraints
 

@@ -130,7 +130,7 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 |----------|---------|------|-------------|
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
-| `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the relay overlay and requires `DISCOVERY=true`; empty disables the overlay |
+| `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the IVNP overlay and requires `DISCOVERY=true`; empty disables the overlay |
 | `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
 
 ### IVNP overlay
@@ -143,6 +143,9 @@ overlay with IVNP's defaults: in-memory router state and a transient service
 destination. Unknown fields, invalid values, and legacy `ivnp.conf` syntax fail
 startup; replace the old file explicitly when upgrading. Runtime `Logger` and
 `Resolver` collaborators cannot be configured through this file.
+
+This file configures IVNP's router; Portal applies it and owns only endpoint
+selection and authorization. See [IVNP overlay transport](/architecture#optional-relay-overlay).
 
 For explicit router persistence, mount a private writable directory and use:
 
