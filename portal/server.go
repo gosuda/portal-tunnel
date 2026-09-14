@@ -708,12 +708,11 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 				}
 
 				serverName := utils.NormalizeHostname(clientHello.ServerName)
-				if serverName == "" {
-					_ = wrappedConn.Close()
-					return
-				}
-
-				if serverName == s.identity.Name {
+				// Go omits the SNI extension for IP-literal hosts and tenant
+				// hostnames are always DNS names, so a connection without a server
+				// name targets the canonical root origin; route it there instead
+				// of failing the handshake for IP-literal PORTAL_URL deployments.
+				if serverName == "" || serverName == s.identity.Name {
 					if s.apiListener == nil {
 						_ = wrappedConn.Close()
 						return
