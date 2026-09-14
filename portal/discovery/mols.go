@@ -387,7 +387,7 @@ func RankRelayPool(autoPool []RelayState, localAddress string, epoch uint64) []s
 //	          with SelectionEpoch salt providing deterministic rotation across connection retry cycles.
 //
 // SelectPriority returns the ordered relay URLs for a client using MOLS selection with explicit relays prepended.
-func SelectPriority(states []RelayState, routeState RouteState) []string {
+func SelectPriority(states []RelayState, routeState routeState) []string {
 	if len(states) == 0 {
 		return nil
 	}

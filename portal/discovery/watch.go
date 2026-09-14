@@ -4,18 +4,47 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
+)
+
+// FailureKind classifies a relay failure for discovery policy. The
+// vocabulary deliberately mirrors sdk.RelayFailure's string values so
+// callers forward a classification with a plain conversion
+// (discovery.FailureKind(status.Failure)), while the POLICY — which kind
+// means permanent ban versus suppression/backoff — stays inside discovery.
+type FailureKind string
+
+const (
+	FailureRuntime  FailureKind = "runtime"
+	FailureTerminal FailureKind = "terminal"
+	FailureMITM     FailureKind = "mitm"
 )
 
 // Controller is a thin discovery selection and refresh layer. It owns no
 // relay runtime state: RelaySet owns failure/backoff/ban/candidate state,
 // Exposure owns runtime/listener state, and the Controller only refreshes
 // discovery, selects relays, and signals changes.
+//
+// The Controller is the policy owner: callers set explicit relays, max
+// active relays, transport requirements, and local address via the Set*
+// methods; the Controller builds the selection state internally and
+// publishes concrete relay URLs through the Watch callback.
 type Controller struct {
 	relaySet *RelaySet
 	changed  chan struct{}
+
+	mu              sync.Mutex
+	explicitRelays  []string
+	maxActiveRelays int
+	requireUDP      bool
+	requireTCP      bool
+	localAddress    string
 }
 
 // NewController creates a discovery controller from bootstrap relay URLs.
@@ -26,30 +55,78 @@ func NewController(bootstrapRelayURLs []string) *Controller {
 	}
 }
 
-// ReportFailure removes a failed relay from active selection with backoff.
-// It applies the failure directly to RelaySet: UnconfirmRelayURL drops the
-// listener confirmation, and RecordActiveFailure applies backoff suppression.
-// Failures are deduped by RelaySet's own suppression state — once a relay is
-// suppressed, further RecordActiveFailure calls are skipped until the
-// suppression expires, at which point a new failure records again.
-func (c *Controller) ReportFailure(relayURL string) {
+// Report feeds a relay failure into discovery policy. FailureMITM
+// permanently bans the relay; runtime and terminal failures unconfirm
+// the relay and apply backoff suppression. Failures are deduped by
+// RelaySet's own suppression state — once a relay is suppressed, further
+// failures are skipped until suppression expires.
+func (c *Controller) Report(relayURL string, kind FailureKind) {
 	if c == nil || relayURL == "" {
 		return
 	}
-	c.relaySet.UnconfirmRelayURL(relayURL)
-	if !c.relaySet.IsSuppressed(relayURL, time.Now().UTC()) {
-		c.relaySet.RecordActiveFailure(relayURL, 1)
+	switch kind {
+	case FailureMITM:
+		c.relaySet.BanRelayURL(relayURL)
+	default:
+		c.relaySet.UnconfirmRelayURL(relayURL)
+		if !c.relaySet.IsSuppressed(relayURL, time.Now().UTC()) {
+			c.relaySet.RecordActiveFailure(relayURL, 1)
+		}
 	}
 	c.signal()
 }
 
-// Ban permanently excludes a relay from this controller's selections.
-func (c *Controller) Ban(relayURL string) {
-	if c == nil || relayURL == "" {
+// SetExplicitRelays sets the explicit relay URLs for selection. The
+// controller normalizes and stores a defensive copy, then signals the
+// watch loop to re-evaluate immediately.
+func (c *Controller) SetExplicitRelays(urls []string) {
+	if c == nil {
 		return
 	}
-	c.relaySet.BanRelayURL(relayURL)
+	normalized, err := utils.NormalizeRelayURLs(urls...)
+	if err != nil {
+		normalized = urls
+	}
+	c.mu.Lock()
+	c.explicitRelays = append([]string(nil), normalized...)
+	c.mu.Unlock()
 	c.signal()
+}
+
+// SetMaxActiveRelays caps auto-selected listener entries. Zero or
+// negative values use the selection default.
+func (c *Controller) SetMaxActiveRelays(n int) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.maxActiveRelays = n
+	c.mu.Unlock()
+	c.signal()
+}
+
+// SetTransportRequirements sets UDP/TCP eligibility filters for
+// auto-selected relays.
+func (c *Controller) SetTransportRequirements(requireUDP, requireTCP bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.requireUDP = requireUDP
+	c.requireTCP = requireTCP
+	c.mu.Unlock()
+	c.signal()
+}
+
+// SetLocalAddress sets the ingress identity address used by MOLS route
+// selection to derive a deterministic row index.
+func (c *Controller) SetLocalAddress(address string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.localAddress = address
+	c.mu.Unlock()
 }
 
 func (c *Controller) signal() {
@@ -59,26 +136,14 @@ func (c *Controller) signal() {
 	}
 }
 
-// Reconcile prompts the controller to re-evaluate its relay selection
-// immediately. It is intended for callers that have changed policy inputs
-// (such as the agent's max_active_relays) so membership reconciles without
-// waiting for the next poll tick. It signals the Watch loop, which re-reads
-// its state callback and republishes if the selection changed.
-func (c *Controller) Reconcile() {
-	if c == nil {
-		return
-	}
-	c.signal()
-}
-
 // Watch refreshes discovery and publishes selected concrete relay URLs.
-// The state callback MUST supply the caller's current active relay URLs
-// (typically derived from the exposure's live relay statuses) via
-// RouteState.ActiveRelayURLs so selection preserves connection-level
-// stickiness and avoids listener churn.
+// activeRelays returns the caller's currently active relay URLs (typically
+// from Exposure.ActiveRelays) so selection preserves connection-level
+// stickiness and avoids listener churn. onChange applies the new concrete
+// membership (typically Exposure.SetRelays).
 func (c *Controller) Watch(
 	ctx context.Context,
-	state func() RouteState,
+	activeRelays func() []string,
 	onChange func([]string) error,
 ) error {
 	if c == nil {
@@ -86,9 +151,6 @@ func (c *Controller) Watch(
 	}
 	if ctx == nil {
 		return errors.New("relay discovery: context is nil")
-	}
-	if state == nil {
-		return errors.New("relay discovery: state callback is nil")
 	}
 	if onChange == nil {
 		return errors.New("relay discovery: change callback is nil")
@@ -110,8 +172,8 @@ func (c *Controller) Watch(
 				log.Warn().Err(err).Msg("relay discovery refresh failed; will retry")
 			}
 		}
-		routeState := state()
-		routes := c.relaySet.SelectRelays(routeState)
+		rs := c.buildRouteState(activeRelays)
+		routes := c.relaySet.SelectRelays(rs)
 		next := make([]string, 0, len(routes))
 		for _, route := range routes {
 			next = append(next, route.RelayURL)
@@ -133,4 +195,48 @@ func (c *Controller) Watch(
 			refresh = false
 		}
 	}
+}
+
+func (c *Controller) buildRouteState(activeRelays func() []string) routeState {
+	var active []string
+	if activeRelays != nil {
+		active = activeRelays()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return routeState{
+		ExplicitRelayURLs: append([]string(nil), c.explicitRelays...),
+		ActiveRelayURLs:   active,
+		MaxActiveRelays:   c.maxActiveRelays,
+		RequireUDP:        c.requireUDP,
+		RequireTCP:        c.requireTCP,
+		LocalAddress:      c.localAddress,
+	}
+}
+
+// BootstrapRelayURLs returns the normalized built-in bootstrap relay URLs.
+func BootstrapRelayURLs() ([]string, error) {
+	return utils.NormalizeRelayURLs(types.BootstrapRelays...)
+}
+
+// ResolveRelayURLs resolves explicit relay URLs, optionally merged with
+// the built-in bootstrap set. When includeBootstrap is false, only the
+// explicit URLs are returned (normalized). When true, bootstrap URLs are
+// merged with explicit URLs, deduped.
+func ResolveRelayURLs(explicit []string, includeBootstrap bool) ([]string, error) {
+	explicit, err := utils.NormalizeRelayURLs(explicit...)
+	if err != nil {
+		return nil, err
+	}
+	if !includeBootstrap {
+		return explicit, nil
+	}
+	defaults, err := BootstrapRelayURLs()
+	if err != nil {
+		return nil, err
+	}
+	if len(defaults) == 0 {
+		return explicit, nil
+	}
+	return utils.MergeRelayURLs(defaults, nil, explicit)
 }

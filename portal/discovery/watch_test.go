@@ -1,11 +1,12 @@
 package discovery
 
 import (
+	"context"
 	"testing"
 	"time"
 )
 
-func TestControllerReportFailureSuppressesRelay(t *testing.T) {
+func TestControllerReportRuntimeSuppressesRelay(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
 		relayB = "https://relay-b.example"
@@ -14,9 +15,9 @@ func TestControllerReportFailureSuppressesRelay(t *testing.T) {
 	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
 	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayB))
 
-	controller.ReportFailure(relayA)
+	controller.Report(relayA, FailureRuntime)
 
-	routes := controller.relaySet.SelectRelays(RouteState{
+	routes := controller.relaySet.SelectRelays(routeState{
 		MaxActiveRelays: 1,
 	})
 	if len(routes) != 1 || routes[0].RelayURL != relayB {
@@ -24,13 +25,13 @@ func TestControllerReportFailureSuppressesRelay(t *testing.T) {
 	}
 }
 
-func TestControllerBanExcludesExplicitRelay(t *testing.T) {
+func TestControllerReportMITMBansRelay(t *testing.T) {
 	const relayURL = "https://relay.example"
 	controller := NewController([]string{relayURL})
 
-	controller.Ban(relayURL)
+	controller.Report(relayURL, FailureMITM)
 
-	routes := controller.relaySet.SelectRelays(RouteState{
+	routes := controller.relaySet.SelectRelays(routeState{
 		ExplicitRelayURLs: []string{relayURL},
 	})
 	if len(routes) != 0 {
@@ -43,7 +44,7 @@ func TestControllerFailureDedupeSkipsSuppressedRelay(t *testing.T) {
 	controller := NewController([]string{relayURL})
 	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayURL))
 
-	controller.ReportFailure(relayURL)
+	controller.Report(relayURL, FailureRuntime)
 	if failures := activeFailuresFor(controller, relayURL); failures != 1 {
 		t.Fatalf("active failures = %d, want 1 after first report", failures)
 	}
@@ -51,15 +52,91 @@ func TestControllerFailureDedupeSkipsSuppressedRelay(t *testing.T) {
 		t.Fatal("relay should be suppressed after first failure")
 	}
 
-	controller.ReportFailure(relayURL)
+	controller.Report(relayURL, FailureRuntime)
 	if failures := activeFailuresFor(controller, relayURL); failures != 1 {
 		t.Fatalf("active failures = %d, want still 1 (deduped while suppressed)", failures)
 	}
 
 	expireSuppression(controller, relayURL)
-	controller.ReportFailure(relayURL)
+	controller.Report(relayURL, FailureRuntime)
 	if failures := activeFailuresFor(controller, relayURL); failures != 2 {
 		t.Fatalf("active failures = %d, want 2 after suppression expiry", failures)
+	}
+}
+
+func TestControllerReportMITMVsRuntimeDistinctOutcomes(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	controller := NewController([]string{relayA, relayB})
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayB))
+
+	// MITM bans permanently — relay A is excluded even from explicit selection.
+	controller.Report(relayA, FailureMITM)
+	routes := controller.relaySet.SelectRelays(routeState{
+		ExplicitRelayURLs: []string{relayA, relayB},
+	})
+	for _, r := range routes {
+		if r.RelayURL == relayA {
+			t.Fatal("MITM-banned relay A should not appear in selection")
+		}
+	}
+
+	// Runtime failure suppresses relay B but does not ban it — it can still
+	// appear as an explicit relay (just unconfirmed for auto-selection).
+	controller.Report(relayB, FailureRuntime)
+	if !controller.relaySet.IsSuppressed(relayB, time.Now().UTC()) {
+		t.Fatal("relay B should be suppressed after runtime failure")
+	}
+	// Verify relay A is NOT suppressed (ban ≠ suppression).
+	if controller.relaySet.IsSuppressed(relayA, time.Now().UTC()) {
+		t.Fatal("relay A should not be suppressed (MITM is a ban, not suppression)")
+	}
+}
+
+func TestControllerSetMaxActiveRelaysSignalsWatch(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	controller := NewController([]string{relayA})
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayB))
+
+	changes := make(chan []string, 8)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = controller.Watch(ctx, nil, func(urls []string) error {
+			changes <- urls
+			return nil
+		})
+	}()
+
+	// Wait for the initial selection (both relays, default max=3).
+	select {
+	case first := <-changes:
+		if len(first) != 2 {
+			t.Fatalf("initial selection = %v, want 2 relays", first)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for initial watch selection")
+	}
+
+	// Reduce max active relays — the watch loop should observe the change
+	// promptly via the signal, without waiting for the 30s ticker.
+	controller.SetMaxActiveRelays(1)
+
+	select {
+	case next := <-changes:
+		if len(next) != 1 {
+			t.Fatalf("selection after SetMaxActiveRelays = %v, want 1 relay", next)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for selection change after SetMaxActiveRelays")
 	}
 }
 

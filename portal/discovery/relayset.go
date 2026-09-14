@@ -405,7 +405,7 @@ type Route struct {
 	Explicit bool
 }
 
-func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
+func (s *RelaySet) SelectRelays(routeState routeState) []Route {
 	now := time.Now().UTC()
 	states := s.currentRelayStates(now)
 	if len(routeState.ExplicitRelayURLs) > 0 {
@@ -438,7 +438,7 @@ func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
 
 // filterCandidatePool returns the auto-selected relay pool eligible for MOLS
 // ranking.
-func filterCandidatePool(states []RelayState, routeState RouteState, now time.Time) []RelayState {
+func filterCandidatePool(states []RelayState, routeState routeState, now time.Time) []RelayState {
 	pool := make([]RelayState, 0, len(states))
 	for _, state := range states {
 		relayURL := state.Descriptor.APIHTTPSAddr

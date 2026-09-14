@@ -19,9 +19,10 @@ The public SDK facade is centered on `sdk.Exposure`, a multi-relay
 `net.Listener`. `sdk.Expose` takes its required identity and concrete relay URLs
 directly; functional options cover only endpoint capabilities such as UDP, TCP,
 ECH, MITM protection, overlay routing, and initial lease metadata. Discovery
-and relay-count policy are not options. A discovery controller receives active,
-failure, and MITM-ban feedback from the caller's `Exposure.Updates` loop; its
-selection callback applies concrete membership through `Exposure.SetRelays`.
+and relay-count policy are not options. A discovery controller owns selection
+policy: callers feed it failure classifications from their
+`Exposure.Updates` loop and active-relay state through the watch callback, and
+its selection callback applies concrete membership through `Exposure.SetRelays`.
 The SDK never calls discovery and does not contain discovery policy. Readiness
 and accept operations do not infer source exhaustion from the current
 membership; they wait for a future membership update, context cancellation, or

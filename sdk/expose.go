@@ -26,18 +26,18 @@ const (
 	RelayFailed     RelayState = "failed"
 )
 
-// RelayFailure classifies why a relay listener stopped.
-//
-// The canonical definition lives in types.RelayFailure; this alias keeps
-// existing sdk callers compiling. New code should reference types.RelayFailure
-// directly.
-type RelayFailure = types.RelayFailure
+// RelayFailure classifies why a relay listener stopped.  It is an SDK
+// runtime/listener-status concept, not a wire DTO: the listener goroutine
+// produces it and the exposure consumer reads it to decide relay-selection
+// policy (ban vs suppression/backoff).  Keeping it here avoids leaking that
+// policy classification into the types package.
+type RelayFailure string
 
 const (
-	RelayFailureNone     = types.RelayFailureNone
-	RelayFailureRuntime  = types.RelayFailureRuntime
-	RelayFailureTerminal = types.RelayFailureTerminal
-	RelayFailureMITM     = types.RelayFailureMITM
+	RelayFailureNone     RelayFailure = ""
+	RelayFailureRuntime  RelayFailure = "runtime"
+	RelayFailureTerminal RelayFailure = "terminal"
+	RelayFailureMITM     RelayFailure = "mitm"
 )
 
 // RelayStatus is an immutable snapshot of one relay's externally visible state.
@@ -149,6 +149,9 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	relayURLs, err := utils.NormalizeRelayURLs(relays...)
 	if err != nil {
 		return nil, err
+	}
+	if len(relayURLs) == 0 {
+		return nil, errors.New("portal sdk: at least one initial relay is required")
 	}
 	if strings.TrimSpace(identity.Name) == "" {
 		return nil, errors.New("portal sdk: identity name is required")
@@ -266,7 +269,7 @@ func (e *Exposure) UpdateMetadata(metadata types.LeaseMetadata) error {
 	return nil
 }
 
-func (e *Exposure) activeRelayURLs() []string {
+func (e *Exposure) listenerRelayURLs() []string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	relayURLs := make([]string, 0, len(e.relayListeners))
@@ -336,6 +339,25 @@ func (e *Exposure) Relays() []RelayStatus {
 		return strings.Compare(a.RelayURL, b.RelayURL)
 	})
 	return relays
+}
+
+// ActiveRelays returns the relay URLs whose RelayStatus.Active() is true,
+// derived from the same snapshot as Relays.  Relay-selection callers use it
+// for stickiness (keeping a slot for a relay that still holds a lease address).
+func (e *Exposure) ActiveRelays() []string {
+	if e == nil {
+		return nil
+	}
+	e.mu.RLock()
+	relayURLs := make([]string, 0, len(e.statuses))
+	for relayURL, status := range e.statuses {
+		if status.Active() {
+			relayURLs = append(relayURLs, relayURL)
+		}
+	}
+	e.mu.RUnlock()
+	slices.Sort(relayURLs)
+	return relayURLs
 }
 
 func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
@@ -411,17 +433,7 @@ func (e *Exposure) publishRelayStatus(status RelayStatus) {
 	}
 	select {
 	case e.updates <- status:
-		return
-	default:
-	}
-	select {
-	case <-e.updates:
-	default:
-	}
-	select {
 	case <-e.done:
-	case e.updates <- status:
-	default:
 	}
 }
 
@@ -510,8 +522,9 @@ func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <
 	return ready, changed
 }
 
-// Updates reports relay lifecycle changes. Relays is the authoritative
-// snapshot; slow consumers may miss intermediate updates.
+// Updates reports relay lifecycle changes.  Delivery is reliable: a blocking
+// send guarantees every status reaches the consumer (or is dropped only when
+// the exposure is closed).  Relays remains the authoritative snapshot.
 func (e *Exposure) Updates() <-chan RelayStatus {
 	if e == nil {
 		return nil

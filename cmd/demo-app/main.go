@@ -220,7 +220,7 @@ func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, re
 	if err != nil {
 		return nil, err
 	}
-	relayURLs, err := utils.ResolvePortalRelayURLs(explicitRelayURLs, cfg.discovery)
+	relayURLs, err := discovery.ResolveRelayURLs(explicitRelayURLs, cfg.discovery)
 	if err != nil {
 		return nil, err
 	}
@@ -235,23 +235,19 @@ func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, re
 	if !cfg.discovery {
 		return exposure, nil
 	}
-	bootstrapRelayURLs, err := utils.ResolvePortalRelayURLs(nil, true)
+	bootstrapRelayURLs, err := discovery.BootstrapRelayURLs()
 	if err != nil {
 		_ = exposure.Close()
 		return nil, err
 	}
 	controller := discovery.NewController(bootstrapRelayURLs)
+	controller.SetExplicitRelays(explicitRelayURLs)
+	controller.SetMaxActiveRelays(cfg.maxActiveRelays)
+	controller.SetTransportRequirements(requireUDP, false)
+	controller.SetLocalAddress(identity.Address)
 	go forwardDemoDiscoveryFeedback(ctx, exposure, controller)
 	go func() {
-		err := controller.Watch(ctx, func() discovery.RouteState {
-			return discovery.RouteState{
-				ExplicitRelayURLs: explicitRelayURLs,
-				MaxActiveRelays:   cfg.maxActiveRelays,
-				RequireUDP:        requireUDP,
-				LocalAddress:      identity.Address,
-				ActiveRelayURLs:   activeRelayURLs(exposure),
-			}
-		}, exposure.SetRelays)
+		err := controller.Watch(ctx, exposure.ActiveRelays, exposure.SetRelays)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Warn().Err(err).Msg("relay discovery stopped")
 		}
@@ -264,41 +260,12 @@ func forwardDemoDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, c
 		select {
 		case <-ctx.Done():
 			return
-		case <-exposure.Updates():
-			reportRelayStatuses(exposure, controller)
+		case status := <-exposure.Updates():
+			if status.State == sdk.RelayFailed {
+				controller.Report(status.RelayURL, discovery.FailureKind(status.Failure))
+			}
 		}
 	}
-}
-
-// reportRelayStatuses feeds terminal relay failures into the discovery
-// controller: failed relays are banned (MITM) or reported for suppression
-// backoff. Connecting and idle relays are left untouched.
-func reportRelayStatuses(exposure *sdk.Exposure, controller *discovery.Controller) {
-	for _, status := range exposure.Relays() {
-		if status.State != sdk.RelayFailed {
-			continue
-		}
-		if status.Failure == sdk.RelayFailureMITM {
-			controller.Ban(status.RelayURL)
-		} else {
-			controller.ReportFailure(status.RelayURL)
-		}
-	}
-}
-
-// activeRelayURLs returns the relay URLs that currently have live SDK
-// listeners, derived from the exposure snapshot for RouteState stickiness.
-func activeRelayURLs(exposure *sdk.Exposure) []string {
-	if exposure == nil {
-		return nil
-	}
-	var active []string
-	for _, status := range exposure.Relays() {
-		if status.Active() {
-			active = append(active, status.RelayURL)
-		}
-	}
-	return active
 }
 
 // resolveDemoIdentity parses an inline identity or existing file. It generates

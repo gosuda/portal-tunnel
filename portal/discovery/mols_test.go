@@ -18,7 +18,7 @@ func TestSelectPriorityKeepsExplicitRelaysOutsideAutoLimit(t *testing.T) {
 		bootstrapRelayState(explicitRelay),
 		confirmedRelayState(t, relayA),
 		confirmedRelayState(t, relayB),
-	}, RouteState{
+	}, routeState{
 		ExplicitRelayURLs: []string{explicitRelay},
 		MaxActiveRelays:   1,
 	})
@@ -30,7 +30,7 @@ func TestSelectPriorityKeepsExplicitRelaysOutsideAutoLimit(t *testing.T) {
 
 func TestSelectPriorityDeduplicatesExplicitRelays(t *testing.T) {
 	relayURL := "https://relay-explicit.example"
-	selected := SelectPriority([]RelayState{bootstrapRelayState(relayURL)}, RouteState{
+	selected := SelectPriority([]RelayState{bootstrapRelayState(relayURL)}, routeState{
 		ExplicitRelayURLs: []string{relayURL, relayURL},
 	})
 	if len(selected) != 1 || selected[0] != relayURL {
@@ -44,10 +44,10 @@ func TestSelectPriorityLimitsAutomaticRelays(t *testing.T) {
 		relays[i] = confirmedRelayState(t, fmt.Sprintf("https://relay-%d.example", i))
 	}
 
-	if selected := SelectPriority(relays, RouteState{MaxActiveRelays: 3}); len(selected) != 3 {
+	if selected := SelectPriority(relays, routeState{MaxActiveRelays: 3}); len(selected) != 3 {
 		t.Fatalf("len(SelectPriority()) = %d, want 3", len(selected))
 	}
-	if selected := SelectPriority(relays, RouteState{}); len(selected) != defaultMaxActiveRelays {
+	if selected := SelectPriority(relays, routeState{}); len(selected) != defaultMaxActiveRelays {
 		t.Fatalf("len(SelectPriority()) = %d, want default limit %d", len(selected), defaultMaxActiveRelays)
 	}
 }
@@ -58,7 +58,7 @@ func TestSelectPriorityExcludesIneligibleAutomaticRelays(t *testing.T) {
 	banned := confirmedRelayState(t, "https://relay-banned.example")
 	banned.Banned = true
 
-	if selected := SelectPriority([]RelayState{expired, banned}, RouteState{}); len(selected) != 0 {
+	if selected := SelectPriority([]RelayState{expired, banned}, routeState{}); len(selected) != 0 {
 		t.Fatalf("SelectPriority() = %v, want no ineligible automatic relays", selected)
 	}
 }
@@ -68,13 +68,13 @@ func TestSelectPriorityKeepsExplicitRelayIndependentOfDiscoveryState(t *testing.
 	expired := confirmedRelayState(t, relayURL)
 	expired.Descriptor.ExpiresAt = time.Now().UTC().Add(-time.Minute)
 
-	selected := SelectPriority([]RelayState{expired}, RouteState{ExplicitRelayURLs: []string{relayURL}})
+	selected := SelectPriority([]RelayState{expired}, routeState{ExplicitRelayURLs: []string{relayURL}})
 	if len(selected) != 1 || selected[0] != relayURL {
 		t.Fatalf("SelectPriority() = %v, want explicit relay %q", selected, relayURL)
 	}
 
 	seedURL := "https://relay-seed.example"
-	selected = SelectPriority([]RelayState{bootstrapRelayState(seedURL)}, RouteState{})
+	selected = SelectPriority([]RelayState{bootstrapRelayState(seedURL)}, routeState{})
 	if len(selected) != 1 || selected[0] != seedURL {
 		t.Fatalf("SelectPriority() = %v, want unobserved seed %q", selected, seedURL)
 	}
@@ -97,7 +97,7 @@ func TestSelectPriorityStickinessDoesNotRestoreIneligibleRelays(t *testing.T) {
 	healthyB.DiscoveryRTT = 60 * time.Millisecond
 	healthyB.DiscoveryRTTAt = now
 
-	selected := SelectPriority([]RelayState{saturated, fallback, healthyA, healthyB}, RouteState{
+	selected := SelectPriority([]RelayState{saturated, fallback, healthyA, healthyB}, routeState{
 		ActiveRelayURLs: []string{saturated.Descriptor.APIHTTPSAddr, fallback.Descriptor.APIHTTPSAddr},
 		MaxActiveRelays: 2,
 	})
@@ -122,6 +122,6 @@ func BenchmarkSelectPriority(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		SelectPriority(relays, RouteState{LocalAddress: fmt.Sprintf("client-%d", i)})
+		SelectPriority(relays, routeState{LocalAddress: fmt.Sprintf("client-%d", i)})
 	}
 }

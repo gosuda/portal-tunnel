@@ -68,7 +68,7 @@ func servesDescriptor(set *RelaySet, relayURL string) bool {
 // routesTo reports whether automatic single-hop route planning selects relayURL.
 func routesTo(t *testing.T, set *RelaySet, relayURL string) bool {
 	t.Helper()
-	routes := set.SelectRelays(RouteState{LocalAddress: "client"})
+	routes := set.SelectRelays(routeState{LocalAddress: "client"})
 	for _, route := range routes {
 		if route.RelayURL == relayURL {
 			return true
@@ -311,7 +311,7 @@ func TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 	state.Descriptor.SupportsUDP = false
 	set.relays[relayURL] = state
 
-	routes := set.SelectRelays(RouteState{
+	routes := set.SelectRelays(routeState{
 		ExplicitRelayURLs: []string{relayURL},
 		RequireUDP:        true,
 	})
@@ -323,7 +323,7 @@ func TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 func TestSelectRelaysIncludesExplicitRelayMissingFromSet(t *testing.T) {
 	const relayURL = "https://relay-explicit.example"
 
-	routes := NewRelaySet(nil).SelectRelays(RouteState{
+	routes := NewRelaySet(nil).SelectRelays(routeState{
 		ExplicitRelayURLs: []string{relayURL},
 	})
 	if len(routes) != 1 {

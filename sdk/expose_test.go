@@ -164,18 +164,18 @@ func TestExposeRejectsIncompleteIdentity(t *testing.T) {
 	}
 }
 
-func TestExposeAllowsEmptyInitialMembership(t *testing.T) {
-	exposure, err := Expose(context.Background(), types.Identity{
+func TestExposeRejectsEmptyInitialRelays(t *testing.T) {
+	identity := types.Identity{
 		Name:       "svc",
 		Address:    "address",
 		PublicKey:  "public",
 		PrivateKey: "private",
-	}, nil)
-	if err != nil {
-		t.Fatalf("Expose() error = %v", err)
 	}
-	if err := exposure.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	for _, relays := range [][]string{nil, {}} {
+		_, err := Expose(context.Background(), identity, relays)
+		if err == nil || !strings.Contains(err.Error(), "at least one initial relay") {
+			t.Fatalf("Expose(%v) error = %v, want initial relay error", relays, err)
+		}
 	}
 }
 
@@ -335,7 +335,7 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 		t.Fatal("stale relay listener was not closed")
 	}
 
-	if got := exposure.activeRelayURLs(); len(got) != 1 || got[0] != relayB {
+	if got := exposure.listenerRelayURLs(); len(got) != 1 || got[0] != relayB {
 		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", got, relayB)
 	}
 }
@@ -348,7 +348,7 @@ func TestExposureReconcileDoesNotRestartMITMBlockedRelay(t *testing.T) {
 	if err := exposure.reconcileRelayListeners(false); err != nil {
 		t.Fatalf("reconcileRelayListeners() error = %v", err)
 	}
-	if got := exposure.activeRelayURLs(); len(got) != 0 {
+	if got := exposure.listenerRelayURLs(); len(got) != 0 {
 		t.Fatalf("active relay URLs = %v, want none", got)
 	}
 
@@ -390,7 +390,7 @@ func TestExposureRemoveRelayStopsRunningListener(t *testing.T) {
 	default:
 		t.Fatal("removed relay listener was not closed")
 	}
-	if got := exposure.activeRelayURLs(); len(got) != 0 {
+	if got := exposure.listenerRelayURLs(); len(got) != 0 {
 		t.Fatalf("ActiveRelayURLs() = %v, want empty", got)
 	}
 	if got := exposure.relayURLs; len(got) != 0 {
@@ -417,7 +417,7 @@ func TestExposureListenerSelfExitKeepsExplicitRelayConfigured(t *testing.T) {
 
 	exposure.runListenerAcceptLoop(l)
 
-	if got := exposure.activeRelayURLs(); len(got) != 0 {
+	if got := exposure.listenerRelayURLs(); len(got) != 0 {
 		t.Fatalf("ActiveRelayURLs() = %v, want empty", got)
 	}
 	if got := exposure.relayURLs; len(got) != 1 || got[0] != relayA {
@@ -443,17 +443,12 @@ func TestExposureSetRelaysReplacesStatusMembership(t *testing.T) {
 	}
 }
 
-// TestExposureReconcileClosesListenerWhenRelayBlockedDuringCreation covers the
-// TOCTOU window in reconcileRelayListeners: a relay that passes the blockedRelays
-// snapshot can become MITM-blocked while newListener runs. The install path must
-// re-check blockedRelays under e.mu and refuse to install the listener.
-//
-// A fully deterministic interleaving of the snapshot→newListener→install window
-// is impossible without a production hook in newListener, so this test covers
-// the postcondition directly: install a listener, block the relay (simulating
-// MITM detection during the creation window), then re-reconcile and assert the
-// listener is not retained.
-func TestExposureReconcileClosesListenerWhenRelayBlockedDuringCreation(t *testing.T) {
+// TestExposureReconcileExcludesRelayBlockedAfterInstall verifies that a relay
+// blocked (MITM) after its listener already exists is closed and not re-created
+// on the next reconcile.  This is an ordinary blocked-relay postcondition test;
+// it does not exercise the snapshot→newListener→install TOCTOU window, which
+// would require a production hook in newListener.
+func TestExposureReconcileExcludesRelayBlockedAfterInstall(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
 
@@ -469,15 +464,14 @@ func TestExposureReconcileClosesListenerWhenRelayBlockedDuringCreation(t *testin
 		t.Fatal("first reconcile did not install listener for unblocked relay")
 	}
 
-	// Simulate MITM detection during the creation window: the relay becomes
-	// blocked after the snapshot was taken.
+	// Block the relay after its listener exists (simulating MITM detection).
 	exposure.setRelayStatus(relayURL, listenerStatus{
 		state:   RelayFailed,
 		failure: RelayFailureMITM,
 		err:     errMITMDetected,
 	})
 
-	// Second reconcile must not retain a listener for the blocked relay.
+	// Second reconcile must close the listener and not re-create it.
 	if err := exposure.reconcileRelayListeners(false); err != nil {
 		t.Fatalf("second reconcileRelayListeners() error = %v", err)
 	}

@@ -17,8 +17,6 @@ import (
 	"unicode"
 
 	"golang.org/x/net/idna"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func SplitCSV(raw string) []string {
@@ -379,25 +377,6 @@ func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
 	}
 
 	return FilterRelayURLs(merged, excluded), nil
-}
-
-func ResolvePortalRelayURLs(explicit []string, includeBootstrap bool) ([]string, error) {
-	explicit, err := NormalizeRelayURLs(explicit...)
-	if err != nil {
-		return nil, err
-	}
-	if !includeBootstrap {
-		return explicit, nil
-	}
-
-	defaults, err := NormalizeRelayURLs(types.BootstrapRelays...)
-	if err != nil {
-		return nil, err
-	}
-	if len(defaults) == 0 {
-		return explicit, nil
-	}
-	return MergeRelayURLs(defaults, nil, explicit)
 }
 
 func ExcludeLocalRelayURLs(inputs ...string) ([]string, error) {

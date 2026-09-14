@@ -255,7 +255,7 @@ func TestFilterCandidatePoolExcludesCandidatesUntilVerified(t *testing.T) {
 		LastSeenAt: now,
 	}
 
-	pool := filterCandidatePool([]RelayState{candidate, verified}, RouteState{}, now)
+	pool := filterCandidatePool([]RelayState{candidate, verified}, routeState{}, now)
 	if len(pool) != 1 || pool[0].Descriptor.APIHTTPSAddr != "https://verified-candidate.example" {
 		t.Fatalf("filterCandidatePool() = %v, want only the verified entry", pool)
 	}
@@ -470,14 +470,14 @@ func TestBootstrapCandidateDescriptorStaysHidden(t *testing.T) {
 			t.Fatal("candidate descriptor squatted on a bootstrap URL must stay out of Descriptors()")
 		}
 	}
-	if pool := filterCandidatePool([]RelayState{state}, RouteState{}, now); len(pool) != 0 {
+	if pool := filterCandidatePool([]RelayState{state}, routeState{}, now); len(pool) != 0 {
 		t.Fatalf("filterCandidatePool() = %v, want the squatted bootstrap excluded", pool)
 	}
 
 	// URL-only bootstrap entries remain eligible as a public relay fallback.
 	urlOnly := newRelayState("https://bootstrap-fallback.example")
 	urlOnly.Bootstrap = true
-	if pool := filterCandidatePool([]RelayState{urlOnly}, RouteState{}, now); len(pool) != 1 {
+	if pool := filterCandidatePool([]RelayState{urlOnly}, routeState{}, now); len(pool) != 1 {
 		t.Fatal("URL-only bootstrap entry must remain a single-hop fallback candidate")
 	}
 

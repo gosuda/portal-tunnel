@@ -161,7 +161,7 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	if err != nil {
 		return err
 	}
-	relayURLs, err := utils.ResolvePortalRelayURLs(explicitRelayURLs, cfg.discovery)
+	relayURLs, err := discovery.ResolveRelayURLs(explicitRelayURLs, cfg.discovery)
 	if err != nil {
 		return err
 	}
@@ -177,21 +177,17 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	}
 	defer exposure.Close()
 	if cfg.discovery {
-		bootstrapRelayURLs, resolveErr := utils.ResolvePortalRelayURLs(nil, true)
+		bootstrapRelayURLs, resolveErr := discovery.BootstrapRelayURLs()
 		if resolveErr != nil {
 			return resolveErr
 		}
 		controller := discovery.NewController(bootstrapRelayURLs)
+		controller.SetExplicitRelays(explicitRelayURLs)
+		controller.SetMaxActiveRelays(cfg.maxActiveRelays)
+		controller.SetLocalAddress(listenerIdentity.Address)
 		go forwardDiscoveryFeedback(ctx, exposure, controller)
 		go func() {
-			err := controller.Watch(ctx, func() discovery.RouteState {
-				return discovery.RouteState{
-					ExplicitRelayURLs: explicitRelayURLs,
-					MaxActiveRelays:   cfg.maxActiveRelays,
-					LocalAddress:      listenerIdentity.Address,
-					ActiveRelayURLs:   activeRelayURLs(exposure),
-				}
-			}, exposure.SetRelays)
+			err := controller.Watch(ctx, exposure.ActiveRelays, exposure.SetRelays)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				log.Warn().Err(err).Msg("relay discovery stopped")
 			}
@@ -218,40 +214,12 @@ func forwardDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, contr
 		select {
 		case <-ctx.Done():
 			return
-		case <-exposure.Updates():
-			reportRelayStatuses(exposure, controller)
+		case status := <-exposure.Updates():
+			if status.State == sdk.RelayFailed {
+				controller.Report(status.RelayURL, discovery.FailureKind(status.Failure))
+			}
 		}
 	}
-}
-
-// reportRelayStatuses feeds terminal relay failures into the discovery
-// controller: failed relays are banned (MITM) or reported for suppression
-// backoff. Connecting and idle relays are left untouched.
-func reportRelayStatuses(exposure *sdk.Exposure, controller *discovery.Controller) {
-	for _, status := range exposure.Relays() {
-		if status.State != sdk.RelayFailed {
-			continue
-		}
-		if status.Failure == sdk.RelayFailureMITM {
-			controller.Ban(status.RelayURL)
-		} else {
-			controller.ReportFailure(status.RelayURL)
-		}
-	}
-}
-
-// activeRelayURLs returns the relay URLs that currently have live SDK
-func activeRelayURLs(exposure *sdk.Exposure) []string {
-	if exposure == nil {
-		return nil
-	}
-	var active []string
-	for _, status := range exposure.Relays() {
-		if status.Active() {
-			active = append(active, status.RelayURL)
-		}
-	}
-	return active
 }
 
 func printUsage(w io.Writer) {

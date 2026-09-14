@@ -237,7 +237,7 @@ func runExposeCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	relayURLs, err := utils.ResolvePortalRelayURLs(explicitRelayURLs, flags.discovery)
+	relayURLs, err := discovery.ResolveRelayURLs(explicitRelayURLs, flags.discovery)
 	if err != nil {
 		return err
 	}
@@ -271,24 +271,19 @@ func runExposeCommand(args []string) error {
 		return fmt.Errorf("failed to start relays: %w", err)
 	}
 	if flags.discovery {
-		bootstrapRelayURLs, resolveErr := utils.ResolvePortalRelayURLs(nil, true)
+		bootstrapRelayURLs, resolveErr := discovery.BootstrapRelayURLs()
 		if resolveErr != nil {
 			_ = exposure.Close()
 			return resolveErr
 		}
 		controller := discovery.NewController(bootstrapRelayURLs)
+		controller.SetExplicitRelays(explicitRelayURLs)
+		controller.SetMaxActiveRelays(flags.maxActiveRelays)
+		controller.SetTransportRequirements(flags.udp, flags.tcp)
+		controller.SetLocalAddress(listenerIdentity.Address)
 		go forwardDiscoveryFeedback(ctx, exposure, controller)
 		go func() {
-			err := controller.Watch(ctx, func() discovery.RouteState {
-				return discovery.RouteState{
-					ExplicitRelayURLs: explicitRelayURLs,
-					MaxActiveRelays:   flags.maxActiveRelays,
-					RequireUDP:        flags.udp,
-					RequireTCP:        flags.tcp,
-					LocalAddress:      listenerIdentity.Address,
-					ActiveRelayURLs:   activeRelayURLs(exposure),
-				}
-			}, exposure.SetRelays)
+			err := controller.Watch(ctx, exposure.ActiveRelays, exposure.SetRelays)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				log.Warn().Err(err).Msg("relay discovery stopped")
 			}
@@ -324,41 +319,12 @@ func forwardDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, contr
 		select {
 		case <-ctx.Done():
 			return
-		case <-exposure.Updates():
-			reportRelayStatuses(exposure, controller)
+		case status := <-exposure.Updates():
+			if status.State == sdk.RelayFailed {
+				controller.Report(status.RelayURL, discovery.FailureKind(status.Failure))
+			}
 		}
 	}
-}
-
-// reportRelayStatuses feeds terminal relay failures into the discovery
-// controller: failed relays are banned (MITM) or reported for suppression
-// backoff. Connecting and idle relays are left untouched.
-func reportRelayStatuses(exposure *sdk.Exposure, controller *discovery.Controller) {
-	for _, status := range exposure.Relays() {
-		if status.State != sdk.RelayFailed {
-			continue
-		}
-		if status.Failure == sdk.RelayFailureMITM {
-			controller.Ban(status.RelayURL)
-		} else {
-			controller.ReportFailure(status.RelayURL)
-		}
-	}
-}
-
-// activeRelayURLs returns the relay URLs that currently have live SDK
-// listeners, derived from the exposure snapshot for RouteState stickiness.
-func activeRelayURLs(exposure *sdk.Exposure) []string {
-	if exposure == nil {
-		return nil
-	}
-	var active []string
-	for _, status := range exposure.Relays() {
-		if status.Active() {
-			active = append(active, status.RelayURL)
-		}
-	}
-	return active
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {
@@ -448,7 +414,7 @@ func runListCommand(args []string) error {
 
 	relayInputs := utils.SplitCSV(flags.relayCSV)
 
-	relayURLs, err := utils.ResolvePortalRelayURLs(relayInputs, flags.defaultRelays)
+	relayURLs, err := discovery.ResolveRelayURLs(relayInputs, flags.defaultRelays)
 	if err != nil {
 		return fmt.Errorf("resolve relay urls: %w", err)
 	}
