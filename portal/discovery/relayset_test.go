@@ -304,6 +304,32 @@ func TestConfirmAndUnconfirmRelayURL(t *testing.T) {
 	}
 }
 
+// EnsureRelayURL must persist a clean candidate for an unknown URL without
+// clobbering existing state: suppression recorded before the call survives,
+// so explicit relays keep durable failure state across intent refreshes.
+func TestRelaySetEnsureRelayURLPreservesExistingState(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	set := NewRelaySet(nil)
+	mustApplyAuthoritative(t, set, mustRelayDescriptor(t, relayA))
+
+	if _, _, failures := set.RecordActiveFailure(relayA, 1); failures != 1 {
+		t.Fatalf("RecordActiveFailure() failures = %d, want 1", failures)
+	}
+
+	set.EnsureRelayURL(relayA)
+	set.EnsureRelayURL(relayB)
+
+	if !set.IsSuppressed(relayA, time.Now().UTC()) {
+		t.Fatal("EnsureRelayURL() cleared relay A suppression")
+	}
+	if set.IsSuppressed(relayB, time.Now().UTC()) {
+		t.Fatal("EnsureRelayURL() must not suppress an unknown relay")
+	}
+}
+
 func TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 	const relayURL = "https://relay-udp-disabled.example"
 	set := NewRelaySet(nil)

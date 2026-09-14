@@ -86,13 +86,10 @@ type Exposure struct {
 	// discovery is the relay-selection collaborator. It is nil when
 	// discovery is disabled, meaning Exposure owns membership directly.
 	// When non-nil, Exposure delegates relay selection to the controller
-	// and routes intent (AddRelay/RemoveRelay/SetMaxActiveRelays) through it.
+	// and routes intent (AddRelay/RemoveRelay/SetMaxActiveRelays) through
+	// it as delta operations — the controller is the single owner of the
+	// explicit relay list.
 	discovery *discovery.Controller
-
-	// explicitRelays tracks the user's explicit relay intent when
-	// discovery is enabled. AddRelay/RemoveRelay update this list and
-	// forward it to the controller via SetExplicitRelays.
-	explicitRelays []string
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
@@ -244,7 +241,6 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		stateChanged:   make(chan struct{}),
 		updates:        make(chan RelayStatus, 1),
 		discovery:      controller,
-		explicitRelays: append([]string(nil), relayURLs...),
 	}
 
 	if err := exposure.setRelays(initialRelays, true); err != nil {
@@ -301,9 +297,11 @@ func (e *Exposure) setRelays(relayURLs []string, failOnError bool) error {
 }
 
 // AddRelay adds one concrete relay without restarting the exposure.
-// When discovery is enabled, it updates the controller's explicit relay
-// set and clears any ban or suppression on the relay so a re-added relay
-// is immediately eligible; re-selection republishes through the watch loop.
+// When discovery is enabled, it forwards the intent to the controller as a
+// delta operation (AddExplicitRelay — concurrent add/remove calls serialize
+// there instead of racing whole-list snapshots) and clears any ban or
+// suppression on the relay so a re-added relay is immediately eligible;
+// re-selection republishes membership through the watch loop.
 func (e *Exposure) AddRelay(relayURL string) error {
 	relayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
@@ -313,14 +311,7 @@ func (e *Exposure) AddRelay(relayURL string) error {
 		return net.ErrClosed
 	}
 	if e.discovery != nil {
-		e.mu.Lock()
-		if !slices.Contains(e.explicitRelays, relayURL) {
-			e.explicitRelays = append(e.explicitRelays, relayURL)
-			slices.Sort(e.explicitRelays)
-		}
-		next := append([]string(nil), e.explicitRelays...)
-		e.mu.Unlock()
-		e.discovery.SetExplicitRelays(next)
+		e.discovery.AddExplicitRelay(relayURL)
 		e.discovery.Allow(relayURL)
 		return nil
 	}
@@ -334,11 +325,11 @@ func (e *Exposure) AddRelay(relayURL string) error {
 }
 
 // RemoveRelay removes one concrete relay without restarting the exposure.
-// When discovery is enabled, it updates the controller's explicit relay
-// set and deactivates the relay — the relay drops out of active selection
-// while keeping its discovered descriptor as a candidate, so discovery
-// does not immediately re-select it. Re-selection republishes through the
-// watch loop.
+// When discovery is enabled, it forwards the intent to the controller as a
+// delta operation (RemoveExplicitRelay) and deactivates the relay — the
+// relay drops out of active selection while keeping its descriptor as a
+// candidate, so discovery does not immediately re-select it. Re-selection
+// republishes membership through the watch loop.
 func (e *Exposure) RemoveRelay(relayURL string) error {
 	relayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
@@ -348,16 +339,7 @@ func (e *Exposure) RemoveRelay(relayURL string) error {
 		return net.ErrClosed
 	}
 	if e.discovery != nil {
-		e.mu.Lock()
-		next := make([]string, 0, len(e.explicitRelays))
-		for _, existing := range e.explicitRelays {
-			if existing != relayURL {
-				next = append(next, existing)
-			}
-		}
-		e.explicitRelays = next
-		e.mu.Unlock()
-		e.discovery.SetExplicitRelays(next)
+		e.discovery.RemoveExplicitRelay(relayURL)
 		e.discovery.Deactivate(relayURL)
 		return nil
 	}

@@ -619,6 +619,20 @@ func (s *RelaySet) DeactivateRelayURL(relayURL string) {
 	s.relays[relayURL] = state
 }
 
+// EnsureRelayURL persists a candidate state for relayURL when none exists, so
+// explicit relays that never entered through discovery keep their failure and
+// suppression state durable. Existing states — discovered descriptors, bans,
+// suppression — are left untouched.
+func (s *RelaySet) EnsureRelayURL(relayURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.relays[relayURL]; ok {
+		return
+	}
+	s.relays[relayURL] = newRelayState(relayURL)
+}
+
 // discoveryRelayStateLocked is the cryptographic gate for every gossiped
 // descriptor. The caller must hold s.mu for reading the URL ban state.
 func (s *RelaySet) discoveryRelayStateLocked(

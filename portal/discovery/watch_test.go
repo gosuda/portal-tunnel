@@ -187,6 +187,51 @@ func TestControllerSetMaxActiveRelaysSignalsWatch(t *testing.T) {
 	}
 }
 
+// A custom explicit relay that never entered through discovery must hold a
+// durable RelaySet candidate state: a reported failure suppresses it, the
+// next selection changes, and the watch loop republishes membership — the
+// exposure reconciles to a replacement instead of keeping a selected URL
+// with no live listener.
+func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	controller := NewController(nil)
+	controller.SetExplicitRelays([]string{relayA, relayB})
+
+	changes := make(chan []string, 8)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = controller.Watch(ctx, nil, func(urls []string) error {
+			changes <- urls
+			return nil
+		})
+	}()
+
+	select {
+	case first := <-changes:
+		if len(first) != 2 {
+			t.Fatalf("initial selection = %v, want both explicit relays", first)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for initial watch selection")
+	}
+
+	controller.Report(relayA, FailureRuntime)
+
+	select {
+	case next := <-changes:
+		if len(next) != 1 || next[0] != relayB {
+			t.Fatalf("selection after explicit relay failure = %v, want only relay B", next)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for membership republish after explicit relay failure")
+	}
+}
+
 func activeFailuresFor(controller *Controller, relayURL string) int {
 	for _, state := range controller.relaySet.AllRelays() {
 		if state.Descriptor.APIHTTPSAddr == relayURL {

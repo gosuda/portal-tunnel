@@ -100,7 +100,9 @@ func (c *Controller) Allow(relayURL string) {
 }
 
 // SetExplicitRelays sets the explicit relay URLs for selection. The
-// controller normalizes and stores a defensive copy, then signals the
+// controller normalizes and stores a defensive copy, gives every URL a
+// durable RelaySet candidate state (so later failure reports stick for
+// custom relays that never entered through discovery), and signals the
 // watch loop to re-evaluate immediately.
 func (c *Controller) SetExplicitRelays(urls []string) {
 	if c == nil {
@@ -112,6 +114,49 @@ func (c *Controller) SetExplicitRelays(urls []string) {
 	}
 	c.mu.Lock()
 	c.explicitRelays = append([]string(nil), normalized...)
+	c.mu.Unlock()
+	for _, relayURL := range normalized {
+		c.relaySet.EnsureRelayURL(relayURL)
+	}
+	c.signal()
+}
+
+// AddExplicitRelay adds one explicit relay URL. The delta is applied under
+// the controller lock, so concurrent add/remove intent from the exposure
+// serializes here instead of publishing stale whole-list snapshots out of
+// order. The relay also gets a durable RelaySet candidate state.
+func (c *Controller) AddExplicitRelay(relayURL string) {
+	if c == nil || relayURL == "" {
+		return
+	}
+	if normalized, err := utils.NormalizeRelayURL(relayURL); err == nil {
+		relayURL = normalized
+	}
+	c.mu.Lock()
+	if !slices.Contains(c.explicitRelays, relayURL) {
+		c.explicitRelays = append(c.explicitRelays, relayURL)
+		slices.Sort(c.explicitRelays)
+	}
+	c.mu.Unlock()
+	c.relaySet.EnsureRelayURL(relayURL)
+	c.signal()
+}
+
+// RemoveExplicitRelay removes one explicit relay URL. Like
+// AddExplicitRelay it is a delta operation: concurrent intent updates
+// serialize through the controller's lock.
+func (c *Controller) RemoveExplicitRelay(relayURL string) {
+	if c == nil || relayURL == "" {
+		return
+	}
+	c.mu.Lock()
+	next := make([]string, 0, len(c.explicitRelays))
+	for _, existing := range c.explicitRelays {
+		if existing != relayURL {
+			next = append(next, existing)
+		}
+	}
+	c.explicitRelays = next
 	c.mu.Unlock()
 	c.signal()
 }
