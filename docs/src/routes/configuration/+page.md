@@ -53,16 +53,16 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | `PORTAL_FRONTEND_DIR` | `""` | string | Custom SPA directory containing `index.html`; empty uses the frontend embedded in the Portal binary |
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
 | `API_PORT` | `4017` | int | Admin/API server listen port |
-| `SNI_PORT` | `443` | int | Local TCP SNI router listen port; it does not change the public port advertised from `PORTAL_URL` |
+| `SNI_PORT` | `PORTAL_URL` port, else `443` | int | Local TCP SNI router listen port; an unset value follows the explicit `PORTAL_URL` port when it names one, and it never changes the public port advertised from `PORTAL_URL` |
 
 `PORTAL_URL` owns public semantics and `SNI_PORT` owns local bind semantics.
 Portal derives tenant URLs, reverse endpoints, QUIC connection metadata, and
-ECH HTTPS/SVCB ports from `PORTAL_URL`. For a direct listener on a non-default
-port, set both values explicitly:
+ECH HTTPS/SVCB ports from `PORTAL_URL`. An unset `SNI_PORT` follows the
+explicit `PORTAL_URL` port when it names one, so a direct listener on a
+non-default port needs a single setting:
 
 ```text
 PORTAL_URL=https://localhost:8443
-SNI_PORT=8443
 ```
 
 When a load balancer maps public port 443 to a local listener on 8443, use:

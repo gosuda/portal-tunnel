@@ -1,7 +1,6 @@
 package portal
 
 import (
-	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -550,11 +549,14 @@ func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 		name           string
 		portalURL      string
 		localSNIPort   int
+		wantLocalPort  int
 		wantPublicPort int
 	}{
-		{"default ports", "https://relay.example.com", 0, 443},
-		{"local bind override", "https://relay.example.com", 8443, 443},
-		{"explicit public port", "https://relay.example.com:9443", 443, 9443},
+		{"default ports", "https://relay.example.com", 0, 443, 443},
+		{"local bind override", "https://relay.example.com", 8443, 8443, 443},
+		{"explicit public port", "https://relay.example.com:9443", 443, 443, 9443},
+		{"unoverridden listener follows public port", "https://relay.example.com:9443", 0, 9443, 9443},
+		{"explicit override keeps mapped listener", "https://localhost:8443", 443, 443, 8443},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -567,9 +569,8 @@ func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewServer() error = %v", err)
 			}
-			wantLocalPort := cmp.Or(tc.localSNIPort, 443)
-			if got := server.config().SNIPort; got != wantLocalPort {
-				t.Fatalf("ServerConfig.SNIPort = %d, want local port %d", got, wantLocalPort)
+			if got := server.config().SNIPort; got != tc.wantLocalPort {
+				t.Fatalf("ServerConfig.SNIPort = %d, want local port %d", got, tc.wantLocalPort)
 			}
 			if got := server.publicPort; got != tc.wantPublicPort {
 				t.Fatalf("Server.publicPort = %d, want %d", got, tc.wantPublicPort)
