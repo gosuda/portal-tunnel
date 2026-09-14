@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -161,38 +160,18 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	if err != nil {
 		return err
 	}
-	relayURLs, err := discovery.ResolveRelayURLs(explicitRelayURLs, cfg.discovery)
-	if err != nil {
-		return err
-	}
-	if len(relayURLs) == 0 {
-		return errors.New("at least one relay or discovery is required")
-	}
-	exposure, err := sdk.Expose(ctx, listenerIdentity, relayURLs,
+	opts := []sdk.Option{
 		sdk.WithMITMProtection(cfg.banMITM),
 		sdk.WithMetadata(metadata),
-	)
+	}
+	if cfg.discovery {
+		opts = append(opts, sdk.WithDiscovery(cfg.maxActiveRelays))
+	}
+	exposure, err := sdk.Expose(ctx, listenerIdentity, explicitRelayURLs, opts...)
 	if err != nil {
 		return fmt.Errorf("exposure listen error: %w", err)
 	}
 	defer exposure.Close()
-	if cfg.discovery {
-		bootstrapRelayURLs, resolveErr := discovery.BootstrapRelayURLs()
-		if resolveErr != nil {
-			return resolveErr
-		}
-		controller := discovery.NewController(bootstrapRelayURLs)
-		controller.SetExplicitRelays(explicitRelayURLs)
-		controller.SetMaxActiveRelays(cfg.maxActiveRelays)
-		controller.SetLocalAddress(listenerIdentity.Address)
-		go forwardDiscoveryFeedback(ctx, exposure, controller)
-		go func() {
-			err := controller.Watch(ctx, exposure.ActiveRelays, exposure.SetRelays)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				log.Warn().Err(err).Msg("relay discovery stopped")
-			}
-		}()
-	}
 
 	err = sdk.RunHTTP(ctx, exposure, handler, addr)
 	if err != nil {
@@ -207,19 +186,6 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	}
 	log.Info().Msg("payment app shutdown complete")
 	return nil
-}
-
-func forwardDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, controller *discovery.Controller) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case status := <-exposure.Updates():
-			if status.State == sdk.RelayFailed {
-				controller.Report(status.RelayURL, discovery.FailureKind(status.Failure))
-			}
-		}
-	}
 }
 
 func printUsage(w io.Writer) {

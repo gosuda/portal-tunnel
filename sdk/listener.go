@@ -122,6 +122,7 @@ type listener struct {
 	httpClient    *http.Client
 	httpTransport *http.Transport
 	tlsConfig     *tls.Config
+	transportMu   sync.RWMutex
 	reverseTLSMu  sync.Mutex
 	reverseTLSURL string
 	reverseTLS    *tls.Config
@@ -719,7 +720,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 	if !lease.reverse.ExpiresAt.After(time.Now().UTC()) {
 		return nil, errLeaseRefreshRequired
 	}
-	if l.tlsConfig == nil {
+	if l.relayTLSConfigClone() == nil {
 		return nil, errors.New("relay tls config is unavailable")
 	}
 
@@ -779,7 +780,7 @@ func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tl
 		return nil, errors.New("reverse endpoint hostname is unavailable")
 	}
 	if strings.EqualFold(endpoint.Host, l.relayURL.Host) {
-		return l.tlsConfig.Clone(), nil
+		return l.relayTLSConfigClone(), nil
 	}
 	key := strings.ToLower(endpoint.Scheme + "://" + endpoint.Host)
 	l.reverseTLSMu.Lock()
@@ -841,13 +842,14 @@ func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, err
 	if lease.publicPort <= 0 {
 		return nil, errors.New("public port is not available")
 	}
-	if l.tlsConfig == nil {
+	tlsCfg := l.relayTLSConfigClone()
+	if tlsCfg == nil {
 		return nil, errors.New("relay tls config is unavailable")
 	}
 	host := strings.TrimSpace(l.relayURL.Hostname())
 	host = cmp.Or(host, strings.TrimSpace(l.relayURL.Host))
 	dialAddr := net.JoinHostPort(host, fmt.Sprintf("%d", lease.publicPort))
-	return transport.DialQUICBackhaul(ctx, dialAddr, l.tlsConfig, lease.accessToken)
+	return transport.DialQUICBackhaul(ctx, dialAddr, tlsCfg, lease.accessToken)
 }
 
 func (l *listener) runRenewLoop(ctx context.Context) error {

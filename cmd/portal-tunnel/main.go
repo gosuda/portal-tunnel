@@ -237,13 +237,6 @@ func runExposeCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	relayURLs, err := discovery.ResolveRelayURLs(explicitRelayURLs, flags.discovery)
-	if err != nil {
-		return err
-	}
-	if len(relayURLs) == 0 {
-		return errors.New("at least one relay or discovery is required")
-	}
 	opts := []sdk.Option{
 		sdk.WithMITMProtection(flags.banMITM),
 		sdk.WithMetadata(types.LeaseMetadata{
@@ -266,28 +259,12 @@ func runExposeCommand(args []string) error {
 	if flags.overlay {
 		opts = append(opts, sdk.WithOverlay())
 	}
-	exposure, err := sdk.Expose(ctx, listenerIdentity, relayURLs, opts...)
+	if flags.discovery {
+		opts = append(opts, sdk.WithDiscovery(flags.maxActiveRelays))
+	}
+	exposure, err := sdk.Expose(ctx, listenerIdentity, explicitRelayURLs, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to start relays: %w", err)
-	}
-	if flags.discovery {
-		bootstrapRelayURLs, resolveErr := discovery.BootstrapRelayURLs()
-		if resolveErr != nil {
-			_ = exposure.Close()
-			return resolveErr
-		}
-		controller := discovery.NewController(bootstrapRelayURLs)
-		controller.SetExplicitRelays(explicitRelayURLs)
-		controller.SetMaxActiveRelays(flags.maxActiveRelays)
-		controller.SetTransportRequirements(flags.udp, flags.tcp)
-		controller.SetLocalAddress(listenerIdentity.Address)
-		go forwardDiscoveryFeedback(ctx, exposure, controller)
-		go func() {
-			err := controller.Watch(ctx, exposure.ActiveRelays, exposure.SetRelays)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				log.Warn().Err(err).Msg("relay discovery stopped")
-			}
-		}()
 	}
 	if len(httpRoutes) > 0 {
 		defer exposure.Close()
@@ -312,19 +289,6 @@ func runExposeCommand(args []string) error {
 		TCPTarget: flags.targetAddr,
 		UDPTarget: udpTarget,
 	})
-}
-
-func forwardDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, controller *discovery.Controller) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case status := <-exposure.Updates():
-			if status.State == sdk.RelayFailed {
-				controller.Report(status.RelayURL, discovery.FailureKind(status.Failure))
-			}
-		}
-	}
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {

@@ -14,7 +14,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	discoverypkg "github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -445,12 +444,11 @@ type managedTunnel struct {
 	mu  sync.RWMutex
 	cfg TunnelConfig
 
-	cancel     context.CancelFunc
-	done       chan struct{}
-	exposure   *sdk.Exposure
-	controller *discoverypkg.Controller
-	lastError  string
-	runtime    types.AgentTunnelStatus
+	cancel    context.CancelFunc
+	done      chan struct{}
+	exposure  *sdk.Exposure
+	lastError string
+	runtime   types.AgentTunnelStatus
 }
 
 func newTunnel(cfg TunnelConfig) *managedTunnel {
@@ -508,14 +506,8 @@ func (t *managedTunnel) ConnectRelay(relayURL string) error {
 	if !slices.Contains(t.cfg.RelayURLs, relayURL) {
 		t.cfg.RelayURLs = append(t.cfg.RelayURLs, relayURL)
 	}
-	relays := append([]string(nil), t.cfg.RelayURLs...)
 	exposure := t.exposure
-	controller := t.controller
 	t.mu.Unlock()
-	if controller != nil {
-		controller.SetExplicitRelays(relays)
-		return nil
-	}
 	if exposure == nil {
 		return nil
 	}
@@ -535,14 +527,8 @@ func (t *managedTunnel) DisconnectRelay(relayURL string) error {
 		}
 	}
 	t.cfg.RelayURLs = next
-	relays := append([]string(nil), t.cfg.RelayURLs...)
 	exposure := t.exposure
-	controller := t.controller
 	t.mu.Unlock()
-	if controller != nil {
-		controller.SetExplicitRelays(relays)
-		return nil
-	}
 	if exposure == nil {
 		return nil
 	}
@@ -553,7 +539,6 @@ func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays boo
 	t.mu.RLock()
 	exposure := t.exposure
 	cfg := t.cfg
-	controller := t.controller
 	t.mu.RUnlock()
 	if exposure == nil {
 		return nil
@@ -562,8 +547,8 @@ func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays boo
 	if updateMetadata {
 		err = errors.Join(err, exposure.UpdateMetadata(metadataFromTunnelConfig(cfg)))
 	}
-	if controller != nil && updateMaxActiveRelays {
-		controller.SetMaxActiveRelays(cfg.MaxActiveRelays)
+	if updateMaxActiveRelays {
+		err = errors.Join(err, exposure.SetMaxActiveRelays(cfg.MaxActiveRelays))
 	}
 	return err
 }
@@ -670,7 +655,6 @@ func (t *managedTunnel) runLoop(ctx context.Context) {
 		err := t.runOnce(ctx)
 		t.mu.Lock()
 		t.exposure = nil
-		t.controller = nil
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) || err == nil {
 			t.lastError = ""
 		} else {
@@ -712,13 +696,6 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	relayURLs, err := discoverypkg.ResolveRelayURLs(explicitRelayURLs, discovery)
-	if err != nil {
-		return err
-	}
-	if len(relayURLs) == 0 {
-		return errors.New("at least one relay or discovery is required")
-	}
 	opts := []sdk.Option{
 		sdk.WithMITMProtection(banMITM),
 		sdk.WithMetadata(metadataFromTunnelConfig(cfg)),
@@ -735,36 +712,15 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if cfg.Overlay {
 		opts = append(opts, sdk.WithOverlay())
 	}
-	exposure, err := sdk.Expose(ctx, listenerIdentity, relayURLs, opts...)
+	if discovery {
+		opts = append(opts, sdk.WithDiscovery(cfg.MaxActiveRelays))
+	}
+	exposure, err := sdk.Expose(ctx, listenerIdentity, explicitRelayURLs, opts...)
 	if err != nil {
 		return err
 	}
-	var stopWatch context.CancelFunc
-	var controller *discoverypkg.Controller
-	if discovery {
-		bootstrapRelayURLs, resolveErr := discoverypkg.BootstrapRelayURLs()
-		if resolveErr != nil {
-			_ = exposure.Close()
-			return resolveErr
-		}
-		controller = discoverypkg.NewController(bootstrapRelayURLs)
-		controller.SetExplicitRelays(explicitRelayURLs)
-		controller.SetMaxActiveRelays(cfg.MaxActiveRelays)
-		controller.SetTransportRequirements(cfg.UDPEnabled, cfg.TCPEnabled)
-		controller.SetLocalAddress(listenerIdentity.Address)
-		watchCtx, cancel := context.WithCancel(ctx)
-		stopWatch = cancel
-		go forwardDiscoveryFeedback(watchCtx, exposure, controller)
-		go func() {
-			err := controller.Watch(watchCtx, exposure.ActiveRelays, exposure.SetRelays)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				log.Warn().Err(err).Msg("relay discovery stopped")
-			}
-		}()
-	}
 	t.mu.Lock()
 	t.exposure = exposure
-	t.controller = controller
 	t.runtime = types.AgentTunnelStatus{
 		Address:         listenerIdentity.Address,
 		TargetAddr:      cfg.TargetAddr,
@@ -775,9 +731,6 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.mu.Unlock()
 
 	defer func() {
-		if stopWatch != nil {
-			stopWatch()
-		}
 		_ = exposure.Close()
 	}()
 
@@ -817,19 +770,6 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		return ctx.Err()
 	}
 	return err
-}
-
-func forwardDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, controller *discoverypkg.Controller) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case status := <-exposure.Updates():
-			if status.State == sdk.RelayFailed {
-				controller.Report(status.RelayURL, discoverypkg.FailureKind(status.Failure))
-			}
-		}
-	}
 }
 
 func metadataFromTunnelConfig(cfg TunnelConfig) types.LeaseMetadata {

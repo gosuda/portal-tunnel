@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base32"
 	"errors"
 	"fmt"
@@ -52,6 +53,8 @@ func (err *relayRegistrationError) Unwrap() error {
 // API call creates fresh TCP connections. Call this after detecting a system
 // sleep/wake cycle where pooled connections are almost certainly dead.
 func (l *listener) resetTransport() {
+	l.transportMu.Lock()
+	defer l.transportMu.Unlock()
 	if l.httpTransport != nil {
 		l.httpTransport.CloseIdleConnections()
 	}
@@ -61,9 +64,12 @@ func (l *listener) resetTransport() {
 }
 
 func (l *listener) initHTTPTransport(ctx context.Context) error {
+	l.transportMu.RLock()
 	if l.httpClient != nil {
+		l.transportMu.RUnlock()
 		return nil
 	}
+	l.transportMu.RUnlock()
 
 	bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
 	defer cancel()
@@ -84,12 +90,37 @@ func (l *listener) initHTTPTransport(ctx context.Context) error {
 		return fmt.Errorf("%w: relay sdk protocol version mismatch: relay=%q client=%q", errRelayIncompatible, protocolVersion, types.SDKVersion)
 	}
 
+	l.transportMu.Lock()
+	defer l.transportMu.Unlock()
+	// Re-check after network I/O: resetTransport may have cleared the
+	// fields while we were connecting.
+	if l.httpClient != nil {
+		return nil
+	}
 	l.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
-
 	l.httpClient = httpClient
 	l.httpTransport = httpTransport
 	l.tlsConfig = tlsConfig
 	return nil
+}
+
+// relayHTTPClient returns the cached HTTP client under the transport lock.
+// Callers must not mutate the returned client.
+func (l *listener) relayHTTPClient() *http.Client {
+	l.transportMu.RLock()
+	defer l.transportMu.RUnlock()
+	return l.httpClient
+}
+
+// relayTLSConfigClone returns a cloned copy of the relay TLS config under
+// the transport lock, or nil if the transport has not been initialized.
+func (l *listener) relayTLSConfigClone() *tls.Config {
+	l.transportMu.RLock()
+	defer l.transportMu.RUnlock()
+	if l.tlsConfig == nil {
+		return nil
+	}
+	return l.tlsConfig.Clone()
 }
 
 func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnabled, tcpEnabled bool) (types.RegisterResponse, string, string, error) {
@@ -134,7 +165,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	}
 
 	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge); err != nil {
+	if err := utils.HTTPDoAPIPath(ctx, l.relayHTTPClient(), l.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge); err != nil {
 		return types.RegisterResponse{}, "", "", err
 	}
 
@@ -145,7 +176,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 	}
 
 	var resp types.RegisterResponse
-	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
+	if err := utils.HTTPDoAPIPath(ctx, l.relayHTTPClient(), l.relayURL, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		ChallengeID:   challenge.ChallengeID,
 		SIWEMessage:   challenge.SIWEMessage,
 		SIWESignature: signature,
@@ -173,7 +204,7 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, accessToken string) (types.RenewResponse, error) {
 	var resp types.RenewResponse
 	req := newRenewRequest(ttl, accessToken, utils.ResolvePublicIP(ctx), l.metadataSnapshot())
-	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRenew, req, nil, &resp); err != nil {
+	if err := utils.HTTPDoAPIPath(ctx, l.relayHTTPClient(), l.relayURL, http.MethodPost, types.PathSDKRenew, req, nil, &resp); err != nil {
 		return types.RenewResponse{}, err
 	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
@@ -190,7 +221,7 @@ func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, 
 func (l *listener) requestReverseEndpoint(ctx context.Context, accessToken, failedURL string, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {
 	var endpoint types.ReverseEndpoint
 	req := types.ReverseEndpointRequest{AccessToken: accessToken, FailedURL: failedURL}
-	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKReverse, req, nil, &endpoint); err != nil {
+	if err := utils.HTTPDoAPIPath(ctx, l.relayHTTPClient(), l.relayURL, http.MethodPost, types.PathSDKReverse, req, nil, &endpoint); err != nil {
 		return types.ReverseEndpoint{}, err
 	}
 	endpoint, err := validateReverseEndpoint(endpoint, leaseExpiresAt)
@@ -253,7 +284,7 @@ func newRenewRequest(ttl time.Duration, accessToken, reportedIP string, metadata
 }
 
 func (l *listener) unregisterLease(ctx context.Context, accessToken string) error {
-	err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
+	err := utils.HTTPDoAPIPath(ctx, l.relayHTTPClient(), l.relayURL, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
 		AccessToken: accessToken,
 	}, nil, nil)
 	return err

@@ -499,3 +499,128 @@ func TestExposureReconcileExcludesRelayBlockedAfterInstall(t *testing.T) {
 		t.Fatal("listener retained for MITM-blocked relay")
 	}
 }
+
+func testIdentity() types.Identity {
+	return types.Identity{
+		Name:       "svc",
+		Address:    "address",
+		PublicKey:  "public",
+		PrivateKey: "private",
+	}
+}
+
+func TestExposeWithDiscoveryRetainsExplicitRelay(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exposure, err := Expose(ctx, testIdentity(), []string{"https://relay.example"}, WithDiscovery(1))
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer func() { _ = exposure.Close() }()
+
+	// The explicit relay must appear in the membership. Its listener starts
+	// in RelayConnecting and will eventually fail (unreachable), but it is
+	// retained because explicit relays are always kept by the discovery
+	// selection. No network assertions: we only check membership presence.
+	relays := exposure.Relays()
+	found := false
+	for _, r := range relays {
+		if r.RelayURL == "https://relay.example" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Relays() = %+v, want https://relay.example present", relays)
+	}
+
+	if err := exposure.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestExposeDiscoveryStaysUsableAfterRelayFailure(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exposure, err := Expose(ctx, testIdentity(), []string{relayA, relayB}, WithDiscovery(2))
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer func() { _ = exposure.Close() }()
+
+	// Force one relay to fail. The failure hook reports it to the
+	// discovery controller, which unconfirms and suppresses it. The
+	// other relay must remain in the membership — the exposure stays
+	// usable. We drive the failure the same way existing failure tests
+	// do: via setRelayStatus.
+	exposure.setRelayStatus(relayA, listenerStatus{
+		state: RelayFailed,
+		err:   errors.New("rejected"),
+	})
+
+	// relayB is an explicit relay present in the membership from
+	// construction, so the exposure stays usable after the failure; the
+	// discovery reaction (unconfirm + suppression → re-selection) is
+	// covered by the discovery package tests. setRelayStatus exercised
+	// the synchronous failure→discovery.Report hook above. The failed
+	// relay's own status is not asserted because the listener retry loop
+	// flips it between failed and connecting asynchronously.
+	relays := exposure.Relays()
+	var foundA, foundB bool
+	for _, r := range relays {
+		switch r.RelayURL {
+		case relayA:
+			foundA = true
+		case relayB:
+			foundB = true
+		}
+	}
+	if !foundA || !foundB {
+		t.Fatalf("Relays() = %+v, want %s and %s present after failure", relays, relayA, relayB)
+	}
+
+	if err := exposure.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestExposeSetMaxActiveRelaysDiscovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exposure, err := Expose(ctx, testIdentity(), []string{"https://relay.example"}, WithDiscovery(2))
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer func() { _ = exposure.Close() }()
+
+	if err := exposure.SetMaxActiveRelays(1); err != nil {
+		t.Fatalf("SetMaxActiveRelays(1) error = %v", err)
+	}
+
+	// Calling again with a different value must not panic or race.
+	if err := exposure.SetMaxActiveRelays(3); err != nil {
+		t.Fatalf("SetMaxActiveRelays(3) error = %v", err)
+	}
+}
+
+func TestExposeSetMaxActiveRelaysNoDiscovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exposure, err := Expose(ctx, testIdentity(), []string{"https://relay.example"})
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer func() { _ = exposure.Close() }()
+
+	// Without discovery, SetMaxActiveRelays is a no-op that returns nil.
+	if err := exposure.SetMaxActiveRelays(1); err != nil {
+		t.Fatalf("SetMaxActiveRelays(1) error = %v, want nil", err)
+	}
+}

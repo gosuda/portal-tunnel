@@ -15,7 +15,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -145,7 +144,7 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 	if err != nil {
 		return err
 	}
-	exposure, err := exposeDemo(ctx, cfg, listenerIdentity, false, sdk.WithMetadata(metadata))
+	exposure, err := exposeDemo(ctx, cfg, listenerIdentity, sdk.WithMetadata(metadata))
 	if err != nil {
 		return fmt.Errorf("exposure listen error: %w", err)
 	}
@@ -176,7 +175,7 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	if err != nil {
 		return err
 	}
-	exposure, err := exposeDemo(ctx, cfg, listenerIdentity, true,
+	exposure, err := exposeDemo(ctx, cfg, listenerIdentity,
 		sdk.WithUDP(),
 		sdk.WithMetadata(types.LeaseMetadata{
 			Description: cfg.desc,
@@ -215,57 +214,16 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	return nil
 }
 
-func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, requireUDP bool, opts ...sdk.Option) (*sdk.Exposure, error) {
+func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, opts ...sdk.Option) (*sdk.Exposure, error) {
 	explicitRelayURLs, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.relayURLs)...)
 	if err != nil {
 		return nil, err
 	}
-	relayURLs, err := discovery.ResolveRelayURLs(explicitRelayURLs, cfg.discovery)
-	if err != nil {
-		return nil, err
-	}
-	if len(relayURLs) == 0 {
-		return nil, errors.New("at least one relay or discovery is required")
-	}
 	opts = append(opts, sdk.WithMITMProtection(cfg.banMITM))
-	exposure, err := sdk.Expose(ctx, identity, relayURLs, opts...)
-	if err != nil {
-		return nil, err
+	if cfg.discovery {
+		opts = append(opts, sdk.WithDiscovery(cfg.maxActiveRelays))
 	}
-	if !cfg.discovery {
-		return exposure, nil
-	}
-	bootstrapRelayURLs, err := discovery.BootstrapRelayURLs()
-	if err != nil {
-		_ = exposure.Close()
-		return nil, err
-	}
-	controller := discovery.NewController(bootstrapRelayURLs)
-	controller.SetExplicitRelays(explicitRelayURLs)
-	controller.SetMaxActiveRelays(cfg.maxActiveRelays)
-	controller.SetTransportRequirements(requireUDP, false)
-	controller.SetLocalAddress(identity.Address)
-	go forwardDemoDiscoveryFeedback(ctx, exposure, controller)
-	go func() {
-		err := controller.Watch(ctx, exposure.ActiveRelays, exposure.SetRelays)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			log.Warn().Err(err).Msg("relay discovery stopped")
-		}
-	}()
-	return exposure, nil
-}
-
-func forwardDemoDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, controller *discovery.Controller) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case status := <-exposure.Updates():
-			if status.State == sdk.RelayFailed {
-				controller.Report(status.RelayURL, discovery.FailureKind(status.Failure))
-			}
-		}
-	}
+	return sdk.Expose(ctx, identity, explicitRelayURLs, opts...)
 }
 
 // resolveDemoIdentity parses an inline identity or existing file. It generates
