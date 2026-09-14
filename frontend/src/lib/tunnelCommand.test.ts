@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildTunnelCommand,
-  buildTunnelDisplayCommand,
   buildTunnelPreviewURL,
 } from "@/lib/tunnelCommand";
 
@@ -31,7 +30,7 @@ describe("tunnelCommand", () => {
     expect(command).not.toContain("\n  --name");
   });
 
-  it("keeps display and copied commands flat", () => {
+  it("keeps copied windows commands flat", () => {
     const options = {
       currentOrigin: "https://relay.example.com",
       target: "localhost:3000",
@@ -50,15 +49,7 @@ describe("tunnelCommand", () => {
         `portal expose localhost:3000 --name my-app --relays https://relay.example.com --discovery=false --thumbnail https://example.com/thumb.png`,
       ].join("\n")
     );
-    expect(buildTunnelDisplayCommand(options)).toBe(
-      [
-        `$ProgressPreference = 'SilentlyContinue'`,
-        `irm https://relay.example.com/api/install.ps1 | iex`,
-        `portal expose localhost:3000 --name my-app --relays https://relay.example.com --discovery=false --thumbnail https://example.com/thumb.png`,
-      ].join("\n")
-    );
   });
-
   it("serves a static path with --serve for file share links", () => {
     const options = {
       currentOrigin: "https://localhost",

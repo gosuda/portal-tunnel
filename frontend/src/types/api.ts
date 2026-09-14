@@ -23,6 +23,8 @@ export interface LeaseMetadata {
   thumbnail?: string;
   tags?: string[];
   hide?: boolean;
+  payment_enabled?: boolean;
+  payment_label?: string;
 }
 
 export interface Lease {
@@ -114,6 +116,7 @@ export interface DomainResponse {
 
 export interface RelayDescriptor {
   api_https_addr?: string;
+  version?: string;
 }
 
 export interface IncompatibleRelayEntry {
