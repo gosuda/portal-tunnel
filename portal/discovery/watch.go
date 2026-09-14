@@ -13,11 +13,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// FailureKind classifies a relay failure for discovery policy. The
-// vocabulary deliberately mirrors sdk.RelayFailure's string values so
-// callers forward a classification with a plain conversion
-// (discovery.FailureKind(status.Failure)), while the POLICY — which kind
-// means permanent ban versus suppression/backoff — stays inside discovery.
+// FailureKind classifies a relay failure for discovery policy. Callers map
+// their own failure vocabulary onto these kinds explicitly (the sdk does so
+// in one place, next to its RelayFailure type), while the POLICY — which
+// kind means permanent ban versus suppression/backoff — stays inside
+// discovery.
 type FailureKind string
 
 const (
@@ -73,6 +73,29 @@ func (c *Controller) Report(relayURL string, kind FailureKind) {
 			c.relaySet.RecordActiveFailure(relayURL, 1)
 		}
 	}
+	c.signal()
+}
+
+// Deactivate drops a relay out of active selection while keeping its
+// discovered descriptor as a candidate: the relay stays suppressed until
+// the recovery backoff expires, after which discovery may select it again.
+// Exposure.RemoveRelay routes an explicit disconnect here so a disconnected
+// relay is not immediately re-selected from the candidate pool.
+func (c *Controller) Deactivate(relayURL string) {
+	if c == nil || relayURL == "" {
+		return
+	}
+	c.relaySet.DeactivateRelayURL(relayURL)
+	c.signal()
+}
+
+// Allow clears a relay's ban and suppression so an explicitly re-added
+// relay is immediately eligible for selection again.
+func (c *Controller) Allow(relayURL string) {
+	if c == nil || relayURL == "" {
+		return
+	}
+	c.relaySet.AllowRelayURL(relayURL)
 	c.signal()
 }
 
@@ -140,7 +163,7 @@ func (c *Controller) signal() {
 // activeRelays returns the caller's currently active relay URLs (typically
 // from Exposure.ActiveRelays) so selection preserves connection-level
 // stickiness and avoids listener churn. onChange applies the new concrete
-// membership (typically Exposure.SetRelays).
+// membership (the exposure's internal membership callback).
 func (c *Controller) Watch(
 	ctx context.Context,
 	activeRelays func() []string,

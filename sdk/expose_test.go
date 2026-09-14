@@ -179,23 +179,6 @@ func TestExposeRejectsEmptyInitialRelays(t *testing.T) {
 	}
 }
 
-// The string values are load-bearing beyond the sdk: discovery.FailureKind
-// deliberately mirrors this vocabulary so relay-failure classifications cross
-// the boundary with a plain conversion. Drifting a value would silently
-// misclassify failures at the discovery layer, so pin the literals.
-func TestRelayFailureVocabularyValues(t *testing.T) {
-	for value, want := range map[RelayFailure]string{
-		RelayFailureNone:     "",
-		RelayFailureRuntime:  "runtime",
-		RelayFailureTerminal: "terminal",
-		RelayFailureMITM:     "mitm",
-	} {
-		if string(value) != want {
-			t.Fatalf("RelayFailure value = %q, want %q", string(value), want)
-		}
-	}
-}
-
 func TestExposeOptionsContainOnlyEndpointCapabilities(t *testing.T) {
 	metadata := types.LeaseMetadata{Tags: []string{"initial"}}
 	var got options
@@ -442,7 +425,7 @@ func TestExposureListenerSelfExitKeepsExplicitRelayConfigured(t *testing.T) {
 	}
 }
 
-func TestExposureSetRelaysReplacesStatusMembership(t *testing.T) {
+func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
 		relayB = "https://relay-b.example"
@@ -450,8 +433,8 @@ func TestExposureSetRelaysReplacesStatusMembership(t *testing.T) {
 	exposure := newExposureStateTest(t, relayA)
 	exposure.syncRelayStatuses(exposure.relayURLs)
 
-	if err := exposure.SetRelays([]string{relayB}); err != nil {
-		t.Fatalf("SetRelays() error = %v", err)
+	if err := exposure.applyRelays([]string{relayB}); err != nil {
+		t.Fatalf("applyRelays() error = %v", err)
 	}
 
 	relays := exposure.Relays()
@@ -587,6 +570,70 @@ func TestExposeDiscoveryStaysUsableAfterRelayFailure(t *testing.T) {
 	if err := exposure.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+}
+
+// TestExposeDiscoveryRemoveRelayRoutesThroughDiscovery verifies that relay
+// add/remove intent under discovery routes through the controller: the
+// explicit set changes, the relay is deactivated on removal and re-allowed
+// on add, and the watch loop republishes the new membership. The
+// deactivation POLICY (a verified candidate is not immediately re-selected)
+// is covered by the discovery package tests.
+func TestExposeDiscoveryRemoveRelayRoutesThroughDiscovery(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exposure, err := Expose(ctx, testIdentity(), []string{relayA, relayB}, WithDiscovery(2))
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer func() { _ = exposure.Close() }()
+
+	if err := exposure.RemoveRelay(relayA); err != nil {
+		t.Fatalf("RemoveRelay() error = %v", err)
+	}
+	waitUntilRelayAbsent(t, exposure, relayA)
+	waitUntilRelayPresent(t, exposure, relayB)
+
+	if err := exposure.AddRelay(relayA); err != nil {
+		t.Fatalf("AddRelay() error = %v", err)
+	}
+	waitUntilRelayPresent(t, exposure, relayA)
+}
+
+func waitUntilRelayPresent(t *testing.T, exposure *Exposure, relayURL string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, r := range exposure.Relays() {
+			if r.RelayURL == relayURL {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("Relays() never contained %s after membership update", relayURL)
+}
+
+func waitUntilRelayAbsent(t *testing.T, exposure *Exposure, relayURL string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		found := false
+		for _, r := range exposure.Relays() {
+			if r.RelayURL == relayURL {
+				found = true
+			}
+		}
+		if !found {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("Relays() still contains %s after membership update", relayURL)
 }
 
 func TestExposeSetMaxActiveRelaysDiscovery(t *testing.T) {

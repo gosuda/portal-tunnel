@@ -22,7 +22,11 @@ ECH, MITM protection, overlay routing, and initial lease metadata. The
 `sdk.WithDiscovery` option enables discovery-driven relay membership: when it
 is set, `Exposure` delegates relay selection to `portal/discovery` as a blind
 collaborator, feeding it failure classifications from listener events and
-applying the collaborator's membership decisions through `SetRelays`.
+applying the collaborator's membership decisions through an internal
+membership callback. `AddRelay` and `RemoveRelay` route the same user intent
+through the collaborator: a removed relay is deactivated out of active
+selection (kept as a future candidate), and a re-added relay is made
+immediately eligible again.
 `Exposure` owns the logical multi-relay lifecycle and listener membership; it
 does not implement discovery or relay-selection policy. Applications provide
 only user intent — explicit relays, discovery on/off, max active relays, and

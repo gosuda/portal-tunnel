@@ -254,7 +254,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 
 	if controller != nil {
 		go func() {
-			err := controller.Watch(exposureCtx, exposure.ActiveRelays, exposure.SetRelays)
+			err := controller.Watch(exposureCtx, exposure.ActiveRelays, exposure.applyRelays)
 			if err != nil && !errors.Is(err, context.Canceled) && !exposure.closed() {
 				log.Warn().Err(err).Msg("relay discovery watch exited")
 			}
@@ -269,9 +269,11 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	return exposure, nil
 }
 
-// SetRelays replaces the concrete relay membership without restarting the
-// exposure.
-func (e *Exposure) SetRelays(relays []string) error {
+// applyRelays is the discovery collaborator's membership callback: it
+// applies a newly selected concrete relay set without restarting the
+// exposure. It is unexported so external callers cannot bypass discovery
+// policy and overwrite runtime membership directly.
+func (e *Exposure) applyRelays(relays []string) error {
 	relayURLs, err := utils.NormalizeRelayURLs(relays...)
 	if err != nil {
 		return err
@@ -300,7 +302,8 @@ func (e *Exposure) setRelays(relayURLs []string, failOnError bool) error {
 
 // AddRelay adds one concrete relay without restarting the exposure.
 // When discovery is enabled, it updates the controller's explicit relay
-// set, which signals a re-selection and republish through the watch loop.
+// set and clears any ban or suppression on the relay so a re-added relay
+// is immediately eligible; re-selection republishes through the watch loop.
 func (e *Exposure) AddRelay(relayURL string) error {
 	relayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
@@ -318,6 +321,7 @@ func (e *Exposure) AddRelay(relayURL string) error {
 		next := append([]string(nil), e.explicitRelays...)
 		e.mu.Unlock()
 		e.discovery.SetExplicitRelays(next)
+		e.discovery.Allow(relayURL)
 		return nil
 	}
 	e.mu.Lock()
@@ -331,7 +335,10 @@ func (e *Exposure) AddRelay(relayURL string) error {
 
 // RemoveRelay removes one concrete relay without restarting the exposure.
 // When discovery is enabled, it updates the controller's explicit relay
-// set, which signals a re-selection and republish through the watch loop.
+// set and deactivates the relay — the relay drops out of active selection
+// while keeping its discovered descriptor as a candidate, so discovery
+// does not immediately re-select it. Re-selection republishes through the
+// watch loop.
 func (e *Exposure) RemoveRelay(relayURL string) error {
 	relayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
@@ -351,6 +358,7 @@ func (e *Exposure) RemoveRelay(relayURL string) error {
 		e.explicitRelays = next
 		e.mu.Unlock()
 		e.discovery.SetExplicitRelays(next)
+		e.discovery.Deactivate(relayURL)
 		return nil
 	}
 	e.mu.Lock()
@@ -544,10 +552,29 @@ func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
 
 	// Feed terminal relay failures directly to the discovery collaborator.
 	// This bypasses the Updates channel so slow consumers cannot delay
-	// policy reactions. The FailureKind vocabulary mirrors RelayFailure's
-	// string values, so a plain conversion crosses the boundary.
+	// policy reactions. discoveryFailureKind maps the classification
+	// explicitly so the two string types never form a hidden cross-package
+	// value contract.
 	if status.State == RelayFailed && e.discovery != nil {
-		e.discovery.Report(status.RelayURL, discovery.FailureKind(status.Failure))
+		e.discovery.Report(status.RelayURL, discoveryFailureKind(status.Failure))
+	}
+}
+
+// discoveryFailureKind maps an SDK relay failure classification onto the
+// discovery failure vocabulary. The mapping is a switch, not a string
+// conversion, so neither package's literal values become a cross-package
+// contract.
+func discoveryFailureKind(failure RelayFailure) discovery.FailureKind {
+	switch failure {
+	case RelayFailureMITM:
+		return discovery.FailureMITM
+	case RelayFailureTerminal:
+		return discovery.FailureTerminal
+	default:
+		// RelayFailureRuntime, an unclassified failure, and RelayFailureNone
+		// on a Failed status all mean "listener stopped, relay suspect":
+		// suppression/backoff, not a permanent ban.
+		return discovery.FailureRuntime
 	}
 }
 

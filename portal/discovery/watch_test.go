@@ -6,19 +6,50 @@ import (
 	"time"
 )
 
-// FailureKind's string values mirror sdk.RelayFailure so callers forward
-// classifications with a plain conversion (see the sdk-side value pin). If a
-// value drifts here or there, failures are silently misclassified, so both
-// sides pin the literals.
-func TestFailureKindVocabularyValues(t *testing.T) {
-	for value, want := range map[FailureKind]string{
-		FailureRuntime:  "runtime",
-		FailureTerminal: "terminal",
-		FailureMITM:     "mitm",
-	} {
-		if string(value) != want {
-			t.Fatalf("FailureKind value = %q, want %q", string(value), want)
-		}
+// Deactivate must preserve the explicit-disconnect semantic: a relay the
+// user removed stays out of active selection (suppressed) while keeping its
+// verified descriptor as a future candidate.
+func TestControllerDeactivateDropsRelayFromSelection(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	controller := NewController(nil)
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayB))
+
+	controller.Deactivate(relayA)
+
+	routes := controller.relaySet.SelectRelays(routeState{
+		MaxActiveRelays: 1,
+	})
+	if len(routes) != 1 || routes[0].RelayURL != relayB {
+		t.Fatalf("selected routes = %+v, want only relay B after deactivation", routes)
+	}
+}
+
+// Allow restores eligibility: a deactivated relay that is explicitly
+// re-added must be selectable again immediately, without waiting out the
+// recovery backoff.
+func TestControllerAllowClearsDeactivation(t *testing.T) {
+	const relayURL = "https://relay.example"
+	controller := NewController(nil)
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayURL))
+
+	controller.Deactivate(relayURL)
+	routes := controller.relaySet.SelectRelays(routeState{
+		MaxActiveRelays: 1,
+	})
+	if len(routes) != 0 {
+		t.Fatalf("selected routes = %+v, want deactivated relay excluded", routes)
+	}
+
+	controller.Allow(relayURL)
+	routes = controller.relaySet.SelectRelays(routeState{
+		MaxActiveRelays: 1,
+	})
+	if len(routes) != 1 || routes[0].RelayURL != relayURL {
+		t.Fatalf("selected routes = %+v, want relay selectable after allow", routes)
 	}
 }
 
