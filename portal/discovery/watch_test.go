@@ -38,3 +38,23 @@ func TestControllerBanExcludesExplicitRelay(t *testing.T) {
 		t.Fatalf("selected routes = %+v, want banned relay excluded", routes)
 	}
 }
+
+func TestControllerFailureDedupeIsPerSelectionEpisode(t *testing.T) {
+	const relayURL = "https://relay.example"
+	controller := NewController([]string{relayURL})
+
+	controller.ReportFailure(relayURL)
+	if _, marked := controller.failedRelays[relayURL]; !marked {
+		t.Fatal("first ReportFailure did not mark relay")
+	}
+
+	controller.beginSelectionEpisode([]string{relayURL})
+	if _, marked := controller.failedRelays[relayURL]; marked {
+		t.Fatal("beginSelectionEpisode did not clear failedRelays marker")
+	}
+
+	controller.ReportFailure(relayURL)
+	if _, marked := controller.failedRelays[relayURL]; !marked {
+		t.Fatal("second ReportFailure after reselection was ignored; dedupe must be per episode")
+	}
+}

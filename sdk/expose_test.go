@@ -426,16 +426,19 @@ func TestExposureListenerSelfExitKeepsExplicitRelayConfigured(t *testing.T) {
 }
 
 func TestExposureSetRelaysReplacesStatusMembership(t *testing.T) {
-	exposure := newExposureStateTest(t, "https://relay-a.example")
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	exposure := newExposureStateTest(t, relayA)
 	exposure.syncRelayStatuses(exposure.relayURLs)
 
-	exposure.mu.Lock()
-	exposure.relayURLs = []string{"https://relay-b.example"}
-	exposure.mu.Unlock()
-	exposure.syncRelayStatuses(exposure.relayURLs)
+	if err := exposure.SetRelays([]string{relayB}); err != nil {
+		t.Fatalf("SetRelays() error = %v", err)
+	}
 
 	relays := exposure.Relays()
-	if len(relays) != 1 || relays[0].RelayURL != "https://relay-b.example" {
+	if len(relays) != 1 || relays[0].RelayURL != relayB {
 		t.Fatalf("Relays() = %+v, want only relay B", relays)
 	}
 }

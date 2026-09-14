@@ -400,8 +400,8 @@ func SelectPriority(states []RelayState, routeState RouteState) []string {
 		}
 		seen[relayURL] = struct{}{}
 		for _, state := range states {
-			if state.Descriptor.APIHTTPSAddr == relayURL && !state.Banned && !state.Dead &&
-				(state.suppressActiveUntil.IsZero() || !state.suppressActiveUntil.After(now)) &&
+			suppressed := !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now)
+			if state.Descriptor.APIHTTPSAddr == relayURL && !state.Banned && !state.Dead && !suppressed &&
 				state.supportsRequiredTransports(routeState, now) {
 				explicit = append(explicit, relayURL)
 				break

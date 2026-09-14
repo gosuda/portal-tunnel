@@ -263,30 +263,32 @@ func forwardDemoDiscoveryFeedback(ctx context.Context, exposure *sdk.Exposure, c
 		select {
 		case <-ctx.Done():
 			return
-		case update := <-exposure.Updates():
-			if update.State == sdk.RelayFailed {
-				if update.Failure == sdk.RelayFailureMITM {
-					controller.Ban(update.RelayURL)
-				} else {
-					controller.ReportFailure(update.RelayURL)
-				}
-			}
-			statuses := exposure.Relays()
-			active := make([]string, 0, len(statuses))
-			for _, status := range statuses {
-				if status.Active() {
-					active = append(active, status.RelayURL)
-					continue
-				}
-				if status.Failure == sdk.RelayFailureMITM {
-					controller.Ban(status.RelayURL)
-				} else {
-					controller.ReportFailure(status.RelayURL)
-				}
-			}
-			controller.ReportActive(active)
+		case <-exposure.Updates():
+			reportRelayStatuses(exposure, controller)
 		}
 	}
+}
+
+// reportRelayStatuses feeds the current SDK relay statuses into the discovery
+// controller: failed relays are banned (MITM) or reported for suppression
+// backoff, active relays form the controller's active set, and relays that are
+// still connecting or idle stay pending until they transition.
+func reportRelayStatuses(exposure *sdk.Exposure, controller *discovery.Controller) {
+	statuses := exposure.Relays()
+	active := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		switch {
+		case status.State == sdk.RelayFailed:
+			if status.Failure == sdk.RelayFailureMITM {
+				controller.Ban(status.RelayURL)
+			} else {
+				controller.ReportFailure(status.RelayURL)
+			}
+		case status.Active():
+			active = append(active, status.RelayURL)
+		}
+	}
+	controller.ReportActive(active)
 }
 
 // resolveDemoIdentity parses an inline identity or existing file. It generates

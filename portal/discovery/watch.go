@@ -17,7 +17,7 @@ type Controller struct {
 
 	mu              sync.RWMutex
 	activeRelayURLs []string
-	failedRelays    map[string]struct{}
+	failedRelays    map[string]struct{} // per selection episode: markers cleared on republish so a reselected relay's later failure reports again
 }
 
 // NewController creates a discovery controller from bootstrap relay URLs.
@@ -100,6 +100,29 @@ func (c *Controller) activeRelays() []string {
 	return append([]string(nil), c.activeRelayURLs...)
 }
 
+// beginSelectionEpisode starts a new failure-dedupe episode for every relay in
+// the published selection set, clearing their failedRelays markers so a later
+// ReportFailure reports again even if the relay failed in a prior episode.
+func (c *Controller) beginSelectionEpisode(relayURLs []string) {
+	c.mu.Lock()
+	for _, relayURL := range relayURLs {
+		delete(c.failedRelays, relayURL)
+	}
+	c.mu.Unlock()
+}
+
+// Reconcile prompts the controller to re-evaluate its relay selection
+// immediately. It is intended for callers that have changed policy inputs
+// (such as the agent's max_active_relays) so membership reconciles without
+// waiting for the next poll tick. It signals the Watch loop, which re-reads
+// its state callback and republishes if the selection changed.
+func (c *Controller) Reconcile() {
+	if c == nil {
+		return
+	}
+	c.signal()
+}
+
 // Watch refreshes discovery and publishes selected concrete relay URLs.
 func (c *Controller) Watch(
 	ctx context.Context,
@@ -148,6 +171,7 @@ func (c *Controller) Watch(
 			}
 			selected = next
 			published = true
+			c.beginSelectionEpisode(next)
 		}
 
 		select {
