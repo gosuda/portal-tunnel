@@ -168,7 +168,10 @@ func WithDiscovery(maxActiveRelays int) Option {
 // the controller may expand membership with bootstrap candidates after
 // discovery refresh confirms them. Applications do not interact with the
 // controller directly — AddRelay, RemoveRelay, and SetMaxActiveRelays route
-// intent through it automatically.
+// intent through it automatically. An empty relay list is allowed only in
+// this mode: the resolved explicit-plus-bootstrap membership must still be
+// non-empty, and without WithDiscovery at least one explicit relay is
+// required.
 func Expose(ctx context.Context, identity types.Identity, relays []string, opts ...Option) (*Exposure, error) {
 	var cfg options
 	for _, option := range opts {
