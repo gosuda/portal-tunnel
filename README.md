@@ -108,7 +108,7 @@ Portal prints a public HTTPS URL for your local app instantly. More examples:
 # Custom name and relay
 portal expose 3000 --name myapp --relays https://portal.example.com --discovery=false
 
-# Prefer IVNP overlay transport when available
+# Prefer IVNP overlay transport for the reverse stream
 portal expose 3000 --overlay
 
 # Mount frontend and API behind one URL
@@ -126,6 +126,8 @@ portal expose --name paid-app \
 portal expose localhost:25565 --name minecraft --tcp
 
 ```
+
+**IVNP overlay transport.** `--overlay` prefers IVNP-routed overlay transport: Portal still selects and authorizes the two endpoints (public ingress and overlay gateway) and issues the delegated reverse capability, while IVNP owns the network path between gateway and ingress — it may carry that one logical hop over multiple internal I2P-style router hops that are invisible to Portal. Direct reverse transport remains the default and the fallback; Portal-level multi-hop routing is not a feature (the old relay-chain model and WireGuard mesh were removed). **Portal selects and authorizes endpoints. IVNP connects destinations. Portal does not own the path between them.** See [IVNP overlay transport](docs/src/routes/architecture/+page.md) for the canonical explanation.
 
 See [CLI Reference](cmd/portal-tunnel/README.md) for the full route syntax and
 [API Reference](docs/src/routes/api-reference/+page.md#payments) for the x402

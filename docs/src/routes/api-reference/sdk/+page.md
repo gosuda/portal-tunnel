@@ -125,6 +125,8 @@ endpoint.
 The relay preserves the `overlay` preference for the lease lifetime. By
 default it issues the ingress relay's direct endpoint. When `overlay` is true,
 it prefers an available overlay gateway and falls back to the direct endpoint.
+The SDK sees no IVNP topology; it consumes the same generic reverse endpoint
+either way. See [IVNP overlay transport](/architecture#optional-relay-overlay).
 
 ## Renew And Unregister
 

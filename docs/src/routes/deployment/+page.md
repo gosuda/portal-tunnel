@@ -65,7 +65,7 @@ Embedded DNS logs its DS as soon as the local DNS listeners start; startup does 
 `LANDING_PAGE_ENABLED` supplies the initial value. Changes made from the admin
 dashboard are stored in `IDENTITY_PATH/policy.json` and survive restarts.
 
-To enable the optional relay overlay, set `DISCOVERY=true`, mount an IVNP
+To enable the optional IVNP overlay, set `DISCOVERY=true`, mount an IVNP
 `RouterConfig` JSON file, and set `IVNP_CONFIG` to its container path. A file
 containing `{}` uses in-memory router state and needs no writable state mount.
 Replace legacy `ivnp.conf` files with the new JSON format. For persistent router
@@ -73,7 +73,7 @@ state, explicitly configure and mount a dedicated private directory as described
 in [IVNP overlay configuration](/configuration#ivnp-overlay).
 Invalid overlay configuration fails startup. Destination warmup runs in the
 background; a runtime overlay failure leaves public ingress and direct reverse
-transport running.
+transport running. See [IVNP overlay transport](/architecture#optional-relay-overlay).
 
 ## Custom Community Frontend
 

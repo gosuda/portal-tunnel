@@ -30,7 +30,10 @@ The tunnel process owns:
 
 When configured, the relay's single overlay runtime owns gateway selection,
 delegated reverse authorization, IVNP forwarding, and gateway replacement.
-Those concerns are not part of SDK relay selection or the lease model.
+Those concerns are not part of SDK relay selection or the lease model. Portal's
+routing decision stops at endpoint selection; IVNP owns the gateway→ingress path
+including internal hops, and the SDK keeps consuming the same generic reverse
+endpoint. **Portal selects and authorizes endpoints. IVNP connects destinations. Portal does not own the path between them.** See [IVNP overlay transport](/architecture#optional-relay-overlay).
 
 This split is why Portal can use public relays without giving relay operators
 tenant plaintext.

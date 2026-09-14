@@ -71,6 +71,9 @@ Portal 会立即为你的本地应用打印一个公共 HTTPS URL。更多示例
 # 自定义名称和中继
 portal expose 3000 --name myapp --relays https://portal.example.com --discovery=false
 
+# 优先使用 IVNP overlay transport（当可用时）
+portal expose 3000 --overlay
+
 # 把前端和 API 挂到同一个 URL 后面
 portal expose --name myapp \
   --http-route /api=http://127.0.0.1:3001 \
@@ -86,6 +89,8 @@ portal expose --name paid-app \
 portal expose localhost:25565 --name minecraft --tcp
 
 ```
+
+**IVNP overlay transport。** `--overlay` 优先使用 IVNP 路由的 overlay 传输：Portal 仍然选择并授权两个端点（公共 ingress 和 overlay gateway），并签发委托的反向 capability；而 IVNP 拥有 gateway 到 ingress 之间的网络路径——它可能把这一个逻辑跳通过多个内部 I2P 式路由跳来承载，这些跳对 Portal 不可见。直接反向传输仍然是默认和回退方式；Portal 层面的多跳路由不是功能（旧的 relay-chain 模型和 WireGuard mesh 已被移除）。**Portal selects and authorizes endpoints. IVNP connects destinations. Portal does not own the path between them.** 完整说明请参阅 [IVNP overlay transport](docs/src/routes/architecture/+page.md)。
 
 对于付费路由，支付策略运行在隧道进程内，而不是中继上。默认使用 Sui mainnet；加上 `--x402-testnet` 可切换到 Sui testnet，这个选择与中继自身的支付设置无关。隧道会在同一个公共 origin 上提供 `/x402/client.js` 和 `/x402/prepare`。浏览器前端可以导入 `/x402/client.js` 并调用 `x402Fetch()`；原生客户端可以直接调用 `/x402/prepare`，用自己的 Sui 运行时签名返回的交易，并发送签名后的 `X-PAYMENT`。
 
