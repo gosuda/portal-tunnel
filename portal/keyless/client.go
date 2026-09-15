@@ -45,6 +45,7 @@ type Client struct {
 	tlsConfig   *tls.Config
 	signer      io.Closer
 	closeOnce   sync.Once
+	closeErr    error
 }
 
 // NewClient creates one lease-scoped tenant TLS client.
@@ -137,18 +138,19 @@ func (c *Client) TLSConfig() *tls.Config {
 	return c.tlsConfig.Clone()
 }
 
-// Close releases the remote signer backing the TLS configuration.
+// Close releases the remote signer backing the TLS configuration. It is safe
+// to call more than once: the signer is closed exactly once and every call
+// returns the result of that first close attempt.
 func (c *Client) Close() error {
 	if c == nil {
 		return nil
 	}
-	var err error
 	c.closeOnce.Do(func() {
 		if c.signer != nil {
-			err = c.signer.Close()
+			c.closeErr = c.signer.Close()
 		}
 	})
-	return err
+	return c.closeErr
 }
 
 func ResolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte, []byte, error) {
