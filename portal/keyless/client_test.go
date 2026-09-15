@@ -112,6 +112,24 @@ func TestVerifyRemoteSignerUnsupportedKey(t *testing.T) {
 	}
 }
 
+func TestClientClosePreservesFirstError(t *testing.T) {
+	t.Parallel()
+	closer := &failingCloseResource{}
+	client := &Client{signer: closer}
+
+	first := client.Close()
+	second := client.Close()
+	if first == nil || second == nil {
+		t.Fatalf("Close() must keep reporting the first close error; got first=%v second=%v", first, second)
+	}
+	if !errors.Is(second, first) {
+		t.Fatalf("second Close() = %v, want first close error %v", second, first)
+	}
+	if closer.calls != 1 {
+		t.Fatalf("underlying resource closed %d times, want exactly 1", closer.calls)
+	}
+}
+
 func selfTestSigners(t *testing.T) map[string]crypto.Signer {
 	t.Helper()
 	return map[string]crypto.Signer{
@@ -174,4 +192,13 @@ func (s failingSigner) Public() crypto.PublicKey { return s.public }
 
 func (s failingSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
 	return nil, errors.New("sign endpoint unavailable")
+}
+
+type failingCloseResource struct {
+	calls int
+}
+
+func (c *failingCloseResource) Close() error {
+	c.calls++
+	return errors.New("signer close failed")
 }
