@@ -40,13 +40,14 @@ CLI or agent callers, and routed HTTP payment settings belong to
 events update it, while `Relays`, `Updates`, and `WaitReady` read from that
 state. Agent status types are not part of the SDK contract.
 
-ECH material and semantics live in `portal/ech`: tenant route hostname
-derivation, fallback hostname hashing, key/ECHConfigList preparation, lease
-registration validation, and the HTTPS-record value encoding. The SDK prepares
-`ech.Materials` once per lease session and the lease client only transports
-the prepared fields; the relay validates them through the same package while
-keeping lease lifecycle and DNS publication orchestration to itself. TLS
-mechanics (keyless signing, ECH key installation) remain in `portal/keyless`.
+`portal/keyless` is the tenant TLS feature boundary: it owns keyless remote
+signing, TLS config construction, and the ECH layer of that path — tenant
+route hostname derivation, fallback hostname hashing, key/ECHConfigList
+preparation, lease registration validation, and the HTTPS-record value
+encoding. The SDK prepares `keyless.ECHMaterials` once per lease session and
+the lease client only transports the prepared fields; the relay validates
+them through the same package while keeping lease lifecycle and DNS
+publication orchestration to itself.
 
 ## Identity challenges
 

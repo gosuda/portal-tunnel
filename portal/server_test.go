@@ -19,7 +19,6 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/ech"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -648,7 +647,7 @@ func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
 			Address: server.identity.Address,
 		},
 		RouteHostname: routeHostname,
-		HostnameHash:  ech.HostnameHash(publicHostname),
+		HostnameHash:  keyless.ECHHostnameHash(publicHostname),
 		ECHConfigList: echConfigList,
 		UDPEnabled:    true,
 		TCPEnabled:    true,

@@ -16,8 +16,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	"github.com/gosuda/portal-tunnel/v2/portal/ech"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
@@ -118,7 +118,7 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 			return record, true
 		}
 	}
-	hostHash := ech.HostnameHash(host)
+	hostHash := keyless.ECHHostnameHash(host)
 	for _, record := range r.records {
 		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
 			continue
@@ -195,7 +195,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			return nil, types.RegisterResponse{}, err
 		}
 	}
-	hostnameHash, echConfigList, err := ech.NormalizeRegistration(routeHostname, strings.TrimSpace(req.HostnameHash), bytes.Clone(req.ECHConfigList), publicHostname, r.rootHostname)
+	hostnameHash, echConfigList, err := keyless.NormalizeECHRegistration(routeHostname, strings.TrimSpace(req.HostnameHash), bytes.Clone(req.ECHConfigList), publicHostname, r.rootHostname)
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
 	}
@@ -643,7 +643,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 		return types.RegisterChallengeResponse{}, errFeatureUnavailable
 	}
 	if len(req.ECHConfigList) > 0 {
-		echConfigList, err := ech.NormalizeConfigList(req.ECHConfigList)
+		echConfigList, err := keyless.NormalizeEncryptedClientHelloConfigList(req.ECHConfigList)
 		if err != nil {
 			return types.RegisterChallengeResponse{}, err
 		}
@@ -853,7 +853,7 @@ func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 	name := record.Name
 	hostname := record.Hostname
 	if record.stream != nil && record.HostnameHash != "" {
-		if publicHostname, err := utils.LeaseHostname(record.Name, r.rootHostname); err == nil && ech.HostnameHash(publicHostname) == record.HostnameHash {
+		if publicHostname, err := utils.LeaseHostname(record.Name, r.rootHostname); err == nil && keyless.ECHHostnameHash(publicHostname) == record.HostnameHash {
 			hostname = publicHostname
 		}
 	} else if record.HostnameHash != "" && record.Hostname != "" {

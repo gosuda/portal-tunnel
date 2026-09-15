@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/ech"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -209,7 +209,7 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	record, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:      newTestLeaseIdentity(t, "auto-ech"),
 		RouteHostname: routeHostname,
-		HostnameHash:  ech.HostnameHash(publicHostname),
+		HostnameHash:  keyless.ECHHostnameHash(publicHostname),
 	}, "203.0.113.10", "")
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -245,7 +245,7 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 
 	if _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:     newTestLeaseIdentity(t, "hash-only"),
-		HostnameHash: ech.HostnameHash("hash-only.example.com"),
+		HostnameHash: keyless.ECHHostnameHash("hash-only.example.com"),
 	}, "203.0.113.10", ""); err == nil {
 		t.Fatal("Register(fallback hash only) error = nil, want error")
 	}
@@ -253,7 +253,7 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	if _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:      newTestLeaseIdentity(t, "attacker"),
 		RouteHostname: "ech-attacker.example.com",
-		HostnameHash:  ech.HostnameHash("victim.example.com"),
+		HostnameHash:  keyless.ECHHostnameHash("victim.example.com"),
 	}, "203.0.113.10", ""); err == nil {
 		t.Fatal("Register(mismatched hostname hash) error = nil, want error")
 	}

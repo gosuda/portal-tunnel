@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/portal/ech"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -27,10 +27,7 @@ func (m *Manager) SyncECHConfig(ctx context.Context, hostname string, echConfigL
 	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return fmt.Errorf("hostname %q is outside acme base domain %q", hostname, m.cfg.BaseDomain)
 	}
-	if port < 0 || port > 65535 {
-		return errors.New("https record port must be between 0 and 65535")
-	}
-	svcParams, err := ech.HTTPSRecordValue(echConfigList, port)
+	svcParams, err := keyless.HTTPSRecordValue(echConfigList, port)
 	if err != nil {
 		return err
 	}
