@@ -296,10 +296,15 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	self, descriptors, err := s.overlayIssueDescriptors(time.Now().UTC())
-	if err != nil {
-		writeAPIErrorResponse(w, err)
-		return
+	var self types.RelayDescriptor
+	var descriptors []types.RelayDescriptor
+	if challenge.Request.Overlay {
+		self, descriptors, err = s.overlayIssueDescriptors(time.Now().UTC())
+		if err != nil {
+			log.Warn().Err(err).Str("lease", challenge.Request.Identity.Key()).Msg("relay overlay descriptors unavailable; using direct reverse transport")
+			self = types.RelayDescriptor{}
+			descriptors = nil
+		}
 	}
 	record, resp, err := s.registry.Register(challenge.Request, clientIP, req.ReportedIP, self, descriptors)
 	if err != nil {
@@ -388,12 +393,12 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	self, descriptors, err := s.overlayIssueDescriptors(time.Now().UTC())
+	resp, endpointInput, err := s.registry.Renew(req, clientIP)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	resp, err := s.registry.Renew(req, clientIP, self, descriptors)
+	resp.ReverseEndpoint, err = s.issueReverseEndpoint(endpointInput)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return
@@ -434,12 +439,12 @@ func (s *Server) handleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	self, descriptors, err := s.overlayIssueDescriptors(time.Now().UTC())
+	endpointInput, err := s.registry.resolveReverseEndpoint(req)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	endpoint, err := s.registry.RefreshReverseEndpoint(req, self, descriptors)
+	endpoint, err := s.issueReverseEndpoint(endpointInput)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return

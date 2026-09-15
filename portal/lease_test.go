@@ -97,12 +97,16 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 		t.Fatalf("Lookup() = %v, %v, want registered lease", lookedUp, ok)
 	}
 
-	renewed, err := registry.Renew(types.RenewRequest{
+	renewed, endpointInput, err := registry.Renew(types.RenewRequest{
 		AccessToken: registered.AccessToken,
 		TTL:         int(time.Minute / time.Second),
-	}, "203.0.113.11", types.RelayDescriptor{}, nil)
+	}, "203.0.113.11")
 	if err != nil {
 		t.Fatalf("Renew() error = %v", err)
+	}
+	renewed.ReverseEndpoint, err = registry.issueReverseEndpoint(endpointInput, types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("issueReverseEndpoint() after Renew error = %v", err)
 	}
 	if record.ClientIP != "203.0.113.11" {
 		t.Fatalf("Renew() client ip = %q, want %q", record.ClientIP, "203.0.113.11")
@@ -119,9 +123,13 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if !renewed.ReverseEndpoint.ExpiresAt.Equal(renewed.ExpiresAt) {
 		t.Fatalf("Renew() reverse expiry = %v, want %v", renewed.ReverseEndpoint.ExpiresAt, renewed.ExpiresAt)
 	}
-	refreshed, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: renewed.AccessToken}, types.RelayDescriptor{}, nil)
+	endpointInput, err = registry.resolveReverseEndpoint(types.ReverseEndpointRequest{AccessToken: renewed.AccessToken})
 	if err != nil {
 		t.Fatalf("RefreshReverseEndpoint() error = %v", err)
+	}
+	refreshed, err := registry.issueReverseEndpoint(endpointInput, types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("issueReverseEndpoint() after RefreshReverseEndpoint error = %v", err)
 	}
 	if refreshed.Capability == renewed.ReverseEndpoint.Capability || refreshed.URL != renewed.ReverseEndpoint.URL {
 		t.Fatalf("RefreshReverseEndpoint() = %#v, want rotated direct capability", refreshed)
@@ -171,10 +179,10 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	if _, err := registry.admitLeaseByToken(firstResponse.AccessToken, false); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token admission error = %v, want unauthorized", err)
 	}
-	if _, err := registry.Renew(types.RenewRequest{AccessToken: firstResponse.AccessToken}, "203.0.113.12", types.RelayDescriptor{}, nil); !errors.Is(err, errUnauthorized) {
+	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: firstResponse.AccessToken}, "203.0.113.12"); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token renew error = %v, want unauthorized", err)
 	}
-	if _, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}, types.RelayDescriptor{}, nil); !errors.Is(err, errUnauthorized) {
+	if _, err := registry.resolveReverseEndpoint(types.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token reverse refresh error = %v, want unauthorized", err)
 	}
 	if err := registry.verifySigningAccessToken(firstResponse.AccessToken); !errors.Is(err, errUnauthorized) {
@@ -478,10 +486,10 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	if _, err := restarted.admitReverseCapability(resp.ReverseEndpoint.Capability); !errors.Is(err, errLeaseNotFound) {
 		t.Fatalf("admitReverseCapability() after restart = %v, want lease not found", err)
 	}
-	if _, err := restarted.Renew(types.RenewRequest{AccessToken: resp.AccessToken}, "203.0.113.10", types.RelayDescriptor{}, nil); !errors.Is(err, errLeaseNotFound) {
+	if _, _, err := restarted.Renew(types.RenewRequest{AccessToken: resp.AccessToken}, "203.0.113.10"); !errors.Is(err, errLeaseNotFound) {
 		t.Fatalf("Renew() after restart = %v, want lease not found", err)
 	}
-	if _, err := restarted.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: resp.AccessToken}, types.RelayDescriptor{}, nil); !errors.Is(err, errLeaseNotFound) {
+	if _, err := restarted.resolveReverseEndpoint(types.ReverseEndpointRequest{AccessToken: resp.AccessToken}); !errors.Is(err, errLeaseNotFound) {
 		t.Fatalf("RefreshReverseEndpoint() after restart = %v, want lease not found", err)
 	}
 	if err := restarted.verifySigningAccessToken(resp.AccessToken); !errors.Is(err, errLeaseNotFound) {
@@ -491,7 +499,7 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	if _, err := restarted.admitReverseCapability("forged"); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("admitReverseCapability() forged = %v, want unauthorized", err)
 	}
-	if _, err := restarted.Renew(types.RenewRequest{AccessToken: "forged"}, "203.0.113.10", types.RelayDescriptor{}, nil); !errors.Is(err, errUnauthorized) {
+	if _, _, err := restarted.Renew(types.RenewRequest{AccessToken: "forged"}, "203.0.113.10"); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("Renew() forged = %v, want unauthorized", err)
 	}
 }

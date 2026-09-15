@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -20,9 +21,93 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
+
+func TestLeaseTokenCheckedBeforeOverlayDescriptorSigning(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL: "https://portal.example.com",
+		StateDir:  tempStateDir(t),
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	server.overlay = &overlay.Runtime{}
+	server.relaySet = discovery.NewRelaySet(nil)
+	server.authority = nil
+
+	for name, test := range map[string]struct {
+		path    string
+		request any
+		handle  func(http.ResponseWriter, *http.Request)
+	}{
+		"renew": {
+			path:    types.PathSDKRenew,
+			request: types.RenewRequest{AccessToken: "forged"},
+			handle:  server.handleRenew,
+		},
+		"reverse endpoint": {
+			path:    types.PathSDKReverse,
+			request: types.ReverseEndpointRequest{AccessToken: "forged"},
+			handle:  server.handleReverseEndpoint,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, err := json.Marshal(test.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, test.path, bytes.NewReader(body))
+			rec := httptest.NewRecorder()
+			test.handle(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want token rejection %d", rec.Code, http.StatusForbidden)
+			}
+		})
+	}
+}
+
+func TestOverlayDescriptorFailureFallsBackToDirectEndpoint(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL: "https://portal.example.com",
+		StateDir:  tempStateDir(t),
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	server.overlay = &overlay.Runtime{}
+	server.registry.overlay = server.overlay
+	server.relaySet = discovery.NewRelaySet(nil)
+	server.authority = nil
+
+	record, _, err := server.registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "overlay-descriptor-fallback"),
+		Overlay:  true,
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	t.Cleanup(record.Close)
+
+	endpoint, err := server.issueReverseEndpoint(reverseEndpointInput{
+		leaseIdentity: record.Identity,
+		leaseID:       record.id,
+		expiresAt:     record.ExpiresAt,
+		useOverlay:    true,
+	})
+	if err != nil {
+		t.Fatalf("issueReverseEndpoint() error = %v", err)
+	}
+	if endpoint.Overlay || endpoint.URL != server.registry.reverseURL {
+		t.Fatalf("endpoint = %#v, want direct fallback", endpoint)
+	}
+}
 
 var (
 	testLeasePortsMu sync.Mutex

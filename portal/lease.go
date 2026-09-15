@@ -359,7 +359,12 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		}
 		replaced.Close()
 	}
-	reverseEndpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, req.Overlay, "", self, descriptors)
+	reverseEndpoint, err := r.issueReverseEndpoint(reverseEndpointInput{
+		leaseIdentity: leaseIdentity,
+		leaseID:       leaseID,
+		expiresAt:     expiresAt,
+		useOverlay:    req.Overlay,
+	}, self, descriptors)
 	if err != nil {
 		r.mu.Lock()
 		for i, current := range r.records {
@@ -435,13 +440,21 @@ func (r *leaseRegistry) admitLeaseIdentity(key, leaseID string, now time.Time, r
 	return record, nil
 }
 
-func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.RenewResponse, error) {
+type reverseEndpointInput struct {
+	leaseIdentity types.Identity
+	leaseID       string
+	expiresAt     time.Time
+	failedURL     string
+	useOverlay    bool
+}
+
+func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.RenewResponse, reverseEndpointInput, error) {
 	if r == nil {
-		return types.RenewResponse{}, errFeatureUnavailable
+		return types.RenewResponse{}, reverseEndpointInput{}, errFeatureUnavailable
 	}
 	claims, err := identity.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, time.Now().UTC())
 	if err != nil {
-		return types.RenewResponse{}, errUnauthorized
+		return types.RenewResponse{}, reverseEndpointInput{}, errUnauthorized
 	}
 	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
@@ -454,7 +467,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string, self type
 	record, err := r.recordForVerifiedLease(leaseKey, claims.LeaseID, time.Time{})
 	if err != nil {
 		r.mu.Unlock()
-		return types.RenewResponse{}, err
+		return types.RenewResponse{}, reverseEndpointInput{}, err
 	}
 
 	now := time.Now()
@@ -471,97 +484,93 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string, self type
 	r.policy.IPFilter().RegisterIdentityIP(leaseKey, clientIP)
 	recordIdentity := record.Identity
 	leaseID := record.id
-	overlay := record.Overlay
+	useOverlay := record.Overlay
 	r.mu.Unlock()
 
 	nextAccessToken, _, err := identity.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, recordIdentity, leaseID, ttl)
 	if err != nil {
-		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
-	}
-
-	reverseEndpoint, err := r.issueReverseEndpoint(recordIdentity, leaseID, expiresAt, overlay, "", self, descriptors)
-	if err != nil {
-		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
-	}
-	r.mu.RLock()
-	_, activeErr := r.recordForVerifiedLease(leaseKey, leaseID, time.Now().UTC())
-	r.mu.RUnlock()
-	if activeErr != nil {
-		if r.overlay != nil {
-			r.overlay.ForgetLease(leaseID)
-		}
-		return types.RenewResponse{}, activeErr
+		return types.RenewResponse{}, reverseEndpointInput{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 
 	return types.RenewResponse{
-		ExpiresAt:       expiresAt,
-		AccessToken:     nextAccessToken,
-		ReverseEndpoint: reverseEndpoint,
-	}, nil
+			ExpiresAt:   expiresAt,
+			AccessToken: nextAccessToken,
+		}, reverseEndpointInput{
+			leaseIdentity: recordIdentity,
+			leaseID:       leaseID,
+			expiresAt:     expiresAt,
+			useOverlay:    useOverlay,
+		}, nil
 }
 
-func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, useOverlay bool, failedURL string, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
-	if useOverlay && r.overlay != nil {
-		endpoint, ok, err := r.overlay.IssueEndpoint(overlay.IssueInput{
-			LeaseIdentity: leaseIdentity,
-			LeaseID:       leaseID,
-			ExpiresAt:     expiresAt,
-			FailedURL:     failedURL,
+func (r *leaseRegistry) issueReverseEndpoint(input reverseEndpointInput, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
+	var endpoint types.ReverseEndpoint
+	if input.useOverlay && r.overlay != nil && self.Address != "" {
+		overlayEndpoint, ok, err := r.overlay.IssueEndpoint(overlay.IssueInput{
+			LeaseIdentity: input.leaseIdentity,
+			LeaseID:       input.leaseID,
+			ExpiresAt:     input.expiresAt,
+			FailedURL:     input.failedURL,
 			Self:          self,
 			Descriptors:   descriptors,
 		})
 		if err == nil && ok {
-			return endpoint, nil
+			endpoint = overlayEndpoint
 		}
 		if err != nil {
-			log.Warn().Err(err).Str("lease", leaseIdentity.Key()).Msg("relay overlay endpoint unavailable; using direct reverse transport")
+			log.Warn().Err(err).Str("lease", input.leaseIdentity.Key()).Msg("relay overlay endpoint unavailable; using direct reverse transport")
 		}
 	}
-	capability, claims, err := identity.IssueReverseCapability(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, expiresAt)
-	if err != nil {
-		return types.ReverseEndpoint{}, err
+	if endpoint.URL == "" {
+		capability, claims, err := identity.IssueReverseCapability(r.tokenAuthority, r.tokenIssuer, input.leaseIdentity, input.leaseID, input.expiresAt)
+		if err != nil {
+			return types.ReverseEndpoint{}, err
+		}
+		endpoint = types.ReverseEndpoint{
+			URL:        r.reverseURL,
+			Capability: capability,
+			ExpiresAt:  claims.Expiry.Time().UTC(),
+		}
 	}
-	return types.ReverseEndpoint{
-		URL:        r.reverseURL,
-		Capability: capability,
-		ExpiresAt:  claims.Expiry.Time().UTC(),
-	}, nil
+	r.mu.RLock()
+	_, activeErr := r.recordForVerifiedLease(input.leaseIdentity.Key(), input.leaseID, time.Now().UTC())
+	r.mu.RUnlock()
+	if activeErr != nil {
+		if r.overlay != nil {
+			r.overlay.ForgetLease(input.leaseID)
+		}
+		return types.ReverseEndpoint{}, activeErr
+	}
+	return endpoint, nil
 }
 
-func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
+func (r *leaseRegistry) resolveReverseEndpoint(req types.ReverseEndpointRequest) (reverseEndpointInput, error) {
 	if r == nil {
-		return types.ReverseEndpoint{}, errFeatureUnavailable
+		return reverseEndpointInput{}, errFeatureUnavailable
 	}
 	now := time.Now().UTC()
 	claims, err := identity.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
 	if err != nil {
-		return types.ReverseEndpoint{}, errUnauthorized
+		return reverseEndpointInput{}, errUnauthorized
 	}
 	r.mu.RLock()
 	record, err := r.recordForVerifiedLease(claims.Identity.Key(), claims.LeaseID, now)
 	if err != nil {
 		r.mu.RUnlock()
-		return types.ReverseEndpoint{}, err
+		return reverseEndpointInput{}, err
 	}
 	leaseIdentity := record.Identity
 	leaseID := record.id
 	expiresAt := record.ExpiresAt
-	overlay := record.Overlay
+	useOverlay := record.Overlay
 	r.mu.RUnlock()
-	endpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, overlay, strings.TrimSpace(req.FailedURL), self, descriptors)
-	if err != nil {
-		return types.ReverseEndpoint{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
-	}
-	r.mu.RLock()
-	_, activeErr := r.recordForVerifiedLease(claims.Identity.Key(), leaseID, time.Now().UTC())
-	r.mu.RUnlock()
-	if activeErr != nil {
-		if r.overlay != nil {
-			r.overlay.ForgetLease(leaseID)
-		}
-		return types.ReverseEndpoint{}, activeErr
-	}
-	return endpoint, nil
+	return reverseEndpointInput{
+		leaseIdentity: leaseIdentity,
+		leaseID:       leaseID,
+		expiresAt:     expiresAt,
+		failedURL:     strings.TrimSpace(req.FailedURL),
+		useOverlay:    useOverlay,
+	}, nil
 }
 
 func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, error) {
