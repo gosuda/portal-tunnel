@@ -122,7 +122,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		EncryptedClientHelloConfigList: bytes.Clone(lease.echConfigList),
 	}
 
-	rawConn, err := (&net.Dialer{Timeout: l.dialTimeout}).DialContext(probeCtx, "tcp", dialAddr)
+	rawConn, err := (&net.Dialer{Timeout: defaultDialTimeout}).DialContext(probeCtx, "tcp", dialAddr)
 	if err != nil {
 		return report, fmt.Errorf("dial mitm probe: %w", err)
 	}

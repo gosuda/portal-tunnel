@@ -35,7 +35,6 @@ type listenerConfig struct {
 	ECH        bool
 	BanMITM    bool
 	Metadata   types.LeaseMetadata
-	RetryCount int
 }
 
 type listenerStatus struct {
@@ -102,12 +101,6 @@ type listener struct {
 	udpEnabled        bool
 	tcpEnabled        bool
 	echEnabled        bool
-	dialTimeout       time.Duration
-	readyTarget       int
-	retryCount        int
-	retryWait         time.Duration
-	leaseTTL          time.Duration
-	renewBefore       time.Duration
 
 	stream        *transport.ClientStream
 	datagram      *transport.ClientDatagram
@@ -150,15 +143,9 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		udpEnabled:    cfg.UDPEnabled,
 		tcpEnabled:    cfg.TCPEnabled,
 		echEnabled:    cfg.ECH,
-		dialTimeout:   defaultDialTimeout,
-		readyTarget:   defaultReadyTarget,
-		retryCount:    cfg.RetryCount,
-		retryWait:     defaultRetryWait,
-		leaseTTL:      defaultLeaseTTL,
-		renewBefore:   defaultRenewBefore,
+		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
 	}
-	l.api = newAPIClient(relayurl, defaultRequestTimeout)
 	l.mitmManager = newMITMManager(listenerCtx, l, cfg.BanMITM)
 	l.stream = transport.NewClientStream(defaultReadyTarget, defaultHandshakeTimeout)
 	if l.udpEnabled {
@@ -370,16 +357,11 @@ type listenerSnapshot struct {
 	reverse       types.ReverseEndpoint
 	expiresAt     time.Time
 	publicPort    int
-	publicURLBase *url.URL
 	tenantTLS     *keyless.Client
 }
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
 	s.echConfigList = bytes.Clone(s.echConfigList)
-	if s.publicURLBase != nil {
-		publicURLBase := *s.publicURLBase
-		s.publicURLBase = &publicURLBase
-	}
 	return s
 }
 
@@ -473,10 +455,7 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 }
 
 func (l *listener) publicURLForLease(lease listenerSnapshot) string {
-	baseURL := lease.publicURLBase
-	if baseURL == nil {
-		baseURL = l.relayURL
-	}
+	baseURL := l.relayURL
 	if baseURL == nil {
 		return ""
 	}
@@ -510,10 +489,10 @@ func (l *listener) runLease(ctx context.Context) error {
 	leaseCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	errCh := make(chan error, max(l.readyTarget, 1)+1)
+	errCh := make(chan error, defaultReadyTarget+1)
 	var workers sync.WaitGroup
-	if l.stream != nil && l.readyTarget > 0 {
-		for sessionSlot := range l.readyTarget {
+	if l.stream != nil {
+		for sessionSlot := range defaultReadyTarget {
 			sessionSlot++
 			workers.Add(1)
 			go func() {
@@ -717,7 +696,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 		return nil, err
 	}
 	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: l.dialTimeout},
+		NetDialer: &net.Dialer{Timeout: defaultDialTimeout},
 		Config:    reverseTLS,
 	}
 	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(reverseURL.Host))
@@ -772,7 +751,7 @@ func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tl
 	if l.reverseTLS != nil && l.reverseTLSURL == key {
 		return l.reverseTLS.Clone(), nil
 	}
-	tlsConfig, _, transport, err := utils.NewHTTPTLSClient(ctx, endpoint, l.dialTimeout)
+	tlsConfig, _, transport, err := utils.NewHTTPTLSClient(ctx, endpoint, defaultDialTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -903,19 +882,7 @@ func (l *listener) renewDelay(now time.Time) (time.Duration, error) {
 		return 0, errLeaseRefreshRequired
 	}
 
-	leaseTTL := l.leaseTTL
-	if leaseTTL <= 0 {
-		leaseTTL = defaultLeaseTTL
-	}
-	renewBefore := l.renewBefore
-	if renewBefore <= 0 || renewBefore >= leaseTTL {
-		renewBefore = leaseTTL / 2
-	}
-	if renewBefore <= 0 {
-		renewBefore = time.Second
-	}
-
-	renewAt := lease.expiresAt.Add(-renewBefore)
+	renewAt := lease.expiresAt.Add(-defaultRenewBefore)
 	if !now.Before(renewAt) {
 		return 0, nil
 	}
@@ -933,7 +900,7 @@ func (l *listener) renewLease(ctx context.Context) error {
 
 	resp, err := l.api.renew(requestCtx, types.RenewRequest{
 		AccessToken: lease.accessToken,
-		TTL:         int(l.leaseTTL / time.Second),
+		TTL:         int(defaultLeaseTTL / time.Second),
 		ReportedIP:  utils.ResolvePublicIP(requestCtx),
 		Metadata:    l.metadataSnapshot(),
 	})
@@ -990,7 +957,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		Identity:   l.identity,
 		Metadata:   l.metadataSnapshot(),
 		Overlay:    l.overlay,
-		TTL:        int(l.leaseTTL / time.Second),
+		TTL:        int(defaultLeaseTTL / time.Second),
 		UDPEnabled: l.udpEnabled,
 		TCPEnabled: l.tcpEnabled,
 	}
@@ -1044,7 +1011,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		reverse:       resp.ReverseEndpoint,
 		expiresAt:     resp.ExpiresAt,
 		publicPort:    resp.SNIPort,
-		publicURLBase: l.relayURL,
 		tenantTLS:     tenantTLS,
 	}
 	oldLease := l.lease.Swap(next)
@@ -1094,14 +1060,6 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		logger = logger.With().Int("reverse_session_slot", reverseSessionSlot).Logger()
 	}
 
-	if l.retryCount > 0 && retries > l.retryCount {
-		logger.Error().
-			Err(err).
-			Int("retry_count", l.retryCount).
-			Msg("retry budget exhausted")
-		return false
-	}
-
 	if retries == 1 {
 		transport := ""
 		switch {
@@ -1114,25 +1072,24 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 			logger.Warn().
 				Err(err).
 				Str("transport", transport).
-				Dur("retry_wait", l.retryWait).
+				Dur("retry_wait", defaultRetryWait).
 				Msg("raw transport port pool exhausted; waiting for a port")
-			return utils.SleepOrDone(ctx, l.retryWait)
+			return utils.SleepOrDone(ctx, defaultRetryWait)
 		}
 		logger.Warn().
 			Err(err).
-			Dur("retry_wait", l.retryWait).
+			Dur("retry_wait", defaultRetryWait).
 			Msg("operation failed; retrying")
-		return utils.SleepOrDone(ctx, l.retryWait)
+		return utils.SleepOrDone(ctx, defaultRetryWait)
 	}
 
 	logger.Debug().
 		Err(err).
 		Int("retry_attempt", retries).
-		Int("retry_count", l.retryCount).
-		Dur("retry_wait", l.retryWait).
+		Dur("retry_wait", defaultRetryWait).
 		Msg("operation failed; retrying")
 
-	return utils.SleepOrDone(ctx, l.retryWait)
+	return utils.SleepOrDone(ctx, defaultRetryWait)
 }
 
 type bufferedConn struct {

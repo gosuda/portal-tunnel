@@ -21,7 +21,6 @@ import (
 type RelayState string
 
 const (
-	RelayIdle       RelayState = "idle"
 	RelayConnecting RelayState = "connecting"
 	RelayReady      RelayState = "ready"
 	RelayFailed     RelayState = "failed"
@@ -1013,7 +1012,6 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			ECH:        e.options.ECH,
 			BanMITM:    e.options.BanMITM,
 			Metadata:   e.metadata.Copy(),
-			RetryCount: 0,
 		})
 		if err != nil {
 			e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: err})

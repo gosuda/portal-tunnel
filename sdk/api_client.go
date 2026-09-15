@@ -33,18 +33,13 @@ const (
 var errRelayIncompatible = errors.New("relay is incompatible")
 
 type apiClient struct {
-	relayURL       *url.URL
-	requestTimeout time.Duration
+	relayURL *url.URL
 
 	mu             sync.RWMutex
 	http           *http.Client
 	transport      *http.Transport
 	tls            *tls.Config
 	releaseVersion string
-}
-
-func newAPIClient(relayURL *url.URL, requestTimeout time.Duration) *apiClient {
-	return &apiClient{relayURL: relayURL, requestTimeout: requestTimeout}
 }
 
 // resetTransport tears down the cached HTTP client and TLS config so the next
@@ -72,7 +67,7 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 	bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
 	defer cancel()
 
-	tlsConfig, httpClient, httpTransport, err := utils.NewHTTPTLSClient(bootstrapCtx, c.relayURL, c.requestTimeout)
+	tlsConfig, httpClient, httpTransport, err := utils.NewHTTPTLSClient(bootstrapCtx, c.relayURL, defaultRequestTimeout)
 	if err != nil {
 		return err
 	}
