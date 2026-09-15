@@ -54,8 +54,8 @@ IVNP_CONFIG=
 
 # Embedded authoritative DNS is the default provider and needs no API
 # credentials once the NS delegation above is in place. External providers
-# (cloudflare, gcloud, hetzner, njalla, route53, vultr) are deprecated but
-# remain available until a future major release when selected explicitly.
+# (cloudflare, gcloud, hetzner, njalla, route53, vultr) are supported
+# first-class backends when selected explicitly.
 ACME_DNS_PROVIDER=
 EMBEDDED_DNS_PORT=53
 ```

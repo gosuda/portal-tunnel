@@ -45,10 +45,6 @@ type DNSProvider interface {
 
 func newDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 	switch providerType {
-	case TypeCloudflare, TypeGCloud, TypeHetzner, TypeNjalla, TypeRoute53, TypeVultr:
-		log.Warn().Str("dns_provider", providerType).Msg("external managed DNS providers are deprecated and will be removed in a future major release; delegate the relay subdomain via NS to the embedded provider instead (no DNS API credentials required)")
-	}
-	switch providerType {
 	case TypeEmbedded:
 		return embedded.New(embedded.Config{
 			BaseDomain: cfg.BaseDomain,
