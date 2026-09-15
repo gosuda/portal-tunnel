@@ -91,9 +91,9 @@ func TestListenerReverseSessionReadinessTracksLiveSessions(t *testing.T) {
 	}
 
 	l.reportStreamReady()
-	status := <-l.statusUpdates
+	<-l.statusUpdates
 	l.reportStreamReady()
-	status = <-l.statusUpdates
+	status := <-l.statusUpdates
 	if got := l.readySessions.Load(); got != 2 {
 		t.Fatalf("ready session count = %d, want 2", got)
 	}
