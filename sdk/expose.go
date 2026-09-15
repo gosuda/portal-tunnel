@@ -608,6 +608,10 @@ func (e *Exposure) publishRelayStatus(status RelayStatus) {
 }
 
 func relayStatusEqual(a, b RelayStatus) bool {
+	errorsEqual := a.Err == nil && b.Err == nil
+	if a.Err != nil && b.Err != nil {
+		errorsEqual = a.Err.Error() == b.Err.Error()
+	}
 	return a.RelayURL == b.RelayURL &&
 		a.PublicURL == b.PublicURL &&
 		a.UDPAddr == b.UDPAddr &&
@@ -615,14 +619,7 @@ func relayStatusEqual(a, b RelayStatus) bool {
 		a.Version == b.Version &&
 		a.State == b.State &&
 		a.Failure == b.Failure &&
-		relayErrorsEqual(a.Err, b.Err)
-}
-
-func relayErrorsEqual(a, b error) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return a.Error() == b.Error()
+		errorsEqual
 }
 
 func (e *Exposure) notifyStateChangedLocked() {

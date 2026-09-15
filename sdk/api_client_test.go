@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -77,34 +76,6 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 				t.Fatalf("validateReverseEndpointTransport() error = %v, wantErr %v", err, test.wantErr)
 			}
 		})
-	}
-}
-
-func TestOnlyExplicitIncompatibilityDropsRelayFromActivePool(t *testing.T) {
-	if shouldDropRelayFromActivePool(errors.New("connection closed")) {
-		t.Fatal("ordinary connection failure must not drop a relay from the active pool")
-	}
-	if shouldDropRelayFromActivePool(fmt.Errorf("request failed: %w", io.EOF)) {
-		t.Fatal("EOF must be retried, not treated as relay incompatibility")
-	}
-	if !shouldDropRelayFromActivePool(fmt.Errorf("%w: unsupported version", errRelayIncompatible)) {
-		t.Fatal("protocol mismatch must drop an incompatible relay from the active pool")
-	}
-	for _, code := range []string{
-		types.APIErrorCodeFeatureUnavailable,
-		types.APIErrorCodeUDPDisabled,
-		types.APIErrorCodeTCPPortDisabled,
-	} {
-		if !shouldDropRelayFromActivePool(&types.APIRequestError{Code: code}) {
-			t.Errorf("%s must drop an incompatible relay from the active pool", code)
-		}
-	}
-	unknownClientError := &types.APIRequestError{StatusCode: 404, Code: "unknown_endpoint"}
-	if shouldDropRelayFromActivePool(unknownClientError) {
-		t.Fatal("unclassified client error must not long-term drop a relay from the active pool")
-	}
-	if !isTerminalRelayError(unknownClientError) {
-		t.Fatal("unclassified client error must relinquish the listener for route reconciliation")
 	}
 }
 

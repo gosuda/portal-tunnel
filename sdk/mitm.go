@@ -274,7 +274,7 @@ func (m *mitmManager) logResult(report mitmProbeReport, err error) {
 			Str("address", report.Address)
 		if m.ban {
 			event.Msg("tls termination suspected by self-probe; closing listener")
-			l.reportFailure(errMITMDetected, RelayFailureMITM)
+			l.report(listenerStatus{state: RelayFailed, failure: RelayFailureMITM, err: errMITMDetected})
 			_ = l.Close()
 			return
 		}

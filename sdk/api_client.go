@@ -178,7 +178,12 @@ func (l *listener) registerLease(ctx context.Context, materials keyless.ECHMater
 
 func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, accessToken string) (types.RenewResponse, error) {
 	var resp types.RenewResponse
-	req := newRenewRequest(ttl, accessToken, utils.ResolvePublicIP(ctx), l.metadataSnapshot())
+	req := types.RenewRequest{
+		AccessToken: accessToken,
+		TTL:         int(ttl / time.Second),
+		ReportedIP:  utils.ResolvePublicIP(ctx),
+		Metadata:    l.metadataSnapshot(),
+	}
 	if err := utils.HTTPDoAPIPath(ctx, l.relayHTTPClient(), l.relayURL, http.MethodPost, types.PathSDKRenew, req, nil, &resp); err != nil {
 		return types.RenewResponse{}, err
 	}
@@ -247,15 +252,6 @@ func validateReverseEndpoint(endpoint types.ReverseEndpoint, leaseExpiresAt time
 	}
 	endpoint.URL = parsed.String()
 	return endpoint, nil
-}
-
-func newRenewRequest(ttl time.Duration, accessToken, reportedIP string, metadata types.LeaseMetadata) types.RenewRequest {
-	return types.RenewRequest{
-		AccessToken: accessToken,
-		TTL:         int(ttl / time.Second),
-		ReportedIP:  reportedIP,
-		Metadata:    metadata.Copy(),
-	}
 }
 
 func (l *listener) unregisterLease(ctx context.Context, accessToken string) error {

@@ -50,19 +50,12 @@ type listenerStatus struct {
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
 
-// shouldDropRelayFromActivePool is deliberately limited to errors that prove
-// the relay cannot serve this client. Transport failures, including EOF, must
-// be retried so a transient close cannot quarantine a relay for days.
-func shouldDropRelayFromActivePool(err error) bool {
-	return errors.Is(err, errRelayIncompatible) ||
+func isTerminalRelayError(err error) bool {
+	if errors.Is(err, errRelayIncompatible) ||
 		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) ||
 		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTransportMismatch}) ||
 		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUDPDisabled}) ||
-		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTCPPortDisabled})
-}
-
-func isTerminalRelayError(err error) bool {
-	if shouldDropRelayFromActivePool(err) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTCPPortDisabled}) ||
 		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict}) ||
 		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeIPBanned}) {
 		return true
@@ -85,7 +78,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 		Str("relay_url", relayURL).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
-	l.reportFailure(err, RelayFailureTerminal)
+	l.report(listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: err})
 	_ = l.Close()
 	return true
 }
@@ -212,10 +205,6 @@ func (l *listener) UpdateMetadata(metadata types.LeaseMetadata) {
 	l.metadataMu.Unlock()
 }
 
-func (l *listener) reportConnecting() {
-	l.report(listenerStatus{state: RelayConnecting})
-}
-
 func (l *listener) reportStreamReady() {
 	l.readySessions.Add(1)
 	l.reportAvailable()
@@ -256,19 +245,11 @@ func (l *listener) reportAvailable() {
 	})
 }
 
-func (l *listener) reportFailed(err error) {
-	l.reportFailure(err, RelayFailureRuntime)
-}
-
-func (l *listener) reportFailure(err error, failure RelayFailure) {
-	l.report(listenerStatus{state: RelayFailed, failure: failure, err: err})
-}
-
 func (l *listener) run(ctx context.Context) {
 	var retries int
 
 	for {
-		l.reportConnecting()
+		l.report(listenerStatus{state: RelayConnecting})
 		err := l.registerAndConfigure(ctx)
 		switch {
 		case err == nil:
@@ -281,7 +262,7 @@ func (l *listener) run(ctx context.Context) {
 			retries++
 			if !l.waitRetry(ctx, "lease registration", err, retries, 0) {
 				if ctx.Err() == nil {
-					l.reportFailed(err)
+					l.report(listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: err})
 				}
 				_ = l.Close()
 				return
@@ -308,7 +289,9 @@ func (l *listener) run(ctx context.Context) {
 		if udpAddr != "" || tcpAddr != "" {
 			event.Msg("raw transport endpoints allocated")
 		} else if publicURL != "" {
-			logHTTPReady(l.identity.Address, publicURL, l.relayURL.String())
+			event.Str("public_url", publicURL).
+				Str("relay_url", l.relayURL.String()).
+				Msg("service ready at " + publicURL)
 		} else {
 			event.Msg("relay listener registered")
 		}
@@ -342,20 +325,10 @@ func (l *listener) run(ctx context.Context) {
 			Str("relay_url", relayURL).
 			Str("address", l.identity.Address).
 			Msg("listener connection retry budget exhausted; closing listener")
-		l.reportFailed(err)
+		l.report(listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: err})
 		_ = l.Close()
 		return
 	}
-}
-
-func logHTTPReady(address, publicURL, relayURL string) {
-	event := log.Info().
-		Str("address", address).
-		Str("public_url", publicURL)
-	if relayURL != "" {
-		event = event.Str("relay_url", relayURL)
-	}
-	event.Msg("service ready at " + publicURL)
 }
 
 func (l *listener) Close() error {
