@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -70,7 +71,7 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			listener := &listener{relayURL: relayURL, overlay: test.enabled}
+			listener := &listener{api: &apiClient{relayURL: relayURL}, overlay: test.enabled}
 			err := listener.validateReverseEndpointTransport(test.endpoint)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("validateReverseEndpointTransport() error = %v, wantErr %v", err, test.wantErr)
@@ -79,26 +80,69 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 	}
 }
 
+func TestAPIClientRenewUsesExplicitRequestValues(t *testing.T) {
+	t.Parallel()
+
+	want := types.RenewRequest{
+		AccessToken: "access-token",
+		TTL:         90,
+		ReportedIP:  "192.0.2.10",
+		Metadata: types.LeaseMetadata{
+			Description: "updated description",
+			Tags:        []string{"api", "renew"},
+		},
+	}
+	requestCh := make(chan types.RenewRequest, 1)
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req types.RenewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode renew request: %v", err)
+		}
+		requestCh <- req
+		utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
+			AccessToken: " renewed-token ",
+			ExpiresAt:   expiresAt,
+			ReverseEndpoint: types.ReverseEndpoint{
+				URL:        "https://relay.example/sdk/connect",
+				Capability: " capability ",
+				ExpiresAt:  expiresAt,
+			},
+		})
+	}))
+	defer server.Close()
+
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &apiClient{relayURL: relayURL, http: server.Client()}
+	resp, err := client.renew(context.Background(), want)
+	if err != nil {
+		t.Fatalf("renew() error = %v", err)
+	}
+	if resp.AccessToken != "renewed-token" || resp.ReverseEndpoint.Capability != "capability" {
+		t.Fatalf("renew() response = %+v", resp)
+	}
+	got := <-requestCh
+	if got.AccessToken != want.AccessToken || got.TTL != want.TTL || got.ReportedIP != want.ReportedIP || got.Metadata.Description != want.Metadata.Description || len(got.Metadata.Tags) != len(want.Metadata.Tags) {
+		t.Fatalf("renew request = %+v, want %+v", got, want)
+	}
+}
+
 func TestTerminalRelayFailureClosesListener(t *testing.T) {
-	const (
-		entry = "https://entry.example"
-		exit  = "https://exit.example"
-	)
-	entryURL, err := url.Parse(entry)
+	relayURL, err := url.Parse("https://relay.example")
 	if err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
 	listener := &listener{
-		relayURL:      entryURL,
+		api:           &apiClient{relayURL: relayURL},
 		cancel:        func() { close(done) },
 		doneCh:        done,
 		statusUpdates: make(chan listenerStatus, 1),
 	}
-	err = &relayRegistrationError{
-		relayURL: exit,
-		err:      fmt.Errorf("%w: unsupported protocol", errRelayIncompatible),
-	}
+	err = fmt.Errorf("%w: unsupported protocol", errRelayIncompatible)
 	if !listener.closeForTerminalRelayError(err) {
 		t.Fatal("terminal relay error was not handled")
 	}
@@ -124,8 +168,7 @@ func TestRefreshReverseEndpointAfterFailureReportsMissingLease(t *testing.T) {
 		t.Fatalf("parse relay URL: %v", err)
 	}
 	listener := &listener{
-		relayURL:   relayURL,
-		httpClient: server.Client(),
+		api: &apiClient{relayURL: relayURL, http: server.Client()},
 		lease: utils.NewSnapshot(listenerSnapshot{
 			accessToken: "access-token",
 			reverse: types.ReverseEndpoint{

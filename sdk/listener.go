@@ -27,6 +27,15 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+const (
+	defaultDialTimeout      = 15 * time.Second
+	defaultHandshakeTimeout = 30 * time.Second
+	defaultLeaseTTL         = 2 * time.Minute
+	defaultRenewBefore      = 30 * time.Second
+	defaultReadyTarget      = 2
+	defaultRetryWait        = 3 * time.Second
+)
+
 type listenerConfig struct {
 	Identity   types.Identity
 	Overlay    bool
@@ -35,7 +44,6 @@ type listenerConfig struct {
 	ECH        bool
 	BanMITM    bool
 	Metadata   types.LeaseMetadata
-	RetryCount int
 }
 
 type listenerStatus struct {
@@ -78,14 +86,9 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 	if !isTerminalRelayError(err) {
 		return false
 	}
-	relayURL := l.relayURL.String()
-	var registrationErr *relayRegistrationError
-	if errors.As(err, &registrationErr) && registrationErr.relayURL != "" {
-		relayURL = registrationErr.relayURL
-	}
 	log.Error().
 		Err(err).
-		Str("relay_url", relayURL).
+		Str("relay_url", l.api.relayURL.String()).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
 	l.report(listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: err})
@@ -98,7 +101,6 @@ type listener struct {
 	doneCh    <-chan struct{}
 	closeOnce sync.Once
 
-	relayURL          *url.URL
 	metadataMu        sync.RWMutex
 	metadata          types.LeaseMetadata
 	identity          types.Identity
@@ -107,13 +109,6 @@ type listener struct {
 	udpEnabled        bool
 	tcpEnabled        bool
 	echEnabled        bool
-	dialTimeout       time.Duration
-	requestTimeout    time.Duration
-	readyTarget       int
-	retryCount        int
-	retryWait         time.Duration
-	leaseTTL          time.Duration
-	renewBefore       time.Duration
 
 	stream        *transport.ClientStream
 	datagram      *transport.ClientDatagram
@@ -121,16 +116,11 @@ type listener struct {
 	statusUpdates chan listenerStatus
 	readySessions atomic.Int32
 
-	httpClient    *http.Client
-	httpTransport *http.Transport
-	tlsConfig     *tls.Config
-	transportMu   sync.RWMutex
+	api           *apiClient
 	reverseTLSMu  sync.Mutex
 	reverseTLSURL string
 	reverseTLS    *tls.Config
 	reverseMu     sync.Mutex
-
-	releaseVersion string
 
 	lease *utils.Snapshot[listenerSnapshot]
 }
@@ -151,24 +141,17 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
 	l := &listener{
-		cancel:         cancel,
-		doneCh:         listenerCtx.Done(),
-		relayURL:       relayurl,
-		metadata:       cfg.Metadata.Copy(),
-		identity:       cfg.Identity.Copy(),
-		overlay:        cfg.Overlay,
-		statusUpdates:  make(chan listenerStatus),
-		udpEnabled:     cfg.UDPEnabled,
-		tcpEnabled:     cfg.TCPEnabled,
-		echEnabled:     cfg.ECH,
-		dialTimeout:    defaultDialTimeout,
-		requestTimeout: defaultRequestTimeout,
-		readyTarget:    defaultReadyTarget,
-		retryCount:     cfg.RetryCount,
-		retryWait:      defaultRetryWait,
-		leaseTTL:       defaultLeaseTTL,
-		renewBefore:    defaultRenewBefore,
-		lease:          utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
+		cancel:        cancel,
+		doneCh:        listenerCtx.Done(),
+		metadata:      cfg.Metadata.Copy(),
+		identity:      cfg.Identity.Copy(),
+		overlay:       cfg.Overlay,
+		statusUpdates: make(chan listenerStatus),
+		udpEnabled:    cfg.UDPEnabled,
+		tcpEnabled:    cfg.TCPEnabled,
+		echEnabled:    cfg.ECH,
+		api:           &apiClient{relayURL: relayurl},
+		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l, cfg.BanMITM)
 	l.stream = transport.NewClientStream(defaultReadyTarget, defaultHandshakeTimeout)
@@ -251,7 +234,7 @@ func (l *listener) reportAvailable() {
 		publicURL: l.publicURLForLease(lease),
 		udpAddr:   udpAddr,
 		tcpAddr:   lease.tcpAddr,
-		version:   l.releaseVersion,
+		version:   l.api.relayReleaseVersion(),
 	})
 }
 
@@ -300,7 +283,7 @@ func (l *listener) run(ctx context.Context) {
 			event.Msg("raw transport endpoints allocated")
 		} else if publicURL != "" {
 			event.Str("public_url", publicURL).
-				Str("relay_url", l.relayURL.String()).
+				Str("relay_url", l.api.relayURL.String()).
 				Msg("service ready at " + publicURL)
 		} else {
 			event.Msg("relay listener registered")
@@ -319,8 +302,8 @@ func (l *listener) run(ctx context.Context) {
 			if lease != nil && lease.tenantTLS != nil {
 				_ = lease.tenantTLS.Close()
 			}
-			l.resetTransport()
-			relayURL := l.relayURL.String()
+			l.api.resetTransport()
+			relayURL := l.api.relayURL.String()
 			log.Debug().
 				Err(err).
 				Str("relay_url", relayURL).
@@ -329,7 +312,7 @@ func (l *listener) run(ctx context.Context) {
 			continue
 		}
 
-		relayURL := l.relayURL.String()
+		relayURL := l.api.relayURL.String()
 		log.Error().
 			Err(err).
 			Str("relay_url", relayURL).
@@ -359,13 +342,15 @@ func (l *listener) Close() error {
 
 		if lease != nil && lease.hostname != "" && l.identity.Key() != "" && lease.accessToken != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			closeErr = errors.Join(closeErr, l.unregisterLease(ctx, lease.accessToken))
+			closeErr = errors.Join(closeErr, l.api.unregister(ctx, lease.accessToken))
 			cancel()
 		}
 		if lease != nil && lease.tenantTLS != nil {
 			closeErr = errors.Join(closeErr, lease.tenantTLS.Close())
 		}
-		l.resetTransport()
+		if l.api != nil {
+			l.api.resetTransport()
+		}
 	})
 	return closeErr
 }
@@ -379,16 +364,11 @@ type listenerSnapshot struct {
 	reverse       types.ReverseEndpoint
 	expiresAt     time.Time
 	publicPort    int
-	publicURLBase *url.URL
 	tenantTLS     *keyless.Client
 }
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
 	s.echConfigList = bytes.Clone(s.echConfigList)
-	if s.publicURLBase != nil {
-		publicURLBase := *s.publicURLBase
-		s.publicURLBase = &publicURLBase
-	}
 	return s
 }
 
@@ -435,7 +415,7 @@ func (l *listener) Accept() (net.Conn, error) {
 		if handleErr != nil {
 			log.Debug().
 				Err(handleErr).
-				Str("relay_url", l.relayURL.String()).
+				Str("relay_url", l.api.relayURL.String()).
 				Str("address", l.identity.Address).
 				Msg("mitm self-probe handling failed")
 		}
@@ -461,8 +441,8 @@ func (l *listener) acceptDatagram() (types.DatagramFrame, error) {
 		frame.UDPAddr = lease.udpAddr
 	}
 	frame.Address = l.identity.Address
-	if l.relayURL != nil {
-		frame.RelayURL = l.relayURL.String()
+	if l.api != nil && l.api.relayURL != nil {
+		frame.RelayURL = l.api.relayURL.String()
 	}
 	return frame, nil
 }
@@ -482,10 +462,7 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 }
 
 func (l *listener) publicURLForLease(lease listenerSnapshot) string {
-	baseURL := lease.publicURLBase
-	if baseURL == nil {
-		baseURL = l.relayURL
-	}
+	baseURL := l.api.relayURL
 	if baseURL == nil {
 		return ""
 	}
@@ -519,10 +496,10 @@ func (l *listener) runLease(ctx context.Context) error {
 	leaseCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	errCh := make(chan error, max(l.readyTarget, 1)+1)
+	errCh := make(chan error, defaultReadyTarget+1)
 	var workers sync.WaitGroup
-	if l.stream != nil && l.readyTarget > 0 {
-		for sessionSlot := range l.readyTarget {
+	if l.stream != nil {
+		for sessionSlot := range defaultReadyTarget {
 			sessionSlot++
 			workers.Add(1)
 			go func() {
@@ -614,7 +591,7 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 		case claimed:
 			log.Debug().
 				Err(err).
-				Str("relay_url", l.relayURL.String()).
+				Str("relay_url", l.api.relayURL.String()).
 				Str("address", l.identity.Address).
 				Int("reverse_session_slot", sessionSlot).
 				Msg("tenant tls handshake failed")
@@ -639,7 +616,27 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 
 func (l *listener) isAlternateReverseEndpoint(rawURL string) bool {
 	endpoint, err := url.Parse(strings.TrimSpace(rawURL))
-	return err == nil && l.relayURL != nil && (!strings.EqualFold(endpoint.Scheme, l.relayURL.Scheme) || !strings.EqualFold(endpoint.Host, l.relayURL.Host))
+	return err == nil && l.api != nil && l.api.relayURL != nil && (!strings.EqualFold(endpoint.Scheme, l.api.relayURL.Scheme) || !strings.EqualFold(endpoint.Host, l.api.relayURL.Host))
+}
+
+func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoint) error {
+	if !l.overlay {
+		if endpoint.Overlay {
+			return errors.New("relay returned an overlay reverse endpoint but overlay is disabled")
+		}
+		if l.isAlternateReverseEndpoint(endpoint.URL) {
+			return fmt.Errorf("relay reverse endpoint %s does not match the relay URL; align the relay's PORTAL_URL with the address clients dial", endpoint.URL)
+		}
+		return nil
+	}
+	if !endpoint.Overlay && !l.isAlternateReverseEndpoint(endpoint.URL) {
+		l.warnOverlayDirect.Do(func() {
+			log.Warn().
+				Str("relay_url", l.api.relayURL.String()).
+				Msg("overlay requested but the relay serves a direct reverse endpoint; continuing without overlay forwarding")
+		})
+	}
+	return nil
 }
 
 func (l *listener) runDatagramLoop(ctx context.Context) {
@@ -713,7 +710,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 	if !lease.reverse.ExpiresAt.After(time.Now().UTC()) {
 		return nil, errLeaseRefreshRequired
 	}
-	if l.relayTLSConfigClone() == nil {
+	if l.api.tlsConfigClone() == nil {
 		return nil, errors.New("relay tls config is unavailable")
 	}
 
@@ -726,7 +723,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 		return nil, err
 	}
 	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: l.dialTimeout},
+		NetDialer: &net.Dialer{Timeout: defaultDialTimeout},
 		Config:    reverseTLS,
 	}
 	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(reverseURL.Host))
@@ -772,8 +769,8 @@ func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tl
 	if endpoint == nil || endpoint.Hostname() == "" {
 		return nil, errors.New("reverse endpoint hostname is unavailable")
 	}
-	if strings.EqualFold(endpoint.Host, l.relayURL.Host) {
-		return l.relayTLSConfigClone(), nil
+	if strings.EqualFold(endpoint.Host, l.api.relayURL.Host) {
+		return l.api.tlsConfigClone(), nil
 	}
 	key := strings.ToLower(endpoint.Scheme + "://" + endpoint.Host)
 	l.reverseTLSMu.Lock()
@@ -781,7 +778,7 @@ func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tl
 	if l.reverseTLS != nil && l.reverseTLSURL == key {
 		return l.reverseTLS.Clone(), nil
 	}
-	tlsConfig, _, transport, err := utils.NewHTTPTLSClient(ctx, endpoint, l.dialTimeout)
+	tlsConfig, _, transport, err := utils.NewHTTPTLSClient(ctx, endpoint, defaultDialTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -802,16 +799,24 @@ func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, faile
 		return nil
 	}
 	endpoint, err := url.Parse(lease.reverse.URL)
-	if err != nil || strings.EqualFold(endpoint.Host, l.relayURL.Host) {
+	if err != nil || strings.EqualFold(endpoint.Host, l.api.relayURL.Host) {
 		return nil
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	next, err := l.requestReverseEndpoint(requestCtx, lease.accessToken, lease.reverse.URL, lease.expiresAt)
+	next, err := l.api.requestReverseEndpoint(requestCtx, lease.accessToken, lease.reverse.URL, lease.expiresAt)
 	if err != nil {
 		if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
 			return errLeaseRefreshRequired
 		}
+		return nil
+	}
+	if err := l.validateReverseEndpointTransport(next); err != nil {
+		log.Debug().
+			Err(err).
+			Str("relay_url", l.api.relayURL.String()).
+			Str("reverse_url", next.URL).
+			Msg("relay returned unusable reverse endpoint; keeping current endpoint")
 		return nil
 	}
 	if l.lease == nil {
@@ -835,12 +840,12 @@ func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, err
 	if lease.publicPort <= 0 {
 		return nil, errors.New("public port is not available")
 	}
-	tlsCfg := l.relayTLSConfigClone()
+	tlsCfg := l.api.tlsConfigClone()
 	if tlsCfg == nil {
 		return nil, errors.New("relay tls config is unavailable")
 	}
-	host := strings.TrimSpace(l.relayURL.Hostname())
-	host = cmp.Or(host, strings.TrimSpace(l.relayURL.Host))
+	host := strings.TrimSpace(l.api.relayURL.Hostname())
+	host = cmp.Or(host, strings.TrimSpace(l.api.relayURL.Host))
 	dialAddr := net.JoinHostPort(host, fmt.Sprintf("%d", lease.publicPort))
 	return transport.DialQUICBackhaul(ctx, dialAddr, tlsCfg, lease.accessToken)
 }
@@ -909,19 +914,7 @@ func (l *listener) renewDelay(now time.Time) (time.Duration, error) {
 		return 0, errLeaseRefreshRequired
 	}
 
-	leaseTTL := l.leaseTTL
-	if leaseTTL <= 0 {
-		leaseTTL = defaultLeaseTTL
-	}
-	renewBefore := l.renewBefore
-	if renewBefore <= 0 || renewBefore >= leaseTTL {
-		renewBefore = leaseTTL / 2
-	}
-	if renewBefore <= 0 {
-		renewBefore = time.Second
-	}
-
-	renewAt := lease.expiresAt.Add(-renewBefore)
+	renewAt := lease.expiresAt.Add(-defaultRenewBefore)
 	if !now.Before(renewAt) {
 		return 0, nil
 	}
@@ -937,17 +930,21 @@ func (l *listener) renewLease(ctx context.Context) error {
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	resp, err := l.renewRegisteredLease(requestCtx, l.leaseTTL, lease.accessToken)
+	resp, err := l.api.renew(requestCtx, types.RenewRequest{
+		AccessToken: lease.accessToken,
+		TTL:         int(defaultLeaseTTL / time.Second),
+		ReportedIP:  utils.ResolvePublicIP(requestCtx),
+		Metadata:    l.metadataSnapshot(),
+	})
 	if err != nil {
 		if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
 			return errLeaseRefreshRequired
 		}
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return err
 	}
 
-	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
-	if resp.AccessToken == "" {
-		return errors.New("relay did not return renewed access token")
+	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
+		return err
 	}
 	if l.lease == nil {
 		return errLeaseRefreshRequired
@@ -972,55 +969,64 @@ func (l *listener) renewLease(ctx context.Context) error {
 }
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
-	if err := l.initHTTPTransport(ctx); err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
-	}
-
-	rootHostname := utils.PortalRootHost(l.relayURL.String())
+	rootHostname := utils.PortalRootHost(l.api.relayURL.String())
 	publicHostname, err := utils.LeaseHostname(l.identity.Name, rootHostname)
 	if err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return err
 	}
 	var materials keyless.ECHMaterials
 	if l.echEnabled {
 		materials, err = keyless.TenantECHMaterials(l.identity, publicHostname, rootHostname)
 		if err != nil {
-			return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+			return err
 		}
 	}
-	resp, err := l.registerLease(ctx, materials, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
-	if err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+	registerReq := types.RegisterChallengeRequest{
+		Identity:   l.identity,
+		Metadata:   l.metadataSnapshot(),
+		Overlay:    l.overlay,
+		TTL:        int(defaultLeaseTTL / time.Second),
+		UDPEnabled: l.udpEnabled,
+		TCPEnabled: l.tcpEnabled,
 	}
-	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
-	if resp.AccessToken == "" {
-		return errors.New("relay did not return access token")
+	if l.echEnabled {
+		registerReq.RouteHostname = materials.RouteHostname
+		registerReq.HostnameHash = materials.HostnameHash
+		registerReq.ECHConfigList = bytes.Clone(materials.ConfigList)
+	}
+	resp, err := l.api.register(ctx, registerReq, utils.ResolvePublicIP(ctx))
+	if err != nil {
+		return err
+	}
+	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
+		_ = l.api.unregister(context.Background(), resp.AccessToken)
+		return err
 	}
 	if l.udpEnabled && !resp.UDPEnabled {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken)
+		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return &types.APIRequestError{
 			Code:    types.APIErrorCodeFeatureUnavailable,
 			Message: "relay did not enable required udp support",
 		}
 	}
 	if l.udpEnabled && resp.SNIPort <= 0 {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken)
+		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return errors.New("relay did not return public port for udp transport")
 	}
 
 	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
-		RelayURL:    l.relayURL.String(),
+		RelayURL:    l.api.relayURL.String(),
 		Hostname:    publicHostname,
 		ECH:         materials,
 		AccessToken: resp.AccessToken,
 	})
 	if err != nil {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken)
+		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return err
 	}
 
 	if ctx.Err() != nil {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken)
+		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		_ = tenantTLS.Close()
 		return ctx.Err()
 	}
@@ -1033,7 +1039,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		reverse:       resp.ReverseEndpoint,
 		expiresAt:     resp.ExpiresAt,
 		publicPort:    resp.SNIPort,
-		publicURLBase: l.relayURL,
 		tenantTLS:     tenantTLS,
 	}
 	oldLease := l.lease.Swap(next)
@@ -1044,7 +1049,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		lease := l.clearLease("registration canceled")
 		if lease != nil {
 			if lease.accessToken != "" {
-				_ = l.unregisterLease(context.Background(), lease.accessToken)
+				_ = l.api.unregister(context.Background(), lease.accessToken)
 			}
 			if lease.tenantTLS != nil {
 				_ = lease.tenantTLS.Close()
@@ -1071,8 +1076,8 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 	}
 
 	relayURL := ""
-	if l.relayURL != nil {
-		relayURL = l.relayURL.String()
+	if l.api != nil && l.api.relayURL != nil {
+		relayURL = l.api.relayURL.String()
 	}
 	logger := log.With().
 		Str("relay_url", relayURL).
@@ -1081,14 +1086,6 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		Logger()
 	if reverseSessionSlot > 0 {
 		logger = logger.With().Int("reverse_session_slot", reverseSessionSlot).Logger()
-	}
-
-	if l.retryCount > 0 && retries > l.retryCount {
-		logger.Error().
-			Err(err).
-			Int("retry_count", l.retryCount).
-			Msg("retry budget exhausted")
-		return false
 	}
 
 	if retries == 1 {
@@ -1103,25 +1100,24 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 			logger.Warn().
 				Err(err).
 				Str("transport", transport).
-				Dur("retry_wait", l.retryWait).
+				Dur("retry_wait", defaultRetryWait).
 				Msg("raw transport port pool exhausted; waiting for a port")
-			return utils.SleepOrDone(ctx, l.retryWait)
+			return utils.SleepOrDone(ctx, defaultRetryWait)
 		}
 		logger.Warn().
 			Err(err).
-			Dur("retry_wait", l.retryWait).
+			Dur("retry_wait", defaultRetryWait).
 			Msg("operation failed; retrying")
-		return utils.SleepOrDone(ctx, l.retryWait)
+		return utils.SleepOrDone(ctx, defaultRetryWait)
 	}
 
 	logger.Debug().
 		Err(err).
 		Int("retry_attempt", retries).
-		Int("retry_count", l.retryCount).
-		Dur("retry_wait", l.retryWait).
+		Dur("retry_wait", defaultRetryWait).
 		Msg("operation failed; retrying")
 
-	return utils.SleepOrDone(ctx, l.retryWait)
+	return utils.SleepOrDone(ctx, defaultRetryWait)
 }
 
 type bufferedConn struct {
