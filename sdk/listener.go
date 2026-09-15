@@ -50,15 +50,25 @@ type listenerStatus struct {
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
 
+// terminalAPIErrorCodes are relay API rejections that permanently
+// disqualify a relay for the exposure, matched by code via errors.Is.
+var terminalAPIErrorCodes = []string{
+	types.APIErrorCodeFeatureUnavailable,
+	types.APIErrorCodeTransportMismatch,
+	types.APIErrorCodeUDPDisabled,
+	types.APIErrorCodeTCPPortDisabled,
+	types.APIErrorCodeHostnameConflict,
+	types.APIErrorCodeIPBanned,
+}
+
 func isTerminalRelayError(err error) bool {
-	if errors.Is(err, errRelayIncompatible) ||
-		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) ||
-		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTransportMismatch}) ||
-		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUDPDisabled}) ||
-		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTCPPortDisabled}) ||
-		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict}) ||
-		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeIPBanned}) {
+	if errors.Is(err, errRelayIncompatible) {
 		return true
+	}
+	for _, code := range terminalAPIErrorCodes {
+		if errors.Is(err, &types.APIRequestError{Code: code}) {
+			return true
+		}
 	}
 	var apiErr *types.APIRequestError
 	return errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500

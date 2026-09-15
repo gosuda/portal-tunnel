@@ -283,12 +283,12 @@ func TestExposureWaitTCPReadyWaitsAfterTerminalFailure(t *testing.T) {
 }
 
 func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
-	listener := &listener{
+	ln := &listener{
 		metadata: types.LeaseMetadata{Tags: []string{"initial"}},
 	}
 	exposure := &Exposure{
 		metadata:       types.LeaseMetadata{Tags: []string{"initial"}},
-		relayListeners: map[string]*listener{"https://relay.example": listener},
+		relayListeners: map[string]*listener{"https://relay.example": ln},
 	}
 	metadata := exposure.metadata.Copy()
 	metadata.Tags[0] = "mutated"
@@ -298,7 +298,7 @@ func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
 	if err := exposure.UpdateMetadata(types.LeaseMetadata{Tags: []string{"updated"}}); err != nil {
 		t.Fatalf("UpdateMetadata() error = %v", err)
 	}
-	if got := listener.metadataSnapshot().Tags[0]; got != "updated" {
+	if got := ln.metadataSnapshot().Tags[0]; got != "updated" {
 		t.Fatalf("listener Metadata.Tags[0] = %q, want updated", got)
 	}
 }

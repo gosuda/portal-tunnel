@@ -303,15 +303,15 @@ func (s *Server) config() ServerConfig {
 	return s.cfg.Load()
 }
 
-func (s *Server) overlayIssueDescriptors(now time.Time) (types.RelayDescriptor, []types.RelayDescriptor) {
+func (s *Server) overlayIssueDescriptors(now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
 	if s.overlay == nil || s.relaySet == nil {
-		return types.RelayDescriptor{}, nil
+		return types.RelayDescriptor{}, nil, nil
 	}
 	self, err := s.newSelfDescriptor(now)
 	if err != nil {
-		return types.RelayDescriptor{}, nil
+		return types.RelayDescriptor{}, nil, fmt.Errorf("build self overlay descriptor: %w", err)
 	}
-	return self, s.relaySet.Descriptors(types.RelayDescriptor{})
+	return self, s.relaySet.Descriptors(types.RelayDescriptor{}), nil
 }
 
 func (s *Server) SetUDPPolicy(enabled bool, maxLeases int) {
