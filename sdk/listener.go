@@ -1040,6 +1040,18 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if oldLease.tenantTLS != nil {
 		_ = oldLease.tenantTLS.Close()
 	}
+	if err := ctx.Err(); err != nil {
+		lease := l.clearLease("registration canceled")
+		if lease != nil {
+			if lease.accessToken != "" {
+				_ = l.unregisterLease(context.Background(), lease.accessToken)
+			}
+			if lease.tenantTLS != nil {
+				_ = lease.tenantTLS.Close()
+			}
+		}
+		return err
+	}
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")
 	}
