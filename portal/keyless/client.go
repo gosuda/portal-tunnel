@@ -116,7 +116,9 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 }
 
 // TLSConfig returns the tenant TLS configuration owned by the client. The
-// configuration must only be used while the Client remains open.
+// returned configuration is shared by every caller and is safe for
+// concurrent use; callers must not mutate it. It must only be used while
+// the Client remains open.
 func (c *Client) TLSConfig() *tls.Config { return c.tlsConf }
 
 // Close releases the remote signer backing the TLS configuration. It is
