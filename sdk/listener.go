@@ -993,7 +993,19 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 	}
 
-	resp, publicHostname, materials, err := l.registerLease(ctx, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
+	rootHostname := utils.PortalRootHost(l.relayURL.String())
+	publicHostname, err := utils.LeaseHostname(l.identity.Name, rootHostname)
+	if err != nil {
+		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+	}
+	var materials keyless.ECHMaterials
+	if l.echEnabled {
+		materials, err = keyless.TenantECHMaterials(l.identity, publicHostname, rootHostname)
+		if err != nil {
+			return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		}
+	}
+	resp, err := l.registerLease(ctx, materials, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
 	if err != nil {
 		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 	}
@@ -1016,7 +1028,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
 		RelayURL:    l.relayURL.String(),
 		Hostname:    publicHostname,
-		ECHKeys:     materials.Keys,
+		ECH:         materials,
 		AccessToken: resp.AccessToken,
 	})
 	if err != nil {

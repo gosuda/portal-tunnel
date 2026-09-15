@@ -33,7 +33,7 @@ import (
 type ClientConfig struct {
 	RelayURL    string
 	Hostname    string
-	ECHKeys     []tls.EncryptedClientHelloKey
+	ECH         ECHMaterials
 	AccessToken string
 }
 
@@ -96,8 +96,8 @@ func NewClient(config ClientConfig) (*Client, error) {
 		CertPEM:                  certPEM,
 		Signer:                   remoteSigner,
 		NextProtos:               []string{"http/1.1"},
-		MinVersion:               MinTLSVersion(len(config.ECHKeys) > 0),
-		EncryptedClientHelloKeys: config.ECHKeys,
+		MinVersion:               MinTLSVersion(len(config.ECH.Keys) > 0),
+		EncryptedClientHelloKeys: config.ECH.Keys,
 	})
 	if err != nil {
 		_ = remoteSigner.Close()
