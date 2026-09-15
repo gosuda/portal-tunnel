@@ -118,7 +118,7 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 			return record, true
 		}
 	}
-	hostHash := utils.HostnameHash(host)
+	hostHash := keyless.ECHHostnameHash(host)
 	for _, record := range r.records {
 		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
 			continue
@@ -188,37 +188,16 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 
 	identityKey := leaseIdentity.Key()
 	routeHostname := utils.NormalizeHostname(req.RouteHostname)
-	hostnameHash := strings.TrimSpace(req.HostnameHash)
-	echConfigList := bytes.Clone(req.ECHConfigList)
-	if hostnameHash != "" && routeHostname == "" {
-		return nil, types.RegisterResponse{}, errors.New("hostname hash requires route hostname")
-	}
-	if len(echConfigList) > 0 && routeHostname == "" {
-		return nil, types.RegisterResponse{}, errors.New("ech config list requires route hostname")
-	}
 	publicHostname := ""
 	if routeHostname != "" {
-		routeLabel, routeBase, ok := strings.Cut(routeHostname, ".")
-		normalizedRouteLabel, labelErr := utils.NormalizeDNSLabel(routeLabel)
-		if !ok || labelErr != nil || normalizedRouteLabel != routeLabel || routeBase != r.rootHostname {
-			return nil, types.RegisterResponse{}, errors.New("route hostname must be a child of relay root hostname")
-		}
-
 		publicHostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {
 			return nil, types.RegisterResponse{}, err
 		}
-		expectedHostnameHash := utils.HostnameHash(publicHostname)
-		if hostnameHash != "" && hostnameHash != expectedHostnameHash {
-			return nil, types.RegisterResponse{}, errors.New("hostname hash does not match public hostname")
-		}
-		hostnameHash = expectedHostnameHash
 	}
-	if len(echConfigList) > 0 {
-		echConfigList, err = keyless.NormalizeEncryptedClientHelloConfigList(echConfigList)
-		if err != nil {
-			return nil, types.RegisterResponse{}, err
-		}
+	hostnameHash, echConfigList, err := keyless.NormalizeECHRegistration(routeHostname, strings.TrimSpace(req.HostnameHash), bytes.Clone(req.ECHConfigList), publicHostname, r.rootHostname)
+	if err != nil {
+		return nil, types.RegisterResponse{}, err
 	}
 	echDNSHostname := ""
 	if len(echConfigList) > 0 {
@@ -874,7 +853,7 @@ func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 	name := record.Name
 	hostname := record.Hostname
 	if record.stream != nil && record.HostnameHash != "" {
-		if publicHostname, err := utils.LeaseHostname(record.Name, r.rootHostname); err == nil && utils.HostnameHash(publicHostname) == record.HostnameHash {
+		if publicHostname, err := utils.LeaseHostname(record.Name, r.rootHostname); err == nil && keyless.ECHHostnameHash(publicHostname) == record.HostnameHash {
 			hostname = publicHostname
 		}
 	} else if record.HostnameHash != "" && record.Hostname != "" {

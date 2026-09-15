@@ -1,3 +1,9 @@
+// Package keyless owns Portal's tenant TLS feature boundary: keyless remote
+// signing for relay-facing TLS, TLS config construction, and the ECH
+// (Encrypted Client Hello) material and routing semantics that keep tenant
+// hostnames private on that TLS path. The SDK and the relay own when and why
+// these operations happen (lease sessions, DNS publication, TLS listeners);
+// this package owns the tenant TLS protocol itself.
 package keyless
 
 import (

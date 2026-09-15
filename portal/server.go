@@ -673,17 +673,11 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
 	}
-	echSeed, err := identity.DeriveToken(
+	echKeys, echConfigList, err := keyless.RelayECHMaterials(
 		s.identity.Identity,
-		"relay-ech",
 		s.identity.EncryptedClientHelloSeed,
 		s.identity.Name,
 	)
-	if err != nil {
-		_ = manager.Stop(ctx)
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("derive relay ech seed: %w", err)
-	}
-	echKeys, echConfigList, err := keyless.EncryptedClientHelloMaterials(echSeed, s.identity.Name)
 	if err != nil {
 		_ = manager.Stop(ctx)
 		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("prepare ech materials: %w", err)

@@ -21,7 +21,6 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -980,7 +979,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 	}
 
-	resp, publicHostname, routeHostname, err := l.registerLease(ctx, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
+	resp, publicHostname, materials, err := l.registerLease(ctx, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
 	if err != nil {
 		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 	}
@@ -999,13 +998,8 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
 		return errors.New("relay did not return public port for udp transport")
 	}
-	echKeys, echConfigList, err := l.tenantECHMaterials(publicHostname, routeHostname)
-	if err != nil {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		return err
-	}
 
-	tlsConf, tenantTLSCloser, err := keyless.BuildClientTLSConfig(l.relayURL.String(), publicHostname, echKeys, func() http.Header {
+	tlsConf, tenantTLSCloser, err := keyless.BuildClientTLSConfig(l.relayURL.String(), publicHostname, materials.Keys, func() http.Header {
 		headers := http.Header{}
 		accessToken := resp.AccessToken
 		if snapshot, ok := l.leaseSnapshot(); ok && snapshot.accessToken != "" {
@@ -1031,7 +1025,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	}
 	next := listenerSnapshot{
 		hostname:      publicHostname,
-		echConfigList: echConfigList,
+		echConfigList: materials.ConfigList,
 		udpAddr:       resp.UDPAddr,
 		tcpAddr:       resp.TCPAddr,
 		accessToken:   resp.AccessToken,
@@ -1049,29 +1043,14 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")
 	}
-	if len(echConfigList) > 0 {
+	if len(materials.ConfigList) > 0 {
 		log.Debug().
 			Str("address", l.identity.Address).
-			Str("route_hostname", routeHostname).
-			Str("ech_config_list_base64", base64.StdEncoding.EncodeToString(echConfigList)).
+			Str("route_hostname", materials.RouteHostname).
+			Str("ech_config_list_base64", base64.StdEncoding.EncodeToString(materials.ConfigList)).
 			Msg("tenant ech config ready")
 	}
 	return nil
-}
-
-func (l *listener) tenantECHMaterials(publicHostname, routeHostname string) ([]tls.EncryptedClientHelloKey, []byte, error) {
-	if routeHostname == "" {
-		return nil, nil, nil
-	}
-	echSeed, err := identity.DeriveToken(l.identity, "tenant-ech", publicHostname, routeHostname)
-	if err != nil {
-		return nil, nil, fmt.Errorf("derive tenant ech seed: %w", err)
-	}
-	echKeys, echConfigList, err := keyless.EncryptedClientHelloMaterials(echSeed, routeHostname)
-	if err != nil {
-		return nil, nil, fmt.Errorf("prepare tenant ech materials: %w", err)
-	}
-	return echKeys, echConfigList, nil
 }
 
 func (l *listener) waitRetry(ctx context.Context, operation string, err error, retries, reverseSessionSlot int) bool {

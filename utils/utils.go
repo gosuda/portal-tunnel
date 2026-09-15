@@ -3,7 +3,6 @@ package utils
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -244,15 +243,6 @@ func HostnameMatchesPattern(pattern, hostname string) bool {
 	}
 	_, rest, ok := strings.Cut(hostname, ".")
 	return ok && rest == suffix
-}
-
-func HostnameHash(hostname string) string {
-	hostname = NormalizeHostname(hostname)
-	if hostname == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte("portal hostname hash v1\x00" + hostname))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func NormalizeChildHostnames(inputs []string, baseDomain string) []string {

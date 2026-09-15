@@ -647,7 +647,7 @@ func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
 			Address: server.identity.Address,
 		},
 		RouteHostname: routeHostname,
-		HostnameHash:  utils.HostnameHash(publicHostname),
+		HostnameHash:  keyless.ECHHostnameHash(publicHostname),
 		ECHConfigList: echConfigList,
 		UDPEnabled:    true,
 		TCPEnabled:    true,
