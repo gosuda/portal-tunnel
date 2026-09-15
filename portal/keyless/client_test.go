@@ -11,7 +11,22 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+func TestClientAccessTokenUpdateChangesSignerHeaders(t *testing.T) {
+	t.Parallel()
+	client := &Client{}
+	client.SetAccessToken(" first ")
+	if got := client.headers().Get(types.HeaderAccessToken); got != "first" {
+		t.Fatalf("initial access token header = %q, want first", got)
+	}
+	client.SetAccessToken("second")
+	if got := client.headers().Get(types.HeaderAccessToken); got != "second" {
+		t.Fatalf("updated access token header = %q, want second", got)
+	}
+}
 
 func TestVerifyRemoteSignerAcceptsMatchingKey(t *testing.T) {
 	t.Parallel()

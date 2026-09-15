@@ -296,7 +296,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, resp, err := s.registry.Register(challenge.Request, clientIP, req.ReportedIP)
+	self, descriptors := s.overlayIssueDescriptors(time.Now().UTC())
+	record, resp, err := s.registry.Register(challenge.Request, clientIP, req.ReportedIP, self, descriptors)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return
@@ -383,7 +384,8 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.registry.Renew(req, clientIP)
+	self, descriptors := s.overlayIssueDescriptors(time.Now().UTC())
+	resp, err := s.registry.Renew(req, clientIP, self, descriptors)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return
@@ -424,7 +426,8 @@ func (s *Server) handleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	endpoint, err := s.registry.RefreshReverseEndpoint(req)
+	self, descriptors := s.overlayIssueDescriptors(time.Now().UTC())
+	endpoint, err := s.registry.RefreshReverseEndpoint(req, self, descriptors)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return

@@ -47,7 +47,7 @@ func TestRegisterOverlayPreferenceFallsBackToDirect(t *testing.T) {
 	record, registered, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "overlay-fallback"),
 		Overlay:  true,
-	}, "203.0.113.10", "")
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -66,7 +66,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	runtime := registry.policy
 	record, registered, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "demo"),
-	}, "203.0.113.10", "")
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -100,7 +100,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	renewed, err := registry.Renew(types.RenewRequest{
 		AccessToken: registered.AccessToken,
 		TTL:         int(time.Minute / time.Second),
-	}, "203.0.113.11")
+	}, "203.0.113.11", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Renew() error = %v", err)
 	}
@@ -119,7 +119,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if !renewed.ReverseEndpoint.ExpiresAt.Equal(renewed.ExpiresAt) {
 		t.Fatalf("Renew() reverse expiry = %v, want %v", renewed.ReverseEndpoint.ExpiresAt, renewed.ExpiresAt)
 	}
-	refreshed, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: renewed.AccessToken})
+	refreshed, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: renewed.AccessToken}, types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("RefreshReverseEndpoint() error = %v", err)
 	}
@@ -154,11 +154,11 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 
 	registry := newTestRegistry(t)
 	leaseIdentity := newTestLeaseIdentity(t, "replace")
-	first, firstResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.10", "")
+	first, firstResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("first Register() error = %v", err)
 	}
-	second, secondResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.11", "")
+	second, secondResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.11", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("second Register() error = %v", err)
 	}
@@ -171,10 +171,10 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	if _, err := registry.admitLeaseByToken(firstResponse.AccessToken, false); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token admission error = %v, want unauthorized", err)
 	}
-	if _, err := registry.Renew(types.RenewRequest{AccessToken: firstResponse.AccessToken}, "203.0.113.12"); !errors.Is(err, errUnauthorized) {
+	if _, err := registry.Renew(types.RenewRequest{AccessToken: firstResponse.AccessToken}, "203.0.113.12", types.RelayDescriptor{}, nil); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token renew error = %v, want unauthorized", err)
 	}
-	if _, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
+	if _, err := registry.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}, types.RelayDescriptor{}, nil); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token reverse refresh error = %v, want unauthorized", err)
 	}
 	if err := registry.verifySigningAccessToken(firstResponse.AccessToken); !errors.Is(err, errUnauthorized) {
@@ -210,7 +210,7 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 		Identity:      newTestLeaseIdentity(t, "auto-ech"),
 		RouteHostname: routeHostname,
 		HostnameHash:  keyless.ECHHostnameHash(publicHostname),
-	}, "203.0.113.10", "")
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -246,7 +246,7 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	if _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:     newTestLeaseIdentity(t, "hash-only"),
 		HostnameHash: keyless.ECHHostnameHash("hash-only.example.com"),
-	}, "203.0.113.10", ""); err == nil {
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil); err == nil {
 		t.Fatal("Register(fallback hash only) error = nil, want error")
 	}
 
@@ -254,7 +254,7 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 		Identity:      newTestLeaseIdentity(t, "attacker"),
 		RouteHostname: "ech-attacker.example.com",
 		HostnameHash:  keyless.ECHHostnameHash("victim.example.com"),
-	}, "203.0.113.10", ""); err == nil {
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil); err == nil {
 		t.Fatal("Register(mismatched hostname hash) error = nil, want error")
 	}
 	if lookedUp, ok := registry.Lookup("victim.example.com"); ok {
@@ -282,12 +282,12 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 
 	if _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "conflict"),
-	}, "203.0.113.10", ""); err != nil {
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil); err != nil {
 		t.Fatalf("Register(conflict first) error = %v", err)
 	}
 	_, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "conflict"),
-	}, "203.0.113.11", "")
+	}, "203.0.113.11", "", types.RelayDescriptor{}, nil)
 	if !errors.Is(err, errHostnameConflict) {
 		t.Fatalf("Register(conflict second) error = %v, want hostname conflict", err)
 	}
@@ -303,7 +303,7 @@ func TestLeaseRegistryPolicyViewsUseRoutablePolicy(t *testing.T) {
 	}
 	record, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "demo"),
-	}, "203.0.113.20", "")
+	}, "203.0.113.20", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -464,7 +464,7 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	// tokens stay verifiable while the in-memory lease records are gone.
 	before, restarted := newRegistry(), newRegistry()
 
-	_, resp, err := before.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "restart")}, "203.0.113.10", "")
+	_, resp, err := before.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "restart")}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -478,10 +478,10 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	if _, err := restarted.admitReverseCapability(resp.ReverseEndpoint.Capability); !errors.Is(err, errLeaseNotFound) {
 		t.Fatalf("admitReverseCapability() after restart = %v, want lease not found", err)
 	}
-	if _, err := restarted.Renew(types.RenewRequest{AccessToken: resp.AccessToken}, "203.0.113.10"); !errors.Is(err, errLeaseNotFound) {
+	if _, err := restarted.Renew(types.RenewRequest{AccessToken: resp.AccessToken}, "203.0.113.10", types.RelayDescriptor{}, nil); !errors.Is(err, errLeaseNotFound) {
 		t.Fatalf("Renew() after restart = %v, want lease not found", err)
 	}
-	if _, err := restarted.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: resp.AccessToken}); !errors.Is(err, errLeaseNotFound) {
+	if _, err := restarted.RefreshReverseEndpoint(types.ReverseEndpointRequest{AccessToken: resp.AccessToken}, types.RelayDescriptor{}, nil); !errors.Is(err, errLeaseNotFound) {
 		t.Fatalf("RefreshReverseEndpoint() after restart = %v, want lease not found", err)
 	}
 	if err := restarted.verifySigningAccessToken(resp.AccessToken); !errors.Is(err, errLeaseNotFound) {
@@ -491,7 +491,7 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	if _, err := restarted.admitReverseCapability("forged"); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("admitReverseCapability() forged = %v, want unauthorized", err)
 	}
-	if _, err := restarted.Renew(types.RenewRequest{AccessToken: "forged"}, "203.0.113.10"); !errors.Is(err, errUnauthorized) {
+	if _, err := restarted.Renew(types.RenewRequest{AccessToken: "forged"}, "203.0.113.10", types.RelayDescriptor{}, nil); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("Renew() forged = %v, want unauthorized", err)
 	}
 }

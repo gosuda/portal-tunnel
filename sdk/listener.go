@@ -34,9 +34,8 @@ type listenerConfig struct {
 	TCPEnabled bool
 	ECH        bool
 	BanMITM    bool
-	Metadata   func() types.LeaseMetadata
+	Metadata   types.LeaseMetadata
 	RetryCount int
-	Status     func(listenerStatus)
 }
 
 type listenerStatus struct {
@@ -97,7 +96,8 @@ type listener struct {
 	closeOnce sync.Once
 
 	relayURL          *url.URL
-	metadata          func() types.LeaseMetadata
+	metadataMu        sync.RWMutex
+	metadata          types.LeaseMetadata
 	identity          types.Identity
 	overlay           bool
 	warnOverlayDirect sync.Once
@@ -115,7 +115,7 @@ type listener struct {
 	stream        *transport.ClientStream
 	datagram      *transport.ClientDatagram
 	mitmManager   *mitmManager
-	status        func(listenerStatus)
+	statusUpdates chan listenerStatus
 	readySessions atomic.Int32
 
 	httpClient    *http.Client
@@ -151,10 +151,10 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		cancel:         cancel,
 		doneCh:         listenerCtx.Done(),
 		relayURL:       relayurl,
-		metadata:       cfg.Metadata,
+		metadata:       cfg.Metadata.Copy(),
 		identity:       cfg.Identity.Copy(),
 		overlay:        cfg.Overlay,
-		status:         cfg.Status,
+		statusUpdates:  make(chan listenerStatus),
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
 		echEnabled:     cfg.ECH,
@@ -185,16 +185,31 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 }
 
 func (l *listener) metadataSnapshot() types.LeaseMetadata {
-	if l.metadata == nil {
+	if l == nil {
 		return types.LeaseMetadata{}
 	}
-	return l.metadata()
+	l.metadataMu.RLock()
+	defer l.metadataMu.RUnlock()
+	return l.metadata.Copy()
 }
 
 func (l *listener) report(status listenerStatus) {
-	if l != nil && l.status != nil {
-		l.status(status)
+	if l == nil || l.statusUpdates == nil {
+		return
 	}
+	select {
+	case <-l.doneCh:
+	case l.statusUpdates <- status:
+	}
+}
+
+func (l *listener) UpdateMetadata(metadata types.LeaseMetadata) {
+	if l == nil {
+		return
+	}
+	l.metadataMu.Lock()
+	l.metadata = metadata.Copy()
+	l.metadataMu.Unlock()
 }
 
 func (l *listener) reportConnecting() {
@@ -308,8 +323,8 @@ func (l *listener) run(ctx context.Context) {
 
 		if errors.Is(err, errLeaseRefreshRequired) {
 			lease := l.clearLease("lease refresh required")
-			if lease != nil && lease.tlsCloser != nil {
-				_ = lease.tlsCloser.Close()
+			if lease != nil && lease.tenantTLS != nil {
+				_ = lease.tenantTLS.Close()
 			}
 			l.resetTransport()
 			relayURL := l.relayURL.String()
@@ -364,8 +379,8 @@ func (l *listener) Close() error {
 			closeErr = errors.Join(closeErr, l.unregisterLease(ctx, lease.accessToken))
 			cancel()
 		}
-		if lease != nil && lease.tlsCloser != nil {
-			closeErr = errors.Join(closeErr, lease.tlsCloser.Close())
+		if lease != nil && lease.tenantTLS != nil {
+			closeErr = errors.Join(closeErr, lease.tenantTLS.Close())
 		}
 		l.resetTransport()
 	})
@@ -382,8 +397,7 @@ type listenerSnapshot struct {
 	expiresAt     time.Time
 	publicPort    int
 	publicURLBase *url.URL
-	tlsConfig     *tls.Config
-	tlsCloser     io.Closer
+	tenantTLS     *keyless.Client
 }
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
@@ -391,9 +405,6 @@ func (s listenerSnapshot) snapshot() listenerSnapshot {
 	if s.publicURLBase != nil {
 		publicURLBase := *s.publicURLBase
 		s.publicURLBase = &publicURLBase
-	}
-	if s.tlsConfig != nil {
-		s.tlsConfig = s.tlsConfig.Clone()
 	}
 	return s
 }
@@ -410,7 +421,7 @@ func (l *listener) clearLease(reason string) *listenerSnapshot {
 	if l.datagram != nil && reason != "" {
 		l.datagram.Clear(reason)
 	}
-	if lease.accessToken == "" && lease.tlsCloser == nil {
+	if lease.accessToken == "" && lease.tenantTLS == nil {
 		return nil
 	}
 	return &lease
@@ -533,7 +544,7 @@ func (l *listener) runLease(ctx context.Context) error {
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				if err := l.runReverseSessionLoop(leaseCtx, lease.tlsConfig, sessionSlot); err != nil {
+				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS.TLSConfig(), sessionSlot); err != nil {
 					select {
 					case errCh <- err:
 					case <-leaseCtx.Done():
@@ -971,6 +982,9 @@ func (l *listener) renewLease(ctx context.Context) error {
 	if !updated {
 		return errLeaseRefreshRequired
 	}
+	if lease.tenantTLS != nil {
+		lease.tenantTLS.SetAccessToken(resp.AccessToken)
+	}
 	return nil
 }
 
@@ -999,28 +1013,20 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return errors.New("relay did not return public port for udp transport")
 	}
 
-	tlsConf, tenantTLSCloser, err := keyless.BuildClientTLSConfig(l.relayURL.String(), publicHostname, materials.Keys, func() http.Header {
-		headers := http.Header{}
-		accessToken := resp.AccessToken
-		if snapshot, ok := l.leaseSnapshot(); ok && snapshot.accessToken != "" {
-			accessToken = snapshot.accessToken
-		}
-		headers.Set(types.HeaderAccessToken, accessToken)
-		return headers
+	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
+		RelayURL:    l.relayURL.String(),
+		Hostname:    publicHostname,
+		ECHKeys:     materials.Keys,
+		AccessToken: resp.AccessToken,
 	})
 	if err != nil {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		if tenantTLSCloser != nil {
-			_ = tenantTLSCloser.Close()
-		}
 		return err
 	}
 
 	if ctx.Err() != nil {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		if tenantTLSCloser != nil {
-			_ = tenantTLSCloser.Close()
-		}
+		_ = tenantTLS.Close()
 		return ctx.Err()
 	}
 	next := listenerSnapshot{
@@ -1033,12 +1039,11 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		expiresAt:     resp.ExpiresAt,
 		publicPort:    resp.SNIPort,
 		publicURLBase: l.relayURL,
-		tlsConfig:     tlsConf,
-		tlsCloser:     tenantTLSCloser,
+		tenantTLS:     tenantTLS,
 	}
 	oldLease := l.lease.Swap(next)
-	if oldLease.tlsCloser != nil {
-		_ = oldLease.tlsCloser.Close()
+	if oldLease.tenantTLS != nil {
+		_ = oldLease.tenantTLS.Close()
 	}
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")

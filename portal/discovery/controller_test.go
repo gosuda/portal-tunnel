@@ -179,7 +179,7 @@ func TestControllerReportMITMVsRuntimeDistinctOutcomes(t *testing.T) {
 	}
 }
 
-func TestControllerSetMaxActiveRelaysSignalsWatch(t *testing.T) {
+func TestControllerSetMaxActiveRelaysSignalsNext(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
 		relayB = "https://relay-b.example"
@@ -193,10 +193,13 @@ func TestControllerSetMaxActiveRelaysSignalsWatch(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = controller.Watch(ctx, nil, func(urls []string) error {
+		for {
+			urls, err := controller.Next(ctx)
+			if err != nil {
+				return
+			}
 			changes <- urls
-			return nil
-		})
+		}
 	}()
 
 	// Wait for the initial selection (both relays, default max=3).
@@ -206,10 +209,10 @@ func TestControllerSetMaxActiveRelaysSignalsWatch(t *testing.T) {
 			t.Fatalf("initial selection = %v, want 2 relays", first)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for initial watch selection")
+		t.Fatal("timed out waiting for initial selection")
 	}
 
-	// Reduce max active relays — the watch loop should observe the change
+	// Reduce max active relays — the selection loop should observe the change
 	// promptly via the signal, without waiting for the 30s ticker.
 	controller.SetMaxActiveRelays(1)
 
@@ -223,9 +226,39 @@ func TestControllerSetMaxActiveRelaysSignalsWatch(t *testing.T) {
 	}
 }
 
+func TestControllerSetActiveRelaysSuppliesStickinessSnapshot(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	controller := NewController([]string{relayA, relayB})
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayB))
+	controller.SetMaxActiveRelays(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first, err := controller.Next(ctx)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("initial selection = %v, %v, want one relay", first, err)
+	}
+	sticky := relayA
+	if first[0] == relayA {
+		sticky = relayB
+	}
+	controller.SetActiveRelays([]string{sticky})
+	next, err := controller.Next(ctx)
+	if err != nil {
+		t.Fatalf("selection after active snapshot: %v", err)
+	}
+	if len(next) != 1 || next[0] != sticky {
+		t.Fatalf("selection after active snapshot = %v, want [%s]", next, sticky)
+	}
+}
+
 // A custom explicit relay that never entered through discovery must hold a
 // durable RelaySet candidate state: a reported failure suppresses it, the
-// next selection changes, and the watch loop republishes membership — the
+// next selection changes, and the selection loop republishes membership — the
 // exposure reconciles to a replacement instead of keeping a selected URL
 // with no live listener.
 func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
@@ -241,10 +274,13 @@ func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = controller.Watch(ctx, nil, func(urls []string) error {
+		for {
+			urls, err := controller.Next(ctx)
+			if err != nil {
+				return
+			}
 			changes <- urls
-			return nil
-		})
+		}
 	}()
 
 	select {
@@ -253,7 +289,7 @@ func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
 			t.Fatalf("initial selection = %v, want both explicit relays", first)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for initial watch selection")
+		t.Fatal("timed out waiting for initial selection")
 	}
 
 	controller.Report(relayA, FailureRuntime)

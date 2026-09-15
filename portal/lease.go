@@ -171,7 +171,7 @@ func (r *leaseRegistry) recordForVerifiedLease(key, leaseID string, now time.Tim
 	return record, nil
 }
 
-func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, reportedIP string) (*leaseRecord, types.RegisterResponse, error) {
+func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (*leaseRecord, types.RegisterResponse, error) {
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
 	}
@@ -359,7 +359,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		}
 		replaced.Close()
 	}
-	reverseEndpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, req.Overlay, "")
+	reverseEndpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, req.Overlay, "", self, descriptors)
 	if err != nil {
 		r.mu.Lock()
 		for i, current := range r.records {
@@ -435,7 +435,7 @@ func (r *leaseRegistry) admitLeaseIdentity(key, leaseID string, now time.Time, r
 	return record, nil
 }
 
-func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.RenewResponse, error) {
+func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.RenewResponse, error) {
 	if r == nil {
 		return types.RenewResponse{}, errFeatureUnavailable
 	}
@@ -479,7 +479,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 
-	reverseEndpoint, err := r.issueReverseEndpoint(recordIdentity, leaseID, expiresAt, overlay, "")
+	reverseEndpoint, err := r.issueReverseEndpoint(recordIdentity, leaseID, expiresAt, overlay, "", self, descriptors)
 	if err != nil {
 		return types.RenewResponse{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
@@ -500,9 +500,16 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}, nil
 }
 
-func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, overlay bool, failedURL string) (types.ReverseEndpoint, error) {
-	if overlay && r.overlay != nil {
-		endpoint, ok, err := r.overlay.IssueEndpoint(leaseIdentity, leaseID, expiresAt, failedURL)
+func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, useOverlay bool, failedURL string, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
+	if useOverlay && r.overlay != nil {
+		endpoint, ok, err := r.overlay.IssueEndpoint(overlay.IssueInput{
+			LeaseIdentity: leaseIdentity,
+			LeaseID:       leaseID,
+			ExpiresAt:     expiresAt,
+			FailedURL:     failedURL,
+			Self:          self,
+			Descriptors:   descriptors,
+		})
 		if err == nil && ok {
 			return endpoint, nil
 		}
@@ -521,7 +528,7 @@ func (r *leaseRegistry) issueReverseEndpoint(leaseIdentity types.Identity, lease
 	}, nil
 }
 
-func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest) (types.ReverseEndpoint, error) {
+func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
 	if r == nil {
 		return types.ReverseEndpoint{}, errFeatureUnavailable
 	}
@@ -541,7 +548,7 @@ func (r *leaseRegistry) RefreshReverseEndpoint(req types.ReverseEndpointRequest)
 	expiresAt := record.ExpiresAt
 	overlay := record.Overlay
 	r.mu.RUnlock()
-	endpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, overlay, strings.TrimSpace(req.FailedURL))
+	endpoint, err := r.issueReverseEndpoint(leaseIdentity, leaseID, expiresAt, overlay, strings.TrimSpace(req.FailedURL), self, descriptors)
 	if err != nil {
 		return types.ReverseEndpoint{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}

@@ -125,11 +125,9 @@ func TestIssueEndpointRotatesGatewayWithoutChangingLease(t *testing.T) {
 	}
 	runtime := &Runtime{
 		config: Config{
-			Authority:      ingressAuthority,
-			Descriptors:    func() []types.RelayDescriptor { return relays.Descriptors(types.RelayDescriptor{}) },
-			SelfDescriptor: func(time.Time) (types.RelayDescriptor, error) { return ingress, nil },
-			OfferReverse:   func(string, string, net.Conn, func() error) error { return nil },
-			Bridge:         func(net.Conn, net.Conn) {},
+			Authority:    ingressAuthority,
+			OfferReverse: func(string, string, net.Conn, func() error) error { return nil },
+			Bridge:       func(net.Conn, net.Conn) {},
 		},
 		endpoint:    endpointStub{destination: ingressDestination},
 		assignments: make(map[string]string),
@@ -139,15 +137,24 @@ func TestIssueEndpointRotatesGatewayWithoutChangingLease(t *testing.T) {
 	leaseIdentity := types.Identity{Name: "lease", Address: ingressAuthority.Identity().Address}
 	expiresAt := time.Now().UTC().Add(time.Minute)
 
-	initial, ok, err := runtime.IssueEndpoint(leaseIdentity, "lease_1", expiresAt, "")
+	input := IssueInput{
+		LeaseIdentity: leaseIdentity,
+		LeaseID:       "lease_1",
+		ExpiresAt:     expiresAt,
+		Self:          ingress,
+		Descriptors:   relays.Descriptors(types.RelayDescriptor{}),
+	}
+	initial, ok, err := runtime.IssueEndpoint(input)
 	if err != nil || !ok || initial.URL != "https://first.example/sdk/connect" {
 		t.Fatalf("initial endpoint = %#v, %v, %v", initial, ok, err)
 	}
-	replacement, ok, err := runtime.IssueEndpoint(leaseIdentity, "lease_1", expiresAt, initial.URL)
+	input.FailedURL = initial.URL
+	replacement, ok, err := runtime.IssueEndpoint(input)
 	if err != nil || !ok || replacement.URL != "https://second.example/sdk/connect" {
 		t.Fatalf("replacement endpoint = %#v, %v, %v", replacement, ok, err)
 	}
-	if endpoint, ok, err := runtime.IssueEndpoint(leaseIdentity, "lease_1", expiresAt, replacement.URL); err != nil || ok || endpoint.URL != "" {
+	input.FailedURL = replacement.URL
+	if endpoint, ok, err := runtime.IssueEndpoint(input); err != nil || ok || endpoint.URL != "" {
 		t.Fatalf("exhausted gateways did not fall back to direct transport: %#v, %v, %v", endpoint, ok, err)
 	}
 }
@@ -373,7 +380,7 @@ func TestUnavailableOverlayStartsAndShutsDownWithoutPeers(t *testing.T) {
 			if err := runtime.Start(ctx); err != nil {
 				t.Fatalf("local startup without peers: %v", err)
 			}
-			if endpoint, useOverlay, err := runtime.IssueEndpoint(types.Identity{}, "", time.Time{}, ""); err != nil || useOverlay || endpoint.URL != "" {
+			if endpoint, useOverlay, err := runtime.IssueEndpoint(IssueInput{}); err != nil || useOverlay || endpoint.URL != "" {
 				t.Fatalf("unavailable overlay must retain direct fallback: %v, %v, %v", endpoint, useOverlay, err)
 			}
 			runCtx, cancelRun := context.WithCancel(ctx)

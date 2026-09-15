@@ -280,10 +280,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		server.overlay, err = overlay.New(overlay.Config{
 			ConfigPath: cfg.IVNPConfigPath,
 			Authority:  relayAuthority,
-			Descriptors: func() []types.RelayDescriptor {
-				return server.relaySet.Descriptors(types.RelayDescriptor{})
-			},
-			SelfDescriptor: server.newSelfDescriptor,
 			OfferReverse: func(identityKey, leaseID string, conn net.Conn, ready func() error) error {
 				lease, err := registry.admitLeaseIdentity(identityKey, leaseID, time.Now().UTC(), false)
 				if err != nil {
@@ -305,6 +301,17 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 func (s *Server) config() ServerConfig {
 	return s.cfg.Load()
+}
+
+func (s *Server) overlayIssueDescriptors(now time.Time) (types.RelayDescriptor, []types.RelayDescriptor) {
+	if s.overlay == nil || s.relaySet == nil {
+		return types.RelayDescriptor{}, nil
+	}
+	self, err := s.newSelfDescriptor(now)
+	if err != nil {
+		return types.RelayDescriptor{}, nil
+	}
+	return self, s.relaySet.Descriptors(types.RelayDescriptor{})
 }
 
 func (s *Server) SetUDPPolicy(enabled bool, maxLeases int) {

@@ -598,7 +598,7 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 			Name:    "demo-app",
 			Address: server.identity.Address,
 		},
-	}, "203.0.113.10", "")
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("registry.Register() error = %v", err)
 	}
@@ -651,7 +651,7 @@ func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
 		ECHConfigList: echConfigList,
 		UDPEnabled:    true,
 		TCPEnabled:    true,
-	}, "203.0.113.10", "")
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("registry.Register() error = %v", err)
 	}

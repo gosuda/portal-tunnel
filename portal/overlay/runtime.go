@@ -62,12 +62,20 @@ func normalizeIVNPDestination(destination string) (string, error) {
 }
 
 type Config struct {
-	ConfigPath     string
-	Authority      identity.Authority
-	Descriptors    func() []types.RelayDescriptor
-	SelfDescriptor func(time.Time) (types.RelayDescriptor, error)
-	OfferReverse   func(identityKey, leaseID string, conn net.Conn, ready func() error) error
-	Bridge         func(net.Conn, net.Conn)
+	ConfigPath   string
+	Authority    identity.Authority
+	OfferReverse func(identityKey, leaseID string, conn net.Conn, ready func() error) error
+	Bridge       func(net.Conn, net.Conn)
+}
+
+// IssueInput is the complete point-in-time state needed to issue an endpoint.
+type IssueInput struct {
+	LeaseIdentity types.Identity
+	LeaseID       string
+	ExpiresAt     time.Time
+	FailedURL     string
+	Self          types.RelayDescriptor
+	Descriptors   []types.RelayDescriptor
 }
 
 var ErrLeaseUnavailable = errors.New("overlay ingress lease is unavailable")
@@ -100,8 +108,7 @@ type Runtime struct {
 
 func New(config Config) (*Runtime, error) {
 	config.ConfigPath = strings.TrimSpace(config.ConfigPath)
-	missingCallbacks := config.Descriptors == nil || config.SelfDescriptor == nil || config.OfferReverse == nil || config.Bridge == nil
-	if config.ConfigPath == "" || config.Authority == nil || missingCallbacks {
+	if config.ConfigPath == "" || config.Authority == nil || config.OfferReverse == nil || config.Bridge == nil {
 		return nil, errors.New("overlay runtime configuration is incomplete")
 	}
 	return &Runtime{
@@ -248,21 +255,18 @@ func (r *Runtime) ForgetLease(leaseID string) {
 }
 
 // IssueEndpoint returns false when direct reverse transport should be used.
-// failedURL excludes a failed gateway when the SDK requests replacement.
-func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, expiresAt time.Time, failedURL string) (types.ReverseEndpoint, bool, error) {
+// Input carries the caller's current relay-state snapshot; FailedURL excludes
+// a failed gateway when the SDK requests replacement.
+func (r *Runtime) IssueEndpoint(input IssueInput) (types.ReverseEndpoint, bool, error) {
 	if r == nil || !r.ready.Load() {
 		return types.ReverseEndpoint{}, false, nil
 	}
 	now := time.Now().UTC()
-	leaseID = strings.TrimSpace(leaseID)
-	if leaseID == "" || !expiresAt.After(now) {
+	input.LeaseID = strings.TrimSpace(input.LeaseID)
+	if input.LeaseID == "" || !input.ExpiresAt.After(now) {
 		return types.ReverseEndpoint{}, false, errors.New("overlay lease is invalid")
 	}
-	ingress, err := r.config.SelfDescriptor(now)
-	if err != nil {
-		return types.ReverseEndpoint{}, false, err
-	}
-	ingress, err = discovery.VerifyRelayDescriptor(ingress)
+	ingress, err := discovery.VerifyRelayDescriptor(input.Self)
 	if err != nil {
 		return types.ReverseEndpoint{}, false, err
 	}
@@ -271,15 +275,15 @@ func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, ex
 		return types.ReverseEndpoint{}, false, errors.New("overlay ingress descriptor is invalid")
 	}
 
-	candidates := r.gatewayCandidates(now, ingress.Address, ingressDestination)
+	candidates := r.gatewayCandidates(input.Descriptors, now, ingress.Address, ingressDestination)
 	if len(candidates) == 0 {
 		return types.ReverseEndpoint{}, false, nil
 	}
-	gateway, ok := r.selectGateway(leaseID, failedURL, candidates, now)
+	gateway, ok := r.selectGateway(input.LeaseID, input.FailedURL, candidates, now)
 	if !ok {
 		return types.ReverseEndpoint{}, false, nil
 	}
-	capabilityExpiry := expiresAt.UTC()
+	capabilityExpiry := input.ExpiresAt.UTC()
 	if ingress.ExpiresAt.Before(capabilityExpiry) {
 		capabilityExpiry = ingress.ExpiresAt
 	}
@@ -288,8 +292,8 @@ func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, ex
 	}
 	claims := capabilityClaims{
 		Version:            1,
-		LeaseIdentity:      leaseIdentity,
-		LeaseID:            leaseID,
+		LeaseIdentity:      input.LeaseIdentity,
+		LeaseID:            input.LeaseID,
 		ExpiresAt:          capabilityExpiry,
 		Ingress:            ingress,
 		GatewayAddress:     gateway.Address,
@@ -311,11 +315,11 @@ func (r *Runtime) IssueEndpoint(leaseIdentity types.Identity, leaseID string, ex
 	}, true, nil
 }
 
-func (r *Runtime) gatewayCandidates(now time.Time, ingressAddress, ingressDestination string) []types.RelayDescriptor {
+func (r *Runtime) gatewayCandidates(descriptors []types.RelayDescriptor, now time.Time, ingressAddress, ingressDestination string) []types.RelayDescriptor {
 	var candidates []types.RelayDescriptor
 	seenAddresses := make(map[string]struct{})
 	seenDestinations := make(map[string]struct{})
-	for _, candidate := range r.config.Descriptors() {
+	for _, candidate := range descriptors {
 		verified, err := discovery.VerifyRelayDescriptor(candidate)
 		if err != nil || !verified.ExpiresAt.After(now.Add(minimumGatewayTTL)) || strings.EqualFold(verified.Address, ingressAddress) {
 			continue

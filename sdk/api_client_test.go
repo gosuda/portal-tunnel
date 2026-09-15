@@ -118,14 +118,11 @@ func TestTerminalRelayFailureClosesListener(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	var failure RelayFailure
 	listener := &listener{
-		relayURL: entryURL,
-		cancel:   func() { close(done) },
-		doneCh:   done,
-		status: func(status listenerStatus) {
-			failure = status.failure
-		},
+		relayURL:      entryURL,
+		cancel:        func() { close(done) },
+		doneCh:        done,
+		statusUpdates: make(chan listenerStatus, 1),
 	}
 	err = &relayRegistrationError{
 		relayURL: exit,
@@ -140,7 +137,7 @@ func TestTerminalRelayFailureClosesListener(t *testing.T) {
 	default:
 		t.Fatal("listener remains open after terminal relay failure")
 	}
-	if failure != RelayFailureTerminal {
+	if failure := (<-listener.statusUpdates).failure; failure != RelayFailureTerminal {
 		t.Fatalf("failure = %q, want terminal", failure)
 	}
 }

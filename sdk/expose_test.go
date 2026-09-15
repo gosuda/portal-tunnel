@@ -82,11 +82,8 @@ func TestPublicURLForLeaseUsesCanonicalRelayPort(t *testing.T) {
 }
 
 func TestListenerReverseSessionReadinessTracksLiveSessions(t *testing.T) {
-	var states []RelayState
 	l := &listener{
-		status: func(status listenerStatus) {
-			states = append(states, status.state)
-		},
+		statusUpdates: make(chan listenerStatus, 1),
 		lease: utils.NewSnapshot(listenerSnapshot{
 			accessToken: "token",
 			hostname:    "service.relay.example",
@@ -94,27 +91,31 @@ func TestListenerReverseSessionReadinessTracksLiveSessions(t *testing.T) {
 	}
 
 	l.reportStreamReady()
+	status := <-l.statusUpdates
 	l.reportStreamReady()
+	status = <-l.statusUpdates
 	if got := l.readySessions.Load(); got != 2 {
 		t.Fatalf("ready session count = %d, want 2", got)
 	}
-	if got := states[len(states)-1]; got != RelayReady {
+	if got := status.state; got != RelayReady {
 		t.Fatalf("state after opening sessions = %q, want %q", got, RelayReady)
 	}
 
 	l.reportStreamClosed()
+	status = <-l.statusUpdates
 	if got := l.readySessions.Load(); got != 1 {
 		t.Fatalf("ready session count after one close = %d, want 1", got)
 	}
-	if got := states[len(states)-1]; got != RelayReady {
+	if got := status.state; got != RelayReady {
 		t.Fatalf("state with one live session = %q, want %q", got, RelayReady)
 	}
 
 	l.reportStreamClosed()
+	status = <-l.statusUpdates
 	if got := l.readySessions.Load(); got != 0 {
 		t.Fatalf("ready session count after final close = %d, want 0", got)
 	}
-	if got := states[len(states)-1]; got != RelayConnecting {
+	if got := status.state; got != RelayConnecting {
 		t.Fatalf("state after final close = %q, want %q", got, RelayConnecting)
 	}
 }
@@ -281,14 +282,24 @@ func TestExposureWaitTCPReadyWaitsAfterTerminalFailure(t *testing.T) {
 	}
 }
 
-func TestExposureMetadataSnapshotsDoNotShareMutableState(t *testing.T) {
-	exposure := &Exposure{
-		metadata: utils.NewSnapshot(types.LeaseMetadata{Tags: []string{"initial"}}, types.LeaseMetadata.Copy),
+func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
+	listener := &listener{
+		metadata: types.LeaseMetadata{Tags: []string{"initial"}},
 	}
-	metadata := exposure.metadata.Load()
+	exposure := &Exposure{
+		metadata:       types.LeaseMetadata{Tags: []string{"initial"}},
+		relayListeners: map[string]*listener{"https://relay.example": listener},
+	}
+	metadata := exposure.metadata.Copy()
 	metadata.Tags[0] = "mutated"
-	if got := exposure.metadata.Load().Tags[0]; got != "initial" {
+	if got := exposure.metadata.Tags[0]; got != "initial" {
 		t.Fatalf("Metadata.Tags[0] = %q, want initial", got)
+	}
+	if err := exposure.UpdateMetadata(types.LeaseMetadata{Tags: []string{"updated"}}); err != nil {
+		t.Fatalf("UpdateMetadata() error = %v", err)
+	}
+	if got := listener.metadataSnapshot().Tags[0]; got != "updated" {
+		t.Fatalf("listener Metadata.Tags[0] = %q, want updated", got)
 	}
 }
 
