@@ -38,6 +38,7 @@ import (
 // Client keeps the signer and TLS lifetimes from diverging.
 type Client struct {
 	closeOnce sync.Once
+	closeErr  error
 	closer    io.Closer
 	tlsConf   *tls.Config
 }
@@ -122,15 +123,15 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 func (c *Client) TLSConfig() *tls.Config { return c.tlsConf }
 
 // Close releases the remote signer backing the TLS configuration. It is
-// safe to call more than once; later calls return the first close result.
+// safe to call more than once: the underlying resource is closed exactly
+// once, and every call returns that first close result.
 func (c *Client) Close() error {
-	var err error
 	c.closeOnce.Do(func() {
 		if c.closer != nil {
-			err = c.closer.Close()
+			c.closeErr = c.closer.Close()
 		}
 	})
-	return err
+	return c.closeErr
 }
 
 func ResolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte, []byte, error) {

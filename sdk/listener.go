@@ -987,7 +987,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 			return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 		}
 	}
-	resp, err := l.registerLease(ctx, publicHostname, materials, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
+	resp, err := l.registerLease(ctx, materials, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
 	if err != nil {
 		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 	}

@@ -123,11 +123,10 @@ func (l *listener) relayTLSConfigClone() *tls.Config {
 }
 
 // registerLease performs the transport-level lease registration calls
-// (challenge, sign, register) and returns the granted lease. The tenant
-// hostname and ECH material are feature inputs prepared by the caller
-// before this transport path runs; registerLease only forwards them onto
-// the registration request.
-func (l *listener) registerLease(ctx context.Context, publicHostname string, materials keyless.ECHMaterials, ttl time.Duration, udpEnabled, tcpEnabled bool) (types.RegisterResponse, error) {
+// (challenge, sign, register) and returns the granted lease. The prepared
+// ECH material is the only feature input the registration request
+// serializes; it is prepared by the caller before this transport path runs.
+func (l *listener) registerLease(ctx context.Context, materials keyless.ECHMaterials, ttl time.Duration, udpEnabled, tcpEnabled bool) (types.RegisterResponse, error) {
 	registerReq := types.RegisterChallengeRequest{
 		Identity:   l.identity,
 		Metadata:   l.metadataSnapshot(),

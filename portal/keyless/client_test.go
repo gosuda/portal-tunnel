@@ -197,3 +197,29 @@ func (c *countingCloser) Close() error {
 	c.closed++
 	return nil
 }
+
+func TestClientClosePreservesFirstError(t *testing.T) {
+	t.Parallel()
+	closer := &failingCloseResource{}
+	client := &Client{closer: closer}
+	first := client.Close()
+	second := client.Close()
+	if first == nil || second == nil {
+		t.Fatalf("Close() must keep reporting the first close error; got first=%v second=%v", first, second)
+	}
+	if !errors.Is(second, first) {
+		t.Fatalf("second Close() = %v, want the first close error %v", second, first)
+	}
+	if closer.calls != 1 {
+		t.Fatalf("underlying resource closed %d times, want exactly 1", closer.calls)
+	}
+}
+
+type failingCloseResource struct {
+	calls int
+}
+
+func (c *failingCloseResource) Close() error {
+	c.calls++
+	return errors.New("signer close failed")
+}
