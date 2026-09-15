@@ -2,12 +2,10 @@ package main
 
 import (
 	"bufio"
-	"cmp"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,330 +15,63 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	portalx402 "github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// A feature is one capability the operator turned on or off, reported at
-// startup and by the config subcommand. Logging the raw settings is not enough:
-// "you switched this off" and "you switched this on but it cannot run" both
-// show up as a false flag, and only the second one is a misconfiguration.
-type featureState string
-
-const (
-	stateEnabled     featureState = "enabled"
-	stateDisabled    featureState = "disabled"
-	stateBlocked     featureState = "blocked"
-	stateUnprotected featureState = "UNPROTECTED"
-)
-
-type feature struct {
-	Name string
-	// State reflects validated configuration, not listener readiness.
-	State featureState
-	// By is the setting that produced the state, e.g. "DISCOVERY=true".
-	By string
-	// Detail adds context for a working feature.
-	Detail string
-	// Missing says what has to be supplied, for blocked and unprotected states.
-	Missing string
+func evaluateFeatures(cfg appConfig) []types.FeatureDiagnostic {
+	features := portal.ServerConfigDiagnostics(cfg.Relay)
+	return append(features, adminAPIFeature(cfg), frontendFeature(cfg), landingPageFeature(cfg))
 }
 
-func (f feature) needsAttention() bool {
-	return f.State == stateBlocked || f.State == stateUnprotected
-}
-
-func evaluateFeatures(cfg relayServerConfig) []feature {
-	return []feature{
-		discoveryFeature(cfg),
-		acmeFeature(cfg),
-		ensGaslessFeature(cfg),
-		leaseTransportFeature("udp-transport", "UDP_ENABLED", cfg.UDPEnabled, cfg),
-		leaseTransportFeature("tcp-transport", "TCP_ENABLED", cfg.TCPEnabled, cfg),
-		adminAPIFeature(cfg),
-		frontendFeature(cfg),
-		landingPageFeature(cfg),
-		proxyHeaderFeature(cfg),
-		x402Feature(cfg),
-		pprofFeature(cfg),
-		httpRedirectFeature(cfg),
-	}
-}
-
-func httpRedirectFeature(cfg relayServerConfig) feature {
-	f := feature{Name: types.HTTPRedirectFeatureName, State: stateDisabled, By: types.HTTPRedirectEnabledEnv + "=false"}
-	if !cfg.HTTPRedirect.Enabled {
-		return f
-	}
-	f.By = types.HTTPRedirectEnabledEnv + "=true"
-	redirect, err := portal.NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
-	if err != nil {
-		f.State, f.Missing = stateBlocked, err.Error()
-		return f
-	}
-	f.State = stateEnabled
-	f.Detail = "addr=" + redirect.Addr + "; canonical PORTAL_URL only; configuration valid; listener binding occurs at startup"
-	if redirect.HSTS {
-		f.Detail += "; HSTS header requested (browsers ignore it over HTTP)"
-	}
-	return f
-}
-
-func frontendFeature(cfg relayServerConfig) feature {
-	f := feature{Name: "frontend"}
+func frontendFeature(cfg appConfig) types.FeatureDiagnostic {
+	f := types.FeatureDiagnostic{Name: "frontend"}
 	dir := strings.TrimSpace(cfg.FrontendDir)
 	if dir == "" {
-		f.State, f.By = stateEnabled, "PORTAL_FRONTEND_DIR="
+		f.State, f.By = types.FeatureEnabled, "PORTAL_FRONTEND_DIR="
 		f.Detail = "serving the SPA embedded in the binary"
 		return f
 	}
 	index := filepath.Join(dir, "index.html")
 	if _, err := os.Stat(index); err != nil {
-		f.State, f.By = stateBlocked, "PORTAL_FRONTEND_DIR="+dir
+		f.State, f.By = types.FeatureBlocked, "PORTAL_FRONTEND_DIR="+dir
 		f.Missing = fmt.Sprintf("%s is not readable (%v); mount the directory or clear the variable to use the embedded SPA", index, err)
 		return f
 	}
-	f.State, f.By = stateEnabled, "PORTAL_FRONTEND_DIR="+dir
+	f.State, f.By = types.FeatureEnabled, "PORTAL_FRONTEND_DIR="+dir
 	f.Detail = "serving a custom SPA instead of the embedded one"
 	return f
 }
 
-func landingPageFeature(cfg relayServerConfig) feature {
-	f := feature{Name: "landing-page"}
+func landingPageFeature(cfg appConfig) types.FeatureDiagnostic {
+	f := types.FeatureDiagnostic{Name: "landing-page"}
 	if !cfg.LandingPageEnabled {
-		f.State, f.By = stateDisabled, "LANDING_PAGE_ENABLED=false"
+		f.State, f.By = types.FeatureDisabled, "LANDING_PAGE_ENABLED=false"
 		f.Detail = "the dashboard opens directly on the relay view"
 		return f
 	}
-	f.State, f.By = stateEnabled, "LANDING_PAGE_ENABLED=true"
+	f.State, f.By = types.FeatureEnabled, "LANDING_PAGE_ENABLED=true"
 	return f
 }
 
-func discoveryFeature(cfg relayServerConfig) feature {
-	f := feature{Name: "discovery"}
-	if !cfg.DiscoveryEnabled {
-		f.State, f.By = stateDisabled, "DISCOVERY=false"
-		return f
-	}
-	// The same normalization portal.NewServer applies, not a second opinion
-	// about it. Checking only the parsed hostname would report PORTAL_URL=http://…
-	// as enabled and then have the server reject it seconds later, which is
-	// exactly the divergence this report exists to remove.
-	if _, err := utils.NormalizeRelayURL(cfg.PortalURL); err != nil {
-		f.State, f.By = stateBlocked, "DISCOVERY=true"
-		f.Missing = fmt.Sprintf("PORTAL_URL is not usable as a relay URL: %v", err)
-		return f
-	}
-	host := portalURLHost(cfg.PortalURL)
-	if host == "" || utils.IsLocalRelayHost(host) {
-		f.State, f.By = stateBlocked, "DISCOVERY=true"
-		f.Missing = fmt.Sprintf(
-			"PORTAL_URL host %q is local-only and public discovery rejects it; set PORTAL_URL to a publicly resolvable HTTPS origin",
-			host)
-		return f
-	}
-	bootstraps, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.Bootstraps)...)
-	if err != nil {
-		f.State, f.By = stateBlocked, "DISCOVERY=true"
-		f.Missing = fmt.Sprintf("BOOTSTRAPS is not usable: %v", err)
-		return f
-	}
-	f.State, f.By = stateEnabled, "DISCOVERY=true"
-	f.Detail = fmt.Sprintf("host=%s bootstraps=%d",
-		host, len(bootstraps))
-	return f
-}
-
-func acmeFeature(cfg relayServerConfig) feature {
-	f := feature{Name: "acme"}
-	// Unset is not off. The relay falls back to the embedded authoritative DNS
-	// server, so reporting "disabled" here would describe a relay that is in
-	// fact serving its own zone and answering ACME challenges from it.
-	provider := strings.ToLower(strings.TrimSpace(cfg.ACMEDNSProvider))
-	provider = cmp.Or(provider, acme.TypeEmbedded)
-	// acme.NewManager returns before it builds a DNS provider when the base
-	// domain is local-only, so managed issuance cannot run however well the
-	// provider is configured. Reporting it as enabled here would describe an
-	// automation that never starts.
-	if host := portalURLHost(cfg.PortalURL); host == "" || utils.IsLocalRelayHost(host) {
-		f.State, f.By = stateBlocked, "ACME_DNS_PROVIDER="+provider
-		f.Missing = fmt.Sprintf(
-			"PORTAL_URL host %q is local-only; managed issuance is skipped for local hosts and a development certificate is used instead",
-			host)
-		return f
-	}
-
-	if provider == acme.TypeEmbedded {
-		f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
-		f.Detail = fmt.Sprintf(
-			"the relay serves its own zone on port %d; delegate the base domain with an NS record and open 53/tcp+udp. "+
-				"Valid manual fullchain.pem and privatekey.pem under IDENTITY_PATH override issuance only when neither acme-account.key nor acme-registration.json exists; DNS/ECH management continues",
-			cfg.EmbeddedDNSPort)
-		return f
-	}
-
-	required, supported := dnsProviderCredential[provider]
-	if !supported {
-		f.State, f.By = stateBlocked, "ACME_DNS_PROVIDER="+provider
-		f.Missing = "unsupported provider; use embedded, cloudflare, gcloud, hetzner, njalla, route53 or vultr"
-		return f
-	}
-
-	var empty []string
-	for _, name := range required {
-		if strings.TrimSpace(providerCredential(cfg, name)) == "" {
-			empty = append(empty, name)
-		}
-	}
-	if len(empty) > 0 {
-		f.State, f.By = stateBlocked, "ACME_DNS_PROVIDER="+provider
-		f.Missing = strings.Join(empty, ", ") + " is empty"
-		return f
-	}
-
-	f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
-	f.Detail = "supported external DNS backend; embedded remains the canonical default; managed issuance and renewal under IDENTITY_PATH"
-	if len(required) == 0 {
-		f.Detail += "; credentials come from the ambient provider chain"
-	}
-	return f
-}
-
-func ensGaslessFeature(cfg relayServerConfig) feature {
-	f := feature{Name: "ens-gasless"}
-	if !cfg.ENSGaslessEnabled {
-		f.State, f.By = stateDisabled, "ENS_GASLESS_ENABLED=false"
-		return f
-	}
-	provider := strings.ToLower(strings.TrimSpace(cfg.ACMEDNSProvider))
-	provider = cmp.Or(provider, acme.TypeEmbedded)
-	// ENS gasless drives the same provider ACME does, so it cannot work when
-	// that provider cannot. Repeating only the "is it set" half of the check
-	// here would report this as enabled while acme is blocked, which is exactly
-	// the mismatch this report exists to surface.
-	if acmeState := acmeFeature(cfg); acmeState.State == stateBlocked {
-		f.State, f.By = stateBlocked, "ENS_GASLESS_ENABLED=true"
-		f.Missing = "the DNS provider it shares with ACME is blocked: " + acmeState.Missing
-		return f
-	}
-	if provider == acme.TypeHetzner || provider == acme.TypeNjalla {
-		f.State, f.By = stateBlocked, "ENS_GASLESS_ENABLED=true"
-		f.Missing = provider + " does not support ENS DNSSEC automation; use embedded, cloudflare, gcloud, route53 or vultr"
-		return f
-	}
-	f.State, f.By = stateEnabled, "ENS_GASLESS_ENABLED=true"
-	f.Detail = "DNSSEC and ENS TXT automation through " + provider
-	if provider == acme.TypeEmbedded {
-		f.Detail += "; publish the startup DS at the parent after delegation is reachable; local signing does not verify the parent chain"
-	}
-	return f
-}
-
-func leaseTransportFeature(name, envName string, enabled bool, cfg relayServerConfig) feature {
-	f := feature{Name: name}
-	if !enabled {
-		f.State, f.By = stateDisabled, envName+"=false"
-		return f
-	}
-	if cfg.MinPort <= 0 || cfg.MaxPort <= 0 || cfg.MaxPort < cfg.MinPort {
-		f.State, f.By = stateBlocked, envName+"=true"
-		f.Missing = fmt.Sprintf(
-			"MIN_PORT=%d MAX_PORT=%d is not a usable range; set both and publish the range in docker-compose.yml",
-			cfg.MinPort, cfg.MaxPort)
-		return f
-	}
-	f.State, f.By = stateEnabled, envName+"=true"
-	f.Detail = fmt.Sprintf("ports=%d-%d", cfg.MinPort, cfg.MaxPort)
-	return f
-}
-
-func adminAPIFeature(cfg relayServerConfig) feature {
-	f := feature{Name: "admin-api"}
+func adminAPIFeature(cfg appConfig) types.FeatureDiagnostic {
+	f := types.FeatureDiagnostic{Name: "admin-api"}
 	if strings.TrimSpace(cfg.AdminToken) == "" {
-		f.State = stateUnprotected
+		f.State = types.FeatureUnprotected
 		f.Missing = "ADMIN_TOKEN is empty; the admin and policy APIs accept unauthenticated requests. Generate one with: openssl rand -hex 32"
 		return f
 	}
-	f.State, f.By = stateEnabled, "ADMIN_TOKEN set"
+	f.State, f.By = types.FeatureEnabled, "ADMIN_TOKEN set"
 	f.Detail = "bearer token required for /api/admin and /api/policy"
 	return f
 }
 
-func proxyHeaderFeature(cfg relayServerConfig) feature {
-	f := feature{Name: "proxy-headers"}
-	if !cfg.TrustProxyHeaders {
-		f.State, f.By = stateDisabled, "TRUST_PROXY_HEADERS=false"
-		f.Detail = "client addresses come from the socket, which is correct when Portal owns the public port itself"
-		return f
-	}
-	f.State, f.By = stateEnabled, "TRUST_PROXY_HEADERS=true"
-	if cidrs := strings.TrimSpace(cfg.TrustedProxyCIDRs); cidrs != "" {
-		f.Detail = "trusted=" + cidrs
-	} else {
-		f.State, f.By = stateDisabled, "TRUSTED_PROXY_CIDRS empty"
-		f.Detail = "no proxies are trusted; forwarded client addresses are ignored and client addresses come from the socket"
-	}
-	return f
-}
-
-func x402Feature(cfg relayServerConfig) feature {
-	f := feature{Name: "x402"}
-	if !cfg.X402Enabled {
-		f.State, f.By = stateDisabled, "X402_ENABLED=false"
-		return f
-	}
-	if strings.TrimSpace(cfg.X402PayTo) == "" {
-		f.State, f.By = stateBlocked, "X402_ENABLED=true"
-		f.Missing = "X402_PAY_TO is empty; the facilitator has no payment recipient"
-		return f
-	}
-	f.State, f.By = stateEnabled, "X402_ENABLED=true"
-	f.Detail = "network=" + portalx402.Network(cfg.X402Testnet)
-	return f
-}
-
-func pprofFeature(cfg relayServerConfig) feature {
-	f := feature{Name: "pprof"}
-	if !cfg.PProfEnabled {
-		f.State, f.By = stateDisabled, "PPROF_ENABLED=false"
-		return f
-	}
-	f.State, f.By = stateEnabled, "PPROF_ENABLED=true"
-	f.Detail = "addr=" + cfg.PProfAddr
-	return f
-}
-
-func portalURLHost(raw string) string {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return ""
-	}
-	return utils.NormalizeHostname(parsed.Hostname())
-}
-
-func providerCredential(cfg relayServerConfig, name string) string {
-	switch name {
-	case "CLOUDFLARE_TOKEN":
-		return cfg.CloudflareToken
-	case "HETZNER_API_TOKEN":
-		return cfg.HetznerAPIToken
-	case "NJALLA_TOKEN":
-		return cfg.NjallaToken
-	case "VULTR_API_KEY":
-		return cfg.VultrAPIKey
-	default:
-		return ""
-	}
-}
-
 // logFeatureReport emits the same report the config subcommand renders, so the
 // two can never describe the deployment differently.
-func logFeatureReport(features []feature) {
+func logFeatureReport(features []types.FeatureDiagnostic) {
 	for _, f := range features {
 		event := log.Info()
-		if f.needsAttention() {
+		if f.NeedsAttention() {
 			event = log.Warn()
 		}
 		event = event.Str("feature", f.Name).Str("state", string(f.State))
@@ -467,7 +198,7 @@ func displayValue(name, value string) string {
 	return value
 }
 
-func writeConfigReport(w io.Writer, cfg relayServerConfig, entries []envFileEntry, source string) {
+func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, source string) {
 	relay := knownEnvNames()
 
 	fmt.Fprintf(w, "Portal relay configuration (%s)\n", source)
@@ -539,7 +270,7 @@ func writeConfigReport(w io.Writer, cfg relayServerConfig, entries []envFileEntr
 	fmt.Fprintln(w, "Features")
 	for _, f := range evaluateFeatures(cfg) {
 		marker := " "
-		if f.needsAttention() {
+		if f.NeedsAttention() {
 			marker = "!"
 		}
 		fmt.Fprintf(w, " %s %-16s %-12s %s\n", marker, f.Name, f.State, f.By)
@@ -737,7 +468,7 @@ func writeCommentWrapped(w io.Writer, text string) {
 func applyEnvFileInIsolation(entries []envFileEntry) (func(), error) {
 	// A first pass populates the registry, which is how the set of names the
 	// deployment understands is known at all.
-	if _, err := resolveRelayServerConfig(nil); err != nil {
+	if _, err := resolveAppConfig(nil); err != nil {
 		return nil, err
 	}
 
@@ -829,7 +560,7 @@ func runConfigCommand(args []string) error {
 		source = envFilePath
 	}
 
-	cfg, err := resolveRelayServerConfig(nil)
+	cfg, err := resolveAppConfig(nil)
 	if err != nil {
 		return err
 	}

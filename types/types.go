@@ -23,6 +23,29 @@ const (
 	MarkerTLSStart          = byte(0x02)
 )
 
+type FeatureState string
+
+const (
+	FeatureEnabled     FeatureState = "enabled"
+	FeatureDisabled    FeatureState = "disabled"
+	FeatureBlocked     FeatureState = "blocked"
+	FeatureUnprotected FeatureState = "UNPROTECTED"
+)
+
+// FeatureDiagnostic describes the resolved configuration state of one
+// capability without probing runtime resources such as listeners or networks.
+type FeatureDiagnostic struct {
+	Name    string
+	State   FeatureState
+	By      string
+	Detail  string
+	Missing string
+}
+
+func (d FeatureDiagnostic) NeedsAttention() bool {
+	return d.State == FeatureBlocked || d.State == FeatureUnprotected
+}
+
 const (
 	DefaultHTTPRedirectAddr = ":80"
 	HTTPRedirectFeatureName = "http-redirect"

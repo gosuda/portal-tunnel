@@ -29,6 +29,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
+	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -190,6 +191,137 @@ func DefaultSNIPort(portalURL string) int {
 		return 443
 	}
 	return port
+}
+
+// ServerConfigDiagnostics reports relay-owned capability state without
+// creating identity files, contacting providers, or binding listeners.
+func ServerConfigDiagnostics(cfg ServerConfig) []types.FeatureDiagnostic {
+	diagnostics := []types.FeatureDiagnostic{
+		discoveryConfigDiagnostic(cfg),
+	}
+	acmeCfg := cfg.ACME
+	if parsed, err := url.Parse(strings.TrimSpace(cfg.PortalURL)); err == nil {
+		acmeCfg.BaseDomain = parsed.Hostname()
+	}
+	diagnostics = append(diagnostics, acme.ConfigDiagnostics(acmeCfg)...)
+	diagnostics = append(diagnostics,
+		leaseTransportConfigDiagnostic("udp-transport", "UDP_ENABLED", cfg.UDPEnabled, cfg),
+		leaseTransportConfigDiagnostic("tcp-transport", "TCP_ENABLED", cfg.TCPEnabled, cfg),
+		proxyHeaderConfigDiagnostic(cfg),
+		x402ConfigDiagnostic(cfg),
+		pprofConfigDiagnostic(cfg),
+		httpRedirectConfigDiagnostic(cfg),
+	)
+	return diagnostics
+}
+
+func discoveryConfigDiagnostic(cfg ServerConfig) types.FeatureDiagnostic {
+	diagnostic := types.FeatureDiagnostic{Name: "discovery"}
+	if !cfg.DiscoveryEnabled {
+		diagnostic.State, diagnostic.By = types.FeatureDisabled, "DISCOVERY=false"
+		return diagnostic
+	}
+	diagnostic.By = "DISCOVERY=true"
+	normalizedURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
+	if err != nil {
+		diagnostic.State, diagnostic.Missing = types.FeatureBlocked, fmt.Sprintf("PORTAL_URL is not usable as a relay URL: %v", err)
+		return diagnostic
+	}
+	parsed, _ := url.Parse(normalizedURL)
+	host := utils.NormalizeHostname(parsed.Hostname())
+	if host == "" || utils.IsLocalRelayHost(host) {
+		diagnostic.State = types.FeatureBlocked
+		diagnostic.Missing = fmt.Sprintf("PORTAL_URL host %q is local-only and public discovery rejects it; set PORTAL_URL to a publicly resolvable HTTPS origin", host)
+		return diagnostic
+	}
+	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
+	if err != nil {
+		diagnostic.State, diagnostic.Missing = types.FeatureBlocked, err.Error()
+		return diagnostic
+	}
+	diagnostic.State = types.FeatureEnabled
+	diagnostic.Detail = fmt.Sprintf("host=%s bootstraps=%d", host, len(bootstraps))
+	return diagnostic
+}
+
+func leaseTransportConfigDiagnostic(name, envName string, enabled bool, cfg ServerConfig) types.FeatureDiagnostic {
+	diagnostic := types.FeatureDiagnostic{Name: name}
+	if !enabled {
+		diagnostic.State, diagnostic.By = types.FeatureDisabled, envName+"=false"
+		return diagnostic
+	}
+	diagnostic.By = envName + "=true"
+	if !cfg.hasLeasePortRange() {
+		diagnostic.State = types.FeatureBlocked
+		diagnostic.Missing = fmt.Sprintf("MIN_PORT=%d MAX_PORT=%d is not a usable range; set both and publish the range in docker-compose.yml", cfg.MinPort, cfg.MaxPort)
+		return diagnostic
+	}
+	diagnostic.State = types.FeatureEnabled
+	diagnostic.Detail = fmt.Sprintf("ports=%d-%d", cfg.MinPort, cfg.MaxPort)
+	return diagnostic
+}
+
+func proxyHeaderConfigDiagnostic(cfg ServerConfig) types.FeatureDiagnostic {
+	diagnostic := types.FeatureDiagnostic{Name: "proxy-headers"}
+	if !cfg.TrustProxyHeaders {
+		diagnostic.State, diagnostic.By = types.FeatureDisabled, "TRUST_PROXY_HEADERS=false"
+		diagnostic.Detail = "client addresses come from the socket, which is correct when Portal owns the public port itself"
+		return diagnostic
+	}
+	diagnostic.State, diagnostic.By = types.FeatureEnabled, "TRUST_PROXY_HEADERS=true"
+	if cidrs := strings.TrimSpace(cfg.TrustedProxyCIDRs); cidrs != "" {
+		diagnostic.Detail = "trusted=" + cidrs
+	} else {
+		diagnostic.State, diagnostic.By = types.FeatureDisabled, "TRUSTED_PROXY_CIDRS empty"
+		diagnostic.Detail = "no proxies are trusted; forwarded client addresses are ignored and client addresses come from the socket"
+	}
+	return diagnostic
+}
+
+func x402ConfigDiagnostic(cfg ServerConfig) types.FeatureDiagnostic {
+	diagnostic := types.FeatureDiagnostic{Name: "x402"}
+	if !cfg.X402Enabled {
+		diagnostic.State, diagnostic.By = types.FeatureDisabled, "X402_ENABLED=false"
+		return diagnostic
+	}
+	diagnostic.By = "X402_ENABLED=true"
+	if strings.TrimSpace(cfg.X402PayTo) == "" {
+		diagnostic.State, diagnostic.Missing = types.FeatureBlocked, "X402_PAY_TO is empty; the facilitator has no payment recipient"
+		return diagnostic
+	}
+	diagnostic.State = types.FeatureEnabled
+	diagnostic.Detail = "network=" + x402.Network(cfg.X402Testnet)
+	return diagnostic
+}
+
+func pprofConfigDiagnostic(cfg ServerConfig) types.FeatureDiagnostic {
+	diagnostic := types.FeatureDiagnostic{Name: "pprof"}
+	if !cfg.PProfEnabled {
+		diagnostic.State, diagnostic.By = types.FeatureDisabled, "PPROF_ENABLED=false"
+		return diagnostic
+	}
+	diagnostic.State, diagnostic.By = types.FeatureEnabled, "PPROF_ENABLED=true"
+	diagnostic.Detail = "addr=" + utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
+	return diagnostic
+}
+
+func httpRedirectConfigDiagnostic(cfg ServerConfig) types.FeatureDiagnostic {
+	diagnostic := types.FeatureDiagnostic{Name: types.HTTPRedirectFeatureName, State: types.FeatureDisabled, By: types.HTTPRedirectEnabledEnv + "=false"}
+	if !cfg.HTTPRedirect.Enabled {
+		return diagnostic
+	}
+	diagnostic.By = types.HTTPRedirectEnabledEnv + "=true"
+	redirect, err := NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
+	if err != nil {
+		diagnostic.State, diagnostic.Missing = types.FeatureBlocked, err.Error()
+		return diagnostic
+	}
+	diagnostic.State = types.FeatureEnabled
+	diagnostic.Detail = "addr=" + redirect.Addr + "; canonical PORTAL_URL only; configuration valid; listener binding occurs at startup"
+	if redirect.HSTS {
+		diagnostic.Detail += "; HSTS header requested (browsers ignore it over HTTP)"
+	}
+	return diagnostic
 }
 
 func (cfg ServerConfig) snapshot() ServerConfig {
@@ -372,7 +504,30 @@ func (s *Server) supportsTCP() bool {
 	return runtime != nil && runtime.IsTCPPortEnabled()
 }
 
-func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
+// Serve runs the complete relay lifecycle and mounts relay-owned HTTP
+// capabilities around the application handler.
+func (s *Server) Serve(ctx context.Context, handler http.Handler) error {
+	if handler == nil {
+		handler = http.NotFoundHandler()
+	}
+	mux := http.NewServeMux()
+	if s.config().X402Enabled {
+		if err := x402.MountFacilitator(mux, x402.FacilitatorConfig{Testnet: s.config().X402Testnet}); err != nil {
+			return fmt.Errorf("mount x402 facilitator: %w", err)
+		}
+		log.Info().
+			Str("path", types.PathX402Facilitator).
+			Str("network", x402.Network(s.config().X402Testnet)).
+			Msg("relay-owned x402 facilitator enabled")
+	}
+	mux.Handle("/", handler)
+	if err := s.Start(ctx, mux); err != nil {
+		return fmt.Errorf("start relay server: %w", err)
+	}
+	return s.Wait()
+}
+
+func (s *Server) Start(ctx context.Context, apiHandler http.Handler) error {
 	if s.group != nil {
 		return errors.New("server already started")
 	}
@@ -442,7 +597,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	}
 
 	group, groupCtx := errgroup.WithContext(serverCtx)
-	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiMux, apiTLS)
+	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiHandler, apiTLS)
 	if err != nil {
 		return err
 	}

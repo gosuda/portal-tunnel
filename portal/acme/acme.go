@@ -1,6 +1,7 @@
 package acme
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,84 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
+
+// ConfigDiagnostics reports ACME and ENS capability state from configuration
+// only. Runtime reachability and provider API access are intentionally deferred
+// until the manager starts.
+func ConfigDiagnostics(cfg Config) []types.FeatureDiagnostic {
+	provider := cmp.Or(strings.ToLower(strings.TrimSpace(cfg.DNSProvider)), TypeEmbedded)
+	acmeDiagnostic := types.FeatureDiagnostic{Name: "acme", By: "ACME_DNS_PROVIDER=" + provider}
+	if host := utils.NormalizeHostname(cfg.BaseDomain); host == "" || utils.IsLocalRelayHost(host) {
+		acmeDiagnostic.State = types.FeatureBlocked
+		acmeDiagnostic.Missing = fmt.Sprintf("PORTAL_URL host %q is local-only; managed issuance is skipped for local hosts and a development certificate is used instead", host)
+	} else if provider == TypeEmbedded {
+		acmeDiagnostic.State = types.FeatureEnabled
+		acmeDiagnostic.Detail = fmt.Sprintf("the relay serves its own zone on port %d; delegate the base domain with an NS record and open 53/tcp+udp. Valid manual fullchain.pem and privatekey.pem under IDENTITY_PATH override issuance only when neither acme-account.key nor acme-registration.json exists; DNS/ECH management continues", cfg.EmbeddedDNSPort)
+	} else if required, supported := providerCredentialNames(provider); !supported {
+		acmeDiagnostic.State = types.FeatureBlocked
+		acmeDiagnostic.Missing = "unsupported provider; use embedded, cloudflare, gcloud, hetzner, njalla, route53 or vultr"
+	} else if missing := missingProviderCredentials(cfg, required); len(missing) > 0 {
+		acmeDiagnostic.State = types.FeatureBlocked
+		acmeDiagnostic.Missing = strings.Join(missing, ", ") + " is empty"
+	} else {
+		acmeDiagnostic.State = types.FeatureEnabled
+		acmeDiagnostic.Detail = "supported external DNS backend; embedded remains the canonical default; managed issuance and renewal under IDENTITY_PATH"
+		if len(required) == 0 {
+			acmeDiagnostic.Detail += "; credentials come from the ambient provider chain"
+		}
+	}
+
+	ensDiagnostic := types.FeatureDiagnostic{Name: "ens-gasless"}
+	if !cfg.ENSGaslessEnabled {
+		ensDiagnostic.State, ensDiagnostic.By = types.FeatureDisabled, "ENS_GASLESS_ENABLED=false"
+	} else if acmeDiagnostic.State == types.FeatureBlocked {
+		ensDiagnostic.State, ensDiagnostic.By = types.FeatureBlocked, "ENS_GASLESS_ENABLED=true"
+		ensDiagnostic.Missing = "the DNS provider it shares with ACME is blocked: " + acmeDiagnostic.Missing
+	} else if provider == TypeHetzner || provider == TypeNjalla {
+		ensDiagnostic.State, ensDiagnostic.By = types.FeatureBlocked, "ENS_GASLESS_ENABLED=true"
+		ensDiagnostic.Missing = provider + " does not support ENS DNSSEC automation; use embedded, cloudflare, gcloud, route53 or vultr"
+	} else {
+		ensDiagnostic.State, ensDiagnostic.By = types.FeatureEnabled, "ENS_GASLESS_ENABLED=true"
+		ensDiagnostic.Detail = "DNSSEC and ENS TXT automation through " + provider
+		if provider == TypeEmbedded {
+			ensDiagnostic.Detail += "; publish the startup DS at the parent after delegation is reachable; local signing does not verify the parent chain"
+		}
+	}
+	return []types.FeatureDiagnostic{acmeDiagnostic, ensDiagnostic}
+}
+
+func providerCredentialNames(provider string) ([]string, bool) {
+	switch provider {
+	case TypeCloudflare:
+		return []string{"CLOUDFLARE_TOKEN"}, true
+	case TypeHetzner:
+		return []string{"HETZNER_API_TOKEN"}, true
+	case TypeNjalla:
+		return []string{"NJALLA_TOKEN"}, true
+	case TypeVultr:
+		return []string{"VULTR_API_KEY"}, true
+	case TypeGCloud, TypeRoute53:
+		return nil, true
+	default:
+		return nil, false
+	}
+}
+
+func missingProviderCredentials(cfg Config, names []string) []string {
+	values := map[string]string{
+		"CLOUDFLARE_TOKEN":  cfg.CloudflareToken,
+		"HETZNER_API_TOKEN": cfg.HetznerAPIToken,
+		"NJALLA_TOKEN":      cfg.NjallaToken,
+		"VULTR_API_KEY":     cfg.VultrAPIKey,
+	}
+	var missing []string
+	for _, name := range names {
+		if strings.TrimSpace(values[name]) == "" {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
 
 const (
 	fullChainFileName      = "fullchain.pem"

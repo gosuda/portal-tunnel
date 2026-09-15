@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -24,7 +25,7 @@ func writeEnvFile(t *testing.T, lines ...string) string {
 
 // resolveWithEnvFile runs the same isolation the config subcommand performs and
 // returns the resulting configuration.
-func resolveWithEnvFile(t *testing.T, path string) relayServerConfig {
+func resolveWithEnvFile(t *testing.T, path string) appConfig {
 	t.Helper()
 	entries, err := loadEnvFile(path)
 	if err != nil {
@@ -36,7 +37,7 @@ func resolveWithEnvFile(t *testing.T, path string) relayServerConfig {
 	}
 	defer restore()
 
-	cfg, err := resolveRelayServerConfig(nil)
+	cfg, err := resolveAppConfig(nil)
 	if err != nil {
 		t.Fatalf("resolve config: %v", err)
 	}
@@ -46,15 +47,15 @@ func resolveWithEnvFile(t *testing.T, path string) relayServerConfig {
 func TestHTTPRedirectEnvironment(t *testing.T) {
 	cfg := resolveWithEnvFile(t, writeEnvFile(t,
 		types.HTTPRedirectEnabledEnv+"=true", "HTTP_REDIRECT_ADDR=127.0.0.1:18080", "HTTP_REDIRECT_HSTS=true"))
-	if !cfg.HTTPRedirect.Enabled || cfg.HTTPRedirect.Addr != "127.0.0.1:18080" || !cfg.HTTPRedirect.HSTS {
+	if !cfg.Relay.HTTPRedirect.Enabled || cfg.Relay.HTTPRedirect.Addr != "127.0.0.1:18080" || !cfg.Relay.HTTPRedirect.HSTS {
 		t.Fatalf("redirect environment not resolved: %+v", cfg)
 	}
 	f := featureByName(t, cfg, types.HTTPRedirectFeatureName)
-	if f.State != stateEnabled || !strings.Contains(f.Detail, "browsers ignore") {
+	if f.State != types.FeatureEnabled || !strings.Contains(f.Detail, "browsers ignore") {
 		t.Fatalf("redirect capability report=%+v", f)
 	}
 	cfg = resolveWithEnvFile(t, writeEnvFile(t))
-	if cfg.HTTPRedirect.Enabled || cfg.HTTPRedirect.HSTS || cfg.HTTPRedirect.Addr != types.DefaultHTTPRedirectAddr {
+	if cfg.Relay.HTTPRedirect.Enabled || cfg.Relay.HTTPRedirect.HSTS || cfg.Relay.HTTPRedirect.Addr != types.DefaultHTTPRedirectAddr {
 		t.Fatalf("unexpected redirect defaults: %+v", cfg)
 	}
 }
@@ -69,18 +70,18 @@ func TestHTTPRedirectReportDoesNotBind(t *testing.T) {
 		"PORTAL_URL=https://localhost:4017", types.HTTPRedirectEnabledEnv+"=true",
 		"HTTP_REDIRECT_ADDR="+occupied.Addr().String()))
 	f := featureByName(t, cfg, types.HTTPRedirectFeatureName)
-	if f.State != stateEnabled || f.Missing != "" {
+	if f.State != types.FeatureEnabled || f.Missing != "" {
 		t.Fatalf("occupied address must not block configuration reporting: %+v", f)
 	}
 	_, err = portal.NewServer(portal.ServerConfig{
-		PortalURL: cfg.PortalURL, StateDir: t.TempDir(), HTTPRedirect: cfg.HTTPRedirect,
+		PortalURL: cfg.Relay.PortalURL, StateDir: t.TempDir(), HTTPRedirect: cfg.Relay.HTTPRedirect,
 	})
 	if err != nil {
 		t.Fatalf("NewServer must defer binding until Start: %v", err)
 	}
 }
 
-func featureByName(t *testing.T, cfg relayServerConfig, name string) feature {
+func featureByName(t *testing.T, cfg appConfig, name string) types.FeatureDiagnostic {
 	t.Helper()
 	for _, f := range evaluateFeatures(cfg) {
 		if f.Name == name {
@@ -88,7 +89,7 @@ func featureByName(t *testing.T, cfg relayServerConfig, name string) feature {
 		}
 	}
 	t.Fatalf("feature %q not reported", name)
-	return feature{}
+	return types.FeatureDiagnostic{}
 }
 
 // A variable absent from the env file must not leak in from the surrounding
@@ -99,7 +100,7 @@ func TestEnvFileIsolationIgnoresInheritedValue(t *testing.T) {
 
 	cfg := resolveWithEnvFile(t, writeEnvFile(t, "PORTAL_URL=https://relay.example.com"))
 
-	if cfg.DiscoveryEnabled {
+	if cfg.Relay.DiscoveryEnabled {
 		t.Fatal("DISCOVERY was inherited from the process environment; the file did not set it")
 	}
 }
@@ -111,8 +112,8 @@ func TestEnvFileIsolationBeatsHigherPriorityAlias(t *testing.T) {
 
 	cfg := resolveWithEnvFile(t, writeEnvFile(t, "AWS_DEFAULT_REGION=ap-northeast-2"))
 
-	if cfg.AWSRegion != "ap-northeast-2" {
-		t.Fatalf("AWS region = %q, want the file value ap-northeast-2", cfg.AWSRegion)
+	if cfg.Relay.ACME.AWSRegion != "ap-northeast-2" {
+		t.Fatalf("AWS region = %q, want the file value ap-northeast-2", cfg.Relay.ACME.AWSRegion)
 	}
 }
 
@@ -145,15 +146,16 @@ func TestEnvFileIsolationRestoresEnvironment(t *testing.T) {
 func TestACMEFeatureBlockedForLocalHost(t *testing.T) {
 	for _, provider := range []string{"", "embedded", "cloudflare"} {
 		t.Run(provider, func(t *testing.T) {
-			cfg := relayServerConfig{
-				PortalURL:       "https://localhost",
-				ACMEDNSProvider: provider,
-				CloudflareToken: "token",
+			cfg := appConfig{
+				Relay: portal.ServerConfig{
+					PortalURL: "https://localhost",
+					ACME:      acme.Config{DNSProvider: provider, CloudflareToken: "token"},
+				},
 			}
 
 			f := featureByName(t, cfg, "acme")
-			if f.State != stateBlocked {
-				t.Fatalf("acme state = %q, want %q", f.State, stateBlocked)
+			if f.State != types.FeatureBlocked {
+				t.Fatalf("acme state = %q, want %q", f.State, types.FeatureBlocked)
 			}
 			if !strings.Contains(f.Missing, "local-only") {
 				t.Fatalf("acme missing = %q, want it to name the local-only host", f.Missing)
@@ -167,16 +169,16 @@ func TestACMEFeatureBlockedForLocalHost(t *testing.T) {
 func TestENSGaslessFollowsBlockedACME(t *testing.T) {
 	for _, provider := range []string{"", "embedded", "cloudflare"} {
 		t.Run(provider, func(t *testing.T) {
-			cfg := relayServerConfig{
-				PortalURL:         "https://localhost",
-				ACMEDNSProvider:   provider,
-				CloudflareToken:   "token",
-				ENSGaslessEnabled: true,
+			cfg := appConfig{
+				Relay: portal.ServerConfig{
+					PortalURL: "https://localhost",
+					ACME:      acme.Config{DNSProvider: provider, CloudflareToken: "token", ENSGaslessEnabled: true},
+				},
 			}
 
 			f := featureByName(t, cfg, "ens-gasless")
-			if f.State != stateBlocked {
-				t.Fatalf("ens-gasless state = %q, want %q", f.State, stateBlocked)
+			if f.State != types.FeatureBlocked {
+				t.Fatalf("ens-gasless state = %q, want %q", f.State, types.FeatureBlocked)
 			}
 			if !strings.Contains(f.Missing, "local-only") {
 				t.Fatalf("ens-gasless missing = %q, want the ACME reason propagated", f.Missing)
@@ -188,25 +190,26 @@ func TestENSGaslessFollowsBlockedACME(t *testing.T) {
 func TestENSGaslessBlockedForUnsupportedDNSSECProvider(t *testing.T) {
 	for _, provider := range []string{"hetzner", "njalla"} {
 		t.Run(provider, func(t *testing.T) {
-			cfg := relayServerConfig{
-				PortalURL:         "https://relay.example.com",
-				ACMEDNSProvider:   provider,
-				ENSGaslessEnabled: true,
+			cfg := appConfig{
+				Relay: portal.ServerConfig{
+					PortalURL: "https://relay.example.com",
+					ACME:      acme.Config{DNSProvider: provider, ENSGaslessEnabled: true},
+				},
 			}
 			if provider == "hetzner" {
-				cfg.HetznerAPIToken = "token"
+				cfg.Relay.ACME.HetznerAPIToken = "token"
 			} else {
-				cfg.NjallaToken = "token"
+				cfg.Relay.ACME.NjallaToken = "token"
 			}
-			if f := featureByName(t, cfg, "acme"); f.State != stateEnabled {
+			if f := featureByName(t, cfg, "acme"); f.State != types.FeatureEnabled {
 				t.Fatalf("acme state = %q, want managed DNS to remain enabled", f.State)
 			}
 			f := featureByName(t, cfg, "ens-gasless")
-			if f.State != stateBlocked || !strings.Contains(f.Missing, "DNSSEC") {
+			if f.State != types.FeatureBlocked || !strings.Contains(f.Missing, "DNSSEC") {
 				t.Fatalf("ens-gasless = %+v, want blocked for missing DNSSEC support", f)
 			}
-			cfg.ENSGaslessEnabled = false
-			if f := featureByName(t, cfg, "ens-gasless"); f.State != stateDisabled {
+			cfg.Relay.ACME.ENSGaslessEnabled = false
+			if f := featureByName(t, cfg, "ens-gasless"); f.State != types.FeatureDisabled {
 				t.Fatalf("ens-gasless state = %q, want disabled when not requested", f.State)
 			}
 		})
@@ -214,27 +217,30 @@ func TestENSGaslessBlockedForUnsupportedDNSSECProvider(t *testing.T) {
 }
 
 func TestACMEFeatureEnabledForPublicHost(t *testing.T) {
-	cfg := relayServerConfig{
-		PortalURL:       "https://relay.example.com",
-		ACMEDNSProvider: "cloudflare",
-		CloudflareToken: "token",
+	cfg := appConfig{
+		Relay: portal.ServerConfig{
+			PortalURL: "https://relay.example.com",
+			ACME:      acme.Config{DNSProvider: "cloudflare", CloudflareToken: "token"},
+		},
 	}
 
 	f := featureByName(t, cfg, "acme")
-	if f.State != stateEnabled {
-		t.Fatalf("acme state = %q, want %q (missing: %s)", f.State, stateEnabled, f.Missing)
+	if f.State != types.FeatureEnabled {
+		t.Fatalf("acme state = %q, want %q (missing: %s)", f.State, types.FeatureEnabled, f.Missing)
 	}
 }
 
 func TestACMEFeatureBlockedWithoutCredential(t *testing.T) {
-	cfg := relayServerConfig{
-		PortalURL:       "https://relay.example.com",
-		ACMEDNSProvider: "cloudflare",
+	cfg := appConfig{
+		Relay: portal.ServerConfig{
+			PortalURL: "https://relay.example.com",
+			ACME:      acme.Config{DNSProvider: "cloudflare"},
+		},
 	}
 
 	f := featureByName(t, cfg, "acme")
-	if f.State != stateBlocked {
-		t.Fatalf("acme state = %q, want %q", f.State, stateBlocked)
+	if f.State != types.FeatureBlocked {
+		t.Fatalf("acme state = %q, want %q", f.State, types.FeatureBlocked)
 	}
 	if !strings.Contains(f.Missing, "CLOUDFLARE_TOKEN") {
 		t.Fatalf("acme missing = %q, want it to name the credential", f.Missing)
@@ -282,8 +288,8 @@ func TestDiscoveryBlockedForNonHTTPSPortalURL(t *testing.T) {
 	path := writeEnvFile(t, "DISCOVERY=true", "PORTAL_URL=http://relay.example.com")
 	cfg := resolveWithEnvFile(t, path)
 
-	f := discoveryFeature(cfg)
-	if f.State != stateBlocked {
+	f := featureByName(t, cfg, "discovery")
+	if f.State != types.FeatureBlocked {
 		t.Fatalf("discovery state = %q, want blocked for a non-https PORTAL_URL", f.State)
 	}
 	if !strings.Contains(f.Missing, "https") {
@@ -298,8 +304,8 @@ func TestDiscoveryBlockedForUnusableBootstraps(t *testing.T) {
 		"BOOTSTRAPS=http://peer.example.com")
 	cfg := resolveWithEnvFile(t, path)
 
-	f := discoveryFeature(cfg)
-	if f.State != stateBlocked {
+	f := featureByName(t, cfg, "discovery")
+	if f.State != types.FeatureBlocked {
 		t.Fatalf("discovery state = %q, want blocked for an unusable BOOTSTRAPS", f.State)
 	}
 }
@@ -311,8 +317,8 @@ func TestDiscoveryEnabledCountsNormalizedBootstraps(t *testing.T) {
 		"BOOTSTRAPS=https://a.example.com,https://b.example.com")
 	cfg := resolveWithEnvFile(t, path)
 
-	f := discoveryFeature(cfg)
-	if f.State != stateEnabled {
+	f := featureByName(t, cfg, "discovery")
+	if f.State != types.FeatureEnabled {
 		t.Fatalf("discovery state = %q, want enabled", f.State)
 	}
 	if !strings.Contains(f.Detail, "bootstraps=2") {
@@ -327,8 +333,8 @@ func TestACMEFeatureReportsEmbeddedWhenUnset(t *testing.T) {
 	path := writeEnvFile(t, "PORTAL_URL=https://relay.example.com")
 	cfg := resolveWithEnvFile(t, path)
 
-	f := acmeFeature(cfg)
-	if f.State != stateEnabled {
+	f := featureByName(t, cfg, "acme")
+	if f.State != types.FeatureEnabled {
 		t.Fatalf("acme state = %q, want enabled for the embedded default", f.State)
 	}
 	if !strings.Contains(f.By, "embedded") {
@@ -344,8 +350,8 @@ func TestENSGaslessEnabledOnEmbeddedProvider(t *testing.T) {
 		"ENS_GASLESS_ENABLED=true")
 	cfg := resolveWithEnvFile(t, path)
 
-	f := ensGaslessFeature(cfg)
-	if f.State != stateEnabled {
+	f := featureByName(t, cfg, "ens-gasless")
+	if f.State != types.FeatureEnabled {
 		t.Fatalf("ens-gasless state = %q, want enabled on the embedded provider", f.State)
 	}
 	if !strings.Contains(f.Detail, "embedded") {
@@ -370,7 +376,7 @@ func TestENSGaslessEnabledOnManagedProvider(t *testing.T) {
 			path := writeEnvFile(t, values...)
 			cfg := resolveWithEnvFile(t, path)
 
-			if f := ensGaslessFeature(cfg); f.State != stateEnabled {
+			if f := featureByName(t, cfg, "ens-gasless"); f.State != types.FeatureEnabled {
 				t.Fatalf("ens-gasless state = %q (%s), want enabled", f.State, f.Missing)
 			}
 		})

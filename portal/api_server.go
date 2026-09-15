@@ -56,7 +56,7 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 	utils.InvalidRequestError(err).Write(w)
 }
 
-func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
+func (s *Server) newAPIServer(listener net.Listener, handler http.Handler, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
 	var keylessSignerHandler http.Handler
 	if len(apiTLS.KeyPEM) > 0 {
 		signer, err := keyless.NewSigner(apiTLS.KeyPEM)
@@ -67,7 +67,7 @@ func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiT
 	}
 
 	apiServer := &http.Server{
-		Handler:           s.apiHandler(apiMux, keylessSignerHandler),
+		Handler:           s.apiHandler(handler, keylessSignerHandler),
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
@@ -80,7 +80,7 @@ func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiT
 	return tls.NewListener(listener, apiServer.TLSConfig), apiServer, apiCloser, nil
 }
 
-func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handler) http.Handler {
+func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler) http.Handler {
 	if base == nil {
 		base = http.NewServeMux()
 		base.HandleFunc("/{$}", s.handleRoot)
