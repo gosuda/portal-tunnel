@@ -20,7 +20,7 @@ func newExposureStateTest(t *testing.T, relayURLs ...string) *Exposure {
 		cancel:         cancel,
 		done:           ctx.Done(),
 		relayURLs:      append([]string(nil), relayURLs...),
-		metadata:       utils.NewSnapshot(types.LeaseMetadata{}, types.LeaseMetadata.Copy),
+		metadata:       types.LeaseMetadata{},
 		accepted:       make(chan net.Conn, 2),
 		relayListeners: make(map[string]*listener),
 		statuses:       make(map[string]RelayStatus),
