@@ -144,14 +144,7 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 	if err != nil {
 		return err
 	}
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
-		Discovery:       cfg.discovery,
-		Identity:        listenerIdentity,
-		BanMITM:         cfg.banMITM,
-		MaxActiveRelays: cfg.maxActiveRelays,
-		Metadata:        metadata,
-	})
+	exposure, err := exposeDemo(ctx, cfg, listenerIdentity, sdk.WithMetadata(metadata))
 	if err != nil {
 		return fmt.Errorf("exposure listen error: %w", err)
 	}
@@ -182,21 +175,16 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	if err != nil {
 		return err
 	}
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
-		Discovery:       cfg.discovery,
-		Identity:        listenerIdentity,
-		UDPEnabled:      true,
-		BanMITM:         cfg.banMITM,
-		MaxActiveRelays: cfg.maxActiveRelays,
-		Metadata: types.LeaseMetadata{
+	exposure, err := exposeDemo(ctx, cfg, listenerIdentity,
+		sdk.WithUDP(),
+		sdk.WithMetadata(types.LeaseMetadata{
 			Description: cfg.desc,
 			Tags:        utils.SplitCSV(cfg.tags),
 			Owner:       cfg.owner,
 			Thumbnail:   cfg.thumbnail,
 			Hide:        cfg.hide,
-		},
-	})
+		}),
+	)
 	if err != nil {
 		return fmt.Errorf("exposure listen error: %w", err)
 	}
@@ -224,6 +212,18 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	}
 	log.Info().Msg("demo udp shutdown complete")
 	return nil
+}
+
+func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, opts ...sdk.Option) (*sdk.Exposure, error) {
+	explicitRelayURLs, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.relayURLs)...)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, sdk.WithMITMProtection(cfg.banMITM))
+	if cfg.discovery {
+		opts = append(opts, sdk.WithDiscovery(cfg.maxActiveRelays))
+	}
+	return sdk.Expose(ctx, identity, explicitRelayURLs, opts...)
 }
 
 // resolveDemoIdentity parses an inline identity or existing file. It generates

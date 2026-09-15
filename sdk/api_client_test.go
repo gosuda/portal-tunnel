@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -109,16 +108,26 @@ func TestOnlyExplicitIncompatibilityDropsRelayFromActivePool(t *testing.T) {
 	}
 }
 
-func TestTerminalRelayFailureTargetsTheReportingRelay(t *testing.T) {
+func TestTerminalRelayFailureClosesListener(t *testing.T) {
 	const (
 		entry = "https://entry.example"
 		exit  = "https://exit.example"
 	)
-	listener := &listener{
-		route:    discovery.Route{RelayURL: entry, Explicit: false},
-		relaySet: mustRelaySet(t, entry, exit),
+	entryURL, err := url.Parse(entry)
+	if err != nil {
+		t.Fatal(err)
 	}
-	err := &relayRegistrationError{
+	done := make(chan struct{})
+	var failure RelayFailure
+	listener := &listener{
+		relayURL: entryURL,
+		cancel:   func() { close(done) },
+		doneCh:   done,
+		status: func(status listenerStatus) {
+			failure = status.failure
+		},
+	}
+	err = &relayRegistrationError{
 		relayURL: exit,
 		err:      fmt.Errorf("%w: unsupported protocol", errRelayIncompatible),
 	}
@@ -126,14 +135,13 @@ func TestTerminalRelayFailureTargetsTheReportingRelay(t *testing.T) {
 		t.Fatal("terminal relay error was not handled")
 	}
 
-	routes := listener.relaySet.SelectRelays(discovery.RouteState{})
-	for _, route := range routes {
-		if route.RelayURL == exit {
-			t.Fatal("incompatible exit relay remains active")
-		}
-		if route.RelayURL != entry {
-			t.Fatalf("unexpected remaining relay %q", route.RelayURL)
-		}
+	select {
+	case <-done:
+	default:
+		t.Fatal("listener remains open after terminal relay failure")
+	}
+	if failure != RelayFailureTerminal {
+		t.Fatalf("failure = %q, want terminal", failure)
 	}
 }
 

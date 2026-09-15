@@ -22,6 +22,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var errMITMDetected = errors.New("tls termination suspected by self-probe")
+
 const (
 	mitmProbeExporterLabel = "Portal-MITM-Probe-v1"
 	mitmProbePeekTimeout   = 100 * time.Millisecond
@@ -94,7 +96,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	}
 
 	report := mitmProbeReport{
-		RelayURL:  l.route.RelayURL,
+		RelayURL:  l.relayURL.String(),
 		PublicURL: publicURL,
 		Address:   l.identity.Address,
 	}
@@ -188,7 +190,7 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	}
 
 	dialHost := parsedURL.Host
-	entryRelayURL, err := url.Parse(l.route.RelayURL)
+	entryRelayURL, err := url.Parse(l.relayURL.String())
 	if err != nil {
 		return "", fmt.Errorf("parse ingress relay url: %w", err)
 	}
@@ -271,11 +273,8 @@ func (m *mitmManager) logResult(report mitmProbeReport, err error) {
 			Str("public_url", report.PublicURL).
 			Str("address", report.Address)
 		if m.ban {
-			event.Msg("tls termination suspected by self-probe; banning relay")
-			if l.relaySet != nil && report.RelayURL != "" {
-				l.relaySet.UnconfirmRelayURL(report.RelayURL)
-				l.relaySet.BanRelayURL(report.RelayURL)
-			}
+			event.Msg("tls termination suspected by self-probe; closing listener")
+			l.reportFailure(errMITMDetected, RelayFailureMITM)
 			_ = l.Close()
 			return
 		}

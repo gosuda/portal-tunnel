@@ -405,7 +405,7 @@ type Route struct {
 	Explicit bool
 }
 
-func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
+func (s *RelaySet) SelectRelays(routeState routeState) []Route {
 	now := time.Now().UTC()
 	states := s.currentRelayStates(now)
 	if len(routeState.ExplicitRelayURLs) > 0 {
@@ -438,7 +438,7 @@ func (s *RelaySet) SelectRelays(routeState RouteState) []Route {
 
 // filterCandidatePool returns the auto-selected relay pool eligible for MOLS
 // ranking.
-func filterCandidatePool(states []RelayState, routeState RouteState, now time.Time) []RelayState {
+func filterCandidatePool(states []RelayState, routeState routeState, now time.Time) []RelayState {
 	pool := make([]RelayState, 0, len(states))
 	for _, state := range states {
 		relayURL := state.Descriptor.APIHTTPSAddr
@@ -617,6 +617,20 @@ func (s *RelaySet) DeactivateRelayURL(relayURL string) {
 	state.Confirmed = false
 	state.suppressActiveUntil = time.Now().Add(defaultDirectRecoveryBackoff)
 	s.relays[relayURL] = state
+}
+
+// EnsureRelayURL persists a candidate state for relayURL when none exists, so
+// explicit relays that never entered through discovery keep their failure and
+// suppression state durable. Existing states — discovered descriptors, bans,
+// suppression — are left untouched.
+func (s *RelaySet) EnsureRelayURL(relayURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.relays[relayURL]; ok {
+		return
+	}
+	s.relays[relayURL] = newRelayState(relayURL)
 }
 
 // discoveryRelayStateLocked is the cryptographic gate for every gossiped
@@ -1042,4 +1056,19 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 	state.suppressActiveUntil = now.Add(backoff)
 	s.relays[relayURL] = state
 	return true, "active", state.activeFailures
+}
+
+// IsSuppressed reports whether relayURL is currently excluded from active
+// selection due to a prior active-listener failure backoff. Callers use this
+// to avoid recording duplicate failures while a suppression is still in
+// effect; once the backoff expires the relay becomes eligible again and a
+// new failure records.
+func (s *RelaySet) IsSuppressed(relayURL string, now time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	state, ok := s.relays[relayURL]
+	if !ok {
+		return false
+	}
+	return !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now)
 }

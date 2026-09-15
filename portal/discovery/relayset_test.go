@@ -68,7 +68,7 @@ func servesDescriptor(set *RelaySet, relayURL string) bool {
 // routesTo reports whether automatic single-hop route planning selects relayURL.
 func routesTo(t *testing.T, set *RelaySet, relayURL string) bool {
 	t.Helper()
-	routes := set.SelectRelays(RouteState{LocalAddress: "client"})
+	routes := set.SelectRelays(routeState{LocalAddress: "client"})
 	for _, route := range routes {
 		if route.RelayURL == relayURL {
 			return true
@@ -304,6 +304,32 @@ func TestConfirmAndUnconfirmRelayURL(t *testing.T) {
 	}
 }
 
+// EnsureRelayURL must persist a clean candidate for an unknown URL without
+// clobbering existing state: suppression recorded before the call survives,
+// so explicit relays keep durable failure state across intent refreshes.
+func TestRelaySetEnsureRelayURLPreservesExistingState(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	set := NewRelaySet(nil)
+	mustApplyAuthoritative(t, set, mustRelayDescriptor(t, relayA))
+
+	if _, _, failures := set.RecordActiveFailure(relayA, 1); failures != 1 {
+		t.Fatalf("RecordActiveFailure() failures = %d, want 1", failures)
+	}
+
+	set.EnsureRelayURL(relayA)
+	set.EnsureRelayURL(relayB)
+
+	if !set.IsSuppressed(relayA, time.Now().UTC()) {
+		t.Fatal("EnsureRelayURL() cleared relay A suppression")
+	}
+	if set.IsSuppressed(relayB, time.Now().UTC()) {
+		t.Fatal("EnsureRelayURL() must not suppress an unknown relay")
+	}
+}
+
 func TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 	const relayURL = "https://relay-udp-disabled.example"
 	set := NewRelaySet(nil)
@@ -311,7 +337,7 @@ func TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 	state.Descriptor.SupportsUDP = false
 	set.relays[relayURL] = state
 
-	routes := set.SelectRelays(RouteState{
+	routes := set.SelectRelays(routeState{
 		ExplicitRelayURLs: []string{relayURL},
 		RequireUDP:        true,
 	})
@@ -323,7 +349,7 @@ func TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 func TestSelectRelaysIncludesExplicitRelayMissingFromSet(t *testing.T) {
 	const relayURL = "https://relay-explicit.example"
 
-	routes := NewRelaySet(nil).SelectRelays(RouteState{
+	routes := NewRelaySet(nil).SelectRelays(routeState{
 		ExplicitRelayURLs: []string{relayURL},
 	})
 	if len(routes) != 1 {

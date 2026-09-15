@@ -281,7 +281,7 @@ func (state RelayState) hasObservedDescriptor() bool {
 	return !state.LastSeenAt.IsZero()
 }
 
-type RouteState struct {
+type routeState struct {
 	ExplicitRelayURLs []string
 	// ActiveRelayURLs holds currently active connected relay URLs to enable
 	// connection-level stickiness and prevent listener churn during ranking updates.
@@ -299,7 +299,7 @@ type RouteState struct {
 	SelectionEpoch uint64
 }
 
-func (state RelayState) supportsRequiredTransports(routeState RouteState, now time.Time) bool {
+func (state RelayState) supportsRequiredTransports(routeState routeState, now time.Time) bool {
 	if !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) {
 		return true
 	}

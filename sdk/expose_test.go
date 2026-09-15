@@ -9,15 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
-
-func mustRelaySet(t *testing.T, relayURLs ...string) *discovery.RelaySet {
-	t.Helper()
-	return discovery.NewRelaySet(relayURLs)
-}
 
 func newExposureStateTest(t *testing.T, relayURLs ...string) *Exposure {
 	t.Helper()
@@ -25,13 +19,13 @@ func newExposureStateTest(t *testing.T, relayURLs ...string) *Exposure {
 	exposure := &Exposure{
 		cancel:         cancel,
 		done:           ctx.Done(),
-		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: relayURLs}, ExposeConfig.snapshot),
+		relayURLs:      append([]string(nil), relayURLs...),
+		metadata:       utils.NewSnapshot(types.LeaseMetadata{}, types.LeaseMetadata.Copy),
 		accepted:       make(chan net.Conn, 2),
 		relayListeners: make(map[string]*listener),
 		statuses:       make(map[string]RelayStatus),
 		stateChanged:   make(chan struct{}),
-		statusEvents:   make(chan RelayStatus, 4),
-		updates:        make(chan RelayStatus, 4),
+		updates:        make(chan RelayStatus, 1),
 	}
 	t.Cleanup(func() { _ = exposure.Close() })
 	return exposure
@@ -125,13 +119,26 @@ func TestListenerReverseSessionReadinessTracksLiveSessions(t *testing.T) {
 	}
 }
 
-func TestExposureAcceptReturnsErrNoRelaysAfterTerminalFailures(t *testing.T) {
+func TestExposureAcceptWaitsAfterTerminalFailures(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
 	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: errors.New("rejected")})
 
-	if _, err := exposure.Accept(); !errors.Is(err, ErrNoRelays) {
-		t.Fatalf("Accept() error = %v, want ErrNoRelays", err)
+	result := make(chan error, 1)
+	go func() {
+		_, err := exposure.Accept()
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("Accept() returned before Close: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	if err := exposure.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-result; !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Accept() error after Close = %v, want net.ErrClosed", err)
 	}
 }
 
@@ -151,12 +158,53 @@ func TestExposureAcceptDrainsQueuedConnectionBeforeNoRelays(t *testing.T) {
 }
 
 func TestExposeRejectsIncompleteIdentity(t *testing.T) {
-	_, err := Expose(context.Background(), ExposeConfig{
-		RelayURLs: []string{"https://relay.example"},
-		Identity:  types.Identity{Name: "svc"},
-	})
+	_, err := Expose(context.Background(), types.Identity{Name: "svc"}, []string{"https://relay.example"})
 	if err == nil || !strings.Contains(err.Error(), "identity must include") {
 		t.Fatalf("Expose() error = %v, want incomplete identity error", err)
+	}
+}
+
+func TestExposeRejectsEmptyInitialRelays(t *testing.T) {
+	identity := types.Identity{
+		Name:       "svc",
+		Address:    "address",
+		PublicKey:  "public",
+		PrivateKey: "private",
+	}
+	for _, relays := range [][]string{nil, {}} {
+		_, err := Expose(context.Background(), identity, relays)
+		if err == nil || !strings.Contains(err.Error(), "at least one initial relay") {
+			t.Fatalf("Expose(%v) error = %v, want initial relay error", relays, err)
+		}
+	}
+}
+
+func TestExposeOptionsContainOnlyEndpointCapabilities(t *testing.T) {
+	metadata := types.LeaseMetadata{Tags: []string{"initial"}}
+	var got options
+	for _, option := range []Option{
+		WithUDP(),
+		WithTCP(),
+		WithECH(),
+		WithMITMProtection(true),
+		WithOverlay(),
+		WithMetadata(metadata),
+	} {
+		option(&got)
+	}
+	metadata.Tags[0] = "mutated"
+	if !got.UDPEnabled || !got.TCPEnabled || !got.ECH || !got.BanMITM || !got.Overlay {
+		t.Fatalf("options = %+v, want all endpoint capabilities enabled", got)
+	}
+	if got.Metadata.Tags[0] != "initial" {
+		t.Fatalf("metadata tags = %v, want copied initial value", got.Metadata.Tags)
+	}
+}
+
+func TestExposeRejectsNilOption(t *testing.T) {
+	_, err := Expose(context.Background(), types.Identity{}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "option is nil") {
+		t.Fatalf("Expose() error = %v, want nil option error", err)
 	}
 }
 
@@ -182,7 +230,7 @@ func TestProxyValidationDoesNotCloseExposure(t *testing.T) {
 func TestExposureWaitDatagramReadyDoesNotRequireStreamReadiness(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
-	exposure.cfg.UpdateCopy(func(cfg *ExposeConfig) { cfg.UDPEnabled = true })
+	exposure.options.UDPEnabled = true
 	exposure.setRelayStatus(relayURL, listenerStatus{
 		state:   RelayConnecting,
 		udpAddr: "relay.example:40000",
@@ -202,7 +250,7 @@ func TestExposureWaitDatagramReadyDoesNotRequireStreamReadiness(t *testing.T) {
 func TestExposureWaitTCPReadyUsesRelayStatus(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
-	exposure.cfg.UpdateCopy(func(cfg *ExposeConfig) { cfg.TCPEnabled = true })
+	exposure.options.TCPEnabled = true
 	exposure.setRelayStatus(relayURL, listenerStatus{
 		state:   RelayConnecting,
 		tcpAddr: "relay.example:40000",
@@ -217,108 +265,30 @@ func TestExposureWaitTCPReadyUsesRelayStatus(t *testing.T) {
 	}
 }
 
-func TestExposureWaitTCPReadyReturnsAfterTerminalFailure(t *testing.T) {
+func TestExposureWaitTCPReadyWaitsAfterTerminalFailure(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
-	exposure.cfg.UpdateCopy(func(cfg *ExposeConfig) { cfg.TCPEnabled = true })
+	exposure.options.TCPEnabled = true
 	exposure.setRelayStatus(relayURL, listenerStatus{
 		state: RelayFailed,
 		err:   errors.New("tcp_port_disabled"),
 	})
 
-	if _, err := exposure.WaitTCPReady(context.Background()); !errors.Is(err, ErrNoRelays) {
-		t.Fatalf("WaitTCPReady() error = %v, want ErrNoRelays", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if _, err := exposure.WaitTCPReady(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitTCPReady() error = %v, want context deadline", err)
 	}
 }
 
-func TestExposureConfigSnapshotsDoNotShareMutableState(t *testing.T) {
+func TestExposureMetadataSnapshotsDoNotShareMutableState(t *testing.T) {
 	exposure := &Exposure{
-		cfg: utils.NewSnapshot(ExposeConfig{
-			RelayURLs: []string{"https://relay-a.example"},
-			Identity: types.Identity{
-				Name:    "svc",
-				Address: "portal-address",
-			},
-			Metadata: types.LeaseMetadata{
-				Tags: []string{"initial"},
-			},
-		}, ExposeConfig.snapshot),
+		metadata: utils.NewSnapshot(types.LeaseMetadata{Tags: []string{"initial"}}, types.LeaseMetadata.Copy),
 	}
-
-	snapshot := exposure.config()
-	snapshot.RelayURLs[0] = "https://mutated.example"
-	snapshot.Metadata.Tags[0] = "mutated"
-
-	next := exposure.config()
-	if got := next.RelayURLs[0]; got != "https://relay-a.example" {
-		t.Fatalf("RelayURLs[0] = %q, want original relay", got)
-	}
-	if got := next.Metadata.Tags[0]; got != "initial" {
-		t.Fatalf("Metadata.Tags[0] = %q, want original tag", got)
-	}
-
-	exposure.cfg.UpdateCopy(func(cfg *ExposeConfig) {
-		cfg.MaxActiveRelays = 2
-		cfg.Metadata = types.LeaseMetadata{Tags: []string{"updated"}}
-	})
-
-	metadata := exposure.config().Metadata
+	metadata := exposure.metadata.Load()
 	metadata.Tags[0] = "mutated"
-	if got := exposure.config().Metadata.Tags[0]; got != "updated" {
-		t.Fatalf("Metadata.Tags[0] = %q, want updated", got)
-	}
-	if got := exposure.config().MaxActiveRelays; got != 2 {
-		t.Fatalf("MaxActiveRelays = %d, want 2", got)
-	}
-}
-
-func TestExposureReconcileRemovesBannedRelayFromActiveSet(t *testing.T) {
-	const (
-		relayA = "https://relay-a.example"
-		relayB = "https://relay-b.example"
-	)
-
-	relayURL, err := url.Parse(relayA)
-	if err != nil {
-		t.Fatalf("url.Parse() error = %v", err)
-	}
-	relayBURL, err := url.Parse(relayB)
-	if err != nil {
-		t.Fatalf("url.Parse() error = %v", err)
-	}
-
-	exposure := &Exposure{
-		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: []string{relayA, relayB}}, ExposeConfig.snapshot),
-		relaySet:       mustRelaySet(t, relayA, relayB),
-		relayListeners: make(map[string]*listener, 2),
-	}
-	relayAClosed := make(chan struct{})
-	exposure.relayListeners = map[string]*listener{
-		relayA: {
-			relayURL: relayURL,
-			route:    discovery.Route{RelayURL: relayA, Explicit: true},
-			cancel:   func() { close(relayAClosed) },
-			doneCh:   relayAClosed,
-		},
-		relayB: {
-			relayURL: relayBURL,
-			route:    discovery.Route{RelayURL: relayB, Explicit: true},
-		},
-	}
-
-	exposure.relaySet.BanRelayURL(relayA)
-	if err := exposure.reconcileRelayListeners(false); err != nil {
-		t.Fatalf("reconcileRelayListeners() error = %v", err)
-	}
-
-	select {
-	case <-relayAClosed:
-	default:
-		t.Fatal("banned relay listener was not closed")
-	}
-
-	if got := exposure.activeRelayURLs(); len(got) != 1 || got[0] != relayB {
-		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", got, relayB)
+	if got := exposure.metadata.Load().Tags[0]; got != "initial" {
+		t.Fatalf("Metadata.Tags[0] = %q, want initial", got)
 	}
 }
 
@@ -339,24 +309,22 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 
 	relayAClosed := make(chan struct{})
 	exposure := &Exposure{
-		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: []string{relayB}}, ExposeConfig.snapshot),
-		relaySet:       mustRelaySet(t, relayA, relayB),
+		relayURLs:      []string{relayB},
 		relayListeners: make(map[string]*listener, 2),
+		statuses:       make(map[string]RelayStatus),
+		stateChanged:   make(chan struct{}),
 	}
 	exposure.relayListeners = map[string]*listener{
 		relayA: {
 			relayURL: relayAURL,
-			route:    discovery.Route{RelayURL: relayA, Explicit: true},
 			cancel:   func() { close(relayAClosed) },
 			doneCh:   relayAClosed,
 		},
 		relayB: {
 			relayURL: relayBURL,
-			route:    discovery.Route{RelayURL: relayB, Explicit: true},
 		},
 	}
 
-	exposure.relaySet.SetBootstrapRelayURLs([]string{relayB})
 	if err := exposure.reconcileRelayListeners(false); err != nil {
 		t.Fatalf("reconcileRelayListeners() error = %v", err)
 	}
@@ -367,8 +335,28 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 		t.Fatal("stale relay listener was not closed")
 	}
 
-	if got := exposure.activeRelayURLs(); len(got) != 1 || got[0] != relayB {
+	if got := exposure.listenerRelayURLs(); len(got) != 1 || got[0] != relayB {
 		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", got, relayB)
+	}
+}
+
+func TestExposureReconcileDoesNotRestartMITMBlockedRelay(t *testing.T) {
+	const relayURL = "https://relay.example"
+	exposure := newExposureStateTest(t, relayURL)
+	exposure.blockedRelays = map[string]error{relayURL: errMITMDetected}
+
+	if err := exposure.reconcileRelayListeners(false); err != nil {
+		t.Fatalf("reconcileRelayListeners() error = %v", err)
+	}
+	if got := exposure.listenerRelayURLs(); len(got) != 0 {
+		t.Fatalf("active relay URLs = %v, want none", got)
+	}
+
+	if err := exposure.RemoveRelay(relayURL); err != nil {
+		t.Fatalf("RemoveRelay() error = %v", err)
+	}
+	if _, blocked := exposure.blockedRelays[relayURL]; blocked {
+		t.Fatal("removing relay did not clear its MITM block")
 	}
 }
 
@@ -382,9 +370,10 @@ func TestExposureRemoveRelayStopsRunningListener(t *testing.T) {
 
 	relayAClosed := make(chan struct{})
 	exposure := &Exposure{
-		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: []string{relayA}}, ExposeConfig.snapshot),
-		relaySet:       mustRelaySet(t, relayA),
+		relayURLs:      []string{relayA},
 		relayListeners: make(map[string]*listener, 1),
+		statuses:       make(map[string]RelayStatus),
+		stateChanged:   make(chan struct{}),
 	}
 	exposure.relayListeners[relayA] = &listener{
 		relayURL: relayAURL,
@@ -401,19 +390,11 @@ func TestExposureRemoveRelayStopsRunningListener(t *testing.T) {
 	default:
 		t.Fatal("removed relay listener was not closed")
 	}
-	if got := exposure.activeRelayURLs(); len(got) != 0 {
+	if got := exposure.listenerRelayURLs(); len(got) != 0 {
 		t.Fatalf("ActiveRelayURLs() = %v, want empty", got)
 	}
-	if got := exposure.config().RelayURLs; len(got) != 0 {
+	if got := exposure.relayURLs; len(got) != 0 {
 		t.Fatalf("RelayURLs = %v, want empty", got)
-	}
-	routes := exposure.relaySet.SelectRelays(discovery.RouteState{})
-	if len(routes) != 0 {
-		t.Fatalf("SelectRelays() = %v, want empty", routes)
-	}
-	relays := exposure.relaySet.AllRelays()
-	if len(relays) != 1 || relays[0].Descriptor.APIHTTPSAddr != relayA || relays[0].Banned {
-		t.Fatalf("AllRelays() = %+v, want unbanned candidate %q", relays, relayA)
 	}
 }
 
@@ -427,83 +408,342 @@ func TestExposureListenerSelfExitKeepsExplicitRelayConfigured(t *testing.T) {
 
 	l := &listener{
 		relayURL: relayAURL,
-		route:    discovery.Route{RelayURL: relayA, Explicit: true},
 	}
 	exposure := &Exposure{
-		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: []string{relayA}}, ExposeConfig.snapshot),
-		relaySet:       mustRelaySet(t, relayA),
+		relayURLs:      []string{relayA},
 		relayListeners: map[string]*listener{relayA: l},
 		done:           make(chan struct{}),
 	}
 
 	exposure.runListenerAcceptLoop(l)
 
-	if got := exposure.activeRelayURLs(); len(got) != 0 {
+	if got := exposure.listenerRelayURLs(); len(got) != 0 {
 		t.Fatalf("ActiveRelayURLs() = %v, want empty", got)
 	}
-	if got := exposure.config().RelayURLs; len(got) != 1 || got[0] != relayA {
+	if got := exposure.relayURLs; len(got) != 1 || got[0] != relayA {
 		t.Fatalf("RelayURLs = %v, want [%q]", got, relayA)
-	}
-	if got := exposure.relaySet.BootstrapRelayURLs(); len(got) != 1 || got[0] != relayA {
-		t.Fatalf("BootstrapRelayURLs() = %v, want [%q]", got, relayA)
 	}
 }
 
-func TestExposureSnapshotReflectsDeadRelayStatus(t *testing.T) {
+func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
 		relayB = "https://relay-b.example"
 	)
+	exposure := newExposureStateTest(t, relayA)
+	exposure.syncRelayStatuses(exposure.relayURLs)
 
-	relayAURL, err := url.Parse(relayA)
-	if err != nil {
-		t.Fatalf("url.Parse(relayA) error = %v", err)
-	}
-	relayBURL, err := url.Parse(relayB)
-	if err != nil {
-		t.Fatalf("url.Parse(relayB) error = %v", err)
+	if err := exposure.applyRelays([]string{relayB}); err != nil {
+		t.Fatalf("applyRelays() error = %v", err)
 	}
 
-	relaySet := mustRelaySet(t, relayA, relayB)
-	exposure := &Exposure{
-		cfg:            utils.NewSnapshot(ExposeConfig{RelayURLs: []string{relayA, relayB}}, ExposeConfig.snapshot),
-		relaySet:       relaySet,
-		relayListeners: make(map[string]*listener, 2),
-	}
-	exposure.relayListeners = map[string]*listener{
-		relayA: {
-			relayURL: relayAURL,
-			route:    discovery.Route{RelayURL: relayA, Explicit: true},
-		},
-		relayB: {
-			relayURL: relayBURL,
-			route:    discovery.Route{RelayURL: relayB, Explicit: true},
-		},
-	}
-	exposure.syncRelayStatuses(nil, exposure.config())
-
-	for range 3 {
-		relaySet.RecordDiscoveryFailure(relayA, 3)
-	}
-	exposure.syncRelayStatuses(nil, exposure.config())
 	relays := exposure.Relays()
-	foundRelayB := false
-	foundFailedRelayA := false
-	for _, relayStatus := range relays {
-		if relayStatus.RelayURL == relayB {
-			foundRelayB = true
+	if len(relays) != 1 || relays[0].RelayURL != relayB {
+		t.Fatalf("Relays() = %+v, want only relay B", relays)
+	}
+}
+
+// TestExposureReconcileExcludesRelayBlockedAfterInstall verifies the
+// end-to-end reconcile postcondition for blocked relays: a relay blocked
+// (MITM) after its listener already exists is closed and not re-created on
+// the next reconcile. The creation-window recheck itself is covered
+// deterministically at the publish boundary by
+// TestExposurePublishCreatedListenerClosesRelayBlockedDuringCreation.
+func TestExposureReconcileExcludesRelayBlockedAfterInstall(t *testing.T) {
+	const relayURL = "https://relay.example"
+	exposure := newExposureStateTest(t, relayURL)
+
+	// First reconcile: relay is not blocked, so newListener succeeds and a
+	// listener is installed.
+	if err := exposure.reconcileRelayListeners(false); err != nil {
+		t.Fatalf("first reconcileRelayListeners() error = %v", err)
+	}
+	exposure.mu.RLock()
+	_, installed := exposure.relayListeners[relayURL]
+	exposure.mu.RUnlock()
+	if !installed {
+		t.Fatal("first reconcile did not install listener for unblocked relay")
+	}
+
+	// Block the relay after its listener exists (simulating MITM detection).
+	exposure.setRelayStatus(relayURL, listenerStatus{
+		state:   RelayFailed,
+		failure: RelayFailureMITM,
+		err:     errMITMDetected,
+	})
+
+	// Second reconcile must close the listener and not re-create it.
+	if err := exposure.reconcileRelayListeners(false); err != nil {
+		t.Fatalf("second reconcileRelayListeners() error = %v", err)
+	}
+	exposure.mu.RLock()
+	_, stillInstalled := exposure.relayListeners[relayURL]
+	exposure.mu.RUnlock()
+	if stillInstalled {
+		t.Fatal("listener retained for MITM-blocked relay")
+	}
+}
+
+// TestExposurePublishCreatedListenerClosesRelayBlockedDuringCreation covers
+// the install-time recheck deterministically at the publish boundary: a
+// relay that passed the desired-membership filter but is MITM-blocked by
+// the time its listener finishes creation must never be published — the
+// listener is closed and a MITM failure is recorded. The newListener call
+// itself contains no blocking I/O (relay startup runs in a background
+// goroutine), so the creation window cannot be held open by an external
+// dial target; the recheck contract is therefore exercised exactly where
+// it lives. Deleting the blockedRelays recheck inside publishCreatedListener
+// installs the listener and fails this test.
+func TestExposurePublishCreatedListenerClosesRelayBlockedDuringCreation(t *testing.T) {
+	const relayURL = "https://relay.example"
+	exposure := newExposureStateTest(t, relayURL)
+
+	relayURLParsed, err := url.Parse(relayURL)
+	if err != nil {
+		t.Fatalf("url.Parse(relayURL) error = %v", err)
+	}
+	listenerClosed := make(chan struct{})
+	created := &listener{
+		relayURL: relayURLParsed,
+		cancel:   func() { close(listenerClosed) },
+		doneCh:   listenerClosed,
+	}
+
+	// The relay was eligible when reconcile snapshotted desired membership;
+	// MITM detection lands while the listener is being created.
+	exposure.blockedRelays = map[string]error{relayURL: errMITMDetected}
+
+	if exposure.publishCreatedListener(relayURL, created) {
+		t.Fatal("publishCreatedListener() = true, want false for relay blocked during creation")
+	}
+	select {
+	case <-listenerClosed:
+	default:
+		t.Fatal("listener for relay blocked during creation was not closed")
+	}
+	if got := exposure.listenerRelayURLs(); len(got) != 0 {
+		t.Fatalf("listenerRelayURLs() = %v, want blocked relay not installed", got)
+	}
+	blockedStatusFound := false
+	for _, status := range exposure.Relays() {
+		if status.RelayURL != relayURL {
+			continue
 		}
-		if relayStatus.RelayURL == relayA {
-			if relayStatus.State != RelayFailed {
-				t.Fatalf("Relays() state for dead relay = %s, want failed", relayStatus.State)
+		blockedStatusFound = true
+		if status.State != RelayFailed || status.Failure != RelayFailureMITM {
+			t.Fatalf("status = %+v, want failed/MITM for relay blocked during creation", status)
+		}
+	}
+	if !blockedStatusFound {
+		t.Fatalf("Relays() = %+v, want a recorded status for relay blocked during creation", exposure.Relays())
+	}
+}
+
+func testIdentity() types.Identity {
+	return types.Identity{
+		Name:       "svc",
+		Address:    "address",
+		PublicKey:  "public",
+		PrivateKey: "private",
+	}
+}
+
+func TestExposeWithDiscoveryRetainsExplicitRelay(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exposure, err := Expose(ctx, testIdentity(), []string{"https://relay.example"}, WithDiscovery(1))
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer func() { _ = exposure.Close() }()
+
+	// The explicit relay must appear in the membership. Its listener starts
+	// in RelayConnecting and will eventually fail (unreachable), but it is
+	// retained because explicit relays are always kept by the discovery
+	// selection. No network assertions: we only check membership presence.
+	relays := exposure.Relays()
+	found := false
+	for _, r := range relays {
+		if r.RelayURL == "https://relay.example" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Relays() = %+v, want https://relay.example present", relays)
+	}
+
+	if err := exposure.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestExposeDiscoveryStaysUsableAfterRelayFailure(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exposure, err := Expose(ctx, testIdentity(), []string{relayA, relayB}, WithDiscovery(2))
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer func() { _ = exposure.Close() }()
+
+	// Force one relay to fail. The failure hook reports it to the
+	// discovery controller, which unconfirms and suppresses it. The
+	// other relay must remain in the membership — the exposure stays
+	// usable. We drive the failure the same way existing failure tests
+	// do: via setRelayStatus.
+	exposure.setRelayStatus(relayA, listenerStatus{
+		state: RelayFailed,
+		err:   errors.New("rejected"),
+	})
+
+	// relayB is an explicit relay present in the membership from
+	// construction, so the exposure stays usable after the failure; the
+	// discovery reaction (unconfirm + suppression → re-selection) is
+	// covered by the discovery package tests. setRelayStatus exercised
+	// the synchronous failure→discovery.Report hook above. The failed
+	// relay's own status is not asserted because the listener retry loop
+	// flips it between failed and connecting asynchronously.
+	relays := exposure.Relays()
+	var foundA, foundB bool
+	for _, r := range relays {
+		switch r.RelayURL {
+		case relayA:
+			foundA = true
+		case relayB:
+			foundB = true
+		}
+	}
+	if !foundA || !foundB {
+		t.Fatalf("Relays() = %+v, want %s and %s present after failure", relays, relayA, relayB)
+	}
+
+	if err := exposure.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+// TestExposeDiscoveryRemoveRelayRoutesThroughDiscovery verifies that relay
+// add/remove intent under discovery routes through the controller: the
+// explicit set changes, the relay is deactivated on removal and re-allowed
+// on add, and the watch loop republishes the new membership. The
+// deactivation POLICY (a verified candidate is not immediately re-selected)
+// is covered by the discovery package tests.
+func TestExposeDiscoveryRemoveRelayRoutesThroughDiscovery(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exposure, err := Expose(ctx, testIdentity(), []string{relayA, relayB}, WithDiscovery(2))
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer func() { _ = exposure.Close() }()
+
+	if err := exposure.RemoveRelay(relayA); err != nil {
+		t.Fatalf("RemoveRelay() error = %v", err)
+	}
+	waitUntilRelayAbsent(t, exposure, relayA)
+	waitUntilRelayPresent(t, exposure, relayB)
+
+	if err := exposure.AddRelay(relayA); err != nil {
+		t.Fatalf("AddRelay() error = %v", err)
+	}
+	waitUntilRelayPresent(t, exposure, relayA)
+}
+
+// waitUntilRelayPresent polls membership driven by the exposure's
+// state-change notifications. The time.After tick only guards against a
+// missed notification between the condition check and the wait, so the
+// happy path never sleeps.
+func waitUntilRelayPresent(t *testing.T, exposure *Exposure, relayURL string) {
+	t.Helper()
+	for range 500 {
+		changed := exposure.relayStateChanged()
+		for _, r := range exposure.Relays() {
+			if r.RelayURL == relayURL {
+				return
 			}
-			foundFailedRelayA = true
 		}
+		waitRelayStateChanged(t, exposure, changed)
 	}
-	if !foundRelayB {
-		t.Fatalf("Relays() omitted active relay %q", relayB)
+	t.Fatalf("Relays() never contained %s after membership update", relayURL)
+}
+
+// waitUntilRelayAbsent is waitUntilRelayPresent with an inverted condition.
+func waitUntilRelayAbsent(t *testing.T, exposure *Exposure, relayURL string) {
+	t.Helper()
+	for range 500 {
+		changed := exposure.relayStateChanged()
+		found := false
+		for _, r := range exposure.Relays() {
+			if r.RelayURL == relayURL {
+				found = true
+			}
+		}
+		if !found {
+			return
+		}
+		waitRelayStateChanged(t, exposure, changed)
 	}
-	if !foundFailedRelayA {
-		t.Fatalf("Relays() omitted failed explicit relay %q", relayA)
+	t.Fatalf("Relays() still contains %s after membership update", relayURL)
+}
+
+func waitRelayStateChanged(t *testing.T, exposure *Exposure, changed <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-changed:
+	case <-time.After(10 * time.Millisecond):
+	case <-exposure.done:
+	}
+}
+
+func (e *Exposure) relayStateChanged() <-chan struct{} {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.stateChanged
+}
+
+func TestExposeSetMaxActiveRelaysDiscovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exposure, err := Expose(ctx, testIdentity(), []string{"https://relay.example"}, WithDiscovery(2))
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer func() { _ = exposure.Close() }()
+
+	if err := exposure.SetMaxActiveRelays(1); err != nil {
+		t.Fatalf("SetMaxActiveRelays(1) error = %v", err)
+	}
+
+	// Calling again with a different value must not panic or race.
+	if err := exposure.SetMaxActiveRelays(3); err != nil {
+		t.Fatalf("SetMaxActiveRelays(3) error = %v", err)
+	}
+}
+
+func TestExposeSetMaxActiveRelaysNoDiscovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exposure, err := Expose(ctx, testIdentity(), []string{"https://relay.example"})
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer func() { _ = exposure.Close() }()
+
+	// Without discovery, SetMaxActiveRelays is a no-op that returns nil.
+	if err := exposure.SetMaxActiveRelays(1); err != nil {
+		t.Fatalf("SetMaxActiveRelays(1) error = %v, want nil", err)
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -232,24 +233,36 @@ func runExposeCommand(args []string) error {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
 
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:       utils.SplitCSV(flags.relayCSV),
-		Discovery:       flags.discovery,
-		Overlay:         flags.overlay,
-		Identity:        listenerIdentity,
-		UDPEnabled:      flags.udp,
-		TCPEnabled:      flags.tcp,
-		ECH:             flags.ech,
-		BanMITM:         flags.banMITM,
-		MaxActiveRelays: flags.maxActiveRelays,
-		Metadata: types.LeaseMetadata{
+	explicitRelayURLs, err := utils.NormalizeRelayURLs(utils.SplitCSV(flags.relayCSV)...)
+	if err != nil {
+		return err
+	}
+	opts := []sdk.Option{
+		sdk.WithMITMProtection(flags.banMITM),
+		sdk.WithMetadata(types.LeaseMetadata{
 			Description: flags.desc,
 			Tags:        utils.SplitCSV(flags.tags),
 			Owner:       flags.owner,
 			Thumbnail:   flags.thumbnail,
 			Hide:        flags.hide,
-		},
-	})
+		}),
+	}
+	if flags.udp {
+		opts = append(opts, sdk.WithUDP())
+	}
+	if flags.tcp {
+		opts = append(opts, sdk.WithTCP())
+	}
+	if flags.ech {
+		opts = append(opts, sdk.WithECH())
+	}
+	if flags.overlay {
+		opts = append(opts, sdk.WithOverlay())
+	}
+	if flags.discovery {
+		opts = append(opts, sdk.WithDiscovery(flags.maxActiveRelays))
+	}
+	exposure, err := sdk.Expose(ctx, listenerIdentity, explicitRelayURLs, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to start relays: %w", err)
 	}
@@ -365,7 +378,7 @@ func runListCommand(args []string) error {
 
 	relayInputs := utils.SplitCSV(flags.relayCSV)
 
-	relayURLs, err := utils.ResolvePortalRelayURLs(relayInputs, flags.defaultRelays)
+	relayURLs, err := discovery.ResolveRelayURLs(relayInputs, flags.defaultRelays)
 	if err != nil {
 		return fmt.Errorf("resolve relay urls: %w", err)
 	}

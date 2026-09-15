@@ -21,7 +21,6 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
@@ -38,12 +37,12 @@ type listenerConfig struct {
 	BanMITM    bool
 	Metadata   func() types.LeaseMetadata
 	RetryCount int
-	relaySet   *discovery.RelaySet
 	Status     func(listenerStatus)
 }
 
 type listenerStatus struct {
 	state     RelayState
+	failure   RelayFailure
 	err       error
 	publicURL string
 	udpAddr   string
@@ -78,25 +77,17 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 	if !isTerminalRelayError(err) {
 		return false
 	}
-	relayURL := l.route.RelayURL
+	relayURL := l.relayURL.String()
 	var registrationErr *relayRegistrationError
 	if errors.As(err, &registrationErr) && registrationErr.relayURL != "" {
 		relayURL = registrationErr.relayURL
-	}
-	if l.relaySet != nil && relayURL != "" {
-		l.relaySet.UnconfirmRelayURL(relayURL)
-		if shouldDropRelayFromActivePool(err) {
-			l.relaySet.DropRelayURLFromActivePool(relayURL)
-		} else {
-			l.relaySet.RecordActiveFailure(relayURL, 1)
-		}
 	}
 	log.Error().
 		Err(err).
 		Str("relay_url", relayURL).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
-	l.reportFailed(err)
+	l.reportFailure(err, RelayFailureTerminal)
 	_ = l.Close()
 	return true
 }
@@ -107,12 +98,10 @@ type listener struct {
 	closeOnce sync.Once
 
 	relayURL          *url.URL
-	route             discovery.Route
 	metadata          func() types.LeaseMetadata
 	identity          types.Identity
 	overlay           bool
 	warnOverlayDirect sync.Once
-	relaySet          *discovery.RelaySet
 	udpEnabled        bool
 	tcpEnabled        bool
 	echEnabled        bool
@@ -133,6 +122,7 @@ type listener struct {
 	httpClient    *http.Client
 	httpTransport *http.Transport
 	tlsConfig     *tls.Config
+	transportMu   sync.RWMutex
 	reverseTLSMu  sync.Mutex
 	reverseTLSURL string
 	reverseTLS    *tls.Config
@@ -145,10 +135,10 @@ type listener struct {
 
 // newListener creates one public relay listener.
 // Only local config validation fails immediately; relay startup runs in the background until ready.
-func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig) (*listener, error) {
+func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*listener, error) {
 	listenerCtx, cancel := context.WithCancel(ctx)
 
-	entryRelayURL, err := utils.NormalizeRelayURL(route.RelayURL)
+	entryRelayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -162,11 +152,9 @@ func newListener(ctx context.Context, route discovery.Route, cfg listenerConfig)
 		cancel:         cancel,
 		doneCh:         listenerCtx.Done(),
 		relayURL:       relayurl,
-		route:          discovery.Route{RelayURL: entryRelayURL, Explicit: route.Explicit},
 		metadata:       cfg.Metadata,
 		identity:       cfg.Identity.Copy(),
 		overlay:        cfg.Overlay,
-		relaySet:       cfg.relaySet,
 		status:         cfg.Status,
 		udpEnabled:     cfg.UDPEnabled,
 		tcpEnabled:     cfg.TCPEnabled,
@@ -255,7 +243,11 @@ func (l *listener) reportAvailable() {
 }
 
 func (l *listener) reportFailed(err error) {
-	l.report(listenerStatus{state: RelayFailed, err: err})
+	l.reportFailure(err, RelayFailureRuntime)
+}
+
+func (l *listener) reportFailure(err error, failure RelayFailure) {
+	l.report(listenerStatus{state: RelayFailed, failure: failure, err: err})
 }
 
 func (l *listener) run(ctx context.Context) {
@@ -302,7 +294,7 @@ func (l *listener) run(ctx context.Context) {
 		if udpAddr != "" || tcpAddr != "" {
 			event.Msg("raw transport endpoints allocated")
 		} else if publicURL != "" {
-			logHTTPReady(l.identity.Address, publicURL, l.route.RelayURL)
+			logHTTPReady(l.identity.Address, publicURL, l.relayURL.String())
 		} else {
 			event.Msg("relay listener registered")
 		}
@@ -728,7 +720,7 @@ func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
 	if !lease.reverse.ExpiresAt.After(time.Now().UTC()) {
 		return nil, errLeaseRefreshRequired
 	}
-	if l.tlsConfig == nil {
+	if l.relayTLSConfigClone() == nil {
 		return nil, errors.New("relay tls config is unavailable")
 	}
 
@@ -788,7 +780,7 @@ func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tl
 		return nil, errors.New("reverse endpoint hostname is unavailable")
 	}
 	if strings.EqualFold(endpoint.Host, l.relayURL.Host) {
-		return l.tlsConfig.Clone(), nil
+		return l.relayTLSConfigClone(), nil
 	}
 	key := strings.ToLower(endpoint.Scheme + "://" + endpoint.Host)
 	l.reverseTLSMu.Lock()
@@ -850,13 +842,14 @@ func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, err
 	if lease.publicPort <= 0 {
 		return nil, errors.New("public port is not available")
 	}
-	if l.tlsConfig == nil {
+	tlsCfg := l.relayTLSConfigClone()
+	if tlsCfg == nil {
 		return nil, errors.New("relay tls config is unavailable")
 	}
 	host := strings.TrimSpace(l.relayURL.Hostname())
 	host = cmp.Or(host, strings.TrimSpace(l.relayURL.Host))
 	dialAddr := net.JoinHostPort(host, fmt.Sprintf("%d", lease.publicPort))
-	return transport.DialQUICBackhaul(ctx, dialAddr, l.tlsConfig, lease.accessToken)
+	return transport.DialQUICBackhaul(ctx, dialAddr, tlsCfg, lease.accessToken)
 }
 
 func (l *listener) runRenewLoop(ctx context.Context) error {
@@ -1056,10 +1049,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")
 	}
-	entryURL := l.route.RelayURL
-	if l.relaySet != nil && entryURL != "" {
-		l.relaySet.ConfirmRelayURL(entryURL)
-	}
 	if len(echConfigList) > 0 {
 		log.Debug().
 			Str("address", l.identity.Address).
@@ -1104,12 +1093,6 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 	}
 
 	if l.retryCount > 0 && retries > l.retryCount {
-		entryURL := l.route.RelayURL
-		if l.relaySet != nil && entryURL != "" {
-			l.relaySet.UnconfirmRelayURL(entryURL)
-			l.relaySet.RecordActiveFailure(entryURL, 1)
-			l.relaySet.DropRelayURLFromActivePool(entryURL)
-		}
 		logger.Error().
 			Err(err).
 			Int("retry_count", l.retryCount).

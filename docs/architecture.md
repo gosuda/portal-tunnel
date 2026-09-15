@@ -16,12 +16,29 @@ The SDK consumes the same generic reverse endpoint in both cases. Discovery
 routes and the lease lifecycle contain no overlay topology.
 
 The public SDK facade is centered on `sdk.Exposure`, a multi-relay
-`net.Listener`. `ExposeConfig` contains only relay and lease concerns. Local
+`net.Listener`. `sdk.Expose` takes its required identity and concrete relay URLs
+directly; functional options cover endpoint capabilities such as UDP, TCP,
+ECH, MITM protection, overlay routing, and initial lease metadata. The
+`sdk.WithDiscovery` option enables discovery-driven relay membership: when it
+is set, `Exposure` delegates relay selection to `portal/discovery` as a blind
+collaborator, feeding it failure classifications from listener events and
+applying the collaborator's membership decisions through an internal
+membership callback. `AddRelay` and `RemoveRelay` route the same user intent
+through the collaborator: a removed relay is deactivated out of active
+selection (kept as a future candidate), and a re-added relay is made
+immediately eligible again.
+`Exposure` owns the logical multi-relay lifecycle and listener membership; it
+does not implement discovery or relay-selection policy. Applications provide
+only user intent — explicit relays, discovery on/off, max active relays, and
+transport requirements — and never interact with the discovery controller,
+watch callbacks, or failure feedback directly. Readiness and accept operations
+do not infer source exhaustion from the current membership; they wait for a
+future membership update, context cancellation, or exposure closure. Local
 TCP/UDP targets belong to `sdk.ProxyConfig`, identity file loading belongs to
 CLI or agent callers, and routed HTTP payment settings belong to
 `sdk.NewHTTPRoutes`. `Exposure` owns one canonical relay-status map; listener
-and discovery events update it, while `Relays`, `Updates`, and `WaitReady`
-read from that state. Agent status types are not part of the SDK contract.
+events update it, while `Relays`, `Updates`, and `WaitReady` read from that
+state. Agent status types are not part of the SDK contract.
 
 ## Identity challenges
 

@@ -156,14 +156,18 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
-		Discovery:       cfg.discovery,
-		Identity:        listenerIdentity,
-		BanMITM:         cfg.banMITM,
-		MaxActiveRelays: cfg.maxActiveRelays,
-		Metadata:        metadata,
-	})
+	explicitRelayURLs, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.relayURLs)...)
+	if err != nil {
+		return err
+	}
+	opts := []sdk.Option{
+		sdk.WithMITMProtection(cfg.banMITM),
+		sdk.WithMetadata(metadata),
+	}
+	if cfg.discovery {
+		opts = append(opts, sdk.WithDiscovery(cfg.maxActiveRelays))
+	}
+	exposure, err := sdk.Expose(ctx, listenerIdentity, explicitRelayURLs, opts...)
 	if err != nil {
 		return fmt.Errorf("exposure listen error: %w", err)
 	}
