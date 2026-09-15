@@ -201,7 +201,7 @@ func acmeFeature(cfg relayServerConfig) feature {
 	}
 
 	f.State, f.By = stateEnabled, "ACME_DNS_PROVIDER="+provider
-	f.Detail = "deprecated external DNS backend (removal in a future major release); prefer NS delegation to embedded; managed issuance and renewal under IDENTITY_PATH"
+	f.Detail = "supported external DNS backend; embedded remains the canonical default; managed issuance and renewal under IDENTITY_PATH"
 	if len(required) == 0 {
 		f.Detail += "; credentials come from the ambient provider chain"
 	}

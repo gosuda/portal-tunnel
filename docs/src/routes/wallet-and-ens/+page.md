@@ -146,7 +146,7 @@ Requirements for every supported provider:
 
 For the preferred **embedded** setup, leave `ACME_DNS_PROVIDER` unset or set it to `embedded`, configure NS/glue delegation to the relay, and persist `IDENTITY_PATH/dnssec-csk.json`. Embedded DNS signs the ENS TXT records and exports a DS when its local listeners start and in ENS status; after delegation is reachable, publish that DS at the parent zone. No DNS API credentials are needed. Local signing does not verify parent publication: embedded status remains `pending` and `ens.verified=false` because Portal does not authenticate the parent chain. See [Embedded DNS](/configuration#embedded-dns) for trust-chain and key-persistence requirements.
 
-External providers remain available, though deprecated until a future major release. They do not start embedded DNS and do not use its port, NS/glue setup, or `dnssec-csk.json`:
+External providers remain available and supported. They do not start embedded DNS and do not use its port, NS/glue setup, or `dnssec-csk.json`:
 
 | Provider | ENS DNSSEC setup |
 |----------|------------------|

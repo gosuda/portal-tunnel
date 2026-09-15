@@ -160,7 +160,7 @@ matching glue `A` record at the parent zone as shown above. After verifying the 
 
 Certificates are issued automatically via ACME DNS-01 against the embedded
 authoritative DNS server — no DNS provider credentials are required once the
-delegation above is in place. External managed backends are deprecated and receive no new features; they remain supported until removal in a future major release. Operators may retain any vendor for the parent zone and delegate only the relay namespace. For an existing external-backend deployment, the retained settings are:
+delegation above is in place. External managed backends are supported first-class alternatives to embedded DNS. Operators may retain any vendor for the parent zone and delegate only the relay namespace. For an existing external-backend deployment, the retained settings are:
 
 ```yaml
 environment:

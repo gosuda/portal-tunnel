@@ -212,7 +212,7 @@ UDP client
 ### Operational Constraints
 
 - For non-localhost deployments, relay TLS can run from manual certificate files in the relay `IDENTITY_PATH` directory or from managed ACME.
-- The canonical/default managed DNS provider is `embedded`: NS-delegated authoritative DNS with persistent CSK signing and parent DS export, without DNS API secrets. External `cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, and `vultr` backends are deprecated but retained until a future major release.
+- The canonical/default managed DNS provider is `embedded`: NS-delegated authoritative DNS with persistent CSK signing and parent DS export, without DNS API secrets. External `cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, and `vultr` backends are supported first-class alternatives.
 - ENS gasless automation reuses `ACME_DNS_PROVIDER` for DNSSEC and ENS TXT sync when the selected provider supports DNSSEC.
 - Relay stores its state under `IDENTITY_PATH`, including `identity.json`, `policy.json`, and certificate material. Tunnel and demo-app identities still use `IDENTITY_PATH` / `--identity-path` as a direct JSON file path.
 - Managed non-localhost ACME keeps both root and wildcard DNS A records in sync.
