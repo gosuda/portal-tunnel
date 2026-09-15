@@ -24,6 +24,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/ech"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
@@ -673,17 +674,11 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
 	}
-	echSeed, err := identity.DeriveToken(
+	echKeys, echConfigList, err := ech.RelayMaterials(
 		s.identity.Identity,
-		"relay-ech",
 		s.identity.EncryptedClientHelloSeed,
 		s.identity.Name,
 	)
-	if err != nil {
-		_ = manager.Stop(ctx)
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("derive relay ech seed: %w", err)
-	}
-	echKeys, echConfigList, err := keyless.EncryptedClientHelloMaterials(echSeed, s.identity.Name)
 	if err != nil {
 		_ = manager.Stop(ctx)
 		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("prepare ech materials: %w", err)

@@ -2,13 +2,11 @@ package acme
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"strconv"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/ech"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -29,16 +27,12 @@ func (m *Manager) SyncECHConfig(ctx context.Context, hostname string, echConfigL
 	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return fmt.Errorf("hostname %q is outside acme base domain %q", hostname, m.cfg.BaseDomain)
 	}
-	echConfigList, err := keyless.NormalizeEncryptedClientHelloConfigList(echConfigList)
-	if err != nil {
-		return err
-	}
 	if port < 0 || port > 65535 {
 		return errors.New("https record port must be between 0 and 65535")
 	}
-	svcParams := `ech="` + base64.StdEncoding.EncodeToString(echConfigList) + `"`
-	if port > 0 && port != 443 {
-		svcParams += " port=" + strconv.Itoa(port)
+	svcParams, err := ech.HTTPSRecordValue(echConfigList, port)
+	if err != nil {
+		return err
 	}
 	record := dnsrecord.HTTPSRecord{Priority: 1, Target: ".", SvcParams: svcParams}
 	record, err = record.Normalized()

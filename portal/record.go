@@ -7,10 +7,10 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/ech"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 type leaseRecord struct {
@@ -68,10 +68,10 @@ func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
 	if r.HostnameHash != "" && other.HostnameHash != "" && r.HostnameHash == other.HostnameHash {
 		return true
 	}
-	if r.Hostname != "" && other.HostnameHash != "" && utils.HostnameHash(r.Hostname) == other.HostnameHash {
+	if r.Hostname != "" && other.HostnameHash != "" && ech.HostnameHash(r.Hostname) == other.HostnameHash {
 		return true
 	}
-	return other.Hostname != "" && r.HostnameHash != "" && utils.HostnameHash(other.Hostname) == r.HostnameHash
+	return other.Hostname != "" && r.HostnameHash != "" && ech.HostnameHash(other.Hostname) == r.HostnameHash
 }
 
 func (r *leaseRecord) isExpired(now time.Time) bool {
