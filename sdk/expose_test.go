@@ -82,7 +82,12 @@ func TestPublicURLForLeaseUsesCanonicalRelayPort(t *testing.T) {
 }
 
 func TestListenerReverseSessionReadinessTracksLiveSessions(t *testing.T) {
+	relayURL, err := url.Parse("https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
 	l := &listener{
+		api:           &apiClient{relayURL: relayURL},
 		statusUpdates: make(chan listenerStatus, 1),
 		lease: utils.NewSnapshot(listenerSnapshot{
 			accessToken: "token",
