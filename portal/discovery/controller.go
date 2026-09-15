@@ -35,15 +35,19 @@ const (
 // active relays, transport requirements, and local address via the Set*
 // methods, and forward add/remove relay user intent through AddRelay /
 // RemoveRelay, which apply the explicit-list change together with the
-// matching eligibility change as one atomic unit; the Controller builds the
-// selection state internally and publishes concrete relay URLs through the
-// Watch callback.
+// matching eligibility change as one atomic unit. Next returns each changed
+// desired relay set as a value for the runtime to reconcile.
 type Controller struct {
-	relaySet *RelaySet
-	changed  chan struct{}
+	relaySet  *RelaySet
+	refresher *Refresher
+	changed   chan struct{}
+	selected  []string
+	published bool
+	refreshAt time.Time
 
 	mu              sync.Mutex
 	explicitRelays  []string
+	activeRelays    []string
 	maxActiveRelays int
 	requireUDP      bool
 	requireTCP      bool
@@ -52,9 +56,11 @@ type Controller struct {
 
 // NewController creates a discovery controller from bootstrap relay URLs.
 func NewController(bootstrapRelayURLs []string) *Controller {
+	relaySet := NewRelaySet(bootstrapRelayURLs)
 	return &Controller{
-		relaySet: NewRelaySet(bootstrapRelayURLs),
-		changed:  make(chan struct{}, 1),
+		relaySet:  relaySet,
+		refresher: NewRefresher(relaySet),
+		changed:   make(chan struct{}, 1),
 	}
 }
 
@@ -83,7 +89,7 @@ func (c *Controller) Report(relayURL string, kind FailureKind) {
 // controller normalizes and stores a defensive copy, gives every URL a
 // durable RelaySet candidate state (so later failure reports stick for
 // custom relays that never entered through discovery), and signals the
-// watch loop to re-evaluate immediately.
+// selection loop to re-evaluate immediately.
 func (c *Controller) SetExplicitRelays(urls []string) {
 	if c == nil {
 		return
@@ -98,6 +104,24 @@ func (c *Controller) SetExplicitRelays(urls []string) {
 	for _, relayURL := range normalized {
 		c.relaySet.EnsureRelayURL(relayURL)
 	}
+	c.signal()
+}
+
+// SetActiveRelays supplies the runtime's current active-session snapshot for
+// selection stickiness. Discovery retains the value but does not own or query
+// the sessions that produced it.
+func (c *Controller) SetActiveRelays(urls []string) {
+	if c == nil {
+		return
+	}
+	urls = append([]string(nil), urls...)
+	c.mu.Lock()
+	if slices.Equal(c.activeRelays, urls) {
+		c.mu.Unlock()
+		return
+	}
+	c.activeRelays = urls
+	c.mu.Unlock()
 	c.signal()
 }
 
@@ -189,77 +213,71 @@ func (c *Controller) signal() {
 	}
 }
 
-// Watch refreshes discovery and publishes selected concrete relay URLs.
-// activeRelays returns the caller's currently active relay URLs (typically
-// from Exposure.ActiveRelays) so selection preserves connection-level
-// stickiness and avoids listener churn. onChange applies the new concrete
-// membership (the exposure's internal membership callback).
-func (c *Controller) Watch(
-	ctx context.Context,
-	activeRelays func() []string,
-	onChange func([]string) error,
-) error {
+// Next refreshes discovery as needed and blocks until the desired relay set
+// changes. The caller remains responsible for reconciling the result.
+func (c *Controller) Next(ctx context.Context) ([]string, error) {
 	if c == nil {
-		return errors.New("relay discovery: controller is nil")
+		return nil, errors.New("relay discovery: controller is nil")
 	}
 	if ctx == nil {
-		return errors.New("relay discovery: context is nil")
+		return nil, errors.New("relay discovery: context is nil")
 	}
-	if onChange == nil {
-		return errors.New("relay discovery: change callback is nil")
-	}
-
-	refresher := NewRefresher(c.relaySet)
-	ticker := time.NewTicker(DiscoveryPollInterval)
-	defer ticker.Stop()
-
-	var selected []string
-	published := false
-	refresh := true
 	for {
+		now := time.Now()
+		refresh := !c.published || !now.Before(c.refreshAt)
 		if refresh {
-			if err := refresher.Refresh(ctx, nil); err != nil {
+			if err := c.refresher.Refresh(ctx, nil); err != nil {
 				if ctx.Err() != nil {
-					return ctx.Err()
+					return nil, ctx.Err()
 				}
 				log.Warn().Err(err).Msg("relay discovery refresh failed; will retry")
 			}
+			c.refreshAt = time.Now().Add(DiscoveryPollInterval)
 		}
-		rs := c.buildRouteState(activeRelays)
+		rs := c.buildRouteState()
 		routes := c.relaySet.SelectRelays(rs)
 		next := make([]string, 0, len(routes))
 		for _, route := range routes {
 			next = append(next, route.RelayURL)
 		}
-		if !published || !slices.Equal(selected, next) {
-			if err := onChange(next); err != nil {
-				return err
-			}
-			selected = next
-			published = true
+		if !c.published || !slices.Equal(c.selected, next) {
+			c.selected = append([]string(nil), next...)
+			c.published = true
+			return next, nil
 		}
 
+		wait := time.Until(c.refreshAt)
+		if wait < 0 {
+			wait = 0
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			refresh = true
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
 		case <-c.changed:
-			refresh = false
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		}
 	}
 }
 
-func (c *Controller) buildRouteState(activeRelays func() []string) routeState {
-	var active []string
-	if activeRelays != nil {
-		active = activeRelays()
-	}
+func (c *Controller) buildRouteState() routeState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return routeState{
 		ExplicitRelayURLs: append([]string(nil), c.explicitRelays...),
-		ActiveRelayURLs:   active,
+		ActiveRelayURLs:   append([]string(nil), c.activeRelays...),
 		MaxActiveRelays:   c.maxActiveRelays,
 		RequireUDP:        c.requireUDP,
 		RequireTCP:        c.requireTCP,

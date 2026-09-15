@@ -280,10 +280,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		server.overlay, err = overlay.New(overlay.Config{
 			ConfigPath: cfg.IVNPConfigPath,
 			Authority:  relayAuthority,
-			Descriptors: func() []types.RelayDescriptor {
-				return server.relaySet.Descriptors(types.RelayDescriptor{})
-			},
-			SelfDescriptor: server.newSelfDescriptor,
 			OfferReverse: func(identityKey, leaseID string, conn net.Conn, ready func() error) error {
 				lease, err := registry.admitLeaseIdentity(identityKey, leaseID, time.Now().UTC(), false)
 				if err != nil {
@@ -305,6 +301,38 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 func (s *Server) config() ServerConfig {
 	return s.cfg.Load()
+}
+
+func (s *Server) overlayIssueDescriptors(now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
+	if s.overlay == nil || s.relaySet == nil {
+		return types.RelayDescriptor{}, nil, nil
+	}
+	self, err := s.newSelfDescriptor(now)
+	if err != nil {
+		return types.RelayDescriptor{}, nil, fmt.Errorf("build self overlay descriptor: %w", err)
+	}
+	return self, s.relaySet.Descriptors(types.RelayDescriptor{}), nil
+}
+
+func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.ReverseEndpoint, error) {
+	var self types.RelayDescriptor
+	var descriptors []types.RelayDescriptor
+	if input.useOverlay {
+		var err error
+		self, descriptors, err = s.overlayIssueDescriptors(time.Now().UTC())
+		if err != nil {
+			log.Warn().Err(err).Str("lease", input.leaseIdentity.Key()).Msg("relay overlay descriptors unavailable; using direct reverse transport")
+			input.useOverlay = false
+		}
+	}
+	endpoint, err := s.registry.issueReverseEndpoint(input, self, descriptors)
+	if err != nil {
+		if errors.Is(err, errUnauthorized) || errors.Is(err, errLeaseNotFound) {
+			return types.ReverseEndpoint{}, err
+		}
+		return types.ReverseEndpoint{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
+	}
+	return endpoint, nil
 }
 
 func (s *Server) SetUDPPolicy(enabled bool, maxLeases int) {

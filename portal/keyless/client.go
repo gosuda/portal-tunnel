@@ -17,74 +17,140 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func BuildClientTLSConfig(relayURL, hostname string, echKeys []tls.EncryptedClientHelloKey, headers func() http.Header) (*tls.Config, ioCloser, error) {
-	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
+// ClientConfig contains the lease-scoped inputs for a tenant TLS client.
+type ClientConfig struct {
+	RelayURL    string
+	Hostname    string
+	ECH         ECHMaterials
+	AccessToken string
+}
+
+// Client owns the tenant TLS configuration and the remote signer that keeps
+// it usable. Access tokens can be updated without rebuilding the TLS client.
+type Client struct {
+	mu          sync.RWMutex
+	accessToken string
+	tlsConfig   *tls.Config
+	signer      io.Closer
+	closeOnce   sync.Once
+	closeErr    error
+}
+
+// NewClient creates one lease-scoped tenant TLS client.
+func NewClient(config ClientConfig) (*Client, error) {
+	normalizedRelayURL, err := utils.NormalizeRelayURL(config.RelayURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	parsed, err := url.Parse(normalizedRelayURL)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse relay url: %w", err)
+		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
 	serverName := parsed.Hostname()
 	if serverName == "" {
-		return nil, nil, errors.New("relay hostname is required")
+		return nil, errors.New("relay hostname is required")
 	}
 
 	certPEM, rootCAPEM, err := ResolveMaterials(context.Background(), normalizedRelayURL, serverName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
+		return nil, fmt.Errorf("prepare keyless materials: %w", err)
 	}
-	hostname = strings.TrimSpace(hostname)
+	hostname := strings.TrimSpace(config.Hostname)
 	if hostname == "" {
-		return nil, nil, errors.New("keyless hostname is required")
+		return nil, errors.New("keyless hostname is required")
 	}
 	if verifyErr := VerifyCertificateHostname(certPEM, hostname); verifyErr != nil {
-		return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", hostname, verifyErr)
+		return nil, fmt.Errorf("keyless certificate does not cover %s: %w", hostname, verifyErr)
 	}
+	client := &Client{accessToken: strings.TrimSpace(config.AccessToken)}
 
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
 		Endpoint:   normalizedRelayURL,
 		ServerName: serverName,
 		KeyID:      RelayKeyID,
 		RootCAPEM:  rootCAPEM,
-		Headers:    headers,
+		Headers:    client.headers,
 	}, certPEM)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create keyless remote signer: %w", err)
+		return nil, fmt.Errorf("create keyless remote signer: %w", err)
 	}
 
 	if err := verifyRemoteSigner(remoteSigner); err != nil {
 		_ = remoteSigner.Close()
-		return nil, nil, fmt.Errorf("keyless signer self-test against %s failed: %w", serverName, err)
+		return nil, fmt.Errorf("keyless signer self-test against %s failed: %w", serverName, err)
 	}
 
 	tlsConfig, err := keylesstls.NewServerTLSConfig(keylesstls.ServerTLSConfig{
 		CertPEM:                  certPEM,
 		Signer:                   remoteSigner,
 		NextProtos:               []string{"http/1.1"},
-		MinVersion:               MinTLSVersion(len(echKeys) > 0),
-		EncryptedClientHelloKeys: echKeys,
+		MinVersion:               MinTLSVersion(len(config.ECH.Keys) > 0),
+		EncryptedClientHelloKeys: config.ECH.Keys,
 	})
 	if err != nil {
 		_ = remoteSigner.Close()
-		return nil, nil, fmt.Errorf("create keyless tls config: %w", err)
+		return nil, fmt.Errorf("create keyless tls config: %w", err)
 	}
-	return tlsConfig, remoteSigner, nil
+	client.tlsConfig = tlsConfig
+	client.signer = remoteSigner
+	return client, nil
 }
 
-type ioCloser interface {
-	Close() error
+func (c *Client) headers() http.Header {
+	headers := http.Header{}
+	c.mu.RLock()
+	token := c.accessToken
+	c.mu.RUnlock()
+	if token != "" {
+		headers.Set(types.HeaderAccessToken, token)
+	}
+	return headers
+}
+
+// SetAccessToken updates the credential used by subsequent signer requests.
+func (c *Client) SetAccessToken(token string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.accessToken = strings.TrimSpace(token)
+	c.mu.Unlock()
+}
+
+// TLSConfig returns a clone safe for one listener session.
+func (c *Client) TLSConfig() *tls.Config {
+	if c == nil || c.tlsConfig == nil {
+		return nil
+	}
+	return c.tlsConfig.Clone()
+}
+
+// Close releases the remote signer backing the TLS configuration. It is safe
+// to call more than once: the signer is closed exactly once and every call
+// returns the result of that first close attempt.
+func (c *Client) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.closeOnce.Do(func() {
+		if c.signer != nil {
+			c.closeErr = c.signer.Close()
+		}
+	})
+	return c.closeErr
 }
 
 func ResolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte, []byte, error) {
