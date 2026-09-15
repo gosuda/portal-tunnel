@@ -32,13 +32,6 @@ const (
 
 var errRelayIncompatible = errors.New("relay is incompatible")
 
-// relayRegistrationError records the exact relay that rejected a registration
-// operation.
-type relayRegistrationError struct {
-	relayURL string
-	err      error
-}
-
 type apiClient struct {
 	relayURL       *url.URL
 	requestTimeout time.Duration
@@ -52,14 +45,6 @@ type apiClient struct {
 
 func newAPIClient(relayURL *url.URL, requestTimeout time.Duration) *apiClient {
 	return &apiClient{relayURL: relayURL, requestTimeout: requestTimeout}
-}
-
-func (err *relayRegistrationError) Error() string {
-	return fmt.Sprintf("register relay at %s: %v", err.relayURL, err.err)
-}
-
-func (err *relayRegistrationError) Unwrap() error {
-	return err.err
 }
 
 // resetTransport tears down the cached HTTP client and TLS config so the next

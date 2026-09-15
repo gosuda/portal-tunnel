@@ -78,14 +78,9 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 	if !isTerminalRelayError(err) {
 		return false
 	}
-	relayURL := l.relayURL.String()
-	var registrationErr *relayRegistrationError
-	if errors.As(err, &registrationErr) && registrationErr.relayURL != "" {
-		relayURL = registrationErr.relayURL
-	}
 	log.Error().
 		Err(err).
-		Str("relay_url", relayURL).
+		Str("relay_url", l.relayURL.String()).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
 	l.report(listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: err})
@@ -946,11 +941,11 @@ func (l *listener) renewLease(ctx context.Context) error {
 		if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
 			return errLeaseRefreshRequired
 		}
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return err
 	}
 
 	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return err
 	}
 	if l.lease == nil {
 		return errLeaseRefreshRequired
@@ -976,19 +971,19 @@ func (l *listener) renewLease(ctx context.Context) error {
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err := l.api.initHTTPTransport(ctx); err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return err
 	}
 
 	rootHostname := utils.PortalRootHost(l.relayURL.String())
 	publicHostname, err := utils.LeaseHostname(l.identity.Name, rootHostname)
 	if err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return err
 	}
 	var materials keyless.ECHMaterials
 	if l.echEnabled {
 		materials, err = keyless.TenantECHMaterials(l.identity, publicHostname, rootHostname)
 		if err != nil {
-			return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+			return err
 		}
 	}
 	registerReq := types.RegisterChallengeRequest{
@@ -1006,11 +1001,11 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	}
 	resp, err := l.api.register(ctx, registerReq, utils.ResolvePublicIP(ctx))
 	if err != nil {
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return err
 	}
 	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
-		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		return err
 	}
 	if l.udpEnabled && !resp.UDPEnabled {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)

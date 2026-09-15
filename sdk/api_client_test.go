@@ -131,25 +131,18 @@ func TestAPIClientRenewUsesExplicitRequestValues(t *testing.T) {
 }
 
 func TestTerminalRelayFailureClosesListener(t *testing.T) {
-	const (
-		entry = "https://entry.example"
-		exit  = "https://exit.example"
-	)
-	entryURL, err := url.Parse(entry)
+	relayURL, err := url.Parse("https://relay.example")
 	if err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
 	listener := &listener{
-		relayURL:      entryURL,
+		relayURL:      relayURL,
 		cancel:        func() { close(done) },
 		doneCh:        done,
 		statusUpdates: make(chan listenerStatus, 1),
 	}
-	err = &relayRegistrationError{
-		relayURL: exit,
-		err:      fmt.Errorf("%w: unsupported protocol", errRelayIncompatible),
-	}
+	err = fmt.Errorf("%w: unsupported protocol", errRelayIncompatible)
 	if !listener.closeForTerminalRelayError(err) {
 		t.Fatal("terminal relay error was not handled")
 	}
