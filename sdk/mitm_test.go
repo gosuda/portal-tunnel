@@ -332,7 +332,7 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 		t.Fatalf("url.Parse() error = %v", err)
 	}
 	listener := &listener{
-		relayURL: entryURL,
+		api: &apiClient{relayURL: entryURL},
 		cancel: func() {
 			select {
 			case <-doneCh:
@@ -365,8 +365,8 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 	}
 
 	listener := &listener{
-		relayURL: relayURL,
-		doneCh:   doneCh,
+		api:    &apiClient{relayURL: relayURL},
+		doneCh: doneCh,
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
@@ -390,7 +390,7 @@ func TestMITMProbeDialAddressUsesRelayHostForLocalRelay(t *testing.T) {
 	}
 
 	listener := &listener{
-		relayURL: relayURL,
+		api: &apiClient{relayURL: relayURL},
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
@@ -410,7 +410,7 @@ func TestMITMProbeDialAddressUsesPublicURLForRemoteRelay(t *testing.T) {
 	}
 
 	listener := &listener{
-		relayURL: relayURL,
+		api: &apiClient{relayURL: relayURL},
 	}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 

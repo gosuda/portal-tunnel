@@ -69,7 +69,7 @@ func TestPublicURLForLeaseUsesCanonicalRelayPort(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			l := &listener{relayURL: relayURL}
+			l := &listener{api: &apiClient{relayURL: relayURL}}
 			got := l.publicURLForLease(listenerSnapshot{
 				hostname:   "demo.relay.example.com",
 				publicPort: 8443,
@@ -327,12 +327,12 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	}
 	exposure.relayListeners = map[string]*listener{
 		relayA: {
-			relayURL: relayAURL,
-			cancel:   func() { close(relayAClosed) },
-			doneCh:   relayAClosed,
+			api:    &apiClient{relayURL: relayAURL},
+			cancel: func() { close(relayAClosed) },
+			doneCh: relayAClosed,
 		},
 		relayB: {
-			relayURL: relayBURL,
+			api: &apiClient{relayURL: relayBURL},
 		},
 	}
 
@@ -387,9 +387,9 @@ func TestExposureRemoveRelayStopsRunningListener(t *testing.T) {
 		stateChanged:   make(chan struct{}),
 	}
 	exposure.relayListeners[relayA] = &listener{
-		relayURL: relayAURL,
-		cancel:   func() { close(relayAClosed) },
-		doneCh:   relayAClosed,
+		api:    &apiClient{relayURL: relayAURL},
+		cancel: func() { close(relayAClosed) },
+		doneCh: relayAClosed,
 	}
 
 	if err := exposure.RemoveRelay(relayA); err != nil {
@@ -418,7 +418,7 @@ func TestExposureListenerSelfExitKeepsExplicitRelayConfigured(t *testing.T) {
 	}
 
 	l := &listener{
-		relayURL: relayAURL,
+		api: &apiClient{relayURL: relayAURL},
 	}
 	exposure := &Exposure{
 		relayURLs:      []string{relayA},
@@ -515,9 +515,9 @@ func TestExposurePublishCreatedListenerClosesRelayBlockedDuringCreation(t *testi
 	}
 	listenerClosed := make(chan struct{})
 	created := &listener{
-		relayURL: relayURLParsed,
-		cancel:   func() { close(listenerClosed) },
-		doneCh:   listenerClosed,
+		api:    &apiClient{relayURL: relayURLParsed},
+		cancel: func() { close(listenerClosed) },
+		doneCh: listenerClosed,
 	}
 
 	// The relay was eligible when reconcile snapshotted desired membership;

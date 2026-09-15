@@ -27,6 +27,15 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+const (
+	defaultDialTimeout      = 15 * time.Second
+	defaultHandshakeTimeout = 30 * time.Second
+	defaultLeaseTTL         = 2 * time.Minute
+	defaultRenewBefore      = 30 * time.Second
+	defaultReadyTarget      = 2
+	defaultRetryWait        = 3 * time.Second
+)
+
 type listenerConfig struct {
 	Identity   types.Identity
 	Overlay    bool
@@ -79,7 +88,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 	}
 	log.Error().
 		Err(err).
-		Str("relay_url", l.relayURL.String()).
+		Str("relay_url", l.api.relayURL.String()).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
 	l.report(listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: err})
@@ -92,7 +101,6 @@ type listener struct {
 	doneCh    <-chan struct{}
 	closeOnce sync.Once
 
-	relayURL          *url.URL
 	metadataMu        sync.RWMutex
 	metadata          types.LeaseMetadata
 	identity          types.Identity
@@ -135,7 +143,6 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 	l := &listener{
 		cancel:        cancel,
 		doneCh:        listenerCtx.Done(),
-		relayURL:      relayurl,
 		metadata:      cfg.Metadata.Copy(),
 		identity:      cfg.Identity.Copy(),
 		overlay:       cfg.Overlay,
@@ -276,7 +283,7 @@ func (l *listener) run(ctx context.Context) {
 			event.Msg("raw transport endpoints allocated")
 		} else if publicURL != "" {
 			event.Str("public_url", publicURL).
-				Str("relay_url", l.relayURL.String()).
+				Str("relay_url", l.api.relayURL.String()).
 				Msg("service ready at " + publicURL)
 		} else {
 			event.Msg("relay listener registered")
@@ -296,7 +303,7 @@ func (l *listener) run(ctx context.Context) {
 				_ = lease.tenantTLS.Close()
 			}
 			l.api.resetTransport()
-			relayURL := l.relayURL.String()
+			relayURL := l.api.relayURL.String()
 			log.Debug().
 				Err(err).
 				Str("relay_url", relayURL).
@@ -305,7 +312,7 @@ func (l *listener) run(ctx context.Context) {
 			continue
 		}
 
-		relayURL := l.relayURL.String()
+		relayURL := l.api.relayURL.String()
 		log.Error().
 			Err(err).
 			Str("relay_url", relayURL).
@@ -408,7 +415,7 @@ func (l *listener) Accept() (net.Conn, error) {
 		if handleErr != nil {
 			log.Debug().
 				Err(handleErr).
-				Str("relay_url", l.relayURL.String()).
+				Str("relay_url", l.api.relayURL.String()).
 				Str("address", l.identity.Address).
 				Msg("mitm self-probe handling failed")
 		}
@@ -434,8 +441,8 @@ func (l *listener) acceptDatagram() (types.DatagramFrame, error) {
 		frame.UDPAddr = lease.udpAddr
 	}
 	frame.Address = l.identity.Address
-	if l.relayURL != nil {
-		frame.RelayURL = l.relayURL.String()
+	if l.api != nil && l.api.relayURL != nil {
+		frame.RelayURL = l.api.relayURL.String()
 	}
 	return frame, nil
 }
@@ -455,7 +462,7 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 }
 
 func (l *listener) publicURLForLease(lease listenerSnapshot) string {
-	baseURL := l.relayURL
+	baseURL := l.api.relayURL
 	if baseURL == nil {
 		return ""
 	}
@@ -584,7 +591,7 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 		case claimed:
 			log.Debug().
 				Err(err).
-				Str("relay_url", l.relayURL.String()).
+				Str("relay_url", l.api.relayURL.String()).
 				Str("address", l.identity.Address).
 				Int("reverse_session_slot", sessionSlot).
 				Msg("tenant tls handshake failed")
@@ -609,7 +616,27 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 
 func (l *listener) isAlternateReverseEndpoint(rawURL string) bool {
 	endpoint, err := url.Parse(strings.TrimSpace(rawURL))
-	return err == nil && l.relayURL != nil && (!strings.EqualFold(endpoint.Scheme, l.relayURL.Scheme) || !strings.EqualFold(endpoint.Host, l.relayURL.Host))
+	return err == nil && l.api != nil && l.api.relayURL != nil && (!strings.EqualFold(endpoint.Scheme, l.api.relayURL.Scheme) || !strings.EqualFold(endpoint.Host, l.api.relayURL.Host))
+}
+
+func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoint) error {
+	if !l.overlay {
+		if endpoint.Overlay {
+			return errors.New("relay returned an overlay reverse endpoint but overlay is disabled")
+		}
+		if l.isAlternateReverseEndpoint(endpoint.URL) {
+			return fmt.Errorf("relay reverse endpoint %s does not match the relay URL; align the relay's PORTAL_URL with the address clients dial", endpoint.URL)
+		}
+		return nil
+	}
+	if !endpoint.Overlay && !l.isAlternateReverseEndpoint(endpoint.URL) {
+		l.warnOverlayDirect.Do(func() {
+			log.Warn().
+				Str("relay_url", l.api.relayURL.String()).
+				Msg("overlay requested but the relay serves a direct reverse endpoint; continuing without overlay forwarding")
+		})
+	}
+	return nil
 }
 
 func (l *listener) runDatagramLoop(ctx context.Context) {
@@ -742,7 +769,7 @@ func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tl
 	if endpoint == nil || endpoint.Hostname() == "" {
 		return nil, errors.New("reverse endpoint hostname is unavailable")
 	}
-	if strings.EqualFold(endpoint.Host, l.relayURL.Host) {
+	if strings.EqualFold(endpoint.Host, l.api.relayURL.Host) {
 		return l.api.tlsConfigClone(), nil
 	}
 	key := strings.ToLower(endpoint.Scheme + "://" + endpoint.Host)
@@ -772,7 +799,7 @@ func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, faile
 		return nil
 	}
 	endpoint, err := url.Parse(lease.reverse.URL)
-	if err != nil || strings.EqualFold(endpoint.Host, l.relayURL.Host) {
+	if err != nil || strings.EqualFold(endpoint.Host, l.api.relayURL.Host) {
 		return nil
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -785,6 +812,11 @@ func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, faile
 		return nil
 	}
 	if err := l.validateReverseEndpointTransport(next); err != nil {
+		log.Debug().
+			Err(err).
+			Str("relay_url", l.api.relayURL.String()).
+			Str("reverse_url", next.URL).
+			Msg("relay returned unusable reverse endpoint; keeping current endpoint")
 		return nil
 	}
 	if l.lease == nil {
@@ -812,8 +844,8 @@ func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, err
 	if tlsCfg == nil {
 		return nil, errors.New("relay tls config is unavailable")
 	}
-	host := strings.TrimSpace(l.relayURL.Hostname())
-	host = cmp.Or(host, strings.TrimSpace(l.relayURL.Host))
+	host := strings.TrimSpace(l.api.relayURL.Hostname())
+	host = cmp.Or(host, strings.TrimSpace(l.api.relayURL.Host))
 	dialAddr := net.JoinHostPort(host, fmt.Sprintf("%d", lease.publicPort))
 	return transport.DialQUICBackhaul(ctx, dialAddr, tlsCfg, lease.accessToken)
 }
@@ -937,11 +969,7 @@ func (l *listener) renewLease(ctx context.Context) error {
 }
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
-	if err := l.api.initHTTPTransport(ctx); err != nil {
-		return err
-	}
-
-	rootHostname := utils.PortalRootHost(l.relayURL.String())
+	rootHostname := utils.PortalRootHost(l.api.relayURL.String())
 	publicHostname, err := utils.LeaseHostname(l.identity.Name, rootHostname)
 	if err != nil {
 		return err
@@ -987,7 +1015,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	}
 
 	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
-		RelayURL:    l.relayURL.String(),
+		RelayURL:    l.api.relayURL.String(),
 		Hostname:    publicHostname,
 		ECH:         materials,
 		AccessToken: resp.AccessToken,
@@ -1048,8 +1076,8 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 	}
 
 	relayURL := ""
-	if l.relayURL != nil {
-		relayURL = l.relayURL.String()
+	if l.api != nil && l.api.relayURL != nil {
+		relayURL = l.api.relayURL.String()
 	}
 	logger := log.With().
 		Str("relay_url", relayURL).

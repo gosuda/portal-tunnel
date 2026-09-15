@@ -71,7 +71,7 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			listener := &listener{relayURL: relayURL, overlay: test.enabled}
+			listener := &listener{api: &apiClient{relayURL: relayURL}, overlay: test.enabled}
 			err := listener.validateReverseEndpointTransport(test.endpoint)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("validateReverseEndpointTransport() error = %v, wantErr %v", err, test.wantErr)
@@ -137,7 +137,7 @@ func TestTerminalRelayFailureClosesListener(t *testing.T) {
 	}
 	done := make(chan struct{})
 	listener := &listener{
-		relayURL:      relayURL,
+		api:           &apiClient{relayURL: relayURL},
 		cancel:        func() { close(done) },
 		doneCh:        done,
 		statusUpdates: make(chan listenerStatus, 1),
@@ -168,8 +168,7 @@ func TestRefreshReverseEndpointAfterFailureReportsMissingLease(t *testing.T) {
 		t.Fatalf("parse relay URL: %v", err)
 	}
 	listener := &listener{
-		relayURL: relayURL,
-		api:      &apiClient{relayURL: relayURL, http: server.Client()},
+		api: &apiClient{relayURL: relayURL, http: server.Client()},
 		lease: utils.NewSnapshot(listenerSnapshot{
 			accessToken: "access-token",
 			reverse: types.ReverseEndpoint{

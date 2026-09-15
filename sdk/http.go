@@ -12,12 +12,19 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
+)
+
+const (
+	defaultHTTPReadHeaderTimeout = 30 * time.Second
+	defaultHTTPShutdownTimeout   = 5 * time.Second
+	defaultHTTPIdleTimeout       = 90 * time.Second
 )
 
 func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
@@ -33,8 +40,8 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	if relayListener != nil {
 		relaySrv = &http.Server{
 			Handler:           handler,
-			ReadHeaderTimeout: defaultRequestTimeout,
-			IdleTimeout:       defaultIdleTimeout,
+			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
+			IdleTimeout:       defaultHTTPIdleTimeout,
 		}
 	}
 
@@ -43,8 +50,8 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 		localSrv = &http.Server{
 			Addr:              localAddr,
 			Handler:           handler,
-			ReadHeaderTimeout: defaultRequestTimeout,
-			IdleTimeout:       defaultIdleTimeout,
+			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
+			IdleTimeout:       defaultHTTPIdleTimeout,
 		}
 	}
 

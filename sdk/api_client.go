@@ -11,23 +11,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
-	defaultDialTimeout         = 15 * time.Second
-	defaultRequestTimeout      = 30 * time.Second
-	defaultHandshakeTimeout    = 30 * time.Second
-	defaultLeaseTTL            = 2 * time.Minute
-	defaultRenewBefore         = 30 * time.Second
-	defaultReadyTarget         = 2
-	defaultRetryWait           = 3 * time.Second
-	defaultHTTPShutdownTimeout = 5 * time.Second
-	defaultIdleTimeout         = 90 * time.Second
+	defaultAPIBootstrapTimeout = 45 * time.Second
+	defaultAPIRequestTimeout   = 30 * time.Second
 )
 
 var errRelayIncompatible = errors.New("relay is incompatible")
@@ -64,10 +55,10 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 	}
 	c.mu.RUnlock()
 
-	bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
+	bootstrapCtx, cancel := context.WithTimeout(ctx, defaultAPIBootstrapTimeout)
 	defer cancel()
 
-	tlsConfig, httpClient, httpTransport, err := utils.NewHTTPTLSClient(bootstrapCtx, c.relayURL, defaultRequestTimeout)
+	tlsConfig, httpClient, httpTransport, err := utils.NewHTTPTLSClient(bootstrapCtx, c.relayURL, defaultAPIRequestTimeout)
 	if err != nil {
 		return err
 	}
@@ -130,6 +121,10 @@ func (c *apiClient) relayReleaseVersion() string {
 // register only performs the challenge and registration wire exchange.
 // The caller prepares ECH feature inputs beforehand.
 func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterResponse, error) {
+	if err := c.initHTTPTransport(ctx); err != nil {
+		return types.RegisterResponse{}, err
+	}
+
 	var challenge types.RegisterChallengeResponse
 	if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge); err != nil {
 		return types.RegisterResponse{}, err
@@ -195,26 +190,6 @@ func (c *apiClient) requestReverseEndpoint(ctx context.Context, accessToken, fai
 		return types.ReverseEndpoint{}, err
 	}
 	return endpoint, nil
-}
-
-func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoint) error {
-	if !l.overlay {
-		if endpoint.Overlay {
-			return errors.New("relay returned an overlay reverse endpoint but overlay is disabled")
-		}
-		if l.isAlternateReverseEndpoint(endpoint.URL) {
-			return fmt.Errorf("relay reverse endpoint %s does not match the relay URL; align the relay's PORTAL_URL with the address clients dial", endpoint.URL)
-		}
-		return nil
-	}
-	if !endpoint.Overlay && !l.isAlternateReverseEndpoint(endpoint.URL) {
-		l.warnOverlayDirect.Do(func() {
-			log.Warn().
-				Str("relay_url", l.relayURL.String()).
-				Msg("overlay requested but the relay serves a direct reverse endpoint; continuing without overlay forwarding")
-		})
-	}
-	return nil
 }
 
 func validateReverseEndpoint(endpoint types.ReverseEndpoint, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {

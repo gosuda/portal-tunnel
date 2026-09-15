@@ -1087,7 +1087,7 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 		return
 	}
 
-	relayURL := listener.relayURL.String()
+	relayURL := listener.api.relayURL.String()
 	var workers sync.WaitGroup
 	defer workers.Wait()
 	statusUpdates := listener.statusUpdates

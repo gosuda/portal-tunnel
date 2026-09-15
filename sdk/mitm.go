@@ -78,7 +78,7 @@ func (m *mitmManager) reset() {
 
 func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport, error) {
 	l := m.listener
-	if l == nil || l.relayURL == nil {
+	if l == nil || l.api == nil || l.api.relayURL == nil {
 		return mitmProbeReport{}, errors.New("listener is not ready")
 	}
 
@@ -96,7 +96,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	}
 
 	report := mitmProbeReport{
-		RelayURL:  l.relayURL.String(),
+		RelayURL:  l.api.relayURL.String(),
 		PublicURL: publicURL,
 		Address:   l.identity.Address,
 	}
@@ -181,7 +181,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 
 func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	l := m.listener
-	if l == nil || l.relayURL == nil {
+	if l == nil || l.api == nil || l.api.relayURL == nil {
 		return "", errors.New("listener is not ready")
 	}
 	parsedURL, err := url.Parse(publicURL)
@@ -190,7 +190,7 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	}
 
 	dialHost := parsedURL.Host
-	entryRelayURL, err := url.Parse(l.relayURL.String())
+	entryRelayURL, err := url.Parse(l.api.relayURL.String())
 	if err != nil {
 		return "", fmt.Errorf("parse ingress relay url: %w", err)
 	}
@@ -241,8 +241,8 @@ func (m *mitmManager) logResult(report mitmProbeReport, err error) {
 	default:
 	}
 	relayURL := ""
-	if l.relayURL != nil {
-		relayURL = l.relayURL.String()
+	if l.api != nil && l.api.relayURL != nil {
+		relayURL = l.api.relayURL.String()
 	}
 	switch {
 	case closed:
