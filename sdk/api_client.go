@@ -122,20 +122,12 @@ func (l *listener) relayTLSConfigClone() *tls.Config {
 	return l.tlsConfig.Clone()
 }
 
-func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnabled, tcpEnabled bool) (types.RegisterResponse, string, keyless.ECHMaterials, error) {
-	rootHostname := utils.PortalRootHost(l.relayURL.String())
-	publicHostname, err := utils.LeaseHostname(l.identity.Name, rootHostname)
-	if err != nil {
-		return types.RegisterResponse{}, "", keyless.ECHMaterials{}, err
-	}
-	var materials keyless.ECHMaterials
-	if l.echEnabled {
-		materials, err = keyless.TenantECHMaterials(l.identity, publicHostname, rootHostname)
-		if err != nil {
-			return types.RegisterResponse{}, "", keyless.ECHMaterials{}, err
-		}
-	}
-
+// registerLease performs the transport-level lease registration calls
+// (challenge, sign, register) and returns the granted lease. The tenant
+// hostname and ECH material are feature inputs prepared by the caller
+// before this transport path runs; registerLease only forwards them onto
+// the registration request.
+func (l *listener) registerLease(ctx context.Context, publicHostname string, materials keyless.ECHMaterials, ttl time.Duration, udpEnabled, tcpEnabled bool) (types.RegisterResponse, error) {
 	registerReq := types.RegisterChallengeRequest{
 		Identity:   l.identity,
 		Metadata:   l.metadataSnapshot(),
@@ -152,13 +144,13 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 
 	var challenge types.RegisterChallengeResponse
 	if err := utils.HTTPDoAPIPath(ctx, l.relayHTTPClient(), l.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge); err != nil {
-		return types.RegisterResponse{}, "", keyless.ECHMaterials{}, err
+		return types.RegisterResponse{}, err
 	}
 
 	authority := identity.NewLocalAuthority(l.identity)
 	signature, err := authority.SignEthereumPersonalMessage(challenge.SIWEMessage)
 	if err != nil {
-		return types.RegisterResponse{}, "", keyless.ECHMaterials{}, err
+		return types.RegisterResponse{}, err
 	}
 
 	var resp types.RegisterResponse
@@ -168,23 +160,23 @@ func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnab
 		SIWESignature: signature,
 		ReportedIP:    utils.ResolvePublicIP(ctx),
 	}, nil, &resp); err != nil {
-		return types.RegisterResponse{}, "", keyless.ECHMaterials{}, err
+		return types.RegisterResponse{}, err
 	}
 	if resp.Identity.Key() != l.identity.Key() {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		return types.RegisterResponse{}, "", keyless.ECHMaterials{}, errors.New("relay returned mismatched lease identity")
+		return types.RegisterResponse{}, errors.New("relay returned mismatched lease identity")
 	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
 	if err != nil {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		return types.RegisterResponse{}, "", keyless.ECHMaterials{}, err
+		return types.RegisterResponse{}, err
 	}
 	if err := l.validateReverseEndpointTransport(reverseEndpoint); err != nil {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		return types.RegisterResponse{}, "", keyless.ECHMaterials{}, err
+		return types.RegisterResponse{}, err
 	}
 	resp.ReverseEndpoint = reverseEndpoint
-	return resp, publicHostname, materials, nil
+	return resp, nil
 }
 
 func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, accessToken string) (types.RenewResponse, error) {

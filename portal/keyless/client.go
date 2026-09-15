@@ -17,40 +17,72 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func BuildClientTLSConfig(relayURL, hostname string, echKeys []tls.EncryptedClientHelloKey, headers func() http.Header) (*tls.Config, ioCloser, error) {
-	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
+// Client owns the complete client-side tenant TLS resource for one relay
+// lease: the relay keyless certificate material it resolves and pins, the
+// remote signer backing that certificate, and the tenant TLS configuration
+// (including any ECH keys) built from them. TLSConfig stays usable for as
+// long as the Client is open; Close releases the signer and everything the
+// config needs to keep serving handshakes, and is safe to call more than
+// once. Callers decide when a Client is created, replaced, and closed; the
+// Client keeps the signer and TLS lifetimes from diverging.
+type Client struct {
+	closeOnce sync.Once
+	closer    io.Closer
+	tlsConf   *tls.Config
+}
+
+// ClientConfig describes one tenant TLS resource. RelayURL is the relay API
+// endpoint whose certificate chain is pinned for keyless signing, Hostname
+// is the tenant hostname that certificate must cover, ECH carries the
+// prepared tenant ECH material (its keys configure the TLS path), and
+// Headers supplies the auth headers attached to signer requests without
+// keyless learning what they authorize.
+type ClientConfig struct {
+	RelayURL string
+	Hostname string
+	ECH      ECHMaterials
+	Headers  func() http.Header
+}
+
+// NewClient resolves and verifies the keyless material for cfg and returns
+// the owning Client. On failure every partially created resource is closed
+// before returning, so a nil Client never leaks.
+func NewClient(cfg ClientConfig) (*Client, error) {
+	normalizedRelayURL, err := utils.NormalizeRelayURL(cfg.RelayURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	parsed, err := url.Parse(normalizedRelayURL)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse relay url: %w", err)
+		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
 	serverName := parsed.Hostname()
 	if serverName == "" {
-		return nil, nil, errors.New("relay hostname is required")
+		return nil, errors.New("relay hostname is required")
 	}
 
 	certPEM, rootCAPEM, err := ResolveMaterials(context.Background(), normalizedRelayURL, serverName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
+		return nil, fmt.Errorf("prepare keyless materials: %w", err)
 	}
-	hostname = strings.TrimSpace(hostname)
+	hostname := strings.TrimSpace(cfg.Hostname)
 	if hostname == "" {
-		return nil, nil, errors.New("keyless hostname is required")
+		return nil, errors.New("keyless hostname is required")
 	}
 	if verifyErr := VerifyCertificateHostname(certPEM, hostname); verifyErr != nil {
-		return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", hostname, verifyErr)
+		return nil, fmt.Errorf("keyless certificate does not cover %s: %w", hostname, verifyErr)
 	}
 
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
@@ -58,33 +90,45 @@ func BuildClientTLSConfig(relayURL, hostname string, echKeys []tls.EncryptedClie
 		ServerName: serverName,
 		KeyID:      RelayKeyID,
 		RootCAPEM:  rootCAPEM,
-		Headers:    headers,
+		Headers:    cfg.Headers,
 	}, certPEM)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create keyless remote signer: %w", err)
+		return nil, fmt.Errorf("create keyless remote signer: %w", err)
 	}
 
 	if err := verifyRemoteSigner(remoteSigner); err != nil {
 		_ = remoteSigner.Close()
-		return nil, nil, fmt.Errorf("keyless signer self-test against %s failed: %w", serverName, err)
+		return nil, fmt.Errorf("keyless signer self-test against %s failed: %w", serverName, err)
 	}
 
 	tlsConfig, err := keylesstls.NewServerTLSConfig(keylesstls.ServerTLSConfig{
 		CertPEM:                  certPEM,
 		Signer:                   remoteSigner,
 		NextProtos:               []string{"http/1.1"},
-		MinVersion:               MinTLSVersion(len(echKeys) > 0),
-		EncryptedClientHelloKeys: echKeys,
+		MinVersion:               MinTLSVersion(len(cfg.ECH.Keys) > 0),
+		EncryptedClientHelloKeys: cfg.ECH.Keys,
 	})
 	if err != nil {
 		_ = remoteSigner.Close()
-		return nil, nil, fmt.Errorf("create keyless tls config: %w", err)
+		return nil, fmt.Errorf("create keyless tls config: %w", err)
 	}
-	return tlsConfig, remoteSigner, nil
+	return &Client{closer: remoteSigner, tlsConf: tlsConfig}, nil
 }
 
-type ioCloser interface {
-	Close() error
+// TLSConfig returns the tenant TLS configuration owned by the client. The
+// configuration must only be used while the Client remains open.
+func (c *Client) TLSConfig() *tls.Config { return c.tlsConf }
+
+// Close releases the remote signer backing the TLS configuration. It is
+// safe to call more than once; later calls return the first close result.
+func (c *Client) Close() error {
+	var err error
+	c.closeOnce.Do(func() {
+		if c.closer != nil {
+			err = c.closer.Close()
+		}
+	})
+	return err
 }
 
 func ResolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte, []byte, error) {

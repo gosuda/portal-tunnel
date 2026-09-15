@@ -308,8 +308,8 @@ func (l *listener) run(ctx context.Context) {
 
 		if errors.Is(err, errLeaseRefreshRequired) {
 			lease := l.clearLease("lease refresh required")
-			if lease != nil && lease.tlsCloser != nil {
-				_ = lease.tlsCloser.Close()
+			if lease != nil && lease.tenantTLS != nil {
+				_ = lease.tenantTLS.Close()
 			}
 			l.resetTransport()
 			relayURL := l.relayURL.String()
@@ -364,8 +364,8 @@ func (l *listener) Close() error {
 			closeErr = errors.Join(closeErr, l.unregisterLease(ctx, lease.accessToken))
 			cancel()
 		}
-		if lease != nil && lease.tlsCloser != nil {
-			closeErr = errors.Join(closeErr, lease.tlsCloser.Close())
+		if lease != nil && lease.tenantTLS != nil {
+			closeErr = errors.Join(closeErr, lease.tenantTLS.Close())
 		}
 		l.resetTransport()
 	})
@@ -382,8 +382,7 @@ type listenerSnapshot struct {
 	expiresAt     time.Time
 	publicPort    int
 	publicURLBase *url.URL
-	tlsConfig     *tls.Config
-	tlsCloser     io.Closer
+	tenantTLS     *keyless.Client
 }
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
@@ -391,9 +390,6 @@ func (s listenerSnapshot) snapshot() listenerSnapshot {
 	if s.publicURLBase != nil {
 		publicURLBase := *s.publicURLBase
 		s.publicURLBase = &publicURLBase
-	}
-	if s.tlsConfig != nil {
-		s.tlsConfig = s.tlsConfig.Clone()
 	}
 	return s
 }
@@ -410,7 +406,7 @@ func (l *listener) clearLease(reason string) *listenerSnapshot {
 	if l.datagram != nil && reason != "" {
 		l.datagram.Clear(reason)
 	}
-	if lease.accessToken == "" && lease.tlsCloser == nil {
+	if lease.accessToken == "" && lease.tenantTLS == nil {
 		return nil
 	}
 	return &lease
@@ -533,7 +529,7 @@ func (l *listener) runLease(ctx context.Context) error {
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				if err := l.runReverseSessionLoop(leaseCtx, lease.tlsConfig, sessionSlot); err != nil {
+				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS.TLSConfig(), sessionSlot); err != nil {
 					select {
 					case errCh <- err:
 					case <-leaseCtx.Done():
@@ -979,7 +975,19 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 	}
 
-	resp, publicHostname, materials, err := l.registerLease(ctx, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
+	rootHostname := utils.PortalRootHost(l.relayURL.String())
+	publicHostname, err := utils.LeaseHostname(l.identity.Name, rootHostname)
+	if err != nil {
+		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+	}
+	var materials keyless.ECHMaterials
+	if l.echEnabled {
+		materials, err = keyless.TenantECHMaterials(l.identity, publicHostname, rootHostname)
+		if err != nil {
+			return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
+		}
+	}
+	resp, err := l.registerLease(ctx, publicHostname, materials, l.leaseTTL, l.udpEnabled, l.tcpEnabled)
 	if err != nil {
 		return &relayRegistrationError{relayURL: l.relayURL.String(), err: err}
 	}
@@ -999,28 +1007,28 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return errors.New("relay did not return public port for udp transport")
 	}
 
-	tlsConf, tenantTLSCloser, err := keyless.BuildClientTLSConfig(l.relayURL.String(), publicHostname, materials.Keys, func() http.Header {
-		headers := http.Header{}
-		accessToken := resp.AccessToken
-		if snapshot, ok := l.leaseSnapshot(); ok && snapshot.accessToken != "" {
-			accessToken = snapshot.accessToken
-		}
-		headers.Set(types.HeaderAccessToken, accessToken)
-		return headers
+	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
+		RelayURL: l.relayURL.String(),
+		Hostname: publicHostname,
+		ECH:      materials,
+		Headers: func() http.Header {
+			headers := http.Header{}
+			accessToken := resp.AccessToken
+			if snapshot, ok := l.leaseSnapshot(); ok && snapshot.accessToken != "" {
+				accessToken = snapshot.accessToken
+			}
+			headers.Set(types.HeaderAccessToken, accessToken)
+			return headers
+		},
 	})
 	if err != nil {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		if tenantTLSCloser != nil {
-			_ = tenantTLSCloser.Close()
-		}
 		return err
 	}
 
 	if ctx.Err() != nil {
 		_ = l.unregisterLease(context.Background(), resp.AccessToken)
-		if tenantTLSCloser != nil {
-			_ = tenantTLSCloser.Close()
-		}
+		_ = tenantTLS.Close()
 		return ctx.Err()
 	}
 	next := listenerSnapshot{
@@ -1033,12 +1041,11 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		expiresAt:     resp.ExpiresAt,
 		publicPort:    resp.SNIPort,
 		publicURLBase: l.relayURL,
-		tlsConfig:     tlsConf,
-		tlsCloser:     tenantTLSCloser,
+		tenantTLS:     tenantTLS,
 	}
 	oldLease := l.lease.Swap(next)
-	if oldLease.tlsCloser != nil {
-		_ = oldLease.tlsCloser.Close()
+	if oldLease.tenantTLS != nil {
+		_ = oldLease.tenantTLS.Close()
 	}
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")

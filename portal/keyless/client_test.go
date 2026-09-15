@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"errors"
 	"io"
 	"strings"
@@ -159,4 +160,40 @@ func (s failingSigner) Public() crypto.PublicKey { return s.public }
 
 func (s failingSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
 	return nil, errors.New("sign endpoint unavailable")
+}
+
+func TestClientTLSConfigAndCloseOwnership(t *testing.T) {
+	t.Parallel()
+	closer := &countingCloser{}
+	conf := &tls.Config{MinVersion: tls.VersionTLS12}
+	client := &Client{closer: closer, tlsConf: conf}
+	if client.TLSConfig() != conf {
+		t.Fatal("TLSConfig() must return the owned config unchanged")
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if closer.closed != 1 {
+		t.Fatalf("underlying resource closed %d times, want exactly 1", closer.closed)
+	}
+}
+
+func TestClientCloseWithoutResource(t *testing.T) {
+	t.Parallel()
+	client := &Client{}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() without resource error = %v", err)
+	}
+}
+
+type countingCloser struct {
+	closed int
+}
+
+func (c *countingCloser) Close() error {
+	c.closed++
+	return nil
 }
