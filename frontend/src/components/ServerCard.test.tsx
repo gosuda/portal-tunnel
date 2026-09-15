@@ -1,29 +1,34 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
 import type { Mock } from "vitest";
 import { describe, expect, it, vi } from "vitest";
 import { ServerCard } from "./ServerCard";
+import type { BaseServer } from "@/hooks/useList";
 
 const TCP = "minecraft.relay.example.com:50000";
 const UDP = "minecraft.relay.example.com:50001";
 
-function renderCard(props: { tcpAddr?: string; udpAddr?: string }) {
+function makeServer(overrides: Partial<BaseServer> = {}): BaseServer {
+  return {
+    id: "srv-1",
+    name: "minecraft",
+    description: "",
+    tags: [],
+    thumbnail: "",
+    owner: "",
+    online: true,
+    dns: "minecraft.relay.example.com",
+    link: "https://minecraft.relay.example.com/",
+    ...overrides,
+  };
+}
+
+function renderCard(overrides: Partial<BaseServer> = {}) {
   return render(
-    <MemoryRouter>
-      <ServerCard
-        serverId="srv-1"
-        name="minecraft"
-        description=""
-        tags={[]}
-        thumbnail=""
-        owner=""
-        online
-        dns="minecraft.relay.example.com"
-        navigationPath="/server/srv-1"
-        navigationState={null}
-        {...props}
-      />
-    </MemoryRouter>
+    <ServerCard
+      server={makeServer(overrides)}
+      isFavorite={false}
+      onToggleFavorite={vi.fn()}
+    />,
   );
 }
 
@@ -51,7 +56,7 @@ describe("ServerCard raw transport endpoints", () => {
   it("copies each endpoint from its own control", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     stubClipboard(writeText);
-    renderCard({ tcpAddr: TCP, udpAddr: UDP });
+    renderCard({ tcpAddr: TCP, udpAddr: UDP, link: "" });
 
     await clickCopy(UDP);
     expect(writeText).toHaveBeenCalledWith(UDP);
@@ -62,7 +67,7 @@ describe("ServerCard raw transport endpoints", () => {
 
   it("confirms only the endpoint that was copied", async () => {
     stubClipboard(vi.fn().mockResolvedValue(undefined));
-    renderCard({ tcpAddr: TCP, udpAddr: UDP });
+    renderCard({ tcpAddr: TCP, udpAddr: UDP, link: "" });
 
     await clickCopy(UDP);
 
@@ -72,7 +77,7 @@ describe("ServerCard raw transport endpoints", () => {
 
   it("does not claim success when the clipboard rejects", async () => {
     stubClipboard(vi.fn().mockRejectedValue(new Error("denied")));
-    renderCard({ tcpAddr: TCP });
+    renderCard({ tcpAddr: TCP, link: "" });
 
     await clickCopy(TCP);
 
@@ -80,7 +85,7 @@ describe("ServerCard raw transport endpoints", () => {
   });
 
   it("keeps a plain service navigable instead of copyable", () => {
-    renderCard({});
+    renderCard();
 
     expect(screen.queryByRole("button", { name: /^Copy / })).toBeNull();
     expect(screen.getByRole("link")).toBeTruthy();
@@ -90,7 +95,7 @@ describe("ServerCard raw transport endpoints", () => {
   // could reach. Wrapping these buttons back in a <Link> would nest
   // interactive content instead, so pin both halves: reachable, not nested.
   it("keeps every copy control keyboard reachable and outside a link", () => {
-    renderCard({ tcpAddr: TCP, udpAddr: UDP });
+    renderCard({ tcpAddr: TCP, udpAddr: UDP, link: "" });
 
     for (const address of [TCP, UDP]) {
       const button = copyButton(address);
@@ -98,5 +103,28 @@ describe("ServerCard raw transport endpoints", () => {
       expect(document.activeElement).toBe(button);
       expect(button.closest("a")).toBeNull();
     }
+  });
+});
+
+describe("ServerCard payment badge", () => {
+  // payment_enabled is the explicit capability flag; a leftover label alone
+  // must not re-enable the badge or disagree with the page-level paid count.
+  it("shows the badge for paymentEnabled with the default label fallback", () => {
+    renderCard({ paymentEnabled: true });
+
+    expect(screen.getByText("Paid app")).toBeTruthy();
+  });
+
+  it("shows the declared label when payment is enabled", () => {
+    renderCard({ paymentEnabled: true, paymentLabel: "x402 USDC" });
+
+    expect(screen.getByText("x402 USDC")).toBeTruthy();
+  });
+
+  it("does not show a badge from a payment label without paymentEnabled", () => {
+    renderCard({ paymentEnabled: false, paymentLabel: "x402 USDC" });
+
+    expect(screen.queryByText("x402 USDC")).toBeNull();
+    expect(screen.queryByText("Paid app")).toBeNull();
   });
 });

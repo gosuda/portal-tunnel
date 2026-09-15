@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useList, type BaseServer } from "@/hooks/useList";
 import { apiClient } from "@/lib/apiClient";
-import { BROWSER_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import {
   parseLeaseMetadata,
-  resolveLeasePayment,
   resolveLeaseThumbnail,
 } from "@/lib/metadata";
 import type { Lease, PublicStateResponse } from "@/types/api";
@@ -17,7 +16,6 @@ type PublicState = {
 function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
   return leases.map((row) => {
     const metadata = parseLeaseMetadata(row.metadata);
-    const payment = resolveLeasePayment(metadata);
     const hostname = row.hostname || "";
     const serviceName = row.name || "";
     const tcpAddr = row.tcp_addr?.trim() || "";
@@ -37,8 +35,8 @@ function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
       udpAddr: udpAddr || undefined,
       lastUpdated: row.last_seen_at || undefined,
       firstSeen: row.first_seen_at || undefined,
-      paymentEnabled: payment.enabled,
-      paymentLabel: payment.label,
+      paymentEnabled: metadata.paymentEnabled,
+      paymentLabel: metadata.paymentLabel,
     };
   });
 }
@@ -51,29 +49,38 @@ export function useServerList() {
 
   useEffect(() => {
     let cancelled = false;
+    let timer: number | undefined;
 
-    void (async () => {
+    // Serialize polls: the next request is scheduled only after the previous
+    // one settles, so a slow response can never arrive after a newer one and
+    // overwrite fresh state, and requests cannot accumulate under latency.
+    const poll = async () => {
       try {
         const data = await apiClient.get<PublicStateResponse>(
-          BROWSER_API_PATHS.public.state
+          RELAY_API_PATHS.public.state
         );
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          setPublicState({
+            leases: Array.isArray(data?.leases) ? data.leases : [],
+            landingPageEnabled: data?.landing_page_enabled ?? false,
+          });
         }
-        setPublicState({
-          leases: Array.isArray(data?.leases) ? data.leases : [],
-          landingPageEnabled: data?.landing_page_enabled ?? false,
-        });
       } catch (error) {
         console.error("Failed to load public relay state", error);
+      } finally {
         if (!cancelled) {
-          setPublicState({ leases: [], landingPageEnabled: false });
+          timer = window.setTimeout(() => {
+            void poll();
+          }, 1500);
         }
       }
-    })();
+    };
+
+    void poll();
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, []);
 
@@ -89,6 +96,7 @@ export function useServerList() {
 
   return {
     ...list,
+    leases: publicState.leases,
     landingPageEnabled: publicState.landingPageEnabled,
   };
 }

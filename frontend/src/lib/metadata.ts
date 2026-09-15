@@ -3,11 +3,8 @@ interface Metadata {
   tags: string[];
   thumbnail: string;
   owner: string;
-}
-
-export interface PaymentDisplay {
-  enabled: boolean;
-  label: string;
+  paymentEnabled: boolean;
+  paymentLabel: string;
 }
 
 const EMPTY_METADATA: Metadata = {
@@ -15,6 +12,8 @@ const EMPTY_METADATA: Metadata = {
   tags: [],
   thumbnail: "",
   owner: "",
+  paymentEnabled: false,
+  paymentLabel: "",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -31,6 +30,9 @@ function metadataFromRecord(value: Record<string, unknown>): Metadata {
       : [],
     thumbnail: typeof value.thumbnail === "string" ? value.thumbnail : "",
     owner: typeof value.owner === "string" ? value.owner : "",
+    paymentEnabled: value.payment_enabled === true,
+    paymentLabel:
+      typeof value.payment_label === "string" ? value.payment_label.trim() : "",
   };
 }
 
@@ -61,34 +63,4 @@ export function parseLeaseMetadata(metadataValue: unknown): Metadata {
 
 export function resolveLeaseThumbnail(metadata: Metadata): string {
   return metadata.thumbnail.trim();
-}
-
-export function resolveLeasePayment(metadata: Metadata): PaymentDisplay {
-  const normalizedTags = new Set(
-    metadata.tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean)
-  );
-  const description = metadata.description.toLowerCase();
-  const enabled =
-    normalizedTags.has("x402") ||
-    normalizedTags.has("payment") ||
-    normalizedTags.has("paid") ||
-    normalizedTags.has("usdc") ||
-    /\bx402\b|\bpaid\b|\bpayment\b|\busdc\b/.test(description);
-
-  if (!enabled) {
-    return { enabled: false, label: "" };
-  }
-
-  const labelParts: string[] = [];
-  if (normalizedTags.has("x402") || description.includes("x402")) {
-    labelParts.push("x402");
-  }
-  if (normalizedTags.has("usdc") || description.includes("usdc")) {
-    labelParts.push("USDC");
-  }
-
-  return {
-    enabled: true,
-    label: labelParts.length > 0 ? labelParts.join(" ") : "Paid app",
-  };
 }

@@ -1,4 +1,5 @@
 import { TunnelCommandForm } from "@/components/TunnelCommandForm";
+import type { Lease } from "@/types/api";
 
 const coreFeatures = [
   {
@@ -38,8 +39,7 @@ const coreFeatures = [
       "Carry HTTPS, raw TCP, and UDP workloads without SSH or WebSocket overlays.",
   },
 ] as const;
-
-export function LandingHero() {
+export function LandingHero({ leases }: { leases: Lease[] }) {
   return (
     <section
       aria-labelledby="landing-title"
@@ -107,7 +107,7 @@ export function LandingHero() {
                 </h2>
               </div>
             </div>
-            <TunnelCommandForm theme="terminal" mode="hero" />
+            <TunnelCommandForm theme="terminal" mode="hero" leases={leases} />
           </div>
         </div>
       </div>

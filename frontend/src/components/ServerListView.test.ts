@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   mergeIncompatibleRelays,
-  relayReleaseLabel,
+  buildKnownRelays,
 } from "./ServerListView";
 
 const CURRENT = "https://relay-current.example";
 
 describe("mergeIncompatibleRelays", () => {
   it("returns the known list unchanged without incompatible entries", () => {
-    const known = [{ relayURL: CURRENT, isCurrent: true }];
+    const known = [{ relayURL: CURRENT, isCurrent: true, compatible: true }];
     expect(mergeIncompatibleRelays(known, undefined, CURRENT)).toBe(known);
   });
 
   it("appends incompatible relay URLs and preserves the observed protocol version", () => {
-    const known = [{ relayURL: CURRENT, isCurrent: true }];
+    const known = [{ relayURL: CURRENT, isCurrent: true, compatible: true }];
     expect(
       mergeIncompatibleRelays(
         known,
@@ -21,17 +21,18 @@ describe("mergeIncompatibleRelays", () => {
         CURRENT
       )
     ).toEqual([
-      { relayURL: CURRENT, isCurrent: true },
+      { relayURL: CURRENT, isCurrent: true, compatible: true },
       {
         relayURL: "https://relay-old.example",
         isCurrent: false,
+        compatible: false,
         protocolVersion: "8",
       },
     ]);
   });
 
   it("skips entries already known and blank URLs", () => {
-    const known = [{ relayURL: CURRENT, isCurrent: true }];
+    const known = [{ relayURL: CURRENT, isCurrent: true, compatible: true }];
     expect(
       mergeIncompatibleRelays(
         known,
@@ -42,35 +43,44 @@ describe("mergeIncompatibleRelays", () => {
   });
 });
 
-describe("relayReleaseLabel", () => {
-  const oldRelay = {
-    relayURL: "https://relay-old.example",
-    isCurrent: false,
-    protocolVersion: "8",
-  };
+describe("buildKnownRelays", () => {
+  it("marks compatible relays and carries version from discovery", () => {
+    const discovery = {
+      relays: [
+        { api_https_addr: CURRENT, version: "9" },
+        { api_https_addr: "https://relay-other.example", version: "9" },
+      ],
+    };
+    const relays = buildKnownRelays(discovery, CURRENT);
+    expect(relays).toEqual([
+      {
+        relayURL: CURRENT,
+        isCurrent: true,
+        compatible: true,
+        protocolVersion: "9",
+      },
+      {
+        relayURL: "https://relay-other.example",
+        isCurrent: false,
+        compatible: true,
+        protocolVersion: "9",
+      },
+    ]);
+  });
 
-  it("shows loading while the release probe is pending", () => {
-    expect(relayReleaseLabel({}, oldRelay)).toBe("loading...");
-    expect(relayReleaseLabel({ [oldRelay.relayURL]: null }, oldRelay)).toBe(
-      "loading..."
+  it("keeps incompatible relays visible with their observed protocol version", () => {
+    const discovery = {
+      relays: [{ api_https_addr: CURRENT, version: "9" }],
+      incompatible_relays: [
+        { url: "https://relay-old.example", protocol_version: "8" },
+      ],
+    };
+    const relays = buildKnownRelays(discovery, CURRENT);
+    const incompatible = relays.find(
+      (r) => r.relayURL === "https://relay-old.example"
     );
-  });
-
-  it("falls back to the observed discovery protocol when the probe fails", () => {
-    expect(
-      relayReleaseLabel({ [oldRelay.relayURL]: "" }, oldRelay)
-    ).toBe("discovery 8");
-  });
-
-  it("still reports offline without a protocol version", () => {
-    expect(
-      relayReleaseLabel({ [oldRelay.relayURL]: "" }, { ...oldRelay, protocolVersion: undefined })
-    ).toBe("offline");
-  });
-
-  it("prefers the probed release version when available", () => {
-    expect(
-      relayReleaseLabel({ [oldRelay.relayURL]: "v2.3.8" }, oldRelay)
-    ).toBe("v2.3.8");
+    expect(incompatible).toBeDefined();
+    expect(incompatible?.compatible).toBe(false);
+    expect(incompatible?.protocolVersion).toBe("8");
   });
 });

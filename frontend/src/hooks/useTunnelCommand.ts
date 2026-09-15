@@ -6,7 +6,6 @@ import {
 import { classifyShareInput } from "@/lib/shareLink";
 import {
   buildTunnelCommand,
-  buildTunnelDisplayCommand,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 
@@ -119,13 +118,9 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
     () => buildTunnelCommand(commandOptions),
     [commandOptions]
   );
-  const displayCommand = useMemo(
-    () => buildTunnelDisplayCommand(commandOptions),
-    [commandOptions]
-  );
   const { installBlock, runBlock } = useMemo(
     () => {
-      const lines = displayCommand.split("\n");
+      const lines = copyCommand.split("\n");
       const installLineCount = os === "windows" ? 2 : 1;
 
       return {
@@ -133,7 +128,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
         runBlock: lines.slice(installLineCount).join("\n"),
       };
     },
-    [displayCommand, os]
+    [copyCommand, os]
   );
 
   useEffect(() => {

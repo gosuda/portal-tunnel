@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useList, type BaseServer } from "@/hooks/useList";
 import type { BanFilter } from "@/types/filters";
-import { BROWSER_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
 import {
   parseLeaseMetadata,
-  resolveLeasePayment,
   resolveLeaseThumbnail,
 } from "@/lib/metadata";
 import type {
@@ -91,7 +90,6 @@ function toAdminServer(
   row: PolicyLease,
 ): AdminServer {
   const metadata = parseLeaseMetadata(row.metadata);
-  const payment = resolveLeasePayment(metadata);
   const hostname = row.hostname || "";
   const serviceName = row.name || "";
   const address = row.address.trim();
@@ -108,8 +106,8 @@ function toAdminServer(
     link: hostname ? `https://${hostname}/` : "",
     lastUpdated: row.last_seen_at || undefined,
     firstSeen: row.first_seen_at || undefined,
-    paymentEnabled: payment.enabled,
-    paymentLabel: payment.label,
+    paymentEnabled: metadata.paymentEnabled,
+    paymentLabel: metadata.paymentLabel,
     identityKey: row.identity_key.trim(),
     address,
     isBanned: row.is_banned,
@@ -148,7 +146,7 @@ interface PolicyViewState {
 }
 
 async function loadPolicyState(): Promise<PolicyViewState> {
-  const state = await apiClient.get<PolicyStateResponse>(BROWSER_API_PATHS.policy.state);
+  const state = await apiClient.get<PolicyStateResponse>(RELAY_API_PATHS.policy.state);
   const normalizedLeases = Array.isArray(state?.leases) ? state.leases : [];
 
   return {
@@ -252,7 +250,7 @@ export function useAdmin(enabled = true) {
   };
 
   const postPolicySettings = async (settings: PolicySettings) => {
-    const response = await apiClient.post<PolicySettings>(BROWSER_API_PATHS.policy.root, settings);
+    const response = await apiClient.post<PolicySettings>(RELAY_API_PATHS.policy.root, settings);
     setPolicySettings(normalizePolicySettings(response));
   };
 
@@ -268,7 +266,7 @@ export function useAdmin(enabled = true) {
     if (!identityKey) {
       throw new Error("Missing lease identity");
     }
-    await apiClient.post<unknown>(BROWSER_API_PATHS.policy.leases, {
+    await apiClient.post<unknown>(RELAY_API_PATHS.policy.leases, {
       identity_key: identityKey,
       ...policy,
     } satisfies LeasePolicyUpdate);
@@ -360,7 +358,7 @@ export function useAdmin(enabled = true) {
       if (!normalizedIP) {
         throw new Error("Missing IP address");
       }
-      await apiClient.post<unknown>(BROWSER_API_PATHS.policy.ips, {
+      await apiClient.post<unknown>(RELAY_API_PATHS.policy.ips, {
         ip: normalizedIP,
         is_banned: isBan,
       } satisfies IPPolicyUpdate);
@@ -382,7 +380,7 @@ export function useAdmin(enabled = true) {
             : action === "deny"
               ? { identity_key: identityKey, is_denied: true }
               : { identity_key: identityKey, is_banned: true };
-        return apiClient.post<unknown>(BROWSER_API_PATHS.policy.leases, policy);
+        return apiClient.post<unknown>(RELAY_API_PATHS.policy.leases, policy);
       })
     );
 

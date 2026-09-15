@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BROWSER_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
 import { readAdminAuthToken, writeAdminAuthToken } from "@/lib/adminAuthToken";
 import type {
@@ -38,7 +38,7 @@ async function fetchAuthState(): Promise<AuthState> {
   }
   try {
     const data = await apiClient.get<AdminAuthStatusResponse>(
-      BROWSER_API_PATHS.admin.authStatus
+      RELAY_API_PATHS.admin.authStatus
     );
     if (!data.authenticated) {
       writeAdminAuthToken("");
@@ -78,7 +78,7 @@ export function useAuth() {
     try {
       const body: AdminAuthLoginRequest = { token: trimmed };
       const data = await apiClient.post<AdminAuthLoginResponse>(
-        BROWSER_API_PATHS.admin.authLogin,
+        RELAY_API_PATHS.admin.authLogin,
         body
       );
       const accessToken = data.access_token?.trim() || "";
@@ -101,7 +101,7 @@ export function useAuth() {
 
   const logout = async () => {
     try {
-      await apiClient.post<unknown>(BROWSER_API_PATHS.admin.logout);
+      await apiClient.post<unknown>(RELAY_API_PATHS.admin.logout);
     } catch {
       // Logging out should clear local state even if the remote token is stale.
     } finally {

@@ -126,11 +126,13 @@ func validatePaymentConfig(cfg paymentConfig) error {
 
 func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 	metadata := types.LeaseMetadata{
-		Description: cfg.desc,
-		Tags:        utils.SplitCSV(cfg.tags),
-		Owner:       cfg.owner,
-		Thumbnail:   cfg.thumbnail,
-		Hide:        cfg.hide,
+		Description:    cfg.desc,
+		Tags:           utils.SplitCSV(cfg.tags),
+		Owner:          cfg.owner,
+		Thumbnail:      cfg.thumbnail,
+		Hide:           cfg.hide,
+		PaymentEnabled: true,
+		PaymentLabel:   "x402 USDC",
 	}
 	rawAddr := cfg.addr
 	addr, err := utils.NormalizeTargetAddr(cfg.addr)
