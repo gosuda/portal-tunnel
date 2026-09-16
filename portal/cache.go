@@ -107,7 +107,11 @@ func (c *staticCache) detach(record *leaseRecord) {
 		if record.ExpiresAt.Before(disconnected) {
 			disconnected = record.ExpiresAt
 		}
-		site.expiresAt = disconnected.Add(site.ttl)
+		// Disconnecting may shorten retention, never extend the last observed
+		// liveness bound (which may precede a long-lived lease's expiry).
+		if expiresAt := disconnected.Add(site.ttl); expiresAt.Before(site.expiresAt) {
+			site.expiresAt = expiresAt
+		}
 	}
 }
 

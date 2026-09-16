@@ -16,7 +16,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -133,7 +132,12 @@ func (s *Server) handleStaticCache(w http.ResponseWriter, req *http.Request) {
 		}
 	}()
 	site.dir, err = os.MkdirTemp(c.cfg.Dir, "portal-cache-")
+	var root *os.Root
 	if err == nil {
+		root, err = os.OpenRoot(site.dir)
+	}
+	if err == nil {
+		defer root.Close()
 		site.index = manifest.Index
 		site.files = make(map[string]types.StaticCacheFile, len(manifest.Files))
 		for _, file := range manifest.Files {
@@ -144,7 +148,7 @@ func (s *Server) handleStaticCache(w http.ResponseWriter, req *http.Request) {
 			}
 			// Disk filenames are content hashes, never uploaded paths. Distinct
 			// URLs may share a digest within this snapshot.
-			output, createErr := os.Create(filepath.Join(site.dir, file.SHA256))
+			output, createErr := root.Create(file.SHA256)
 			if createErr != nil {
 				err = createErr
 				break
@@ -216,7 +220,7 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 			if !found {
 				file = site.files[site.index]
 			}
-			input, err := os.Open(filepath.Join(site.dir, file.SHA256))
+			input, err := os.OpenInRoot(site.dir, file.SHA256)
 			if err == nil {
 				defer input.Close()
 				w.Header().Set("ETag", `"`+file.SHA256+`"`)

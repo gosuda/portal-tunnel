@@ -243,3 +243,33 @@ func TestStaticCacheLeaseTTLDoesNotOverrideOfflineCeiling(t *testing.T) {
 		t.Fatal("unregister resurrected an expired snapshot")
 	}
 }
+
+func TestStaticCacheUnregisterCannotExtendOfflineCeiling(t *testing.T) {
+	s := cacheTestServer(t, 32)
+	record, response, err := s.registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "idle-origin"), Cache: true, TTL: 86400}, "203.0.113.1", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := httptest.NewRecorder()
+	s.handleStaticCache(result, cacheTestUpload(t, response.AccessToken, "site"))
+	if result.Code != http.StatusOK {
+		t.Fatal(result.Body.String())
+	}
+	// A long-lived origin stops renewing, then unregisters while its snapshot
+	// is still inside the bounded offline retention window.
+	record.LastSeenAt = time.Now().Add(-defaultLeaseTTL - 10*time.Second)
+	site := s.registry.cache.entries[record.Hostname]
+	site.expiresAt = record.cacheExpiresAt()
+	ceiling := site.expiresAt
+	if _, err := s.registry.Unregister(types.UnregisterRequest{AccessToken: response.AccessToken}); err != nil {
+		t.Fatal(err)
+	}
+	if site.expiresAt.After(ceiling) {
+		t.Fatalf("unregister extended offline expiry from %s to %s", ceiling, site.expiresAt)
+	}
+	if cached := s.registry.acquireCachedSite(record.Hostname); cached == nil {
+		t.Fatal("unregister discarded a snapshot still within its offline lifetime")
+	} else {
+		s.registry.cache.release(cached)
+	}
+}

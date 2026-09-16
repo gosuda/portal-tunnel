@@ -27,6 +27,20 @@ type staticCacheSource struct {
 	ttl         time.Duration
 }
 
+func (l *listener) staticCacheHTTPClient() *http.Client {
+	client := l.api.httpClient()
+	if client == nil {
+		return nil
+	}
+	// Cache data and the lease token belong only to the configured relay.
+	// Apply the same redirect boundary to probing, upload, and invalidation.
+	cacheClient := *client
+	cacheClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &cacheClient
+}
+
 func (l *listener) runStaticCache(ctx context.Context) {
 	l.api.mu.RLock()
 	limits := l.api.cache
@@ -40,7 +54,9 @@ func (l *listener) runStaticCache(ctx context.Context) {
 			log.Warn().Err(err).Str("relay_url", l.api.relayURL.String()).Msg("static cache population skipped; origin tunnel remains available")
 			if lease, ok := l.leaseSnapshot(); ok {
 				headers := http.Header{types.HeaderAccessToken: []string{lease.accessToken}}
-				_ = utils.HTTPDoAPIPath(ctx, l.api.httpClient(), l.api.relayURL, http.MethodDelete, types.PathSDKCache, nil, headers, nil)
+				if client := l.staticCacheHTTPClient(); client != nil {
+					_ = utils.HTTPDoAPIPath(ctx, client, l.api.relayURL, http.MethodDelete, types.PathSDKCache, nil, headers, nil)
+				}
 			}
 		}
 		if !utils.SleepOrDone(ctx, 30*time.Second) {
@@ -50,7 +66,7 @@ func (l *listener) runStaticCache(ctx context.Context) {
 }
 
 func (l *listener) syncStaticCache(ctx context.Context, limits types.StaticCacheLimits) error {
-	client := l.api.httpClient()
+	client := l.staticCacheHTTPClient()
 	if client == nil {
 		return errors.New("cache API transport is unavailable")
 	}

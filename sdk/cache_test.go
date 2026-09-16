@@ -112,3 +112,40 @@ func TestStaticCacheRefreshUsesContentDigest(t *testing.T) {
 		}
 	})
 }
+
+func TestStaticCacheDoesNotFollowRedirects(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("site"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var foreignRequests atomic.Int32
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		foreignRequests.Add(1)
+		utils.WriteAPIData(w, http.StatusOK, types.StaticCacheStatus{})
+	}))
+	defer foreign.Close()
+	for _, method := range []string{http.MethodPost, http.MethodPut} {
+		t.Run(method, func(t *testing.T) {
+			relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == method {
+					http.Redirect(w, r, foreign.URL, http.StatusFound)
+					return
+				}
+				utils.WriteAPIData(w, http.StatusOK, types.StaticCacheStatus{})
+			}))
+			defer relay.Close()
+			relayURL, _ := url.Parse(relay.URL)
+			l := &listener{
+				api:   &apiClient{relayURL: relayURL, http: relay.Client()},
+				cache: &staticCacheSource{root: root, index: "index.html"},
+				lease: utils.NewSnapshot(listenerSnapshot{accessToken: "lease-token"}, listenerSnapshot.snapshot),
+			}
+			if err := l.syncStaticCache(context.Background(), types.StaticCacheLimits{MaxExposureBytes: 1024, MaxObjectSize: 512}); err == nil {
+				t.Fatal("redirect accepted as a successful cache operation")
+			}
+			if foreignRequests.Load() != 0 {
+				t.Fatal("cache request reached an endpoint other than the configured relay")
+			}
+		})
+	}
+}
