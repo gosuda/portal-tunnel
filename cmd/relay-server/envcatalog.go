@@ -1,7 +1,5 @@
 package main
 
-import "github.com/gosuda/portal-tunnel/v2/portal/acme"
-
 // The deployment .env is shared by the relay and by Docker Compose itself.
 // Checking a key against the relay's own flags alone would report the
 // Compose-level ones as unknown, so the keys owned elsewhere are catalogued
@@ -59,24 +57,4 @@ var pinnedByTopology = map[string]struct {
 }{
 	"API_PORT": {"4017", "the SNI router forwards root-host traffic to the internal API listener on this port"},
 	"SNI_PORT": {"443", "the SNI router listens on this fixed container port"},
-}
-
-// dnsProviderCredential maps each supported ACME_DNS_PROVIDER value to the
-// credential it requires. Providers whose credentials come from an ambient
-// chain (an instance role, application default credentials) map to an empty
-// list because there is nothing to require.
-//
-// Keys reuse acme's exported constants, but additions are not checked for
-// completeness automatically. Keep this credential catalog synchronized with
-// the provider construction owned by acme.NewManager.
-var dnsProviderCredential = map[string][]string{
-	// The embedded server is the default and needs no credentials: it answers
-	// from the relay itself rather than through a provider API.
-	acme.TypeEmbedded:   nil,
-	acme.TypeCloudflare: {"CLOUDFLARE_TOKEN"},
-	acme.TypeHetzner:    {"HETZNER_API_TOKEN"},
-	acme.TypeNjalla:     {"NJALLA_TOKEN"},
-	acme.TypeVultr:      {"VULTR_API_KEY"},
-	acme.TypeRoute53:    nil,
-	acme.TypeGCloud:     nil,
 }
