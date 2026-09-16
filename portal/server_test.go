@@ -382,6 +382,28 @@ func TestValidateServerConfigRequiresX402Recipient(t *testing.T) {
 	}
 }
 
+// The runtime rejects an unparseable proxy CIDR allowlist inside
+// policy.NewRuntime; validation must parse it the same way so `relay-server
+// config` cannot call a list valid that startup rejects.
+func TestValidateServerConfigRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
+	cfg := ServerConfig{
+		PortalURL:         "https://localhost:4017",
+		StateDir:          t.TempDir(),
+		TrustedProxyCIDRs: "192.0.2.0/24,not-a-cidr",
+	}
+	if _, err := ValidateServerConfig(cfg); err == nil {
+		t.Fatal("ValidateServerConfig() error = nil, want error for invalid trusted proxy CIDR")
+	}
+	cfg.TrustedProxyCIDRs = "192.0.2.0/24,2001:db8::/32"
+	if _, err := ValidateServerConfig(cfg); err != nil {
+		t.Fatalf("ValidateServerConfig() error = %v, want nil for valid CIDR list", err)
+	}
+	cfg.TrustedProxyCIDRs = ""
+	if _, err := ValidateServerConfig(cfg); err != nil {
+		t.Fatalf("ValidateServerConfig() error = %v, want nil for empty CIDR list", err)
+	}
+}
+
 func TestHTTPRedirectTargetValidation(t *testing.T) {
 	for _, target := range []string{"http://localhost:4017", "http://relay.example", "//relay.example", "https://user:pass@relay.example", "https://relay.example:0", "https://relay.example:65536", "https://relay.example:bad", "https://relay.example:", "https:///missing-host", "https://./"} {
 		t.Run(target, func(t *testing.T) {

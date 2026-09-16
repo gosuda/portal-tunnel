@@ -241,7 +241,7 @@ func editDistance(a, b string) int {
 		current[0] = i
 		for j := 1; j <= len(b); j++ {
 			cost := 1
-			if a[i-1] == b[i-1] {
+			if a[i-1] == b[j-1] {
 				cost = 0
 			}
 			current[j] = min(previous[j]+1, current[j-1]+1, previous[j-1]+cost)

@@ -162,6 +162,12 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if cfg.X402Enabled && cfg.X402PayTo == "" {
 		return ServerConfig{}, errors.New("x402 facilitator enabled without a payment recipient")
 	}
+	// The runtime parses the proxy CIDR allowlist in policy.NewRuntime before
+	// serving; validate it here so the config report and startup agree on the
+	// same parse instead of the report calling an invalid list valid.
+	if _, err := utils.ParseCIDRs(cfg.TrustedProxyCIDRs); err != nil {
+		return ServerConfig{}, fmt.Errorf("parse trusted proxy cidrs: %w", err)
+	}
 	hasPortRange := cfg.MinPort > 0 && cfg.MaxPort > 0
 	if cfg.UDPEnabled || cfg.TCPEnabled {
 		switch {

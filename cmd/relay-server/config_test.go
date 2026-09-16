@@ -160,3 +160,23 @@ func TestConfigReportSurfacesUnknownEnvFileKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestEditDistance(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"", "", 0},
+		{"", "abc", 3},
+		{"abc", "", 3},
+		{"same", "same", 0},
+		{"DISCOVRY", "DISCOVERY", 1},
+		{"DISCOVERY", "DISCOVRY", 1},
+		{"kitten", "sitting", 3},
+	}
+	for _, test := range tests {
+		if got := editDistance(test.a, test.b); got != test.want {
+			t.Fatalf("editDistance(%q, %q) = %d, want %d", test.a, test.b, got, test.want)
+		}
+	}
+}
