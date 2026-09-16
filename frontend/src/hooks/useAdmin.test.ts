@@ -211,6 +211,56 @@ describe("useAdmin", () => {
     expect(result.current.landingPageEnabled).toBe(true);
   });
 
+  it.each(["before", "during"])("ignores a stale lease refresh started %s a policy save", async (timing) => {
+    let savedPolicy = buildSettings();
+    mockGet.mockImplementation(async () => ({ leases: [], policy: savedPolicy }));
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    let finishSave!: () => void;
+    mockPost.mockImplementation(async (path, body) => {
+      if (path === RELAY_API_PATHS.policy.root) {
+        await new Promise<void>((resolve) => { finishSave = resolve; });
+        savedPolicy = body as PolicySettings;
+        return savedPolicy;
+      }
+      return {};
+    });
+    let finishLeaseRefresh!: () => void;
+    mockGet.mockImplementationOnce(async () => {
+      const oldPolicy = savedPolicy;
+      await new Promise<void>((resolve) => { finishLeaseRefresh = resolve; });
+      return { leases: [], policy: oldPolicy };
+    });
+    let saving!: Promise<void>;
+    if (timing === "during") {
+      act(() => { saving = result.current.handleApprovalModeChange("manual"); });
+    }
+    let leaseAction!: Promise<void>;
+    act(() => { leaseAction = result.current.handleBanStatus("relay:identity", true); });
+    await waitFor(() => { expect(finishLeaseRefresh).toBeTypeOf("function"); });
+    if (timing === "before") {
+      act(() => { saving = result.current.handleApprovalModeChange("manual"); });
+    }
+    await act(async () => {
+      finishSave();
+      await saving;
+    });
+    expect(result.current.approvalMode).toBe("manual");
+    await act(async () => {
+      finishLeaseRefresh();
+      await leaseAction;
+    });
+    expect(result.current.approvalMode).toBe("manual");
+
+    mockPost.mockImplementation(async (_path, body) => {
+      savedPolicy = body as PolicySettings;
+      return savedPolicy;
+    });
+    await act(async () => { await result.current.handleLandingPageEnabledChange(true); });
+    expect(savedPolicy).toEqual({ ...buildSettings("manual"), landing_page_enabled: true });
+  });
+
   it("validates missing IP in handleIPBanStatus", async () => {
     const { result } = renderHook(() => useAdmin());
     await waitForLoaded(result);

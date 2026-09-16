@@ -199,7 +199,7 @@ export function AdminServerList({
     try {
       await action();
     } catch {
-      // useAdmin owns the error shown alongside these controls.
+      // useAdmin owns the shared action error displayed by this view.
     }
   };
 
@@ -367,7 +367,6 @@ export function AdminServerList({
         </div>
       </div>
       {policySaving && <p role="status" className="text-sm text-text-muted">Saving policy...</p>}
-      {error && <p role="alert" className="w-full text-sm text-destructive">{error}</p>}
     </fieldset>
   );
 
@@ -422,6 +421,9 @@ export function AdminServerList({
               isAdmin
               onAuthChange={onAuthChange}
             />
+            {error && !showFilterModal && (
+              <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>
+            )}
             <div className="flex items-center gap-2">
               <div className="flex-1">{searchBar}</div>
             </div>
@@ -450,6 +452,7 @@ export function AdminServerList({
           <DialogHeader>
             <DialogTitle>Filters and policy</DialogTitle>
           </DialogHeader>
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
               <span className="text-sm font-medium text-text-muted">

@@ -160,23 +160,28 @@ export function useAdmin(enabled = true) {
   const [policySettings, setPolicySettings] = useState<PolicySettings>(DEFAULT_POLICY_SETTINGS);
   const [policySaving, setPolicySaving] = useState(false);
   const policyUpdateInFlight = useRef(false);
+  const stateVersion = useRef(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   const [banFilter, setBanFilter] = useState<BanFilter>("all");
 
-  const applyPolicyState = (state: PolicyViewState) => {
+  const applyPolicyState = (state: PolicyViewState, version: number) => {
+    if (version !== stateVersion.current) return;
     setServerData(state.serverData);
     setPolicySettings(state.settings);
   };
 
   const fetchData = async () => {
+    const version = ++stateVersion.current;
     setError("");
 
     try {
-      applyPolicyState(await loadPolicyState());
+      applyPolicyState(await loadPolicyState(), version);
     } catch (err: unknown) {
-      setError(toAdminErrorMessage(err, "Failed to load admin data"));
+      if (version === stateVersion.current) {
+        setError(toAdminErrorMessage(err, "Failed to load admin data"));
+      }
     }
   };
 
@@ -191,6 +196,7 @@ export function useAdmin(enabled = true) {
     }
 
     const loadInitialData = async () => {
+      const version = ++stateVersion.current;
       setError("");
       setLoading(true);
       try {
@@ -198,9 +204,9 @@ export function useAdmin(enabled = true) {
         if (!mounted) {
           return;
         }
-        applyPolicyState(state);
+        applyPolicyState(state, version);
       } catch (err: unknown) {
-        if (!mounted) {
+        if (!mounted || version !== stateVersion.current) {
           return;
         }
         setError(toAdminErrorMessage(err, "Failed to load admin data"));
@@ -256,6 +262,9 @@ export function useAdmin(enabled = true) {
     // saved policy has been refreshed, including events before React rerenders.
     if (policyUpdateInFlight.current) return;
     policyUpdateInFlight.current = true;
+    // Lease actions also refresh policy. Retire reads that began before this
+    // write, then those begun while it was in flight when the server accepts it.
+    ++stateVersion.current;
     setPolicySaving(true);
     try {
       await runAdminAction(async () => {
@@ -263,6 +272,7 @@ export function useAdmin(enabled = true) {
           ...policySettings,
           ...overrides,
         });
+        ++stateVersion.current;
         setPolicySettings(normalizePolicySettings(response));
       });
     } finally {

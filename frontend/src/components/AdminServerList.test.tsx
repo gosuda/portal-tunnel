@@ -63,5 +63,7 @@ describe("AdminServerList policy controls", () => {
     rerender(<AdminServerList {...props} error="Unable to save policy" />);
     expect(dialog.getByRole("alert").textContent).toBe("Unable to save policy");
     expect(dialog.getByRole("button", { name: "Manual" }).matches(":disabled")).toBe(false);
+    fireEvent.click(dialog.getByRole("button", { name: "Close" }));
+    expect(screen.getByRole("alert").textContent).toBe("Unable to save policy");
   });
 });
