@@ -82,8 +82,9 @@ func (s *Server) newAPIServer(listener net.Listener, handler http.Handler, apiTL
 
 func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler) http.Handler {
 	if base == nil {
-		base = http.NewServeMux()
-		base.HandleFunc("/{$}", s.handleRoot)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/{$}", s.handleRoot)
+		base = mux
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

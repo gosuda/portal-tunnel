@@ -326,6 +326,20 @@ func TestDiscoveryEnabledCountsNormalizedBootstraps(t *testing.T) {
 	}
 }
 
+func TestProxyHeaderFeatureBlockedForInvalidCIDR(t *testing.T) {
+	cfg := resolveWithEnvFile(t, writeEnvFile(t,
+		"TRUST_PROXY_HEADERS=true",
+		"TRUSTED_PROXY_CIDRS=not-a-cidr"))
+
+	f := featureByName(t, cfg, "proxy-headers")
+	if f.State != types.FeatureBlocked {
+		t.Fatalf("proxy header state = %q, want blocked", f.State)
+	}
+	if !strings.Contains(f.Missing, "invalid cidr") {
+		t.Fatalf("proxy header missing = %q, want CIDR validation error", f.Missing)
+	}
+}
+
 // An unset ACME_DNS_PROVIDER selects the embedded authoritative server, not
 // "no automation". Reporting it as disabled would describe a relay that is in
 // fact serving its own zone.

@@ -268,13 +268,20 @@ func proxyHeaderConfigDiagnostic(cfg ServerConfig) types.FeatureDiagnostic {
 		diagnostic.Detail = "client addresses come from the socket, which is correct when Portal owns the public port itself"
 		return diagnostic
 	}
-	diagnostic.State, diagnostic.By = types.FeatureEnabled, "TRUST_PROXY_HEADERS=true"
-	if cidrs := strings.TrimSpace(cfg.TrustedProxyCIDRs); cidrs != "" {
-		diagnostic.Detail = "trusted=" + cidrs
-	} else {
+	diagnostic.By = "TRUST_PROXY_HEADERS=true"
+	cidrs := strings.TrimSpace(cfg.TrustedProxyCIDRs)
+	if cidrs == "" {
 		diagnostic.State, diagnostic.By = types.FeatureDisabled, "TRUSTED_PROXY_CIDRS empty"
 		diagnostic.Detail = "no proxies are trusted; forwarded client addresses are ignored and client addresses come from the socket"
+		return diagnostic
 	}
+	if _, err := utils.ParseCIDRs(cidrs); err != nil {
+		diagnostic.State = types.FeatureBlocked
+		diagnostic.Missing = fmt.Sprintf("parse trusted proxy cidrs: %v", err)
+		return diagnostic
+	}
+	diagnostic.State = types.FeatureEnabled
+	diagnostic.Detail = "trusted=" + cidrs
 	return diagnostic
 }
 
@@ -507,9 +514,6 @@ func (s *Server) supportsTCP() bool {
 // Serve runs the complete relay lifecycle and mounts relay-owned HTTP
 // capabilities around the application handler.
 func (s *Server) Serve(ctx context.Context, handler http.Handler) error {
-	if handler == nil {
-		handler = http.NotFoundHandler()
-	}
 	mux := http.NewServeMux()
 	if s.config().X402Enabled {
 		if err := x402.MountFacilitator(mux, x402.FacilitatorConfig{Testnet: s.config().X402Testnet}); err != nil {
@@ -520,14 +524,25 @@ func (s *Server) Serve(ctx context.Context, handler http.Handler) error {
 			Str("network", x402.Network(s.config().X402Testnet)).
 			Msg("relay-owned x402 facilitator enabled")
 	}
-	mux.Handle("/", handler)
-	if err := s.Start(ctx, mux); err != nil {
+	if handler == nil {
+		mux.HandleFunc("/{$}", s.handleRoot)
+	} else {
+		mux.Handle("/", handler)
+	}
+	if err := s.start(ctx, mux); err != nil {
 		return fmt.Errorf("start relay server: %w", err)
 	}
 	return s.Wait()
 }
 
-func (s *Server) Start(ctx context.Context, apiHandler http.Handler) error {
+// Start starts the relay and returns after its listeners are ready. Serve is
+// the normal lifecycle entry point; Start and Wait remain available to callers
+// that need explicit lifecycle control.
+func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
+	return s.start(ctx, apiMux)
+}
+
+func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	if s.group != nil {
 		return errors.New("server already started")
 	}
