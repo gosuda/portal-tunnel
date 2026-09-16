@@ -159,6 +159,9 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		cfg.PProfListenAddr = utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
 	}
 	cfg.X402PayTo = strings.TrimSpace(cfg.X402PayTo)
+	if cfg.X402Enabled && cfg.X402PayTo == "" {
+		return ServerConfig{}, errors.New("x402 facilitator enabled without a payment recipient")
+	}
 	hasPortRange := cfg.MinPort > 0 && cfg.MaxPort > 0
 	if cfg.UDPEnabled || cfg.TCPEnabled {
 		switch {

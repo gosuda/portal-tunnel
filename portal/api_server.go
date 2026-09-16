@@ -81,6 +81,12 @@ func (s *Server) newAPIServer(listener net.Listener, handler http.Handler, apiTL
 }
 
 func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler) http.Handler {
+	// A nil *http.ServeMux reaches this handler as a typed-nil interface: it
+	// compares non-nil, then panics on the first ServeHTTP call. Normalize it
+	// so the root fallback below still covers Start(ctx, nil).
+	if mux, ok := base.(*http.ServeMux); ok && mux == nil {
+		base = nil
+	}
 	if base == nil {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/{$}", s.handleRoot)

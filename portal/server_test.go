@@ -306,6 +306,7 @@ func TestServerServeRoutesAndCancellation(t *testing.T) {
 				APIListenAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPort)),
 				SNIListenAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(sniPort)),
 				X402Enabled:   true,
+				X402PayTo:     "0xtest",
 			})
 			if err != nil {
 				t.Fatalf("NewServer() error = %v", err)
@@ -361,6 +362,23 @@ func TestServerServeRoutesAndCancellation(t *testing.T) {
 				t.Fatal("Serve() did not return after cancellation")
 			}
 		})
+	}
+}
+
+// The facilitator without a recipient advertises payments nothing can settle,
+// so an enabled x402 must fail validation instead of booting unusable.
+func TestValidateServerConfigRequiresX402Recipient(t *testing.T) {
+	cfg := ServerConfig{
+		PortalURL:   "https://localhost:4017",
+		StateDir:    t.TempDir(),
+		X402Enabled: true,
+	}
+	if _, err := ValidateServerConfig(cfg); err == nil {
+		t.Fatal("ValidateServerConfig() error = nil, want error for enabled x402 without recipient")
+	}
+	cfg.X402PayTo = "0xrecipient"
+	if _, err := ValidateServerConfig(cfg); err != nil {
+		t.Fatalf("ValidateServerConfig() error = %v, want nil with recipient set", err)
 	}
 }
 

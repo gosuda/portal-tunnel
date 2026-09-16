@@ -63,6 +63,18 @@ func loadEnvFile(path string) ([]envFileEntry, error) {
 	return entries, nil
 }
 
+// knownEnvNames indexes every name the relay reads, including flag aliases.
+func knownEnvNames() map[string]utils.EnvVar {
+	index := make(map[string]utils.EnvVar)
+	for _, entry := range utils.EnvVars() {
+		index[entry.Name] = entry
+		for _, alias := range entry.Aliases {
+			index[alias] = entry
+		}
+	}
+	return index
+}
+
 func secretEnvName(name string) bool {
 	upper := strings.ToUpper(name)
 	for _, marker := range []string{"TOKEN", "SECRET", "KEY", "PASSWORD", "CREDENTIALS"} {
@@ -137,6 +149,26 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 		fmt.Fprintf(w, "         source: %s\n", valueSource(entry, supplied, source))
 		writeWrapped(w, entry.Usage)
 	}
+	// Keys the file supplies that nothing reads are how deployment drift hides:
+	// the relay runs on defaults while the operator believes their value is in
+	// effect. Surface every unrecognized name instead of dropping it.
+	relay := knownEnvNames()
+	var unknown []envFileEntry
+	for _, entry := range entries {
+		if _, isRelay := relay[entry.Name]; !isRelay {
+			unknown = append(unknown, entry)
+		}
+	}
+	if len(unknown) > 0 {
+		fmt.Fprintf(w, "\nUNKNOWN  %d key(s) are not read by the relay and are silently ignored:\n", len(unknown))
+		for _, entry := range unknown {
+			if suggestion := nearestEnvName(entry.Name, relay); suggestion != "" {
+				fmt.Fprintf(w, "  %-30s did you mean %s?\n", entry.Name, suggestion)
+				continue
+			}
+			fmt.Fprintf(w, "  %-30s no equivalent key exists\n", entry.Name)
+		}
+	}
 	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "Validation")
@@ -177,6 +209,46 @@ func writeWrapped(w io.Writer, text string) {
 	if strings.TrimSpace(line) != "" {
 		fmt.Fprintln(w, line)
 	}
+}
+
+// nearestEnvName suggests the closest known key for a typo. Deployment drift
+// usually looks like ADMIN_WALLETS for ADMIN_TOKEN: close enough to look right,
+// far enough that nothing reads it.
+func nearestEnvName(name string, relay map[string]utils.EnvVar) string {
+	candidates := make([]string, 0, len(relay))
+	for candidate := range relay {
+		candidates = append(candidates, candidate)
+	}
+	sort.Strings(candidates)
+
+	best := ""
+	bestDistance := len(name)/2 + 2
+	for _, candidate := range candidates {
+		if distance := editDistance(name, candidate); distance < bestDistance {
+			best, bestDistance = candidate, distance
+		}
+	}
+	return best
+}
+
+func editDistance(a, b string) int {
+	previous := make([]int, len(b)+1)
+	current := make([]int, len(b)+1)
+	for j := range previous {
+		previous[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		current[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[i-1] {
+				cost = 0
+			}
+			current[j] = min(previous[j]+1, current[j-1]+1, previous[j-1]+cost)
+		}
+		previous, current = current, previous
+	}
+	return previous[len(b)]
 }
 
 // writeEnvReference emits every key the relay reads. It is generated from the

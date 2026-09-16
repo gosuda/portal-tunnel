@@ -132,3 +132,31 @@ func TestLoadEnvFileKeepsCommentsAndBlanks(t *testing.T) {
 		t.Fatalf("entries = %v, want only PORTAL_URL", entries)
 	}
 }
+
+// A key the env file supplies that nothing reads must be surfaced with a
+// closest-match suggestion, not silently dropped: that silence is how a typo
+// runs the relay on defaults while the operator believes their value is set.
+func TestConfigReportSurfacesUnknownEnvFileKeys(t *testing.T) {
+	path := writeEnvFile(t, "PORTAL_URL=https://relay.example.com", "DISCOVRY=true")
+	entries, err := loadEnvFile(path)
+	if err != nil {
+		t.Fatalf("load env file: %v", err)
+	}
+	restore, err := applyEnvFileInIsolation(entries)
+	if err != nil {
+		t.Fatalf("isolate env file: %v", err)
+	}
+	defer restore()
+
+	cfg, err := resolveAppConfig(nil)
+	if err != nil {
+		t.Fatalf("resolve config: %v", err)
+	}
+	var report strings.Builder
+	writeConfigReport(&report, cfg, entries, path)
+	for _, want := range []string{"DISCOVRY", "did you mean DISCOVERY?"} {
+		if !strings.Contains(report.String(), want) {
+			t.Fatalf("config report missing %q:\n%s", want, report.String())
+		}
+	}
+}

@@ -91,10 +91,13 @@ Enabling redirects requires an explicit absolute HTTPS `PORTAL_URL` without
 credentials and with a valid port; HTTPS scheme spelling is case-insensitive.
 The listen address must use `host:port` syntax (bracket IPv6 addresses) with a
 numeric port from 0 to 65535; port 0 requests an automatically assigned port.
-`relay-server config` reports invalid targets or listen-address syntax as
-`blocked`. Reporting only validates configuration: it does not resolve listen
-hosts or bind sockets, so `enabled` is not a readiness check. Bind failures,
-including occupied ports or unavailable hosts, still fail startup.
+`relay-server config` reports validation failures as `INVALID <error>` and
+successful validation as `OK relay configuration is valid`. Validation only
+checks configuration: it does not resolve listen hosts or bind sockets, so `OK`
+is not a readiness check. Bind failures, including occupied ports or
+unavailable hosts, still fail startup. Keys in an env file that the relay does
+not read are reported as `UNKNOWN` with a closest-match suggestion instead of
+being silently dropped.
 Disabled mode preserves existing loopback HTTP-to-HTTPS URL normalization.
 Shutdown releases the listener. The listener uses bounded read, write, and idle
 timeouts.
@@ -178,7 +181,7 @@ closes the router and its destination resources, including pending connections.
 |----------|---------|------|-------------|
 | `X402_ENABLED` | `false` | bool | Enable relay-owned Sui x402 facilitator endpoints under `/api/x402` for future control-plane payments |
 | `X402_TESTNET` | `false` | bool | Use Sui testnet for relay-owned x402 facilitator payments; `false` uses Sui mainnet |
-| `X402_PAY_TO` | `""` | string | Sui payment recipient address for relay-owned control-plane x402 resources |
+| `X402_PAY_TO` | `""` | string | Sui payment recipient address for relay-owned control-plane x402 resources; required (non-empty) when `X402_ENABLED=true` |
 
 ### Proxy
 
