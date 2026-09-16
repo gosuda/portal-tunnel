@@ -7,35 +7,34 @@ description: Complete reference for all Portal environment variables, CLI flags,
 
 Complete reference for all Portal environment variables, CLI flags, and configuration files.
 
-## Checking a Real Deployment
+## Checking Relay Configuration
 
-This page describes what each variable means. To see what a specific deployment
-is actually doing, ask the binary rather than reading a table:
+This page describes what each variable means. To see the effective relay values
+inside the bundled container, ask the binary rather than reading a table:
 
 ```bash
 docker compose run --rm -T portal config
 ```
 
-It prints every key with its effective value and where that value came from,
-names any key nothing reads, and reports which features are off and what is
-missing.
+It prints every environment key the relay consumes, its effective value and
+source, and any side-effect-free validation error the server would reject.
+Compose-only variables, container settings, and external SDK configuration are
+outside this report.
 
 Run it **inside the container, without `--env-file`**. Compose has already
 combined `.env` with the defaults declared in `docker-compose.yml`, so the
 report then describes the environment `docker compose up` will actually
 provide. `--env-file` reads a file on its own, against the relay binary's
-defaults — `MIN_PORT` is `0` there and `40000` under Compose — so a file that
-sets only `PORTAL_URL` and `UDP_ENABLED=true` is reported as
-`udp-transport blocked` although the deployment would enable it. Use it to
-inspect a file in isolation, not to predict a deployment:
+defaults — `MIN_PORT` is `0` there and `40000` under Compose. Use it to inspect
+a file in isolation, not to predict the surrounding deployment:
 
 ```bash
 relay-server config                    # this process environment
 relay-server config --env-file .env    # one file, against relay defaults
 ```
 
-`relay-server config --format env` regenerates the full list from the flag
-definitions, and `make check-env-example` fails when this page or
+`relay-server config --format env` regenerates the relay-owned list from the
+flag definitions, and `make check-env-example` fails when this page or
 `.env.example` stops mentioning a key.
 
 ## Relay Server Environment Variables
@@ -92,10 +91,13 @@ Enabling redirects requires an explicit absolute HTTPS `PORTAL_URL` without
 credentials and with a valid port; HTTPS scheme spelling is case-insensitive.
 The listen address must use `host:port` syntax (bracket IPv6 addresses) with a
 numeric port from 0 to 65535; port 0 requests an automatically assigned port.
-`relay-server config` reports invalid targets or listen-address syntax as
-`blocked`. Reporting only validates configuration: it does not resolve listen
-hosts or bind sockets, so `enabled` is not a readiness check. Bind failures,
-including occupied ports or unavailable hosts, still fail startup.
+`relay-server config` reports validation failures as `INVALID <error>` and
+successful validation as `OK relay configuration is valid`. Validation only
+checks configuration: it does not resolve listen hosts or bind sockets, so `OK`
+is not a readiness check. Bind failures, including occupied ports or
+unavailable hosts, still fail startup. Keys in an env file that the relay does
+not read are reported as `UNKNOWN` with a closest-match suggestion instead of
+being silently dropped.
 Disabled mode preserves existing loopback HTTP-to-HTTPS URL normalization.
 Shutdown releases the listener. The listener uses bounded read, write, and idle
 timeouts.
@@ -179,7 +181,7 @@ closes the router and its destination resources, including pending connections.
 |----------|---------|------|-------------|
 | `X402_ENABLED` | `false` | bool | Enable relay-owned Sui x402 facilitator endpoints under `/api/x402` for future control-plane payments |
 | `X402_TESTNET` | `false` | bool | Use Sui testnet for relay-owned x402 facilitator payments; `false` uses Sui mainnet |
-| `X402_PAY_TO` | `""` | string | Sui payment recipient address for relay-owned control-plane x402 resources |
+| `X402_PAY_TO` | `""` | string | Sui payment recipient address for relay-owned control-plane x402 resources; required (non-empty) when `X402_ENABLED=true` |
 
 ### Proxy
 

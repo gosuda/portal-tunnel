@@ -263,6 +263,125 @@ func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *htt
 	return client
 }
 
+func TestServerServeRoutesAndCancellation(t *testing.T) {
+	appHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/app" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	tests := []struct {
+		name    string
+		handler http.Handler
+		paths   map[string]int
+	}{
+		{
+			name:    "application and facilitator routes coexist",
+			handler: appHandler,
+			paths: map[string]int{
+				"/app":                  http.StatusNoContent,
+				types.X402SupportedPath: http.StatusOK,
+			},
+		},
+		{
+			name:    "nil handler preserves relay root",
+			handler: nil,
+			paths: map[string]int{
+				"/":        http.StatusOK,
+				"/missing": http.StatusNotFound,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			apiPort := tempLeasePort(t)
+			defer releaseTestLeasePort(apiPort)
+			sniPort := tempLeasePort(t)
+			defer releaseTestLeasePort(sniPort)
+
+			server, err := NewServer(ServerConfig{
+				PortalURL:     "https://localhost:4017",
+				StateDir:      tempStateDir(t),
+				APIListenAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPort)),
+				SNIListenAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(sniPort)),
+				X402Enabled:   true,
+				X402PayTo:     "0xtest",
+			})
+			if err != nil {
+				t.Fatalf("NewServer() error = %v", err)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				result <- server.Serve(ctx, test.handler)
+			}()
+
+			client := utils.NewHTTPClient(utils.WithHTTPTLSConfig(&tls.Config{InsecureSkipVerify: true}))
+			defer client.CloseIdleConnections()
+			baseURL := "https://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPort))
+			readyTimeout := time.NewTimer(5 * time.Second)
+			defer readyTimeout.Stop()
+			retry := time.NewTicker(10 * time.Millisecond)
+			defer retry.Stop()
+			for {
+				resp, requestErr := client.Get(baseURL + types.PathHealthz)
+				if requestErr == nil {
+					resp.Body.Close()
+					break
+				}
+				select {
+				case serveErr := <-result:
+					t.Fatalf("Serve() exited before readiness: %v", serveErr)
+				case <-readyTimeout.C:
+					t.Fatalf("Serve() did not become ready: %v", requestErr)
+				case <-retry.C:
+				}
+			}
+
+			for path, wantStatus := range test.paths {
+				resp, err := client.Get(baseURL + path)
+				if err != nil {
+					t.Fatalf("GET %s error = %v", path, err)
+				}
+				resp.Body.Close()
+				if resp.StatusCode != wantStatus {
+					t.Fatalf("GET %s status = %d, want %d", path, resp.StatusCode, wantStatus)
+				}
+			}
+
+			cancel()
+			select {
+			case err := <-result:
+				if err != nil {
+					t.Fatalf("Serve() error after cancellation = %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Serve() did not return after cancellation")
+			}
+		})
+	}
+}
+
+// The facilitator without a recipient advertises payments nothing can settle,
+// so an enabled x402 must fail validation instead of booting unusable.
+func TestValidateServerConfigRequiresX402Recipient(t *testing.T) {
+	cfg := ServerConfig{
+		PortalURL:   "https://localhost:4017",
+		StateDir:    t.TempDir(),
+		X402Enabled: true,
+	}
+	if _, err := ValidateServerConfig(cfg); err == nil {
+		t.Fatal("ValidateServerConfig() error = nil, want error for enabled x402 without recipient")
+	}
+	cfg.X402PayTo = "0xrecipient"
+	if _, err := ValidateServerConfig(cfg); err != nil {
+		t.Fatalf("ValidateServerConfig() error = %v, want nil with recipient set", err)
+	}
+}
+
 func TestHTTPRedirectTargetValidation(t *testing.T) {
 	for _, target := range []string{"http://localhost:4017", "http://relay.example", "//relay.example", "https://user:pass@relay.example", "https://relay.example:0", "https://relay.example:65536", "https://relay.example:bad", "https://relay.example:", "https:///missing-host", "https://./"} {
 		t.Run(target, func(t *testing.T) {
