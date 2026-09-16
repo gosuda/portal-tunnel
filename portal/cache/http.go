@@ -11,7 +11,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/cachemanifest"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -87,7 +86,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 		}
 	}
 	if err == nil {
-		site.digest, site.bytes, err = cachemanifest.Digest(manifest, c.limits.MaxObjectSize, c.limits.MaxExposureBytes)
+		site.digest, site.bytes, err = manifestDigest(manifest, c.limits.MaxObjectSize, c.limits.MaxExposureBytes)
 	}
 	if err != nil {
 		utils.InvalidRequestError(err).Write(w)

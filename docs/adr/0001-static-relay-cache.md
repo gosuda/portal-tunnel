@@ -4,23 +4,29 @@ The origin declares cache permission in its authenticated registration. The
 relay owns admission, disk storage, eviction, and the offline TTL ceiling. No
 deployment database, object service, or independent hosting lifecycle is added.
 
-`portal/cache.Manager` owns cache configuration, eligibility, lease events,
-admission, storage, expiry/LRU, and serving. The lease registry supplies immutable
+`portal/cache` owns the feature on both sides of the wire. Its `Manager` owns
+cache configuration, eligibility, lease events, admission, storage, expiry/LRU,
+and serving. The lease registry supplies immutable
 `cache.Lease` observations on registration, renewal, and detach; the manager
 never receives a `*leaseRecord`. Server integration authenticates SDK requests,
 uses the manager's ingress hint, and supplies reverse-stream origin fallback.
 The manager consults the existing policy runtime for identity/IP admission.
-Wire messages remain in `types`; shared wire-manifest validation lives in
-`internal/cachemanifest`, separate from relay retention and storage policy.
+Wire messages remain in `types`; manifest validation, digest computation, and
+byte accounting are private cache-domain operations in `portal/cache`.
+The relay independently validates every received manifest, regardless of
+preflight validation on the client.
 
 `portal expose --serve ./dist --cache` periodically hashes the regular files in
-the static root, including its SPA entry. One exposure-owned source produces a
-shared immutable manifest every 30 seconds while cache-capable relays subscribe.
-The source bounds discovery by their advertised limits; each relay listener
-enforces its own limits before checking/uploading that manifest. Joining relays
+the static root, including its SPA entry. One exposure-owned `cache.Source`
+produces a shared immutable manifest every 30 seconds while cache-capable relays
+subscribe.
+The source bounds discovery by their advertised limits; each `cache.Syncer`
+enforces its relay's limits before checking/uploading that manifest. Joining relays
 use the current generation, and exposure shutdown stops the source. Each
-listener compares the manifest with its relay. An unchanged snapshot needs no artifact
-upload. A changed snapshot invalidates the old cache and is streamed as bounded
+syncer compares the manifest with its relay. SDK listeners supply current
+transport and lease credentials after waiting for the next source generation,
+so token renewal remains owned by the SDK. An unchanged snapshot needs no
+artifact upload. A changed snapshot invalidates the old cache and is streamed as bounded
 multipart data to `/sdk/cache`; the relay validates content hashes and publishes
 the complete snapshot atomically. Symlinks and special files are ineligible.
 Disk filenames are SHA-256 digests, never client-controlled extraction paths.

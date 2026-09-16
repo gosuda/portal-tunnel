@@ -1,4 +1,4 @@
-package sdk
+package cache
 
 import (
 	"cmp"
@@ -14,71 +14,67 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/cachemanifest"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-type staticCacheConfig struct {
+// SourceConfig identifies the static site and its requested offline lifetime.
+// A zero TTL accepts the relay's maximum lifetime.
+type SourceConfig struct {
+	Path string
+	TTL  time.Duration
+}
+
+// Source belongs to one exposure. Its producer publishes immutable
+// manifests to every relay; subscribers own only transport and relay limits.
+type Source struct {
 	root, index string
 	ttl         time.Duration
+	mu          sync.Mutex
+	limits      map[string]types.StaticCacheLimits
+	snapshot    *sourceSnapshot
+	changed     chan struct{}
+	wake        chan struct{}
+	done        chan struct{}
 }
 
-// staticCacheSource belongs to one exposure. Its producer publishes immutable
-// manifests to every relay; subscribers own only transport and relay limits.
-type staticCacheSource struct {
-	cfg      staticCacheConfig
-	mu       sync.Mutex
-	limits   map[string]types.StaticCacheLimits
-	snapshot *staticSnapshot
-	changed  chan struct{}
-	wake     chan struct{}
-	done     chan struct{}
-}
-
-type staticSnapshot struct {
+type sourceSnapshot struct {
 	root     string
 	manifest types.StaticCacheManifest
 	err      error
 }
 
-func newStaticCacheSource(cfg staticCacheConfig) *staticCacheSource {
-	return &staticCacheSource{cfg: cfg, limits: make(map[string]types.StaticCacheLimits), changed: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}
+// NewSource resolves and validates a static site without starting background work.
+func NewSource(cfg SourceConfig) (*Source, error) {
+	if cfg.TTL != 0 && (cfg.TTL < time.Second || cfg.TTL > 365*24*time.Hour) {
+		return nil, errors.New("relay cache TTL must be zero or between 1s and 8760h")
+	}
+	root, index, err := utils.ResolveStaticSite(cfg.Path)
+	if err != nil {
+		return nil, fmt.Errorf("relay cache source: %w", err)
+	}
+	return &Source{root: root, index: index, ttl: cfg.TTL, limits: make(map[string]types.StaticCacheLimits), changed: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}, nil
 }
 
-func (s *staticCacheSource) configureRegistration(req *types.RegisterChallengeRequest) {
+// ConfigureRegistration applies this source's cache permission and requested TTL.
+// A nil source leaves ordinary exposure registration unchanged.
+func (s *Source) ConfigureRegistration(req *types.RegisterChallengeRequest) {
 	if s == nil {
 		return
 	}
 	req.Cache = true
-	req.CacheTTL = int(s.cfg.ttl / time.Second)
+	req.CacheTTL = int(s.ttl / time.Second)
 }
 
-func (s *staticCacheSource) subscribe(relay string, limits *types.StaticCacheLimits) {
-	s.mu.Lock()
-	if limits == nil {
-		delete(s.limits, relay)
-	} else {
-		s.limits[relay] = *limits
-	}
-	// A newly connected relay consumes the current generation. Only a missing
-	// or failed snapshot needs an immediate rebuild (possibly with larger limits).
-	wake := limits != nil && (s.snapshot == nil || s.snapshot.err != nil)
-	s.mu.Unlock()
-	if wake {
-		select {
-		case s.wake <- struct{}{}:
-		default:
-		}
-	}
-}
-
-func (s *staticCacheSource) current() (*staticSnapshot, <-chan struct{}) {
+func (s *Source) current() (*sourceSnapshot, <-chan struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.snapshot, s.changed
 }
 
-func (s *staticCacheSource) run(ctx context.Context) {
+// Run produces shared snapshot generations until cancellation. The exposure
+// starts it exactly once and calls Wait after canceling its context.
+func (s *Source) Run(ctx context.Context) {
 	defer close(s.done)
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -111,9 +107,14 @@ func (s *staticCacheSource) run(ctx context.Context) {
 	}
 }
 
-func (s *staticCacheSource) scan(ctx context.Context, limits types.StaticCacheLimits) *staticSnapshot {
-	snapshot := &staticSnapshot{root: s.cfg.root, manifest: types.StaticCacheManifest{Index: s.cfg.index}}
-	root, err := os.OpenRoot(s.cfg.root)
+// Wait waits for the producer started by Run to stop.
+func (s *Source) Wait() {
+	<-s.done
+}
+
+func (s *Source) scan(ctx context.Context, limits types.StaticCacheLimits) *sourceSnapshot {
+	snapshot := &sourceSnapshot{root: s.root, manifest: types.StaticCacheManifest{Index: s.index}}
+	root, err := os.OpenRoot(s.root)
 	if err != nil {
 		snapshot.err = err
 		return snapshot
@@ -160,6 +161,6 @@ func (s *staticCacheSource) scan(ctx context.Context, limits types.StaticCacheLi
 		return snapshot
 	}
 	slices.SortFunc(snapshot.manifest.Files, func(a, b types.StaticCacheFile) int { return cmp.Compare(a.Path, b.Path) })
-	_, _, snapshot.err = cachemanifest.Digest(snapshot.manifest, limits.MaxObjectSize, limits.MaxExposureBytes)
+	_, _, snapshot.err = manifestDigest(snapshot.manifest, limits.MaxObjectSize, limits.MaxExposureBytes)
 	return snapshot
 }

@@ -1,4 +1,4 @@
-package cachemanifest
+package cache
 
 import (
 	"crypto/sha256"
@@ -11,9 +11,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// Digest validates the bounded wire manifest and hashes its canonical
+// manifestDigest validates the bounded wire manifest and hashes its canonical
 // representation. Paths are URL paths, never filesystem extraction targets.
-func Digest(m types.StaticCacheManifest, maxObject, maxBytes int64) (string, int64, error) {
+func manifestDigest(m types.StaticCacheManifest, maxObject, maxBytes int64) (string, int64, error) {
 	if len(m.Files) == 0 || len(m.Files) > types.StaticCacheMaxFiles {
 		return "", 0, errors.New("invalid static cache file count")
 	}
