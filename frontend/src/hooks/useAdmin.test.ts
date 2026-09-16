@@ -154,6 +154,61 @@ describe("useAdmin", () => {
         "Invalid approval mode. Choose auto or manual and retry.",
       );
     });
+    expect(result.current.policySaving).toBe(false);
+    await act(async () => {
+      await result.current.handleApprovalModeChange("manual");
+    });
+    expect(result.current.error).toBe("");
+  });
+
+  it("protects the saved policy from overlapping edits until refresh completes", async () => {
+    let savedPolicy = buildSettings();
+    mockGet.mockImplementation(async () => ({ leases: [], policy: savedPolicy }));
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    let finishSave!: () => void;
+    mockPost.mockImplementationOnce(async (_path, body) => {
+      await new Promise<void>((resolve) => { finishSave = resolve; });
+      savedPolicy = body as PolicySettings;
+      return savedPolicy;
+    });
+    let finishRefresh!: () => void;
+    mockGet.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { finishRefresh = resolve; });
+      return { leases: [], policy: savedPolicy };
+    });
+
+    let saving!: Promise<void>;
+    act(() => {
+      saving = result.current.handleApprovalModeChange("manual");
+      void result.current.handleLandingPageEnabledChange(true);
+    });
+    expect(result.current.policySaving).toBe(true);
+
+    await act(async () => { finishSave(); });
+    expect(result.current.policySaving).toBe(true);
+    await act(async () => {
+      await result.current.handleUDPSettingsChange({ enabled: true, maxLeases: 5 });
+    });
+    expect(savedPolicy).toEqual(buildSettings("manual"));
+
+    await act(async () => {
+      finishRefresh();
+      await saving;
+    });
+    expect(result.current.policySaving).toBe(false);
+    expect(result.current.approvalMode).toBe("manual");
+
+    mockPost.mockImplementation(async (_path, body) => {
+      savedPolicy = body as PolicySettings;
+      return savedPolicy;
+    });
+    await act(async () => {
+      await result.current.handleLandingPageEnabledChange(true);
+    });
+    expect(savedPolicy).toEqual({ ...buildSettings("manual"), landing_page_enabled: true });
+    expect(result.current.landingPageEnabled).toBe(true);
   });
 
   it("validates missing IP in handleIPBanStatus", async () => {
