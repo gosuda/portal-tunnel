@@ -32,10 +32,12 @@ interface AdminServerListProps {
   banFilter: BanFilter;
   approvalMode: ApprovalMode;
   landingPageEnabled: boolean;
+  policySaving: boolean;
+  error: string;
   onBanFilterChange: (value: BanFilter) => void;
   onBanStatusChange: (identityKey: string, isBan: boolean) => void | Promise<void>;
   onBPSChange: (identityKey: string, bps: number) => void | Promise<void>;
-  onApprovalModeChange: (mode: ApprovalMode) => void;
+  onApprovalModeChange: (mode: ApprovalMode) => void | Promise<void>;
   onLandingPageEnabledChange: (enabled: boolean) => void | Promise<void>;
   udpSettings: UDPSettings;
   onUDPSettingsChange: (settings: UDPSettings) => void | Promise<void>;
@@ -65,6 +67,8 @@ export function AdminServerList({
   banFilter,
   approvalMode,
   landingPageEnabled,
+  policySaving,
+  error,
   onBanFilterChange,
   onBanStatusChange,
   onBPSChange,
@@ -191,44 +195,52 @@ export function AdminServerList({
     setTCPPortMaxLeasesInput(String(tcpPortSettings.maxLeases ?? 0));
   }, [tcpPortSettings.maxLeases]);
 
+  const runPolicyAction = async (action: () => void | Promise<void>) => {
+    try {
+      await action();
+    } catch {
+      // useAdmin owns the shared action error displayed by this view.
+    }
+  };
+
   const handleUDPToggle = (enabled: boolean) => {
-    void onUDPSettingsChange({ ...udpSettings, enabled });
+    void runPolicyAction(() => onUDPSettingsChange({ ...udpSettings, enabled }));
   };
 
   const handleTCPPortToggle = (enabled: boolean) => {
-    void onTCPPortSettingsChange({ ...tcpPortSettings, enabled });
+    void runPolicyAction(() => onTCPPortSettingsChange({ ...tcpPortSettings, enabled }));
   };
 
   const handleLandingPageToggle = (enabled: boolean) => {
-    void onLandingPageEnabledChange(enabled);
+    void runPolicyAction(() => onLandingPageEnabledChange(enabled));
   };
 
   const handleMaxLeasesSave = () => {
     const value = Math.max(0, parseInt(maxLeasesInput, 10) || 0);
     setMaxLeasesInput(String(value));
-    void onUDPSettingsChange({ ...udpSettings, maxLeases: value });
+    void runPolicyAction(() => onUDPSettingsChange({ ...udpSettings, maxLeases: value }));
   };
 
   const handleTCPPortMaxLeasesSave = () => {
     const value = Math.max(0, parseInt(tcpPortMaxLeasesInput, 10) || 0);
     setTCPPortMaxLeasesInput(String(value));
-    void onTCPPortSettingsChange({ ...tcpPortSettings, maxLeases: value });
+    void runPolicyAction(() => onTCPPortSettingsChange({ ...tcpPortSettings, maxLeases: value }));
   };
 
-  const adminFilterControls = (
-    <>
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-text-muted">Ban Status</span>
-        <BanStatusButtons
-          banFilter={banFilter}
-          onBanFilterChange={onBanFilterChange}
-        />
-      </div>
+  const policyControls = (
+    <fieldset
+      disabled={policySaving}
+      aria-label="Relay policy"
+      aria-busy={policySaving}
+      className="flex min-w-0 flex-wrap items-center gap-4 sm:gap-6 disabled:opacity-60 [&_button:disabled]:cursor-wait [&_input:disabled]:cursor-wait"
+    >
       <div className="flex items-center gap-3">
         <span className="text-sm font-medium text-text-muted">Approval</span>
         <ApprovalModeToggle
           approvalMode={approvalMode}
-          onApprovalModeChange={onApprovalModeChange}
+          onApprovalModeChange={(mode) => {
+            void runPolicyAction(() => onApprovalModeChange(mode));
+          }}
         />
       </div>
       <div className="flex items-center gap-3">
@@ -256,7 +268,7 @@ export function AdminServerList({
           </button>
         </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div role="group" aria-label="UDP" className="flex items-center gap-3">
         <span className="text-sm font-medium text-text-muted">UDP</span>
         <div className="flex rounded-lg overflow-hidden border border-foreground/20">
           <button
@@ -286,6 +298,7 @@ export function AdminServerList({
         <div className="flex items-center gap-2">
           <input
             type="number"
+            aria-label="Max UDP leases"
             min="0"
             value={maxLeasesInput}
             onChange={(e) => setMaxLeasesInput(e.target.value)}
@@ -297,13 +310,14 @@ export function AdminServerList({
           />
           <button
             onClick={handleMaxLeasesSave}
+            aria-label="Save max UDP leases"
             className="cursor-pointer h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
           >
             Save
           </button>
         </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div role="group" aria-label="TCP" className="flex items-center gap-3">
         <span className="text-sm font-medium text-text-muted">TCP</span>
         <div className="flex rounded-lg overflow-hidden border border-foreground/20">
           <button
@@ -333,6 +347,7 @@ export function AdminServerList({
         <div className="flex items-center gap-2">
           <input
             type="number"
+            aria-label="Max TCP leases"
             min="0"
             value={tcpPortMaxLeasesInput}
             onChange={(e) => setTCPPortMaxLeasesInput(e.target.value)}
@@ -344,13 +359,15 @@ export function AdminServerList({
           />
           <button
             onClick={handleTCPPortMaxLeasesSave}
+            aria-label="Save max TCP leases"
             className="cursor-pointer h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
           >
             Save
           </button>
         </div>
       </div>
-    </>
+      {policySaving && <p role="status" className="text-sm text-text-muted">Saving policy...</p>}
+    </fieldset>
   );
 
   const serverCards = filteredServers.map((server) => (
@@ -404,45 +421,18 @@ export function AdminServerList({
               isAdmin
               onAuthChange={onAuthChange}
             />
+            {error && !showFilterModal && (
+              <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>
+            )}
             <div className="flex items-center gap-2">
               <div className="flex-1">{searchBar}</div>
             </div>
             <div className="mt-4 hidden flex-wrap items-center gap-6 sm:flex">
-              {adminFilterControls}
-            </div>
-            <div className="mt-4 flex items-center gap-3 sm:hidden">
-              <span className="text-sm font-medium text-text-muted">
-                Approval
-              </span>
-              <ApprovalModeToggle
-                approvalMode={approvalMode}
-                onApprovalModeChange={onApprovalModeChange}
-              />
-            </div>
-            <div className="mt-4 flex items-center gap-3 sm:hidden">
-              <span className="text-sm font-medium text-text-muted">Landing</span>
-              <div className="flex overflow-hidden rounded-lg border border-foreground/20">
-                <button
-                  onClick={() => handleLandingPageToggle(true)}
-                  className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
-                    landingPageEnabled
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                  }`}
-                >
-                  Shown
-                </button>
-                <button
-                  onClick={() => handleLandingPageToggle(false)}
-                  className={`cursor-pointer border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${
-                    !landingPageEnabled
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                  }`}
-                >
-                  Hidden
-                </button>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-text-muted">Ban Status</span>
+                <BanStatusButtons banFilter={banFilter} onBanFilterChange={onBanFilterChange} />
               </div>
+              {policyControls}
             </div>
           </div>
         </div>
@@ -458,10 +448,11 @@ export function AdminServerList({
       </div>
 
       <Dialog open={showFilterModal} onOpenChange={setShowFilterModal}>
-        <DialogContent className="sm:hidden max-w-sm rounded-sm">
+        <DialogContent className="sm:hidden max-w-sm max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-sm" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Filters</DialogTitle>
+            <DialogTitle>Filters and policy</DialogTitle>
           </DialogHeader>
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
               <span className="text-sm font-medium text-text-muted">
@@ -500,6 +491,7 @@ export function AdminServerList({
                 onRemove={onTagToggle}
               />
             </div>
+            {policyControls}
           </div>
         </DialogContent>
       </Dialog>
