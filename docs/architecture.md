@@ -2,7 +2,9 @@
 
 Public clients reach a Portal relay through its existing HTTPS/SNI ingress.
 Tunnel clients establish an outbound reverse backhaul to their selected public
-relay. Tenant TLS terminates at the tunnel client, not at the relay.
+relay. Tenant TLS normally terminates at the tunnel client. Explicitly opted-in
+static caches terminate browser TLS at the selected relay; see
+[static cache ownership and limits](adr/0001-static-relay-cache.md).
 
 Relay selection returns public relay priorities. Portal does not construct an
 ordered list of intermediate relays. Explicit relay URLs, transport eligibility,

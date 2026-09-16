@@ -8,6 +8,28 @@ The relay owns transport, lease registration, routing, and relay policy. The
 tunnel process owns local proxy behavior, routed HTTP policy, x402 route
 payments, and tenant TLS termination for the default HTTPS stream path.
 
+## Static content offload
+
+```bash
+portal expose --serve ./dist --cache --cache-ttl 24h \
+  --relays https://portal.example.com --discovery=false
+```
+
+`--cache` explicitly trusts the selected relay with the static files and browser
+TLS termination. Cached responses are not end-to-end encrypted to your client.
+It requires `--serve` and cannot be combined with `--ech` or `--ban-mitm`.
+Without it, exposures remain uncached. With discovery enabled, every selected
+relay may receive the site; use the example above to restrict that trust.
+
+The SDK refreshes an immutable site snapshot every 30 seconds; an unchanged
+snapshot needs no upload. The relay controls storage, eviction, and TTL.
+`--cache-ttl` requests a shorter offline lifetime and is clamped by relay policy;
+omit it to accept the relay maximum. Cached files can remain available after
+the client exits until the effective TTL expires. An abrupt disconnect starts
+that period when the lease expires. Restart or eviction may discard content
+earlier. Unsupported relays and rejected uploads keep using the live origin
+tunnel. Keep the local static server running for cache misses.
+
 ## Quick Start
 
 Install from GitHub release assets:

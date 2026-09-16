@@ -94,6 +94,20 @@ func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := utils.NormalizeHostname(r.Host)
+		if hostname, _, err := net.SplitHostPort(r.Host); err == nil {
+			host = utils.NormalizeHostname(hostname)
+		}
+		// Bind a tenant TLS connection to its Host even if the next request
+		// tries to address a control-plane path or the canonical root host.
+		if r.TLS != nil && r.TLS.ServerName != "" && utils.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
+			s.serveCachedSite(w, r, host)
+			return
+		}
+		if s.registry.cache != nil && host != s.identity.Name {
+			s.serveCachedSite(w, r, host)
+			return
+		}
 		if utils.HandleAPICORS(w, r) {
 			return
 		}
@@ -114,6 +128,8 @@ func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler
 			s.handleUnregister(w, r)
 		case types.PathSDKConnect:
 			s.handleConnect(w, r)
+		case types.PathSDKCache:
+			s.handleStaticCache(w, r)
 		case types.PathDiscovery:
 			if !s.config().DiscoveryEnabled {
 				base.ServeHTTP(w, r)
@@ -269,7 +285,12 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 		x402Info.PayTo = cfg.X402PayTo
 	}
 
+	var cacheLimits *types.StaticCacheLimits
+	if cache := s.registry.cache; cache != nil {
+		cacheLimits = &types.StaticCacheLimits{MaxExposureBytes: int64(cache.cfg.MaxExposureBytes), MaxObjectSize: int64(cache.cfg.MaxObjectSize)}
+	}
 	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
+		Cache:           cacheLimits,
 		ProtocolVersion: types.SDKVersion,
 		ReleaseVersion:  types.ReleaseVersion,
 		ENS:             s.acmeManager.ENSStatus(),

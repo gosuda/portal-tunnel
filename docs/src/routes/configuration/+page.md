@@ -7,6 +7,30 @@ description: Complete reference for all Portal environment variables, CLI flags,
 
 Complete reference for all Portal environment variables, CLI flags, and configuration files.
 
+## Static relay cache
+
+Capability is enabled by default in the relay binary. Exposures are eligible
+only with `portal expose --serve ./dist --cache`. Cached responses terminate
+TLS at the selected relay and lose browser-to-origin end-to-end encryption.
+
+| Environment | Flag | Default | Meaning |
+| --- | --- | --- | --- |
+| `CACHE_ENABLED` | `--cache-enabled` | `true` | Enable origin-opted-in cache admission |
+| `CACHE_DIR` | `--cache-dir` | `IDENTITY_PATH/static-cache` | Exclusive disposable cache directory |
+| `CACHE_MAX_BYTES` | `--cache-max-bytes` | `1073741824` | Relay payload bytes, including staging and pinned evictions |
+| `CACHE_MAX_EXPOSURE_BYTES` | `--cache-max-exposure-bytes` | `67108864` | Maximum complete snapshot bytes |
+| `CACHE_MAX_OBJECT_SIZE` | `--cache-max-object-size` | `10485760` | Maximum single file bytes |
+| `CACHE_MAX_TTL` | `--cache-max-ttl` | `24h` | Maximum offline lifetime after unregister or lease expiration |
+| `CACHE_POPULATION_CONCURRENCY` | `--cache-population-concurrency` | `2` | Concurrent cache operations (1–32) |
+
+Byte limits must satisfy `0 < object <= exposure <= total`; TTL must be between
+`1s` and `8760h`. `--cache-ttl` on the origin is only a request, clamped by the
+relay. The cache holds at most 128 snapshots with at most 2,048 files each.
+Expired snapshots are removed first, then least recently used snapshots.
+Storage-full, unsupported capability, or upload rejection falls back to the
+origin tunnel. Restart may discard all cached content. Allow additional disk
+space for filesystem metadata and block allocation beyond the payload limit.
+
 ## Checking Relay Configuration
 
 This page describes what each variable means. To see the effective relay values

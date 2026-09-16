@@ -37,6 +37,7 @@ const (
 )
 
 type listenerConfig struct {
+	Cache      *staticCacheSource
 	Identity   types.Identity
 	Overlay    bool
 	UDPEnabled bool
@@ -109,6 +110,7 @@ type listener struct {
 	udpEnabled        bool
 	tcpEnabled        bool
 	echEnabled        bool
+	cache             *staticCacheSource
 
 	stream        *transport.ClientStream
 	datagram      *transport.ClientDatagram
@@ -150,6 +152,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		udpEnabled:    cfg.UDPEnabled,
 		tcpEnabled:    cfg.TCPEnabled,
 		echEnabled:    cfg.ECH,
+		cache:         cfg.Cache,
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
 	}
@@ -498,6 +501,13 @@ func (l *listener) runLease(ctx context.Context) error {
 
 	errCh := make(chan error, defaultReadyTarget+1)
 	var workers sync.WaitGroup
+	if l.cache != nil {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			l.runStaticCache(leaseCtx)
+		}()
+	}
 	if l.stream != nil {
 		for sessionSlot := range defaultReadyTarget {
 			sessionSlot++
@@ -988,6 +998,10 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		TTL:        int(defaultLeaseTTL / time.Second),
 		UDPEnabled: l.udpEnabled,
 		TCPEnabled: l.tcpEnabled,
+	}
+	if l.cache != nil {
+		registerReq.Cache = true
+		registerReq.CacheTTL = int(l.cache.ttl / time.Second)
 	}
 	if l.echEnabled {
 		registerReq.RouteHostname = materials.RouteHostname

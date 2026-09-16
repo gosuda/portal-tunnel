@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -97,6 +98,7 @@ type Exposure struct {
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
+	Cache      *staticCacheSource
 	UDPEnabled bool
 	TCPEnabled bool
 	ECH        bool
@@ -110,6 +112,13 @@ type options struct {
 
 // Option configures an optional capability of a relay-backed exposure.
 type Option func(*options)
+
+// WithRelayCache opts a static site into relay TLS termination and bounded
+// offline serving. A zero TTL accepts the relay's maximum offline lifetime.
+// Cache errors never stop the exposure; the caller still serves the same path.
+func WithRelayCache(path string, ttl time.Duration) Option {
+	return func(opts *options) { opts.Cache = &staticCacheSource{root: path, ttl: ttl} }
+}
 
 // WithUDP enables the datagram transport capability.
 func WithUDP() Option {
@@ -181,6 +190,21 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if cfg.Cache != nil {
+		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.ECH || cfg.BanMITM {
+			return nil, errors.New("relay static cache cannot be combined with UDP, raw TCP, ECH, or MITM blocking")
+		}
+		validTTL := cfg.Cache.ttl >= time.Second && cfg.Cache.ttl <= 365*24*time.Hour
+		if cfg.Cache.ttl != 0 && !validTTL {
+			return nil, errors.New("relay cache TTL must be zero or between 1s and 8760h")
+		}
+		root, index, err := utils.ResolveStaticSite(cfg.Cache.root)
+		if err != nil {
+			return nil, fmt.Errorf("relay cache source: %w", err)
+		}
+		cfg.Cache.root, cfg.Cache.index = root, index
+		log.Warn().Msg("relay cache enabled: selected relays are trusted to store static content and terminate browser TLS; cached responses are not end-to-end encrypted to this client")
 	}
 	relayURLs, err := utils.NormalizeRelayURLs(relays...)
 	if err != nil {
@@ -1005,6 +1029,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
+			Cache:      e.options.Cache,
 			Identity:   e.identity.Copy(),
 			Overlay:    e.options.Overlay,
 			UDPEnabled: e.options.UDPEnabled,

@@ -42,6 +42,7 @@ const (
 )
 
 type ServerConfig struct {
+	Cache             types.RelayCacheConfig
 	IVNPConfigPath    string
 	PortalURL         string
 	StateDir          string
@@ -120,6 +121,17 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
 		cfg.ACME.KeyDir = cfg.StateDir
+	}
+	if cfg.Cache.Enabled {
+		validSizes := cfg.Cache.MaxObjectSize > 0 && cfg.Cache.MaxObjectSize <= cfg.Cache.MaxExposureBytes && cfg.Cache.MaxExposureBytes <= cfg.Cache.MaxBytes
+		validTTL := cfg.Cache.MaxTTL >= time.Second && cfg.Cache.MaxTTL <= 365*24*time.Hour
+		validConcurrency := cfg.Cache.PopulationConcurrency >= 1 && cfg.Cache.PopulationConcurrency <= 32
+		if !validSizes || !validTTL || !validConcurrency {
+			return ServerConfig{}, errors.New("invalid relay cache limits: require 0 < object <= exposure <= total bytes, TTL 1s..8760h, and concurrency 1..32")
+		}
+		if strings.TrimSpace(cfg.Cache.Dir) == "" {
+			cfg.Cache.Dir = filepath.Join(cfg.StateDir, "static-cache")
+		}
 	}
 
 	redirect, err := NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
@@ -419,6 +431,11 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	if s.group != nil {
 		return errors.New("server already started")
 	}
+	cache, cacheErr := newStaticCache(s.config().Cache)
+	if cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("relay cache unavailable; using origin tunnels")
+	}
+	s.registry.cache = cache
 	cfg := s.config()
 	apiTLS, acmeManager, err := s.prepareAPITLS(ctx)
 	if err != nil {
@@ -571,6 +588,20 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		group.Go(s.runQUICBackhaulListener)
 	}
 	group.Go(func() error { return s.runRegistryJanitor(groupCtx, 5*time.Second) })
+	if cache != nil {
+		group.Go(func() error {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-groupCtx.Done():
+					return nil
+				case now := <-ticker.C:
+					cache.collect(now)
+				}
+			}
+		})
+	}
 	if cfg.DiscoveryEnabled {
 		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
 	}
@@ -803,7 +834,11 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 				// hostnames are always DNS names, so a connection without a server
 				// name targets the canonical root origin; route it there instead
 				// of failing the handshake for IP-literal PORTAL_URL deployments.
-				if serverName == "" || serverName == s.identity.Name {
+				cached := s.registry.acquireCachedSite(serverName)
+				if cached != nil {
+					s.registry.cache.release(cached)
+				}
+				if serverName == "" || serverName == s.identity.Name || cached != nil {
 					if s.apiListener == nil {
 						_ = wrappedConn.Close()
 						return

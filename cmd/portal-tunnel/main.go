@@ -73,6 +73,8 @@ type exposeFlags struct {
 	targetAddr           string
 	httpRoutes           []string
 	serve                string
+	cache                bool
+	cacheTTL             time.Duration
 	udp                  bool
 	udpAddr              string
 	tcp                  bool
@@ -102,6 +104,8 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlagEnv(fs, &flags.x402FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
 	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
 	utils.StringFlag(fs, &flags.serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
+	utils.BoolFlag(fs, &flags.cache, "cache", false, "Allow selected relays to store --serve content and terminate browser TLS; cached responses lose end-to-end TLS to this client")
+	fs.DurationVar(&flags.cacheTTL, "cache-ttl", 0, "Requested offline cache lifetime, clamped by the relay; 0 uses relay policy (requires --cache)")
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
@@ -132,6 +136,12 @@ func runExposeCommand(args []string) error {
 	httpRouteInputs := append([]string(nil), flags.httpRoutes...)
 	serve := strings.TrimSpace(flags.serve)
 	switch {
+	case flags.cache && serve == "":
+		return errors.New("--cache requires --serve")
+	case !flags.cache && flags.cacheTTL != 0:
+		return errors.New("--cache-ttl requires --cache")
+	case flags.cache && (flags.ech || flags.banMITM):
+		return errors.New("--cache permits relay TLS termination and cannot be combined with --ech or --ban-mitm")
 	case serve != "" && flags.targetAddr != "":
 		printExposeUsage(os.Stderr)
 		return errors.New("target cannot be combined with --serve")
@@ -249,6 +259,9 @@ func runExposeCommand(args []string) error {
 	}
 	if flags.udp {
 		opts = append(opts, sdk.WithUDP())
+	}
+	if flags.cache {
+		opts = append(opts, sdk.WithRelayCache(serve, flags.cacheTTL))
 	}
 	if flags.tcp {
 		opts = append(opts, sdk.WithTCP())
