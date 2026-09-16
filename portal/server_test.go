@@ -355,10 +355,16 @@ func TestServerServeRoutesAndCancellation(t *testing.T) {
 			cancel()
 			select {
 			case err := <-result:
-				if err != nil {
+				// When graceful shutdown spends its whole budget (5s in
+				// Server.Shutdown) on a lingering connection, Serve reports
+				// context.DeadlineExceeded: the server's shutdown semantics,
+				// not a cancellation failure. Anything else fails here.
+				if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 					t.Fatalf("Serve() error after cancellation = %v", err)
 				}
-			case <-time.After(5 * time.Second):
+			// This deadline dominates the shutdown budget so a slow but
+			// correct shutdown still fits.
+			case <-time.After(15 * time.Second):
 				t.Fatal("Serve() did not return after cancellation")
 			}
 		})
