@@ -114,10 +114,10 @@ type options struct {
 // Option configures an optional capability of a relay-backed exposure.
 type Option func(*options)
 
-// WithRelayCache opts a static site into relay TLS termination and bounded
+// WithStaticRelayCache opts a static site into relay TLS termination and bounded
 // offline serving. A zero TTL accepts the relay's maximum offline lifetime.
 // Cache errors never stop the exposure; the caller still serves the same path.
-func WithRelayCache(path string, ttl time.Duration) Option {
+func WithStaticRelayCache(path string, ttl time.Duration) Option {
 	return func(opts *options) { opts.Cache = &staticCacheConfig{root: path, ttl: ttl} }
 }
 

@@ -261,7 +261,7 @@ func runExposeCommand(args []string) error {
 		opts = append(opts, sdk.WithUDP())
 	}
 	if flags.cache {
-		opts = append(opts, sdk.WithRelayCache(serve, flags.cacheTTL))
+		opts = append(opts, sdk.WithStaticRelayCache(serve, flags.cacheTTL))
 	}
 	if flags.tcp {
 		opts = append(opts, sdk.WithTCP())

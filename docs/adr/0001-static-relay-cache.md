@@ -36,14 +36,17 @@ toward the relay's payload-byte budget. Deletion failures retain their charge.
 Expiration precedes LRU eviction, with hostname order breaking ties. Metadata
 is bounded to 2,048 files per snapshot and 128 total snapshots, including
 staging and retired snapshots whose files have not been deleted.
-Uploads are bounded by `CACHE_POPULATION_CONCURRENCY`; manifest checks have
-their own explicit `CACHE_CHECK_CONCURRENCY` setting. Their combined admission
-ceiling is the sum of these two independently configured limits (default 2 + 2).
+Operators configure only enablement, the total payload-byte budget, and the
+maximum offline TTL. The manager derives an exposure limit of one quarter of
+the total budget, capped at 64 MiB with a one-byte minimum. Objects are bounded
+to 10 MiB or the exposure limit, whichever is smaller. Independent internal
+pools admit at most two uploads and two manifest checks concurrently.
 Upload bodies have a two-minute read deadline;
 manifest checks retain a 1 MiB body limit and a ten-second read deadline.
 Slow checks cannot consume upload slots. Filesystem block
 allocation and metadata overhead require additional disk headroom. The cache
-directory must be exclusive to one relay process; generated snapshot directories
+directory lives under the relay state directory as `static-cache` and must be
+exclusive to one relay process; generated snapshot directories
 are discarded on startup. Cached bytes are disposable, including after a crash.
 
 A successful lease renewal sets the cached snapshot's expiry to

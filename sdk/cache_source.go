@@ -45,6 +45,14 @@ func newStaticCacheSource(cfg staticCacheConfig) *staticCacheSource {
 	return &staticCacheSource{cfg: cfg, limits: make(map[string]types.StaticCacheLimits), changed: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
+func (s *staticCacheSource) configureRegistration(req *types.RegisterChallengeRequest) {
+	if s == nil {
+		return
+	}
+	req.Cache = true
+	req.CacheTTL = int(s.cfg.ttl / time.Second)
+}
+
 func (s *staticCacheSource) subscribe(relay string, limits *types.StaticCacheLimits) {
 	s.mu.Lock()
 	if limits == nil {

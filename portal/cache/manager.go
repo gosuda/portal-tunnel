@@ -19,6 +19,8 @@ import (
 type Manager struct {
 	mu         sync.Mutex
 	cfg        Config
+	dir        string
+	limits     types.StaticCacheLimits
 	policy     *policy.Runtime
 	leases     map[string]leaseState
 	entries    map[string]*cachedSite
@@ -39,38 +41,50 @@ type cachedSite struct {
 	readers                        int
 }
 
-func New(cfg Config, policy *policy.Runtime) (*Manager, error) {
-	var err error
-	cfg, err = cfg.Normalize("")
-	if err != nil {
-		return nil, err
-	}
+// New requires an explicit storage directory from the host application.
+// It never infers a cleanup location from the process working directory.
+func New(cfg Config, dir string, policy *policy.Runtime) (*Manager, error) {
 	if !cfg.Enabled {
 		return nil, nil
+	}
+	if strings.TrimSpace(dir) == "" {
+		return nil, errors.New("cache directory is required")
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
 	}
 	if policy == nil {
 		return nil, errors.New("cache policy runtime is required")
 	}
-	if err := os.MkdirAll(cfg.Dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	// This operator-selected directory must be exclusive to this relay. Only
+	// This host-provided directory must be exclusive to this relay. Only
 	// our generated snapshot directories are disposable across restarts.
-	children, err := os.ReadDir(cfg.Dir)
+	children, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	for _, child := range children {
 		if child.IsDir() && strings.HasPrefix(child.Name(), "portal-cache-") {
-			if err := os.RemoveAll(filepath.Join(cfg.Dir, child.Name())); err != nil {
+			if err := os.RemoveAll(filepath.Join(dir, child.Name())); err != nil {
 				return nil, err
 			}
 		}
 	}
+	// A tenant may use at most a quarter of the total budget, capped at
+	// 64 MiB, with a one-byte minimum for tiny budgets.
+	exposureBytes := min(64<<20, max(1, cfg.MaxBytes/4))
 	return &Manager{
-		cfg: cfg, policy: policy, leases: make(map[string]leaseState), entries: make(map[string]*cachedSite),
-		population: make(chan struct{}, cfg.PopulationConcurrency),
-		checks:     make(chan struct{}, cfg.CheckConcurrency),
+		cfg: cfg, dir: dir, policy: policy,
+		limits: types.StaticCacheLimits{MaxExposureBytes: int64(exposureBytes), MaxObjectSize: int64(min(10<<20, exposureBytes))},
+		leases: make(map[string]leaseState), entries: make(map[string]*cachedSite),
+		population: make(chan struct{}, 2),
+		checks:     make(chan struct{}, 2),
 	}, nil
 }
 
@@ -203,7 +217,8 @@ func (c *Manager) Limits() *types.StaticCacheLimits {
 	if c == nil {
 		return nil
 	}
-	return &types.StaticCacheLimits{MaxExposureBytes: int64(c.cfg.MaxExposureBytes), MaxObjectSize: int64(c.cfg.MaxObjectSize)}
+	limits := c.limits
+	return &limits
 }
 
 // Eligible checks the current lease event and the live policy owner. It is

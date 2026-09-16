@@ -121,6 +121,15 @@ func (c *apiClient) relayReleaseVersion() string {
 	return c.releaseVersion
 }
 
+func (c *apiClient) cacheLimits() (types.StaticCacheLimits, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.cache == nil {
+		return types.StaticCacheLimits{}, false
+	}
+	return *c.cache, true
+}
+
 // register only performs the challenge and registration wire exchange.
 // The caller prepares ECH feature inputs beforehand.
 func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterResponse, error) {

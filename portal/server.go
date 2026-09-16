@@ -123,11 +123,9 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
 		cfg.ACME.KeyDir = cfg.StateDir
 	}
-	cacheConfig, err := cfg.Cache.Normalize(cfg.StateDir)
-	if err != nil {
+	if err := cfg.Cache.Validate(); err != nil {
 		return ServerConfig{}, err
 	}
-	cfg.Cache = cacheConfig
 
 	redirect, err := NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
 	if err != nil {
@@ -426,12 +424,12 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	if s.group != nil {
 		return errors.New("server already started")
 	}
-	cacheManager, cacheErr := cache.New(s.config().Cache, s.registry.policy)
+	cfg := s.config()
+	cacheManager, cacheErr := cache.New(cfg.Cache, filepath.Join(cfg.StateDir, "static-cache"), s.registry.policy)
 	if cacheErr != nil {
 		log.Warn().Err(cacheErr).Msg("relay cache unavailable; using origin tunnels")
 	}
 	s.registry.cache = cacheManager
-	cfg := s.config()
 	apiTLS, acmeManager, err := s.prepareAPITLS(ctx)
 	if err != nil {
 		return err

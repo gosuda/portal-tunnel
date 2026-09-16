@@ -66,7 +66,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	var manifestReader io.Reader = http.MaxBytesReader(w, req.Body, types.StaticCacheManifestLimit)
 	if req.Method == http.MethodPut {
 		// Includes multipart framing and manifest bytes, with a fixed bound.
-		req.Body = http.MaxBytesReader(w, req.Body, int64(c.cfg.MaxExposureBytes)+2*types.StaticCacheManifestLimit)
+		req.Body = http.MaxBytesReader(w, req.Body, c.limits.MaxExposureBytes+2*types.StaticCacheManifestLimit)
 		parts, err = req.MultipartReader()
 		if err == nil {
 			var part *multipart.Part
@@ -87,7 +87,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 		}
 	}
 	if err == nil {
-		site.digest, site.bytes, err = cachemanifest.Digest(manifest, int64(c.cfg.MaxObjectSize), int64(c.cfg.MaxExposureBytes))
+		site.digest, site.bytes, err = cachemanifest.Digest(manifest, c.limits.MaxObjectSize, c.limits.MaxExposureBytes)
 	}
 	if err != nil {
 		utils.InvalidRequestError(err).Write(w)
@@ -126,7 +126,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 			c.collect(time.Now())
 		}
 	}()
-	site.dir, err = os.MkdirTemp(c.cfg.Dir, "portal-cache-")
+	site.dir, err = os.MkdirTemp(c.dir, "portal-cache-")
 	var root *os.Root
 	if err == nil {
 		root, err = os.OpenRoot(site.dir)

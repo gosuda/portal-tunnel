@@ -31,21 +31,19 @@ func (l *listener) staticCacheHTTPClient() *http.Client {
 }
 
 func (l *listener) runStaticCache(ctx context.Context) {
-	l.api.mu.RLock()
-	limits := l.api.cache
-	l.api.mu.RUnlock()
-	if limits == nil {
+	limits, available := l.api.cacheLimits()
+	if !available {
 		log.Info().Str("relay_url", l.api.relayURL.String()).Msg("relay cache unavailable; serving through the origin tunnel")
 		return
 	}
 	relay := l.api.relayURL.String()
-	l.cache.subscribe(relay, limits)
+	l.cache.subscribe(relay, &limits)
 	defer l.cache.subscribe(relay, nil)
 	for {
 		snapshot, changed := l.cache.current()
 		var syncErr error
 		if snapshot != nil {
-			syncErr = l.syncStaticCache(ctx, *limits, snapshot)
+			syncErr = l.syncStaticCache(ctx, limits, snapshot)
 		}
 		if syncErr != nil && ctx.Err() == nil {
 			log.Warn().Err(syncErr).Str("relay_url", relay).Msg("static cache population skipped; origin tunnel remains available")

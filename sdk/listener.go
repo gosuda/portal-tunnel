@@ -999,10 +999,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		UDPEnabled: l.udpEnabled,
 		TCPEnabled: l.tcpEnabled,
 	}
-	if l.cache != nil {
-		registerReq.Cache = true
-		registerReq.CacheTTL = int(l.cache.cfg.ttl / time.Second)
-	}
+	l.cache.configureRegistration(&registerReq)
 	if l.echEnabled {
 		registerReq.RouteHostname = materials.RouteHostname
 		registerReq.HostnameHash = materials.HostnameHash

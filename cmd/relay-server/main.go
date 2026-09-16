@@ -65,13 +65,8 @@ func resolveAppConfig(args []string) (appConfig, error) {
 
 func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.BoolFlagEnv(fs, &cfg.Relay.Cache.Enabled, "cache-enabled", true, "allow explicitly opted-in static exposures to use the relay disk cache", "CACHE_ENABLED")
-	utils.StringFlagEnv(fs, &cfg.Relay.Cache.Dir, "cache-dir", "", "exclusive cache directory; defaults to static-cache under identity-path; disposable on restart", "CACHE_DIR")
 	utils.IntFlagEnv(fs, &cfg.Relay.Cache.MaxBytes, "cache-max-bytes", 1<<30, nil, "maximum relay cached and staging payload bytes", "CACHE_MAX_BYTES")
-	utils.IntFlagEnv(fs, &cfg.Relay.Cache.MaxExposureBytes, "cache-max-exposure-bytes", 64<<20, nil, "maximum complete static snapshot bytes per exposure", "CACHE_MAX_EXPOSURE_BYTES")
-	utils.IntFlagEnv(fs, &cfg.Relay.Cache.MaxObjectSize, "cache-max-object-size", 10<<20, nil, "maximum individual cached object bytes", "CACHE_MAX_OBJECT_SIZE")
 	utils.DurationFlagEnv(fs, &cfg.Relay.Cache.MaxTTL, "cache-max-ttl", 24*time.Hour, "maximum offline cache lifetime after unregister or lease expiry", "CACHE_MAX_TTL")
-	utils.IntFlagEnv(fs, &cfg.Relay.Cache.PopulationConcurrency, "cache-population-concurrency", 2, nil, "maximum concurrent cache uploads; busy caches fall back to origin", "CACHE_POPULATION_CONCURRENCY")
-	utils.IntFlagEnv(fs, &cfg.Relay.Cache.CheckConcurrency, "cache-check-concurrency", 2, nil, "maximum concurrent cache manifest checks, separate from uploads", "CACHE_CHECK_CONCURRENCY")
 	utils.StringFlagEnv(fs, &cfg.Relay.PortalURL, "portal-url", "https://localhost", "portal base URL", "PORTAL_URL")
 	utils.StringFlagEnv(fs, &cfg.FrontendDir, "frontend-dir", "", "custom SPA directory containing index.html; embedded frontend is used when empty", "PORTAL_FRONTEND_DIR")
 	utils.StringFlagEnv(fs, &cfg.Relay.StateDir, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")

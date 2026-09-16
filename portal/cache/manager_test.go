@@ -26,7 +26,7 @@ func testManager(t *testing.T, budget int) *Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Config{Enabled: true, Dir: t.TempDir(), MaxBytes: budget, MaxExposureBytes: budget, MaxObjectSize: budget, MaxTTL: time.Minute, PopulationConcurrency: 1, CheckConcurrency: 2}, policy)
+	c, err := New(Config{Enabled: true, MaxBytes: budget, MaxTTL: time.Minute}, t.TempDir(), policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,28 +70,104 @@ func testRequest(t *testing.T, method, content string) *http.Request {
 	return req
 }
 
-func TestStorageBoundIncludesReadersAndStaging(t *testing.T) {
-	c := testManager(t, 6)
-	first, second := testLease(c, "first"), testLease(c, "second")
+func TestNewRejectsEmptyDirectoryWithoutFilesystemChanges(t *testing.T) {
+	t.Chdir(t.TempDir())
+	untouched := filepath.Join("static-cache", "portal-cache-existing", "keep")
+	if err := os.MkdirAll(filepath.Dir(untouched), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(untouched, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := policy.NewRuntime(false, false, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"", " \t"} {
+		manager, err := New(Config{Enabled: true, MaxBytes: 32, MaxTTL: time.Minute}, dir, runtime)
+		if err == nil || manager != nil {
+			t.Fatalf("enabled cache accepted empty directory %q", dir)
+		}
+	}
+	if manager, err := New(Config{}, "", runtime); err != nil || manager != nil {
+		t.Fatalf("disabled cache requires storage: %v", err)
+	}
+	if content, err := os.ReadFile(untouched); err != nil || string(content) != "existing" {
+		t.Fatalf("empty directory modified working-directory files: %q, %v", content, err)
+	}
+}
+
+func TestAdmissionPreservesTenantAndObjectBounds(t *testing.T) {
+	c := testManager(t, 32)
+	lease := testLease(c, "site")
 	w := httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "first"), first.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "12345678"), lease.ID)
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
-	pinned := c.acquire(first.Hostname)
+	// Each object fits, but their sum exceeds this exposure's share while
+	// remaining well below the relay's total budget.
+	manifest := types.StaticCacheManifest{Index: "index.html", Files: []types.StaticCacheFile{
+		{Path: "index.html", Size: 5, SHA256: strings.Repeat("a", 64)},
+		{Path: "other.html", Size: 5, SHA256: strings.Repeat("b", 64)},
+	}}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	w = httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "new"), second.ID)
-	if w.Code != http.StatusServiceUnavailable || c.used != 5 {
+	c.Handle(w, httptest.NewRequest(http.MethodPost, types.PathSDKCache, bytes.NewReader(raw)), lease.ID)
+	if w.Code != http.StatusBadRequest || c.used != 8 || !c.Has(lease.Hostname) {
+		t.Fatalf("over-budget exposure modified storage: %d, %d", w.Code, c.used)
+	}
+
+	// A large total budget must still reject oversized individual objects.
+	c = testManager(t, 1<<30)
+	lease = testLease(c, "site")
+	manifest.Files = manifest.Files[:1]
+	manifest.Files[0].Size = (10 << 20) + 1
+	raw, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	c.Handle(w, httptest.NewRequest(http.MethodPost, types.PathSDKCache, bytes.NewReader(raw)), lease.ID)
+	if w.Code != http.StatusBadRequest || c.used != 0 {
+		t.Fatalf("oversized object admitted: %d, %d", w.Code, c.used)
+	}
+}
+
+func TestStorageBoundIncludesReadersAndStaging(t *testing.T) {
+	c := testManager(t, 24)
+	var pinned []*cachedSite
+	for _, name := range []string{"first", "second", "third", "fourth"} {
+		lease := testLease(c, name)
+		w := httptest.NewRecorder()
+		c.Handle(w, testRequest(t, http.MethodPut, "123456"), lease.ID)
+		if w.Code != http.StatusOK {
+			t.Fatal(w.Body.String())
+		}
+		pinned = append(pinned, c.acquire(lease.Hostname))
+	}
+	defer func() {
+		for _, site := range pinned[1:] {
+			c.release(site)
+		}
+	}()
+	next := testLease(c, "next")
+	w := httptest.NewRecorder()
+	c.Handle(w, testRequest(t, http.MethodPut, "new"), next.ID)
+	if w.Code != http.StatusServiceUnavailable || c.used != 24 {
 		t.Fatalf("pinned bound: %d, %d", w.Code, c.used)
 	}
-	c.release(pinned)
+	c.release(pinned[0])
 	w = httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "new"), second.ID)
-	if w.Code != http.StatusOK || c.used != 3 || c.snapshots != 1 {
+	c.Handle(w, testRequest(t, http.MethodPut, "new"), next.ID)
+	if w.Code != http.StatusOK || c.used != 21 || c.snapshots != 4 {
 		t.Fatalf("eviction: %d, %d", w.Code, c.used)
 	}
 	var diskBytes int64
-	err := filepath.Walk(c.cfg.Dir, func(_ string, info os.FileInfo, err error) error {
+	err := filepath.Walk(c.dir, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -100,7 +176,7 @@ func TestStorageBoundIncludesReadersAndStaging(t *testing.T) {
 		}
 		return nil
 	})
-	if err != nil || diskBytes != 3 {
+	if err != nil || diskBytes != 21 {
 		t.Fatalf("disk bytes = %d, %v", diskBytes, err)
 	}
 }
@@ -118,29 +194,29 @@ func TestBoundsZeroByteStagingMetadata(t *testing.T) {
 }
 
 func TestFailedStagingReleasesCapacity(t *testing.T) {
-	c := testManager(t, 4)
+	c := testManager(t, 16)
 	l := testLease(c, "site")
-	dir := c.cfg.Dir
+	dir := c.dir
 	blocked := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c.cfg.Dir = blocked
+	c.dir = blocked
 	w := httptest.NewRecorder()
 	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
-	if w.Code == http.StatusOK {
-		t.Fatal("unusable directory accepted")
+	if w.Code == http.StatusOK || c.used != 0 || c.snapshots != 0 {
+		t.Fatal("failed staging accepted or retained a reservation")
 	}
-	c.cfg.Dir = dir
+	c.dir = dir
 	w = httptest.NewRecorder()
 	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
 	if w.Code != http.StatusOK {
-		t.Fatalf("full-capacity retry: %d %s", w.Code, w.Body.String())
+		t.Fatalf("retry after failed staging: %d %s", w.Code, w.Body.String())
 	}
 }
 
 func TestRejectsUnsafeAndOversizedManifest(t *testing.T) {
-	c := testManager(t, 4)
+	c := testManager(t, 16)
 	l := testLease(c, "site")
 	for _, content := range []string{"12345", "123"} {
 		req := testRequest(t, http.MethodPut, content)
@@ -188,7 +264,7 @@ func TestLeaseEventsBoundOfflineLifetime(t *testing.T) {
 func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 	for _, failure := range []string{"method", "missing", "truncated"} {
 		t.Run(failure, func(t *testing.T) {
-			c := testManager(t, 4)
+			c := testManager(t, 16)
 			l := testLease(c, "site")
 			w := httptest.NewRecorder()
 			c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
@@ -196,6 +272,14 @@ func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 				t.Fatal(w.Body.String())
 			}
 			site := c.entries[l.Hostname]
+			for _, name := range []string{"second", "third", "fourth"} {
+				other := testLease(c, name)
+				fill := httptest.NewRecorder()
+				c.Handle(fill, testRequest(t, http.MethodPut, "fill"), other.ID)
+				if fill.Code != http.StatusOK {
+					t.Fatal(fill.Body.String())
+				}
+			}
 			method := http.MethodPost
 			if failure != "method" {
 				method = http.MethodGet
@@ -244,7 +328,7 @@ func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 }
 
 func TestFailedOldReaderDoesNotDiscardReplacement(t *testing.T) {
-	c := testManager(t, 8)
+	c := testManager(t, 32)
 	l := testLease(c, "site")
 	w := httptest.NewRecorder()
 	c.Handle(w, testRequest(t, http.MethodPut, "old"), l.ID)
@@ -276,13 +360,13 @@ func (r *gatedBody) Read(p []byte) (int, error) {
 	return r.ReadCloser.Read(p)
 }
 
-func TestAdmissionUsesSeparateConfiguredLimits(t *testing.T) {
-	c := testManager(t, 32) // One upload and two checks are explicitly configured.
+func TestAdmissionKeepsChecksAndUploadsIndependentlyBounded(t *testing.T) {
+	c := testManager(t, 32) // Cache owns a separate two-request pool for each operation.
 	l := testLease(c, "site")
 	resume := make(chan struct{})
 	var workers sync.WaitGroup
 	defer func() { close(resume); workers.Wait() }()
-	for _, method := range []string{http.MethodPost, http.MethodPost, http.MethodPut} {
+	for _, method := range []string{http.MethodPost, http.MethodPost, http.MethodPut, http.MethodPut} {
 		started := make(chan struct{})
 		req := testRequest(t, method, "site")
 		req.Body = &gatedBody{ReadCloser: req.Body, started: started, resume: resume}
@@ -291,14 +375,14 @@ func TestAdmissionUsesSeparateConfiguredLimits(t *testing.T) {
 		select {
 		case <-started:
 		case <-time.After(5 * time.Second):
-			t.Fatalf("configured %s capacity was not available", method)
+			t.Fatalf("internal %s capacity was not available", method)
 		}
 	}
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
 		w := httptest.NewRecorder()
 		c.Handle(w, testRequest(t, method, "site"), l.ID)
 		if w.Code != http.StatusServiceUnavailable {
-			t.Fatalf("%s exceeded its configured bound: %d", method, w.Code)
+			t.Fatalf("%s exceeded its internal bound: %d", method, w.Code)
 		}
 	}
 }
@@ -314,7 +398,7 @@ func (w *failingDiskResponse) WriteHeader(code int) {
 }
 
 func TestReadFailureAfterHeadersInvalidatesSnapshot(t *testing.T) {
-	c := testManager(t, 4)
+	c := testManager(t, 16)
 	l := testLease(c, "site")
 	w := httptest.NewRecorder()
 	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)

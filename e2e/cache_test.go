@@ -38,7 +38,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL: relayURL, StateDir: stateDir,
 		APIListenAddr: "127.0.0.1:" + strconv.Itoa(apiPort), SNIListenAddr: sniAddr,
-		Cache: cache.Config{Enabled: true, MaxBytes: 1024, MaxExposureBytes: 512, MaxObjectSize: 512, MaxTTL: offlineTTL, PopulationConcurrency: 1, CheckConcurrency: 1},
+		Cache: cache.Config{Enabled: true, MaxBytes: 1024, MaxTTL: offlineTTL},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exposure, err := sdk.Expose(ctx, id, []string{relayURL}, sdk.WithRelayCache(siteDir, 24*time.Hour))
+	exposure, err := sdk.Expose(ctx, id, []string{relayURL}, sdk.WithStaticRelayCache(siteDir, 24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}

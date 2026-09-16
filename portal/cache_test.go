@@ -20,7 +20,7 @@ import (
 func cacheTestServer(t *testing.T, budget int) *Server {
 	t.Helper()
 	registry := newTestRegistry(t)
-	manager, err := cache.New(cache.Config{Enabled: true, Dir: t.TempDir(), MaxBytes: budget, MaxExposureBytes: budget, MaxObjectSize: budget, MaxTTL: time.Minute, PopulationConcurrency: 1, CheckConcurrency: 1}, registry.policy)
+	manager, err := cache.New(cache.Config{Enabled: true, MaxBytes: budget, MaxTTL: time.Minute}, t.TempDir(), registry.policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,61 +129,6 @@ func TestStaticCacheOfflineExpiryAndHostIsolation(t *testing.T) {
 	}
 	s.registry.policy.UnbanIdentity(record.Key())
 
-}
-
-func TestStaticCacheChecksAndUploadsHaveIndependentLimits(t *testing.T) {
-	for _, slowMethod := range []string{http.MethodPost, http.MethodPut} {
-		t.Run(slowMethod, func(t *testing.T) {
-			s := cacheTestServer(t, 32)
-			_, token := cacheTestRegister(t, s, "site", true)
-			digest := sha256.Sum256([]byte("site"))
-			manifest, err := json.Marshal(types.StaticCacheManifest{Index: "index.html", Files: []types.StaticCacheFile{{Path: "index.html", Size: 4, SHA256: hex.EncodeToString(digest[:])}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			request := func(method string) *http.Request {
-				if method == http.MethodPut {
-					return cacheTestUpload(t, token, "site")
-				}
-				req := httptest.NewRequest(method, types.PathSDKCache, bytes.NewReader(manifest))
-				req.Header.Set(types.HeaderAccessToken, token)
-				return req
-			}
-			started, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
-			slow := request(slowMethod)
-			slow.Body = &cacheReplacementReader{ReadCloser: slow.Body, replace: func() {
-				close(started)
-				<-resume
-			}}
-			go func() {
-				defer close(done)
-				s.handleStaticCache(httptest.NewRecorder(), slow)
-			}()
-			defer func() {
-				close(resume)
-				<-done
-			}()
-			select {
-			case <-started:
-			case <-time.After(5 * time.Second):
-				t.Fatal("cache request did not start reading its body")
-			}
-			busy := httptest.NewRecorder()
-			s.handleStaticCache(busy, request(slowMethod))
-			if busy.Code != http.StatusServiceUnavailable {
-				t.Fatalf("concurrent %s bypassed its admission limit: %d", slowMethod, busy.Code)
-			}
-			otherMethod := http.MethodPut
-			if slowMethod == http.MethodPut {
-				otherMethod = http.MethodPost
-			}
-			available := httptest.NewRecorder()
-			s.handleStaticCache(available, request(otherMethod))
-			if available.Code != http.StatusOK {
-				t.Fatalf("slow %s blocked %s: %d %s", slowMethod, otherMethod, available.Code, available.Body.String())
-			}
-		})
-	}
 }
 
 type cacheReplacementReader struct {
