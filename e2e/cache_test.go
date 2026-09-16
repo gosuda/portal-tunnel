@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 )
 
 func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
+	const offlineTTL = time.Second
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	stateDir, siteDir := t.TempDir(), t.TempDir()
@@ -35,7 +38,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL: relayURL, StateDir: stateDir,
 		APIListenAddr: "127.0.0.1:" + strconv.Itoa(apiPort), SNIListenAddr: sniAddr,
-		Cache: types.RelayCacheConfig{Enabled: true, MaxBytes: 1024, MaxExposureBytes: 512, MaxObjectSize: 512, MaxTTL: time.Second, PopulationConcurrency: 1},
+		Cache: types.RelayCacheConfig{Enabled: true, MaxBytes: 1024, MaxExposureBytes: 512, MaxObjectSize: 512, MaxTTL: offlineTTL, PopulationConcurrency: 1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -132,9 +135,14 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if response.Header.Get("X-Origin") != "true" {
 		t.Fatalf("cache fallback did not reach the origin: %d", response.StatusCode)
 	}
+	closeStartedAt := time.Now()
 	if err := exposure.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// The relay processes unregister between the start and end of Close.
+	// Before this lower bound, a failed request cannot be legitimate expiry.
+	earliestExpiry := closeStartedAt.Add(offlineTTL)
+	deadline := time.Now().Add(offlineTTL + 3*time.Second)
 	response, err = client.Get(publicURL)
 	if err != nil {
 		t.Fatal(err)
@@ -144,18 +152,34 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if response.StatusCode != http.StatusOK || string(body) != "cached site" {
 		t.Fatalf("offline cache: %d, %q", response.StatusCode, body)
 	}
-	deadline := time.Now().Add(4 * time.Second)
 	poll := time.NewTicker(50 * time.Millisecond)
 	defer poll.Stop()
 	for time.Now().Before(deadline) {
 		response, err = client.Get(publicURL)
 		if err != nil {
+			if time.Now().Before(earliestExpiry) {
+				t.Fatalf("offline cache failed before its TTL: %v", err)
+			}
+			// An unknown tenant closes the TLS connection. A dial timeout or
+			// certificate failure must not masquerade as successful expiry.
+			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, syscall.ECONNRESET) {
+				t.Fatalf("unexpected error while checking cache expiry: %v", err)
+			}
 			return // Cache TTL has expired and there is no live origin.
 		}
-		_, _ = io.Copy(io.Discard, response.Body)
+		body, err = io.ReadAll(response.Body)
 		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if response.StatusCode == http.StatusServiceUnavailable {
+			if time.Now().Before(earliestExpiry) {
+				t.Fatal("offline cache returned 503 before its TTL")
+			}
 			return
+		}
+		if response.StatusCode != http.StatusOK || string(body) != "cached site" {
+			t.Fatalf("unexpected offline cache response: %d, %q", response.StatusCode, body)
 		}
 		<-poll.C
 	}

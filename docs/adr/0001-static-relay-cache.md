@@ -23,17 +23,21 @@ toward the relay's payload-byte budget. Deletion failures retain their charge.
 Expiration precedes LRU eviction, with hostname order breaking ties. Metadata
 is bounded to 2,048 files per snapshot and 128 total snapshots, including
 staging and retired snapshots whose files have not been deleted.
-Upload concurrency and duration are bounded independently. Filesystem block
+Uploads and manifest checks have separate admission pools, each bounded by
+`CACHE_POPULATION_CONCURRENCY`. Upload bodies have a two-minute read deadline;
+manifest checks retain a 1 MiB body limit and a ten-second read deadline.
+Slow checks cannot consume upload slots. Filesystem block
 allocation and metadata overhead require additional disk headroom. The cache
 directory must be exclusive to one relay process; generated snapshot directories
 are discarded on startup. Cached bytes are disposable, including after a crash.
 
-A successful lease renewal extends the cached snapshot's validity through the
-lease expiration plus its effective offline TTL. Unregister starts that TTL
-immediately; abrupt disconnection is detected by lease expiration. Cache
-liveness is capped at two minutes since registration or renewal, so requesting
-a longer tunnel lease cannot bypass the offline cache ceiling. The origin may
-request a shorter TTL; the relay clamps it to its configured maximum.
+A successful lease renewal sets the cached snapshot's expiry to
+`min(ExpiresAt, LastSeenAt + defaultLeaseTTL) + CacheTTL`, where `defaultLeaseTTL`
+is currently two minutes and `CacheTTL` is the effective, relay-clamped offline
+TTL. Unregister may shorten this deadline to the unregister time plus that TTL,
+but never extends the existing deadline. After an abrupt disconnect, no renewal
+advances the bounded deadline, even if the origin requested a long tunnel lease.
+The origin may request a shorter TTL; the relay clamps it to its configured maximum.
 Visitor traffic never extends validity. Lease replacement invalidates the old
 snapshot, including when the new exposure does not opt in. Upload publication
 rechecks the lease instance to prevent late uploads restoring stale content.

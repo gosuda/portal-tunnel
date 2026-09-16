@@ -220,6 +220,83 @@ func TestStaticCacheBoundsZeroByteStagingMetadata(t *testing.T) {
 	}
 }
 
+func TestStaticCacheChecksAndUploadsHaveIndependentLimits(t *testing.T) {
+	for _, slowMethod := range []string{http.MethodPost, http.MethodPut} {
+		t.Run(slowMethod, func(t *testing.T) {
+			s := cacheTestServer(t, 32)
+			_, token := cacheTestRegister(t, s, "site", true)
+			digest := sha256.Sum256([]byte("site"))
+			manifest, err := json.Marshal(types.StaticCacheManifest{Index: "index.html", Files: []types.StaticCacheFile{{Path: "index.html", Size: 4, SHA256: hex.EncodeToString(digest[:])}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := func(method string) *http.Request {
+				if method == http.MethodPut {
+					return cacheTestUpload(t, token, "site")
+				}
+				req := httptest.NewRequest(method, types.PathSDKCache, bytes.NewReader(manifest))
+				req.Header.Set(types.HeaderAccessToken, token)
+				return req
+			}
+			started, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			slow := request(slowMethod)
+			slow.Body = &cacheReplacementReader{ReadCloser: slow.Body, replace: func() {
+				close(started)
+				<-resume
+			}}
+			go func() {
+				defer close(done)
+				s.handleStaticCache(httptest.NewRecorder(), slow)
+			}()
+			defer func() {
+				close(resume)
+				<-done
+			}()
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("cache request did not start reading its body")
+			}
+			busy := httptest.NewRecorder()
+			s.handleStaticCache(busy, request(slowMethod))
+			if busy.Code != http.StatusServiceUnavailable {
+				t.Fatalf("concurrent %s bypassed its admission limit: %d", slowMethod, busy.Code)
+			}
+			otherMethod := http.MethodPut
+			if slowMethod == http.MethodPut {
+				otherMethod = http.MethodPost
+			}
+			available := httptest.NewRecorder()
+			s.handleStaticCache(available, request(otherMethod))
+			if available.Code != http.StatusOK {
+				t.Fatalf("slow %s blocked %s: %d %s", slowMethod, otherMethod, available.Code, available.Body.String())
+			}
+		})
+	}
+}
+
+func TestStaticCacheCanUploadAfterStagingDirectoryFailure(t *testing.T) {
+	s := cacheTestServer(t, 4)
+	_, token := cacheTestRegister(t, s, "site", true)
+	workingDir := s.registry.cache.cfg.Dir
+	blockedDir := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockedDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.registry.cache.cfg.Dir = blockedDir
+	failed := httptest.NewRecorder()
+	s.handleStaticCache(failed, cacheTestUpload(t, token, "site"))
+	if failed.Code == http.StatusOK {
+		t.Fatal("upload unexpectedly succeeded with an unusable cache directory")
+	}
+	s.registry.cache.cfg.Dir = workingDir
+	retried := httptest.NewRecorder()
+	s.handleStaticCache(retried, cacheTestUpload(t, token, "site"))
+	if retried.Code != http.StatusOK {
+		t.Fatalf("failed staging retained the capacity needed for retry: %d %s", retried.Code, retried.Body.String())
+	}
+}
+
 func TestStaticCacheLeaseTTLDoesNotOverrideOfflineCeiling(t *testing.T) {
 	s := cacheTestServer(t, 32)
 	record, response, err := s.registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "long-lease"), Cache: true, TTL: 86400}, "203.0.113.1", "", types.RelayDescriptor{}, nil)

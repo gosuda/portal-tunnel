@@ -21,6 +21,7 @@ type staticCache struct {
 	used       int64
 	snapshots  int
 	population chan struct{}
+	checks     chan struct{}
 }
 
 type cachedSite struct {
@@ -53,7 +54,11 @@ func newStaticCache(cfg types.RelayCacheConfig) (*staticCache, error) {
 			}
 		}
 	}
-	return &staticCache{cfg: cfg, entries: make(map[string]*cachedSite), population: make(chan struct{}, cfg.PopulationConcurrency)}, nil
+	return &staticCache{
+		cfg: cfg, entries: make(map[string]*cachedSite),
+		population: make(chan struct{}, cfg.PopulationConcurrency),
+		checks:     make(chan struct{}, cfg.PopulationConcurrency),
+	}, nil
 }
 
 // retireLocked removes routing immediately, while readers and failed disk

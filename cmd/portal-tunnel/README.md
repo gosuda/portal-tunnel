@@ -25,8 +25,11 @@ The SDK refreshes an immutable site snapshot every 30 seconds; an unchanged
 snapshot needs no upload. The relay controls storage, eviction, and TTL.
 `--cache-ttl` requests a shorter offline lifetime and is clamped by relay policy;
 omit it to accept the relay maximum. Cached files can remain available after
-the client exits until the effective TTL expires. An abrupt disconnect starts
-that period when the lease expires. Restart or eviction may discard content
+the client exits until the bounded deadline expires. Without further renewals,
+the deadline is the earlier of lease expiration and two minutes after the last
+registration or renewal, plus the effective offline TTL. Unregister may shorten
+that deadline to the unregister time plus the TTL, but cannot extend it.
+Restart or eviction may discard content
 earlier. Unsupported relays and rejected uploads keep using the live origin
 tunnel. Keep the local static server running for cache misses.
 

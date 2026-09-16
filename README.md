@@ -58,9 +58,9 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
 | Self-hostable | **Yes** | Enterprise only | No | Yes |
 | Open source | **MIT** | No | Client only | Apache 2.0 |
 | Custom domain | **Yes** | Paid plans | Yes | Yes |
-| End-to-end tenant TLS | **Yes** | No | No | No |
-| SNI hiding (ECH) | **Yes** | No | No | No |
-| MITM self-probe | **Built-in** | No | No | No |
+| End-to-end tenant TLS | **Yes (uncached exposures)** | No | No | No |
+| SNI hiding (ECH) | **Yes (uncached exposures)** | No | No | No |
+| MITM self-probe | **Built-in (uncached exposures)** | No | No | No |
 | Multi-relay failover | **Yes** | Managed | Built-in | No |
 | Account required | **No** | Yes | Yes | No |
 | Native x402 payments | **Yes** | No | No | No |

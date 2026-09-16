@@ -20,12 +20,16 @@ TLS at the selected relay and lose browser-to-origin end-to-end encryption.
 | `CACHE_MAX_BYTES` | `--cache-max-bytes` | `1073741824` | Relay payload bytes, including staging and pinned evictions |
 | `CACHE_MAX_EXPOSURE_BYTES` | `--cache-max-exposure-bytes` | `67108864` | Maximum complete snapshot bytes |
 | `CACHE_MAX_OBJECT_SIZE` | `--cache-max-object-size` | `10485760` | Maximum single file bytes |
-| `CACHE_MAX_TTL` | `--cache-max-ttl` | `24h` | Maximum offline lifetime after unregister or lease expiration |
-| `CACHE_POPULATION_CONCURRENCY` | `--cache-population-concurrency` | `2` | Concurrent cache operations (1–32) |
+| `CACHE_MAX_TTL` | `--cache-max-ttl` | `24h` | Maximum offline TTL added to the bounded lease-liveness deadline |
+| `CACHE_POPULATION_CONCURRENCY` | `--cache-population-concurrency` | `2` | Concurrent uploads and, independently, manifest checks (1–32 each) |
 
 Byte limits must satisfy `0 < object <= exposure <= total`; TTL must be between
 `1s` and `8760h`. `--cache-ttl` on the origin is only a request, clamped by the
-relay. The cache holds at most 128 snapshots with at most 2,048 files each.
+relay. Cache expiry is `min(ExpiresAt, LastSeenAt + 2m) + effective TTL`.
+Unregister may shorten expiry to the unregister time plus that TTL, but cannot
+extend it. Uploads have a two-minute body-read deadline; manifest checks have
+an independent admission pool, a 1 MiB body limit, and a ten-second read deadline.
+The cache holds at most 128 snapshots with at most 2,048 files each.
 Expired snapshots are removed first, then least recently used snapshots.
 Storage-full, unsupported capability, or upload rejection falls back to the
 origin tunnel. Restart may discard all cached content. Allow additional disk

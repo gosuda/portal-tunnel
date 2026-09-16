@@ -61,15 +61,21 @@ func (s *Server) handleStaticCache(w http.ResponseWriter, req *http.Request) {
 		utils.WriteAPIData(w, http.StatusOK, types.StaticCacheStatus{})
 		return
 	}
+	// Manifest checks cannot consume upload slots, but still have their own
+	// bounded concurrency, body size, and shorter read deadline.
+	slots, readTimeout := c.population, 2*time.Minute
+	if req.Method == http.MethodPost {
+		slots, readTimeout = c.checks, 10*time.Second
+	}
 	select {
-	case c.population <- struct{}{}:
-		defer func() { <-c.population }()
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
 	default:
-		http.Error(w, "relay cache population is busy; use origin tunnel", http.StatusServiceUnavailable)
+		http.Error(w, "relay cache request limit reached; use origin tunnel", http.StatusServiceUnavailable)
 		return
 	}
 	controller := http.NewResponseController(w)
-	_ = controller.SetReadDeadline(time.Now().Add(2 * time.Minute))
+	_ = controller.SetReadDeadline(time.Now().Add(readTimeout))
 	defer controller.SetReadDeadline(time.Time{})
 	var manifest types.StaticCacheManifest
 	var parts *multipart.Reader
