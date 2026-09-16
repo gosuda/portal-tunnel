@@ -129,10 +129,6 @@ func runServeCommand(args []string) error {
 		Int("sni_port", utils.IntOrDefault(cfg.Relay.SNIPort, portal.DefaultSNIPort(cfg.Relay.PortalURL))).
 		Msg("starting relay server")
 
-	// Report each capability with the setting that produced it, so a feature
-	// that was switched off is distinguishable from one that cannot run.
-	logFeatureReport(evaluateFeatures(cfg))
-
 	ctx, stop := utils.SignalContext()
 	defer stop()
 

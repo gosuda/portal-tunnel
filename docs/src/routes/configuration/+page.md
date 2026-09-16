@@ -7,35 +7,34 @@ description: Complete reference for all Portal environment variables, CLI flags,
 
 Complete reference for all Portal environment variables, CLI flags, and configuration files.
 
-## Checking a Real Deployment
+## Checking Relay Configuration
 
-This page describes what each variable means. To see what a specific deployment
-is actually doing, ask the binary rather than reading a table:
+This page describes what each variable means. To see the effective relay values
+inside the bundled container, ask the binary rather than reading a table:
 
 ```bash
 docker compose run --rm -T portal config
 ```
 
-It prints every key with its effective value and where that value came from,
-names any key nothing reads, and reports which features are off and what is
-missing.
+It prints every environment key the relay consumes, its effective value and
+source, and any side-effect-free validation error the server would reject.
+Compose-only variables, container settings, and external SDK configuration are
+outside this report.
 
 Run it **inside the container, without `--env-file`**. Compose has already
 combined `.env` with the defaults declared in `docker-compose.yml`, so the
 report then describes the environment `docker compose up` will actually
 provide. `--env-file` reads a file on its own, against the relay binary's
-defaults — `MIN_PORT` is `0` there and `40000` under Compose — so a file that
-sets only `PORTAL_URL` and `UDP_ENABLED=true` is reported as
-`udp-transport blocked` although the deployment would enable it. Use it to
-inspect a file in isolation, not to predict a deployment:
+defaults — `MIN_PORT` is `0` there and `40000` under Compose. Use it to inspect
+a file in isolation, not to predict the surrounding deployment:
 
 ```bash
 relay-server config                    # this process environment
 relay-server config --env-file .env    # one file, against relay defaults
 ```
 
-`relay-server config --format env` regenerates the full list from the flag
-definitions, and `make check-env-example` fails when this page or
+`relay-server config --format env` regenerates the relay-owned list from the
+flag definitions, and `make check-env-example` fails when this page or
 `.env.example` stops mentioning a key.
 
 ## Relay Server Environment Variables
