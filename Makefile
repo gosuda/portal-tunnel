@@ -60,17 +60,14 @@ tidy:
 	go mod tidy
 	go mod verify
 
-# The keys themselves are owned by the flag definitions in
-# cmd/relay-server/main.go and by the catalog of keys other components read.
-# .env.example and the configuration reference are documentation of that set.
-# Adding a flag without documenting it is how configuration drifts away from the
-# code, so fail loudly here rather than let an operator find the gap in
-# production. Keys the bundled topology pins are excluded on purpose; see
-# cmd/relay-server/envcatalog.go.
+# Relay keys are owned by the flag definitions in cmd/relay-server/main.go.
+# This deployment check excludes listener values fixed directly by the bundled
+# Compose topology; that topology, not the relay binary, owns the exception.
 CONFIG_DOC := docs/src/routes/configuration/+page.md
+COMPOSE_PINNED_ENV_PATTERN := ^(API_PORT|SNI_PORT)$$
 
 check-env-example:
-	@go run ./cmd/relay-server config --format names > /tmp/portal-env-names.txt
+	@go run ./cmd/relay-server config --format names | grep -Ev '$(COMPOSE_PINNED_ENV_PATTERN)' > /tmp/portal-env-names.txt
 	@status=0; \
 	missing=""; \
 	while read -r name; do \

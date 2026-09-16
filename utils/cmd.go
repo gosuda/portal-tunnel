@@ -229,6 +229,24 @@ func StringFlagEnv(fs *flag.FlagSet, target *string, name, fallback, usage strin
 	flagSet.Lookup(name).DefValue = fallback
 }
 
+// CSVFlagEnv resolves a comma-separated environment/flag value directly into
+// the slice owned by the application configuration.
+func CSVFlagEnv(fs *flag.FlagSet, target *[]string, name, fallback, usage string, envNames ...string) {
+	value, setBy := resolveStringEnv(fallback, envNames...)
+	registerEnvVar(name, usage, fallback, value, setBy, envNames)
+	if target != nil {
+		*target = SplitCSV(value)
+	}
+	flagSet := ensureFlagSet(fs)
+	flagSet.Func(name, flagUsage(usage, envNames...), func(value string) error {
+		if target != nil {
+			*target = SplitCSV(value)
+		}
+		return nil
+	})
+	flagSet.Lookup(name).DefValue = fallback
+}
+
 func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string) {
 	ensureFlagSet(fs).BoolVar(target, name, fallback, usage)
 }

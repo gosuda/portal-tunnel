@@ -29,6 +29,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
+	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -105,7 +106,9 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 	return cfg, nil
 }
 
-func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
+// ValidateServerConfig normalizes server configuration and checks the
+// side-effect-free invariants required before runtime resources are created.
+func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
 	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
 		return ServerConfig{}, errors.New("relay overlay requires discovery")
@@ -156,6 +159,15 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		cfg.PProfListenAddr = utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
 	}
 	cfg.X402PayTo = strings.TrimSpace(cfg.X402PayTo)
+	if cfg.X402Enabled && cfg.X402PayTo == "" {
+		return ServerConfig{}, errors.New("x402 facilitator enabled without a payment recipient")
+	}
+	// The runtime parses the proxy CIDR allowlist in policy.NewRuntime before
+	// serving; validate it here so the config report and startup agree on the
+	// same parse instead of the report calling an invalid list valid.
+	if _, err := utils.ParseCIDRs(cfg.TrustedProxyCIDRs); err != nil {
+		return ServerConfig{}, fmt.Errorf("parse trusted proxy cidrs: %w", err)
+	}
 	hasPortRange := cfg.MinPort > 0 && cfg.MaxPort > 0
 	if cfg.UDPEnabled || cfg.TCPEnabled {
 		switch {
@@ -230,7 +242,7 @@ type Server struct {
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
-	cfg, err := normalizeServerConfig(cfg)
+	cfg, err := ValidateServerConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +384,38 @@ func (s *Server) supportsTCP() bool {
 	return runtime != nil && runtime.IsTCPPortEnabled()
 }
 
+// Serve runs the complete relay lifecycle and mounts relay-owned HTTP
+// capabilities around the application handler.
+func (s *Server) Serve(ctx context.Context, handler http.Handler) error {
+	mux := http.NewServeMux()
+	if s.config().X402Enabled {
+		if err := x402.MountFacilitator(mux, x402.FacilitatorConfig{Testnet: s.config().X402Testnet}); err != nil {
+			return fmt.Errorf("mount x402 facilitator: %w", err)
+		}
+		log.Info().
+			Str("path", types.PathX402Facilitator).
+			Str("network", x402.Network(s.config().X402Testnet)).
+			Msg("relay-owned x402 facilitator enabled")
+	}
+	if handler == nil {
+		mux.HandleFunc("/{$}", s.handleRoot)
+	} else {
+		mux.Handle("/", handler)
+	}
+	if err := s.start(ctx, mux); err != nil {
+		return fmt.Errorf("start relay server: %w", err)
+	}
+	return s.Wait()
+}
+
+// Start starts the relay and returns after its listeners are ready. Serve is
+// the normal lifecycle entry point; Start and Wait remain available to callers
+// that need explicit lifecycle control.
 func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
+	return s.start(ctx, apiMux)
+}
+
+func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	if s.group != nil {
 		return errors.New("server already started")
 	}
@@ -442,7 +485,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	}
 
 	group, groupCtx := errgroup.WithContext(serverCtx)
-	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiMux, apiTLS)
+	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiHandler, apiTLS)
 	if err != nil {
 		return err
 	}
