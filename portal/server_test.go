@@ -321,7 +321,10 @@ func TestServerServeRoutesAndCancellation(t *testing.T) {
 			client := utils.NewHTTPClient(utils.WithHTTPTLSConfig(&tls.Config{InsecureSkipVerify: true}))
 			defer client.CloseIdleConnections()
 			baseURL := "https://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPort))
-			deadline := time.Now().Add(5 * time.Second)
+			readyTimeout := time.NewTimer(5 * time.Second)
+			defer readyTimeout.Stop()
+			retry := time.NewTicker(10 * time.Millisecond)
+			defer retry.Stop()
 			for {
 				resp, requestErr := client.Get(baseURL + types.PathHealthz)
 				if requestErr == nil {
@@ -331,12 +334,10 @@ func TestServerServeRoutesAndCancellation(t *testing.T) {
 				select {
 				case serveErr := <-result:
 					t.Fatalf("Serve() exited before readiness: %v", serveErr)
-				default:
-				}
-				if time.Now().After(deadline) {
+				case <-readyTimeout.C:
 					t.Fatalf("Serve() did not become ready: %v", requestErr)
+				case <-retry.C:
 				}
-				time.Sleep(10 * time.Millisecond)
 			}
 
 			for path, wantStatus := range test.paths {
