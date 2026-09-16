@@ -1,31 +1,20 @@
 package sdk
 
 import (
-	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"os"
-	"slices"
-	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/cachemanifest"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
-
-type staticCacheSource struct {
-	root, index string
-	ttl         time.Duration
-}
 
 func (l *listener) staticCacheHTTPClient() *http.Client {
 	client := l.api.httpClient()
@@ -49,77 +38,49 @@ func (l *listener) runStaticCache(ctx context.Context) {
 		log.Info().Str("relay_url", l.api.relayURL.String()).Msg("relay cache unavailable; serving through the origin tunnel")
 		return
 	}
+	relay := l.api.relayURL.String()
+	l.cache.subscribe(relay, limits)
+	defer l.cache.subscribe(relay, nil)
 	for {
-		if err := l.syncStaticCache(ctx, *limits); err != nil && ctx.Err() == nil {
-			log.Warn().Err(err).Str("relay_url", l.api.relayURL.String()).Msg("static cache population skipped; origin tunnel remains available")
-			if lease, ok := l.leaseSnapshot(); ok {
+		snapshot, changed := l.cache.current()
+		var syncErr error
+		if snapshot != nil {
+			syncErr = l.syncStaticCache(ctx, *limits, snapshot)
+		}
+		if syncErr != nil && ctx.Err() == nil {
+			log.Warn().Err(syncErr).Str("relay_url", relay).Msg("static cache population skipped; origin tunnel remains available")
+			lease, ok := l.leaseSnapshot()
+			client := l.staticCacheHTTPClient()
+			if ok && client != nil {
 				headers := http.Header{types.HeaderAccessToken: []string{lease.accessToken}}
-				if client := l.staticCacheHTTPClient(); client != nil {
-					_ = utils.HTTPDoAPIPath(ctx, client, l.api.relayURL, http.MethodDelete, types.PathSDKCache, nil, headers, nil)
-				}
+				_ = utils.HTTPDoAPIPath(ctx, client, l.api.relayURL, http.MethodDelete, types.PathSDKCache, nil, headers, nil)
 			}
 		}
-		if !utils.SleepOrDone(ctx, 30*time.Second) {
+		select {
+		case <-ctx.Done():
 			return
+		case <-changed:
 		}
 	}
 }
 
-func (l *listener) syncStaticCache(ctx context.Context, limits types.StaticCacheLimits) error {
+func (l *listener) syncStaticCache(ctx context.Context, limits types.StaticCacheLimits, snapshot *staticSnapshot) error {
+	if snapshot.err != nil {
+		return snapshot.err
+	}
 	client := l.staticCacheHTTPClient()
 	if client == nil {
 		return errors.New("cache API transport is unavailable")
 	}
-	root, err := os.OpenRoot(l.cache.root)
+	manifest := snapshot.manifest
+	if _, _, err := cachemanifest.Digest(manifest, limits.MaxObjectSize, limits.MaxExposureBytes); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(snapshot.root)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	manifest := types.StaticCacheManifest{Index: l.cache.index}
-	var total int64
-	err = fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		if !entry.Type().IsRegular() {
-			return fmt.Errorf("cache source %q is not a regular file", path)
-		}
-		if len(manifest.Files) >= types.StaticCacheMaxFiles {
-			return errors.New("too many static cache files")
-		}
-		file, err := root.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		info, err := file.Stat()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() || info.Size() > limits.MaxObjectSize || info.Size() > limits.MaxExposureBytes-total {
-			return fmt.Errorf("cache source %q exceeds relay limits or is not a regular file", path)
-		}
-		hash := sha256.New()
-		if _, err := io.CopyN(hash, file, info.Size()); err != nil {
-			return err
-		}
-		manifest.Files = append(manifest.Files, types.StaticCacheFile{Path: path, Size: info.Size(), SHA256: hex.EncodeToString(hash.Sum(nil))})
-		total += info.Size()
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	slices.SortFunc(manifest.Files, func(a, b types.StaticCacheFile) int { return cmp.Compare(a.Path, b.Path) })
-	if _, _, err := utils.StaticCacheDigest(manifest, limits.MaxObjectSize, limits.MaxExposureBytes); err != nil {
-		return err
-	}
 	lease, ok := l.leaseSnapshot()
 	if !ok {
 		return errors.New("cache origin lease is unavailable")

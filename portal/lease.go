@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
@@ -42,7 +43,7 @@ type leaseRegistry struct {
 	tokenIssuer    string
 	reverseURL     string
 	overlay        *overlay.Runtime
-	cache          *staticCache
+	cache          *cache.Manager
 	policy         *policy.Runtime
 	udpPorts       *transport.PortAllocator
 	tcpPorts       *transport.PortAllocator
@@ -233,14 +234,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	expiresAt := claims.Expiry.Time().UTC()
 
 	stream := transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit)
-	cacheTTL := time.Duration(0)
-	cacheable := r.cache != nil && req.Cache && !req.UDPEnabled && !req.TCPEnabled && hostnameHash == "" && routeHostname == "" && !strings.Contains(hostname, "*")
-	if cacheable {
-		cacheTTL = r.cache.cfg.MaxTTL
-		if req.CacheTTL > 0 && int64(req.CacheTTL) < int64(cacheTTL/time.Second) {
-			cacheTTL = time.Duration(req.CacheTTL) * time.Second
-		}
-	}
 	record := &leaseRecord{
 		Identity:       leaseIdentity,
 		id:             leaseID,
@@ -250,8 +243,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		ECHDNSHostname: echDNSHostname,
 		Metadata:       req.Metadata.Copy(),
 		Overlay:        req.Overlay,
-		Cache:          cacheable,
-		CacheTTL:       cacheTTL,
 		ExpiresAt:      expiresAt,
 		FirstSeenAt:    issuedAt,
 		LastSeenAt:     issuedAt,
@@ -355,7 +346,8 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			i--
 		}
 	}
-	r.cache.invalidate(record)
+	req.RouteHostname = routeHostname
+	r.cache.Register(record.cacheLease(), req)
 	if replacedIndex >= 0 {
 		r.policy.ForgetIdentity(identityKey)
 		r.records[replacedIndex] = record
@@ -493,7 +485,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 		record.ReportedIP = reportedIP
 	}
 	record.Metadata = req.Metadata.Copy()
-	r.cache.renew(record)
+	r.cache.Renew(record.cacheLease())
 	r.policy.IPFilter().RegisterIdentityIP(leaseKey, clientIP)
 	recordIdentity := record.Identity
 	leaseID := record.id
@@ -870,7 +862,7 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 
 func (r *leaseRegistry) deleteRecord(i int) {
 	if record := r.records[i]; record != nil {
-		r.cache.detach(record)
+		r.cache.Detach(record.cacheLease())
 	}
 	if record := r.records[i]; record != nil && r.overlay != nil {
 		r.overlay.ForgetLease(record.id)

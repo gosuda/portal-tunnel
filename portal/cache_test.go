@@ -10,23 +10,21 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func cacheTestServer(t *testing.T, budget int) *Server {
 	t.Helper()
 	registry := newTestRegistry(t)
-	cache, err := newStaticCache(types.RelayCacheConfig{Enabled: true, Dir: t.TempDir(), MaxBytes: budget, MaxExposureBytes: budget, MaxObjectSize: budget, MaxTTL: time.Minute, PopulationConcurrency: 1})
+	manager, err := cache.New(cache.Config{Enabled: true, Dir: t.TempDir(), MaxBytes: budget, MaxExposureBytes: budget, MaxObjectSize: budget, MaxTTL: time.Minute, PopulationConcurrency: 1, CheckConcurrency: 1}, registry.policy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry.cache = cache
+	registry.cache = manager
 	t.Cleanup(func() { registry.CloseAll() })
 	return &Server{registry: registry}
 }
@@ -72,20 +70,17 @@ func TestStaticCachePermissionIntegrityAndLeaseReplacement(t *testing.T) {
 	uncached, token := cacheTestRegister(t, s, "uncached", false)
 	result := httptest.NewRecorder()
 	s.handleStaticCache(result, cacheTestUpload(t, token, "site"))
-	if result.Code != http.StatusForbidden || uncached.Cache {
+	if result.Code != http.StatusForbidden || s.registry.cache.Eligible(uncached.id) {
 		t.Fatalf("non-opted-in upload = %d", result.Code)
 	}
 	record, token := cacheTestRegister(t, s, "cached", true)
-	if record.CacheTTL != time.Minute {
-		t.Fatalf("TTL hint was not clamped: %s", record.CacheTTL)
-	}
 	bad := cacheTestUpload(t, token, "site")
 	body, _ := io.ReadAll(bad.Body)
 	bad.Body = io.NopCloser(bytes.NewReader(bytes.Replace(body, []byte("\r\nsite\r\n"), []byte("\r\nfake\r\n"), 1)))
 	result = httptest.NewRecorder()
 	s.handleStaticCache(result, bad)
-	if result.Code != http.StatusBadRequest || s.registry.cache.used != 0 {
-		t.Fatalf("corrupt upload status=%d charged=%d", result.Code, s.registry.cache.used)
+	if result.Code != http.StatusBadRequest {
+		t.Fatalf("corrupt upload status=%d", result.Code)
 	}
 	request := cacheTestUpload(t, token, "site")
 	request.Body = &cacheReplacementReader{ReadCloser: request.Body, replace: func() {
@@ -96,22 +91,9 @@ func TestStaticCachePermissionIntegrityAndLeaseReplacement(t *testing.T) {
 	}}
 	result = httptest.NewRecorder()
 	s.handleStaticCache(result, request)
-	if result.Code != http.StatusForbidden || s.registry.cache.used != 0 || len(s.registry.cache.entries) != 0 {
+	if result.Code != http.StatusForbidden || s.registry.cache.Has(record.Hostname) {
 		t.Fatalf("replaced lease published an in-flight upload: %d", result.Code)
 	}
-}
-
-type cacheReplacementReader struct {
-	io.ReadCloser
-	replace func()
-}
-
-func (r *cacheReplacementReader) Read(p []byte) (int, error) {
-	if r.replace != nil {
-		r.replace()
-		r.replace = nil
-	}
-	return r.ReadCloser.Read(p)
 }
 
 func TestStaticCacheOfflineExpiryAndHostIsolation(t *testing.T) {
@@ -142,82 +124,11 @@ func TestStaticCacheOfflineExpiryAndHostIsolation(t *testing.T) {
 		t.Fatalf("spoofed root host status = %d", result.Code)
 	}
 	s.registry.policy.BanIdentity(record.Key())
-	if site := s.registry.acquireCachedSite(record.Hostname); site != nil {
+	if s.registry.cache.Has(record.Hostname) {
 		t.Fatal("banned identity still served from cache")
 	}
 	s.registry.policy.UnbanIdentity(record.Key())
-	site := s.registry.cache.entries[record.Hostname]
-	site.expiresAt = time.Now().Add(-time.Second)
-	s.registry.cache.collect(time.Now())
-	if _, err := os.Stat(site.dir); !os.IsNotExist(err) || s.registry.cache.used != 0 {
-		t.Fatalf("expired cache remains on disk: %v, %d bytes", err, s.registry.cache.used)
-	}
-}
 
-func TestStaticCacheStorageBoundIncludesReadersAndStaging(t *testing.T) {
-	s := cacheTestServer(t, 6)
-	first, token := cacheTestRegister(t, s, "first", true)
-	result := httptest.NewRecorder()
-	s.handleStaticCache(result, cacheTestUpload(t, token, "first"))
-	if result.Code != http.StatusOK {
-		t.Fatal(result.Body.String())
-	}
-	pinned := s.registry.acquireCachedSite(first.Hostname)
-	_, secondToken := cacheTestRegister(t, s, "second", true)
-	result = httptest.NewRecorder()
-	s.handleStaticCache(result, cacheTestUpload(t, secondToken, "new"))
-	if result.Code != http.StatusServiceUnavailable || s.registry.cache.used != 5 {
-		t.Fatalf("pinned cache bound: %d, %d", result.Code, s.registry.cache.used)
-	}
-	s.registry.cache.release(pinned)
-	result = httptest.NewRecorder()
-	s.handleStaticCache(result, cacheTestUpload(t, secondToken, "new"))
-	if result.Code != http.StatusOK || s.registry.cache.used != 3 || s.registry.cache.snapshots != 1 {
-		t.Fatalf("LRU admission: %d, %d", result.Code, s.registry.cache.used)
-	}
-	var diskBytes int64
-	_ = filepath.Walk(s.registry.cache.cfg.Dir, func(_ string, info os.FileInfo, err error) error {
-		if err == nil && info.Mode().IsRegular() {
-			diskBytes += info.Size()
-		}
-		return err
-	})
-	if diskBytes != 3 {
-		t.Fatalf("disk bytes = %d", diskBytes)
-	}
-	// Full/busy cache admission never removes the live tunnel registration.
-	if _, ok := s.registry.Lookup(first.Hostname); !ok {
-		t.Fatal("eviction removed the origin tunnel")
-	}
-}
-
-func TestStaticCacheRejectsUnsafeAndOversizedManifest(t *testing.T) {
-	s := cacheTestServer(t, 4)
-	_, token := cacheTestRegister(t, s, "site", true)
-	for _, content := range []string{"12345", "123"} {
-		req := cacheTestUpload(t, token, content)
-		if len(content) == 3 {
-			raw, _ := io.ReadAll(req.Body)
-			req.Body = io.NopCloser(strings.NewReader(strings.ReplaceAll(string(raw), "index.html", "../index.html")))
-		}
-		result := httptest.NewRecorder()
-		s.handleStaticCache(result, req)
-		if result.Code != http.StatusBadRequest || s.registry.cache.used != 0 {
-			t.Fatalf("invalid admission: %d, %d", result.Code, s.registry.cache.used)
-		}
-	}
-}
-
-func TestStaticCacheBoundsZeroByteStagingMetadata(t *testing.T) {
-	s := cacheTestServer(t, 32)
-	for range types.StaticCacheMaxEntries {
-		if err := s.registry.cache.reserve(0); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := s.registry.cache.reserve(0); err == nil {
-		t.Fatal("zero-byte staging bypassed the snapshot count limit")
-	}
 }
 
 func TestStaticCacheChecksAndUploadsHaveIndependentLimits(t *testing.T) {
@@ -275,78 +186,15 @@ func TestStaticCacheChecksAndUploadsHaveIndependentLimits(t *testing.T) {
 	}
 }
 
-func TestStaticCacheCanUploadAfterStagingDirectoryFailure(t *testing.T) {
-	s := cacheTestServer(t, 4)
-	_, token := cacheTestRegister(t, s, "site", true)
-	workingDir := s.registry.cache.cfg.Dir
-	blockedDir := filepath.Join(t.TempDir(), "not-a-directory")
-	if err := os.WriteFile(blockedDir, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s.registry.cache.cfg.Dir = blockedDir
-	failed := httptest.NewRecorder()
-	s.handleStaticCache(failed, cacheTestUpload(t, token, "site"))
-	if failed.Code == http.StatusOK {
-		t.Fatal("upload unexpectedly succeeded with an unusable cache directory")
-	}
-	s.registry.cache.cfg.Dir = workingDir
-	retried := httptest.NewRecorder()
-	s.handleStaticCache(retried, cacheTestUpload(t, token, "site"))
-	if retried.Code != http.StatusOK {
-		t.Fatalf("failed staging retained the capacity needed for retry: %d %s", retried.Code, retried.Body.String())
-	}
+type cacheReplacementReader struct {
+	io.ReadCloser
+	replace func()
 }
 
-func TestStaticCacheLeaseTTLDoesNotOverrideOfflineCeiling(t *testing.T) {
-	s := cacheTestServer(t, 32)
-	record, response, err := s.registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "long-lease"), Cache: true, TTL: 86400}, "203.0.113.1", "", types.RelayDescriptor{}, nil)
-	if err != nil {
-		t.Fatal(err)
+func (r *cacheReplacementReader) Read(p []byte) (int, error) {
+	if r.replace != nil {
+		r.replace()
+		r.replace = nil
 	}
-	result := httptest.NewRecorder()
-	s.handleStaticCache(result, cacheTestUpload(t, response.AccessToken, "site"))
-	if result.Code != http.StatusOK {
-		t.Fatal(result.Body.String())
-	}
-	site := s.registry.cache.entries[record.Hostname]
-	if site.expiresAt.After(record.LastSeenAt.Add(defaultLeaseTTL + s.registry.cache.cfg.MaxTTL)) {
-		t.Fatal("origin lease TTL bypassed the relay's offline cache ceiling")
-	}
-	site.expiresAt = time.Now().Add(-time.Second)
-	if _, err := s.registry.Unregister(types.UnregisterRequest{AccessToken: response.AccessToken}); err != nil {
-		t.Fatal(err)
-	}
-	if site := s.registry.acquireCachedSite(record.Hostname); site != nil {
-		t.Fatal("unregister resurrected an expired snapshot")
-	}
-}
-
-func TestStaticCacheUnregisterCannotExtendOfflineCeiling(t *testing.T) {
-	s := cacheTestServer(t, 32)
-	record, response, err := s.registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "idle-origin"), Cache: true, TTL: 86400}, "203.0.113.1", "", types.RelayDescriptor{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := httptest.NewRecorder()
-	s.handleStaticCache(result, cacheTestUpload(t, response.AccessToken, "site"))
-	if result.Code != http.StatusOK {
-		t.Fatal(result.Body.String())
-	}
-	// A long-lived origin stops renewing, then unregisters while its snapshot
-	// is still inside the bounded offline retention window.
-	record.LastSeenAt = time.Now().Add(-defaultLeaseTTL - 10*time.Second)
-	site := s.registry.cache.entries[record.Hostname]
-	site.expiresAt = record.cacheExpiresAt()
-	ceiling := site.expiresAt
-	if _, err := s.registry.Unregister(types.UnregisterRequest{AccessToken: response.AccessToken}); err != nil {
-		t.Fatal(err)
-	}
-	if site.expiresAt.After(ceiling) {
-		t.Fatalf("unregister extended offline expiry from %s to %s", ceiling, site.expiresAt)
-	}
-	if cached := s.registry.acquireCachedSite(record.Hostname); cached == nil {
-		t.Fatal("unregister discarded a snapshot still within its offline lifetime")
-	} else {
-		s.registry.cache.release(cached)
-	}
+	return r.ReadCloser.Read(p)
 }

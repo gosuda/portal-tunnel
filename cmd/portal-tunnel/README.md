@@ -21,16 +21,16 @@ It requires `--serve` and cannot be combined with `--ech` or `--ban-mitm`.
 Without it, exposures remain uncached. With discovery enabled, every selected
 relay may receive the site; use the example above to restrict that trust.
 
-The SDK refreshes an immutable site snapshot every 30 seconds; an unchanged
-snapshot needs no upload. The relay controls storage, eviction, and TTL.
+The exposure refreshes one shared site manifest every 30 seconds for all its
+relays; an unchanged snapshot needs no upload. Each relay applies its own upload
+limits. The relay controls storage, eviction, and TTL.
 `--cache-ttl` requests a shorter offline lifetime and is clamped by relay policy;
 omit it to accept the relay maximum. Cached files can remain available after
 the client exits until the bounded deadline expires. Without further renewals,
 the deadline is the earlier of lease expiration and two minutes after the last
 registration or renewal, plus the effective offline TTL. Unregister may shorten
 that deadline to the unregister time plus the TTL, but cannot extend it.
-Restart or eviction may discard content
-earlier. Unsupported relays and rejected uploads keep using the live origin
+Restart or eviction may discard content earlier. Unsupported relays and rejected uploads keep using the live origin
 tunnel. Keep the local static server running for cache misses.
 
 ## Quick Start

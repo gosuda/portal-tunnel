@@ -27,8 +27,6 @@ type leaseRecord struct {
 	ECHDNSHostname string
 	Metadata       types.LeaseMetadata
 	Overlay        bool
-	Cache          bool
-	CacheTTL       time.Duration
 
 	registerChallenge *identity.RegisterChallenge
 
@@ -37,16 +35,6 @@ type leaseRecord struct {
 	tcpPort  *transport.RelayTCPPort
 	tcpPorts *transport.PortAllocator
 	stream   *transport.RelayStream
-}
-
-// Cache liveness cannot be extended by requesting an arbitrarily long lease.
-// Only an authenticated renewal refreshes this bounded observation window.
-func (r *leaseRecord) cacheExpiresAt() time.Time {
-	onlineUntil := r.LastSeenAt.Add(defaultLeaseTTL)
-	if r.ExpiresAt.Before(onlineUntil) {
-		onlineUntil = r.ExpiresAt
-	}
-	return onlineUntil.Add(r.CacheTTL)
 }
 
 func (r *leaseRecord) isPublicEntry() bool {

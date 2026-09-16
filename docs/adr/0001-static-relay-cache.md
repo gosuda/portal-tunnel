@@ -4,9 +4,22 @@ The origin declares cache permission in its authenticated registration. The
 relay owns admission, disk storage, eviction, and the offline TTL ceiling. No
 deployment database, object service, or independent hosting lifecycle is added.
 
+`portal/cache.Manager` owns cache configuration, eligibility, lease events,
+admission, storage, expiry/LRU, and serving. The lease registry supplies immutable
+`cache.Lease` observations on registration, renewal, and detach; the manager
+never receives a `*leaseRecord`. Server integration authenticates SDK requests,
+uses the manager's ingress hint, and supplies reverse-stream origin fallback.
+The manager consults the existing policy runtime for identity/IP admission.
+Wire messages remain in `types`; shared wire-manifest validation lives in
+`internal/cachemanifest`, separate from relay retention and storage policy.
+
 `portal expose --serve ./dist --cache` periodically hashes the regular files in
-the static root, including its SPA entry. Every 30 seconds the SDK compares the
-manifest with each selected relay. An unchanged snapshot needs no artifact
+the static root, including its SPA entry. One exposure-owned source produces a
+shared immutable manifest every 30 seconds while cache-capable relays subscribe.
+The source bounds discovery by their advertised limits; each relay listener
+enforces its own limits before checking/uploading that manifest. Joining relays
+use the current generation, and exposure shutdown stops the source. Each
+listener compares the manifest with its relay. An unchanged snapshot needs no artifact
 upload. A changed snapshot invalidates the old cache and is streamed as bounded
 multipart data to `/sdk/cache`; the relay validates content hashes and publishes
 the complete snapshot atomically. Symlinks and special files are ineligible.
@@ -23,8 +36,10 @@ toward the relay's payload-byte budget. Deletion failures retain their charge.
 Expiration precedes LRU eviction, with hostname order breaking ties. Metadata
 is bounded to 2,048 files per snapshot and 128 total snapshots, including
 staging and retired snapshots whose files have not been deleted.
-Uploads and manifest checks have separate admission pools, each bounded by
-`CACHE_POPULATION_CONCURRENCY`. Upload bodies have a two-minute read deadline;
+Uploads are bounded by `CACHE_POPULATION_CONCURRENCY`; manifest checks have
+their own explicit `CACHE_CHECK_CONCURRENCY` setting. Their combined admission
+ceiling is the sum of these two independently configured limits (default 2 + 2).
+Upload bodies have a two-minute read deadline;
 manifest checks retain a 1 MiB body limit and a ten-second read deadline.
 Slow checks cannot consume upload slots. Filesystem block
 allocation and metadata overhead require additional disk headroom. The cache
@@ -32,8 +47,8 @@ directory must be exclusive to one relay process; generated snapshot directories
 are discarded on startup. Cached bytes are disposable, including after a crash.
 
 A successful lease renewal sets the cached snapshot's expiry to
-`min(ExpiresAt, LastSeenAt + defaultLeaseTTL) + CacheTTL`, where `defaultLeaseTTL`
-is currently two minutes and `CacheTTL` is the effective, relay-clamped offline
+`min(ExpiresAt, LastSeenAt + observationWindow) + CacheTTL`, where the manager's
+`observationWindow` is two minutes and `CacheTTL` is the effective, relay-clamped offline
 TTL. Unregister may shorten this deadline to the unregister time plus that TTL,
 but never extends the existing deadline. After an abrupt disconnect, no renewal
 advances the bounded deadline, even if the origin requested a long tunnel lease.
@@ -57,6 +72,10 @@ uses the live reverse stream with authenticated TLS to the origin. **That
 connection still trusts the relay; it cannot regain browser-to-origin E2E TLS
 after termination.** New connections without an eligible snapshot go through
 normal TLS passthrough. The relay never dials a client-supplied origin URL.
+Snapshot readers are released before origin fallback. Missing, unreadable, or
+truncated disk content invalidates that snapshot so the next manifest check
+requests a fresh upload. A failed reader of an older snapshot cannot invalidate
+a newer replacement.
 
 Tenant TLS names and HTTP Host headers must match. Tenant requests never reach
 control-plane handlers, even for `/sdk`, `/api`, or a forged root Host. ECH and

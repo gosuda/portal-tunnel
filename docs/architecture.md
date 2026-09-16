@@ -6,6 +6,12 @@ relay. Tenant TLS normally terminates at the tunnel client. Explicitly opted-in
 static caches terminate browser TLS at the selected relay; see
 [static cache ownership and limits](adr/0001-static-relay-cache.md).
 
+`portal/cache.Manager` owns cache admission, storage, expiry, lease events, and
+lookup/serving. The registry supplies immutable lease observations; server
+integration owns authentication and reverse-stream fallback. On the SDK side,
+one exposure-owned static source builds manifests shared by all relay listeners,
+which retain only relay-specific synchronization and transport.
+
 Relay selection returns public relay priorities. Portal does not construct an
 ordered list of intermediate relays. Explicit relay URLs, transport eligibility,
 admission, expiry, health, and load remain Portal responsibilities.

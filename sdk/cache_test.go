@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/gosuda/portal-tunnel/v2/internal/cachemanifest"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -35,7 +36,7 @@ func TestStaticCacheRefreshUsesContentDigest(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			digest, _, err := utils.StaticCacheDigest(manifest, limits.MaxObjectSize, limits.MaxExposureBytes)
+			digest, _, err := cachemanifest.Digest(manifest, limits.MaxObjectSize, limits.MaxExposureBytes)
 			if err != nil {
 				t.Error(err)
 				return
@@ -68,7 +69,7 @@ func TestStaticCacheRefreshUsesContentDigest(t *testing.T) {
 				return
 			}
 		}
-		cachedDigest, _, err = utils.StaticCacheDigest(manifest, limits.MaxObjectSize, limits.MaxExposureBytes)
+		cachedDigest, _, err = cachemanifest.Digest(manifest, limits.MaxObjectSize, limits.MaxExposureBytes)
 		if err != nil {
 			t.Error(err)
 			return
@@ -80,11 +81,11 @@ func TestStaticCacheRefreshUsesContentDigest(t *testing.T) {
 	relayURL, _ := url.Parse(relay.URL)
 	l := &listener{
 		api:   &apiClient{relayURL: relayURL, http: relay.Client()},
-		cache: &staticCacheSource{root: root, index: "index.html"},
+		cache: newStaticCacheSource(staticCacheConfig{root: root, index: "index.html"}),
 		lease: utils.NewSnapshot(listenerSnapshot{accessToken: "lease-token"}, listenerSnapshot.snapshot),
 	}
 	for range 2 {
-		if err := l.syncStaticCache(context.Background(), limits); err != nil {
+		if err := l.syncStaticCache(context.Background(), limits, l.cache.scan(context.Background(), limits)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -94,7 +95,7 @@ func TestStaticCacheRefreshUsesContentDigest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("second"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.syncStaticCache(context.Background(), limits); err != nil {
+	if err := l.syncStaticCache(context.Background(), limits, l.cache.scan(context.Background(), limits)); err != nil {
 		t.Fatal(err)
 	}
 	if uploads.Load() != 2 {
@@ -104,7 +105,7 @@ func TestStaticCacheRefreshUsesContentDigest(t *testing.T) {
 		if err := os.Symlink(filepath.Join(root, "index.html"), filepath.Join(root, "link.html")); err != nil {
 			t.Skipf("symlinks unavailable on this host: %v", err)
 		}
-		if err := l.syncStaticCache(context.Background(), limits); err == nil {
+		if err := l.syncStaticCache(context.Background(), limits, l.cache.scan(context.Background(), limits)); err == nil {
 			t.Fatal("symlink accepted into snapshot")
 		}
 		if uploads.Load() != 2 {
@@ -137,10 +138,10 @@ func TestStaticCacheDoesNotFollowRedirects(t *testing.T) {
 			relayURL, _ := url.Parse(relay.URL)
 			l := &listener{
 				api:   &apiClient{relayURL: relayURL, http: relay.Client()},
-				cache: &staticCacheSource{root: root, index: "index.html"},
+				cache: newStaticCacheSource(staticCacheConfig{root: root, index: "index.html"}),
 				lease: utils.NewSnapshot(listenerSnapshot{accessToken: "lease-token"}, listenerSnapshot.snapshot),
 			}
-			if err := l.syncStaticCache(context.Background(), types.StaticCacheLimits{MaxExposureBytes: 1024, MaxObjectSize: 512}); err == nil {
+			if err := l.syncStaticCache(context.Background(), types.StaticCacheLimits{MaxExposureBytes: 1024, MaxObjectSize: 512}, l.cache.scan(context.Background(), types.StaticCacheLimits{MaxExposureBytes: 1024, MaxObjectSize: 512})); err == nil {
 				t.Fatal("redirect accepted as a successful cache operation")
 			}
 			if foreignRequests.Load() != 0 {

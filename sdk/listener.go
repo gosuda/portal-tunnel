@@ -1001,7 +1001,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	}
 	if l.cache != nil {
 		registerReq.Cache = true
-		registerReq.CacheTTL = int(l.cache.ttl / time.Second)
+		registerReq.CacheTTL = int(l.cache.cfg.ttl / time.Second)
 	}
 	if l.echEnabled {
 		registerReq.RouteHostname = materials.RouteHostname

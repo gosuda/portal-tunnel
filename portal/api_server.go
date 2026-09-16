@@ -285,12 +285,8 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 		x402Info.PayTo = cfg.X402PayTo
 	}
 
-	var cacheLimits *types.StaticCacheLimits
-	if cache := s.registry.cache; cache != nil {
-		cacheLimits = &types.StaticCacheLimits{MaxExposureBytes: int64(cache.cfg.MaxExposureBytes), MaxObjectSize: int64(cache.cfg.MaxObjectSize)}
-	}
 	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
-		Cache:           cacheLimits,
+		Cache:           s.registry.cache.Limits(),
 		ProtocolVersion: types.SDKVersion,
 		ReleaseVersion:  types.ReleaseVersion,
 		ENS:             s.acmeManager.ENSStatus(),

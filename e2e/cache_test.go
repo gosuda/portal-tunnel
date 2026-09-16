@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -38,7 +38,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL: relayURL, StateDir: stateDir,
 		APIListenAddr: "127.0.0.1:" + strconv.Itoa(apiPort), SNIListenAddr: sniAddr,
-		Cache: types.RelayCacheConfig{Enabled: true, MaxBytes: 1024, MaxExposureBytes: 512, MaxObjectSize: 512, MaxTTL: offlineTTL, PopulationConcurrency: 1},
+		Cache: cache.Config{Enabled: true, MaxBytes: 1024, MaxExposureBytes: 512, MaxObjectSize: 512, MaxTTL: offlineTTL, PopulationConcurrency: 1, CheckConcurrency: 1},
 	})
 	if err != nil {
 		t.Fatal(err)
