@@ -47,6 +47,8 @@ func mustSignedDescriptor(t *testing.T, signing types.Identity, relayURL string,
 	return signed
 }
 
+// TestInsertCandidateAcceptsValidDescriptor pins the admission path: a signed,
+// currently valid descriptor for an unknown URL enters the pool as a candidate.
 func TestInsertCandidateAcceptsValidDescriptor(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
@@ -60,6 +62,8 @@ func TestInsertCandidateAcceptsValidDescriptor(t *testing.T) {
 	}
 }
 
+// TestInsertCandidateRejectsUnsigned pins the signature gate: an announce
+// without a descriptor signature is rejected and never enters the pool.
 func TestInsertCandidateRejectsUnsigned(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
@@ -71,6 +75,8 @@ func TestInsertCandidateRejectsUnsigned(t *testing.T) {
 	}
 }
 
+// TestInsertCandidateRejectsExpired pins the validity window: a descriptor
+// whose ExpiresAt has already passed is rejected at insert time.
 func TestInsertCandidateRejectsExpired(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
@@ -82,6 +88,9 @@ func TestInsertCandidateRejectsExpired(t *testing.T) {
 	}
 }
 
+// TestInsertCandidateIgnoresSupersededRollback pins the monotonic-IssuedAt
+// anchor: re-announcing an older-issued descriptor for the same URL is ignored
+// and never overwrites the newer stored descriptor.
 func TestInsertCandidateIgnoresSupersededRollback(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
@@ -105,6 +114,9 @@ func TestInsertCandidateIgnoresSupersededRollback(t *testing.T) {
 	}
 }
 
+// TestInsertCandidateRejectsRollbackAcrossRelayURL extends the rollback guard
+// across URLs: a signing identity cannot re-anchor an older IssuedAt by
+// submitting it under a different relay URL.
 func TestInsertCandidateRejectsRollbackAcrossRelayURL(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
@@ -119,6 +131,9 @@ func TestInsertCandidateRejectsRollbackAcrossRelayURL(t *testing.T) {
 	}
 }
 
+// TestInsertCandidateBlocksCrossIdentityTakeover pins URL ownership: a second
+// signing identity cannot claim a URL slot while the current owner's descriptor
+// is still valid, and the owner's entry is retained.
 func TestInsertCandidateBlocksCrossIdentityTakeover(t *testing.T) {
 	set := NewRelaySet(nil)
 	owner := mustSigningIdentity(t)
@@ -145,6 +160,9 @@ func TestInsertCandidateBlocksCrossIdentityTakeover(t *testing.T) {
 	}
 }
 
+// TestInsertCandidateCapsFloodPerSigningIdentity pins the per-identity
+// announcement cap: a flooding identity is held to MaxAnnouncedRelaysPerIdentity
+// entries whose eviction cannot displace another identity's relays.
 func TestInsertCandidateCapsFloodPerSigningIdentity(t *testing.T) {
 	set := NewRelaySet(nil)
 	legit := mustSigningIdentity(t)
@@ -181,6 +199,9 @@ func TestInsertCandidateCapsFloodPerSigningIdentity(t *testing.T) {
 	}
 }
 
+// TestInsertCandidatePerIdentityCapKeepsConfirmedEntries pins the cap's
+// exemption: listener-confirmed entries survive per-identity eviction even
+// when the same identity floods fresh announcements.
 func TestInsertCandidatePerIdentityCapKeepsConfirmedEntries(t *testing.T) {
 	set := NewRelaySet(nil)
 	owner := mustSigningIdentity(t)
@@ -206,6 +227,9 @@ func TestInsertCandidatePerIdentityCapKeepsConfirmedEntries(t *testing.T) {
 	}
 }
 
+// TestInsertCandidateHiddenUntilDirectProbe pins candidate opacity: a
+// gossip-inserted candidate stays out of Descriptors() until an authoritative
+// probe of the relay itself promotes it to visible.
 func TestInsertCandidateHiddenUntilDirectProbe(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
@@ -241,6 +265,9 @@ func TestInsertCandidateHiddenUntilDirectProbe(t *testing.T) {
 	}
 }
 
+// TestFilterCandidatePoolExcludesCandidatesUntilVerified pins selection
+// eligibility: unverified candidates are filtered out while RelayVerified
+// entries pass through to route planning.
 func TestFilterCandidatePoolExcludesCandidatesUntilVerified(t *testing.T) {
 	signing := mustSigningIdentity(t)
 	other := mustSigningIdentity(t)
@@ -261,6 +288,9 @@ func TestFilterCandidatePoolExcludesCandidatesUntilVerified(t *testing.T) {
 	}
 }
 
+// TestApplyRelayDiscoveryResponseAppliesIdentityCap pins gossip hygiene:
+// ingesting a discovery response is bounded by the same per-identity cap as
+// direct announces.
 func TestApplyRelayDiscoveryResponseAppliesIdentityCap(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
@@ -290,6 +320,9 @@ func TestApplyRelayDiscoveryResponseAppliesIdentityCap(t *testing.T) {
 	}
 }
 
+// TestApplyRelayDiscoveryResponsePromotesOnlyTarget pins the anti-laundering
+// rule: only the directly probed relay's own descriptor becomes visible; third
+// parties riding in the response need their own direct probe.
 func TestApplyRelayDiscoveryResponsePromotesOnlyTarget(t *testing.T) {
 	set := NewRelaySet(nil)
 	source := mustSigningIdentity(t)
@@ -336,6 +369,8 @@ func TestApplyRelayDiscoveryResponsePromotesOnlyTarget(t *testing.T) {
 	}
 }
 
+// TestGossipRefreshKeepsVerifiedTrust pins trust monotonicity: a later gossip
+// refresh of an already verified relay must not demote it out of Descriptors().
 func TestGossipRefreshKeepsVerifiedTrust(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)
@@ -370,6 +405,9 @@ func TestGossipRefreshKeepsVerifiedTrust(t *testing.T) {
 	}
 }
 
+// TestGlobalCapEvictsCandidatesBeforeVerified pins global-cap eviction order:
+// a candidate flood filling MaxAnnouncedRelays must evict unverified
+// candidates while the verified relay survives and the pool bound holds.
 func TestGlobalCapEvictsCandidatesBeforeVerified(t *testing.T) {
 	set := NewRelaySet(nil)
 	verified := mustSigningIdentity(t)
@@ -412,6 +450,9 @@ func TestGlobalCapEvictsCandidatesBeforeVerified(t *testing.T) {
 	}
 }
 
+// TestTrustDoesNotTransferAcrossIdentityTakeover pins trust scoping: once a
+// verified descriptor expires, a cross-identity successor at the same URL
+// restarts as an unverified candidate with no inherited visibility.
 func TestTrustDoesNotTransferAcrossIdentityTakeover(t *testing.T) {
 	set := NewRelaySet(nil)
 	first := mustSigningIdentity(t)
@@ -449,6 +490,9 @@ func TestTrustDoesNotTransferAcrossIdentityTakeover(t *testing.T) {
 	}
 }
 
+// TestBootstrapCandidateDescriptorStaysHidden pins bootstrap pinning: a
+// candidate squatted on a bootstrap URL keeps the Bootstrap flag and stays
+// out of Descriptors(), while URL-only bootstrap entries remain fallbacks.
 func TestBootstrapCandidateDescriptorStaysHidden(t *testing.T) {
 	bootstrapURL := "https://bootstrap.example"
 	set := NewRelaySet([]string{bootstrapURL})

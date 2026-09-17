@@ -24,6 +24,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// TestStaticCacheOffloadAndOfflineTLS verifies that the static relay cache serves
+// tenant traffic when the origin is unreachable, honours Range requests and ETag
+// freshness from cache, falls back to the origin for non-cacheable methods, and
+// expires cached responses after the configured TTL.
 func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	const offlineTTL = time.Second
 	ctx, cancel := context.WithCancel(context.Background())

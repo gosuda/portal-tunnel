@@ -11,6 +11,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 )
 
+// TestCertificateSignerMismatchRejectsStartup verifies that the relay refuses to start
+// when the persisted TLS certificate does not match the keyless signer keypair,
+// preventing silent downgrade to an untrusted certificate.
 func TestCertificateSignerMismatchRejectsStartup(t *testing.T) {
 	certPEM, _ := localTLSMaterial(t, t.TempDir())
 	_, otherKeyPEM := localTLSMaterial(t, t.TempDir())

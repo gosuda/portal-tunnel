@@ -6,6 +6,9 @@ import (
 	gdns "google.golang.org/api/dns/v1"
 )
 
+// TestDNSKeyDSRecordPrefersSHA256 protects the invariant that when a DNSSEC key has
+// multiple DS digest types, the DS record uses SHA-256 (the minimum mandatory algorithm
+// per RFC 8624), preferring it over weaker SHA-1.
 func TestDNSKeyDSRecordPrefersSHA256(t *testing.T) {
 	t.Parallel()
 
@@ -27,6 +30,9 @@ func TestDNSKeyDSRecordPrefersSHA256(t *testing.T) {
 	}
 }
 
+// TestDNSSECStatusFromZoneUsesActiveKeySigningKey protects the invariant that only
+// an active key-signing key (KSK) with a valid SHA-256 digest contributes to the
+// DS record, so that the parent chain is anchored only to keys that are in use.
 func TestDNSSECStatusFromZoneUsesActiveKeySigningKey(t *testing.T) {
 	t.Parallel()
 

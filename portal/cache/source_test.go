@@ -18,6 +18,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// TestSourceSharesGenerationAcrossRelays verifies that multiple relays sharing the same source
+// receive the same content digest manifest and that a generation is immutable once
+// published, even if the source file is removed. A relay whose limits cannot be satisfied
+// is invalidated without affecting other relays, and canceling the source releases all
+// subscribers including those not yet individually cancelled.
+
 func TestSourceSharesGenerationAcrossRelays(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "index.html")

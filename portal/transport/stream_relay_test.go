@@ -9,6 +9,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// TestOfferConnReadyWritesProtocolAckBeforeClaimMarker pins handshake byte
+// order: the caller's protocol ack reaches the wire before the claim marker,
+// the ordering the SDK connect handshake depends on.
 func TestOfferConnReadyWritesProtocolAckBeforeClaimMarker(t *testing.T) {
 	relay := NewRelayStream("lease", time.Minute, 1)
 	t.Cleanup(relay.Close)
@@ -43,6 +46,9 @@ func TestOfferConnReadyWritesProtocolAckBeforeClaimMarker(t *testing.T) {
 	_ = (<-claimed).Close()
 }
 
+// TestOfferConnReadyLeavesRejectedConnectionWithCaller pins backpressure
+// ownership: with the ready queue full, the offer is rejected without running
+// the ready callback and the connection stays owned by the caller.
 func TestOfferConnReadyLeavesRejectedConnectionWithCaller(t *testing.T) {
 	relay := NewRelayStream("lease", time.Minute, 1)
 	t.Cleanup(relay.Close)

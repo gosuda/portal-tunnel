@@ -15,6 +15,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// TestValidateReverseEndpoint pins the endpoint-validation contract: validateReverseEndpoint
+// accepts correctly formed endpoints and rejects wrong paths, expired expiry, and unknown capabilities.
 func TestValidateReverseEndpoint(t *testing.T) {
 	t.Parallel()
 	leaseExpiry := time.Now().UTC().Add(time.Minute)
@@ -48,6 +50,8 @@ func TestValidateReverseEndpoint(t *testing.T) {
 	}
 }
 
+// TestValidateReverseEndpointTransport pins the transport-selection contract: the overlay flag
+// gates whether a gateway URL is accepted or rejected for the reverse endpoint.
 func TestValidateReverseEndpointTransport(t *testing.T) {
 	t.Parallel()
 	relayURL, err := url.Parse("https://relay.example")
@@ -80,6 +84,8 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 	}
 }
 
+// TestAPIClientRenewUsesExplicitRequestValues pins the renew passthrough contract: the HTTP
+// renew call uses caller-supplied AccessToken, TTL, ReportedIP, and Metadata verbatim.
 func TestAPIClientRenewUsesExplicitRequestValues(t *testing.T) {
 	t.Parallel()
 
@@ -130,6 +136,8 @@ func TestAPIClientRenewUsesExplicitRequestValues(t *testing.T) {
 	}
 }
 
+// TestTerminalRelayFailureClosesListener pins the terminal-failure contract: a relay response
+// indicating an incompatible protocol causes the listener to close without retry.
 func TestTerminalRelayFailureClosesListener(t *testing.T) {
 	relayURL, err := url.Parse("https://relay.example")
 	if err != nil {
@@ -157,6 +165,9 @@ func TestTerminalRelayFailureClosesListener(t *testing.T) {
 	}
 }
 
+// TestRefreshReverseEndpointAfterFailureReportsMissingLease pins the missing-lease contract:
+// refreshReverseEndpointAfterFailure maps a 404 response to errLeaseRefreshRequired,
+// signaling that the lease must be re-registered rather than refreshed.
 func TestRefreshReverseEndpointAfterFailureReportsMissingLease(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, "lease not found")
@@ -186,6 +197,9 @@ func TestRefreshReverseEndpointAfterFailureReportsMissingLease(t *testing.T) {
 	}
 }
 
+// TestRenewLeaseReportsStaleCredentialsAfterAuthorityRotation pins the credential-rotation contract:
+// renewLease surfaces a 401 response as errLeaseRefreshRequired, signaling that the lease must
+// be fully re-registered rather than renewed.
 func TestRenewLeaseReportsStaleCredentialsAfterAuthorityRotation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized")

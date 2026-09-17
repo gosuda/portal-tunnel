@@ -66,6 +66,9 @@ func testDescriptor(t *testing.T, authority identity.Authority, rawURL, destinat
 	return descriptor
 }
 
+// TestCapabilityBindsIngressGatewayAndLease pins capability authenticity: the
+// capability binds lease, ingress descriptor, and gateway destination, and the
+// gateway cannot sign capabilities for itself — only the ingress verifies.
 func TestCapabilityBindsIngressGatewayAndLease(t *testing.T) {
 	t.Parallel()
 	ingressAuthority := testAuthority(t, "ingress")
@@ -101,6 +104,9 @@ func TestCapabilityBindsIngressGatewayAndLease(t *testing.T) {
 	}
 }
 
+// TestIssueEndpointRotatesGatewayWithoutChangingLease pins gateway rotation:
+// a failed gateway advances to the next candidate for the same lease, and
+// exhausting the catalog degrades to direct transport instead of failing.
 func TestIssueEndpointRotatesGatewayWithoutChangingLease(t *testing.T) {
 	t.Parallel()
 	ingressAuthority := testAuthority(t, "ingress")
@@ -159,6 +165,9 @@ func TestIssueEndpointRotatesGatewayWithoutChangingLease(t *testing.T) {
 	}
 }
 
+// TestGatewayLimitsSourceRequestsBeforeDial pins admission control: per-source
+// limits bound /sdk/connect requests before any overlay dial, so an exhausted
+// source is rejected without dialing and other sources still get through.
 func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 	t.Parallel()
 	gate, capability := testGateway(t)
@@ -195,6 +204,9 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 	}
 }
 
+// TestGatewayReservesCapacityForOtherSources pins capacity isolation: one
+// source consuming its full budget is rejected with 429 while a different
+// source still dials, and released reservations become reusable.
 func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 	t.Parallel()
 	gate, capability := testGateway(t)
@@ -295,6 +307,9 @@ type peerConn struct {
 
 func (c peerConn) RemoteAddr() net.Addr { return c.remote }
 
+// TestDialRequiresAuthenticatedIVNPPeer pins peer authentication: dial only
+// accepts a peer whose IVNP address names the expected destination with a bound
+// port on the i2p network; any rejected peer's connection is closed.
 func TestDialRequiresAuthenticatedIVNPPeer(t *testing.T) {
 	hash := sha256.Sum256([]byte("ingress"))
 	destination := foundation.B32(hash)
@@ -342,6 +357,9 @@ func TestDialRequiresAuthenticatedIVNPPeer(t *testing.T) {
 	}
 }
 
+// TestStartRejectsInvalidRouterConfiguration pins config validation: Start
+// refuses malformed or schema-invalid IVNP router configuration and never
+// starts a router from it.
 func TestStartRejectsInvalidRouterConfiguration(t *testing.T) {
 	for _, content := range []string{
 		"", "null", "[router]\n", `{"Unknown":true}`, `{} {}`,
@@ -364,6 +382,9 @@ func TestStartRejectsInvalidRouterConfiguration(t *testing.T) {
 	}
 }
 
+// TestUnavailableOverlayStartsAndShutsDownWithoutPeers pins graceful
+// degradation: an overlay with no reachable peers still starts, keeps the
+// direct fallback, and shuts down cleanly without leaving state behind.
 func TestUnavailableOverlayStartsAndShutsDownWithoutPeers(t *testing.T) {
 	for _, mode := range []string{"cancel run", "close runtime"} {
 		t.Run(mode, func(t *testing.T) {

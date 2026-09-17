@@ -7,6 +7,8 @@ import (
 	"testing/fstest"
 )
 
+// TestServeFrontendFallsBackForDottedClientRoute verifies that unknown client-side
+// routes (e.g. "/users/jane.doe") return the SPA entry file instead of 404.
 func TestServeFrontendFallsBackForDottedClientRoute(t *testing.T) {
 	api := &RelayAPI{frontendFS: fstest.MapFS{
 		"index.html": {Data: []byte("<html>portal</html>")},
@@ -24,6 +26,9 @@ func TestServeFrontendFallsBackForDottedClientRoute(t *testing.T) {
 	}
 }
 
+// TestServeFrontendReturnsNotFoundForMissingAsset verifies that a request for
+// a non-existent file asset (e.g. a stale hashed asset) returns 404, not the
+// SPA index, so the browser does not load stale content.
 func TestServeFrontendReturnsNotFoundForMissingAsset(t *testing.T) {
 	api := &RelayAPI{frontendFS: fstest.MapFS{
 		"index.html": {Data: []byte("<html>portal</html>")},
@@ -38,6 +43,9 @@ func TestServeFrontendReturnsNotFoundForMissingAsset(t *testing.T) {
 	}
 }
 
+// TestServeFrontendDoesNotHandleReservedPortalPath verifies that paths reserved
+// for the relay API (e.g. "/api/...") are not consumed by the frontend handler
+// and fall through to the API mux, which returns 404.
 func TestServeFrontendDoesNotHandleReservedPortalPath(t *testing.T) {
 	api := &RelayAPI{frontendFS: fstest.MapFS{
 		"index.html": {Data: []byte("<html>portal</html>")},

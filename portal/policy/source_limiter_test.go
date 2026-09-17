@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// TestSourceLimiterIsolatesSourcesAndRefills protects the per-source token-bucket
+// rate-limiting invariant: each source IP has its own bucket, the burst budget
+// is shared across requests from the same source, and tokens refill at a fixed rate.
 func TestSourceLimiterIsolatesSourcesAndRefills(t *testing.T) {
 	limiter := NewSourceLimiter(60, 5)
 	now := time.Now()
@@ -26,6 +29,9 @@ func TestSourceLimiterIsolatesSourcesAndRefills(t *testing.T) {
 	}
 }
 
+// TestSourceLimiterBoundsStorageAndExpiresIdleSources protects the memory-bounds
+// invariant that the limiter caps the number of tracked sources and evicts sources
+// that have been idle beyond the TTL to release that storage.
 func TestSourceLimiterBoundsStorageAndExpiresIdleSources(t *testing.T) {
 	limiter := NewSourceLimiter(60, 1)
 	limiter.maxBucketCount = 1

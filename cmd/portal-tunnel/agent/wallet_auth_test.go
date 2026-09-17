@@ -9,6 +9,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// TestWalletAuthSIWE verifies that SIWE challenge issuance and login respect the
+// full SIWE contract: only the owner address can log in, the message must be
+// byte-for-byte unchanged, expiration is enforced, and challenges cannot be reused.
 func TestWalletAuthSIWE(t *testing.T) {
 	owner := siweTestAuthority(t, "1")
 	other := siweTestAuthority(t, "2")
@@ -83,6 +86,8 @@ func TestWalletAuthSIWE(t *testing.T) {
 	}
 }
 
+// TestWalletAuthRejectsDisallowedChallenge verifies that an address not in the
+// AllowedAddresses list cannot receive a challenge; issuance is gated on allowlist.
 func TestWalletAuthRejectsDisallowedChallenge(t *testing.T) {
 	owner := siweTestAuthority(t, "1")
 	other := siweTestAuthority(t, "2")

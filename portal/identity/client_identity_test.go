@@ -17,6 +17,9 @@ func mustLoadOrCreate(t *testing.T, name, target, path, rawJSON string) types.Id
 	return loaded
 }
 
+// TestLoadOrCreatePersistsAndReloads protects the persistence contract that a created identity
+// is written to disk and that a subsequent LoadOrCreate call reads back the same identity
+// unchanged, so identities survive process restarts.
 func TestLoadOrCreatePersistsAndReloads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
 
@@ -32,6 +35,9 @@ func TestLoadOrCreatePersistsAndReloads(t *testing.T) {
 	}
 }
 
+// TestLoadOrCreateJSONTakesPrecedenceWithoutPersistence protects the configuration contract
+// that a rawJSON argument overrides the on-disk file without modifying the file on disk,
+// so an operator-supplied identity takes effect for the current process run only.
 func TestLoadOrCreateJSONTakesPrecedenceWithoutPersistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
 	mustLoadOrCreate(t, "stored-name", "", path, "")
@@ -54,6 +60,9 @@ func TestLoadOrCreateJSONTakesPrecedenceWithoutPersistence(t *testing.T) {
 	}
 }
 
+// TestLoadOrCreateWithoutPathStaysEphemeral protects the lifecycle contract that when no
+// path is provided, LoadOrCreate generates an identity in memory without writing to disk,
+// so the caller can use a stateless ephemeral identity.
 func TestLoadOrCreateWithoutPathStaysEphemeral(t *testing.T) {
 	resolved := mustLoadOrCreate(t, "", "127.0.0.1:9999", "", "")
 	if resolved.Name == "" || resolved.PrivateKey == "" {
@@ -61,6 +70,9 @@ func TestLoadOrCreateWithoutPathStaysEphemeral(t *testing.T) {
 	}
 }
 
+// TestLoadOrCreateNameOnlyAppliesWhenGenerating protects the persistence contract that the
+// name argument is accepted only when creating a new identity; reloading an existing identity
+// preserves its original name, so stored identities are stable across process runs.
 func TestLoadOrCreateNameOnlyAppliesWhenGenerating(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
 	first := mustLoadOrCreate(t, "stored-name", "", path, "")
@@ -71,6 +83,9 @@ func TestLoadOrCreateNameOnlyAppliesWhenGenerating(t *testing.T) {
 	}
 }
 
+// TestLoadOrCreateRejectsInvalidExistingName protects the data-integrity contract that a stored
+// identity with an invalid (empty) name field is rejected rather than silently replaced, so
+// corrupted stored identities are surfaced as errors.
 func TestLoadOrCreateRejectsInvalidExistingName(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
 	raw := withJSONField(t, mustMarshal(t, mustGenerate(t, "valid")), "name", "")
@@ -83,6 +98,9 @@ func TestLoadOrCreateRejectsInvalidExistingName(t *testing.T) {
 	}
 }
 
+// TestLoadOrCreateRejectsKeylessFile protects the data-integrity contract that a stored identity
+// file missing a private key is rejected rather than silently generating a new key, so the caller
+// cannot accidentally create a new identity when the stored one is corrupt.
 func TestLoadOrCreateRejectsKeylessFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
 	if err := os.WriteFile(path, []byte(`{"name":"foo"}`), 0o600); err != nil {

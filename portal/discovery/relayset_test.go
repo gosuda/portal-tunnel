@@ -77,6 +77,9 @@ func routesTo(t *testing.T, set *RelaySet, relayURL string) bool {
 	return false
 }
 
+// TestApplyRelayDiscoveryResponsePreservesBootstrapFlag pins bootstrap
+// durability: ingesting a discovery response for a configured bootstrap relay
+// must not drop its Bootstrap marker.
 func TestApplyRelayDiscoveryResponsePreservesBootstrapFlag(t *testing.T) {
 	relayURL := "https://relay-a.example"
 	set := NewRelaySet([]string{relayURL})
@@ -88,6 +91,9 @@ func TestApplyRelayDiscoveryResponsePreservesBootstrapFlag(t *testing.T) {
 	}
 }
 
+// TestDescriptorsDropsExpiredSignedRelayDescriptor pins gossip freshness:
+// Descriptors() stops serving a descriptor once its validity window has
+// passed, even though it was accepted while still valid.
 func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
 	set := NewRelaySet(nil)
 
@@ -141,6 +147,9 @@ func TestBannedRelayStopsServingAndRouting(t *testing.T) {
 	}
 }
 
+// TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch pins
+// hint salvage: an empty-target gossip response over a mismatched protocol
+// version is not an error and still collects the announced relays, unconfirmed.
 func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *testing.T) {
 	set := NewRelaySet(nil)
 
@@ -168,6 +177,9 @@ func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *tes
 	}
 }
 
+// TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing
+// pins partial-response handling: a direct probe missing the target's own
+// descriptor errors, yet its gossiped hints are still collected unconfirmed.
 func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t *testing.T) {
 	set := NewRelaySet(nil)
 
@@ -330,6 +342,9 @@ func TestRelaySetEnsureRelayURLPreservesExistingState(t *testing.T) {
 	}
 }
 
+// TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport pins the transport
+// gate: explicit intent cannot override a descriptor that lacks a required
+// transport.
 func TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 	const relayURL = "https://relay-udp-disabled.example"
 	set := NewRelaySet(nil)
@@ -346,6 +361,9 @@ func TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 	}
 }
 
+// TestSelectRelaysIncludesExplicitRelayMissingFromSet pins explicit intent
+// precedence over discovery: an unobserved relay named explicitly is still
+// returned as an Explicit route.
 func TestSelectRelaysIncludesExplicitRelayMissingFromSet(t *testing.T) {
 	const relayURL = "https://relay-explicit.example"
 
@@ -364,6 +382,9 @@ func TestSelectRelaysIncludesExplicitRelayMissingFromSet(t *testing.T) {
 	}
 }
 
+// TestProtocolMismatchKeepsOlderRelayVisibleWithoutRouting pins protocol
+// quarantine: an incompatible relay is reported via ErrProtocolMismatch,
+// recorded in KnownIncompatibleRelays, and excluded from gossip and routing.
 func TestProtocolMismatchKeepsOlderRelayVisibleWithoutRouting(t *testing.T) {
 	set := NewRelaySet(nil)
 
@@ -401,6 +422,9 @@ func TestProtocolMismatchKeepsOlderRelayVisibleWithoutRouting(t *testing.T) {
 	}
 }
 
+// TestKnownIncompatibleRelaysExpireAfterRetention pins the retention window:
+// incompatibility records expire after AnnounceMaxValidity without a fresh
+// observation.
 func TestKnownIncompatibleRelaysExpireAfterRetention(t *testing.T) {
 	set := NewRelaySet(nil)
 
@@ -421,6 +445,9 @@ func TestKnownIncompatibleRelaysExpireAfterRetention(t *testing.T) {
 	}
 }
 
+// TestCompatibleAuthoritativeDiscoveryClearsIncompatibleRelay pins recovery:
+// a compatible authoritative discovery from the relay clears its
+// incompatibility record so it can re-enter service after an upgrade.
 func TestCompatibleAuthoritativeDiscoveryClearsIncompatibleRelay(t *testing.T) {
 	set := NewRelaySet(nil)
 
@@ -442,6 +469,9 @@ func TestCompatibleAuthoritativeDiscoveryClearsIncompatibleRelay(t *testing.T) {
 	}
 }
 
+// TestKnownIncompatibleRelaysSuppressBannedRelay pins precedence: a local ban
+// removes the relay's incompatibility record, keeping the ban the single
+// visible reason the relay is out of service.
 func TestKnownIncompatibleRelaysSuppressBannedRelay(t *testing.T) {
 	set := NewRelaySet(nil)
 
@@ -463,6 +493,9 @@ func TestKnownIncompatibleRelaysSuppressBannedRelay(t *testing.T) {
 	}
 }
 
+// TestProtocolMismatchOutranksMissingTarget pins error precedence: when a probe
+// both mismatches the protocol and omits the target descriptor, the mismatch is
+// reported and still recorded in KnownIncompatibleRelays.
 func TestProtocolMismatchOutranksMissingTarget(t *testing.T) {
 	set := NewRelaySet(nil)
 

@@ -41,6 +41,9 @@ func withJSONField(t *testing.T, data []byte, field string, value any) []byte {
 	return raw
 }
 
+// TestGenerateReturnsValidIdentity protects the data-integrity contract that Generate() produces
+// an identity with all required fields (Name, Address, PublicKey, PrivateKey, TokenSecret) populated,
+// and that the identity round-trips through Marshal and Parse unchanged.
 func TestGenerateReturnsValidIdentity(t *testing.T) {
 	generated := mustGenerate(t, "generate-check")
 	if generated.Name != "generate-check" ||
@@ -58,6 +61,9 @@ func TestGenerateReturnsValidIdentity(t *testing.T) {
 	}
 }
 
+// TestParseRejectsInvalidStorageInput protects the data-integrity contract that Parse() rejects
+// corrupted or malformed identity storage: missing private key, invalid JSON, mismatched address
+// (does not match the key), empty name, or derivation path without mnemonic.
 func TestParseRejectsInvalidStorageInput(t *testing.T) {
 	valid := mustMarshal(t, mustGenerate(t, "parse-check"))
 
@@ -84,6 +90,9 @@ func TestParseRejectsInvalidStorageInput(t *testing.T) {
 	}
 }
 
+// TestMarshalSerializesValidIdentity protects the wire-protocol compatibility contract that
+// Marshal() outputs JSON containing all required fields (name, address, public_key, private_key,
+// token_secret) under their canonical lowercase keys, so the format is stable for storage and parsing.
 func TestMarshalSerializesValidIdentity(t *testing.T) {
 	data := mustMarshal(t, mustGenerate(t, "marshal-check"))
 
@@ -98,6 +107,9 @@ func TestMarshalSerializesValidIdentity(t *testing.T) {
 	}
 }
 
+// TestNewRegisterChallengeNormalizesWireIdentity protects the wire-protocol contract that the
+// identity embedded in a RegisterChallenge has a lowercased name, matching the normalization applied
+// during initial identity creation, so challenge verification is consistent.
 func TestNewRegisterChallengeNormalizesWireIdentity(t *testing.T) {
 	generated := mustGenerate(t, "wire-check")
 	challenge, err := NewRegisterChallenge(types.RegisterChallengeRequest{

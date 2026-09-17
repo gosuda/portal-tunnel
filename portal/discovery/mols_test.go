@@ -9,6 +9,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// TestSelectPriorityKeepsExplicitRelaysOutsideAutoLimit pins explicit intent:
+// explicitly requested relays are prepended without consuming the automatic
+// selection limit.
 func TestSelectPriorityKeepsExplicitRelaysOutsideAutoLimit(t *testing.T) {
 	explicitRelay := "https://relay-explicit.example"
 	relayA := "https://relay-a.example"
@@ -28,6 +31,8 @@ func TestSelectPriorityKeepsExplicitRelaysOutsideAutoLimit(t *testing.T) {
 	}
 }
 
+// TestSelectPriorityDeduplicatesExplicitRelays pins list hygiene: a relay
+// requested repeatedly appears once in the selection.
 func TestSelectPriorityDeduplicatesExplicitRelays(t *testing.T) {
 	relayURL := "https://relay-explicit.example"
 	selected := SelectPriority([]RelayState{bootstrapRelayState(relayURL)}, routeState{
@@ -38,6 +43,9 @@ func TestSelectPriorityDeduplicatesExplicitRelays(t *testing.T) {
 	}
 }
 
+// TestSelectPriorityLimitsAutomaticRelays pins the capacity bound: automatic
+// selection is capped at MaxActiveRelays, falling back to the package default
+// when no limit is set.
 func TestSelectPriorityLimitsAutomaticRelays(t *testing.T) {
 	relays := make([]RelayState, 10)
 	for i := range relays {
@@ -52,6 +60,8 @@ func TestSelectPriorityLimitsAutomaticRelays(t *testing.T) {
 	}
 }
 
+// TestSelectPriorityExcludesIneligibleAutomaticRelays pins the eligibility
+// gate: expired and banned relays never enter automatic selection.
 func TestSelectPriorityExcludesIneligibleAutomaticRelays(t *testing.T) {
 	expired := confirmedRelayState(t, "https://relay-expired.example")
 	expired.Descriptor.ExpiresAt = time.Now().UTC().Add(-time.Minute)
@@ -63,6 +73,9 @@ func TestSelectPriorityExcludesIneligibleAutomaticRelays(t *testing.T) {
 	}
 }
 
+// TestSelectPriorityKeepsExplicitRelayIndependentOfDiscoveryState pins
+// explicit precedence: a stale or entirely unobserved relay is still selected
+// when named explicitly, so user intent survives discovery gaps.
 func TestSelectPriorityKeepsExplicitRelayIndependentOfDiscoveryState(t *testing.T) {
 	relayURL := "https://relay-explicit.example"
 	expired := confirmedRelayState(t, relayURL)
@@ -80,6 +93,9 @@ func TestSelectPriorityKeepsExplicitRelayIndependentOfDiscoveryState(t *testing.
 	}
 }
 
+// TestSelectPriorityStickinessDoesNotRestoreIneligibleRelays pins eviction over
+// stickiness: saturated and RTT-fallback active relays are not restored by the
+// stickiness pass; only healthy active relays keep their slots.
 func TestSelectPriorityStickinessDoesNotRestoreIneligibleRelays(t *testing.T) {
 	now := time.Now().UTC()
 	saturated := confirmedRelayState(t, "https://saturated.example")

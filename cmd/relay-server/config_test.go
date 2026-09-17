@@ -41,6 +41,8 @@ func resolveWithEnvFile(t *testing.T, path string) appConfig {
 	return cfg
 }
 
+// TestHTTPRedirectEnvironment verifies that the relay resolves HTTP→HTTPS
+// redirect settings from the env file and applies sensible defaults when absent.
 func TestHTTPRedirectEnvironment(t *testing.T) {
 	cfg := resolveWithEnvFile(t, writeEnvFile(t,
 		types.HTTPRedirectEnabledEnv+"=true", "HTTP_REDIRECT_ADDR=127.0.0.1:18080", "HTTP_REDIRECT_HSTS=true"))
@@ -121,6 +123,8 @@ func TestLoadEnvFileRejectsMalformedLines(t *testing.T) {
 	}
 }
 
+// TestLoadEnvFileKeepsCommentsAndBlanks verifies that blank lines, empty
+// whitespace, and comment lines are ignored and do not appear in the result.
 func TestLoadEnvFileKeepsCommentsAndBlanks(t *testing.T) {
 	path := writeEnvFile(t, "# a comment", "", "  ", "export PORTAL_URL=https://relay.example.com")
 
@@ -161,6 +165,8 @@ func TestConfigReportSurfacesUnknownEnvFileKeys(t *testing.T) {
 	}
 }
 
+// TestEditDistance verifies the Levenshtein distance implementation used for
+// config report typo suggestions.
 func TestEditDistance(t *testing.T) {
 	tests := []struct {
 		a, b string

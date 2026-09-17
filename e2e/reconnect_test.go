@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// TestTunnelRemainsUsableAfterFailedTenantHandshake verifies that an untrusted tenant
+// TLS handshake fails with a certificate verification error but does not break the
+// tunnel for subsequent trusted requests.
 func TestTunnelRemainsUsableAfterFailedTenantHandshake(t *testing.T) {
 	h := newHarness(t)
 	publicURL := h.waitForPublicURL()

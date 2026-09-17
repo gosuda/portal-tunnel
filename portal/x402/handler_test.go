@@ -9,6 +9,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// TestUSDCPaymentHandlerRejectsOversizedPrepareBody protects the exported-API contract that
+// the USDC payment handler returns StatusRequestEntityTooLarge when the prepare request
+// body exceeds X402RequestBodyLimit, preventing unbounded memory allocation on the server.
 func TestUSDCPaymentHandlerRejectsOversizedPrepareBody(t *testing.T) {
 	t.Parallel()
 

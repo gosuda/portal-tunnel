@@ -2,6 +2,9 @@ package dnsrecord
 
 import "testing"
 
+// TestHTTPSRecordContent protects the invariant that HTTPSRecord normalization
+// produces a dot-terminated target and a default priority of 1, and that the
+// wire-format Content() output matches the RFC 9460 SvcParams syntax.
 func TestHTTPSRecordContent(t *testing.T) {
 	record, err := (HTTPSRecord{Target: "public.example.com", SvcParams: `ech="config" port=8443`}).Normalized()
 	if err != nil {
@@ -19,6 +22,9 @@ func TestHTTPSRecordContent(t *testing.T) {
 	}
 }
 
+// TestRelativeName protects the invariant that RelativeName converts fully-qualified
+// domain names to the provider-specific relative form, handles the apex as "@",
+// and rejects names outside the zone with a descriptive error.
 func TestRelativeName(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +70,9 @@ func TestRelativeName(t *testing.T) {
 	}
 }
 
+// TestNameMatches protects the invariant that NameMatches accepts the relative,
+// apex, and fully-qualified record-name forms as equivalent, so that provider
+// API responses round-trip correctly regardless of which form they return.
 func TestNameMatches(t *testing.T) {
 	t.Parallel()
 
@@ -93,6 +102,9 @@ func TestNameMatches(t *testing.T) {
 	}
 }
 
+// TestTXTContent protects the invariant that TXTContent unquotes and trims TXT
+// record values returned by DNS provider APIs, so that assertion comparisons are
+// stable regardless of whether the provider includes surrounding quotes.
 func TestTXTContent(t *testing.T) {
 	t.Parallel()
 

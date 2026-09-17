@@ -15,6 +15,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// TestClientAccessTokenUpdateChangesSignerHeaders protects the exported-API contract that
+// SetAccessToken() updates the headers sent with every subsequent keyless sign request,
+// and that whitespace is trimmed from the token value.
 func TestClientAccessTokenUpdateChangesSignerHeaders(t *testing.T) {
 	t.Parallel()
 	client := &Client{}
@@ -28,6 +31,9 @@ func TestClientAccessTokenUpdateChangesSignerHeaders(t *testing.T) {
 	}
 }
 
+// TestVerifyRemoteSignerAcceptsMatchingKey protects the wire-protocol compatibility
+// invariant that verifyRemoteSigner() accepts RSA and ECDSA signers whose public key
+// matches the key used to produce the self-test signature.
 func TestVerifyRemoteSignerAcceptsMatchingKey(t *testing.T) {
 	t.Parallel()
 	for name, signer := range selfTestSigners(t) {
@@ -40,6 +46,9 @@ func TestVerifyRemoteSignerAcceptsMatchingKey(t *testing.T) {
 	}
 }
 
+// TestVerifyRemoteSignerRejectsSwappedKeypair protects the security invariant from
+// issue #377: when the pinned certificate advertises keypair A but the sign endpoint
+// holds keypair B, verifyRemoteSigner() must reject the connection with errSignerKeyMismatch.
 func TestVerifyRemoteSignerRejectsSwappedKeypair(t *testing.T) {
 	t.Parallel()
 	// Faithful to #377: RemoteSigner.Public() is parsed from the pinned
@@ -63,6 +72,9 @@ func TestVerifyRemoteSignerRejectsSwappedKeypair(t *testing.T) {
 	}
 }
 
+// TestVerifyRemoteSignerRejectsTamperedSignature protects the data-integrity invariant
+// that a tampered signature (mutated after signing) is rejected by verifyRemoteSigner()
+// and classified as errSignerKeyMismatch, not as a sign-RPC failure.
 func TestVerifyRemoteSignerRejectsTamperedSignature(t *testing.T) {
 	t.Parallel()
 	for name, signer := range selfTestSigners(t) {
@@ -79,6 +91,9 @@ func TestVerifyRemoteSignerRejectsTamperedSignature(t *testing.T) {
 	}
 }
 
+// TestVerifyRemoteSignerPropagatesSignError protects the error-handling contract that when
+// the keyless sign endpoint returns an error (network or server fault), that error propagates
+// to the caller and is not incorrectly reclassified as errSignerKeyMismatch.
 func TestVerifyRemoteSignerPropagatesSignError(t *testing.T) {
 	t.Parallel()
 	rsaKey := mustRSAKey(t)
@@ -94,6 +109,9 @@ func TestVerifyRemoteSignerPropagatesSignError(t *testing.T) {
 	}
 }
 
+// TestVerifyRemoteSignerUnsupportedKey protects the wire-protocol compatibility contract that
+// Ed25519 keys are rejected as unsupported by the keyless sign protocol (which only supports
+// RSA and ECDSA), and the error message names the protocol limitation.
 func TestVerifyRemoteSignerUnsupportedKey(t *testing.T) {
 	t.Parallel()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -112,6 +130,9 @@ func TestVerifyRemoteSignerUnsupportedKey(t *testing.T) {
 	}
 }
 
+// TestClientClosePreservesFirstError protects the lifecycle guarantee that once Close()
+// returns an error, subsequent Close() calls keep returning that same first error rather
+// than masking it with a later close failure, and the underlying resource is closed exactly once.
 func TestClientClosePreservesFirstError(t *testing.T) {
 	t.Parallel()
 	closer := &failingCloseResource{}

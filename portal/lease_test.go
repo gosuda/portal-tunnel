@@ -40,6 +40,10 @@ func newTestLeaseIdentity(t *testing.T, name string) types.Identity {
 	return testIdentity
 }
 
+// TestRegisterOverlayPreferenceFallsBackToDirect verifies that when a client requests
+// overlay mode but the overlay runtime is unavailable, Register still succeeds and
+// the returned reverse endpoint uses the direct relay transport.
+
 func TestRegisterOverlayPreferenceFallsBackToDirect(t *testing.T) {
 	t.Parallel()
 
@@ -58,6 +62,10 @@ func TestRegisterOverlayPreferenceFallsBackToDirect(t *testing.T) {
 		t.Fatalf("Register() reverse endpoint = %#v, want direct fallback", registered.ReverseEndpoint)
 	}
 }
+
+// TestLeaseRegistryLifecycle exercises the full lease lifecycle: Register, Lookup,
+// Renew (which updates the client IP and rotates the capability), RefreshReverseEndpoint,
+// and Unregister; each operation is verified against the registry and policy state.
 
 func TestLeaseRegistryLifecycle(t *testing.T) {
 	t.Parallel()
@@ -157,6 +165,10 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 }
 
+// TestLeaseTokensAreBoundToLeaseInstance verifies that re-registering the same identity
+// creates a new lease with a new ID, that all tokens from the previous lease are
+// rejected, and that the new lease remains reachable by Lookup and token admission.
+
 func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	t.Parallel()
 
@@ -207,6 +219,11 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 		t.Fatalf("new access token signing error = %v", err)
 	}
 }
+
+// TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI verifies that Register with
+// RouteHostname and HostnameHash creates a lease reachable by both the public hostname
+// (via ECH fallback) and the route hostname (via direct ECH), and that a mismatched
+// hash is rejected outright.
 
 func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	t.Parallel()
@@ -270,6 +287,10 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	}
 }
 
+// TestLeaseRegistryWildcardAndConflict verifies that Lookup respects single-level
+// wildcard hostnames, rejects multi-level wildcards, and that registering an
+// identical hostname raises a hostname-conflict error.
+
 func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 	t.Parallel()
 
@@ -300,6 +321,10 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 		t.Fatalf("Register(conflict second) error = %v, want hostname conflict", err)
 	}
 }
+
+// TestLeaseRegistryPolicyViewsUseRoutablePolicy verifies that PublicLeases excludes
+// unapproved leases while PolicyLeases includes them, and that Approve/Deny/Ban/Unban
+// correctly gate which leases appear in PublicLeases.
 
 func TestLeaseRegistryPolicyViewsUseRoutablePolicy(t *testing.T) {
 	t.Parallel()
@@ -367,6 +392,10 @@ func TestLeaseRegistryPolicyViewsUseRoutablePolicy(t *testing.T) {
 	}
 }
 
+// TestLeaseRegistryPublicLeasesIncludesIngressRouteInManualApproval verifies that when
+// the approver is in manual mode, a manually registered lease is included in
+// PublicLeases immediately, reflecting that the lease owns its ingress route.
+
 func TestLeaseRegistryPublicLeasesIncludesIngressRouteInManualApproval(t *testing.T) {
 	t.Parallel()
 
@@ -390,6 +419,9 @@ func TestLeaseRegistryPublicLeasesIncludesIngressRouteInManualApproval(t *testin
 	}
 }
 
+// TestLeaseRegistryCleanupExpiredClosesBroker verifies that cleanupExpired removes
+// expired leases from the registry and closes their relay streams.
+
 func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 	t.Parallel()
 
@@ -411,6 +443,10 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 		t.Fatalf("Claim() after cleanupExpired() error = %v, want %v", err, net.ErrClosed)
 	}
 }
+
+// TestIssueRegisterChallengeBoundsPendingPerIP verifies that the registry enforces
+// a per-IP limit on concurrent pending register challenges and that expired
+// challenges are cleaned up before the limit is reached.
 
 func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 	t.Parallel()
@@ -451,6 +487,11 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 		t.Fatalf("issueRegisterChallenge() after expired cleanup error = %v", err)
 	}
 }
+
+// TestMissingLeaseRecordReportsLeaseNotFound verifies that when a relay restarts
+// and its in-memory lease records are gone, all token-based operations on the
+// former lease return errLeaseNotFound (not errUnauthorized) while forged tokens
+// still return errUnauthorized.
 
 func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	t.Parallel()

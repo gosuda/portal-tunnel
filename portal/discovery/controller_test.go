@@ -89,6 +89,9 @@ func TestControllerRelayIntentOpsLinearizeUnderConcurrency(t *testing.T) {
 	}
 }
 
+// TestControllerReportRuntimeSuppressesRelay pins failure handling: a runtime
+// failure report suppresses the relay so the next selection picks only the
+// healthy peer.
 func TestControllerReportRuntimeSuppressesRelay(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -108,6 +111,8 @@ func TestControllerReportRuntimeSuppressesRelay(t *testing.T) {
 	}
 }
 
+// TestControllerReportMITMBansRelay pins the security escalation: a MITM
+// report bans the relay outright, excluding it even from explicit selection.
 func TestControllerReportMITMBansRelay(t *testing.T) {
 	const relayURL = "https://relay.example"
 	controller := NewController([]string{relayURL})
@@ -122,6 +127,9 @@ func TestControllerReportMITMBansRelay(t *testing.T) {
 	}
 }
 
+// TestControllerFailureDedupeSkipsSuppressedRelay pins failure accounting:
+// reports are not double-counted while a suppression is active, and counting
+// resumes only after the suppression expires.
 func TestControllerFailureDedupeSkipsSuppressedRelay(t *testing.T) {
 	const relayURL = "https://relay.example"
 	controller := NewController([]string{relayURL})
@@ -147,6 +155,9 @@ func TestControllerFailureDedupeSkipsSuppressedRelay(t *testing.T) {
 	}
 }
 
+// TestControllerReportMITMVsRuntimeDistinctOutcomes pins outcome separation:
+// MITM is a permanent ban that survives explicit selection, while a runtime
+// failure is a suppression only — ban and suppression stay distinct states.
 func TestControllerReportMITMVsRuntimeDistinctOutcomes(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -179,6 +190,9 @@ func TestControllerReportMITMVsRuntimeDistinctOutcomes(t *testing.T) {
 	}
 }
 
+// TestControllerSetMaxActiveRelaysSignalsNext pins reactivity: changing the
+// max-active limit promptly wakes the selection loop via signal instead of
+// waiting out the periodic ticker.
 func TestControllerSetMaxActiveRelaysSignalsNext(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -226,6 +240,9 @@ func TestControllerSetMaxActiveRelaysSignalsNext(t *testing.T) {
 	}
 }
 
+// TestControllerSetActiveRelaysSuppliesStickinessSnapshot pins stickiness
+// input: the reported active relay set anchors the next selection, so a live
+// listener connection is retained across selection recomputation.
 func TestControllerSetActiveRelaysSuppliesStickinessSnapshot(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"

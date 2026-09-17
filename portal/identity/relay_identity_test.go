@@ -7,6 +7,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// TestLoadOrCreateRelayIdentityCreatesAndReloads protects the persistence contract that a relay
+// identity (with EncryptedClientHelloSeed) is written to disk and reloaded unchanged, so the
+// relay's ECH configuration and signing key survive process restarts.
 func TestLoadOrCreateRelayIdentityCreatesAndReloads(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, types.RelayIdentityFilename)

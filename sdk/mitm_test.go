@@ -22,6 +22,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// TestMITMProbeConnMatchesExporter pins the MITM probe verification
+// contract: a TLS session whose exporter value matches the reserved
+// nonce expectation is identified as probed through intact.
 func TestMITMProbeConnMatchesExporter(t *testing.T) {
 	clientConn, serverConn := newMITMProbeTLSPair(t)
 	defer closeMITMProbeTLSConn(clientConn)
@@ -83,6 +86,9 @@ func TestMITMProbeConnMatchesExporter(t *testing.T) {
 	}
 }
 
+// TestMITMProbeConnDetectsExporterMismatch pins the MITM detection
+// contract: an exporter value that does not match the reserved
+// expectation is reported as an intercepted session.
 func TestMITMProbeConnDetectsExporterMismatch(t *testing.T) {
 	clientConn, serverConn := newMITMProbeTLSPair(t)
 	defer closeMITMProbeTLSConn(clientConn)
@@ -139,6 +145,9 @@ func TestMITMProbeConnDetectsExporterMismatch(t *testing.T) {
 	}
 }
 
+// TestMITMProbeConnAtHandshakeCompletionIsHandled pins the probe timing
+// contract: a probe whose TLS handshake completes before the server
+// reads it is still matched once it is handled.
 func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
 	listener := &listener{}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
@@ -265,6 +274,9 @@ func (c *readSignalingConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
+// TestMITMProbeConnPassesThroughNormalTraffic pins the non-matching
+// passthrough contract: sessions without a matching probe nonce are
+// handed to the normal reverse path without interception.
 func TestMITMProbeConnPassesThroughNormalTraffic(t *testing.T) {
 	clientConn, serverConn := newMITMProbeTLSPair(t)
 	defer closeMITMProbeTLSConn(clientConn)
@@ -325,6 +337,8 @@ func TestMITMProbeConnPassesThroughNormalTraffic(t *testing.T) {
 	}
 }
 
+// TestMITMProbeDetectionBansListener pins the MITM-ban security contract:
+// with banning enabled, a detected MITM proxy closes the listener.
 func TestMITMProbeDetectionBansListener(t *testing.T) {
 	doneCh := make(chan struct{})
 	entryURL, err := url.Parse("https://entry.example")
@@ -357,6 +371,9 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 	}
 }
 
+// TestMITMProbeDetectionWarnsWithoutBanningListener pins the
+// warn-only mode contract: detection without banning logs and passes
+// through instead of closing the listener.
 func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 	doneCh := make(chan struct{})
 	relayURL, err := url.Parse("https://relay.example")
@@ -383,6 +400,9 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 	}
 }
 
+// TestMITMProbeDialAddressUsesRelayHostForLocalRelay pins the probe
+// routing contract: loopback relays probe their own relay host, not the
+// tenant hostname.
 func TestMITMProbeDialAddressUsesRelayHostForLocalRelay(t *testing.T) {
 	relayURL, err := url.Parse("https://localhost:4017")
 	if err != nil {
@@ -403,6 +423,9 @@ func TestMITMProbeDialAddressUsesRelayHostForLocalRelay(t *testing.T) {
 	}
 }
 
+// TestMITMProbeDialAddressUsesPublicURLForRemoteRelay pins the probe
+// routing contract: remote relays probe the advertised public URL so
+// the probe traverses the same path as tenant traffic.
 func TestMITMProbeDialAddressUsesPublicURLForRemoteRelay(t *testing.T) {
 	relayURL, err := url.Parse("https://relay.example")
 	if err != nil {

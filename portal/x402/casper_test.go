@@ -86,6 +86,10 @@ func TestPaymentChallengeDoesNotDiscloseFacilitatorToken(t *testing.T) {
 	}
 }
 
+// TestCasperFacilitatorSettle protects the wire-protocol compatibility contract that a
+// valid payment payload results in a Settle call to the facilitator endpoint with the
+// correct Authorization header, amount (in atomic units), and network, and that the
+// returned transaction identifier is propagated back to the caller.
 func TestCasperFacilitatorSettle(t *testing.T) {
 	var got facilitatortypes.PaymentSettleRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -141,6 +145,9 @@ func TestCasperFacilitatorSettle(t *testing.T) {
 	}
 }
 
+// TestCasperFacilitatorVerifyRejects protects the data-integrity contract that a payment
+// whose validity check returns IsValid=false from the facilitator is surfaced to the caller
+// with the original invalidReason string, so the rejection is meaningful rather than silent.
 func TestCasperFacilitatorVerifyRejects(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if token := r.Header.Get("Authorization"); token != testFacilitatorToken {

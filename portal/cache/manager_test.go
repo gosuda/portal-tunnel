@@ -70,6 +70,10 @@ func testRequest(t *testing.T, method, content string) *http.Request {
 	return req
 }
 
+// TestNewRejectsEmptyDirectoryWithoutFilesystemChanges verifies that New refuses to
+// initialise an enabled cache on an empty or whitespace-only directory without
+// modifying any pre-existing working-tree files.
+
 func TestNewRejectsEmptyDirectoryWithoutFilesystemChanges(t *testing.T) {
 	t.Chdir(t.TempDir())
 	untouched := filepath.Join("static-cache", "portal-cache-existing", "keep")
@@ -96,6 +100,10 @@ func TestNewRejectsEmptyDirectoryWithoutFilesystemChanges(t *testing.T) {
 		t.Fatalf("empty directory modified working-directory files: %q, %v", content, err)
 	}
 }
+
+// TestAdmissionPreservesTenantAndObjectBounds verifies that the cache enforces per-tenant
+// exposure budget limits and rejects individual objects that exceed the configured
+// max object size, regardless of the total budget.
 
 func TestAdmissionPreservesTenantAndObjectBounds(t *testing.T) {
 	c := testManager(t, 32)
@@ -136,6 +144,10 @@ func TestAdmissionPreservesTenantAndObjectBounds(t *testing.T) {
 		t.Fatalf("oversized object admitted: %d, %d", w.Code, c.used)
 	}
 }
+
+// TestStorageBoundIncludesReadersAndStaging verifies that the cache's byte counter
+// accounts for both pinned readers and staged (uncommitted) snapshots, so that
+// eviction is triggered only when truly all space is reclaimable.
 
 func TestStorageBoundIncludesReadersAndStaging(t *testing.T) {
 	c := testManager(t, 24)
@@ -181,6 +193,9 @@ func TestStorageBoundIncludesReadersAndStaging(t *testing.T) {
 	}
 }
 
+// TestBoundsZeroByteStagingMetadata verifies that a zero-byte object still occupies
+// one snapshot slot in the metadata bound.
+
 func TestBoundsZeroByteStagingMetadata(t *testing.T) {
 	c := testManager(t, 32)
 	for range maxSnapshots {
@@ -192,6 +207,10 @@ func TestBoundsZeroByteStagingMetadata(t *testing.T) {
 		t.Fatal("zero-byte staging bypassed metadata bound")
 	}
 }
+
+// TestFailedStagingReleasesCapacity verifies that when staging fails (directory
+// unwritable) the capacity reservation is fully released and a subsequent staging
+// attempt succeeds.
 
 func TestFailedStagingReleasesCapacity(t *testing.T) {
 	c := testManager(t, 16)
@@ -215,6 +234,10 @@ func TestFailedStagingReleasesCapacity(t *testing.T) {
 	}
 }
 
+// TestRejectsUnsafeAndOversizedManifest verifies that the cache rejects manifests
+// with path traversal (parent-directory references) and manifests declaring
+// objects that exceed the configured max object size.
+
 func TestRejectsUnsafeAndOversizedManifest(t *testing.T) {
 	c := testManager(t, 16)
 	l := testLease(c, "site")
@@ -231,6 +254,11 @@ func TestRejectsUnsafeAndOversizedManifest(t *testing.T) {
 		}
 	}
 }
+
+// TestLeaseEventsBoundOfflineLifetime verifies that the cache sets an expiry ceiling
+// on offline content tied to the least-recently-observed time among all registered
+// leases, that Detach prevents further renewal, and that collection evicts
+// content that has passed its ceiling.
 
 func TestLeaseEventsBoundOfflineLifetime(t *testing.T) {
 	c := testManager(t, 32)
@@ -260,6 +288,11 @@ func TestLeaseEventsBoundOfflineLifetime(t *testing.T) {
 		t.Fatal("late renewal resurrected detached cache lease")
 	}
 }
+
+// TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload verifies that a GET fallback
+// to the origin releases the disk snapshot pin so the budget is reclaimable,
+// that a broken snapshot (method mismatch, missing, or truncated file) is not
+// reported as present, and that re-uploading recovers the cache entry.
 
 func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 	for _, failure := range []string{"method", "missing", "truncated"} {
@@ -327,6 +360,9 @@ func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 	}
 }
 
+// TestFailedOldReaderDoesNotDiscardReplacement verifies that discarding the snapshot
+// from a failed GET request does not discard the current valid snapshot.
+
 func TestFailedOldReaderDoesNotDiscardReplacement(t *testing.T) {
 	c := testManager(t, 32)
 	l := testLease(c, "site")
@@ -359,6 +395,10 @@ func (r *gatedBody) Read(p []byte) (int, error) {
 	}
 	return r.ReadCloser.Read(p)
 }
+
+// TestAdmissionKeepsChecksAndUploadsIndependentlyBounded verifies that the cache
+// enforces separate internal capacity limits for manifest checks and object uploads,
+// so that a stalled check does not starve uploads or vice versa.
 
 func TestAdmissionKeepsChecksAndUploadsIndependentlyBounded(t *testing.T) {
 	c := testManager(t, 32) // Cache owns a separate two-request pool for each operation.
@@ -396,6 +436,10 @@ func (w *failingDiskResponse) WriteHeader(code int) {
 	w.truncate()
 	w.ResponseRecorder.WriteHeader(code)
 }
+
+// TestReadFailureAfterHeadersInvalidatesSnapshot verifies that if a response is
+// committed to a client and the subsequent body read fails, the snapshot is
+// invalidated so a future request re-fetches from the origin.
 
 func TestReadFailureAfterHeadersInvalidatesSnapshot(t *testing.T) {
 	c := testManager(t, 16)

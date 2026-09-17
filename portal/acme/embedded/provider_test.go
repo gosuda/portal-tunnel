@@ -57,6 +57,10 @@ func requireRcode(t *testing.T, resp *dns.Msg, rcode int) {
 	}
 }
 
+// TestASynthesisFollowsCurrentPublicIP protects the invariant that A answers are
+// synthesized from the current public IPv4 for every name in the zone, and that
+// explicit per-hostname A records never override the synthesis so that IP changes
+// propagate immediately to all hostnames.
 func TestASynthesisFollowsCurrentPublicIP(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
@@ -110,6 +114,9 @@ func TestASynthesisFollowsCurrentPublicIP(t *testing.T) {
 	}
 }
 
+// TestAWithoutPublicIPIsNodata protects the invariant that A queries return an
+// authoritative NODATA (SOA in authority) when no public IPv4 is configured,
+// not NXDOMAIN, so the zone is provably present but the address is absent.
 func TestAWithoutPublicIPIsNodata(t *testing.T) {
 	p := newTestProvider(t, nil)
 	resp := exchange(t, p, "tcp", dns.TypeA, testZone)
@@ -125,6 +132,9 @@ func TestAWithoutPublicIPIsNodata(t *testing.T) {
 	}
 }
 
+// TestTXTRecordLifecycle protects the invariant that TXT records accumulate
+// by value so that multiple ACME challenges or ENS entries coexist, and that
+// prefix-based deletion removes only the matching values without touching others.
 func TestTXTRecordLifecycle(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
@@ -170,6 +180,9 @@ func TestTXTRecordLifecycle(t *testing.T) {
 	}
 }
 
+// TestDNS01ChallengePresentAndCleanup protects the invariant that the ACME DNS-01
+// Present and CleanUp calls produce and remove a TXT record with the exact
+// key-authorization value, so that Let's Encrypt validation round-trips correctly.
 func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 	p := newTestProvider(t, nil)
 	keyAuth := "token.example-key-authorization"
@@ -196,6 +209,9 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 	}
 }
 
+// TestHTTPSRecordRoundTrip protects the invariant that HTTPS records are stored
+// with their ECH config and port, answered verbatim by the DNS server, and
+// deletable without affecting other records.
 func TestHTTPSRecordRoundTrip(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
@@ -256,6 +272,9 @@ func TestHTTPSRecordRoundTrip(t *testing.T) {
 	}
 }
 
+// TestApexMetadata protects the invariant that the apex NS and SOA records are
+// served with the correct in-bailiwick glue and serial, and that any mutation
+// advances the serial so that downstream resolvers refresh the zone.
 func TestApexMetadata(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
@@ -302,6 +321,9 @@ func TestApexMetadata(t *testing.T) {
 	}
 }
 
+// TestQueryBoundaries protects the invariant that the server refuses outside-zone
+// queries, returns NODATA for AAAA and NS on non-apex names, and returns NOTIMPL
+// for type-ANY queries, adhering to RFC 8499 and the DNSSEC DO flag handling.
 func TestQueryBoundaries(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
@@ -331,6 +353,9 @@ func TestQueryBoundaries(t *testing.T) {
 	}
 }
 
+// TestUnsupportedEDNSVersionContainsOnlyOPT protects the invariant that an
+// EDNS version mismatch returns BADVERS with an OPT record and no other answers,
+// never a truncated or malformed response, per RFC 6891.
 func TestUnsupportedEDNSVersionContainsOnlyOPT(t *testing.T) {
 	p := newTestProvider(t, nil)
 	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
@@ -358,6 +383,9 @@ func TestUnsupportedEDNSVersionContainsOnlyOPT(t *testing.T) {
 	}
 }
 
+// TestUDPExchangeWithEDNS protects the invariant that the server echoes back
+// an EDNS0 OPT record in UDP responses so that clients can discover the maximum
+// supported response size without switching to TCP.
 func TestUDPExchangeWithEDNS(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()

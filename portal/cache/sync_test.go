@@ -17,6 +17,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// TestStaticCacheRefreshUsesContentDigest verifies that a syncer uploads a snapshot only
+// when its content digest differs from the one the relay last accepted, and that
+// symlinks in the static tree are rejected from the snapshot.
+
 func TestStaticCacheRefreshUsesContentDigest(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("first"), 0o600); err != nil {
@@ -129,6 +133,10 @@ func TestStaticCacheRefreshUsesContentDigest(t *testing.T) {
 		}
 	})
 }
+
+// TestStaticCacheDoesNotFollowRedirects verifies that cache POST, PUT, and DELETE
+// operations fail if the relay responds with a redirect, preventing a lease token
+// from being forwarded to an unintended host.
 
 func TestStaticCacheDoesNotFollowRedirects(t *testing.T) {
 	root := t.TempDir()

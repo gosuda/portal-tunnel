@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+// TestCanonicalTunnel verifies that a registered tunnel receives a public URL on the
+// same port as the relay's PORTAL_URL and that the public URL serves tenant traffic.
 func TestCanonicalTunnel(t *testing.T) {
 	h := newHarness(t)
 	publicURL := h.waitForPublicURL()

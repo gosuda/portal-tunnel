@@ -65,6 +65,10 @@ func cacheTestRegister(t *testing.T, server *Server, name string, optIn bool) (*
 	return record, response.AccessToken
 }
 
+// TestStaticCachePermissionIntegrityAndLeaseReplacement verifies that uploads are rejected
+// when the lease has not opted into caching, that a corrupt manifest is rejected,
+// and that uploading with a replaced lease (same identity but different id) is rejected.
+
 func TestStaticCachePermissionIntegrityAndLeaseReplacement(t *testing.T) {
 	s := cacheTestServer(t, 32)
 	uncached, token := cacheTestRegister(t, s, "uncached", false)
@@ -95,6 +99,11 @@ func TestStaticCachePermissionIntegrityAndLeaseReplacement(t *testing.T) {
 		t.Fatalf("replaced lease published an in-flight upload: %d", result.Code)
 	}
 }
+
+// TestStaticCacheOfflineExpiryAndHostIsolation verifies that after a lease expires or is
+// unregistered, its cached content is still served offline for the duration of the
+// TTL, that a spoofed Host header at the root path is rejected, and that banning
+// an identity immediately evicts its cached content.
 
 func TestStaticCacheOfflineExpiryAndHostIsolation(t *testing.T) {
 	s := cacheTestServer(t, 32)

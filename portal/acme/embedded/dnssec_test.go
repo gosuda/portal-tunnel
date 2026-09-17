@@ -81,6 +81,10 @@ func requireNSEC(t *testing.T, m *dns.Msg, owner, next string) {
 	t.Fatalf("missing NSEC %s -> %s: %v", owner, next, m.Ns)
 }
 
+// TestDNSSECSigningAndWildcardDenial protects the invariant that every DNS answer
+// includes RRSIG records signed by the zone-signing key, wildcards are provably
+// denied by NSEC, unsigned queries leak no signed records, and DNSSEC types are
+// always served so that validators never fail to find the chain of trust.
 func TestDNSSECSigningAndWildcardDenial(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
@@ -149,6 +153,9 @@ func TestDNSSECSigningAndWildcardDenial(t *testing.T) {
 	}
 }
 
+// TestDNSSECNameErrorAndEmptyNonterminal protects the invariant that NXDOMAIN
+// answers carry NSEC records proving exactly which name does not exist and that
+// no wildcard covers it, and that empty nonterminal names return no data, per RFC 7129.
 func TestDNSSECNameErrorAndEmptyNonterminal(t *testing.T) {
 	p := newTestProvider(t, nil)
 	if err := p.EnsureTXTRecord(context.Background(), "leaf.branch."+testZone, "value"); err != nil {
@@ -175,6 +182,9 @@ func TestDNSSECNameErrorAndEmptyNonterminal(t *testing.T) {
 	}
 }
 
+// TestDNSSECCanonicalDenialIntervals protects the invariant that NSEC record
+// owners and next-hosts are ordered according to RFC 4034 section 6.1 canonical
+// name order, so that DNSSEC validators can follow the chain unambiguously.
 func TestDNSSECCanonicalDenialIntervals(t *testing.T) {
 	p := newTestProvider(t, nil)
 	for _, owner := range []string{"a.", "z.a.", "aa.", "b."} {
@@ -209,6 +219,9 @@ func TestDNSSECCanonicalDenialIntervals(t *testing.T) {
 	}
 }
 
+// TestDNSSECKeyPersistence protects the invariant that the private signing key is
+// persisted to disk with mode 0600 and reloaded across restarts unchanged, and that
+// a key loaded from disk is rejected if it was generated for a different zone.
 func TestDNSSECKeyPersistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), types.DNSSECKeyFileName)
 	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: path}
@@ -282,6 +295,9 @@ func (w *dnssecResponseWriter) WriteMsg(m *dns.Msg) error {
 	return err
 }
 
+// TestDNSSECRefreshAndMutation protects the invariant that DNSSEC signatures are
+// lazily refreshed before they expire and immediately after any zone mutation,
+// and that every answer carries a current RRSIG so validation never fails mid-TTL.
 func TestDNSSECRefreshAndMutation(t *testing.T) {
 	// Real listener goroutines stay outside the fake-time bubble so they do
 	// not prevent its clock from advancing while the handler is idle.
@@ -381,6 +397,9 @@ func TestDNSSECRefreshAndMutation(t *testing.T) {
 	}
 }
 
+// TestDNSSECUDPTruncationAndTCPRetry protects the invariant that an oversize
+// UDP response is truncated without tearing, prompting a TCP retry that returns
+// the complete signed RRset intact, per RFC 5966 and RFC 1035.
 func TestDNSSECUDPTruncationAndTCPRetry(t *testing.T) {
 	p := newTestProvider(t, nil)
 	for i := range 8 {

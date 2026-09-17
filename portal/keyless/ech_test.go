@@ -21,6 +21,10 @@ func testTenantIdentity(t *testing.T, name string) types.Identity {
 	return id
 }
 
+// TestTenantECHMaterialsDerivesStableMaterials protects the deterministic-derivation contract that
+// TenantECHMaterials() produces a route hostname with an ech- label under the relay root, a
+// hostname hash derived from the public hostname, and a non-empty ECH config; the same inputs
+// always yield the same outputs, and different identities produce distinct hostnames.
 func TestTenantECHMaterialsDerivesStableMaterials(t *testing.T) {
 	t.Parallel()
 	id := testTenantIdentity(t, "demo")
@@ -62,6 +66,9 @@ func TestTenantECHMaterialsDerivesStableMaterials(t *testing.T) {
 	}
 }
 
+// TestECHHostnameHashNormalizesAndDistinguishes protects the deterministic-hashing contract
+// that ECHHostnameHash() is case-insensitive and trailing-dot-insensitive for a given hostname,
+// produces distinct hashes across different hostnames, and returns an empty string for empty input.
 func TestECHHostnameHashNormalizesAndDistinguishes(t *testing.T) {
 	t.Parallel()
 	if ECHHostnameHash("") != "" {
@@ -76,6 +83,10 @@ func TestECHHostnameHashNormalizesAndDistinguishes(t *testing.T) {
 	}
 }
 
+// TestNormalizeECHRegistration protects the wire-protocol compatibility contract that
+// NormalizeECHRegistration() validates hostname-hash, config-list, and public-hostname
+// consistency; fills in missing fields from the public hostname; and rejects registrations
+// that do not belong under the relay root hostname.
 func TestNormalizeECHRegistration(t *testing.T) {
 	t.Parallel()
 	const (
@@ -159,6 +170,9 @@ func TestNormalizeECHRegistration(t *testing.T) {
 	})
 }
 
+// TestHTTPSRecordValue protects the DNS-record contract that HTTPSRecordValue() serializes
+// an ECH config list into the RFC 9460 ech parameter format, appending the port only when
+// it is non-default, and rejects out-of-range ports and invalid config lists.
 func TestHTTPSRecordValue(t *testing.T) {
 	t.Parallel()
 	_, configList, err := EncryptedClientHelloMaterials("test-seed", "ech-demo.example.com")
@@ -192,6 +206,9 @@ func TestHTTPSRecordValue(t *testing.T) {
 	}
 }
 
+// TestRelayECHMaterials protects the deterministic-derivation contract that RelayECHMaterials()
+// produces non-empty key material deterministically for the same seed, and distinct material
+// for different seeds, so relays can reproduce and reuse their ECH configuration.
 func TestRelayECHMaterials(t *testing.T) {
 	t.Parallel()
 	id := testTenantIdentity(t, "relay.example.com")

@@ -8,6 +8,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// TestRegisterChallengeSIWE protects the wire-protocol compatibility contract that a RegisterChallenge
+// embeds a valid EIP-4361 SIWE message; the owner's signature verifies, wrong signers are rejected,
+// expired challenges are rejected (including at the inclusive boundary), and short signatures are rejected.
 func TestRegisterChallengeSIWE(t *testing.T) {
 	owner := siweTestAuthority(t, "1")
 	other := siweTestAuthority(t, "2")

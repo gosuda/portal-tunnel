@@ -12,6 +12,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// TestWriteAPIDataAndDecodeEnvelope verifies that WriteAPIData serialises a success
+// response as a JSON envelope with ok=true and the payload in the data field.
 func TestWriteAPIDataAndDecodeEnvelope(t *testing.T) {
 	t.Parallel()
 
@@ -31,6 +33,8 @@ func TestWriteAPIDataAndDecodeEnvelope(t *testing.T) {
 	}
 }
 
+// TestDecodeAPIRequestError verifies that DecodeAPIRequestError reconstructs a typed
+// APIRequestError from an HTTP error response envelope.
 func TestDecodeAPIRequestError(t *testing.T) {
 	t.Parallel()
 
@@ -49,6 +53,8 @@ func TestDecodeAPIRequestError(t *testing.T) {
 	}
 }
 
+// TestDecodeJSONRequestWritesInvalidJSONError verifies that DecodeJSONRequest
+// responds with a bad-request envelope when the request body is malformed JSON.
 func TestDecodeJSONRequestWritesInvalidJSONError(t *testing.T) {
 	t.Parallel()
 
@@ -72,6 +78,8 @@ func TestDecodeJSONRequestWritesInvalidJSONError(t *testing.T) {
 	}
 }
 
+// TestDecodeJSONRequestRejectsOversizedBody verifies that DecodeJSONRequest
+// rejects request bodies that exceed the configured size limit with 413.
 func TestDecodeJSONRequestRejectsOversizedBody(t *testing.T) {
 	t.Parallel()
 

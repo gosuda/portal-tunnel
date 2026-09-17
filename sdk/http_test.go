@@ -11,6 +11,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// TestHTTPRoutesUseLongestPrefix pins the route-selection contract: when multiple routes match,
+// the handler selects the one with the longest prefix.
 func TestHTTPRoutesUseLongestPrefix(t *testing.T) {
 	t.Parallel()
 
@@ -46,6 +48,8 @@ func TestHTTPRoutesUseLongestPrefix(t *testing.T) {
 	}
 }
 
+// TestHTTPRoutesRewriteResponseHeaders pins the header-rewriting contract: Location and Set-Cookie
+// response headers are rewritten to reflect the incoming request's public URL and prefix.
 func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 	t.Parallel()
 
@@ -78,6 +82,8 @@ func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 	}
 }
 
+// TestHTTPRoutesRejectOversizedPaymentPrepareBody pins the body-size limit contract: a POST to
+// the payment prepare path with a body exceeding X402RequestBodyLimit returns 413.
 func TestHTTPRoutesRejectOversizedPaymentPrepareBody(t *testing.T) {
 	t.Parallel()
 
@@ -127,6 +133,8 @@ func TestHTTPRoutesServeStaticRoute(t *testing.T) {
 	}
 }
 
+// TestHTTPRoutesStaticPaidRouteChallengesUnpaid pins the static-paid-challenge contract: a request to
+// a paid static route without payment returns a 402 response and does not serve the file.
 func TestHTTPRoutesStaticPaidRouteChallengesUnpaid(t *testing.T) {
 	t.Parallel()
 

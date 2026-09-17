@@ -6,6 +6,9 @@ import (
 	"testing"
 )
 
+// TestExtractClientIPDoesNotTrustImplicitProxies protects the security invariant that
+// X-Forwarded-For and X-Real-IP headers are ignored when TRUST_PROXY_HEADERS is false
+// (the default), so clients behind implicit proxies cannot spoof their source address.
 func TestExtractClientIPDoesNotTrustImplicitProxies(t *testing.T) {
 	runtime, err := NewRuntime(false, false, true, "")
 	if err != nil {
@@ -30,6 +33,10 @@ func TestExtractClientIPDoesNotTrustImplicitProxies(t *testing.T) {
 	}
 }
 
+// TestExtractClientIPHonorsConfiguredProxyBoundary protects the contract that
+// X-Forwarded-For and X-Real-IP are accepted only when TRUST_PROXY_HEADERS is
+// true and the socket peer falls within TRUSTED_PROXY_CIDRS; outside that boundary
+// the function falls back to the socket peer address.
 func TestExtractClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -64,6 +71,10 @@ func TestExtractClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
 	}
 }
 
+// TestExtractClientIPRevokesRemovedProxy protects the lifecycle contract that
+// disabling proxy trust after a request has already been handled with trust enabled
+// causes subsequent ExtractClientIP calls to return the socket peer instead of
+// the forwarded address, so the trust boundary is immediately active.
 func TestExtractClientIPRevokesRemovedProxy(t *testing.T) {
 	runtime, err := NewRuntime(false, false, true, "172.31.240.2/32")
 	if err != nil {

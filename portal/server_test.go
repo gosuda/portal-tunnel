@@ -26,6 +26,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// TestLeaseTokenCheckedBeforeOverlayDescriptorSigning verifies that the lease token
+// is validated before any overlay descriptor is signed, so a forged token cannot
+// trigger descriptor signing without a valid lease.
 func TestLeaseTokenCheckedBeforeOverlayDescriptorSigning(t *testing.T) {
 	t.Parallel()
 
@@ -71,6 +74,9 @@ func TestLeaseTokenCheckedBeforeOverlayDescriptorSigning(t *testing.T) {
 	}
 }
 
+// TestOverlayDescriptorFailureFallsBackToDirectEndpoint verifies that when the
+// overlay runtime is unavailable the server returns a direct reverse endpoint
+// rather than an overlay endpoint.
 func TestOverlayDescriptorFailureFallsBackToDirectEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -263,6 +269,9 @@ func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *htt
 	return client
 }
 
+// TestServerServeRoutesAndCancellation verifies that Serve starts all listeners,
+// becomes reachable on the health endpoint, serves both application and relay
+// routes, and terminates cleanly when its context is cancelled.
 func TestServerServeRoutesAndCancellation(t *testing.T) {
 	appHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/app" {
@@ -410,6 +419,9 @@ func TestValidateServerConfigRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
 	}
 }
 
+// TestHTTPRedirectTargetValidation verifies that NewServer rejects portal URLs
+// with unsafe or malformed redirect targets: loopback addresses, scheme-relative
+// hosts, credentials, out-of-range ports, and hostless forms.
 func TestHTTPRedirectTargetValidation(t *testing.T) {
 	for _, target := range []string{"http://localhost:4017", "http://relay.example", "//relay.example", "https://user:pass@relay.example", "https://relay.example:0", "https://relay.example:65536", "https://relay.example:bad", "https://relay.example:", "https:///missing-host", "https://./"} {
 		t.Run(target, func(t *testing.T) {
@@ -424,6 +436,9 @@ func TestHTTPRedirectTargetValidation(t *testing.T) {
 	}
 }
 
+// TestHTTPRedirectDisabledPreservesLoopback verifies that when HTTP redirect is
+// disabled the server does not bind the redirect port and does not interfere
+// with loopback API listeners.
 func TestHTTPRedirectDisabledPreservesLoopback(t *testing.T) {
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -457,6 +472,10 @@ func TestHTTPRedirectDisabledPreservesLoopback(t *testing.T) {
 	}
 }
 
+// TestHTTPRedirectLifecycle verifies that the redirect server redirects HTTP
+// requests to the configured HTTPS portal URL, applies HSTS headers when
+// enabled, ignores the request host and forwarded headers, and releases the
+// port after shutdown.
 func TestHTTPRedirectLifecycle(t *testing.T) {
 	for _, hsts := range []bool{false, true} {
 		t.Run(strconv.FormatBool(hsts), func(t *testing.T) {
@@ -531,6 +550,9 @@ func TestHTTPRedirectLifecycle(t *testing.T) {
 	}
 }
 
+// TestHTTPRedirectPartialStartupCleanup verifies that when the server starts
+// but a listener fails to bind, all previously-bound listeners are released and
+// the redirect port is not leaked.
 func TestHTTPRedirectPartialStartupCleanup(t *testing.T) {
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -563,6 +585,9 @@ func TestHTTPRedirectPartialStartupCleanup(t *testing.T) {
 	listener.Close()
 }
 
+// TestHTTPRedirectBindFailure verifies that when the redirect listener cannot
+// bind, Start fails with a descriptive error, and the server retries and
+// succeeds once the port is released.
 func TestHTTPRedirectBindFailure(t *testing.T) {
 	occupied, addr := tempRedirectPort(t)
 	defer occupied.Close()
@@ -610,6 +635,9 @@ func TestHTTPRedirectBindFailure(t *testing.T) {
 	listener.Close()
 }
 
+// TestRelayDiscoveryEnabledServesDiscoveryEnvelope verifies that when relay discovery
+// is enabled the server serves a discovery envelope at /relay/discovery containing
+// the protocol version of this relay.
 func TestRelayDiscoveryEnabledServesDiscoveryEnvelope(t *testing.T) {
 	t.Parallel()
 
@@ -638,6 +666,9 @@ func TestRelayDiscoveryEnabledServesDiscoveryEnvelope(t *testing.T) {
 	}
 }
 
+// TestServerStartInitializesLocalACMEAndSigner verifies that Start provisions a
+// local ACME identity and keyless signer, persists certificate files to the state
+// directory when KeyDir is omitted, and serves a working /api/healthz endpoint.
 func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	t.Parallel()
 
@@ -698,6 +729,9 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	}
 }
 
+// TestServerStartDomainReportsCompatibilityInfo verifies that Start serves the
+// /sdk/domain endpoint with correct protocol version, release version, and x402
+// feature flags, and preserves an explicitly configured ACME KeyDir.
 func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 	t.Parallel()
 
@@ -761,6 +795,9 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 	}
 }
 
+// TestNewServerRejectsPortalURLCredentialsWithoutEchoingThem verifies that NewServer
+// rejects a portal URL containing embedded credentials and does not echo those
+// credentials in the returned error message.
 func TestNewServerRejectsPortalURLCredentialsWithoutEchoingThem(t *testing.T) {
 	_, err := NewServer(ServerConfig{
 		PortalURL: "https://user:secret@localhost",
@@ -774,6 +811,10 @@ func TestNewServerRejectsPortalURLCredentialsWithoutEchoingThem(t *testing.T) {
 	}
 }
 
+// TestNewServerSeparatesPublicAndLocalSNIPorts verifies that the public SNI port
+// (from the portal URL) and the local bind port (from SNIPort config) are stored
+// as separate fields and that the local bind defaults to the public port when
+// SNIPort is zero.
 func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 	t.Parallel()
 
@@ -811,6 +852,9 @@ func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 	}
 }
 
+// TestRegisterLeaseDerivesFixedHostnameFromName verifies that Register derives a
+// deterministic fixed hostname from the identity name and that publicLease returns
+// a lease response with the correct name and hostname.
 func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	t.Parallel()
 
@@ -849,6 +893,10 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	}
 }
 
+// TestRegisterLeaseCombinesECHWithUDPAndRawTCP verifies that Register with ECH
+// materials returns UDP and raw TCP transport endpoints, that the public hostname
+// routes to the lease via its hash, and that the route hostname also routes to
+// the same lease.
 func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
 	t.Parallel()
 
@@ -903,6 +951,9 @@ func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
 	}
 }
 
+// TestServerStartHidesDiscoveryRoutesWhenDisabled verifies that when discovery is
+// not configured, Start does not enable discovery and the /relay/discovery route
+// returns 404.
 func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -940,6 +991,9 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 	}
 }
 
+// TestRelayDiscoveryServesIncompatibleRelays verifies that ApplyRelayDiscoveryResponse
+// reports a protocol mismatch and that the discovery envelope lists the incompatible
+// relay with its observed protocol version.
 func TestRelayDiscoveryServesIncompatibleRelays(t *testing.T) {
 	t.Parallel()
 

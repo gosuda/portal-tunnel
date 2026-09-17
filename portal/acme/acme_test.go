@@ -31,6 +31,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// TestEnsureCertificateGeneratesLocalDevelopmentMaterial ensures that NewManager
+// defaults to the embedded DNS provider and persists local-only ACME material
+// without requiring external credentials or DNS API tokens.
 func TestEnsureCertificateGeneratesLocalDevelopmentMaterial(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +67,9 @@ func TestEnsureCertificateGeneratesLocalDevelopmentMaterial(t *testing.T) {
 	}
 }
 
+// TestNewManagerDefaultsToEmbeddedProvider protects the invariant that the
+// embedded DNS provider is selected when no DNSProvider is configured,
+// so that local development works without credentials.
 func TestNewManagerDefaultsToEmbeddedProvider(t *testing.T) {
 	t.Parallel()
 
@@ -111,6 +117,9 @@ func TestEnsureTLSMaterialUsesManualCertificateWithDNSProvider(t *testing.T) {
 	}
 }
 
+// TestNewManagerRejectsEmptyKeyDirectory protects the invariant that
+// NewManager fails fast with a specific error when the key directory is blank,
+// regardless of the configured DNS provider, preventing silent filesystem leaks.
 func TestNewManagerRejectsEmptyKeyDirectory(t *testing.T) {
 	workingDir := t.TempDir()
 	t.Chdir(workingDir)
@@ -160,6 +169,10 @@ func (transport publicIPv4Transport) RoundTrip(*http.Request) (*http.Response, e
 	}, nil
 }
 
+// TestManualEmbeddedCertificateServesDNSAndKeepsENSPending protects the invariant
+// that an operator-supplied certificate is served over HTTPS while ENS automation
+// remains pending, and that public-IP discovery recovery does not re-trigger
+// ACME issuance when manual material is already in place.
 func TestManualEmbeddedCertificateServesDNSAndKeepsENSPending(t *testing.T) {
 	originalClient := utils.DefaultHTTPClient
 	t.Cleanup(func() { utils.DefaultHTTPClient = originalClient })
@@ -285,6 +298,9 @@ func assertEmbeddedDNSAddress(t *testing.T, client *dns.Client, addr, name, publ
 	}
 }
 
+// TestManagedCertificateRequiresPublicIPv4 protects the invariant that managed
+// certificate issuance (embedded or external provider) requires a public IPv4
+// address, refusing to proceed without one so that TLS termination is always reachable.
 func TestManagedCertificateRequiresPublicIPv4(t *testing.T) {
 	outage := errors.New("public IPv4 discovery is unavailable")
 	originalClient := utils.DefaultHTTPClient
@@ -327,6 +343,9 @@ func TestManagedCertificateRequiresPublicIPv4(t *testing.T) {
 	}
 }
 
+// TestManualEmbeddedCertificateDoesNotIgnoreCancellation protects the invariant
+// that caller context cancellation is propagated as the TLS-material error,
+// never swallowed, so that long-running issuance can be aborted safely.
 func TestManualEmbeddedCertificateDoesNotIgnoreCancellation(t *testing.T) {
 	keyDir := t.TempDir()
 	if err := writeManualRelayCertificate(t, keyDir, "portal.example.com"); err != nil {
@@ -351,6 +370,9 @@ func TestManualEmbeddedCertificateDoesNotIgnoreCancellation(t *testing.T) {
 	}
 }
 
+// TestEnsureTLSMaterialRejectsDNSRecordUpdateFailure protects the invariant that
+// DNS record update errors from the provider API are fatal to the TLS material
+// operation and return no certificate bytes, preventing a split-brain TLS state.
 func TestEnsureTLSMaterialRejectsDNSRecordUpdateFailure(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != "api.cloudflare.com" {

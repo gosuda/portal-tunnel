@@ -2,6 +2,9 @@ package utils
 
 import "testing"
 
+// TestSanitizeReportedIP verifies that SanitizeReportedIP strips whitespace from
+// valid IP literals, passes through bare addresses, and returns empty string for
+// anything that is not a clean IP address.
 func TestSanitizeReportedIP(t *testing.T) {
 	t.Parallel()
 

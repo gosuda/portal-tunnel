@@ -7,6 +7,9 @@ import (
 	"testing"
 )
 
+// TestSystemdUnitWorkingDirectoryIsAbsoluteAndUnquoted verifies that the generated
+// systemd unit writes WorkingDirectory as an absolute unquoted path (systemd 259
+// treats quotes as literal characters in the path) and ExecStart stays shell-quoted.
 func TestSystemdUnitWorkingDirectoryIsAbsoluteAndUnquoted(t *testing.T) {
 	t.Parallel()
 
@@ -32,6 +35,8 @@ func TestSystemdUnitWorkingDirectoryIsAbsoluteAndUnquoted(t *testing.T) {
 	}
 }
 
+// TestSystemdUnitWorkingDirectoryEscapesSpecifiers verifies that % characters in
+// WorkingDirectory are escaped to %% so systemd does not interpret them as specifiers.
 func TestSystemdUnitWorkingDirectoryEscapesSpecifiers(t *testing.T) {
 	t.Parallel()
 

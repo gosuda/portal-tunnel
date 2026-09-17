@@ -24,6 +24,8 @@ func newStaticSite(t *testing.T, files map[string]string) string {
 	return root
 }
 
+// TestResolveStaticSiteDirectoryUsesDefaultIndex verifies that ResolveStaticSite
+// accepts a directory root and selects the configured default entry file name.
 func TestResolveStaticSiteDirectoryUsesDefaultIndex(t *testing.T) {
 	t.Parallel()
 
@@ -41,6 +43,9 @@ func TestResolveStaticSiteDirectoryUsesDefaultIndex(t *testing.T) {
 	}
 }
 
+// TestResolveStaticSiteFileUsesParentDirectory verifies that ResolveStaticSite
+// accepts a file path and resolves to its parent directory with the file as the
+// index entry, so "portal expose file.html" serves that file at the root.
 func TestResolveStaticSiteFileUsesParentDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -72,6 +77,9 @@ func TestResolveStaticSiteRejectsMissingEntry(t *testing.T) {
 	}
 }
 
+// TestStaticSiteRequestPathStripsPrefixAndRejectsTraversal verifies that the
+// URL-to-filesystem path mapper strips the configured prefix from the request
+// path and rejects any traversal sequence, preventing access outside the root.
 func TestStaticSiteRequestPathStripsPrefixAndRejectsTraversal(t *testing.T) {
 	t.Parallel()
 
@@ -104,6 +112,8 @@ func TestStaticSiteRequestPathStripsPrefixAndRejectsTraversal(t *testing.T) {
 	}
 }
 
+// TestStaticSiteHandlerServesConcreteFile verifies that the handler returns a file's
+// content with its correct Content-Type when the file exists under the root.
 func TestStaticSiteHandlerServesConcreteFile(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +138,8 @@ func TestStaticSiteHandlerServesConcreteFile(t *testing.T) {
 	}
 }
 
+// TestStaticSiteHandlerFallsBackToIndex verifies that the handler returns the SPA
+// entry file for the root and any unknown path, enabling client-side routing.
 func TestStaticSiteHandlerFallsBackToIndex(t *testing.T) {
 	t.Parallel()
 
@@ -153,6 +165,8 @@ func TestStaticSiteHandlerFallsBackToIndex(t *testing.T) {
 	}
 }
 
+// TestStaticSiteHandlerReturnsIndexForDirectory verifies that a request for a
+// directory path returns the SPA entry file rather than a directory listing.
 func TestStaticSiteHandlerReturnsIndexForDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -174,6 +188,9 @@ func TestStaticSiteHandlerReturnsIndexForDirectory(t *testing.T) {
 	}
 }
 
+// TestStaticSiteHandlerRejectsTraversal verifies that path traversal attempts
+// never reach files outside the root, even when the secret file is created
+// at filesystem level during the test.
 func TestStaticSiteHandlerRejectsTraversal(t *testing.T) {
 	t.Parallel()
 

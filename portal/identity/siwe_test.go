@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// TestSIWEMessageFormat protects the EIP-4361 wire-protocol compatibility contract that
+// FormatSIWEMessage() produces the canonical text format with the correct field ordering
+// and LF separators, including optional fields (Statement) and required fields (Expiration Time).
 func TestSIWEMessageFormat(t *testing.T) {
 	// EIP-4361's ABNF defines the literal field order and LF separators:
 	// https://eips.ethereum.org/EIPS/eip-4361#message-format
@@ -34,6 +37,9 @@ func TestSIWEMessageFormat(t *testing.T) {
 	}
 }
 
+// TestSIWEMessageRejectsInvalidFields protects the security invariant that FormatSIWEMessage()
+// rejects malformed inputs including empty domain, relative URI, invalid address, newline injection
+// in Statement, and malformed nonce, preventing forging of SIWE messages.
 func TestSIWEMessageRejectsInvalidFields(t *testing.T) {
 	for name, change := range map[string]func(*SIWEMessage){
 		"empty domain":       func(m *SIWEMessage) { m.Domain = "" },
@@ -60,6 +66,10 @@ func TestSIWEMessageRejectsInvalidFields(t *testing.T) {
 	}
 }
 
+// TestEthereumPersonalMessageRecoveryVectors protects the wire-protocol compatibility contract
+// that recoverEthereumPersonalMessage() recovers the correct signer address from known-good
+// personal-sign signatures generated externally (Spruceid SIWE interoperability vectors), including
+// both standard and alternative recovery bytes; changed messages are rejected.
 func TestEthereumPersonalMessageRecoveryVectors(t *testing.T) {
 	// Independent signatures from Spruce's SIWE interoperability vectors:
 	// https://github.com/spruceid/siwe/blob/911f6f2c73ef24deac73fec2f6b84930721d2fb4/test/verification_positive.json
@@ -108,6 +118,10 @@ func TestEthereumPersonalMessageRecoveryVectors(t *testing.T) {
 	}
 }
 
+// TestEthereumPersonalMessageRejectsMalformedSignatures protects the data-integrity contract
+// that recoverEthereumPersonalMessage() rejects malformed personal-sign signatures including
+// empty, short, overlong, missing prefix, non-hex, zero values, overflow in r or s, and invalid
+// or ambiguous recovery-byte values, preventing authentication bypass via crafted signatures.
 func TestEthereumPersonalMessageRejectsMalformedSignatures(t *testing.T) {
 	valid := "dc35c7f8ba2720df052e0092556456127f00f7707eaa8e3bbff7e56774e7f2e05a093cfc9e02964c33d86e8e066e221b7d153d27e5a2e97ccd5ca7d3f2ce06cb1b"
 	for name, signature := range map[string]string{

@@ -7,6 +7,9 @@ import (
 	"testing"
 )
 
+// TestBanIPCanonicalizesMappedAndPlainForms protects the invariant that the IP
+// filter normalizes IPv4-mapped IPv6 addresses so that banning or unbanning
+// either form affects the same canonical address.
 func TestBanIPCanonicalizesMappedAndPlainForms(t *testing.T) {
 	filter := NewIPFilter()
 
@@ -26,6 +29,9 @@ func TestBanIPCanonicalizesMappedAndPlainForms(t *testing.T) {
 	}
 }
 
+// TestSetBannedIPsDeduplicatesEquivalentForms protects the data-integrity
+// invariant that SetBannedIPs() produces exactly one entry per distinct address
+// in BannedIPs(), regardless of whether the input mixes plain and mapped forms.
 func TestSetBannedIPsDeduplicatesEquivalentForms(t *testing.T) {
 	filter := NewIPFilter()
 
@@ -39,6 +45,9 @@ func TestSetBannedIPsDeduplicatesEquivalentForms(t *testing.T) {
 	}
 }
 
+// TestExtractClientIPCanonicalizesMappedRemoteAddr protects the contract that
+// ExtractClientIP() returns a canonical dotted-quad address from an IPv4-in-IPv6
+// mapped RemoteAddr, so bans and identity registrations use consistent keys.
 func TestExtractClientIPCanonicalizesMappedRemoteAddr(t *testing.T) {
 	runtime, err := NewRuntime(false, false, false, "")
 	if err != nil {
@@ -51,6 +60,9 @@ func TestExtractClientIPCanonicalizesMappedRemoteAddr(t *testing.T) {
 	}
 }
 
+// TestInfrastructureBanReason protects the security invariant that loopback and
+// configured trusted-proxy addresses return a non-empty infrastructure ban reason,
+// while regular client addresses return empty (so they are not auto-banned).
 func TestInfrastructureBanReason(t *testing.T) {
 	runtime, err := NewRuntime(false, false, true, "203.0.113.9/32")
 	if err != nil {
@@ -84,6 +96,9 @@ func TestInfrastructureBanReason(t *testing.T) {
 	}
 }
 
+// TestIdentitiesForIPCountsDistinctIdentities protects the data-integrity contract
+// that IdentitiesForIP() counts distinct identities registered for a given address,
+// with a canonicalized (non-mapped) address as the lookup key.
 func TestIdentitiesForIPCountsDistinctIdentities(t *testing.T) {
 	filter := NewIPFilter()
 

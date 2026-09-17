@@ -31,6 +31,8 @@ func newExposureStateTest(t *testing.T, relayURLs ...string) *Exposure {
 	return exposure
 }
 
+// TestExposureWaitReadyUsesRelayStatus pins the WaitReady contract: it returns
+// only relays whose status snapshot has reached RelayReady.
 func TestExposureWaitReadyUsesRelayStatus(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
@@ -50,6 +52,9 @@ func TestExposureWaitReadyUsesRelayStatus(t *testing.T) {
 	}
 }
 
+// TestPublicURLForLeaseUsesCanonicalRelayPort pins the advertised public URL
+// contract: an explicit relay port is preserved and only the default HTTPS
+// port is elided, so tenants always see a canonical URL.
 func TestPublicURLForLeaseUsesCanonicalRelayPort(t *testing.T) {
 	t.Parallel()
 
@@ -81,6 +86,9 @@ func TestPublicURLForLeaseUsesCanonicalRelayPort(t *testing.T) {
 	}
 }
 
+// TestListenerReverseSessionReadinessTracksLiveSessions pins the readiness
+// contract: a relay reports Ready while at least one reverse session is
+// live and drops back to Connecting when the last one closes.
 func TestListenerReverseSessionReadinessTracksLiveSessions(t *testing.T) {
 	relayURL, err := url.Parse("https://relay.example")
 	if err != nil {
@@ -125,6 +133,9 @@ func TestListenerReverseSessionReadinessTracksLiveSessions(t *testing.T) {
 	}
 }
 
+// TestExposureAcceptWaitsAfterTerminalFailures pins the Accept lifecycle
+// contract: terminal relay failures never surface as an Accept error;
+// Accept returns net.ErrClosed only once the exposure closes.
 func TestExposureAcceptWaitsAfterTerminalFailures(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
@@ -148,6 +159,9 @@ func TestExposureAcceptWaitsAfterTerminalFailures(t *testing.T) {
 	}
 }
 
+// TestExposureAcceptDrainsQueuedConnectionBeforeNoRelays pins the Accept
+// ordering contract: a connection accepted before the last relay failed
+// is still delivered instead of being dropped by the no-relay path.
 func TestExposureAcceptDrainsQueuedConnectionBeforeNoRelays(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
@@ -163,6 +177,9 @@ func TestExposureAcceptDrainsQueuedConnectionBeforeNoRelays(t *testing.T) {
 	_ = conn.Close()
 }
 
+// TestExposeRejectsIncompleteIdentity pins the Expose input contract: an
+// identity without key material is rejected up front, before any relay
+// connection is attempted.
 func TestExposeRejectsIncompleteIdentity(t *testing.T) {
 	_, err := Expose(context.Background(), types.Identity{Name: "svc"}, []string{"https://relay.example"})
 	if err == nil || !strings.Contains(err.Error(), "identity must include") {
@@ -170,6 +187,8 @@ func TestExposeRejectsIncompleteIdentity(t *testing.T) {
 	}
 }
 
+// TestExposeRejectsEmptyInitialRelays pins the Expose input contract: at
+// least one initial relay URL is required.
 func TestExposeRejectsEmptyInitialRelays(t *testing.T) {
 	identity := types.Identity{
 		Name:       "svc",
@@ -185,6 +204,9 @@ func TestExposeRejectsEmptyInitialRelays(t *testing.T) {
 	}
 }
 
+// TestExposeOptionsContainOnlyEndpointCapabilities pins the option surface
+// contract: options configure endpoint capabilities only, and metadata is
+// deep-copied so later caller mutation cannot alter the exposure.
 func TestExposeOptionsContainOnlyEndpointCapabilities(t *testing.T) {
 	metadata := types.LeaseMetadata{Tags: []string{"initial"}}
 	var got options
@@ -207,6 +229,8 @@ func TestExposeOptionsContainOnlyEndpointCapabilities(t *testing.T) {
 	}
 }
 
+// TestExposeRejectsNilOption pins the Expose input contract: a nil option
+// is rejected instead of panicking.
 func TestExposeRejectsNilOption(t *testing.T) {
 	_, err := Expose(context.Background(), types.Identity{}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "option is nil") {
@@ -214,6 +238,9 @@ func TestExposeRejectsNilOption(t *testing.T) {
 	}
 }
 
+// TestProxyValidationDoesNotCloseExposure pins the Proxy failure contract:
+// an invalid proxy target returns an error without tearing down the
+// exposure it was given.
 func TestProxyValidationDoesNotCloseExposure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	exposure := &Exposure{
@@ -233,6 +260,9 @@ func TestProxyValidationDoesNotCloseExposure(t *testing.T) {
 	_ = exposure.Close()
 }
 
+// TestExposureWaitDatagramReadyDoesNotRequireStreamReadiness pins the
+// datagram readiness contract: WaitDatagramReady succeeds on a UDP
+// address alone, without stream (reverse session) readiness.
 func TestExposureWaitDatagramReadyDoesNotRequireStreamReadiness(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
@@ -253,6 +283,9 @@ func TestExposureWaitDatagramReadyDoesNotRequireStreamReadiness(t *testing.T) {
 	}
 }
 
+// TestExposureWaitTCPReadyUsesRelayStatus pins the raw TCP readiness
+// contract: WaitTCPReady returns relays as soon as their TCP address is
+// committed to the status snapshot.
 func TestExposureWaitTCPReadyUsesRelayStatus(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
@@ -271,6 +304,9 @@ func TestExposureWaitTCPReadyUsesRelayStatus(t *testing.T) {
 	}
 }
 
+// TestExposureWaitTCPReadyWaitsAfterTerminalFailure pins the raw TCP
+// readiness contract: after a terminal TCP failure the wait blocks until
+// context cancellation instead of returning the failed relay.
 func TestExposureWaitTCPReadyWaitsAfterTerminalFailure(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
@@ -287,6 +323,9 @@ func TestExposureWaitTCPReadyWaitsAfterTerminalFailure(t *testing.T) {
 	}
 }
 
+// TestExposureMetadataCopiesDoNotShareMutableState pins the metadata
+// ownership contract: reads hand out copies and UpdateMetadata propagates
+// a fresh snapshot to every listener.
 func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
 	ln := &listener{
 		metadata: types.LeaseMetadata{Tags: []string{"initial"}},
@@ -308,6 +347,9 @@ func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
 	}
 }
 
+// TestExposureReconcileRemovesStaleListener pins the reconcile lifecycle
+// contract: relays that leave the desired set have their listeners
+// stopped and deregistered.
 func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -356,6 +398,9 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	}
 }
 
+// TestExposureReconcileDoesNotRestartMITMBlockedRelay pins the security
+// invariant that a relay blocked for MITM detection is not silently
+// restarted by a later reconcile.
 func TestExposureReconcileDoesNotRestartMITMBlockedRelay(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
@@ -376,6 +421,9 @@ func TestExposureReconcileDoesNotRestartMITMBlockedRelay(t *testing.T) {
 	}
 }
 
+// TestExposureRemoveRelayStopsRunningListener pins the RemoveRelay
+// lifecycle contract: an explicitly removed relay's listener is stopped
+// and its status leaves the snapshot.
 func TestExposureRemoveRelayStopsRunningListener(t *testing.T) {
 	const relayA = "https://relay-a.example"
 
@@ -414,6 +462,10 @@ func TestExposureRemoveRelayStopsRunningListener(t *testing.T) {
 	}
 }
 
+// TestExposureListenerSelfExitKeepsExplicitRelayConfigured pins the
+// self-exit membership contract: when a listener closes itself on a
+// terminal failure, an explicitly configured relay stays in the desired
+// set so it can be retried.
 func TestExposureListenerSelfExitKeepsExplicitRelayConfigured(t *testing.T) {
 	const relayA = "https://relay-a.example"
 
@@ -441,6 +493,10 @@ func TestExposureListenerSelfExitKeepsExplicitRelayConfigured(t *testing.T) {
 	}
 }
 
+// TestExposureApplyRelaysReplacesStatusMembership pins the membership
+// snapshot contract: after the desired relay set changes, Relays()
+// reflects only the new set and the removed relay is reported through a
+// Deselected notification carrying its last known endpoint.
 func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -686,6 +742,9 @@ func testIdentity() types.Identity {
 	}
 }
 
+// TestExposeWithDiscoveryRetainsExplicitRelay pins the discovery membership
+// contract: an explicit relay URL is always retained in the membership,
+// independently of discovery selection.
 func TestExposeWithDiscoveryRetainsExplicitRelay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -716,6 +775,10 @@ func TestExposeWithDiscoveryRetainsExplicitRelay(t *testing.T) {
 	}
 }
 
+// TestExposeDiscoveryStaysUsableAfterRelayFailure pins the discovery
+// liveness contract: a relay failure is reported to the controller
+// without dropping the remaining membership, so the exposure stays
+// usable.
 func TestExposeDiscoveryStaysUsableAfterRelayFailure(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -850,6 +913,9 @@ func (e *Exposure) relayStateChanged() <-chan struct{} {
 	return e.stateChanged
 }
 
+// TestExposeSetMaxActiveRelaysDiscovery pins the discovery configuration
+// contract: the active-relay cap can be changed repeatedly at runtime
+// without error.
 func TestExposeSetMaxActiveRelaysDiscovery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -870,6 +936,8 @@ func TestExposeSetMaxActiveRelaysDiscovery(t *testing.T) {
 	}
 }
 
+// TestExposeSetMaxActiveRelaysNoDiscovery pins the configuration contract:
+// without discovery the cap setter is an accepted no-op.
 func TestExposeSetMaxActiveRelaysNoDiscovery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

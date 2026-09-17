@@ -2,6 +2,9 @@ package policy
 
 import "testing"
 
+// TestApproverDecisionsAreMutuallyExclusive protects the security invariant that an
+// identity key is either approved or denied at any point in time, never both: Approve
+// clears a prior denial and Deny clears a prior approval.
 func TestApproverDecisionsAreMutuallyExclusive(t *testing.T) {
 	t.Parallel()
 
