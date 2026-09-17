@@ -52,6 +52,13 @@ type RelayStatus struct {
 	State     RelayState
 	Failure   RelayFailure
 	Err       error
+	// Deselected marks a best-effort removal notification, never a stored
+	// snapshot: the relay left the desired membership set (discovery
+	// deselection or a relay-list change) and the endpoint fields carry
+	// its last known values, which are no longer backed by an active
+	// tunnel listener. Relays() stays authoritative — treat Deselected as
+	// a trigger to re-read the snapshot, not as durable history.
+	Deselected bool
 }
 
 // Active reports whether the relay currently has a usable registered listener.
@@ -646,6 +653,7 @@ func relayStatusEqual(a, b RelayStatus) bool {
 		a.Version == b.Version &&
 		a.State == b.State &&
 		a.Failure == b.Failure &&
+		a.Deselected == b.Deselected &&
 		errorsEqual
 }
 
@@ -686,17 +694,34 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) {
 		e.statuses[relayURL] = status
 		changed = true
 	}
-	for relayURL := range e.statuses {
+	var deselected []RelayStatus
+	for relayURL, previous := range e.statuses {
 		if _, ok := desired[relayURL]; ok {
 			continue
 		}
 		delete(e.statuses, relayURL)
 		changed = true
+		previous.Deselected = true
+		deselected = append(deselected, previous)
 	}
 	if changed {
 		e.notifyStateChangedLocked()
 	}
 	e.mu.Unlock()
+	// Membership shrank: report each dropped endpoint symmetrically with
+	// "service ready at" so log consumers can stop advertising it, and
+	// publish a best-effort removal notification for Updates() readers.
+	// Relays() remains the authoritative snapshot.
+	for _, status := range deselected {
+		if status.PublicURL != "" {
+			log.Info().
+				Str("relay_url", status.RelayURL).
+				Str("public_url", status.PublicURL).
+				Str("reason", "deselected").
+				Msg("relay no longer active for " + status.PublicURL)
+		}
+		e.publishRelayStatus(status)
+	}
 	if changed && e.discovery != nil {
 		e.discovery.SetActiveRelays(e.ActiveRelays())
 	}
@@ -720,7 +745,11 @@ func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <
 }
 
 // Updates reports relay lifecycle changes. Relays is the authoritative
-// snapshot; slow consumers may miss intermediate updates.
+// snapshot; slow consumers may miss intermediate updates. When relay
+// membership shrinks — discovery deselection or a relay-list change — a
+// removal notification with Deselected set and the relay's last known
+// endpoint is delivered best-effort; use it as a trigger to re-read
+// Relays(), not as durable history.
 func (e *Exposure) Updates() <-chan RelayStatus {
 	if e == nil {
 		return nil

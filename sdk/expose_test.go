@@ -448,6 +448,10 @@ func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 	)
 	exposure := newExposureStateTest(t, relayA)
 	exposure.syncRelayStatuses(exposure.relayURLs)
+	exposure.setRelayStatus(relayA, listenerStatus{
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
+	})
 
 	if err := exposure.applyRelays([]string{relayB}); err != nil {
 		t.Fatalf("applyRelays() error = %v", err)
@@ -456,6 +460,21 @@ func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 	relays := exposure.Relays()
 	if len(relays) != 1 || relays[0].RelayURL != relayB {
 		t.Fatalf("Relays() = %+v, want only relay B", relays)
+	}
+
+	// The deselected relay's last known endpoint must be reported
+	// explicitly (issue #463): consumers accumulating "service ready at"
+	// lines need a matching signal to drop the URL.
+	select {
+	case status := <-exposure.Updates():
+		if !status.Deselected {
+			t.Fatalf("Updates() delivered %+v, want a deselection notification", status)
+		}
+		if status.RelayURL != relayA || status.PublicURL != "https://service.relay-a.example" {
+			t.Fatalf("deselection notification = %+v, want relay A with its last known public URL", status)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no deselection notification was delivered")
 	}
 }
 
