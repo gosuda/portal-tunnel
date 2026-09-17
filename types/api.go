@@ -186,6 +186,26 @@ type PublicStateResponse struct {
 	LandingPageEnabled bool    `json:"landing_page_enabled"`
 }
 
+// ReputationSummary is the relay-computed public reputation for one lease
+// hostname. Warning thresholds, the probation window, and retention are
+// relay configuration; the relay, not clients, decides the verdict.
+type ReputationSummary struct {
+	Up                      int       `json:"up"`
+	Down                    int       `json:"down"`
+	Total                   int       `json:"total"`
+	DownRatio               float64   `json:"down_ratio"`
+	Warning                 bool      `json:"warning"`
+	ViewerVote              string    `json:"viewer_vote"`
+	IsNew                   bool      `json:"is_new"`
+	IdentityChangedRecently bool      `json:"identity_changed_recently"`
+	FirstSeenAt             time.Time `json:"first_seen_at"`
+}
+
+type ReputationVoteRequest struct {
+	Hostname string `json:"hostname"`
+	Vote     string `json:"vote"`
+}
+
 type AdminAuthLoginRequest struct {
 	Token string `json:"token"`
 }

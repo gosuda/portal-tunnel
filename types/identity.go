@@ -6,10 +6,11 @@ import (
 )
 
 const (
-	IdentityKeySeparator  = ":"
-	RelayIdentityFilename = "identity.json"
-	RelayPolicyFilename   = "policy.json"
-	DNSSECKeyFileName     = "dnssec-csk.json"
+	IdentityKeySeparator    = ":"
+	RelayIdentityFilename   = "identity.json"
+	RelayPolicyFilename     = "policy.json"
+	RelayReputationFilename = "reputation.json"
+	DNSSECKeyFileName       = "dnssec-csk.json"
 )
 
 type Identity struct {
@@ -73,6 +74,10 @@ type Lease struct {
 	TCPAddr     string        `json:"tcp_addr,omitempty"`
 	Metadata    LeaseMetadata `json:"metadata"`
 	Ready       int           `json:"ready"`
+	// Reputation is the relay-computed community aggregate for Hostname,
+	// attached when the public state is served. It survives lease restarts
+	// and re-registrations, unlike the lease-scoped FirstSeenAt/LastSeenAt.
+	Reputation *ReputationSummary `json:"reputation,omitempty"`
 }
 
 type PolicyLease struct {

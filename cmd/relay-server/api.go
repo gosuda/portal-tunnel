@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -36,6 +37,7 @@ type RelayAPI struct {
 	server               *portal.Server
 	adminToken           string
 	policyStatePath      string
+	reputation           *ReputationStore
 	frontendFS           fs.FS
 	frontendCache        sync.Map
 	frontendCacheEnabled bool
@@ -62,11 +64,22 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 	if err != nil {
 		return nil, err
 	}
+	// Reputation lives beside the policy state in the relay state dir, and its
+	// voter hashing keys off the relay identity secret, so both restart intact.
+	reputation, err := newReputationStore(
+		filepath.Join(filepath.Dir(policyStatePath), types.RelayReputationFilename),
+		defaultReputationConfig(),
+		[]byte(server.RelayIdentity().TokenSecret),
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	api := &RelayAPI{
 		server:               server,
 		adminToken:           strings.TrimSpace(adminToken),
 		policyStatePath:      policyStatePath,
+		reputation:           reputation,
 		frontendFS:           frontendFS,
 		frontendCacheEnabled: strings.TrimSpace(frontendDir) == "",
 		landingPageEnabled:   landingPageEnabled,
@@ -88,6 +101,8 @@ func (api *RelayAPI) Handler() *http.ServeMux {
 	mux.HandleFunc(types.PathPolicy, api.servePolicy)
 	mux.HandleFunc(types.PathPolicyPrefix, api.servePolicy)
 	mux.HandleFunc(types.PathState, api.servePublicState)
+	mux.HandleFunc(types.PathReputation, api.serveReputation)
+	mux.HandleFunc(types.PathReputationVote, api.serveReputationVote)
 	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
 		serveInstallScript(w, r, api.server.PortalURL(), false)
 	})
@@ -106,6 +121,31 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leases := api.server.PublicLeases()
+	// Owner keys are resolved once from the policy projection; the public wire
+	// shape never carries them, only the derived reputation aggregates do.
+	ownerKeys := make(map[string]string, len(leases))
+	for _, lease := range api.server.PolicyLeases() {
+		hostname := utils.NormalizeHostname(lease.Hostname)
+		if hostname == "" {
+			continue
+		}
+		if _, seen := ownerKeys[hostname]; !seen {
+			ownerKeys[hostname] = lease.IdentityKey
+		}
+	}
+	live := make([]LiveLease, 0, len(leases))
+	for _, lease := range leases {
+		live = append(live, LiveLease{
+			Hostname:    lease.Hostname,
+			IdentityKey: ownerKeys[utils.NormalizeHostname(lease.Hostname)],
+		})
+	}
+	api.reputation.ObserveLive(live)
+	voterHash := api.reputation.VoterHash(reputationVoterIDFromRequest(r))
+	for i := range leases {
+		summary := api.reputation.Summary(utils.NormalizeHostname(leases[i].Hostname), voterHash)
+		leases[i].Reputation = &summary
+	}
 	api.policyMu.RLock()
 	landingPageEnabled := api.landingPageEnabled
 	api.policyMu.RUnlock()

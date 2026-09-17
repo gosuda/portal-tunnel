@@ -7,6 +7,9 @@ const (
 	PathHealthz   = PathAPIPrefix + "/healthz"
 	PathState     = PathAPIPrefix + "/state"
 
+	PathReputation     = PathAPIPrefix + "/reputation"
+	PathReputationVote = PathReputation + "/vote"
+
 	PathAdmin           = PathAPIPrefix + "/admin"
 	PathAdminPrefix     = PathAdmin + "/"
 	PathAdminAuthLogin  = PathAdmin + "/auth/login"
