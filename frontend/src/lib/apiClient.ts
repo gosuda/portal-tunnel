@@ -1,6 +1,6 @@
 import { readAdminAuthToken } from "@/lib/adminAuthToken";
 import { BROWSER_API_PATHS, RELAY_API_PATHS } from "@/lib/apiPaths";
-import type { APIEnvelope } from "@/types/api";
+import type { APIEnvelope, ReputationSummary, ReputationVote } from "@/types/api";
 
 export class APIClientError extends Error {
   readonly code: string;
@@ -175,5 +175,21 @@ export const apiClient = {
   },
   post<T>(path: string, body?: unknown): Promise<T> {
     return request<T>(path, jsonRequestInit(body));
+  },
+  getReputation(hostname: string): Promise<ReputationSummary> {
+    const query = `?hostname=${encodeURIComponent(hostname)}`;
+    return request<ReputationSummary>(
+      `${RELAY_API_PATHS.public.reputation.root}${query}`,
+      { method: "GET" }
+    );
+  },
+  postReputationVote(
+    hostname: string,
+    vote: ReputationVote
+  ): Promise<ReputationSummary> {
+    return request<ReputationSummary>(
+      RELAY_API_PATHS.public.reputation.vote,
+      jsonRequestInit({ hostname, vote })
+    );
   },
 };

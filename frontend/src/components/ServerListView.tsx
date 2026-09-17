@@ -16,7 +16,7 @@ import { FloatingActionBar } from "@/components/FloatingActionBar";
 import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
-import type { DiscoveryResponse, DomainResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
+import type { DiscoveryResponse, DomainResponse, RelayDescriptor, IncompatibleRelayEntry, ReputationVote } from "@/types/api";
 import {
   Dialog,
   DialogContent,
@@ -160,6 +160,7 @@ interface ServerListViewProps {
   onSortByChange: (value: SortOption) => void;
   onTagToggle: (tag: string) => void;
   onToggleFavorite: (serverId: string) => void;
+  onVote?: (hostname: string, vote: ReputationVote) => void | Promise<void>;
   isAdmin?: boolean;
   banFilter?: BanFilter;
   approvalMode?: ApprovalMode;
@@ -211,6 +212,7 @@ export function ServerListView({
   onSortByChange,
   onTagToggle,
   onToggleFavorite,
+  onVote,
   isAdmin = false,
   banFilter = "all",
   approvalMode = "auto",
@@ -648,12 +650,15 @@ export function ServerListView({
           serverUrl: server.link,
           paymentEnabled: server.paymentEnabled,
           paymentLabel: server.paymentLabel,
+          reputation: server.reputation,
         }}
         tcpAddr={server.tcpAddr}
         udpAddr={server.udpAddr}
         firstSeen={server.firstSeen}
         isFavorite={favoriteIds.has(server.id)}
         onToggleFavorite={onToggleFavorite}
+        reputation={isAdmin ? undefined : server.reputation}
+        onVote={isAdmin ? undefined : onVote}
         paymentEnabled={server.paymentEnabled}
         paymentLabel={server.paymentLabel}
         showAdminControls={isAdmin && !!adminServer}

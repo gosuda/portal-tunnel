@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReputationSummary } from "@/types/api";
 import type { SortOption, StatusFilter } from "@/types/filters";
 
 export interface BaseServer {
@@ -17,6 +18,7 @@ export interface BaseServer {
   firstSeen?: string;
   paymentEnabled?: boolean;
   paymentLabel?: string;
+  reputation?: ReputationSummary;
 }
 
 export interface UseListOptions<T extends BaseServer> {

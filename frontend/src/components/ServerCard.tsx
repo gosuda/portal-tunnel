@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
-import { BadgeDollarSign } from "lucide-react";
+import { BadgeDollarSign, ThumbsDown, ThumbsUp } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import type { ReputationSummary, ReputationVote } from "@/types/api";
 
 interface ServerCardProps {
   serverId: string;
@@ -28,6 +29,8 @@ interface ServerCardProps {
   udpAddr?: string;
   isFavorite?: boolean;
   onToggleFavorite?: (serverId: string) => void;
+  reputation?: ReputationSummary;
+  onVote?: (hostname: string, vote: ReputationVote) => void | Promise<void>;
   showAdminControls?: boolean;
   identityKey?: string;
   address?: string;
@@ -68,6 +71,8 @@ export function ServerCard({
   udpAddr,
   isFavorite = false,
   onToggleFavorite,
+  reputation,
+  onVote,
   showAdminControls = false,
   identityKey,
   isBanned = false,
@@ -151,6 +156,13 @@ export function ServerCard({
     event.stopPropagation();
     onToggleFavorite?.(serverId);
   };
+
+  const handleVoteClick =
+    (vote: ReputationVote) => (event: React.MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onVote?.(serverId, vote);
+    };
 
   const copyEndpoint = async (protocol: string, address: string) => {
     if (!navigator.clipboard) return;
@@ -310,6 +322,12 @@ export function ServerCard({
                 <span className="min-w-0 truncate">{effectivePaymentLabel}</span>
               </div>
             )}
+
+            {reputation?.is_new && (
+              <div className="inline-flex items-center rounded-md border border-primary/40 bg-primary/24 px-2.5 py-1 text-[10px] font-bold uppercase tracking-normal text-white backdrop-blur-sm">
+                New
+              </div>
+            )}
           </div>
 
           {showAdminControls ? (
@@ -390,6 +408,41 @@ export function ServerCard({
                       </span>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {reputation && onVote && (
+                <div className="mt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleVoteClick("up")}
+                    aria-pressed={reputation.viewer_vote === "up"}
+                    aria-label="Upvote this service"
+                    className={clsx(
+                      "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+                      reputation.viewer_vote === "up"
+                        ? "border-primary bg-primary text-black"
+                        : "border-white/20 bg-black/40 text-white hover:bg-primary hover:text-black"
+                    )}
+                  >
+                    <ThumbsUp className="size-3 shrink-0" />
+                    <span>{reputation.up}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleVoteClick("down")}
+                    aria-pressed={reputation.viewer_vote === "down"}
+                    aria-label="Downvote this service"
+                    className={clsx(
+                      "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+                      reputation.viewer_vote === "down"
+                        ? "border-primary bg-primary text-black"
+                        : "border-white/20 bg-black/40 text-white hover:bg-primary hover:text-black"
+                    )}
+                  >
+                    <ThumbsDown className="size-3 shrink-0" />
+                    <span>{reputation.down}</span>
+                  </button>
                 </div>
               )}
 

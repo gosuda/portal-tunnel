@@ -1,7 +1,10 @@
 import { SsgoiTransition } from "@ssgoi/react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { BadgeDollarSign } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { openExternal } from "@/lib/navigate";
+import type { ReputationSummary } from "@/types/api";
 
 interface ServerDetailState {
   id: string;
@@ -14,12 +17,47 @@ interface ServerDetailState {
   serverUrl: string;
   paymentEnabled?: boolean;
   paymentLabel?: string;
+  reputation?: ReputationSummary;
 }
+
+const REPUTATION_ACK_PREFIX = "portalReputationWarningAck:";
 
 export function ServerDetail() {
   const location = useLocation();
   const navigate = useNavigate();
   const server = location.state as ServerDetailState;
+
+  // A warned service stops auto-opening until the visitor acknowledges it for
+  // this browser session (per-tab, like the isPush bfcache flag).
+  const [acknowledged, setAcknowledged] = useState(() => {
+    try {
+      return (
+        server?.reputation?.warning === true &&
+        sessionStorage.getItem(`${REPUTATION_ACK_PREFIX}${server.id}`) === "1"
+      );
+    } catch {
+      return false;
+    }
+  });
+  const warningActive =
+    server?.reputation?.warning === true && !acknowledged;
+
+  const acknowledgeWarning = () => {
+    if (!server) return;
+    try {
+      sessionStorage.setItem(`${REPUTATION_ACK_PREFIX}${server.id}`, "1");
+    } catch {
+      // Storage can be unavailable (quota/private browsing); the ack is
+      // best-effort and this visit still proceeds without it.
+    }
+    setAcknowledged(true);
+  };
+
+  const handleOpenAnyway = () => {
+    if (!server) return;
+    acknowledgeWarning();
+    openExternal(server.serverUrl);
+  };
 
   // Detect back navigation using pageshow event
   useEffect(() => {
@@ -57,16 +95,21 @@ export function ServerDetail() {
       return;
     }
 
+    // A community-warning interstitial holds the redirect until the visitor
+    // chooses; every other case keeps the original 500ms auto-open.
+    if (warningActive) {
+      return;
+    }
+
     // Redirect after animation
     const timer = setTimeout(() => {
-      localStorage.setItem("isPush", "true");
-      window.location.href = server.serverUrl;
+      openExternal(server.serverUrl);
     }, 500);
 
     return () => {
       clearTimeout(timer);
     };
-  }, [server, navigate]);
+  }, [server, navigate, warningActive]);
 
   // If no server data, show nothing (will redirect)
   if (!server) {
@@ -186,6 +229,72 @@ export function ServerDetail() {
             </div>
           </div>
         </div>
+
+        {warningActive && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center p-6">
+            <div
+              role="alertdialog"
+              aria-labelledby="reputation-warning-title"
+              aria-describedby="reputation-warning-description"
+              className="flex w-full max-w-md flex-col gap-4 rounded-lg border border-border bg-background/95 p-6 text-start shadow-xl backdrop-blur-md"
+            >
+              <h2
+                id="reputation-warning-title"
+                className="font-display text-xl font-bold text-foreground"
+              >
+                Before you continue
+              </h2>
+              <p
+                id="reputation-warning-description"
+                className="text-sm leading-normal text-text-muted"
+              >
+                Some visitors reported issues with this service recently. This
+                is anonymous community feedback and may not reflect its current
+                state.
+              </p>
+              {server.reputation?.identity_changed_recently && (
+                <p className="text-sm leading-normal text-text-muted">
+                  This service recently changed its identity.
+                </p>
+              )}
+              <dl
+                data-testid="reputation-counts"
+                className="flex gap-6 text-sm font-medium text-foreground"
+              >
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-[10px] font-bold uppercase tracking-wider text-text-muted">
+                    Up
+                  </dt>
+                  <dd>{server.reputation?.up ?? 0}</dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-[10px] font-bold uppercase tracking-wider text-text-muted">
+                    Down
+                  </dt>
+                  <dd>{server.reputation?.down ?? 0}</dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-[10px] font-bold uppercase tracking-wider text-text-muted">
+                    Total
+                  </dt>
+                  <dd>{server.reputation?.total ?? 0}</dd>
+                </div>
+              </dl>
+              <div className="flex justify-end gap-3">
+                <Button
+                  variant="secondary"
+                  className="cursor-pointer"
+                  onClick={() => navigate(-1)}
+                >
+                  Back
+                </Button>
+                <Button className="cursor-pointer" onClick={handleOpenAnyway}>
+                  Open anyway
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </SsgoiTransition>
   );

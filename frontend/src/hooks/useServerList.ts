@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useList, type BaseServer } from "@/hooks/useList";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
@@ -7,7 +7,12 @@ import {
   resolveLeasePayment,
   resolveLeaseThumbnail,
 } from "@/lib/metadata";
-import type { Lease, PublicStateResponse } from "@/types/api";
+import type {
+  Lease,
+  PublicStateResponse,
+  ReputationSummary,
+  ReputationVote,
+} from "@/types/api";
 
 type PublicState = {
   leases: Lease[];
@@ -39,6 +44,7 @@ function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
       firstSeen: row.first_seen_at || undefined,
       paymentEnabled: payment.enabled,
       paymentLabel: payment.label,
+      reputation: row.reputation,
     };
   });
 }
@@ -82,6 +88,28 @@ export function useServerList() {
     [publicState.leases]
   );
 
+  const handleVote = useCallback(
+    async (hostname: string, vote: ReputationVote) => {
+      try {
+        const summary: ReputationSummary = await apiClient.postReputationVote(
+          hostname,
+          vote
+        );
+        setPublicState((prev) => ({
+          ...prev,
+          leases: prev.leases.map((lease) =>
+            lease.hostname === hostname
+              ? { ...lease, reputation: summary }
+              : lease
+          ),
+        }));
+      } catch (error) {
+        console.error("Failed to submit reputation vote", error);
+      }
+    },
+    []
+  );
+
   const list = useList({
     servers,
     storageKey: "serverFavorites",
@@ -90,5 +118,6 @@ export function useServerList() {
   return {
     ...list,
     landingPageEnabled: publicState.landingPageEnabled,
+    onVote: handleVote,
   };
 }

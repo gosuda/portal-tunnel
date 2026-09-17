@@ -17,6 +17,22 @@ export type APIEnvelope<T> =
 
 export type ApprovalMode = "auto" | "manual";
 
+export type ReputationVote = "up" | "down";
+
+// Mirrors types.ReputationSummary (Go). The relay computes warning thresholds
+// and viewer-specific fields; the frontend only renders them.
+export interface ReputationSummary {
+  up: number;
+  down: number;
+  total: number;
+  down_ratio: number;
+  warning: boolean;
+  viewer_vote?: ReputationVote | "";
+  is_new: boolean;
+  identity_changed_recently: boolean;
+  first_seen_at?: string;
+}
+
 export interface LeaseMetadata {
   description?: string;
   owner?: string;
@@ -37,6 +53,7 @@ export interface Lease {
   tcp_addr?: string;
   metadata: LeaseMetadata;
   ready: number;
+  reputation?: ReputationSummary;
 }
 
 export interface PolicyLease extends Lease {
