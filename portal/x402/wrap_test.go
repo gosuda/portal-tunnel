@@ -166,6 +166,32 @@ func TestWrapSettlesAndForwardsSanitizedRequest(t *testing.T) {
 	}
 }
 
+func TestWrapKeepsTrustedSettlementHeaders(t *testing.T) {
+	payment := newStubPayment(stubSettlement)
+	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(types.HeaderPaymentResponse, "upstream")
+		w.Header().Set(types.HeaderXPaymentResponse, "upstream")
+		w.Header().Set(types.HeaderPaymentRequired, "upstream")
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodGet, "https://public.example/paid", nil)
+	req.Header.Set(types.HeaderXPayment, paidPayloadHeader(t, stubRequirements))
+	rec := httptest.NewRecorder()
+	payment.Wrap(protected).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get(types.HeaderPaymentResponse); got == "" || got == "upstream" {
+		t.Fatalf("payment response = %q, want trusted settlement", got)
+	}
+	if got := rec.Header().Get(types.HeaderXPaymentResponse); got != rec.Header().Get(types.HeaderPaymentResponse) {
+		t.Fatalf("legacy response = %q, want same trusted settlement", got)
+	}
+	if got := rec.Header().Get(types.HeaderPaymentRequired); got != "" {
+		t.Fatalf("upstream challenge leaked: %q", got)
+	}
+}
+
 func TestWrapMethodFilterPassesUnpaidMethodsThrough(t *testing.T) {
 	payment := newStubPayment(stubSettlement)
 	payment.methods = paymentMethodSet([]string{"post"})

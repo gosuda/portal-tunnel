@@ -306,6 +306,7 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 	pr.SetURL(r.upstream)
 	pr.SetXForwarded()
+	utils.StripPaymentHeaders(pr.Out.Header)
 
 	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy
 	// the inbound X-Forwarded-Proto carries the real client scheme.
@@ -332,6 +333,7 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 	}
 
 	header := resp.Header
+	utils.StripPaymentHeaders(header)
 	publicHost := resp.Request.Header.Get("X-Forwarded-Host")
 	publicScheme := resp.Request.Header.Get("X-Forwarded-Proto")
 	publicPath := func(raw string) string {

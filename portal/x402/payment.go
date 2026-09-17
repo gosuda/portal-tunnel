@@ -358,7 +358,7 @@ func (p *Payment) WritePrepare(w http.ResponseWriter, r *http.Request, sender, r
 	resourcePath = cmp.Or(resourcePath, "/")
 	resourceMimeType := strings.TrimSpace(p.payment.ResourceMimeType)
 	resourceMimeType = cmp.Or(resourceMimeType, "text/html")
-	utils.WritePaymentJSON(w, http.StatusOK, types.X402PreparePaymentResponse{
+	writePaymentJSON(w, http.StatusOK, types.X402PreparePaymentResponse{
 		X402Version:         int(facilitatortypes.X402VersionV2),
 		PaymentRequirements: paymentRequirementsFromFacilitator(p.requirements),
 		Resource: &types.X402ResourceInfo{

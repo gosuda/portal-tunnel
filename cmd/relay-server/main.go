@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +42,8 @@ type appConfig struct {
 	FrontendDir        string
 	LandingPageEnabled bool
 	AdminToken         string
+	PprofEnabled       bool
+	PprofListenAddr    string
 	// Relay-owned x402 facilitator surface: portal.Server is x402-blind, so
 	// this application resolves the flags and mounts the payment endpoints.
 	X402Enabled bool
@@ -105,8 +109,8 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.IntFlagEnv(fs, &cfg.Relay.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
 
 	utils.StringFlagEnv(fs, &cfg.AdminToken, "admin-token", "", "admin bearer token for relay admin and policy APIs", "ADMIN_TOKEN")
-	utils.BoolFlagEnv(fs, &cfg.Relay.PProfEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
-	utils.StringFlagEnv(fs, &cfg.Relay.PProfListenAddr, "pprof-addr", portal.DefaultPProfListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
+	utils.BoolFlagEnv(fs, &cfg.PprofEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
+	utils.StringFlagEnv(fs, &cfg.PprofListenAddr, "pprof-addr", DefaultPprofListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
 	utils.BoolFlagEnv(fs, &cfg.X402Enabled, "x402-enabled", false, "enable relay-owned Sui x402 facilitator endpoints under /api/x402 for future control-plane payments", "X402_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
 	utils.StringFlagEnv(fs, &cfg.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
@@ -163,6 +167,14 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
+	if x402Settings.Enabled {
+		// NewServer already validated the URL; keep metadata consistent with
+		// the normalized URL the relay advertises.
+		x402Settings.PortalURL, err = utils.NormalizeRelayURL(cfg.Relay.PortalURL)
+		if err != nil {
+			return fmt.Errorf("normalize portal url: %w", err)
+		}
+	}
 
 	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
 	relayAPI, err := NewRelayAPI(server, policyPath, cfg.AdminToken, cfg.FrontendDir, cfg.LandingPageEnabled)
@@ -174,15 +186,48 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return err
 	}
-	return server.Serve(ctx, handler)
+	if !cfg.PprofEnabled {
+		return server.Serve(ctx, handler)
+	}
+
+	bound, stopPprof, pprofErrs, err := startPprofServer(ctx, normalizePprofAddr(cfg.PprofListenAddr))
+	if err != nil {
+		return err
+	}
+	log.Info().Str("pprof_addr", utils.HostPortOrLoopback(bound.String())).Msg("starting pprof server")
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(runCtx, handler) }()
+
+	var serveErr error
+	select {
+	case err := <-serveDone:
+		serveErr = err
+	case err := <-pprofErrs:
+		serveErr = fmt.Errorf("serve pprof: %w", err)
+		cancel()
+		<-serveDone
+	}
+	cancel()
+
+	shutdownCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	if err := stopPprof(shutdownCtx); err != nil {
+		log.Warn().Err(err).Msg("shutdown pprof server")
+	}
+	stop()
+	return serveErr
 }
 
 // x402FacilitatorSettings is the resolved relay-owned x402 facilitator
 // configuration. portal.Server knows nothing about payments: this application
 // validates the flags and mounts the facilitator itself.
 type x402FacilitatorSettings struct {
-	Enabled bool
-	Testnet bool
+	Enabled   bool
+	Testnet   bool
+	PayTo     string
+	PortalURL string
 }
 
 // resolveX402Facilitator resolves the relay-owned x402 flags. An enabled
@@ -195,7 +240,7 @@ func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
 	if strings.TrimSpace(cfg.X402PayTo) == "" {
 		return x402FacilitatorSettings{}, errors.New("x402 facilitator enabled without a payment recipient")
 	}
-	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet}, nil
+	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet, PayTo: strings.TrimSpace(cfg.X402PayTo), PortalURL: cfg.Relay.PortalURL}, nil
 }
 
 // composeRelayHandler mounts the relay-owned x402 facilitator in front of the
@@ -213,6 +258,37 @@ func composeRelayHandler(settings x402FacilitatorSettings, base http.Handler) (h
 		Str("path", types.PathX402Facilitator).
 		Str("network", x402.Network(settings.Testnet)).
 		Msg("relay-owned x402 facilitator enabled")
+	mux.HandleFunc(types.PathSDKDomain, func(w http.ResponseWriter, r *http.Request) {
+		rec := httptest.NewRecorder()
+		base.ServeHTTP(rec, r)
+		if rec.Code != http.StatusOK || r.Method != http.MethodGet {
+			for name, values := range rec.Header() {
+				w.Header()[name] = append([]string(nil), values...)
+			}
+			w.WriteHeader(rec.Code)
+			_, _ = w.Write(rec.Body.Bytes())
+			return
+		}
+		var envelope types.APIEnvelope[types.DomainResponse]
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil || !envelope.OK {
+			http.Error(w, "invalid relay domain response", http.StatusBadGateway)
+			return
+		}
+		baseURL := strings.TrimRight(settings.PortalURL, "/")
+		network := x402.Network(settings.Testnet)
+		envelope.Data.X402 = types.X402FacilitatorInfo{
+			Enabled:      true,
+			URL:          baseURL + types.PathX402Facilitator,
+			Network:      network,
+			NetworkName:  x402.NetworkDisplayName(network),
+			SupportedURL: baseURL + types.X402SupportedPath,
+			PayTo:        settings.PayTo,
+		}
+		for name, values := range rec.Header() {
+			w.Header()[name] = append([]string(nil), values...)
+		}
+		utils.WriteAPIData(w, http.StatusOK, envelope.Data)
+	})
 	mux.Handle("/", base)
 	return mux, nil
 }

@@ -175,3 +175,30 @@ func TestComposeHTTPRoutesRejectsMethodsWithoutAmount(t *testing.T) {
 		t.Fatalf("ComposeHTTPRoutes() error = nil, want payment methods require amount error")
 	}
 }
+
+func TestComposeHTTPRoutesSelectsCanonicalLongestPrefix(t *testing.T) {
+	t.Parallel()
+	root := newGatewayStaticSiteDir(t, "index.html", "health")
+	handler, err := agent.ComposeHTTPRoutes([]agent.ExposedHTTPRoute{
+		{Prefix: "/", StaticRoot: root, Amount: "0.01"},
+		{Prefix: "/health", StaticRoot: root},
+		{Prefix: "/paid/", StaticRoot: root, Amount: "0.01"},
+	}, gatewayTestContract())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{path: "/health", want: http.StatusOK},
+		{path: "/paid", want: http.StatusPaymentRequired},
+		{path: "/paid/child", want: http.StatusPaymentRequired},
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://public.example"+tc.path, nil))
+		if rec.Code != tc.want {
+			t.Errorf("%s status = %d, want %d", tc.path, rec.Code, tc.want)
+		}
+	}
+}

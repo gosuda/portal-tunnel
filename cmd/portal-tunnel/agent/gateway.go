@@ -44,9 +44,13 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 	contract.PayTo = strings.TrimSpace(contract.PayTo)
 
 	sdkConfigs := make([]sdk.HTTPRouteConfig, 0, len(routes))
-	paid := make([]paidRoute, 0, len(routes))
+	policies := make([]routePolicy, 0, len(routes))
 	for _, route := range routes {
 		prefix := strings.TrimSpace(route.Prefix)
+		if prefix != "" && strings.HasPrefix(prefix, "/") {
+			prefix = utils.NormalizeURLPath(prefix)
+		}
+		policy := routePolicy{prefix: prefix}
 		sdkConfigs = append(sdkConfigs, sdk.HTTPRouteConfig{
 			Prefix:      prefix,
 			Upstream:    route.Upstream,
@@ -59,6 +63,7 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 			if len(route.Methods) > 0 {
 				return nil, fmt.Errorf("http route %q payment methods require amount", prefix)
 			}
+			policies = append(policies, policy)
 			continue
 		}
 		if contract.PayTo == "" {
@@ -81,14 +86,15 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 		if err != nil {
 			return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
 		}
-		paid = append(paid, paidRoute{prefix: prefix, methods: methodSet, payment: payment})
+		policy.paid = &paidRoute{methods: methodSet, payment: payment}
+		policies = append(policies, policy)
 	}
 
-	sort.Slice(paid, func(i, j int) bool {
-		if len(paid[i].prefix) == len(paid[j].prefix) {
-			return paid[i].prefix < paid[j].prefix
+	sort.Slice(policies, func(i, j int) bool {
+		if len(policies[i].prefix) == len(policies[j].prefix) {
+			return policies[i].prefix < policies[j].prefix
 		}
-		return len(paid[i].prefix) > len(paid[j].prefix)
+		return len(policies[i].prefix) > len(policies[j].prefix)
 	})
 
 	routed, err := sdk.NewHTTPRoutes(sdkConfigs)
@@ -97,29 +103,25 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 	}
 
 	var clientJS http.Handler = http.HandlerFunc(x402.ServeClientJS)
-	if len(paid) > 0 {
-		clientJS = paid[0].payment.ClientJSHandler()
-	}
-	prefixes := make([]string, 0, len(sdkConfigs))
-	for _, config := range sdkConfigs {
-		prefixes = append(prefixes, strings.TrimSpace(config.Prefix))
-	}
-	sort.Slice(prefixes, func(i, j int) bool {
-		if len(prefixes[i]) == len(prefixes[j]) {
-			return prefixes[i] < prefixes[j]
+	for _, policy := range policies {
+		if policy.paid != nil {
+			clientJS = policy.paid.payment.ClientJSHandler()
+			break
 		}
-		return len(prefixes[i]) > len(prefixes[j])
-	})
+	}
 	return &httpGateway{
 		routes:   routed,
 		clientJS: clientJS,
-		prefixes: prefixes,
-		paid:     paid,
+		policies: policies,
 	}, nil
 }
 
+type routePolicy struct {
+	prefix string
+	paid   *paidRoute
+}
+
 type paidRoute struct {
-	prefix  string
 	methods map[string]struct{}
 	payment *x402.Payment
 }
@@ -127,8 +129,7 @@ type paidRoute struct {
 type httpGateway struct {
 	routes   *sdk.HTTPRoutes
 	clientJS http.Handler
-	prefixes []string
-	paid     []paidRoute
+	policies []routePolicy
 }
 
 func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -147,8 +148,8 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if route := g.matchPaid(path); route != nil {
-		route.payment.Wrap(g.routes).ServeHTTP(w, r)
+	if policy := g.matchPolicy(path); policy != nil && policy.paid != nil {
+		policy.paid.payment.Wrap(g.routes).ServeHTTP(w, r)
 		return
 	}
 	g.routes.ServeHTTP(w, r)
@@ -176,11 +177,12 @@ func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 		method = raw
 	}
 
-	if !g.matchesRoute(path) {
+	policy := g.matchPolicy(path)
+	if policy == nil {
 		http.NotFound(w, r)
 		return
 	}
-	route := g.matchPaid(path)
+	route := policy.paid
 	if route == nil || !route.allowsMethod(method) {
 		http.Error(w, "x402 payment is not enabled for path", http.StatusNotFound)
 		return
@@ -188,23 +190,12 @@ func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 	route.payment.WritePrepare(w, r, req.Sender, path)
 }
 
-// matchesRoute mirrors the sdk router's longest-prefix match.
-func (g *httpGateway) matchesRoute(path string) bool {
-	for _, prefix := range g.prefixes {
-		if prefix == "/" || path == prefix || strings.HasPrefix(path, prefix+"/") {
-			return true
-		}
-	}
-	return false
-}
-
-// matchPaid returns the first matching paid route, mirroring the sdk router's
-// longest-prefix match. Wrap enforces the route's payment methods itself.
-func (g *httpGateway) matchPaid(path string) *paidRoute {
-	for i := range g.paid {
-		route := &g.paid[i]
-		if route.prefix == "/" || path == route.prefix || strings.HasPrefix(path, route.prefix+"/") {
-			return route
+// matchPolicy selects the same longest canonical prefix as the SDK router.
+func (g *httpGateway) matchPolicy(path string) *routePolicy {
+	for i := range g.policies {
+		policy := &g.policies[i]
+		if policy.prefix == "/" || path == policy.prefix || strings.HasPrefix(path, policy.prefix+"/") {
+			return policy
 		}
 	}
 	return nil

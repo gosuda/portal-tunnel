@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,6 +37,29 @@ func TestResolveX402FacilitatorRequiresRecipient(t *testing.T) {
 	}
 	if disabled.Enabled {
 		t.Fatalf("resolveX402Facilitator() = %+v, want disabled without --x402-enabled", disabled)
+	}
+}
+
+func TestComposeRelayHandlerPreservesDomainX402Metadata(t *testing.T) {
+	base := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// The generic relay reports a disabled facilitator; the process owner
+		// fills in its enabled application configuration.
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"protocol_version":"2","release_version":"test","ens":{},"x402":{"enabled":false}}}`))
+	})
+	settings := x402FacilitatorSettings{Enabled: true, Testnet: true, PayTo: "0xrecipient", PortalURL: "https://relay.example"}
+	handler, err := composeRelayHandler(settings, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, types.PathSDKDomain, nil))
+	var response types.APIEnvelope[types.DomainResponse]
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	info := response.Data.X402
+	if rec.Code != http.StatusOK || !info.Enabled || info.PayTo != settings.PayTo || info.URL != settings.PortalURL+types.PathX402Facilitator || info.SupportedURL != settings.PortalURL+types.X402SupportedPath {
+		t.Fatalf("domain metadata = %+v, status = %d", info, rec.Code)
 	}
 }
 
