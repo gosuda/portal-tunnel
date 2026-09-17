@@ -602,6 +602,7 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	if update.tcpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
 		status.TCPAddr = update.tcpAddr
 	}
+	advertised := previous.State != RelayReady && status.State == RelayReady && status.PublicURL != ""
 	if !relayStatusEqual(previous, status) {
 		e.statuses[relayURL] = status
 		e.notifyStateChangedLocked()
@@ -610,6 +611,18 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 		return
 	}
 	e.mu.Unlock()
+
+	// Advertise readiness from the authoritative snapshot only: the same
+	// committed PublicURL that later feeds the deselection tombstone, so
+	// every "service ready at" line is guaranteed retractable by a
+	// matching "relay no longer active for" line (issue #463).
+	if advertised {
+		log.Info().
+			Str("address", e.identity.Address).
+			Str("public_url", status.PublicURL).
+			Str("relay_url", status.RelayURL).
+			Msg("service ready at " + status.PublicURL)
+	}
 
 	e.publishRelayStatus(status)
 	if e.discovery != nil {

@@ -299,13 +299,13 @@ func (l *listener) run(ctx context.Context) {
 		}
 		if udpAddr != "" || tcpAddr != "" {
 			event.Msg("raw transport endpoints allocated")
-		} else if publicURL != "" {
-			event.Str("public_url", publicURL).
-				Str("relay_url", l.api.relayURL.String()).
-				Msg("service ready at " + publicURL)
-		} else {
+		} else if publicURL == "" {
 			event.Msg("relay listener registered")
 		}
+		// The ready advertisement ("service ready at") is logged by
+		// Exposure.applyRelayStatus once the public URL is committed to
+		// the authoritative relay status, so it can always be retracted
+		// by the symmetric deselection log (issue #463).
 
 		err = l.runLease(ctx)
 		if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {

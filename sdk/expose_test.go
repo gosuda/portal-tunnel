@@ -541,6 +541,46 @@ func TestStaleListenerStatusCannotRecreateDeselectedMembership(t *testing.T) {
 	}
 }
 
+// TestImmediateReadyCommitmentThenDeselectCarriesPublicURL pins the
+// publication invariant from the #463 review: the ready advertisement
+// derives from the same authoritative status commit that the deselection
+// tombstone is built from, so an immediate ready-then-deselect sequence
+// must emit a removal carrying the exact PublicURL that was advertised.
+func TestImmediateReadyCommitmentThenDeselectCarriesPublicURL(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	exposure := newExposureStateTest(t, relayA)
+	exposure.syncRelayStatuses(exposure.relayURLs)
+
+	// The moment the ready advertisement now fires: the public URL is
+	// committed to the authoritative snapshot by the owning listener.
+	owner := &listener{}
+	exposure.mu.Lock()
+	exposure.relayListeners[relayA] = owner
+	exposure.mu.Unlock()
+	exposure.setListenerRelayStatus(relayA, owner, listenerStatus{
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
+	})
+	if relays := exposure.Relays(); len(relays) != 1 ||
+		relays[0].PublicURL != "https://service.relay-a.example" {
+		t.Fatalf("Relays() = %+v, want the ready commit carrying the public URL", relays)
+	}
+
+	// Deselect immediately after the advertisement precondition: the
+	// tombstone must carry the same URL, so the removal log fires.
+	exposure.mu.Lock()
+	delete(exposure.relayListeners, relayA)
+	exposure.mu.Unlock()
+	deselected := exposure.syncRelayStatuses([]string{relayB})
+	if len(deselected) != 1 || deselected[0].RelayURL != relayA || !deselected[0].Deselected ||
+		deselected[0].PublicURL != "https://service.relay-a.example" {
+		t.Fatalf("syncRelayStatuses() = %+v, want relay A tombstone carrying the ready public URL", deselected)
+	}
+}
+
 // TestExposureReconcileExcludesRelayBlockedAfterInstall verifies the
 // end-to-end reconcile postcondition for blocked relays: a relay blocked
 // (MITM) after its listener already exists is closed and not re-created on
