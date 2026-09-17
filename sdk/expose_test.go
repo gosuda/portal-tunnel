@@ -448,6 +448,10 @@ func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 	)
 	exposure := newExposureStateTest(t, relayA)
 	exposure.syncRelayStatuses(exposure.relayURLs)
+	exposure.setRelayStatus(relayA, listenerStatus{
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
+	})
 
 	if err := exposure.applyRelays([]string{relayB}); err != nil {
 		t.Fatalf("applyRelays() error = %v", err)
@@ -456,6 +460,124 @@ func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 	relays := exposure.Relays()
 	if len(relays) != 1 || relays[0].RelayURL != relayB {
 		t.Fatalf("Relays() = %+v, want only relay B", relays)
+	}
+
+	// The deselected relay's last known endpoint must be reported
+	// explicitly (issue #463): consumers accumulating "service ready at"
+	// lines need a matching signal to drop the URL.
+	select {
+	case status := <-exposure.Updates():
+		if !status.Deselected {
+			t.Fatalf("Updates() delivered %+v, want a deselection notification", status)
+		}
+		if status.Active() {
+			t.Fatalf("deselection notification %+v reports Active(), want the tombstone to be inactive", status)
+		}
+		if status.RelayURL != relayA || status.PublicURL != "https://service.relay-a.example" {
+			t.Fatalf("deselection notification = %+v, want relay A with its last known public URL", status)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no deselection notification was delivered")
+	}
+}
+
+// TestStaleListenerStatusCannotRecreateDeselectedMembership proves the
+// ownership guard from the #463 review: a listener-originated status
+// update delivered after reconcileRelayListeners detached the listener
+// must not recreate the deselected relay's status entry, and a replaced
+// listener must not overwrite its successor's status.
+func TestStaleListenerStatusCannotRecreateDeselectedMembership(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	exposure := newExposureStateTest(t, relayA)
+	exposure.syncRelayStatuses(exposure.relayURLs)
+	exposure.setRelayStatus(relayA, listenerStatus{
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
+	})
+
+	// End state of reconcileRelayListeners for relay A: the listener was
+	// detached first (relayListeners no longer holds the slot), then the
+	// membership status was deleted with a tombstone collected.
+	deselected := exposure.syncRelayStatuses([]string{relayB})
+	if len(deselected) != 1 || deselected[0].RelayURL != relayA || !deselected[0].Deselected ||
+		deselected[0].PublicURL != "https://service.relay-a.example" {
+		t.Fatalf("syncRelayStatuses() = %+v, want relay A tombstone with its last known URL", deselected)
+	}
+
+	// The stale listener's status worker delivers one last ready update
+	// after the membership delete (the review's race).
+	staleListener := &listener{}
+	exposure.setListenerRelayStatus(relayA, staleListener, listenerStatus{
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
+	})
+	if relays := exposure.Relays(); len(relays) != 1 || relays[0].RelayURL != relayB {
+		t.Fatalf("Relays() = %+v, want the stale update to not recreate relay A membership", relays)
+	}
+
+	// The replaced-listener variant: the current owner applies updates
+	// to its own slot, and the old owner cannot overwrite them.
+	owner := &listener{}
+	exposure.mu.Lock()
+	exposure.relayListeners[relayB] = owner
+	exposure.mu.Unlock()
+	exposure.setListenerRelayStatus(relayB, owner, listenerStatus{
+		state: RelayFailed,
+		err:   errors.New("owner-reported failure"),
+	})
+	relays := exposure.Relays()
+	if len(relays) != 1 || relays[0].State != RelayFailed {
+		t.Fatalf("Relays() = %+v, want the current owner's update applied", relays)
+	}
+	exposure.setListenerRelayStatus(relayB, staleListener, listenerStatus{
+		state:     RelayReady,
+		publicURL: "https://ghost.relay-a.example",
+	})
+	if relays := exposure.Relays(); len(relays) != 1 || relays[0].State != RelayFailed {
+		t.Fatalf("Relays() = %+v, want a non-owner update ignored", relays)
+	}
+}
+
+// TestImmediateReadyCommitmentThenDeselectCarriesPublicURL pins the
+// publication invariant from the #463 review: the ready advertisement
+// derives from the same authoritative status commit that the deselection
+// tombstone is built from, so an immediate ready-then-deselect sequence
+// must emit a removal carrying the exact PublicURL that was advertised.
+func TestImmediateReadyCommitmentThenDeselectCarriesPublicURL(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	exposure := newExposureStateTest(t, relayA)
+	exposure.syncRelayStatuses(exposure.relayURLs)
+
+	// The moment the ready advertisement now fires: the public URL is
+	// committed to the authoritative snapshot by the owning listener.
+	owner := &listener{}
+	exposure.mu.Lock()
+	exposure.relayListeners[relayA] = owner
+	exposure.mu.Unlock()
+	exposure.setListenerRelayStatus(relayA, owner, listenerStatus{
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
+	})
+	if relays := exposure.Relays(); len(relays) != 1 ||
+		relays[0].PublicURL != "https://service.relay-a.example" {
+		t.Fatalf("Relays() = %+v, want the ready commit carrying the public URL", relays)
+	}
+
+	// Deselect immediately after the advertisement precondition: the
+	// tombstone must carry the same URL, so the removal log fires.
+	exposure.mu.Lock()
+	delete(exposure.relayListeners, relayA)
+	exposure.mu.Unlock()
+	deselected := exposure.syncRelayStatuses([]string{relayB})
+	if len(deselected) != 1 || deselected[0].RelayURL != relayA || !deselected[0].Deselected ||
+		deselected[0].PublicURL != "https://service.relay-a.example" {
+		t.Fatalf("syncRelayStatuses() = %+v, want relay A tombstone carrying the ready public URL", deselected)
 	}
 }
 

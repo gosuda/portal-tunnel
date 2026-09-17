@@ -52,10 +52,23 @@ type RelayStatus struct {
 	State     RelayState
 	Failure   RelayFailure
 	Err       error
+	// Deselected marks a best-effort removal notification, never a stored
+	// snapshot: the relay left the desired membership set (discovery
+	// deselection or a relay-list change) and the endpoint fields carry
+	// its last known values, which are no longer backed by an active
+	// tunnel listener. Relays() stays authoritative — treat Deselected as
+	// a trigger to re-read the snapshot, not as durable history.
+	Deselected bool
 }
 
-// Active reports whether the relay currently has a usable registered listener.
+// Active reports whether the relay currently has a usable registered
+// listener. A deselection notification never describes an active
+// listener: it reports that the relay left the desired membership set,
+// so its preserved endpoint fields must not keep it advertised.
 func (s RelayStatus) Active() bool {
+	if s.Deselected {
+		return false
+	}
 	return s.State != RelayFailed &&
 		(s.State == RelayReady || s.PublicURL != "" || s.UDPAddr != "" || s.TCPAddr != "")
 }
@@ -518,11 +531,32 @@ func (e *Exposure) ActiveRelays() []string {
 }
 
 func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
+	e.applyRelayStatus(relayURL, update, nil)
+}
+
+// setListenerRelayStatus applies a status update originating from a
+// specific listener, but only while that listener still owns its relay
+// slot. A deselected or replaced listener can deliver a final update
+// after reconcileRelayListeners dropped it; letting that recreate or
+// overwrite the entry would contradict the deselection notification
+// derived from the status snapshot (and let an old listener overwrite
+// its replacement).
+func (e *Exposure) setListenerRelayStatus(relayURL string, owner *listener, update listenerStatus) {
+	e.applyRelayStatus(relayURL, update, owner)
+}
+
+func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owner *listener) {
 	if e == nil || relayURL == "" || e.closed() {
 		return
 	}
 
 	e.mu.Lock()
+	if owner != nil {
+		if current, ok := e.relayListeners[relayURL]; !ok || current != owner {
+			e.mu.Unlock()
+			return
+		}
+	}
 	if e.statuses == nil {
 		e.statuses = make(map[string]RelayStatus)
 	}
@@ -568,6 +602,7 @@ func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
 	if update.tcpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
 		status.TCPAddr = update.tcpAddr
 	}
+	advertised := previous.State != RelayReady && status.State == RelayReady && status.PublicURL != ""
 	if !relayStatusEqual(previous, status) {
 		e.statuses[relayURL] = status
 		e.notifyStateChangedLocked()
@@ -576,6 +611,18 @@ func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
 		return
 	}
 	e.mu.Unlock()
+
+	// Advertise readiness from the authoritative snapshot only: the same
+	// committed PublicURL that later feeds the deselection tombstone, so
+	// every "service ready at" line is guaranteed retractable by a
+	// matching "relay no longer active for" line (issue #463).
+	if advertised {
+		log.Info().
+			Str("address", e.identity.Address).
+			Str("public_url", status.PublicURL).
+			Str("relay_url", status.RelayURL).
+			Msg("service ready at " + status.PublicURL)
+	}
 
 	e.publishRelayStatus(status)
 	if e.discovery != nil {
@@ -646,6 +693,7 @@ func relayStatusEqual(a, b RelayStatus) bool {
 		a.Version == b.Version &&
 		a.State == b.State &&
 		a.Failure == b.Failure &&
+		a.Deselected == b.Deselected &&
 		errorsEqual
 }
 
@@ -656,7 +704,12 @@ func (e *Exposure) notifyStateChangedLocked() {
 	e.stateChanged = make(chan struct{})
 }
 
-func (e *Exposure) syncRelayStatuses(relayURLs []string) {
+// syncRelayStatuses reconciles the stored status snapshot with the
+// desired relay set and returns the deselection notifications for relays
+// that left it. Callers report them once the stale listeners are
+// actually detached (see reportDeselectedRelays), so the lifecycle
+// signal lines up with the listener lifecycle.
+func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
 	desired := make(map[string]RelayStatus, len(relayURLs))
 	for _, relayURL := range relayURLs {
 		desired[relayURL] = RelayStatus{
@@ -686,12 +739,15 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) {
 		e.statuses[relayURL] = status
 		changed = true
 	}
-	for relayURL := range e.statuses {
+	var deselected []RelayStatus
+	for relayURL, previous := range e.statuses {
 		if _, ok := desired[relayURL]; ok {
 			continue
 		}
 		delete(e.statuses, relayURL)
 		changed = true
+		previous.Deselected = true
+		deselected = append(deselected, previous)
 	}
 	if changed {
 		e.notifyStateChangedLocked()
@@ -699,6 +755,25 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) {
 	e.mu.Unlock()
 	if changed && e.discovery != nil {
 		e.discovery.SetActiveRelays(e.ActiveRelays())
+	}
+	return deselected
+}
+
+// reportDeselectedRelays publishes the membership-shrink notifications
+// collected by syncRelayStatuses once the stale listeners are detached:
+// a structured log mirroring "service ready at" so log consumers can
+// stop advertising the URL, and a best-effort Updates() notification.
+// Relays() remains the authoritative snapshot.
+func (e *Exposure) reportDeselectedRelays(deselected []RelayStatus) {
+	for _, status := range deselected {
+		if status.PublicURL != "" {
+			log.Info().
+				Str("relay_url", status.RelayURL).
+				Str("public_url", status.PublicURL).
+				Str("reason", "deselected").
+				Msg("relay no longer active for " + status.PublicURL)
+		}
+		e.publishRelayStatus(status)
 	}
 }
 
@@ -720,7 +795,11 @@ func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <
 }
 
 // Updates reports relay lifecycle changes. Relays is the authoritative
-// snapshot; slow consumers may miss intermediate updates.
+// snapshot; slow consumers may miss intermediate updates. When relay
+// membership shrinks — discovery deselection or a relay-list change — a
+// removal notification with Deselected set and the relay's last known
+// endpoint is delivered best-effort; use it as a trigger to re-read
+// Relays(), not as durable history.
 func (e *Exposure) Updates() <-chan RelayStatus {
 	if e == nil {
 		return nil
@@ -995,8 +1074,12 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		}
 		desired[relayURL] = struct{}{}
 	}
-	e.syncRelayStatuses(relayURLs)
-
+	// Detach stale listeners before deleting their membership statuses:
+	// once a listener no longer owns its relay slot, listener-originated
+	// status updates are dropped by the ownership guard in
+	// applyRelayStatus, and updates racing ahead of the detach are
+	// re-deleted by the sync below. Either way a stale status cannot
+	// recreate a deselected entry after its tombstone is published.
 	e.mu.Lock()
 	staleListeners := make(map[string]*listener)
 	stateChanged := false
@@ -1023,6 +1106,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		e.notifyStateChangedLocked()
 	}
 	e.mu.Unlock()
+	deselected := e.syncRelayStatuses(relayURLs)
 
 	addedRelayURLs := make([]string, 0, len(missingRelayURLs))
 	for relayURL, listener := range staleListeners {
@@ -1033,6 +1117,10 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			log.Warn().Err(err).Str("relay_url", relayURL).Msg("close stale relay listener")
 		}
 	}
+
+	// Report deselection only now that the stale listeners are actually
+	// detached, so the lifecycle signal matches the listener lifecycle.
+	e.reportDeselectedRelays(deselected)
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
@@ -1130,7 +1218,7 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 			for {
 				select {
 				case status := <-statusUpdates:
-					e.setRelayStatus(relayURL, status)
+					e.setListenerRelayStatus(relayURL, listener, status)
 				case <-listener.doneCh:
 					return
 				}
