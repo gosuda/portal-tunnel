@@ -194,7 +194,7 @@ func TestWrapKeepsTrustedSettlementHeaders(t *testing.T) {
 
 func TestWrapMethodFilterPassesUnpaidMethodsThrough(t *testing.T) {
 	payment := newStubPayment(stubSettlement)
-	payment.methods = paymentMethodSet([]string{"post"})
+	payment.methods = paymentMethodSet([]string{http.MethodPost})
 
 	var ran bool
 	protected := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -234,6 +234,22 @@ func TestWrapMethodFilterPassesUnpaidMethodsThrough(t *testing.T) {
 	payment.Wrap(protected).ServeHTTP(rec, req)
 	if !ran || rec.Code != http.StatusOK {
 		t.Fatalf("paid POST: ran=%v status=%d, want handler ran with 200", ran, rec.Code)
+	}
+}
+
+// An empty method list pays every method, so a blank configured method must be
+// rejected as a configuration error instead of silently widening the gate.
+func TestNewPaymentRejectsBlankMethod(t *testing.T) {
+	_, err := NewPayment(types.X402Payment{
+		Network:          CasperTestnetNetwork,
+		Asset:            testWCSPRAsset,
+		PayTo:            "Account-Hash-ABC123",
+		Amount:           "0.25",
+		FacilitatorToken: testFacilitatorToken,
+		Methods:          []string{http.MethodPost, " "},
+	})
+	if err == nil {
+		t.Fatal("NewPayment() error = nil, want blank payment method error")
 	}
 }
 

@@ -176,6 +176,17 @@ func TestComposeHTTPRoutesRejectsMethodsWithoutAmount(t *testing.T) {
 	}
 }
 
+func TestComposeHTTPRoutesRejectsBlankMethod(t *testing.T) {
+	t.Parallel()
+
+	_, err := agent.ComposeHTTPRoutes([]agent.ExposedHTTPRoute{
+		{Prefix: "/api", Upstream: "http://127.0.0.1:3001", Methods: []string{"GET", " "}, Amount: "0.01"},
+	}, gatewayTestContract())
+	if err == nil {
+		t.Fatalf("ComposeHTTPRoutes() error = nil, want blank payment method error")
+	}
+}
+
 func TestComposeHTTPRoutesSelectsCanonicalLongestPrefix(t *testing.T) {
 	t.Parallel()
 	root := newGatewayStaticSiteDir(t, "index.html", "health")

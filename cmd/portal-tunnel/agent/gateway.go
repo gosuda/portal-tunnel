@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"sort"
 	"strings"
 
@@ -69,24 +68,15 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 		if contract.PayTo == "" {
 			return nil, fmt.Errorf("http route %q amount requires x402 pay-to", prefix)
 		}
-		methods, err := normalizeX402Methods(route.Methods)
-		if err != nil {
-			return nil, fmt.Errorf("http route %q: %w", prefix, err)
-		}
-		methodSet := make(map[string]struct{}, len(methods))
-		for _, method := range methods {
-			methodSet[method] = struct{}{}
-		}
-
 		paymentConfig := contract
 		paymentConfig.Amount = amount
 		paymentConfig.ResourcePath = prefix
-		paymentConfig.Methods = slices.Clone(methods)
+		paymentConfig.Methods = route.Methods
 		payment, err := x402.NewPayment(paymentConfig)
 		if err != nil {
 			return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
 		}
-		policy.paid = &paidRoute{methods: methodSet, payment: payment}
+		policy.paid = payment
 		policies = append(policies, policy)
 	}
 
@@ -105,7 +95,7 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 	var clientJS http.Handler = http.HandlerFunc(x402.ServeClientJS)
 	for _, policy := range policies {
 		if policy.paid != nil {
-			clientJS = policy.paid.payment.ClientJSHandler()
+			clientJS = policy.paid.ClientJSHandler()
 			break
 		}
 	}
@@ -118,12 +108,7 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 
 type routePolicy struct {
 	prefix string
-	paid   *paidRoute
-}
-
-type paidRoute struct {
-	methods map[string]struct{}
-	payment *x402.Payment
+	paid   *x402.Payment
 }
 
 type httpGateway struct {
@@ -149,7 +134,7 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if policy := g.matchPolicy(path); policy != nil && policy.paid != nil {
-		policy.paid.payment.Wrap(g.routes).ServeHTTP(w, r)
+		policy.paid.Wrap(g.routes).ServeHTTP(w, r)
 		return
 	}
 	g.routes.ServeHTTP(w, r)
@@ -182,12 +167,12 @@ func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	route := policy.paid
-	if route == nil || !route.allowsMethod(method) {
+	payment := policy.paid
+	if payment == nil || !payment.PaidMethod(method) {
 		http.Error(w, "x402 payment is not enabled for path", http.StatusNotFound)
 		return
 	}
-	route.payment.WritePrepare(w, r, req.Sender, path)
+	payment.WritePrepare(w, r, req.Sender, path)
 }
 
 // matchPolicy selects the same longest canonical prefix as the SDK router.
@@ -199,26 +184,4 @@ func (g *httpGateway) matchPolicy(path string) *routePolicy {
 		}
 	}
 	return nil
-}
-
-func (r *paidRoute) allowsMethod(method string) bool {
-	if len(r.methods) == 0 {
-		return true
-	}
-	_, ok := r.methods[strings.ToUpper(strings.TrimSpace(method))]
-	return ok
-}
-
-func normalizeX402Methods(raw []string) ([]string, error) {
-	methods := make([]string, 0, len(raw))
-	for _, value := range raw {
-		method := strings.ToUpper(strings.TrimSpace(value))
-		if method == "" {
-			return nil, errors.New("payment method is required")
-		}
-		if !slices.Contains(methods, method) {
-			methods = append(methods, method)
-		}
-	}
-	return methods, nil
 }

@@ -95,7 +95,10 @@ func NewUSDCPayment(payment types.X402Payment) (*Payment, error) {
 	payment.ResourcePath = strings.TrimSpace(payment.ResourcePath)
 	payment.ResourceDescription = strings.TrimSpace(payment.ResourceDescription)
 	payment.ResourceMimeType = strings.TrimSpace(payment.ResourceMimeType)
-	payment.Methods = normalizedPaymentMethods(payment.Methods)
+	payment.Methods, err = normalizedPaymentMethods(payment.Methods)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Payment{
 		payment:      payment,
@@ -388,27 +391,34 @@ func paymentRequirementsFromFacilitator(requirements facilitatortypes.PaymentReq
 }
 
 // normalizedPaymentMethods canonicalizes configured payment methods: trimmed,
-// uppercased, de-duplicated, and ordered for deterministic publication.
-func normalizedPaymentMethods(methods []string) []string {
-	seen := paymentMethodSet(methods)
-	if len(seen) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(seen))
-	for method := range seen {
-		out = append(out, method)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func paymentMethodSet(methods []string) map[string]struct{} {
+// uppercased, de-duplicated, and ordered for deterministic publication. A
+// blank method is a configuration error rather than an omission: an empty
+// method list pays every method, so dropping a blank entry would widen the
+// payment gate instead of narrowing it.
+func normalizedPaymentMethods(methods []string) ([]string, error) {
 	set := make(map[string]struct{}, len(methods))
 	for _, raw := range methods {
 		method := strings.ToUpper(strings.TrimSpace(raw))
 		if method == "" {
-			continue
+			return nil, errors.New("x402 payment method is required")
 		}
+		set[method] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(set))
+	for method := range set {
+		out = append(out, method)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// paymentMethodSet indexes already-normalized payment methods.
+func paymentMethodSet(methods []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(methods))
+	for _, method := range methods {
 		set[method] = struct{}{}
 	}
 	return set

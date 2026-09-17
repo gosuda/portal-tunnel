@@ -20,7 +20,7 @@ import (
 // untouched.
 func (p *Payment) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !p.paidMethod(r.Method) {
+		if !p.PaidMethod(r.Method) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -124,9 +124,9 @@ func (w *paymentResponseWriter) Flush() {
 
 func (w *paymentResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// paidMethod reports whether method is subject to payment. An empty method
-// list pays every method.
-func (p *Payment) paidMethod(method string) bool {
+// PaidMethod reports whether method is subject to payment. An empty configured
+// method list pays every method.
+func (p *Payment) PaidMethod(method string) bool {
 	if p == nil || len(p.methods) == 0 {
 		return true
 	}
