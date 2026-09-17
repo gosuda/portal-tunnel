@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { Ssgoi } from "@ssgoi/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -49,7 +50,11 @@ function renderDetail(state: unknown) {
   let pathname = "/";
   function LocationProbe() {
     const location = useLocation();
-    pathname = location.pathname;
+    // Captured in an effect: writing an outer variable during render tears
+    // under concurrent mode and trips react-hooks/globals.
+    useEffect(() => {
+      pathname = location.pathname;
+    }, [location.pathname]);
     return null;
   }
 

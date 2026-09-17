@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
@@ -53,6 +54,8 @@ type RelayAPI struct {
 	// cookielessSources tracks sourceIP -> minted voter IDs for the
 	// per-source mint budget. In-memory only; resets on relay restart.
 	cookielessSources map[string][]string
+	// reputationStop is closed by Close to stop the reputation reconcile loop.
+	reputationStop chan struct{}
 }
 
 func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
@@ -92,6 +95,10 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 		landingPageEnabled:   landingPageEnabled,
 		cookielessSources:    make(map[string][]string),
 	}
+	// The reconcile loop owns only reputationStop, which nothing else touches,
+	// so it can start before the policy state loads.
+	api.reputationStop = make(chan struct{})
+	go api.reconcileReputation()
 	if err := api.loadPolicyState(); err != nil {
 		return nil, err
 	}
@@ -129,7 +136,7 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leases := api.server.PublicLeases()
-	voterHash := api.reputation.VoterHash(reputationVoterIDFromRequest(r))
+	voterHash := api.reputation.VoterHash(reputationVoterIDFromRequest(api.reputation, r))
 	for i := range leases {
 		summary := api.reputation.Summary(utils.NormalizeHostname(leases[i].Hostname), voterHash)
 		leases[i].Reputation = &summary
@@ -143,10 +150,11 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// OnLeasesChanged is called by the portal server after each lease registration
-// or re-registration. It updates first-seen timestamps, owner-key tracking, and
-// retention pruning, so that first_seen is captured even without a /api/state call.
-func (api *RelayAPI) OnLeasesChanged() {
+// observeLiveLeases pulls the current public lease set into the reputation
+// store: first-seen capture, owner-key tracking, and retention pruning. It is
+// called by the reconcile loop; persist failures are logged, never fatal, and
+// retried on the next tick.
+func (api *RelayAPI) observeLiveLeases() {
 	leases := api.server.PublicLeases()
 	if len(leases) == 0 {
 		return
@@ -168,7 +176,37 @@ func (api *RelayAPI) OnLeasesChanged() {
 			IdentityKey: ownerKeys[utils.NormalizeHostname(lease.Hostname)],
 		})
 	}
-	api.reputation.ObserveLive(live)
+	if err := api.reputation.ObserveLive(live); err != nil {
+		log.Error().Err(err).Msg("reconcile service reputation")
+	}
+}
+
+// reconcileReputation periodically pulls the public lease set into the
+// reputation store so first_seen and owner-key tracking follow registrations
+// without a portal-layer callback. It exits when Close closes reputationStop.
+func (api *RelayAPI) reconcileReputation() {
+	ticker := time.NewTicker(reputationReconcileInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-api.reputationStop:
+			return
+		case <-ticker.C:
+			api.observeLiveLeases()
+		}
+	}
+}
+
+// Close stops the reputation reconcile loop. Safe to call more than once.
+func (api *RelayAPI) Close() {
+	if api.reputationStop == nil {
+		return
+	}
+	select {
+	case <-api.reputationStop:
+	default:
+		close(api.reputationStop)
+	}
 }
 
 func (api *RelayAPI) loadPolicyState() error {

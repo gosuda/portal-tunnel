@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -156,7 +158,9 @@ func TestReputationStoreRoundTripSurvivesRestart(t *testing.T) {
 	if store.Knows(hostname) {
 		t.Fatal("fresh store already knows the hostname")
 	}
-	store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
+	if err := store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}}); err != nil {
+		t.Fatal(err)
+	}
 	voterA, voterB := store.VoterHash("voter-a"), store.VoterHash("voter-b")
 	voterC := store.VoterHash("voter-c")
 	for _, vote := range []struct {
@@ -213,12 +217,16 @@ func TestReputationStoreSurvivesReRegistration(t *testing.T) {
 	t.Parallel()
 	store, _ := newTestReputationStore(t, defaultReputationConfig())
 	const hostname = "reregister.example.com"
-	store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
+	if err := store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.Vote(hostname, store.VoterHash("voter-a"), "down"); err != nil {
 		t.Fatal(err)
 	}
 
-	store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
+	if err := store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}}); err != nil {
+		t.Fatal(err)
+	}
 	summary := store.Summary(hostname, "")
 	if summary.IdentityChangedRecently {
 		t.Fatal("same identity re-registration flagged as identity change")
@@ -227,7 +235,9 @@ func TestReputationStoreSurvivesReRegistration(t *testing.T) {
 		t.Fatalf("same identity re-registration lost votes: down=%d", summary.Down)
 	}
 
-	store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-2"}})
+	if err := store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-2"}}); err != nil {
+		t.Fatal(err)
+	}
 	summary = store.Summary(hostname, "")
 	if !summary.IdentityChangedRecently {
 		t.Fatal("owner-key change not flagged as identity_changed_recently")
@@ -367,7 +377,9 @@ func TestReputationProbationJudgedFromPersistedTimestamps(t *testing.T) {
 func TestReputationAPIVoteIssuesVoterCookieOnce(t *testing.T) {
 	t.Parallel()
 	api := newTestReputationAPI(t)
-	api.reputation.ObserveLive([]LiveLease{{Hostname: "demo.example.com", IdentityKey: "owner-key-1"}})
+	if err := api.reputation.ObserveLive([]LiveLease{{Hostname: "demo.example.com", IdentityKey: "owner-key-1"}}); err != nil {
+		t.Fatal(err)
+	}
 
 	recorder := postVote(t, api, `{"hostname":"demo.example.com","vote":"down"}`, "", "")
 	if recorder.Code != http.StatusOK {
@@ -382,8 +394,8 @@ func TestReputationAPIVoteIssuesVoterCookieOnce(t *testing.T) {
 	if issued == nil {
 		t.Fatal("first vote did not issue a voter cookie")
 	}
-	if !validReputationVoterID(issued.Value) {
-		t.Fatalf("issued voter id %q has unexpected shape", issued.Value)
+	if verified, ok := api.reputation.voterIDFromCookie(issued.Value); !ok || verified == "" {
+		t.Fatalf("issued voter cookie %q does not carry a verifiable signature", issued.Value)
 	}
 	if !issued.HttpOnly || !issued.Secure || issued.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("cookie flags = httponly=%v secure=%v samesite=%v", issued.HttpOnly, issued.Secure, issued.SameSite)
@@ -470,18 +482,21 @@ func TestReputationAPIRateLimitsPerSource(t *testing.T) {
 	t.Parallel()
 	api := newTestReputationAPI(t)
 	const hostname = "busy.example.com"
-	api.reputation.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
+	if err := api.reputation.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}}); err != nil {
+		t.Fatal(err)
+	}
 	burst := defaultReputationConfig().VoteSourceBurst
 
-	// Issue one voter cookie so the cookieless mint check is bypassed.
+	// Issue one signed voter cookie so the cookieless mint check is bypassed.
 	existingVoterID, err := issueReputationVoterID()
 	if err != nil {
 		t.Fatal(err)
 	}
+	existingCookie := api.reputation.signReputationVoterID(existingVoterID)
 	voterHash := api.reputation.VoterHash(existingVoterID)
 
 	for i := range burst {
-		recorder := postVote(t, api, `{"hostname":"busy.example.com","vote":"up"}`, existingVoterID, "")
+		recorder := postVote(t, api, `{"hostname":"busy.example.com","vote":"up"}`, existingCookie, "")
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("burst vote %d status = %d, want %d", i, recorder.Code, http.StatusOK)
 		}
@@ -493,7 +508,7 @@ func TestReputationAPIRateLimitsPerSource(t *testing.T) {
 		t.Fatalf("same-voter burst aggregate = up=%d down=%d, want up=1 down=0", summary.Up, summary.Down)
 	}
 
-	rejected := postVote(t, api, `{"hostname":"busy.example.com","vote":"down"}`, existingVoterID, "")
+	rejected := postVote(t, api, `{"hostname":"busy.example.com","vote":"down"}`, existingCookie, "")
 	if rejected.Code != http.StatusTooManyRequests || decodeErrorCode(t, rejected) != types.APIErrorCodeRateLimited {
 		t.Fatalf("over-burst vote: status=%d code=%s", rejected.Code, rejected.Body.String())
 	}
@@ -509,7 +524,7 @@ func TestReputationAPIRateLimitsPerSource(t *testing.T) {
 		t.Fatalf("rejected vote changed the aggregate: up=%d down=%d", summary.Up, summary.Down)
 	}
 
-	recorder := postVote(t, api, `{"hostname":"busy.example.com","vote":"down"}`, existingVoterID, "203.0.113.9:4444")
+	recorder := postVote(t, api, `{"hostname":"busy.example.com","vote":"down"}`, existingCookie, "203.0.113.9:4444")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("other source status = %d, want %d", recorder.Code, http.StatusOK)
 	}
@@ -534,7 +549,9 @@ func TestReputationAPIBlocksCookielessMintOverLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	const hostname = "mint-limit.example.com"
-	api.reputation.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
+	if err := api.reputation.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Mint MaxVotersPerSource voter IDs through the HTTP layer so the
 	// per-source mint budget is actually exercised.
@@ -595,7 +612,9 @@ func TestReputationHostnameVoterLimit(t *testing.T) {
 	cfg.MaxVotersPerHostname = 2
 	store, _ := newTestReputationStore(t, cfg)
 	const hostname = "hostname-limit.example.com"
-	store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
+	if err := store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}}); err != nil {
+		t.Fatal(err)
+	}
 
 	var voterIDs []string
 	for i := 0; i < cfg.MaxVotersPerHostname; i++ {
@@ -623,56 +642,110 @@ func TestReputationHostnameVoterLimit(t *testing.T) {
 	}
 }
 
-// TestReputationRelayWideHostnameEviction pins blocker 2 (relay-wide leg):
-// once MaxHostnames is reached, a new hostname is admitted by evicting the
-// hostname whose LastSeenAt is oldest. All setup hostnames share the same
-// LastSeenAt, so any one may be evicted; we verify exactly one pre-existing
-// hostname survives and the new one is admitted.
-func TestReputationRelayWideHostnameEviction(t *testing.T) {
+// TestReputationAdmissionEvictsOldestVotelessKeepsVoted pins blocker 2 (relay-wide leg):
+// when MaxHostnames is reached, admission evicts the oldest voteless record.
+// Voted records are never evicted, even when their LastSeenAt is older, and
+// the map length never exceeds MaxHostnames.
+func TestReputationAdmissionEvictsOldestVotelessKeepsVoted(t *testing.T) {
 	t.Parallel()
 	cfg := defaultReputationConfig()
 	cfg.MaxHostnames = 2
 	store, _ := newTestReputationStore(t, cfg)
-
-	// Populate MaxHostnames distinct hostnames via ObserveLive so they exist.
-	names := make([]string, cfg.MaxHostnames)
-	for i := range names {
-		names[i] = fmt.Sprintf("host-%d.example.com", i)
-		store.ObserveLive([]LiveLease{{Hostname: names[i], IdentityKey: "key"}})
-		voterID, _ := issueReputationVoterID()
-		if _, err := store.Vote(names[i], store.VoterHash(voterID), "up"); err != nil {
-			t.Fatalf("setup vote for %s: %v", names[i], err)
-		}
+	if err := store.ObserveLive([]LiveLease{
+		{Hostname: "voted.example.com", IdentityKey: "key"},
+		{Hostname: "stale.example.com", IdentityKey: "key"},
+	}); err != nil {
+		t.Fatal(err)
 	}
-
-	// All hostnames are known.
-	for _, n := range names {
-		if !store.Knows(n) {
-			t.Fatalf("store does not know %q", n)
-		}
+	if _, err := store.Vote("voted.example.com", store.VoterHash("voter-1"), "up"); err != nil {
+		t.Fatal(err)
 	}
+	// White-box: stagger timestamps so the voted record is also the oldest —
+	// age alone must not make it evictable.
+	store.mu.Lock()
+	store.meta.Hostnames["voted.example.com"].LastSeenAt = time.Now().UTC().Add(-time.Hour)
+	store.meta.Hostnames["stale.example.com"].LastSeenAt = time.Now().UTC().Add(-time.Minute)
+	store.mu.Unlock()
 
-	// A new hostname vote triggers eviction of one of the existing hostnames.
-	newHost := "host-new.example.com"
 	newVoterID, _ := issueReputationVoterID()
-	_, err := store.Vote(newHost, store.VoterHash(newVoterID), "up")
-	if err != nil {
-		t.Fatalf("new hostname vote: %v", err)
+	if _, err := store.Vote("fresh.example.com", store.VoterHash(newVoterID), "up"); err != nil {
+		t.Fatalf("admission past a full map: %v", err)
 	}
+	if !store.Knows("voted.example.com") {
+		t.Fatal("voted record was evicted")
+	}
+	if store.Knows("stale.example.com") {
+		t.Fatal("voteless record was not evicted")
+	}
+	if !store.Knows("fresh.example.com") {
+		t.Fatal("new hostname was not admitted")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.meta.Hostnames) > cfg.MaxHostnames {
+		t.Fatalf("hostnames = %d, want <= %d", len(store.meta.Hostnames), cfg.MaxHostnames)
+	}
+}
 
-	// Exactly one pre-existing hostname survived.
-	survived := 0
-	for _, n := range names {
-		if store.Knows(n) {
-			survived++
+// TestReputationAdmissionRejectsWhenFullOfVoted pins the fail-closed leg of
+// bounded admission: a map full of voted records admits nothing — Vote
+// returns ErrReputationBudgetExceeded and ObserveLive skips creation rather
+// than evicting a voter.
+func TestReputationAdmissionRejectsWhenFullOfVoted(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	cfg.MaxHostnames = 2
+	store, _ := newTestReputationStore(t, cfg)
+	for _, name := range []string{"full-a.example.com", "full-b.example.com"} {
+		if err := store.ObserveLive([]LiveLease{{Hostname: name, IdentityKey: "key"}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Vote(name, store.VoterHash(name), "up"); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if survived != 1 {
-		t.Fatalf("survived hostnames = %d, want exactly 1", survived)
+
+	newVoterID, _ := issueReputationVoterID()
+	_, err := store.Vote("new.example.com", store.VoterHash(newVoterID), "up")
+	if !errors.Is(err, ErrReputationBudgetExceeded) {
+		t.Fatalf("vote into voted-full map: err=%v, want ErrReputationBudgetExceeded", err)
 	}
-	// New hostname is admitted.
-	if !store.Knows(newHost) {
-		t.Fatalf("new hostname %q was not admitted", newHost)
+	if store.Knows("new.example.com") {
+		t.Fatal("rejected vote left a record behind")
+	}
+
+	if err := store.ObserveLive([]LiveLease{{Hostname: "new.example.com", IdentityKey: "key"}}); err != nil {
+		t.Fatal(err)
+	}
+	if store.Knows("new.example.com") {
+		t.Fatal("ObserveLive created a record past the voted-full budget")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.meta.Hostnames) != cfg.MaxHostnames {
+		t.Fatalf("hostnames = %d, want exactly %d", len(store.meta.Hostnames), cfg.MaxHostnames)
+	}
+}
+
+// TestReputationObserveLiveStormStaysBounded pins the ObserveLive leg of
+// bounded admission: a storm of fresh hostnames cannot push the map past
+// MaxHostnames.
+func TestReputationObserveLiveStormStaysBounded(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	cfg.MaxHostnames = 8
+	store, _ := newTestReputationStore(t, cfg)
+	storm := make([]LiveLease, 0, 3*cfg.MaxHostnames)
+	for i := range 3 * cfg.MaxHostnames {
+		storm = append(storm, LiveLease{Hostname: fmt.Sprintf("storm-%d.example.com", i), IdentityKey: "key"})
+	}
+	if err := store.ObserveLive(storm); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.meta.Hostnames) != cfg.MaxHostnames {
+		t.Fatalf("hostnames after storm = %d, want exactly %d", len(store.meta.Hostnames), cfg.MaxHostnames)
 	}
 }
 
@@ -684,10 +757,12 @@ func TestReputationRelayWideHostnameEviction(t *testing.T) {
 func TestReputationCookiePathScopedToAPIPrefix(t *testing.T) {
 	t.Parallel()
 	api := newTestReputationAPI(t)
-	api.reputation.ObserveLive([]LiveLease{
+	if err := api.reputation.ObserveLive([]LiveLease{
 		{Hostname: "a.example.com", IdentityKey: "key-a"},
 		{Hostname: "b.example.com", IdentityKey: "key-b"},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Vote on a.example.com — issues a cookie.
 	rec := postVote(t, api, `{"hostname":"a.example.com","vote":"up"}`, "", "")
@@ -790,15 +865,18 @@ func TestReputationPersistFailureRollsBackMemory(t *testing.T) {
 }
 
 // TestReputationFirstSeenCapturedOnRegistration pins blocker 4: first_seen_at is
-// set when ObserveLive fires during registration, without requiring a /api/state call.
+// set when ObserveLive runs (the relay API's reconcile loop pulls the public
+// lease set after registration), without requiring a /api/state call.
 func TestReputationFirstSeenCapturedOnRegistration(t *testing.T) {
 	t.Parallel()
 	store, _ := newTestReputationStore(t, defaultReputationConfig())
 	const hostname = "first-seen.example.com"
 
-	// Simulate registration heartbeat via ObserveLive (called by OnLeasesChanged).
+	// Simulate the reconcile loop's pull after a registration.
 	now := time.Now().UTC()
-	store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
+	if err := store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}}); err != nil {
+		t.Fatal(err)
+	}
 
 	summary := store.Summary(hostname, "")
 	if summary.FirstSeenAt.IsZero() {
@@ -809,5 +887,270 @@ func TestReputationFirstSeenCapturedOnRegistration(t *testing.T) {
 	}
 	if !summary.IsNew {
 		t.Fatal("hostname not marked is_new immediately after ObserveLive")
+	}
+}
+
+// TestReputationForgedCookieTakesMintPath pins the self-authenticating cookie:
+// a manufactured ID without a valid MAC is treated as cookieless — it counts
+// against the source's mint budget instead of voting as an existing voter,
+// and a correctly signed cookie keeps attributing its real voter.
+func TestReputationForgedCookieTakesMintPath(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	cfg.MaxVotersPerSource = 1
+	cfg.VoteSourcePerMinute = 100
+	cfg.VoteSourceBurst = 100
+	api := newTestReputationAPI(t)
+	if err := api.applyReputationConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	const hostname = "forge.example.com"
+	if err := api.reputation.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "key"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	forge := func(rawID string) string {
+		return rawID + "." + base64.RawURLEncoding.EncodeToString(make([]byte, sha256.Size))
+	}
+	// A valid-shape ID with a garbage MAC: the mint path must kick in.
+	forgedID, _ := issueReputationVoterID()
+	recorder := postVote(t, api, fmt.Sprintf(`{"hostname":%q,"vote":"down"}`, hostname), forge(forgedID), "203.0.113.50:1111")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("forged-cookie vote status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	// The forged ID was never recorded as an existing voter: the recorded
+	// vote is the single minted replacement, and a fresh cookie was issued.
+	summary := decodeSummary(t, getReputation(t, api, hostname, ""))
+	if summary.Down != 1 {
+		t.Fatalf("forged cookie counted as an existing voter: down=%d, want 1", summary.Down)
+	}
+	var reissued *http.Cookie
+	for _, c := range recorder.Result().Cookies() {
+		if c.Name == reputationVoterCookie {
+			reissued = c
+		}
+	}
+	if reissued == nil {
+		t.Fatal("forged cookie did not take the mint path (no replacement cookie issued)")
+	}
+	if _, ok := api.reputation.voterIDFromCookie(reissued.Value); !ok {
+		t.Fatalf("reissued cookie %q does not verify", reissued.Value)
+	}
+	if reissued.Value == forge(forgedID) {
+		t.Fatal("mint path reissued the forged cookie value")
+	}
+
+	// The forged attempt consumed the source's single mint budget.
+	recorder = postVote(t, api, fmt.Sprintf(`{"hostname":%q,"vote":"up"}`, hostname), forge(forgedID), "203.0.113.50:1111")
+	if recorder.Code != http.StatusTooManyRequests || decodeErrorCode(t, recorder) != types.APIErrorCodeRateLimited {
+		t.Fatalf("second forged-cookie vote: status=%d code=%s, want 429 rate_limited", recorder.Code, recorder.Body.String())
+	}
+
+	// A correctly signed cookie bypasses the mint budget entirely: the same
+	// source is over its mint limit, yet the existing voter can still vote.
+	// Repeating the minted voter's "down" side is a no-op on the aggregate.
+	recorder = postVote(t, api, fmt.Sprintf(`{"hostname":%q,"vote":"down"}`, hostname), reissued.Value, "203.0.113.50:1111")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("signed-cookie vote status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	for _, c := range recorder.Result().Cookies() {
+		if c.Name == reputationVoterCookie {
+			t.Fatal("signed-cookie vote took the mint path (issued a new cookie)")
+		}
+	}
+	summary = decodeSummary(t, getReputation(t, api, hostname, ""))
+	if summary.Up != 0 || summary.Down != 1 || summary.Total != 1 {
+		t.Fatalf("signed-cookie vote aggregate = up=%d down=%d total=%d, want up=0 down=1 total=1", summary.Up, summary.Down, summary.Total)
+	}
+}
+
+// TestReputationAPIMintSourceCap pins the mint-source cap: once
+// MaxMintSources distinct sources hold minted voter IDs, a new source's
+// cookieless mint fails closed with 429 while existing sources keep voting
+// and nobody's budget is flushed.
+func TestReputationAPIMintSourceCap(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	cfg.MaxMintSources = 1
+	api := newTestReputationAPI(t)
+	if err := api.applyReputationConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	const hostname = "mintcap.example.com"
+	if err := api.reputation.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "key"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first source mints normally.
+	recorder := postVote(t, api, `{"hostname":"mintcap.example.com","vote":"up"}`, "", "203.0.113.60:1")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("first source mint status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	// A second source is rejected with 429 while the cap is held.
+	recorder = postVote(t, api, `{"hostname":"mintcap.example.com","vote":"up"}`, "", "203.0.113.61:2")
+	if recorder.Code != http.StatusTooManyRequests || decodeErrorCode(t, recorder) != types.APIErrorCodeRateLimited {
+		t.Fatalf("second source mint: status=%d code=%s, want 429 rate_limited", recorder.Code, recorder.Body.String())
+	}
+	for _, c := range recorder.Result().Cookies() {
+		if c.Name == reputationVoterCookie {
+			t.Fatal("capped source mint issued a voter cookie")
+		}
+	}
+
+	// The existing source keeps its own budget: its second mint still works
+	// and no one's prior votes were flushed.
+	recorder = postVote(t, api, `{"hostname":"mintcap.example.com","vote":"down"}`, "", "203.0.113.60:1")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("existing source mint past cap = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	summary := decodeSummary(t, getReputation(t, api, hostname, ""))
+	if summary.Up != 1 || summary.Down != 1 {
+		t.Fatalf("cap disturbed other budgets: up=%d down=%d, want up=1 down=1", summary.Up, summary.Down)
+	}
+}
+
+// TestReputationMintReservationRollsBackOnVoteFailure pins mint atomicity:
+// when the vote fails after the reservation, the minted ID is removed again
+// so the failed attempt does not consume the source's mint budget.
+func TestReputationMintReservationRollsBackOnVoteFailure(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	cfg.MaxVotersPerSource = 1
+	api := newTestReputationAPI(t)
+	if err := api.applyReputationConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	const hostname = "rollback-mint.example.com"
+	if err := api.reputation.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "key"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	api.reputation.persistFn = func() error { return errors.New("simulated write failure") }
+	recorder := postVote(t, api, fmt.Sprintf(`{"hostname":%q,"vote":"up"}`, hostname), "", "203.0.113.70:9")
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("persist-failure vote status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	api.cookielessMu.Lock()
+	tracked := len(api.cookielessSources["203.0.113.70:9"])
+	api.cookielessMu.Unlock()
+	if tracked != 0 {
+		t.Fatalf("failed mint left %d reserved voter IDs, want 0", tracked)
+	}
+
+	// With persistence working again, the same source can mint immediately.
+	api.reputation.persistFn = nil
+	recorder = postVote(t, api, fmt.Sprintf(`{"hostname":%q,"vote":"up"}`, hostname), "", "203.0.113.70:9")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("post-rollback mint status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
+// TestReputationKnowsRetentionReadOnlyAndVoteRefresh pins retention semantics:
+// Knows turns false past Retention without mutating anything, and a vote
+// refreshes LastSeenAt so a voted record keeps its directory presence.
+func TestReputationKnowsRetentionReadOnlyAndVoteRefresh(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	cfg.Retention = time.Hour
+	store, _ := newTestReputationStore(t, cfg)
+	const hostname = "retention.example.com"
+	if err := store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "key"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// White-box: age the record past Retention.
+	expired := time.Now().UTC().Add(-2 * cfg.Retention)
+	store.mu.Lock()
+	store.meta.Hostnames[hostname].LastSeenAt = expired
+	store.mu.Unlock()
+
+	if store.Knows(hostname) {
+		t.Fatal("Knows returned true past retention")
+	}
+	// Read-only: the expired record is untouched; pruning is ObserveLive's job.
+	store.mu.Lock()
+	if !store.meta.Hostnames[hostname].LastSeenAt.Equal(expired) {
+		t.Fatal("Knows mutated LastSeenAt")
+	}
+	if len(store.meta.Hostnames) != 1 {
+		t.Fatalf("Knows mutated the hostname map: %d records", len(store.meta.Hostnames))
+	}
+	store.mu.Unlock()
+
+	// A vote refreshes LastSeenAt to now.
+	if _, err := store.Vote(hostname, store.VoterHash("voter-1"), "up"); err != nil {
+		t.Fatal(err)
+	}
+	if !store.Knows(hostname) {
+		t.Fatal("voted record unknown after LastSeenAt refresh")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.meta.Hostnames[hostname].LastSeenAt.Equal(expired) {
+		t.Fatal("vote did not refresh LastSeenAt")
+	}
+}
+
+// TestReputationConstructorPersistsFreshSecret pins the constructor contract:
+// a fresh store persists reputation.json (carrying the voter secret) before
+// newReputationStore returns, and a reload derives identical voter hashes.
+func TestReputationConstructorPersistsFreshSecret(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	path := filepath.Join(t.TempDir(), types.RelayReputationFilename)
+	store, err := newReputationStore(path, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	voterID, _ := issueReputationVoterID()
+	want := store.VoterHash(voterID)
+
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("fresh store did not persist its state file: %v", err)
+	}
+	var meta ReputationMeta
+	if err := json.Unmarshal(payload, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.VoterSecret) != 32 {
+		t.Fatalf("persisted voter secret = %d bytes, want 32", len(meta.VoterSecret))
+	}
+
+	reopened, err := newReputationStore(path, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.VoterHash(voterID); got != want {
+		t.Fatalf("voter hash after reload = %q, want %q", got, want)
+	}
+}
+
+// TestReputationObserveLivePersistFailureRestores pins ObserveLive atomicity:
+// a persist failure restores both the metadata and the prune clock and
+// returns the error instead of discarding it.
+func TestReputationObserveLivePersistFailureRestores(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestReputationStore(t, defaultReputationConfig())
+	store.persistFn = func() error { return errors.New("simulated write failure") }
+	// Backdate the prune clock so the observe actually advances it before
+	// the (failing) persist.
+	store.mu.Lock()
+	store.lastPrune = time.Now().UTC().Add(-2 * reputationPruneInterval)
+	pruneBefore := store.lastPrune
+	store.mu.Unlock()
+
+	err := store.ObserveLive([]LiveLease{{Hostname: "unpersisted.example.com", IdentityKey: "key"}})
+	if err == nil {
+		t.Fatal("ObserveLive swallowed the persist failure")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.meta.Hostnames) != 0 {
+		t.Fatalf("hostnames after failed observe = %d, want 0", len(store.meta.Hostnames))
+	}
+	if !store.lastPrune.Equal(pruneBefore) {
+		t.Fatal("prune clock advanced past a failed persist")
 	}
 }

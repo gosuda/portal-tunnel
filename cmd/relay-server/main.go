@@ -89,7 +89,8 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.IntFlagEnv(fs, &cfg.Reputation.VoteSourceBurst, "reputation-vote-burst", reputationDefaults.VoteSourceBurst, nil, "per-source reputation vote burst", "REPUTATION_VOTE_BURST")
 	utils.IntFlagEnv(fs, &cfg.Reputation.MaxVotersPerSource, "reputation-max-voters-per-source", reputationDefaults.MaxVotersPerSource, nil, "maximum voter IDs a single source may mint without a cookie; resets on restart", "REPUTATION_MAX_VOTERS_PER_SOURCE")
 	utils.IntFlagEnv(fs, &cfg.Reputation.MaxVotersPerHostname, "reputation-max-voters-per-hostname", reputationDefaults.MaxVotersPerHostname, nil, "maximum distinct voters per hostname; new voters rejected with 429 when exhausted", "REPUTATION_MAX_VOTERS_PER_HOSTNAME")
-	utils.IntFlagEnv(fs, &cfg.Reputation.MaxHostnames, "reputation-max-hostnames", reputationDefaults.MaxHostnames, nil, "relay-wide cap on hostnames with votes; oldest is evicted when exceeded", "REPUTATION_MAX_HOSTNAMES")
+	utils.IntFlagEnv(fs, &cfg.Reputation.MaxHostnames, "reputation-max-hostnames", reputationDefaults.MaxHostnames, nil, "relay-wide cap on hostnames with votes; oldest voteless is evicted when exceeded", "REPUTATION_MAX_HOSTNAMES")
+	utils.IntFlagEnv(fs, &cfg.Reputation.MaxMintSources, "reputation-max-mint-sources", reputationDefaults.MaxMintSources, nil, "maximum distinct sources that may hold cookieless minted voter IDs; new sources beyond the cap get 429", "REPUTATION_MAX_MINT_SOURCES")
 	utils.StringFlagEnv(fs, &cfg.Relay.PortalURL, "portal-url", "https://localhost", "portal base URL", "PORTAL_URL")
 	utils.StringFlagEnv(fs, &cfg.FrontendDir, "frontend-dir", "", "custom SPA directory containing index.html; embedded frontend is used when empty", "PORTAL_FRONTEND_DIR")
 	utils.StringFlagEnv(fs, &cfg.Relay.StateDir, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")
@@ -176,9 +177,8 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err := relayAPI.applyReputationConfig(cfg.Reputation); err != nil {
 		return fmt.Errorf("apply reputation config: %w", err)
 	}
-	// Register the reputation observer so first_seen and owner-key tracking are
-	// updated on the registration path, without requiring a /api/state call.
-	server.RegisterLeaseObserver(relayAPI)
+	// Stop the reputation reconcile loop when the server exits.
+	defer relayAPI.Close()
 
 	return server.Serve(ctx, relayAPI.Handler())
 }

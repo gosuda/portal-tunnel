@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BaseServer } from "@/types/server";
 import type { SortOption, StatusFilter } from "@/types/filters";
 
-export type { BaseServer };
-
 export interface UseListOptions<T extends BaseServer> {
   servers: T[];
   storageKey: string;
