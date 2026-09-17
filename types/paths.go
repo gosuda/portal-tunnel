@@ -39,6 +39,7 @@ const (
 	PathSDKReverse           = PathSDKPrefix + "/reverse"
 	PathSDKUnregister        = PathSDKPrefix + "/unregister"
 	PathSDKConnect           = PathSDKPrefix + "/connect"
+	PathSDKCache             = PathSDKPrefix + "/cache"
 
 	PathDiscovery         = "/discovery"
 	PathDiscoveryAnnounce = PathDiscovery + "/announce"

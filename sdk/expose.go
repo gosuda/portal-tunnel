@@ -9,9 +9,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -67,6 +69,7 @@ type Exposure struct {
 	identity types.Identity
 	options  options
 	metadata types.LeaseMetadata
+	cache    *cache.Source
 
 	accepted  chan net.Conn
 	datagrams chan types.DatagramFrame
@@ -97,6 +100,7 @@ type Exposure struct {
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
+	Cache      *cache.SourceConfig
 	UDPEnabled bool
 	TCPEnabled bool
 	ECH        bool
@@ -110,6 +114,13 @@ type options struct {
 
 // Option configures an optional capability of a relay-backed exposure.
 type Option func(*options)
+
+// WithStaticRelayCache opts a static site into relay TLS termination and bounded
+// offline serving. A zero TTL accepts the relay's maximum offline lifetime.
+// Cache errors never stop the exposure; the caller still serves the same path.
+func WithStaticRelayCache(path string, ttl time.Duration) Option {
+	return func(opts *options) { opts.Cache = &cache.SourceConfig{Path: path, TTL: ttl} }
+}
 
 // WithUDP enables the datagram transport capability.
 func WithUDP() Option {
@@ -182,6 +193,18 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	var source *cache.Source
+	if cfg.Cache != nil {
+		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.ECH || cfg.BanMITM {
+			return nil, errors.New("relay static cache cannot be combined with UDP, raw TCP, ECH, or MITM blocking")
+		}
+		var err error
+		source, err = cache.NewSource(*cfg.Cache)
+		if err != nil {
+			return nil, err
+		}
+		log.Warn().Msg("relay cache enabled: selected relays are trusted to store static content and terminate browser TLS; cached responses are not end-to-end encrypted to this client")
+	}
 	relayURLs, err := utils.NormalizeRelayURLs(relays...)
 	if err != nil {
 		return nil, err
@@ -232,6 +255,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		identity:       identity.Copy(),
 		options:        cfg,
 		metadata:       cfg.Metadata.Copy(),
+		cache:          source,
 		accepted:       make(chan net.Conn, max(len(initialRelays)*defaultReadyTarget*2, 1)),
 		datagrams:      make(chan types.DatagramFrame, max(len(initialRelays)*32, 1)),
 		relayListeners: make(map[string]*listener, len(initialRelays)),
@@ -240,6 +264,10 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		stateChanged:   make(chan struct{}),
 		updates:        make(chan RelayStatus, 1),
 		discovery:      controller,
+	}
+
+	if exposure.cache != nil {
+		go exposure.cache.Run(exposureCtx)
 	}
 
 	if err := exposure.setRelays(initialRelays, true); err != nil {
@@ -925,6 +953,9 @@ func (e *Exposure) Close() error {
 				Strs("relays", relayURLs)
 		}
 		event.Msg("exposure closed")
+		if e.cache != nil {
+			e.cache.Wait()
+		}
 		e.acceptLoops.Wait()
 		e.drainAccepted()
 	})
@@ -1005,6 +1036,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
+			Cache:      e.cache,
 			Identity:   e.identity.Copy(),
 			Overlay:    e.options.Overlay,
 			UDPEnabled: e.options.UDPEnabled,

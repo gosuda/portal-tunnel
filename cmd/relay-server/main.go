@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -63,6 +64,9 @@ func resolveAppConfig(args []string) (appConfig, error) {
 }
 
 func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
+	utils.BoolFlagEnv(fs, &cfg.Relay.Cache.Enabled, "cache-enabled", true, "allow explicitly opted-in static exposures to use the relay disk cache", "CACHE_ENABLED")
+	utils.IntFlagEnv(fs, &cfg.Relay.Cache.MaxBytes, "cache-max-bytes", 1<<30, nil, "maximum relay cached and staging payload bytes", "CACHE_MAX_BYTES")
+	utils.DurationFlagEnv(fs, &cfg.Relay.Cache.MaxTTL, "cache-max-ttl", 24*time.Hour, "maximum offline cache lifetime after unregister or lease expiry", "CACHE_MAX_TTL")
 	utils.StringFlagEnv(fs, &cfg.Relay.PortalURL, "portal-url", "https://localhost", "portal base URL", "PORTAL_URL")
 	utils.StringFlagEnv(fs, &cfg.FrontendDir, "frontend-dir", "", "custom SPA directory containing index.html; embedded frontend is used when empty", "PORTAL_FRONTEND_DIR")
 	utils.StringFlagEnv(fs, &cfg.Relay.StateDir, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")

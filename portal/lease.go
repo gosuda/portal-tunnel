@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
@@ -42,6 +43,7 @@ type leaseRegistry struct {
 	tokenIssuer    string
 	reverseURL     string
 	overlay        *overlay.Runtime
+	cache          *cache.Manager
 	policy         *policy.Runtime
 	udpPorts       *transport.PortAllocator
 	tcpPorts       *transport.PortAllocator
@@ -344,6 +346,8 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			i--
 		}
 	}
+	req.RouteHostname = routeHostname
+	r.cache.Register(record.cacheLease(), req)
 	if replacedIndex >= 0 {
 		r.policy.ForgetIdentity(identityKey)
 		r.records[replacedIndex] = record
@@ -481,6 +485,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 		record.ReportedIP = reportedIP
 	}
 	record.Metadata = req.Metadata.Copy()
+	r.cache.Renew(record.cacheLease())
 	r.policy.IPFilter().RegisterIdentityIP(leaseKey, clientIP)
 	recordIdentity := record.Identity
 	leaseID := record.id
@@ -856,6 +861,9 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 }
 
 func (r *leaseRegistry) deleteRecord(i int) {
+	if record := r.records[i]; record != nil {
+		r.cache.Detach(record.cacheLease())
+	}
 	if record := r.records[i]; record != nil && r.overlay != nil {
 		r.overlay.ForgetLease(record.id)
 	}

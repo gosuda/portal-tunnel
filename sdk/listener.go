@@ -21,6 +21,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -37,6 +38,7 @@ const (
 )
 
 type listenerConfig struct {
+	Cache      *cache.Source
 	Identity   types.Identity
 	Overlay    bool
 	UDPEnabled bool
@@ -123,6 +125,7 @@ type listener struct {
 	udpEnabled        bool
 	tcpEnabled        bool
 	echEnabled        bool
+	cache             *cache.Source
 
 	stream        *transport.ClientStream
 	datagram      *transport.ClientDatagram
@@ -164,6 +167,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		udpEnabled:    cfg.UDPEnabled,
 		tcpEnabled:    cfg.TCPEnabled,
 		echEnabled:    cfg.ECH,
+		cache:         cfg.Cache,
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
 	}
@@ -500,6 +504,27 @@ func (l *listener) publicURLForLease(lease listenerSnapshot) string {
 	}).String()
 }
 
+// runStaticCache supplies current SDK transport and lease credentials; the
+// cache package owns generation selection and the synchronization protocol.
+func (l *listener) runStaticCache(ctx context.Context) {
+	limits, available := l.api.cacheLimits()
+	if !available {
+		log.Info().Str("relay_url", l.api.relayURL.String()).Msg("relay cache unavailable; serving through the origin tunnel")
+		return
+	}
+	syncer := l.cache.Subscribe(*l.api.relayURL, limits)
+	defer syncer.Close()
+	for syncer.Next(ctx) {
+		lease, ok := l.leaseSnapshot()
+		if !ok {
+			return
+		}
+		if err := syncer.Sync(ctx, l.api.httpClient(), lease.accessToken); err != nil && ctx.Err() == nil {
+			log.Warn().Err(err).Str("relay_url", l.api.relayURL.String()).Msg("static cache population skipped; origin tunnel remains available")
+		}
+	}
+}
+
 func (l *listener) runLease(ctx context.Context) error {
 	lease, ok := l.leaseSnapshot()
 	if !ok || lease.hostname == "" {
@@ -513,6 +538,13 @@ func (l *listener) runLease(ctx context.Context) error {
 
 	errCh := make(chan error, defaultReadyTarget+1)
 	var workers sync.WaitGroup
+	if l.cache != nil {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			l.runStaticCache(leaseCtx)
+		}()
+	}
 	if l.stream != nil {
 		for sessionSlot := range defaultReadyTarget {
 			sessionSlot++
@@ -1022,6 +1054,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		UDPEnabled: l.udpEnabled,
 		TCPEnabled: l.tcpEnabled,
 	}
+	l.cache.ConfigureRegistration(&registerReq)
 	if l.echEnabled {
 		registerReq.RouteHostname = materials.RouteHostname
 		registerReq.HostnameHash = materials.HostnameHash

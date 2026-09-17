@@ -23,6 +23,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
@@ -42,6 +43,7 @@ const (
 )
 
 type ServerConfig struct {
+	Cache             cache.Config
 	IVNPConfigPath    string
 	PortalURL         string
 	StateDir          string
@@ -120,6 +122,9 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
 		cfg.ACME.KeyDir = cfg.StateDir
+	}
+	if err := cfg.Cache.Validate(); err != nil {
+		return ServerConfig{}, err
 	}
 
 	redirect, err := NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
@@ -420,6 +425,11 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		return errors.New("server already started")
 	}
 	cfg := s.config()
+	cacheManager, cacheErr := cache.New(cfg.Cache, filepath.Join(cfg.StateDir, "static-cache"), s.registry.policy)
+	if cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("relay cache unavailable; using origin tunnels")
+	}
+	s.registry.cache = cacheManager
 	apiTLS, acmeManager, err := s.prepareAPITLS(ctx)
 	if err != nil {
 		return err
@@ -571,6 +581,9 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		group.Go(s.runQUICBackhaulListener)
 	}
 	group.Go(func() error { return s.runRegistryJanitor(groupCtx, 5*time.Second) })
+	if cacheManager != nil {
+		group.Go(func() error { return cacheManager.Run(groupCtx) })
+	}
 	if cfg.DiscoveryEnabled {
 		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
 	}
@@ -803,7 +816,7 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 				// hostnames are always DNS names, so a connection without a server
 				// name targets the canonical root origin; route it there instead
 				// of failing the handshake for IP-literal PORTAL_URL deployments.
-				if serverName == "" || serverName == s.identity.Name {
+				if serverName == "" || serverName == s.identity.Name || s.registry.cache.Has(serverName) {
 					if s.apiListener == nil {
 						_ = wrappedConn.Close()
 						return

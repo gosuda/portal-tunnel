@@ -2,7 +2,16 @@
 
 Public clients reach a Portal relay through its existing HTTPS/SNI ingress.
 Tunnel clients establish an outbound reverse backhaul to their selected public
-relay. Tenant TLS terminates at the tunnel client, not at the relay.
+relay. Tenant TLS normally terminates at the tunnel client. Explicitly opted-in
+static caches terminate browser TLS at the selected relay; see
+[static cache ownership and limits](adr/0001-static-relay-cache.md).
+
+`portal/cache` owns the static cache feature on both sides of the wire:
+`Manager` handles admission, storage, expiry, lease events, and serving;
+`Source` builds shared immutable manifests and `Syncer` handles relay
+synchronization. The registry supplies immutable lease observations; server
+integration owns authentication and reverse-stream fallback. SDK exposures own
+source lifecycle, and listeners supply current transport and lease credentials.
 
 Relay selection returns public relay priorities. Portal does not construct an
 ordered list of intermediate relays. Explicit relay URLs, transport eligibility,
