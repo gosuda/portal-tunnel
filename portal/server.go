@@ -249,6 +249,29 @@ type Server struct {
 	preAuthLimiter *policy.SourceLimiter
 	registry       *leaseRegistry
 	overlay        *overlay.Runtime
+
+	leaseObservers []LeaseObserver
+}
+
+// LiveLease is one publicly visible lease hostname with its owner identity key.
+type LiveLease struct {
+	Hostname    string
+	IdentityKey string
+}
+
+// LeaseObserver receives notifications when the live lease set changes.
+// Implementations must be safe for concurrent calls.
+type LeaseObserver interface {
+	// OnLeasesChanged is called after a lease is registered or re-registered.
+	// Callers should not block indefinitely from this callback.
+	OnLeasesChanged()
+}
+
+// RegisterLeaseObserver registers o to receive OnLeasesChanged calls after each
+// lease registration or re-registration. The observer is invoked from the
+// registration goroutine.
+func (s *Server) RegisterLeaseObserver(o LeaseObserver) {
+	s.leaseObservers = append(s.leaseObservers, o)
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -298,6 +321,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		preAuthLimiter: policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 	}
 	server.registry.proxy = &server.proxy
+	// Wire the lease-change callback so observers are notified after each registration.
+	registry.onChange = func() {
+		for _, o := range server.leaseObservers {
+			o.OnLeasesChanged()
+		}
+	}
 	if cfg.IVNPConfigPath != "" {
 		server.overlay, err = overlay.New(overlay.Config{
 			ConfigPath: cfg.IVNPConfigPath,

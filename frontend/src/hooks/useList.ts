@@ -1,25 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReputationSummary } from "@/types/api";
+import type { BaseServer } from "@/types/server";
 import type { SortOption, StatusFilter } from "@/types/filters";
 
-export interface BaseServer {
-  id: string;
-  name: string;
-  description: string;
-  tags: string[];
-  thumbnail: string;
-  owner: string;
-  online: boolean;
-  dns: string;
-  link: string;
-  tcpAddr?: string;
-  udpAddr?: string;
-  lastUpdated?: string;
-  firstSeen?: string;
-  paymentEnabled?: boolean;
-  paymentLabel?: string;
-  reputation?: ReputationSummary;
-}
+export type { BaseServer };
 
 export interface UseListOptions<T extends BaseServer> {
   servers: T[];

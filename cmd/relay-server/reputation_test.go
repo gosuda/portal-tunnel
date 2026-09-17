@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,7 +21,7 @@ import (
 func newTestReputationStore(t *testing.T, cfg ReputationConfig) (*ReputationStore, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), types.RelayReputationFilename)
-	store, err := newReputationStore(path, cfg, []byte("test-voter-secret"))
+	store, err := newReputationStore(path, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +49,11 @@ func newTestReputationAPI(t *testing.T) *RelayAPI {
 func reputationRequest(t *testing.T, api *RelayAPI, method, target, body, voterID, remoteAddr string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	// Note: X-Forwarded-For is NOT injected here. ExtractClientIP uses socket address
+	// (RemoteAddr) in test mode since TrustProxyHeaders=false, so tests that need a
+	// specific source IP should set remoteAddr. Injecting a random XFF header would
+	// cause ExtractClientIP to read the header only when TrustProxyHeaders=true,
+	// creating inconsistency between test runs and production.
 	if remoteAddr != "" {
 		req.RemoteAddr = remoteAddr
 	}
@@ -162,7 +169,7 @@ func TestReputationStoreRoundTripSurvivesRestart(t *testing.T) {
 	}
 	before := store.Summary(hostname, voterA)
 
-	reopened, err := newReputationStore(path, cfg, []byte("test-voter-secret"))
+	reopened, err := newReputationStore(path, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,12 +188,11 @@ func TestReputationStoreRoundTripSurvivesRestart(t *testing.T) {
 		t.Fatalf("restarted first seen = %v, want %v", after.FirstSeenAt, before.FirstSeenAt)
 	}
 
-	otherSecret, err := newReputationStore(path, cfg, []byte("other-secret"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if viewer := otherSecret.Summary(hostname, otherSecret.VoterHash("voter-a")); viewer.ViewerVote != "" {
-		t.Fatalf("foreign secret attributed a stored vote to %q", viewer.ViewerVote)
+	// Reopen: the persisted secret is reused, so a different raw voter ID produces a
+	// different hash (which is correct — it is a different voter).
+	otherID, _ := issueReputationVoterID()
+	if viewer := reopened.Summary(hostname, reopened.VoterHash(otherID)); viewer.ViewerVote != "" {
+		t.Fatalf("unrelated voter ID attributed to a stored vote: %q", viewer.ViewerVote)
 	}
 
 	raw, err := os.ReadFile(path)
@@ -236,15 +242,15 @@ func TestReputationStoreSurvivesReRegistration(t *testing.T) {
 // their configured minima, including exact boundary values.
 func TestReputationWarningRequiresTotalDownAndRatioThresholds(t *testing.T) {
 	t.Parallel()
-	strict := ReputationConfig{
-		MinTotal:            2,
-		MinDown:             1,
-		MinDownRatioPercent: 50,
-		Probation:           time.Hour,
-		Retention:           24 * time.Hour,
-		VoteSourcePerMinute: 60,
-		VoteSourceBurst:     60,
-	}
+	strict := defaultReputationConfig()
+	strict.MinTotal = 2
+	strict.MinDown = 1
+	strict.MinDownRatioPercent = 50
+	strict.Probation = time.Hour
+	strict.Retention = 24 * time.Hour
+	strict.VoteSourcePerMinute = 60
+	strict.VoteSourceBurst = 60
+	// MaxVotersPerSource/MaxHostnames inherit positive defaults from defaultReputationConfig.
 	store, _ := newTestReputationStore(t, strict)
 	const hostname = "threshold.example.com"
 	voter := func(name string) string { return store.VoterHash(name) }
@@ -336,7 +342,7 @@ func TestReputationProbationJudgedFromPersistedTimestamps(t *testing.T) {
 	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store, err := newReputationStore(path, cfg, []byte("test-voter-secret"))
+	store, err := newReputationStore(path, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,8 +388,8 @@ func TestReputationAPIVoteIssuesVoterCookieOnce(t *testing.T) {
 	if !issued.HttpOnly || !issued.Secure || issued.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("cookie flags = httponly=%v secure=%v samesite=%v", issued.HttpOnly, issued.Secure, issued.SameSite)
 	}
-	if issued.Path != types.PathReputation {
-		t.Fatalf("cookie path = %q, want %q", issued.Path, types.PathReputation)
+	if issued.Path != types.PathAPIPrefix {
+		t.Fatalf("cookie path = %q, want %q", issued.Path, types.PathAPIPrefix)
 	}
 	if want := int((365 * 24 * time.Hour).Seconds()); issued.MaxAge != want {
 		t.Fatalf("cookie max age = %d, want %d", issued.MaxAge, want)
@@ -458,7 +464,8 @@ func TestReputationAPIRejectsInvalidInputWithoutStateChange(t *testing.T) {
 
 // TestReputationAPIRateLimitsPerSource pins burst admission: votes past the
 // per-source burst get 429 with retry guidance and change nothing, while other
-// sources keep voting.
+// sources keep voting. Uses a pre-existing voter cookie so the cookieless mint
+// budget does not interfere with the rate-limiter test.
 func TestReputationAPIRateLimitsPerSource(t *testing.T) {
 	t.Parallel()
 	api := newTestReputationAPI(t)
@@ -466,18 +473,27 @@ func TestReputationAPIRateLimitsPerSource(t *testing.T) {
 	api.reputation.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
 	burst := defaultReputationConfig().VoteSourceBurst
 
+	// Issue one voter cookie so the cookieless mint check is bypassed.
+	existingVoterID, err := issueReputationVoterID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	voterHash := api.reputation.VoterHash(existingVoterID)
+
 	for i := range burst {
-		recorder := postVote(t, api, `{"hostname":"busy.example.com","vote":"up"}`, "", "")
+		recorder := postVote(t, api, `{"hostname":"busy.example.com","vote":"up"}`, existingVoterID, "")
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("burst vote %d status = %d, want %d", i, recorder.Code, http.StatusOK)
 		}
 	}
-	summary := decodeSummary(t, getReputation(t, api, hostname, ""))
-	if summary.Up != burst {
-		t.Fatalf("accepted burst = up=%d, want %d", summary.Up, burst)
+	// Same-voter repeats are idempotent: the burst is admitted (200 above)
+	// but counts a single vote.
+	summary := decodeSummary(t, getReputation(t, api, hostname, voterHash))
+	if summary.Up != 1 || summary.Down != 0 {
+		t.Fatalf("same-voter burst aggregate = up=%d down=%d, want up=1 down=0", summary.Up, summary.Down)
 	}
 
-	rejected := postVote(t, api, `{"hostname":"busy.example.com","vote":"down"}`, "", "")
+	rejected := postVote(t, api, `{"hostname":"busy.example.com","vote":"down"}`, existingVoterID, "")
 	if rejected.Code != http.StatusTooManyRequests || decodeErrorCode(t, rejected) != types.APIErrorCodeRateLimited {
 		t.Fatalf("over-burst vote: status=%d code=%s", rejected.Code, rejected.Body.String())
 	}
@@ -488,17 +504,310 @@ func TestReputationAPIRateLimitsPerSource(t *testing.T) {
 	if got := len(rejected.Result().Cookies()); got != 0 {
 		t.Fatalf("rejected vote issued %d cookies", got)
 	}
-	summary = decodeSummary(t, getReputation(t, api, hostname, ""))
-	if summary.Up != burst || summary.Down != 0 {
+	summary = decodeSummary(t, getReputation(t, api, hostname, voterHash))
+	if summary.Up != 1 || summary.Down != 0 {
 		t.Fatalf("rejected vote changed the aggregate: up=%d down=%d", summary.Up, summary.Down)
 	}
 
-	recorder := postVote(t, api, `{"hostname":"busy.example.com","vote":"down"}`, "", "203.0.113.9:4444")
+	recorder := postVote(t, api, `{"hostname":"busy.example.com","vote":"down"}`, existingVoterID, "203.0.113.9:4444")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("other source status = %d, want %d", recorder.Code, http.StatusOK)
 	}
 	summary = decodeSummary(t, getReputation(t, api, hostname, ""))
 	if summary.Down != 1 {
 		t.Fatalf("other source vote missing: down=%d", summary.Down)
+	}
+}
+
+// TestReputationAPIBlocksCookielessMintOverLimit pins blocker 1: cookieless votes
+// are rejected with 429 once a source IP has already minted MaxVotersPerSource
+// voter IDs through the HTTP layer. Existing voters presenting their cookie can
+// still change their vote.
+func TestReputationAPIBlocksCookielessMintOverLimit(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	cfg.MaxVotersPerSource = 2
+	cfg.VoteSourcePerMinute = 100
+	cfg.VoteSourceBurst = 100
+	api := newTestReputationAPI(t)
+	if err := api.applyReputationConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	const hostname = "mint-limit.example.com"
+	api.reputation.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
+
+	// Mint MaxVotersPerSource voter IDs through the HTTP layer so the
+	// per-source mint budget is actually exercised.
+	body := fmt.Sprintf(`{"hostname":%q,"vote":"up"}`, hostname)
+	var cookies []string
+	for i := 0; i < cfg.MaxVotersPerSource; i++ {
+		recorder := postVote(t, api, body, "", "")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("setup mint %d status = %d, want 200", i, recorder.Code)
+		}
+		var issued *http.Cookie
+		for _, c := range recorder.Result().Cookies() {
+			if c.Name == reputationVoterCookie {
+				issued = c
+				break
+			}
+		}
+		if issued == nil {
+			t.Fatalf("setup mint %d issued no voter cookie", i)
+		}
+		cookies = append(cookies, issued.Value)
+	}
+
+	// The next cookieless mint from the same source is rejected, and the
+	// rejection issues no replacement cookie.
+	recorder := postVote(t, api, fmt.Sprintf(`{"hostname":%q,"vote":"down"}`, hostname), "", "")
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("over-limit cookieless vote status = %d, want 429", recorder.Code)
+	}
+	if decodeErrorCode(t, recorder) != types.APIErrorCodeRateLimited {
+		t.Fatalf("error code = %s, want rate_limited", decodeErrorCode(t, recorder))
+	}
+	for _, c := range recorder.Result().Cookies() {
+		if c.Name == reputationVoterCookie {
+			t.Fatal("rejected mint issued a voter cookie")
+		}
+	}
+
+	// Existing voters presenting their cookie can still change their vote.
+	for i, cookie := range cookies {
+		recorder := postVote(t, api, fmt.Sprintf(`{"hostname":%q,"vote":"down"}`, hostname), cookie, "")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("existing voter %d vote switch status = %d, want 200", i, recorder.Code)
+		}
+	}
+	summary := decodeSummary(t, getReputation(t, api, hostname, ""))
+	if summary.Up != 0 || summary.Down != 2 {
+		t.Fatalf("after switches: up=%d down=%d, want up=0 down=2", summary.Up, summary.Down)
+	}
+}
+
+// TestReputationHostnameVoterLimitPinsPerHostnameBudget pins blocker 2 (hostname leg):
+// a new voter for a hostname is rejected with 429 when MaxVotersPerHostname is
+// reached; existing voters can still change their vote.
+func TestReputationHostnameVoterLimit(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	cfg.MaxVotersPerHostname = 2
+	store, _ := newTestReputationStore(t, cfg)
+	const hostname = "hostname-limit.example.com"
+	store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
+
+	var voterIDs []string
+	for i := 0; i < cfg.MaxVotersPerHostname; i++ {
+		voterID, err := issueReputationVoterID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		voterIDs = append(voterIDs, voterID)
+		if _, err := store.Vote(hostname, store.VoterHash(voterID), "up"); err != nil {
+			t.Fatalf("setup vote %d: %v", i, err)
+		}
+	}
+
+	// A new voter (no pre-existing entry) is rejected.
+	newVoterID, _ := issueReputationVoterID()
+	_, err := store.Vote(hostname, store.VoterHash(newVoterID), "up")
+	if err == nil || !errors.Is(err, ErrReputationBudgetExceeded) {
+		t.Fatalf("over-limit new voter: err=%v, want ErrReputationBudgetExceeded", err)
+	}
+
+	// Existing voters can still switch sides.
+	_, err = store.Vote(hostname, store.VoterHash(voterIDs[0]), "down")
+	if err != nil {
+		t.Fatalf("existing voter vote switch: %v", err)
+	}
+}
+
+// TestReputationRelayWideHostnameEviction pins blocker 2 (relay-wide leg):
+// once MaxHostnames is reached, a new hostname is admitted by evicting the
+// hostname whose LastSeenAt is oldest. All setup hostnames share the same
+// LastSeenAt, so any one may be evicted; we verify exactly one pre-existing
+// hostname survives and the new one is admitted.
+func TestReputationRelayWideHostnameEviction(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	cfg.MaxHostnames = 2
+	store, _ := newTestReputationStore(t, cfg)
+
+	// Populate MaxHostnames distinct hostnames via ObserveLive so they exist.
+	names := make([]string, cfg.MaxHostnames)
+	for i := range names {
+		names[i] = fmt.Sprintf("host-%d.example.com", i)
+		store.ObserveLive([]LiveLease{{Hostname: names[i], IdentityKey: "key"}})
+		voterID, _ := issueReputationVoterID()
+		if _, err := store.Vote(names[i], store.VoterHash(voterID), "up"); err != nil {
+			t.Fatalf("setup vote for %s: %v", names[i], err)
+		}
+	}
+
+	// All hostnames are known.
+	for _, n := range names {
+		if !store.Knows(n) {
+			t.Fatalf("store does not know %q", n)
+		}
+	}
+
+	// A new hostname vote triggers eviction of one of the existing hostnames.
+	newHost := "host-new.example.com"
+	newVoterID, _ := issueReputationVoterID()
+	_, err := store.Vote(newHost, store.VoterHash(newVoterID), "up")
+	if err != nil {
+		t.Fatalf("new hostname vote: %v", err)
+	}
+
+	// Exactly one pre-existing hostname survived.
+	survived := 0
+	for _, n := range names {
+		if store.Knows(n) {
+			survived++
+		}
+	}
+	if survived != 1 {
+		t.Fatalf("survived hostnames = %d, want exactly 1", survived)
+	}
+	// New hostname is admitted.
+	if !store.Knows(newHost) {
+		t.Fatalf("new hostname %q was not admitted", newHost)
+	}
+}
+
+// TestReputationCookiePathScopedToAPIPrefix pins blocker 3: the voter cookie is
+// set with Path=/api so it is sent only on /api/* requests, not on arbitrary
+// page loads. This is verified by the existing TestReputationAPIVoteIssuesVoterCookieOnce
+// cookie path assertion, so this test documents the browser-path-scoping invariant
+// and adds a cross-hostname attribution check.
+func TestReputationCookiePathScopedToAPIPrefix(t *testing.T) {
+	t.Parallel()
+	api := newTestReputationAPI(t)
+	api.reputation.ObserveLive([]LiveLease{
+		{Hostname: "a.example.com", IdentityKey: "key-a"},
+		{Hostname: "b.example.com", IdentityKey: "key-b"},
+	})
+
+	// Vote on a.example.com — issues a cookie.
+	rec := postVote(t, api, `{"hostname":"a.example.com","vote":"up"}`, "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatal(rec.Code)
+	}
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == reputationVoterCookie {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("no cookie issued")
+	}
+	if cookie.Path != types.PathAPIPrefix {
+		t.Fatalf("cookie path = %q, want %q", cookie.Path, types.PathAPIPrefix)
+	}
+
+	// The same cookie attributes the vote on b.example.com.
+	rec2 := getReputation(t, api, "b.example.com", cookie.Value)
+	summary := decodeSummary(t, rec2)
+	// Cookie was issued for a.example.com, not b.example.com.
+	if summary.ViewerVote != "" {
+		t.Fatalf("b.example.com viewer_vote = %q, want empty (cookie scoped to /api/a.example.com path)", summary.ViewerVote)
+	}
+
+	// Cookie works on a.example.com again.
+	rec3 := getReputation(t, api, "a.example.com", cookie.Value)
+	summary3 := decodeSummary(t, rec3)
+	if summary3.ViewerVote != "up" {
+		t.Fatalf("a.example.com viewer_vote = %q, want up", summary3.ViewerVote)
+	}
+}
+
+// TestReputationSecretSurvivesRestart pins blocker 5: the voter secret is
+// persisted in reputation.json and voter identity is stable across restarts,
+// without deriving from the relay identity.
+func TestReputationSecretSurvivesRestart(t *testing.T) {
+	t.Parallel()
+	cfg := defaultReputationConfig()
+	store, path := newTestReputationStore(t, cfg)
+
+	voterID, _ := issueReputationVoterID()
+	voterHash := store.VoterHash(voterID)
+	store.Vote("stable.example.com", voterHash, "up")
+
+	// Reopen with same config.
+	store2, err := newReputationStore(path, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// VoterHash must be identical — secret persisted.
+	if got := store2.VoterHash(voterID); got != voterHash {
+		t.Fatalf("voter hash after restart = %q, want %q", got, voterHash)
+	}
+	// Attribution preserved.
+	summary := store2.Summary("stable.example.com", voterHash)
+	if summary.ViewerVote != "up" {
+		t.Fatalf("viewer vote after restart = %q, want up", summary.ViewerVote)
+	}
+}
+
+// TestReputationPersistFailureRollsBackMemory pins blocker 7: when persistLocked
+// fails, the in-memory state is fully restored (including records created during
+// the Vote call).
+func TestReputationPersistFailureRollsBackMemory(t *testing.T) {
+	cfg := defaultReputationConfig()
+	store, _ := newTestReputationStore(t, cfg)
+	const hostname = "rollback.example.com"
+
+	// Make persist always fail.
+	origPersist := store.persistFn
+	store.persistFn = func() error { return errors.New("simulated write failure") }
+
+	_, err := store.Vote(hostname, store.VoterHash("voter-x"), "up")
+	if err == nil {
+		t.Fatal("expected persist error, got nil")
+	}
+
+	// In-memory state must be rolled back.
+	summary := store.Summary(hostname, store.VoterHash("voter-x"))
+	if summary.Total != 0 {
+		t.Fatalf("rolled-back total = %d, want 0", summary.Total)
+	}
+	if store.Knows(hostname) {
+		t.Fatal("rolled-back hostname is still known")
+	}
+
+	// Restore and verify normal operation.
+	store.persistFn = origPersist
+	_, err = store.Vote(hostname, store.VoterHash("voter-y"), "up")
+	if err != nil {
+		t.Fatalf("after restore: %v", err)
+	}
+	summary = store.Summary(hostname, store.VoterHash("voter-y"))
+	if summary.Total != 1 {
+		t.Fatalf("after restore: total=%d, want 1", summary.Total)
+	}
+}
+
+// TestReputationFirstSeenCapturedOnRegistration pins blocker 4: first_seen_at is
+// set when ObserveLive fires during registration, without requiring a /api/state call.
+func TestReputationFirstSeenCapturedOnRegistration(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestReputationStore(t, defaultReputationConfig())
+	const hostname = "first-seen.example.com"
+
+	// Simulate registration heartbeat via ObserveLive (called by OnLeasesChanged).
+	now := time.Now().UTC()
+	store.ObserveLive([]LiveLease{{Hostname: hostname, IdentityKey: "owner-key-1"}})
+
+	summary := store.Summary(hostname, "")
+	if summary.FirstSeenAt.IsZero() {
+		t.Fatal("first_seen_at not set after ObserveLive")
+	}
+	if summary.FirstSeenAt.Before(now.Add(-time.Second)) || summary.FirstSeenAt.After(now.Add(time.Second)) {
+		t.Fatalf("first_seen_at = %v, want near %v", summary.FirstSeenAt, now)
+	}
+	if !summary.IsNew {
+		t.Fatal("hostname not marked is_new immediately after ObserveLive")
 	}
 }

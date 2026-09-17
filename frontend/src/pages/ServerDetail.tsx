@@ -5,6 +5,7 @@ import { BadgeDollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { openExternal } from "@/lib/navigate";
 import type { ReputationSummary } from "@/types/api";
+import { REPUTATION_ACK_PREFIX } from "@/types/storage";
 
 interface ServerDetailState {
   id: string;
@@ -19,8 +20,6 @@ interface ServerDetailState {
   paymentLabel?: string;
   reputation?: ReputationSummary;
 }
-
-const REPUTATION_ACK_PREFIX = "portalReputationWarningAck:";
 
 export function ServerDetail() {
   const location = useLocation();
@@ -224,6 +223,25 @@ export function ServerDetail() {
                   >
                     by {owner}
                   </p>
+                )}
+                {server.reputation && (server.reputation.up > 0 || server.reputation.down > 0) && !warningActive && (
+                  <dl
+                    data-testid="reputation-counts"
+                    className="flex gap-4 text-xs font-medium text-text-muted"
+                  >
+                    <div className="flex flex-col gap-0.5">
+                      <dt className="text-[10px] font-bold uppercase tracking-wider text-text-muted">Up</dt>
+                      <dd>{server.reputation?.up ?? 0}</dd>
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <dt className="text-[10px] font-bold uppercase tracking-wider text-text-muted">Down</dt>
+                      <dd>{server.reputation?.down ?? 0}</dd>
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <dt className="text-[10px] font-bold uppercase tracking-wider text-text-muted">Total</dt>
+                      <dd>{server.reputation?.total ?? 0}</dd>
+                    </div>
+                  </dl>
                 )}
               </div>
             </div>

@@ -3,6 +3,7 @@ import { Ssgoi } from "@ssgoi/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openExternal } from "@/lib/navigate";
+import { REPUTATION_ACK_PREFIX } from "@/types/storage";
 import { ServerDetail } from "./ServerDetail";
 
 // jsdom's Location methods are legacy-unforgeable (non-configurable), so the
@@ -11,7 +12,7 @@ import { ServerDetail } from "./ServerDetail";
 vi.mock("@/lib/navigate", () => ({ openExternal: vi.fn() }));
 
 const SERVER_URL = "https://minecraft.relay.example.com/";
-const ACK_KEY = "portalReputationWarningAck:minecraft.relay.example.com";
+const ACK_KEY = `${REPUTATION_ACK_PREFIX}minecraft.relay.example.com`;
 
 const openExternalMock = vi.mocked(openExternal);
 
@@ -118,6 +119,22 @@ describe("ServerDetail reputation gate", () => {
 
     expect(openExternalMock).not.toHaveBeenCalled();
     expect(screen.getByRole("alertdialog")).toBeTruthy();
+    const counts = within(screen.getByTestId("reputation-counts"));
+    expect(counts.getByText("2")).toBeTruthy();
+    expect(counts.getByText("8")).toBeTruthy();
+    expect(counts.getByText("10")).toBeTruthy();
+  });
+
+  it("shows aggregate counts on the detail page even without an active warning", () => {
+    renderDetail(
+      detailState({
+        reputation: reputationFixture({ warning: false }),
+      })
+    );
+
+    // No warning interstitial
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    // Counts visible in the page body
     const counts = within(screen.getByTestId("reputation-counts"));
     expect(counts.getByText("2")).toBeTruthy();
     expect(counts.getByText("8")).toBeTruthy();

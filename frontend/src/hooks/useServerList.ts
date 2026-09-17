@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useList, type BaseServer } from "@/hooks/useList";
+import { useEffect, useMemo, useState } from "react";
+import { useList } from "@/hooks/useList";
+import type { BaseServer } from "@/types/server";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
 import {
@@ -13,6 +14,10 @@ import type {
   ReputationSummary,
   ReputationVote,
 } from "@/types/api";
+
+// Tracks in-flight vote request sequences per hostname to discard stale responses.
+// When a second vote fires before the first resolves, only the latest fires.
+const voteRequestSeq = new Map<string, number>();
 
 type PublicState = {
   leases: Lease[];
@@ -88,27 +93,34 @@ export function useServerList() {
     [publicState.leases]
   );
 
-  const handleVote = useCallback(
-    async (hostname: string, vote: ReputationVote) => {
-      try {
-        const summary: ReputationSummary = await apiClient.postReputationVote(
-          hostname,
-          vote
-        );
-        setPublicState((prev) => ({
-          ...prev,
-          leases: prev.leases.map((lease) =>
-            lease.hostname === hostname
-              ? { ...lease, reputation: summary }
-              : lease
-          ),
-        }));
-      } catch (error) {
-        console.error("Failed to submit reputation vote", error);
+  async function handleVote(hostname: string, vote: ReputationVote) {
+    try {
+      const seq = (voteRequestSeq.get(hostname) ?? 0) + 1;
+      voteRequestSeq.set(hostname, seq);
+
+      const summary: ReputationSummary = await apiClient.postReputationVote(
+        hostname,
+        vote
+      );
+
+      // Discard if a newer vote for this hostname has already fired.
+      const currentSeq = voteRequestSeq.get(hostname) ?? 0;
+      if (currentSeq !== seq) {
+        return;
       }
-    },
-    []
-  );
+
+      setPublicState((prev) => ({
+        ...prev,
+        leases: prev.leases.map((lease) =>
+          lease.hostname === hostname
+            ? { ...lease, reputation: summary }
+            : lease
+        ),
+      }));
+    } catch (error) {
+      console.error("Failed to submit reputation vote", error);
+    }
+  }
 
   const list = useList({
     servers,

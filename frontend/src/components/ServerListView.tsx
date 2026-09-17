@@ -5,7 +5,7 @@ import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
 import { TagCombobox } from "@/components/TagCombobox";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
-import type { BaseServer } from "@/hooks/useList";
+import type { BaseServer } from "@/types/server";
 import type { AdminServer, ApprovalMode, UDPSettings, TCPPortSettings } from "@/hooks/useAdmin";
 import type { BanFilter, SortOption, StatusFilter } from "@/types/filters";
 import { StatusSelect } from "@/components/select/StatusSelect";

@@ -49,6 +49,8 @@ type leaseRegistry struct {
 	tcpPorts       *transport.PortAllocator
 	proxy          *proxy
 	mu             sync.RWMutex
+	// onChange is called after a lease is registered or re-registered.
+	onChange func()
 }
 
 func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, rootHostname string, publicPort int, tokenAuthority identity.Authority, tokenIssuer string, trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*leaseRegistry, error) {
@@ -396,6 +398,9 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 	if record.tcpPort != nil {
 		resp.TCPAddr = fmt.Sprintf("%s:%d", r.rootHostname, record.tcpPort.TCPPort())
+	}
+	if r.onChange != nil {
+		r.onChange()
 	}
 	return record, resp, nil
 }

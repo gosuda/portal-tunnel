@@ -102,6 +102,92 @@ describe("ServerCard raw transport endpoints", () => {
   });
 });
 
+describe("ServerCard public card height", () => {
+  // A public card (non-admin, no transport) must not clip content when it shows
+  // the full set: name + description + tags + reputation row + owner + favorite.
+  // This is the "name+desc+tags+reputation+vote" path that was reported as clipped.
+  it("does not clip content in a full-featured public card", () => {
+    const onVote = vi.fn();
+    render(
+      <MemoryRouter>
+        <ServerCard
+          serverId="full-card-srv"
+          name="Minecraft Relay"
+          description="A great Minecraft server"
+          tags={["gaming", "minecraft", "creative"]}
+          thumbnail=""
+          owner="ExampleOwner"
+          online
+          dns="mc.example.com"
+          navigationPath="/server/full-card-srv"
+          navigationState={null}
+          reputation={{
+            up: 10,
+            down: 2,
+            total: 12,
+            down_ratio: 0.17,
+            warning: false,
+            viewer_vote: "up",
+            is_new: false,
+            identity_changed_recently: false,
+          }}
+          onVote={onVote}
+        />
+      </MemoryRouter>
+    );
+
+    // All content must be visible — none clipped by overflow:hidden on the card.
+    expect(screen.getByRole("heading", { name: /Minecraft Relay/i })).toBeTruthy();
+    expect(screen.getByText("A great Minecraft server")).toBeTruthy();
+    expect(screen.getByText("by ExampleOwner")).toBeTruthy();
+    // Tags
+    expect(screen.getByText("#gaming")).toBeTruthy();
+    expect(screen.getByText("#minecraft")).toBeTruthy();
+    // Vote row
+    expect(screen.getByRole("button", { name: /upvote/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /downvote/i })).toBeTruthy();
+    // The article element has data-hero-key="server-bg-{serverId}"; verify it renders.
+    const card = document.querySelector("[data-hero-key='server-bg-full-card-srv']");
+    expect(card).toBeTruthy();
+    expect(card?.tagName).toBe("ARTICLE");
+  });
+
+  it("keeps vote counts visible when description is long", () => {
+    const onVote = vi.fn();
+    render(
+      <MemoryRouter>
+        <ServerCard
+          serverId="long-desc"
+          name="Relay"
+          description="This is a very long description that could cause clipping if the card height is too constrained for all the content to fit"
+          tags={["tag1", "tag2", "tag3", "tag4", "tag5"]}
+          thumbnail=""
+          owner="Owner"
+          online
+          dns="relay.example.com"
+          navigationPath="/server/long-desc"
+          navigationState={null}
+          reputation={{
+            up: 5,
+            down: 1,
+            total: 6,
+            down_ratio: 0.17,
+            warning: false,
+            viewer_vote: "",
+            is_new: true,
+            identity_changed_recently: false,
+          }}
+          onVote={onVote}
+        />
+      </MemoryRouter>
+    );
+
+    // Vote counts must be present (not clipped off)
+    expect(screen.getByRole("button", { name: /upvote/i }).textContent).toContain("5");
+    expect(screen.getByRole("button", { name: /downvote/i }).textContent).toContain("1");
+  });
+});
+
 describe("ServerCard reputation", () => {
   const HOSTNAME = "minecraft.relay.example.com";
 

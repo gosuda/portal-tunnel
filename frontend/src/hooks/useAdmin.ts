@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { useList, type BaseServer } from "@/hooks/useList";
+import { useList } from "@/hooks/useList";
+import type { BaseServer } from "@/types/server";
 import type { BanFilter } from "@/types/filters";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";

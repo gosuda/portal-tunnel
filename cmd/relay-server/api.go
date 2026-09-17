@@ -46,6 +46,13 @@ type RelayAPI struct {
 	policyWriteMu      sync.Mutex
 	policyMu           sync.RWMutex
 	landingPageEnabled bool
+	// cookielessMu guards cookielessSources only; it is separate from
+	// policyWriteMu so reputation mint tracking never contends with
+	// admin policy writes.
+	cookielessMu sync.Mutex
+	// cookielessSources tracks sourceIP -> minted voter IDs for the
+	// per-source mint budget. In-memory only; resets on relay restart.
+	cookielessSources map[string][]string
 }
 
 func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
@@ -64,12 +71,12 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 	if err != nil {
 		return nil, err
 	}
-	// Reputation lives beside the policy state in the relay state dir, and its
-	// voter hashing keys off the relay identity secret, so both restart intact.
+	// Reputation lives beside the policy state in the relay state dir.
+	// Its voter secret is generated and persisted within reputation.json so that
+	// voter identity remains stable across relay restarts.
 	reputation, err := newReputationStore(
 		filepath.Join(filepath.Dir(policyStatePath), types.RelayReputationFilename),
 		defaultReputationConfig(),
-		[]byte(server.RelayIdentity().TokenSecret),
 	)
 	if err != nil {
 		return nil, err
@@ -83,6 +90,7 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 		frontendFS:           frontendFS,
 		frontendCacheEnabled: strings.TrimSpace(frontendDir) == "",
 		landingPageEnabled:   landingPageEnabled,
+		cookielessSources:    make(map[string][]string),
 	}
 	if err := api.loadPolicyState(); err != nil {
 		return nil, err
@@ -121,8 +129,28 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leases := api.server.PublicLeases()
-	// Owner keys are resolved once from the policy projection; the public wire
-	// shape never carries them, only the derived reputation aggregates do.
+	voterHash := api.reputation.VoterHash(reputationVoterIDFromRequest(r))
+	for i := range leases {
+		summary := api.reputation.Summary(utils.NormalizeHostname(leases[i].Hostname), voterHash)
+		leases[i].Reputation = &summary
+	}
+	api.policyMu.RLock()
+	landingPageEnabled := api.landingPageEnabled
+	api.policyMu.RUnlock()
+	utils.WriteAPIData(w, http.StatusOK, types.PublicStateResponse{
+		Leases:             leases,
+		LandingPageEnabled: landingPageEnabled,
+	})
+}
+
+// OnLeasesChanged is called by the portal server after each lease registration
+// or re-registration. It updates first-seen timestamps, owner-key tracking, and
+// retention pruning, so that first_seen is captured even without a /api/state call.
+func (api *RelayAPI) OnLeasesChanged() {
+	leases := api.server.PublicLeases()
+	if len(leases) == 0 {
+		return
+	}
 	ownerKeys := make(map[string]string, len(leases))
 	for _, lease := range api.server.PolicyLeases() {
 		hostname := utils.NormalizeHostname(lease.Hostname)
@@ -141,18 +169,6 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	api.reputation.ObserveLive(live)
-	voterHash := api.reputation.VoterHash(reputationVoterIDFromRequest(r))
-	for i := range leases {
-		summary := api.reputation.Summary(utils.NormalizeHostname(leases[i].Hostname), voterHash)
-		leases[i].Reputation = &summary
-	}
-	api.policyMu.RLock()
-	landingPageEnabled := api.landingPageEnabled
-	api.policyMu.RUnlock()
-	utils.WriteAPIData(w, http.StatusOK, types.PublicStateResponse{
-		Leases:             leases,
-		LandingPageEnabled: landingPageEnabled,
-	})
 }
 
 func (api *RelayAPI) loadPolicyState() error {
