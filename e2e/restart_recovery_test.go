@@ -14,8 +14,8 @@ import (
 // identity, the listener's stored credentials answer "lease not found"
 // once it is back, and the SDK re-registers on its own. This test pins
 // that recovery so a relay restart never requires restarting the SDK
-// application (issue #471); the rotated-authority variant lives in the
-// portal package, which can swap the token authority in place.
+// application (issue #471); the rotated-authority variant lives in
+// authority_rotation_test.go.
 func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
 	h := newHarness(t)
 	publicURL := h.waitForPublicURL()
