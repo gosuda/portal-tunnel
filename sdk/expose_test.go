@@ -470,6 +470,9 @@ func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 		if !status.Deselected {
 			t.Fatalf("Updates() delivered %+v, want a deselection notification", status)
 		}
+		if status.Active() {
+			t.Fatalf("deselection notification %+v reports Active(), want the tombstone to be inactive", status)
+		}
 		if status.RelayURL != relayA || status.PublicURL != "https://service.relay-a.example" {
 			t.Fatalf("deselection notification = %+v, want relay A with its last known public URL", status)
 		}

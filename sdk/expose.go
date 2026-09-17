@@ -61,8 +61,14 @@ type RelayStatus struct {
 	Deselected bool
 }
 
-// Active reports whether the relay currently has a usable registered listener.
+// Active reports whether the relay currently has a usable registered
+// listener. A deselection notification never describes an active
+// listener: it reports that the relay left the desired membership set,
+// so its preserved endpoint fields must not keep it advertised.
 func (s RelayStatus) Active() bool {
+	if s.Deselected {
+		return false
+	}
 	return s.State != RelayFailed &&
 		(s.State == RelayReady || s.PublicURL != "" || s.UDPAddr != "" || s.TCPAddr != "")
 }
@@ -664,7 +670,12 @@ func (e *Exposure) notifyStateChangedLocked() {
 	e.stateChanged = make(chan struct{})
 }
 
-func (e *Exposure) syncRelayStatuses(relayURLs []string) {
+// syncRelayStatuses reconciles the stored status snapshot with the
+// desired relay set and returns the deselection notifications for relays
+// that left it. Callers report them once the stale listeners are
+// actually detached (see reportDeselectedRelays), so the lifecycle
+// signal lines up with the listener lifecycle.
+func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
 	desired := make(map[string]RelayStatus, len(relayURLs))
 	for _, relayURL := range relayURLs {
 		desired[relayURL] = RelayStatus{
@@ -708,10 +719,18 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) {
 		e.notifyStateChangedLocked()
 	}
 	e.mu.Unlock()
-	// Membership shrank: report each dropped endpoint symmetrically with
-	// "service ready at" so log consumers can stop advertising it, and
-	// publish a best-effort removal notification for Updates() readers.
-	// Relays() remains the authoritative snapshot.
+	if changed && e.discovery != nil {
+		e.discovery.SetActiveRelays(e.ActiveRelays())
+	}
+	return deselected
+}
+
+// reportDeselectedRelays publishes the membership-shrink notifications
+// collected by syncRelayStatuses once the stale listeners are detached:
+// a structured log mirroring "service ready at" so log consumers can
+// stop advertising the URL, and a best-effort Updates() notification.
+// Relays() remains the authoritative snapshot.
+func (e *Exposure) reportDeselectedRelays(deselected []RelayStatus) {
 	for _, status := range deselected {
 		if status.PublicURL != "" {
 			log.Info().
@@ -721,9 +740,6 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) {
 				Msg("relay no longer active for " + status.PublicURL)
 		}
 		e.publishRelayStatus(status)
-	}
-	if changed && e.discovery != nil {
-		e.discovery.SetActiveRelays(e.ActiveRelays())
 	}
 }
 
@@ -1024,7 +1040,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		}
 		desired[relayURL] = struct{}{}
 	}
-	e.syncRelayStatuses(relayURLs)
+	deselected := e.syncRelayStatuses(relayURLs)
 
 	e.mu.Lock()
 	staleListeners := make(map[string]*listener)
@@ -1062,6 +1078,10 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			log.Warn().Err(err).Str("relay_url", relayURL).Msg("close stale relay listener")
 		}
 	}
+
+	// Report deselection only now that the stale listeners are actually
+	// detached, so the lifecycle signal matches the listener lifecycle.
+	e.reportDeselectedRelays(deselected)
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
