@@ -77,7 +77,7 @@ func normalizeClientIPCandidate(raw string) string {
 		return ""
 	}
 	if ip := net.ParseIP(candidate); ip != nil {
-		return candidate
+		return ip.String()
 	}
 	host, _, err := net.SplitHostPort(candidate)
 	if err != nil {
@@ -87,5 +87,5 @@ func normalizeClientIPCandidate(raw string) string {
 	if host == "" || net.ParseIP(host) == nil {
 		return ""
 	}
-	return host
+	return net.ParseIP(host).String()
 }

@@ -42,6 +42,8 @@ export function Admin() {
     handleApproveStatus,
     handleDenyStatus,
     handleIPBanStatus,
+    bannedIPs,
+    handleUnbanIP,
     handleBulkApprove,
     handleBulkDeny,
     handleBulkBan,
@@ -118,6 +120,8 @@ export function Admin() {
         onApproveStatusChange={handleApproveStatus}
         onDenyStatusChange={handleDenyStatus}
         onIPBanStatusChange={handleIPBanStatus}
+        bannedIPs={bannedIPs}
+        onUnbanIP={handleUnbanIP}
         onBulkApprove={handleBulkApprove}
         onBulkDeny={handleBulkDeny}
         onBulkBan={handleBulkBan}

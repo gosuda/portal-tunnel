@@ -254,33 +254,47 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		}
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 	case types.PathPolicyIPs:
-		if !utils.RequireMethod(w, r, http.MethodPost) {
-			return
+		switch r.Method {
+		case http.MethodGet:
+			api.policyMu.RLock()
+			banned := runtime.IPFilter().BannedIPs()
+			api.policyMu.RUnlock()
+			utils.WriteAPIData(w, http.StatusOK, types.BannedIPsResponse{BannedIPs: banned})
+		case http.MethodPost:
+			req, ok := utils.DecodeJSONRequestAs[types.IPPolicyUpdate](w, r, controlBodyLimit, invalidRequestBody)
+			if !ok {
+				return
+			}
+			ip := strings.TrimSpace(req.IP)
+			if net.ParseIP(ip) == nil {
+				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidIP, "invalid IP address")
+				return
+			}
+			if req.IsBanned {
+				if reason := runtime.InfrastructureBanReason(ip); reason != "" {
+					utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidIP, reason)
+					return
+				}
+			}
+			api.policyWriteMu.Lock()
+			defer api.policyWriteMu.Unlock()
+			api.policyMu.Lock()
+			previous := api.policyState(runtime)
+			if req.IsBanned {
+				runtime.IPFilter().BanIP(ip)
+			} else {
+				runtime.IPFilter().UnbanIP(ip)
+			}
+			payload := api.policyState(runtime)
+			api.policyMu.Unlock()
+			if !api.persistPolicyState(w, previous, payload) {
+				return
+			}
+			utils.WriteAPIData(w, http.StatusOK, map[string]any{})
+		default:
+			w.Header().Set("Allow", http.MethodGet+","+http.MethodPost)
+			utils.MethodNotAllowedError().Write(w)
 		}
-		req, ok := utils.DecodeJSONRequestAs[types.IPPolicyUpdate](w, r, controlBodyLimit, invalidRequestBody)
-		if !ok {
-			return
-		}
-		ip := strings.TrimSpace(req.IP)
-		if net.ParseIP(ip) == nil {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidIP, "invalid IP address")
-			return
-		}
-		api.policyWriteMu.Lock()
-		defer api.policyWriteMu.Unlock()
-		api.policyMu.Lock()
-		previous := api.policyState(runtime)
-		if req.IsBanned {
-			runtime.IPFilter().BanIP(ip)
-		} else {
-			runtime.IPFilter().UnbanIP(ip)
-		}
-		payload := api.policyState(runtime)
-		api.policyMu.Unlock()
-		if !api.persistPolicyState(w, previous, payload) {
-			return
-		}
-		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 	default:
 		http.NotFound(w, r)
 	}

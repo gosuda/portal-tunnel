@@ -97,10 +97,13 @@ describe("useAdmin", () => {
           policy: { ...buildSettings(), approval_mode: "not-a-mode" },
         } as never;
       }
+      if (path === BROWSER_API_PATHS.policy.ips) {
+        return { banned_ips: [] } as never;
+      }
       throw new Error(`Unexpected GET path: ${path}`);
     });
 
-    mockPost.mockImplementation(async <T,>(path: string, body?: unknown): Promise<T> => {
+    mockPost.mockImplementation(async <T>(path: string, body?: unknown): Promise<T> => {
       if (path === BROWSER_API_PATHS.policy.root) {
         return body as T;
       }
@@ -124,6 +127,9 @@ describe("useAdmin", () => {
     mockGet.mockImplementation(async (path: string) => {
       if (path === BROWSER_API_PATHS.policy.state) {
         throw new APIClientError("failed to load leases", 500, "server_error");
+      }
+      if (path === BROWSER_API_PATHS.policy.ips) {
+        return { banned_ips: [] } as never;
       }
       throw new Error(`Unexpected GET path: ${path}`);
     });
@@ -214,19 +220,22 @@ describe("useAdmin", () => {
       | undefined;
 
     mockGet.mockImplementation((path: string) => {
-      if (path !== BROWSER_API_PATHS.policy.state) {
-        throw new Error(`Unexpected GET path: ${path}`);
+      if (path === BROWSER_API_PATHS.policy.state) {
+        getCalls++;
+        if (getCalls === 1) {
+          return Promise.resolve({
+            leases: [buildLease("0x00000000000000000000000000000000000000A1")],
+            policy: buildSettings(),
+          } as never);
+        }
+        return new Promise<DeferredPolicyState>((resolve) => {
+          resolveRefresh = resolve;
+        }) as never;
       }
-      getCalls++;
-      if (getCalls === 1) {
-        return Promise.resolve({
-          leases: [buildLease("0x00000000000000000000000000000000000000A1")],
-          policy: buildSettings(),
-        } as never);
+      if (path === BROWSER_API_PATHS.policy.ips) {
+        return Promise.resolve({ banned_ips: [] }) as never;
       }
-      return new Promise<DeferredPolicyState>((resolve) => {
-        resolveRefresh = resolve;
-      }) as never;
+      throw new Error(`Unexpected GET path: ${path}`);
     });
 
     const { result } = renderHook(() => useAdmin());
@@ -267,6 +276,9 @@ describe("useAdmin", () => {
           policy: buildSettings(),
         } as never;
       }
+      if (path === BROWSER_API_PATHS.policy.ips) {
+        return { banned_ips: [] } as never;
+      }
       throw new Error(`Unexpected GET path: ${path}`);
     });
 
@@ -293,5 +305,50 @@ describe("useAdmin", () => {
         [BROWSER_API_PATHS.policy.leases, { identity_key: identityKeyB, is_denied: true }],
       ]),
     );
+  });
+
+  it("exposes banned IPs from the policy ips endpoint", async () => {
+    mockGet.mockImplementation(async (path: string) => {
+      if (path === BROWSER_API_PATHS.policy.state) {
+        return {
+          leases: [],
+          policy: buildSettings(),
+        } as never;
+      }
+      if (path === BROWSER_API_PATHS.policy.ips) {
+        return { banned_ips: ["192.0.2.1", "  192.0.2.2  ", ""] } as never;
+      }
+      throw new Error(`Unexpected GET path: ${path}`);
+    });
+
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    expect(result.current.bannedIPs).toEqual(["192.0.2.1", "192.0.2.2"]);
+  });
+
+  it("handleUnbanIP posts is_banned false and refreshes banned IPs", async () => {
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    await act(async () => {
+      await result.current.handleUnbanIP("192.0.2.1");
+    });
+
+    expect(mockPost).toHaveBeenCalledWith(BROWSER_API_PATHS.policy.ips, {
+      ip: "192.0.2.1",
+      is_banned: false,
+    });
+  });
+
+  it("handleUnbanIP rejects an empty IP", async () => {
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    await act(async () => {
+      await expect(result.current.handleUnbanIP("   ")).rejects.toThrow(
+        "Missing IP address",
+      );
+    });
   });
 });
