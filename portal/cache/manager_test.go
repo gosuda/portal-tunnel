@@ -419,3 +419,109 @@ func TestReadFailureAfterHeadersInvalidatesSnapshot(t *testing.T) {
 		t.Fatal("failed response retained a valid or pinned snapshot")
 	}
 }
+
+func TestUploadRequiresOptedInLease(t *testing.T) {
+	c := testManager(t, 16)
+	l := Lease{ID: "plain-id", Owner: "plain", Hostname: "plain.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
+	c.Register(l, types.RegisterChallengeRequest{Cache: false})
+	w := httptest.NewRecorder()
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+	if w.Code != http.StatusForbidden || c.Eligible(l.ID) || c.Has(l.Hostname) || c.used != 0 {
+		t.Fatalf("non-opted-in lease admitted an upload: %d", w.Code)
+	}
+	w = httptest.NewRecorder()
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), "unknown-id")
+	if w.Code != http.StatusForbidden || c.used != 0 {
+		t.Fatalf("unknown lease admitted an upload: %d", w.Code)
+	}
+}
+
+func TestObjectDigestMismatchRejectsUpload(t *testing.T) {
+	c := testManager(t, 16)
+	l := testLease(c, "site")
+	req := testRequest(t, http.MethodPut, "site")
+	raw, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The manifest still announces the declared size, but the object bytes no
+	// longer hash to the declared SHA-256.
+	req.Body = io.NopCloser(strings.NewReader(strings.Replace(string(raw), "site", "tampered", 1)))
+	w := httptest.NewRecorder()
+	c.Handle(w, req, l.ID)
+	if w.Code != http.StatusBadRequest || c.Has(l.Hostname) || c.used != 0 {
+		t.Fatalf("corrupt object admitted: %d, %d", w.Code, c.used)
+	}
+}
+
+func TestLeaseReplacementRejectsInFlightUpload(t *testing.T) {
+	c := testManager(t, 32)
+	first := Lease{ID: "first-id", Owner: "site", Hostname: "first.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
+	c.Register(first, types.RegisterChallengeRequest{Cache: true, CacheTTL: 86400})
+	started := make(chan struct{})
+	resume := make(chan struct{})
+	req := testRequest(t, http.MethodPut, "site")
+	req.Body = &gatedBody{ReadCloser: req.Body, started: started, resume: resume}
+	codes := make(chan int, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		c.Handle(w, req, first.ID)
+		codes <- w.Code
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload never started reading its body")
+	}
+	// Re-registering the same identity replaces the lease while the old
+	// upload is still streaming its body.
+	replacement := Lease{ID: "second-id", Owner: "site", Hostname: "second.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
+	c.Register(replacement, types.RegisterChallengeRequest{Cache: true, CacheTTL: 86400})
+	close(resume)
+	var code int
+	select {
+	case code = <-codes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replaced upload never completed")
+	}
+	if code != http.StatusForbidden || c.Eligible(first.ID) || c.Has(first.Hostname) {
+		t.Fatalf("replaced lease published an in-flight upload: %d", code)
+	}
+	if !c.Eligible(replacement.ID) {
+		t.Fatal("replacement lease lost upload eligibility")
+	}
+	w := httptest.NewRecorder()
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), replacement.ID)
+	if w.Code != http.StatusOK || !c.Has(replacement.Hostname) {
+		t.Fatalf("replacement lease could not publish: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPolicyBanSuspendsCacheRouting(t *testing.T) {
+	runtime, err := policy.NewRuntime(false, false, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Config{Enabled: true, MaxBytes: 16, MaxTTL: time.Minute}, t.TempDir(), runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := testLease(c, "site")
+	w := httptest.NewRecorder()
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	runtime.BanIdentity(l.Owner)
+	if c.Has(l.Hostname) || c.Eligible(l.ID) {
+		t.Fatal("banned identity remained routable from cache")
+	}
+	if c.Serve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "https://"+l.Hostname+"/", nil), l.Hostname) {
+		t.Fatal("banned identity was still served from cache")
+	}
+	// A ban is a routing decision; the retained snapshot returns on unban.
+	runtime.UnbanIdentity(l.Owner)
+	if !c.Has(l.Hostname) {
+		t.Fatal("unban discarded retained cache content")
+	}
+}

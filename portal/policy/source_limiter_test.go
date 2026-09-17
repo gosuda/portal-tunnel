@@ -74,3 +74,36 @@ func TestSourceLimiterBoundsStorageAndExpiresIdleSources(t *testing.T) {
 		t.Fatal("idle source did not release storage")
 	}
 }
+
+// Failed pre-auth attempts bill exactly the endpoint weight, and a rejected
+// attempt pays nothing, so premature retries never deepen the debt and the
+// returned retry window is exact.
+func TestPreAuthRejectionChargesNoFailurePenalty(t *testing.T) {
+	limiter := NewSourceLimiter(10, 20, 600, 200)
+	now := time.Now()
+	limiter.clock = func() time.Time { return now }
+	for range 4 {
+		if retry, layer := limiter.Allow("192.0.2.1", 5); retry != 0 || layer != "" {
+			t.Fatalf("register-weighted attempt rejected: %v %q", retry, layer)
+		}
+	}
+	var guidance time.Duration
+	for range 3 {
+		retry, layer := limiter.Allow("192.0.2.1", 1)
+		if retry == 0 || layer != "source" {
+			t.Fatalf("exhausted source admitted cost-1 attempt: %v %q", retry, layer)
+		}
+		if guidance == 0 {
+			guidance = retry
+		} else if retry != guidance {
+			t.Fatalf("rejected attempt changed retry guidance to %v, want stable %v", retry, guidance)
+		}
+	}
+	if guidance != 6*time.Second {
+		t.Fatalf("retry guidance = %v, want 6s for cost 1 at 10/min", guidance)
+	}
+	now = now.Add(guidance)
+	if retry, layer := limiter.Allow("192.0.2.1", 1); retry != 0 || layer != "" {
+		t.Fatalf("post-retry admission = %v %q, want admitted", retry, layer)
+	}
+}

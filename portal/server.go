@@ -11,6 +11,7 @@ import (
 	"net/http/pprof"
 	"net/netip"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -43,30 +44,38 @@ const (
 )
 
 type ServerConfig struct {
-	PreAuth           types.PreAuthConfig
-	Cache             cache.Config
-	IVNPConfigPath    string
-	PortalURL         string
-	StateDir          string
-	Bootstraps        []string
-	DiscoveryEnabled  bool
-	APIPort           int
-	SNIPort           int
-	HTTPRedirect      types.HTTPRedirectConfig
-	APIListenAddr     string
-	SNIListenAddr     string
-	TrustProxyHeaders bool
-	TrustedProxyCIDRs string
-	UDPEnabled        bool
-	TCPEnabled        bool
-	MinPort           int
-	MaxPort           int
-	PProfEnabled      bool
-	PProfListenAddr   string
-	X402Enabled       bool
-	X402Testnet       bool
-	X402PayTo         string
-	ACME              acme.Config
+	PreAuth        types.PreAuthConfig
+	Cache          cache.Config
+	IVNPConfigPath string
+	PortalURL      string
+	StateDir       string
+	// LeaseAuthorityPath optionally points at an identity file whose key
+	// signs lease access tokens and reverse capabilities instead of the
+	// relay identity under StateDir. Empty keeps the default: leases are
+	// signed with the relay identity. Restarting with a different
+	// authority invalidates every lease the previous relay issued, which
+	// is how deployments rotate the lease signing key and how the e2e
+	// suite models a rotated-authority relay restart.
+	LeaseAuthorityPath string
+	Bootstraps         []string
+	DiscoveryEnabled   bool
+	APIPort            int
+	SNIPort            int
+	HTTPRedirect       types.HTTPRedirectConfig
+	APIListenAddr      string
+	SNIListenAddr      string
+	TrustProxyHeaders  bool
+	TrustedProxyCIDRs  string
+	UDPEnabled         bool
+	TCPEnabled         bool
+	MinPort            int
+	MaxPort            int
+	PProfEnabled       bool
+	PProfListenAddr    string
+	X402Enabled        bool
+	X402Testnet        bool
+	X402PayTo          string
+	ACME               acme.Config
 }
 
 // NormalizeHTTPRedirectConfig validates redirect settings without resolving names
@@ -274,7 +283,19 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
-	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, relayAuthority, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	leaseAuthority := relayAuthority
+	if cfg.LeaseAuthorityPath != "" {
+		rawLeaseAuthority, err := os.ReadFile(cfg.LeaseAuthorityPath)
+		if err != nil {
+			return nil, fmt.Errorf("read lease authority identity: %w", err)
+		}
+		leaseAuthorityIdentity, err := identity.Parse(rawLeaseAuthority)
+		if err != nil {
+			return nil, fmt.Errorf("parse lease authority identity: %w", err)
+		}
+		leaseAuthority = identity.NewLocalAuthority(leaseAuthorityIdentity)
+	}
+	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, leaseAuthority, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return nil, err
 	}

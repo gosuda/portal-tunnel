@@ -124,6 +124,19 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if response.StatusCode != http.StatusPartialContent || string(body) != "cached" || originCalls.Load() != before {
 		t.Fatalf("cache hit crossed origin or lost Range support: %d, %q", response.StatusCode, body)
 	}
+	// A Host header that disagrees with the tenant TLS server name must never
+	// reach cached content, even while the tenant is online.
+	spoofed, _ := http.NewRequestWithContext(ctx, http.MethodGet, publicURL, nil)
+	spoofed.Host = "spoofed.example.com"
+	response, err = client.Do(spoofed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("spoofed host status = %d, want %d", response.StatusCode, http.StatusMisdirectedRequest)
+	}
 	// A non-cacheable method on a terminated connection uses the existing
 	// reverse tunnel, with authenticated tenant TLS on the upstream leg.
 	response, err = client.Post(publicURL, "text/plain", strings.NewReader(""))
