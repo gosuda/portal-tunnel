@@ -531,11 +531,32 @@ func (e *Exposure) ActiveRelays() []string {
 }
 
 func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
+	e.applyRelayStatus(relayURL, update, nil)
+}
+
+// setListenerRelayStatus applies a status update originating from a
+// specific listener, but only while that listener still owns its relay
+// slot. A deselected or replaced listener can deliver a final update
+// after reconcileRelayListeners dropped it; letting that recreate or
+// overwrite the entry would contradict the deselection notification
+// derived from the status snapshot (and let an old listener overwrite
+// its replacement).
+func (e *Exposure) setListenerRelayStatus(relayURL string, owner *listener, update listenerStatus) {
+	e.applyRelayStatus(relayURL, update, owner)
+}
+
+func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owner *listener) {
 	if e == nil || relayURL == "" || e.closed() {
 		return
 	}
 
 	e.mu.Lock()
+	if owner != nil {
+		if current, ok := e.relayListeners[relayURL]; !ok || current != owner {
+			e.mu.Unlock()
+			return
+		}
+	}
 	if e.statuses == nil {
 		e.statuses = make(map[string]RelayStatus)
 	}
@@ -1040,8 +1061,12 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		}
 		desired[relayURL] = struct{}{}
 	}
-	deselected := e.syncRelayStatuses(relayURLs)
-
+	// Detach stale listeners before deleting their membership statuses:
+	// once a listener no longer owns its relay slot, listener-originated
+	// status updates are dropped by the ownership guard in
+	// applyRelayStatus, and updates racing ahead of the detach are
+	// re-deleted by the sync below. Either way a stale status cannot
+	// recreate a deselected entry after its tombstone is published.
 	e.mu.Lock()
 	staleListeners := make(map[string]*listener)
 	stateChanged := false
@@ -1068,6 +1093,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		e.notifyStateChangedLocked()
 	}
 	e.mu.Unlock()
+	deselected := e.syncRelayStatuses(relayURLs)
 
 	addedRelayURLs := make([]string, 0, len(missingRelayURLs))
 	for relayURL, listener := range staleListeners {
@@ -1179,7 +1205,7 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 			for {
 				select {
 				case status := <-statusUpdates:
-					e.setRelayStatus(relayURL, status)
+					e.setListenerRelayStatus(relayURL, listener, status)
 				case <-listener.doneCh:
 					return
 				}

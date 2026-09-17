@@ -481,6 +481,66 @@ func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 	}
 }
 
+// TestStaleListenerStatusCannotRecreateDeselectedMembership proves the
+// ownership guard from the #463 review: a listener-originated status
+// update delivered after reconcileRelayListeners detached the listener
+// must not recreate the deselected relay's status entry, and a replaced
+// listener must not overwrite its successor's status.
+func TestStaleListenerStatusCannotRecreateDeselectedMembership(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+	)
+	exposure := newExposureStateTest(t, relayA)
+	exposure.syncRelayStatuses(exposure.relayURLs)
+	exposure.setRelayStatus(relayA, listenerStatus{
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
+	})
+
+	// End state of reconcileRelayListeners for relay A: the listener was
+	// detached first (relayListeners no longer holds the slot), then the
+	// membership status was deleted with a tombstone collected.
+	deselected := exposure.syncRelayStatuses([]string{relayB})
+	if len(deselected) != 1 || deselected[0].RelayURL != relayA || !deselected[0].Deselected ||
+		deselected[0].PublicURL != "https://service.relay-a.example" {
+		t.Fatalf("syncRelayStatuses() = %+v, want relay A tombstone with its last known URL", deselected)
+	}
+
+	// The stale listener's status worker delivers one last ready update
+	// after the membership delete (the review's race).
+	staleListener := &listener{}
+	exposure.setListenerRelayStatus(relayA, staleListener, listenerStatus{
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
+	})
+	if relays := exposure.Relays(); len(relays) != 1 || relays[0].RelayURL != relayB {
+		t.Fatalf("Relays() = %+v, want the stale update to not recreate relay A membership", relays)
+	}
+
+	// The replaced-listener variant: the current owner applies updates
+	// to its own slot, and the old owner cannot overwrite them.
+	owner := &listener{}
+	exposure.mu.Lock()
+	exposure.relayListeners[relayB] = owner
+	exposure.mu.Unlock()
+	exposure.setListenerRelayStatus(relayB, owner, listenerStatus{
+		state: RelayFailed,
+		err:   errors.New("owner-reported failure"),
+	})
+	relays := exposure.Relays()
+	if len(relays) != 1 || relays[0].State != RelayFailed {
+		t.Fatalf("Relays() = %+v, want the current owner's update applied", relays)
+	}
+	exposure.setListenerRelayStatus(relayB, staleListener, listenerStatus{
+		state:     RelayReady,
+		publicURL: "https://ghost.relay-a.example",
+	})
+	if relays := exposure.Relays(); len(relays) != 1 || relays[0].State != RelayFailed {
+		t.Fatalf("Relays() = %+v, want a non-owner update ignored", relays)
+	}
+}
+
 // TestExposureReconcileExcludesRelayBlockedAfterInstall verifies the
 // end-to-end reconcile postcondition for blocked relays: a relay blocked
 // (MITM) after its listener already exists is closed and not re-created on
