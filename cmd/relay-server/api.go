@@ -302,17 +302,16 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, runtime *policy.
 
 // normalizePolicyIdentityKey canonicalizes an untrusted admin-supplied
 // identity key into the runtime key form (lowercase name:address, as built
-// by types.Identity.Key). This is the only place policy keys are validated;
-// persisted policy state is trusted as-is.
+// by types.Identity.Key). It reuses the same types.ParseIdentityKey rule the
+// policy.json loader applies, so malformed keys are rejected with an HTTP 400
+// instead of being trusted as-is.
 func normalizePolicyIdentityKey(w http.ResponseWriter, raw string) (string, bool) {
-	name, address, ok := strings.Cut(strings.TrimSpace(raw), types.IdentityKeySeparator)
-	name = strings.ToLower(strings.TrimSpace(name))
-	address = strings.ToLower(strings.TrimSpace(address))
-	if !ok || name == "" || address == "" {
+	key, err := types.ParseIdentityKey(raw)
+	if err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid identity")
 		return "", false
 	}
-	return name + types.IdentityKeySeparator + address, true
+	return key, true
 }
 func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, identityKey string, req types.LeasePolicyUpdate) bool {
 	if req.IsBanned == nil && req.IsApproved == nil && req.IsDenied == nil && req.BPS == nil {
@@ -469,15 +468,61 @@ func (s persistedPolicyState) apply(api *RelayAPI) error {
 			return err
 		}
 	}
+	if err := canonicalizeIdentityKeyList("approved_identity_keys", s.ApprovedIdentityKeys); err != nil {
+		return err
+	}
+	if err := canonicalizeIdentityKeyList("denied_identity_keys", s.DeniedIdentityKeys); err != nil {
+		return err
+	}
+	if err := canonicalizeIdentityKeyList("banned_identity_keys", s.BannedIdentityKeys); err != nil {
+		return err
+	}
+	identityBPS, err := canonicalIdentityBPSKeys(s.IdentityBPS)
+	if err != nil {
+		return err
+	}
 	runtime.Approver().SetDecisions(s.ApprovedIdentityKeys, s.DeniedIdentityKeys)
 	runtime.SetBannedIdentityKeys(s.BannedIdentityKeys)
-	runtime.BPSManager().SetIdentityBPSLimits(s.IdentityBPS)
+	runtime.BPSManager().SetIdentityBPSLimits(identityBPS)
 	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, api.server.SetUDPPolicy)
 	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, api.server.SetTCPPortPolicy)
 	if s.LandingPageEnabled != nil {
 		api.landingPageEnabled = *s.LandingPageEnabled
 	}
 	return nil
+}
+
+// canonicalizeIdentityKeyList validates every persisted identity key through
+// types.ParseIdentityKey, normalizing entries in place so the runtime only
+// ever receives canonical lowercase name:address keys. A malformed entry
+// aborts with the offending section, index, and value so a corrupt
+// policy.json fails startup with a clear message.
+func canonicalizeIdentityKeyList(section string, keys []string) error {
+	for i, raw := range keys {
+		key, err := types.ParseIdentityKey(raw)
+		if err != nil {
+			return fmt.Errorf("policy.json %s[%d]: %w", section, i, err)
+		}
+		keys[i] = key
+	}
+	return nil
+}
+
+// canonicalIdentityBPSKeys rebuilds the identity_bps map with canonical keys
+// so per-identity limits set under unnormalized spellings still apply.
+func canonicalIdentityBPSKeys(limits map[string]int64) (map[string]int64, error) {
+	if limits == nil {
+		return nil, nil
+	}
+	canonical := make(map[string]int64, len(limits))
+	for raw, limit := range limits {
+		key, err := types.ParseIdentityKey(raw)
+		if err != nil {
+			return nil, fmt.Errorf("policy.json identity_bps[%q]: %w", raw, err)
+		}
+		canonical[key] = limit
+	}
+	return canonical, nil
 }
 
 func serveInstallBinary(w http.ResponseWriter, r *http.Request) {

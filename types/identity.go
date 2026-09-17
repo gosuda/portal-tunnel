@@ -1,6 +1,7 @@
 package types
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -34,13 +35,44 @@ func (i Identity) Copy() Identity {
 	}
 }
 
-func (i Identity) Key() string {
-	name := strings.TrimSpace(strings.ToLower(i.Name))
-	address := strings.TrimSpace(strings.ToLower(i.Address))
+// canonicalIdentityPart lowercases and trims one identity key part; it is the
+// single home of the canonicalization rule shared by the key constructor and
+// parser.
+func canonicalIdentityPart(part string) string {
+	return strings.TrimSpace(strings.ToLower(part))
+}
+
+// CanonicalIdentityKey returns the canonical identity key for the given name
+// and address: both parts are canonicalized, the result is "" when both parts
+// are empty, and "name:address" otherwise.
+func CanonicalIdentityKey(name, address string) string {
+	name = canonicalIdentityPart(name)
+	address = canonicalIdentityPart(address)
 	if name == "" && address == "" {
 		return ""
 	}
 	return name + IdentityKeySeparator + address
+}
+
+// ParseIdentityKey parses a raw identity key in "name:address" form and
+// returns its canonical form. The key is split on the first separator and both
+// parts are canonicalized; parsing fails when the separator is missing or
+// either part is empty after canonicalization.
+func ParseIdentityKey(raw string) (string, error) {
+	name, address, ok := strings.Cut(raw, IdentityKeySeparator)
+	if !ok {
+		return "", fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
+	}
+	name = canonicalIdentityPart(name)
+	address = canonicalIdentityPart(address)
+	if name == "" || address == "" {
+		return "", fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
+	}
+	return CanonicalIdentityKey(name, address), nil
+}
+
+func (i Identity) Key() string {
+	return CanonicalIdentityKey(i.Name, i.Address)
 }
 
 type LeaseMetadata struct {
