@@ -133,15 +133,19 @@ func TestExposureReRegistersAfterAuthorityRotation(t *testing.T) {
 }
 
 // registerShortLivedToken performs a complete register challenge + sign +
-// round trip against the relay's API listener (TLS with skipped verification
-// resulting access token.  The token is signed by the relay's current
-// (pre-restart) lease authority.
+// register round trip against the relay's API listener and returns the
+// resulting access token. The token is signed by the relay's current
+// (pre-restart) lease authority. TLS verification is skipped: the loopback
+// relay serves a self-signed certificate.
 func registerShortLivedToken(apiPort int) (string, error) {
 	baseURL, err := url.Parse("https://127.0.0.1:" + strconv.Itoa(apiPort))
 	if err != nil {
 		return "", err
 	}
-	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: "localhost"}}
+	// No ServerName: the relay binds a connection to the tenant path when SNI
+	// differs from the relay identity name, so an IP-literal dial must send no
+	// SNI to reach the control-plane register endpoints.
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 
 	// Generate a temporary client identity so we can sign the challenge.
@@ -178,15 +182,15 @@ func registerShortLivedToken(apiPort int) (string, error) {
 }
 
 // assertUnauthorizedForOldToken POSTs the given access token to /sdk/renew on
-// the relay's API listener (TLS with skipped verification: loopback self-signed cert)
-// code "unauthorized".  The token was signed by the pre-restart authority;
+// the relay's API listener and asserts the response is HTTP 403 with error
+// code "unauthorized". The token was signed by the pre-restart authority;
 // the restarted relay holds a different public key, so VerifyLeaseAccessToken
 // in lease.go returns an error and the handler writes HTTP 403 via
 // errUnauthorized in api_server.go.
 func assertUnauthorizedForOldToken(t *testing.T, apiPort int, accessToken string) {
 	t.Helper()
 	baseURL := "https://127.0.0.1:" + strconv.Itoa(apiPort) + types.PathSDKRenew
-	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: "localhost"}}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 
 	body, _ := json.Marshal(types.RenewRequest{AccessToken: accessToken, Metadata: types.LeaseMetadata{}})
