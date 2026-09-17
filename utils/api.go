@@ -42,15 +42,6 @@ func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-func StripPaymentHeaders(header http.Header) {
-	header.Del(types.HeaderXPayment)
-	header.Del(types.HeaderPaymentSignature)
-	header.Del(types.HeaderPaymentRequired)
-	header.Del(types.HeaderXPaymentRequired)
-	header.Del(types.HeaderPaymentResponse)
-	header.Del(types.HeaderXPaymentResponse)
-}
-
 func HandleAPICORS(w http.ResponseWriter, r *http.Request) bool {
 	header := w.Header()
 	header.Set("Access-Control-Allow-Origin", "*")

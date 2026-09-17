@@ -35,7 +35,7 @@ func (p *Payment) wrapPaid(next http.Handler) http.Handler {
 			return
 		}
 		forwarded := r.Clone(r.Context())
-		utils.StripPaymentHeaders(forwarded.Header)
+		stripPaymentHeaders(forwarded.Header)
 		receipt := w.Header().Get(types.HeaderPaymentResponse)
 		response := &paymentResponseWriter{ResponseWriter: w, receipt: receipt}
 		next.ServeHTTP(response, forwarded)
@@ -76,6 +76,15 @@ func setPaymentResponseHeaders(header http.Header, settled *facilitatortypes.Pay
 	header.Set(types.HeaderXPaymentResponse, encoded)
 }
 
+func stripPaymentHeaders(header http.Header) {
+	header.Del(types.HeaderXPayment)
+	header.Del(types.HeaderPaymentSignature)
+	header.Del(types.HeaderPaymentRequired)
+	header.Del(types.HeaderXPaymentRequired)
+	header.Del(types.HeaderPaymentResponse)
+	header.Del(types.HeaderXPaymentResponse)
+}
+
 // paymentResponseWriter keeps the trusted settlement receipt ahead of any
 // headers written by the downstream handler.
 type paymentResponseWriter struct {
@@ -89,7 +98,7 @@ func (w *paymentResponseWriter) WriteHeader(status int) {
 		return
 	}
 	w.wroteHeader = true
-	utils.StripPaymentHeaders(w.Header())
+	stripPaymentHeaders(w.Header())
 	if w.receipt != "" {
 		w.Header().Set(types.HeaderPaymentResponse, w.receipt)
 		w.Header().Set(types.HeaderXPaymentResponse, w.receipt)

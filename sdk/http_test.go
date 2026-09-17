@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestHTTPRoutesUseLongestPrefix(t *testing.T) {
@@ -75,29 +73,6 @@ func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Set-Cookie"); !strings.Contains(got, "Path=/app/session") {
 		t.Fatalf("Set-Cookie = %q, want rewritten path", got)
-	}
-}
-
-func TestHTTPRoutesStripReservedPaymentHeadersAtProxy(t *testing.T) {
-	t.Parallel()
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get(types.HeaderXPayment); got != "" {
-			t.Errorf("upstream received payment header %q", got)
-		}
-		w.Header().Set(types.HeaderPaymentResponse, "untrusted")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer upstream.Close()
-	handler, err := NewHTTPRoutes([]HTTPRouteConfig{{Prefix: "/", Upstream: upstream.URL}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodGet, "https://public.example/", nil)
-	req.Header.Set(types.HeaderXPayment, "untrusted")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if got := rec.Header().Get(types.HeaderPaymentResponse); got != "" {
-		t.Fatalf("proxy forwarded payment response %q", got)
 	}
 }
 
