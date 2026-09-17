@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useList, type BaseServer } from "@/hooks/useList";
-import { useReputation } from "@/hooks/useReputation";
+import { normalizeHostname, useReputation } from "@/hooks/useReputation";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
 import {
@@ -81,13 +81,15 @@ export function useServerList() {
 
   // Join the relay's reputation aggregate onto each card by hostname; the
   // relay's `warning` decision is consumed as-is, never recomputed here.
+  // Deps are plain state (array + record), so the compiler can preserve
+  // this memo — a function identity dep would bail compilation out.
   const servers: BaseServer[] = useMemo(
     () =>
       convertPublicLeasesToServers(publicState.leases).map((server) => ({
         ...server,
-        reputation: reputation.getSummary(server.dns),
+        reputation: reputation.summaries[normalizeHostname(server.dns)],
       })),
-    [publicState.leases, reputation.getSummary]
+    [publicState.leases, reputation.summaries]
   );
 
   const list = useList({

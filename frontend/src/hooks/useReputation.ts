@@ -70,7 +70,7 @@ export function rememberOpenAnyway(hostname: string): void {
   }
 }
 
-function normalizeHostname(hostname: string): string {
+export function normalizeHostname(hostname: string): string {
   return hostname.trim().toLowerCase();
 }
 
@@ -188,5 +188,5 @@ export function useReputation() {
   const getSummary = (hostname: string): ReputationSummary | undefined =>
     summaries[normalizeHostname(hostname)];
 
-  return { getSummary, vote };
+  return { getSummary, summaries, vote };
 }
