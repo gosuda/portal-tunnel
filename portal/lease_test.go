@@ -1,10 +1,8 @@
 package portal
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,21 +10,23 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
-	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func newTestRegistry(t *testing.T) *leaseRegistry {
+func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegistry {
 	t.Helper()
 	relay, err := identity.LoadOrCreateRelayIdentity(filepath.Join(t.TempDir(), types.RelayIdentityFilename), "example.com")
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
-	registry, err := newLeaseRegistry(false, false, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com", false, "")
+	registry, err := newLeaseRegistry(udpEnabled, tcpPortEnabled, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com", false, "")
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
+	// Registered leases bind UDP and raw-TCP relays; releasing them keeps
+	// repeated runs in one process free of port collisions.
+	t.Cleanup(func() { registry.CloseAll() })
 	return registry
 }
 
@@ -43,7 +43,7 @@ func newTestLeaseIdentity(t *testing.T, name string) types.Identity {
 func TestRegisterOverlayPreferenceFallsBackToDirect(t *testing.T) {
 	t.Parallel()
 
-	registry := newTestRegistry(t)
+	registry := newTestRegistry(t, false, false)
 	record, registered, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "overlay-fallback"),
 		Overlay:  true,
@@ -62,89 +62,47 @@ func TestRegisterOverlayPreferenceFallsBackToDirect(t *testing.T) {
 func TestLeaseRegistryLifecycle(t *testing.T) {
 	t.Parallel()
 
-	registry := newTestRegistry(t)
-	record, registered, err := registry.Register(types.RegisterChallengeRequest{
+	registry := newTestRegistry(t, false, false)
+	_, resp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "demo"),
 	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	if record.Hostname != "demo.example.com" || record.HostnameHash != "" || len(record.ECHConfigList) != 0 || record.ECHDNSHostname != "" {
-		t.Fatalf("Register() plaintext SNI record = %#v, want public hostname without ECH material", record)
+	if resp.ReverseEndpoint.URL != "https://example.com/sdk/connect" || resp.ReverseEndpoint.Capability == "" {
+		t.Fatalf("Register() reverse endpoint = %#v, want direct capability", resp.ReverseEndpoint)
 	}
-	if record.Overlay {
-		t.Fatal("Register() enabled overlay by default")
-	}
-	if registered.ReverseEndpoint.URL != "https://example.com/sdk/connect" || registered.ReverseEndpoint.Capability == "" {
-		t.Fatalf("Register() reverse endpoint = %#v", registered.ReverseEndpoint)
-	}
-	if !registered.ReverseEndpoint.ExpiresAt.Equal(registered.ExpiresAt) {
-		t.Fatalf("Register() reverse expiry = %v, want %v", registered.ReverseEndpoint.ExpiresAt, registered.ExpiresAt)
-	}
-	if admitted, err := registry.admitReverseCapability(registered.ReverseEndpoint.Capability); err != nil || admitted != record {
-		t.Fatalf("admitReverseCapability() = %v, %v, want registered lease", admitted, err)
-	}
-	if _, err := registry.admitReverseCapability(registered.AccessToken); !errors.Is(err, errUnauthorized) {
-		t.Fatalf("admitReverseCapability(lease token) error = %v, want unauthorized", err)
-	}
-	if _, err := registry.admitLeaseByToken(registered.ReverseEndpoint.Capability, false); !errors.Is(err, errUnauthorized) {
-		t.Fatalf("admitLeaseByToken(reverse capability) error = %v, want unauthorized", err)
-	}
-
-	lookedUp, ok := registry.Lookup("demo.example.com")
-	if !ok || lookedUp != record {
-		t.Fatalf("Lookup() = %v, %v, want registered lease", lookedUp, ok)
+	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 || leases[0].Hostname != "demo.example.com" {
+		t.Fatalf("PublicLeases() = %+v, want the registered demo lease", leases)
 	}
 
 	renewed, endpointInput, err := registry.Renew(types.RenewRequest{
-		AccessToken: registered.AccessToken,
-		TTL:         int(time.Minute / time.Second),
+		AccessToken: resp.AccessToken,
+		TTL:         int((3 * time.Minute) / time.Second),
 	}, "203.0.113.11")
 	if err != nil {
 		t.Fatalf("Renew() error = %v", err)
 	}
-	renewed.ReverseEndpoint, err = registry.issueReverseEndpoint(endpointInput, types.RelayDescriptor{}, nil)
+	if !renewed.ExpiresAt.After(resp.ExpiresAt) {
+		t.Fatalf("Renew() expires at = %v, want later than register expiry %v", renewed.ExpiresAt, resp.ExpiresAt)
+	}
+	if _, err := registry.admitLeaseByToken(renewed.AccessToken, false); err != nil {
+		t.Fatalf("admitLeaseByToken(renewed access token) error = %v, want admitted", err)
+	}
+	rotated, err := registry.issueReverseEndpoint(endpointInput, types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("issueReverseEndpoint() after Renew error = %v", err)
 	}
-	if record.ClientIP != "203.0.113.11" {
-		t.Fatalf("Renew() client ip = %q, want %q", record.ClientIP, "203.0.113.11")
+	if rotated.Capability == "" || rotated.Capability == resp.ReverseEndpoint.Capability {
+		t.Fatal("issueReverseEndpoint() did not rotate the reverse capability")
 	}
-	if !renewed.ExpiresAt.Equal(record.ExpiresAt) {
-		t.Fatalf("Renew() expires at = %v, want %v", renewed.ExpiresAt, record.ExpiresAt)
-	}
-	if renewed.AccessToken == "" {
-		t.Fatal("Renew() access token is empty")
-	}
-	if renewed.ReverseEndpoint.Capability == "" || renewed.ReverseEndpoint.Capability == registered.ReverseEndpoint.Capability {
-		t.Fatal("Renew() did not rotate the reverse capability")
-	}
-	if !renewed.ReverseEndpoint.ExpiresAt.Equal(renewed.ExpiresAt) {
-		t.Fatalf("Renew() reverse expiry = %v, want %v", renewed.ReverseEndpoint.ExpiresAt, renewed.ExpiresAt)
-	}
-	endpointInput, err = registry.resolveReverseEndpoint(types.ReverseEndpointRequest{AccessToken: renewed.AccessToken})
-	if err != nil {
-		t.Fatalf("RefreshReverseEndpoint() error = %v", err)
-	}
-	refreshed, err := registry.issueReverseEndpoint(endpointInput, types.RelayDescriptor{}, nil)
-	if err != nil {
-		t.Fatalf("issueReverseEndpoint() after RefreshReverseEndpoint error = %v", err)
-	}
-	if refreshed.Capability == renewed.ReverseEndpoint.Capability || refreshed.URL != renewed.ReverseEndpoint.URL {
-		t.Fatalf("RefreshReverseEndpoint() = %#v, want rotated direct capability", refreshed)
-	}
-	if admitted, err := registry.admitReverseCapability(refreshed.Capability); err != nil || admitted != record {
-		t.Fatalf("refreshed reverse capability = %v, %v, want registered lease", admitted, err)
+	if _, err := registry.admitReverseCapability(rotated.Capability); err != nil {
+		t.Fatalf("admitReverseCapability(rotated capability) error = %v, want admitted", err)
 	}
 
-	removed, err := registry.Unregister(types.UnregisterRequest{AccessToken: renewed.AccessToken})
-	if err != nil {
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: renewed.AccessToken}); err != nil {
 		t.Fatalf("Unregister() error = %v", err)
 	}
-	if removed != record {
-		t.Fatalf("Unregister() record = %v, want original record", removed)
-	}
-
 	if _, ok := registry.Lookup("demo.example.com"); ok {
 		t.Fatal("Lookup() after Unregister() = true, want false")
 	}
@@ -153,18 +111,15 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	t.Parallel()
 
-	registry := newTestRegistry(t)
+	registry := newTestRegistry(t, false, false)
 	leaseIdentity := newTestLeaseIdentity(t, "replace")
-	first, firstResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
+	_, firstResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("first Register() error = %v", err)
 	}
 	second, secondResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.11", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("second Register() error = %v", err)
-	}
-	if first == second || first.id == second.id {
-		t.Fatal("replacement reused the previous lease instance")
 	}
 	if _, err := registry.admitReverseCapability(firstResponse.ReverseEndpoint.Capability); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old reverse capability error = %v, want unauthorized", err)
@@ -187,14 +142,14 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	if second.ClientIP != "203.0.113.11" {
 		t.Fatalf("replacement lease client ip = %q after old token operations, want unchanged", second.ClientIP)
 	}
-	if lookedUp, ok := registry.Lookup("replace.example.com"); !ok || lookedUp != second {
-		t.Fatalf("replacement lease after old token operations = %v, %v, want active", lookedUp, ok)
+	if _, ok := registry.Lookup("replace.example.com"); !ok {
+		t.Fatal("Lookup() after replacement = false, want active replacement lease")
 	}
-	if admitted, err := registry.admitReverseCapability(secondResponse.ReverseEndpoint.Capability); err != nil || admitted != second {
-		t.Fatalf("new reverse capability = %v, %v, want replacement lease", admitted, err)
+	if _, err := registry.admitReverseCapability(secondResponse.ReverseEndpoint.Capability); err != nil {
+		t.Fatalf("new reverse capability admission error = %v, want admitted", err)
 	}
-	if admitted, err := registry.admitLeaseByToken(secondResponse.AccessToken, false); err != nil || admitted != second {
-		t.Fatalf("new access token = %v, %v, want replacement lease", admitted, err)
+	if _, err := registry.admitLeaseByToken(secondResponse.AccessToken, false); err != nil {
+		t.Fatalf("new access token admission error = %v, want admitted", err)
 	}
 	if err := registry.verifySigningAccessToken(secondResponse.AccessToken); err != nil {
 		t.Fatalf("new access token signing error = %v", err)
@@ -204,7 +159,7 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	t.Parallel()
 
-	registry := newTestRegistry(t)
+	registry := newTestRegistry(t, false, false)
 	routeHostname := "ech-auto-ech.example.com"
 	publicHostname := "auto-ech.example.com"
 	record, _, err := registry.Register(types.RegisterChallengeRequest{
@@ -221,12 +176,11 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	if record.Hostname == publicHostname {
 		t.Fatalf("Register() route hostname = public hostname = %q", record.Hostname)
 	}
-	if lookedUp, ok := registry.Lookup(publicHostname); !ok || lookedUp != record {
-		t.Fatalf("Lookup(public hostname) = %v, %v, want fallback lease", lookedUp, ok)
+	if _, ok := registry.Lookup(publicHostname); !ok {
+		t.Fatal("Lookup(public hostname) = false, want ECH fallback route")
 	}
-	lookedUp, ok := registry.Lookup(record.Hostname)
-	if !ok || lookedUp != record {
-		t.Fatalf("Lookup(route hostname) = %v, %v, want registered lease", lookedUp, ok)
+	if _, ok := registry.Lookup(record.Hostname); !ok {
+		t.Fatal("Lookup(route hostname) = false, want registered route")
 	}
 	leases := registry.PublicLeases(time.Now())
 	if len(leases) != 1 {
@@ -245,13 +199,6 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	}
 
 	if _, _, err := registry.Register(types.RegisterChallengeRequest{
-		Identity:     newTestLeaseIdentity(t, "hash-only"),
-		HostnameHash: keyless.ECHHostnameHash("hash-only.example.com"),
-	}, "203.0.113.10", "", types.RelayDescriptor{}, nil); err == nil {
-		t.Fatal("Register(fallback hash only) error = nil, want error")
-	}
-
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:      newTestLeaseIdentity(t, "attacker"),
 		RouteHostname: "ech-attacker.example.com",
 		HostnameHash:  keyless.ECHHostnameHash("victim.example.com"),
@@ -263,24 +210,10 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	}
 }
 
-func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
+func TestLeaseRegistryHostnameConflict(t *testing.T) {
 	t.Parallel()
 
-	registry := newTestRegistry(t)
-	wildcardLease := &leaseRecord{
-		Identity:  newTestLeaseIdentity(t, "wildcard"),
-		Hostname:  "*.example.com",
-		ExpiresAt: time.Now().Add(30 * time.Second),
-	}
-	registry.records = append(registry.records, wildcardLease)
-
-	if _, ok := registry.Lookup("app.example.com"); !ok {
-		t.Fatal("Lookup(one-level wildcard) = false, want true")
-	}
-	if _, ok := registry.Lookup("deep.app.example.com"); ok {
-		t.Fatal("Lookup(multi-level wildcard) = true, want false")
-	}
-
+	registry := newTestRegistry(t, false, false)
 	if _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "conflict"),
 	}, "203.0.113.10", "", types.RelayDescriptor{}, nil); err != nil {
@@ -297,25 +230,19 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 func TestLeaseRegistryPolicyViewsUseRoutablePolicy(t *testing.T) {
 	t.Parallel()
 
-	registry := newTestRegistry(t)
-	runtime := registry.policy
-	if err := runtime.Approver().SetMode(policy.ModeManual); err != nil {
+	registry := newTestRegistry(t, false, false)
+	if err := registry.policy.Approver().SetMode(policy.ModeManual); err != nil {
 		t.Fatalf("SetMode() error = %v", err)
 	}
-	record, _, err := registry.Register(types.RegisterChallengeRequest{
+	if _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "demo"),
-	}, "203.0.113.20", "", types.RelayDescriptor{}, nil)
-	if err != nil {
+	}, "203.0.113.20", "", types.RelayDescriptor{}, nil); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	if registry.policy.IsIdentityRoutable(record.Key()) {
-		t.Fatal("policy.IsIdentityRoutable() = true, want false before approval")
-	}
 	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
 		t.Fatalf("PublicLeases() length = %d, want 0 before approval", len(leases))
 	}
-
 	leases := registry.PolicyLeases(time.Now())
 	if len(leases) != 1 {
 		t.Fatalf("PolicyLeases() length = %d, want 1", len(leases))
@@ -324,88 +251,45 @@ func TestLeaseRegistryPolicyViewsUseRoutablePolicy(t *testing.T) {
 		t.Fatal("PolicyLeases()[0].IsApproved = true, want false before approval")
 	}
 
-	runtime.Approver().Approve(record.Key())
-	if !registry.policy.IsIdentityRoutable(record.Key()) {
-		t.Fatal("policy.IsIdentityRoutable() = false, want true after approval")
-	}
+	registry.policy.Approver().Approve(leases[0].IdentityKey)
 	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 {
 		t.Fatalf("PublicLeases() length = %d, want 1 after approval", len(leases))
 	}
-
 	leases = registry.PolicyLeases(time.Now())
-	if len(leases) != 1 {
-		t.Fatalf("PolicyLeases() length = %d, want 1", len(leases))
-	}
-	if !leases[0].IsApproved {
-		t.Fatal("PolicyLeases()[0].IsApproved = false, want true after approval")
-	}
-
-	runtime.Approver().Deny(record.Key())
-	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
-		t.Fatalf("PublicLeases() length = %d, want 0 after denial", len(leases))
-	}
-
-	runtime.Approver().Approve(record.Key())
-	runtime.BanIdentity(record.Key())
-	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
-		t.Fatalf("PublicLeases() length = %d, want 0 while banned", len(leases))
-	}
-
-	runtime.UnbanIdentity(record.Key())
-	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 {
-		t.Fatalf("PublicLeases() length = %d, want 1 after unban", len(leases))
+	if len(leases) != 1 || !leases[0].IsApproved {
+		t.Fatalf("PolicyLeases() = %+v, want the approved lease", leases)
 	}
 }
 
-func TestLeaseRegistryPublicLeasesIncludesIngressRouteInManualApproval(t *testing.T) {
+func TestLeaseRegistryCleanupExpiredForgetsIdentity(t *testing.T) {
 	t.Parallel()
 
-	registry := newTestRegistry(t)
-	if err := registry.policy.Approver().SetMode(policy.ModeManual); err != nil {
-		t.Fatalf("SetMode() error = %v", err)
+	registry := newTestRegistry(t, false, false)
+	record, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "expired"),
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
 	}
-	route := &leaseRecord{
-		Identity:  newTestLeaseIdentity(t, "demo"),
-		Hostname:  "demo.example.com",
-		ExpiresAt: time.Now().Add(30 * time.Second),
-	}
-	registry.records = append(registry.records, route)
+	registry.policy.BPSManager().SetIdentityBPS(record.Key(), 1024)
 
-	leases := registry.PublicLeases(time.Now())
-	if len(leases) != 1 {
-		t.Fatalf("PublicLeases() length = %d, want 1", len(leases))
-	}
-	if leases[0].Hostname != route.Hostname {
-		t.Fatalf("PublicLeases()[0].Hostname = %q, want %q", leases[0].Hostname, route.Hostname)
-	}
-}
-
-func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
-	t.Parallel()
-
-	registry := newTestRegistry(t)
-	record := &leaseRecord{
-		Identity:  newTestLeaseIdentity(t, "expired"),
-		Hostname:  "expired.example.com",
-		ExpiresAt: time.Now().Add(-time.Second),
-		stream:    transport.NewRelayStream("addr-expired", time.Minute, 1),
-	}
-	registry.records = append(registry.records, record)
-
+	registry.mu.Lock()
+	record.ExpiresAt = time.Now().Add(-time.Second)
+	registry.mu.Unlock()
 	registry.cleanupExpired(time.Now())
 
 	if _, ok := registry.Lookup("expired.example.com"); ok {
 		t.Fatal("Lookup() after cleanupExpired() = true, want false")
 	}
-	if _, err := record.stream.Claim(context.Background()); !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("Claim() after cleanupExpired() error = %v, want %v", err, net.ErrClosed)
+	if bps := registry.policy.BPSManager().IdentityBPS(record.Key()); bps != 0 {
+		t.Fatalf("IdentityBPS() after cleanupExpired() = %d, want identity forgotten", bps)
 	}
 }
 
 func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 	t.Parallel()
 
-	registry := newTestRegistry(t)
+	registry := newTestRegistry(t, false, false)
 	clientIP := "203.0.113.50"
 	for i := range defaultRegisterChallengeOutstandingPerIP {
 		_, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{

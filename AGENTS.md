@@ -16,6 +16,9 @@ rejected-design history.
 - Keep a regression test when the regression reveals a contract or invariant that remains important.
 - Do not test incidental implementation details such as call sequence, log output, retry count, or file metadata unless they are themselves part of a stable contract.
 - When a refactor makes an implementation-coupled test obsolete, delete it if no enduring behavior or invariant would be left unprotected.
+- Prefer deterministic unit tests at the lowest coherent owner, or real black-box E2E tests in `e2e/`; do not add middle-layer tests that assemble several subsystems with fake transports or callbacks to inspect internal state.
+- Never add a production callback, interface, config knob, wrapper, or injection seam only to make a test possible.
+- When a regression crosses components, protect the enduring invariant in its lowest owner; otherwise assert the real behavior in `e2e/`.
 
 ## Project Principles
 

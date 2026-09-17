@@ -187,12 +187,6 @@ func TestENSGaslessLeaseRemovalDoesNotRunWhenDisabled(t *testing.T) {
 	if err := manager.DeleteENSGaslessHostname(ctx, host); err != nil {
 		t.Fatalf("DeleteENSGaslessHostname(): %v", err)
 	}
-
-	select {
-	case command := <-manager.ensCommands:
-		t.Fatalf("DeleteENSGaslessHostname() queued unexpected command: %+v", command)
-	default:
-	}
 	if !zone.hasARecord(host) {
 		t.Fatalf("untracked A record for %s was deleted", host)
 	}

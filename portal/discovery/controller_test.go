@@ -1,20 +1,10 @@
 package discovery
 
 import (
-	"context"
-	"crypto/tls"
-	"net"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-
 	"slices"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // AddRelay and RemoveRelay each apply the whole user intent as one unit:
@@ -188,84 +178,10 @@ func TestControllerReportMITMVsRuntimeDistinctOutcomes(t *testing.T) {
 	}
 }
 
-func TestControllerSetMaxActiveRelaysSignalsNext(t *testing.T) {
-	const (
-		relayA = "https://relay-a.example"
-		relayB = "https://relay-b.example"
-	)
-	controller := newSelectionTestController(t, relayA, relayB)
-
-	changes := make(chan []string, 8)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		for {
-			urls, err := controller.Next(ctx)
-			if err != nil {
-				return
-			}
-			changes <- urls
-		}
-	}()
-
-	// Wait for the initial selection (both relays, default max=3).
-	select {
-	case first := <-changes:
-		if len(first) != 2 {
-			t.Fatalf("initial selection = %v, want 2 relays", first)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for initial selection")
-	}
-
-	// Reduce max active relays — the selection loop should observe the change
-	// promptly via the signal, without waiting for the 30s ticker.
-	controller.SetMaxActiveRelays(1)
-
-	select {
-	case next := <-changes:
-		if len(next) != 1 {
-			t.Fatalf("selection after SetMaxActiveRelays = %v, want 1 relay", next)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for selection change after SetMaxActiveRelays")
-	}
-}
-
-func TestControllerSetActiveRelaysSuppliesStickinessSnapshot(t *testing.T) {
-	const (
-		relayA = "https://relay-a.example"
-		relayB = "https://relay-b.example"
-	)
-	controller := newSelectionTestController(t, relayA, relayB)
-	controller.SetMaxActiveRelays(1)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	first, err := controller.Next(ctx)
-	if err != nil || len(first) != 1 {
-		t.Fatalf("initial selection = %v, %v, want one relay", first, err)
-	}
-	sticky := relayA
-	if first[0] == relayA {
-		sticky = relayB
-	}
-	controller.SetActiveRelays([]string{sticky})
-	next, err := controller.Next(ctx)
-	if err != nil {
-		t.Fatalf("selection after active snapshot: %v", err)
-	}
-	if len(next) != 1 || next[0] != sticky {
-		t.Fatalf("selection after active snapshot = %v, want [%s]", next, sticky)
-	}
-}
-
 // A custom explicit relay that never entered through discovery must hold a
-// durable RelaySet candidate state: a reported failure suppresses it, the
-// next selection changes, and the selection loop republishes membership — the
-// exposure reconciles to a replacement instead of keeping a selected URL
-// with no live listener.
+// durable RelaySet candidate state: a reported failure suppresses it, and the
+// next selection reconciles to a replacement instead of keeping a selected
+// URL with no live listener.
 func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -274,38 +190,13 @@ func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
 	controller := NewController(nil)
 	controller.SetExplicitRelays([]string{relayA, relayB})
 
-	changes := make(chan []string, 8)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		for {
-			urls, err := controller.Next(ctx)
-			if err != nil {
-				return
-			}
-			changes <- urls
-		}
-	}()
-
-	select {
-	case first := <-changes:
-		if len(first) != 2 {
-			t.Fatalf("initial selection = %v, want both explicit relays", first)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for initial selection")
-	}
-
 	controller.Report(relayA, FailureRuntime)
 
-	select {
-	case next := <-changes:
-		if len(next) != 1 || next[0] != relayB {
-			t.Fatalf("selection after explicit relay failure = %v, want only relay B", next)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for membership republish after explicit relay failure")
+	routes := controller.relaySet.SelectRelays(routeState{
+		ExplicitRelayURLs: []string{relayA, relayB},
+	})
+	if len(routes) != 1 || routes[0].RelayURL != relayB {
+		t.Fatalf("selection after explicit relay failure = %+v, want only relay B", routes)
 	}
 }
 
@@ -324,33 +215,4 @@ func expireSuppression(controller *Controller, relayURL string) {
 	state := controller.relaySet.relays[relayURL]
 	state.suppressActiveUntil = time.Now().UTC().Add(-time.Minute)
 	controller.relaySet.relays[relayURL] = state
-}
-
-// Selection tests exercise refresh through HTTP without depending on public DNS.
-func newSelectionTestController(t *testing.T, urls ...string) *Controller {
-	t.Helper()
-	descriptors := make(map[string]types.RelayDescriptor)
-	controller := NewController(urls)
-	for _, relayURL := range urls {
-		parsed, err := url.Parse(relayURL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		desc := mustRelayDescriptor(t, relayURL)
-		descriptors[parsed.Host] = desc
-		mustApplyAuthoritative(t, controller.relaySet, desc)
-	}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		utils.WriteAPIData(w, http.StatusOK, types.DiscoveryResponse{ProtocolVersion: types.DiscoveryVersion, Relays: []types.RelayDescriptor{descriptors[r.Host]}})
-	}))
-	t.Cleanup(server.Close)
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
-		},
-	}
-	t.Cleanup(transport.CloseIdleConnections)
-	controller.refresher.httpClient = &http.Client{Transport: transport, Timeout: 5 * time.Second}
-	return controller
 }
