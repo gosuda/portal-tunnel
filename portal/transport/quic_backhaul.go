@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const (
@@ -78,9 +80,27 @@ func DialQUICBackhaul(ctx context.Context, addr string, tlsConfig *tls.Config, a
 		errText := strings.TrimSpace(resp.Error)
 		errText = cmp.Or(errText, "rejected")
 		_ = conn.CloseWithError(1, errText)
+		if code := backhaulRejectionCode(errText); code != "" {
+			return nil, fmt.Errorf("quic backhaul rejected: %w", &types.APIRequestError{Code: code})
+		}
 		return nil, fmt.Errorf("quic backhaul rejected: %s", errText)
 	}
 	return conn, nil
+}
+
+// backhaulRejectionCode maps a backhaul control rejection reason back to
+// its relay API error code so callers classify rejections with errors.Is
+// against types.APIRequestError like every other relay response.
+func backhaulRejectionCode(errText string) string {
+	switch errText {
+	case types.APIErrorCodeUnauthorized,
+		types.APIErrorCodeLeaseNotFound,
+		types.APIErrorCodeLeaseRejected,
+		types.APIErrorCodeTransportMismatch,
+		types.APIErrorCodeInvalidRequest:
+		return errText
+	}
+	return ""
 }
 
 func AcceptQUICBackhaulControl(ctx context.Context, conn *quic.Conn) (*QUICBackhaulControl, error) {

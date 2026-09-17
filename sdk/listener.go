@@ -82,6 +82,20 @@ func isTerminalRelayError(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
 }
 
+// staleLeaseError reports whether err means credentials this listener
+// previously obtained are no longer valid on the relay: the in-memory
+// lease registry was dropped by a relay restart, or the relay rotated its
+// signing authority so the stored access token and reverse capability
+// answer "unauthorized" before the missing-record check can answer "lease
+// not found". Errors in this class must move the listener back to full
+// registration; they are never a reason to keep retrying the same stale
+// credential or to fail the relay permanently.
+func staleLeaseError(err error) bool {
+	return errors.Is(err, errLeaseRefreshRequired) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) ||
+		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUnauthorized})
+}
+
 func (l *listener) closeForTerminalRelayError(err error) bool {
 	if !isTerminalRelayError(err) {
 		return false
@@ -303,6 +317,7 @@ func (l *listener) run(ctx context.Context) {
 				_ = lease.tenantTLS.Close()
 			}
 			l.api.resetTransport()
+			l.clearReverseTLSCache()
 			relayURL := l.api.relayURL.String()
 			log.Debug().
 				Err(err).
@@ -517,7 +532,12 @@ func (l *listener) runLease(ctx context.Context) error {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			l.runDatagramLoop(leaseCtx)
+			if err := l.runDatagramLoop(leaseCtx); err != nil {
+				select {
+				case errCh <- err:
+				case <-leaseCtx.Done():
+				}
+			}
 		}()
 	}
 	workers.Add(1)
@@ -556,11 +576,11 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
-			// A verified credential whose lease record is gone (relay
-			// restart, expiry) must leave the retry loop and re-register;
-			// ordinary transport errors below keep retrying.
-			if errors.Is(err, errLeaseRefreshRequired) ||
-				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
+			// Credentials this listener previously obtained that the relay
+			// no longer recognizes (restart, expiry, authority rotation)
+			// must leave the retry loop and re-register; ordinary transport
+			// errors below keep retrying.
+			if staleLeaseError(err) {
 				return errLeaseRefreshRequired
 			}
 			if l.isAlternateReverseEndpoint(lease.reverse.URL) {
@@ -639,21 +659,25 @@ func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoi
 	return nil
 }
 
-func (l *listener) runDatagramLoop(ctx context.Context) {
+func (l *listener) runDatagramLoop(ctx context.Context) error {
 	if l.datagram == nil {
-		return
+		return nil
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			l.datagram.Clear("lease stopped")
-			return
+			return nil
 		default:
 		}
 
 		conn, err := l.openQUICBackhaulSession(ctx)
 		if err != nil {
+			if staleLeaseError(err) {
+				l.datagram.Clear("lease refresh required")
+				return errLeaseRefreshRequired
+			}
 			log.Info().
 				Err(err).
 				Str("component", "sdk-quic-backhaul").
@@ -661,7 +685,7 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 				Msg("quic backhaul unavailable; retrying")
 			if !utils.SleepOrDone(ctx, 2*time.Second) {
 				l.datagram.Clear("lease stopped")
-				return
+				return nil
 			}
 			continue
 		}
@@ -675,7 +699,7 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 		recvDone, err := l.datagram.BindBackhaul(conn)
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return ctx.Err()
 			}
 			log.Info().
 				Err(err).
@@ -683,7 +707,7 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 				Str("address", l.identity.Address).
 				Msg("quic backhaul did not bind cleanly; retrying")
 			if !utils.SleepOrDone(ctx, time.Second) {
-				return
+				return nil
 			}
 			continue
 		}
@@ -692,12 +716,12 @@ func (l *listener) runDatagramLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			l.datagram.Clear("lease stopped")
-			return
+			return nil
 		case <-recvDone:
 		}
 
 		if !utils.SleepOrDone(ctx, time.Second) {
-			return
+			return nil
 		}
 	}
 }
@@ -788,6 +812,15 @@ func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tl
 	return tlsConfig, nil
 }
 
+// clearReverseTLSCache drops the cached TLS config for alternate reverse
+// endpoints so a rotated relay authority is re-trusted on the next dial.
+func (l *listener) clearReverseTLSCache() {
+	l.reverseTLSMu.Lock()
+	defer l.reverseTLSMu.Unlock()
+	l.reverseTLS = nil
+	l.reverseTLSURL = ""
+}
+
 func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, failedCapability string) error {
 	l.reverseMu.Lock()
 	defer l.reverseMu.Unlock()
@@ -806,7 +839,7 @@ func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, faile
 	defer cancel()
 	next, err := l.api.requestReverseEndpoint(requestCtx, lease.accessToken, lease.reverse.URL, lease.expiresAt)
 	if err != nil {
-		if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
+		if staleLeaseError(err) {
 			return errLeaseRefreshRequired
 		}
 		return nil
@@ -937,7 +970,7 @@ func (l *listener) renewLease(ctx context.Context) error {
 		Metadata:    l.metadataSnapshot(),
 	})
 	if err != nil {
-		if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
+		if staleLeaseError(err) {
 			return errLeaseRefreshRequired
 		}
 		return err

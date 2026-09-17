@@ -33,6 +33,9 @@ type harness struct {
 	service     *httptest.Server
 	sniAddr     string
 	certificate string
+	apiPort     int
+	sniPort     int
+	stateDir    string
 	proxyDone   chan error
 }
 
@@ -96,6 +99,9 @@ func newHarness(t *testing.T) *harness {
 		service:     service,
 		sniAddr:     "127.0.0.1:" + strconv.Itoa(sniPort),
 		certificate: filepath.Join(stateDir, "fullchain.pem"),
+		apiPort:     apiPort,
+		sniPort:     sniPort,
+		stateDir:    stateDir,
 		proxyDone:   make(chan error, 1),
 	}
 	go func() {
@@ -143,14 +149,24 @@ func (h *harness) waitForPublicURL() string {
 
 func (h *harness) get(publicURL string) string {
 	h.t.Helper()
+	body, ok := h.tryGet(publicURL)
+	if !ok {
+		h.t.Fatalf("tenant request to %s failed: no successful round trip", publicURL)
+	}
+	return body
+}
 
+// tryGet performs a single tenant round trip against the relay
+// certificate current at call time and reports whether it succeeded.
+// Recovery tests poll it while the exposure re-registers.
+func (h *harness) tryGet(publicURL string) (string, bool) {
 	certPEM, err := os.ReadFile(h.certificate)
 	if err != nil {
-		h.t.Fatalf("read relay certificate: %v", err)
+		return "", false
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(certPEM) {
-		h.t.Fatal("parse relay certificate")
+		return "", false
 	}
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
@@ -163,17 +179,17 @@ func (h *harness) get(publicURL string) string {
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	resp, err := client.Get(publicURL + "/marker")
 	if err != nil {
-		h.t.Fatalf("request tenant URL: %v", err)
+		return "", false
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		h.t.Fatalf("read tenant response: %v", err)
+		return "", false
 	}
 	if resp.StatusCode != http.StatusOK {
-		h.t.Fatalf("tenant response status = %d, want 200", resp.StatusCode)
+		return "", false
 	}
-	return string(body)
+	return string(body), true
 }
 
 var (
