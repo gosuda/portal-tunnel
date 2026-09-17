@@ -12,10 +12,7 @@ rejected-design history.
 - Prefer a single stable contract with one real owner.
 - Prefer local simplicity over premature or speculative abstraction.
 - Add indirection only when it removes real coupling or protects a real boundary.
-- Tests protect stable public behavior, protocol and security invariants, and real lifecycle E2E behavior.
-- Keep a regression test when the regression reveals a contract or invariant that remains important.
-- Do not test incidental implementation details such as call sequence, log output, retry count, or file metadata unless they are themselves part of a stable contract.
-- When a refactor makes an implementation-coupled test obsolete, delete it if no enduring behavior or invariant would be left unprotected.
+- Tests protect stable behavior, not refactor intermediates; apply the Test Selection section before adding or requesting one.
 
 ## Project Principles
 
@@ -33,6 +30,23 @@ rejected-design history.
 - Use ADRs sparingly for stable, long-lived architecture or compatibility decisions.
 - Keep ordinary refactors, migrations, rejected approaches, and temporary implementation decisions in issues and pull requests unless they are needed to understand current operational compatibility.
 - Remove stale or superseded documentation that no longer helps explain the current system or its supported compatibility constraints.
+
+## Test Selection
+
+Regression tests protect stable behavior, not intermediate implementations discovered during refactoring. Before adding a test, or requesting one in review, classify it:
+
+1. What stable contract or invariant does this protect?
+2. Which package actually owns that behavior?
+3. Is the same behavior already covered at a more appropriate boundary?
+4. Would this test still be valuable if the implementation were reorganized tomorrow?
+
+If those questions do not produce a clear stable contract, fix the code without adding a permanent test.
+
+Keep or add tests that protect exported API contracts, wire/protocol compatibility, security invariants, data integrity and persistence correctness, lifecycle guarantees callers rely on, real production bugs that could plausibly recur, and end-to-end behavior across a stable boundary.
+
+Be conservative about tests for internal helper placement, package ownership decisions still in motion, config forwarding or assembly already covered by the owning package, duplicated diagnostics or policy assertions across layers, temporary refactor adapters, exact internal call structure or orchestration sequence that is not externally observable, and regression scenarios invented only because the current change touched that implementation.
+
+Put each test in the package that owns the behavior and name the protected contract in a short doc comment. Do not request a test that merely proves a mechanical move, rename, or ownership transfer happened correctly when compile checks, owner-package tests, or integration coverage already protect the behavior; when a refactor makes an implementation-coupled test obsolete, delete it if no enduring behavior would be left unprotected.
 
 ## Verification
 
