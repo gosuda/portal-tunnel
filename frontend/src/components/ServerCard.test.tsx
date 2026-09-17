@@ -107,8 +107,6 @@ const REPUTATION: ReputationSummary = {
   up: 12,
   down: 8,
   total: 20,
-  down_ratio: 0.4,
-  warning: false,
   viewer_vote: "",
 };
 

@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
-import { openAnywaySessionKey } from "@/hooks/useReputation";
+import { isReputationWarning, openAnywaySessionKey } from "@/hooks/useReputation";
 import type { ReputationSummary } from "@/types/api";
 import { openExternal } from "@/lib/navigate";
 import { ServerDetail } from "./ServerDetail";
@@ -21,8 +21,6 @@ const FLAGGED: ReputationSummary = {
   up: 1,
   down: 9,
   total: 10,
-  down_ratio: 0.9,
-  warning: true,
   viewer_vote: "",
 };
 
@@ -30,8 +28,6 @@ const UNFLAGGED: ReputationSummary = {
   ...FLAGGED,
   up: 9,
   down: 1,
-  down_ratio: 0.1,
-  warning: false,
 };
 
 const SERVER_STATE = {
@@ -133,5 +129,14 @@ describe("ServerDetail reputation gate", () => {
 
     expect(screen.getByText("directory")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /open anyway/i })).toBeNull();
+  });
+});
+
+describe("directory warning policy", () => {
+  it("changes at the vote thresholds", () => {
+    expect(isReputationWarning({ ...FLAGGED, up: 2, down: 3, total: 5 })).toBe(false);
+    expect(isReputationWarning({ ...FLAGGED, up: 1, down: 4, total: 5 })).toBe(true);
+    expect(isReputationWarning({ ...FLAGGED, up: 2, down: 5, total: 7 })).toBe(true);
+    expect(isReputationWarning({ ...FLAGGED, up: 3, down: 5, total: 8 })).toBe(false);
   });
 });

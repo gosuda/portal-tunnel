@@ -137,8 +137,6 @@ export interface ReputationSummary {
   up: number;
   down: number;
   total: number;
-  down_ratio: number;
-  warning: boolean;
   viewer_vote?: ViewerVote;
 }
 

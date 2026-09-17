@@ -79,8 +79,7 @@ export function useServerList() {
     };
   }, []);
 
-  // Join the relay's reputation aggregate onto each card by hostname; the
-  // relay's `warning` decision is consumed as-is, never recomputed here.
+  // Join the relay's vote aggregate onto each card by hostname.
   // Deps are plain state (array + record), so the compiler can preserve
   // this memo — a function identity dep would bail compilation out.
   const servers: BaseServer[] = useMemo(

@@ -174,6 +174,8 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 	fmt.Fprintln(w, "Validation")
 	if _, err := portal.ValidateServerConfig(cfg.Relay); err != nil {
 		fmt.Fprintf(w, "  INVALID %s\n", err)
+	} else if err := cfg.Reputation.validate(); err != nil {
+		fmt.Fprintf(w, "  INVALID %s\n", err)
 	} else {
 		fmt.Fprintln(w, "  OK relay configuration is valid")
 	}

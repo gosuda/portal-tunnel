@@ -8,7 +8,11 @@ import type {
   ReputationVoteResponse,
 } from "@/types/api";
 
-// The relay owns the warning decision; this projection only shifts counts.
+// Directory presentation policy; the relay only stores vote aggregates.
+export function isReputationWarning(summary: ReputationSummary | undefined): boolean {
+  return summary !== undefined && summary.total >= 5 && summary.down >= 3 && summary.down * 100 >= summary.total * 70;
+}
+
 export function applyVoteToSummary(
   summary: ReputationSummary,
   vote: ReputationVote
@@ -32,7 +36,7 @@ export function applyVoteToSummary(
     up,
     down,
     total,
-    down_ratio: total > 0 ? down / total : 0,
+    viewer_vote: vote,
   };
 }
 
@@ -145,8 +149,7 @@ export function useReputation() {
       return;
     }
 
-    // Optimistic: show the new tally immediately; the relay's warning
-    // decision stays untouched until the authoritative response arrives.
+    // Optimistic counts use the same directory warning policy immediately.
     const snapshot = current;
     applySummaries({
       ...summariesRef.current,
