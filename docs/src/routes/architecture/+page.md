@@ -174,7 +174,7 @@ UDP client
 - Raw TCP reverse-connect is the canonical stream transport.
 - Do not introduce websocket or legacy compatibility paths by default.
 - Derive lease hostnames from the full normalized `PORTAL_URL` host, not from apex extraction.
-- Preserve explicit root-host fallback through SNI no-route handling to the admin/API listener.
+- Preserve explicit root-host fallback through SNI no-route handling to the admin/API handler.
 - Stream ingress is TLS-only. UDP exposure, when enabled, is raw UDP.
 - Overlay transport keeps endpoint policy in Portal and path ownership in IVNP; discovery routes and leases carry no overlay topology.
 
@@ -189,7 +189,7 @@ UDP client
 - Lease operations require a relay-issued access token whose identity and lease ID both match the active lease instance. `/sdk/connect` uses a separate reverse-only capability returned as part of a generic reverse endpoint.
 - `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK identity secp256k1 key. On success, the relay issues separate signed credentials for lease operations and reverse connection establishment.
 - Relay URLs must use `https://`.
-- HTTP/2 stays disabled on the admin/API TLS listener. Keyless TLS certificate sharing and `/sdk/connect` both depend on the current HTTP/1.1-only transport contract.
+- HTTP/2 stays disabled on the admin/API TLS route. Keyless TLS certificate sharing and `/sdk/connect` both depend on the current HTTP/1.1-only transport contract.
 
 ### Reverse Session Protocol
 
@@ -394,7 +394,7 @@ Route lookup order:
 
 1. Exact hostname match
 2. Single-label wildcard match (`*.example.com`)
-3. Root-host fallback to the admin/API listener
+3. Root-host fallback to the admin/API handler
 
 Notes:
 
@@ -411,7 +411,7 @@ in `types/paths.go` and `cmd/relay-server`.
 
 ## Keyless TLS Trust Model
 
-The relay signs handshake digests via `/v1/sign` but never receives tenant TLS traffic secrets. The SDK/tunnel endpoint runs the full TLS server handshake and derives session keys locally. Relay control-plane TLS and reverse-session setup terminate on the relay's admin/API listener and are not protected by the tenant keyless path.
+The relay signs handshake digests via `/v1/sign` but never receives tenant TLS traffic secrets. The SDK/tunnel endpoint runs the full TLS server handshake and derives session keys locally. Relay control-plane TLS and reverse-session setup terminate on the relay's admin/API route and are not protected by the tenant keyless path.
 
 ## Design Properties
 

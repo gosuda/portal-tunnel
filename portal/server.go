@@ -50,10 +50,8 @@ type ServerConfig struct {
 	StateDir          string
 	Bootstraps        []string
 	DiscoveryEnabled  bool
-	APIPort           int
 	SNIPort           int
 	HTTPRedirect      types.HTTPRedirectConfig
-	APIListenAddr     string
 	SNIListenAddr     string
 	TrustProxyHeaders bool
 	TrustedProxyCIDRs string
@@ -153,7 +151,6 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.Bootstraps = bootstraps
 	cfg.Bootstraps = utils.RemoveRelayURL(cfg.Bootstraps, selfRelayURL)
 
-	cfg.APIPort = utils.IntOrDefault(cfg.APIPort, 4017)
 	if cfg.SNIPort == 0 {
 		// SNI_PORT owns only the local bind. When PORTAL_URL names an explicit
 		// port, an unoverridden listener follows it so a single-setting
@@ -162,7 +159,6 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
 	}
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
-	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
 	if cfg.PProfEnabled {
 		cfg.PProfListenAddr = utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
@@ -234,8 +230,7 @@ type Server struct {
 	acmeManager *acme.Manager
 	proxy       proxy
 
-	apiListener      net.Listener
-	apiHandoff       *apiHandoff
+	apiHandoff       *handoffListener
 	sniListener      net.Listener
 	apiServer        *http.Server
 	apiTLSClose      io.Closer
@@ -442,7 +437,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 
 	serverCtx, cancel := context.WithCancel(ctx)
 	started := false
-	var apiListener net.Listener
 	var sniListener net.Listener
 	var apiServer *http.Server
 	var apiCloser io.Closer
@@ -484,23 +478,16 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		if sniListener != nil {
 			_ = sniListener.Close()
 		}
-		if apiListener != nil {
-			_ = apiListener.Close()
-		}
 	}()
 	var listenConfig net.ListenConfig
 
-	apiListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.APIListenAddr)
-	if err != nil {
-		return fmt.Errorf("listen api: %w", err)
-	}
 	sniListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.SNIListenAddr)
 	if err != nil {
 		return fmt.Errorf("listen sni: %w", err)
 	}
 
 	group, groupCtx := errgroup.WithContext(serverCtx)
-	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiHandler, apiTLS)
+	apiServer, apiCloser, err = s.newAPIServer(apiHandler, apiTLS)
 	if err != nil {
 		return err
 	}
@@ -554,8 +541,7 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		}
 	}
 
-	s.apiHandoff = &apiHandoff{addr: sniListener.Addr(), conns: make(chan net.Conn), done: make(chan struct{})}
-	s.apiListener = wrappedAPIListener
+	s.apiHandoff = &handoffListener{addr: sniListener.Addr(), conns: make(chan net.Conn), done: make(chan struct{})}
 	s.sniListener = sniListener
 	s.apiServer = apiServer
 	s.apiTLSClose = apiCloser
@@ -569,7 +555,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	s.quicBackhaul = quicBackhaul
 	started = true
 
-	group.Go(s.runAPIServer)
 	group.Go(func() error {
 		err := s.apiServer.Serve(tls.NewListener(s.apiHandoff, s.apiServer.TLSConfig))
 		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
@@ -618,7 +603,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	})
 
 	logEvent := log.Info().
-		Str("api_addr", utils.HostPortOrLoopback(s.apiListener.Addr().String())).
 		Str("sni_addr", s.sniListener.Addr().String()).
 		Str("root_host", s.identity.Name).
 		Str("acme_dns_provider", cfg.ACME.DNSProvider).
@@ -793,14 +777,6 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 	}
 
 	return apiTLS, manager, nil
-}
-
-func (s *Server) runAPIServer() error {
-	err := s.apiServer.Serve(s.apiListener)
-	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
-		return nil
-	}
-	return err
 }
 
 func (s *Server) runPProfServer() error {

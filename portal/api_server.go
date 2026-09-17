@@ -4,15 +4,18 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -25,6 +28,31 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
+
+// handoffListener accepts already-inspected TLS connections without a TCP redial,
+// preserving the socket peer for both HTTP and hijacked reverse sessions.
+type handoffListener struct {
+	addr      net.Addr
+	conns     chan net.Conn
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+func (l *handoffListener) Accept() (net.Conn, error) {
+	select {
+	case conn := <-l.conns:
+		return conn, nil
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *handoffListener) Close() error {
+	l.closeOnce.Do(func() { close(l.done) })
+	return nil
+}
+
+func (l *handoffListener) Addr() net.Addr { return l.addr }
 
 type apiError struct {
 	code   string
@@ -58,12 +86,12 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 	utils.InvalidRequestError(err).Write(w)
 }
 
-func (s *Server) newAPIServer(listener net.Listener, handler http.Handler, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
+func (s *Server) newAPIServer(handler http.Handler, apiTLS keyless.TLSMaterialConfig) (*http.Server, io.Closer, error) {
 	var keylessSignerHandler http.Handler
 	if len(apiTLS.KeyPEM) > 0 {
 		signer, err := keyless.NewSigner(apiTLS.KeyPEM)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("configure api signer: %w", err)
+			return nil, nil, fmt.Errorf("configure api signer: %w", err)
 		}
 		keylessSignerHandler = signer.Handler()
 	}
@@ -76,10 +104,10 @@ func (s *Server) newAPIServer(listener net.Listener, handler http.Handler, apiTL
 
 	apiCloser, err := keyless.AttachToHTTPServer(apiServer, apiTLS)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("configure api tls: %w", err)
+		return nil, nil, fmt.Errorf("configure api tls: %w", err)
 	}
 
-	return tls.NewListener(listener, apiServer.TLSConfig), apiServer, apiCloser, nil
+	return apiServer, apiCloser, nil
 }
 
 func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler) http.Handler {
@@ -532,6 +560,65 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Str("remote_addr", remoteAddr).
 		Int("ready", lease.stream.ReadyCount()).
 		Msg("sdk reverse connected")
+}
+
+func (s *Server) handleStaticCache(w http.ResponseWriter, req *http.Request) {
+	record, err := s.registry.admitLeaseByToken(req.Header.Get(types.HeaderAccessToken), false)
+	if err != nil {
+		writeAPIErrorResponse(w, err)
+		return
+	}
+	s.registry.cache.Handle(w, req, record.id)
+}
+
+// Tenant hosts never reach the relay control plane, including on a connection
+// with a mismatched Host header. TLS termination here is explicit cache opt-in.
+func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host string) {
+	if req.TLS == nil || utils.NormalizeHostname(req.TLS.ServerName) != host {
+		http.Error(w, "TLS name and request host must match", http.StatusMisdirectedRequest)
+		return
+	}
+	if s.registry.cache.Serve(w, req, host) {
+		return
+	}
+	// A snapshot can be evicted between ClientHello routing and HTTP lookup.
+	// Reuse the reverse stream for fallback, never dial a user-supplied URL.
+	// This already-terminated connection remains within the cache trust opt-in.
+	record, ok := s.registry.Lookup(host)
+	if !ok || !s.registry.cache.Eligible(record.id) {
+		http.Error(w, "static origin unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Second)
+	defer cancel()
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			upstream, err := record.stream.Claim(ctx)
+			if err != nil {
+				return nil, err
+			}
+			roots := x509.NewCertPool()
+			for _, cert := range s.apiServer.TLSConfig.Certificates {
+				leaf, err := x509.ParseCertificate(cert.Certificate[0])
+				if err != nil {
+					_ = upstream.Close()
+					return nil, err
+				}
+				roots.AddCert(leaf)
+			}
+			conn := tls.Client(upstream, &tls.Config{ServerName: host, RootCAs: roots, MinVersion: tls.VersionTLS12})
+			if err := conn.HandshakeContext(ctx); err != nil {
+				_ = conn.Close()
+				return nil, fmt.Errorf("cache fallback TLS: %w", err)
+			}
+			return conn, nil
+		},
+	}
+	defer transport.CloseIdleConnections()
+	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "https", Host: host})
+	proxy.Transport = transport
+	proxy.ServeHTTP(w, req.WithContext(ctx))
 }
 
 // Admission runs before decoding or signature work. Verified lease operations

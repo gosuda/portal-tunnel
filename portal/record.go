@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
@@ -35,6 +36,11 @@ type leaseRecord struct {
 	tcpPort  *transport.RelayTCPPort
 	tcpPorts *transport.PortAllocator
 	stream   *transport.RelayStream
+}
+
+// cacheLease copies registry facts while the caller holds the registry lock.
+func (r *leaseRecord) cacheLease() cache.Lease {
+	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.Hostname, HostnameHash: r.HostnameHash, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
 func (r *leaseRecord) isPublicEntry() bool {

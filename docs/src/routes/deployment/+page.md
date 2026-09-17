@@ -17,15 +17,15 @@ proxy or changing ownership of the Portal API paths.
 Browser or tunnel client
   -> https://portal.example.com or https://*.portal.example.com
   -> Portal :443 SNI router
-      -> root host: internal API listener
+      -> root host: Admin/API handler (in-process handoff)
           -> /api/*, /sdk/*, /discovery*, /v1/sign
           -> embedded React SPA for /, /admin, and client routes
       -> registered wildcard host: tunnel ingress
 ```
 
-The internal API listener defaults to `4017/tcp` and is not published by the
-bundled Compose deployment. Root-host traffic reaches it through Portal's own
-SNI router.
+The SNI router is the single ingress: it inspects each TLS handshake and hands
+root-host connections in-process to the Admin/API handler, so there is no
+separate API listener and nothing else to publish.
 
 This topology assumes Portal owns public `443/tcp`. If that port already
 belongs to something else on the host, see
@@ -186,7 +186,7 @@ Complete, tested configurations are in
 
 nginx runs as a service on the same Compose network as Portal. Only nginx
 publishes host ports. Portal publishes no TCP port at all and is reached as
-`portal:443` and `portal:4017` over that network.
+`portal:443` over that network.
 
 ```text
 host :443 -> nginx container
@@ -201,9 +201,10 @@ published `127.0.0.1:8443`, nginx's own listener on that address could not
 bind. Pick this topology or a host nginx reaching Portal over published ports —
 not both.
 
-`SNI_PORT` stays `443` inside the container. Portal reaches its own API listener
-through its SNI router. The public port in `PORTAL_URL`, not this local listener
-setting, goes into the ECH `HTTPS` record.
+`SNI_PORT` stays `443` inside the container. The SNI router is Portal's single
+ingress: the Admin/API handler is served through it in-process, so there is no
+separate API port to wire around. The public port in `PORTAL_URL`, not this
+local listener setting, goes into the ECH `HTTPS` record.
 
 ### Lease hostnames must pass through, unmodified
 
@@ -310,7 +311,7 @@ reads `X-Forwarded-For` and `X-Real-IP` only, and a pass-through carries no HTTP
 layer to put them in. Terminating it recovers that, but check one thing first.
 
 When a DNS provider is configured, Portal publishes an `HTTPS` record carrying
-`ech=` for its own hostname and installs the matching key **only on its own API
+`ech=` for its own hostname and installs the matching key **only on its own SNI
 listener**. An nginx terminator has neither, so ECH-capable clients that read
 the record can fail the connection before any request arrives.
 
@@ -453,8 +454,3 @@ certificate files under `IDENTITY_PATH`. With the embedded DNS provider,
 confirm the delegation is visible (`dig @<relay public IP> portal.example.com NS`)
 and that `53/tcp` + `53/udp` are reachable. With an external provider, verify
 the DNS API token has permission to update the selected zone.
-
-### API Port 4017
-
-Do not publish or browse directly to 4017 in the bundled deployment. It is the
-internal TLS API listener used by Portal's root-host SNI route.

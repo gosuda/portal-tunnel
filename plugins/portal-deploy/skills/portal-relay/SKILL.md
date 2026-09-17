@@ -33,7 +33,7 @@ Bandwidth guidance: web/API tunnels are lightweight (tens of GB/month for typica
 
 - The relay's admin token (`ADMIN_TOKEN`) is a credential — generate a long random value, never commit or log it.
 - The identity directory (`IDENTITY_PATH`) contains private key material — keep it out of version control and backups you don't control.
-- Do not expose the API port (`4017`) publicly. It is reached through the relay's own SNI router.
+- Expose only the relay's SNI listener (443 by default): it is the single ingress and serves the Admin/API handler in-process, so there is no separate API port to protect.
 - If enabling TCP/UDP leases for game hosting, the host firewall or cloud security group must allow the same port range that Docker publishes. Half-open ranges cause silent failures.
 
 ## Workflow

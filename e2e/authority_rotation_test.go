@@ -47,7 +47,7 @@ func TestExposureReRegistersAfterAuthorityRotation(t *testing.T) {
 	// identity.  The token is signed by the relay's current (pre-restart) lease
 	// authority; which client identity was used is irrelevant — any token signed
 	// by the old authority must be rejected after the rotation.
-	preRestartToken, err := registerShortLivedToken(h.apiPort)
+	preRestartToken, err := registerShortLivedToken(h.sniPort)
 	if err != nil {
 		t.Fatalf("register pre-restart token: %v", err)
 	}
@@ -92,7 +92,6 @@ func TestExposureReRegistersAfterAuthorityRotation(t *testing.T) {
 	restarted, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     "https://127.0.0.1:" + strconv.Itoa(h.sniPort),
 		StateDir:      h.stateDir,
-		APIListenAddr: "127.0.0.1:" + strconv.Itoa(h.apiPort),
 		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(h.sniPort),
 		SNIPort:       h.sniPort,
 	})
@@ -113,7 +112,7 @@ func TestExposureReRegistersAfterAuthorityRotation(t *testing.T) {
 	// By contrast, a same-authority restart (same identity file, fresh registry)
 	// yields HTTP 404 "lease_not_found" because the signature verifies but the
 	// in-memory lease record no longer exists (recordForVerifiedLease).
-	assertUnauthorizedForOldToken(t, h.apiPort, preRestartToken)
+	assertUnauthorizedForOldToken(t, h.sniPort, preRestartToken)
 
 	// The exposure must recover without being recreated: the SDK detects the
 	// 403/401 from the relay, treats it as a lost lease, performs a fresh
@@ -133,18 +132,20 @@ func TestExposureReRegistersAfterAuthorityRotation(t *testing.T) {
 }
 
 // registerShortLivedToken performs a complete register challenge + sign +
-// register round trip against the relay's API listener and returns the
-// resulting access token. The token is signed by the relay's current
-// (pre-restart) lease authority. TLS verification is skipped: the loopback
-// relay serves a self-signed certificate.
-func registerShortLivedToken(apiPort int) (string, error) {
-	baseURL, err := url.Parse("https://127.0.0.1:" + strconv.Itoa(apiPort))
+// register round trip against the relay's control plane — reached through
+// the public SNI listener, which hands the connection in-process to the API
+// server — and returns the resulting access token. The token is signed by
+// the relay's current (pre-restart) lease authority. TLS verification is
+// skipped: the loopback relay serves a self-signed certificate.
+func registerShortLivedToken(sniPort int) (string, error) {
+	baseURL, err := url.Parse("https://127.0.0.1:" + strconv.Itoa(sniPort))
 	if err != nil {
 		return "", err
 	}
-	// No ServerName: the relay binds a connection to the tenant path when SNI
-	// differs from the relay identity name, so an IP-literal dial must send no
-	// SNI to reach the control-plane register endpoints.
+	// No ServerName: an IP-literal dial sends no SNI, and the SNI listener
+	// routes an SNI-less connection to the canonical root origin — the same
+	// SNI-less shape the SDK itself uses — so it reaches the control-plane
+	// register endpoints instead of the tenant path.
 	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 
@@ -182,14 +183,16 @@ func registerShortLivedToken(apiPort int) (string, error) {
 }
 
 // assertUnauthorizedForOldToken POSTs the given access token to /sdk/renew on
-// the relay's API listener and asserts the response is HTTP 403 with error
-// code "unauthorized". The token was signed by the pre-restart authority;
-// the restarted relay holds a different public key, so VerifyLeaseAccessToken
-// in lease.go returns an error and the handler writes HTTP 403 via
-// errUnauthorized in api_server.go.
-func assertUnauthorizedForOldToken(t *testing.T, apiPort int, accessToken string) {
+// the relay's control plane through the public SNI listener and asserts the
+// response is HTTP 403 with error code "unauthorized". The token was signed
+// by the pre-restart authority; the restarted relay holds a different public
+// key, so VerifyLeaseAccessToken in lease.go returns an error and the handler
+// writes HTTP 403 via errUnauthorized in api_server.go. An IP-literal dial
+// sends no SNI, which the SNI listener routes to the canonical root origin,
+// so the request reaches the control-plane renew handler.
+func assertUnauthorizedForOldToken(t *testing.T, sniPort int, accessToken string) {
 	t.Helper()
-	baseURL := "https://127.0.0.1:" + strconv.Itoa(apiPort) + types.PathSDKRenew
+	baseURL := "https://127.0.0.1:" + strconv.Itoa(sniPort) + types.PathSDKRenew
 	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 

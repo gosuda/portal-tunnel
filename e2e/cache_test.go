@@ -32,13 +32,13 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(siteDir, "index.html"), []byte("cached site"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	apiPort, sniPort := harnessPort(t), harnessPort(t)
+	sniPort := harnessPort(t)
 	sniAddr := "127.0.0.1:" + strconv.Itoa(sniPort)
 	relayURL := "https://" + sniAddr
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL: relayURL, StateDir: stateDir,
-		APIListenAddr: "127.0.0.1:" + strconv.Itoa(apiPort), SNIListenAddr: sniAddr,
-		Cache: cache.Config{Enabled: true, MaxBytes: 1024, MaxTTL: offlineTTL},
+		SNIListenAddr: sniAddr,
+		Cache:         cache.Config{Enabled: true, MaxBytes: 1024, MaxTTL: offlineTTL},
 	})
 	if err != nil {
 		t.Fatal(err)

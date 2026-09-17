@@ -72,7 +72,6 @@ services:
       - "53:53/udp"
     environment:
       PORTAL_URL: https://relay.example.com
-      API_PORT: "4017"
       SNI_PORT: "443"
       IDENTITY_PATH: /portal-certs
       ADMIN_TOKEN: ${ADMIN_TOKEN}
@@ -91,7 +90,6 @@ docker compose up -d
 | Variable | Default | Description |
 |---|---|---|
 | `PORTAL_URL` | `https://localhost` | Canonical public HTTPS origin, including its externally reachable port. |
-| `API_PORT` | `4017` | Internal Admin/API server port. |
 | `SNI_PORT` | `443` | Local TCP SNI router listen port; public metadata uses the port from `PORTAL_URL`. |
 | `IDENTITY_PATH` | `./.portal-certs` | Relay state directory containing `identity.json`, `policy.json`, and TLS materials. |
 | `ADMIN_TOKEN` | | Bearer token source for relay admin and policy APIs. |

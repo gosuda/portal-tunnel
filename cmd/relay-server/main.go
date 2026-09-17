@@ -87,7 +87,6 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.BoolFlagEnv(fs, &cfg.Relay.HTTPRedirect.Enabled, "http-redirect-enabled", false, "enable HTTP redirects to the canonical HTTPS portal URL (not tenant hosts)", types.HTTPRedirectEnabledEnv)
 	utils.StringFlagEnv(fs, &cfg.Relay.HTTPRedirect.Addr, "http-redirect-addr", types.DefaultHTTPRedirectAddr, "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
 	utils.BoolFlagEnv(fs, &cfg.Relay.HTTPRedirect.HSTS, "http-redirect-hsts", false, "include HSTS max-age=31536000 on redirects; browsers ignore HSTS received over HTTP", "HTTP_REDIRECT_HSTS")
-	utils.IntFlagEnv(fs, &cfg.Relay.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
 	utils.IntFlagEnv(fs, &cfg.Relay.SNIPort, "sni-port", 0, utils.ParsePortNumber, "local TCP SNI router listen port (0 follows the PORTAL_URL port when it names one, else 443)", "SNI_PORT")
 	utils.BoolFlagEnv(fs, &cfg.Relay.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
 	utils.StringFlagEnv(fs, &cfg.Relay.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "explicit trusted proxy CIDR allowlist for forwarded headers, comma-separated; empty trusts no proxies", "TRUSTED_PROXY_CIDRS")
@@ -139,7 +138,6 @@ func runServeCommand(args []string) error {
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("state_dir", cfg.Relay.StateDir).
-		Int("api_port", cfg.Relay.APIPort).
 		Int("sni_port", utils.IntOrDefault(cfg.Relay.SNIPort, portal.DefaultSNIPort(cfg.Relay.PortalURL))).
 		Msg("starting relay server")
 
@@ -204,7 +202,7 @@ func printRootUsage(w io.Writer) {
 	registerAppFlags(fs, &appConfig{})
 	utils.WriteFlagDefaults(w, fs)
 	utils.WriteHelpSection(w, "Loopback", []string{
-		"relay-server --portal-url https://127.0.0.1:8443 --api-port 4017",
+		"relay-server --portal-url https://127.0.0.1:8443",
 		"portal expose 127.0.0.1:8080 --relays https://127.0.0.1:8443 --discovery=false",
 	})
 	utils.WriteHelpSection(w, "Ready", []string{

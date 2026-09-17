@@ -81,7 +81,6 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | `PORTAL_URL` | `https://localhost` | string | Canonical public HTTPS origin, including the externally reachable port |
 | `PORTAL_FRONTEND_DIR` | `""` | string | Custom SPA directory containing `index.html`; empty uses the frontend embedded in the Portal binary |
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
-| `API_PORT` | `4017` | int | Admin/API server listen port |
 | `SNI_PORT` | `PORTAL_URL` port, else `443` | int | Local TCP SNI router listen port; an unset value follows the explicit `PORTAL_URL` port when it names one, and it never changes the public port advertised from `PORTAL_URL` |
 
 `PORTAL_URL` owns public semantics and `SNI_PORT` owns local bind semantics.
@@ -138,7 +137,7 @@ over HTTPS by the destination. This option does not change HTTPS or tenant
 policy and does not add `includeSubDomains` or `preload`.
 
 ```bash
-relay-server --portal-url https://localhost:14443 --api-port 14017 --sni-port 14443 --http-redirect-enabled --http-redirect-addr 127.0.0.1:18080
+relay-server --portal-url https://localhost:14443 --sni-port 14443 --http-redirect-enabled --http-redirect-addr 127.0.0.1:18080
 curl -i -H "Host: untrusted.example" "http://127.0.0.1:18080/ignored?secret=value"
 ```
 

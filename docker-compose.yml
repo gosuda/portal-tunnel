@@ -34,7 +34,6 @@ services:
       CACHE_MAX_BYTES: ${CACHE_MAX_BYTES:-1073741824}
       CACHE_MAX_TTL: ${CACHE_MAX_TTL:-24h}
 
-      API_PORT: 4017
       SNI_PORT: 443
       # Optional canonical-portal redirect; also publish 80:80 under ports when enabled.
       HTTP_REDIRECT_ENABLED: ${HTTP_REDIRECT_ENABLED:-false}

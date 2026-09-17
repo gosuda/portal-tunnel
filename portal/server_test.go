@@ -263,6 +263,14 @@ func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *htt
 	return client
 }
 
+// sniBaseURL returns the loopback HTTPS base URL of the server's single SNI
+// listener. Dialing an IP literal sends no SNI, which the ingress router maps
+// to the canonical root origin, so requests reach the control-plane API
+// handlers the former direct API listener served.
+func sniBaseURL(server *Server) string {
+	return "https://" + utils.HostPortOrLoopback(server.sniListener.Addr().String())
+}
+
 func TestServerServeRoutesAndCancellation(t *testing.T) {
 	appHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/app" {
@@ -295,15 +303,12 @@ func TestServerServeRoutesAndCancellation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			apiPort := tempLeasePort(t)
-			defer releaseTestLeasePort(apiPort)
 			sniPort := tempLeasePort(t)
 			defer releaseTestLeasePort(sniPort)
 
 			server, err := NewServer(ServerConfig{
 				PortalURL:     "https://localhost:4017",
 				StateDir:      tempStateDir(t),
-				APIListenAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPort)),
 				SNIListenAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(sniPort)),
 				X402Enabled:   true,
 				X402PayTo:     "0xtest",
@@ -321,7 +326,11 @@ func TestServerServeRoutesAndCancellation(t *testing.T) {
 
 			client := utils.NewHTTPClient(utils.WithHTTPTLSConfig(&tls.Config{InsecureSkipVerify: true}))
 			defer client.CloseIdleConnections()
-			baseURL := "https://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPort))
+			// The SNI listener is the only public listener. The dial uses an IP
+			// literal, so the client sends no SNI and the ingress router maps
+			// the SNI-less connection to the canonical root origin — the same
+			// control-plane handlers the former direct API listener served.
+			baseURL := "https://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(sniPort))
 			readyTimeout := time.NewTimer(5 * time.Second)
 			defer readyTimeout.Stop()
 			retry := time.NewTicker(10 * time.Millisecond)
@@ -430,13 +439,10 @@ func TestHTTPRedirectDisabledPreservesLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer occupied.Close()
-	apiPort := tempLeasePort(t)
-	defer releaseTestLeasePort(apiPort)
-	apiAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPort))
 	server, err := NewServer(ServerConfig{
 		PortalURL: "http://localhost:4017", StateDir: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
-		APIListenAddr: apiAddr, SNIListenAddr: "127.0.0.1:0",
-		HTTPRedirect: types.HTTPRedirectConfig{Addr: occupied.Addr().String()},
+		SNIListenAddr: "127.0.0.1:0",
+		HTTPRedirect:  types.HTTPRedirectConfig{Addr: occupied.Addr().String()},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -447,7 +453,7 @@ func TestHTTPRedirectDisabledPreservesLoopback(t *testing.T) {
 		t.Fatalf("disabled redirect attempted to bind or changed loopback behavior: %v", err)
 	}
 	client := newTestClient(t, cancel, server)
-	resp, err := client.Get("https://" + apiAddr + types.PathHealthz)
+	resp, err := client.Get(sniBaseURL(server) + types.PathHealthz)
 	if err != nil {
 		t.Fatalf("loopback API is not serving HTTPS: %v", err)
 	}
@@ -472,8 +478,8 @@ func TestHTTPRedirectLifecycle(t *testing.T) {
 			server, err := NewServer(ServerConfig{
 				PortalURL: scheme + "://localhost:4017/base/?configured=discarded#fragment",
 				StateDir:  t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
-				APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
-				HTTPRedirect: types.HTTPRedirectConfig{Enabled: true, Addr: addr, HSTS: hsts},
+				SNIListenAddr: "127.0.0.1:0",
+				HTTPRedirect:  types.HTTPRedirectConfig{Enabled: true, Addr: addr, HSTS: hsts},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -543,9 +549,9 @@ func TestHTTPRedirectPartialStartupCleanup(t *testing.T) {
 	}
 	server, err := NewServer(ServerConfig{
 		PortalURL: "https://localhost:4017", StateDir: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
-		APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
-		HTTPRedirect: types.HTTPRedirectConfig{Enabled: true, Addr: addr},
-		PProfEnabled: true, PProfListenAddr: occupied.Addr().String(),
+		SNIListenAddr: "127.0.0.1:0",
+		HTTPRedirect:  types.HTTPRedirectConfig{Enabled: true, Addr: addr},
+		PProfEnabled:  true, PProfListenAddr: occupied.Addr().String(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -568,8 +574,8 @@ func TestHTTPRedirectBindFailure(t *testing.T) {
 	defer occupied.Close()
 	server, err := NewServer(ServerConfig{
 		PortalURL: "https://localhost:4017", StateDir: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
-		APIListenAddr: "127.0.0.1:0", SNIListenAddr: "127.0.0.1:0",
-		HTTPRedirect: types.HTTPRedirectConfig{Enabled: true, Addr: addr},
+		SNIListenAddr: "127.0.0.1:0",
+		HTTPRedirect:  types.HTTPRedirectConfig{Enabled: true, Addr: addr},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -645,7 +651,6 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://localhost:4017",
 		StateDir:      stateDir,
-		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
 		MinPort:       40000,
 		MaxPort:       40000,
@@ -669,7 +674,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		}
 	}
 
-	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
+	healthResp, err := client.Get(sniBaseURL(server) + types.PathHealthz)
 	if err != nil {
 		t.Fatalf("GET /api/healthz error = %v", err)
 	}
@@ -687,7 +692,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		t.Fatalf("GET /api/healthz response = %+v, want ok status", healthEnvelope)
 	}
 
-	signResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathV1Sign)
+	signResp, err := client.Get(sniBaseURL(server) + types.PathV1Sign)
 	if err != nil {
 		t.Fatalf("GET /v1/sign error = %v", err)
 	}
@@ -707,7 +712,6 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 		StateDir:      tempStateDir(t),
 		ACME:          acme.Config{KeyDir: keyDir},
 		SNIPort:       4443,
-		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
 	})
 	if err != nil {
@@ -728,7 +732,7 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 		}
 	}
 
-	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathSDKDomain)
+	resp, err := client.Get(sniBaseURL(server) + types.PathSDKDomain)
 	if err != nil {
 		t.Fatalf("GET /sdk/domain error = %v", err)
 	}
@@ -910,7 +914,6 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 		PortalURL:     "https://localhost:4017",
 		StateDir:      tempStateDir(t),
 		ACME:          acme.Config{KeyDir: t.TempDir()},
-		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
 	})
 	if err != nil {
@@ -926,7 +929,7 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 
 	client := newTestClient(t, cancel, server)
 
-	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathDiscovery)
+	resp, err := client.Get(sniBaseURL(server) + types.PathDiscovery)
 	if err != nil {
 		t.Fatalf("GET relay discovery error = %v", err)
 	}
