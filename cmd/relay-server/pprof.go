@@ -15,11 +15,11 @@ import (
 // binds when --pprof-addr is not supplied.
 const DefaultPprofListenAddr = "127.0.0.1:6060"
 
-// normalizePprofAddr trims the flag value and applies the default when the
-// server is enabled but no address was supplied.
-func normalizePprofAddr(enabled bool, addr string) string {
+// normalizePprofAddr trims the flag value and applies the default when no
+// address was supplied.
+func normalizePprofAddr(addr string) string {
 	addr = strings.TrimSpace(addr)
-	if enabled && addr == "" {
+	if addr == "" {
 		return DefaultPprofListenAddr
 	}
 	return addr
@@ -37,6 +37,7 @@ func newPprofServer() *http.Server {
 	return &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
 	}
 }
 

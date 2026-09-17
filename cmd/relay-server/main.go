@@ -160,20 +160,18 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}
+	if !cfg.PprofEnabled {
+		return server.Serve(ctx, relayAPI.Handler())
+	}
 
 	// The pprof listener is process-level diagnostics with no relay state, so
 	// it binds ahead of the relay Serve and shuts down when the process
 	// lifecycle ends, whatever the outcome.
-	var stopPprof func(context.Context) error
-	var pprofErrs <-chan error
-	if cfg.PprofEnabled {
-		bound, shutdown, errs, err := startPprofServer(ctx, normalizePprofAddr(cfg.PprofEnabled, cfg.PprofListenAddr))
-		if err != nil {
-			return err
-		}
-		stopPprof, pprofErrs = shutdown, errs
-		log.Info().Str("pprof_addr", utils.HostPortOrLoopback(bound.String())).Msg("starting pprof server")
+	bound, stopPprof, pprofErrs, err := startPprofServer(ctx, normalizePprofAddr(cfg.PprofListenAddr))
+	if err != nil {
+		return err
 	}
+	log.Info().Str("pprof_addr", utils.HostPortOrLoopback(bound.String())).Msg("starting pprof server")
 
 	// Both servers report to the process owner: an unexpected pprof failure
 	// ends the relay lifecycle, as it did inside the relay errgroup.
@@ -183,29 +181,23 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	go func() { serveDone <- server.Serve(runCtx, relayAPI.Handler()) }()
 
 	var serveErr error
-	if pprofErrs == nil {
-		serveErr = <-serveDone
-	} else {
-		select {
-		case err := <-serveDone:
-			serveErr = err
-		case err := <-pprofErrs:
-			serveErr = fmt.Errorf("serve pprof: %w", err)
-			// Let the relay wind down before returning, mirroring the
-			// errgroup cancellation the relay used to provide.
-			cancel()
-			<-serveDone
-		}
+	select {
+	case err := <-serveDone:
+		serveErr = err
+	case err := <-pprofErrs:
+		serveErr = fmt.Errorf("serve pprof: %w", err)
+		// Let the relay wind down before returning, mirroring the
+		// errgroup cancellation the relay used to provide.
+		cancel()
+		<-serveDone
 	}
 	cancel()
 
-	if stopPprof != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		if err := stopPprof(shutdownCtx); err != nil {
-			log.Warn().Err(err).Msg("shutdown pprof server")
-		}
-		cancel()
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	if err := stopPprof(shutdownCtx); err != nil {
+		log.Warn().Err(err).Msg("shutdown pprof server")
 	}
+	cancel()
 	return serveErr
 }
 

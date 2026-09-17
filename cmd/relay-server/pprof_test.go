@@ -11,20 +11,16 @@ import (
 
 func TestNormalizePprofAddr(t *testing.T) {
 	for name, test := range map[string]struct {
-		enabled bool
-		addr    string
-		want    string
+		addr string
+		want string
 	}{
-		"enabled without address gets loopback default": {enabled: true, want: DefaultPprofListenAddr},
-		"enabled explicit address survives trimmed":     {enabled: true, addr: " 127.0.0.1:7070 ", want: "127.0.0.1:7070"},
-		"enabled blank address counts as unset":         {enabled: true, addr: "   ", want: DefaultPprofListenAddr},
-		// A disabled server must not inherit the default address either: the
-		// caller starts nothing, but no address should exist to start.
-		"disabled starts nothing": {want: ""},
+		"without address gets loopback default": {want: DefaultPprofListenAddr},
+		"explicit address survives trimmed":     {addr: " 127.0.0.1:7070 ", want: "127.0.0.1:7070"},
+		"blank address counts as unset":         {addr: "   ", want: DefaultPprofListenAddr},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := normalizePprofAddr(test.enabled, test.addr); got != test.want {
-				t.Fatalf("normalizePprofAddr(%v, %q) = %q, want %q", test.enabled, test.addr, got, test.want)
+			if got := normalizePprofAddr(test.addr); got != test.want {
+				t.Fatalf("normalizePprofAddr(%q) = %q, want %q", test.addr, got, test.want)
 			}
 		})
 	}
