@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/pprof"
 	"net/netip"
 	"net/url"
 	"path/filepath"
@@ -39,7 +38,6 @@ const (
 	defaultClaimTimeout     = 10 * time.Second
 	defaultClientHelloWait  = 2 * time.Second
 	defaultControlBodyLimit = 4 << 20
-	DefaultPProfListenAddr  = "127.0.0.1:6060"
 )
 
 type ServerConfig struct {
@@ -59,8 +57,6 @@ type ServerConfig struct {
 	TCPEnabled        bool
 	MinPort           int
 	MaxPort           int
-	PProfEnabled      bool
-	PProfListenAddr   string
 	X402Enabled       bool
 	X402Testnet       bool
 	X402PayTo         string
@@ -160,9 +156,6 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
-	if cfg.PProfEnabled {
-		cfg.PProfListenAddr = utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
-	}
 	cfg.X402PayTo = strings.TrimSpace(cfg.X402PayTo)
 	if cfg.X402Enabled && cfg.X402PayTo == "" {
 		return ServerConfig{}, errors.New("x402 facilitator enabled without a payment recipient")
@@ -236,8 +229,6 @@ type Server struct {
 	apiTLSClose      io.Closer
 	redirectListener net.Listener
 	redirectServer   *http.Server
-	pprofListener    net.Listener
-	pprofServer      *http.Server
 	quicBackhaul     *quic.Listener
 
 	relaySet       *discovery.RelaySet
@@ -442,8 +433,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	var apiCloser io.Closer
 	var redirectListener net.Listener
 	var redirectServer *http.Server
-	var pprofListener net.Listener
-	var pprofServer *http.Server
 	var quicBackhaul *quic.Listener
 	defer func() {
 		if started {
@@ -462,12 +451,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		}
 		if redirectListener != nil {
 			_ = redirectListener.Close()
-		}
-		if pprofServer != nil {
-			_ = pprofServer.Close()
-		}
-		if pprofListener != nil {
-			_ = pprofListener.Close()
 		}
 		if quicBackhaul != nil {
 			_ = quicBackhaul.Close()
@@ -511,22 +494,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 			IdleTimeout:       30 * time.Second,
 		}
 	}
-	if cfg.PProfEnabled {
-		pprofListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.PProfListenAddr)
-		if err != nil {
-			return fmt.Errorf("listen pprof: %w", err)
-		}
-		pprofMux := http.NewServeMux()
-		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
-		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-		pprofServer = &http.Server{
-			Handler:           pprofMux,
-			ReadHeaderTimeout: 10 * time.Second,
-		}
-	}
 
 	if cfg.UDPEnabled {
 		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
@@ -547,8 +514,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	s.apiTLSClose = apiCloser
 	s.redirectListener = redirectListener
 	s.redirectServer = redirectServer
-	s.pprofListener = pprofListener
-	s.pprofServer = pprofServer
 	s.acmeManager = acmeManager
 	s.cancel = cancel
 	s.group = group
@@ -570,9 +535,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 			}
 			return err
 		})
-	}
-	if s.pprofServer != nil {
-		group.Go(s.runPProfServer)
 	}
 	group.Go(func() error { return s.runPublicIngress(groupCtx) })
 	if s.quicBackhaul != nil {
@@ -611,13 +573,9 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
 		Bool("udp_enabled", s.quicBackhaul != nil).
 		Bool("tcp_enabled", s.supportsTCP()).
-		Bool("api_ech_enabled", len(apiTLS.EncryptedClientHelloKeys) > 0).
-		Bool("pprof_enabled", s.pprofServer != nil)
+		Bool("api_ech_enabled", len(apiTLS.EncryptedClientHelloKeys) > 0)
 	if s.redirectListener != nil {
 		logEvent = logEvent.Str("http_redirect_addr", s.redirectListener.Addr().String())
-	}
-	if s.pprofListener != nil {
-		logEvent = logEvent.Str("pprof_addr", utils.HostPortOrLoopback(s.pprofListener.Addr().String()))
 	}
 	if s.quicBackhaul != nil {
 		logEvent = logEvent.Str("internal_quic_backhaul_addr", s.quicBackhaul.Addr().String())
@@ -714,11 +672,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			// Shutdown can precede the Serve goroutine registering its listener.
 			_ = s.redirectListener.Close()
 		}
-		if s.pprofServer != nil {
-			if err := s.pprofServer.Shutdown(ctx); err != nil && shutdownErr == nil {
-				shutdownErr = err
-			}
-		}
 		if s.apiTLSClose != nil {
 			_ = s.apiTLSClose.Close()
 		}
@@ -777,14 +730,6 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 	}
 
 	return apiTLS, manager, nil
-}
-
-func (s *Server) runPProfServer() error {
-	err := s.pprofServer.Serve(s.pprofListener)
-	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
-		return nil
-	}
-	return err
 }
 
 func (s *Server) runPublicIngress(ctx context.Context) error {
