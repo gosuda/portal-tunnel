@@ -85,7 +85,6 @@ type PolicyLease struct {
 	IsApproved  bool   `json:"is_approved"`
 	IsBanned    bool   `json:"is_banned"`
 	IsDenied    bool   `json:"is_denied"`
-	IsIPBanned  bool   `json:"is_ip_banned"`
 }
 
 type RelayDescriptor struct {

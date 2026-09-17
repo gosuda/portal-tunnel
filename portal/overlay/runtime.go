@@ -114,7 +114,7 @@ func New(config Config) (*Runtime, error) {
 	return &Runtime{
 		config:        config,
 		inbound:       make(chan struct{}, connectionLimit),
-		sourceLimiter: policy.NewSourceLimiter(sourceRequestsPerMinute, sourceRequestBurst),
+		sourceLimiter: policy.NewSourceLimiter(sourceRequestsPerMinute, sourceRequestBurst, 0, 0),
 		activeSources: make(map[string]int),
 		assignments:   make(map[string]string),
 		failures:      make(map[string]map[string]time.Time),
@@ -415,7 +415,7 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 	}
 	// The server resolves clientIP using its trusted-proxy policy. Caller-chosen
 	// signing keys and lease IDs must not create fresh admission budgets.
-	if !r.sourceLimiter.Allow(clientIP) {
+	if retry, _ := r.sourceLimiter.Allow(clientIP, 1); retry > 0 {
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay request rate exceeded")
 		return
 	}

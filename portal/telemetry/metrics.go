@@ -121,3 +121,9 @@ var CongestionMode = promauto.NewGauge(
 		Help: "Active congestion mode (0=normal, 1=congested, 2=variant-grid).",
 	},
 )
+
+// PreAuthRejectedTotal uses fixed endpoint and layer labels, never source IPs.
+var PreAuthRejectedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "portal_preauth_rejected_total",
+	Help: "Pre-auth requests rejected by endpoint and admission layer.",
+}, []string{"endpoint", "layer"})

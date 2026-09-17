@@ -223,7 +223,7 @@ closes the router and its destination resources, including pending connections.
 When upgrading a deployment that used `TRUST_PROXY_HEADERS=true` with an empty
 `TRUSTED_PROXY_CIDRS`, set the proxy's fixed address explicitly (`/32` for IPv4,
 `/128` for IPv6). Private and loopback addresses are no longer trusted implicitly.
-Without an allowlist, IP bans and source limits apply to the socket peer, which
+Without an allowlist, source limits apply to the socket peer, which
 is the proxy when one sits in front. The trusted proxy must overwrite
 `X-Forwarded-For` and `X-Real-IP` with the client address; see the
 [reverse-proxy trust boundary](/deployment#client-addresses-and-the-trust-boundary).
@@ -573,3 +573,37 @@ Note: Njalla supports managed ACME, A records, TXT records, and HTTPS/ECH record
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `VULTR_API_KEY` | Yes | Vultr API key with DNS domain, record, and DNSSEC write access |
+
+## Pre-auth admission
+
+Registration challenges, registration attempts, and discovery announces share
+one weighted source-IP budget and one relay-wide budget. These limits run before
+signature verification; verified lease operations use identity policy instead.
+IP addresses are never durable moderation identities.
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `PREAUTH_SOURCE_PER_MINUTE` | `10` | Source-IP units refilled per minute |
+| `PREAUTH_SOURCE_BURST` | `20` | Source-IP burst capacity |
+| `PREAUTH_GLOBAL_PER_MINUTE` | `600` | Relay-wide units refilled per minute |
+| `PREAUTH_GLOBAL_BURST` | `200` | Relay-wide burst capacity |
+| `PREAUTH_CHALLENGE_COST` | `1` | Units per registration challenge |
+| `PREAUTH_ANNOUNCE_COST` | `2` | Units per discovery announce |
+| `PREAUTH_REGISTER_COST` | `5` | Units per registration attempt |
+
+Positive values are required; zero selects the default. Both burst capacities
+must cover the largest endpoint cost. The global default allows approximately
+100 complete challenge-plus-registration flows per minute, with a burst of 33.
+This is an initial operational budget, not a measured capacity guarantee: tune
+it to relay resources and observed rejection rates.
+
+Rejected requests return HTTP 429 and `Retry-After`. The
+`portal_preauth_rejected_total{endpoint,layer}` metric distinguishes `source`
+and `global` limits. Source buckets expire after 30 minutes idle, are collected
+on subsequent traffic, and have a hard ceiling of 65,536 entries. Invalid
+signatures incur no additional penalty. IPv6 buckets use individual addresses.
+
+Since v2.4.3, startup explicitly removes legacy `banned_ips` from `policy.json`.
+Identity approvals, denials, bans, and bandwidth settings are preserved.
+Operators requiring network IP blocks should configure their firewall or
+trusted ingress proxy.

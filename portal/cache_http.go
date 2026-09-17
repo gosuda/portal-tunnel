@@ -18,7 +18,7 @@ import (
 
 // cacheLease copies registry facts while the caller holds the registry lock.
 func (r *leaseRecord) cacheLease() cache.Lease {
-	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.Hostname, HostnameHash: r.HostnameHash, ClientIP: r.ClientIP, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
+	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.Hostname, HostnameHash: r.HostnameHash, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
 func (s *Server) handleStaticCache(w http.ResponseWriter, req *http.Request) {

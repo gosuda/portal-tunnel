@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -773,10 +775,23 @@ func TestExposeDiscoveryStaysUsableAfterRelayFailure(t *testing.T) {
 // deactivation POLICY (a verified candidate is not immediately re-selected)
 // is covered by the discovery package tests.
 func TestExposeDiscoveryRemoveRelayRoutesThroughDiscovery(t *testing.T) {
-	const (
-		relayA = "https://relay-a.example"
-		relayB = "https://relay-b.example"
-	)
+	// Serve discovery locally and keep listeners connecting while membership
+	// changes. No external bootstrap or DNS lookup participates in this test.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == types.PathDiscovery {
+			utils.WriteAPIData(w, http.StatusOK, types.DiscoveryResponse{ProtocolVersion: types.DiscoveryVersion})
+			return
+		}
+		<-r.Context().Done()
+	})
+	first := httptest.NewTLSServer(handler)
+	second := httptest.NewTLSServer(handler)
+	t.Cleanup(first.Close)
+	t.Cleanup(second.Close)
+	relayA, relayB := first.URL, second.URL
+	previous := types.BootstrapRelays
+	types.BootstrapRelays = []string{relayA, relayB}
+	t.Cleanup(func() { types.BootstrapRelays = previous })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

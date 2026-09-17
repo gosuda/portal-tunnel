@@ -33,7 +33,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "cache lease unavailable")
 		return
 	}
-	site := &cachedSite{host: lease.Hostname, owner: lease.Owner, leaseID: lease.ID, clientIP: lease.ClientIP, ttl: lease.ttl, expiresAt: lease.cacheExpiry(), usedAt: time.Now()}
+	site := &cachedSite{host: lease.Hostname, owner: lease.Owner, leaseID: lease.ID, ttl: lease.ttl, expiresAt: lease.cacheExpiry(), usedAt: time.Now()}
 	if req.Method == http.MethodDelete {
 		c.mu.Lock()
 		if existing := c.entries[site.host]; existing != nil && existing.leaseID == site.leaseID && c.eligibleLocked(site.leaseID) {
@@ -177,7 +177,6 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 			c.retireLocked(previous)
 		}
 		site.expiresAt = active.cacheExpiry()
-		site.clientIP = active.ClientIP
 		c.entries[site.host] = site
 		published = true
 		status = types.StaticCacheStatus{Present: true, ExpiresAt: site.expiresAt}

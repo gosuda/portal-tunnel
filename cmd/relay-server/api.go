@@ -6,10 +6,10 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -116,7 +116,10 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *RelayAPI) loadPolicyState() error {
-	var payload persistedPolicyState
+	var payload struct {
+		persistedPolicyState
+		LegacyBannedIPs json.RawMessage `json:"banned_ips"`
+	}
 	loaded, err := utils.ReadJSONFileIfExists(api.policyStatePath, &payload)
 	if err != nil {
 		return err
@@ -124,7 +127,16 @@ func (api *RelayAPI) loadPolicyState() error {
 	if !loaded {
 		return nil
 	}
-	return payload.apply(api)
+	if err := payload.apply(api); err != nil {
+		return err
+	}
+	if len(payload.LegacyBannedIPs) > 0 {
+		if err := api.savePolicyState(api.policyState(api.server.PolicyRuntime())); err != nil {
+			return fmt.Errorf("remove legacy IP bans: %w", err)
+		}
+		log.Info().Msg("removed legacy IP bans; durable blocking now uses identity keys")
+	}
+	return nil
 }
 
 func (api *RelayAPI) serveAdmin(w http.ResponseWriter, r *http.Request) {
@@ -253,48 +265,6 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
-	case types.PathPolicyIPs:
-		switch r.Method {
-		case http.MethodGet:
-			api.policyMu.RLock()
-			banned := runtime.IPFilter().BannedIPs()
-			api.policyMu.RUnlock()
-			utils.WriteAPIData(w, http.StatusOK, types.BannedIPsResponse{BannedIPs: banned})
-		case http.MethodPost:
-			req, ok := utils.DecodeJSONRequestAs[types.IPPolicyUpdate](w, r, controlBodyLimit, invalidRequestBody)
-			if !ok {
-				return
-			}
-			ip := strings.TrimSpace(req.IP)
-			if net.ParseIP(ip) == nil {
-				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidIP, "invalid IP address")
-				return
-			}
-			if req.IsBanned {
-				if reason := runtime.InfrastructureBanReason(ip); reason != "" {
-					utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidIP, reason)
-					return
-				}
-			}
-			api.policyWriteMu.Lock()
-			defer api.policyWriteMu.Unlock()
-			api.policyMu.Lock()
-			previous := api.policyState(runtime)
-			if req.IsBanned {
-				runtime.IPFilter().BanIP(ip)
-			} else {
-				runtime.IPFilter().UnbanIP(ip)
-			}
-			payload := api.policyState(runtime)
-			api.policyMu.Unlock()
-			if !api.persistPolicyState(w, previous, payload) {
-				return
-			}
-			utils.WriteAPIData(w, http.StatusOK, map[string]any{})
-		default:
-			w.Header().Set("Allow", http.MethodGet+","+http.MethodPost)
-			utils.MethodNotAllowedError().Write(w)
-		}
 	default:
 		http.NotFound(w, r)
 	}
@@ -455,7 +425,6 @@ func (api *RelayAPI) policyState(runtime *policy.Runtime) persistedPolicyState {
 		ApprovedIdentityKeys: approver.ApprovedKeys(),
 		DeniedIdentityKeys:   approver.DeniedKeys(),
 		BannedIdentityKeys:   runtime.BannedIdentityKeys(),
-		BannedIPs:            runtime.IPFilter().BannedIPs(),
 		IdentityBPS:          runtime.BPSManager().IdentityBPSLimits(),
 		UDPEnabled:           &udpEnabled,
 		UDPMaxLeases:         &udpMaxLeases,
@@ -470,7 +439,6 @@ type persistedPolicyState struct {
 	ApprovedIdentityKeys []string         `json:"approved_identity_keys,omitempty"`
 	DeniedIdentityKeys   []string         `json:"denied_identity_keys,omitempty"`
 	BannedIdentityKeys   []string         `json:"banned_identity_keys,omitempty"`
-	BannedIPs            []string         `json:"banned_ips,omitempty"`
 	IdentityBPS          map[string]int64 `json:"identity_bps,omitempty"`
 	UDPEnabled           *bool            `json:"udp_enabled,omitempty"`
 	UDPMaxLeases         *int             `json:"udp_max_leases,omitempty"`
@@ -503,7 +471,6 @@ func (s persistedPolicyState) apply(api *RelayAPI) error {
 	}
 	runtime.Approver().SetDecisions(s.ApprovedIdentityKeys, s.DeniedIdentityKeys)
 	runtime.SetBannedIdentityKeys(s.BannedIdentityKeys)
-	runtime.IPFilter().SetBannedIPs(s.BannedIPs)
 	runtime.BPSManager().SetIdentityBPSLimits(s.IdentityBPS)
 	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, api.server.SetUDPPolicy)
 	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, api.server.SetTCPPortPolicy)

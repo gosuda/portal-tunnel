@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -34,7 +37,6 @@ func (e *apiError) Error() string { return e.msg }
 var (
 	errFeatureUnavailable       = &apiError{types.APIErrorCodeFeatureUnavailable, "feature unavailable", http.StatusServiceUnavailable}
 	errHostnameConflict         = &apiError{types.APIErrorCodeHostnameConflict, "hostname conflict", http.StatusConflict}
-	errIPBanned                 = &apiError{types.APIErrorCodeIPBanned, "request denied because source IP is banned", http.StatusForbidden}
 	errLeaseNotFound            = &apiError{types.APIErrorCodeLeaseNotFound, "lease not found", http.StatusNotFound}
 	errLeaseRejected            = &apiError{types.APIErrorCodeLeaseRejected, "lease is not approved for routing", http.StatusForbidden}
 	errTransportMismatch        = &apiError{types.APIErrorCodeTransportMismatch, "transport mismatch", http.StatusConflict}
@@ -201,12 +203,8 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay discovery disabled")
 		return
 	}
-	clientIP, ok := s.extractAllowedClientIP(w, r)
-	if !ok {
-		return
-	}
-	if !s.announceLimiter.Allow(clientIP) {
-		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "announce rate limit exceeded")
+	clientIP := s.registry.policy.ExtractClientIP(r)
+	if !s.admitPreAuth(w, r, clientIP, s.config().PreAuth.AnnounceCost) {
 		return
 	}
 
@@ -299,8 +297,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP, ok := s.extractAllowedClientIP(w, r)
-	if !ok {
+	clientIP := s.registry.policy.ExtractClientIP(r)
+	if !s.admitPreAuth(w, r, clientIP, s.config().PreAuth.RegisterCost) {
 		return
 	}
 
@@ -360,8 +358,8 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	clientIP, ok := s.extractAllowedClientIP(w, r)
-	if !ok {
+	clientIP := s.registry.policy.ExtractClientIP(r)
+	if !s.admitPreAuth(w, r, clientIP, s.config().PreAuth.ChallengeCost) {
 		return
 	}
 
@@ -407,10 +405,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP, ok := s.extractAllowedClientIP(w, r)
-	if !ok {
-		return
-	}
+	clientIP := s.registry.policy.ExtractClientIP(r)
 
 	req, ok := utils.DecodeJSONRequest[types.RenewRequest](w, r, defaultControlBodyLimit)
 	if !ok {
@@ -456,9 +451,6 @@ func (s *Server) handleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if _, ok := s.extractAllowedClientIP(w, r); !ok {
-		return
-	}
 	req, ok := utils.DecodeJSONRequest[types.ReverseEndpointRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return
@@ -486,10 +478,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
-	clientIP, ok := s.extractAllowedClientIP(w, r)
-	if !ok {
-		return
-	}
+	clientIP := s.registry.policy.ExtractClientIP(r)
 	if s.overlay != nil && s.overlay.Handles(capability) {
 		s.overlay.HandleConnect(w, r, capability, clientIP)
 		return
@@ -545,11 +534,15 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Msg("sdk reverse connected")
 }
 
-func (s *Server) extractAllowedClientIP(w http.ResponseWriter, r *http.Request) (string, bool) {
-	clientIP := s.registry.policy.ExtractClientIP(r)
-	if !s.registry.policy.IPFilter().IsIPBanned(clientIP) {
-		return clientIP, true
+// Admission runs before decoding or signature work. Verified lease operations
+// use identity policy and do not consume a shared NAT source budget.
+func (s *Server) admitPreAuth(w http.ResponseWriter, r *http.Request, clientIP string, cost int) bool {
+	retry, layer := s.preAuthLimiter.Allow(clientIP, cost)
+	if retry == 0 {
+		return true
 	}
-	utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
-	return "", false
+	telemetry.PreAuthRejectedTotal.WithLabelValues(strings.TrimSpace(r.URL.Path), layer).Inc()
+	w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retry.Seconds())))))
+	utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "pre-auth request budget exhausted")
+	return false
 }

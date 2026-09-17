@@ -2,10 +2,19 @@ package discovery
 
 import (
 	"context"
+	"crypto/tls"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+
 	"slices"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // AddRelay and RemoveRelay each apply the whole user intent as one unit:
@@ -184,9 +193,7 @@ func TestControllerSetMaxActiveRelaysSignalsNext(t *testing.T) {
 		relayA = "https://relay-a.example"
 		relayB = "https://relay-b.example"
 	)
-	controller := NewController([]string{relayA})
-	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
-	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayB))
+	controller := newSelectionTestController(t, relayA, relayB)
 
 	changes := make(chan []string, 8)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -231,9 +238,7 @@ func TestControllerSetActiveRelaysSuppliesStickinessSnapshot(t *testing.T) {
 		relayA = "https://relay-a.example"
 		relayB = "https://relay-b.example"
 	)
-	controller := NewController([]string{relayA, relayB})
-	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
-	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayB))
+	controller := newSelectionTestController(t, relayA, relayB)
 	controller.SetMaxActiveRelays(1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -319,4 +324,33 @@ func expireSuppression(controller *Controller, relayURL string) {
 	state := controller.relaySet.relays[relayURL]
 	state.suppressActiveUntil = time.Now().UTC().Add(-time.Minute)
 	controller.relaySet.relays[relayURL] = state
+}
+
+// Selection tests exercise refresh through HTTP without depending on public DNS.
+func newSelectionTestController(t *testing.T, urls ...string) *Controller {
+	t.Helper()
+	descriptors := make(map[string]types.RelayDescriptor)
+	controller := NewController(urls)
+	for _, relayURL := range urls {
+		parsed, err := url.Parse(relayURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		desc := mustRelayDescriptor(t, relayURL)
+		descriptors[parsed.Host] = desc
+		mustApplyAuthoritative(t, controller.relaySet, desc)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		utils.WriteAPIData(w, http.StatusOK, types.DiscoveryResponse{ProtocolVersion: types.DiscoveryVersion, Relays: []types.RelayDescriptor{descriptors[r.Host]}})
+	}))
+	t.Cleanup(server.Close)
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+		},
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	controller.refresher.httpClient = &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	return controller
 }

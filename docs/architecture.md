@@ -81,3 +81,17 @@ remains an indirect dependency of the separate x402 payment integration.
 
 See [the site architecture documentation](src/routes/architecture/+page.md) for
 the rest of the system.
+
+## Admission and identity policy
+
+The relay hands root/API and cache TLS connections from its SNI ingress directly
+to the API server, preserving the original socket peer without a local TCP hop.
+Forwarded HTTP headers are accepted only from explicitly trusted proxies.
+
+Durable approval, denial, banning, and routing are keyed by verified Portal
+identity. Source IP remains diagnostic metadata and an ephemeral pre-auth
+admission signal. Registration challenges, registration attempts, and discovery
+announces share weighted per-source and global budgets owned by
+`portal/policy.SourceLimiter`. The server applies these before decoding and
+signature work, returns 429 with retry guidance, and records bounded rejection
+metrics. Authenticated lease operations do not spend the source budget.

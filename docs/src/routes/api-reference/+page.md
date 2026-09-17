@@ -136,7 +136,6 @@ Casper facilitator.
 | `POST` | `/api/policy` | Admin bearer | `PolicySettings` | `PolicySettings` |
 | `GET` | `/api/policy/state` | Admin bearer | none | `PolicyStateResponse` |
 | `POST` | `/api/policy/leases` | Admin bearer | `LeasePolicyUpdate` | `{}` |
-| `POST` | `/api/policy/ips` | Admin bearer | `IPPolicyUpdate` | `{}` |
 
 ### Relay
 
@@ -186,7 +185,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `identity_key`, `address` | `string` |
 | `bps` | `number` |
 | `client_ip`, `reported_ip` | `string` |
-| `is_approved`, `is_banned`, `is_denied`, `is_ip_banned` | `boolean` |
+| `is_approved`, `is_banned`, `is_denied` | `boolean` |
 
 `PublicStateResponse`:
 
@@ -228,13 +227,6 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `is_denied` | `boolean` | optional; `true` also revokes approval |
 | `bps` | `number` | optional; `0` removes the limit |
 
-`IPPolicyUpdate`:
-
-| Field | Type |
-|-------|------|
-| `ip` | `string` |
-| `is_banned` | `boolean` |
-
 ## Common Errors
 
 | Code | Meaning |
@@ -248,9 +240,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `hostname_conflict` | lease hostname is already registered |
 | `lease_not_found` | lease token or identity has no active lease |
 | `lease_rejected` | lease is not currently allowed to route |
-| `ip_banned` | source or reported IP is banned |
 | `invalid_address` | address path or body value is invalid |
-| `invalid_ip` | IP path value is invalid |
 | `invalid_mode` | approval mode is not `auto` or `manual` |
 | `http11_only` | endpoint requires HTTP/1.1 |
 | `hijack_unsupported`, `hijack_failed` | reverse stream setup failed |

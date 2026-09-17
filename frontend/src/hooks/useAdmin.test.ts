@@ -73,7 +73,6 @@ function buildLease(address: string, name: string = "relay-1"): PolicyLease {
     is_approved: true,
     is_banned: address === "0x00000000000000000000000000000000000000A1",
     is_denied: false,
-    is_ip_banned: false,
   };
 }
 
@@ -96,9 +95,6 @@ describe("useAdmin", () => {
           leases: [buildLease("0x00000000000000000000000000000000000000A1")],
           policy: { ...buildSettings(), approval_mode: "not-a-mode" },
         } as never;
-      }
-      if (path === BROWSER_API_PATHS.policy.ips) {
-        return { banned_ips: [] } as never;
       }
       throw new Error(`Unexpected GET path: ${path}`);
     });
@@ -128,9 +124,6 @@ describe("useAdmin", () => {
       if (path === BROWSER_API_PATHS.policy.state) {
         throw new APIClientError("failed to load leases", 500, "server_error");
       }
-      if (path === BROWSER_API_PATHS.policy.ips) {
-        return { banned_ips: [] } as never;
-      }
       throw new Error(`Unexpected GET path: ${path}`);
     });
 
@@ -159,20 +152,6 @@ describe("useAdmin", () => {
       expect(result.current.error).toBe(
         "Invalid approval mode. Choose auto or manual and retry.",
       );
-    });
-  });
-
-  it("validates missing IP in handleIPBanStatus", async () => {
-    const { result } = renderHook(() => useAdmin());
-    await waitForLoaded(result);
-
-    await act(async () => {
-      await expect(result.current.handleIPBanStatus("   ", true)).rejects.toThrow(
-        "Missing IP address",
-      );
-    });
-    await waitFor(() => {
-      expect(result.current.error).toContain("Missing IP address");
     });
   });
 
@@ -232,9 +211,6 @@ describe("useAdmin", () => {
           resolveRefresh = resolve;
         }) as never;
       }
-      if (path === BROWSER_API_PATHS.policy.ips) {
-        return Promise.resolve({ banned_ips: [] }) as never;
-      }
       throw new Error(`Unexpected GET path: ${path}`);
     });
 
@@ -276,9 +252,6 @@ describe("useAdmin", () => {
           policy: buildSettings(),
         } as never;
       }
-      if (path === BROWSER_API_PATHS.policy.ips) {
-        return { banned_ips: [] } as never;
-      }
       throw new Error(`Unexpected GET path: ${path}`);
     });
 
@@ -307,48 +280,4 @@ describe("useAdmin", () => {
     );
   });
 
-  it("exposes banned IPs from the policy ips endpoint", async () => {
-    mockGet.mockImplementation(async (path: string) => {
-      if (path === BROWSER_API_PATHS.policy.state) {
-        return {
-          leases: [],
-          policy: buildSettings(),
-        } as never;
-      }
-      if (path === BROWSER_API_PATHS.policy.ips) {
-        return { banned_ips: ["192.0.2.1", "  192.0.2.2  ", ""] } as never;
-      }
-      throw new Error(`Unexpected GET path: ${path}`);
-    });
-
-    const { result } = renderHook(() => useAdmin());
-    await waitForLoaded(result);
-
-    expect(result.current.bannedIPs).toEqual(["192.0.2.1", "192.0.2.2"]);
-  });
-
-  it("handleUnbanIP posts is_banned false and refreshes banned IPs", async () => {
-    const { result } = renderHook(() => useAdmin());
-    await waitForLoaded(result);
-
-    await act(async () => {
-      await result.current.handleUnbanIP("192.0.2.1");
-    });
-
-    expect(mockPost).toHaveBeenCalledWith(BROWSER_API_PATHS.policy.ips, {
-      ip: "192.0.2.1",
-      is_banned: false,
-    });
-  });
-
-  it("handleUnbanIP rejects an empty IP", async () => {
-    const { result } = renderHook(() => useAdmin());
-    await waitForLoaded(result);
-
-    await act(async () => {
-      await expect(result.current.handleUnbanIP("   ")).rejects.toThrow(
-        "Missing IP address",
-      );
-    });
-  });
 });

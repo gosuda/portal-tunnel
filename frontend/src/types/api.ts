@@ -48,7 +48,6 @@ export interface PolicyLease extends Lease {
   is_approved: boolean;
   is_banned: boolean;
   is_denied: boolean;
-  is_ip_banned: boolean;
 }
 
 export interface PublicStateResponse {
@@ -133,13 +132,4 @@ export interface LeasePolicyUpdate {
   is_approved?: boolean;
   is_banned?: boolean;
   is_denied?: boolean;
-}
-
-export interface IPPolicyUpdate {
-  ip: string;
-  is_banned: boolean;
-}
-
-export interface BannedIPsResponse {
-  banned_ips?: string[];
 }

@@ -68,7 +68,6 @@ var terminalAPIErrorCodes = []string{
 	types.APIErrorCodeUDPDisabled,
 	types.APIErrorCodeTCPPortDisabled,
 	types.APIErrorCodeHostnameConflict,
-	types.APIErrorCodeIPBanned,
 }
 
 func isTerminalRelayError(err error) bool {
