@@ -245,3 +245,8 @@ type IPPolicyUpdate struct {
 	IP       string `json:"ip"`
 	IsBanned bool   `json:"is_banned"`
 }
+
+// BannedIPsResponse is the admin-facing view of the effective IP ban list.
+type BannedIPsResponse struct {
+	BannedIPs []string `json:"banned_ips,omitempty"`
+}

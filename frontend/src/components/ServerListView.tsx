@@ -189,8 +189,9 @@ interface ServerListViewProps {
   onBulkDeny?: (identityKeys: string[]) => void | Promise<void>;
   onBulkBan?: (identityKeys: string[]) => void | Promise<void>;
   onAuthChange?: () => void | Promise<void>;
+  bannedIPs?: string[];
+  onUnbanIP?: (ip: string) => void | Promise<void>;
 }
-
 function isAdminServer(server: ListServer): server is AdminServer {
   return "address" in server;
 }
@@ -227,6 +228,8 @@ export function ServerListView({
   tcpPortSettings,
   onTCPPortSettingsChange,
   onApproveStatusChange,
+  bannedIPs,
+  onUnbanIP,
   onDenyStatusChange,
   onIPBanStatusChange,
   onBulkApprove,
@@ -806,6 +809,51 @@ export function ServerListView({
                   <div className="py-12 text-center">
                     {noMatchingServersMessage}
                   </div>
+                )}
+                {onUnbanIP && (
+                  <section
+                    id="banned-ips"
+                    aria-labelledby="banned-ips-title"
+                    className="scroll-mt-24 border-t border-border/80 px-4 py-8 sm:px-6 md:px-8"
+                  >
+                    <div className="space-y-2">
+                      <p className="text-sm font-semibold uppercase tracking-normal text-primary">
+                        Policy
+                      </p>
+                      <h2
+                        id="banned-ips-title"
+                        className="text-3xl font-semibold tracking-normal text-foreground"
+                      >
+                        Banned IPs
+                      </h2>
+                    </div>
+                    <div className="mt-6 rounded-lg border border-border/80 bg-secondary/25 p-5 sm:p-6">
+                      {(!bannedIPs || bannedIPs.length === 0) ? (
+                        <div className="rounded-md border border-border/70 bg-background px-4 py-3 text-sm text-text-muted">
+                          No banned IPs.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                          {bannedIPs.map((bannedIP) => (
+                            <div
+                              key={bannedIP}
+                              className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border/70 bg-background px-4 py-3"
+                            >
+                              <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-foreground sm:text-sm">
+                                {bannedIP}
+                              </span>
+                              <button
+                                onClick={() => onUnbanIP(bannedIP)}
+                                className="inline-flex h-8 shrink-0 items-center justify-center rounded-md bg-primary/10 px-3 text-xs font-semibold text-primary transition-colors hover:bg-primary/16 cursor-pointer"
+                              >
+                                Unban
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </section>
                 )}
               </main>
             </div>

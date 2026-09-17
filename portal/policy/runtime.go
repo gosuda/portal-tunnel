@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -63,6 +64,33 @@ func (r *Runtime) Approver() *Approver {
 
 func (r *Runtime) IPFilter() *IPFilter {
 	return r.ipFilter
+}
+
+// InfrastructureBanReason explains why banning ip would take down relay
+// infrastructure rather than an end client: loopback addresses and the
+// configured trusted proxies are shared by every client that reaches the
+// relay through them. An empty string means the address is safe to ban.
+func (r *Runtime) InfrastructureBanReason(ip string) string {
+	if r == nil {
+		return ""
+	}
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil {
+		return ""
+	}
+	if parsed.IsLoopback() {
+		return "refusing to ban loopback address " + parsed.String() + "; it is relay infrastructure, not an end client"
+	}
+	cfg := runtimeConfig{}
+	if r.config != nil {
+		cfg = r.config.Load()
+	}
+	for _, cidr := range cfg.trustedProxyCIDRs {
+		if cidr.Contains(parsed) {
+			return "refusing to ban trusted proxy address " + parsed.String() + "; it is shared by every client behind the proxy (configure the proxy trust boundary instead)"
+		}
+	}
+	return ""
 }
 
 func (r *Runtime) BPSManager() *BPSManager {

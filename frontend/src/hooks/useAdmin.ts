@@ -10,6 +10,7 @@ import {
 } from "@/lib/metadata";
 import type {
   ApprovalMode,
+  BannedIPsResponse,
   IPPolicyUpdate,
   LeasePolicyUpdate,
   PolicyLease,
@@ -157,11 +158,22 @@ async function loadPolicyState(): Promise<PolicyViewState> {
   };
 }
 
+async function loadBannedIPs(): Promise<string[]> {
+  const response = await apiClient.get<BannedIPsResponse>(
+    BROWSER_API_PATHS.policy.ips,
+  );
+  const bannedIPs = Array.isArray(response?.banned_ips) ? response.banned_ips : [];
+  return bannedIPs
+    .map((ip) => ip.trim())
+    .filter((ip) => ip.length > 0);
+}
+
 export function useAdmin(enabled = true) {
   const [serverData, setServerData] = useState<PolicyLease[]>([]);
   const [policySettings, setPolicySettings] = useState<PolicySettings>(DEFAULT_POLICY_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [bannedIPs, setBannedIPs] = useState<string[]>([]);
 
   const [banFilter, setBanFilter] = useState<BanFilter>("all");
 
@@ -174,7 +186,12 @@ export function useAdmin(enabled = true) {
     setError("");
 
     try {
-      applyPolicyState(await loadPolicyState());
+      const [state, banned] = await Promise.all([
+        loadPolicyState(),
+        loadBannedIPs(),
+      ]);
+      applyPolicyState(state);
+      setBannedIPs(banned);
     } catch (err: unknown) {
       setError(toAdminErrorMessage(err, "Failed to load admin data"));
     }
@@ -194,11 +211,15 @@ export function useAdmin(enabled = true) {
       setError("");
       setLoading(true);
       try {
-        const state = await loadPolicyState();
+        const [state, banned] = await Promise.all([
+          loadPolicyState(),
+          loadBannedIPs(),
+        ]);
         if (!mounted) {
           return;
         }
         applyPolicyState(state);
+        setBannedIPs(banned);
       } catch (err: unknown) {
         if (!mounted) {
           return;
@@ -366,6 +387,18 @@ export function useAdmin(enabled = true) {
       } satisfies IPPolicyUpdate);
     });
 
+  const handleUnbanIP = (ip: string) =>
+    runAdminAction(async () => {
+      const normalizedIP = ip.trim();
+      if (!normalizedIP) {
+        throw new Error("Missing IP address");
+      }
+      await apiClient.post<unknown>(BROWSER_API_PATHS.policy.ips, {
+        ip: normalizedIP,
+        is_banned: false,
+      } satisfies IPPolicyUpdate);
+    });
+
   const runBulkLeaseAction = async (identityKeys: string[], action: LeaseAction) => {
     const normalizedIdentityKeys = [...new Set(
       identityKeys.filter((identityKey) => identityKey.length > 0)
@@ -429,6 +462,7 @@ export function useAdmin(enabled = true) {
     tcpPortSettings,
     loading,
     error,
+    bannedIPs,
     handleBanFilterChange,
     handleBanStatus,
     handleBPSChange,
@@ -439,6 +473,7 @@ export function useAdmin(enabled = true) {
     handleApproveStatus,
     handleDenyStatus,
     handleIPBanStatus,
+    handleUnbanIP,
     handleBulkApprove,
     handleBulkDeny,
     handleBulkBan,

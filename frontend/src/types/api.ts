@@ -139,3 +139,7 @@ export interface IPPolicyUpdate {
   ip: string;
   is_banned: boolean;
 }
+
+export interface BannedIPsResponse {
+  banned_ips?: string[];
+}

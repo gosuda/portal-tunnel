@@ -465,9 +465,25 @@ export function ServerCard({
 
               {isApproved && ip && (
                 <div className="text-[10px] text-white/50">
-                  IP: <span className="font-mono">{displayIP || ip}</span>
-                  {isIPBanned && (
-                    <span className="ml-2 text-red-400">(Banned)</span>
+                  {displayIP && displayIP !== ip ? (
+                    <>
+                      <div>
+                        Client IP: <span className="font-mono">{ip}</span>
+                        {isIPBanned && (
+                          <span className="ml-2 text-red-400">(Banned)</span>
+                        )}
+                      </div>
+                      <div>
+                        Reported IP: <span className="font-mono">{displayIP}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      IP: <span className="font-mono">{ip}</span>
+                      {isIPBanned && (
+                        <span className="ml-2 text-red-400">(Banned)</span>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -499,8 +515,8 @@ export function ServerCard({
                 >
                   {ip
                     ? isIPBanned
-                      ? "Unban IP"
-                      : "Ban IP"
+                      ? `Unban client IP ${ip}`
+                      : `Ban client IP ${ip}`
                     : isBanned
                       ? "Unban"
                       : "Ban"}
