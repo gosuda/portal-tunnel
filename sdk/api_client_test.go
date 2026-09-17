@@ -185,3 +185,26 @@ func TestRefreshReverseEndpointAfterFailureReportsMissingLease(t *testing.T) {
 		t.Fatalf("refreshReverseEndpointAfterFailure() error = %v, want lease refresh required", err)
 	}
 }
+
+func TestRenewLeaseReportsStaleCredentialsAfterAuthorityRotation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized")
+	}))
+	defer server.Close()
+
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse relay URL: %v", err)
+	}
+	listener := &listener{
+		api: &apiClient{relayURL: relayURL, http: server.Client()},
+		lease: utils.NewSnapshot(listenerSnapshot{
+			accessToken: "stale-access-token",
+			expiresAt:   time.Now().UTC().Add(time.Minute),
+		}, listenerSnapshot.snapshot),
+	}
+
+	if err := listener.renewLease(context.Background()); !errors.Is(err, errLeaseRefreshRequired) {
+		t.Fatalf("renewLease() error = %v, want lease refresh required after authority rotation", err)
+	}
+}
