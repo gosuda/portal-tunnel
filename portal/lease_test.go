@@ -63,7 +63,6 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t)
-	runtime := registry.policy
 	record, registered, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "demo"),
 	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
@@ -137,9 +136,6 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if admitted, err := registry.admitReverseCapability(refreshed.Capability); err != nil || admitted != record {
 		t.Fatalf("refreshed reverse capability = %v, %v, want registered lease", admitted, err)
 	}
-	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "203.0.113.11" {
-		t.Fatalf("Renew() did not register client IP for lease")
-	}
 
 	removed, err := registry.Unregister(types.UnregisterRequest{AccessToken: renewed.AccessToken})
 	if err != nil {
@@ -151,9 +147,6 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 
 	if _, ok := registry.Lookup("demo.example.com"); ok {
 		t.Fatal("Lookup() after Unregister() = true, want false")
-	}
-	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "" {
-		t.Fatalf("Unregister() lease IP = %q, want empty", got)
 	}
 }
 
@@ -329,9 +322,6 @@ func TestLeaseRegistryPolicyViewsUseRoutablePolicy(t *testing.T) {
 	}
 	if leases[0].IsApproved {
 		t.Fatal("PolicyLeases()[0].IsApproved = true, want false before approval")
-	}
-	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "203.0.113.20" {
-		t.Fatalf("Register() lease IP = %q, want %q", got, "203.0.113.20")
 	}
 
 	runtime.Approver().Approve(record.Key())

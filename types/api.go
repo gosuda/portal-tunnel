@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -18,9 +19,16 @@ type APIError struct {
 }
 
 type APIRequestError struct {
-	StatusCode int    `json:"-"`
-	Code       string `json:"code,omitempty"`
-	Message    string `json:"message,omitempty"`
+	RetryAfter time.Duration `json:"-"`
+	StatusCode int           `json:"-"`
+	Code       string        `json:"code,omitempty"`
+	Message    string        `json:"message,omitempty"`
+}
+
+// IsRateLimited identifies temporary admission failures, including a gateway
+// HTTP 429 without Portal's JSON envelope.
+func (e *APIRequestError) IsRateLimited() bool {
+	return e != nil && (e.StatusCode == http.StatusTooManyRequests || e.Code == APIErrorCodeRateLimited)
 }
 
 func (e *APIRequestError) Error() string {
@@ -239,14 +247,4 @@ type LeasePolicyUpdate struct {
 type PolicyPortSettings struct {
 	Enabled   bool `json:"enabled"`
 	MaxLeases int  `json:"max_leases"`
-}
-
-type IPPolicyUpdate struct {
-	IP       string `json:"ip"`
-	IsBanned bool   `json:"is_banned"`
-}
-
-// BannedIPsResponse is the admin-facing view of the effective IP ban list.
-type BannedIPsResponse struct {
-	BannedIPs []string `json:"banned_ips,omitempty"`
 }

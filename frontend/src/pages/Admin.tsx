@@ -41,9 +41,6 @@ export function Admin() {
     handleTCPPortSettingsChange,
     handleApproveStatus,
     handleDenyStatus,
-    handleIPBanStatus,
-    bannedIPs,
-    handleUnbanIP,
     handleBulkApprove,
     handleBulkDeny,
     handleBulkBan,
@@ -119,9 +116,6 @@ export function Admin() {
         onTCPPortSettingsChange={handleTCPPortSettingsChange}
         onApproveStatusChange={handleApproveStatus}
         onDenyStatusChange={handleDenyStatus}
-        onIPBanStatusChange={handleIPBanStatus}
-        bannedIPs={bannedIPs}
-        onUnbanIP={handleUnbanIP}
         onBulkApprove={handleBulkApprove}
         onBulkDeny={handleBulkDeny}
         onBulkBan={handleBulkBan}

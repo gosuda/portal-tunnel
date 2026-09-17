@@ -172,7 +172,7 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 	}
 	// A fresh ingress signer is enough to pass signature checks. Source
 	// admission must still bound these requests without any discovery catalog.
-	gate.sourceLimiter = policy.NewSourceLimiter(1, 2)
+	gate.sourceLimiter = policy.NewSourceLimiter(1, 2, 0, 0)
 	for range 2 {
 		response := httptest.NewRecorder()
 		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, "192.0.2.1")
@@ -198,7 +198,7 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 	t.Parallel()
 	gate, capability := testGateway(t)
-	gate.sourceLimiter = policy.NewSourceLimiter(1000, 1000)
+	gate.sourceLimiter = policy.NewSourceLimiter(1000, 1000, 0, 0)
 	entered := make(chan struct{}, sourceConnectionLimit)
 	release := make(chan struct{})
 	var dials atomic.Int32

@@ -68,10 +68,12 @@ var terminalAPIErrorCodes = []string{
 	types.APIErrorCodeUDPDisabled,
 	types.APIErrorCodeTCPPortDisabled,
 	types.APIErrorCodeHostnameConflict,
-	types.APIErrorCodeIPBanned,
 }
 
 func isTerminalRelayError(err error) bool {
+	if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok && apiErr.IsRateLimited() {
+		return false
+	}
 	if errors.Is(err, errRelayIncompatible) {
 		return true
 	}
@@ -1141,6 +1143,10 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		return false
 	}
 
+	retryWait := defaultRetryWait
+	if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok {
+		retryWait = max(retryWait, apiErr.RetryAfter)
+	}
 	relayURL := ""
 	if l.api != nil && l.api.relayURL != nil {
 		relayURL = l.api.relayURL.String()
@@ -1166,24 +1172,24 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 			logger.Warn().
 				Err(err).
 				Str("transport", transport).
-				Dur("retry_wait", defaultRetryWait).
+				Dur("retry_wait", retryWait).
 				Msg("raw transport port pool exhausted; waiting for a port")
-			return utils.SleepOrDone(ctx, defaultRetryWait)
+			return utils.SleepOrDone(ctx, retryWait)
 		}
 		logger.Warn().
 			Err(err).
-			Dur("retry_wait", defaultRetryWait).
+			Dur("retry_wait", retryWait).
 			Msg("operation failed; retrying")
-		return utils.SleepOrDone(ctx, defaultRetryWait)
+		return utils.SleepOrDone(ctx, retryWait)
 	}
 
 	logger.Debug().
 		Err(err).
 		Int("retry_attempt", retries).
-		Dur("retry_wait", defaultRetryWait).
+		Dur("retry_wait", retryWait).
 		Msg("operation failed; retrying")
 
-	return utils.SleepOrDone(ctx, defaultRetryWait)
+	return utils.SleepOrDone(ctx, retryWait)
 }
 
 type bufferedConn struct {

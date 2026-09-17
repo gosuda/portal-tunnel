@@ -37,7 +37,6 @@ interface ServerCardProps {
   bps?: number;
   ip?: string;
   displayIP?: string;
-  isIPBanned?: boolean;
   paymentEnabled?: boolean;
   paymentLabel?: string;
   onBanStatusChange?: (
@@ -50,7 +49,6 @@ interface ServerCardProps {
     approve: boolean
   ) => void | Promise<void>;
   onDenyStatusChange?: (identityKey: string, deny: boolean) => void | Promise<void>;
-  onIPBanStatusChange?: (ip: string, isBan: boolean) => void | Promise<void>;
   isSelected?: boolean;
   onToggleSelect?: (identityKey: string) => void;
 }
@@ -78,14 +76,12 @@ export function ServerCard({
   bps = 0,
   ip = "",
   displayIP,
-  isIPBanned = false,
   paymentEnabled = false,
   paymentLabel = "",
   onBanStatusChange,
   onBPSChange,
   onApproveStatusChange,
   onDenyStatusChange,
-  onIPBanStatusChange,
   isSelected = false,
   onToggleSelect,
 }: ServerCardProps) {
@@ -198,14 +194,6 @@ export function ServerCard({
     event.stopPropagation();
     if (identityKey) {
       runAsyncAdminAction(() => onDenyStatusChange?.(identityKey, !isDenied));
-    }
-  };
-
-  const handleIPBanClick = (event: React.MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (ip) {
-      runAsyncAdminAction(() => onIPBanStatusChange?.(ip, !isIPBanned));
     }
   };
 
@@ -469,9 +457,6 @@ export function ServerCard({
                     <>
                       <div>
                         Client IP: <span className="font-mono">{ip}</span>
-                        {isIPBanned && (
-                          <span className="ml-2 text-red-400">(Banned)</span>
-                        )}
                       </div>
                       <div>
                         Reported IP: <span className="font-mono">{displayIP}</span>
@@ -480,9 +465,6 @@ export function ServerCard({
                   ) : (
                     <>
                       IP: <span className="font-mono">{ip}</span>
-                      {isIPBanned && (
-                        <span className="ml-2 text-red-400">(Banned)</span>
-                      )}
                     </>
                   )}
                 </div>
@@ -505,21 +487,15 @@ export function ServerCard({
                 </div>
               ) : (
                 <button
-                  onClick={ip ? handleIPBanClick : handleBanClick}
+                  onClick={handleBanClick}
                   className={clsx(
                     "w-full px-4 py-2 rounded-md font-medium text-xs transition-colors cursor-pointer text-white backdrop-blur-sm",
-                    (ip ? isIPBanned : isBanned)
+                    isBanned
                       ? "bg-green-600/80 hover:bg-green-600"
                       : "bg-red-600/80 hover:bg-red-600"
                   )}
                 >
-                  {ip
-                    ? isIPBanned
-                      ? `Unban client IP ${ip}`
-                      : `Ban client IP ${ip}`
-                    : isBanned
-                      ? "Unban"
-                      : "Ban"}
+                  {isBanned ? "Unban identity" : "Ban identity"}
                 </button>
               )}
             </div>

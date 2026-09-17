@@ -65,7 +65,7 @@ The origin may request a shorter TTL; the relay clamps it to its configured maxi
 Visitor traffic never extends validity. Lease replacement invalidates the old
 snapshot, including when the new exposure does not opt in. Upload publication
 rechecks the lease instance to prevent late uploads restoring stale content.
-Identity approval, bans, and the originating IP ban apply to cache serving too.
+Identity approval, denial, and bans apply to cache serving too.
 
 ## TLS boundary
 

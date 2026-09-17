@@ -34,7 +34,7 @@ func testManager(t *testing.T, budget int) *Manager {
 }
 
 func testLease(c *Manager, name string) Lease {
-	l := Lease{ID: name + "-id", Owner: name, Hostname: name + ".localhost", ClientIP: "203.0.113.1", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
+	l := Lease{ID: name + "-id", Owner: name, Hostname: name + ".localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
 	c.Register(l, types.RegisterChallengeRequest{Cache: true, CacheTTL: 86400})
 	return l
 }

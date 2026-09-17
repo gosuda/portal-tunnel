@@ -179,9 +179,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 	leaseIdentity := req.Identity
 	var err error
-	if r.policy.IPFilter().IsIPBanned(clientIP) {
-		return nil, types.RegisterResponse{}, errIPBanned
-	}
 
 	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
@@ -354,7 +351,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	} else {
 		r.records = append(r.records, record)
 	}
-	r.policy.IPFilter().RegisterIdentityIP(identityKey, record.ClientIP)
 	r.mu.Unlock()
 
 	if replaced != nil {
@@ -486,7 +482,6 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}
 	record.Metadata = req.Metadata.Copy()
 	r.cache.Renew(record.cacheLease())
-	r.policy.IPFilter().RegisterIdentityIP(leaseKey, clientIP)
 	recordIdentity := record.Identity
 	leaseID := record.id
 	useOverlay := record.Overlay
@@ -776,7 +771,6 @@ func (r *leaseRegistry) Touch(key, clientIP string, now time.Time) {
 	if strings.TrimSpace(clientIP) != "" {
 		record.ClientIP = clientIP
 	}
-	r.policy.IPFilter().RegisterIdentityIP(record.Key(), clientIP)
 }
 
 func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
@@ -854,7 +848,6 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 			IsApproved:  r.policy.EffectiveApproval(identityKey),
 			IsBanned:    r.policy.IsIdentityBanned(identityKey),
 			IsDenied:    r.policy.IsIdentityDenied(identityKey),
-			IsIPBanned:  r.policy.IPFilter().IsIPBanned(clientIP),
 		})
 	}
 	return leases

@@ -10,8 +10,6 @@ import {
 } from "@/lib/metadata";
 import type {
   ApprovalMode,
-  BannedIPsResponse,
-  IPPolicyUpdate,
   LeasePolicyUpdate,
   PolicyLease,
   PolicyPortSettings,
@@ -32,7 +30,6 @@ export interface AdminServer extends BaseServer {
   isDenied: boolean;
   ip: string;
   displayIP: string;
-  isIPBanned: boolean;
 }
 
 export interface UDPSettings {
@@ -57,7 +54,6 @@ const ADMIN_ERROR_MESSAGE_BY_CODE: Record<string, string> = {
   invalid_address: "Selected address is invalid. Refresh and try again.",
   invalid_request: "Selected lease is invalid. Refresh and try again.",
   lease_rejected: "Request was rejected by policy. Review conflicts and retry.",
-  ip_banned: "Request denied because the source IP is banned.",
   unauthorized: "Admin authorization failed. Sign in again and retry.",
   method_not_allowed: "This action is not supported by the current server version.",
 };
@@ -119,7 +115,6 @@ function toAdminServer(
     isDenied: row.is_denied,
     ip: row.client_ip,
     displayIP: row.reported_ip || row.client_ip,
-    isIPBanned: row.is_ip_banned,
   };
 }
 
@@ -158,22 +153,11 @@ async function loadPolicyState(): Promise<PolicyViewState> {
   };
 }
 
-async function loadBannedIPs(): Promise<string[]> {
-  const response = await apiClient.get<BannedIPsResponse>(
-    BROWSER_API_PATHS.policy.ips,
-  );
-  const bannedIPs = Array.isArray(response?.banned_ips) ? response.banned_ips : [];
-  return bannedIPs
-    .map((ip) => ip.trim())
-    .filter((ip) => ip.length > 0);
-}
-
 export function useAdmin(enabled = true) {
   const [serverData, setServerData] = useState<PolicyLease[]>([]);
   const [policySettings, setPolicySettings] = useState<PolicySettings>(DEFAULT_POLICY_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [bannedIPs, setBannedIPs] = useState<string[]>([]);
 
   const [banFilter, setBanFilter] = useState<BanFilter>("all");
 
@@ -186,12 +170,8 @@ export function useAdmin(enabled = true) {
     setError("");
 
     try {
-      const [state, banned] = await Promise.all([
-        loadPolicyState(),
-        loadBannedIPs(),
-      ]);
+      const state = await loadPolicyState();
       applyPolicyState(state);
-      setBannedIPs(banned);
     } catch (err: unknown) {
       setError(toAdminErrorMessage(err, "Failed to load admin data"));
     }
@@ -211,15 +191,11 @@ export function useAdmin(enabled = true) {
       setError("");
       setLoading(true);
       try {
-        const [state, banned] = await Promise.all([
-          loadPolicyState(),
-          loadBannedIPs(),
-        ]);
+        const state = await loadPolicyState();
         if (!mounted) {
           return;
         }
         applyPolicyState(state);
-        setBannedIPs(banned);
       } catch (err: unknown) {
         if (!mounted) {
           return;
@@ -375,30 +351,6 @@ export function useAdmin(enabled = true) {
   const handleDenyStatus = (identityKey: string, deny: boolean) =>
     runAdminAction(() => updateLeasePolicy(identityKey, { is_denied: deny }));
 
-  const handleIPBanStatus = (ip: string, isBan: boolean) =>
-    runAdminAction(async () => {
-      const normalizedIP = ip.trim();
-      if (!normalizedIP) {
-        throw new Error("Missing IP address");
-      }
-      await apiClient.post<unknown>(BROWSER_API_PATHS.policy.ips, {
-        ip: normalizedIP,
-        is_banned: isBan,
-      } satisfies IPPolicyUpdate);
-    });
-
-  const handleUnbanIP = (ip: string) =>
-    runAdminAction(async () => {
-      const normalizedIP = ip.trim();
-      if (!normalizedIP) {
-        throw new Error("Missing IP address");
-      }
-      await apiClient.post<unknown>(BROWSER_API_PATHS.policy.ips, {
-        ip: normalizedIP,
-        is_banned: false,
-      } satisfies IPPolicyUpdate);
-    });
-
   const runBulkLeaseAction = async (identityKeys: string[], action: LeaseAction) => {
     const normalizedIdentityKeys = [...new Set(
       identityKeys.filter((identityKey) => identityKey.length > 0)
@@ -462,7 +414,6 @@ export function useAdmin(enabled = true) {
     tcpPortSettings,
     loading,
     error,
-    bannedIPs,
     handleBanFilterChange,
     handleBanStatus,
     handleBPSChange,
@@ -472,8 +423,6 @@ export function useAdmin(enabled = true) {
     handleTCPPortSettingsChange,
     handleApproveStatus,
     handleDenyStatus,
-    handleIPBanStatus,
-    handleUnbanIP,
     handleBulkApprove,
     handleBulkDeny,
     handleBulkBan,

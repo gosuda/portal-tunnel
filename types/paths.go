@@ -17,7 +17,6 @@ const (
 	PathPolicyPrefix = PathPolicy + "/"
 	PathPolicyState  = PathPolicy + "/state"
 	PathPolicyLeases = PathPolicy + "/leases"
-	PathPolicyIPs    = PathPolicy + "/ips"
 
 	PathInstallShell      = PathAPIPrefix + "/install.sh"
 	PathInstallPowerShell = PathAPIPrefix + "/install.ps1"

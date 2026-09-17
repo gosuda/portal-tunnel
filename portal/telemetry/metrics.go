@@ -12,6 +12,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const MaxRelayLabelCardinality = 64
@@ -121,3 +123,9 @@ var CongestionMode = promauto.NewGauge(
 		Help: "Active congestion mode (0=normal, 1=congested, 2=variant-grid).",
 	},
 )
+
+// PreAuthRejectedTotal uses fixed endpoint and layer labels, never source IPs.
+var PreAuthRejectedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: types.PreAuthRejectedMetricName,
+	Help: "Pre-auth requests rejected by endpoint and admission layer.",
+}, []string{types.PreAuthEndpointLabel, types.PreAuthLayerLabel})

@@ -2,29 +2,31 @@ package policy
 
 import (
 	"cmp"
+	"math"
+	"net"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const (
-	sourceLimiterPruneInterval = 10 * time.Minute
+	sourceLimiterPruneInterval = time.Minute
 	sourceLimiterIdleTTL       = 30 * time.Minute
 )
 
-// SourceLimiter bounds requests per source IP with a token bucket. Each endpoint
-// owns its budget; bucket storage is bounded and idle entries expire on demand.
-// It is safe for concurrent use.
+// SourceLimiter owns weighted source and global admission budgets. State is
+// bounded, expires on demand, and never becomes durable authorization policy.
 type SourceLimiter struct {
-	mu             sync.Mutex
-	buckets        map[string]*sourceBucket
-	ratePerMinute  float64
-	burst          float64
-	lastPrune      time.Time
-	pruneInterval  time.Duration
-	bucketIdleTTL  time.Duration
-	clock          func() time.Time // overridable for tests
-	maxBucketCount int
+	mu                      sync.Mutex
+	buckets                 map[string]*sourceBucket
+	ratePerMinute, burst    float64
+	globalRate, globalBurst float64
+	global                  sourceBucket
+	lastPrune               time.Time
+	clock                   func() time.Time
+	maxBucketCount          int
 }
 
 type sourceBucket struct {
@@ -33,86 +35,67 @@ type sourceBucket struct {
 	lastUsedAt time.Time
 }
 
-// NewSourceLimiter constructs an endpoint's budget. Both limits must be positive.
-func NewSourceLimiter(ratePerMinute, burst int) *SourceLimiter {
+// NewSourceLimiter requires positive source limits. A zero global rate disables
+// the global bucket for callers that already have a separate capacity boundary.
+func NewSourceLimiter(ratePerMinute, burst, globalRate, globalBurst int) *SourceLimiter {
 	return &SourceLimiter{
-		buckets:        make(map[string]*sourceBucket),
-		ratePerMinute:  float64(ratePerMinute),
-		burst:          float64(burst),
-		pruneInterval:  sourceLimiterPruneInterval,
-		bucketIdleTTL:  sourceLimiterIdleTTL,
-		clock:          func() time.Time { return time.Now() },
-		maxBucketCount: 65536,
+		buckets: make(map[string]*sourceBucket), ratePerMinute: float64(ratePerMinute), burst: float64(burst),
+		globalRate: float64(globalRate), globalBurst: float64(globalBurst),
+		global: sourceBucket{tokens: float64(globalBurst)}, clock: time.Now, maxBucketCount: 65536,
 	}
 }
 
-// Allow returns true if the supplied source IP has remaining capacity in
-// its bucket and atomically deducts one token. Empty source IPs share a
-// single anonymized bucket so a misconfigured proxy cannot bypass the
-// limiter by suppressing client identification.
-func (l *SourceLimiter) Allow(srcIP string) bool {
-	if l == nil {
-		return true
+// Allow deducts cost only if both budgets admit the request. Rejections return
+// retry guidance and a bounded layer label; no IP history is persisted.
+func (l *SourceLimiter) Allow(srcIP string, cost int) (time.Duration, string) {
+	key := strings.TrimSpace(srcIP)
+	if ip := net.ParseIP(key); ip != nil {
+		key = ip.String()
 	}
-	key := strings.ToLower(strings.TrimSpace(srcIP))
 	key = cmp.Or(key, "<unknown>")
-
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
 	now := l.clock()
-	l.maybePruneLocked(now)
-
-	bucket, ok := l.buckets[key]
-	if !ok {
-		// New buckets start full so a single legitimate request isn't
-		// gated by warm-up latency.
-		bucket = &sourceBucket{
-			tokens:     l.burst,
-			updatedAt:  now,
-			lastUsedAt: now,
-		}
-		// Hard ceiling: if the table is saturated, refuse new IPs rather
-		// than allow unbounded growth from random source addresses.
-		if len(l.buckets) >= l.maxBucketCount {
-			return false
-		}
-		l.buckets[key] = bucket
-	} else {
-		elapsed := now.Sub(bucket.updatedAt)
-		if elapsed > 0 {
-			bucket.tokens += (l.ratePerMinute * float64(elapsed)) / float64(time.Minute)
-			if bucket.tokens > l.burst {
-				bucket.tokens = l.burst
+	if l.lastPrune.IsZero() || now.Sub(l.lastPrune) >= sourceLimiterPruneInterval {
+		l.lastPrune = now
+		for key, bucket := range l.buckets {
+			if now.Sub(bucket.lastUsedAt) >= sourceLimiterIdleTTL {
+				delete(l.buckets, key)
 			}
-			bucket.updatedAt = now
 		}
 	}
-
-	bucket.lastUsedAt = now
-	if bucket.tokens < 1 {
-		return false
+	// Check global capacity before allocating memory for a new source.
+	if l.globalRate > 0 {
+		if retry := l.global.retry(now, l.globalRate, l.globalBurst, cost); retry > 0 {
+			return retry, types.PreAuthLayerGlobal
+		}
 	}
-	bucket.tokens--
-	return true
+	bucket := l.buckets[key]
+	if bucket == nil {
+		if len(l.buckets) >= l.maxBucketCount {
+			return sourceLimiterPruneInterval, types.PreAuthLayerSource
+		}
+		bucket = &sourceBucket{tokens: l.burst, updatedAt: now}
+		l.buckets[key] = bucket
+	}
+	bucket.lastUsedAt = now
+	if retry := bucket.retry(now, l.ratePerMinute, l.burst, cost); retry > 0 {
+		return retry, types.PreAuthLayerSource
+	}
+	bucket.tokens -= float64(cost)
+	if l.globalRate > 0 {
+		l.global.tokens -= float64(cost)
+	}
+	return 0, ""
 }
 
-// maybePruneLocked drops idle buckets so the limiter's memory footprint
-// stays proportional to the number of recently-active source IPs. The
-// caller MUST already hold l.mu.
-func (l *SourceLimiter) maybePruneLocked(now time.Time) {
-	if l.lastPrune.IsZero() {
-		l.lastPrune = now
-		return
+func (b *sourceBucket) retry(now time.Time, rate, burst float64, cost int) time.Duration {
+	if !b.updatedAt.IsZero() && now.After(b.updatedAt) {
+		b.tokens = math.Min(burst, b.tokens+rate*now.Sub(b.updatedAt).Minutes())
 	}
-	if now.Sub(l.lastPrune) < l.pruneInterval {
-		return
+	b.updatedAt = now
+	if b.tokens >= float64(cost) {
+		return 0
 	}
-	l.lastPrune = now
-	threshold := now.Add(-l.bucketIdleTTL)
-	for key, bucket := range l.buckets {
-		if bucket.lastUsedAt.Before(threshold) {
-			delete(l.buckets, key)
-		}
-	}
+	return time.Duration(math.Ceil((float64(cost) - b.tokens) / rate * float64(time.Minute)))
 }

@@ -32,13 +32,13 @@ type Manager struct {
 }
 
 type cachedSite struct {
-	host, owner, leaseID, clientIP string
-	digest, dir, index             string
-	files                          map[string]types.StaticCacheFile
-	bytes                          int64
-	ttl                            time.Duration
-	expiresAt, usedAt              time.Time
-	readers                        int
+	host, owner, leaseID string
+	digest, dir, index   string
+	files                map[string]types.StaticCacheFile
+	bytes                int64
+	ttl                  time.Duration
+	expiresAt, usedAt    time.Time
+	readers              int
 }
 
 // New requires an explicit storage directory from the host application.
@@ -98,8 +98,8 @@ func (c *Manager) retireLocked(site *cachedSite) {
 // Lease is an immutable observation supplied by the lease registry. Cache
 // policy and effective retention are owned only by Manager.
 type Lease struct {
-	ID, Owner, Hostname, HostnameHash, ClientIP string
-	ExpiresAt, LastSeenAt                       time.Time
+	ID, Owner, Hostname, HostnameHash string
+	ExpiresAt, LastSeenAt             time.Time
 }
 
 type leaseState struct {
@@ -174,7 +174,6 @@ func (c *Manager) Renew(lease Lease) {
 			return
 		}
 		site.expiresAt = state.cacheExpiry()
-		site.clientIP = lease.ClientIP
 	}
 }
 
@@ -234,11 +233,7 @@ func (c *Manager) Eligible(id string) bool {
 
 func (c *Manager) eligibleLocked(id string) bool {
 	lease, ok := c.leases[id]
-	return ok && time.Now().Before(lease.ExpiresAt) && c.allowed(lease.Owner, lease.ClientIP)
-}
-
-func (c *Manager) allowed(owner, clientIP string) bool {
-	return c.policy.IsIdentityRoutable(owner) && !c.policy.IPFilter().IsIPBanned(clientIP)
+	return ok && time.Now().Before(lease.ExpiresAt) && c.policy.IsIdentityRoutable(lease.Owner)
 }
 
 func (c *Manager) collect(now time.Time) {
@@ -324,7 +319,7 @@ func (c *Manager) Has(host string) bool {
 
 func (c *Manager) lookupLocked(host string) *cachedSite {
 	site := c.entries[host]
-	if site == nil || !time.Now().Before(site.expiresAt) || !c.allowed(site.owner, site.clientIP) {
+	if site == nil || !time.Now().Before(site.expiresAt) || !c.policy.IsIdentityRoutable(site.owner) {
 		return nil
 	}
 	return site

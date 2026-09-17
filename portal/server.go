@@ -43,6 +43,7 @@ const (
 )
 
 type ServerConfig struct {
+	PreAuth           types.PreAuthConfig
 	Cache             cache.Config
 	IVNPConfigPath    string
 	PortalURL         string
@@ -111,6 +112,9 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 // ValidateServerConfig normalizes server configuration and checks the
 // side-effect-free invariants required before runtime resources are created.
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
+	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
+		return ServerConfig{}, err
+	}
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
 	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
 		return ServerConfig{}, errors.New("relay overlay requires discovery")
@@ -231,6 +235,7 @@ type Server struct {
 	proxy       proxy
 
 	apiListener      net.Listener
+	apiHandoff       *apiHandoff
 	sniListener      net.Listener
 	apiServer        *http.Server
 	apiTLSClose      io.Closer
@@ -240,10 +245,10 @@ type Server struct {
 	pprofServer      *http.Server
 	quicBackhaul     *quic.Listener
 
-	relaySet        *discovery.RelaySet
-	announceLimiter *policy.SourceLimiter
-	registry        *leaseRegistry
-	overlay         *overlay.Runtime
+	relaySet       *discovery.RelaySet
+	preAuthLimiter *policy.SourceLimiter
+	registry       *leaseRegistry
+	overlay        *overlay.Runtime
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -284,13 +289,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	server := &Server{
-		cfg:             utils.NewSnapshot(cfg, ServerConfig.snapshot),
-		identity:        relayIdentity,
-		authority:       relayAuthority,
-		publicPort:      publicPort,
-		registry:        registry,
-		relaySet:        relaySet,
-		announceLimiter: policy.NewSourceLimiter(30, 60),
+		cfg:            utils.NewSnapshot(cfg, ServerConfig.snapshot),
+		identity:       relayIdentity,
+		authority:      relayAuthority,
+		publicPort:     publicPort,
+		registry:       registry,
+		relaySet:       relaySet,
+		preAuthLimiter: policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 	}
 	server.registry.proxy = &server.proxy
 	if cfg.IVNPConfigPath != "" {
@@ -549,6 +554,7 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		}
 	}
 
+	s.apiHandoff = &apiHandoff{addr: sniListener.Addr(), conns: make(chan net.Conn), done: make(chan struct{})}
 	s.apiListener = wrappedAPIListener
 	s.sniListener = sniListener
 	s.apiServer = apiServer
@@ -564,6 +570,13 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	started = true
 
 	group.Go(s.runAPIServer)
+	group.Go(func() error {
+		err := s.apiServer.Serve(tls.NewListener(s.apiHandoff, s.apiServer.TLSConfig))
+		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+			return nil
+		}
+		return err
+	})
 	if s.redirectServer != nil {
 		group.Go(func() error {
 			err := s.redirectServer.Serve(s.redirectListener)
@@ -694,6 +707,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if s.quicBackhaul != nil {
 			_ = s.quicBackhaul.Close()
 		}
+		if s.apiHandoff != nil {
+			_ = s.apiHandoff.Close()
+		}
 		if s.sniListener != nil {
 			if err := s.sniListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 				shutdownErr = err
@@ -817,17 +833,13 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 				// name targets the canonical root origin; route it there instead
 				// of failing the handshake for IP-literal PORTAL_URL deployments.
 				if serverName == "" || serverName == s.identity.Name || s.registry.cache.Has(serverName) {
-					if s.apiListener == nil {
+					select {
+					case s.apiHandoff.conns <- wrappedConn:
+					case <-s.apiHandoff.done:
 						_ = wrappedConn.Close()
-						return
-					}
-					dialer := &net.Dialer{Timeout: 5 * time.Second}
-					upstream, err := dialer.DialContext(ctx, "tcp", utils.HostPortOrLoopback(s.apiListener.Addr().String()))
-					if err != nil {
+					case <-ctx.Done():
 						_ = wrappedConn.Close()
-						return
 					}
-					s.proxy.bridge(wrappedConn, upstream, "", nil)
 					return
 				}
 

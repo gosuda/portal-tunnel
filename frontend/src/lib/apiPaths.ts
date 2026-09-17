@@ -12,7 +12,6 @@ export const RELAY_API_PATHS = {
     root: "/api/policy",
     state: "/api/policy/state",
     leases: "/api/policy/leases",
-    ips: "/api/policy/ips",
   },
   x402: {
     root: "/api/x402",
