@@ -126,6 +126,38 @@ export interface DiscoveryResponse {
   incompatible_relays?: IncompatibleRelayEntry[];
 }
 
+export type ReputationVote = "up" | "down";
+
+// Anonymous viewers carry "" from the relay; only per-hostname responses
+// include viewer_vote at all.
+export type ViewerVote = ReputationVote | "";
+
+export interface ReputationSummary {
+  hostname: string;
+  up: number;
+  down: number;
+  total: number;
+  down_ratio: number;
+  warning: boolean;
+  viewer_vote?: ViewerVote;
+}
+
+export interface ReputationAggregatesResponse {
+  hostnames?: ReputationSummary[];
+}
+
+export interface ReputationVoteRequest {
+  hostname: string;
+  vote: ReputationVote;
+}
+
+export interface ReputationVoteResponse {
+  up: number;
+  down: number;
+  total: number;
+  viewer_vote?: ViewerVote;
+}
+
 export interface LeasePolicyUpdate {
   identity_key: string;
   bps?: number;

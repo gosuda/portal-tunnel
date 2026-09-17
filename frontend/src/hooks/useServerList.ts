@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useList, type BaseServer } from "@/hooks/useList";
+import { useReputation } from "@/hooks/useReputation";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
 import {
@@ -48,6 +49,7 @@ export function useServerList() {
     leases: [],
     landingPageEnabled: false,
   });
+  const reputation = useReputation();
 
   useEffect(() => {
     let cancelled = false;
@@ -77,9 +79,15 @@ export function useServerList() {
     };
   }, []);
 
+  // Join the relay's reputation aggregate onto each card by hostname; the
+  // relay's `warning` decision is consumed as-is, never recomputed here.
   const servers: BaseServer[] = useMemo(
-    () => convertPublicLeasesToServers(publicState.leases),
-    [publicState.leases]
+    () =>
+      convertPublicLeasesToServers(publicState.leases).map((server) => ({
+        ...server,
+        reputation: reputation.getSummary(server.dns),
+      })),
+    [publicState.leases, reputation.getSummary]
   );
 
   const list = useList({
@@ -90,5 +98,6 @@ export function useServerList() {
   return {
     ...list,
     landingPageEnabled: publicState.landingPageEnabled,
+    onVote: reputation.vote,
   };
 }

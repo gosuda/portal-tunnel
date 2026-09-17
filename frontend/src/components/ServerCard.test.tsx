@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { Mock } from "vitest";
 import { describe, expect, it, vi } from "vitest";
+import type { ReputationSummary } from "@/types/api";
 import { ServerCard } from "./ServerCard";
 
 const TCP = "minecraft.relay.example.com:50000";
@@ -98,5 +99,84 @@ describe("ServerCard raw transport endpoints", () => {
       expect(document.activeElement).toBe(button);
       expect(button.closest("a")).toBeNull();
     }
+  });
+});
+
+const REPUTATION: ReputationSummary = {
+  hostname: "minecraft.relay.example.com",
+  up: 12,
+  down: 8,
+  total: 20,
+  down_ratio: 0.4,
+  warning: false,
+  viewer_vote: "",
+};
+
+// Routes probe: the card sits on the directory route; navigation into
+// /server/srv-1 would swap in the "service detail" marker.
+function renderVotingCard() {
+  const onVote = vi.fn();
+  render(
+    <MemoryRouter initialEntries={["/"]}>
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <>
+              <div>directory</div>
+              <ServerCard
+                serverId="srv-1"
+                name="minecraft"
+                description=""
+                tags={[]}
+                thumbnail=""
+                owner=""
+                online
+                dns="minecraft.relay.example.com"
+                navigationPath="/server/srv-1"
+                navigationState={null}
+                reputation={REPUTATION}
+                onVote={onVote}
+              />
+            </>
+          }
+        />
+        <Route path="/server/srv-1" element={<div>service detail</div>} />
+      </Routes>
+    </MemoryRouter>
+  );
+  return onVote;
+}
+
+describe("ServerCard community reputation votes", () => {
+  it("renders counts and votes without navigating the card", () => {
+    const onVote = renderVotingCard();
+
+    expect(screen.getByText("12")).toBeTruthy();
+    expect(screen.getByText("8")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Recommend" }));
+    expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "up");
+
+    fireEvent.click(screen.getByRole("button", { name: "Not recommend" }));
+    expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "down");
+
+    expect(screen.getByText("directory")).toBeTruthy();
+    expect(screen.queryByText("service detail")).toBeNull();
+  });
+
+  it("keeps vote controls keyboard reachable without navigating", () => {
+    const onVote = renderVotingCard();
+
+    for (const name of ["Recommend", "Not recommend"]) {
+      const button = screen.getByRole("button", { name });
+      button.focus();
+      expect(document.activeElement).toBe(button);
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Recommend" }));
+    expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "up");
+    expect(screen.getByText("directory")).toBeTruthy();
+    expect(screen.queryByText("service detail")).toBeNull();
   });
 });
