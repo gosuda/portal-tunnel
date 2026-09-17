@@ -537,38 +537,6 @@ func TestHTTPRedirectLifecycle(t *testing.T) {
 	}
 }
 
-func TestHTTPRedirectPartialStartupCleanup(t *testing.T) {
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer occupied.Close()
-	probe, addr := tempRedirectPort(t)
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
-	server, err := NewServer(ServerConfig{
-		PortalURL: "https://localhost:4017", StateDir: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
-		SNIListenAddr: "127.0.0.1:0",
-		HTTPRedirect:  types.HTTPRedirectConfig{Enabled: true, Addr: addr},
-		PProfEnabled:  true, PProfListenAddr: occupied.Addr().String(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := server.Start(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "listen pprof") {
-		if err == nil {
-			server.Shutdown(context.Background())
-		}
-		t.Fatalf("Start error=%v, want later pprof bind failure", err)
-	}
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		t.Fatalf("partial startup leaked redirect listener: %v", err)
-	}
-	listener.Close()
-}
-
 func TestHTTPRedirectBindFailure(t *testing.T) {
 	occupied, addr := tempRedirectPort(t)
 	defer occupied.Close()

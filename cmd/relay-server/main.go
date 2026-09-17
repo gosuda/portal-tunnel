@@ -38,6 +38,8 @@ type appConfig struct {
 	FrontendDir        string
 	LandingPageEnabled bool
 	AdminToken         string
+	PprofEnabled       bool
+	PprofListenAddr    string
 }
 
 // resolveAppConfig registers every flag and resolves it against the
@@ -98,8 +100,8 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.IntFlagEnv(fs, &cfg.Relay.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
 
 	utils.StringFlagEnv(fs, &cfg.AdminToken, "admin-token", "", "admin bearer token for relay admin and policy APIs", "ADMIN_TOKEN")
-	utils.BoolFlagEnv(fs, &cfg.Relay.PProfEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
-	utils.StringFlagEnv(fs, &cfg.Relay.PProfListenAddr, "pprof-addr", portal.DefaultPProfListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
+	utils.BoolFlagEnv(fs, &cfg.PprofEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
+	utils.StringFlagEnv(fs, &cfg.PprofListenAddr, "pprof-addr", DefaultPprofListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
 	utils.BoolFlagEnv(fs, &cfg.Relay.X402Enabled, "x402-enabled", false, "enable relay-owned Sui x402 facilitator endpoints under /api/x402 for future control-plane payments", "X402_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.Relay.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
 	utils.StringFlagEnv(fs, &cfg.Relay.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
@@ -158,8 +160,45 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}
+	if !cfg.PprofEnabled {
+		return server.Serve(ctx, relayAPI.Handler())
+	}
 
-	return server.Serve(ctx, relayAPI.Handler())
+	// The pprof listener is process-level diagnostics with no relay state, so
+	// it binds ahead of the relay Serve and shuts down when the process
+	// lifecycle ends, whatever the outcome.
+	bound, stopPprof, pprofErrs, err := startPprofServer(ctx, normalizePprofAddr(cfg.PprofListenAddr))
+	if err != nil {
+		return err
+	}
+	log.Info().Str("pprof_addr", utils.HostPortOrLoopback(bound.String())).Msg("starting pprof server")
+
+	// Both servers report to the process owner: an unexpected pprof failure
+	// ends the relay lifecycle, as it did inside the relay errgroup.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(runCtx, relayAPI.Handler()) }()
+
+	var serveErr error
+	select {
+	case err := <-serveDone:
+		serveErr = err
+	case err := <-pprofErrs:
+		serveErr = fmt.Errorf("serve pprof: %w", err)
+		// Let the relay wind down before returning, mirroring the
+		// errgroup cancellation the relay used to provide.
+		cancel()
+		<-serveDone
+	}
+	cancel()
+
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	if err := stopPprof(shutdownCtx); err != nil {
+		log.Warn().Err(err).Msg("shutdown pprof server")
+	}
+	cancel()
+	return serveErr
 }
 
 func runHelpCommand(args []string) error {
