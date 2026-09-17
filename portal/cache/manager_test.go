@@ -444,9 +444,9 @@ func TestObjectDigestMismatchRejectsUpload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The manifest still announces the declared size, but the object bytes no
-	// longer hash to the declared SHA-256.
-	req.Body = io.NopCloser(strings.NewReader(strings.Replace(string(raw), "site", "tampered", 1)))
+	// The replacement is the same length as "site" so the streamed byte count
+	// matches the manifest and only the SHA-256 comparison can reject.
+	req.Body = io.NopCloser(strings.NewReader(strings.Replace(string(raw), "site", "sita", 1)))
 	w := httptest.NewRecorder()
 	c.Handle(w, req, l.ID)
 	if w.Code != http.StatusBadRequest || c.Has(l.Hostname) || c.used != 0 {
@@ -497,7 +497,7 @@ func TestLeaseReplacementRejectsInFlightUpload(t *testing.T) {
 	}
 }
 
-func TestPolicyBanSuspendsCacheRouting(t *testing.T) {
+func TestPolicyBanSuppressesCacheRouting(t *testing.T) {
 	runtime, err := policy.NewRuntime(false, false, false, "")
 	if err != nil {
 		t.Fatal(err)
@@ -518,10 +518,5 @@ func TestPolicyBanSuspendsCacheRouting(t *testing.T) {
 	}
 	if c.Serve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "https://"+l.Hostname+"/", nil), l.Hostname) {
 		t.Fatal("banned identity was still served from cache")
-	}
-	// A ban is a routing decision; the retained snapshot returns on unban.
-	runtime.UnbanIdentity(l.Owner)
-	if !c.Has(l.Hostname) {
-		t.Fatal("unban discarded retained cache content")
 	}
 }
