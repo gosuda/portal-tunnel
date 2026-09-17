@@ -11,7 +11,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
 
@@ -230,25 +232,23 @@ func DecodeAPIData(body []byte, out any) error {
 
 func DecodeAPIRequestError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	apiErr := &types.APIRequestError{StatusCode: resp.StatusCode, Message: strings.TrimSpace(string(body))}
+	retryAfter := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if seconds, err := strconv.ParseUint(retryAfter, 10, 31); err == nil {
+		apiErr.RetryAfter = time.Duration(seconds) * time.Second
+	} else if at, err := http.ParseTime(retryAfter); err == nil {
+		apiErr.RetryAfter = max(0, time.Until(at))
+	}
 	var envelope types.APIEnvelope[json.RawMessage]
 	if err := json.Unmarshal(body, &envelope); err == nil && !envelope.OK {
 		if envelope.Error == nil {
-			return &types.APIRequestError{
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("api request failed with status %d", resp.StatusCode),
-			}
-		}
-		return &types.APIRequestError{
-			StatusCode: resp.StatusCode,
-			Code:       envelope.Error.Code,
-			Message:    envelope.Error.Message,
+			apiErr.Message = fmt.Sprintf("api request failed with status %d", resp.StatusCode)
+		} else {
+			apiErr.Code = envelope.Error.Code
+			apiErr.Message = envelope.Error.Message
 		}
 	}
-
-	return &types.APIRequestError{
-		StatusCode: resp.StatusCode,
-		Message:    strings.TrimSpace(string(body)),
-	}
+	return apiErr
 }
 
 func DecodeJSONRequest[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (T, bool) {

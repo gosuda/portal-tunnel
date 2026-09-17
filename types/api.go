@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -18,9 +19,16 @@ type APIError struct {
 }
 
 type APIRequestError struct {
-	StatusCode int    `json:"-"`
-	Code       string `json:"code,omitempty"`
-	Message    string `json:"message,omitempty"`
+	RetryAfter time.Duration `json:"-"`
+	StatusCode int           `json:"-"`
+	Code       string        `json:"code,omitempty"`
+	Message    string        `json:"message,omitempty"`
+}
+
+// IsRateLimited identifies temporary admission failures, including a gateway
+// HTTP 429 without Portal's JSON envelope.
+func (e *APIRequestError) IsRateLimited() bool {
+	return e != nil && (e.StatusCode == http.StatusTooManyRequests || e.Code == APIErrorCodeRateLimited)
 }
 
 func (e *APIRequestError) Error() string {

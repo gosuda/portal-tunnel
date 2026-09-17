@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const (
@@ -65,20 +67,20 @@ func (l *SourceLimiter) Allow(srcIP string, cost int) (time.Duration, string) {
 	// Check global capacity before allocating memory for a new source.
 	if l.globalRate > 0 {
 		if retry := l.global.retry(now, l.globalRate, l.globalBurst, cost); retry > 0 {
-			return retry, "global"
+			return retry, types.PreAuthLayerGlobal
 		}
 	}
 	bucket := l.buckets[key]
 	if bucket == nil {
 		if len(l.buckets) >= l.maxBucketCount {
-			return sourceLimiterPruneInterval, "source"
+			return sourceLimiterPruneInterval, types.PreAuthLayerSource
 		}
 		bucket = &sourceBucket{tokens: l.burst, updatedAt: now}
 		l.buckets[key] = bucket
 	}
 	bucket.lastUsedAt = now
 	if retry := bucket.retry(now, l.ratePerMinute, l.burst, cost); retry > 0 {
-		return retry, "source"
+		return retry, types.PreAuthLayerSource
 	}
 	bucket.tokens -= float64(cost)
 	if l.globalRate > 0 {

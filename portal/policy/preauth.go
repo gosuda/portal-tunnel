@@ -1,26 +1,19 @@
 package policy
 
-import "fmt"
+import (
+	"fmt"
 
-// PreAuthConfig describes operational limits, not protocol constants.
-type PreAuthConfig struct {
-	SourcePerMinute int
-	SourceBurst     int
-	GlobalPerMinute int
-	GlobalBurst     int
-	ChallengeCost   int
-	AnnounceCost    int
-	RegisterCost    int
-}
+	"github.com/gosuda/portal-tunnel/v2/types"
+)
 
-func DefaultPreAuthConfig() PreAuthConfig {
+func DefaultPreAuthConfig() types.PreAuthConfig {
 	// 600 units/minute permits about 100 complete registrations/minute;
 	// the 200-unit burst permits about 33 simultaneous startups. Operators
 	// should tune this aggregate work budget to their relay capacity.
-	return PreAuthConfig{SourcePerMinute: 10, SourceBurst: 20, GlobalPerMinute: 600, GlobalBurst: 200, ChallengeCost: 1, AnnounceCost: 2, RegisterCost: 5}
+	return types.PreAuthConfig{SourcePerMinute: 10, SourceBurst: 20, GlobalPerMinute: 600, GlobalBurst: 200, ChallengeCost: 1, AnnounceCost: 2, RegisterCost: 5}
 }
 
-func (c *PreAuthConfig) Normalize() error {
+func NormalizePreAuthConfig(c *types.PreAuthConfig) error {
 	defaults := DefaultPreAuthConfig()
 	for _, field := range []struct {
 		value    *int

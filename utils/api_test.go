@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -83,5 +84,29 @@ func TestDecodeJSONRequestRejectsOversizedBody(t *testing.T) {
 	}
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("DecodeJSONRequest() status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestDecodeAPIRequestErrorRetryAfter(t *testing.T) {
+	for _, header := range []string{"7", time.Now().Add(7 * time.Second).UTC().Format(http.TimeFormat), "", "bad", "-1", "99999999999999999999999999"} {
+		response := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Retry-After": {header}}, Body: io.NopCloser(strings.NewReader("busy"))}
+		apiErr, ok := errors.AsType[*types.APIRequestError](DecodeAPIRequestError(response))
+		if !ok {
+			t.Fatal("expected APIRequestError")
+		}
+		if !apiErr.IsRateLimited() {
+			t.Fatal("non-JSON HTTP 429 lost its retryable status")
+		}
+		if header == "7" {
+			if apiErr.RetryAfter != 7*time.Second {
+				t.Fatalf("delta-seconds = %v", apiErr.RetryAfter)
+			}
+		} else if strings.Contains(header, "GMT") {
+			if apiErr.RetryAfter <= 5*time.Second || apiErr.RetryAfter > 7*time.Second {
+				t.Fatalf("HTTP-date = %v", apiErr.RetryAfter)
+			}
+		} else if apiErr.RetryAfter != 0 {
+			t.Fatalf("invalid header %q = %v", header, apiErr.RetryAfter)
+		}
 	}
 }

@@ -138,24 +138,42 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	}
 
 	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge); err != nil {
-		return types.RegisterResponse{}, err
-	}
-
-	authority := identity.NewLocalAuthority(registerReq.Identity)
-	signature, err := authority.SignEthereumPersonalMessage(challenge.SIWEMessage)
-	if err != nil {
-		return types.RegisterResponse{}, err
-	}
-
+	var request types.RegisterRequest
 	var resp types.RegisterResponse
-	if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
-		ChallengeID:   challenge.ChallengeID,
-		SIWEMessage:   challenge.SIWEMessage,
-		SIWESignature: signature,
-		ReportedIP:    reportedIP,
-	}, nil, &resp); err != nil {
-		return types.RegisterResponse{}, err
+	for {
+		var err error
+		if request.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
+			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge)
+			if err == nil {
+				if challenge.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
+					return types.RegisterResponse{}, errors.New("relay returned an invalid or expired registration challenge")
+				}
+				signature, err := identity.NewLocalAuthority(registerReq.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
+				if err != nil {
+					return types.RegisterResponse{}, err
+				}
+				request = types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature, ReportedIP: reportedIP}
+				// Challenge issuance succeeded; keep this signed request until admission
+				// succeeds or the challenge expires. A 429 must not buy another challenge.
+				continue
+			}
+		} else {
+			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegister, request, nil, &resp)
+			if err == nil {
+				break
+			}
+		}
+		apiErr, ok := errors.AsType[*types.APIRequestError](err)
+		if !ok || !apiErr.IsRateLimited() {
+			return types.RegisterResponse{}, err
+		}
+		delay := apiErr.RetryAfter
+		if delay <= 0 {
+			delay = defaultRetryWait
+		}
+		if !utils.SleepOrDone(ctx, delay) {
+			return types.RegisterResponse{}, ctx.Err()
+		}
 	}
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
 	if resp.AccessToken == "" {

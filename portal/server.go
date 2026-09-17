@@ -43,7 +43,7 @@ const (
 )
 
 type ServerConfig struct {
-	PreAuth           policy.PreAuthConfig
+	PreAuth           types.PreAuthConfig
 	Cache             cache.Config
 	IVNPConfigPath    string
 	PortalURL         string
@@ -112,7 +112,7 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 // ValidateServerConfig normalizes server configuration and checks the
 // side-effect-free invariants required before runtime resources are created.
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
-	if err := cfg.PreAuth.Normalize(); err != nil {
+	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
 		return ServerConfig{}, err
 	}
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
