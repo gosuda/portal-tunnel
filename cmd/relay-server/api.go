@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -39,6 +40,9 @@ type RelayAPI struct {
 	frontendFS           fs.FS
 	frontendCache        sync.Map
 	frontendCacheEnabled bool
+	// reputation owns relay-local service reputation state and its
+	// reputation.json file; see reputation.go.
+	reputation *ReputationStore
 	// policyWriteMu serializes mutations including the state-file write;
 	// policyMu guards in-memory state only, so readers never block on disk I/O.
 	policyWriteMu      sync.Mutex
@@ -46,7 +50,7 @@ type RelayAPI struct {
 	landingPageEnabled bool
 }
 
-func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
+func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool, reputation ReputationConfig) (*RelayAPI, error) {
 	if server == nil {
 		return nil, errors.New("relay api requires portal server")
 	}
@@ -62,6 +66,10 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 	if err != nil {
 		return nil, err
 	}
+	reputationStore, err := newReputationStore(filepath.Join(filepath.Dir(policyStatePath), reputationFilename), reputation)
+	if err != nil {
+		return nil, err
+	}
 
 	api := &RelayAPI{
 		server:               server,
@@ -69,6 +77,7 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 		policyStatePath:      policyStatePath,
 		frontendFS:           frontendFS,
 		frontendCacheEnabled: strings.TrimSpace(frontendDir) == "",
+		reputation:           reputationStore,
 		landingPageEnabled:   landingPageEnabled,
 	}
 	if err := api.loadPolicyState(); err != nil {
@@ -88,6 +97,8 @@ func (api *RelayAPI) Handler() *http.ServeMux {
 	mux.HandleFunc(types.PathPolicy, api.servePolicy)
 	mux.HandleFunc(types.PathPolicyPrefix, api.servePolicy)
 	mux.HandleFunc(types.PathState, api.servePublicState)
+	mux.HandleFunc(pathReputation, api.serveReputation)
+	mux.HandleFunc(pathReputationVote, api.serveReputationVote)
 	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
 		serveInstallScript(w, r, api.server.PortalURL(), false)
 	})

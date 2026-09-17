@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useList, type BaseServer } from "@/hooks/useList";
+import { normalizeHostname, useReputation } from "@/hooks/useReputation";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
 import {
@@ -48,6 +49,7 @@ export function useServerList() {
     leases: [],
     landingPageEnabled: false,
   });
+  const reputation = useReputation();
 
   useEffect(() => {
     let cancelled = false;
@@ -77,9 +79,16 @@ export function useServerList() {
     };
   }, []);
 
+  // Join the relay's vote aggregate onto each card by hostname.
+  // Deps are plain state (array + record), so the compiler can preserve
+  // this memo — a function identity dep would bail compilation out.
   const servers: BaseServer[] = useMemo(
-    () => convertPublicLeasesToServers(publicState.leases),
-    [publicState.leases]
+    () =>
+      convertPublicLeasesToServers(publicState.leases).map((server) => ({
+        ...server,
+        reputation: reputation.summaries[normalizeHostname(server.dns)],
+      })),
+    [publicState.leases, reputation.summaries]
   );
 
   const list = useList({
@@ -90,5 +99,6 @@ export function useServerList() {
   return {
     ...list,
     landingPageEnabled: publicState.landingPageEnabled,
+    onVote: reputation.vote,
   };
 }

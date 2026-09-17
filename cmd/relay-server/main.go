@@ -40,6 +40,7 @@ type appConfig struct {
 	AdminToken         string
 	PprofEnabled       bool
 	PprofListenAddr    string
+	Reputation         ReputationConfig
 }
 
 // resolveAppConfig registers every flag and resolves it against the
@@ -75,6 +76,9 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.IntFlagEnv(fs, &cfg.Relay.PreAuth.ChallengeCost, "preauth-challenge-cost", preAuthDefaults.ChallengeCost, nil, "pre-auth units per registration challenge", "PREAUTH_CHALLENGE_COST")
 	utils.IntFlagEnv(fs, &cfg.Relay.PreAuth.AnnounceCost, "preauth-announce-cost", preAuthDefaults.AnnounceCost, nil, "pre-auth units per discovery announce", "PREAUTH_ANNOUNCE_COST")
 	utils.IntFlagEnv(fs, &cfg.Relay.PreAuth.RegisterCost, "preauth-register-cost", preAuthDefaults.RegisterCost, nil, "pre-auth units per registration attempt", "PREAUTH_REGISTER_COST")
+
+	reputationDefaults := defaultReputationConfig()
+	utils.DurationFlagEnv(fs, &cfg.Reputation.Retention, "reputation-retention", reputationDefaults.Retention, "hostname reputation drops out of reads after this long without votes and without being live", "REPUTATION_RETENTION")
 
 	utils.BoolFlagEnv(fs, &cfg.Relay.Cache.Enabled, "cache-enabled", true, "allow explicitly opted-in static exposures to use the relay disk cache", "CACHE_ENABLED")
 	utils.IntFlagEnv(fs, &cfg.Relay.Cache.MaxBytes, "cache-max-bytes", 1<<30, nil, "maximum relay cached and staging payload bytes", "CACHE_MAX_BYTES")
@@ -156,7 +160,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	}
 
 	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
-	relayAPI, err := NewRelayAPI(server, policyPath, cfg.AdminToken, cfg.FrontendDir, cfg.LandingPageEnabled)
+	relayAPI, err := NewRelayAPI(server, policyPath, cfg.AdminToken, cfg.FrontendDir, cfg.LandingPageEnabled, cfg.Reputation)
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}
