@@ -64,7 +64,7 @@ tidy:
 # This deployment check excludes listener values fixed directly by the bundled
 # Compose topology; that topology, not the relay binary, owns the exception.
 CONFIG_DOC := docs/src/routes/configuration/+page.md
-COMPOSE_PINNED_ENV_PATTERN := ^(API_PORT|SNI_PORT)$$
+COMPOSE_PINNED_ENV_PATTERN := ^(SNI_PORT)$$
 
 check-env-example:
 	@go run ./cmd/relay-server config --format names | grep -Ev '$(COMPOSE_PINNED_ENV_PATTERN)' > /tmp/portal-env-names.txt

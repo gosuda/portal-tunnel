@@ -26,7 +26,6 @@ func TestCertificateSignerMismatchRejectsStartup(t *testing.T) {
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     "https://localhost",
 		StateDir:      stateDir,
-		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
 	})
 	if err != nil {

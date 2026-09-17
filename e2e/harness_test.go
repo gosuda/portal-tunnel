@@ -33,7 +33,6 @@ type harness struct {
 	service     *httptest.Server
 	sniAddr     string
 	certificate string
-	apiPort     int
 	sniPort     int
 	stateDir    string
 	proxyDone   chan error
@@ -52,14 +51,12 @@ func newHarness(t *testing.T) *harness {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	apiPort := harnessPort(t)
 	sniPort := harnessPort(t)
 	stateDir := t.TempDir()
 	relayURL := "https://127.0.0.1:" + strconv.Itoa(sniPort)
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     relayURL,
 		StateDir:      stateDir,
-		APIListenAddr: "127.0.0.1:" + strconv.Itoa(apiPort),
 		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(sniPort),
 		SNIPort:       sniPort,
 	})
@@ -99,7 +96,6 @@ func newHarness(t *testing.T) *harness {
 		service:     service,
 		sniAddr:     "127.0.0.1:" + strconv.Itoa(sniPort),
 		certificate: filepath.Join(stateDir, "fullchain.pem"),
-		apiPort:     apiPort,
 		sniPort:     sniPort,
 		stateDir:    stateDir,
 		proxyDone:   make(chan error, 1),

@@ -37,7 +37,6 @@ func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
 	restarted, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     "https://127.0.0.1:" + strconv.Itoa(h.sniPort),
 		StateDir:      h.stateDir,
-		APIListenAddr: "127.0.0.1:" + strconv.Itoa(h.apiPort),
 		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(h.sniPort),
 		SNIPort:       h.sniPort,
 	})
