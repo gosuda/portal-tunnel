@@ -202,6 +202,9 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 
 func (m *mitmManager) maybeStart() {
 	l := m.listener
+	if l.cache != nil {
+		return // This exposure explicitly permits relay TLS termination.
+	}
 	select {
 	case <-l.doneCh:
 		return

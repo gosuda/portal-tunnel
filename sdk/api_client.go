@@ -31,6 +31,7 @@ type apiClient struct {
 	transport      *http.Transport
 	tls            *tls.Config
 	releaseVersion string
+	cache          *types.StaticCacheLimits
 }
 
 // resetTransport tears down the cached HTTP client and TLS config so the next
@@ -45,6 +46,7 @@ func (c *apiClient) resetTransport() {
 	c.http = nil
 	c.transport = nil
 	c.tls = nil
+	c.cache = nil
 }
 
 func (c *apiClient) initHTTPTransport(ctx context.Context) error {
@@ -81,6 +83,7 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 		return nil
 	}
 	c.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
+	c.cache = domainResp.Cache
 	c.http = httpClient
 	c.transport = httpTransport
 	c.tls = tlsConfig
@@ -116,6 +119,15 @@ func (c *apiClient) relayReleaseVersion() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.releaseVersion
+}
+
+func (c *apiClient) cacheLimits() (types.StaticCacheLimits, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.cache == nil {
+		return types.StaticCacheLimits{}, false
+	}
+	return *c.cache, true
 }
 
 // register only performs the challenge and registration wire exchange.

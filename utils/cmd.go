@@ -267,6 +267,19 @@ func IntFlagEnv(fs *flag.FlagSet, target *int, name string, fallback int, parse 
 	flagSet.Lookup(name).DefValue = strconv.Itoa(fallback)
 }
 
+func DurationFlagEnv(fs *flag.FlagSet, target *time.Duration, name string, fallback time.Duration, usage string, envNames ...string) {
+	raw, setBy := resolveStringEnv(fallback.String(), envNames...)
+	value, err := time.ParseDuration(raw)
+	if err != nil {
+		recordEnvIssue(setBy, raw, "not a duration; use values such as 30m or 24h")
+		value, setBy = fallback, ""
+	}
+	registerEnvVar(name, usage, fallback.String(), value.String(), setBy, envNames)
+	flagSet := ensureFlagSet(fs)
+	flagSet.DurationVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = fallback.String()
+}
+
 func RepeatedStringFlag(fs *flag.FlagSet, target *[]string, name, usage string) {
 	ensureFlagSet(fs).Func(name, usage, func(value string) error {
 		if target == nil {
