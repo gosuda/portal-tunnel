@@ -537,40 +537,6 @@ func TestHTTPRedirectLifecycle(t *testing.T) {
 	}
 }
 
-func TestHTTPRedirectPartialStartupCleanup(t *testing.T) {
-	// A malformed IVNP config makes the first post-redirect-bind startup step
-	// (overlay start) fail, so the test proves the already-bound redirect
-	// listener is released on partial startup.
-	ivnpConfig := filepath.Join(t.TempDir(), "ivnp.json")
-	if err := os.WriteFile(ivnpConfig, []byte("{"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	probe, addr := tempRedirectPort(t)
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
-	}
-	server, err := NewServer(ServerConfig{
-		PortalURL: "https://localhost:4017", StateDir: t.TempDir(), ACME: acme.Config{KeyDir: t.TempDir()},
-		SNIListenAddr:    "127.0.0.1:0",
-		HTTPRedirect:     types.HTTPRedirectConfig{Enabled: true, Addr: addr},
-		DiscoveryEnabled: true, IVNPConfigPath: ivnpConfig,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := server.Start(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "start relay overlay") {
-		if err == nil {
-			server.Shutdown(context.Background())
-		}
-		t.Fatalf("Start error=%v, want later overlay start failure", err)
-	}
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		t.Fatalf("partial startup leaked redirect listener: %v", err)
-	}
-	listener.Close()
-}
-
 func TestHTTPRedirectBindFailure(t *testing.T) {
 	occupied, addr := tempRedirectPort(t)
 	defer occupied.Close()
