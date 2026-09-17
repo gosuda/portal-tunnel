@@ -118,12 +118,12 @@ func (h *USDCPaymentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel = context.WithTimeout(ctx, payment.RequestTimeout)
 		}
 		defer cancel()
+		r = r.WithContext(ctx)
 
-		settled, ok := h.payment.Settle(ctx, w, r)
+		settled, ok := h.payment.settleAndDecorate(w, r)
 		if !ok {
 			return
 		}
-		utils.SetPaymentResponseHeaders(w.Header(), settled)
 
 		h.handler(w, r, types.X402PaymentResult{
 			TransactionID: strings.TrimSpace(settled.Transaction),

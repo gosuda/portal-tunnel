@@ -30,7 +30,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
-	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -61,9 +60,6 @@ type ServerConfig struct {
 	MaxPort           int
 	PProfEnabled      bool
 	PProfListenAddr   string
-	X402Enabled       bool
-	X402Testnet       bool
-	X402PayTo         string
 	ACME              acme.Config
 }
 
@@ -162,10 +158,6 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
 	if cfg.PProfEnabled {
 		cfg.PProfListenAddr = utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
-	}
-	cfg.X402PayTo = strings.TrimSpace(cfg.X402PayTo)
-	if cfg.X402Enabled && cfg.X402PayTo == "" {
-		return ServerConfig{}, errors.New("x402 facilitator enabled without a payment recipient")
 	}
 	// The runtime parses the proxy CIDR allowlist in policy.NewRuntime before
 	// serving; validate it here so the config report and startup agree on the
@@ -393,15 +385,6 @@ func (s *Server) supportsTCP() bool {
 // capabilities around the application handler.
 func (s *Server) Serve(ctx context.Context, handler http.Handler) error {
 	mux := http.NewServeMux()
-	if s.config().X402Enabled {
-		if err := x402.MountFacilitator(mux, x402.FacilitatorConfig{Testnet: s.config().X402Testnet}); err != nil {
-			return fmt.Errorf("mount x402 facilitator: %w", err)
-		}
-		log.Info().
-			Str("path", types.PathX402Facilitator).
-			Str("network", x402.Network(s.config().X402Testnet)).
-			Msg("relay-owned x402 facilitator enabled")
-	}
 	if handler == nil {
 		mux.HandleFunc("/{$}", s.handleRoot)
 	} else {

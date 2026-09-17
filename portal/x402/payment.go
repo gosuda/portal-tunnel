@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/cockroachdb/apd/v3"
@@ -27,6 +28,7 @@ type Payment struct {
 	payment      types.X402Payment
 	facilitator  facilitatorcore.Facilitator
 	requirements facilitatortypes.PaymentRequirements
+	methods      map[string]struct{}
 }
 
 // NewPayment builds the payment implementation selected by its CAIP-2 network.
@@ -93,11 +95,13 @@ func NewUSDCPayment(payment types.X402Payment) (*Payment, error) {
 	payment.ResourcePath = strings.TrimSpace(payment.ResourcePath)
 	payment.ResourceDescription = strings.TrimSpace(payment.ResourceDescription)
 	payment.ResourceMimeType = strings.TrimSpace(payment.ResourceMimeType)
+	payment.Methods = normalizedPaymentMethods(payment.Methods)
 
 	return &Payment{
 		payment:      payment,
 		facilitator:  facilitator,
 		requirements: requirements,
+		methods:      paymentMethodSet(payment.Methods),
 	}, nil
 }
 
@@ -356,8 +360,8 @@ func (p *Payment) WritePrepare(w http.ResponseWriter, r *http.Request, sender, r
 	resourceMimeType = cmp.Or(resourceMimeType, "text/html")
 	utils.WritePaymentJSON(w, http.StatusOK, types.X402PreparePaymentResponse{
 		X402Version:         int(facilitatortypes.X402VersionV2),
-		PaymentRequirements: p.requirements,
-		Resource: &facilitatortypes.ResourceInfo{
+		PaymentRequirements: paymentRequirementsFromFacilitator(p.requirements),
+		Resource: &types.X402ResourceInfo{
 			URL:         utils.PublicURLForPath(r, resourcePath),
 			Description: strings.TrimSpace(p.payment.ResourceDescription),
 			MimeType:    resourceMimeType,
@@ -367,4 +371,45 @@ func (p *Payment) WritePrepare(w http.ResponseWriter, r *http.Request, sender, r
 			Transaction string `json:"transaction"`
 		}{Transaction: base64.StdEncoding.EncodeToString(paymentTxBytes)},
 	})
+}
+
+// paymentRequirementsFromFacilitator restates facilitator requirements in the
+// Portal DTO shape shared with SDK helpers and payment apps.
+func paymentRequirementsFromFacilitator(requirements facilitatortypes.PaymentRequirements) types.X402PaymentRequirements {
+	return types.X402PaymentRequirements{
+		Scheme:            requirements.Scheme,
+		Network:           requirements.Network,
+		Asset:             requirements.Asset,
+		Amount:            requirements.Amount,
+		PayTo:             requirements.PayTo,
+		MaxTimeoutSeconds: requirements.MaxTimeoutSeconds,
+		Extra:             requirements.Extra,
+	}
+}
+
+// normalizedPaymentMethods canonicalizes configured payment methods: trimmed,
+// uppercased, de-duplicated, and ordered for deterministic publication.
+func normalizedPaymentMethods(methods []string) []string {
+	seen := paymentMethodSet(methods)
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for method := range seen {
+		out = append(out, method)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func paymentMethodSet(methods []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(methods))
+	for _, raw := range methods {
+		method := strings.ToUpper(strings.TrimSpace(raw))
+		if method == "" {
+			continue
+		}
+		set[method] = struct{}{}
+	}
+	return set
 }

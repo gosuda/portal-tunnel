@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
+	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -38,6 +40,11 @@ type appConfig struct {
 	FrontendDir        string
 	LandingPageEnabled bool
 	AdminToken         string
+	// Relay-owned x402 facilitator surface: portal.Server is x402-blind, so
+	// this application resolves the flags and mounts the payment endpoints.
+	X402Enabled bool
+	X402Testnet bool
+	X402PayTo   string
 }
 
 // resolveAppConfig registers every flag and resolves it against the
@@ -100,9 +107,9 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.StringFlagEnv(fs, &cfg.AdminToken, "admin-token", "", "admin bearer token for relay admin and policy APIs", "ADMIN_TOKEN")
 	utils.BoolFlagEnv(fs, &cfg.Relay.PProfEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.Relay.PProfListenAddr, "pprof-addr", portal.DefaultPProfListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
-	utils.BoolFlagEnv(fs, &cfg.Relay.X402Enabled, "x402-enabled", false, "enable relay-owned Sui x402 facilitator endpoints under /api/x402 for future control-plane payments", "X402_ENABLED")
-	utils.BoolFlagEnv(fs, &cfg.Relay.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
-	utils.StringFlagEnv(fs, &cfg.Relay.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
+	utils.BoolFlagEnv(fs, &cfg.X402Enabled, "x402-enabled", false, "enable relay-owned Sui x402 facilitator endpoints under /api/x402 for future control-plane payments", "X402_ENABLED")
+	utils.BoolFlagEnv(fs, &cfg.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
+	utils.StringFlagEnv(fs, &cfg.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
 
 	utils.StringFlagEnv(fs, &cfg.Relay.ACME.DNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded without API credentials", "ACME_DNS_PROVIDER")
 	utils.BoolFlagEnv(fs, &cfg.Relay.ACME.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
@@ -148,6 +155,10 @@ func runServeCommand(args []string) error {
 }
 
 func runServer(ctx context.Context, cfg appConfig) error {
+	x402Settings, err := resolveX402Facilitator(cfg)
+	if err != nil {
+		return fmt.Errorf("create relay server: %w", err)
+	}
 	server, err := portal.NewServer(cfg.Relay)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
@@ -159,7 +170,51 @@ func runServer(ctx context.Context, cfg appConfig) error {
 		return fmt.Errorf("create relay api: %w", err)
 	}
 
-	return server.Serve(ctx, relayAPI.Handler())
+	handler, err := composeRelayHandler(x402Settings, relayAPI.Handler())
+	if err != nil {
+		return err
+	}
+	return server.Serve(ctx, handler)
+}
+
+// x402FacilitatorSettings is the resolved relay-owned x402 facilitator
+// configuration. portal.Server knows nothing about payments: this application
+// validates the flags and mounts the facilitator itself.
+type x402FacilitatorSettings struct {
+	Enabled bool
+	Testnet bool
+}
+
+// resolveX402Facilitator resolves the relay-owned x402 flags. An enabled
+// facilitator without a payment recipient would advertise payments nothing
+// can settle, so it fails resolution instead of booting unusable.
+func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
+	if !cfg.X402Enabled {
+		return x402FacilitatorSettings{}, nil
+	}
+	if strings.TrimSpace(cfg.X402PayTo) == "" {
+		return x402FacilitatorSettings{}, errors.New("x402 facilitator enabled without a payment recipient")
+	}
+	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet}, nil
+}
+
+// composeRelayHandler mounts the relay-owned x402 facilitator in front of the
+// relay API handler: /api/x402 is served by the application that chose to
+// enable payments, and every other path reaches the generic relay handler.
+func composeRelayHandler(settings x402FacilitatorSettings, base http.Handler) (http.Handler, error) {
+	if !settings.Enabled {
+		return base, nil
+	}
+	mux := http.NewServeMux()
+	if err := x402.MountFacilitator(mux, x402.FacilitatorConfig{Testnet: settings.Testnet}); err != nil {
+		return nil, fmt.Errorf("mount x402 facilitator: %w", err)
+	}
+	log.Info().
+		Str("path", types.PathX402Facilitator).
+		Str("network", x402.Network(settings.Testnet)).
+		Msg("relay-owned x402 facilitator enabled")
+	mux.Handle("/", base)
+	return mux, nil
 }
 
 func runHelpCommand(args []string) error {

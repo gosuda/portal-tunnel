@@ -222,10 +222,12 @@ func NewCasperPayment(payment types.X402Payment) (*Payment, error) {
 	payment.ResourcePath = strings.TrimSpace(payment.ResourcePath)
 	payment.ResourceDescription = strings.TrimSpace(payment.ResourceDescription)
 	payment.ResourceMimeType = strings.TrimSpace(payment.ResourceMimeType)
+	payment.Methods = normalizedPaymentMethods(payment.Methods)
 
 	return &Payment{
 		payment:      payment,
 		facilitator:  facilitator,
 		requirements: requirements,
+		methods:      paymentMethodSet(payment.Methods),
 	}, nil
 }

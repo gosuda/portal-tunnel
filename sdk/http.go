@@ -16,8 +16,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/x402"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -132,7 +130,7 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	return errors.Join(serveErr, shutdownErr)
 }
 
-// HTTPRouteConfig maps one public path prefix to one local HTTP upstream and optional x402 payment.
+// HTTPRouteConfig maps one public path prefix to one local HTTP upstream.
 type HTTPRouteConfig struct {
 	// Prefix is the public request path prefix, such as "/api" or "/".
 	Prefix string
@@ -146,30 +144,23 @@ type HTTPRouteConfig struct {
 	// StaticIndex is the SPA entry file served for the root and any unknown
 	// path under a static route. Defaults to "index.html" when empty.
 	StaticIndex string
-	// Methods limits payment to these HTTP methods. Empty means every method.
-	Methods []string
-	// Amount enables Sui USDC x402 payment for this public path prefix.
-	// It is a human USDC amount such as "0.01"; x402 converts it to atomic units.
-	Amount string
 }
 
-// HTTPRoutes serves HTTPRouteConfig upstreams and the shared x402 prepare endpoint.
+// HTTPRoutes serves HTTPRouteConfig upstreams over one shared handler.
 type HTTPRoutes struct {
 	routes []*httpRoute
 }
 
-// NewHTTPRoutes creates routed HTTP handling with an explicit x402
-// payment contract shared by every paid route.
-func NewHTTPRoutes(routeConfigs []HTTPRouteConfig, x402Payment types.X402Payment) (*HTTPRoutes, error) {
+// NewHTTPRoutes creates routed HTTP handling for the given route configs.
+func NewHTTPRoutes(routeConfigs []HTTPRouteConfig) (*HTTPRoutes, error) {
 	if len(routeConfigs) == 0 {
 		return nil, errors.New("at least one http route is required")
 	}
 
-	x402Payment.PayTo = strings.TrimSpace(x402Payment.PayTo)
 	routes := make([]*httpRoute, 0, len(routeConfigs))
 	seen := make(map[string]struct{}, len(routeConfigs))
 	for _, routeConfig := range routeConfigs {
-		route, err := newHTTPRoute(routeConfig, x402Payment)
+		route, err := newHTTPRoute(routeConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -177,7 +168,7 @@ func NewHTTPRoutes(routeConfigs []HTTPRouteConfig, x402Payment types.X402Payment
 			return nil, fmt.Errorf("duplicate http route prefix %q", route.prefix)
 		}
 		seen[route.prefix] = struct{}{}
-		route.handler = route.newHandler()
+		route.handler = route.baseHandler()
 		routes = append(routes, route)
 	}
 
@@ -197,52 +188,10 @@ func (h *HTTPRoutes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		path = r.URL.Path
 	}
 	path = utils.NormalizeURLPath(path)
-	if path == types.X402ClientPath {
-		x402.ServeClientJS(w, r)
-		return
-	}
-	prepare := path == types.X402PreparePath
-	var paymentSender string
-	paymentMethod := http.MethodGet
-	if prepare {
-		if !utils.RequireMethod(w, r, http.MethodPost) {
-			return
-		}
-		req, ok := utils.DecodeJSONRequestAs[types.X402PreparePaymentRequest](w, r, types.X402RequestBodyLimit, utils.APIErrorResponse{
-			Status:  http.StatusBadRequest,
-			Code:    types.APIErrorCodeInvalidJSON,
-			Message: "invalid payment prepare request",
-		})
-		if !ok {
-			return
-		}
-		if strings.TrimSpace(req.Path) == "" {
-			http.Error(w, "path is required", http.StatusBadRequest)
-			return
-		}
-		path = utils.NormalizeURLPath(req.Path)
-		paymentSender = req.Sender
-		if method := strings.ToUpper(strings.TrimSpace(req.Method)); method != "" {
-			paymentMethod = method
-		}
-	}
 
 	for _, route := range h.routes {
 		if route.prefix != "/" && path != route.prefix && !strings.HasPrefix(path, route.prefix+"/") {
 			continue
-		}
-
-		if prepare {
-			paid := route.payment != nil
-			if paid && len(route.paymentMethods) > 0 {
-				_, paid = route.paymentMethods[paymentMethod]
-			}
-			if !paid {
-				http.Error(w, "x402 payment is not enabled for path", http.StatusNotFound)
-				return
-			}
-			route.payment.WritePrepare(w, r, paymentSender, path)
-			return
 		}
 
 		route.handler.ServeHTTP(w, r)
@@ -258,12 +207,10 @@ type httpRoute struct {
 	upstreamDomain string
 	staticRoot     string
 	staticIndex    string
-	payment        *x402.Payment
-	paymentMethods map[string]struct{}
 	handler        http.Handler
 }
 
-func newHTTPRoute(routeConfig HTTPRouteConfig, x402Payment types.X402Payment) (*httpRoute, error) {
+func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	prefix := strings.TrimSpace(routeConfig.Prefix)
 	if prefix == "" {
 		return nil, errors.New("http route prefix is required")
@@ -273,97 +220,47 @@ func newHTTPRoute(routeConfig HTTPRouteConfig, x402Payment types.X402Payment) (*
 	}
 	prefix = utils.NormalizeURLPath(prefix)
 
-	var route *httpRoute
 	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
 		staticIndex := strings.TrimSpace(routeConfig.StaticIndex)
 		staticIndex = cmp.Or(staticIndex, utils.DefaultStaticIndex)
-		route = &httpRoute{
+		return &httpRoute{
 			prefix:      prefix,
 			staticRoot:  staticRoot,
 			staticIndex: staticIndex,
-		}
-	} else {
-		upstreamInput := strings.TrimSpace(routeConfig.Upstream)
-		if upstreamInput == "" {
-			return nil, fmt.Errorf("http route %q upstream is required", prefix)
-		}
-		if !strings.Contains(upstreamInput, "://") {
-			target, err := utils.NormalizeLoopbackTarget(upstreamInput)
-			if err != nil {
-				return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
-			}
-			upstreamInput = "http://" + target
-		}
+		}, nil
+	}
 
-		upstream, err := url.Parse(upstreamInput)
+	upstreamInput := strings.TrimSpace(routeConfig.Upstream)
+	if upstreamInput == "" {
+		return nil, fmt.Errorf("http route %q upstream is required", prefix)
+	}
+	if !strings.Contains(upstreamInput, "://") {
+		target, err := utils.NormalizeLoopbackTarget(upstreamInput)
 		if err != nil {
 			return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
 		}
-		if upstream.Host == "" {
-			return nil, fmt.Errorf("http route %q upstream host is required", prefix)
-		}
-		if upstream.Scheme != "http" && upstream.Scheme != "https" {
-			return nil, fmt.Errorf("http route %q upstream scheme must be http or https", prefix)
-		}
-		upstream.Fragment = ""
-		upstream.Path = utils.NormalizeURLPath(upstream.Path)
+		upstreamInput = "http://" + target
+	}
 
-		route = &httpRoute{
-			prefix:         prefix,
-			upstream:       upstream,
-			upstreamPath:   upstream.Path,
-			upstreamDomain: utils.NormalizeHostname(upstream.Hostname()),
-		}
+	upstream, err := url.Parse(upstreamInput)
+	if err != nil {
+		return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
 	}
-	amount := strings.TrimSpace(routeConfig.Amount)
-	if amount == "" && len(routeConfig.Methods) > 0 {
-		return nil, fmt.Errorf("http route %q payment methods require amount", route.prefix)
+	if upstream.Host == "" {
+		return nil, fmt.Errorf("http route %q upstream host is required", prefix)
 	}
-	if amount != "" {
-		if x402Payment.PayTo == "" {
-			return nil, fmt.Errorf("http route %q amount requires x402 pay-to", route.prefix)
-		}
-		methods := make(map[string]struct{}, len(routeConfig.Methods))
-		for _, rawMethod := range routeConfig.Methods {
-			method := strings.ToUpper(strings.TrimSpace(rawMethod))
-			if method == "" {
-				return nil, fmt.Errorf("http route %q payment method is required", route.prefix)
-			}
-			methods[method] = struct{}{}
-		}
-		paymentConfig := x402Payment
-		paymentConfig.Amount = amount
-		paymentConfig.ResourcePath = route.prefix
-		payment, err := x402.NewPayment(paymentConfig)
-		if err != nil {
-			return nil, fmt.Errorf("http route %q x402 payment: %w", route.prefix, err)
-		}
-		route.payment = payment
-		route.paymentMethods = methods
+	if upstream.Scheme != "http" && upstream.Scheme != "https" {
+		return nil, fmt.Errorf("http route %q upstream scheme must be http or https", prefix)
 	}
-	return route, nil
-}
+	upstream.Fragment = ""
+	upstream.Path = utils.NormalizeURLPath(upstream.Path)
 
-func (r *httpRoute) newHandler() http.Handler {
-	base := r.baseHandler()
-	if r.payment == nil {
-		return base
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if len(r.paymentMethods) > 0 {
-			if _, ok := r.paymentMethods[strings.ToUpper(req.Method)]; !ok {
-				base.ServeHTTP(w, req)
-				return
-			}
-		}
-
-		settled, ok := r.payment.Settle(req.Context(), w, req)
-		if !ok {
-			return
-		}
-		utils.SetPaymentResponseHeaders(w.Header(), settled)
-		base.ServeHTTP(w, req)
-	})
+	return &httpRoute{
+		prefix:         prefix,
+		upstream:       upstream,
+		upstreamPath:   upstream.Path,
+		upstreamDomain: utils.NormalizeHostname(upstream.Hostname()),
+	}, nil
 }
 
 func (r *httpRoute) baseHandler() http.Handler {
@@ -409,13 +306,6 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 	pr.SetURL(r.upstream)
 	pr.SetXForwarded()
-	paid := r.payment != nil
-	if paid && len(r.paymentMethods) > 0 {
-		_, paid = r.paymentMethods[strings.ToUpper(pr.In.Method)]
-	}
-	if paid {
-		utils.StripPaymentHeaders(pr.Out.Header)
-	}
 
 	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy
 	// the inbound X-Forwarded-Proto carries the real client scheme.
@@ -442,13 +332,6 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 	}
 
 	header := resp.Header
-	paid := r.payment != nil
-	if paid && len(r.paymentMethods) > 0 {
-		_, paid = r.paymentMethods[strings.ToUpper(resp.Request.Method)]
-	}
-	if paid {
-		utils.StripPaymentHeaders(header)
-	}
 	publicHost := resp.Request.Header.Get("X-Forwarded-Host")
 	publicScheme := resp.Request.Header.Get("X-Forwarded-Proto")
 	publicPath := func(raw string) string {

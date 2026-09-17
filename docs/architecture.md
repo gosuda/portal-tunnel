@@ -44,8 +44,9 @@ watch callbacks, or failure feedback directly. Readiness and accept operations
 do not infer source exhaustion from the current membership; they wait for a
 future membership update, context cancellation, or exposure closure. Local
 TCP/UDP targets belong to `sdk.ProxyConfig`, identity file loading belongs to
-CLI or agent callers, and routed HTTP payment settings belong to
-`sdk.NewHTTPRoutes`. `Exposure` owns one canonical relay-status map; listener
+CLI or agent callers, routed HTTP route tables belong to `sdk.NewHTTPRoutes`,
+and x402 payment gating belongs to the CLI and agent composition over
+`portal/x402`. `Exposure` owns one canonical relay-status map; listener
 events update it, while `Relays`, `Updates`, and `WaitReady` read from that
 state. Agent status types are not part of the SDK contract.
 

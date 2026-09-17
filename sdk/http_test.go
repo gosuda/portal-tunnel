@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestHTTPRoutesUseLongestPrefix(t *testing.T) {
@@ -29,7 +27,7 @@ func TestHTTPRoutesUseLongestPrefix(t *testing.T) {
 	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
 		{Prefix: "/", Upstream: rootServer.URL},
 		{Prefix: "/api", Upstream: apiServer.URL},
-	}, types.X402Payment{})
+	})
 	if err != nil {
 		t.Fatalf("NewHTTPRoutes() error = %v", err)
 	}
@@ -60,7 +58,7 @@ func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 
 	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
 		{Prefix: "/app", Upstream: upstreamURL + "/base"},
-	}, types.X402Payment{})
+	})
 	if err != nil {
 		t.Fatalf("NewHTTPRoutes() error = %v", err)
 	}
@@ -78,18 +76,15 @@ func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 	}
 }
 
-func TestHTTPRoutesRejectOversizedPaymentPrepareBody(t *testing.T) {
+func TestHTTPRoutesRejectDuplicatePrefixes(t *testing.T) {
 	t.Parallel()
 
-	handler := &HTTPRoutes{}
-	body := `{"sender":"` + strings.Repeat("a", int(types.X402RequestBodyLimit)) + `"}`
-	req := httptest.NewRequest(http.MethodPost, types.X402PreparePath, strings.NewReader(body))
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	_, err := NewHTTPRoutes([]HTTPRouteConfig{
+		{Prefix: "/api", Upstream: "http://127.0.0.1:3001"},
+		{Prefix: "/api", Upstream: "http://127.0.0.1:3002"},
+	})
+	if err == nil {
+		t.Fatalf("NewHTTPRoutes() error = nil, want duplicate prefix error")
 	}
 }
 
@@ -110,7 +105,7 @@ func TestHTTPRoutesServeStaticRoute(t *testing.T) {
 	root := newStaticSiteDir(t, "main.html", "<html>main</html>")
 	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
 		{Prefix: "/", StaticRoot: root, StaticIndex: "main.html"},
-	}, types.X402Payment{})
+	})
 	if err != nil {
 		t.Fatalf("NewHTTPRoutes() error = %v", err)
 	}
@@ -127,26 +122,21 @@ func TestHTTPRoutesServeStaticRoute(t *testing.T) {
 	}
 }
 
-func TestHTTPRoutesStaticPaidRouteChallengesUnpaid(t *testing.T) {
+func TestHTTPRoutesUnknownPathReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
-	root := newStaticSiteDir(t, "index.html", "<html>paid</html>")
-	payTo := "0x" + strings.Repeat("a", 64)
 	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
-		{Prefix: "/", StaticRoot: root, Amount: "0.01"},
-	}, types.X402Payment{PayTo: payTo, Testnet: true})
+		{Prefix: "/api", Upstream: "http://127.0.0.1:3001"},
+	})
 	if err != nil {
 		t.Fatalf("NewHTTPRoutes() error = %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "https://public.example/", nil)
+	req := httptest.NewRequest(http.MethodGet, "https://public.example/other", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code == http.StatusOK {
-		t.Fatalf("unpaid request status = 200, want payment challenge")
-	}
-	if strings.Contains(rec.Body.String(), "paid") {
-		t.Fatalf("unpaid request served the static file body: %q", rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
