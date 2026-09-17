@@ -162,20 +162,42 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	}
 
 	// The pprof listener is process-level diagnostics with no relay state, so
-	// it binds ahead of the blocking relay Serve and shuts down when Serve
-	// returns, whatever the outcome.
-	pprofAddr := normalizePprofAddr(cfg.PprofEnabled, cfg.PprofListenAddr)
+	// it binds ahead of the relay Serve and shuts down when the process
+	// lifecycle ends, whatever the outcome.
 	var stopPprof func(context.Context) error
+	var pprofErrs <-chan error
 	if cfg.PprofEnabled {
-		addr, shutdown, err := startPprofServer(ctx, pprofAddr)
+		bound, shutdown, errs, err := startPprofServer(ctx, normalizePprofAddr(cfg.PprofEnabled, cfg.PprofListenAddr))
 		if err != nil {
 			return err
 		}
-		stopPprof = shutdown
-		log.Info().Str("pprof_addr", utils.HostPortOrLoopback(addr.String())).Msg("starting pprof server")
+		stopPprof, pprofErrs = shutdown, errs
+		log.Info().Str("pprof_addr", utils.HostPortOrLoopback(bound.String())).Msg("starting pprof server")
 	}
 
-	serveErr := server.Serve(ctx, relayAPI.Handler())
+	// Both servers report to the process owner: an unexpected pprof failure
+	// ends the relay lifecycle, as it did inside the relay errgroup.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(runCtx, relayAPI.Handler()) }()
+
+	var serveErr error
+	if pprofErrs == nil {
+		serveErr = <-serveDone
+	} else {
+		select {
+		case err := <-serveDone:
+			serveErr = err
+		case err := <-pprofErrs:
+			serveErr = fmt.Errorf("serve pprof: %w", err)
+			// Let the relay wind down before returning, mirroring the
+			// errgroup cancellation the relay used to provide.
+			cancel()
+			<-serveDone
+		}
+	}
+	cancel()
 
 	if stopPprof != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

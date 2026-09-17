@@ -9,8 +9,6 @@ import (
 	"net/http/pprof"
 	"strings"
 	"time"
-
-	"github.com/rs/zerolog/log"
 )
 
 // DefaultPprofListenAddr is the loopback address the pprof diagnostics server
@@ -43,19 +41,22 @@ func newPprofServer() *http.Server {
 }
 
 // startPprofServer binds addr synchronously so a bind failure aborts startup,
-// then serves in the background. The returned shutdown func drains in-flight
-// requests.
-func startPprofServer(ctx context.Context, addr string) (net.Addr, func(context.Context) error, error) {
+// then serves in the background. Unexpected serve failures are reported on
+// serveErrs so the process owner can end the relay lifecycle instead of
+// running blind; the channel is buffered, so reporting never blocks shutdown.
+// The returned shutdown func drains in-flight requests.
+func startPprofServer(ctx context.Context, addr string) (net.Addr, func(context.Context) error, <-chan error, error) {
 	var lc net.ListenConfig
 	listener, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("listen pprof: %w", err)
+		return nil, nil, nil, fmt.Errorf("listen pprof: %w", err)
 	}
 	server := newPprofServer()
+	serveErrs := make(chan error, 1)
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-			log.Error().Err(err).Msg("serve pprof")
+			serveErrs <- err
 		}
 	}()
-	return listener.Addr(), server.Shutdown, nil
+	return listener.Addr(), server.Shutdown, serveErrs, nil
 }
