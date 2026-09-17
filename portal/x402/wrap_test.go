@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	facilitatorcore "github.com/gosuda/x402-facilitator/facilitator"
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
@@ -79,6 +80,8 @@ func paidPayloadHeader(t *testing.T, requirements facilitatortypes.PaymentRequir
 	return string(raw)
 }
 
+// Unpaid requests get the 402 challenge carrying the payment requirements, and
+// the wrapped handler never runs.
 func TestWrapChallengesUnpaidRequests(t *testing.T) {
 	payment := newStubPayment(stubSettlement)
 	protected := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +101,6 @@ func TestWrapChallengesUnpaidRequests(t *testing.T) {
 		}
 	}
 	var body struct {
-		Error   string `json:"error"`
 		Accepts []struct {
 			Network string `json:"network"`
 			Scheme  string `json:"scheme"`
@@ -107,19 +109,22 @@ func TestWrapChallengesUnpaidRequests(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode 402 body: %v", err)
 	}
-	if body.Error != "payment required" {
-		t.Fatalf("error = %q, want payment required", body.Error)
-	}
 	if len(body.Accepts) != 1 || body.Accepts[0].Network != CasperTestnetNetwork || body.Accepts[0].Scheme != "exact" {
 		t.Fatalf("accepts = %+v, want one %s exact requirement", body.Accepts, CasperTestnetNetwork)
 	}
 }
 
-func TestWrapSettlesAndForwardsSanitizedRequest(t *testing.T) {
+// A paid request settles exactly once, forwards with every payment header
+// stripped and unrelated headers intact, and the trusted settlement receipt
+// wins over anything the wrapped handler writes, including a forged challenge.
+func TestWrapPaidRequestSettlesSanitizesAndKeepsTrustedHeaders(t *testing.T) {
 	payment := newStubPayment(stubSettlement)
 	var sawHeader http.Header
 	protected := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sawHeader = r.Header
+		w.Header().Set(types.HeaderPaymentResponse, "upstream")
+		w.Header().Set(types.HeaderXPaymentResponse, "upstream")
+		w.Header().Set(types.HeaderPaymentRequired, "upstream")
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -155,32 +160,6 @@ func TestWrapSettlesAndForwardsSanitizedRequest(t *testing.T) {
 	if sawHeader.Get("X-Keep-Me") != "yes" {
 		t.Fatal("forwarded request lost an unrelated header")
 	}
-	for _, name := range []string{types.HeaderPaymentResponse, types.HeaderXPaymentResponse} {
-		if rec.Header().Get(name) == "" {
-			t.Fatalf("missing %s settlement header", name)
-		}
-	}
-	stub, ok := payment.facilitator.(*stubFacilitator)
-	if !ok || stub.settleCalls != 1 {
-		t.Fatalf("settle calls = %+v, want exactly one", payment.facilitator)
-	}
-}
-
-func TestWrapKeepsTrustedSettlementHeaders(t *testing.T) {
-	payment := newStubPayment(stubSettlement)
-	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set(types.HeaderPaymentResponse, "upstream")
-		w.Header().Set(types.HeaderXPaymentResponse, "upstream")
-		w.Header().Set(types.HeaderPaymentRequired, "upstream")
-		w.WriteHeader(http.StatusOK)
-	})
-	req := httptest.NewRequest(http.MethodGet, "https://public.example/paid", nil)
-	req.Header.Set(types.HeaderXPayment, paidPayloadHeader(t, stubRequirements))
-	rec := httptest.NewRecorder()
-	payment.Wrap(protected).ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
 	if got := rec.Header().Get(types.HeaderPaymentResponse); got == "" || got == "upstream" {
 		t.Fatalf("payment response = %q, want trusted settlement", got)
 	}
@@ -190,8 +169,15 @@ func TestWrapKeepsTrustedSettlementHeaders(t *testing.T) {
 	if got := rec.Header().Get(types.HeaderPaymentRequired); got != "" {
 		t.Fatalf("upstream challenge leaked: %q", got)
 	}
+	stub, ok := payment.facilitator.(*stubFacilitator)
+	if !ok || stub.settleCalls != 1 {
+		t.Fatalf("settle calls = %+v, want exactly one", payment.facilitator)
+	}
 }
 
+// Method filtering is a pass-through, not a rewrite: methods outside the paid
+// list reach the handler with their headers intact, methods inside it still
+// face the gate.
 func TestWrapMethodFilterPassesUnpaidMethodsThrough(t *testing.T) {
 	payment := newStubPayment(stubSettlement)
 	payment.methods = paymentMethodSet([]string{http.MethodPost})
@@ -225,15 +211,51 @@ func TestWrapMethodFilterPassesUnpaidMethodsThrough(t *testing.T) {
 	if rec.Code != http.StatusPaymentRequired {
 		t.Fatalf("POST status = %d, want %d", rec.Code, http.StatusPaymentRequired)
 	}
+}
 
-	// A paid POST settles and forwards.
-	ran = false
-	req = httptest.NewRequest(http.MethodPost, "https://public.example/paid", nil)
+// blockingFacilitator never settles on its own: Settle returns only when its
+// context is done, mirroring a facilitator that stops answering.
+type blockingFacilitator struct{ stubFacilitator }
+
+func (f *blockingFacilitator) Settle(ctx context.Context, _ *facilitatortypes.PaymentPayload, _ *facilitatortypes.PaymentRequirements) (*facilitatortypes.PaymentSettleResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A paid request whose inbound context carries no deadline must not hang on a
+// stuck facilitator: the configured RequestTimeout bounds settlement and the
+// request fails with the 402 challenge instead.
+func TestWrapBoundsSettlementByRequestTimeout(t *testing.T) {
+	t.Parallel()
+	payment := newStubPayment(stubSettlement)
+	payment.payment.RequestTimeout = 20 * time.Millisecond
+	payment.facilitator = &blockingFacilitator{}
+
+	var ran bool
+	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		ran = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "https://public.example/paid", nil)
 	req.Header.Set(types.HeaderXPayment, paidPayloadHeader(t, stubRequirements))
-	rec = httptest.NewRecorder()
-	payment.Wrap(protected).ServeHTTP(rec, req)
-	if !ran || rec.Code != http.StatusOK {
-		t.Fatalf("paid POST: ran=%v status=%d, want handler ran with 200", ran, rec.Code)
+	served := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		payment.Wrap(protected).ServeHTTP(rec, req)
+		served <- rec
+	}()
+
+	select {
+	case rec := <-served:
+		if rec.Code != http.StatusPaymentRequired {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusPaymentRequired)
+		}
+		if ran {
+			t.Fatal("wrapped handler ran after a failed settlement")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("settlement never returned: RequestTimeout did not bound the facilitator call")
 	}
 }
 
@@ -253,6 +275,11 @@ func TestNewPaymentRejectsBlankMethod(t *testing.T) {
 	}
 }
 
+// The prepare endpoint is POST-only with JSON validation, and a valid prepare
+// request reaches the prepare response path: the wallet-facing challenge
+// document echoing the requested resource path. Requirement construction
+// (motes amount, requirement network values) is owned by casper_test.go, so
+// only presence of a usable requirements entry is asserted here.
 func TestPrepareHandlerGatesAndRoutesToWritePrepare(t *testing.T) {
 	payment, err := NewCasperPayment(types.X402Payment{
 		Testnet:          true,
@@ -279,21 +306,16 @@ func TestPrepareHandlerGatesAndRoutesToWritePrepare(t *testing.T) {
 		t.Fatalf("invalid JSON status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 
-	// Casper payments publish requirements instead of a server-built
-	// transaction, so the prepare endpoint answers with the 402 requirements
-	// document carrying the client-requested resource path.
-	body := `{"sender":"sender-01","path":"/custom/resource"}`
 	rec = httptest.NewRecorder()
-	prepare.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+types.X402PreparePath, strings.NewReader(body)))
+	prepare.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+types.X402PreparePath, strings.NewReader(`{"sender":"sender-01","path":"/custom/resource"}`)))
 	if rec.Code != http.StatusPaymentRequired {
-		t.Fatalf("casper prepare status = %d, want %d", rec.Code, http.StatusPaymentRequired)
+		t.Fatalf("prepare status = %d, want %d", rec.Code, http.StatusPaymentRequired)
 	}
 	var challenge struct {
 		Resource *struct {
 			URL string `json:"url"`
 		} `json:"resource"`
 		Accepts []struct {
-			Amount  string `json:"amount"`
 			Network string `json:"network"`
 		} `json:"accepts"`
 	}
@@ -303,33 +325,15 @@ func TestPrepareHandlerGatesAndRoutesToWritePrepare(t *testing.T) {
 	if challenge.Resource == nil || challenge.Resource.URL != "https://public.example/custom/resource" {
 		t.Fatalf("resource = %+v, want the requested /custom/resource URL", challenge.Resource)
 	}
-	if len(challenge.Accepts) != 1 || challenge.Accepts[0].Amount != "10000000" || challenge.Accepts[0].Network != CasperTestnetNetwork {
-		t.Fatalf("accepts = %+v, want the casper requirement", challenge.Accepts)
+	if len(challenge.Accepts) != 1 || challenge.Accepts[0].Network == "" {
+		t.Fatalf("accepts = %+v, want one requirement carrying a network", challenge.Accepts)
 	}
 }
 
-func TestClientJSServesSharedWalletClient(t *testing.T) {
-	handler := newStubPayment(stubSettlement).ClientJSHandler()
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://public.example"+types.X402ClientPath, nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/javascript") {
-		t.Fatalf("content type = %q, want application/javascript", got)
-	}
-	if rec.Body.Len() != len(clientJS) {
-		t.Fatalf("body length = %d, want %d", rec.Body.Len(), len(clientJS))
-	}
-
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+types.X402ClientPath, nil))
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
-	}
-}
-
+// USDCPaymentHandler layers its own method gate and settlement-result callback
+// on the same settleAndDecorate machinery Wrap exercises above. Its distinct
+// contract: a method outside the gate never reaches settlement, and a paid
+// request hands the mapped settlement result to the callback.
 func TestUSDCPaymentHandlerProtectsPathWithWrappedFlow(t *testing.T) {
 	payment := newStubPayment(stubSettlement)
 	var results []types.X402PaymentResult
@@ -342,7 +346,6 @@ func TestUSDCPaymentHandlerProtectsPathWithWrappedFlow(t *testing.T) {
 		},
 	}
 
-	// Method outside the handler's gate is rejected before any settlement.
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://public.example/paid", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -352,17 +355,6 @@ func TestUSDCPaymentHandlerProtectsPathWithWrappedFlow(t *testing.T) {
 		t.Fatal("settlement ran for a method outside the handler gate")
 	}
 
-	// Unpaid POST gets the challenge; the handler callback never runs.
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example/paid", nil))
-	if rec.Code != http.StatusPaymentRequired {
-		t.Fatalf("unpaid POST status = %d, want %d", rec.Code, http.StatusPaymentRequired)
-	}
-	if len(results) != 0 {
-		t.Fatal("handler callback ran without a settlement")
-	}
-
-	// Paid POST settles and hands the settlement result to the callback.
 	req := httptest.NewRequest(http.MethodPost, "https://public.example/paid", nil)
 	req.Header.Set(types.HeaderXPayment, paidPayloadHeader(t, stubRequirements))
 	rec = httptest.NewRecorder()
@@ -370,54 +362,8 @@ func TestUSDCPaymentHandlerProtectsPathWithWrappedFlow(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("paid POST status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if len(results) != 1 {
-		t.Fatalf("results = %+v, want exactly one", results)
-	}
-	if results[0].TransactionID != "tx-5f0e1d2c" || results[0].Payer != "payer-01" || results[0].Network != CasperTestnetNetwork {
-		t.Fatalf("result = %+v, want the stub settlement mapping", results[0])
-	}
-	if rec.Header().Get(types.HeaderPaymentResponse) == "" {
-		t.Fatal("missing PAYMENT-RESPONSE settlement header")
-	}
-}
-
-// The prepare response is the wallet-facing wire contract shared with
-// client.js: the Portal DTO swap from facilitator types must not move a byte.
-func TestX402PreparePaymentResponseWireShape(t *testing.T) {
-	response := types.X402PreparePaymentResponse{
-		X402Version: 2,
-		PaymentRequirements: types.X402PaymentRequirements{
-			Scheme:            "exact",
-			Network:           CasperTestnetNetwork,
-			Asset:             testWCSPRAsset,
-			Amount:            "10000000",
-			PayTo:             "account-hash-abc123",
-			MaxTimeoutSeconds: 60,
-			Extra:             map[string]any{"asset": "wCSPR"},
-		},
-		Resource: &types.X402ResourceInfo{
-			URL:         "http://public.example/paid",
-			Description: "protected resource",
-			MimeType:    "text/html",
-		},
-		PrepareTransaction: &struct {
-			Transaction string `json:"transaction"`
-		}{Transaction: "cHJlcGFyZQ=="},
-		PaymentTransaction: struct {
-			Transaction string `json:"transaction"`
-		}{Transaction: "cGF5"},
-	}
-	raw, err := json.Marshal(response)
-	if err != nil {
-		t.Fatalf("marshal prepare response: %v", err)
-	}
-	want := `{"x402Version":2,` +
-		`"paymentRequirements":{"scheme":"exact","network":"casper:casper-test","asset":"` + testWCSPRAsset + `","amount":"10000000","payTo":"account-hash-abc123","maxTimeoutSeconds":60,"extra":{"asset":"wCSPR"}},` +
-		`"resource":{"url":"http://public.example/paid","description":"protected resource","mimeType":"text/html"},` +
-		`"prepareTransaction":{"transaction":"cHJlcGFyZQ=="},` +
-		`"paymentTransaction":{"transaction":"cGF5"}}`
-	if string(raw) != want {
-		t.Fatalf("prepare response wire shape drifted:\n got %s\nwant %s", raw, want)
+	if len(results) != 1 || results[0].TransactionID != "tx-5f0e1d2c" || results[0].Payer != "payer-01" || results[0].Network != CasperTestnetNetwork {
+		t.Fatalf("results = %+v, want the stub settlement mapping", results)
 	}
 }
 

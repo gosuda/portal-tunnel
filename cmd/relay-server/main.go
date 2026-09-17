@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,6 +161,9 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
+	// With payments enabled this application serves /sdk/domain itself,
+	// composing the facilitator metadata onto the relay's domain report.
+	cfg.Relay.ApplicationOwnsDomainReport = x402Settings.Enabled
 	server, err := portal.NewServer(cfg.Relay)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
@@ -182,7 +183,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 		return fmt.Errorf("create relay api: %w", err)
 	}
 
-	handler, err := composeRelayHandler(x402Settings, relayAPI.Handler())
+	handler, err := composeRelayHandler(x402Settings, server, relayAPI.Handler())
 	if err != nil {
 		return err
 	}
@@ -246,7 +247,10 @@ func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
 // composeRelayHandler mounts the relay-owned x402 facilitator in front of the
 // relay API handler: /api/x402 is served by the application that chose to
 // enable payments, and every other path reaches the generic relay handler.
-func composeRelayHandler(settings x402FacilitatorSettings, base http.Handler) (http.Handler, error) {
+// The application also serves /sdk/domain (the relay hands the path over via
+// ApplicationOwnsDomainReport) by composing the facilitator metadata onto
+// server.DomainReport().
+func composeRelayHandler(settings x402FacilitatorSettings, server *portal.Server, base http.Handler) (http.Handler, error) {
 	if !settings.Enabled {
 		return base, nil
 	}
@@ -259,24 +263,13 @@ func composeRelayHandler(settings x402FacilitatorSettings, base http.Handler) (h
 		Str("network", x402.Network(settings.Testnet)).
 		Msg("relay-owned x402 facilitator enabled")
 	mux.HandleFunc(types.PathSDKDomain, func(w http.ResponseWriter, r *http.Request) {
-		rec := httptest.NewRecorder()
-		base.ServeHTTP(rec, r)
-		if rec.Code != http.StatusOK || r.Method != http.MethodGet {
-			for name, values := range rec.Header() {
-				w.Header()[name] = append([]string(nil), values...)
-			}
-			w.WriteHeader(rec.Code)
-			_, _ = w.Write(rec.Body.Bytes())
+		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
-		var envelope types.APIEnvelope[types.DomainResponse]
-		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil || !envelope.OK {
-			http.Error(w, "invalid relay domain response", http.StatusBadGateway)
-			return
-		}
+		report := server.DomainReport()
 		baseURL := strings.TrimRight(settings.PortalURL, "/")
 		network := x402.Network(settings.Testnet)
-		envelope.Data.X402 = types.X402FacilitatorInfo{
+		report.X402 = types.X402FacilitatorInfo{
 			Enabled:      true,
 			URL:          baseURL + types.PathX402Facilitator,
 			Network:      network,
@@ -284,10 +277,7 @@ func composeRelayHandler(settings x402FacilitatorSettings, base http.Handler) (h
 			SupportedURL: baseURL + types.X402SupportedPath,
 			PayTo:        settings.PayTo,
 		}
-		for name, values := range rec.Header() {
-			w.Header()[name] = append([]string(nil), values...)
-		}
-		utils.WriteAPIData(w, http.StatusOK, envelope.Data)
+		utils.WriteAPIData(w, http.StatusOK, report)
 	})
 	mux.Handle("/", base)
 	return mux, nil

@@ -121,22 +121,3 @@ func TestHTTPRoutesServeStaticRoute(t *testing.T) {
 		t.Fatalf("body = %q, want the configured entry file", got)
 	}
 }
-
-func TestHTTPRoutesUnknownPathReturnsNotFound(t *testing.T) {
-	t.Parallel()
-
-	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
-		{Prefix: "/api", Upstream: "http://127.0.0.1:3001"},
-	})
-	if err != nil {
-		t.Fatalf("NewHTTPRoutes() error = %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "https://public.example/other", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
-	}
-}

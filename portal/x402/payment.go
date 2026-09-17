@@ -209,6 +209,13 @@ func (p *Payment) Settle(ctx context.Context, w http.ResponseWriter, r *http.Req
 	if !ok {
 		return nil, false
 	}
+	// The inbound request context may carry no deadline, so settlement needs
+	// its own bound or a stuck facilitator hangs the paid request forever.
+	cancel := func() {}
+	if p.payment.RequestTimeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, p.payment.RequestTimeout)
+	}
+	defer cancel()
 	settled, err := p.facilitator.Settle(ctx, payment, &p.requirements)
 	if err != nil {
 		log.Warn().
