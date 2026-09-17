@@ -128,8 +128,7 @@ export interface DiscoveryResponse {
 
 export type ReputationVote = "up" | "down";
 
-// Anonymous viewers carry "" from the relay; only per-hostname responses
-// include viewer_vote at all.
+// Every reputation response carries viewer_vote; anonymous viewers carry "".
 export type ViewerVote = ReputationVote | "";
 
 export interface ReputationSummary {
@@ -149,12 +148,8 @@ export interface ReputationVoteRequest {
   vote: ReputationVote;
 }
 
-export interface ReputationVoteResponse {
-  up: number;
-  down: number;
-  total: number;
-  viewer_vote?: ViewerVote;
-}
+// The vote response is the same aggregate as a directory row, hostname included.
+export type ReputationVoteResponse = ReputationSummary;
 
 export interface LeasePolicyUpdate {
   identity_key: string;

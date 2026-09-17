@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,31 @@ func TestReputationPersistFailureRestoresVote(t *testing.T) {
 	}
 	if got := store.summary("demo.example.com", store.viewerHashFor(cookie), live); got.Up != 1 || got.Down != 0 {
 		t.Fatalf("failed write changed vote: %+v", got)
+	}
+}
+
+func TestReputationDirectoryProjectsLiveHostsAndViewerVote(t *testing.T) {
+	store := newTestReputationStore(t)
+	live := map[string]bool{"voted.example.com": true, "old.example.com": true}
+	_, cookie, err := store.castVote("voted.example.com", voteUp, "", live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.castVote("old.example.com", voteUp, cookie, live); err != nil {
+		t.Fatal(err)
+	}
+	// old.example.com drops out of the live set but its record stays within
+	// the retention window, so it keeps its directory row; fresh.example.com
+	// is live with no record yet and must still get a zero-count row.
+	live = map[string]bool{"voted.example.com": true, "fresh.example.com": true}
+	directory := store.directory(store.viewerHashFor(cookie), live)
+	want := []reputationSummary{
+		{Hostname: "fresh.example.com"},
+		{Hostname: "old.example.com", Up: 1, Down: 0, Total: 1, ViewerVote: voteUp},
+		{Hostname: "voted.example.com", Up: 1, Down: 0, Total: 1, ViewerVote: voteUp},
+	}
+	if !slices.Equal(directory.Hostnames, want) {
+		t.Fatalf("directory rows = %+v, want %+v", directory.Hostnames, want)
 	}
 }
 

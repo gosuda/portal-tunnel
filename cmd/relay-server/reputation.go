@@ -1,10 +1,10 @@
-﻿package main
+package main
 
 // Service reputation: relay-local, hostname-keyed up/down votes.
 //
 // Ownership rules enforced by this file:
-//   - Records key on the relay-local public hostname ??never the lease ID and
-//     never an identity key ??so reputation survives re-registration.
+//   - Records key on the relay-local public hostname, never the lease ID and
+//     never an identity key, so reputation survives re-registration.
 //   - portal.Server stays unaware of reputation. No lease callbacks or
 //     background reconciliation; new hosts are admitted from the public
 //     directory at the vote boundary.
@@ -112,21 +112,15 @@ type reputationVoteRequest struct {
 }
 
 type reputationSummary struct {
+	Hostname   string `json:"hostname"`
 	Up         int    `json:"up"`
 	Down       int    `json:"down"`
 	Total      int    `json:"total"`
 	ViewerVote string `json:"viewer_vote"` // "" | "up" | "down"
 }
 
-type reputationDirectoryRow struct {
-	Hostname  string  `json:"hostname"`
-	Up        int     `json:"up"`
-	Down      int     `json:"down"`
-	Total     int     `json:"total"`
-}
-
 type reputationDirectory struct {
-	Hostnames []reputationDirectoryRow `json:"hostnames"`
+	Hostnames []reputationSummary `json:"hostnames"`
 }
 
 var (
@@ -204,7 +198,7 @@ func newReputationStore(path string, cfg ReputationConfig) (*ReputationStore, er
 // castVote resolves the voter (minting a cookieless identity when needed),
 // applies the vote, and persists atomically under one lock. The returned
 // mint value is a fresh cookie value, set only when a new voter was minted.
-// known reports whether the hostname currently appears in the public directory.
+// The live set is the relay's current public directory.
 func (s *ReputationStore) castVote(hostname, vote, cookieID string, live map[string]bool) (reputationSummary, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -218,14 +212,17 @@ func (s *ReputationStore) castVote(hostname, vote, cookieID string, live map[str
 	if previous == nil && !live[hostname] {
 		return reputationSummary{}, "", errReputationUnknownHostname
 	}
-	if previous != nil && (live[hostname] || now.Sub(previous.LastSeenAt) <= s.cfg.Retention) && previous.Voters[hash] == vote {
-		return s.summarize(previous, hash), minted, nil
+	if previous != nil && s.visibleLocked(hostname, previous, live) && previous.Voters[hash] == vote {
+		return s.summarize(hostname, previous, hash), minted, nil
 	}
 	var evictedHost string
 	var evictedRecord *reputationRecord
 	if previous == nil && len(s.state.Hostnames) >= reputationMaxHostnames {
 		for candidate, rec := range s.state.Hostnames {
-			if !live[candidate] && now.Sub(rec.LastSeenAt) > s.cfg.Retention && (evictedRecord == nil || rec.LastSeenAt.Before(evictedRecord.LastSeenAt)) {
+			if s.visibleLocked(candidate, rec, live) {
+				continue
+			}
+			if evictedRecord == nil || rec.LastSeenAt.Before(evictedRecord.LastSeenAt) {
 				evictedHost, evictedRecord = candidate, rec
 			}
 		}
@@ -233,7 +230,7 @@ func (s *ReputationStore) castVote(hostname, vote, cookieID string, live map[str
 			return reputationSummary{}, "", errReputationHostnameCapacity
 		}
 	}
-	if previous != nil && !live[hostname] && now.Sub(previous.LastSeenAt) > s.cfg.Retention {
+	if previous != nil && !s.visibleLocked(hostname, previous, live) {
 		return reputationSummary{}, "", errReputationUnknownHostname
 	}
 	if previous == nil {
@@ -283,42 +280,49 @@ func (s *ReputationStore) castVote(hostname, vote, cookieID string, live map[str
 		}
 		return reputationSummary{}, "", fmt.Errorf("%w: %w", errReputationPersist, err)
 	}
-	return s.summarize(rec, hash), minted, nil
+	return s.summarize(hostname, rec, hash), minted, nil
 }
 
-// summary is the read-side single-hostname view. Reads never mutate: an
-// expired record returns an empty summary without being deleted.
+// summary is the read-side single-hostname view. Reads never mutate: a
+// record that is no longer visible drops out of the view without being
+// deleted, and the hostname is echoed even when unknown or aged out.
 func (s *ReputationStore) summary(hostname, viewerHash string, live map[string]bool) reputationSummary {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.state.Hostnames[hostname]
-	if rec == nil || !s.visibleLocked(hostname, rec, live) {
-		return reputationSummary{}
+	if rec != nil && !s.visibleLocked(hostname, rec, live) {
+		rec = nil
 	}
-	return s.summarize(rec, viewerHash)
+	return s.summarize(hostname, rec, viewerHash)
 }
 
-// directory is the hostname-keyed aggregate projection for the directory
-// list, sorted for deterministic output.
-func (s *ReputationStore) directory(live map[string]bool) reputationDirectory {
+// directory projects the rows the directory list renders: every currently
+// live hostname gets a row (zero-count when no record exists yet) so the UI
+// can cast the first vote, and retained records keep recently-offline
+// hostnames visible. Rows are sorted by hostname for deterministic output.
+func (s *ReputationStore) directory(viewerHash string, live map[string]bool) reputationDirectory {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows := make([]reputationDirectoryRow, 0, len(s.state.Hostnames))
+	rows := make([]reputationSummary, 0, len(s.state.Hostnames)+len(live))
 	for hostname, rec := range s.state.Hostnames {
 		if !s.visibleLocked(hostname, rec, live) {
 			continue
 		}
-		up, down := tallyVotes(rec)
-		rows = append(rows, reputationDirectoryRow{Hostname: hostname, Up: up, Down: down, Total: up + down})
+		rows = append(rows, s.summarize(hostname, rec, viewerHash))
 	}
-	slices.SortFunc(rows, func(a, b reputationDirectoryRow) int {
+	for hostname := range live {
+		if _, exists := s.state.Hostnames[hostname]; !exists {
+			rows = append(rows, s.summarize(hostname, nil, viewerHash))
+		}
+	}
+	slices.SortFunc(rows, func(a, b reputationSummary) int {
 		return strings.Compare(a.Hostname, b.Hostname)
 	})
 	return reputationDirectory{Hostnames: rows}
 }
 
 // viewerHashFor resolves a cookie to its voter digest for read paths. A
-// forged or malformed cookie reads as anonymous ??the cookieless mint path
+// forged or malformed cookie reads as anonymous; the cookieless mint path
 // exists only on votes.
 func (s *ReputationStore) viewerHashFor(cookieID string) string {
 	if cookieID == "" {
@@ -389,9 +393,15 @@ func (s *ReputationStore) visibleLocked(hostname string, rec *reputationRecord, 
 	return s.now().Sub(rec.LastSeenAt) <= s.cfg.Retention
 }
 
-func (s *ReputationStore) summarize(rec *reputationRecord, viewerHash string) reputationSummary {
+// summarize projects one hostname's row, zero-count when rec is nil so a
+// newly live hostname without a record still renders with vote controls.
+func (s *ReputationStore) summarize(hostname string, rec *reputationRecord, viewerHash string) reputationSummary {
+	if rec == nil {
+		return reputationSummary{Hostname: hostname}
+	}
 	up, down := tallyVotes(rec)
 	return reputationSummary{
+		Hostname:   hostname,
 		Up:         up,
 		Down:       down,
 		Total:      up + down,
@@ -411,8 +421,6 @@ func tallyVotes(rec *reputationRecord) (up, down int) {
 	return up, down
 }
 
-// ??? HTTP handlers ???????????????????????????????????????????????????????????
-
 // serveReputation serves the directory projection (no query) or one
 // hostname's summary (hostname=...). Pure reads: no cookie is minted and no
 // store state changes.
@@ -426,7 +434,7 @@ func (api *RelayAPI) serveReputation(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIData(w, http.StatusOK, api.reputation.summary(hostname, viewerHash, live))
 		return
 	}
-	utils.WriteAPIData(w, http.StatusOK, api.reputation.directory(live))
+	utils.WriteAPIData(w, http.StatusOK, api.reputation.directory(viewerHash, live))
 }
 
 // serveReputationVote is admission -> decode -> store op. Admission runs
@@ -546,4 +554,3 @@ func liveHostnames(server *portal.Server) map[string]bool {
 	}
 	return live
 }
-
