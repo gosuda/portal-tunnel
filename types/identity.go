@@ -56,11 +56,11 @@ func CanonicalIdentityKey(name, address string) string {
 
 // ParseIdentityKey parses a raw identity key in "name:address" form and
 // returns its canonical form. The key is split on the first separator and both
-// parts are canonicalized; parsing fails when the separator is missing or
-// either part is empty after canonicalization.
+// parts are canonicalized; parsing fails when the raw value does not contain
+// exactly one separator or either part is empty after canonicalization.
 func ParseIdentityKey(raw string) (string, error) {
 	name, address, ok := strings.Cut(raw, IdentityKeySeparator)
-	if !ok {
+	if !ok || strings.Contains(address, IdentityKeySeparator) {
 		return "", fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
 	}
 	name = canonicalIdentityPart(name)

@@ -509,7 +509,10 @@ func canonicalizeIdentityKeyList(section string, keys []string) error {
 }
 
 // canonicalIdentityBPSKeys rebuilds the identity_bps map with canonical keys
-// so per-identity limits set under unnormalized spellings still apply.
+// so per-identity limits set under unnormalized spellings still apply. Two
+// spellings sharing a canonical key must agree on the limit: conflicting
+// values abort load instead of letting map iteration order pick a winner,
+// while identical duplicates collapse silently.
 func canonicalIdentityBPSKeys(limits map[string]int64) (map[string]int64, error) {
 	if limits == nil {
 		return nil, nil
@@ -519,6 +522,9 @@ func canonicalIdentityBPSKeys(limits map[string]int64) (map[string]int64, error)
 		key, err := types.ParseIdentityKey(raw)
 		if err != nil {
 			return nil, fmt.Errorf("policy.json identity_bps[%q]: %w", raw, err)
+		}
+		if existing, ok := canonical[key]; ok && existing != limit {
+			return nil, fmt.Errorf("policy.json identity_bps[%q]: canonical key %q already set to %d", raw, key, existing)
 		}
 		canonical[key] = limit
 	}

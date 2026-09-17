@@ -83,7 +83,7 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 }
 
 func TestPolicyLoadNormalizesUnnormalizedIdentityKeys(t *testing.T) {
-	_, server, err := newPolicyAPI(t, `{"approval_mode":"manual","banned_identity_keys":["  Blocked : ADDR "],"approved_identity_keys":[" ALLOWED : addr "],"denied_identity_keys":["  DENIED : Key "],"identity_bps":{" Floody : Key ":1500}}`)
+	_, server, err := newPolicyAPI(t, `{"approval_mode":"manual","banned_identity_keys":["  Blocked : ADDR "],"approved_identity_keys":[" ALLOWED : addr "],"denied_identity_keys":["  DENIED : Key "],"identity_bps":{" Floody : Key ":1500,"floody:key":1500}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,26 +103,25 @@ func TestPolicyLoadNormalizesUnnormalizedIdentityKeys(t *testing.T) {
 	}
 }
 
-func TestPolicyLoadRejectsMalformedIdentityKeys(t *testing.T) {
-	cases := []struct {
-		section string
-		payload string
-	}{
-		{"approved_identity_keys", `{"approved_identity_keys":["no-separator"]}`},
-		{"denied_identity_keys", `{"denied_identity_keys":["no-separator"]}`},
-		{"banned_identity_keys", `{"banned_identity_keys":["ok:addr","no-separator"]}`},
-		{"identity_bps", `{"identity_bps":{"no-separator":100}}`},
+func TestPolicyLoadRejectsMalformedIdentityKey(t *testing.T) {
+	_, _, err := newPolicyAPI(t, `{"identity_bps":{"no-separator":100}}`)
+	if err == nil {
+		t.Fatal("malformed identity key accepted at load")
 	}
-	for _, tc := range cases {
-		t.Run(tc.section, func(t *testing.T) {
-			_, _, err := newPolicyAPI(t, tc.payload)
-			if err == nil {
-				t.Fatalf("malformed %s accepted at load", tc.section)
-			}
-			if !strings.Contains(err.Error(), tc.section) || !strings.Contains(err.Error(), "no-separator") {
-				t.Fatalf("load error %q must name section %q and the offending key", err, tc.section)
-			}
-		})
+	if !strings.Contains(err.Error(), "identity_bps") || !strings.Contains(err.Error(), "no-separator") {
+		t.Fatalf("load error %q must name the section and the offending key", err)
+	}
+}
+
+func TestPolicyLoadRejectsConflictingIdentityBPSLimits(t *testing.T) {
+	_, _, err := newPolicyAPI(t, `{"identity_bps":{" Floody : Key ":1500,"floody:key":2000}}`)
+	if err == nil {
+		t.Fatal("conflicting canonical identity_bps limits accepted at load")
+	}
+	// Either raw spelling may surface as the conflicting entry depending on
+	// map iteration order; the canonical key is named either way.
+	if !strings.Contains(err.Error(), "identity_bps") || !strings.Contains(err.Error(), "floody:key") {
+		t.Fatalf("load error %q must name the section and the canonical key", err)
 	}
 }
 

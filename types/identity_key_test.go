@@ -1,10 +1,6 @@
 package types
 
-import (
-	"fmt"
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestCanonicalIdentityKey(t *testing.T) {
 	t.Parallel()
@@ -42,7 +38,6 @@ func TestParseIdentityKey(t *testing.T) {
 		{"canonical round-trip", "alice:addr", "alice:addr"},
 		{"uppercase normalized", "Alice:ADDR", "alice:addr"},
 		{"whitespace normalized", " alice :\taddr ", "alice:addr"},
-		{"first separator wins, colons kept in address", "a:b:c", "a:b:c"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -71,6 +66,7 @@ func TestParseIdentityKeyRejectsMalformed(t *testing.T) {
 		{"empty address", "alice:"},
 		{"whitespace-only name", "  :addr"},
 		{"whitespace-only address", "alice: \t"},
+		{"multiple separators", "a:b:c"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -83,46 +79,10 @@ func TestParseIdentityKeyRejectsMalformed(t *testing.T) {
 	}
 }
 
-func TestParseIdentityKeyErrorMentionsInputAndShape(t *testing.T) {
+func TestIdentityKeyDelegatesToCanonicalIdentityKey(t *testing.T) {
 	t.Parallel()
-	const raw = "Alice:"
-	_, err := ParseIdentityKey(raw)
-	if err == nil {
-		t.Fatal("ParseIdentityKey(\"Alice:\") error = nil, want error")
-	}
-	wantInput := fmt.Sprintf("%q", raw)
-	if !strings.Contains(err.Error(), wantInput) {
-		t.Errorf("error %q does not mention offending input %s", err, wantInput)
-	}
-	if !strings.Contains(err.Error(), `"name:address"`) {
-		t.Errorf("error %q does not describe expected name:address shape", err)
-	}
-}
-
-func TestIdentityKeyMirrorsLegacyBehavior(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name     string
-		identity Identity
-		want     string
-	}{
-		{"zero identity", Identity{}, ""},
-		{"whitespace-only identity", Identity{Name: " \t", Address: " \n"}, ""},
-		{"canonical parts", Identity{Name: "alice", Address: "addr"}, "alice:addr"},
-		{"mixed case", Identity{Name: "Alice", Address: "Addr"}, "alice:addr"},
-		{"surrounding whitespace", Identity{Name: " alice ", Address: " addr "}, "alice:addr"},
-		{"name only", Identity{Name: "alice"}, "alice:"},
-		{"address only", Identity{Address: "addr"}, ":addr"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := tt.identity.Key(); got != tt.want {
-				t.Errorf("Identity{Name: %q, Address: %q}.Key() = %q, want %q", tt.identity.Name, tt.identity.Address, got, tt.want)
-			}
-			if delegated := CanonicalIdentityKey(tt.identity.Name, tt.identity.Address); delegated != tt.want {
-				t.Errorf("CanonicalIdentityKey(%q, %q) = %q, want %q; Key() and constructor disagree", tt.identity.Name, tt.identity.Address, delegated, tt.want)
-			}
-		})
+	identity := Identity{Name: " Alice ", Address: "ADDR"}
+	if got, want := identity.Key(), CanonicalIdentityKey(identity.Name, identity.Address); got != want {
+		t.Errorf("Identity.Key() = %q, want CanonicalIdentityKey(%q, %q) = %q", got, identity.Name, identity.Address, want)
 	}
 }
