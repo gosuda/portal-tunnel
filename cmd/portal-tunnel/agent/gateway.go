@@ -175,6 +175,11 @@ func composeSuiRoute(prefix, amount string, contract types.X402Payment) (*routeP
 			"assetTransferMethod": "sui-gasless-stablecoin-address-balance",
 		},
 	}
+	resourceDescription := strings.TrimSpace(contract.ResourceDescription)
+	resourceMimeType := strings.TrimSpace(contract.ResourceMimeType)
+	if resourceMimeType == "" {
+		resourceMimeType = "text/html"
+	}
 	facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, firstEndpoint(contract.Endpoints), "", suifacilitator.SuiFacilitatorOptions{
 		GaslessStablecoinTypes: []string{asset},
 	})
@@ -187,7 +192,11 @@ func composeSuiRoute(prefix, amount string, contract types.X402Payment) (*routeP
 		// The gate re-publishes this descriptor in every 402 challenge, so
 		// it carries the route prefix rather than a per-request URL; the
 		// prepare delegate below keeps the per-request absolute URL.
-		Resource: &facilitatortypes.ResourceInfo{URL: prefix, MimeType: "text/html"},
+		Resource: &facilitatortypes.ResourceInfo{
+			URL:         prefix,
+			Description: resourceDescription,
+			MimeType:    resourceMimeType,
+		},
 		// Zero lets the gate apply its own settle deadline instead of the
 		// previous unbounded settlement.
 		RequestTimeout: contract.RequestTimeout,
@@ -196,11 +205,12 @@ func composeSuiRoute(prefix, amount string, contract types.X402Payment) (*routeP
 		return nil, err
 	}
 	preparer, err := suihttp.NewPreparer(suihttp.Config{
-		Requirements:     requirements,
-		ResourcePath:     prefix,
-		ResourceMimeType: "text/html",
-		Endpoints:        contract.Endpoints,
-		RequestTimeout:   contract.RequestTimeout,
+		Requirements:        requirements,
+		ResourcePath:        prefix,
+		ResourceDescription: resourceDescription,
+		ResourceMimeType:    resourceMimeType,
+		Endpoints:           contract.Endpoints,
+		RequestTimeout:      contract.RequestTimeout,
 	})
 	if err != nil {
 		return nil, err
