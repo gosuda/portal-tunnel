@@ -21,12 +21,20 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func TestResolveX402FacilitatorRequiresRecipient(t *testing.T) {
+// testSuiPayTo is a syntactically valid Sui address (0x + 64 hex chars).
+const testSuiPayTo = "0xabababababababababababababababababababababababababababababababab"
+
+func TestResolveX402FacilitatorRequiresValidRecipient(t *testing.T) {
 	cfg := appConfig{X402Enabled: true}
 	if _, err := resolveX402Facilitator(cfg); err == nil {
 		t.Fatal("resolveX402Facilitator() error = nil, want error for enabled x402 without recipient")
 	}
-	cfg.X402PayTo = "0xrecipient"
+	// A nonblank but malformed recipient must be rejected too: the value is
+	// advertised as the settlement target in /sdk/domain metadata.
+	if _, err := resolveX402Facilitator(appConfig{X402Enabled: true, X402PayTo: "0xrecipient"}); err == nil {
+		t.Fatal("resolveX402Facilitator() error = nil, want error for a malformed Sui recipient")
+	}
+	cfg.X402PayTo = testSuiPayTo
 	settings, err := resolveX402Facilitator(cfg)
 	if err != nil {
 		t.Fatalf("resolveX402Facilitator() error = %v, want nil with recipient set", err)
@@ -34,8 +42,11 @@ func TestResolveX402FacilitatorRequiresRecipient(t *testing.T) {
 	if !settings.Enabled || settings.Testnet {
 		t.Fatalf("resolveX402Facilitator() = %+v, want enabled mainnet with recipient set", settings)
 	}
+	if settings.PayTo != testSuiPayTo {
+		t.Fatalf("resolved PayTo = %q, want the normalized recipient %q", settings.PayTo, testSuiPayTo)
+	}
 
-	testnetSettings, err := resolveX402Facilitator(appConfig{X402Enabled: true, X402Testnet: true, X402PayTo: "0xrecipient"})
+	testnetSettings, err := resolveX402Facilitator(appConfig{X402Enabled: true, X402Testnet: true, X402PayTo: testSuiPayTo})
 	if err != nil {
 		t.Fatalf("resolveX402Facilitator() error = %v, want nil with recipient set", err)
 	}
@@ -43,7 +54,7 @@ func TestResolveX402FacilitatorRequiresRecipient(t *testing.T) {
 		t.Fatalf("resolveX402Facilitator() = %+v, want enabled testnet with recipient set", testnetSettings)
 	}
 
-	disabled, err := resolveX402Facilitator(appConfig{X402PayTo: "0xrecipient"})
+	disabled, err := resolveX402Facilitator(appConfig{X402PayTo: testSuiPayTo})
 	if err != nil {
 		t.Fatalf("resolveX402Facilitator() error = %v, want nil when disabled", err)
 	}
@@ -97,21 +108,22 @@ func TestComposeRelayHandlerMountsFacilitatorOnlyWhenEnabled(t *testing.T) {
 
 // GET /sdk/domain must serve the composed report in the production wiring:
 // with the facilitator enabled, runServer hands the path to the application
-// (ApplicationOwnsDomainReport), portal's apiHandler delegates it, and the
-// composed handler merges the facilitator block onto server.DomainReport().
-// A wrapper exercised in isolation never sees that delegated traffic, so this
-// drives a real portal.Server request path — SNI listener and apiHandler
-// included — and fails if portal answers the path itself.
+// (types.ApplicationOwnsDomainReport), portal's apiHandler delegates it, and
+// the composed handler merges the facilitator block onto
+// server.DomainReport(). A wrapper exercised in isolation never sees that
+// delegated traffic, so this drives a real portal.Server request path — SNI
+// listener and apiHandler included — and fails if portal answers the path
+// itself.
 func TestRelayServesComposedDomainX402Metadata(t *testing.T) {
 	port := relayTestPort(t)
 	portalURL := "https://127.0.0.1:" + strconv.Itoa(port)
 	stateDir := t.TempDir()
 	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:                   portalURL,
-		StateDir:                    stateDir,
-		SNIListenAddr:               "127.0.0.1:" + strconv.Itoa(port),
-		SNIPort:                     port,
-		ApplicationOwnsDomainReport: true,
+		PortalURL:         portalURL,
+		StateDir:          stateDir,
+		SNIListenAddr:     "127.0.0.1:" + strconv.Itoa(port),
+		SNIPort:           port,
+		DomainReportOwner: types.ApplicationOwnsDomainReport,
 	})
 	if err != nil {
 		t.Fatalf("create relay server: %v", err)
@@ -123,7 +135,7 @@ func TestRelayServesComposedDomainX402Metadata(t *testing.T) {
 	handler, err := composeRelayHandler(x402FacilitatorSettings{
 		Enabled:   true,
 		Testnet:   true,
-		PayTo:     "0xrecipient",
+		PayTo:     testSuiPayTo,
 		PortalURL: portalURL,
 	}, server, relayAPI.Handler())
 	if err != nil {
@@ -195,8 +207,8 @@ func TestRelayServesComposedDomainX402Metadata(t *testing.T) {
 	}
 	info := envelope.Data.X402
 	facilitatorURL := portalURL + types.PathX402Facilitator
-	if !info.Enabled || info.URL != facilitatorURL || info.PayTo != "0xrecipient" {
-		t.Fatalf("domain x402 metadata = %+v, want enabled with url %q and pay-to 0xrecipient", info, facilitatorURL)
+	if !info.Enabled || info.URL != facilitatorURL || info.PayTo != testSuiPayTo {
+		t.Fatalf("domain x402 metadata = %+v, want enabled with url %q and pay-to %q", info, facilitatorURL, testSuiPayTo)
 	}
 	if envelope.Data.ProtocolVersion != types.SDKVersion {
 		t.Fatalf("domain protocol_version = %q, want relay-owned %q preserved through composition", envelope.Data.ProtocolVersion, types.SDKVersion)
@@ -223,7 +235,11 @@ func relayTestPort(t *testing.T) int {
 	lo, hi := ephemeralPortRange()
 	start, end := 31000, 32100
 	if start <= hi && end >= lo {
-		start, end = hi+1, min(hi+1100, 65535)
+		if hi < 65535 {
+			start, end = hi+1, min(hi+1100, 65535)
+		} else {
+			start, end = max(1, lo-1100), lo-1
+		}
 	}
 	for port := start; port <= end; port++ {
 		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))

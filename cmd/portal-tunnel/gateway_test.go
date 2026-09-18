@@ -114,6 +114,37 @@ func TestComposeHTTPRoutes(t *testing.T) {
 			t.Fatal("ComposeHTTPRoutes() error = nil, want payment methods require amount error")
 		}
 	})
+
+	t.Run("x402 endpoints stay upstream when nothing is paid", func(t *testing.T) {
+		unpaid, err := agent.ComposeHTTPRoutes([]agent.ExposedHTTPRoute{
+			{Prefix: "/", Upstream: upstream.URL},
+		}, gatewayTestContract())
+		if err != nil {
+			t.Fatalf("ComposeHTTPRoutes() error = %v", err)
+		}
+		for _, path := range []string{types.X402ClientPath, types.X402PreparePath} {
+			rec := httptest.NewRecorder()
+			unpaid.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+path, strings.NewReader(`{"path":"/x"}`)))
+			if rec.Code != http.StatusOK || rec.Body.String() != "api" {
+				t.Fatalf("POST %s status = %d body = %q, want a fully unpaid gateway to pass x402 paths through", path, rec.Code, rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("paid gateway serves the x402 client endpoint", func(t *testing.T) {
+		paid, err := agent.ComposeHTTPRoutes([]agent.ExposedHTTPRoute{
+			{Prefix: "/api", Upstream: upstream.URL},
+			{Prefix: "/paid", Upstream: upstream.URL, Amount: "0.01"},
+		}, gatewayTestContract())
+		if err != nil {
+			t.Fatalf("ComposeHTTPRoutes() error = %v", err)
+		}
+		rec := httptest.NewRecorder()
+		paid.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://public.example"+types.X402ClientPath, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want the paid gateway to serve the x402 client", types.X402ClientPath, rec.Code)
+		}
+	})
 }
 
 func TestComposeHTTPRoutesSelectsCanonicalLongestPrefix(t *testing.T) {

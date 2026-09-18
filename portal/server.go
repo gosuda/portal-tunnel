@@ -58,11 +58,10 @@ type ServerConfig struct {
 	MaxPort           int
 	ACME              acme.Config
 
-	// ApplicationOwnsDomainReport hands types.PathSDKDomain to the
-	// application handler: it serves the domain report and composes
-	// Server.DomainReport() itself. Leave it false to serve the relay's
-	// own report.
-	ApplicationOwnsDomainReport bool
+	// DomainReportOwner selects who serves types.PathSDKDomain: the relay
+	// core (default) or the application handler, which serves the report
+	// and composes Server.DomainReport() itself.
+	DomainReportOwner types.DomainReportOwner
 }
 
 // NormalizeHTTPRedirectConfig validates redirect settings without resolving names

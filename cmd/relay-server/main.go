@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	suischeme "github.com/gosuda/x402-facilitator/scheme/sui"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -163,7 +164,9 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	}
 	// With payments enabled this application serves /sdk/domain itself,
 	// composing the facilitator metadata onto the relay's domain report.
-	cfg.Relay.ApplicationOwnsDomainReport = x402Settings.Enabled
+	if x402Settings.Enabled {
+		cfg.Relay.DomainReportOwner = types.ApplicationOwnsDomainReport
+	}
 	server, err := portal.NewServer(cfg.Relay)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
@@ -233,23 +236,26 @@ type x402FacilitatorSettings struct {
 
 // resolveX402Facilitator resolves the relay-owned x402 flags. An enabled
 // facilitator without a payment recipient would advertise payments nothing
-// can settle, so it fails resolution instead of booting unusable.
+// can settle, so it fails resolution instead of booting unusable. The
+// recipient must normalize to a valid Sui address: it is published verbatim
+// in the /sdk/domain facilitator metadata.
 func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
 	if !cfg.X402Enabled {
 		return x402FacilitatorSettings{}, nil
 	}
-	if strings.TrimSpace(cfg.X402PayTo) == "" {
-		return x402FacilitatorSettings{}, errors.New("x402 facilitator enabled without a payment recipient")
+	payTo := suischeme.NormalizeAddress(cfg.X402PayTo)
+	if payTo == "" {
+		return x402FacilitatorSettings{}, errors.New("x402 facilitator requires a valid Sui pay-to address")
 	}
-	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet, PayTo: strings.TrimSpace(cfg.X402PayTo), PortalURL: cfg.Relay.PortalURL}, nil
+	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet, PayTo: payTo, PortalURL: cfg.Relay.PortalURL}, nil
 }
 
 // composeRelayHandler mounts the relay-owned x402 facilitator in front of the
 // relay API handler: /api/x402 is served by the application that chose to
 // enable payments, and every other path reaches the generic relay handler.
 // The application also serves /sdk/domain (the relay hands the path over via
-// ApplicationOwnsDomainReport) by composing the facilitator metadata onto
-// server.DomainReport().
+// types.ApplicationOwnsDomainReport) by composing the facilitator metadata
+// onto server.DomainReport().
 func composeRelayHandler(settings x402FacilitatorSettings, server *portal.Server, base http.Handler) (http.Handler, error) {
 	if !settings.Enabled {
 		return base, nil

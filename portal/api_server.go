@@ -144,7 +144,7 @@ func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler
 		case types.PathHealthz:
 			s.handleHealthz(w, r)
 		case types.PathSDKDomain:
-			if s.config().ApplicationOwnsDomainReport {
+			if s.config().DomainReportOwner == types.ApplicationOwnsDomainReport {
 				base.ServeHTTP(w, r)
 				return
 			}
@@ -299,10 +299,10 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 }
 
 // DomainReport returns the relay-owned /sdk/domain payload. An
-// application that sets ApplicationOwnsDomainReport composes its own
-// metadata onto this value and serves the result itself. x402 facilitator
-// metadata is owned by the application that mounts the facilitator
-// (cmd/relay-server); this report stays x402-blind.
+// application that selects types.ApplicationOwnsDomainReport composes its
+// own metadata onto this value and serves the result itself. x402
+// facilitator metadata is owned by the application that mounts the
+// facilitator (cmd/relay-server); this report stays x402-blind.
 func (s *Server) DomainReport() types.DomainResponse {
 	return types.DomainResponse{
 		Cache:           s.registry.cache.Limits(),

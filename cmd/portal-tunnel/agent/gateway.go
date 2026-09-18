@@ -35,7 +35,9 @@ type ExposedHTTPRoute struct {
 
 // ComposeHTTPRoutes builds the payment-agnostic sdk router and explicitly
 // wraps only the routes carrying an x402 amount with payment gates. The
-// returned handler also serves the shared x402 client and prepare endpoints.
+// returned handler also serves the shared x402 client and prepare endpoints
+// when at least one route is paid; a fully unpaid gateway passes those paths
+// through to the routes like any other path.
 func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (http.Handler, error) {
 	if len(routes) == 0 {
 		return nil, errors.New("at least one http route is required")
@@ -93,16 +95,19 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 	}
 
 	var clientJS http.Handler = http.HandlerFunc(x402.ServeClientJS)
+	servesX402 := false
 	for _, policy := range policies {
 		if policy.paid != nil {
 			clientJS = policy.paid.ClientJSHandler()
+			servesX402 = true
 			break
 		}
 	}
 	return &httpGateway{
-		routes:   routed,
-		clientJS: clientJS,
-		policies: policies,
+		routes:     routed,
+		clientJS:   clientJS,
+		policies:   policies,
+		servesX402: servesX402,
 	}, nil
 }
 
@@ -112,9 +117,10 @@ type routePolicy struct {
 }
 
 type httpGateway struct {
-	routes   *sdk.HTTPRoutes
-	clientJS http.Handler
-	policies []routePolicy
+	routes     *sdk.HTTPRoutes
+	clientJS   http.Handler
+	policies   []routePolicy
+	servesX402 bool
 }
 
 func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -124,13 +130,15 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	path = utils.NormalizeURLPath(path)
 
-	if path == types.X402ClientPath {
-		g.clientJS.ServeHTTP(w, r)
-		return
-	}
-	if path == types.X402PreparePath {
-		g.servePrepare(w, r)
-		return
+	if g.servesX402 {
+		if path == types.X402ClientPath {
+			g.clientJS.ServeHTTP(w, r)
+			return
+		}
+		if path == types.X402PreparePath {
+			g.servePrepare(w, r)
+			return
+		}
 	}
 
 	if policy := g.matchPolicy(path); policy != nil && policy.paid != nil {
