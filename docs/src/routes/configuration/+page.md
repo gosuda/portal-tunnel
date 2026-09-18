@@ -332,7 +332,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
 | `--identity-path` | `IDENTITY_PATH` | string | `identity.json` | Identity JSON file path |
-| `--identity-json` | `IDENTITY_JSON` | string | | Identity JSON payload; overrides `--identity-path` contents and is persisted there when both are set |
+| `--identity-json` | `IDENTITY_JSON` | string | | In-memory identity JSON; takes precedence over `--identity-path` without reading or writing that file |
 
 ### Lease
 
@@ -357,10 +357,28 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 |------|---------|------|---------|-------------|
 | `--http-route` | | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]` form; repeat to aggregate multiple local HTTP services behind one public URL; route amounts require `--x402-pay-to` |
 
+### Static Sites
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--serve` | string | | Serve a directory or HTML file with SPA fallback; excludes positional target, `--http-route`, `--tcp`, and `--udp` |
+| `--cache` | bool | `false` | Allow selected relays to store `--serve` content and terminate browser TLS; excludes `--ech` and `--ban-mitm` |
+| `--cache-ttl` | duration | `0` | Offline TTL request; requires `--cache`; `0` uses relay policy, otherwise `1s` to `8760h`, clamped by the relay |
+
+These options have no environment-variable fallback and are not agent TOML
+fields. See [static serving](/cli-reference#serve-a-static-site).
+
+### Diagnostics
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--metrics-addr` | string | empty | Optional `host:port` serving Prometheus `/metrics`; no environment fallback |
+
 ### Transport
 
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
+| `--ech` | `ECH_ENABLED` | bool | `false` | Enable ECH hostname privacy for uncached TLS stream tunnels |
 | `--udp` | `UDP_ENABLED` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--udp-addr` | `UDP_ADDR` | string | | Local UDP target address for relayed datagrams (`host:port` or port only); defaults to the target when `--udp` is enabled |
 | `--tcp` | `TCP_ENABLED` | bool | `false` | Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers) |
@@ -435,11 +453,15 @@ The local agent dashboard and mutating control API calls use the bearer token in
 the agent state directory. Wallet-authenticated agent requests are read-only and
 can only read `/agent/status`.
 
-Tunnel fields mirror `portal expose` flags:
+Supported tunnel fields follow the corresponding `portal expose` options.
+The agent does not currently support `serve`, `cache`, or `cache_ttl`:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Stable tunnel ID used by the agent dashboard |
+| `name` | string | Name used when creating a new identity; an existing identity keeps its saved name |
+| `max_active_relays` | int | Auto-selected relay limit; defaults to `3`; explicit relays remain included |
+| `ban_mitm` | bool | Ban on suspected TLS termination; defaults to warning-only |
 | `target` | string | Local TCP target, equivalent to the `portal expose <target>` argument |
 | `http_routes` | table array | HTTP route mappings; cannot be combined with `target` or `udp` |
 | `relays` | string array | Explicit relay API URLs |
@@ -447,7 +469,7 @@ Tunnel fields mirror `portal expose` flags:
 | `overlay` | bool | Prefer IVNP overlay transport when available; defaults to direct and retains direct fallback |
 | `ech` | bool | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
-| `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
+| `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |
@@ -504,6 +526,10 @@ Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors
 | `mnemonic` | string | BIP-39 mnemonic used to derive the secp256k1 identity key; keep secret |
 | `derivation_path` | string | EVM derivation path for `mnemonic`; defaults to `m/44'/60'/0'/0/0` |
 | `encrypted_client_hello_seed` | string | Relay-only HKDF salt for deriving the ECH HPKE private key; generated automatically when missing; keep secret |
+
+An existing identity file or `--identity-json` supplies the saved name as well
+as the key. `--name` applies only when creating a new identity; it does not
+rename an existing one. Use a separate `--identity-path` for a new identity.
 
 When `mnemonic` is present, Portal derives the private key at `derivation_path`
 and preserves the mnemonic form when rewriting `identity.json`. The same

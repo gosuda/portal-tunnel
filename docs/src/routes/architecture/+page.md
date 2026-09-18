@@ -141,7 +141,9 @@ const overlayDiagram = `sequenceDiagram
 ## Overview
 
 Portal publishes local services on public subdomains, optional dedicated TCP ports, and optional UDP ports through a relay.
-Backends connect outward to the relay. Stream traffic is routed by SNI, and tenant TLS remains end-to-end between the client and the SDK or tunnel endpoint for the stream path.
+Backends connect outward to the relay. Uncached stream traffic is routed by SNI,
+and tenant TLS remains end-to-end between the client and the tunnel endpoint.
+Opt-in static caches terminate browser TLS at the relay.
 
 High-level path:
 
@@ -183,7 +185,7 @@ UDP client
 - Relay terminates admin/API TLS on the root host and exposes `/v1/sign` for tenant-side keyless signing.
 - Control-plane HTTP (`/sdk/*`), reverse-session establishment (`/sdk/connect`), and tenant TLS are separate connections with different trust boundaries.
 - Relay API TLS, SDK relay-client TLS, SDK tenant-server TLS, and QUIC tunnel TLS are distinct configs even when they reuse the same relay certificate material.
-- Relay does not terminate tenant TLS. It peeks ClientHello for SNI and bridges raw encrypted bytes after routing.
+- For uncached HTTPS tunnels, the relay peeks ClientHello for SNI and bridges encrypted bytes; tenant TLS terminates at the tunnel. Opt-in static caches terminate browser TLS at the relay.
 - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
 - In keyless TLS, the relay performs certificate private-key signing through `/v1/sign`, but the SDK/tunnel endpoint still runs the TLS server handshake and derives tenant TLS session keys locally.
 - Lease operations require a relay-issued access token whose identity and lease ID both match the active lease instance. `/sdk/connect` uses a separate reverse-only capability returned as part of a generic reverse endpoint.
@@ -202,7 +204,7 @@ UDP client
 
 ### JSON and Shared Contract
 
-- All JSON control-plane responses use `APIEnvelope`: `{ ok, data?, error? }`.
+- Portal JSON control-plane responses use `APIEnvelope`: `{ ok, data?, error? }`. Delegated facilitator responses, streams, installers, and some cache HTTP errors use their endpoint-specific formats.
 - JSON handlers should write responses through the shared API helpers.
 - `types/` is reserved for shared wire/public types and cross-package constants only.
 - Shared control-plane and public route constants belong in `types/paths.go`.
@@ -249,6 +251,15 @@ The SDK client library lives in `sdk/` (listener, exposure, relay API client, MI
 CLI entry points live in `cmd/relay-server` and `cmd/portal-tunnel`; they import `portal/` and `sdk/` respectively but never each other.
 Shared wire types, API envelope, error codes, path constants, and transport frame codec live in `types/`.
 
+## Opt-in Static Cache
+
+`portal/cache` owns snapshot creation and synchronization on the origin side,
+and admission, storage, expiry, and serving on the relay side. A lease must
+explicitly opt in before the relay accepts its files. Eligible snapshots route
+through the relay HTTP handler and terminate browser TLS there; ordinary
+uncached connections retain TLS passthrough. See [the cache trust boundary](/security-model#opt-in-static-cache)
+and [cache limits and expiry](/configuration#static-relay-cache).
+
 ## Transport Model
 
 ### Raw reverse transport (TLS only)
@@ -278,9 +289,8 @@ lease.
 
 The `Gateway → Ingress` edge is one logical Portal transport edge. IVNP may
 carry it over multiple internal I2P-style hops, but that internal topology is
-opaque to Portal. Portal-level explicit multi-hop routing and the former
-WireGuard relay mesh were removed; network-level multi-hop now lives inside
-IVNP, below Portal.
+opaque to Portal. Network-level multi-hop belongs to IVNP; Portal does not
+construct an ordered list of intermediate relays.
 
 Ownership split:
 
@@ -411,7 +421,7 @@ in `types/paths.go` and `cmd/relay-server`.
 
 ## Keyless TLS Trust Model
 
-The relay signs handshake digests via `/v1/sign` but never receives tenant TLS traffic secrets. The SDK/tunnel endpoint runs the full TLS server handshake and derives session keys locally. Relay control-plane TLS and reverse-session setup terminate on the relay's admin/API route and are not protected by the tenant keyless path.
+For uncached HTTPS tunnels, the relay signs handshake digests via `/v1/sign` without receiving tenant TLS traffic secrets. The SDK/tunnel endpoint runs the full TLS server handshake and derives session keys locally. Relay control-plane TLS and reverse-session setup terminate on the relay's admin/API route and are not protected by the tenant keyless path.
 
 ## Design Properties
 

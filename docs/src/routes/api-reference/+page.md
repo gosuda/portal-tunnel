@@ -53,10 +53,14 @@ HTTP 404 outside the envelope.
 |------|---------|----------------|
 | None | public and challenge endpoints | no credential |
 | Admin bearer | admin API | `Authorization: Bearer <access_token>` |
-| Lease token header | keyless signer and datagram backhaul | `X-Portal-Access-Token: <access_token>` |
+| Lease token header | keyless signer and static cache | `X-Portal-Access-Token: <access_token>` |
 | Reverse capability header | reverse stream | `X-Portal-Reverse-Capability: <capability>` |
-| Lease token body | lease renew/unregister | JSON field `access_token` |
+| Lease token body | lease renew/reverse/unregister | JSON field `access_token` |
 | Signed descriptor | relay discovery announce | signed `RelayDescriptor` body |
+
+The QUIC datagram backhaul carries the lease access token in a JSON message
+on its first stream, rather than an HTTP header. Cache endpoints can return
+plain-text HTTP errors for unsupported methods or exhausted request slots.
 
 Admin auth and SDK lease auth issue different tokens and are not
 interchangeable. SDK lease registration uses SIWE; relay admin access uses the
@@ -75,6 +79,9 @@ configured admin token.
 | `GET`/`HEAD` | `/api/install.sh`, `/api/install.ps1` | None | install script |
 | `GET`/`HEAD` | `/api/install/bin/{slug}` | None | install binary or redirect |
 
+Detailed contracts: [SDK API](/api-reference/sdk) and
+[Admin and Policy API](/api-reference/admin).
+
 ### SDK
 
 | Method | Path | Auth | Body | Response |
@@ -86,6 +93,9 @@ configured admin token.
 | `POST` | `/sdk/reverse` | lease token body | `ReverseEndpointRequest` | `ReverseEndpoint` |
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
 | `GET` | `/sdk/connect` | reverse capability header | none | hijacked stream |
+| `POST` | `/sdk/cache` | lease token header | `StaticCacheManifest` JSON | `StaticCacheStatus` |
+| `PUT` | `/sdk/cache` | lease token header | manifest and file bytes as multipart | `StaticCacheStatus` |
+| `DELETE` | `/sdk/cache` | lease token header | none | `StaticCacheStatus` |
 
 ### Admin
 

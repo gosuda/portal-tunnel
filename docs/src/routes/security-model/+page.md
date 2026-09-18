@@ -5,7 +5,21 @@ description: How Portal keeps tenant traffic opaque to relay operators.
 
 # Security Model
 
-Portal is designed so relay operators do not receive tenant traffic plaintext.
+Ordinary uncached HTTPS tunnels keep tenant traffic opaque to relay operators.
+Raw port transports and opt-in static caching have different trust boundaries.
+
+## Opt-in Static Cache
+
+`portal expose --serve ./dist --cache` explicitly permits selected relays to
+store the site's files and terminate browser TLS. Cached connections therefore
+expose HTTP headers and content to the serving relay. If that connection falls
+back to the live origin, it still trusts the relay; browser-to-origin end-to-end
+TLS is not restored on an already terminated connection.
+
+Use explicit `--relays` with `--discovery=false` to choose exactly which relays
+receive the files. Cache mode cannot be combined with `--ech` or `--ban-mitm`.
+Ordinary uncached HTTPS tunnels retain the tenant TLS path described below.
+See [cache configuration](/configuration#static-relay-cache) for expiry and limits.
 
 ## Tenant TLS
 
@@ -39,9 +53,13 @@ Enable ECH for a CLI tunnel with `portal expose ... --ech` or set `ech = true` i
 
 ECH-enabled tunnels retain plaintext-SNI fallback routing. This lets clients that do not obtain or use the ECHConfigList connect through the public hostname without weakening tenant TLS passthrough.
 
-When `ACME_DNS_PROVIDER` is configured, Portal publishes the relay root HTTPS/ECH record. For each ECH-enabled stream lease it also creates or updates the public hostname A record and HTTPS record containing the `ech` parameter. Portal does not create tenant ECH DNS records for the default `ECH=false` mode. It removes tenant A and HTTPS/ECH records when the owning ECH lease is removed and no active replacement requires the hostname. Successful ECH HTTPS operations are not periodically rewritten; failed create, update, and delete operations remain pending for retry. Active ECH hostname A records are updated when Portal observes that the relay public IPv4 has changed.
+For public relays, Portal selects embedded DNS when `ACME_DNS_PROVIDER` is empty.
+The selected provider publishes the relay root HTTPS/ECH record. For each ECH-enabled stream lease it also creates or updates the public hostname A record and HTTPS record containing the `ech` parameter. Portal does not create tenant ECH DNS records for the default `ECH=false` mode. It removes tenant A and HTTPS/ECH records when the owning ECH lease is removed and no active replacement requires the hostname. Successful ECH HTTPS operations are not periodically rewritten; failed create, update, and delete operations remain pending for retry. Active ECH hostname A records are updated when Portal observes that the relay public IPv4 has changed.
 
-Without a DNS provider, operators must distribute the ECHConfigList through DNS HTTPS/SVCB or another ECH-capable bootstrap. Until clients obtain that configuration, they continue through the public hostname and plaintext-SNI fallback.
+An empty provider setting does not disable DNS or ECH publication. Embedded
+DNS needs public NS/glue delegation and reachable DNS ports; external providers
+need their API credentials. Manual certificates only override issuance. Clients
+that do not obtain an ECHConfigList use plaintext-SNI fallback.
 
 Enabling UDP or a dedicated raw TCP port does not disable tunnel ECH on the
 default TLS hostname. The additional raw TCP and UDP endpoints do not themselves
@@ -54,6 +72,8 @@ use ECH or add tenant TLS.
 Matching exporter values mean the sampled connection preserved passthrough. A mismatch is treated as suspected relay-side TLS termination and logged by default; use `--ban-mitm` when suspected TLS termination should ban the relay.
 
 ## Relay Visibility
+
+For ordinary uncached tunnels:
 
 | Relays can see | Relays cannot see |
 |---|---|

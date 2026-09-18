@@ -108,13 +108,19 @@ fullchain.pem
 privatekey.pem
 ```
 
-The certificate must cover the Portal root hostname. A wildcard certificate is
-also required when wildcard tunnel names terminate TLS at Portal.
+The certificate must cover the Portal root hostname and the tunnel hostnames,
+normally through a wildcard SAN. Even uncached tunnels use this certificate
+through the relay-backed keyless signer. Manual files override issuance only
+when neither `acme-account.key` nor `acme-registration.json` exists in the state
+directory; DNS and ECH management still run.
 
 ## Deploy
 
 ```bash
 mkdir -p ./.portal-certs
+# For a new bind-mount directory on Linux, allow the nonroot container to write.
+# Preserve the ownership policy of existing deployments.
+sudo chown 65532:65532 ./.portal-certs
 docker compose pull portal
 docker compose up -d --force-recreate portal
 ```
@@ -125,10 +131,9 @@ For a local source build:
 docker compose up -d --build --force-recreate portal
 ```
 
-`--remove-orphans` is deliberately absent. It is useful once, to clear the
-containers a superseded topology left behind, and dangerous in a project shared
-with unrelated services. Remove those containers by name instead — see
-[Migration From the Split Stack](#migration-from-the-split-stack).
+Name the Portal service explicitly when the Compose project contains unrelated
+services. Do not use `--remove-orphans` on a shared project; remove obsolete
+containers individually after confirming their ownership.
 
 The Compose stack publishes:
 
@@ -138,8 +143,11 @@ The Compose stack publishes:
 | `53/tcp` + `53/udp` | Embedded authoritative DNS for the delegated relay zone |
 | configured lease range | Optional UDP and raw TCP leases |
 
-Port `80/tcp` is not required. Operators who need HTTP-to-HTTPS redirects may
-add a small external redirect service, but it must not terminate wildcard
+Port `80/tcp` is optional. To enable the built-in redirect listener, set
+`HTTP_REDIRECT_ENABLED=true` and publish `80:80`. It redirects to the canonical
+`PORTAL_URL`, discarding the request path and query; it does not redirect tenant
+hostnames. See [HTTP redirect configuration](/configuration#optional-http-redirect-listener).
+An external redirect service is also possible, but must not terminate wildcard
 tunnel TLS.
 
 ## Verify
@@ -179,14 +187,15 @@ sites from that port, it cannot simply be pointed at: Portal's SNI router
 every request meant for those other sites.
 
 The proxy keeps the port and hands Portal the hostnames that belong to it.
-Complete, tested configurations are in
-`docs/static/examples/reverse-proxy/`.
+Example configurations: [Compose override](/examples/reverse-proxy/compose.override.yaml)
+and [nginx configuration](/examples/reverse-proxy/nginx.conf).
 
 ### One topology: nginx in a container beside Portal
 
-nginx runs as a service on the same Compose network as Portal. Only nginx
-publishes host ports. Portal publishes no TCP port at all and is reached as
-`portal:443` over that network.
+nginx runs on the same Compose network as Portal and owns the public HTTPS
+port. It reaches Portal as `portal:443` on that network. Portal still publishes
+`53/tcp` and `53/udp` for the default embedded DNS provider; retain any enabled
+UDP backhaul and lease-port mappings in the override.
 
 ```text
 host :443 -> nginx container
@@ -378,45 +387,6 @@ chmod +x watch_and_deploy.sh
 ./watch_and_deploy.sh
 ```
 
-## Migration From the Split Stack
-
-1. Confirm `./.portal-certs` contains the Portal certificate and state. It holds
-   the relay identity: losing it makes this a different relay.
-2. Pull or build the new single Portal image.
-3. Stop the old stack so it releases public port 443.
-4. Remove the superseded `nginx`, `portal-api` and `portal-frontend` services,
-   then start `portal`.
-
-   Do this through the **old** Compose file. Those services did not set
-   `container_name`, so their containers are named `<project>-portal-api-1`
-   rather than `portal-api`, and `docker stop portal-api` fails with
-   `No such container`. Keep the old file until this step is done:
-
-   ```bash
-   docker compose -f docker-compose.old.yml ps            # confirm the real names
-   docker compose -f docker-compose.old.yml stop nginx portal-api portal-frontend
-   docker compose -f docker-compose.old.yml rm -f nginx portal-api portal-frontend
-   docker compose up -d portal
-   ```
-
-   If the old file is already gone, resolve the names through Compose's own
-   labels instead of guessing:
-
-   ```bash
-   docker ps -a --filter label=com.docker.compose.service=portal-api \
-     --format '{{.Names}}'
-   ```
-
-   Not `--remove-orphans`: it deletes every container in the project that the
-   current file does not define, including services belonging to other stacks
-   when the project is shared.
-
-5. Verify the SPA, relay APIs, and at least one wildcard tunnel.
-
-The old edge configuration and its separate browser certificate are no longer
-used. Portal owns the public certificate and performs only one TLS handshake
-for root-host requests.
-
 ## Troubleshooting
 
 ### Port 443 Is Already Allocated
@@ -427,23 +397,14 @@ Identify what holds the port first:
 sudo ss -tlnp | grep ':443\b'
 ```
 
-If it is a superseded Portal edge container, stop and remove it by name, then
-start Portal:
-
-```bash
-docker stop <old-edge-container>
-docker rm   <old-edge-container>
-docker compose up -d portal
-```
-
-If it is something that has to keep serving — an nginx fronting other sites, for
-example — Portal cannot take the port from it and must not try. See
-[Running Behind an Existing Reverse Proxy](#running-behind-an-existing-reverse-proxy).
+If the listener belongs to an obsolete deployment, stop only that deployment's
+service after confirming ownership. If it serves other sites, keep it running
+and use [the reverse-proxy topology](#running-behind-an-existing-reverse-proxy).
 
 ### SPA Routes Return 404
 
-When `PORTAL_FRONTEND_DIR` is empty, use an image built after the embedded
-frontend migration. When it is set, confirm the mounted directory contains
+When `PORTAL_FRONTEND_DIR` is empty, Portal serves its embedded frontend.
+When it is set, confirm the mounted directory contains
 `index.html` and all asset paths expected by that file. `/admin` and other
 non-reserved client routes fall back to the selected SPA's `index.html`.
 

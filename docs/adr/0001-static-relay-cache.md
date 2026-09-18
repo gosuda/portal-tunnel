@@ -10,7 +10,7 @@ and serving. The lease registry supplies immutable
 `cache.Lease` observations on registration, renewal, and detach; the manager
 never receives a `*leaseRecord`. Server integration authenticates SDK requests,
 uses the manager's ingress hint, and supplies reverse-stream origin fallback.
-The manager consults the existing policy runtime for identity/IP admission.
+The manager consults the existing policy runtime for identity routing policy.
 Wire messages remain in `types`; manifest validation, digest computation, and
 byte accounting are private cache-domain operations in `portal/cache`.
 The relay independently validates every received manifest, regardless of

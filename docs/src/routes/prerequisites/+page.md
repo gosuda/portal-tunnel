@@ -12,9 +12,8 @@ requirements.
 
 | Requirement | Minimum |
 |-------------|---------|
-| OS | Linux (amd64/arm64), macOS (amd64/arm64), Windows (amd64) |
-| Network | Outbound TCP access for tunnel clients |
-| Disk | About 10 MB for the binary |
+| OS | Linux (amd64/arm64), macOS (amd64/arm64), Windows (amd64/arm64) |
+| Network | Outbound TCP; UDP tunnels also require outbound UDP to the relay QUIC port |
 
 ## For Tunnel Users
 
@@ -30,7 +29,8 @@ are required for normal tunnel use.
 If you plan to run your own relay server:
 
 - A server with a public IP address
-- A domain name with DNS pointing to the server
+- A domain name; the default embedded DNS provider needs NS/glue delegation
+  and inbound `53/tcp` plus `53/udp`
 - TLS certificate material, either managed through ACME or manually provided
 - Open inbound `443/tcp`
 - Optional UDP and raw TCP transport port ranges
@@ -39,8 +39,8 @@ If you plan to run your own relay server:
 
 - Long random admin token for relay admin access
 - Ethereum wallet for optional local agent status access
-- DNS provider account for relay-managed ACME, ECH DNS records, and optional ENS
-  gasless DNS import
+- DNS provider API credentials if choosing an external provider; the default
+  embedded provider manages ACME/ECH without a DNS vendor account
 
 ## Next Steps
 

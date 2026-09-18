@@ -211,7 +211,7 @@ Common fields:
 | `max_active_relays` | Maximum auto-selected relays kept connected; explicit relays are always included |
 | `overlay` | Prefer [IVNP overlay transport](/architecture#optional-relay-overlay) when available; defaults to direct and retains direct fallback |
 | `identity_path` | Tunnel identity JSON path |
-| `identity_json` | Identity JSON payload; persisted to `identity_path` when both are set |
+| `identity_json` | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr` | UDP transport settings |
 | `tcp` | Dedicated raw TCP port setting |
 | `ech` | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
@@ -222,10 +222,14 @@ Common fields:
 | `x402_network` | Optional Sui or Casper CAIP-2 network |
 | `x402_asset` | wCSPR CEP-18 contract hash required by Casper |
 | `x402_endpoints` | Optional Sui RPC endpoints or Casper facilitator URL |
+| `x402_facilitator_token` | Casper facilitator token; falls back to `CSPR_CLOUD_API_KEY` |
 | `http_routes[].amount` | Optional human payment amount, such as `0.01`, for one HTTP route prefix |
 | `http_routes[].methods` | Optional HTTP methods that require payment on that route; empty means every method |
 
-Constraints match `portal expose`:
+The agent supports the target and routed HTTP modes below. It does not
+currently accept the CLI static-site options `serve`, `cache`, or `cache_ttl`.
+
+Constraints:
 
 - `target` cannot be combined with `http_routes`.
 - `http_routes` cannot be combined with `udp`.
@@ -238,6 +242,9 @@ If `identity_path` is omitted:
 
 - a single tunnel uses `<state_dir>/identity.json`
 - multiple tunnels use `<state_dir>/<tunnel-id>/identity.json`
+
+An existing identity file or `identity_json` supplies its saved name and key;
+`tunnels.name` is used only when creating a new identity.
 
 Reusing an identity keeps the same tunnel address and lease identity across
 restarts. Use separate identity paths when two tunnels should have separate

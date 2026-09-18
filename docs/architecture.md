@@ -17,8 +17,7 @@ Relay selection returns public relay priorities. Portal does not construct an
 ordered list of intermediate relays. Explicit relay URLs, transport eligibility,
 admission, expiry, health, and load remain Portal responsibilities.
 
-The former Portal-owned multi-hop route model and WireGuard relay mesh have
-been removed. Direct reverse transport is the tunnel default. When a tunnel
+Direct reverse transport is the tunnel default. When a tunnel
 enables overlay and the relay has an available IVNP gateway, one relay overlay
 runtime carries its reverse TCP streams; direct transport remains the fallback.
 The SDK consumes the same generic reverse endpoint in both cases. Discovery
@@ -62,7 +61,7 @@ publication orchestration to itself.
 ## Identity challenges
 
 `portal/identity` owns the EIP-4361 message model, formatting, and verification
-shared by tunnel registration and browser/admin wallet login, while the agent
+shared by tunnel registration and agent browser wallet login, while the agent
 owns the wallet-login lifecycle. Portal emits version 1, chain ID 1 messages
 with LF separators. Nonces use `crypto/rand`; the existing secp256k1 and Keccak
 primitives own EIP-191 personal-sign hashing and signer recovery. Personal-sign
@@ -76,9 +75,8 @@ expiration remains authoritative at second precision, including the existing
 inclusive cutoff. Registration challenge consumption and wallet allowlists,
 sessions, and challenge consumption remain with their respective owners.
 
-This supports Portal-issued EOA challenges, not arbitrary SIWE messages or
-contract-wallet verification. `siwe-go` is no longer required; `go-ethereum`
-remains an indirect dependency of the separate x402 payment integration.
+This supports Portal-issued EOA challenges. Arbitrary SIWE messages and
+contract-wallet verification are outside this contract.
 
 See [the site architecture documentation](src/routes/architecture/+page.md) for
 the rest of the system.

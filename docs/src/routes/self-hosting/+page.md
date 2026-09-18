@@ -25,9 +25,14 @@ Run the relay with a single Docker command:
 
 ```bash
 mkdir -p ./relay-data
+# For a new bind-mount directory on Linux, allow the nonroot container to write.
+# Preserve the ownership policy of existing deployments.
+sudo chown 65532:65532 ./relay-data
 # Optional: place valid fullchain.pem/privatekey.pem in ./relay-data to use a
 # manual certificate, only if neither acme-account.key nor acme-registration.json
 # is present. Embedded DNS and ECH management still run.
+ADMIN_TOKEN=$(openssl rand -hex 32)
+# Save ADMIN_TOKEN in your password manager before starting the container.
 docker run -d \
   --name portal-relay \
   --restart unless-stopped \
@@ -37,7 +42,7 @@ docker run -d \
   -p 53:53/udp \
   -e PORTAL_URL=https://relay.example.com \
   -e IDENTITY_PATH=/portal-certs \
-  -e ADMIN_TOKEN="$(openssl rand -hex 32)" \
+  -e ADMIN_TOKEN="$ADMIN_TOKEN" \
   -v $(pwd)/relay-data:/portal-certs \
   ghcr.io/gosuda/portal:2
 ```
@@ -79,9 +84,14 @@ services:
       - ./relay-data:/portal-certs
 ```
 
-Start it:
+Prepare a new bind-mount directory and provide the saved admin token through
+`.env` or an exported `ADMIN_TOKEN`. On Linux, the nonroot container needs write
+access to the directory:
 
 ```bash
+mkdir -p ./relay-data
+# For a new directory; preserve existing deployments' ownership policy.
+sudo chown 65532:65532 ./relay-data
 docker compose up -d
 ```
 
@@ -90,7 +100,7 @@ docker compose up -d
 | Variable | Default | Description |
 |---|---|---|
 | `PORTAL_URL` | `https://localhost` | Canonical public HTTPS origin, including its externally reachable port. |
-| `SNI_PORT` | `443` | Local TCP SNI router listen port; public metadata uses the port from `PORTAL_URL`. |
+| `SNI_PORT` | `PORTAL_URL` port, else `443` | Local TCP SNI router listen port; public metadata uses the port from `PORTAL_URL`. |
 | `IDENTITY_PATH` | `./.portal-certs` | Relay state directory containing `identity.json`, `policy.json`, and TLS materials. |
 | `ADMIN_TOKEN` | | Bearer token source for relay admin and policy APIs. |
 | `EMBEDDED_DNS_PORT` | `53` | Embedded authoritative DNS listen port; requires `53/tcp` + `53/udp` and `CAP_NET_BIND_SERVICE` in containers. |
@@ -179,9 +189,13 @@ environment:
   MIN_PORT: "10000"
   MAX_PORT: "10100"
 ports:
+  - "443:443/udp" # QUIC backhaul; match the public PORTAL_URL port
   - "10000-10100:10000-10100/tcp"
   - "10000-10100:10000-10100/udp"
 ```
+
+Allow both the public QUIC backhaul UDP port and the allocated UDP range
+through the firewall. The TCP dashboard/SNI mapping remains required.
 
 See [TCP/UDP Tunneling](/tcp-udp-tunneling) for usage details.
 
@@ -196,7 +210,9 @@ sudo ss -tlnp | grep ':443'
 ```
 
 Stop or reconfigure the conflicting service. The bundled public deployment
-requires TCP `443` because Portal publishes standard HTTPS tunnel URLs.
+uses TCP `443` by default. A different public port must be included in
+`PORTAL_URL`, published by Docker, and reachable by clients; configure
+`SNI_PORT` separately only when the local bind port differs.
 
 **DNS not resolving**
 

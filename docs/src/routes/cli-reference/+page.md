@@ -77,6 +77,7 @@ not supported.
 | Mode | Example | Notes |
 |------|---------|-------|
 | Default HTTPS stream | `portal expose 3000` | Relay routes by SNI; tunnel process terminates tenant TLS |
+| Static site | `portal expose --serve ./dist` | Serves a directory or an HTML file with SPA fallback |
 | Routed HTTP | `portal expose --http-route /api=3001 --http-route /=5173` | Tunnel process runs the HTTP reverse proxy |
 | Dedicated raw TCP | `portal expose localhost:25565 --tcp` | Relay allocates a public TCP port |
 | UDP relay | `portal expose 8080 --udp --udp-addr 19132` | Relay allocates a public UDP port |
@@ -92,7 +93,7 @@ not supported.
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--ech` | bool | `false` | Enable ECH hostname privacy for TLS stream tunnels; plaintext-SNI routing remains available as fallback |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
-| `--identity-json` | string | | Identity JSON payload; overrides `--identity-path` contents and is persisted there when both are set |
+| `--identity-json` | string | | In-memory identity JSON; takes precedence over `--identity-path` without reading or writing that file |
 | `--name` | string | auto | Public hostname prefix, one DNS label |
 | `--description` | string | | Service description metadata |
 | `--tags` | string | | Service tags metadata, comma-separated |
@@ -106,6 +107,9 @@ not supported.
 | `--x402-endpoint` | string | | Optional Sui RPC or Casper facilitator endpoint; repeatable |
 | `--x402-facilitator-token` | string | `CSPR_CLOUD_API_KEY` | Casper facilitator authorization token; prefer the environment variable so the secret is not exposed in the process arguments |
 | `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]` form; repeatable; route amounts require `--x402-pay-to` |
+| `--serve` | string | | Serve a local directory or HTML file; unknown paths fall back to the entry HTML |
+| `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
+| `--cache-ttl` | duration | `0` | Requested offline cache lifetime; `0` uses relay policy; requires `--cache` |
 | `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
@@ -115,9 +119,19 @@ Direct reverse transport is the default. `--overlay` asks the relay to use an
 IVNP overlay gateway when one is available and retains direct fallback. See
 [IVNP overlay transport](/architecture#optional-relay-overlay).
 
+### Identity Names
+
+An existing identity file or `--identity-json` supplies the saved name as well
+as the key. `--name` applies only when creating a new identity; it does not
+rename an existing one. Use a separate `--identity-path` for a new identity.
+
 ### Constraints
 
-- `<target>` cannot be combined with `--http-route`.
+- Choose one of `<target>`, `--serve`, or `--http-route`.
+- `--serve` cannot be combined with `--tcp` or `--udp`.
+- `--cache` requires `--serve` and cannot be combined with `--ech` or `--ban-mitm`.
+- `--cache-ttl` requires `--cache`; a nonzero value must be between `1s` and
+  `8760h` and is clamped by the relay.
 - `--http-route` cannot be combined with `--udp`.
 - `--tcp` and `--udp` require matching transport support on the relay.
 - Route payment amounts are part of `--http-route` and require a tunnel-owned
@@ -241,6 +255,33 @@ const header = base64(JSON.stringify(payload));
 The frontend integration is optional. Requests without a valid `X-PAYMENT`
 header still receive x402 payment-required responses from the tunnel.
 
+### Serve A Static Site
+
+```bash
+portal expose --serve ./dist
+# An HTML file serves its containing folder with that file as the SPA entry.
+portal expose --serve ./site/index.html
+```
+
+Unknown paths fall back to the entry HTML file. Keep private files outside the
+served directory. Static serving is currently an `expose` CLI feature; the
+agent TOML format does not support `serve`, `cache`, or `cache_ttl`.
+
+To opt in to storage and TLS termination at one selected relay:
+
+```bash
+portal expose --serve ./dist --cache --cache-ttl 1h \
+  --relays https://gosunuts.xyz --discovery=false
+```
+
+The selected relay must advertise cache support and admit the snapshot.
+Otherwise the live origin tunnel remains in use. A cached connection trusts
+the relay with the files and HTTP traffic, even if it falls back to the live
+origin. The requested TTL is an upper request subject to relay policy, not a
+hosting guarantee; cached files may be evicted or lost on relay restart.
+See [cache configuration](/configuration#static-relay-cache) and
+[the TLS boundary](/security-model#opt-in-static-cache).
+
 ## `portal list`
 
 Print relay URLs resolved for the current invocation:
@@ -325,7 +366,7 @@ Prints the installed version string and exits.
   healthy relays from serving.
 - With discovery enabled, the tunnel consumes relay `/discovery` results and
   reconciles its relay pool.
-- MITM enforcement is enabled by default for the default stream path.
+- MITM self-probing logs suspected termination by default; relay banning requires `--ban-mitm`.
 - When the local stream target is unreachable, the tunnel returns an HTTP 503
   page to browser-style clients.
 - Routed HTTP mode is HTTP-only and runs inside the tunnel process.

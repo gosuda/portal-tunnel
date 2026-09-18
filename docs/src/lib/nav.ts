@@ -60,6 +60,7 @@ export const guidesNavigation: NavSection[] = [
 			{ title: 'TCP/UDP Tunneling', href: '/tcp-udp-tunneling' },
 			{ title: 'Game Server Hosting', href: '/game-server-hosting' },
 			{ title: 'Wallet and ENS', href: '/wallet-and-ens' },
+			{ title: 'SIWE Authentication', href: '/siwe-authentication' },
 			{ title: 'Deployment', href: '/deployment' },
 			{ title: 'Configuration', href: '/configuration' }
 		]
@@ -72,7 +73,9 @@ export const referencesNavigation: NavSection[] = [
 		defaultOpen: true,
 		items: [
 			{ title: 'CLI Reference', href: '/cli-reference' },
-			{ title: 'API Reference', href: '/api-reference' }
+			{ title: 'API Reference', href: '/api-reference' },
+			{ title: 'SDK API', href: '/api-reference/sdk' },
+			{ title: 'Admin and Policy API', href: '/api-reference/admin' }
 		]
 	}
 ];
