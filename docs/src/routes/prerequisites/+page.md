@@ -32,7 +32,8 @@ If you plan to run your own relay server:
 - A domain name; the default embedded DNS provider needs NS/glue delegation
   and inbound `53/tcp` plus `53/udp`
 - TLS certificate material, either managed through ACME or manually provided
-- Open inbound `443/tcp`
+- Open the externally reachable TCP port declared by `PORTAL_URL` (`443/tcp`
+  by default, or the explicit port such as `8443/tcp`)
 - Optional UDP and raw TCP transport port ranges
 
 ## Optional

@@ -247,6 +247,6 @@ A lease hostname has no ENS TXT record:
 
 ## Next Steps
 
-- [Deployment](/configuration#embedded-dns): production setup
+- [Configuration](/configuration#embedded-dns): embedded DNS setup
 - [Security Model](/security-model): identity and TLS trust boundaries
 - [Portal Agent](/portal-agent): local durable tunnel management
