@@ -162,19 +162,6 @@ type UnregisterRequest struct {
 	AccessToken string `json:"access_token"`
 }
 
-// DomainReportOwner selects who serves PathSDKDomain on a relay.
-type DomainReportOwner uint8
-
-const (
-	// RelayOwnsDomainReport (zero value) lets the relay core serve its own
-	// domain report.
-	RelayOwnsDomainReport DomainReportOwner = iota
-	// ApplicationOwnsDomainReport hands PathSDKDomain to the application
-	// handler: it serves the domain report and composes Server.DomainReport()
-	// itself.
-	ApplicationOwnsDomainReport
-)
-
 type DomainResponse struct {
 	Cache           *StaticCacheLimits  `json:"cache,omitempty"`
 	ProtocolVersion string              `json:"protocol_version"`

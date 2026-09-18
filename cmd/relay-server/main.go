@@ -165,7 +165,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	// With payments enabled this application serves /sdk/domain itself,
 	// composing the facilitator metadata onto the relay's domain report.
 	if x402Settings.Enabled {
-		cfg.Relay.DomainReportOwner = types.ApplicationOwnsDomainReport
+		cfg.Relay.ApplicationOwnsDomainReport = true
 	}
 	server, err := portal.NewServer(cfg.Relay)
 	if err != nil {
@@ -254,7 +254,7 @@ func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
 // relay API handler: /api/x402 is served by the application that chose to
 // enable payments, and every other path reaches the generic relay handler.
 // The application also serves /sdk/domain (the relay hands the path over via
-// types.ApplicationOwnsDomainReport) by composing the facilitator metadata
+// ServerConfig.ApplicationOwnsDomainReport) by composing the facilitator metadata
 // onto server.DomainReport().
 func composeRelayHandler(settings x402FacilitatorSettings, server *portal.Server, base http.Handler) (http.Handler, error) {
 	if !settings.Enabled {

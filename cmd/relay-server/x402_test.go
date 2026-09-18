@@ -108,7 +108,7 @@ func TestComposeRelayHandlerMountsFacilitatorOnlyWhenEnabled(t *testing.T) {
 
 // GET /sdk/domain must serve the composed report in the production wiring:
 // with the facilitator enabled, runServer hands the path to the application
-// (types.ApplicationOwnsDomainReport), portal's apiHandler delegates it, and
+// (ServerConfig.ApplicationOwnsDomainReport), portal's apiHandler delegates it, and
 // the composed handler merges the facilitator block onto
 // server.DomainReport(). A wrapper exercised in isolation never sees that
 // delegated traffic, so this drives a real portal.Server request path — SNI
@@ -123,7 +123,7 @@ func TestRelayServesComposedDomainX402Metadata(t *testing.T) {
 		StateDir:          stateDir,
 		SNIListenAddr:     "127.0.0.1:" + strconv.Itoa(port),
 		SNIPort:           port,
-		DomainReportOwner: types.ApplicationOwnsDomainReport,
+		ApplicationOwnsDomainReport: true,
 	})
 	if err != nil {
 		t.Fatalf("create relay server: %v", err)
