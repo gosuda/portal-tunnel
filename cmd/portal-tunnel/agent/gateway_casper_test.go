@@ -142,7 +142,6 @@ func TestCasperFacilitatorClientRejectsPlaintextTokenTransport(t *testing.T) {
 		token:    "",
 		wantErr:  false,
 	}} {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			contract := X402Payment{
