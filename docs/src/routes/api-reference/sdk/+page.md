@@ -32,6 +32,9 @@ that switches to a raw stream after a successful HTTP/1.1 response.
 | `POST` | `/sdk/reverse` | lease token body | `ReverseEndpointRequest` | `ReverseEndpoint` |
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
 | `GET` | `/sdk/connect` | reverse capability header | none | hijacked stream |
+| `POST` | `/sdk/cache` | lease token header | `StaticCacheManifest` JSON | `StaticCacheStatus` |
+| `PUT` | `/sdk/cache` | lease token header | manifest and file bytes as multipart | `StaticCacheStatus` |
+| `DELETE` | `/sdk/cache` | lease token header | none | `StaticCacheStatus` |
 
 ## Domain
 
@@ -41,6 +44,7 @@ that switches to a raw stream after a successful HTTP/1.1 response.
 |-------|------|-------|
 | `protocol_version` | `string` | SDK tunnel protocol version |
 | `release_version` | `string` | relay software release |
+| `cache` | `StaticCacheLimits` | optional; advertised when static caching is enabled |
 | `ens` | `ENSStatus` | gasless ENS status |
 | `x402` | `X402FacilitatorInfo` | relay-owned Sui x402 control-plane facilitator status |
 
@@ -74,6 +78,15 @@ which are configured locally by the tunnel process.
 | `ttl` | `number` | no | requested TTL in seconds |
 | `udp_enabled` | `boolean` | no | request UDP transport |
 | `tcp_enabled` | `boolean` | no | request dedicated TCP port |
+| `cache` | `boolean` | no | Explicitly permit static storage and relay TLS termination; default `false` |
+| `cache_ttl` | `number` | no | Requested offline seconds; `0` uses relay policy, positive values are clamped |
+| `route_hostname` | `string` | no | Opaque ECH outer-SNI route hostname |
+| `hostname_hash` | `string` | no | Validated hash binding the ECH fallback hostname |
+| `ech_config_list` | `string` | no | Base64-encoded ECHConfigList bytes (Go `[]byte` JSON encoding) |
+
+The ECH fields are prepared together by the SDK's keyless ECH implementation;
+ordinary non-ECH clients omit them. Cache opt-in is incompatible with ECH and
+raw TCP/UDP leases.
 
 `RegisterChallengeResponse`:
 
@@ -159,6 +172,49 @@ when another gateway or the direct path is available.
 | `access_token` | `string` | yes |
 
 `/sdk/unregister` returns `{}` on success.
+
+## Static Cache
+
+All `/sdk/cache` operations require
+`X-Portal-Access-Token: <lease access_token>` for an active, cache-opted-in lease.
+The reverse capability cannot authorize them. Cache capability is optional;
+clients retain the live origin tunnel if admission or upload fails.
+
+`StaticCacheLimits` (the optional `/sdk/domain` `cache` object):
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `max_exposure_bytes` | number | Total file bytes allowed for one snapshot |
+| `max_object_size` | number | Maximum bytes for one file |
+
+`StaticCacheManifest`:
+
+```json
+{
+  "index": "index.html",
+  "files": [
+    { "path": "index.html", "size": 5, "sha256": "<64-character SHA-256 hex digest>" }
+  ]
+}
+```
+
+Paths must be safe, relative, unique, and sorted, and `index` must identify a
+listed file. Only regular files are eligible. Manifests are limited to 1 MiB
+and 2,048 files, in addition to the advertised byte limits.
+
+- `POST`: send the manifest as JSON. `present` indicates whether the matching
+  unexpired snapshot exists. A changed manifest invalidates the previous snapshot.
+- `PUT`: send `multipart/form-data`, with the JSON manifest as the first part
+  (`manifest`), followed by one binary part (`object`) per file, in manifest
+  order. Sizes and hashes are validated before atomic publication.
+- `DELETE`: invalidate this lease's snapshot; returns `present: false`.
+
+Successful operations return the standard envelope containing
+`StaticCacheStatus`: `present` (boolean) and `expires_at` (timestamp when a
+snapshot is present). Authentication, expiry, capacity, and method failures
+must be handled by HTTP status; not every cache error uses the JSON envelope.
+See [cache configuration](/configuration#static-relay-cache) for TTL and storage
+limits and [the TLS boundary](/security-model#opt-in-static-cache).
 
 ## Reverse Connect
 

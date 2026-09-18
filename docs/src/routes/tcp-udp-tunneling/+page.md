@@ -108,6 +108,19 @@ portal expose --udp --udp-addr localhost:19132 --name myapp localhost:8080
 omitted, Portal uses the primary target address. The primary positional target
 is still used for stream traffic on the same lease.
 
+The relay also needs its QUIC backhaul reachable over UDP on the public
+`PORTAL_URL` port (normally `443/udp`), in addition to the lease port range.
+Publish both in Docker and allow both through the firewall:
+
+```yaml
+ports:
+  - "443:443/udp"
+  - "10000-10100:10000-10100/udp"
+```
+
+Use a matching `MIN_PORT=10000` / `MAX_PORT=10100` range. Keep the relay
+HTTPS and DNS mappings from the deployment guide.
+
 ## Minecraft Server Example
 
 This exposes a Minecraft Java Edition server running on `localhost:25565`.
@@ -175,6 +188,6 @@ Both ports are drawn from the same `MIN_PORT` to `MAX_PORT` range on the relay.
   encryption when the service requires confidentiality.
 - **UDP max packet size**: datagrams are capped at 1350 bytes. Larger packets
   are dropped.
-- **Flow idle timeout**: UDP flows with no traffic for 30 seconds are cleaned up
+- **Flow idle timeout**: UDP flows with no traffic for 5 minutes are cleaned up
   on the relay. Long-lived protocols should send keepalive packets if they may
   be idle.

@@ -14,6 +14,10 @@ proxy. The relay routes by SNI and forwards the connection. Tenant TLS
 terminates in the tunnel process on your machine, so the relay does not receive
 tenant plaintext or session keys.
 
+Static sites can also use `portal expose --serve ./dist`. Adding `--cache`
+explicitly trusts selected relays with the files and browser TLS termination;
+see [the cache trust boundary](/security-model#opt-in-static-cache).
+
 ## Core Properties
 
 - **Permissionless**: no SaaS account or API key is required.

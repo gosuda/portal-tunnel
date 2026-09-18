@@ -10,7 +10,7 @@
 			eyebrow: 'TLS',
 			title: 'Client-side tenant TLS',
 			description:
-				'Tenant TLS terminates locally with MITM detection, so relays cannot read plaintext.'
+				'Uncached HTTPS tunnels terminate TLS locally. Optional static caching explicitly trusts the selected relays.'
 		},
 		{
 			eyebrow: 'HTTP',

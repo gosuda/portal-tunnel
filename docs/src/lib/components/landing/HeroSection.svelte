@@ -10,10 +10,10 @@
 	</div>
 
 	<a
-		href="#live-servers"
+		href="#tunnel-preview"
 		class="sr-only focus:not-sr-only focus:absolute focus:left-6 focus:top-6 focus:z-20 focus:rounded-full focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground"
 	>
-		Skip to live servers
+		Skip to quick start
 	</a>
 
 	<div class="relative mx-auto max-w-4xl px-2 text-center sm:px-4">

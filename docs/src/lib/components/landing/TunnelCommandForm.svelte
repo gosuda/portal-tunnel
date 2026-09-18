@@ -1,11 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import {
-		buildTunnelDisplayCommand,
-		buildTunnelPreviewURL,
-		RELAY_ORIGIN,
-		type TunnelCommandOS
-	} from '$lib/tunnel-command';
+	import { buildTunnelCommand, type TunnelCommandOS } from '$lib/tunnel-command';
 	import { buildDefaultExposeName } from '$lib/expose-name';
 	import { classifyShareInput, type ShareKind } from '$lib/share-link';
 
@@ -26,37 +21,10 @@
 
 	const share = $derived(classifyShareInput(target));
 	const generatedName = $derived(buildDefaultExposeName(share.seedTarget, nameSeed));
-	const effectiveName = $derived(name.trim() || generatedName);
-
-	const commandLines = $derived.by(() =>
-		buildTunnelDisplayCommand({
-			currentOrigin: RELAY_ORIGIN,
-			target: share.target,
-			name: effectiveName,
-			nameSeed,
-			relayUrls: [RELAY_ORIGIN],
-			discovery: true,
-			thumbnailURL: '',
-			os,
-			shareKind: share.kind,
-			servePath: share.path
-		}).split('\n')
-	);
-
-	// Install is the first line(s); the expose command is the rest.
-	const installBlock = $derived(
-		os === 'windows' ? commandLines.slice(0, 2).join('\n') : (commandLines[0] ?? '')
-	);
-	const runBlock = $derived(
-		os === 'windows' ? commandLines.slice(2).join('\n') : commandLines.slice(1).join('\n')
-	);
-
-	const previewURL = $derived(
-		buildTunnelPreviewURL(RELAY_ORIGIN, effectiveName, share.seedTarget, nameSeed)
-	);
+	const command = $derived(buildTunnelCommand(share, name, nameSeed, os));
 
 	function handleCopy() {
-		const fullCommand = installBlock + '\n' + runBlock;
+		const fullCommand = command.install + '\n' + command.run;
 		navigator.clipboard.writeText(fullCommand).then(() => {
 			copied = true;
 			setTimeout(() => {
@@ -154,7 +122,7 @@
 									? 'bg-white/[0.08] text-slate-200'
 									: 'text-slate-500 hover:text-slate-300'}"
 							>
-								Linux
+								macOS / Linux
 							</button>
 							<button
 								type="button"
@@ -274,27 +242,24 @@
 								</svg>
 							{/if}
 						</button>
-						<pre class="overflow-x-auto whitespace-pre-wrap break-all"><span class="block">{installBlock}</span><span class="mt-2 block">{runBlock}</span></pre>
+						<pre class="overflow-x-auto whitespace-pre-wrap break-all"><span class="block">{command.install}</span><span class="mt-2 block">{command.run}</span></pre>
 					</div>
 				</div>
 
-				<!-- 3. Open this public URL -->
+				<!-- 3. Open the URL printed by Portal -->
 				<div class="space-y-2 pt-1">
 					<p class="text-[13px] font-semibold tracking-[0.04em] text-slate-100 sm:text-sm">
-						3. Open this public URL
+						3. Open the URL printed by Portal
 					</p>
 					<div
 						class="space-y-3 rounded-xl border px-3.5 py-3"
 						style="border-color: rgba(255,255,255,0.08); background: rgba(255,255,255,0.045);"
 					>
-						<a
-							href={previewURL}
-							target="_blank"
-							rel="noopener noreferrer"
-							class="block overflow-x-auto whitespace-nowrap font-mono text-[15px] font-medium text-sky-300 underline-offset-4 hover:underline sm:text-base"
-						>
-							{previewURL}
-						</a>
+						<p class="text-sm leading-6 text-slate-300">
+							Portal discovers public relays and prints the available URLs in your terminal.
+							The name above applies when creating a new identity; an existing
+							<code>identity.json</code> keeps its saved name.
+						</p>
 					</div>
 				</div>
 			</div>

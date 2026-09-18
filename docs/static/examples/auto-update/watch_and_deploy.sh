@@ -31,7 +31,7 @@ echo "Compose services: $SERVICES"
 
 update_services() {
     docker compose pull $SERVICES
-    docker compose up -d --force-recreate --remove-orphans $SERVICES
+    docker compose up -d --force-recreate $SERVICES
 }
 
 while true; do

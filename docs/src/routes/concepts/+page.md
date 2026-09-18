@@ -35,8 +35,9 @@ routing decision stops at endpoint selection; IVNP owns the gateway→ingress pa
 including internal hops, and the SDK keeps consuming the same generic reverse
 endpoint. **Portal selects and authorizes endpoints. IVNP connects destinations. Portal does not own the path between them.** See [IVNP overlay transport](/architecture#optional-relay-overlay).
 
-This split is why Portal can use public relays without giving relay operators
-tenant plaintext.
+For uncached HTTPS tunnels, this split keeps tenant plaintext at the endpoint.
+Opt-in `--serve --cache` additionally lets selected relays store static content
+and terminate browser TLS. See [the cache trust boundary](/security-model#opt-in-static-cache).
 
 ## Default Stream Path
 

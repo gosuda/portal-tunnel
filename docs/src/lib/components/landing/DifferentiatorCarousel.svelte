@@ -21,7 +21,7 @@
 			key: 'permissionless',
 			title: 'Permissionless',
 			description:
-				'Use the public registry or attach your own relay. No approval required.'
+				'Use the public registry or attach your own relay. Each operator sets its approval policy.'
 		}
 	] as const;
 
