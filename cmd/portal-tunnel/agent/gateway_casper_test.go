@@ -61,7 +61,7 @@ func TestCasperPrepareChallengePaysThroughGate(t *testing.T) {
 		Prefix:   "/paid",
 		Upstream: upstream.URL,
 		Amount:   "2.5",
-	}}, types.X402Payment{
+	}}, X402Payment{
 		Network:          "casper:casper-test",
 		Asset:            casperTestHash,
 		PayTo:            "account-hash-" + casperTestHash,
@@ -109,4 +109,58 @@ func TestCasperPrepareChallengePaysThroughGate(t *testing.T) {
 	require.Equal(t, []string{"test-token"}, authHeaders)
 	require.Empty(t, upstreamHeaders.Get("Payment-Signature"))
 	require.Empty(t, upstreamHeaders.Get("X-Payment"))
+}
+
+// TestCasperFacilitatorClientRejectsPlaintextTokenTransport verifies CWE-319:
+// a non-loopback HTTP endpoint with a FacilitatorToken is rejected because the
+// token would be sent in a plaintext Authorization header over the network.
+func TestCasperFacilitatorClientRejectsPlaintextTokenTransport(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		endpoint    string
+		token       string
+		wantErr     bool
+		errContains string
+	}{{
+		name:        "http non-loopback with token",
+		endpoint:    "http://facilitator.example.com",
+		token:       "test-token",
+		wantErr:     true,
+		errContains: "plaintext http",
+	}, {
+		name:     "http loopback with token",
+		endpoint: "http://127.0.0.1:9",
+		token:    "test-token",
+		wantErr:  false,
+	}, {
+		name:     "https with token",
+		endpoint: "https://facilitator.example.com",
+		token:    "test-token",
+		wantErr:  false,
+	}, {
+		name:     "http without token",
+		endpoint: "http://facilitator.example.com",
+		token:    "",
+		wantErr:  false,
+	}} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			contract := X402Payment{
+				Network:          "casper:casper-test",
+				Asset:            casperTestHash,
+				PayTo:            "account-hash-" + casperTestHash,
+				Endpoints:        []string{tc.endpoint},
+				FacilitatorToken: tc.token,
+			}
+			_, err := newCasperFacilitatorClient(contract)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.errContains)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

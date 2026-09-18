@@ -744,7 +744,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 				Amount:   route.Amount,
 			})
 		}
-		handler, routeErr := ComposeHTTPRoutes(routes, types.X402Payment{
+		handler, routeErr := ComposeHTTPRoutes(routes, X402Payment{
 			Testnet:          cfg.X402Testnet,
 			Network:          cfg.X402Network,
 			Asset:            cfg.X402Asset,

@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	facilitatorclient "github.com/gosuda/x402-facilitator/api/client"
 	x402http "github.com/gosuda/x402-facilitator/resource/http"
@@ -31,6 +34,43 @@ const (
 	// contract timeout unset; the upstream x402 gates default to the same.
 	defaultMaxTimeoutSeconds = 60
 )
+
+// X402Payment is the agent-local payment composition contract.
+// It was moved here from types/x402.go so that the types layer carries no
+// x402 knowledge; owning packages hold the symbols they use.
+type X402Payment struct {
+	Testnet             bool
+	Network             string
+	NetworkName         string
+	Asset               string
+	PayTo               string
+	Amount              string
+	MaxTimeoutSeconds   int
+	RequestTimeout      time.Duration
+	Endpoints           []string
+	FacilitatorToken    string
+	ResourcePath        string
+	ResourceDescription string
+	ResourceMimeType    string
+	// Methods limits payment enforcement to these HTTP methods, matched
+	// case-insensitively. Empty means every method is paid.
+	Methods []string
+}
+
+// X402PreparePath is the agent-owned path for the /x402/prepare endpoint.
+const X402PreparePath = "/x402/prepare"
+
+// X402ClientPath is the agent-owned path for the /x402/client.js endpoint.
+const X402ClientPath = "/x402/client.js"
+
+const x402RequestBodyLimit int64 = 64 << 10
+
+// x402PreparePaymentRequest is the agent-owned prepare endpoint request body.
+type x402PreparePaymentRequest struct {
+	Sender string `json:"sender"`
+	Method string `json:"method,omitempty"`
+	Path   string `json:"path,omitempty"`
+}
 
 // ExposedHTTPRoute is one route exposed through the tunnel HTTP gateway,
 // carrying the optional x402 payment metadata that gates it.
@@ -58,7 +98,7 @@ type ExposedHTTPRoute struct {
 // returned handler also serves the shared x402 client and prepare endpoints
 // when at least one route is paid; a fully unpaid gateway passes those paths
 // through to the routes like any other path.
-func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (http.Handler, error) {
+func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Handler, error) {
 	if len(routes) == 0 {
 		return nil, errors.New("at least one http route is required")
 	}
@@ -130,7 +170,7 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 // facilitators live as long as the gateway — the agent owns the composition
 // for its whole process lifetime, so no per-route Close is wired (the same
 // lifetime the previous portal/x402 composition had).
-func composePaidRoute(prefix, amount string, contract types.X402Payment) (*routePolicy, error) {
+func composePaidRoute(prefix, amount string, contract X402Payment) (*routePolicy, error) {
 	network := strings.ToLower(strings.TrimSpace(contract.Network))
 	switch {
 	case network == "" || network == suiMainnetNetwork || network == suiTestnetNetwork:
@@ -142,7 +182,7 @@ func composePaidRoute(prefix, amount string, contract types.X402Payment) (*route
 	}
 }
 
-func composeSuiRoute(prefix, amount string, contract types.X402Payment) (*routePolicy, error) {
+func composeSuiRoute(prefix, amount string, contract X402Payment) (*routePolicy, error) {
 	network := strings.ToLower(strings.TrimSpace(contract.Network))
 	if network == "" {
 		if contract.Testnet {
@@ -176,10 +216,7 @@ func composeSuiRoute(prefix, amount string, contract types.X402Payment) (*routeP
 		},
 	}
 	resourceDescription := strings.TrimSpace(contract.ResourceDescription)
-	resourceMimeType := strings.TrimSpace(contract.ResourceMimeType)
-	if resourceMimeType == "" {
-		resourceMimeType = "text/html"
-	}
+	resourceMimeType := cmp.Or(strings.TrimSpace(contract.ResourceMimeType), "text/html")
 	facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, firstEndpoint(contract.Endpoints), "", suifacilitator.SuiFacilitatorOptions{
 		GaslessStablecoinTypes: []string{asset},
 	})
@@ -218,7 +255,7 @@ func composeSuiRoute(prefix, amount string, contract types.X402Payment) (*routeP
 	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate, preparer: preparer}, nil
 }
 
-func composeCasperRoute(prefix, amount string, contract types.X402Payment) (*routePolicy, error) {
+func composeCasperRoute(prefix, amount string, contract X402Payment) (*routePolicy, error) {
 	network := strings.ToLower(strings.TrimSpace(contract.Network))
 	if network == "" {
 		if contract.Testnet {
@@ -277,11 +314,25 @@ func composeCasperRoute(prefix, amount string, contract types.X402Payment) (*rou
 // newCasperFacilitatorClient delegates Casper verify/settle to the hosted
 // CSPR.cloud x402 facilitator (or a configured endpoint): Casper has no Go
 // chain SDK, so the remote HTTP facilitator is the settlement backend.
-func newCasperFacilitatorClient(contract types.X402Payment) (*facilitatorclient.Client, error) {
+func newCasperFacilitatorClient(contract X402Payment) (*facilitatorclient.Client, error) {
 	endpoint := cmp.Or(firstEndpoint(contract.Endpoints), casperscheme.DefaultFacilitatorURL)
 	token := strings.TrimSpace(contract.FacilitatorToken)
 	if token == "" && strings.EqualFold(strings.TrimRight(endpoint, "/"), casperscheme.DefaultFacilitatorURL) {
 		return nil, errors.New("CSPR.cloud x402 facilitator requires an authorization token")
+	}
+	// Reject plaintext non-loopback endpoints when a token is present: the
+	// facilitator client sends the token in an Authorization header and an
+	// off-host HTTP request would leak it in transit. Loopback HTTP stays
+	// allowed for explicit local and test configurations (e.g. httptest
+	// servers on 127.0.0.1 with a local token).
+	if token != "" {
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("parse x402 facilitator endpoint %q: %w", endpoint, err)
+		}
+		if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+			return nil, fmt.Errorf("x402 facilitator endpoint %q sends the authorization token over plaintext http; use https or a loopback endpoint", endpoint)
+		}
 	}
 	client, err := facilitatorclient.NewClient(endpoint)
 	if err != nil {
@@ -307,7 +358,19 @@ func firstEndpoint(endpoints []string) string {
 	return ""
 }
 
-func orDefaultMaxTimeout(contract types.X402Payment) int {
+// isLoopbackHost reports whether hostname is a loopback address: "localhost",
+// "::1", or a valid IP address that reports true from IsLoopback().
+func isLoopbackHost(hostname string) bool {
+	if hostname == "localhost" || hostname == "::1" {
+		return true
+	}
+	if addr, err := netip.ParseAddr(hostname); err == nil && addr.IsLoopback() {
+		return true
+	}
+	return false
+}
+
+func orDefaultMaxTimeout(contract X402Payment) int {
 	if contract.MaxTimeoutSeconds <= 0 {
 		return defaultMaxTimeoutSeconds
 	}
@@ -369,11 +432,11 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path = utils.NormalizeURLPath(path)
 
 	if g.servesX402 {
-		if path == types.X402ClientPath {
+		if path == X402ClientPath {
 			g.clientJS.ServeHTTP(w, r)
 			return
 		}
-		if path == types.X402PreparePath {
+		if path == X402PreparePath {
 			g.servePrepare(w, r)
 			return
 		}
@@ -390,7 +453,7 @@ func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	req, ok := utils.DecodeJSONRequestAs[types.X402PreparePaymentRequest](w, r, types.X402RequestBodyLimit, utils.APIErrorResponse{
+	req, ok := utils.DecodeJSONRequestAs[x402PreparePaymentRequest](w, r, x402RequestBodyLimit, utils.APIErrorResponse{
 		Status:  http.StatusBadRequest,
 		Code:    types.APIErrorCodeInvalidJSON,
 		Message: "invalid payment prepare request",

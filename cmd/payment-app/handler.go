@@ -27,6 +27,13 @@ var staticFiles embed.FS
 
 const paidPhotoPath = "/paid/photo"
 
+// x402ClientPath and x402PreparePath are this app's shared payment
+// endpoints; the values match the agent gateway's contract.
+const (
+	x402ClientPath  = "/x402/client.js"
+	x402PreparePath = "/x402/prepare"
+)
+
 const usdcAssetSymbol = "USDC"
 
 // defaultMaxTimeoutSeconds mirrors the gate and preparer defaults so the
@@ -157,8 +164,8 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/static/style.css", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
-	mux.Handle(types.X402ClientPath, suihttp.ClientHandler())
-	mux.Handle(types.X402PreparePath, prepareHandler)
+	mux.Handle(x402ClientPath, suihttp.ClientHandler())
+	mux.Handle(x402PreparePath, prepareHandler)
 	mux.HandleFunc("/", handler.handleIndex)
 	mux.Handle(paidPhotoPath, gate.Wrap(http.HandlerFunc(handler.renderPaidPhoto)))
 	return mux, nil
@@ -221,7 +228,7 @@ func (h *paymentHandler) newPaymentPageData(r *http.Request) paymentPageData {
 		"asset":         h.asset,
 		"amount":        h.amount,
 		"payTo":         h.payTo,
-		"preparePath":   types.X402PreparePath,
+		"preparePath":   x402PreparePath,
 		"protectedPath": paidPhotoPath,
 	}
 	configJSON, err := json.Marshal(config)

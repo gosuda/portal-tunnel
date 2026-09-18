@@ -163,11 +163,9 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
-	// With payments enabled this application serves /sdk/domain itself,
-	// composing the facilitator metadata onto the relay's domain report.
-	if x402Settings.Enabled {
-		cfg.Relay.ApplicationOwnsDomainReport = true
-	}
+	// This application always serves /sdk/domain by composing facilitator metadata
+	// onto server.DomainReport(), whether payments are enabled or not.
+	cfg.Relay.ApplicationOwnsDomainReport = true
 	server, err := portal.NewServer(cfg.Relay)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
@@ -251,45 +249,78 @@ func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
 	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet, PayTo: payTo, PortalURL: cfg.Relay.PortalURL}, nil
 }
 
+// Relay-owned x402 control-plane mount point and its supported listing path.
+const (
+	pathX402Facilitator = "/api/x402"
+	x402SupportedPath   = pathX402Facilitator + "/supported"
+)
+
+// x402FacilitatorInfo is the application-local facilitator metadata composed
+// onto the domain report.
+type x402FacilitatorInfo struct {
+	Enabled      bool   `json:"enabled"`
+	URL          string `json:"url,omitempty"`
+	Network      string `json:"network,omitempty"`
+	NetworkName  string `json:"network_name,omitempty"`
+	SupportedURL string `json:"supported_url,omitempty"`
+	PayTo        string `json:"pay_to,omitempty"`
+}
+
+// domainResponse is the relay's /sdk/domain payload: the x402-blind core report
+// extended with application-local facilitator metadata. The x402 key stays on
+// the wire (zero value marshals as {"enabled":false}) so disabled deployments
+// keep today's shape.
+type domainResponse struct {
+	types.DomainResponse
+	X402 x402FacilitatorInfo `json:"x402"`
+}
+
 // composeRelayHandler mounts the relay-owned x402 facilitator in front of the
-// relay API handler: /api/x402 is served by the application that chose to
-// enable payments, and every other path reaches the generic relay handler.
-// The application also serves /sdk/domain (the relay hands the path over via
-// ServerConfig.ApplicationOwnsDomainReport) by composing the facilitator metadata
-// onto server.DomainReport().
+// relay API handler when payments are enabled; the facilitator is served at
+// /api/x402. The application always serves /sdk/domain (the relay hands the
+// path over via ServerConfig.ApplicationOwnsDomainReport) by composing the
+// facilitator metadata onto server.DomainReport().
 func composeRelayHandler(settings x402FacilitatorSettings, server *portal.Server, base http.Handler) (http.Handler, error) {
-	if !settings.Enabled {
-		return base, nil
-	}
+	mux := http.NewServeMux()
+
 	network := "sui:mainnet"
 	if settings.Testnet {
 		network = "sui:testnet"
 	}
-	facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, "", "", suifacilitator.SuiFacilitatorOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("mount x402 facilitator: %w", err)
+
+	if settings.Enabled {
+		// Portal payments settle only Sui USDC (docs/src/routes/self-hosting),
+		// so the facilitator allowlist is pinned to the network's USDC asset;
+		// upstream default options would allowlist every gasless stablecoin.
+		asset, ok := suischeme.GetGaslessStablecoinType(network, "USDC")
+		if !ok {
+			return nil, fmt.Errorf("x402 USDC is not registered on %s", network)
+		}
+		facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, "", "", suifacilitator.SuiFacilitatorOptions{
+			GaslessStablecoinTypes: []string{asset},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("mount x402 facilitator: %w", err)
+		}
+		mux.Handle(pathX402Facilitator+"/", http.StripPrefix(pathX402Facilitator, facilitatorapi.NewServer(facilitator)))
+		log.Info().Str("path", pathX402Facilitator).Str("network", network).Msg("relay-owned x402 facilitator enabled")
 	}
-	// Upstream default options allowlist every gasless stablecoin on the
-	// network; the deleted portal helper pinned USDC only.
-	mux := http.NewServeMux()
-	mux.Handle(types.PathX402Facilitator+"/", http.StripPrefix(types.PathX402Facilitator, facilitatorapi.NewServer(facilitator)))
-	log.Info().
-		Str("path", types.PathX402Facilitator).
-		Str("network", network).
-		Msg("relay-owned x402 facilitator enabled")
+
 	mux.HandleFunc(types.PathSDKDomain, func(w http.ResponseWriter, r *http.Request) {
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
-		report := server.DomainReport()
-		baseURL := strings.TrimRight(settings.PortalURL, "/")
-		report.X402 = types.X402FacilitatorInfo{
-			Enabled:      true,
-			URL:          baseURL + types.PathX402Facilitator,
-			Network:      network,
-			NetworkName:  suischeme.GetNetworkName(network),
-			SupportedURL: baseURL + types.X402SupportedPath,
-			PayTo:        settings.PayTo,
+		report := domainResponse{DomainResponse: server.DomainReport()}
+		if settings.Enabled {
+			baseURL := strings.TrimRight(settings.PortalURL, "/")
+			report.X402 = x402FacilitatorInfo{
+				Enabled:      true,
+				URL:          baseURL + pathX402Facilitator,
+				Network:      network,
+				NetworkName:  suischeme.GetNetworkName(network),
+				SupportedURL: baseURL + x402SupportedPath,
+				PayTo:        settings.PayTo,
+			}
 		}
 		utils.WriteAPIData(w, http.StatusOK, report)
 	})

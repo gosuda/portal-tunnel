@@ -22,11 +22,6 @@ const (
 	PathInstallPowerShell = PathAPIPrefix + "/install.ps1"
 	PathInstallBinPrefix  = PathAPIPrefix + "/install/bin/"
 
-	PathX402Facilitator = PathAPIPrefix + "/x402"
-	X402SupportedPath   = PathX402Facilitator + "/supported"
-	X402VerifyPath      = PathX402Facilitator + "/verify"
-	X402SettlePath      = PathX402Facilitator + "/settle"
-
 	PathV1Prefix = "/v1"
 	PathV1Sign   = PathV1Prefix + "/sign"
 
@@ -48,9 +43,6 @@ const (
 var ReservedRootPrefixes = []string{PathAPIPrefix, PathSDKPrefix, PathDiscovery, PathV1Prefix}
 
 const (
-	X402PreparePath = "/x402/prepare"
-	X402ClientPath  = "/x402/client.js"
-
 	PathAgentPrefix        = "/agent"
 	PathAgentStatus        = PathAgentPrefix + "/status"
 	PathAgentShutdown      = PathAgentPrefix + "/shutdown"

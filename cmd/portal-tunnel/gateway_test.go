@@ -21,8 +21,8 @@ func newGatewayStaticSiteDir(t *testing.T, name, content string) string {
 	return root
 }
 
-func gatewayTestContract() types.X402Payment {
-	return types.X402Payment{
+func gatewayTestContract() agent.X402Payment {
+	return agent.X402Payment{
 		Testnet: true,
 		PayTo:   "0x" + strings.Repeat("a", 64),
 	}
@@ -82,7 +82,7 @@ func TestComposeHTTPRoutes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ComposeHTTPRoutes() error = %v", err)
 		}
-		for _, path := range []string{types.X402ClientPath, types.X402PreparePath} {
+		for _, path := range []string{agent.X402ClientPath, agent.X402PreparePath} {
 			rec := httptest.NewRecorder()
 			unpaid.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+path, strings.NewReader(`{"path":"/x"}`)))
 			if rec.Code != http.StatusOK || rec.Body.String() != "api" {
@@ -107,7 +107,7 @@ func TestComposeHTTPRoutes(t *testing.T) {
 
 	t.Run("prepare endpoint dispatches paid routes only", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+types.X402PreparePath, strings.NewReader(`{"path":"/api"}`)))
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+agent.X402PreparePath, strings.NewReader(`{"path":"/api"}`)))
 		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "x402 payment is not enabled for path") {
 			t.Fatalf("prepare for unpaid path status = %d body = %q, want not enabled error", rec.Code, rec.Body.String())
 		}
@@ -117,7 +117,7 @@ func TestComposeHTTPRoutes(t *testing.T) {
 		// refusing the path. Everything past this dispatch is portal/x402's
 		// contract, asserted there.
 		rec = httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+types.X402PreparePath, strings.NewReader(`{"path":"/paid"}`)))
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+agent.X402PreparePath, strings.NewReader(`{"path":"/paid"}`)))
 		if rec.Code == http.StatusNotFound || rec.Code == http.StatusInternalServerError {
 			t.Fatalf("prepare for paid path status = %d body = %q, want dispatch into the payment layer", rec.Code, rec.Body.String())
 		}
