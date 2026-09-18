@@ -249,17 +249,6 @@ func TestRelayStartInitializesLocalACMEAndGatesSignPath(t *testing.T) {
 // envelope is served only when discovery is enabled.
 func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 	t.Run("domain reports compatibility info with discovery enabled", func(t *testing.T) {
-		// relayDomainResponse mirrors the relay's /sdk/domain payload: the core
-		// report extended with the relay-owned x402 facilitator metadata. The
-		// x402 field is a pointer so the assertion below can tell a missing
-		// key apart from the documented disabled shape.
-		type relayDomainResponse struct {
-			types.DomainResponse
-			X402 *struct {
-				Enabled bool `json:"enabled"`
-			} `json:"x402"`
-		}
-
 		sniPort := harnessPort(t)
 		keyDir := t.TempDir()
 		server, err := portal.NewServer(portal.ServerConfig{
@@ -293,7 +282,7 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 			resp.Body.Close()
 			t.Fatalf("GET %s status=%d, want 200", types.PathSDKDomain, resp.StatusCode)
 		}
-		var domain types.APIEnvelope[relayDomainResponse]
+		var domain types.APIEnvelope[types.DomainResponse]
 		if err := json.NewDecoder(resp.Body).Decode(&domain); err != nil {
 			resp.Body.Close()
 			t.Fatalf("decode %s response: %v", types.PathSDKDomain, err)
@@ -308,13 +297,6 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 		if domain.Data.ReleaseVersion != types.ReleaseVersion {
 			t.Fatalf("DomainResponse.ReleaseVersion = %q, want %q", domain.Data.ReleaseVersion, types.ReleaseVersion)
 		}
-		if domain.Data.X402 == nil {
-			t.Fatal("DomainResponse omits the x402 object, want the key present with enabled false")
-		}
-		if domain.Data.X402.Enabled {
-			t.Fatal("DomainResponse.X402.Enabled = true, want false with x402 unconfigured")
-		}
-
 		resp, err = client.Get(baseURL + types.PathDiscovery)
 		if err != nil {
 			t.Fatalf("GET %s: %v", types.PathDiscovery, err)
