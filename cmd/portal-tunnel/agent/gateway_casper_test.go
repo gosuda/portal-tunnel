@@ -11,8 +11,6 @@ import (
 	x402http "github.com/gosuda/x402-facilitator/resource/http"
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
 	"github.com/stretchr/testify/require"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 // casperTestHash is a valid 64-hex CEP-18 contract hash for strict
@@ -100,7 +98,7 @@ func TestCasperPrepareChallengePaysThroughGate(t *testing.T) {
 	handler.ServeHTTP(paidRec, paid)
 	require.Equal(t, http.StatusOK, paidRec.Code, paidRec.Body.String())
 	require.Contains(t, paidRec.Body.String(), "casper-paid-body")
-	require.NotEmpty(t, paidRec.Header().Get(types.HeaderPaymentResponse))
+	require.NotEmpty(t, paidRec.Header().Get(HeaderPaymentResponse))
 
 	mu.Lock()
 	defer mu.Unlock()

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func newGatewayStaticSiteDir(t *testing.T, name, content string) string {
@@ -69,7 +68,7 @@ func TestComposeHTTPRoutes(t *testing.T) {
 		if rec.Code != http.StatusOK || rec.Body.String() != "api" {
 			t.Fatalf("status = %d body = %q, want unpaid proxy passthrough", rec.Code, rec.Body.String())
 		}
-		if got := rec.Header().Get(types.HeaderPaymentRequired); got != "" {
+		if got := rec.Header().Get(agent.HeaderPaymentRequired); got != "" {
 			t.Fatalf("unpaid route answered with payment challenge header %q", got)
 		}
 

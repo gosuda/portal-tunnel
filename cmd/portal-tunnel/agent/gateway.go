@@ -63,6 +63,14 @@ const X402PreparePath = "/x402/prepare"
 // X402ClientPath is the agent-owned path for the /x402/client.js endpoint.
 const X402ClientPath = "/x402/client.js"
 
+// x402 wire header names published by the gateway's payment challenge and
+// asserted by the agent's settlement tests.
+const (
+	HeaderPaymentRequired  = "PAYMENT-REQUIRED"
+	HeaderXPaymentRequired = "X-PAYMENT-REQUIRED"
+	HeaderPaymentResponse  = "PAYMENT-RESPONSE"
+)
+
 const x402RequestBodyLimit int64 = 64 << 10
 
 // x402PreparePaymentRequest is the agent-owned prepare endpoint request body.
@@ -526,8 +534,8 @@ func (g *httpGateway) writeRouteChallenge(w http.ResponseWriter, r *http.Request
 	}
 	encoded := base64.StdEncoding.EncodeToString(raw)
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set(types.HeaderPaymentRequired, encoded)
-	w.Header().Set(types.HeaderXPaymentRequired, encoded)
+	w.Header().Set(HeaderPaymentRequired, encoded)
+	w.Header().Set(HeaderXPaymentRequired, encoded)
 	w.WriteHeader(http.StatusPaymentRequired)
 	_, _ = w.Write(raw)
 }
