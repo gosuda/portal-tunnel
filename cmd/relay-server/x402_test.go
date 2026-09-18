@@ -210,6 +210,11 @@ func TestRelayServesComposedDomainX402Metadata(t *testing.T) {
 	if !info.Enabled || info.URL != facilitatorURL || info.PayTo != testSuiPayTo {
 		t.Fatalf("domain x402 metadata = %+v, want enabled with url %q and pay-to %q", info, facilitatorURL, testSuiPayTo)
 	}
+	// The settings compose with Testnet: the app-side network mapping must
+	// surface the facilitator network and its display name verbatim.
+	if info.Network != "sui:testnet" || info.NetworkName != "Sui Testnet" {
+		t.Fatalf("domain x402 network metadata = %q/%q, want sui:testnet/Sui Testnet", info.Network, info.NetworkName)
+	}
 	if envelope.Data.ProtocolVersion != types.SDKVersion {
 		t.Fatalf("domain protocol_version = %q, want relay-owned %q preserved through composition", envelope.Data.ProtocolVersion, types.SDKVersion)
 	}

@@ -4,13 +4,20 @@ import (
 	"cmp"
 	"embed"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/x402"
+	x402http "github.com/gosuda/x402-facilitator/resource/http"
+	suischeme "github.com/gosuda/x402-facilitator/scheme/sui"
+	suifacilitator "github.com/gosuda/x402-facilitator/scheme/sui/facilitator"
+	suihttp "github.com/gosuda/x402-facilitator/scheme/sui/http"
+	facilitatortypes "github.com/gosuda/x402-facilitator/types"
+
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -19,6 +26,12 @@ import (
 var staticFiles embed.FS
 
 const paidPhotoPath = "/paid/photo"
+
+const usdcAssetSymbol = "USDC"
+
+// defaultMaxTimeoutSeconds mirrors the gate and preparer defaults so the
+// contract the page echoes matches the one clients receive.
+const defaultMaxTimeoutSeconds = 60
 
 var (
 	indexPage = template.Must(template.ParseFS(staticFiles, "static/index.html"))
@@ -67,38 +80,105 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 		metadata: cfg.Metadata.Copy(),
 		photoURL: strings.TrimSpace(cfg.PhotoURL),
 	}
-	paidPhotoHandler, err := x402.NewUSDCPaymentHandler(types.X402Payment{
-		Testnet:             cfg.Testnet,
-		PayTo:               cfg.PayTo,
-		Amount:              cfg.Amount,
-		MaxTimeoutSeconds:   cfg.MaxTimeoutSeconds,
-		RequestTimeout:      cfg.RequestTimeout,
-		Endpoints:           cfg.Endpoints,
-		ResourcePath:        paidPhotoPath,
-		ResourceDescription: cfg.Metadata.Description,
-		ResourceMimeType:    "text/html",
-	}, paidPhotoPath, http.MethodGet, handler.renderPaidPhoto)
+	network := suiNetwork(cfg.Testnet)
+	asset, ok := suischeme.GetGaslessStablecoinType(network, usdcAssetSymbol)
+	if !ok {
+		return nil, fmt.Errorf("x402 %s is not registered on %s", usdcAssetSymbol, network)
+	}
+	payTo := suischeme.NormalizeAddress(cfg.PayTo)
+	if payTo == "" {
+		return nil, errors.New("x402 USDC payment requires a valid Sui pay-to address")
+	}
+	amount, err := suischeme.StablecoinAmountToAtomic(network, usdcAssetSymbol, cfg.Amount)
+	if err != nil {
+		return nil, fmt.Errorf("x402 USDC amount: %w", err)
+	}
+	maxTimeoutSeconds := cfg.MaxTimeoutSeconds
+	if maxTimeoutSeconds <= 0 {
+		maxTimeoutSeconds = defaultMaxTimeoutSeconds
+	}
+	handler.network = network
+	handler.networkName = suischeme.GetNetworkName(network)
+	handler.asset = asset
+	handler.amount = amount
+	handler.payTo = payTo
+	requirements := facilitatortypes.PaymentRequirements{
+		Scheme:            string(facilitatortypes.Exact),
+		Network:           network,
+		Asset:             asset,
+		Amount:            amount,
+		PayTo:             payTo,
+		MaxTimeoutSeconds: maxTimeoutSeconds,
+		Extra: map[string]any{
+			"asset":               usdcAssetSymbol,
+			"assetTransferMethod": "sui-gasless-stablecoin-address-balance",
+		},
+	}
+	// The facilitator allowlist is pinned to this contract's asset; its
+	// default would accept every gasless stablecoin on the network. The
+	// facilitator and preparer live as long as the process: newHandler has
+	// no closer to hand them to.
+	facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, firstNonEmpty(cfg.Endpoints), "", suifacilitator.SuiFacilitatorOptions{
+		GaslessStablecoinTypes: []string{asset},
+	})
 	if err != nil {
 		return nil, err
 	}
-	payment := paidPhotoHandler.Payment()
-	handler.network = payment.Network
-	handler.networkName = payment.NetworkName
-	handler.asset = payment.Asset
-	handler.amount = payment.Amount
-	handler.payTo = payment.PayTo
-
+	gate, err := x402http.New(x402http.Config{
+		Requirements: requirements,
+		Facilitator:  facilitator,
+		Resource: &facilitatortypes.ResourceInfo{
+			// The gate stamps this configured prefix into every 402
+			// challenge; it never sees the per-request absolute URL that
+			// the prepare response can advertise.
+			URL:         paidPhotoPath,
+			Description: cfg.Metadata.Description,
+			MimeType:    "text/html",
+		},
+		RequestTimeout: cfg.RequestTimeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+	prepareHandler, err := suihttp.NewPrepareHandler(suihttp.Config{
+		Requirements:        requirements,
+		ResourcePath:        paidPhotoPath,
+		ResourceDescription: cfg.Metadata.Description,
+		ResourceMimeType:    "text/html",
+		Endpoints:           cfg.Endpoints,
+		RequestTimeout:      cfg.RequestTimeout,
+	})
+	if err != nil {
+		return nil, err
+	}
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		return nil, err
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/static/style.css", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
-	mux.HandleFunc(types.X402ClientPath, x402.ServeClientJS)
-	mux.Handle(types.X402PreparePath, paidPhotoHandler)
+	mux.Handle(types.X402ClientPath, suihttp.ClientHandler())
+	mux.Handle(types.X402PreparePath, prepareHandler)
 	mux.HandleFunc("/", handler.handleIndex)
-	mux.Handle(paidPhotoPath, paidPhotoHandler)
+	mux.Handle(paidPhotoPath, gate.Wrap(http.HandlerFunc(handler.renderPaidPhoto)))
 	return mux, nil
+}
+
+// suiNetwork resolves the CAIP-2 network for the configured stage.
+func suiNetwork(testnet bool) string {
+	if testnet {
+		return "sui:testnet"
+	}
+	return "sui:mainnet"
+}
+
+func firstNonEmpty(values []string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (h *paymentHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -115,10 +195,12 @@ func (h *paymentHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
 	_ = indexPage.Execute(w, data)
 }
 
-func (h *paymentHandler) renderPaidPhoto(w http.ResponseWriter, r *http.Request, result types.X402PaymentResult) {
+func (h *paymentHandler) renderPaidPhoto(w http.ResponseWriter, r *http.Request) {
 	data := h.newPaymentPageData(r)
 	data.URL = utils.PublicURLForPath(r, paidPhotoPath)
-	data.TransactionID = result.TransactionID
+	if settlement, ok := x402http.SettlementFrom(r.Context()); ok {
+		data.TransactionID = settlement.Transaction
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = photoPage.Execute(w, data)
@@ -127,6 +209,12 @@ func (h *paymentHandler) renderPaidPhoto(w http.ResponseWriter, r *http.Request,
 func (h *paymentHandler) newPaymentPageData(r *http.Request) paymentPageData {
 	description := strings.TrimSpace(h.metadata.Description)
 	description = cmp.Or(description, "Connect a Sui wallet, settle USDC with x402, and reveal the protected image.")
+	// A formatting failure leaves the atomic string on the page rather than
+	// hiding the contract the payment is settled against.
+	amount := h.amount
+	if formatted, err := suischeme.FormatStablecoinAtomicAmount(h.network, usdcAssetSymbol, h.amount); err == nil {
+		amount = formatted
+	}
 	config := map[string]any{
 		"network":       h.network,
 		"networkName":   h.networkName,
@@ -149,7 +237,7 @@ func (h *paymentHandler) newPaymentPageData(r *http.Request) paymentPageData {
 		Network:          h.network,
 		NetworkName:      h.networkName,
 		Asset:            h.asset,
-		Amount:           x402.FormatUSDCAtomicAmount(h.amount),
+		Amount:           amount,
 		PhotoURL:         h.photoURL,
 		RecipientAddress: h.payTo,
 		ConfigJSON:       template.JS(string(configJSON)),

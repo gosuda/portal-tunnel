@@ -12,13 +12,14 @@ import (
 	"strings"
 	"time"
 
+	facilitatorapi "github.com/gosuda/x402-facilitator/api"
 	suischeme "github.com/gosuda/x402-facilitator/scheme/sui"
+	suifacilitator "github.com/gosuda/x402-facilitator/scheme/sui/facilitator"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
-	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -260,13 +261,21 @@ func composeRelayHandler(settings x402FacilitatorSettings, server *portal.Server
 	if !settings.Enabled {
 		return base, nil
 	}
-	mux := http.NewServeMux()
-	if err := x402.MountFacilitator(mux, x402.FacilitatorConfig{Testnet: settings.Testnet}); err != nil {
+	network := "sui:mainnet"
+	if settings.Testnet {
+		network = "sui:testnet"
+	}
+	facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, "", "", suifacilitator.SuiFacilitatorOptions{})
+	if err != nil {
 		return nil, fmt.Errorf("mount x402 facilitator: %w", err)
 	}
+	// Upstream default options allowlist every gasless stablecoin on the
+	// network; the deleted portal helper pinned USDC only.
+	mux := http.NewServeMux()
+	mux.Handle(types.PathX402Facilitator+"/", http.StripPrefix(types.PathX402Facilitator, facilitatorapi.NewServer(facilitator)))
 	log.Info().
 		Str("path", types.PathX402Facilitator).
-		Str("network", x402.Network(settings.Testnet)).
+		Str("network", network).
 		Msg("relay-owned x402 facilitator enabled")
 	mux.HandleFunc(types.PathSDKDomain, func(w http.ResponseWriter, r *http.Request) {
 		if !utils.RequireMethod(w, r, http.MethodGet) {
@@ -274,12 +283,11 @@ func composeRelayHandler(settings x402FacilitatorSettings, server *portal.Server
 		}
 		report := server.DomainReport()
 		baseURL := strings.TrimRight(settings.PortalURL, "/")
-		network := x402.Network(settings.Testnet)
 		report.X402 = types.X402FacilitatorInfo{
 			Enabled:      true,
 			URL:          baseURL + types.PathX402Facilitator,
 			Network:      network,
-			NetworkName:  x402.NetworkDisplayName(network),
+			NetworkName:  suischeme.GetNetworkName(network),
 			SupportedURL: baseURL + types.X402SupportedPath,
 			PayTo:        settings.PayTo,
 		}
