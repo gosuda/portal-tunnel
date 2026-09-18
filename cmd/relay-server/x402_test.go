@@ -119,10 +119,10 @@ func TestRelayServesComposedDomainX402Metadata(t *testing.T) {
 	portalURL := "https://127.0.0.1:" + strconv.Itoa(port)
 	stateDir := t.TempDir()
 	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:         portalURL,
-		StateDir:          stateDir,
-		SNIListenAddr:     "127.0.0.1:" + strconv.Itoa(port),
-		SNIPort:           port,
+		PortalURL:                   portalURL,
+		StateDir:                    stateDir,
+		SNIListenAddr:               "127.0.0.1:" + strconv.Itoa(port),
+		SNIPort:                     port,
 		ApplicationOwnsDomainReport: true,
 	})
 	if err != nil {
