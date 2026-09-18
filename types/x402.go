@@ -3,8 +3,6 @@ package types
 import (
 	"net/http"
 	"time"
-
-	facilitatortypes "github.com/gosuda/x402-facilitator/types"
 )
 
 // X402RequestBodyLimit is the maximum accepted size of an x402 JSON request body.
@@ -35,6 +33,9 @@ type X402Payment struct {
 	ResourcePath        string
 	ResourceDescription string
 	ResourceMimeType    string
+	// Methods limits payment enforcement to these HTTP methods, matched
+	// case-insensitively. Empty means every method is paid.
+	Methods []string
 }
 
 // X402PaymentResult is the successful settlement data passed to protected handlers.
@@ -54,11 +55,30 @@ type X402PreparePaymentRequest struct {
 	Path   string `json:"path,omitempty"`
 }
 
+// X402PaymentRequirements describes the accepted payment published to wallets.
+// It mirrors the x402 v2 payment-requirements wire object in Portal terms.
+type X402PaymentRequirements struct {
+	Scheme            string         `json:"scheme"`
+	Network           string         `json:"network"`
+	Asset             string         `json:"asset"`
+	Amount            string         `json:"amount"`
+	PayTo             string         `json:"payTo"`
+	MaxTimeoutSeconds int            `json:"maxTimeoutSeconds"`
+	Extra             map[string]any `json:"extra,omitempty"`
+}
+
+// X402ResourceInfo describes the protected resource published to wallets.
+type X402ResourceInfo struct {
+	URL         string `json:"url"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
 // X402PreparePaymentResponse is the wallet transaction payload returned by a payment prepare endpoint.
 type X402PreparePaymentResponse struct {
-	X402Version         int                                  `json:"x402Version"`
-	PaymentRequirements facilitatortypes.PaymentRequirements `json:"paymentRequirements"`
-	Resource            *facilitatortypes.ResourceInfo       `json:"resource,omitempty"`
+	X402Version         int                     `json:"x402Version"`
+	PaymentRequirements X402PaymentRequirements `json:"paymentRequirements"`
+	Resource            *X402ResourceInfo       `json:"resource,omitempty"`
 	PrepareTransaction  *struct {
 		Transaction string `json:"transaction"`
 	} `json:"prepareTransaction,omitempty"`

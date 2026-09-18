@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/cockroachdb/apd/v3"
@@ -27,6 +28,7 @@ type Payment struct {
 	payment      types.X402Payment
 	facilitator  facilitatorcore.Facilitator
 	requirements facilitatortypes.PaymentRequirements
+	methods      map[string]struct{}
 }
 
 // NewPayment builds the payment implementation selected by its CAIP-2 network.
@@ -93,11 +95,16 @@ func NewUSDCPayment(payment types.X402Payment) (*Payment, error) {
 	payment.ResourcePath = strings.TrimSpace(payment.ResourcePath)
 	payment.ResourceDescription = strings.TrimSpace(payment.ResourceDescription)
 	payment.ResourceMimeType = strings.TrimSpace(payment.ResourceMimeType)
+	payment.Methods, err = normalizedPaymentMethods(payment.Methods)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Payment{
 		payment:      payment,
 		facilitator:  facilitator,
 		requirements: requirements,
+		methods:      paymentMethodSet(payment.Methods),
 	}, nil
 }
 
@@ -202,6 +209,13 @@ func (p *Payment) Settle(ctx context.Context, w http.ResponseWriter, r *http.Req
 	if !ok {
 		return nil, false
 	}
+	// The inbound request context may carry no deadline, so settlement needs
+	// its own bound or a stuck facilitator hangs the paid request forever.
+	cancel := func() {}
+	if p.payment.RequestTimeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, p.payment.RequestTimeout)
+	}
+	defer cancel()
 	settled, err := p.facilitator.Settle(ctx, payment, &p.requirements)
 	if err != nil {
 		log.Warn().
@@ -354,10 +368,10 @@ func (p *Payment) WritePrepare(w http.ResponseWriter, r *http.Request, sender, r
 	resourcePath = cmp.Or(resourcePath, "/")
 	resourceMimeType := strings.TrimSpace(p.payment.ResourceMimeType)
 	resourceMimeType = cmp.Or(resourceMimeType, "text/html")
-	utils.WritePaymentJSON(w, http.StatusOK, types.X402PreparePaymentResponse{
+	writePaymentJSON(w, http.StatusOK, types.X402PreparePaymentResponse{
 		X402Version:         int(facilitatortypes.X402VersionV2),
-		PaymentRequirements: p.requirements,
-		Resource: &facilitatortypes.ResourceInfo{
+		PaymentRequirements: paymentRequirementsFromFacilitator(p.requirements),
+		Resource: &types.X402ResourceInfo{
 			URL:         utils.PublicURLForPath(r, resourcePath),
 			Description: strings.TrimSpace(p.payment.ResourceDescription),
 			MimeType:    resourceMimeType,
@@ -367,4 +381,52 @@ func (p *Payment) WritePrepare(w http.ResponseWriter, r *http.Request, sender, r
 			Transaction string `json:"transaction"`
 		}{Transaction: base64.StdEncoding.EncodeToString(paymentTxBytes)},
 	})
+}
+
+// paymentRequirementsFromFacilitator restates facilitator requirements in the
+// Portal DTO shape shared with SDK helpers and payment apps.
+func paymentRequirementsFromFacilitator(requirements facilitatortypes.PaymentRequirements) types.X402PaymentRequirements {
+	return types.X402PaymentRequirements{
+		Scheme:            requirements.Scheme,
+		Network:           requirements.Network,
+		Asset:             requirements.Asset,
+		Amount:            requirements.Amount,
+		PayTo:             requirements.PayTo,
+		MaxTimeoutSeconds: requirements.MaxTimeoutSeconds,
+		Extra:             requirements.Extra,
+	}
+}
+
+// normalizedPaymentMethods canonicalizes configured payment methods: trimmed,
+// uppercased, de-duplicated, and ordered for deterministic publication. A
+// blank method is a configuration error rather than an omission: an empty
+// method list pays every method, so dropping a blank entry would widen the
+// payment gate instead of narrowing it.
+func normalizedPaymentMethods(methods []string) ([]string, error) {
+	set := make(map[string]struct{}, len(methods))
+	for _, raw := range methods {
+		method := strings.ToUpper(strings.TrimSpace(raw))
+		if method == "" {
+			return nil, errors.New("x402 payment method is required")
+		}
+		set[method] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(set))
+	for method := range set {
+		out = append(out, method)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// paymentMethodSet indexes already-normalized payment methods.
+func paymentMethodSet(methods []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(methods))
+	for _, method := range methods {
+		set[method] = struct{}{}
+	}
+	return set
 }

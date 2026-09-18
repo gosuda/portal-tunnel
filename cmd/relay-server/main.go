@@ -6,16 +6,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	suischeme "github.com/gosuda/x402-facilitator/scheme/sui"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
+	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -40,6 +43,11 @@ type appConfig struct {
 	AdminToken         string
 	PprofEnabled       bool
 	PprofListenAddr    string
+	// Relay-owned x402 facilitator surface: portal.Server is x402-blind, so
+	// this application resolves the flags and mounts the payment endpoints.
+	X402Enabled bool
+	X402Testnet bool
+	X402PayTo   string
 }
 
 // resolveAppConfig registers every flag and resolves it against the
@@ -102,9 +110,9 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.StringFlagEnv(fs, &cfg.AdminToken, "admin-token", "", "admin bearer token for relay admin and policy APIs", "ADMIN_TOKEN")
 	utils.BoolFlagEnv(fs, &cfg.PprofEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.PprofListenAddr, "pprof-addr", DefaultPprofListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
-	utils.BoolFlagEnv(fs, &cfg.Relay.X402Enabled, "x402-enabled", false, "enable relay-owned Sui x402 facilitator endpoints under /api/x402 for future control-plane payments", "X402_ENABLED")
-	utils.BoolFlagEnv(fs, &cfg.Relay.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
-	utils.StringFlagEnv(fs, &cfg.Relay.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
+	utils.BoolFlagEnv(fs, &cfg.X402Enabled, "x402-enabled", false, "enable relay-owned Sui x402 facilitator endpoints under /api/x402 for future control-plane payments", "X402_ENABLED")
+	utils.BoolFlagEnv(fs, &cfg.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
+	utils.StringFlagEnv(fs, &cfg.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
 
 	utils.StringFlagEnv(fs, &cfg.Relay.ACME.DNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded without API credentials", "ACME_DNS_PROVIDER")
 	utils.BoolFlagEnv(fs, &cfg.Relay.ACME.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
@@ -150,9 +158,26 @@ func runServeCommand(args []string) error {
 }
 
 func runServer(ctx context.Context, cfg appConfig) error {
+	x402Settings, err := resolveX402Facilitator(cfg)
+	if err != nil {
+		return fmt.Errorf("create relay server: %w", err)
+	}
+	// With payments enabled this application serves /sdk/domain itself,
+	// composing the facilitator metadata onto the relay's domain report.
+	if x402Settings.Enabled {
+		cfg.Relay.ApplicationOwnsDomainReport = true
+	}
 	server, err := portal.NewServer(cfg.Relay)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
+	}
+	if x402Settings.Enabled {
+		// NewServer already validated the URL; keep metadata consistent with
+		// the normalized URL the relay advertises.
+		x402Settings.PortalURL, err = utils.NormalizeRelayURL(cfg.Relay.PortalURL)
+		if err != nil {
+			return fmt.Errorf("normalize portal url: %w", err)
+		}
 	}
 
 	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
@@ -160,25 +185,25 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}
+
+	handler, err := composeRelayHandler(x402Settings, server, relayAPI.Handler())
+	if err != nil {
+		return err
+	}
 	if !cfg.PprofEnabled {
-		return server.Serve(ctx, relayAPI.Handler())
+		return server.Serve(ctx, handler)
 	}
 
-	// The pprof listener is process-level diagnostics with no relay state, so
-	// it binds ahead of the relay Serve and shuts down when the process
-	// lifecycle ends, whatever the outcome.
 	bound, stopPprof, pprofErrs, err := startPprofServer(ctx, normalizePprofAddr(cfg.PprofListenAddr))
 	if err != nil {
 		return err
 	}
 	log.Info().Str("pprof_addr", utils.HostPortOrLoopback(bound.String())).Msg("starting pprof server")
 
-	// Both servers report to the process owner: an unexpected pprof failure
-	// ends the relay lifecycle, as it did inside the relay errgroup.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- server.Serve(runCtx, relayAPI.Handler()) }()
+	go func() { serveDone <- server.Serve(runCtx, handler) }()
 
 	var serveErr error
 	select {
@@ -186,19 +211,82 @@ func runServer(ctx context.Context, cfg appConfig) error {
 		serveErr = err
 	case err := <-pprofErrs:
 		serveErr = fmt.Errorf("serve pprof: %w", err)
-		// Let the relay wind down before returning, mirroring the
-		// errgroup cancellation the relay used to provide.
 		cancel()
 		<-serveDone
 	}
 	cancel()
 
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	shutdownCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	if err := stopPprof(shutdownCtx); err != nil {
 		log.Warn().Err(err).Msg("shutdown pprof server")
 	}
-	cancel()
+	stop()
 	return serveErr
+}
+
+// x402FacilitatorSettings is the resolved relay-owned x402 facilitator
+// configuration. portal.Server knows nothing about payments: this application
+// validates the flags and mounts the facilitator itself.
+type x402FacilitatorSettings struct {
+	Enabled   bool
+	Testnet   bool
+	PayTo     string
+	PortalURL string
+}
+
+// resolveX402Facilitator resolves the relay-owned x402 flags. An enabled
+// facilitator without a payment recipient would advertise payments nothing
+// can settle, so it fails resolution instead of booting unusable. The
+// recipient must normalize to a valid Sui address: it is published verbatim
+// in the /sdk/domain facilitator metadata.
+func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
+	if !cfg.X402Enabled {
+		return x402FacilitatorSettings{}, nil
+	}
+	payTo := suischeme.NormalizeAddress(cfg.X402PayTo)
+	if payTo == "" {
+		return x402FacilitatorSettings{}, errors.New("x402 facilitator requires a valid Sui pay-to address")
+	}
+	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet, PayTo: payTo, PortalURL: cfg.Relay.PortalURL}, nil
+}
+
+// composeRelayHandler mounts the relay-owned x402 facilitator in front of the
+// relay API handler: /api/x402 is served by the application that chose to
+// enable payments, and every other path reaches the generic relay handler.
+// The application also serves /sdk/domain (the relay hands the path over via
+// ServerConfig.ApplicationOwnsDomainReport) by composing the facilitator metadata
+// onto server.DomainReport().
+func composeRelayHandler(settings x402FacilitatorSettings, server *portal.Server, base http.Handler) (http.Handler, error) {
+	if !settings.Enabled {
+		return base, nil
+	}
+	mux := http.NewServeMux()
+	if err := x402.MountFacilitator(mux, x402.FacilitatorConfig{Testnet: settings.Testnet}); err != nil {
+		return nil, fmt.Errorf("mount x402 facilitator: %w", err)
+	}
+	log.Info().
+		Str("path", types.PathX402Facilitator).
+		Str("network", x402.Network(settings.Testnet)).
+		Msg("relay-owned x402 facilitator enabled")
+	mux.HandleFunc(types.PathSDKDomain, func(w http.ResponseWriter, r *http.Request) {
+		if !utils.RequireMethod(w, r, http.MethodGet) {
+			return
+		}
+		report := server.DomainReport()
+		baseURL := strings.TrimRight(settings.PortalURL, "/")
+		network := x402.Network(settings.Testnet)
+		report.X402 = types.X402FacilitatorInfo{
+			Enabled:      true,
+			URL:          baseURL + types.PathX402Facilitator,
+			Network:      network,
+			NetworkName:  x402.NetworkDisplayName(network),
+			SupportedURL: baseURL + types.X402SupportedPath,
+			PayTo:        settings.PayTo,
+		}
+		utils.WriteAPIData(w, http.StatusOK, report)
+	})
+	mux.Handle("/", base)
+	return mux, nil
 }
 
 func runHelpCommand(args []string) error {

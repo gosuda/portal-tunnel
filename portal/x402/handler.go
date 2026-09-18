@@ -2,7 +2,6 @@ package x402
 
 import (
 	"cmp"
-	"context"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -111,19 +110,10 @@ func (h *USDCPaymentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		ctx := r.Context()
-		cancel := func() {}
-		payment := h.payment.payment
-		if payment.RequestTimeout > 0 {
-			ctx, cancel = context.WithTimeout(ctx, payment.RequestTimeout)
-		}
-		defer cancel()
-
-		settled, ok := h.payment.Settle(ctx, w, r)
+		settled, ok := h.payment.settleAndDecorate(w, r)
 		if !ok {
 			return
 		}
-		utils.SetPaymentResponseHeaders(w.Header(), settled)
 
 		h.handler(w, r, types.X402PaymentResult{
 			TransactionID: strings.TrimSpace(settled.Transaction),

@@ -19,6 +19,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
@@ -165,14 +166,14 @@ func runExposeCommand(args []string) error {
 		return errors.New("--udp cannot be combined with --http-route")
 	}
 
-	httpRoutes := make([]sdk.HTTPRouteConfig, 0, len(httpRouteInputs)+1)
+	httpRoutes := make([]agent.ExposedHTTPRoute, 0, len(httpRouteInputs)+1)
 	if serve != "" {
 		root, index, err := utils.ResolveStaticSite(serve)
 		if err != nil {
 			printExposeUsage(os.Stderr)
 			return fmt.Errorf("--serve %q: %w", serve, err)
 		}
-		httpRoutes = append(httpRoutes, sdk.HTTPRouteConfig{
+		httpRoutes = append(httpRoutes, agent.ExposedHTTPRoute{
 			Prefix:      "/",
 			StaticRoot:  root,
 			StaticIndex: index,
@@ -198,7 +199,7 @@ func runExposeCommand(args []string) error {
 		if upstream == "" {
 			return fmt.Errorf("--http-route %q: upstream is required", raw)
 		}
-		route := sdk.HTTPRouteConfig{
+		route := agent.ExposedHTTPRoute{
 			Prefix:   prefix,
 			Upstream: upstream,
 		}
@@ -281,7 +282,7 @@ func runExposeCommand(args []string) error {
 	}
 	if len(httpRoutes) > 0 {
 		defer exposure.Close()
-		handler, err := sdk.NewHTTPRoutes(httpRoutes, types.X402Payment{
+		handler, err := agent.ComposeHTTPRoutes(httpRoutes, types.X402Payment{
 			Testnet:          flags.x402Testnet,
 			Network:          flags.x402Network,
 			Asset:            flags.x402Asset,

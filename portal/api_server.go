@@ -24,7 +24,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
-	"github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -145,6 +144,10 @@ func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler
 		case types.PathHealthz:
 			s.handleHealthz(w, r)
 		case types.PathSDKDomain:
+			if s.config().ApplicationOwnsDomainReport {
+				base.ServeHTTP(w, r)
+				return
+			}
 			s.handleDomain(w, r)
 		case types.PathSDKRegisterChallenge:
 			s.handleRegisterChallenge(w, r)
@@ -295,29 +298,25 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 	})
 }
 
-func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
-	if !utils.RequireMethod(w, r, http.MethodGet) {
-		return
-	}
-	cfg := s.config()
-	x402Info := types.X402FacilitatorInfo{Enabled: cfg.X402Enabled}
-	if cfg.X402Enabled {
-		baseURL := strings.TrimRight(cfg.PortalURL, "/")
-		network := x402.Network(cfg.X402Testnet)
-		x402Info.URL = baseURL + types.PathX402Facilitator
-		x402Info.Network = network
-		x402Info.NetworkName = x402.NetworkDisplayName(network)
-		x402Info.SupportedURL = baseURL + types.X402SupportedPath
-		x402Info.PayTo = cfg.X402PayTo
-	}
-
-	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
+// DomainReport returns the relay-owned /sdk/domain payload. An
+// application that sets ServerConfig.ApplicationOwnsDomainReport composes its
+// own metadata onto this value and serves the result itself. x402
+// facilitator metadata is owned by the application that mounts the
+// facilitator (cmd/relay-server); this report stays x402-blind.
+func (s *Server) DomainReport() types.DomainResponse {
+	return types.DomainResponse{
 		Cache:           s.registry.cache.Limits(),
 		ProtocolVersion: types.SDKVersion,
 		ReleaseVersion:  types.ReleaseVersion,
 		ENS:             s.acmeManager.ENSStatus(),
-		X402:            x402Info,
-	})
+	}
+}
+
+func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	utils.WriteAPIData(w, http.StatusOK, s.DomainReport())
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {

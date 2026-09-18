@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	facilitatortypes "github.com/gosuda/x402-facilitator/types"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -43,35 +40,6 @@ func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 		OK:    false,
 		Error: &types.APIError{Code: code, Message: message},
 	})
-}
-
-func WritePaymentJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-
-func SetPaymentResponseHeaders(header http.Header, settled *facilitatortypes.PaymentSettleResponse) {
-	if header == nil || settled == nil {
-		return
-	}
-	raw, err := json.Marshal(settled)
-	if err != nil {
-		return
-	}
-	encoded := base64.StdEncoding.EncodeToString(raw)
-	header.Set(types.HeaderPaymentResponse, encoded)
-	header.Set(types.HeaderXPaymentResponse, encoded)
-}
-
-func StripPaymentHeaders(header http.Header) {
-	header.Del(types.HeaderXPayment)
-	header.Del(types.HeaderPaymentSignature)
-	header.Del(types.HeaderPaymentRequired)
-	header.Del(types.HeaderXPaymentRequired)
-	header.Del(types.HeaderPaymentResponse)
-	header.Del(types.HeaderXPaymentResponse)
 }
 
 func HandleAPICORS(w http.ResponseWriter, r *http.Request) bool {

@@ -8,23 +8,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// The facilitator without a recipient advertises payments nothing can settle,
-// so an enabled x402 must fail validation instead of booting unusable.
-func TestValidateServerConfigRequiresX402Recipient(t *testing.T) {
-	cfg := ServerConfig{
-		PortalURL:   "https://localhost:4017",
-		StateDir:    t.TempDir(),
-		X402Enabled: true,
-	}
-	if _, err := ValidateServerConfig(cfg); err == nil {
-		t.Fatal("ValidateServerConfig() error = nil, want error for enabled x402 without recipient")
-	}
-	cfg.X402PayTo = "0xrecipient"
-	if _, err := ValidateServerConfig(cfg); err != nil {
-		t.Fatalf("ValidateServerConfig() error = %v, want nil with recipient set", err)
-	}
-}
-
 // The runtime rejects an unparseable proxy CIDR allowlist inside
 // policy.NewRuntime; validation must parse it the same way so `relay-server
 // config` cannot call a list valid that startup rejects.

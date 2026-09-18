@@ -735,16 +735,16 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	}()
 
 	if len(cfg.HTTPRoutes) > 0 {
-		routes := make([]sdk.HTTPRouteConfig, 0, len(cfg.HTTPRoutes))
+		routes := make([]ExposedHTTPRoute, 0, len(cfg.HTTPRoutes))
 		for _, route := range cfg.HTTPRoutes {
-			routes = append(routes, sdk.HTTPRouteConfig{
+			routes = append(routes, ExposedHTTPRoute{
 				Prefix:   route.Prefix,
 				Upstream: route.Upstream,
 				Methods:  route.Methods,
 				Amount:   route.Amount,
 			})
 		}
-		handler, routeErr := sdk.NewHTTPRoutes(routes, types.X402Payment{
+		handler, routeErr := ComposeHTTPRoutes(routes, types.X402Payment{
 			Testnet:          cfg.X402Testnet,
 			Network:          cfg.X402Network,
 			Asset:            cfg.X402Asset,
