@@ -46,6 +46,7 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 
 	sdkConfigs := make([]sdk.HTTPRouteConfig, 0, len(routes))
 	policies := make([]routePolicy, 0, len(routes))
+	servesX402 := false
 	for _, route := range routes {
 		prefix := strings.TrimSpace(route.Prefix)
 		if prefix != "" && strings.HasPrefix(prefix, "/") {
@@ -79,6 +80,7 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 			return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
 		}
 		policy.paid = payment
+		servesX402 = true
 		policies = append(policies, policy)
 	}
 
@@ -94,18 +96,8 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract types.X402Payment) (h
 		return nil, err
 	}
 
-	var clientJS http.Handler = http.HandlerFunc(x402.ServeClientJS)
-	servesX402 := false
-	for _, policy := range policies {
-		if policy.paid != nil {
-			clientJS = policy.paid.ClientJSHandler()
-			servesX402 = true
-			break
-		}
-	}
 	return &httpGateway{
 		routes:     routed,
-		clientJS:   clientJS,
 		policies:   policies,
 		servesX402: servesX402,
 	}, nil
@@ -118,7 +110,6 @@ type routePolicy struct {
 
 type httpGateway struct {
 	routes     *sdk.HTTPRoutes
-	clientJS   http.Handler
 	policies   []routePolicy
 	servesX402 bool
 }
@@ -132,7 +123,7 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if g.servesX402 {
 		if path == types.X402ClientPath {
-			g.clientJS.ServeHTTP(w, r)
+			x402.ServeClientJS(w, r)
 			return
 		}
 		if path == types.X402PreparePath {

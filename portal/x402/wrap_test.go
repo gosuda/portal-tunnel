@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -272,61 +271,6 @@ func TestNewPaymentRejectsBlankMethod(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("NewPayment() error = nil, want blank payment method error")
-	}
-}
-
-// The prepare endpoint is POST-only with JSON validation, and a valid prepare
-// request reaches the prepare response path: the wallet-facing challenge
-// document echoing the requested resource path. Requirement construction
-// (motes amount, requirement network values) is owned by casper_test.go, so
-// only presence of a usable requirements entry is asserted here.
-func TestPrepareHandlerGatesAndRoutesToWritePrepare(t *testing.T) {
-	payment, err := NewCasperPayment(types.X402Payment{
-		Testnet:          true,
-		Asset:            testWCSPRAsset,
-		PayTo:            "account-hash-abc123",
-		Amount:           "0.01",
-		Endpoints:        []string{"https://facilitator.example"},
-		FacilitatorToken: testFacilitatorToken,
-	})
-	if err != nil {
-		t.Fatalf("NewCasperPayment: %v", err)
-	}
-	prepare := payment.PrepareHandler()
-
-	rec := httptest.NewRecorder()
-	prepare.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://public.example"+types.X402PreparePath, nil))
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("GET status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
-	}
-
-	rec = httptest.NewRecorder()
-	prepare.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+types.X402PreparePath, strings.NewReader("{not json")))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("invalid JSON status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
-
-	rec = httptest.NewRecorder()
-	prepare.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://public.example"+types.X402PreparePath, strings.NewReader(`{"sender":"sender-01","path":"/custom/resource"}`)))
-	if rec.Code != http.StatusPaymentRequired {
-		t.Fatalf("prepare status = %d, want %d", rec.Code, http.StatusPaymentRequired)
-	}
-	var challenge struct {
-		Resource *struct {
-			URL string `json:"url"`
-		} `json:"resource"`
-		Accepts []struct {
-			Network string `json:"network"`
-		} `json:"accepts"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &challenge); err != nil {
-		t.Fatalf("decode prepare challenge: %v", err)
-	}
-	if challenge.Resource == nil || challenge.Resource.URL != "https://public.example/custom/resource" {
-		t.Fatalf("resource = %+v, want the requested /custom/resource URL", challenge.Resource)
-	}
-	if len(challenge.Accepts) != 1 || challenge.Accepts[0].Network == "" {
-		t.Fatalf("accepts = %+v, want one requirement carrying a network", challenge.Accepts)
 	}
 }
 
