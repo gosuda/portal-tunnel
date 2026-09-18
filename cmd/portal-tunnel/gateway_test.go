@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -131,6 +133,52 @@ func TestComposeHTTPRoutes(t *testing.T) {
 			t.Fatal("ComposeHTTPRoutes() error = nil, want payment methods require amount error")
 		}
 	})
+}
+
+func TestComposeHTTPRoutesPreservesResourceMetadata(t *testing.T) {
+	t.Parallel()
+
+	root := newGatewayStaticSiteDir(t, "index.html", "<html>paid</html>")
+	contract := gatewayTestContract()
+	contract.ResourceDescription = "Paid JSON API"
+	contract.ResourceMimeType = "application/json"
+
+	handler, err := agent.ComposeHTTPRoutes([]agent.ExposedHTTPRoute{
+		{Prefix: "/paid", StaticRoot: root, Amount: "0.01"},
+	}, contract)
+	if err != nil {
+		t.Fatalf("ComposeHTTPRoutes() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://public.example/paid", nil))
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPaymentRequired)
+	}
+
+	encoded := rec.Header().Get(types.HeaderPaymentRequired)
+	if encoded == "" {
+		t.Fatal("payment challenge header is empty")
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode payment challenge: %v", err)
+	}
+	var challenge struct {
+		Resource struct {
+			Description string `json:"description"`
+			MimeType    string `json:"mimeType"`
+		} `json:"resource"`
+	}
+	if err := json.Unmarshal(raw, &challenge); err != nil {
+		t.Fatalf("decode payment challenge JSON: %v", err)
+	}
+	if challenge.Resource.Description != contract.ResourceDescription {
+		t.Fatalf("resource description = %q, want %q", challenge.Resource.Description, contract.ResourceDescription)
+	}
+	if challenge.Resource.MimeType != contract.ResourceMimeType {
+		t.Fatalf("resource mime type = %q, want %q", challenge.Resource.MimeType, contract.ResourceMimeType)
+	}
 }
 
 func TestComposeHTTPRoutesSelectsCanonicalLongestPrefix(t *testing.T) {
