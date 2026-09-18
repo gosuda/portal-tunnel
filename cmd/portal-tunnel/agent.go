@@ -17,7 +17,6 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -126,18 +125,18 @@ func runAgentRestartCommand(args []string) error {
 	return nil
 }
 
-func startAgentService(ctx context.Context, configPath string, cfg agent.Config) (types.AgentStatusResponse, error) {
+func startAgentService(ctx context.Context, configPath string, cfg agent.Config) (agent.AgentStatusResponse, error) {
 	configPath, err := filepath.Abs(strings.TrimSpace(configPath))
 	if err != nil {
-		return types.AgentStatusResponse{}, err
+		return agent.AgentStatusResponse{}, err
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return types.AgentStatusResponse{}, err
+		return agent.AgentStatusResponse{}, err
 	}
 	executable, err = filepath.Abs(executable)
 	if err != nil {
-		return types.AgentStatusResponse{}, err
+		return agent.AgentStatusResponse{}, err
 	}
 	def := service.Definition{
 		Name:        strings.TrimSpace(cfg.Agent.ServiceName),
@@ -148,10 +147,10 @@ func startAgentService(ctx context.Context, configPath string, cfg agent.Config)
 		WorkingDir:  filepath.Dir(configPath),
 	}
 	if err := service.Install(ctx, def); err != nil {
-		return types.AgentStatusResponse{}, fmt.Errorf("install portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
+		return agent.AgentStatusResponse{}, fmt.Errorf("install portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
 	}
 	if err := service.Start(ctx, cfg.Agent.ServiceName); err != nil {
-		return types.AgentStatusResponse{}, fmt.Errorf("start portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
+		return agent.AgentStatusResponse{}, fmt.Errorf("start portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
 	}
 	return waitAgentStatus(ctx, cfg.Agent.StateDir)
 }
@@ -302,7 +301,7 @@ func runAgentDashboardCommand(args []string) error {
 	return agent.RunDashboard(configPath, stateDir)
 }
 
-func waitAgentStatus(ctx context.Context, stateDir string) (types.AgentStatusResponse, error) {
+func waitAgentStatus(ctx context.Context, stateDir string) (agent.AgentStatusResponse, error) {
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
 	var lastErr error
@@ -314,7 +313,7 @@ func waitAgentStatus(ctx context.Context, stateDir string) (types.AgentStatusRes
 		lastErr = err
 		select {
 		case <-ctx.Done():
-			return types.AgentStatusResponse{}, fmt.Errorf("wait for portal agent status: %w", lastErr)
+			return agent.AgentStatusResponse{}, fmt.Errorf("wait for portal agent status: %w", lastErr)
 		case <-ticker.C:
 		}
 	}

@@ -1,4 +1,13 @@
-package types
+package agent
+
+import (
+	"github.com/gosuda/portal-tunnel/v2/types"
+)
+
+// Agent control-plane DTOs. These live in the agent package because both
+// their producers (the manager and control API in this package) and their
+// consumers (the agent CLI and dashboard) are application surfaces; shared
+// types stay agent-blind.
 
 type AgentStatusResponse struct {
 	ConfigPath    string              `json:"config_path,omitempty"`
@@ -8,24 +17,24 @@ type AgentStatusResponse struct {
 }
 
 type AgentTunnelStatus struct {
-	ID              string             `json:"id"`
-	Name            string             `json:"name,omitempty"`
-	Address         string             `json:"address,omitempty"`
-	State           string             `json:"state"`
-	TargetAddr      string             `json:"target_addr,omitempty"`
-	LastError       string             `json:"last_error,omitempty"`
-	Discovery       bool               `json:"discovery"`
-	Overlay         bool               `json:"overlay"`
-	MaxActiveRelays int                `json:"max_active_relays,omitempty"`
-	ECH             bool               `json:"ech,omitempty"`
-	Metadata        LeaseMetadata      `json:"metadata"`
-	X402PayTo       string             `json:"x402_pay_to,omitempty"`
-	X402Testnet     bool               `json:"x402_testnet,omitempty"`
-	X402Network     string             `json:"x402_network,omitempty"`
-	X402Asset       string             `json:"x402_asset,omitempty"`
-	X402Endpoints   []string           `json:"x402_endpoints,omitempty"`
-	HTTPRoutes      []AgentHTTPRoute   `json:"http_routes,omitempty"`
-	Relays          []AgentRelayStatus `json:"relays,omitempty"`
+	ID              string              `json:"id"`
+	Name            string              `json:"name,omitempty"`
+	Address         string              `json:"address,omitempty"`
+	State           string              `json:"state"`
+	TargetAddr      string              `json:"target_addr,omitempty"`
+	LastError       string              `json:"last_error,omitempty"`
+	Discovery       bool                `json:"discovery"`
+	Overlay         bool                `json:"overlay"`
+	MaxActiveRelays int                 `json:"max_active_relays,omitempty"`
+	ECH             bool                `json:"ech,omitempty"`
+	Metadata        types.LeaseMetadata `json:"metadata"`
+	X402PayTo       string              `json:"x402_pay_to,omitempty"`
+	X402Testnet     bool                `json:"x402_testnet,omitempty"`
+	X402Network     string              `json:"x402_network,omitempty"`
+	X402Asset       string              `json:"x402_asset,omitempty"`
+	X402Endpoints   []string            `json:"x402_endpoints,omitempty"`
+	HTTPRoutes      []AgentHTTPRoute    `json:"http_routes,omitempty"`
+	Relays          []AgentRelayStatus  `json:"relays,omitempty"`
 }
 
 type AgentHTTPRoute struct {

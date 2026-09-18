@@ -82,7 +82,7 @@ type agentDashboardModel struct {
 	configPath string
 	stateDir   string
 
-	status types.AgentStatusResponse
+	status AgentStatusResponse
 	err    error
 
 	width  int
@@ -122,7 +122,7 @@ type agentDashboardModel struct {
 }
 
 type agentDashboardStatusMsg struct {
-	status types.AgentStatusResponse
+	status AgentStatusResponse
 	err    error
 }
 
@@ -566,15 +566,15 @@ func (m *agentDashboardModel) clampSelection() {
 	m.selectedRelayURL = relays[0].RelayURL
 }
 
-func (m agentDashboardModel) selectedTunnelStatus() (types.AgentTunnelStatus, bool) {
+func (m agentDashboardModel) selectedTunnelStatus() (AgentTunnelStatus, bool) {
 	index := m.selectedTunnelIndex()
 	if index < 0 {
-		return types.AgentTunnelStatus{}, false
+		return AgentTunnelStatus{}, false
 	}
 	return m.status.Tunnels[index], true
 }
 
-func (m agentDashboardModel) selectedRelayIndex(tunnel types.AgentTunnelStatus) int {
+func (m agentDashboardModel) selectedRelayIndex(tunnel AgentTunnelStatus) int {
 	if len(tunnel.Relays) == 0 {
 		return -1
 	}
@@ -586,23 +586,23 @@ func (m agentDashboardModel) selectedRelayIndex(tunnel types.AgentTunnelStatus) 
 	return 0
 }
 
-func (m agentDashboardModel) selectedRelayStatus() (types.AgentRelayStatus, bool) {
+func (m agentDashboardModel) selectedRelayStatus() (AgentRelayStatus, bool) {
 	tunnel, ok := m.selectedTunnelStatus()
 	index := m.selectedRelayIndex(tunnel)
 	if !ok || index < 0 {
-		return types.AgentRelayStatus{}, false
+		return AgentRelayStatus{}, false
 	}
 	return tunnel.Relays[index], true
 }
 
-func (m agentDashboardModel) selectedTunnelRelay() (types.AgentTunnelStatus, types.AgentRelayStatus, bool) {
+func (m agentDashboardModel) selectedTunnelRelay() (AgentTunnelStatus, AgentRelayStatus, bool) {
 	tunnel, ok := m.selectedTunnelStatus()
 	if !ok {
-		return types.AgentTunnelStatus{}, types.AgentRelayStatus{}, false
+		return AgentTunnelStatus{}, AgentRelayStatus{}, false
 	}
 	relay, ok := m.selectedRelayStatus()
 	if !ok {
-		return types.AgentTunnelStatus{}, types.AgentRelayStatus{}, false
+		return AgentTunnelStatus{}, AgentRelayStatus{}, false
 	}
 	return tunnel, relay, true
 }
@@ -662,7 +662,7 @@ func (m *agentDashboardModel) syncRelayAttempts() {
 	}
 }
 
-func (m agentDashboardModel) relayDashboardFailed(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) bool {
+func (m agentDashboardModel) relayDashboardFailed(tunnel AgentTunnelStatus, relay AgentRelayStatus) bool {
 	if relayDashboardConnected(tunnel, relay) || relay.Connecting {
 		return false
 	}
@@ -670,7 +670,7 @@ func (m agentDashboardModel) relayDashboardFailed(tunnel types.AgentTunnelStatus
 	return ok && failed
 }
 
-func (m agentDashboardModel) relayDashboardConnecting(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) bool {
+func (m agentDashboardModel) relayDashboardConnecting(tunnel AgentTunnelStatus, relay AgentRelayStatus) bool {
 	if relayDashboardConnected(tunnel, relay) || relay.Connecting {
 		return relay.Connecting
 	}
@@ -907,14 +907,14 @@ func (m *agentDashboardModel) ensureSelectedSettingsDraft() {
 	m.ensureSettingsDraft(tunnel)
 }
 
-func (m *agentDashboardModel) ensureSettingsDraft(tunnel types.AgentTunnelStatus) {
+func (m *agentDashboardModel) ensureSettingsDraft(tunnel AgentTunnelStatus) {
 	if m.settingsEditTunnelID == tunnel.ID {
 		return
 	}
 	m.loadSettingsDraft(tunnel)
 }
 
-func (m *agentDashboardModel) loadSettingsDraft(tunnel types.AgentTunnelStatus) {
+func (m *agentDashboardModel) loadSettingsDraft(tunnel AgentTunnelStatus) {
 	metadata := tunnel.Metadata
 	m.settingsEditTunnelID = tunnel.ID
 	m.settingsMaxRelays.SetValue(strconv.Itoa(tunnel.MaxActiveRelays))
@@ -946,19 +946,19 @@ func (m agentDashboardModel) addTunnelFromInput() (tea.Model, tea.Cmd) {
 	})
 }
 
-func (m agentDashboardModel) addTunnelRequest() (types.AgentTunnelRequest, error) {
+func (m agentDashboardModel) addTunnelRequest() (AgentTunnelRequest, error) {
 	name := strings.TrimSpace(m.addName.Value())
 	if agentTunnelID(name) == "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("tunnel name is required")
+		return AgentTunnelRequest{}, fmt.Errorf("tunnel name is required")
 	}
 
 	targetInput := strings.TrimSpace(m.addTarget.Value())
 	routesInput := strings.TrimSpace(m.addHTTPRoutes.Value())
 	if targetInput != "" && routesInput != "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("target cannot be combined with routes")
+		return AgentTunnelRequest{}, fmt.Errorf("target cannot be combined with routes")
 	}
 	if targetInput == "" && routesInput == "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("target or routes is required")
+		return AgentTunnelRequest{}, fmt.Errorf("target or routes is required")
 	}
 
 	var target string
@@ -966,13 +966,13 @@ func (m agentDashboardModel) addTunnelRequest() (types.AgentTunnelRequest, error
 		var err error
 		target, err = utils.NormalizeLoopbackTarget(targetInput)
 		if err != nil || target == "" {
-			return types.AgentTunnelRequest{}, fmt.Errorf("invalid target %q", targetInput)
+			return AgentTunnelRequest{}, fmt.Errorf("invalid target %q", targetInput)
 		}
 	}
 
 	routes, err := agentDashboardParseAddHTTPRoutes(routesInput)
 	if err != nil {
-		return types.AgentTunnelRequest{}, err
+		return AgentTunnelRequest{}, err
 	}
 	payTo := strings.TrimSpace(m.addX402PayTo.Value())
 	hasPaidRoute := false
@@ -983,45 +983,45 @@ func (m agentDashboardModel) addTunnelRequest() (types.AgentTunnelRequest, error
 		}
 	}
 	if hasPaidRoute && payTo == "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("paid routes require X402 Pay To")
+		return AgentTunnelRequest{}, fmt.Errorf("paid routes require X402 Pay To")
 	}
 	if len(routes) == 0 && payTo != "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Pay To requires routes")
+		return AgentTunnelRequest{}, fmt.Errorf("X402 Pay To requires routes")
 	}
 	x402TestnetRaw := strings.TrimSpace(m.addX402Testnet.Value())
 	x402TestnetRaw = cmp.Or(x402TestnetRaw, "false")
 	x402Testnet, err := strconv.ParseBool(x402TestnetRaw)
 	if err != nil {
-		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Testnet must be true or false")
+		return AgentTunnelRequest{}, fmt.Errorf("X402 Testnet must be true or false")
 	}
 	if x402Testnet && !hasPaidRoute {
-		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Testnet requires paid routes")
+		return AgentTunnelRequest{}, fmt.Errorf("X402 Testnet requires paid routes")
 	}
 	x402Network := strings.ToLower(strings.TrimSpace(m.addX402Network.Value()))
 	x402Asset := strings.TrimSpace(m.addX402Asset.Value())
 	x402Endpoints := utils.SplitCSV(m.addX402Endpoints.Value())
 	if x402Network != "" && !hasPaidRoute {
-		return types.AgentTunnelRequest{}, fmt.Errorf("X402 Network requires paid routes")
+		return AgentTunnelRequest{}, fmt.Errorf("X402 Network requires paid routes")
 	}
 	if strings.HasPrefix(x402Network, "casper:") && x402Asset == "" {
-		return types.AgentTunnelRequest{}, fmt.Errorf("casper payments require X402 Asset")
+		return AgentTunnelRequest{}, fmt.Errorf("casper payments require X402 Asset")
 	}
 
 	discoveryRaw := strings.TrimSpace(m.addDiscovery.Value())
 	discoveryRaw = cmp.Or(discoveryRaw, "true")
 	discovery, err := strconv.ParseBool(discoveryRaw)
 	if err != nil {
-		return types.AgentTunnelRequest{}, fmt.Errorf("discovery must be true or false")
+		return AgentTunnelRequest{}, fmt.Errorf("discovery must be true or false")
 	}
 
 	maxRelaysRaw := strings.TrimSpace(m.addMaxRelays.Value())
 	maxRelaysRaw = cmp.Or(maxRelaysRaw, "3")
 	maxRelays, err := strconv.Atoi(maxRelaysRaw)
 	if err != nil || maxRelays <= 0 {
-		return types.AgentTunnelRequest{}, fmt.Errorf("max relays must be a positive integer")
+		return AgentTunnelRequest{}, fmt.Errorf("max relays must be a positive integer")
 	}
 
-	return types.AgentTunnelRequest{
+	return AgentTunnelRequest{
 		Name:            name,
 		TargetAddr:      target,
 		HTTPRoutes:      routes,
@@ -1036,12 +1036,12 @@ func (m agentDashboardModel) addTunnelRequest() (types.AgentTunnelRequest, error
 	}, nil
 }
 
-func agentDashboardParseAddHTTPRoutes(value string) ([]types.AgentHTTPRoute, error) {
+func agentDashboardParseAddHTTPRoutes(value string) ([]AgentHTTPRoute, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil, nil
 	}
-	var routes []types.AgentHTTPRoute
+	var routes []AgentHTTPRoute
 	seen := make(map[string]struct{})
 
 	for rawSegment := range strings.SplitSeq(value, ";") {
@@ -1079,7 +1079,7 @@ func agentDashboardParseAddHTTPRoutes(value string) ([]types.AgentHTTPRoute, err
 		}
 		seen[prefix] = struct{}{}
 
-		route := types.AgentHTTPRoute{
+		route := AgentHTTPRoute{
 			Prefix:   prefix,
 			Upstream: parts[0],
 		}
@@ -1176,14 +1176,14 @@ func (m agentDashboardModel) applySettingsEdit() (tea.Model, tea.Cmd) {
 	tags := utils.SplitCSV(m.metadataTags.Value())
 	owner := strings.TrimSpace(m.metadataOwner.Value())
 	thumbnail := strings.TrimSpace(m.metadataThumbnail.Value())
-	metadata := types.AgentMetadataRequest{
+	metadata := AgentMetadataRequest{
 		Description: &description,
 		Tags:        &tags,
 		Owner:       &owner,
 		Thumbnail:   &thumbnail,
 		Hide:        &hide,
 	}
-	req := types.AgentTunnelUpdateRequest{
+	req := AgentTunnelUpdateRequest{
 		MaxActiveRelays: &maxActiveRelays,
 		Metadata:        &metadata,
 	}
@@ -1448,7 +1448,7 @@ func (m agentDashboardModel) renderTunnelPane(width, height int) agentDashboardV
 	return pane
 }
 
-func (m agentDashboardModel) relayRowsForHeight(tunnel types.AgentTunnelStatus, height int) int {
+func (m agentDashboardModel) relayRowsForHeight(tunnel AgentTunnelStatus, height int) int {
 	if len(tunnel.Relays) == 0 {
 		return 0
 	}
@@ -1459,7 +1459,7 @@ func (m agentDashboardModel) relayRowsForHeight(tunnel types.AgentTunnelStatus, 
 	return min(relayRows, len(tunnel.Relays))
 }
 
-func (m agentDashboardModel) renderRelaysSection(pane *agentDashboardView, width, maxRows int, tunnel types.AgentTunnelStatus) {
+func (m agentDashboardModel) renderRelaysSection(pane *agentDashboardView, width, maxRows int, tunnel AgentTunnelStatus) {
 	relay, hasRelay := m.selectedRelayStatus()
 	connectDisabled := !hasRelay || relay.Banned || relayDashboardActive(tunnel, relay) || m.relayDashboardConnecting(tunnel, relay)
 	disconnectDisabled := !hasRelay || relay.Banned || !relayDashboardActive(tunnel, relay)
@@ -1494,7 +1494,7 @@ func (m agentDashboardModel) renderRelaysSection(pane *agentDashboardView, width
 	}
 }
 
-func (m agentDashboardModel) renderSettingsSection(pane *agentDashboardView, width, height int, tunnel types.AgentTunnelStatus) {
+func (m agentDashboardModel) renderSettingsSection(pane *agentDashboardView, width, height int, tunnel AgentTunnelStatus) {
 	if height <= 0 {
 		return
 	}
@@ -1515,7 +1515,7 @@ func (m agentDashboardModel) renderSettingsSection(pane *agentDashboardView, wid
 	m.renderSettingsInputRows(pane, width, height, startLine, tunnel)
 }
 
-func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, width, height, startLine int, tunnel types.AgentTunnelStatus) {
+func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, width, height, startLine int, tunnel AgentTunnelStatus) {
 	rows := []struct {
 		label string
 		input textinput.Model
@@ -1706,7 +1706,7 @@ func agentDashboardJoinHorizontal(left, right agentDashboardView, leftWidth, gut
 	return out
 }
 
-func (v *agentDashboardView) addTunnelRow(width, rowWidth int, tunnel types.AgentTunnelStatus, selected bool) {
+func (v *agentDashboardView) addTunnelRow(width, rowWidth int, tunnel AgentTunnelStatus, selected bool) {
 	if width <= 0 {
 		width = 1
 	}
@@ -1885,7 +1885,7 @@ func agentDashboardTunnelStyle(selected bool, state string) lipgloss.Style {
 	}
 }
 
-func agentDashboardRelayStyle(selected bool, tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus, failed, connecting bool) lipgloss.Style {
+func agentDashboardRelayStyle(selected bool, tunnel AgentTunnelStatus, relay AgentRelayStatus, failed, connecting bool) lipgloss.Style {
 	if selected {
 		return agentDashboardSelectedStyle
 	}
@@ -1904,15 +1904,15 @@ func agentDashboardRelayStyle(selected bool, tunnel types.AgentTunnelStatus, rel
 	return agentDashboardMutedStyle
 }
 
-func relayDashboardActive(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) bool {
+func relayDashboardActive(tunnel AgentTunnelStatus, relay AgentRelayStatus) bool {
 	return relayDashboardConnected(tunnel, relay) || relay.Connecting
 }
 
-func relayDashboardConnected(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) bool {
+func relayDashboardConnected(tunnel AgentTunnelStatus, relay AgentRelayStatus) bool {
 	return relay.PublicURL != ""
 }
 
-func agentDashboardHTTPRouteSummary(route types.AgentHTTPRoute) string {
+func agentDashboardHTTPRouteSummary(route AgentHTTPRoute) string {
 	prefix := strings.TrimSpace(route.Prefix)
 	prefix = cmp.Or(prefix, "-")
 	upstream := strings.TrimSpace(route.Upstream)
@@ -1945,7 +1945,7 @@ func agentDashboardX402Network(network string, testnet bool) string {
 	return "sui:mainnet"
 }
 
-func (m agentDashboardModel) settingsChanged(tunnel types.AgentTunnelStatus) bool {
+func (m agentDashboardModel) settingsChanged(tunnel AgentTunnelStatus) bool {
 	if m.settingsEditTunnelID != tunnel.ID {
 		return false
 	}
@@ -1966,7 +1966,7 @@ func (m agentDashboardModel) settingsChanged(tunnel types.AgentTunnelStatus) boo
 		hide != metadata.Hide
 }
 
-func relayDashboardFeatures(relay types.AgentRelayStatus) string {
+func relayDashboardFeatures(relay AgentRelayStatus) string {
 	var features []string
 	if relay.SupportsUDP {
 		features = append(features, "udp")
@@ -1980,14 +1980,14 @@ func relayDashboardFeatures(relay types.AgentRelayStatus) string {
 	return strings.Join(features, ",")
 }
 
-func relayDashboardVersion(relay types.AgentRelayStatus) string {
+func relayDashboardVersion(relay AgentRelayStatus) string {
 	if version := strings.TrimSpace(relay.Version); version != "" {
 		return version
 	}
 	return "-"
 }
 
-func relayDashboardURL(relay types.AgentRelayStatus) string {
+func relayDashboardURL(relay AgentRelayStatus) string {
 	if publicURL := relayDashboardPublicURL(relay.PublicURL); publicURL != "" {
 		return publicURL
 	}
@@ -2031,7 +2031,7 @@ func relayDashboardRelayLabel(rawURL string) string {
 	return host
 }
 
-func (m agentDashboardModel) relayDashboardMode(tunnel types.AgentTunnelStatus, relay types.AgentRelayStatus) string {
+func (m agentDashboardModel) relayDashboardMode(tunnel AgentTunnelStatus, relay AgentRelayStatus) string {
 	var modes []string
 	if relay.PublicURL != "" {
 		modes = append(modes, "direct")
@@ -2046,14 +2046,14 @@ func (m agentDashboardModel) relayDashboardMode(tunnel types.AgentTunnelStatus, 
 	return "-"
 }
 
-func tunnelDashboardName(tunnel types.AgentTunnelStatus) string {
+func tunnelDashboardName(tunnel AgentTunnelStatus) string {
 	if strings.TrimSpace(tunnel.Name) != "" {
 		return tunnel.Name
 	}
 	return tunnel.ID
 }
 
-func tunnelDashboardTarget(tunnel types.AgentTunnelStatus) string {
+func tunnelDashboardTarget(tunnel AgentTunnelStatus) string {
 	if target := strings.TrimSpace(tunnel.TargetAddr); target != "" {
 		return target
 	}
@@ -2072,7 +2072,7 @@ func tunnelDashboardTarget(tunnel types.AgentTunnelStatus) string {
 	return fmt.Sprintf("%d routes, %d paid", len(tunnel.HTTPRoutes), paid)
 }
 
-func agentDashboardTunnelTableWidth(width int, tunnels []types.AgentTunnelStatus) int {
+func agentDashboardTunnelTableWidth(width int, tunnels []AgentTunnelStatus) int {
 	tableWidth := 56
 	for _, tunnel := range tunnels {
 		nameWidth := max(lipgloss.Width(tunnelDashboardName(tunnel)), lipgloss.Width("TUNNEL"))

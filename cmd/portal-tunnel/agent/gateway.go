@@ -41,20 +41,14 @@ const (
 type X402Payment struct {
 	Testnet             bool
 	Network             string
-	NetworkName         string
 	Asset               string
 	PayTo               string
-	Amount              string
 	MaxTimeoutSeconds   int
 	RequestTimeout      time.Duration
 	Endpoints           []string
 	FacilitatorToken    string
-	ResourcePath        string
 	ResourceDescription string
 	ResourceMimeType    string
-	// Methods limits payment enforcement to these HTTP methods, matched
-	// case-insensitively. Empty means every method is paid.
-	Methods []string
 }
 
 // X402PreparePath is the agent-owned path for the /x402/prepare endpoint.
@@ -62,14 +56,6 @@ const X402PreparePath = "/x402/prepare"
 
 // X402ClientPath is the agent-owned path for the /x402/client.js endpoint.
 const X402ClientPath = "/x402/client.js"
-
-// x402 wire header names published by the gateway's payment challenge and
-// asserted by the agent's settlement tests.
-const (
-	HeaderPaymentRequired  = "PAYMENT-REQUIRED"
-	HeaderXPaymentRequired = "X-PAYMENT-REQUIRED"
-	HeaderPaymentResponse  = "PAYMENT-RESPONSE"
-)
 
 const x402RequestBodyLimit int64 = 64 << 10
 
@@ -534,8 +520,8 @@ func (g *httpGateway) writeRouteChallenge(w http.ResponseWriter, r *http.Request
 	}
 	encoded := base64.StdEncoding.EncodeToString(raw)
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set(HeaderPaymentRequired, encoded)
-	w.Header().Set(HeaderXPaymentRequired, encoded)
+	w.Header().Set(x402http.HeaderPaymentRequired, encoded)
+	w.Header().Set(x402http.HeaderXPaymentRequired, encoded)
 	w.WriteHeader(http.StatusPaymentRequired)
 	_, _ = w.Write(raw)
 }
