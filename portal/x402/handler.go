@@ -2,7 +2,6 @@ package x402
 
 import (
 	"cmp"
-	"context"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -110,15 +109,6 @@ func (h *USDCPaymentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-
-		ctx := r.Context()
-		cancel := func() {}
-		payment := h.payment.payment
-		if payment.RequestTimeout > 0 {
-			ctx, cancel = context.WithTimeout(ctx, payment.RequestTimeout)
-		}
-		defer cancel()
-		r = r.WithContext(ctx)
 
 		settled, ok := h.payment.settleAndDecorate(w, r)
 		if !ok {
