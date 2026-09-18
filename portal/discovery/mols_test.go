@@ -109,6 +109,23 @@ func TestSelectPriorityStickinessDoesNotRestoreIneligibleRelays(t *testing.T) {
 	}
 }
 
+func TestSelectPriorityStickinessRetainsEligibleActiveRelay(t *testing.T) {
+	relayA := "https://relay-a.example"
+	relayB := "https://relay-b.example"
+
+	selected := SelectPriority([]RelayState{
+		confirmedRelayState(t, relayA),
+		confirmedRelayState(t, relayB),
+	}, routeState{
+		ActiveRelayURLs: []string{relayA},
+		MaxActiveRelays: 1,
+	})
+
+	if len(selected) != 1 || selected[0] != relayA {
+		t.Fatalf("SelectPriority() = %v, want the healthy active relay %q retained under the active cap", selected, relayA)
+	}
+}
+
 func BenchmarkSelectPriority(b *testing.B) {
 	relays := make([]RelayState, 100)
 	for i := range relays {

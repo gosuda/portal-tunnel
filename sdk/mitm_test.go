@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
@@ -15,314 +16,260 @@ import (
 	"math/big"
 	"net"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func TestMITMProbeConnMatchesExporter(t *testing.T) {
-	clientConn, serverConn := newMITMProbeTLSPair(t)
-	defer closeMITMProbeTLSConn(clientConn)
-	defer closeMITMProbeTLSConn(serverConn)
-
+// TestMITMProbeCompletionClassifiesExporter covers the probe completion
+// decision at the manager boundary, with no TLS peer: a completion matching
+// the armed exporter passes, a differing one reports the exporter mismatch,
+// a reservation that was never armed counts as a mismatch, and an unknown
+// nonce is dropped without touching live reservations.
+func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 	listener := &listener{}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
-	nonce := make([]byte, 16)
-	if _, err := rand.Read(nonce); err != nil {
-		t.Fatalf("rand.Read() error = %v", err)
-	}
-	nonceHex := hex.EncodeToString(nonce)
-	clientState := clientConn.ConnectionState()
-	expected, err := (&clientState).ExportKeyingMaterial(mitmProbeExporterLabel, nil, 32)
-	if err != nil {
-		t.Fatalf("client ExportKeyingMaterial() error = %v", err)
-	}
-	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
-	defer cleanupProbe()
-	listener.mitmManager.attachExpected(nonceHex, expected)
-
-	handleDone := make(chan struct{})
-	go func() {
-		defer close(handleDone)
-		nextConn, handled, err := listener.mitmManager.maybeHandleConn(serverConn)
-		if err != nil {
-			t.Errorf("maybeHandleConn() error = %v", err)
-			return
-		}
-		if nextConn != nil {
-			t.Error("maybeHandleConn() returned passthrough conn for probe")
-		}
-		if !handled {
-			t.Error("maybeHandleConn() handled = false, want true")
-		}
-	}()
-
-	frame := bytes.Clone(nonce)
-	frame = append(frame, bytes.Repeat([]byte{0xAB}, 128)...)
-	if _, err := clientConn.Write(frame); err != nil {
-		t.Fatalf("clientConn.Write() error = %v", err)
-	}
-	_ = clientConn.Close()
-
+	// Matching exporter value: the probe passes with an empty reason.
+	expected := bytes.Repeat([]byte{0xAB}, 32)
+	resultCh, cleanup := listener.mitmManager.reserveProbe("probe-match")
+	defer cleanup()
+	listener.mitmManager.attachExpected("probe-match", expected)
+	listener.mitmManager.completeProbe("probe-match", expected)
 	select {
 	case reason := <-resultCh:
 		if reason != "" {
 			t.Fatalf("probe reason = %q, want empty", reason)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for probe result")
+	default:
+		t.Fatal("matching probe completion produced no result")
 	}
 
-	select {
-	case <-handleDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for probe handler")
-	}
-}
-
-func TestMITMProbeConnDetectsExporterMismatch(t *testing.T) {
-	clientConn, serverConn := newMITMProbeTLSPair(t)
-	defer closeMITMProbeTLSConn(clientConn)
-	defer closeMITMProbeTLSConn(serverConn)
-
-	listener := &listener{}
-	listener.mitmManager = newMITMManager(context.Background(), listener, false)
-
-	nonce := make([]byte, 16)
-	if _, err := rand.Read(nonce); err != nil {
-		t.Fatalf("rand.Read() error = %v", err)
-	}
-	nonceHex := hex.EncodeToString(nonce)
-	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
-	defer cleanupProbe()
-	listener.mitmManager.attachExpected(nonceHex, make([]byte, 32))
-
-	handleDone := make(chan struct{})
-	go func() {
-		defer close(handleDone)
-		nextConn, handled, err := listener.mitmManager.maybeHandleConn(serverConn)
-		if err != nil {
-			t.Errorf("maybeHandleConn() error = %v", err)
-			return
-		}
-		if nextConn != nil {
-			t.Error("maybeHandleConn() returned passthrough conn for probe")
-		}
-		if !handled {
-			t.Error("maybeHandleConn() handled = false, want true")
-		}
-	}()
-
-	frame := bytes.Clone(nonce)
-	frame = append(frame, bytes.Repeat([]byte{0xCD}, 128)...)
-	if _, err := clientConn.Write(frame); err != nil {
-		t.Fatalf("clientConn.Write() error = %v", err)
-	}
-	_ = clientConn.Close()
-
+	// Differing exporter value: exporter mismatch.
+	resultCh, cleanup = listener.mitmManager.reserveProbe("probe-mismatch")
+	defer cleanup()
+	listener.mitmManager.attachExpected("probe-mismatch", bytes.Repeat([]byte{0xAB}, 32))
+	listener.mitmManager.completeProbe("probe-mismatch", bytes.Repeat([]byte{0xCD}, 32))
 	select {
 	case reason := <-resultCh:
 		if reason != types.MITMProbeReasonExporterMismatch {
 			t.Fatalf("probe reason = %q, want %q", reason, types.MITMProbeReasonExporterMismatch)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for probe result")
+	default:
+		t.Fatal("mismatched probe completion produced no result")
 	}
 
+	// A reservation that was never armed holds no exporter value and must
+	// count as a mismatch, never as a pass.
+	resultCh, cleanup = listener.mitmManager.reserveProbe("probe-unarmed")
+	defer cleanup()
+	listener.mitmManager.completeProbe("probe-unarmed", bytes.Repeat([]byte{0xAB}, 32))
 	select {
-	case <-handleDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for probe handler")
-	}
-}
-
-func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
-	listener := &listener{}
-	listener.mitmManager = newMITMManager(context.Background(), listener, false)
-
-	nonce := make([]byte, 16)
-	if _, err := rand.Read(nonce); err != nil {
-		t.Fatalf("rand.Read() error = %v", err)
-	}
-	nonceHex := hex.EncodeToString(nonce)
-
-	// Production order from probeTLSPassthrough: the nonce is reserved
-	// once the TCP connection exists but before the TLS handshake, so the
-	// reservation is in place before the reverse handshake can complete.
-	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
-	defer cleanupProbe()
-
-	cert := newMITMProbeCertificate(t)
-	clientRaw, serverRaw := net.Pipe()
-	clientConn := tls.Client(clientRaw, &tls.Config{
-		InsecureSkipVerify: true,
-		MinVersion:         tls.VersionTLS13,
-		NextProtos:         []string{"http/1.1"},
-	})
-	signaling := &readSignalingConn{Conn: serverRaw, readStarted: make(chan struct{})}
-	serverConn := tls.Server(signaling, &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
-		NextProtos:   []string{"http/1.1"},
-	})
-	defer closeMITMProbeTLSConn(clientConn)
-	defer closeMITMProbeTLSConn(serverConn)
-
-	type handleResult struct {
-		conn    net.Conn
-		handled bool
-		err     error
-	}
-	handleResultCh := make(chan handleResult, 1)
-	go func() {
-		if err := serverConn.HandshakeContext(context.Background()); err != nil {
-			handleResultCh <- handleResult{err: err}
-			return
+	case reason := <-resultCh:
+		if reason != types.MITMProbeReasonExporterMismatch {
+			t.Fatalf("unarmed probe reason = %q, want %q", reason, types.MITMProbeReasonExporterMismatch)
 		}
-		// Accept fires the moment the reverse handshake completes. Arming the
-		// wrapper makes its next read — maybeHandleConn's peek — signal, so
-		// the probe side provably attaches the expected exporter only after
-		// the handler has entered its peek.
-		signaling.arm()
-		nextConn, handled, err := listener.mitmManager.maybeHandleConn(serverConn)
-		handleResultCh <- handleResult{conn: nextConn, handled: handled, err: err}
-	}()
-
-	if err := clientConn.HandshakeContext(context.Background()); err != nil {
-		t.Fatalf("client handshake error: %v", err)
-	}
-	select {
-	case <-signaling.readStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for maybeHandleConn to start reading; was the probe reservation removed?")
+	default:
+		t.Fatal("unarmed probe completion produced no result")
 	}
 
-	clientState := clientConn.ConnectionState()
-	expected, err := (&clientState).ExportKeyingMaterial(mitmProbeExporterLabel, nil, 32)
-	if err != nil {
-		t.Fatalf("client ExportKeyingMaterial() error = %v", err)
-	}
-	listener.mitmManager.attachExpected(nonceHex, expected)
-
-	frame := bytes.Clone(nonce)
-	frame = append(frame, bytes.Repeat([]byte{0xAB}, 128)...)
-	if _, err := clientConn.Write(frame); err != nil {
-		t.Fatalf("clientConn.Write() error = %v", err)
-	}
-	_ = clientConn.Close()
-
+	// An unknown nonce is dropped: completing it must neither block nor
+	// consume the result of a live reservation.
+	armed := bytes.Repeat([]byte{0xAB}, 32)
+	resultCh, cleanup = listener.mitmManager.reserveProbe("probe-live")
+	defer cleanup()
+	listener.mitmManager.attachExpected("probe-live", armed)
+	listener.mitmManager.completeProbe("nonce-unknown", armed)
+	listener.mitmManager.completeProbe("probe-live", armed)
 	select {
 	case reason := <-resultCh:
 		if reason != "" {
-			t.Fatalf("probe reason = %q, want empty", reason)
+			t.Fatalf("live probe reason = %q, want empty after an unknown nonce was dropped", reason)
 		}
-	case <-time.After(2 * time.Second):
+	default:
+		t.Fatal("live probe completion produced no result")
+	}
+}
+
+// TestWrapBufferedConnRedeliversPeekedBytes proves tenant stream integrity
+// while a probe is pending: the nonce frame the probe peek consumed from the
+// wire is re-delivered to the passthrough conn ahead of the remaining bytes.
+func TestWrapBufferedConnRedeliversPeekedBytes(t *testing.T) {
+	const frameSize = 16
+	payload := append(bytes.Repeat([]byte{0x00}, frameSize), bytes.Repeat([]byte{0xAB}, 8)...)
+
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+	if err := server.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline() error = %v", err)
+	}
+	writeErr := make(chan error, 1)
+	go func() {
+		_, err := client.Write(payload)
+		writeErr <- err
+	}()
+
+	reader := bufio.NewReaderSize(server, frameSize)
+	peeked, err := reader.Peek(frameSize)
+	if err != nil {
+		t.Fatalf("Peek() error = %v", err)
+	}
+	passthrough := wrapBufferedConn(server, reader)
+	t.Cleanup(func() { _ = passthrough.Close() })
+
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(passthrough, got); err != nil {
+		t.Fatalf("ReadFull() error = %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("passthrough payload = % x, want % x", got, payload)
+	}
+	if !bytes.Equal(peeked, payload[:frameSize]) {
+		t.Fatalf("peeked frame = % x, want the probe nonce frame % x", peeked, payload[:frameSize])
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatalf("client Write() error = %v", err)
+	}
+}
+
+// TestMITMProbeConnAtHandshakeCompletionIsHandled pins the #397 ordering
+// invariant at its real owner: maybeHandleConn runs the moment the reverse
+// TLS handshake completes, so a nonce reserved before the handshake is
+// served as a probe there — never handed to tenant traffic — while the same
+// connection shape without a pending reservation falls through as ordinary
+// tenant traffic.
+func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
+	t.Run("reserved before handshake is handled as a probe", func(t *testing.T) {
+		listener := &listener{}
+		listener.mitmManager = newMITMManager(context.Background(), listener, false)
+
+		nonce := make([]byte, 16)
+		if _, err := rand.Read(nonce); err != nil {
+			t.Fatalf("rand.Read() error = %v", err)
+		}
+		nonceHex := hex.EncodeToString(nonce)
+
+		// Production order from probeTLSPassthrough: the nonce is reserved
+		// once the TCP connection exists but before the TLS handshake, so
+		// the reservation is pending before the reverse handshake can
+		// complete.
+		resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
+		defer cleanupProbe()
+
+		clientConn, serverConn := newMITMProbeTLSPair(t)
+		defer closeMITMProbeTLSConn(clientConn)
+		defer closeMITMProbeTLSConn(serverConn)
+
+		type handleResult struct {
+			conn    net.Conn
+			handled bool
+			err     error
+		}
+		handleResultCh := make(chan handleResult, 1)
+		go func() {
+			// Accept fires the moment the reverse handshake completes; the
+			// reservation must already be pending at that point.
+			nextConn, handled, err := listener.mitmManager.maybeHandleConn(serverConn)
+			handleResultCh <- handleResult{conn: nextConn, handled: handled, err: err}
+		}()
+
+		clientState := clientConn.ConnectionState()
+		expected, err := (&clientState).ExportKeyingMaterial(mitmProbeExporterLabel, nil, 32)
+		if err != nil {
+			t.Fatalf("client ExportKeyingMaterial() error = %v", err)
+		}
+		listener.mitmManager.attachExpected(nonceHex, expected)
+
+		frame := bytes.Clone(nonce)
+		frame = append(frame, bytes.Repeat([]byte{0xAB}, 128)...)
+		if _, err := clientConn.Write(frame); err != nil {
+			t.Fatalf("clientConn.Write() error = %v", err)
+		}
+		_ = clientConn.Close()
+
+		select {
+		case reason := <-resultCh:
+			if reason != "" {
+				t.Fatalf("probe reason = %q, want empty", reason)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for probe result: was the reservation pending at handshake completion?")
+		}
+
 		select {
 		case result := <-handleResultCh:
-			t.Fatalf("timed out waiting for probe result; handler resolved first: handled=%v passthrough=%v err=%v", result.handled, result.conn != nil, result.err)
-		default:
+			if result.err != nil {
+				t.Fatalf("maybeHandleConn() error = %v", result.err)
+			}
+			if !result.handled {
+				t.Fatal("maybeHandleConn() handled = false, want true: probe bypassed into normal traffic")
+			}
+			if result.conn != nil {
+				t.Fatal("maybeHandleConn() returned passthrough conn for probe")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for probe handler")
 		}
-		t.Fatal("timed out waiting for probe result")
-	}
+	})
 
-	select {
-	case result := <-handleResultCh:
+	t.Run("unreserved connection passes through as tenant traffic", func(t *testing.T) {
+		listener := &listener{}
+		listener.mitmManager = newMITMManager(context.Background(), listener, false)
+
+		clientConn, serverConn := newMITMProbeTLSPair(t)
+		defer closeMITMProbeTLSConn(clientConn)
+		defer closeMITMProbeTLSConn(serverConn)
+
+		type handleResult struct {
+			conn    net.Conn
+			handled bool
+			err     error
+		}
+		handleResultCh := make(chan handleResult, 1)
+		go func() {
+			nextConn, handled, err := listener.mitmManager.maybeHandleConn(serverConn)
+			handleResultCh <- handleResult{conn: nextConn, handled: handled, err: err}
+		}()
+
+		var result handleResult
+		select {
+		case result = <-handleResultCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for passthrough result")
+		}
 		if result.err != nil {
 			t.Fatalf("maybeHandleConn() error = %v", result.err)
 		}
-		if !result.handled {
-			t.Fatal("maybeHandleConn() handled = false, want true: probe bypassed into normal traffic")
+		if result.handled {
+			t.Fatal("maybeHandleConn() handled = true, want false: unreserved conn was intercepted")
 		}
-		if result.conn != nil {
-			t.Fatal("maybeHandleConn() returned passthrough conn for probe")
+		if result.conn == nil {
+			t.Fatal("maybeHandleConn() returned nil passthrough conn")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for probe handler")
-	}
-}
 
-// readSignalingConn closes readStarted on the first Read after arm is
-// called. Reads before arming — the TLS handshake itself — do not signal.
-// Handshake reads and armed reads both happen on the goroutine that owns the
-// conn, so the flag needs no lock; the Once makes repeated armed reads a
-// single signal instead of a double close.
-type readSignalingConn struct {
-	net.Conn
-	readStarted chan struct{}
-	signalOnce  sync.Once
-	armed       bool
-}
-
-func (c *readSignalingConn) arm() { c.armed = true }
-
-func (c *readSignalingConn) Read(p []byte) (int, error) {
-	if c.armed {
-		c.signalOnce.Do(func() { close(c.readStarted) })
-	}
-	return c.Conn.Read(p)
-}
-
-func TestMITMProbeConnPassesThroughNormalTraffic(t *testing.T) {
-	clientConn, serverConn := newMITMProbeTLSPair(t)
-	defer closeMITMProbeTLSConn(clientConn)
-	defer closeMITMProbeTLSConn(serverConn)
-
-	listener := &listener{}
-	listener.mitmManager = newMITMManager(context.Background(), listener, false)
-
-	type handleResult struct {
-		conn    net.Conn
-		handled bool
-		err     error
-	}
-	handleResultCh := make(chan handleResult, 1)
-	go func() {
-		nextConn, handled, err := listener.mitmManager.maybeHandleConn(serverConn)
-		handleResultCh <- handleResult{conn: nextConn, handled: handled, err: err}
-	}()
-
-	payload := []byte("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
-	var result handleResult
-	select {
-	case result = <-handleResultCh:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for passthrough result")
-	}
-
-	if result.err != nil {
-		t.Fatalf("maybeHandleConn() error = %v", result.err)
-	}
-	if result.handled {
-		t.Fatal("maybeHandleConn() handled = true, want false")
-	}
-	if result.conn == nil {
-		t.Fatal("maybeHandleConn() returned nil passthrough conn")
-	}
-
-	writeErrCh := make(chan error, 1)
-	go func() {
-		_, err := clientConn.Write(payload)
-		writeErrCh <- err
-	}()
-
-	got := make([]byte, len(payload))
-	if _, err := io.ReadFull(result.conn, got); err != nil {
-		t.Fatalf("ReadFull() error = %v", err)
-	}
-	select {
-	case err := <-writeErrCh:
-		if err != nil {
-			t.Fatalf("clientConn.Write() error = %v", err)
+		payload := []byte("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+		writeErrCh := make(chan error, 1)
+		go func() {
+			_, err := clientConn.Write(payload)
+			writeErrCh <- err
+		}()
+		got := make([]byte, len(payload))
+		if _, err := io.ReadFull(result.conn, got); err != nil {
+			t.Fatalf("ReadFull() error = %v", err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for client write")
-	}
-	if !bytes.Equal(got, payload) {
-		t.Fatalf("passthrough payload = %q, want %q", got, payload)
-	}
+		select {
+		case err := <-writeErrCh:
+			if err != nil {
+				t.Fatalf("clientConn.Write() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for client write")
+		}
+		if !bytes.Equal(got, payload) {
+			t.Fatalf("passthrough payload = %q, want %q", got, payload)
+		}
+	})
 }
 
 func TestMITMProbeDetectionBansListener(t *testing.T) {
@@ -423,6 +370,8 @@ func TestMITMProbeDialAddressUsesPublicURLForRemoteRelay(t *testing.T) {
 	}
 }
 
+// newMITMProbeTLSPair returns a client/server TLS pair over net.Pipe with
+// the handshake already completed on both sides.
 func newMITMProbeTLSPair(t *testing.T) (*tls.Conn, *tls.Conn) {
 	t.Helper()
 
@@ -451,6 +400,8 @@ func newMITMProbeTLSPair(t *testing.T) (*tls.Conn, *tls.Conn) {
 	return clientConn, serverConn
 }
 
+// closeMITMProbeTLSConn breaks pending pipe I/O before Close so deferred
+// cleanup cannot block on a peer that already exited.
 func closeMITMProbeTLSConn(conn *tls.Conn) {
 	if conn == nil {
 		return
