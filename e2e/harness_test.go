@@ -152,11 +152,12 @@ func (h *harness) get(publicURL string) string {
 	return body
 }
 
-// tryGet performs a single tenant round trip against the relay
-// certificate current at call time and reports whether it succeeded.
-// Recovery tests poll it while the exposure re-registers.
-func (h *harness) tryGet(publicURL string) (string, bool) {
-	certPEM, err := os.ReadFile(h.certificate)
+// tenantGet performs a single tenant round trip against one relay: it
+// dials the relay SNI listener directly and verifies TLS against the
+// relay certificate current at call time. Membership tests reuse it for
+// relays outside the single-relay harness.
+func tenantGet(sniAddr, certPath, publicURL string) (string, bool) {
+	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
 		return "", false
 	}
@@ -167,7 +168,7 @@ func (h *harness) tryGet(publicURL string) (string, bool) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, network, h.sniAddr)
+			return (&net.Dialer{}).DialContext(ctx, network, sniAddr)
 		},
 		ForceAttemptHTTP2: false,
 	}
@@ -186,6 +187,13 @@ func (h *harness) tryGet(publicURL string) (string, bool) {
 		return "", false
 	}
 	return string(body), true
+}
+
+// tryGet performs a single tenant round trip against the relay
+// certificate current at call time and reports whether it succeeded.
+// Recovery tests poll it while the exposure re-registers.
+func (h *harness) tryGet(publicURL string) (string, bool) {
+	return tenantGet(h.sniAddr, h.certificate, publicURL)
 }
 
 var (

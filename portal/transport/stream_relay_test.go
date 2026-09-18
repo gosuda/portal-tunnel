@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -72,5 +73,20 @@ func TestOfferConnReadyLeavesRejectedConnectionWithCaller(t *testing.T) {
 	}
 	if err := <-written; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestClaimAfterCloseFailsWithNetErrClosed(t *testing.T) {
+	relay := NewRelayStream("lease", time.Minute, 1)
+	relay.Close()
+
+	// Closing the relay must release pending claimers with net.ErrClosed,
+	// never leave them waiting for a connection that will never arrive.
+	conn, err := relay.Claim(context.Background())
+	if conn != nil {
+		t.Fatal("Claim() after Close() returned a connection")
+	}
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Claim() after Close() error = %v, want net.ErrClosed", err)
 	}
 }
