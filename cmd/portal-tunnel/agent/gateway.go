@@ -205,7 +205,7 @@ func composeSuiRoute(prefix, amount string, contract types.X402Payment) (*routeP
 	if err != nil {
 		return nil, err
 	}
-	return &routePolicy{requirements: requirements, gate: gate, preparer: preparer}, nil
+	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate, preparer: preparer}, nil
 }
 
 func composeCasperRoute(prefix, amount string, contract types.X402Payment) (*routePolicy, error) {
@@ -261,7 +261,7 @@ func composeCasperRoute(prefix, amount string, contract types.X402Payment) (*rou
 	if err != nil {
 		return nil, err
 	}
-	return &routePolicy{requirements: requirements, gate: gate}, nil
+	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate}, nil
 }
 
 // newCasperFacilitatorClient delegates Casper verify/settle to the hosted
@@ -302,6 +302,22 @@ func orDefaultMaxTimeout(contract types.X402Payment) int {
 		return defaultMaxTimeoutSeconds
 	}
 	return contract.MaxTimeoutSeconds
+}
+
+// canonicalRequirements returns the gate-canonical published contract: the
+// same normalized copy x402http.New keeps internally, with extra.paymentFlow
+// pinned to the upfront flow. Clients echo published requirements as their
+// accepted contract, and the gate's accepted-requirements match requires its
+// pinned paymentFlow to survive the round trip. New has already rejected any
+// conflicting paymentFlow, so this pin cannot mask a misconfiguration.
+func canonicalRequirements(requirements facilitatortypes.PaymentRequirements) facilitatortypes.PaymentRequirements {
+	extra := make(map[string]any, len(requirements.Extra)+1)
+	for key, value := range requirements.Extra {
+		extra[key] = value
+	}
+	extra["paymentFlow"] = x402http.PaymentFlowUpfront
+	requirements.Extra = extra
+	return requirements
 }
 
 // routePolicy is one route's payment layer: the composed gate, the Sui
