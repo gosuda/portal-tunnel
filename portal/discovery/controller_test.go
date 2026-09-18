@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"testing"
@@ -179,9 +180,12 @@ func TestControllerReportMITMVsRuntimeDistinctOutcomes(t *testing.T) {
 }
 
 // A custom explicit relay that never entered through discovery must hold a
-// durable RelaySet candidate state: a reported failure suppresses it, and the
-// next selection reconciles to a replacement instead of keeping a selected
-// URL with no live listener.
+// durable RelaySet candidate state: a reported failure suppresses it, and
+// Next() publishes the reconciled membership — relay B only — instead of
+// keeping a selected URL with no live listener. The transition must be
+// observed through the controller's publication boundary, so a broken
+// Report() state change or a Next() that stops publishing the new desired
+// set both fail the deadline.
 func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -190,13 +194,27 @@ func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
 	controller := NewController(nil)
 	controller.SetExplicitRelays([]string{relayA, relayB})
 
+	// With no discovery candidates the refresher is a no-op, so Next()
+	// publishes the explicit selection directly.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	initial, err := controller.Next(ctx)
+	if err != nil {
+		t.Fatalf("initial Next() error = %v", err)
+	}
+	if len(initial) != 2 {
+		t.Fatalf("initial published membership = %v, want both explicit relays", initial)
+	}
+
 	controller.Report(relayA, FailureRuntime)
 
-	routes := controller.relaySet.SelectRelays(routeState{
-		ExplicitRelayURLs: []string{relayA, relayB},
-	})
-	if len(routes) != 1 || routes[0].RelayURL != relayB {
-		t.Fatalf("selection after explicit relay failure = %+v, want only relay B", routes)
+	republished, err := controller.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next() after Report error = %v: reconciled membership was not published before the deadline", err)
+	}
+	if len(republished) != 1 || republished[0] != relayB {
+		t.Fatalf("republished membership = %v, want only relay B", republished)
 	}
 }
 

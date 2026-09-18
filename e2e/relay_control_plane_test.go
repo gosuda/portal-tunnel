@@ -107,12 +107,12 @@ func TestRelayServeRoutesAndCancellation(t *testing.T) {
 	t.Run("application handler coexists with relay routes", func(t *testing.T) {
 		sniPort := harnessPort(t)
 		stateDir := t.TempDir()
+		// x402 composition is owned by cmd/relay-server (#490), not by the
+		// relay core, so this e2e pins only the routing coexistence.
 		server, err := portal.NewServer(portal.ServerConfig{
 			PortalURL:     "https://localhost:4017",
 			StateDir:      stateDir,
 			SNIListenAddr: "127.0.0.1:" + strconv.Itoa(sniPort),
-			X402Enabled:   true,
-			X402PayTo:     "0xtest",
 		})
 		if err != nil {
 			t.Fatalf("create portal server: %v", err)
@@ -141,7 +141,6 @@ func TestRelayServeRoutesAndCancellation(t *testing.T) {
 			status int
 		}{
 			{"/app", http.StatusNoContent},
-			{types.X402SupportedPath, http.StatusOK},
 			{"/missing", http.StatusNotFound},
 		} {
 			resp, err := client.Get(baseURL + route.path)

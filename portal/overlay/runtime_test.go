@@ -158,9 +158,11 @@ func TestIssueEndpointRotatesGatewayWithoutChangingLease(t *testing.T) {
 func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 	t.Parallel()
 	gate, capability := testGateway(t)
+	dials := 0
 	gate.endpoint = endpointStub{
 		destination: testDestination("gateway"),
 		dial: func(context.Context, string, string) (net.Conn, error) {
+			dials++
 			return nil, errors.New("dial failed")
 		},
 	}
@@ -168,7 +170,8 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 	// admission must still bound these requests without any discovery catalog.
 	gate.sourceLimiter = policy.NewSourceLimiter(1, 2, 0, 0)
 	// Within the per-source budget the request reaches the dial and reports
-	// the dial failure; past the budget it is rejected before any dial occurs.
+	// the dial failure; past the budget it is rejected before any dial occurs
+	// — admission-before-dial is the resource invariant under rate pressure.
 	for range 2 {
 		response := httptest.NewRecorder()
 		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, "192.0.2.1")
@@ -180,6 +183,9 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, "192.0.2.1")
 	if response.Code != http.StatusTooManyRequests {
 		t.Fatalf("rate-limited request status = %d, want %d", response.Code, http.StatusTooManyRequests)
+	}
+	if dials != 2 {
+		t.Fatalf("dial invocations = %d, want 2: the over-budget request must not reach the dial", dials)
 	}
 }
 
