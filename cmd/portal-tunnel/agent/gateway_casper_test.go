@@ -10,9 +10,9 @@ import (
 
 	x402http "github.com/gosuda/x402-facilitator/resource/http"
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/stretchr/testify/require"
 )
 
 // casperTestHash is a valid 64-hex CEP-18 contract hash for strict
