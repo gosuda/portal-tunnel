@@ -52,7 +52,9 @@ export function useServerList() {
   useEffect(() => {
     let cancelled = false;
 
-    void (async () => {
+    let timer: number | undefined;
+
+    const refresh = async () => {
       try {
         const data = await apiClient.get<PublicStateResponse>(
           BROWSER_API_PATHS.public.state
@@ -67,13 +69,20 @@ export function useServerList() {
       } catch (error) {
         console.error("Failed to load public relay state", error);
         if (!cancelled) {
-          setPublicState({ leases: [], landingPageEnabled: false });
+          setPublicState((previous) => ({ ...previous, leases: [] }));
+        }
+      } finally {
+        if (!cancelled) {
+          timer = window.setTimeout(() => void refresh(), 1500);
         }
       }
-    })();
+    };
+
+    void refresh();
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, []);
 
@@ -89,6 +98,7 @@ export function useServerList() {
 
   return {
     ...list,
+    leases: publicState.leases,
     landingPageEnabled: publicState.landingPageEnabled,
   };
 }
