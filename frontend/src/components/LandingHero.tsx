@@ -1,3 +1,4 @@
+import type { Lease } from "@/types/api";
 import { TunnelCommandForm } from "@/components/TunnelCommandForm";
 
 const coreFeatures = [
@@ -39,7 +40,7 @@ const coreFeatures = [
   },
 ] as const;
 
-export function LandingHero() {
+export function LandingHero({ leases }: { leases: Lease[] }) {
   return (
     <section
       aria-labelledby="landing-title"
@@ -107,7 +108,7 @@ export function LandingHero() {
                 </h2>
               </div>
             </div>
-            <TunnelCommandForm theme="terminal" mode="hero" />
+            <TunnelCommandForm theme="terminal" mode="hero" leases={leases} />
           </div>
         </div>
       </div>

@@ -9,7 +9,7 @@ import type { SortOption, StatusFilter } from "@/types/filters";
 import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
-import type { DiscoveryResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
+import type { Lease, DiscoveryResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
 
 export interface KnownRelay {
   relayURL: string;
@@ -98,6 +98,7 @@ interface ServerListViewProps {
   selectedTags: string[];
   availableTags: string[];
   filteredServers: BaseServer[];
+  leases: Lease[];
   favorites: string[];
   onSearchChange: (value: string) => void;
   onStatusChange: (value: StatusFilter) => void;
@@ -115,6 +116,7 @@ export function ServerListView({
   selectedTags,
   availableTags,
   filteredServers,
+  leases,
   favorites,
   onSearchChange,
   onStatusChange,
@@ -242,7 +244,7 @@ export function ServerListView({
           <main className="z-0 flex-1 pb-14">
             {landingPageEnabled && (
               <section className="border-b border-border/80 px-4 pt-6 pb-8 sm:px-6 sm:pb-10 md:px-8">
-                <LandingHero />
+                <LandingHero leases={leases} />
               </section>
             )}
             <section
