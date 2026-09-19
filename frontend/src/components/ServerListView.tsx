@@ -98,7 +98,7 @@ interface ServerListViewProps {
   selectedTags: string[];
   availableTags: string[];
   filteredServers: BaseServer[];
-  leases: Lease[];
+  leases: Lease[] | null;
   favorites: string[];
   onSearchChange: (value: string) => void;
   onStatusChange: (value: StatusFilter) => void;

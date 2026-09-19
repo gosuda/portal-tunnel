@@ -33,17 +33,17 @@ describe("useServerList public snapshot", () => {
     const { result, unmount } = renderHook(() => useServerList());
     await act(async () => {});
 
-    expect(result.current.leases[0].ready).toBe(0);
+    expect(result.current.leases?.[0].ready).toBe(0);
     expect(result.current.filteredServers[0].online).toBe(false);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
 
-    expect(result.current.leases[0].ready).toBe(1);
+    expect(result.current.leases?.[0].ready).toBe(1);
     expect(result.current.filteredServers[0].online).toBe(true);
     unmount();
   });
 
-  it("clears stale lease status on failure and recovers without hiding the hero", async () => {
+  it("marks status unavailable without replacing the last directory snapshot, then recovers", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(apiClient.get)
       .mockResolvedValueOnce({ leases: [{ ...lease, ready: 1 }], landing_page_enabled: true })
@@ -52,9 +52,12 @@ describe("useServerList public snapshot", () => {
     const { result, unmount } = renderHook(() => useServerList());
     await act(async () => {});
 
+    const lastDirectory = result.current.filteredServers;
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-    expect(result.current.leases).toEqual([]);
-    expect(result.current.filteredServers).toEqual([]);
+    expect(result.current.leases).toBeNull();
+    // Keeping this input unchanged prevents useList from pruning favorites/tags.
+    expect(result.current.filteredServers).toBe(lastDirectory);
+    expect(result.current.filteredServers[0].online).toBe(true);
     expect(result.current.landingPageEnabled).toBe(true);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
@@ -62,4 +65,18 @@ describe("useServerList public snapshot", () => {
     expect(result.current.filteredServers[0].online).toBe(false);
     unmount();
   });
+
+  it("treats a successful empty snapshot as authoritative", async () => {
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce({ leases: [lease], landing_page_enabled: true })
+      .mockResolvedValueOnce({ leases: [], landing_page_enabled: true });
+    const { result, unmount } = renderHook(() => useServerList());
+    await act(async () => {});
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(result.current.leases).toEqual([]);
+    expect(result.current.filteredServers).toEqual([]);
+    unmount();
+  });
+
 });

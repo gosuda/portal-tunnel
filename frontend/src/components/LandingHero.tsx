@@ -40,7 +40,7 @@ const coreFeatures = [
   },
 ] as const;
 
-export function LandingHero({ leases }: { leases: Lease[] }) {
+export function LandingHero({ leases }: { leases: Lease[] | null }) {
   return (
     <section
       aria-labelledby="landing-title"
