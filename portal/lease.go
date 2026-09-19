@@ -458,14 +458,14 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}
 
 	return types.RenewResponse{
-			ExpiresAt:   expiresAt,
-			AccessToken: nextAccessToken,
-		}, reverseEndpointInput{
-			leaseIdentity: recordIdentity,
-			leaseID:       leaseID,
-			expiresAt:     expiresAt,
-			useOverlay:    useOverlay,
-		}, nil
+		ExpiresAt:   expiresAt,
+		AccessToken: nextAccessToken,
+	}, reverseEndpointInput{
+		leaseIdentity: recordIdentity,
+		leaseID:       leaseID,
+		expiresAt:     expiresAt,
+		useOverlay:    useOverlay,
+	}, nil
 }
 
 func (r *leaseRegistry) issueReverseEndpoint(input reverseEndpointInput, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
