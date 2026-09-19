@@ -1031,16 +1031,15 @@ func (l *listener) renewLease(ctx context.Context) error {
 	return nil
 }
 
-// ensureMITMProbeSupport rejects a registration whose relay cannot deliver
-// the requested MITM self-probe. The probe stays dormant without keying
-// material export (mitmManager.maybeStart), so honoring ban-mitm silently
+// ensureMITMProbeSupport rejects a registration whose tenant TLS stack
+// cannot deliver the requested MITM self-probe. Honoring ban-mitm silently
 // would advertise protection that never runs; a terminal failure drops this
 // relay and lets the exposure fall back to one that can honor the option.
 func (l *listener) ensureMITMProbeSupport(exporterCapable bool) error {
 	if !l.banMITM || exporterCapable {
 		return nil
 	}
-	return fmt.Errorf("%w: mitm self-probe requested (--ban-mitm) but this relay's tenant tls stack does not export keying material; probe support is pending an upstream keyless_tls exporter; remove the ban-mitm option to expose without probe protection", errRelayIncompatible)
+	return fmt.Errorf("%w: mitm self-probe requested (--ban-mitm) but this relay's tenant tls stack does not export keying material; remove the ban-mitm option to expose without probe protection", errRelayIncompatible)
 }
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {

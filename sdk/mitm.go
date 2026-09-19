@@ -23,14 +23,36 @@ import (
 
 var errMITMDetected = errors.New("tls termination suspected by self-probe")
 
-// KeyingMaterialExporter is the capability the MITM responder side needs from
-// an accepted TLS connection: a connection state that can export keying
-// material for the probe label so both sides can compare exporter values.
-// *tls.Conn satisfies it natively; keyless_tls tenant conns satisfy it in
-// type (their ConnectionState is a tls.ConnectionState alias) while actual
-// export support is tracked by keyless.Client.ExportsKeyingMaterial.
+// KeyingMaterialExporter is the direct TLS 1.3 keying material exporter the
+// MITM responder side needs from an accepted TLS connection, so both sides
+// can compare exporter values. The keyless_tls t13server conn satisfies it
+// through its own RFC 8446 Section 7.5 exporter (keyless_tls v0.0.3).
+// Stock crypto/tls conns cannot satisfy this interface: Go's tls.Conn does
+// not expose the method, and its tls.ConnectionState exporter callback is
+// unexported, so external TLS implementations cannot populate it. Those
+// conns are served through the ConnectionState snapshot instead (see
+// probeExporter); tls.ConnectionState is deliberately never called on
+// t13server conns, whose snapshot carries no working callback.
 type KeyingMaterialExporter interface {
-	ConnectionState() tls.ConnectionState
+	ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error)
+}
+
+// probeExporter resolves how the responder side exports keying material from
+// an accepted conn. Conns with a native exporter export directly; stock
+// crypto/tls conns export through the ConnectionState snapshot, which
+// carries Go's own exporter closure. Conns with neither capability report
+// false so the caller can skip them before the probe-inspection peek.
+func probeExporter(conn net.Conn) (func(label string, context []byte, length int) ([]byte, error), bool) {
+	if direct, ok := conn.(KeyingMaterialExporter); ok {
+		return direct.ExportKeyingMaterial, true
+	}
+	if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+		return func(label string, context []byte, length int) ([]byte, error) {
+			state := stateful.ConnectionState()
+			return (&state).ExportKeyingMaterial(label, context, length)
+		}, true
+	}
+	return nil, false
 }
 
 const (
@@ -335,7 +357,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		return conn, false, nil
 	}
 
-	exporter, ok := conn.(KeyingMaterialExporter)
+	exportFn, ok := probeExporter(conn)
 	if !ok {
 		return conn, false, nil
 	}
@@ -364,8 +386,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		return nil, true, fmt.Errorf("read mitm probe frame: %w", err)
 	}
 
-	state := exporter.ConnectionState()
-	actual, err := (&state).ExportKeyingMaterial(mitmProbeExporterLabel, nil, 32)
+	actual, err := exportFn(mitmProbeExporterLabel, nil, 32)
 	if err != nil {
 		return nil, true, fmt.Errorf("export server probe keying material: %w", err)
 	}

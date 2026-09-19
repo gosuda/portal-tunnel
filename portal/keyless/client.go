@@ -154,10 +154,12 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte
 }
 
 // ExportsKeyingMaterial reports whether terminated tenant connections can
-// export TLS keying material for the SDK's MITM responder probe. t13server
-// does not ship EKM yet, so the responder side of the probe stays disabled.
+// export TLS keying material for the SDK's MITM responder probe. The
+// t13server terminator exposes the RFC 8446 Section 7.5 exporter on every
+// post-handshake conn (keyless_tls v0.0.3), so the capability holds
+// whenever the tenant TLS server exists.
 func (c *Client) ExportsKeyingMaterial() bool {
-	return false
+	return c != nil && c.server != nil
 }
 
 // RelayCertPool returns the pinned relay certificate chain as a verification
