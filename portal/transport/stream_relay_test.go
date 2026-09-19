@@ -71,30 +71,16 @@ func TestTLSBindingFramingRoundTrip(t *testing.T) {
 		claimed <- conn
 	}()
 
-	activatorBindings := make(chan []byte, 1)
-	activator := TLSActivationFunc(func(ctx context.Context, raw net.Conn, b []byte) (net.Conn, error) {
-		activatorBindings <- append([]byte(nil), b...)
-		return raw, nil
-	})
-	stream := NewClientStream(1, time.Second)
-	sessionDone := make(chan error, 1)
-	go func() {
-		_, err := stream.RunSession(context.Background(), clientConn, activator)
-		sessionDone <- err
-	}()
-
-	select {
-	case got := <-activatorBindings:
-		if !bytes.Equal(got, binding[:]) {
-			t.Fatalf("activator binding = %#x, want %#x", got, binding[:])
-		}
-	case err := <-sessionDone:
-		t.Fatalf("RunSession finished before activation: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("activator never received a binding")
-	}
-	if err := <-sessionDone; err != nil {
+	stream := NewClientStream(time.Second)
+	session, err := stream.RunSession(context.Background(), clientConn)
+	if err != nil {
 		t.Fatalf("RunSession: %v", err)
+	}
+	if session.Conn != clientConn {
+		t.Fatal("RunSession replaced the raw connection")
+	}
+	if !bytes.Equal(session.Binding, binding[:]) {
+		t.Fatalf("session binding = %#x, want %#x", session.Binding, binding[:])
 	}
 	select {
 	case conn := <-claimed:

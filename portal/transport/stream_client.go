@@ -2,99 +2,59 @@ package transport
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"time"
 )
 
-// TLSActivationFunc terminates TLS on a freshly claimed raw reverse
-// connection. binding is the 16-byte per-connection value the relay wrote
-// immediately after the markerTLSStart framing byte; implementations must
-// present it back to the relay on every transcript-signing request.
-type TLSActivationFunc func(ctx context.Context, raw net.Conn, binding []byte) (net.Conn, error)
+// ClientSession is a claimed reverse connection. Binding is present only for
+// TLS sessions and contains the per-connection value carried by the framing.
+type ClientSession struct {
+	Conn    net.Conn
+	Binding []byte
+}
 
 type ClientStream struct {
-	accepted         chan net.Conn
 	handshakeTimeout time.Duration
 }
 
-func NewClientStream(readyTarget int, handshakeTimeout time.Duration) *ClientStream {
-	return &ClientStream{
-		accepted:         make(chan net.Conn, max(readyTarget*2, 1)),
-		handshakeTimeout: handshakeTimeout,
-	}
-}
-
-func (s *ClientStream) Accept(done <-chan struct{}) (net.Conn, error) {
-	if s == nil {
-		return nil, net.ErrClosed
-	}
-	select {
-	case <-done:
-		return nil, net.ErrClosed
-	case conn := <-s.accepted:
-		if conn == nil {
-			return nil, net.ErrClosed
-		}
-		return conn, nil
-	}
+func NewClientStream(handshakeTimeout time.Duration) *ClientStream {
+	return &ClientStream{handshakeTimeout: handshakeTimeout}
 }
 
 // RunSession reads reverse-session markers from conn until a session starts.
-// TLS sessions carry a 16-byte binding after markerTLSStart that is handed to
-// activate; raw sessions never call it, so a nil activator is safe for
-// raw-only sessions.
-func (s *ClientStream) RunSession(
-	ctx context.Context,
-	conn net.Conn,
-	activate TLSActivationFunc,
-) (bool, error) {
+// TLS sessions carry a 16-byte binding after markerTLSStart; raw sessions
+// return a nil binding.
+func (s *ClientStream) RunSession(ctx context.Context, conn net.Conn) (ClientSession, error) {
 	if s == nil {
-		return false, net.ErrClosed
+		return ClientSession{}, net.ErrClosed
 	}
-	return s.runSession(ctx, conn, activate)
+	return s.runSession(ctx, conn)
 }
 
-func (s *ClientStream) Drain() {
-	if s == nil {
-		return
-	}
-	for {
-		select {
-		case conn := <-s.accepted:
-			if conn != nil {
-				_ = conn.Close()
-			}
-		default:
-			return
-		}
-	}
-}
-
-func (s *ClientStream) runSession(
-	ctx context.Context,
-	conn net.Conn,
-	activate TLSActivationFunc,
-) (bool, error) {
+func (s *ClientStream) runSession(ctx context.Context, conn net.Conn) (ClientSession, error) {
 	if conn == nil {
-		return false, net.ErrClosed
+		return ClientSession{}, net.ErrClosed
 	}
 
 	var marker [1]byte
-	var binding []byte
 	for {
+		if err := ctx.Err(); err != nil {
+			_ = conn.Close()
+			return ClientSession{}, err
+		}
 		_ = conn.SetReadDeadline(time.Now().Add(2 * s.handshakeTimeout))
 		if _, err := io.ReadFull(conn, marker[:]); err != nil {
 			_ = conn.Close()
-			return false, err
+			return ClientSession{}, err
 		}
+		var binding []byte
 		if marker[0] == markerTLSStart {
 			binding = make([]byte, tlsBindingSize)
 			if _, err := io.ReadFull(conn, binding); err != nil {
 				_ = conn.Close()
-				return false, err
+				return ClientSession{}, err
 			}
 		}
 		_ = conn.SetReadDeadline(time.Time{})
@@ -103,51 +63,12 @@ func (s *ClientStream) runSession(
 		case markerKeepalive:
 			continue
 		case markerTLSStart:
-			if err := s.activate(ctx, conn, activate, binding); err != nil {
-				_ = conn.Close()
-				return true, err
-			}
-			return true, nil
+			return ClientSession{Conn: conn, Binding: binding}, nil
 		case markerRawStart:
-			if err := s.activateRaw(ctx, conn); err != nil {
-				_ = conn.Close()
-				return true, err
-			}
-			return true, nil
+			return ClientSession{Conn: conn}, nil
 		default:
 			_ = conn.Close()
-			return false, fmt.Errorf("unexpected reverse marker: 0x%02x", marker[0])
+			return ClientSession{}, fmt.Errorf("unexpected reverse marker: 0x%02x", marker[0])
 		}
-	}
-}
-
-func (s *ClientStream) activate(ctx context.Context, conn net.Conn, activate TLSActivationFunc, binding []byte) error {
-	if activate == nil {
-		return errors.New("tls activator is unavailable")
-	}
-
-	handshakeCtx, cancel := context.WithTimeout(ctx, s.handshakeTimeout)
-	defer cancel()
-	tlsConn, err := activate(handshakeCtx, conn, binding)
-	if err != nil {
-		return err
-	}
-
-	select {
-	case <-ctx.Done():
-		_ = tlsConn.Close()
-		return ctx.Err()
-	case s.accepted <- tlsConn:
-		return nil
-	}
-}
-
-func (s *ClientStream) activateRaw(ctx context.Context, conn net.Conn) error {
-	select {
-	case <-ctx.Done():
-		_ = conn.Close()
-		return ctx.Err()
-	case s.accepted <- conn:
-		return nil
 	}
 }

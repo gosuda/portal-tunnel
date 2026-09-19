@@ -139,8 +139,7 @@ func (c *Client) SetAccessToken(token string) {
 // chain and proving possession of its key through a transcript-bound
 // signature from the relay. binding is the relay-minted per-connection value
 // forwarded with every /v1/sign request for the handshake. The returned
-// net.Conn is ready for application traffic; the shape satisfies
-// transport.TLSActivationFunc.
+// net.Conn is ready for application traffic.
 func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte) (net.Conn, error) {
 	if c == nil || c.server == nil {
 		return nil, errors.New("keyless client is unavailable")

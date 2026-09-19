@@ -42,10 +42,11 @@ func newTestRelayListener(t *testing.T, relayURL string, closed chan struct{}) *
 		t.Fatalf("url.Parse(%q) error = %v", relayURL, err)
 	}
 	return &listener{
-		api:    &apiClient{relayURL: relayURLParsed},
-		stream: transport.NewClientStream(0, time.Second),
-		cancel: func() { close(closed) },
-		doneCh: closed,
+		api:      &apiClient{relayURL: relayURLParsed},
+		stream:   transport.NewClientStream(time.Second),
+		accepted: make(chan net.Conn),
+		cancel:   func() { close(closed) },
+		doneCh:   closed,
 	}
 }
 

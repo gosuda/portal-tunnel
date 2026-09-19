@@ -128,6 +128,7 @@ type listener struct {
 	cache             *cache.Source
 
 	stream        *transport.ClientStream
+	accepted      chan net.Conn
 	datagram      *transport.ClientDatagram
 	mitmManager   *mitmManager
 	statusUpdates chan listenerStatus
@@ -172,7 +173,8 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l, cfg.BanMITM)
-	l.stream = transport.NewClientStream(defaultReadyTarget, defaultHandshakeTimeout)
+	l.stream = transport.NewClientStream(defaultHandshakeTimeout)
+	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
 	if l.udpEnabled {
 		l.datagram = transport.NewClientDatagram(func(err error) {
 			log.Info().
@@ -352,8 +354,16 @@ func (l *listener) Close() error {
 
 		lease := l.clearLease("")
 
-		if l.stream != nil {
-			l.stream.Drain()
+	drainAccepted:
+		for {
+			select {
+			case conn := <-l.accepted:
+				if conn != nil {
+					_ = conn.Close()
+				}
+			default:
+				break drainAccepted
+			}
 		}
 		if l.datagram != nil {
 			l.datagram.Close()
@@ -423,9 +433,14 @@ func (l *listener) Accept() (net.Conn, error) {
 		return nil, net.ErrClosed
 	}
 	for {
-		conn, err := l.stream.Accept(l.doneCh)
-		if err != nil {
-			return nil, err
+		var conn net.Conn
+		select {
+		case <-l.doneCh:
+			return nil, net.ErrClosed
+		case conn = <-l.accepted:
+			if conn == nil {
+				return nil, net.ErrClosed
+			}
 		}
 
 		nextConn, handled, handleErr := l.mitmManager.maybeHandleConn(conn)
@@ -549,7 +564,7 @@ func (l *listener) runLease(ctx context.Context) error {
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS.TerminateConn, sessionSlot); err != nil {
+				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot); err != nil {
 					select {
 					case errCh <- err:
 					case <-leaseCtx.Done():
@@ -593,7 +608,7 @@ func (l *listener) runLease(ctx context.Context) error {
 	}
 }
 
-func (l *listener) runReverseSessionLoop(ctx context.Context, activate transport.TLSActivationFunc, sessionSlot int) error {
+func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int) error {
 	if l.stream == nil {
 		return nil
 	}
@@ -631,7 +646,28 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, activate transport
 		l.reportStreamReady()
 		claimed, err := func() (bool, error) {
 			defer l.reportStreamClosed()
-			return l.stream.RunSession(ctx, conn, activate)
+			session, err := l.stream.RunSession(ctx, conn)
+			if err != nil {
+				return false, err
+			}
+
+			acceptedConn := session.Conn
+			if len(session.Binding) != 0 {
+				handshakeCtx, cancel := context.WithTimeout(ctx, defaultHandshakeTimeout)
+				defer cancel()
+				acceptedConn, err = tenantTLS.TerminateConn(handshakeCtx, session.Conn, session.Binding)
+				if err != nil {
+					return true, err
+				}
+			}
+
+			select {
+			case <-ctx.Done():
+				_ = acceptedConn.Close()
+				return true, ctx.Err()
+			case l.accepted <- acceptedConn:
+				return true, nil
+			}
 		}()
 		switch {
 		case err == nil:
