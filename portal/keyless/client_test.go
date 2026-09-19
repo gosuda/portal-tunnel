@@ -72,10 +72,10 @@ func TestVerifyCertificateHostname(t *testing.T) {
 	t.Parallel()
 	_, _, certPEM := mustSelfSignedCert(t, "covered.test.example", nil)
 
-	if err := VerifyCertificateHostname(certPEM, "covered.test.example"); err != nil {
+	if err := verifyCertificateHostname(certPEM, "covered.test.example"); err != nil {
 		t.Fatalf("VerifyCertificateHostname(covered) error = %v", err)
 	}
-	if err := VerifyCertificateHostname(certPEM, "other.test.example"); err == nil {
+	if err := verifyCertificateHostname(certPEM, "other.test.example"); err == nil {
 		t.Fatal("VerifyCertificateHostname(other) = nil, want hostname mismatch error")
 	}
 }
@@ -99,7 +99,7 @@ func TestClientTerminateConnLoopback(t *testing.T) {
 	service := &ksigner.Service{
 		Store: func() ksigner.KeyStore {
 			store := ksigner.NewStaticKeyStore()
-			if err := store.Put(RelayKeyID, key); err != nil {
+			if err := store.Put(relayKeyID, key); err != nil {
 				t.Fatalf("seed static key store: %v", err)
 			}
 			return store
@@ -324,7 +324,7 @@ func TestClientTerminateConnExportsKeyingMaterial(t *testing.T) {
 	service := &ksigner.Service{
 		Store: func() ksigner.KeyStore {
 			store := ksigner.NewStaticKeyStore()
-			if err := store.Put(RelayKeyID, key); err != nil {
+			if err := store.Put(relayKeyID, key); err != nil {
 				t.Fatalf("seed static key store: %v", err)
 			}
 			return store

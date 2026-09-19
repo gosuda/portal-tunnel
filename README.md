@@ -39,10 +39,8 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
 - **Built-in MITM Detection** - Portal actively self-probes its own connection
   after real traffic begins. It compares TLS keying material exported on both
   sides and treats a mismatch as suspected relay-side TLS termination. The
-  probe needs a tenant TLS stack that exports keying material; the current
-  keyless TLS tenant stack does not yet, so exposures started with
-  `--ban-mitm` fail at start with an explicit error until upstream support
-  lands.
+  keyless TLS tenant stack exports keying material, so the probe is active for
+  tenant TLS exposures. `--ban-mitm` makes a detected mismatch ban the relay.
 
 - **No Accounts, No API Keys** - Authentication uses SIWE-compatible signing
   with a locally generated secp256k1 key pair. No email, no registration, no

@@ -23,17 +23,17 @@ import (
 
 var errMITMDetected = errors.New("tls termination suspected by self-probe")
 
-// KeyingMaterialExporter is the direct TLS 1.3 keying material exporter the
+// keyingMaterialExporter is the direct TLS 1.3 keying material exporter the
 // MITM responder side needs from an accepted TLS connection, so both sides
 // can compare exporter values. The keyless_tls t13server conn satisfies it
-// through its own RFC 8446 Section 7.5 exporter (keyless_tls v0.0.3).
+// through its own RFC 8446 Section 7.5 exporter.
 // Stock crypto/tls conns cannot satisfy this interface: Go's tls.Conn does
 // not expose the method, and its tls.ConnectionState exporter callback is
 // unexported, so external TLS implementations cannot populate it. Those
 // conns are served through the ConnectionState snapshot instead (see
 // probeExporter); tls.ConnectionState is deliberately never called on
 // t13server conns, whose snapshot carries no working callback.
-type KeyingMaterialExporter interface {
+type keyingMaterialExporter interface {
 	ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error)
 }
 
@@ -43,7 +43,7 @@ type KeyingMaterialExporter interface {
 // carries Go's own exporter closure. Conns with neither capability report
 // false so the caller can skip them before the probe-inspection peek.
 func probeExporter(conn net.Conn) (func(label string, context []byte, length int) ([]byte, error), bool) {
-	if direct, ok := conn.(KeyingMaterialExporter); ok {
+	if direct, ok := conn.(keyingMaterialExporter); ok {
 		return direct.ExportKeyingMaterial, true
 	}
 	if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {

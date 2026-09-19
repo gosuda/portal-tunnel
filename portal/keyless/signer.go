@@ -12,9 +12,9 @@ import (
 	"github.com/gosuda/keyless_tls/relay/signrpc"
 )
 
-// RelayKeyID is the store key of the relay API listener certificate key.
+// relayKeyID is the store key of the relay API listener certificate key.
 // Tenant handshakes address it explicitly in every TranscriptSignRequest.
-const RelayKeyID = "relay-cert"
+const relayKeyID = "relay-cert"
 
 const (
 	defaultAllowedSkew = 30 * time.Second
@@ -42,7 +42,7 @@ func NewSigner(keyPEM []byte, validator ksigner.TranscriptValidator) (*Signer, e
 	}
 
 	store := ksigner.NewStaticKeyStore()
-	if err := store.Put(RelayKeyID, signingKey); err != nil {
+	if err := store.Put(relayKeyID, signingKey); err != nil {
 		return nil, fmt.Errorf("register keyless signing key: %w", err)
 	}
 

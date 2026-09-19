@@ -70,7 +70,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 		return nil, errors.New("relay hostname is required")
 	}
 
-	certPEM, rootCAPEM, err := ResolveMaterials(context.Background(), normalizedRelayURL, serverName)
+	certPEM, rootCAPEM, err := resolveMaterials(context.Background(), normalizedRelayURL, serverName)
 	if err != nil {
 		return nil, fmt.Errorf("prepare keyless materials: %w", err)
 	}
@@ -78,7 +78,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 	if hostname == "" {
 		return nil, errors.New("keyless hostname is required")
 	}
-	if verifyErr := VerifyCertificateHostname(certPEM, hostname); verifyErr != nil {
+	if verifyErr := verifyCertificateHostname(certPEM, hostname); verifyErr != nil {
 		return nil, fmt.Errorf("keyless certificate does not cover %s: %w", hostname, verifyErr)
 	}
 	client := &Client{accessToken: strings.TrimSpace(config.AccessToken)}
@@ -91,7 +91,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
 		Endpoint:   normalizedRelayURL,
 		ServerName: serverName,
-		KeyID:      RelayKeyID,
+		KeyID:      relayKeyID,
 		RootCAPEM:  rootCAPEM,
 		Headers:    client.headers,
 	})
@@ -102,7 +102,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 	server, err := t13server.NewServer(t13server.Config{
 		CertPEM:          certPEM,
 		NextProtos:       []string{"http/1.1"},
-		KeyID:            RelayKeyID,
+		KeyID:            relayKeyID,
 		TranscriptSigner: remoteSigner,
 	})
 	if err != nil {
@@ -156,7 +156,7 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte
 // ExportsKeyingMaterial reports whether terminated tenant connections can
 // export TLS keying material for the SDK's MITM responder probe. The
 // t13server terminator exposes the RFC 8446 Section 7.5 exporter on every
-// post-handshake conn (keyless_tls v0.0.3), so the capability holds
+// post-handshake conn, so the capability holds
 // whenever the tenant TLS server exists.
 func (c *Client) ExportsKeyingMaterial() bool {
 	return c != nil && c.server != nil
@@ -187,7 +187,7 @@ func (c *Client) Close() error {
 	return c.closeErr
 }
 
-func ResolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte, []byte, error) {
+func resolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte, []byte, error) {
 	chainPEM, err := utils.FetchEndpointCertificateChain(ctx, endpoint, serverName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch signer certificate chain: %w", err)
@@ -198,7 +198,7 @@ func ResolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte,
 	return bytes.Clone(chainPEM), bytes.Clone(chainPEM), nil
 }
 
-func VerifyCertificateHostname(certPEM []byte, hostname string) error {
+func verifyCertificateHostname(certPEM []byte, hostname string) error {
 	leaf, err := utils.ParseCertificatePEM(certPEM)
 	if err != nil {
 		return err
