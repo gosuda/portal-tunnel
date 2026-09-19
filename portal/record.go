@@ -11,21 +11,19 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 type leaseRecord struct {
 	types.Identity
-	id           string
-	ExpiresAt    time.Time
-	FirstSeenAt  time.Time
-	LastSeenAt   time.Time
-	ClientIP     string
-	ReportedIP   string
-	Hostname     string
-	HostnameHash string
-	Metadata     types.LeaseMetadata
-	Overlay      bool
+	id          string
+	ExpiresAt   time.Time
+	FirstSeenAt time.Time
+	LastSeenAt  time.Time
+	ClientIP    string
+	ReportedIP  string
+	Hostname    string
+	Metadata    types.LeaseMetadata
+	Overlay     bool
 
 	registerChallenge *identity.RegisterChallenge
 
@@ -38,7 +36,7 @@ type leaseRecord struct {
 
 // cacheLease copies registry facts while the caller holds the registry lock.
 func (r *leaseRecord) cacheLease() cache.Lease {
-	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.Hostname, HostnameHash: r.HostnameHash, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
+	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.Hostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
 func (r *leaseRecord) isPublicEntry() bool {
@@ -49,10 +47,7 @@ func (r *leaseRecord) ensGaslessDNSHostname() string {
 	if !r.isPublicEntry() {
 		return ""
 	}
-	if r.HostnameHash == "" {
-		return r.Hostname
-	}
-	return ""
+	return r.Hostname
 }
 
 func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
@@ -62,13 +57,7 @@ func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
 	if r.Hostname != "" && other.Hostname != "" && r.Hostname == other.Hostname {
 		return true
 	}
-	if r.HostnameHash != "" && other.HostnameHash != "" && r.HostnameHash == other.HostnameHash {
-		return true
-	}
-	if r.Hostname != "" && other.HostnameHash != "" && utils.HostnameHash(r.Hostname) == other.HostnameHash {
-		return true
-	}
-	return other.Hostname != "" && r.HostnameHash != "" && utils.HostnameHash(other.Hostname) == r.HostnameHash
+	return false
 }
 
 func (r *leaseRecord) isExpired(now time.Time) bool {

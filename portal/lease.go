@@ -15,6 +15,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
@@ -44,7 +45,7 @@ type leaseRegistry struct {
 	udpPorts       *transport.PortAllocator
 	tcpPorts       *transport.PortAllocator
 	proxy          *proxy
-	bindings       *bindingRegistry
+	bindings       *keyless.BindingRegistry
 	mu             sync.RWMutex
 }
 
@@ -76,7 +77,7 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		proxy:          &proxy{},
-		bindings:       newBindingRegistry(defaultBindingTTL),
+		bindings:       keyless.NewBindingRegistry(5 * time.Minute),
 	}, nil
 }
 
@@ -115,15 +116,6 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 			continue
 		}
 		if record.Hostname == host {
-			return record, true
-		}
-	}
-	hostHash := utils.HostnameHash(host)
-	for _, record := range r.records {
-		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
-			continue
-		}
-		if record.HostnameHash != "" && record.HostnameHash == hostHash {
 			return record, true
 		}
 	}
@@ -187,10 +179,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
 	}
-	hostnameHash := strings.TrimSpace(req.HostnameHash)
-	if hostnameHash != "" && hostnameHash != utils.HostnameHash(publicHostname) {
-		return nil, types.RegisterResponse{}, errors.New("hostname hash does not match public hostname")
-	}
 	if req.UDPEnabled && !r.policy.IsUDPEnabled() {
 		return nil, types.RegisterResponse{}, errUDPDisabled
 	}
@@ -213,18 +201,17 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 
 	stream := transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit)
 	record := &leaseRecord{
-		Identity:     leaseIdentity,
-		id:           leaseID,
-		Hostname:     publicHostname,
-		HostnameHash: hostnameHash,
-		Metadata:     req.Metadata.Copy(),
-		Overlay:      req.Overlay,
-		ExpiresAt:    expiresAt,
-		FirstSeenAt:  issuedAt,
-		LastSeenAt:   issuedAt,
-		ClientIP:     clientIP,
-		ReportedIP:   utils.SanitizeReportedIP(reportedIP),
-		stream:       stream,
+		Identity:    leaseIdentity,
+		id:          leaseID,
+		Hostname:    publicHostname,
+		Metadata:    req.Metadata.Copy(),
+		Overlay:     req.Overlay,
+		ExpiresAt:   expiresAt,
+		FirstSeenAt: issuedAt,
+		LastSeenAt:  issuedAt,
+		ClientIP:    clientIP,
+		ReportedIP:  utils.SanitizeReportedIP(reportedIP),
+		stream:      stream,
 	}
 
 	if req.UDPEnabled {
@@ -471,14 +458,14 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}
 
 	return types.RenewResponse{
-		ExpiresAt:   expiresAt,
-		AccessToken: nextAccessToken,
-	}, reverseEndpointInput{
-		leaseIdentity: recordIdentity,
-		leaseID:       leaseID,
-		expiresAt:     expiresAt,
-		useOverlay:    useOverlay,
-	}, nil
+			ExpiresAt:   expiresAt,
+			AccessToken: nextAccessToken,
+		}, reverseEndpointInput{
+			leaseIdentity: recordIdentity,
+			leaseID:       leaseID,
+			expiresAt:     expiresAt,
+			useOverlay:    useOverlay,
+		}, nil
 }
 
 func (r *leaseRegistry) issueReverseEndpoint(input reverseEndpointInput, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
@@ -792,14 +779,6 @@ func (r *leaseRegistry) deleteRecord(i int) {
 func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 	name := record.Name
 	hostname := record.Hostname
-	if record.stream != nil && record.HostnameHash != "" {
-		if publicHostname, err := utils.LeaseHostname(record.Name, r.rootHostname); err == nil && utils.HostnameHash(publicHostname) == record.HostnameHash {
-			hostname = publicHostname
-		}
-	} else if record.HostnameHash != "" && record.Hostname != "" {
-		label, _, _ := strings.Cut(record.Hostname, ".")
-		name = label
-	}
 	lease := types.Lease{
 		Name:        name,
 		ExpiresAt:   record.ExpiresAt,

@@ -11,7 +11,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // signLeaseRequest builds the /v1/sign-shaped request the token gate reads.
@@ -165,51 +164,6 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	}
 	if leaseID, ok := registry.verifySigningAccessTokenLease(signLeaseRequest(t, secondResponse.AccessToken)); !ok || leaseID == "" {
 		t.Fatalf("verifySigningAccessTokenLease() new access token = (%q, %v), want live lease", leaseID, ok)
-	}
-}
-
-func TestLeaseRegistryHostnameHashRouting(t *testing.T) {
-	t.Parallel()
-
-	registry := newTestRegistry(t, false, false)
-	publicHostname := "auto.example.com"
-	record, _, err := registry.Register(types.RegisterChallengeRequest{
-		Identity:     newTestLeaseIdentity(t, "auto"),
-		HostnameHash: utils.HostnameHash(publicHostname),
-	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
-	if err != nil {
-		t.Fatalf("Register() error = %v", err)
-	}
-	if record.Hostname != publicHostname {
-		t.Fatalf("Register() hostname = %q, want derived public hostname %q", record.Hostname, publicHostname)
-	}
-	if _, ok := registry.Lookup(publicHostname); !ok {
-		t.Fatal("Lookup(public hostname) = false, want hash-backed route")
-	}
-	leases := registry.PublicLeases(time.Now())
-	if len(leases) != 1 {
-		t.Fatalf("PublicLeases() length = %d, want 1", len(leases))
-	}
-	if leases[0].Hostname != publicHostname {
-		t.Fatalf("PublicLeases()[0].Hostname = %q, want %q", leases[0].Hostname, publicHostname)
-	}
-
-	policyLeases := registry.PolicyLeases(time.Now())
-	if len(policyLeases) != 1 {
-		t.Fatalf("PolicyLeases() length = %d, want 1", len(policyLeases))
-	}
-	if policyLeases[0].Hostname != publicHostname {
-		t.Fatalf("PolicyLeases()[0] hostname = %q, want %q", policyLeases[0].Hostname, publicHostname)
-	}
-
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
-		Identity:     newTestLeaseIdentity(t, "attacker"),
-		HostnameHash: utils.HostnameHash("victim.example.com"),
-	}, "203.0.113.10", "", types.RelayDescriptor{}, nil); err == nil {
-		t.Fatal("Register(mismatched hostname hash) error = nil, want error")
-	}
-	if lookedUp, ok := registry.Lookup("victim.example.com"); ok {
-		t.Fatalf("Lookup(victim hostname) = %v, true; mismatched hash must not route", lookedUp)
 	}
 }
 

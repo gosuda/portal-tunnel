@@ -591,10 +591,10 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 			// client hello exists at issue time, so the binding starts
 			// pending and is pinned to the relay's own ClientHello on
 			// first write (see helloFixingConn).
-			binding := s.registry.bindings.issue(record.id, nil)
+			binding := s.registry.bindings.Issue(record.id, nil)
 			upstream, err := record.stream.Claim(ctx, binding)
 			if err != nil {
-				s.registry.bindings.discard(binding)
+				s.registry.bindings.Discard(binding)
 				return nil, err
 			}
 			roots := x509.NewCertPool()
@@ -634,7 +634,7 @@ type helloFixingConn struct {
 	fix     func(firstWrite []byte) error
 }
 
-func newHelloFixingConn(conn net.Conn, bindings *bindingRegistry, binding [16]byte) *helloFixingConn {
+func newHelloFixingConn(conn net.Conn, bindings *keyless.BindingRegistry, binding [16]byte) *helloFixingConn {
 	return &helloFixingConn{
 		Conn: conn,
 		fix: func(firstWrite []byte) error {
@@ -642,7 +642,7 @@ func newHelloFixingConn(conn net.Conn, bindings *bindingRegistry, binding [16]by
 			if err != nil {
 				return fmt.Errorf("extract relay client hello: %w", err)
 			}
-			return bindings.fixHello(binding, span)
+			return bindings.FixHello(binding, span)
 		},
 	}
 }

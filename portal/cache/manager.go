@@ -11,7 +11,6 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // Manager owns both staging and published bytes. Registry operations only
@@ -98,8 +97,8 @@ func (c *Manager) retireLocked(site *cachedSite) {
 // Lease is an immutable observation supplied by the lease registry. Cache
 // policy and effective retention are owned only by Manager.
 type Lease struct {
-	ID, Owner, Hostname, HostnameHash string
-	ExpiresAt, LastSeenAt             time.Time
+	ID, Owner, Hostname   string
+	ExpiresAt, LastSeenAt time.Time
 }
 
 type leaseState struct {
@@ -119,10 +118,7 @@ func (l leaseState) cacheExpiry() time.Time {
 }
 
 func (l Lease) replaces(owner, host string) bool {
-	if l.Owner == owner || l.Hostname == host {
-		return true
-	}
-	return l.HostnameHash != "" && utils.HostnameHash(host) == l.HostnameHash
+	return l.Owner == owner || l.Hostname == host
 }
 
 func (c *Manager) Register(lease Lease, req types.RegisterChallengeRequest) {
@@ -146,7 +142,7 @@ func (c *Manager) Register(lease Lease, req types.RegisterChallengeRequest) {
 	if !req.Cache || req.UDPEnabled || req.TCPEnabled {
 		return
 	}
-	if lease.HostnameHash != "" || strings.Contains(lease.Hostname, "*") {
+	if strings.Contains(lease.Hostname, "*") {
 		return
 	}
 	ttl := c.cfg.MaxTTL

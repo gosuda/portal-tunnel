@@ -843,13 +843,13 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		return errLeaseRejected
 	}
 	claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-	binding := s.registry.bindings.issue(record.id, helloSpan)
+	binding := s.registry.bindings.Issue(record.id, helloSpan)
 	session, err := record.stream.Claim(claimCtx, binding)
 	cancel()
 	if err != nil {
 		// The binding will never be presented after a failed claim; drop
 		// it instead of leaving a live entry until the TTL sweep.
-		s.registry.bindings.discard(binding)
+		s.registry.bindings.Discard(binding)
 		return fmt.Errorf("claim lease stream: %w", err)
 	}
 	s.proxy.bridge(conn, session, record.Key(), s.registry.policy.BPSManager())
@@ -871,7 +871,7 @@ func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration)
 		case <-ticker.C:
 			now := time.Now()
 			records := s.registry.cleanupExpired(now)
-			s.registry.bindings.sweepExpired(now)
+			s.registry.bindings.SweepExpired(now)
 			for _, record := range records {
 				record.deleteDNS(ctx, s.acmeManager)
 			}
