@@ -620,13 +620,78 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	proxy.ServeHTTP(w, req.WithContext(ctx))
 }
 
+const (
+	cacheTLSRecordHeaderLen      = 5
+	cacheTLSHandshakeContentType = 22
+	cacheClientHelloType         = 1
+	maxCacheTLSRecordPayload     = 1 << 14
+	maxCacheClientHelloSize      = 128 << 10
+)
+
+type cacheClientHelloAccumulator struct {
+	pending  []byte
+	hello    []byte
+	expected int
+}
+
+func (a *cacheClientHelloAccumulator) clone() cacheClientHelloAccumulator {
+	clone := *a
+	clone.pending = append([]byte(nil), a.pending...)
+	clone.hello = append([]byte(nil), a.hello...)
+	return clone
+}
+
+func (a *cacheClientHelloAccumulator) add(p []byte) ([]byte, bool, error) {
+	a.pending = append(a.pending, p...)
+	for len(a.pending) >= cacheTLSRecordHeaderLen {
+		if a.pending[0] != cacheTLSHandshakeContentType {
+			return nil, false, errors.New("client hello contains a non-handshake TLS record")
+		}
+		recordLen := int(a.pending[3])<<8 | int(a.pending[4])
+		if recordLen == 0 || recordLen > maxCacheTLSRecordPayload {
+			return nil, false, errors.New("client hello TLS record has invalid length")
+		}
+		if len(a.pending) < cacheTLSRecordHeaderLen+recordLen {
+			return nil, false, nil
+		}
+		body := a.pending[cacheTLSRecordHeaderLen : cacheTLSRecordHeaderLen+recordLen]
+		a.pending = a.pending[cacheTLSRecordHeaderLen+recordLen:]
+		if a.expected == 0 && len(a.hello) < 4 {
+			need := min(4-len(a.hello), len(body))
+			a.hello = append(a.hello, body[:need]...)
+			body = body[need:]
+			if len(a.hello) == 4 {
+				if a.hello[0] != cacheClientHelloType {
+					return nil, false, errors.New("first TLS handshake message is not a client hello")
+				}
+				messageLen := int(a.hello[1])<<16 | int(a.hello[2])<<8 | int(a.hello[3])
+				a.expected = 4 + messageLen
+				if messageLen == 0 || a.expected > maxCacheClientHelloSize {
+					return nil, false, errors.New("client hello handshake has invalid length")
+				}
+			}
+		}
+		if a.expected > 0 {
+			need := min(a.expected-len(a.hello), len(body))
+			a.hello = append(a.hello, body[:need]...)
+			if len(a.hello) == a.expected {
+				return append([]byte(nil), a.hello...), true, nil
+			}
+		}
+	}
+	if len(a.pending) > maxCacheTLSRecordPayload+cacheTLSRecordHeaderLen {
+		return nil, false, errors.New("client hello TLS record exceeds limit")
+	}
+	return nil, false, nil
+}
+
 // helloFixingConn observes a cache-fallback ClientHello across TLS records
 // and Write calls. It fixes the binding before forwarding the write that
 // completes the handshake message.
 type helloFixingConn struct {
 	net.Conn
 	mu      sync.Mutex
-	capture clientHelloAccumulator
+	capture cacheClientHelloAccumulator
 	fixed   bool
 	fix     func(clientHello []byte) error
 }
