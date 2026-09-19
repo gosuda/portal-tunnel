@@ -509,6 +509,11 @@ export function ServerListView({
           </div>
         </div>
       )}
+    </>
+  );
+
+  const transportPolicyControls = (
+    <>
       {onUDPSettingsChange && udpSettings && (
         <>
           <div className="flex items-center gap-3">
@@ -754,6 +759,7 @@ export function ServerListView({
                 </div>
                 <div className="mt-4 hidden flex-wrap items-center gap-6 sm:flex">
                   {adminFilterControls}
+                  {transportPolicyControls}
                 </div>
                 {onApprovalModeChange && (
                   <div className="mt-4 flex items-center gap-3 sm:hidden">
@@ -943,9 +949,9 @@ export function ServerListView({
 
       {isAdmin && (
         <Dialog open={showFilterModal} onOpenChange={setShowFilterModal}>
-          <DialogContent className="sm:hidden max-w-sm rounded-sm">
+          <DialogContent className="sm:hidden max-w-sm max-h-[90dvh] overflow-y-auto rounded-sm">
             <DialogHeader>
-              <DialogTitle>Filters</DialogTitle>
+              <DialogTitle>Filters and policy</DialogTitle>
             </DialogHeader>
             <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-2">
@@ -987,6 +993,7 @@ export function ServerListView({
                   onRemove={onTagToggle}
                 />
               </div>
+              {transportPolicyControls}
             </div>
           </DialogContent>
         </Dialog>
