@@ -624,9 +624,8 @@ it to relay resources and observed rejection rates.
 
 Rejected requests return HTTP 429 and `Retry-After`. Update tunnels/SDKs to
 v2.4.3 alongside the relay: the SDK treats admission limits as temporary, honors
-retry guidance, and retains a valid signed registration challenge across retries. The
-`portal_preauth_rejected_total{endpoint,layer}` metric distinguishes `source`
-and `global` limits. Source buckets expire after 30 minutes idle, are collected
+retry guidance, and retains a valid signed registration challenge across retries.
+Source buckets expire after 30 minutes idle, are collected
 on subsequent traffic, and have a hard ceiling of 65,536 entries. Invalid
 signatures incur no additional penalty. IPv6 buckets use individual addresses.
 

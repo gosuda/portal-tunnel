@@ -11,11 +11,8 @@ type PreAuthConfig struct {
 	RegisterCost    int
 }
 
-// Pre-auth admission labels and metric names are stable monitoring contracts.
+// Pre-auth admission layer values identify which shared budget rejected a request.
 const (
-	PreAuthLayerSource        = "source"
-	PreAuthLayerGlobal        = "global"
-	PreAuthRejectedMetricName = "portal_preauth_rejected_total"
-	PreAuthEndpointLabel      = "endpoint"
-	PreAuthLayerLabel         = "layer"
+	PreAuthLayerSource = "source"
+	PreAuthLayerGlobal = "global"
 )

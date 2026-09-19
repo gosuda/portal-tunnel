@@ -23,7 +23,6 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
-	github.com/prometheus/client_model v0.6.2
 	github.com/quic-go/quic-go v0.59.0
 	github.com/rs/zerolog v1.34.0
 	github.com/tyler-smith/go-bip39 v1.1.0
@@ -108,6 +107,7 @@ require (
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect

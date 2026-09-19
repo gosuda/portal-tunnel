@@ -23,7 +23,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
-	"github.com/gosuda/portal-tunnel/v2/portal/telemetry"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -623,11 +622,10 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 // Admission runs before decoding or signature work. Verified lease operations
 // use identity policy and do not consume a shared NAT source budget.
 func (s *Server) admitPreAuth(w http.ResponseWriter, r *http.Request, clientIP string, cost int) bool {
-	retry, layer := s.preAuthLimiter.Allow(clientIP, cost)
+	retry, _ := s.preAuthLimiter.Allow(clientIP, cost)
 	if retry == 0 {
 		return true
 	}
-	telemetry.PreAuthRejectedTotal.WithLabelValues(strings.TrimSpace(r.URL.Path), layer).Inc()
 	w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retry.Seconds())))))
 	utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "pre-auth request budget exhausted")
 	return false
