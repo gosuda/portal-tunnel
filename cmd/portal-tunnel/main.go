@@ -282,7 +282,7 @@ func runExposeCommand(args []string) error {
 	}
 	if len(httpRoutes) > 0 {
 		defer exposure.Close()
-		handler, err := agent.ComposeHTTPRoutes(httpRoutes, types.X402Payment{
+		handler, err := agent.ComposeHTTPRoutes(httpRoutes, agent.X402Payment{
 			Testnet:          flags.x402Testnet,
 			Network:          flags.x402Network,
 			Asset:            flags.x402Asset,

@@ -297,10 +297,6 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 		if domain.Data.ReleaseVersion != types.ReleaseVersion {
 			t.Fatalf("DomainResponse.ReleaseVersion = %q, want %q", domain.Data.ReleaseVersion, types.ReleaseVersion)
 		}
-		if domain.Data.X402.Enabled {
-			t.Fatal("DomainResponse.X402.Enabled = true, want false with x402 unconfigured")
-		}
-
 		resp, err = client.Get(baseURL + types.PathDiscovery)
 		if err != nil {
 			t.Fatalf("GET %s: %v", types.PathDiscovery, err)

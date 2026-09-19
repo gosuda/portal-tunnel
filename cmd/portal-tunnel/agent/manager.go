@@ -128,7 +128,7 @@ func (m *manager) DisconnectRelay(id, relayURL string) error {
 	return tunnel.DisconnectRelay(relayURL)
 }
 
-func (m *manager) UpdateTunnel(id string, req types.AgentTunnelUpdateRequest) error {
+func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 	if req.Empty() {
 		return errors.New("tunnel update requires at least one field")
 	}
@@ -173,7 +173,7 @@ func (m *manager) UpdateTunnel(id string, req types.AgentTunnelUpdateRequest) er
 	return tunnel.UpdateSettings(updateMetadata, updateMaxActiveRelays)
 }
 
-func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
+func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -416,7 +416,7 @@ func (m *manager) ApplyConfig(cfg Config) error {
 	return nil
 }
 
-func (m *manager) Snapshot() types.AgentStatusResponse {
+func (m *manager) Snapshot() AgentStatusResponse {
 	m.mu.RLock()
 	configPath := m.cfg.sourcePath
 	tunnels := make([]*managedTunnel, 0, len(m.tunnels))
@@ -425,15 +425,15 @@ func (m *manager) Snapshot() types.AgentStatusResponse {
 	}
 	m.mu.RUnlock()
 
-	statuses := make([]types.AgentTunnelStatus, 0, len(tunnels))
+	statuses := make([]AgentTunnelStatus, 0, len(tunnels))
 	for _, tunnel := range tunnels {
 		statuses = append(statuses, tunnel.Snapshot())
 	}
-	slices.SortFunc(statuses, func(a, b types.AgentTunnelStatus) int {
+	slices.SortFunc(statuses, func(a, b AgentTunnelStatus) int {
 		return strings.Compare(a.ID, b.ID)
 	})
 
-	return types.AgentStatusResponse{
+	return AgentStatusResponse{
 		ConfigPath:  configPath,
 		ControlAddr: m.controlAddr,
 		Tunnels:     statuses,
@@ -448,7 +448,7 @@ type managedTunnel struct {
 	done      chan struct{}
 	exposure  *sdk.Exposure
 	lastError string
-	runtime   types.AgentTunnelStatus
+	runtime   AgentTunnelStatus
 }
 
 func newTunnel(cfg TunnelConfig) *managedTunnel {
@@ -553,7 +553,7 @@ func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays boo
 	return err
 }
 
-func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
+func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	t.mu.RLock()
 	cfg := t.cfg
 	lastError := t.lastError
@@ -585,7 +585,7 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 		discovery = *cfg.Discovery
 	}
 
-	status := types.AgentTunnelStatus{
+	status := AgentTunnelStatus{
 		ID:              cfg.ID,
 		Name:            cfg.Name,
 		State:           state,
@@ -603,9 +603,9 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 		X402Endpoints:   append([]string(nil), cfg.X402Endpoints...),
 	}
 	if len(cfg.HTTPRoutes) > 0 {
-		status.HTTPRoutes = make([]types.AgentHTTPRoute, 0, len(cfg.HTTPRoutes))
+		status.HTTPRoutes = make([]AgentHTTPRoute, 0, len(cfg.HTTPRoutes))
 		for _, route := range cfg.HTTPRoutes {
-			status.HTTPRoutes = append(status.HTTPRoutes, types.AgentHTTPRoute{
+			status.HTTPRoutes = append(status.HTTPRoutes, AgentHTTPRoute{
 				Prefix:   route.Prefix,
 				Upstream: route.Upstream,
 				Methods:  append([]string(nil), route.Methods...),
@@ -620,13 +620,13 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 		if strings.TrimSpace(runtime.TargetAddr) != "" {
 			status.TargetAddr = runtime.TargetAddr
 		}
-		status.Relays = append([]types.AgentRelayStatus(nil), runtime.Relays...)
+		status.Relays = append([]AgentRelayStatus(nil), runtime.Relays...)
 		return status
 	}
 	relays := agentRelayStatuses(exposure.Relays())
 	t.mu.Lock()
 	if t.exposure == exposure {
-		t.runtime.Relays = append([]types.AgentRelayStatus(nil), relays...)
+		t.runtime.Relays = append([]AgentRelayStatus(nil), relays...)
 	}
 	runtime = t.runtime
 	t.mu.Unlock()
@@ -636,10 +636,10 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 	return status
 }
 
-func agentRelayStatuses(relays []sdk.RelayStatus) []types.AgentRelayStatus {
-	statuses := make([]types.AgentRelayStatus, 0, len(relays))
+func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
+	statuses := make([]AgentRelayStatus, 0, len(relays))
 	for _, relay := range relays {
-		statuses = append(statuses, types.AgentRelayStatus{
+		statuses = append(statuses, AgentRelayStatus{
 			RelayURL:   relay.RelayURL,
 			PublicURL:  relay.PublicURL,
 			TCPAddr:    relay.TCPAddr,
@@ -721,7 +721,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	t.exposure = exposure
-	t.runtime = types.AgentTunnelStatus{
+	t.runtime = AgentTunnelStatus{
 		Address:         listenerIdentity.Address,
 		TargetAddr:      cfg.TargetAddr,
 		MaxActiveRelays: cfg.MaxActiveRelays,
@@ -744,7 +744,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 				Amount:   route.Amount,
 			})
 		}
-		handler, routeErr := ComposeHTTPRoutes(routes, types.X402Payment{
+		handler, routeErr := ComposeHTTPRoutes(routes, X402Payment{
 			Testnet:          cfg.X402Testnet,
 			Network:          cfg.X402Network,
 			Asset:            cfg.X402Asset,

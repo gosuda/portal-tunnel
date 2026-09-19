@@ -74,7 +74,7 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		req, ok := utils.DecodeJSONRequest[types.AgentTunnelRequest](w, r, controlRequestBodyLimit)
+		req, ok := utils.DecodeJSONRequest[AgentTunnelRequest](w, r, controlRequestBodyLimit)
 		if !ok {
 			return
 		}
@@ -99,7 +99,7 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			case http.MethodPatch:
-				req, ok := utils.DecodeJSONRequest[types.AgentTunnelUpdateRequest](w, r, controlRequestBodyLimit)
+				req, ok := utils.DecodeJSONRequest[AgentTunnelUpdateRequest](w, r, controlRequestBodyLimit)
 				if !ok {
 					return
 				}
@@ -125,7 +125,7 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			req, ok := utils.DecodeJSONRequest[types.AgentRelayRequest](w, r, controlRequestBodyLimit)
+			req, ok := utils.DecodeJSONRequest[AgentRelayRequest](w, r, controlRequestBodyLimit)
 			if !ok {
 				return
 			}
@@ -264,8 +264,8 @@ func writeAgentWalletAuthError(w http.ResponseWriter, err error) {
 	}
 }
 
-func Status(ctx context.Context, stateDir string) (types.AgentStatusResponse, error) {
-	var status types.AgentStatusResponse
+func Status(ctx context.Context, stateDir string) (AgentStatusResponse, error) {
+	var status AgentStatusResponse
 	err := controlRequest(ctx, stateDir, http.MethodGet, types.PathAgentStatus, nil, &status)
 	return status, err
 }
@@ -274,7 +274,7 @@ func Shutdown(ctx context.Context, stateDir string) error {
 	return controlRequest(ctx, stateDir, http.MethodPost, types.PathAgentShutdown, nil, nil)
 }
 
-func AddTunnel(ctx context.Context, stateDir string, req types.AgentTunnelRequest) error {
+func AddTunnel(ctx context.Context, stateDir string, req AgentTunnelRequest) error {
 	return controlRequest(ctx, stateDir, http.MethodPost, types.PathAgentTunnels, req, nil)
 }
 
@@ -285,15 +285,15 @@ func DeleteTunnel(ctx context.Context, stateDir, tunnelID string) error {
 
 func ConnectRelay(ctx context.Context, stateDir, tunnelID, relayURL string) error {
 	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/relays"
-	return controlRequest(ctx, stateDir, http.MethodPost, path, types.AgentRelayRequest{RelayURL: relayURL}, nil)
+	return controlRequest(ctx, stateDir, http.MethodPost, path, AgentRelayRequest{RelayURL: relayURL}, nil)
 }
 
 func DisconnectRelay(ctx context.Context, stateDir, tunnelID, relayURL string) error {
 	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/relays"
-	return controlRequest(ctx, stateDir, http.MethodDelete, path, types.AgentRelayRequest{RelayURL: relayURL}, nil)
+	return controlRequest(ctx, stateDir, http.MethodDelete, path, AgentRelayRequest{RelayURL: relayURL}, nil)
 }
 
-func UpdateTunnel(ctx context.Context, stateDir, tunnelID string, req types.AgentTunnelUpdateRequest) error {
+func UpdateTunnel(ctx context.Context, stateDir, tunnelID string, req AgentTunnelUpdateRequest) error {
 	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID)
 	return controlRequest(ctx, stateDir, http.MethodPatch, path, req, nil)
 }

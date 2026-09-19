@@ -163,11 +163,10 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
-	Cache           *StaticCacheLimits  `json:"cache,omitempty"`
-	ProtocolVersion string              `json:"protocol_version"`
-	ReleaseVersion  string              `json:"release_version"`
-	ENS             ENSStatus           `json:"ens"`
-	X402            X402FacilitatorInfo `json:"x402"`
+	Cache           *StaticCacheLimits `json:"cache,omitempty"`
+	ProtocolVersion string             `json:"protocol_version"`
+	ReleaseVersion  string             `json:"release_version"`
+	ENS             ENSStatus          `json:"ens"`
 }
 
 type ENSStatus struct {
