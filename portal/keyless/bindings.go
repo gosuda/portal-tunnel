@@ -8,8 +8,6 @@ import (
 	"net"
 	"sync"
 	"time"
-
-	ksigner "github.com/gosuda/keyless_tls/relay/signer"
 )
 
 // BindingRegistry owns Portal's connection-binding policy for keyless transcript signing.
@@ -70,10 +68,10 @@ func (b *BindingRegistry) FixHello(binding [16]byte, clientHello []byte) error {
 // ValidateAndConsume validates the lease and ClientHello and spends the binding.
 func (b *BindingRegistry) ValidateAndConsume(binding []byte, leaseID string, clientHello []byte) error {
 	if len(binding) != 16 {
-		return fmt.Errorf("%w: binding must be 16 bytes", ksigner.ErrPermissionDenied)
+		return errors.New("binding must be 16 bytes")
 	}
 	if len(clientHello) == 0 {
-		return fmt.Errorf("%w: client hello transcript is required", ksigner.ErrPermissionDenied)
+		return errors.New("client hello transcript is required")
 	}
 	helloHash := sha256.Sum256(clientHello)
 	var key [16]byte
@@ -82,16 +80,16 @@ func (b *BindingRegistry) ValidateAndConsume(binding []byte, leaseID string, cli
 	defer b.mu.Unlock()
 	entry, ok := b.entries[key]
 	if !ok || !time.Now().Before(entry.expiresAt) {
-		return fmt.Errorf("%w: binding is unknown or expired", ksigner.ErrPermissionDenied)
+		return errors.New("binding is unknown or expired")
 	}
 	if entry.leaseID != leaseID {
-		return fmt.Errorf("%w: binding does not belong to the signing lease", ksigner.ErrPermissionDenied)
+		return errors.New("binding does not belong to the signing lease")
 	}
 	if entry.helloHash == ([32]byte{}) {
-		return fmt.Errorf("%w: binding hello was never fixed", ksigner.ErrPermissionDenied)
+		return errors.New("binding hello was never fixed")
 	}
 	if entry.helloHash != helloHash {
-		return fmt.Errorf("%w: client hello does not match the routed connection", ksigner.ErrPermissionDenied)
+		return errors.New("client hello does not match the routed connection")
 	}
 	delete(b.entries, key)
 	return nil
@@ -205,11 +203,11 @@ func (c *helloFixingConn) Write(p []byte) (int, error) {
 	preview := c.capture.clone()
 	hello, complete, err := preview.add(p)
 	if err != nil {
-		return 0, fmt.Errorf("capture cache fallback client hello: %w", err)
+		return 0, fmt.Errorf("capture client hello for binding: %w", err)
 	}
 	if complete {
 		if err := c.bindings.FixHello(c.binding, hello); err != nil {
-			return 0, fmt.Errorf("fix cache fallback binding hello: %w", err)
+			return 0, fmt.Errorf("fix binding client hello: %w", err)
 		}
 		c.fixed = true
 		return c.Conn.Write(p)
@@ -218,7 +216,7 @@ func (c *helloFixingConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	if n > 0 {
 		if _, _, captureErr := c.capture.add(p[:n]); captureErr != nil {
-			return n, fmt.Errorf("capture cache fallback client hello: %w", captureErr)
+			return n, fmt.Errorf("capture client hello for binding: %w", captureErr)
 		}
 	}
 	return n, err

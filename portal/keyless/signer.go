@@ -52,7 +52,7 @@ func NewSigner(keyPEM []byte, bindings *BindingRegistry) (*Signer, error) {
 			TranscriptValidator: ksigner.TranscriptValidatorFunc(func(ctx context.Context, req *signrpc.TranscriptSignRequest) error {
 				leaseID, _ := ctx.Value(signLeaseIDContextKey{}).(string)
 				if leaseID == "" {
-					return fmt.Errorf("%w: signing request is not bound to a verified lease", ksigner.ErrPermissionDenied)
+					return errors.New("signing request is not bound to a verified lease")
 				}
 				return bindings.ValidateAndConsume(req.Binding, leaseID, req.ClientHello)
 			}),
