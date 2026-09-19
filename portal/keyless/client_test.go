@@ -94,9 +94,11 @@ func TestClientTerminateConnLoopback(t *testing.T) {
 			}
 			return store
 		}(),
-		// Test-only: this stand-in does not run the production binding
-		// validator; the binding's presence and value are asserted below.
-		AllowUnboundTranscriptSigning: true,
+		// Test-only: this stand-in's validator accepts every structurally
+		// valid request; the binding's presence and value are asserted below.
+		TranscriptValidator: ksigner.TranscriptValidatorFunc(func(context.Context, *signrpc.TranscriptSignRequest) error {
+			return nil
+		}),
 	}
 
 	type signObservation struct {
@@ -317,10 +319,12 @@ func TestClientTerminateConnExportsKeyingMaterial(t *testing.T) {
 			}
 			return store
 		}(),
-		// Test-only: this stand-in does not run the production binding
-		// validator; the binding validator contract is covered by the
+		// Test-only: this stand-in's validator accepts every structurally
+		// valid request; the binding validator contract is covered by the
 		// loopback termination test.
-		AllowUnboundTranscriptSigning: true,
+		TranscriptValidator: ksigner.TranscriptValidatorFunc(func(context.Context, *signrpc.TranscriptSignRequest) error {
+			return nil
+		}),
 	}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != signrpc.SignPath {
