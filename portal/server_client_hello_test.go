@@ -65,8 +65,9 @@ func TestCaptureClientHelloReassemblesFragmentedRecords(t *testing.T) {
 	if !bytes.Equal(gotHello, hello) {
 		t.Fatal("captureClientHello() did not return the exact reassembled handshake")
 	}
-	if host, err := clientHelloServerName(gotHello); err != nil || host != "fragmented.example.com" {
-		t.Fatalf("clientHelloServerName() = (%q, %v), want fragmented.example.com", host, err)
+	info, err := inspectCapturedClientHello(replay, gotHello)
+	if err != nil || info.ServerName != "fragmented.example.com" {
+		t.Fatalf("inspectCapturedClientHello() = (%q, %v), want fragmented.example.com", info.ServerName, err)
 	}
 	replayed := make([]byte, len(wire))
 	if _, err := io.ReadFull(replay, replayed); err != nil {
