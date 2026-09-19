@@ -713,13 +713,31 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 		switch {
 		case err == nil:
 			go func(conn net.Conn) {
-				clientHello, wrappedConn, err := l4.InspectClientHello(conn, defaultClientHelloWait)
+				// Capture the first TLS record before inspection: its
+				// ClientHello span is hashed into the binding so a /v1/sign
+				// transcript can only validate against the connection that
+				// was actually routed.
+				firstRecord, recordConn, err := captureFirstClientHelloRecord(conn, defaultClientHelloWait)
+				if err != nil {
+					_ = conn.Close()
+					return
+				}
+
+				clientHello, wrappedConn, err := l4.InspectClientHello(recordConn, defaultClientHelloWait)
 				if err != nil {
 					if wrappedConn != nil {
 						_ = wrappedConn.Close()
 					} else {
-						_ = conn.Close()
+						_ = recordConn.Close()
 					}
+					return
+				}
+				helloSpan, err := helloSpanFromFirstRecord(firstRecord)
+				if err != nil {
+					// Routing requires a single-record parseable
+					// ClientHello, so this is unreachable in practice;
+					// fail closed rather than issue an unpinned binding.
+					_ = wrappedConn.Close()
 					return
 				}
 
@@ -748,7 +766,7 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 					_ = wrappedConn.Close()
 					return
 				}
-				if err := s.bridgeLeaseConn(ctx, wrappedConn, record); err != nil {
+				if err := s.bridgeLeaseConn(ctx, wrappedConn, record, helloSpan); err != nil {
 					log.Warn().Err(err).Msg("bridge public ingress")
 					_ = wrappedConn.Close()
 					return
@@ -765,7 +783,56 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 	}
 }
 
-func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord) error {
+// captureFirstClientHelloRecord reads the leading TLS record from conn so the
+// ClientHello can be pinned into the connection binding before routing. The
+// returned connection replays the captured bytes before fresh reads, so
+// downstream SNI inspection parses the same record and the proxied stream
+// stays complete. Routing only succeeds when the ClientHello parses from
+// this single record, so the captured body always contains the complete
+// handshake message — exactly the span helloSpanFromFirstRecord cuts.
+func captureFirstClientHelloRecord(conn net.Conn, timeout time.Duration) ([]byte, net.Conn, error) {
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+
+	header := make([]byte, tlsRecordHeaderLen)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return nil, nil, fmt.Errorf("read TLS record header: %w", err)
+	}
+	if header[0] != tlsContentTypeHandshake {
+		return nil, nil, l4.ErrNotTLSRecord
+	}
+	recordLen := int(header[3])<<8 | int(header[4])
+	if recordLen == 0 {
+		return nil, nil, l4.ErrNotClientHello
+	}
+	body := make([]byte, recordLen)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return nil, nil, fmt.Errorf("read TLS record body: %w", err)
+	}
+
+	firstRecord := make([]byte, 0, len(header)+len(body))
+	firstRecord = append(firstRecord, header...)
+	firstRecord = append(firstRecord, body...)
+	return firstRecord, &replayedConn{Conn: conn, pending: firstRecord}, nil
+}
+
+// replayedConn replays already-read bytes before yielding fresh reads from
+// the wrapped connection; embedding covers the rest of net.Conn.
+type replayedConn struct {
+	net.Conn
+	pending []byte
+}
+
+func (c *replayedConn) Read(p []byte) (int, error) {
+	if len(c.pending) > 0 {
+		n := copy(p, c.pending)
+		c.pending = c.pending[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
+}
+
+func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord, helloSpan []byte) error {
 	if record.isExpired(time.Now()) {
 		return errLeaseNotFound
 	}
@@ -776,10 +843,13 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		return errLeaseRejected
 	}
 	claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-	binding := s.registry.bindings.issue(record.id)
+	binding := s.registry.bindings.issue(record.id, helloSpan)
 	session, err := record.stream.Claim(claimCtx, binding)
 	cancel()
 	if err != nil {
+		// The binding will never be presented after a failed claim; drop
+		// it instead of leaving a live entry until the TTL sweep.
+		s.registry.bindings.discard(binding)
 		return fmt.Errorf("claim lease stream: %w", err)
 	}
 	s.proxy.bridge(conn, session, record.Key(), s.registry.policy.BPSManager())

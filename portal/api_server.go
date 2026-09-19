@@ -587,8 +587,14 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			upstream, err := record.stream.Claim(ctx, s.registry.bindings.issue(record.id))
+			// The relay is the TLS client on this fallback: no routed
+			// client hello exists at issue time, so the binding starts
+			// pending and is pinned to the relay's own ClientHello on
+			// first write (see helloFixingConn).
+			binding := s.registry.bindings.issue(record.id, nil)
+			upstream, err := record.stream.Claim(ctx, binding)
 			if err != nil {
+				s.registry.bindings.discard(binding)
 				return nil, err
 			}
 			roots := x509.NewCertPool()
@@ -600,7 +606,7 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 				}
 				roots.AddCert(leaf)
 			}
-			conn := tls.Client(upstream, &tls.Config{ServerName: host, RootCAs: roots, MinVersion: tls.VersionTLS12})
+			conn := tls.Client(newHelloFixingConn(upstream, s.registry.bindings, binding), &tls.Config{ServerName: host, RootCAs: roots, MinVersion: tls.VersionTLS12})
 			if err := conn.HandshakeContext(ctx); err != nil {
 				_ = conn.Close()
 				return nil, fmt.Errorf("cache fallback TLS: %w", err)
@@ -612,6 +618,42 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "https", Host: host})
 	proxy.Transport = transport
 	proxy.ServeHTTP(w, req.WithContext(ctx))
+}
+
+// helloFixingConn pins a cache-fallback binding to the relay's own
+// ClientHello: the first write on such a connection is the handshake's
+// ClientHello record, and the fix lands synchronously before that write
+// proceeds, so the SDK can never receive the hello — or serve a /v1/sign
+// against it — while the binding is still pending. fix runs inline and must
+// not retain the slice. A failed fix leaves the binding permanently denied
+// while the cache data plane keeps working: the binding gates signing, not
+// proxying.
+type helloFixingConn struct {
+	net.Conn
+	fixOnce sync.Once
+	fix     func(firstWrite []byte) error
+}
+
+func newHelloFixingConn(conn net.Conn, bindings *bindingRegistry, binding [16]byte) *helloFixingConn {
+	return &helloFixingConn{
+		Conn: conn,
+		fix: func(firstWrite []byte) error {
+			span, err := helloSpanFromFirstRecord(firstWrite)
+			if err != nil {
+				return fmt.Errorf("extract relay client hello: %w", err)
+			}
+			return bindings.fixHello(binding, span)
+		},
+	}
+}
+
+func (c *helloFixingConn) Write(p []byte) (int, error) {
+	c.fixOnce.Do(func() {
+		if err := c.fix(p); err != nil {
+			log.Warn().Err(err).Msg("fix cache fallback binding hello")
+		}
+	})
+	return c.Conn.Write(p)
 }
 
 // Admission runs before decoding or signature work. Verified lease operations
