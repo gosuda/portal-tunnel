@@ -124,6 +124,7 @@ type listener struct {
 	warnOverlayDirect sync.Once
 	udpEnabled        bool
 	tcpEnabled        bool
+	banMITM           bool
 	cache             *cache.Source
 
 	stream        *transport.ClientStream
@@ -165,6 +166,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		statusUpdates: make(chan listenerStatus),
 		udpEnabled:    cfg.UDPEnabled,
 		tcpEnabled:    cfg.TCPEnabled,
+		banMITM:       cfg.BanMITM,
 		cache:         cfg.Cache,
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
@@ -1029,6 +1031,18 @@ func (l *listener) renewLease(ctx context.Context) error {
 	return nil
 }
 
+// ensureMITMProbeSupport rejects a registration whose relay cannot deliver
+// the requested MITM self-probe. The probe stays dormant without keying
+// material export (mitmManager.maybeStart), so honoring ban-mitm silently
+// would advertise protection that never runs; a terminal failure drops this
+// relay and lets the exposure fall back to one that can honor the option.
+func (l *listener) ensureMITMProbeSupport(exporterCapable bool) error {
+	if !l.banMITM || exporterCapable {
+		return nil
+	}
+	return fmt.Errorf("%w: mitm self-probe requested (--ban-mitm) but this relay's tenant tls stack does not export keying material; probe support is pending an upstream keyless_tls exporter; remove the ban-mitm option to expose without probe protection", errRelayIncompatible)
+}
+
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	rootHostname := utils.PortalRootHost(l.api.relayURL.String())
 	publicHostname, err := utils.LeaseHostname(l.identity.Name, rootHostname)
@@ -1073,7 +1087,13 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return err
 	}
-	l.mitmManager.setResponderCapable(tenantTLS.ExportsKeyingMaterial())
+	exporterCapable := tenantTLS.ExportsKeyingMaterial()
+	if err := l.ensureMITMProbeSupport(exporterCapable); err != nil {
+		_ = tenantTLS.Close()
+		_ = l.api.unregister(context.Background(), resp.AccessToken)
+		return err
+	}
+	l.mitmManager.setResponderCapable(exporterCapable)
 
 	if ctx.Err() != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)

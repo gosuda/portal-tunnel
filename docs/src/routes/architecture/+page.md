@@ -431,7 +431,7 @@ For uncached HTTPS tunnels, the relay signs handshake transcripts via `/v1/sign`
 - Raw public UDP exposure with an internal QUIC datagram backhaul
 - SNI-based routing with root-host fallback
 - End-to-end tenant TLS with relay-backed keyless signing
-- Traffic-triggered detect-only MITM self-probing for probable relay-side TLS termination
+- Traffic-triggered detect-only MITM self-probing for probable relay-side TLS termination (requires a tenant TLS stack that exports keying material; the keyless tenant TLS does not yet, so exposures with ban-mitm enabled fail at start)
 - SIWE identity proof for registration plus relay-issued ES256K JWT access tokens for the lease lifecycle
 - Lease-local stream and datagram ownership through per-lease transport runtimes
 - Optional QUIC/UDP datagram transport coexisting with TCP on the same lease

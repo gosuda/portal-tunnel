@@ -51,6 +51,8 @@ Relay API TLS is separate from tenant TLS:
 
 Matching exporter values mean the sampled connection preserved passthrough. A mismatch is treated as suspected relay-side TLS termination and logged by default; use `--ban-mitm` when suspected TLS termination should ban the relay.
 
+The probe needs a tenant TLS stack that exports TLS keying material on both sides. The current keyless TLS tenant terminator does not export keying material yet (upstream `keyless_tls` follow-up), so the probe stays dormant there, and exposures started with `--ban-mitm` (or `BAN_MITM`) fail at start with an explicit error instead of running unprotected. Remove the option to expose without probe protection.
+
 ## Relay Visibility
 
 For ordinary uncached tunnels:

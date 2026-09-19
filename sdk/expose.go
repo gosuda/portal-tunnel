@@ -144,7 +144,9 @@ func WithTCP() Option {
 	return func(opts *options) { opts.TCPEnabled = true }
 }
 
-// WithMITMProtection controls relay MITM self-probing.
+// WithMITMProtection controls relay MITM self-probing. The probe requires a
+// relay tenant TLS stack that exports keying material; exposures with this
+// option enabled fail at start against relays whose stack does not.
 func WithMITMProtection(enabled bool) Option {
 	return func(opts *options) { opts.BanMITM = enabled }
 }

@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"net"
 	"net/url"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -428,6 +429,56 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 	case <-listener.doneCh:
 		t.Fatal("listener.doneCh is closed, want open")
 	default:
+	}
+}
+
+// TestListenerBanMITMRequiresKeyingMaterialExporter pins the explicit
+// startup failure for probe protection a relay cannot deliver: with
+// ban-mitm requested, a tenant TLS stack without keying material export
+// fails registration terminally instead of silently skipping the probe,
+// while an exporting stack or an unset ban-mitm proceeds.
+func TestListenerBanMITMRequiresKeyingMaterialExporter(t *testing.T) {
+	relayURL, err := url.Parse("https://relay.example")
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+
+	for name, test := range map[string]struct {
+		banMITM         bool
+		exporterCapable bool
+		wantErr         bool
+	}{
+		"ban mitm without exporter": {banMITM: true, exporterCapable: false, wantErr: true},
+		"ban mitm with exporter":    {banMITM: true, exporterCapable: true},
+		"no ban mitm":               {exporterCapable: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			listener := &listener{
+				api:      &apiClient{relayURL: relayURL},
+				banMITM:  test.banMITM,
+				identity: types.Identity{Name: "probe-guard"},
+			}
+			listener.mitmManager = newMITMManager(context.Background(), listener, test.banMITM)
+
+			err := listener.ensureMITMProbeSupport(test.exporterCapable)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("ensureMITMProbeSupport() error = %v, wantErr %v", err, test.wantErr)
+			}
+			if !test.wantErr {
+				return
+			}
+			if !errors.Is(err, errRelayIncompatible) {
+				t.Fatalf("ensureMITMProbeSupport() error = %v, want errRelayIncompatible", err)
+			}
+			if !listener.closeForTerminalRelayError(err) {
+				t.Fatal("ban-mitm capability error was not treated as terminal")
+			}
+			for _, fragment := range []string{"--ban-mitm", "does not export keying material", "remove the ban-mitm option"} {
+				if !strings.Contains(err.Error(), fragment) {
+					t.Fatalf("error %q missing fragment %q", err, fragment)
+				}
+			}
+		})
 	}
 }
 
