@@ -620,40 +620,53 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	proxy.ServeHTTP(w, req.WithContext(ctx))
 }
 
-// helloFixingConn pins a cache-fallback binding to the relay's own
-// ClientHello: the first write on such a connection is the handshake's
-// ClientHello record, and the fix lands synchronously before that write
-// proceeds, so the SDK can never receive the hello — or serve a /v1/sign
-// against it — while the binding is still pending. fix runs inline and must
-// not retain the slice. A failed fix leaves the binding permanently denied
-// while the cache data plane keeps working: the binding gates signing, not
-// proxying.
+// helloFixingConn observes a cache-fallback ClientHello across TLS records
+// and Write calls. It fixes the binding before forwarding the write that
+// completes the handshake message.
 type helloFixingConn struct {
 	net.Conn
-	fixOnce sync.Once
-	fix     func(firstWrite []byte) error
+	mu      sync.Mutex
+	capture clientHelloAccumulator
+	fixed   bool
+	fix     func(clientHello []byte) error
 }
 
 func newHelloFixingConn(conn net.Conn, bindings *keyless.BindingRegistry, binding [16]byte) *helloFixingConn {
 	return &helloFixingConn{
 		Conn: conn,
-		fix: func(firstWrite []byte) error {
-			span, err := helloSpanFromFirstRecord(firstWrite)
-			if err != nil {
-				return fmt.Errorf("extract relay client hello: %w", err)
-			}
-			return bindings.FixHello(binding, span)
+		fix: func(clientHello []byte) error {
+			return bindings.FixHello(binding, clientHello)
 		},
 	}
 }
 
 func (c *helloFixingConn) Write(p []byte) (int, error) {
-	c.fixOnce.Do(func() {
-		if err := c.fix(p); err != nil {
-			log.Warn().Err(err).Msg("fix cache fallback binding hello")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fixed {
+		return c.Conn.Write(p)
+	}
+
+	preview := c.capture.clone()
+	hello, complete, err := preview.add(p)
+	if err != nil {
+		return 0, fmt.Errorf("capture cache fallback client hello: %w", err)
+	}
+	if complete {
+		if err := c.fix(hello); err != nil {
+			return 0, fmt.Errorf("fix cache fallback binding hello: %w", err)
 		}
-	})
-	return c.Conn.Write(p)
+		c.fixed = true
+		return c.Conn.Write(p)
+	}
+
+	n, err := c.Conn.Write(p)
+	if n > 0 {
+		if _, _, captureErr := c.capture.add(p[:n]); captureErr != nil {
+			return n, fmt.Errorf("capture cache fallback client hello: %w", captureErr)
+		}
+	}
+	return n, err
 }
 
 // Admission runs before decoding or signature work. Verified lease operations
