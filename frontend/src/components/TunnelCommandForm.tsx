@@ -32,7 +32,7 @@ type TunnelCommandFormProps = {
   className?: string;
   theme?: "light" | "terminal";
 } & (
-  | { mode: "hero"; leases: Lease[] }
+  | { mode: "hero"; leases: Lease[] | null }
   | { mode?: "full"; leases?: never }
 );
 
@@ -56,7 +56,7 @@ function HeroTunnelCommandForm({
   theme,
   leases,
 }: Required<Pick<TunnelCommandFormProps, "theme">> &
-  Pick<TunnelCommandFormProps, "className"> & { leases: Lease[] }) {
+  Pick<TunnelCommandFormProps, "className"> & { leases: Lease[] | null }) {
   const isTerminal = theme === "terminal";
   const {
     currentOrigin,
@@ -86,7 +86,7 @@ function HeroTunnelCommandForm({
     [currentOrigin, effectiveName, nameSeed, target]
   );
 
-  const lease = statusHostname === "" ? undefined : leases.find(
+  const lease = statusHostname === "" ? undefined : leases?.find(
     (candidate) => candidate.hostname.trim().toLowerCase() === statusHostname
   );
   const serviceStatus: ServiceStatus = !lease

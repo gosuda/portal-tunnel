@@ -12,6 +12,7 @@ import type { Lease, PublicStateResponse } from "@/types/api";
 type PublicState = {
   leases: Lease[];
   landingPageEnabled: boolean;
+  stale: boolean;
 };
 
 function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
@@ -47,6 +48,7 @@ export function useServerList() {
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
     landingPageEnabled: false,
+    stale: true,
   });
 
   useEffect(() => {
@@ -65,11 +67,12 @@ export function useServerList() {
         setPublicState({
           leases: Array.isArray(data?.leases) ? data.leases : [],
           landingPageEnabled: data?.landing_page_enabled ?? false,
+          stale: false,
         });
       } catch (error) {
         console.error("Failed to load public relay state", error);
         if (!cancelled) {
-          setPublicState((previous) => ({ ...previous, leases: [] }));
+          setPublicState((previous) => ({ ...previous, stale: true }));
         }
       } finally {
         if (!cancelled) {
@@ -98,7 +101,8 @@ export function useServerList() {
 
   return {
     ...list,
-    leases: publicState.leases,
+    // null means unavailable; an empty array is an authoritative empty snapshot.
+    leases: publicState.stale ? null : publicState.leases,
     landingPageEnabled: publicState.landingPageEnabled,
   };
 }
