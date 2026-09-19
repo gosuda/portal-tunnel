@@ -2,7 +2,6 @@ package portal
 
 import (
 	"cmp"
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -85,17 +84,17 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.Server, io.Closer, error) {
-	var keylessSignerHandler http.Handler
+	var keylessSigner *keyless.Signer
 	if len(s.apiKeyPEM) > 0 {
-		signer, err := keyless.NewSigner(s.apiKeyPEM, s.transcriptValidator())
+		signer, err := keyless.NewSigner(s.apiKeyPEM, s.registry.bindings)
 		if err != nil {
 			return nil, nil, fmt.Errorf("configure api signer: %w", err)
 		}
-		keylessSignerHandler = signer.Handler()
+		keylessSigner = signer
 	}
 
 	apiServer := &http.Server{
-		Handler:           s.apiHandler(handler, keylessSignerHandler),
+		Handler:           s.apiHandler(handler, keylessSigner),
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		TLSConfig:         apiTLS,
@@ -103,7 +102,7 @@ func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.S
 	return apiServer, nil, nil
 }
 
-func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler) http.Handler {
+func (s *Server) apiHandler(base http.Handler, keylessSigner *keyless.Signer) http.Handler {
 	// A nil *http.ServeMux reaches this handler as a typed-nil interface: it
 	// compares non-nil, then panics on the first ServeHTTP call. Normalize it
 	// so the root fallback below still covers Start(ctx, nil).
@@ -170,7 +169,7 @@ func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler
 			}
 			s.handleRelayDiscoveryAnnounce(w, r)
 		case types.PathV1Sign:
-			if keylessSignerHandler == nil {
+			if keylessSigner == nil {
 				http.NotFound(w, r)
 				return
 			}
@@ -179,7 +178,7 @@ func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler
 				writeAPIErrorResponse(w, errUnauthorized)
 				return
 			}
-			keylessSignerHandler.ServeHTTP(w, r.WithContext(withSignLeaseID(r.Context(), leaseID)))
+			keylessSigner.ServeHTTP(w, r, leaseID)
 		default:
 			base.ServeHTTP(w, r)
 		}

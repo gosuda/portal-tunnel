@@ -783,6 +783,12 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 	}
 }
 
+const (
+	tlsRecordHeaderLen          = 5
+	tlsContentTypeHandshake     = 22
+	tlsHandshakeTypeClientHello = 1
+)
+
 // captureFirstClientHelloRecord reads the leading TLS record from conn so the
 // ClientHello can be pinned into the connection binding before routing. The
 // returned connection replays the captured bytes before fresh reads, so
@@ -814,6 +820,25 @@ func captureFirstClientHelloRecord(conn net.Conn, timeout time.Duration) ([]byte
 	firstRecord = append(firstRecord, header...)
 	firstRecord = append(firstRecord, body...)
 	return firstRecord, &replayedConn{Conn: conn, pending: firstRecord}, nil
+}
+
+// helloSpanFromFirstRecord extracts the exact ClientHello handshake-message bytes.
+func helloSpanFromFirstRecord(record []byte) ([]byte, error) {
+	if len(record) < tlsRecordHeaderLen+4 {
+		return nil, errors.New("first TLS record is too short for a client hello")
+	}
+	if record[0] != tlsContentTypeHandshake {
+		return nil, errors.New("first TLS record is not a handshake record")
+	}
+	body := record[tlsRecordHeaderLen:]
+	if body[0] != tlsHandshakeTypeClientHello {
+		return nil, errors.New("first handshake message is not a client hello")
+	}
+	msgLen := int(body[1]&0x7f)<<16 | int(body[2])<<8 | int(body[3])
+	if msgLen <= 0 || 4+msgLen > len(body) {
+		return nil, errors.New("client hello handshake message is incomplete")
+	}
+	return body[:4+msgLen], nil
 }
 
 // replayedConn replays already-read bytes before yielding fresh reads from

@@ -1,6 +1,7 @@
 package keyless
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,13 +28,11 @@ type Signer struct {
 	service *ksigner.Service
 }
 
-// NewSigner builds the relay-side transcript signer bound to the relay API
-// TLS key. Portal requires a validator because keyless_tls intentionally
-// treats a nil validator as the generic mechanism and signs any structurally
-// valid transcript; Portal's lease/binding policy must therefore be explicit.
-func NewSigner(keyPEM []byte, validator ksigner.TranscriptValidator) (*Signer, error) {
-	if validator == nil {
-		return nil, errors.New("portal transcript validator is required")
+// NewSigner builds the relay-side transcript signer bound to Portal's
+// connection-binding policy.
+func NewSigner(keyPEM []byte, bindings *BindingRegistry) (*Signer, error) {
+	if bindings == nil {
+		return nil, errors.New("portal binding registry is required")
 	}
 
 	signingKey, err := ksigner.ParsePrivateKeyPEM(keyPEM)
@@ -48,53 +47,58 @@ func NewSigner(keyPEM []byte, validator ksigner.TranscriptValidator) (*Signer, e
 
 	return &Signer{
 		service: &ksigner.Service{
-			Store:               store,
-			AllowedSkew:         defaultAllowedSkew,
-			TranscriptValidator: validator,
+			Store:       store,
+			AllowedSkew: defaultAllowedSkew,
+			TranscriptValidator: ksigner.TranscriptValidatorFunc(func(ctx context.Context, req *signrpc.TranscriptSignRequest) error {
+				leaseID, _ := ctx.Value(signLeaseIDContextKey{}).(string)
+				if leaseID == "" {
+					return fmt.Errorf("%w: signing request is not bound to a verified lease", ksigner.ErrPermissionDenied)
+				}
+				return bindings.ValidateAndConsume(req.Binding, leaseID, req.ClientHello)
+			}),
 		},
 	}, nil
 }
 
-// Handler serves the transcript-bound sign endpoint. Requests and responses
-// use the signrpc wire types; failures map to status codes without leaking
-// validator internals.
-func (s *Signer) Handler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
-			writeJSONError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
-			return
-		}
+type signLeaseIDContextKey struct{}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxSignRequestBody)
-		defer r.Body.Close()
+// ServeHTTP serves one transcript-signing request for an authenticated lease.
+func (s *Signer) ServeHTTP(w http.ResponseWriter, r *http.Request, leaseID string) {
+	r = r.WithContext(context.WithValue(r.Context(), signLeaseIDContextKey{}, leaseID))
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
+		writeJSONError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+		return
+	}
 
-		var req signrpc.TranscriptSignRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid json body")
-			return
+	r.Body = http.MaxBytesReader(w, r.Body, maxSignRequestBody)
+	defer r.Body.Close()
+
+	var req signrpc.TranscriptSignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	resp, err := s.service.SignTranscript(r.Context(), &req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, ksigner.ErrInvalidArgument):
+			status = http.StatusBadRequest
+		case errors.Is(err, ksigner.ErrPermissionDenied):
+			status = http.StatusForbidden
 		}
+		writeJSONError(w, status, err.Error())
+		return
+	}
 
-		resp, err := s.service.SignTranscript(r.Context(), &req)
-		if err != nil {
-			status := http.StatusInternalServerError
-			switch {
-			case errors.Is(err, ksigner.ErrInvalidArgument):
-				status = http.StatusBadRequest
-			case errors.Is(err, ksigner.ErrPermissionDenied):
-				status = http.StatusForbidden
-			}
-			writeJSONError(w, status, err.Error())
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {

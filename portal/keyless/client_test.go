@@ -58,13 +58,13 @@ func TestClientClosePreservesFirstError(t *testing.T) {
 	}
 }
 
-func TestNewSignerRequiresTranscriptValidator(t *testing.T) {
+func TestNewSignerRequiresBindingRegistry(t *testing.T) {
 	t.Parallel()
 
 	if _, err := NewSigner(nil, nil); err == nil {
-		t.Fatal("NewSigner(nil validator) = nil error, want policy guard")
-	} else if err.Error() != "portal transcript validator is required" {
-		t.Fatalf("NewSigner(nil validator) error = %q, want transcript validator requirement", err)
+		t.Fatal("NewSigner(nil bindings) = nil error, want policy guard")
+	} else if err.Error() != "portal binding registry is required" {
+		t.Fatalf("NewSigner(nil bindings) error = %q, want binding registry requirement", err)
 	}
 }
 
