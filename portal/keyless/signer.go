@@ -28,10 +28,14 @@ type Signer struct {
 }
 
 // NewSigner builds the relay-side transcript signer bound to the relay API
-// TLS key. validator gates every signature on live relay-side state (the
-// per-connection lease binding); the service stays fail-closed by leaving
-// AllowUnboundTranscriptSigning unset.
+// TLS key. Portal requires a validator because keyless_tls intentionally
+// treats a nil validator as the generic mechanism and signs any structurally
+// valid transcript; Portal's lease/binding policy must therefore be explicit.
 func NewSigner(keyPEM []byte, validator ksigner.TranscriptValidator) (*Signer, error) {
+	if validator == nil {
+		return nil, errors.New("portal transcript validator is required")
+	}
+
 	signingKey, err := ksigner.ParsePrivateKeyPEM(keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("parse keyless signing key: %w", err)
