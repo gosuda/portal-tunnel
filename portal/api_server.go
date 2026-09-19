@@ -84,10 +84,10 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 	utils.InvalidRequestError(err).Write(w)
 }
 
-func (s *Server) newAPIServer(handler http.Handler, apiTLS keyless.TLSMaterialConfig) (*http.Server, io.Closer, error) {
+func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.Server, io.Closer, error) {
 	var keylessSignerHandler http.Handler
-	if len(apiTLS.KeyPEM) > 0 {
-		signer, err := keyless.NewSigner(apiTLS.KeyPEM)
+	if len(s.apiKeyPEM) > 0 {
+		signer, err := keyless.NewSigner(s.apiKeyPEM, s.transcriptValidator())
 		if err != nil {
 			return nil, nil, fmt.Errorf("configure api signer: %w", err)
 		}
@@ -98,14 +98,9 @@ func (s *Server) newAPIServer(handler http.Handler, apiTLS keyless.TLSMaterialCo
 		Handler:           s.apiHandler(handler, keylessSignerHandler),
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		TLSConfig:         apiTLS,
 	}
-
-	apiCloser, err := keyless.AttachToHTTPServer(apiServer, apiTLS)
-	if err != nil {
-		return nil, nil, fmt.Errorf("configure api tls: %w", err)
-	}
-
-	return apiServer, apiCloser, nil
+	return apiServer, nil, nil
 }
 
 func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler) http.Handler {
@@ -179,11 +174,12 @@ func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler
 				http.NotFound(w, r)
 				return
 			}
-			if err := s.registry.verifySigningAccessToken(r.Header.Get(types.HeaderAccessToken)); err != nil {
-				writeAPIErrorResponse(w, err)
+			leaseID, ok := s.registry.verifySigningAccessTokenLease(r)
+			if !ok {
+				writeAPIErrorResponse(w, errUnauthorized)
 				return
 			}
-			keylessSignerHandler.ServeHTTP(w, r)
+			keylessSignerHandler.ServeHTTP(w, r.WithContext(withSignLeaseID(r.Context(), leaseID)))
 		default:
 			base.ServeHTTP(w, r)
 		}
@@ -369,12 +365,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			removed = record
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-		removed.deleteDNS(cleanupCtx, s.acmeManager, false)
+		removed.deleteDNS(cleanupCtx, s.acmeManager)
 		cleanupCancel()
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	s.registry.promoteECHDNS(record, s.acmeManager, s.publicPort)
 
 	utils.WriteAPIData(w, http.StatusCreated, resp)
 }
@@ -467,7 +462,7 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-	record.deleteDNS(dnsCtx, s.acmeManager, true)
+	record.deleteDNS(dnsCtx, s.acmeManager)
 	cancel()
 
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
@@ -592,7 +587,7 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			upstream, err := record.stream.Claim(ctx)
+			upstream, err := record.stream.Claim(ctx, s.registry.bindings.issue(record.id))
 			if err != nil {
 				return nil, err
 			}

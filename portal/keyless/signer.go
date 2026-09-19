@@ -1,7 +1,6 @@
 package keyless
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,17 +12,26 @@ import (
 	"github.com/gosuda/keyless_tls/relay/signrpc"
 )
 
+// RelayKeyID is the store key of the relay API listener certificate key.
+// Tenant handshakes address it explicitly in every TranscriptSignRequest.
+const RelayKeyID = "relay-cert"
+
 const (
-	RelayKeyID         = "relay-cert"
-	defaultAllowedSkew = 5 * time.Minute
+	defaultAllowedSkew = 30 * time.Second
+	// maxSignRequestBody bounds /v1/sign JSON bodies. The transcript carries
+	// full certificate chains, so the budget is generous but finite.
+	maxSignRequestBody = 512 << 10
 )
 
 type Signer struct {
 	service *ksigner.Service
-	keyID   string
 }
 
-func NewSigner(keyPEM []byte) (*Signer, error) {
+// NewSigner builds the relay-side transcript signer bound to the relay API
+// TLS key. validator gates every signature on live relay-side state (the
+// per-connection lease binding); the service stays fail-closed by leaving
+// AllowUnboundTranscriptSigning unset.
+func NewSigner(keyPEM []byte, validator ksigner.TranscriptValidator) (*Signer, error) {
 	signingKey, err := ksigner.ParsePrivateKeyPEM(keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("parse keyless signing key: %w", err)
@@ -36,30 +44,18 @@ func NewSigner(keyPEM []byte) (*Signer, error) {
 
 	return &Signer{
 		service: &ksigner.Service{
-			Store:       store,
-			AllowedSkew: defaultAllowedSkew,
+			Store:               store,
+			AllowedSkew:         defaultAllowedSkew,
+			TranscriptValidator: validator,
 		},
-		keyID: RelayKeyID,
 	}, nil
 }
 
-func (s *Signer) KeyID() string {
-	if s == nil {
-		return ""
-	}
-	return s.keyID
-}
-
-func (s *Signer) Sign(ctx context.Context, req *signrpc.SignRequest) (*signrpc.SignResponse, error) {
-	if s == nil || s.service == nil {
-		return nil, errors.New("keyless signer is disabled")
-	}
-	return s.service.Sign(ctx, req)
-}
-
+// Handler serves the transcript-bound sign endpoint. Requests and responses
+// use the signrpc wire types; failures map to status codes without leaking
+// validator internals.
 func (s *Signer) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc(signrpc.SignPath, func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -70,16 +66,16 @@ func (s *Signer) Handler() http.Handler {
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+		r.Body = http.MaxBytesReader(w, r.Body, maxSignRequestBody)
 		defer r.Body.Close()
 
-		var req signrpc.SignRequest
+		var req signrpc.TranscriptSignRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
 
-		resp, err := s.Sign(r.Context(), &req)
+		resp, err := s.service.SignTranscript(r.Context(), &req)
 		if err != nil {
 			status := http.StatusInternalServerError
 			switch {
@@ -95,7 +91,6 @@ func (s *Signer) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	})
-	return mux
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {

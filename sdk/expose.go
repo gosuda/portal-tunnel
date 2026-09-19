@@ -116,7 +116,6 @@ type options struct {
 	Cache      *cache.SourceConfig
 	UDPEnabled bool
 	TCPEnabled bool
-	ECH        bool
 	BanMITM    bool
 	Overlay    bool
 	Metadata   types.LeaseMetadata
@@ -143,11 +142,6 @@ func WithUDP() Option {
 // WithTCP enables public raw TCP port allocation.
 func WithTCP() Option {
 	return func(opts *options) { opts.TCPEnabled = true }
-}
-
-// WithECH enables ECH hostname privacy for TLS stream tunnels.
-func WithECH() Option {
-	return func(opts *options) { opts.ECH = true }
 }
 
 // WithMITMProtection controls relay MITM self-probing.
@@ -208,8 +202,8 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	}
 	var source *cache.Source
 	if cfg.Cache != nil {
-		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.ECH || cfg.BanMITM {
-			return nil, errors.New("relay static cache cannot be combined with UDP, raw TCP, ECH, or MITM blocking")
+		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM {
+			return nil, errors.New("relay static cache cannot be combined with UDP, raw TCP, or MITM blocking")
 		}
 		var err error
 		source, err = cache.NewSource(*cfg.Cache)
@@ -1129,7 +1123,6 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			Overlay:    e.options.Overlay,
 			UDPEnabled: e.options.UDPEnabled,
 			TCPEnabled: e.options.TCPEnabled,
-			ECH:        e.options.ECH,
 			BanMITM:    e.options.BanMITM,
 			Metadata:   e.metadata.Copy(),
 		})

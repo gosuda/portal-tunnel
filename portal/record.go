@@ -9,25 +9,23 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 type leaseRecord struct {
 	types.Identity
-	id             string
-	ExpiresAt      time.Time
-	FirstSeenAt    time.Time
-	LastSeenAt     time.Time
-	ClientIP       string
-	ReportedIP     string
-	Hostname       string
-	HostnameHash   string
-	ECHConfigList  []byte
-	ECHDNSHostname string
-	Metadata       types.LeaseMetadata
-	Overlay        bool
+	id           string
+	ExpiresAt    time.Time
+	FirstSeenAt  time.Time
+	LastSeenAt   time.Time
+	ClientIP     string
+	ReportedIP   string
+	Hostname     string
+	HostnameHash string
+	Metadata     types.LeaseMetadata
+	Overlay      bool
 
 	registerChallenge *identity.RegisterChallenge
 
@@ -51,17 +49,10 @@ func (r *leaseRecord) ensGaslessDNSHostname() string {
 	if !r.isPublicEntry() {
 		return ""
 	}
-	if len(r.ECHConfigList) > 0 && r.ECHDNSHostname != "" {
-		return r.ECHDNSHostname
-	}
 	if r.HostnameHash == "" {
 		return r.Hostname
 	}
 	return ""
-}
-
-func (r *leaseRecord) hasECHDNSRecord() bool {
-	return r.isPublicEntry() && len(r.ECHConfigList) > 0 && r.ECHDNSHostname != ""
 }
 
 func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
@@ -74,10 +65,10 @@ func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
 	if r.HostnameHash != "" && other.HostnameHash != "" && r.HostnameHash == other.HostnameHash {
 		return true
 	}
-	if r.Hostname != "" && other.HostnameHash != "" && keyless.ECHHostnameHash(r.Hostname) == other.HostnameHash {
+	if r.Hostname != "" && other.HostnameHash != "" && utils.HostnameHash(r.Hostname) == other.HostnameHash {
 		return true
 	}
-	return other.Hostname != "" && r.HostnameHash != "" && keyless.ECHHostnameHash(other.Hostname) == r.HostnameHash
+	return other.Hostname != "" && r.HostnameHash != "" && utils.HostnameHash(other.Hostname) == r.HostnameHash
 }
 
 func (r *leaseRecord) isExpired(now time.Time) bool {
@@ -131,29 +122,7 @@ func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manag
 	return nil
 }
 
-func (r *leaseRecord) syncECHDNS(ctx context.Context, manager *acme.Manager, publicPort int) error {
-	if r == nil || manager == nil || !r.hasECHDNSRecord() {
-		return nil
-	}
-	return manager.SyncECHConfig(ctx, r.ECHDNSHostname, r.ECHConfigList, publicPort)
-}
-
-func (r *leaseRecord) deleteECHDNS(ctx context.Context, manager *acme.Manager) {
-	if r == nil || manager == nil || !r.hasECHDNSRecord() {
-		return
-	}
-	err := manager.DeleteECHConfig(ctx, r.ECHDNSHostname)
-	if err != nil {
-		log.Warn().
-			Err(err).
-			Str("hostname", r.ECHDNSHostname).
-			Str("route_hostname", r.Hostname).
-			Str("address", r.Address).
-			Msg("delete ech dns record")
-	}
-}
-
-func (r *leaseRecord) deleteDNS(ctx context.Context, manager *acme.Manager, includeECH bool) {
+func (r *leaseRecord) deleteDNS(ctx context.Context, manager *acme.Manager) {
 	if r == nil || manager == nil {
 		return
 	}
@@ -166,8 +135,5 @@ func (r *leaseRecord) deleteDNS(ctx context.Context, manager *acme.Manager, incl
 				Str("address", r.Address).
 				Msg("delete ens gasless hostname")
 		}
-	}
-	if includeECH {
-		r.deleteECHDNS(ctx, manager)
 	}
 }

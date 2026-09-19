@@ -1,9 +1,7 @@
 package portal
 
 import (
-	"bytes"
 	"cmp"
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -15,10 +13,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
@@ -48,6 +44,7 @@ type leaseRegistry struct {
 	udpPorts       *transport.PortAllocator
 	tcpPorts       *transport.PortAllocator
 	proxy          *proxy
+	bindings       *bindingRegistry
 	mu             sync.RWMutex
 }
 
@@ -79,6 +76,7 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		proxy:          &proxy{},
+		bindings:       newBindingRegistry(defaultBindingTTL),
 	}, nil
 }
 
@@ -120,7 +118,7 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 			return record, true
 		}
 	}
-	hostHash := keyless.ECHHostnameHash(host)
+	hostHash := utils.HostnameHash(host)
 	for _, record := range r.records {
 		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
 			continue
@@ -178,7 +176,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
 	}
 	leaseIdentity := req.Identity
-	var err error
 
 	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
@@ -186,21 +183,13 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 
 	identityKey := leaseIdentity.Key()
-	routeHostname := utils.NormalizeHostname(req.RouteHostname)
-	publicHostname := ""
-	if routeHostname != "" {
-		publicHostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
-		if err != nil {
-			return nil, types.RegisterResponse{}, err
-		}
-	}
-	hostnameHash, echConfigList, err := keyless.NormalizeECHRegistration(routeHostname, strings.TrimSpace(req.HostnameHash), bytes.Clone(req.ECHConfigList), publicHostname, r.rootHostname)
+	publicHostname, err := utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
 	}
-	echDNSHostname := ""
-	if len(echConfigList) > 0 {
-		echDNSHostname = publicHostname
+	hostnameHash := strings.TrimSpace(req.HostnameHash)
+	if hostnameHash != "" && hostnameHash != utils.HostnameHash(publicHostname) {
+		return nil, types.RegisterResponse{}, errors.New("hostname hash does not match public hostname")
 	}
 	if req.UDPEnabled && !r.policy.IsUDPEnabled() {
 		return nil, types.RegisterResponse{}, errUDPDisabled
@@ -214,14 +203,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		}
 	}
 
-	hostname := routeHostname
-	if hostname == "" {
-		hostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
-		if err != nil {
-			return nil, types.RegisterResponse{}, err
-		}
-	}
-
 	leaseID := utils.RandomID("lease_")
 	accessToken, claims, err := identity.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, ttl)
 	if err != nil {
@@ -232,20 +213,18 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 
 	stream := transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit)
 	record := &leaseRecord{
-		Identity:       leaseIdentity,
-		id:             leaseID,
-		Hostname:       hostname,
-		HostnameHash:   hostnameHash,
-		ECHConfigList:  echConfigList,
-		ECHDNSHostname: echDNSHostname,
-		Metadata:       req.Metadata.Copy(),
-		Overlay:        req.Overlay,
-		ExpiresAt:      expiresAt,
-		FirstSeenAt:    issuedAt,
-		LastSeenAt:     issuedAt,
-		ClientIP:       clientIP,
-		ReportedIP:     utils.SanitizeReportedIP(reportedIP),
-		stream:         stream,
+		Identity:     leaseIdentity,
+		id:           leaseID,
+		Hostname:     publicHostname,
+		HostnameHash: hostnameHash,
+		Metadata:     req.Metadata.Copy(),
+		Overlay:      req.Overlay,
+		ExpiresAt:    expiresAt,
+		FirstSeenAt:  issuedAt,
+		LastSeenAt:   issuedAt,
+		ClientIP:     clientIP,
+		ReportedIP:   utils.SanitizeReportedIP(reportedIP),
+		stream:       stream,
 	}
 
 	if req.UDPEnabled {
@@ -343,7 +322,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			i--
 		}
 	}
-	req.RouteHostname = routeHostname
 	r.cache.Register(record.cacheLease(), req)
 	if replacedIndex >= 0 {
 		r.policy.ForgetIdentity(identityKey)
@@ -603,67 +581,9 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 	return nil, errLeaseNotFound
 }
 
-func (r *leaseRegistry) promoteECHDNS(record *leaseRecord, manager *acme.Manager, publicPort int) {
-	if !record.hasECHDNSRecord() {
-		return
-	}
-
-	go func() {
-		active := false
-		now := time.Now()
-		r.mu.RLock()
-		for _, existing := range r.records {
-			if existing == record && !existing.isExpired(now) {
-				active = true
-				break
-			}
-		}
-		r.mu.RUnlock()
-		if !active {
-			return
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
-		err := record.syncECHDNS(ctx, manager, publicPort)
-		cancel()
-
-		if err != nil {
-			log.Warn().
-				Err(err).
-				Str("hostname", record.ECHDNSHostname).
-				Str("route_hostname", record.Hostname).
-				Str("address", record.Address).
-				Msg("promote ech dns record")
-		}
-
-		hostnameActive := false
-		now = time.Now()
-		r.mu.RLock()
-		for _, existing := range r.records {
-			if existing != nil && !existing.isExpired(now) && existing.hasECHDNSRecord() && existing.ECHDNSHostname == record.ECHDNSHostname {
-				hostnameActive = true
-				break
-			}
-		}
-		r.mu.RUnlock()
-		if !hostnameActive {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
-			record.deleteECHDNS(cleanupCtx, manager)
-			cleanupCancel()
-		}
-	}()
-}
-
 func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeRequest, domain, uri, clientIP string) (types.RegisterChallengeResponse, error) {
 	if r == nil {
 		return types.RegisterChallengeResponse{}, errFeatureUnavailable
-	}
-	if len(req.ECHConfigList) > 0 {
-		echConfigList, err := keyless.NormalizeEncryptedClientHelloConfigList(req.ECHConfigList)
-		if err != nil {
-			return types.RegisterChallengeResponse{}, err
-		}
-		req.ECHConfigList = echConfigList
 	}
 
 	now := time.Now().UTC()
@@ -736,11 +656,14 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 	return nil, identity.ErrRegisterChallengeNotFound
 }
 
-func (r *leaseRegistry) verifySigningAccessToken(token string) error {
+// verifySigningAccessTokenLease authenticates the access-token header of a
+// /v1/sign request and returns the live, routable lease it belongs to. The
+// returned leaseID is the only identity a transcript signature may bind to.
+func (r *leaseRegistry) verifySigningAccessTokenLease(req *http.Request) (string, bool) {
 	now := time.Now().UTC()
-	claims, err := identity.VerifyLeaseAccessToken(token, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
+	claims, err := identity.VerifyLeaseAccessToken(req.Header.Get(types.HeaderAccessToken), r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
 	if err != nil {
-		return errUnauthorized
+		return "", false
 	}
 
 	r.mu.RLock()
@@ -748,15 +671,15 @@ func (r *leaseRegistry) verifySigningAccessToken(token string) error {
 
 	record, err := r.recordForVerifiedLease(claims.Identity.Key(), claims.LeaseID, now)
 	if err != nil {
-		return err
+		return "", false
 	}
 	if !record.isPublicEntry() {
-		return errUnauthorized
+		return "", false
 	}
 	if !r.policy.IsIdentityRoutable(record.Key()) {
-		return errLeaseRejected
+		return "", false
 	}
-	return nil
+	return claims.LeaseID, true
 }
 
 func (r *leaseRegistry) Touch(key, clientIP string, now time.Time) {
@@ -870,7 +793,7 @@ func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 	name := record.Name
 	hostname := record.Hostname
 	if record.stream != nil && record.HostnameHash != "" {
-		if publicHostname, err := utils.LeaseHostname(record.Name, r.rootHostname); err == nil && keyless.ECHHostnameHash(publicHostname) == record.HostnameHash {
+		if publicHostname, err := utils.LeaseHostname(record.Name, r.rootHostname); err == nil && utils.HostnameHash(publicHostname) == record.HostnameHash {
 			hostname = publicHostname
 		}
 	} else if record.HostnameHash != "" && record.Hostname != "" {

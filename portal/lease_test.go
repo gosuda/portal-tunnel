@@ -3,15 +3,27 @@ package portal
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
+
+// signLeaseRequest builds the /v1/sign-shaped request the token gate reads.
+func signLeaseRequest(t *testing.T, token string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, "https://example.com"+types.PathV1Sign, nil)
+	if err != nil {
+		t.Fatalf("build sign request: %v", err)
+	}
+	req.Header.Set(types.HeaderAccessToken, token)
+	return req
+}
 
 func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegistry {
 	t.Helper()
@@ -133,8 +145,8 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	if _, err := registry.resolveReverseEndpoint(types.ReverseEndpointRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token reverse refresh error = %v, want unauthorized", err)
 	}
-	if err := registry.verifySigningAccessToken(firstResponse.AccessToken); !errors.Is(err, errUnauthorized) {
-		t.Fatalf("old access token signing error = %v, want unauthorized", err)
+	if _, ok := registry.verifySigningAccessTokenLease(signLeaseRequest(t, firstResponse.AccessToken)); ok {
+		t.Fatal("verifySigningAccessTokenLease() old access token = true, want false")
 	}
 	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: firstResponse.AccessToken}); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old access token unregister error = %v, want unauthorized", err)
@@ -151,36 +163,28 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	if _, err := registry.admitLeaseByToken(secondResponse.AccessToken, false); err != nil {
 		t.Fatalf("new access token admission error = %v, want admitted", err)
 	}
-	if err := registry.verifySigningAccessToken(secondResponse.AccessToken); err != nil {
-		t.Fatalf("new access token signing error = %v", err)
+	if leaseID, ok := registry.verifySigningAccessTokenLease(signLeaseRequest(t, secondResponse.AccessToken)); !ok || leaseID == "" {
+		t.Fatalf("verifySigningAccessTokenLease() new access token = (%q, %v), want live lease", leaseID, ok)
 	}
 }
 
-func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
+func TestLeaseRegistryHostnameHashRouting(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
-	routeHostname := "ech-auto-ech.example.com"
-	publicHostname := "auto-ech.example.com"
+	publicHostname := "auto.example.com"
 	record, _, err := registry.Register(types.RegisterChallengeRequest{
-		Identity:      newTestLeaseIdentity(t, "auto-ech"),
-		RouteHostname: routeHostname,
-		HostnameHash:  keyless.ECHHostnameHash(publicHostname),
+		Identity:     newTestLeaseIdentity(t, "auto"),
+		HostnameHash: utils.HostnameHash(publicHostname),
 	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	if record.Hostname != routeHostname {
-		t.Fatalf("Register() route hostname = %q, want %q", record.Hostname, routeHostname)
-	}
-	if record.Hostname == publicHostname {
-		t.Fatalf("Register() route hostname = public hostname = %q", record.Hostname)
+	if record.Hostname != publicHostname {
+		t.Fatalf("Register() hostname = %q, want derived public hostname %q", record.Hostname, publicHostname)
 	}
 	if _, ok := registry.Lookup(publicHostname); !ok {
-		t.Fatal("Lookup(public hostname) = false, want ECH fallback route")
-	}
-	if _, ok := registry.Lookup(record.Hostname); !ok {
-		t.Fatal("Lookup(route hostname) = false, want registered route")
+		t.Fatal("Lookup(public hostname) = false, want hash-backed route")
 	}
 	leases := registry.PublicLeases(time.Now())
 	if len(leases) != 1 {
@@ -199,9 +203,8 @@ func TestLeaseRegistryAutomaticECHRouteFallsBackToPlainSNI(t *testing.T) {
 	}
 
 	if _, _, err := registry.Register(types.RegisterChallengeRequest{
-		Identity:      newTestLeaseIdentity(t, "attacker"),
-		RouteHostname: "ech-attacker.example.com",
-		HostnameHash:  keyless.ECHHostnameHash("victim.example.com"),
+		Identity:     newTestLeaseIdentity(t, "attacker"),
+		HostnameHash: utils.HostnameHash("victim.example.com"),
 	}, "203.0.113.10", "", types.RelayDescriptor{}, nil); err == nil {
 		t.Fatal("Register(mismatched hostname hash) error = nil, want error")
 	}
@@ -366,8 +369,8 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	if _, err := restarted.resolveReverseEndpoint(types.ReverseEndpointRequest{AccessToken: resp.AccessToken}); !errors.Is(err, errLeaseNotFound) {
 		t.Fatalf("RefreshReverseEndpoint() after restart = %v, want lease not found", err)
 	}
-	if err := restarted.verifySigningAccessToken(resp.AccessToken); !errors.Is(err, errLeaseNotFound) {
-		t.Fatalf("verifySigningAccessToken() after restart = %v, want lease not found", err)
+	if _, ok := restarted.verifySigningAccessTokenLease(signLeaseRequest(t, resp.AccessToken)); ok {
+		t.Fatal("verifySigningAccessTokenLease() after restart = true, want false for missing lease")
 	}
 
 	if _, err := restarted.admitReverseCapability("forged"); !errors.Is(err, errUnauthorized) {

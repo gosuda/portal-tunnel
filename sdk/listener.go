@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -43,7 +42,6 @@ type listenerConfig struct {
 	Overlay    bool
 	UDPEnabled bool
 	TCPEnabled bool
-	ECH        bool
 	BanMITM    bool
 	Metadata   types.LeaseMetadata
 }
@@ -126,7 +124,6 @@ type listener struct {
 	warnOverlayDirect sync.Once
 	udpEnabled        bool
 	tcpEnabled        bool
-	echEnabled        bool
 	cache             *cache.Source
 
 	stream        *transport.ClientStream
@@ -168,7 +165,6 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		statusUpdates: make(chan listenerStatus),
 		udpEnabled:    cfg.UDPEnabled,
 		tcpEnabled:    cfg.TCPEnabled,
-		echEnabled:    cfg.ECH,
 		cache:         cfg.Cache,
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
@@ -377,19 +373,17 @@ func (l *listener) Close() error {
 }
 
 type listenerSnapshot struct {
-	hostname      string
-	echConfigList []byte
-	udpAddr       string
-	tcpAddr       string
-	accessToken   string
-	reverse       types.ReverseEndpoint
-	expiresAt     time.Time
-	publicPort    int
-	tenantTLS     *keyless.Client
+	hostname    string
+	udpAddr     string
+	tcpAddr     string
+	accessToken string
+	reverse     types.ReverseEndpoint
+	expiresAt   time.Time
+	publicPort  int
+	tenantTLS   *keyless.Client
 }
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
-	s.echConfigList = bytes.Clone(s.echConfigList)
 	return s
 }
 
@@ -553,7 +547,7 @@ func (l *listener) runLease(ctx context.Context) error {
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS.TLSConfig(), sessionSlot); err != nil {
+				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS.TerminateConn, sessionSlot); err != nil {
 					select {
 					case errCh <- err:
 					case <-leaseCtx.Done():
@@ -597,7 +591,7 @@ func (l *listener) runLease(ctx context.Context) error {
 	}
 }
 
-func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Config, sessionSlot int) error {
+func (l *listener) runReverseSessionLoop(ctx context.Context, activate transport.TLSActivationFunc, sessionSlot int) error {
 	if l.stream == nil {
 		return nil
 	}
@@ -635,7 +629,7 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 		l.reportStreamReady()
 		claimed, err := func() (bool, error) {
 			defer l.reportStreamClosed()
-			return l.stream.RunSession(ctx, conn, tlsConfig)
+			return l.stream.RunSession(ctx, conn, activate)
 		}()
 		switch {
 		case err == nil:
@@ -1041,13 +1035,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var materials keyless.ECHMaterials
-	if l.echEnabled {
-		materials, err = keyless.TenantECHMaterials(l.identity, publicHostname, rootHostname)
-		if err != nil {
-			return err
-		}
-	}
 	registerReq := types.RegisterChallengeRequest{
 		Identity:   l.identity,
 		Metadata:   l.metadataSnapshot(),
@@ -1057,11 +1044,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		TCPEnabled: l.tcpEnabled,
 	}
 	l.cache.ConfigureRegistration(&registerReq)
-	if l.echEnabled {
-		registerReq.RouteHostname = materials.RouteHostname
-		registerReq.HostnameHash = materials.HostnameHash
-		registerReq.ECHConfigList = bytes.Clone(materials.ConfigList)
-	}
 	resp, err := l.api.register(ctx, registerReq, utils.ResolvePublicIP(ctx))
 	if err != nil {
 		return err
@@ -1085,13 +1067,13 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
 		RelayURL:    l.api.relayURL.String(),
 		Hostname:    publicHostname,
-		ECH:         materials,
 		AccessToken: resp.AccessToken,
 	})
 	if err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return err
 	}
+	l.mitmManager.setResponderCapable(tenantTLS.ExportsKeyingMaterial())
 
 	if ctx.Err() != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
@@ -1099,15 +1081,14 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return ctx.Err()
 	}
 	next := listenerSnapshot{
-		hostname:      publicHostname,
-		echConfigList: materials.ConfigList,
-		udpAddr:       resp.UDPAddr,
-		tcpAddr:       resp.TCPAddr,
-		accessToken:   resp.AccessToken,
-		reverse:       resp.ReverseEndpoint,
-		expiresAt:     resp.ExpiresAt,
-		publicPort:    resp.SNIPort,
-		tenantTLS:     tenantTLS,
+		hostname:    publicHostname,
+		udpAddr:     resp.UDPAddr,
+		tcpAddr:     resp.TCPAddr,
+		accessToken: resp.AccessToken,
+		reverse:     resp.ReverseEndpoint,
+		expiresAt:   resp.ExpiresAt,
+		publicPort:  resp.SNIPort,
+		tenantTLS:   tenantTLS,
 	}
 	oldLease := l.lease.Swap(next)
 	if oldLease.tenantTLS != nil {
@@ -1127,13 +1108,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	}
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")
-	}
-	if len(materials.ConfigList) > 0 {
-		log.Debug().
-			Str("address", l.identity.Address).
-			Str("route_hostname", materials.RouteHostname).
-			Str("ech_config_list_base64", base64.StdEncoding.EncodeToString(materials.ConfigList)).
-			Msg("tenant ech config ready")
 	}
 	return nil
 }

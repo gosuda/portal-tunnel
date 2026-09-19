@@ -17,7 +17,7 @@ portal expose --serve ./dist --cache --cache-ttl 24h \
 
 `--cache` explicitly trusts the selected relay with the static files and browser
 TLS termination. Cached responses are not end-to-end encrypted to your client.
-It requires `--serve` and cannot be combined with `--ech` or `--ban-mitm`.
+It requires `--serve` and cannot be combined with `--ban-mitm`.
 Without it, exposures remain uncached. With discovery enabled, every selected
 relay may receive the site; use the example above to restrict that trust.
 
@@ -177,7 +177,6 @@ Common `portal expose` flags:
 --max-active-relays  Maximum auto-selected relays; explicit relays are always included
 --overlay            Prefer IVNP overlay transport; direct reverse transport stays default and fallback
 --ban-mitm           Ban relay when the MITM self-probe detects termination
---ech                Enable ECH hostname privacy for TLS stream tunnels (disabled by default)
 --identity-path      Identity JSON file path; created automatically when missing
 --identity-json      Identity JSON payload kept in memory; takes precedence over --identity-path
 --description        Service description metadata

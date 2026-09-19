@@ -22,7 +22,6 @@ import (
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -52,7 +51,7 @@ type Config struct {
 //
 // A answers for the apex and every covered name are synthesized from the
 // relay public IPv4, so they can never go stale. TXT records (ACME DNS-01
-// and ENS gasless) and HTTPS records (ECH) are stored explicitly.
+// and ENS gasless) are stored explicitly.
 type Provider struct {
 	baseDomain string
 	zone       string
@@ -62,7 +61,6 @@ type Provider struct {
 	mu     sync.RWMutex
 	ipv4   net.IP
 	txt    map[string][]string
-	https  map[string]httpsRecordValue
 	serial uint32
 	key    *dns.DNSKEY
 	signer crypto.Signer
@@ -73,11 +71,6 @@ type Provider struct {
 	ready     chan struct{}
 	stopOnce  sync.Once
 	stopErr   error
-}
-
-type httpsRecordValue struct {
-	priority uint16
-	value    []dns.SVCBKeyValue
 }
 
 // New binds the UDP and TCP listeners and starts serving the zone. Binding
@@ -102,7 +95,6 @@ func New(cfg Config) (*Provider, error) {
 		zone:       dns.Fqdn(baseDomain),
 		nsName:     dns.Fqdn("ns." + baseDomain),
 		txt:        make(map[string][]string),
-		https:      make(map[string]httpsRecordValue),
 		ready:      make(chan struct{}),
 	}
 
@@ -313,48 +305,6 @@ func (p *Provider) DeleteTXTRecords(_ context.Context, name, matchPrefix string)
 		p.txt[fqdn] = remaining
 	}
 	p.bumpSerialLocked()
-	return nil
-}
-
-func (p *Provider) EnsureHTTPSRecord(_ context.Context, name string, record dnsrecord.HTTPSRecord) error {
-	if p == nil {
-		return errors.New("embedded dns provider is nil")
-	}
-	fqdn, err := p.zoneHostname(name)
-	if err != nil {
-		return err
-	}
-	record, err = record.Normalized()
-	if err != nil {
-		return err
-	}
-	value, err := parseSvcParams(record.SvcParams)
-	if err != nil {
-		return err
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.https[fqdn] = httpsRecordValue{priority: record.Priority, value: value}
-	p.bumpSerialLocked()
-	return nil
-}
-
-func (p *Provider) DeleteHTTPSRecord(_ context.Context, name string) error {
-	if p == nil {
-		return errors.New("embedded dns provider is nil")
-	}
-	fqdn, err := p.zoneHostname(name)
-	if err != nil {
-		return err
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if _, ok := p.https[fqdn]; ok {
-		delete(p.https, fqdn)
-		p.bumpSerialLocked()
-	}
 	return nil
 }
 

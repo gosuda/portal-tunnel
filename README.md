@@ -33,9 +33,8 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
   static content to bounded relay disk storage, with optional offline TTL.
   This explicitly trusts selected relays with the files and browser TLS
   termination. See [cache usage and trust](cmd/portal-tunnel/README.md#static-content-offload).
-- **End-to-End Tenant TLS And ECH** - For ordinary uncached exposures, Portal
-  terminates tenant TLS at the user's endpoint instead of the relay. Portal also
-  provides ECH to avoid exposing the real hostname in plaintext SNI.
+- **End-to-End Tenant TLS** - For ordinary uncached exposures, Portal
+  terminates tenant TLS at the user's endpoint instead of the relay.
 
 - **Built-in MITM Detection** - Portal actively self-probes its own connection
   after real traffic begins. It compares TLS keying material exported on both
@@ -59,7 +58,6 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
 | Open source | **MIT** | No | Client only | Apache 2.0 |
 | Custom domain | **Yes** | Paid plans | Yes | Yes |
 | End-to-end tenant TLS | **Yes (uncached exposures)** | No | No | No |
-| SNI hiding (ECH) | **Yes (uncached exposures)** | No | No | No |
 | MITM self-probe | **Built-in (uncached exposures)** | No | No | No |
 | Multi-relay failover | **Yes** | Managed | Built-in | No |
 | Account required | **No** | Yes | Yes | No |
@@ -184,13 +182,9 @@ Browser
    keys are derived on your machine.
 4. For relay-hosted domains, the tunnel obtains certificate signatures via
    `/v1/sign`, using the relay only as a keyless signing oracle. The relay signs
-   handshake digests but never receives session keys.
+   handshake transcripts but never receives session keys.
 5. After the handshake, the relay continues forwarding ciphertext without access
    to plaintext.
-
-When ECH is enabled, the relay also cannot see the actual tenant hostname. It
-routes by an opaque token derived from the tunnel identity, while the real SNI
-stays inside the ECH-protected ClientHello.
 
 ## Public Relay Registry
 

@@ -26,7 +26,7 @@ routes and the lease lifecycle contain no overlay topology.
 The public SDK facade is centered on `sdk.Exposure`, a multi-relay
 `net.Listener`. `sdk.Expose` takes its required identity and concrete relay URLs
 directly; functional options cover endpoint capabilities such as UDP, TCP,
-ECH, MITM protection, overlay routing, and initial lease metadata. The
+MITM protection, overlay routing, and initial lease metadata. The
 `sdk.WithDiscovery` option enables discovery-driven relay membership: when it
 is set, `Exposure` delegates relay selection to `portal/discovery` as a blind
 collaborator, feeding it failure classifications from listener events and
@@ -49,14 +49,12 @@ and x402 payment gating belongs to the CLI and agent composition over
 events update it, while `Relays`, `Updates`, and `WaitReady` read from that
 state. Agent status types are not part of the SDK contract.
 
-`portal/keyless` is the tenant TLS feature boundary: it owns keyless remote
-signing, TLS config construction, and the ECH layer of that path — tenant
-route hostname derivation, fallback hostname hashing, key/ECHConfigList
-preparation, lease registration validation, and the HTTPS-record value
-encoding. The SDK prepares `keyless.ECHMaterials` once per lease session and
-the lease client only transports the prepared fields; the relay validates
-them through the same package while keeping lease lifecycle and DNS
-publication orchestration to itself.
+`portal/keyless` is the tenant TLS feature boundary: it owns tenant TLS
+termination via the `keyless_tls` t13server and keyless remote signing —
+certificate chains are pinned from the relay, each handshake signs
+transcript-bound through the relay's `/v1/sign` endpoint, and the relay
+validates every signing request against a live per-connection binding while
+keeping lease lifecycle and DNS publication orchestration to itself.
 
 ## Identity challenges
 

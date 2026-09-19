@@ -17,7 +17,7 @@ back to the live origin, it still trusts the relay; browser-to-origin end-to-end
 TLS is not restored on an already terminated connection.
 
 Use explicit `--relays` with `--discovery=false` to choose exactly which relays
-receive the files. Cache mode cannot be combined with `--ech` or `--ban-mitm`.
+receive the files. Cache mode cannot be combined with `--ban-mitm`.
 Ordinary uncached HTTPS tunnels retain the tenant TLS path described below.
 See [cache configuration](/configuration#static-relay-cache) for expiry and limits.
 
@@ -37,33 +37,13 @@ Tenant TLS terminates on the SDK side. The local service receives the decrypted 
 
 ## Keyless Signing
 
-For relay-hosted names, the SDK builds a tenant-facing TLS server config backed by the relay's `/v1/sign` endpoint. The relay signs handshake digests with its certificate key, but it does not receive the negotiated tenant TLS session keys.
+For relay-hosted names, the SDK terminates tenant TLS with a `keyless_tls` t13server backed by the relay's `/v1/sign` endpoint. The relay signs handshake transcripts with its certificate key, but it does not receive the negotiated tenant TLS session keys.
 
 Relay API TLS is separate from tenant TLS:
 
 - Relay API HTTPS protects `/sdk/*`, `/discovery`, `/api/admin`, installers, and `/v1/sign`.
 - Tenant TLS protects end-user traffic for lease hostnames.
 - The QUIC datagram backhaul uses the public `PORTAL_URL` port with ALPN `portal-tunnel`; `SNI_PORT` controls the relay's corresponding local UDP listener.
-
-## Tunnel ECH
-
-Tunnel ECH is optional and disabled by default. A normal stream tunnel uses its public hostname as the TLS `ServerName`; the relay routes the encrypted TLS stream by plaintext SNI without terminating tenant TLS. ECH adds hostname privacy, not the end-to-end TLS protection itself.
-
-Enable ECH for a CLI tunnel with `portal expose ... --ech` or set `ech = true` in a portal-agent tunnel. For ECH-enabled stream leases, the SDK derives an opaque route hostname and tenant ECH material from the tunnel identity. The relay receives the route hostname, a validated hash of the public fallback hostname, and the ECHConfigList. ECH-capable clients use the opaque route hostname as the outer SNI while the real tenant SNI remains inside the ECH-protected ClientHello handled by the SDK.
-
-ECH-enabled tunnels retain plaintext-SNI fallback routing. This lets clients that do not obtain or use the ECHConfigList connect through the public hostname without weakening tenant TLS passthrough.
-
-For public relays, Portal selects embedded DNS when `ACME_DNS_PROVIDER` is empty.
-The selected provider publishes the relay root HTTPS/ECH record. For each ECH-enabled stream lease it also creates or updates the public hostname A record and HTTPS record containing the `ech` parameter. Portal does not create tenant ECH DNS records for the default `ECH=false` mode. It removes tenant A and HTTPS/ECH records when the owning ECH lease is removed and no active replacement requires the hostname. Successful ECH HTTPS operations are not periodically rewritten; failed create, update, and delete operations remain pending for retry. Active ECH hostname A records are updated when Portal observes that the relay public IPv4 has changed.
-
-An empty provider setting does not disable DNS or ECH publication. Embedded
-DNS needs public NS/glue delegation and reachable DNS ports; external providers
-need their API credentials. Manual certificates only override issuance. Clients
-that do not obtain an ECHConfigList use plaintext-SNI fallback.
-
-Enabling UDP or a dedicated raw TCP port does not disable tunnel ECH on the
-default TLS hostname. The additional raw TCP and UDP endpoints do not themselves
-use ECH or add tenant TLS.
 
 ## MITM Self-Probe
 
@@ -78,8 +58,7 @@ For ordinary uncached tunnels:
 | Relays can see | Relays cannot see |
 |---|---|
 | Source IP and timing metadata | HTTP headers or body |
-| Lease identity/public hostname, including SNI on the plaintext-SNI fallback path | Tenant TLS session keys |
-| Opaque route hostnames on the ECH path | ECH-protected inner SNI when clients use the distributed ECHConfigList |
+| Lease identity/public hostname, including SNI | Tenant TLS session keys |
 | Traffic volume and connection duration | Application payload on the stream path |
 | Requested TCP/UDP transport metadata | Local service plaintext on the tenant TLS stream path |
 | Raw TCP/UDP payloads when the application protocol is unencrypted | Application-level encrypted raw TCP/UDP payloads |

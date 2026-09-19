@@ -1,13 +1,13 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestOfferConnReadyWritesProtocolAckBeforeClaimMarker(t *testing.T) {
@@ -34,14 +34,76 @@ func TestOfferConnReadyWritesProtocolAckBeforeClaimMarker(t *testing.T) {
 
 	claimed := make(chan net.Conn, 1)
 	go func() {
-		conn, _ := relay.Claim(context.Background())
+		conn, _ := relay.Claim(context.Background(), [16]byte{})
 		claimed <- conn
 	}()
-	var marker [1]byte
-	if _, err := client.Read(marker[:]); err != nil || marker[0] != types.MarkerTLSStart {
-		t.Fatalf("claim marker = %d, %v", marker[0], err)
+	var frame [1 + tlsBindingSize]byte
+	if _, err := io.ReadFull(client, frame[:]); err != nil {
+		t.Fatalf("read claim frame: %v", err)
+	}
+	if frame[0] != markerTLSStart {
+		t.Fatalf("claim marker = %d", frame[0])
 	}
 	_ = (<-claimed).Close()
+}
+
+func TestTLSBindingFramingRoundTrip(t *testing.T) {
+	relay := NewRelayStream("lease", time.Minute, 1)
+	t.Cleanup(relay.Close)
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	if err := relay.OfferConn(serverConn); err != nil {
+		t.Fatal(err)
+	}
+
+	binding := [16]byte{
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+	}
+	claimed := make(chan net.Conn, 1)
+	claimErr := make(chan error, 1)
+	go func() {
+		conn, err := relay.Claim(context.Background(), binding)
+		if err != nil {
+			claimErr <- err
+			return
+		}
+		claimed <- conn
+	}()
+
+	activatorBindings := make(chan []byte, 1)
+	activator := TLSActivationFunc(func(ctx context.Context, raw net.Conn, b []byte) (net.Conn, error) {
+		activatorBindings <- append([]byte(nil), b...)
+		return raw, nil
+	})
+	stream := NewClientStream(1, time.Second)
+	sessionDone := make(chan error, 1)
+	go func() {
+		_, err := stream.RunSession(context.Background(), clientConn, activator)
+		sessionDone <- err
+	}()
+
+	select {
+	case got := <-activatorBindings:
+		if !bytes.Equal(got, binding[:]) {
+			t.Fatalf("activator binding = %#x, want %#x", got, binding[:])
+		}
+	case err := <-sessionDone:
+		t.Fatalf("RunSession finished before activation: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("activator never received a binding")
+	}
+	if err := <-sessionDone; err != nil {
+		t.Fatalf("RunSession: %v", err)
+	}
+	select {
+	case conn := <-claimed:
+		_ = conn.Close()
+	case err := <-claimErr:
+		t.Fatalf("Claim: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Claim did not complete")
+	}
 }
 
 func TestOfferConnReadyLeavesRejectedConnectionWithCaller(t *testing.T) {
@@ -82,7 +144,7 @@ func TestClaimAfterCloseFailsWithNetErrClosed(t *testing.T) {
 
 	// Closing the relay must release pending claimers with net.ErrClosed,
 	// never leave them waiting for a connection that will never arrive.
-	conn, err := relay.Claim(context.Background())
+	conn, err := relay.Claim(context.Background(), [16]byte{})
 	if conn != nil {
 		t.Fatal("Claim() after Close() returned a connection")
 	}

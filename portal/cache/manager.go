@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // Manager owns both staging and published bytes. Registry operations only
@@ -122,7 +122,7 @@ func (l Lease) replaces(owner, host string) bool {
 	if l.Owner == owner || l.Hostname == host {
 		return true
 	}
-	return l.HostnameHash != "" && keyless.ECHHostnameHash(host) == l.HostnameHash
+	return l.HostnameHash != "" && utils.HostnameHash(host) == l.HostnameHash
 }
 
 func (c *Manager) Register(lease Lease, req types.RegisterChallengeRequest) {
@@ -146,7 +146,7 @@ func (c *Manager) Register(lease Lease, req types.RegisterChallengeRequest) {
 	if !req.Cache || req.UDPEnabled || req.TCPEnabled {
 		return
 	}
-	if lease.HostnameHash != "" || req.RouteHostname != "" || strings.Contains(lease.Hostname, "*") {
+	if lease.HostnameHash != "" || strings.Contains(lease.Hostname, "*") {
 		return
 	}
 	ttl := c.cfg.MaxTTL

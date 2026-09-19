@@ -209,7 +209,6 @@ func TestExposeOptionsContainOnlyEndpointCapabilities(t *testing.T) {
 	for _, option := range []Option{
 		WithUDP(),
 		WithTCP(),
-		WithECH(),
 		WithMITMProtection(true),
 		WithOverlay(),
 		WithMetadata(metadata),
@@ -217,7 +216,7 @@ func TestExposeOptionsContainOnlyEndpointCapabilities(t *testing.T) {
 		option(&got)
 	}
 	metadata.Tags[0] = "mutated"
-	if !got.UDPEnabled || !got.TCPEnabled || !got.ECH || !got.BanMITM || !got.Overlay {
+	if !got.UDPEnabled || !got.TCPEnabled || !got.BanMITM || !got.Overlay {
 		t.Fatalf("options = %+v, want all endpoint capabilities enabled", got)
 	}
 	if got.Metadata.Tags[0] != "initial" {

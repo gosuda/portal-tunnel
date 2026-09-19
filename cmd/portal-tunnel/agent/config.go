@@ -52,7 +52,6 @@ type TunnelConfig struct {
 	UDPEnabled           bool              `koanf:"udp"`
 	UDPAddr              string            `koanf:"udp_addr"`
 	TCPEnabled           bool              `koanf:"tcp"`
-	ECH                  bool              `koanf:"ech"`
 	BanMITM              *bool             `koanf:"ban_mitm"`
 	MaxActiveRelays      int               `koanf:"max_active_relays"`
 	Description          string            `koanf:"description"`
@@ -201,9 +200,6 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	addStringDocumentField(out, "udp_addr", cfg.UDPAddr)
 	if cfg.TCPEnabled {
 		out["tcp"] = cfg.TCPEnabled
-	}
-	if cfg.ECH {
-		out["ech"] = cfg.ECH
 	}
 	addStringDocumentField(out, "description", cfg.Description)
 	addStringSliceDocumentField(out, "tags", cfg.Tags)

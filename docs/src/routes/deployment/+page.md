@@ -112,7 +112,7 @@ The certificate must cover the Portal root hostname and the tunnel hostnames,
 normally through a wildcard SAN. Even uncached tunnels use this certificate
 through the relay-backed keyless signer. Manual files override issuance only
 when neither `acme-account.key` nor `acme-registration.json` exists in the state
-directory; DNS and ECH management still run.
+directory; DNS management still runs.
 
 ## Deploy
 
@@ -172,12 +172,13 @@ subdomains must continue to reach their tunnel targets through the same public
 
 ## Upgrading
 
-Clients and relays perform an exact protocol version match. v2.4.0 ships
-protocol version 9 for both the tunnel handshake and discovery, so v2.3.x
-clients are rejected by v2.4.0+ relays (`relay sdk protocol version mismatch`)
-and vice versa. Upgrade relays and the tunnel clients that dial them together:
-a relay upgraded first rejects every older client until the clients catch up
-(`portal update`).
+Clients and relays perform an exact protocol version match. This release ships
+tunnel protocol version 10 while discovery stays at version 9, so tunnel
+handshake compatibility is decoupled from discovery compatibility: a relay and
+tunnel client must agree on the tunnel protocol version, and a mismatch is
+rejected (`relay sdk protocol version mismatch`). Upgrade relays and the tunnel
+clients that dial them together: a relay upgraded first rejects every older
+client until the clients catch up (`portal update`).
 
 ## Running Behind an Existing Reverse Proxy
 
@@ -212,15 +213,13 @@ not both.
 
 `SNI_PORT` stays `443` inside the container. The SNI router is Portal's single
 ingress: the Admin/API handler is served through it in-process, so there is no
-separate API port to wire around. The public port in `PORTAL_URL`, not this
-local listener setting, goes into the ECH `HTTPS` record.
+separate API port to wire around.
 
 ### Lease hostnames must pass through, unmodified
 
 Terminating TLS for `*.portal.example.com` breaks tunnels: clients started with
 `--ban-mitm` probe for termination and drop a relay that does it, and it
-disables keyless TLS and Encrypted Client Hello, both of which need the
-handshake itself to reach Portal.
+disables keyless TLS, which needs the handshake itself to reach Portal.
 
 Two things in an nginx `stream` block break this quietly.
 
@@ -264,7 +263,7 @@ real_ip_header proxy_protocol;
 ```
 
 This is what gives the *other sites* on the box their real client addresses. For
-Portal itself it only matters if you terminate the root host — see below.
+Portal itself it only matters if you terminate the root host.
 
 If you do, **overwrite `X-Forwarded-For` rather than appending to it**:
 
@@ -312,21 +311,6 @@ Compose's implicit default network does not accept `ipv4_address`, which is why
 the network is declared. Check the subnet does not overlap something already on
 the host with
 `docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'`.
-
-### Terminating the root host conflicts with ECH
-
-Passing the root host through leaves Portal with no client address at all: it
-reads `X-Forwarded-For` and `X-Real-IP` only, and a pass-through carries no HTTP
-layer to put them in. Terminating it recovers that, but check one thing first.
-
-When a DNS provider is configured, Portal publishes an `HTTPS` record carrying
-`ech=` for its own hostname and installs the matching key **only on its own SNI
-listener**. An nginx terminator has neither, so ECH-capable clients that read
-the record can fail the connection before any request arrives.
-
-An empty `ACME_DNS_PROVIDER` selects embedded DNS; it does not disable ECH publication. Valid manual certificates override issuance only when neither `acme-account.key` nor `acme-registration.json` exists in `IDENTITY_PATH`. Embedded DNS still initializes and refreshes its synthesized A records, and the selected provider still publishes ECH records; external providers therefore still need API access for that publication. For a public relay with managed DNS, pass the root host through: terminating it elsewhere breaks the ECH it advertises.
-
-Pass-through is the default in the example for that reason.
 
 ### Sharing a Compose project with unrelated services
 
