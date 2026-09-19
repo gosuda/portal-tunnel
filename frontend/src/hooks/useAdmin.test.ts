@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PolicyLease, PolicySettings } from "@/types/api";
 import { useAdmin } from "@/hooks/useAdmin";
-import { BROWSER_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
 
 type DeferredPolicyState = {
@@ -90,7 +90,7 @@ describe("useAdmin", () => {
     vi.clearAllMocks();
 
     mockGet.mockImplementation(async (path: string) => {
-      if (path === BROWSER_API_PATHS.policy.state) {
+      if (path === RELAY_API_PATHS.policy.state) {
         return {
           leases: [buildLease("0x00000000000000000000000000000000000000A1")],
           policy: { ...buildSettings(), approval_mode: "not-a-mode" },
@@ -100,7 +100,7 @@ describe("useAdmin", () => {
     });
 
     mockPost.mockImplementation(async <T>(path: string, body?: unknown): Promise<T> => {
-      if (path === BROWSER_API_PATHS.policy.root) {
+      if (path === RELAY_API_PATHS.policy.root) {
         return body as T;
       }
       return {} as T;
@@ -121,7 +121,7 @@ describe("useAdmin", () => {
 
   it("surfaces fetchData API errors", async () => {
     mockGet.mockImplementation(async (path: string) => {
-      if (path === BROWSER_API_PATHS.policy.state) {
+      if (path === RELAY_API_PATHS.policy.state) {
         throw new APIClientError("failed to load leases", 500, "server_error");
       }
       throw new Error(`Unexpected GET path: ${path}`);
@@ -165,8 +165,8 @@ describe("useAdmin", () => {
     });
 
     const calledPaths = mockPost.mock.calls.map(([path]) => path as string);
-    expect(calledPaths).toContain(BROWSER_API_PATHS.policy.leases);
-    expect(mockPost).toHaveBeenCalledWith(BROWSER_API_PATHS.policy.leases, {
+    expect(calledPaths).toContain(RELAY_API_PATHS.policy.leases);
+    expect(mockPost).toHaveBeenCalledWith(RELAY_API_PATHS.policy.leases, {
       identity_key: identityKey,
       is_approved: true,
     });
@@ -184,7 +184,7 @@ describe("useAdmin", () => {
     });
 
     expect(mockPost).toHaveBeenCalledWith(
-      BROWSER_API_PATHS.policy.leases,
+      RELAY_API_PATHS.policy.leases,
       {
         identity_key: "relay-1:0x00000000000000000000000000000000000000a1",
         bps: 4096,
@@ -199,7 +199,7 @@ describe("useAdmin", () => {
       | undefined;
 
     mockGet.mockImplementation((path: string) => {
-      if (path === BROWSER_API_PATHS.policy.state) {
+      if (path === RELAY_API_PATHS.policy.state) {
         getCalls++;
         if (getCalls === 1) {
           return Promise.resolve({
@@ -243,7 +243,7 @@ describe("useAdmin", () => {
 
   it("bulk deny posts deduped identity keys in lease policy bodies", async () => {
     mockGet.mockImplementation(async (path: string) => {
-      if (path === BROWSER_API_PATHS.policy.state) {
+      if (path === RELAY_API_PATHS.policy.state) {
         return {
           leases: [
             buildLease("0x00000000000000000000000000000000000000A1", "relay-1"),
@@ -274,8 +274,8 @@ describe("useAdmin", () => {
     expect(denyCalls).toHaveLength(2);
     expect(denyCalls).toEqual(
       expect.arrayContaining([
-        [BROWSER_API_PATHS.policy.leases, { identity_key: identityKeyA, is_denied: true }],
-        [BROWSER_API_PATHS.policy.leases, { identity_key: identityKeyB, is_denied: true }],
+        [RELAY_API_PATHS.policy.leases, { identity_key: identityKeyA, is_denied: true }],
+        [RELAY_API_PATHS.policy.leases, { identity_key: identityKeyB, is_denied: true }],
       ]),
     );
   });
