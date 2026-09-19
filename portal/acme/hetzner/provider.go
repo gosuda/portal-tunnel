@@ -14,7 +14,6 @@ import (
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"github.com/hetznercloud/hcloud-go/v2/hcloud/exp/zoneutil"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -163,48 +162,6 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	}
 	if err := deleteTXTRecords(ctx, client, zone, name, matchPrefix); err != nil {
 		return fmt.Errorf("delete hetzner TXT records %s: %w", name, err)
-	}
-	return nil
-}
-
-func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, record dnsrecord.HTTPSRecord) error {
-	if p == nil {
-		return errors.New("hetzner provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	content, err := record.Content()
-	if err != nil {
-		return err
-	}
-
-	client, zone, err := p.clientAndZone(ctx, name)
-	if err != nil {
-		return err
-	}
-	if err := ensureRecord(ctx, client, zone, name, hcloud.ZoneRRSetTypeHTTPS, content); err != nil {
-		return fmt.Errorf("upsert hetzner HTTPS record %s: %w", name, err)
-	}
-	return nil
-}
-
-func (p *Provider) DeleteHTTPSRecord(ctx context.Context, name string) error {
-	if p == nil {
-		return errors.New("hetzner provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-
-	client, zone, err := p.clientAndZone(ctx, name)
-	if err != nil {
-		return err
-	}
-	if err := deleteRRSet(ctx, client, zone, name, hcloud.ZoneRRSetTypeHTTPS); err != nil {
-		return fmt.Errorf("delete hetzner HTTPS record %s: %w", name, err)
 	}
 	return nil
 }

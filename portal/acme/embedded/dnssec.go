@@ -152,11 +152,8 @@ func (p *Provider) signedZone(now time.Time) (*signedZone, error) {
 			add(p.txtRR(name, value))
 		}
 	}
-	for name, value := range p.https {
-		add(p.httpsRR(name, value))
-	}
 	// Include empty non-terminals. When the relay has an address, materialize A
-	// and wildcard A at every closest encloser so explicit TXT/HTTPS records do
+	// and wildcard A at every closest encloser so explicit TXT records do
 	// not shadow zone-wide address synthesis (RFC 4592).
 	if p.ipv4 != nil {
 		add(p.aRR(p.nsName, p.ipv4))

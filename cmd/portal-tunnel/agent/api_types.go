@@ -26,7 +26,6 @@ type AgentTunnelStatus struct {
 	Discovery       bool                `json:"discovery"`
 	Overlay         bool                `json:"overlay"`
 	MaxActiveRelays int                 `json:"max_active_relays,omitempty"`
-	ECH             bool                `json:"ech,omitempty"`
 	Metadata        types.LeaseMetadata `json:"metadata"`
 	X402PayTo       string              `json:"x402_pay_to,omitempty"`
 	X402Testnet     bool                `json:"x402_testnet,omitempty"`
@@ -66,7 +65,6 @@ type AgentTunnelRequest struct {
 	Discovery       *bool            `json:"discovery,omitempty"`
 	Overlay         bool             `json:"overlay,omitempty"`
 	MaxActiveRelays int              `json:"max_active_relays,omitempty"`
-	ECH             bool             `json:"ech,omitempty"`
 	X402PayTo       string           `json:"x402_pay_to,omitempty"`
 	X402Testnet     bool             `json:"x402_testnet,omitempty"`
 	X402Network     string           `json:"x402_network,omitempty"`

@@ -38,7 +38,7 @@ type harness struct {
 	proxyDone   chan error
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T, opts ...sdk.Option) *harness {
 	t.Helper()
 
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -79,7 +79,7 @@ func newHarness(t *testing.T) *harness {
 		service.Close()
 		t.Fatalf("generate client identity: %v", err)
 	}
-	exposure, err := sdk.Expose(ctx, clientIdentity, []string{relayURL})
+	exposure, err := sdk.Expose(ctx, clientIdentity, []string{relayURL}, opts...)
 	if err != nil {
 		cancel()
 		_ = relay.Shutdown(context.Background())

@@ -131,7 +131,7 @@ func (c *apiClient) cacheLimits() (types.StaticCacheLimits, bool) {
 }
 
 // register only performs the challenge and registration wire exchange.
-// The caller prepares ECH feature inputs beforehand.
+// The caller prepares lease metadata and capability flags beforehand.
 func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterResponse, error) {
 	if err := c.initHTTPTransport(ctx); err != nil {
 		return types.RegisterResponse{}, err

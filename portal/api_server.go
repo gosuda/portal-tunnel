@@ -84,31 +84,26 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 	utils.InvalidRequestError(err).Write(w)
 }
 
-func (s *Server) newAPIServer(handler http.Handler, apiTLS keyless.TLSMaterialConfig) (*http.Server, io.Closer, error) {
-	var keylessSignerHandler http.Handler
-	if len(apiTLS.KeyPEM) > 0 {
-		signer, err := keyless.NewSigner(apiTLS.KeyPEM)
+func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.Server, io.Closer, error) {
+	var keylessSigner *keyless.Signer
+	if len(s.apiKeyPEM) > 0 {
+		signer, err := keyless.NewSigner(s.apiKeyPEM, s.registry.bindings)
 		if err != nil {
 			return nil, nil, fmt.Errorf("configure api signer: %w", err)
 		}
-		keylessSignerHandler = signer.Handler()
+		keylessSigner = signer
 	}
 
 	apiServer := &http.Server{
-		Handler:           s.apiHandler(handler, keylessSignerHandler),
+		Handler:           s.apiHandler(handler, keylessSigner),
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		TLSConfig:         apiTLS,
 	}
-
-	apiCloser, err := keyless.AttachToHTTPServer(apiServer, apiTLS)
-	if err != nil {
-		return nil, nil, fmt.Errorf("configure api tls: %w", err)
-	}
-
-	return apiServer, apiCloser, nil
+	return apiServer, nil, nil
 }
 
-func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler) http.Handler {
+func (s *Server) apiHandler(base http.Handler, keylessSigner *keyless.Signer) http.Handler {
 	// A nil *http.ServeMux reaches this handler as a typed-nil interface: it
 	// compares non-nil, then panics on the first ServeHTTP call. Normalize it
 	// so the root fallback below still covers Start(ctx, nil).
@@ -175,15 +170,16 @@ func (s *Server) apiHandler(base http.Handler, keylessSignerHandler http.Handler
 			}
 			s.handleRelayDiscoveryAnnounce(w, r)
 		case types.PathV1Sign:
-			if keylessSignerHandler == nil {
+			if keylessSigner == nil {
 				http.NotFound(w, r)
 				return
 			}
-			if err := s.registry.verifySigningAccessToken(r.Header.Get(types.HeaderAccessToken)); err != nil {
-				writeAPIErrorResponse(w, err)
+			leaseID, ok := s.registry.verifySigningAccessTokenLease(r)
+			if !ok {
+				writeAPIErrorResponse(w, errUnauthorized)
 				return
 			}
-			keylessSignerHandler.ServeHTTP(w, r)
+			keylessSigner.ServeHTTP(w, r, leaseID)
 		default:
 			base.ServeHTTP(w, r)
 		}
@@ -369,12 +365,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			removed = record
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-		removed.deleteDNS(cleanupCtx, s.acmeManager, false)
+		removed.deleteDNS(cleanupCtx, s.acmeManager)
 		cleanupCancel()
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	s.registry.promoteECHDNS(record, s.acmeManager, s.publicPort)
 
 	utils.WriteAPIData(w, http.StatusCreated, resp)
 }
@@ -467,7 +462,7 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-	record.deleteDNS(dnsCtx, s.acmeManager, true)
+	record.deleteDNS(dnsCtx, s.acmeManager)
 	cancel()
 
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
@@ -592,8 +587,14 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			upstream, err := record.stream.Claim(ctx)
+			// The relay is the TLS client on this fallback: no routed
+			// client hello exists at issue time, so the binding starts
+			// pending and is pinned to the relay's own ClientHello on
+			// first write.
+			binding := s.registry.bindings.Issue(record.id, nil)
+			upstream, err := record.stream.Claim(ctx, binding)
 			if err != nil {
+				s.registry.bindings.Discard(binding)
 				return nil, err
 			}
 			roots := x509.NewCertPool()
@@ -605,7 +606,7 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 				}
 				roots.AddCert(leaf)
 			}
-			conn := tls.Client(upstream, &tls.Config{ServerName: host, RootCAs: roots, MinVersion: tls.VersionTLS12})
+			conn := tls.Client(s.registry.bindings.FixHelloOnWrite(upstream, binding), &tls.Config{ServerName: host, RootCAs: roots, MinVersion: tls.VersionTLS12})
 			if err := conn.HandshakeContext(ctx); err != nil {
 				_ = conn.Close()
 				return nil, fmt.Errorf("cache fallback TLS: %w", err)

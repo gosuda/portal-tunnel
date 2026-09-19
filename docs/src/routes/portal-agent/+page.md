@@ -214,7 +214,6 @@ Common fields:
 | `identity_json` | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr` | UDP transport settings |
 | `tcp` | Dedicated raw TCP port setting |
-| `ech` | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
 | `x402_pay_to` | Payment recipient for paid HTTP routes |

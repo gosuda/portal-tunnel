@@ -289,64 +289,6 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	return nil
 }
 
-func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, record dnsrecord.HTTPSRecord) error {
-	if p == nil {
-		return errors.New("gcloud provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	content, err := record.Content()
-	if err != nil {
-		return err
-	}
-
-	service, runtimeCfg, zone, err := p.newService(ctx, name)
-	if err != nil {
-		return err
-	}
-
-	if err := ensureRecordSet(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.ResourceRecordSet{
-		Name:    fqdn(name),
-		Type:    "HTTPS",
-		Ttl:     defaultRecordTTL,
-		Rrdatas: []string{content},
-	}); err != nil {
-		return fmt.Errorf("upsert gcloud HTTPS record %s: %w", name, err)
-	}
-	return nil
-}
-
-func (p *Provider) DeleteHTTPSRecord(ctx context.Context, name string) error {
-	if p == nil {
-		return errors.New("gcloud provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-
-	service, runtimeCfg, zone, err := p.newService(ctx, name)
-	if err != nil {
-		return err
-	}
-
-	existing, err := listRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, name, "HTTPS")
-	if err != nil {
-		return fmt.Errorf("list gcloud HTTPS records %s: %w", name, err)
-	}
-	if len(existing) == 0 {
-		return nil
-	}
-	if err := applyChange(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.Change{
-		Deletions: existing,
-	}); err != nil {
-		return fmt.Errorf("delete gcloud HTTPS record %s: %w", name, err)
-	}
-	return nil
-}
-
 func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
 		return "", "", "", errors.New("gcloud provider is nil")

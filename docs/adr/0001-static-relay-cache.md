@@ -87,7 +87,7 @@ requests a fresh upload. A failed reader of an older snapshot cannot invalidate
 a newer replacement.
 
 Tenant TLS names and HTTP Host headers must match. Tenant requests never reach
-control-plane handlers, even for `/sdk`, `/api`, or a forged root Host. ECH and
-MITM blocking are incompatible with this explicit trust exception. Selecting
+control-plane handlers, even for `/sdk`, `/api`, or a forged root Host. MITM
+blocking is incompatible with this explicit trust exception. Selecting
 `--cache` trusts every selected relay; use explicit `--relays` together with
 `--discovery=false` to choose exactly which relay receives the static content.

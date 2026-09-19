@@ -41,7 +41,7 @@ If you plan to run your own relay server:
 - Long random admin token for relay admin access
 - Ethereum wallet for optional local agent status access
 - DNS provider API credentials if choosing an external provider; the default
-  embedded provider manages ACME/ECH without a DNS vendor account
+  embedded provider manages ACME without a DNS vendor account
 
 ## Next Steps
 

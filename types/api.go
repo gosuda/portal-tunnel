@@ -71,17 +71,14 @@ type RegisterRequest struct {
 }
 
 type RegisterChallengeRequest struct {
-	Cache         bool          `json:"cache,omitempty"`
-	CacheTTL      int           `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
-	Identity      Identity      `json:"identity"`
-	Metadata      LeaseMetadata `json:"metadata"`
-	Overlay       bool          `json:"overlay,omitempty"`
-	TTL           int           `json:"ttl,omitempty"`
-	UDPEnabled    bool          `json:"udp_enabled,omitempty"`
-	TCPEnabled    bool          `json:"tcp_enabled,omitempty"`
-	RouteHostname string        `json:"route_hostname,omitempty"`
-	HostnameHash  string        `json:"hostname_hash,omitempty"`
-	ECHConfigList []byte        `json:"ech_config_list,omitempty"`
+	Cache      bool          `json:"cache,omitempty"`
+	CacheTTL   int           `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
+	Identity   Identity      `json:"identity"`
+	Metadata   LeaseMetadata `json:"metadata"`
+	Overlay    bool          `json:"overlay,omitempty"`
+	TTL        int           `json:"ttl,omitempty"`
+	UDPEnabled bool          `json:"udp_enabled,omitempty"`
+	TCPEnabled bool          `json:"tcp_enabled,omitempty"`
 }
 
 type RegisterChallengeResponse struct {

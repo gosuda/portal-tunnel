@@ -12,33 +12,29 @@ import (
 )
 
 type relayIdentityFile struct {
-	Name                     string `json:"name,omitempty"`
-	Address                  string `json:"address,omitempty"`
-	PublicKey                string `json:"public_key,omitempty"`
-	PrivateKey               string `json:"private_key,omitempty"`
-	Mnemonic                 string `json:"mnemonic,omitempty"`
-	DerivationPath           string `json:"derivation_path,omitempty"`
-	TokenSecret              string `json:"token_secret,omitempty"`
-	EncryptedClientHelloSeed string `json:"encrypted_client_hello_seed,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Address        string `json:"address,omitempty"`
+	PublicKey      string `json:"public_key,omitempty"`
+	PrivateKey     string `json:"private_key,omitempty"`
+	Mnemonic       string `json:"mnemonic,omitempty"`
+	DerivationPath string `json:"derivation_path,omitempty"`
+	TokenSecret    string `json:"token_secret,omitempty"`
 }
 
 type RelayIdentity struct {
 	types.Identity
-	EncryptedClientHelloSeed string
 }
 
 func (i RelayIdentity) Copy() RelayIdentity {
 	return RelayIdentity{
-		Identity:                 i.Identity.Copy(),
-		EncryptedClientHelloSeed: i.EncryptedClientHelloSeed,
+		Identity: i.Identity.Copy(),
 	}
 }
 
 // LoadOrCreateRelayIdentity loads the relay identity from path or creates it
 // during relay startup. The file is written by the relay itself, so a
-// loaded identity is trusted as-is; only the relay hostname is applied and a
-// missing ECH seed is filled. The file is rewritten only when something
-// changed.
+// loaded identity is trusted as-is; only the relay hostname is applied.
+// The file is rewritten only when something changed.
 func LoadOrCreateRelayIdentity(path, rootHost string) (RelayIdentity, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -72,9 +68,6 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (RelayIdentity, error) {
 	if rootHost != "" {
 		relay.Name = rootHost
 	}
-	if relay.EncryptedClientHelloSeed == "" {
-		relay.EncryptedClientHelloSeed = utils.RandomID("")
-	}
 	if created || relay != stored {
 		if err := saveRelayIdentity(path, relay); err != nil {
 			return RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
@@ -100,7 +93,7 @@ func loadRelayIdentityFile(path string) (RelayIdentity, error) {
 		Mnemonic:       payload.Mnemonic,
 		DerivationPath: payload.DerivationPath,
 		TokenSecret:    payload.TokenSecret,
-	}, EncryptedClientHelloSeed: payload.EncryptedClientHelloSeed}, nil
+	}}, nil
 }
 
 func saveRelayIdentity(path string, relay RelayIdentity) error {
@@ -109,14 +102,13 @@ func saveRelayIdentity(path string, relay RelayIdentity) error {
 		privateKey = ""
 	}
 	data, err := json.MarshalIndent(relayIdentityFile{
-		Name:                     relay.Name,
-		Address:                  relay.Address,
-		PublicKey:                relay.PublicKey,
-		PrivateKey:               privateKey,
-		Mnemonic:                 relay.Mnemonic,
-		DerivationPath:           relay.DerivationPath,
-		TokenSecret:              relay.TokenSecret,
-		EncryptedClientHelloSeed: relay.EncryptedClientHelloSeed,
+		Name:           relay.Name,
+		Address:        relay.Address,
+		PublicKey:      relay.PublicKey,
+		PrivateKey:     privateKey,
+		Mnemonic:       relay.Mnemonic,
+		DerivationPath: relay.DerivationPath,
+		TokenSecret:    relay.TokenSecret,
 	}, "", "  ")
 	if err != nil {
 		return err

@@ -1,12 +1,8 @@
 package embedded
 
 import (
-	"encoding/base64"
-	"errors"
-	"fmt"
 	"net"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -177,47 +173,4 @@ func (p *Provider) txtRR(name, value string) *dns.TXT {
 		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: recordTTL},
 		Txt: []string{value},
 	}
-}
-
-func (p *Provider) httpsRR(name string, record httpsRecordValue) *dns.HTTPS {
-	return &dns.HTTPS{SVCB: dns.SVCB{
-		Hdr:      dns.RR_Header{Name: name, Rrtype: dns.TypeHTTPS, Class: dns.ClassINET, Ttl: recordTTL},
-		Priority: record.priority,
-		Target:   ".",
-		Value:    record.value,
-	}}
-}
-
-// parseSvcParams converts the presentation-format service parameters built
-// by the ACME package (`ech="…" port=…`) into SVCB key/value pairs.
-func parseSvcParams(svcParams string) ([]dns.SVCBKeyValue, error) {
-	fields := strings.Fields(svcParams)
-	if len(fields) == 0 {
-		return nil, errors.New("https record svc params are required")
-	}
-	values := make([]dns.SVCBKeyValue, 0, len(fields))
-	for _, field := range fields {
-		key, rawValue, found := strings.Cut(field, "=")
-		if !found {
-			return nil, fmt.Errorf("invalid https svc param %q", field)
-		}
-		rawValue = strings.Trim(rawValue, `"`)
-		switch key {
-		case "ech":
-			ech, err := base64.StdEncoding.DecodeString(rawValue)
-			if err != nil {
-				return nil, fmt.Errorf("decode https ech svc param: %w", err)
-			}
-			values = append(values, &dns.SVCBECHConfig{ECH: ech})
-		case "port":
-			port, err := strconv.ParseUint(rawValue, 10, 16)
-			if err != nil {
-				return nil, fmt.Errorf("parse https port svc param: %w", err)
-			}
-			values = append(values, &dns.SVCBPort{Port: uint16(port)})
-		default:
-			return nil, fmt.Errorf("unsupported https svc param %q", key)
-		}
-	}
-	return values, nil
 }

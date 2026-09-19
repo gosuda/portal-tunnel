@@ -42,10 +42,11 @@ func newTestRelayListener(t *testing.T, relayURL string, closed chan struct{}) *
 		t.Fatalf("url.Parse(%q) error = %v", relayURL, err)
 	}
 	return &listener{
-		api:    &apiClient{relayURL: relayURLParsed},
-		stream: transport.NewClientStream(0, time.Second),
-		cancel: func() { close(closed) },
-		doneCh: closed,
+		api:      &apiClient{relayURL: relayURLParsed},
+		stream:   transport.NewClientStream(time.Second),
+		accepted: make(chan net.Conn),
+		cancel:   func() { close(closed) },
+		doneCh:   closed,
 	}
 }
 
@@ -209,7 +210,6 @@ func TestExposeOptionsContainOnlyEndpointCapabilities(t *testing.T) {
 	for _, option := range []Option{
 		WithUDP(),
 		WithTCP(),
-		WithECH(),
 		WithMITMProtection(true),
 		WithOverlay(),
 		WithMetadata(metadata),
@@ -217,7 +217,7 @@ func TestExposeOptionsContainOnlyEndpointCapabilities(t *testing.T) {
 		option(&got)
 	}
 	metadata.Tags[0] = "mutated"
-	if !got.UDPEnabled || !got.TCPEnabled || !got.ECH || !got.BanMITM || !got.Overlay {
+	if !got.UDPEnabled || !got.TCPEnabled || !got.BanMITM || !got.Overlay {
 		t.Fatalf("options = %+v, want all endpoint capabilities enabled", got)
 	}
 	if got.Metadata.Tags[0] != "initial" {

@@ -9,11 +9,21 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const defaultSessionWriteLimit = 5 * time.Second
+
+// Reverse-session framing markers (protocol v10). The relay writes a single
+// marker byte to activate a claimed session; markerTLSStart is immediately
+// followed by tlsBindingSize bytes of per-connection binding that the tenant
+// must present on every transcript-signing request.
+const (
+	markerKeepalive = 0x00
+	markerRawStart  = 0x01
+	markerTLSStart  = 0x02
+
+	tlsBindingSize = 16
+)
 
 var errStreamFull = errors.New("stream ready queue full")
 
@@ -46,6 +56,11 @@ func (b *RelayStream) OfferConn(conn net.Conn) error {
 
 // OfferConnReady transfers ownership only after ready succeeds while the queue
 // slot is reserved. The caller retains the connection when an error is returned.
+//
+// The ready callback may write one caller-defined protocol acknowledgement
+// byte before the session is queued; that byte precedes every activation
+// marker on the wire and is consumed by the client before the session reaches
+// RunSession, which always starts reading at the first marker.
 func (b *RelayStream) OfferConnReady(conn net.Conn, ready func() error) error {
 	if conn == nil {
 		return errors.New("reverse connection is required")
@@ -79,15 +94,18 @@ func (b *RelayStream) OfferConnReady(conn net.Conn, ready func() error) error {
 	return nil
 }
 
-func (b *RelayStream) Claim(ctx context.Context) (net.Conn, error) {
-	return b.claimWithMarker(ctx, types.MarkerTLSStart)
+// Claim activates the next ready session for tenant TLS: the relay writes
+// markerTLSStart followed by binding, the per-connection value the tenant
+// must present on every /v1/sign request.
+func (b *RelayStream) Claim(ctx context.Context, binding [16]byte) (net.Conn, error) {
+	return b.claimWithMarker(ctx, markerTLSStart, binding)
 }
 
 func (b *RelayStream) claimRaw(ctx context.Context) (net.Conn, error) {
-	return b.claimWithMarker(ctx, types.MarkerRawStart)
+	return b.claimWithMarker(ctx, markerRawStart, [16]byte{})
 }
 
-func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte) (net.Conn, error) {
+func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte, binding [16]byte) (net.Conn, error) {
 	for {
 		b.mu.Lock()
 		if b.closedErr != nil {
@@ -104,7 +122,7 @@ func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte) (net.Con
 			if session.IsClosed() {
 				continue
 			}
-			if err := session.activateWithMarker(marker); err != nil {
+			if err := session.activateWithMarker(marker, binding); err != nil {
 				_ = session.Close()
 				continue
 			}
@@ -267,11 +285,7 @@ func (s *relaySession) StartIdle() {
 	go s.runKeepalive(stop, done)
 }
 
-func (s *relaySession) Activate() error {
-	return s.activateWithMarker(types.MarkerTLSStart)
-}
-
-func (s *relaySession) activateWithMarker(marker byte) error {
+func (s *relaySession) activateWithMarker(marker byte, binding [16]byte) error {
 	s.mu.Lock()
 	if s.state != sessionIdle {
 		state := s.state
@@ -298,7 +312,15 @@ func (s *relaySession) activateWithMarker(marker byte) error {
 		return net.ErrClosed
 	}
 	_ = s.conn.SetWriteDeadline(time.Now().Add(defaultSessionWriteLimit))
-	_, err := s.conn.Write([]byte{marker})
+	var err error
+	if marker == markerTLSStart {
+		frame := make([]byte, 0, 1+tlsBindingSize)
+		frame = append(frame, marker)
+		frame = append(frame, binding[:]...)
+		_, err = s.conn.Write(frame)
+	} else {
+		_, err = s.conn.Write([]byte{marker})
+	}
 	_ = s.conn.SetWriteDeadline(time.Time{})
 	if err != nil {
 		_ = s.Close()
@@ -352,7 +374,7 @@ func (s *relaySession) runKeepalive(stop <-chan struct{}, done chan<- struct{}) 
 			return
 		}
 		_ = s.conn.SetWriteDeadline(time.Now().Add(defaultSessionWriteLimit))
-		_, err := s.conn.Write([]byte{types.MarkerKeepalive})
+		_, err := s.conn.Write([]byte{markerKeepalive})
 		_ = s.conn.SetWriteDeadline(time.Time{})
 		s.mu.Unlock()
 		if err != nil {

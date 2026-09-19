@@ -169,48 +169,6 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	return nil
 }
 
-func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, record dnsrecord.HTTPSRecord) error {
-	if p == nil {
-		return errors.New("vultr provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	content, err := record.Content()
-	if err != nil {
-		return err
-	}
-
-	client, zone, err := p.clientAndZone(ctx, name)
-	if err != nil {
-		return err
-	}
-	if err := ensureRecord(ctx, client, zone, name, "HTTPS", content); err != nil {
-		return fmt.Errorf("upsert vultr HTTPS record %s: %w", name, err)
-	}
-	return nil
-}
-
-func (p *Provider) DeleteHTTPSRecord(ctx context.Context, name string) error {
-	if p == nil {
-		return errors.New("vultr provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-
-	client, zone, err := p.clientAndZone(ctx, name)
-	if err != nil {
-		return err
-	}
-	if err := deleteRecords(ctx, client, zone, name, "HTTPS", ""); err != nil {
-		return fmt.Errorf("delete vultr HTTPS record %s: %w", name, err)
-	}
-	return nil
-}
-
 func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
 		return "", "", "", errors.New("vultr provider is nil")

@@ -227,7 +227,6 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		Discovery:       &discovery,
 		Overlay:         req.Overlay,
 		MaxActiveRelays: req.MaxActiveRelays,
-		ECH:             req.ECH,
 		X402PayTo:       strings.TrimSpace(req.X402PayTo),
 		X402Testnet:     req.X402Testnet,
 		X402Network:     strings.ToLower(strings.TrimSpace(req.X402Network)),
@@ -594,7 +593,6 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		Discovery:       discovery,
 		Overlay:         cfg.Overlay,
 		MaxActiveRelays: cfg.MaxActiveRelays,
-		ECH:             cfg.ECH,
 		Metadata:        metadataFromTunnelConfig(cfg),
 		X402PayTo:       strings.TrimSpace(cfg.X402PayTo),
 		X402Testnet:     cfg.X402Testnet,
@@ -705,9 +703,6 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	}
 	if cfg.TCPEnabled {
 		opts = append(opts, sdk.WithTCP())
-	}
-	if cfg.ECH {
-		opts = append(opts, sdk.WithECH())
 	}
 	if cfg.Overlay {
 		opts = append(opts, sdk.WithOverlay())

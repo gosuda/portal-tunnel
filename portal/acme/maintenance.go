@@ -20,16 +20,7 @@ const (
 
 func (m *Manager) maintenanceLoop(ctx context.Context) {
 	defer m.wg.Done()
-	pendingECH := make(map[string]echDNSCommand)
 	pendingENS := make(map[string]ensDNSCommand)
-	activeECHARecords := make(map[string]struct{})
-	trackECHARecord := func(command echDNSCommand) {
-		if command.remove {
-			delete(activeECHARecords, command.hostname)
-			return
-		}
-		activeECHARecords[command.hostname] = struct{}{}
-	}
 	lastPublicIP := ""
 	syncChangedARecords := func(ctx context.Context, publicIP string) error {
 		if publicIP == "" || publicIP == lastPublicIP {
@@ -37,11 +28,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		}
 
 		var syncErr error
-		for hostname := range activeECHARecords {
-			if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-				syncErr = errors.Join(syncErr, fmt.Errorf("ensure ECH A record for %s: %w", hostname, err))
-			}
-		}
 		if m.cfg.ENSGaslessEnabled {
 			syncErr = errors.Join(syncErr, m.syncTrackedENSGaslessHostARecords(ctx, publicIP))
 		}
@@ -53,16 +39,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		return nil
 	}
 	flushCommands := func(ctx context.Context) error {
-	drainECH:
-		for {
-			select {
-			case command := <-m.echCommands:
-				trackECHARecord(command)
-				pendingECH[command.hostname] = command
-			default:
-				break drainECH
-			}
-		}
 	drainENS:
 		for {
 			select {
@@ -74,13 +50,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		}
 
 		var err error
-		for hostname, command := range pendingECH {
-			if commandErr := m.applyECHCommand(ctx, command); commandErr != nil {
-				err = errors.Join(err, commandErr)
-			} else {
-				delete(pendingECH, hostname)
-			}
-		}
 		for hostname, command := range pendingENS {
 			if commandErr := m.applyENSCommand(ctx, command); commandErr != nil {
 				err = errors.Join(err, commandErr)
@@ -108,17 +77,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 				log.Warn().Err(m.stopErr).Str("base_domain", m.cfg.BaseDomain).Msg("flush dns records")
 			}
 			return
-		case command := <-m.echCommands:
-			trackECHARecord(command)
-			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err := m.applyECHCommand(syncCtx, command)
-			cancel()
-			if err != nil {
-				pendingECH[command.hostname] = command
-				log.Warn().Err(err).Str("hostname", command.hostname).Msg("apply ECH dns command")
-			} else {
-				delete(pendingECH, command.hostname)
-			}
 		case command := <-m.ensCommands:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
 			err := m.applyENSCommand(syncCtx, command)
@@ -145,7 +103,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			var err error
 			if pendingDNSAddress {
 				publicIP, err = m.syncDNS(syncCtx)
-			} else if len(activeECHARecords) > 0 || m.cfg.ENSGaslessEnabled {
+			} else if m.cfg.ENSGaslessEnabled {
 				publicIP, err = utils.ResolvePublicIPv4(syncCtx)
 			}
 			if !pendingDNSAddress && err != nil {
