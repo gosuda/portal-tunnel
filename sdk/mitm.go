@@ -138,10 +138,18 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		return report, err
 	}
 
+	if lease.tenantTLS == nil {
+		return report, errors.New("listener relay materials are unavailable")
+	}
+	relayPool := lease.tenantTLS.RelayCertPool()
+	if relayPool == nil {
+		return report, errors.New("listener relay certificate pool is unavailable")
+	}
+
 	probeTLSConf := &tls.Config{
-		ServerName:         lease.hostname,
-		InsecureSkipVerify: true,
-		MinVersion:         tls.VersionTLS13,
+		ServerName: lease.hostname,
+		RootCAs:    relayPool,
+		MinVersion: tls.VersionTLS13,
 	}
 
 	rawConn, err := (&net.Dialer{Timeout: defaultDialTimeout}).DialContext(probeCtx, "tcp", dialAddr)

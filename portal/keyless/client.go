@@ -13,6 +13,7 @@ package keyless
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -42,12 +43,13 @@ type ClientConfig struct {
 // relay's transcript-bound /v1/sign endpoint. Access tokens can be updated
 // without rebuilding the client.
 type Client struct {
-	mu          sync.RWMutex
-	accessToken string
-	server      *t13server.Server
-	signer      io.Closer
-	closeOnce   sync.Once
-	closeErr    error
+	mu            sync.RWMutex
+	accessToken   string
+	server        *t13server.Server
+	signer        io.Closer
+	relayCertPool *x509.CertPool
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 // NewClient creates one lease-scoped tenant TLS client. It resolves and pins
@@ -80,6 +82,11 @@ func NewClient(config ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("keyless certificate does not cover %s: %w", hostname, verifyErr)
 	}
 	client := &Client{accessToken: strings.TrimSpace(config.AccessToken)}
+	relayCertPool := x509.NewCertPool()
+	if !relayCertPool.AppendCertsFromPEM(certPEM) {
+		return nil, errors.New("keyless pinned relay certificate chain is unparsable")
+	}
+	client.relayCertPool = relayCertPool
 
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
 		Endpoint:   normalizedRelayURL,
@@ -151,6 +158,16 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte
 // does not ship EKM yet, so the responder side of the probe stays disabled.
 func (c *Client) ExportsKeyingMaterial() bool {
 	return false
+}
+
+// RelayCertPool returns the pinned relay certificate chain as a verification
+// pool. Callers that dial the relay themselves, such as the MITM self-probe,
+// verify against this pool instead of disabling certificate verification.
+func (c *Client) RelayCertPool() *x509.CertPool {
+	if c == nil {
+		return nil
+	}
+	return c.relayCertPool
 }
 
 // Close releases the remote signer backing the TLS server. It is safe
