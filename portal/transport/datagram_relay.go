@@ -45,16 +45,10 @@ func NewRelayDatagram(identityKey string, port int) *RelayDatagram {
 	d := &RelayDatagram{
 		identityKey: identityKey,
 		port:        port,
-		session: newDatagramSession(256, true, func(err error) {
-			log.Warn().
-				Err(err).
-				Str("component", "quic-backhaul").
-				Str("identity_key", identityKey).
-				Msg("quic backhaul receive loop ended")
-		}),
-		flowTable: make(map[uint32]*flowState),
-		addrIndex: make(map[string]uint32),
-		nextFlow:  1,
+		session:     newDatagramSession(256, true),
+		flowTable:   make(map[uint32]*flowState),
+		addrIndex:   make(map[string]uint32),
+		nextFlow:    1,
 	}
 	go d.runDispatchLoop()
 	go d.runCleanupLoop()
@@ -108,9 +102,20 @@ func (d *RelayDatagram) Close() {
 }
 
 func (d *RelayDatagram) BindBackhaul(conn *quic.Conn) error {
-	if _, err := d.session.Bind(conn); err != nil {
+	recvDone, err := d.session.Bind(conn)
+	if err != nil {
 		return err
 	}
+	go func() {
+		<-recvDone
+		if err := d.session.Err(); err != nil {
+			log.Warn().
+				Err(err).
+				Str("component", "quic-backhaul").
+				Str("identity_key", d.identityKey).
+				Msg("quic backhaul receive loop ended")
+		}
+	}()
 
 	log.Info().
 		Str("component", "quic-backhaul").

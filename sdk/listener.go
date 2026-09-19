@@ -176,14 +176,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 	l.stream = transport.NewClientStream(defaultHandshakeTimeout)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
 	if l.udpEnabled {
-		l.datagram = transport.NewClientDatagram(func(err error) {
-			log.Info().
-				Err(err).
-				Str("component", "sdk-quic-backhaul").
-				Str("address", l.identity.Address).
-				Msg("quic backhaul disconnected; waiting to reconnect")
-			l.reportAvailable()
-		})
+		l.datagram = transport.NewClientDatagram()
 	}
 
 	go l.run(listenerCtx)
@@ -784,6 +777,14 @@ func (l *listener) runDatagramLoop(ctx context.Context) error {
 			l.datagram.Clear("lease stopped")
 			return nil
 		case <-recvDone:
+		}
+		if err := l.datagram.Err(); err != nil {
+			log.Info().
+				Err(err).
+				Str("component", "sdk-quic-backhaul").
+				Str("address", l.identity.Address).
+				Msg("quic backhaul disconnected; waiting to reconnect")
+			l.reportAvailable()
 		}
 
 		if !utils.SleepOrDone(ctx, time.Second) {

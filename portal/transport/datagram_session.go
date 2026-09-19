@@ -15,26 +15,25 @@ var errNoConnection = errors.New("no quic backhaul connection registered")
 
 // datagramSession owns one active QUIC DATAGRAM connection and exposes decoded frames.
 type datagramSession struct {
-	incoming       chan types.DatagramFrame
-	dropIncoming   bool
-	onReceiveError func(error)
-	done           chan struct{}
+	incoming     chan types.DatagramFrame
+	dropIncoming bool
+	done         chan struct{}
+	recvErr      error
 
 	mu     sync.Mutex
 	conn   *quic.Conn
 	closed bool
 }
 
-func newDatagramSession(bufferSize int, dropIncoming bool, onReceiveError func(error)) *datagramSession {
+func newDatagramSession(bufferSize int, dropIncoming bool) *datagramSession {
 	if bufferSize <= 0 {
 		bufferSize = 256
 	}
 
 	return &datagramSession{
-		incoming:       make(chan types.DatagramFrame, bufferSize),
-		dropIncoming:   dropIncoming,
-		onReceiveError: onReceiveError,
-		done:           make(chan struct{}),
+		incoming:     make(chan types.DatagramFrame, bufferSize),
+		dropIncoming: dropIncoming,
+		done:         make(chan struct{}),
 	}
 }
 
@@ -53,6 +52,7 @@ func (s *datagramSession) Bind(conn *quic.Conn) (<-chan struct{}, error) {
 	}
 	old := s.conn
 	s.conn = conn
+	s.recvErr = nil
 	s.mu.Unlock()
 
 	if old != nil {
@@ -66,6 +66,14 @@ func (s *datagramSession) Bind(conn *quic.Conn) (<-chan struct{}, error) {
 
 func (s *datagramSession) Done() <-chan struct{} {
 	return s.done
+}
+
+// Err reports the receive error that ended the active connection's loop, if
+// any. It is cleared on the next Bind.
+func (s *datagramSession) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recvErr
 }
 
 func (s *datagramSession) hasConnection() bool {
@@ -126,17 +134,13 @@ func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
 		data, err := conn.ReceiveDatagram(context.Background())
 		if err != nil {
 			s.mu.Lock()
-			isActive := s.conn == conn
-			if isActive {
+			if s.conn == conn && !s.closed {
 				s.conn = nil
+				s.recvErr = err
 			}
-			closed := s.closed
-			onReceiveError := s.onReceiveError
 			s.mu.Unlock()
-
-			if isActive && !closed && onReceiveError != nil {
-				onReceiveError(err)
-			}
+			// Loop exit is intentional: the error is recorded for Err() and
+			// owners observe termination through the done signal.
 			return
 		}
 

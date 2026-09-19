@@ -71,7 +71,7 @@ func (r *leaseRecord) Start() error {
 		}
 	}
 	if r.tcpPort != nil {
-		return r.tcpPort.Start(context.Background())
+		return r.tcpPort.Start()
 	}
 	return nil
 }
