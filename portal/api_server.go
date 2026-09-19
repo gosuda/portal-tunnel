@@ -501,7 +501,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
 	clientIP := s.registry.policy.ExtractClientIP(r)
 	if s.overlay != nil && s.overlay.Handles(capability) {
-		s.overlay.HandleConnect(w, r, capability, clientIP)
+		client, gateway := s.overlay.HandleConnect(w, r, capability, clientIP)
+		if client != nil {
+			s.proxy.bridge(client, gateway, "", s.registry.policy.BPSManager())
+		}
 		return
 	}
 

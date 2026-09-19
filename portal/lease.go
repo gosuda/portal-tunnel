@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -242,15 +241,16 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			}
 			return nil, types.RegisterResponse{}, err
 		}
-		record.tcpPort = transport.NewRelayTCPPort(identityKey, port, stream, func(left, right net.Conn) {
-			r.proxy.bridge(left, right, identityKey, r.policy.BPSManager())
-		})
+		record.tcpPort = transport.NewRelayTCPPort(identityKey, port, stream)
 		record.tcpPorts = r.tcpPorts
 	}
 
 	if err := record.Start(); err != nil {
 		record.Close()
 		return nil, types.RegisterResponse{}, err
+	}
+	if record.tcpPort != nil {
+		go r.serveTCPPairs(record.tcpPort, identityKey)
 	}
 
 	var replaced *leaseRecord
@@ -387,6 +387,47 @@ func (r *leaseRegistry) admitReverseCapability(token string) (*leaseRecord, erro
 		return nil, errUnauthorized
 	}
 	return r.admitLeaseIdentity(claims.Identity.Key(), claims.LeaseID, now, false)
+}
+
+// admitReverseOffer performs portal lease admission for a verified overlay
+// reverse connection and answers the overlay status byte on the connection:
+// unavailable when the lease is gone, capacity when the ready queue is full,
+// accepted once the connection is queued for the lease.
+func (r *leaseRegistry) admitReverseOffer(offer overlay.ReverseOffer) {
+	lease, err := r.admitLeaseIdentity(offer.IdentityKey, offer.LeaseID, time.Now().UTC(), false)
+	if err != nil {
+		// Admission failed; answer unavailable on the wire and release the
+		// connection — there is no lease to queue it into.
+		_, _ = offer.Conn.Write([]byte{overlay.StatusUnavailable})
+		_ = offer.Conn.Close()
+		return
+	}
+	ready := func() error {
+		_, err := offer.Conn.Write([]byte{overlay.StatusAccepted})
+		return err
+	}
+	if err := lease.stream.OfferConnReady(offer.Conn, ready); err != nil {
+		// The stream did not take ownership; answer capacity on the wire and
+		// release the connection so the client can redial later.
+		_, _ = offer.Conn.Write([]byte{overlay.StatusCapacity})
+		_ = offer.Conn.Close()
+		return
+	}
+	_ = offer.Conn.SetDeadline(time.Time{})
+}
+
+// serveTCPPairs pairs each accepted TCP port connection with a claimed
+// reverse session and hands both to the proxy bridge. It returns when the
+// port stops accepting.
+func (r *leaseRegistry) serveTCPPairs(port *transport.RelayTCPPort, identityKey string) {
+	for {
+		inbound, session, err := port.Accept()
+		if err != nil {
+			// Acceptance ended (port closed); bridges stop with the lease.
+			return
+		}
+		go r.proxy.bridge(inbound, session, identityKey, r.policy.BPSManager())
+	}
 }
 
 func (r *leaseRegistry) admitLeaseIdentity(key, leaseID string, now time.Time, requireDatagram bool) (*leaseRecord, error) {

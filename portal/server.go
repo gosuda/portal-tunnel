@@ -284,16 +284,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		server.overlay, err = overlay.New(overlay.Config{
 			ConfigPath: cfg.IVNPConfigPath,
 			Authority:  relayAuthority,
-			OfferReverse: func(identityKey, leaseID string, conn net.Conn, ready func() error) error {
-				lease, err := registry.admitLeaseIdentity(identityKey, leaseID, time.Now().UTC(), false)
-				if err != nil {
-					return fmt.Errorf("%w: %w", overlay.ErrLeaseUnavailable, err)
-				}
-				return lease.stream.OfferConnReady(conn, ready)
-			},
-			Bridge: func(left, right net.Conn) {
-				server.proxy.bridge(left, right, "", registry.policy.BPSManager())
-			},
 		})
 		if err != nil {
 			return nil, err
@@ -540,6 +530,16 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 				s.overlay.Close()
 			}
 			return nil
+		})
+		group.Go(func() error {
+			for {
+				select {
+				case <-groupCtx.Done():
+					return nil
+				case offer := <-s.overlay.ReverseOffers():
+					s.registry.admitReverseOffer(offer)
+				}
+			}
 		})
 	}
 	s.acmeManager.Start(serverCtx)

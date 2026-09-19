@@ -12,9 +12,9 @@ type ClientDatagram struct {
 	session *datagramSession
 }
 
-func NewClientDatagram(onReceiveError func(error)) *ClientDatagram {
+func NewClientDatagram() *ClientDatagram {
 	return &ClientDatagram{
-		session: newDatagramSession(256, false, onReceiveError),
+		session: newDatagramSession(256, false),
 	}
 }
 
@@ -50,6 +50,14 @@ func (d *ClientDatagram) Send(flowID uint32, payload []byte) error {
 
 func (d *ClientDatagram) Connected() bool {
 	return d != nil && d.session != nil && d.session.hasConnection()
+}
+
+// Err reports the receive error that ended the active backhaul loop, if any.
+func (d *ClientDatagram) Err() error {
+	if d == nil || d.session == nil {
+		return nil
+	}
+	return d.session.Err()
 }
 
 func (d *ClientDatagram) Clear(reason string) {
