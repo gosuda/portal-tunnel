@@ -6,7 +6,6 @@ import {
 import { classifyShareInput } from "@/lib/shareLink";
 import {
   buildTunnelCommand,
-  buildTunnelDisplayCommand,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 
@@ -115,17 +114,13 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
       share.target,
     ]
   );
-  const copyCommand = useMemo(
+  const command = useMemo(
     () => buildTunnelCommand(commandOptions),
-    [commandOptions]
-  );
-  const displayCommand = useMemo(
-    () => buildTunnelDisplayCommand(commandOptions),
     [commandOptions]
   );
   const { installBlock, runBlock } = useMemo(
     () => {
-      const lines = displayCommand.split("\n");
+      const lines = command.split("\n");
       const installLineCount = os === "windows" ? 2 : 1;
 
       return {
@@ -133,7 +128,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
         runBlock: lines.slice(installLineCount).join("\n"),
       };
     },
-    [displayCommand, os]
+    [command, os]
   );
 
   useEffect(() => {
@@ -152,7 +147,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(copyCommand);
+      await navigator.clipboard.writeText(command);
       setCopied(true);
     } catch (error) {
       console.error("Failed to copy tunnel command", error);

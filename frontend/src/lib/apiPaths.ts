@@ -29,8 +29,6 @@ export const RELAY_API_PATHS = {
   },
 } as const;
 
-export const BROWSER_API_PATHS = RELAY_API_PATHS;
-
 export const ROUTE_PATHS = {
   home: "/",
   serverDetail: "/server/:id",

@@ -8,7 +8,7 @@ import type { BaseServer } from "@/hooks/useList";
 import type { SortOption, StatusFilter } from "@/types/filters";
 import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
 import { apiClient } from "@/lib/apiClient";
-import { BROWSER_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
 import type { Lease, DiscoveryResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
 
 export interface KnownRelay {
@@ -139,7 +139,7 @@ export function ServerListView({
 
       try {
         const discovery =
-          await apiClient.get<DiscoveryResponse>(BROWSER_API_PATHS.discovery);
+          await apiClient.get<DiscoveryResponse>(RELAY_API_PATHS.discovery);
         nextKnownRelays = mergeIncompatibleRelays(
           normalizeKnownRelays(discovery?.relays, currentRelayURL),
           discovery?.incompatible_relays,
