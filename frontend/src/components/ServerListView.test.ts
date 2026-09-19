@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  mergeIncompatibleRelays,
-  relayReleaseLabel,
-} from "./ServerListView";
+import { mergeIncompatibleRelays } from "./ServerListView";
 
 const CURRENT = "https://relay-current.example";
 
@@ -39,38 +36,5 @@ describe("mergeIncompatibleRelays", () => {
         CURRENT
       )
     ).toEqual(known);
-  });
-});
-
-describe("relayReleaseLabel", () => {
-  const oldRelay = {
-    relayURL: "https://relay-old.example",
-    isCurrent: false,
-    protocolVersion: "8",
-  };
-
-  it("shows loading while the release probe is pending", () => {
-    expect(relayReleaseLabel({}, oldRelay)).toBe("loading...");
-    expect(relayReleaseLabel({ [oldRelay.relayURL]: null }, oldRelay)).toBe(
-      "loading..."
-    );
-  });
-
-  it("falls back to the observed discovery protocol when the probe fails", () => {
-    expect(
-      relayReleaseLabel({ [oldRelay.relayURL]: "" }, oldRelay)
-    ).toBe("discovery 8");
-  });
-
-  it("still reports offline without a protocol version", () => {
-    expect(
-      relayReleaseLabel({ [oldRelay.relayURL]: "" }, { ...oldRelay, protocolVersion: undefined })
-    ).toBe("offline");
-  });
-
-  it("prefers the probed release version when available", () => {
-    expect(
-      relayReleaseLabel({ [oldRelay.relayURL]: "v2.3.8" }, oldRelay)
-    ).toBe("v2.3.8");
   });
 });

@@ -16,7 +16,7 @@ import { FloatingActionBar } from "@/components/FloatingActionBar";
 import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
-import type { DiscoveryResponse, DomainResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
+import type { DiscoveryResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
 import {
   Dialog,
   DialogContent,
@@ -32,34 +32,9 @@ export interface KnownRelay {
   protocolVersion?: string;
 }
 
-type RelayReleaseVersions = Record<string, string | null>;
-
 const OFFICIAL_REGISTRY_SOURCE_URL =
   "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
 const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
-
-async function loadRelayReleaseVersion(
-  relayURL: string,
-  timeoutMs: number = 5000
-): Promise<string> {
-  const domainURL = new URL(BROWSER_API_PATHS.sdk.domain, relayURL).toString();
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error("timeout")), timeoutMs);
-  });
-
-  try {
-    const domain = await Promise.race([
-      apiClient.get<DomainResponse>(domainURL),
-      timeoutPromise,
-    ]);
-    return typeof domain?.release_version === "string"
-      ? domain.release_version.trim()
-      : "";
-  } catch {
-    return "";
-  }
-}
 
 function normalizeRelayURL(relayURL: string | undefined): string {
   return typeof relayURL === "string" ? relayURL.trim() : "";
@@ -128,22 +103,6 @@ export function mergeIncompatibleRelays(
   });
 
   return merged;
-}
-
-export function relayReleaseLabel(
-  versions: RelayReleaseVersions,
-  relay: KnownRelay
-): string {
-  const version = versions[relay.relayURL];
-  if (version === undefined || version === null) {
-    return "loading...";
-  }
-  if (!version) {
-    return relay.protocolVersion
-      ? `discovery ${relay.protocolVersion}`
-      : "offline";
-  }
-  return version;
 }
 
 interface ServerListViewProps {
@@ -234,9 +193,6 @@ export function ServerListView({
   onAuthChange,
 }: ServerListViewProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
-  const [relayReleaseVersions, setRelayReleaseVersions] = useState<
-    RelayReleaseVersions
-  >({});
   const [knownRelays, setKnownRelays] = useState<KnownRelay[]>([]);
   const [relayDiscoveryLoading, setRelayDiscoveryLoading] = useState(
     () => !isAdmin
@@ -327,7 +283,6 @@ export function ServerListView({
     }
     let cancelled = false;
     setRelayDiscoveryLoading(true);
-    setRelayReleaseVersions({});
     setKnownRelays([]);
 
     void (async () => {
@@ -351,25 +306,6 @@ export function ServerListView({
 
       setKnownRelays(nextKnownRelays);
       setRelayDiscoveryLoading(false);
-
-      const relayURLs = nextKnownRelays.map((relay) => relay.relayURL);
-      const uniqueRelayURLs = [...new Set(relayURLs)];
-      setRelayReleaseVersions(
-        Object.fromEntries(uniqueRelayURLs.map((relayURL) => [relayURL, null]))
-      );
-
-      uniqueRelayURLs.forEach((relayURL) => {
-        void (async () => {
-          const version = await loadRelayReleaseVersion(relayURL);
-          if (cancelled) {
-            return;
-          }
-          setRelayReleaseVersions((prev) => ({
-            ...prev,
-            [relayURL]: version,
-          }));
-        })();
-      });
     })();
 
     return () => {
@@ -942,14 +878,11 @@ export function ServerListView({
                             >
                               {relay.relayURL}
                             </a>
-                            <div className="flex shrink-0 items-center gap-2">
-                              <span className="rounded-sm bg-secondary/70 px-2.5 py-1 font-mono text-[11px] font-medium text-text-muted ring-1 ring-border">
-                                {relayReleaseLabel(
-                                  relayReleaseVersions,
-                                  relay
-                                )}
+                            {relay.protocolVersion && (
+                              <span className="shrink-0 rounded-sm bg-secondary/70 px-2.5 py-1 font-mono text-[11px] font-medium text-text-muted ring-1 ring-border">
+                                discovery {relay.protocolVersion}
                               </span>
-                            </div>
+                            )}
                           </div>
                         ))}
                       </div>
