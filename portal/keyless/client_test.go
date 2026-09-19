@@ -58,6 +58,16 @@ func TestClientClosePreservesFirstError(t *testing.T) {
 	}
 }
 
+func TestNewSignerRequiresTranscriptValidator(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewSigner(nil, nil); err == nil {
+		t.Fatal("NewSigner(nil validator) = nil error, want policy guard")
+	} else if err.Error() != "portal transcript validator is required" {
+		t.Fatalf("NewSigner(nil validator) error = %q, want transcript validator requirement", err)
+	}
+}
+
 func TestVerifyCertificateHostname(t *testing.T) {
 	t.Parallel()
 	_, _, certPEM := mustSelfSignedCert(t, "covered.test.example", nil)
