@@ -24,6 +24,7 @@ export function Admin() {
     landingPageEnabled,
     udpSettings,
     tcpPortSettings,
+    policySaving,
     favorites,
     loading,
     error,
@@ -107,6 +108,7 @@ export function Admin() {
         landingPageEnabled={landingPageEnabled}
         udpSettings={udpSettings}
         tcpPortSettings={tcpPortSettings}
+        policySaving={policySaving}
         onBanFilterChange={handleBanFilterChange}
         onBanStatusChange={handleBanStatus}
         onBPSChange={handleBPSChange}

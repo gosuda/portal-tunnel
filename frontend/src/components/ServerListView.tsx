@@ -163,6 +163,7 @@ interface ServerListViewProps {
   isAdmin?: boolean;
   banFilter?: BanFilter;
   approvalMode?: ApprovalMode;
+  policySaving?: boolean;
   landingPageEnabled?: boolean;
   onBanFilterChange?: (value: BanFilter) => void;
   onBanStatusChange?: (
@@ -214,6 +215,7 @@ export function ServerListView({
   isAdmin = false,
   banFilter = "all",
   approvalMode = "auto",
+  policySaving = false,
   landingPageEnabled = false,
   onBanFilterChange,
   onBanStatusChange,
@@ -478,6 +480,7 @@ export function ServerListView({
           <span className="text-sm font-medium text-text-muted">Approval</span>
           <ApprovalModeToggle
             approvalMode={approvalMode}
+            disabled={policySaving}
             onApprovalModeChange={onApprovalModeChange}
           />
         </div>
@@ -487,8 +490,9 @@ export function ServerListView({
           <span className="text-sm font-medium text-text-muted">Landing</span>
           <div className="flex overflow-hidden rounded-lg border border-foreground/20">
             <button
+              disabled={policySaving}
               onClick={() => handleLandingPageToggle(true)}
-              className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
+              className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors ${
                 landingPageEnabled
                   ? "bg-primary text-primary-foreground"
                   : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -497,8 +501,9 @@ export function ServerListView({
               Shown
             </button>
             <button
+              disabled={policySaving}
               onClick={() => handleLandingPageToggle(false)}
-              className={`cursor-pointer border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${
+              className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${
                 !landingPageEnabled
                   ? "bg-primary text-primary-foreground"
                   : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -520,8 +525,9 @@ export function ServerListView({
             <span className="text-sm font-medium text-text-muted">UDP</span>
             <div className="flex rounded-lg overflow-hidden border border-foreground/20">
               <button
+                disabled={policySaving}
                 onClick={() => handleUDPToggle(false)}
-                className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
+                className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors ${
                   !udpSettings.enabled
                     ? "bg-primary text-primary-foreground"
                     : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -530,8 +536,9 @@ export function ServerListView({
                 Disabled
               </button>
               <button
+                disabled={policySaving}
                 onClick={() => handleUDPToggle(true)}
-                className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
+                className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
                   udpSettings.enabled
                     ? "bg-primary text-primary-foreground"
                     : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -547,17 +554,19 @@ export function ServerListView({
               <input
                 type="number"
                 min="0"
+                disabled={policySaving}
                 value={maxLeasesInput}
                 onChange={(e) => setMaxLeasesInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleMaxLeasesSave();
                 }}
-                className="w-20 h-10 px-3 text-sm border border-foreground/20 rounded-lg bg-secondary text-foreground"
+                className="disabled:opacity-50 w-20 h-10 px-3 text-sm border border-foreground/20 rounded-lg bg-secondary text-foreground"
                 placeholder="0"
               />
               <button
+                disabled={policySaving}
                 onClick={handleMaxLeasesSave}
-                className="cursor-pointer h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                className="cursor-pointer disabled:cursor-wait disabled:opacity-50 h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
               >
                 Save
               </button>
@@ -571,8 +580,9 @@ export function ServerListView({
             <span className="text-sm font-medium text-text-muted">TCP</span>
             <div className="flex rounded-lg overflow-hidden border border-foreground/20">
               <button
+                disabled={policySaving}
                 onClick={() => handleTCPPortToggle(false)}
-                className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
+                className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors ${
                   !tcpPortSettings.enabled
                     ? "bg-primary text-primary-foreground"
                     : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -581,8 +591,9 @@ export function ServerListView({
                 Disabled
               </button>
               <button
+                disabled={policySaving}
                 onClick={() => handleTCPPortToggle(true)}
-                className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
+                className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
                   tcpPortSettings.enabled
                     ? "bg-primary text-primary-foreground"
                     : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -598,17 +609,19 @@ export function ServerListView({
               <input
                 type="number"
                 min="0"
+                disabled={policySaving}
                 value={tcpPortMaxLeasesInput}
                 onChange={(e) => setTCPPortMaxLeasesInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleTCPPortMaxLeasesSave();
                 }}
-                className="w-20 h-10 px-3 text-sm border border-foreground/20 rounded-lg bg-secondary text-foreground"
+                className="disabled:opacity-50 w-20 h-10 px-3 text-sm border border-foreground/20 rounded-lg bg-secondary text-foreground"
                 placeholder="0"
               />
               <button
+                disabled={policySaving}
                 onClick={handleTCPPortMaxLeasesSave}
-                className="cursor-pointer h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                className="cursor-pointer disabled:cursor-wait disabled:opacity-50 h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
               >
                 Save
               </button>
@@ -768,6 +781,7 @@ export function ServerListView({
                     </span>
                     <ApprovalModeToggle
                       approvalMode={approvalMode}
+                      disabled={policySaving}
                       onApprovalModeChange={onApprovalModeChange}
                     />
                   </div>
@@ -777,8 +791,9 @@ export function ServerListView({
                     <span className="text-sm font-medium text-text-muted">Landing</span>
                     <div className="flex overflow-hidden rounded-lg border border-foreground/20">
                       <button
+                        disabled={policySaving}
                         onClick={() => handleLandingPageToggle(true)}
-                        className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
+                        className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors ${
                           landingPageEnabled
                             ? "bg-primary text-primary-foreground"
                             : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -787,8 +802,9 @@ export function ServerListView({
                         Shown
                       </button>
                       <button
+                        disabled={policySaving}
                         onClick={() => handleLandingPageToggle(false)}
-                        className={`cursor-pointer border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${
+                        className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${
                           !landingPageEnabled
                             ? "bg-primary text-primary-foreground"
                             : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
