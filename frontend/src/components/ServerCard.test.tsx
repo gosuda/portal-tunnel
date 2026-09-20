@@ -147,23 +147,23 @@ function renderVotingCard() {
 }
 
 describe("ServerCard community reputation votes", () => {
-  it("renders counts and votes without navigating the card", () => {
+  it("renders counts and votes without navigating the card", async () => {
     const onVote = renderVotingCard();
 
     expect(screen.getByText("12")).toBeTruthy();
     expect(screen.getByText("8")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Recommend" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Recommend" })));
     expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "up");
 
-    fireEvent.click(screen.getByRole("button", { name: "Not recommend" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Not recommend" })));
     expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "down");
 
     expect(screen.getByText("directory")).toBeTruthy();
     expect(screen.queryByText("service detail")).toBeNull();
   });
 
-  it("keeps vote controls keyboard reachable without navigating", () => {
+  it("keeps vote controls keyboard reachable without navigating", async () => {
     const onVote = renderVotingCard();
 
     for (const name of ["Recommend", "Not recommend"]) {
@@ -172,7 +172,7 @@ describe("ServerCard community reputation votes", () => {
       expect(document.activeElement).toBe(button);
     }
 
-    fireEvent.click(screen.getByRole("button", { name: "Recommend" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Recommend" })));
     expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "up");
     expect(screen.getByText("directory")).toBeTruthy();
     expect(screen.queryByText("service detail")).toBeNull();
