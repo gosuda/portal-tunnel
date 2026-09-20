@@ -1,6 +1,6 @@
 # Portal Relay
 
-> Portal exposes local HTTP, TCP, and UDP services through self-hosted or public relays with end-to-end tenant TLS.
+> Portal exposes local services through self-hosted or public relays. Ordinary HTTPS tunnels terminate TLS locally; raw TCP/UDP and opt-in static caching have different trust boundaries.
 
 This Portal relay is available at %s.
 

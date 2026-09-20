@@ -10,9 +10,13 @@ public relay.
 
 ## Prerequisites
 
-- macOS, Linux, or Windows
-- Internet connectivity
+- macOS, Linux, or Windows on amd64 or arm64
+- Outbound TCP connectivity; UDP tunnels also need outbound UDP to the relay QUIC port
 - A local service to expose, such as a web app on port `3000`
+
+Normal tunnel use needs no account, API key, or browser wallet. Relay operators
+also need a public IP, a domain, and reachable ingress ports; see
+[deployment prerequisites](/deployment#prerequisites).
 
 ## Install The CLI
 

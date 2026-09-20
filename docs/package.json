@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build && npx pagefind --site build && cp -r build/pagefind static/",
+    "build": "vite build && pagefind --site build && cp -r build/pagefind static/",
     "preview": "vite preview"
   },
   "devDependencies": {

@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -199,7 +200,7 @@ func DefaultSNIPort(portalURL string) int {
 }
 
 func (cfg ServerConfig) snapshot() ServerConfig {
-	cfg.Bootstraps = utils.CloneSlice(cfg.Bootstraps)
+	cfg.Bootstraps = slices.Clone(cfg.Bootstraps)
 	return cfg
 }
 

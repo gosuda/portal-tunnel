@@ -53,28 +53,14 @@ To stop, run `Portal: Stop Tunnel` or close the `Portal Tunnel` terminal.
 ```bash
 git clone https://github.com/gosuda/portal-tunnel
 cd portal-tunnel/extensions/vscode
-corepack pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile
+pnpm test
+pnpm run compile
 ```
 
-Open the folder in VSCode, then press `F5` to launch the Extension Development Host.
+Command tests use Node's built-in test runner; they do not download or launch
+Electron. To exercise the UI, open this folder in VSCode, press `F5`, and run
+the Portal commands in the Extension Development Host.
 
-To test the extension locally:
-
-1. Open `extensions/vscode` in VSCode.
-2. Press `F5` and choose `Run Extension`.
-3. In the new Extension Development Host window, run `Portal: Start Tunnel` or `Portal: Start Tunnel (Advanced)` from the Command Palette.
-
-If you want Linux behavior from WSL, open the folder with `Remote - WSL` first so the extension host runs in WSL instead of Windows.
-
-## Release Notes
-
-### 0.0.3
-
-- Run the latest GitHub release installer script before execution
-
-### 0.0.2
-
-- Enforce `https://` relay URLs
-- Prompt only for the local host in `Portal: Start Tunnel`
-- Add `Portal: Start Tunnel (Advanced)` for host, name, relay, and thumbnail overrides
-- Generate a stable default service name in the extension when the name is empty
+For Linux behavior under WSL, open the folder through `Remote - WSL` so the
+extension host runs in WSL rather than Windows.

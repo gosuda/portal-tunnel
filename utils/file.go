@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"cmp"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,7 +9,7 @@ import (
 
 func EnsureParentDir(path string) error {
 	dir := filepath.Dir(strings.TrimSpace(path))
-	if dir == "" || dir == "." {
+	if dir == "." {
 		return nil
 	}
 	return os.MkdirAll(dir, 0o700)
@@ -28,7 +27,6 @@ func FileExists(path string) bool {
 func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	path = strings.TrimSpace(path)
 	dir := filepath.Dir(path)
-	dir = cmp.Or(dir, ".")
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
 		return err

@@ -67,6 +67,10 @@ For ordinary uncached tunnels:
 
 Raw TCP and UDP port transports do not add tenant TLS. Use application-level encryption for those modes when confidentiality matters.
 
+Use a separate tunnel domain for public multi-tenant relays. The ordinary TLS
+passthrough path does not let the relay control tenant HTTP responses, so do
+not place arbitrary tenants under a domain that also hosts trusted first-party content.
+
 ## Identity
 
 Registration uses a SIWE challenge signed by the SDK's secp256k1 identity key. The key is loaded from `identity.json` either as a raw secp256k1 `private_key` or derived from a BIP-39 `mnemonic` and `derivation_path`. The relay then issues a lease-scoped ES256K access token used by renew, unregister, keyless signing, and QUIC datagram authentication, plus a separate reverse-only capability for reverse streams.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -28,7 +29,7 @@ type Provider struct {
 func New(apiToken string) *Provider {
 	return &Provider{
 		apiToken: strings.TrimSpace(apiToken),
-		zones:    utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
+		zones:    utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
 	}
 }
 

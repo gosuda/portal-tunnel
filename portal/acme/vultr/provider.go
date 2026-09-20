@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/go-acme/lego/v4/challenge"
@@ -27,7 +28,7 @@ type Provider struct {
 func New(apiKey string) *Provider {
 	return &Provider{
 		apiKey: strings.TrimSpace(apiKey),
-		zones:  utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
+		zones:  utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
 	}
 }
 

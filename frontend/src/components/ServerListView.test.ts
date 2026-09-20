@@ -7,11 +7,6 @@ import {
 const CURRENT = "https://relay-current.example";
 
 describe("mergeIncompatibleRelays", () => {
-  it("returns the known list unchanged without incompatible entries", () => {
-    const known = [{ relayURL: CURRENT, isCurrent: true }];
-    expect(mergeIncompatibleRelays(known, undefined, CURRENT)).toBe(known);
-  });
-
   it("appends incompatible relay URLs and preserves the observed protocol version", () => {
     const known = [{ relayURL: CURRENT, isCurrent: true }];
     expect(

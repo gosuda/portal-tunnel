@@ -196,13 +196,6 @@ func ParseOptionalPortNumber(raw string, fallback int) int {
 	return ParsePortNumber(raw, fallback)
 }
 
-func DurationOrDefault(v, fallback time.Duration) time.Duration {
-	if v > 0 {
-		return v
-	}
-	return fallback
-}
-
 func IntOrDefault(v, fallback int) int {
 	if v > 0 {
 		return v
