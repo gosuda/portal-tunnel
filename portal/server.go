@@ -33,9 +33,10 @@ import (
 )
 
 const (
-	defaultClaimTimeout     = 10 * time.Second
-	defaultClientHelloWait  = 2 * time.Second
-	defaultControlBodyLimit = 4 << 20
+	defaultClaimTimeout          = 10 * time.Second
+	defaultClientHelloWait       = 2 * time.Second
+	defaultControlBodyLimit      = 4 << 20
+	reverseOfferAdmissionWorkers = 16
 )
 
 type ServerConfig struct {
@@ -531,16 +532,21 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 			}
 			return nil
 		})
-		group.Go(func() error {
-			for {
-				select {
-				case <-groupCtx.Done():
-					return nil
-				case offer := <-s.overlay.ReverseOffers():
-					s.registry.admitReverseOffer(offer)
+		// A status-byte write may wait for the reverse connection deadline. A
+		// fixed pool prevents one slow peer from blocking all lease admissions
+		// without creating unbounded admission goroutines.
+		for range reverseOfferAdmissionWorkers {
+			group.Go(func() error {
+				for {
+					select {
+					case <-groupCtx.Done():
+						return nil
+					case offer := <-s.overlay.ReverseOffers():
+						s.registry.admitReverseOffer(offer)
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 	s.acmeManager.Start(serverCtx)
 	group.Go(func() error {
