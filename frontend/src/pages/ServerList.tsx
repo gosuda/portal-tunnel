@@ -17,6 +17,7 @@ export function ServerList() {
     handleTagToggle,
     handleToggleFavorite,
     onVote,
+    isVotePending,
     landingPageEnabled,
   } = useServerList();
 
@@ -37,6 +38,7 @@ export function ServerList() {
         onTagToggle={handleTagToggle}
         onToggleFavorite={handleToggleFavorite}
         onVote={onVote}
+        isVotePending={isVotePending}
       />
     </SsgoiTransition>
   );

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -22,22 +23,23 @@ func newTestReputationStore(t *testing.T) *ReputationStore {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.mintLimiter = policy.NewSourceLimiter(1000, 1000, 0, 0)
 	return store
 }
 
 func TestReputationVoteSwitchAndRestart(t *testing.T) {
 	store := newTestReputationStore(t)
 	live := map[string]bool{"demo.example.com": true}
-	first, cookie, err := store.castVote("demo.example.com", voteUp, "", live)
+	first, cookie, err := store.castVote("demo.example.com", voteUp, "", "203.0.113.10", live)
 	if err != nil || first.Up != 1 || cookie == "" {
 		t.Fatalf("first vote = %+v, cookie=%q, err=%v", first, cookie, err)
 	}
 	seen := store.state.Hostnames["demo.example.com"].LastSeenAt
-	same, _, err := store.castVote("demo.example.com", voteUp, cookie, live)
+	same, _, err := store.castVote("demo.example.com", voteUp, cookie, "203.0.113.10", live)
 	if err != nil || same.Up != 1 || !store.state.Hostnames["demo.example.com"].LastSeenAt.Equal(seen) {
 		t.Fatalf("same vote changed state: %+v, err=%v", same, err)
 	}
-	switched, _, err := store.castVote("demo.example.com", voteDown, cookie, live)
+	switched, _, err := store.castVote("demo.example.com", voteDown, cookie, "203.0.113.10", live)
 	if err != nil || switched.Up != 0 || switched.Down != 1 || switched.ViewerVote != voteDown {
 		t.Fatalf("switched vote = %+v, err=%v", switched, err)
 	}
@@ -54,11 +56,11 @@ func TestReputationKnownHostAndRetention(t *testing.T) {
 	store := newTestReputationStore(t)
 	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
-	if _, _, err := store.castVote("fake.example.com", voteUp, "", nil); !errors.Is(err, errReputationUnknownHostname) {
+	if _, _, err := store.castVote("fake.example.com", voteUp, "", "203.0.113.10", nil); !errors.Is(err, errReputationUnknownHostname) {
 		t.Fatalf("unknown hostname error = %v", err)
 	}
 	live := map[string]bool{"demo.example.com": true}
-	_, cookie, err := store.castVote("demo.example.com", voteUp, "", live)
+	_, cookie, err := store.castVote("demo.example.com", voteUp, "", "203.0.113.10", live)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,10 +71,10 @@ func TestReputationKnownHostAndRetention(t *testing.T) {
 	if got := store.summary("demo.example.com", store.viewerHashFor(cookie), live); got.Total != 1 {
 		t.Fatalf("live hostname lost retained vote = %+v", got)
 	}
-	if _, _, err := store.castVote("demo.example.com", voteDown, cookie, nil); !errors.Is(err, errReputationUnknownHostname) {
+	if _, _, err := store.castVote("demo.example.com", voteDown, cookie, "203.0.113.10", nil); !errors.Is(err, errReputationUnknownHostname) {
 		t.Fatalf("expired absent hostname vote error = %v", err)
 	}
-	if got, _, err := store.castVote("demo.example.com", voteDown, cookie, live); err != nil || got.Down != 1 || got.Up != 0 {
+	if got, _, err := store.castVote("demo.example.com", voteDown, cookie, "203.0.113.10", live); err != nil || got.Down != 1 || got.Up != 0 {
 		t.Fatalf("live hostname vote after retention = %+v, err=%v", got, err)
 	}
 }
@@ -80,12 +82,12 @@ func TestReputationKnownHostAndRetention(t *testing.T) {
 func TestReputationPersistFailureRestoresVote(t *testing.T) {
 	store := newTestReputationStore(t)
 	live := map[string]bool{"demo.example.com": true}
-	_, cookie, err := store.castVote("demo.example.com", voteUp, "", live)
+	_, cookie, err := store.castVote("demo.example.com", voteUp, "", "203.0.113.10", live)
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.persistFn = func() error { return errors.New("disk unavailable") }
-	if _, _, err := store.castVote("demo.example.com", voteDown, cookie, live); !errors.Is(err, errReputationPersist) {
+	if _, _, err := store.castVote("demo.example.com", voteDown, cookie, "203.0.113.10", live); !errors.Is(err, errReputationPersist) {
 		t.Fatalf("persist error = %v", err)
 	}
 	if got := store.summary("demo.example.com", store.viewerHashFor(cookie), live); got.Up != 1 || got.Down != 0 {
@@ -96,11 +98,11 @@ func TestReputationPersistFailureRestoresVote(t *testing.T) {
 func TestReputationDirectoryProjectsLiveHostsAndViewerVote(t *testing.T) {
 	store := newTestReputationStore(t)
 	live := map[string]bool{"voted.example.com": true, "old.example.com": true}
-	_, cookie, err := store.castVote("voted.example.com", voteUp, "", live)
+	_, cookie, err := store.castVote("voted.example.com", voteUp, "", "203.0.113.10", live)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.castVote("old.example.com", voteUp, cookie, live); err != nil {
+	if _, _, err := store.castVote("old.example.com", voteUp, cookie, "203.0.113.10", live); err != nil {
 		t.Fatal(err)
 	}
 	// old.example.com drops out of the live set but its record stays within

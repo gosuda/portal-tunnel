@@ -61,6 +61,8 @@ const (
 	reputationVoteSourceBurst     = 20
 	reputationVoteGlobalPerMinute = 120
 	reputationVoteGlobalBurst     = 40
+	reputationMintSourcePerMinute = 1
+	reputationMintSourceBurst     = 1
 
 	// Whole-file JSON is written on each changed vote, so these caps keep
 	// the work per public POST small.
@@ -127,16 +129,18 @@ var (
 	errReputationUnknownHostname  = errors.New("hostname is not in the public directory")
 	errReputationHostnameCapacity = errors.New("hostname capacity exhausted")
 	errReputationVoterCapacity    = errors.New("hostname voter capacity exhausted")
+	errReputationMintRate         = errors.New("voter identity mint budget exhausted")
 	errReputationPersist          = errors.New("reputation persist failed")
 )
 
 // ReputationStore is the single owner of relay-local service reputation. One
 // mutex covers resolve/mint/apply/persist and each mutation has local rollback.
 type ReputationStore struct {
-	path    string
-	cfg     ReputationConfig
-	limiter *policy.SourceLimiter
-	now     func() time.Time
+	path        string
+	cfg         ReputationConfig
+	limiter     *policy.SourceLimiter
+	mintLimiter *policy.SourceLimiter
+	now         func() time.Time
 
 	// persistFn writes the persisted state; a field so tests can swap in a
 	// failing closure and prove the rollback path.
@@ -181,6 +185,7 @@ func newReputationStore(path string, cfg ReputationConfig) (*ReputationStore, er
 	}
 	store.secret = secret
 	store.limiter = policy.NewSourceLimiter(reputationVoteSourcePerMinute, reputationVoteSourceBurst, reputationVoteGlobalPerMinute, reputationVoteGlobalBurst)
+	store.mintLimiter = policy.NewSourceLimiter(reputationMintSourcePerMinute, reputationMintSourceBurst, 0, 0)
 	store.persistFn = func() error { return utils.WriteJSONFile(store.path, store.state, 0o600) }
 	if secretGenerated {
 		// The secret anchors every voter hash; persist it before the first
@@ -199,10 +204,10 @@ func newReputationStore(path string, cfg ReputationConfig) (*ReputationStore, er
 // applies the vote, and persists atomically under one lock. The returned
 // mint value is a fresh cookie value, set only when a new voter was minted.
 // The live set is the relay's current public directory.
-func (s *ReputationStore) castVote(hostname, vote, cookieID string, live map[string]bool) (reputationSummary, string, error) {
+func (s *ReputationStore) castVote(hostname, vote, cookieID, source string, live map[string]bool) (reputationSummary, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	hash, minted, err := s.resolveVoterLocked(cookieID)
+	hash, minted, err := s.resolveVoterLocked(cookieID, source)
 	if err != nil {
 		return reputationSummary{}, "", err
 	}
@@ -339,10 +344,15 @@ func (s *ReputationStore) viewerHashFor(cookieID string) string {
 
 // resolveVoterLocked returns the digest for a verified cookie or mints a new
 // cookieless identity. Signed cookies need no persisted global voter registry.
-func (s *ReputationStore) resolveVoterLocked(cookieID string) (hash, minted string, err error) {
+func (s *ReputationStore) resolveVoterLocked(cookieID, source string) (hash, minted string, err error) {
 	if cookieID != "" {
 		if verified, ok := s.verifyVoterLocked(cookieID); ok {
 			return verified, "", nil
+		}
+	}
+	if s.mintLimiter != nil {
+		if retry, _ := s.mintLimiter.Allow(source, 1); retry > 0 {
+			return "", "", errReputationMintRate
 		}
 	}
 	id := make([]byte, reputationVoterIDBytes)
@@ -461,7 +471,7 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "vote must be 'up' or 'down'")
 		return
 	}
-	summary, minted, err := api.reputation.castVote(hostname, vote, voterCookieID(r), liveHostnames(api.server))
+	summary, minted, err := api.reputation.castVote(hostname, vote, voterCookieID(r), api.server.PolicyRuntime().ExtractClientIP(r), liveHostnames(api.server))
 	if err != nil {
 		writeReputationError(w, err)
 		return
@@ -489,7 +499,8 @@ func (api *RelayAPI) admitReputationVote(w http.ResponseWriter, r *http.Request)
 func writeReputationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errReputationHostnameCapacity),
-		errors.Is(err, errReputationVoterCapacity):
+		errors.Is(err, errReputationVoterCapacity),
+		errors.Is(err, errReputationMintRate):
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "vote capacity reached")
 	case errors.Is(err, errReputationUnknownHostname):
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "hostname is not in the public directory")

@@ -54,6 +54,7 @@ interface ServerCardProps {
   onToggleSelect?: (identityKey: string) => void;
   reputation?: ReputationSummary;
   onVote?: (hostname: string, vote: ReputationVote) => void;
+  votePending?: boolean;
 }
 
 export function ServerCard({
@@ -89,6 +90,7 @@ export function ServerCard({
   onToggleSelect,
   reputation,
   onVote,
+  votePending = false,
 }: ServerCardProps) {
   const [showBPSModal, setShowBPSModal] = useState(false);
   const [bpsInput, setBpsInput] = useState(bps.toString());
@@ -516,41 +518,6 @@ export function ServerCard({
             </div>
           )}
 
-          {!showAdminControls && reputation && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-white/60">
-                Community
-              </span>
-              <button
-                type="button"
-                onClick={handleVoteClick("up")}
-                aria-label="Recommend"
-                className={clsx(
-                  "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors cursor-pointer",
-                  reputation.viewer_vote === "up"
-                    ? "border-primary/60 bg-primary/90 text-black"
-                    : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
-                )}
-              >
-                <ThumbsUp className="size-3 shrink-0" />
-                <span>{reputation.up}</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleVoteClick("down")}
-                aria-label="Not recommend"
-                className={clsx(
-                  "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors cursor-pointer",
-                  reputation.viewer_vote === "down"
-                    ? "border-primary/60 bg-primary/90 text-black"
-                    : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
-                )}
-              >
-                <ThumbsDown className="size-3 shrink-0" />
-                <span>{reputation.down}</span>
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </article>
@@ -570,6 +537,26 @@ export function ServerCard({
         </Link>
       ) : (
         <div className="relative">{cardBody}</div>
+      )}
+
+      {!showAdminControls && reputation && (
+        <div className="flex items-center gap-1.5 mt-1.5">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-white/60">Community</span>
+          <button type="button" onClick={handleVoteClick("up")} disabled={votePending} aria-label="Recommend" className={clsx(
+            "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
+            votePending ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+            reputation.viewer_vote === "up" ? "border-primary/60 bg-primary/90 text-black" : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
+          )}>
+            <ThumbsUp className="size-3 shrink-0" /><span>{reputation.up}</span>
+          </button>
+          <button type="button" onClick={handleVoteClick("down")} disabled={votePending} aria-label="Not recommend" className={clsx(
+            "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
+            votePending ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+            reputation.viewer_vote === "down" ? "border-primary/60 bg-primary/90 text-black" : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
+          )}>
+            <ThumbsDown className="size-3 shrink-0" /><span>{reputation.down}</span>
+          </button>
+        </div>
       )}
 
       <Dialog open={showBPSModal} onOpenChange={setShowBPSModal}>

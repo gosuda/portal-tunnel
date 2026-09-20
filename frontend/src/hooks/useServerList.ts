@@ -86,7 +86,13 @@ export function useServerList() {
     () =>
       convertPublicLeasesToServers(publicState.leases).map((server) => ({
         ...server,
-        reputation: reputation.summaries[normalizeHostname(server.dns)],
+        reputation: reputation.summaries[normalizeHostname(server.dns)] ?? {
+          hostname: normalizeHostname(server.dns),
+          up: 0,
+          down: 0,
+          total: 0,
+          viewer_vote: "" as const,
+        },
       })),
     [publicState.leases, reputation.summaries]
   );
@@ -100,5 +106,6 @@ export function useServerList() {
     ...list,
     landingPageEnabled: publicState.landingPageEnabled,
     onVote: reputation.vote,
+    isVotePending: reputation.isVotePending,
   };
 }

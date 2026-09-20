@@ -108,10 +108,9 @@ export function useReputation() {
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>(
     {}
   );
-  // Votes read and reconcile through the ref so handlers stay current without
-  // effect re-runs; the relay's newest response wins per hostname.
+  // Keep the current map for the stable vote handler without re-running effects.
   const summariesRef = useRef(summaries);
-  const voteSeqRef = useRef<Record<string, number>>({});
+  const [pending, setPending] = useState<Record<string, boolean>>({});
 
   const applySummaries = (next: Record<string, ReputationSummary>) => {
     summariesRef.current = next;
@@ -144,10 +143,16 @@ export function useReputation() {
 
   const vote = (hostname: string, vote: ReputationVote) => {
     const key = normalizeHostname(hostname);
-    const current = summariesRef.current[key];
-    if (key === "" || !current) {
+    if (key === "" || pending[key]) {
       return;
     }
+    const current = summariesRef.current[key] ?? {
+      hostname: key,
+      up: 0,
+      down: 0,
+      total: 0,
+      viewer_vote: "" as const,
+    };
 
     // Optimistic counts use the same directory warning policy immediately.
     const snapshot = current;
@@ -156,8 +161,7 @@ export function useReputation() {
       [key]: applyVoteToSummary(current, vote),
     });
 
-    const seq = (voteSeqRef.current[key] ?? 0) + 1;
-    voteSeqRef.current[key] = seq;
+    setPending((previous) => ({ ...previous, [key]: true }));
 
     void (async () => {
       try {
@@ -165,9 +169,6 @@ export function useReputation() {
           BROWSER_API_PATHS.public.reputationVote,
           { hostname: current.hostname, vote }
         );
-        if (voteSeqRef.current[key] !== seq) {
-          return;
-        }
         if (
           typeof response?.up === "number" &&
           typeof response?.down === "number" &&
@@ -175,15 +176,14 @@ export function useReputation() {
         ) {
           applySummaries({
             ...summariesRef.current,
-            [key]: applyVoteResponse(current, response),
+            [key]: applyVoteResponse(summariesRef.current[key] ?? current, response),
           });
         }
       } catch (error) {
-        if (voteSeqRef.current[key] !== seq) {
-          return;
-        }
         console.error("Failed to submit vote", error);
         applySummaries({ ...summariesRef.current, [key]: snapshot });
+      } finally {
+        setPending((previous) => ({ ...previous, [key]: false }));
       }
     })();
   };
@@ -191,5 +191,5 @@ export function useReputation() {
   const getSummary = (hostname: string): ReputationSummary | undefined =>
     summaries[normalizeHostname(hostname)];
 
-  return { getSummary, summaries, vote };
+  return { getSummary, summaries, vote, isVotePending: (hostname: string) => Boolean(pending[normalizeHostname(hostname)]) };
 }
