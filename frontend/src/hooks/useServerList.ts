@@ -22,8 +22,24 @@ function normalizeHostname(hostname: string): string {
 type PublicState = {
   leases: Lease[];
   landingPageEnabled: boolean;
-  reputation: ReputationSummary[];
 };
+
+function collectReputation(
+  rows: ReputationSummary[] | undefined
+): Record<string, ReputationSummary> {
+  const summaries: Record<string, ReputationSummary> = {};
+  for (const summary of Array.isArray(rows) ? rows : []) {
+    if (
+      summary?.hostname &&
+      typeof summary.up === "number" &&
+      typeof summary.down === "number" &&
+      typeof summary.total === "number"
+    ) {
+      summaries[normalizeHostname(summary.hostname)] = summary;
+    }
+  }
+  return summaries;
+}
 
 function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
   return leases.map((row) => {
@@ -58,20 +74,8 @@ export function useServerList() {
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
     landingPageEnabled: false,
-    reputation: [],
   });
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
-  useEffect(() => {
-    const next: Record<string, ReputationSummary> = {};
-    for (const summary of publicState.reputation) {
-      if (typeof summary?.hostname === "string" && summary.hostname.trim() !== "" &&
-          typeof summary.up === "number" && typeof summary.down === "number" &&
-          typeof summary.total === "number") {
-        next[normalizeHostname(summary.hostname)] = summary;
-      }
-    }
-    setSummaries(next);
-  }, [publicState.reputation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,15 +88,16 @@ export function useServerList() {
         if (cancelled) {
           return;
         }
+        setSummaries(collectReputation(data?.reputation));
         setPublicState({
           leases: Array.isArray(data?.leases) ? data.leases : [],
           landingPageEnabled: data?.landing_page_enabled ?? false,
-          reputation: Array.isArray(data?.reputation) ? data.reputation : [],
         });
       } catch (error) {
         console.error("Failed to load public relay state", error);
         if (!cancelled) {
-          setPublicState({ leases: [], landingPageEnabled: false, reputation: [] });
+          setPublicState({ leases: [], landingPageEnabled: false });
+          setSummaries({});
         }
       }
     })();
@@ -130,6 +135,7 @@ export function useServerList() {
       }
     } catch (error) {
       console.error("Failed to submit vote", error);
+      throw error;
     }
   };
 

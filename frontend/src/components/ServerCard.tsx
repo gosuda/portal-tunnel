@@ -95,6 +95,7 @@ export function ServerCard({
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const [copiedProtocol, setCopiedProtocol] = useState<string | null>(null);
   const [isVoting, setIsVoting] = useState(false);
+  const [voteError, setVoteError] = useState("");
   const copyTimeoutRef = useRef<number | undefined>(undefined);
   const effectiveThumbnail = thumbnailFailed ? "" : thumbnail;
   const normalizedPaymentLabel = paymentLabel.trim();
@@ -165,9 +166,12 @@ export function ServerCard({
     event.stopPropagation();
     if (reputation) {
       if (!onVote || isVoting) return;
+      setVoteError("");
       setIsVoting(true);
       try {
         await onVote(reputation.hostname, vote);
+      } catch {
+        setVoteError("Vote failed. Please try again.");
       } finally {
         setIsVoting(false);
       }
@@ -279,7 +283,8 @@ export function ServerCard({
     <article
       data-hero-key={`server-bg-${serverId}`}
       className={clsx(
-        "relative w-full overflow-hidden rounded-lg group border border-border bg-card shadow-sm transition-shadow hover:shadow-md dark:border-white/10",
+        "relative w-full overflow-hidden group border border-border bg-card shadow-sm transition-shadow hover:shadow-md dark:border-white/10",
+        !showAdminControls && reputation ? "rounded-t-lg" : "rounded-lg",
         showAdminControls ? "h-71.5" : "h-[174.5px]"
       )}
     >
@@ -544,8 +549,13 @@ export function ServerCard({
         )}
 
         {!showAdminControls && reputation && (
-          <div className="flex items-center gap-1.5 mt-1.5">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-white/60">Community</span>
+          <div
+            className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-b-lg border border-t-0 border-border bg-card px-5 py-2 shadow-sm dark:border-white/10"
+            aria-busy={isVoting}
+          >
+            <span aria-live="polite" className="text-[10px] font-bold uppercase tracking-wider text-white/60">
+              {isVoting ? "Saving…" : "Community"}
+            </span>
             <button type="button" onClick={handleVoteClick("up")} disabled={isVoting} aria-label="Recommend" className={clsx(
               "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
               isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
@@ -553,13 +563,14 @@ export function ServerCard({
             )}>
               <ThumbsUp className="size-3 shrink-0" /><span>{reputation.up}</span>
             </button>
-            <button type="button" onClick={handleVoteClick("down")} disabled={isVoting} aria-label="Not recommend" className={clsx(
+            <button type="button" onClick={handleVoteClick("down")} disabled={isVoting} aria-label="Do not recommend" className={clsx(
               "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
               isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
               reputation.viewer_vote === "down" ? "border-primary/60 bg-primary/90 text-black" : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
             )}>
               <ThumbsDown className="size-3 shrink-0" /><span>{reputation.down}</span>
             </button>
+            {voteError && <span role="alert" className="text-[10px] text-red-400">{voteError}</span>}
           </div>
         )}
       </div>
