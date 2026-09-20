@@ -106,6 +106,7 @@ export function ServerCard({
     ...(udpAddr ? [{ protocol: "UDP", address: udpAddr }] : []),
   ];
   const isTransportService = endpoints.length > 0;
+  const isNavigable = !showAdminControls && !isTransportService;
   const displayTags = [
     ...new Set([...tags, ...endpoints.map((endpoint) => endpoint.protocol)]),
   ];
@@ -283,8 +284,7 @@ export function ServerCard({
     <article
       data-hero-key={`server-bg-${serverId}`}
       className={clsx(
-        "relative w-full overflow-hidden group border border-border bg-card shadow-sm transition-shadow hover:shadow-md dark:border-white/10",
-        !showAdminControls && reputation ? "rounded-t-lg" : "rounded-lg",
+        "relative w-full overflow-hidden rounded-lg group border border-border bg-card shadow-sm transition-shadow hover:shadow-md dark:border-white/10",
         showAdminControls ? "h-71.5" : "h-[174.5px]"
       )}
     >
@@ -308,7 +308,12 @@ export function ServerCard({
 
       <div className="absolute inset-0 bg-linear-to-t from-black/86 via-black/58 to-black/18" />
 
-      <div className="relative z-10 flex h-full flex-col justify-between p-5">
+      <div
+        className={clsx(
+          "relative flex h-full flex-col justify-between p-5",
+          isNavigable ? "pointer-events-none z-30" : "z-10"
+        )}
+      >
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <div className="flex items-center gap-2 rounded-md bg-black/45 px-2.5 py-1 backdrop-blur-sm border border-white/8">
@@ -367,7 +372,7 @@ export function ServerCard({
             <button
               onClick={handleFavoriteClick}
               className={clsx(
-                "flex size-8 items-center justify-center rounded-md backdrop-blur-md transition-colors border border-white/8 cursor-pointer",
+                "pointer-events-auto relative z-30 flex size-8 items-center justify-center rounded-md backdrop-blur-md transition-colors border border-white/8 cursor-pointer",
                 isFavorite
                   ? "bg-primary text-black"
                   : "bg-black/40 text-white/70 hover:bg-primary hover:text-black"
@@ -395,9 +400,57 @@ export function ServerCard({
         <div className="flex flex-col gap-3">
           <div className="flex items-end justify-between gap-3">
             <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-              <h3 className="font-display text-xl font-bold leading-tight text-white truncate">
-                {name}
-              </h3>
+              <div className="flex min-w-0 items-center gap-2">
+                <h3 className="min-w-0 flex-1 truncate font-display text-xl font-bold leading-tight text-white">
+                  {name}
+                </h3>
+
+                {!showAdminControls && reputation && (
+                  <div
+                    className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1"
+                    aria-busy={isVoting}
+                  >
+                    <button
+                      type="button"
+                      onClick={handleVoteClick("up")}
+                      disabled={isVoting}
+                      aria-label="Recommend"
+                      className={clsx(
+                        "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
+                        isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+                        reputation.viewer_vote === "up"
+                          ? "border-primary/60 bg-primary/90 text-black"
+                          : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
+                      )}
+                    >
+                      <ThumbsUp className="size-3 shrink-0" />
+                      <span>{reputation.up}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleVoteClick("down")}
+                      disabled={isVoting}
+                      aria-label="Do not recommend"
+                      className={clsx(
+                        "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
+                        isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+                        reputation.viewer_vote === "down"
+                          ? "border-primary/60 bg-primary/90 text-black"
+                          : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
+                      )}
+                    >
+                      <ThumbsDown className="size-3 shrink-0" />
+                      <span>{reputation.down}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {voteError && (
+                <span role="alert" className="text-[10px] text-red-400">
+                  {voteError}
+                </span>
+              )}
 
               {description && (
                 <p className="text-xs text-white/70 line-clamp-1 font-medium">
@@ -536,42 +589,15 @@ export function ServerCard({
   return (
     <>
       <div className="relative">
-        {!showAdminControls && endpoints.length === 0 ? (
+        {cardBody}
+
+        {isNavigable && (
           <Link
             to={navigationPath}
             state={navigationState}
-            className="cursor-pointer block"
-          >
-            {cardBody}
-          </Link>
-        ) : (
-          cardBody
-        )}
-
-        {!showAdminControls && reputation && (
-          <div
-            className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-b-lg border border-t-0 border-border bg-card px-5 py-2 shadow-sm dark:border-white/10"
-            aria-busy={isVoting}
-          >
-            <span aria-live="polite" className="text-[10px] font-bold uppercase tracking-wider text-white/60">
-              {isVoting ? "Saving…" : "Community"}
-            </span>
-            <button type="button" onClick={handleVoteClick("up")} disabled={isVoting} aria-label="Recommend" className={clsx(
-              "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
-              isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
-              reputation.viewer_vote === "up" ? "border-primary/60 bg-primary/90 text-black" : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
-            )}>
-              <ThumbsUp className="size-3 shrink-0" /><span>{reputation.up}</span>
-            </button>
-            <button type="button" onClick={handleVoteClick("down")} disabled={isVoting} aria-label="Do not recommend" className={clsx(
-              "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
-              isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
-              reputation.viewer_vote === "down" ? "border-primary/60 bg-primary/90 text-black" : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
-            )}>
-              <ThumbsDown className="size-3 shrink-0" /><span>{reputation.down}</span>
-            </button>
-            {voteError && <span role="alert" className="text-[10px] text-red-400">{voteError}</span>}
-          </div>
+            aria-label={`Open ${name}`}
+            className="absolute inset-0 z-20 cursor-pointer rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          />
         )}
       </div>
 
