@@ -83,7 +83,10 @@ type ReverseOffer struct {
 func (o ReverseOffer) Connection() net.Conn { return o.conn }
 
 // Accept writes the accepted status for the reverse-offer protocol.
-func (o ReverseOffer) Accept() error { return o.respond(statusAccepted) }
+func (o ReverseOffer) Accept() error {
+	_, err := o.respond(statusAccepted)
+	return err
+}
 
 // RejectUnavailable writes the unavailable status for the reverse-offer protocol.
 func (o ReverseOffer) RejectUnavailable() { _, _ = o.respond(statusUnavailable) }
