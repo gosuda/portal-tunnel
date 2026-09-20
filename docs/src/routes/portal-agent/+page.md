@@ -142,22 +142,9 @@ the default state directory or an explicit `--state-dir`.
 
 ### Docker Compose TUI
 
-For a new agent, create a config in the persistent identity mount from
-`cmd/portal-tunnel`. The command refuses to overwrite an existing config:
-
-```bash
-mkdir -p identity
-(set -C; printf '[agent]\nstate_dir = "/identity"\n' > identity/config.toml)
-# For a new mount on Linux; preserve existing deployments' ownership policy.
-if [ "$(uname)" = Linux ]; then sudo chown -R 65532:65532 identity; fi
-docker compose run --rm portal-tunnel \
-  agent run --foreground --config /identity/config.toml
-```
-
-The dashboard appears in the current terminal. **Add Tunnel** saves configuration
-and identities under `./identity`; `Ctrl+C` stops the foreground agent. See
-[Docker Compose setup](/getting-started#run-with-docker-compose) for image and
-mount settings. Add tunnels through the dashboard for an existing agent.
+See the [Portal CLI Docker Compose instructions](https://github.com/gosuda/portal-tunnel/blob/main/cmd/portal-tunnel/README.md#agent-dashboard-tui)
+for the single maintained setup, including persistent agent state and host
+directory permissions.
 
 ## Dashboard
 

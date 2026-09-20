@@ -1,7 +1,6 @@
 # Portal CLI reference for app deployment
 
-Prefer the installed Portal version and the repository's current
-`docs/src/routes/cli-reference/+page.md` when they differ from this reference.
+Last checked against `gosuda/portal-tunnel` main commit `79ccc6f2388dd47b0121c4593746150e084f1785` on 2026-08-14. Prefer the behavior of the installed Portal version and the repository's current `cmd/portal-tunnel/README.md` when they differ from this snapshot.
 
 ## Installation
 

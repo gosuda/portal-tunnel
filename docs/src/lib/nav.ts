@@ -39,6 +39,8 @@ export const guidesNavigation: NavSection[] = [
 		title: 'Quick Start',
 		defaultOpen: true,
 		items: [
+			{ title: 'What is Portal?', href: '/what-is-portal' },
+			{ title: 'Prerequisites', href: '/prerequisites' },
 			{ title: 'Getting Started', href: '/getting-started' }
 		]
 	},
@@ -58,6 +60,7 @@ export const guidesNavigation: NavSection[] = [
 			{ title: 'TCP/UDP Tunneling', href: '/tcp-udp-tunneling' },
 			{ title: 'Game Server Hosting', href: '/game-server-hosting' },
 			{ title: 'Wallet and ENS', href: '/wallet-and-ens' },
+			{ title: 'SIWE Authentication', href: '/siwe-authentication' },
 			{ title: 'Deployment', href: '/deployment' },
 			{ title: 'Configuration', href: '/configuration' }
 		]
