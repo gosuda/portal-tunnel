@@ -43,8 +43,12 @@ const (
 	sourceRequestBurst      = 16
 	gatewayRetryDelay       = 30 * time.Second
 	minimumGatewayTTL       = 30 * time.Second
-	accepted                = byte(1)
-	capacity                = byte(2)
+)
+
+const (
+	statusUnavailable = byte(0)
+	statusAccepted    = byte(1)
+	statusCapacity    = byte(2)
 )
 
 func normalizeIVNPDestination(destination string) (string, error) {
@@ -62,11 +66,38 @@ func normalizeIVNPDestination(destination string) (string, error) {
 }
 
 type Config struct {
-	ConfigPath   string
-	Authority    identity.Authority
-	OfferReverse func(identityKey, leaseID string, conn net.Conn, ready func() error) error
-	Bridge       func(net.Conn, net.Conn)
+	ConfigPath string
+	Authority  identity.Authority
 }
+
+// ReverseOffer is a capability-verified inbound reverse connection awaiting
+// portal lease admission. Connection ownership transfers with the offer, and
+// its response methods preserve the overlay status-byte protocol.
+type ReverseOffer struct {
+	IdentityKey string
+	LeaseID     string
+	conn        net.Conn
+}
+
+// Connection returns the connection whose ownership transferred with the offer.
+func (o ReverseOffer) Connection() net.Conn { return o.conn }
+
+// Accept writes the accepted status for the reverse-offer protocol.
+func (o ReverseOffer) Accept() error {
+	_, err := o.respond(statusAccepted)
+	return err
+}
+
+// RejectUnavailable writes the unavailable status for the reverse-offer protocol.
+func (o ReverseOffer) RejectUnavailable() { _, _ = o.respond(statusUnavailable) }
+
+// RejectCapacity writes the capacity status for the reverse-offer protocol.
+func (o ReverseOffer) RejectCapacity() { _, _ = o.respond(statusCapacity) }
+
+// Close releases the connection transferred with the offer.
+func (o ReverseOffer) Close() { closeNow(o.conn) }
+
+func (o ReverseOffer) respond(status byte) (int, error) { return o.conn.Write([]byte{status}) }
 
 // IssueInput is the complete point-in-time state needed to issue an endpoint.
 type IssueInput struct {
@@ -78,10 +109,9 @@ type IssueInput struct {
 	Descriptors   []types.RelayDescriptor
 }
 
-var ErrLeaseUnavailable = errors.New("overlay ingress lease is unavailable")
-
-// Runtime is the sole owner of IVNP gateway selection, capabilities, framing,
-// peer verification, capacity, and connection lifetime.
+// Runtime owns IVNP gateway selection, capabilities, framing, peer
+// verification, and admission. Connection ownership transfers with reverse
+// offers and successful gateway connection pairs.
 type Runtime struct {
 	config Config
 
@@ -96,6 +126,7 @@ type Runtime struct {
 	ready         atomic.Bool
 	close         sync.Once
 	inbound       chan struct{}
+	offers        chan ReverseOffer
 	sourceLimiter *policy.SourceLimiter
 	admissionMu   sync.Mutex
 	outbound      int
@@ -108,12 +139,13 @@ type Runtime struct {
 
 func New(config Config) (*Runtime, error) {
 	config.ConfigPath = strings.TrimSpace(config.ConfigPath)
-	if config.ConfigPath == "" || config.Authority == nil || config.OfferReverse == nil || config.Bridge == nil {
+	if config.ConfigPath == "" || config.Authority == nil {
 		return nil, errors.New("overlay runtime configuration is incomplete")
 	}
 	return &Runtime{
 		config:        config,
 		inbound:       make(chan struct{}, connectionLimit),
+		offers:        make(chan ReverseOffer),
 		sourceLimiter: policy.NewSourceLimiter(sourceRequestsPerMinute, sourceRequestBurst, 0, 0),
 		activeSources: make(map[string]int),
 		assignments:   make(map[string]string),
@@ -238,6 +270,15 @@ func (r *Runtime) Destination() string {
 		return ""
 	}
 	return r.endpoint.B32()
+}
+
+// ReverseOffers hands off verified reverse connections for portal admission.
+// The channel is not closed; consumers stop via their own shutdown context.
+func (r *Runtime) ReverseOffers() <-chan ReverseOffer {
+	if r == nil {
+		return nil
+	}
+	return r.offers
 }
 
 func (r *Runtime) Handles(capability string) bool {
@@ -408,37 +449,41 @@ func endpointOrigin(rawURL string) string {
 	return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
 }
 
-func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, capability, clientIP string) {
+// HandleConnect verifies a gateway connect request, frames the upstream
+// handshake, and returns the hijacked client connection paired with the
+// gateway connection for the caller to bridge. It returns nil, nil after
+// writing an API error.
+func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, capability, clientIP string) (net.Conn, net.Conn) {
 	if r == nil || !r.ready.Load() {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay is unavailable")
-		return
+		return nil, nil
 	}
 	// The server resolves clientIP using its trusted-proxy policy. Caller-chosen
 	// signing keys and lease IDs must not create fresh admission budgets.
 	if retry, _ := r.sourceLimiter.Allow(clientIP, 1); retry > 0 {
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay request rate exceeded")
-		return
+		return nil, nil
 	}
 	claims, err := verifyCapability(capability, time.Now().UTC())
 	if err != nil || !strings.EqualFold(claims.GatewayAddress, r.config.Authority.Identity().Address) || claims.GatewayDestination != r.Destination() {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "reverse capability is invalid")
-		return
+		return nil, nil
 	}
 	r.admissionMu.Lock()
 	if r.activeSources[clientIP] >= sourceConnectionLimit {
 		r.admissionMu.Unlock()
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay source capacity exhausted")
-		return
+		return nil, nil
 	}
 	if r.outbound >= connectionLimit {
 		r.admissionMu.Unlock()
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay capacity exhausted")
-		return
+		return nil, nil
 	}
 	r.outbound++
 	r.activeSources[clientIP]++
 	r.admissionMu.Unlock()
-	defer func() {
+	release := func() {
 		r.admissionMu.Lock()
 		r.outbound--
 		r.activeSources[clientIP]--
@@ -446,6 +491,12 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 			delete(r.activeSources, clientIP)
 		}
 		r.admissionMu.Unlock()
+	}
+	handoff := false
+	defer func() {
+		if !handoff {
+			release()
+		}
 	}()
 
 	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
@@ -453,59 +504,72 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 	cancel()
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay route is unavailable")
-		return
+		return nil, nil
 	}
-	defer closeNow(upstream)
+	defer func() {
+		if !handoff {
+			closeNow(upstream)
+		}
+	}()
 	_ = upstream.SetDeadline(time.Now().Add(10 * time.Second))
 	if err := binary.Write(upstream, binary.BigEndian, uint16(len(capability))); err != nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay route is unavailable")
-		return
+		return nil, nil
 	}
 	if _, err := io.WriteString(upstream, capability); err != nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay route is unavailable")
-		return
+		return nil, nil
 	}
 	var response [1]byte
 	if _, err := io.ReadFull(upstream, response[:]); err != nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay route is unavailable")
-		return
+		return nil, nil
 	}
-	if response[0] == capacity {
+	if response[0] == statusCapacity {
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay capacity exhausted")
-		return
+		return nil, nil
 	}
-	if response[0] != accepted {
+	if response[0] != statusAccepted {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "reverse capability is invalid")
-		return
+		return nil, nil
 	}
 
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeHijackUnsupported, "hijacking is not supported")
-		return
+		return nil, nil
 	}
 	downstream, buffered, err := hijacker.Hijack()
 	if err != nil {
-		return
+		// A hijack failure leaves the response writer unusable, so the HTTP
+		// server owns the connection again; record why no bridge started.
+		log.Warn().Err(err).Str("component", "overlay").Msg("gateway bridge hijack failed")
+		return nil, nil
 	}
-	defer downstream.Close()
-	stop := context.AfterFunc(r.ctx, func() { _ = downstream.Close() })
-	defer stop()
 	if _, err := fmt.Fprint(buffered, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: raw\r\nConnection: Upgrade\r\n\r\n"); err != nil {
-		return
+		// The hijacked connection is unusable, so nothing can be reported to
+		// the client; record why the bridge never started.
+		log.Warn().Err(err).Str("component", "overlay").Msg("gateway bridge upgrade write failed")
+		_ = downstream.Close()
+		return nil, nil
 	}
 	if err := buffered.Flush(); err != nil {
-		return
+		log.Warn().Err(err).Str("component", "overlay").Msg("gateway bridge upgrade flush failed")
+		_ = downstream.Close()
+		return nil, nil
 	}
 	_ = downstream.SetDeadline(time.Time{})
 	_ = upstream.SetDeadline(time.Time{})
-	r.config.Bridge(&bufferedConn{Conn: downstream, reader: buffered.Reader}, upstream)
+	client := &bufferedConn{Conn: downstream, reader: buffered.Reader, release: release}
+	client.stop = context.AfterFunc(r.ctx, func() { _ = client.Close() })
+	handoff = true // ownership and capacity release move to the caller's bridge
+	return client, upstream
 }
 
 func (r *Runtime) acceptReverse(conn net.Conn) {
-	acceptedConn := false
+	handoff := false
 	defer func() {
-		if !acceptedConn {
+		if !handoff {
 			closeNow(conn)
 		}
 	}()
@@ -520,27 +584,21 @@ func (r *Runtime) acceptReverse(conn net.Conn) {
 	}
 	peer, err := peerDestination(conn)
 	if err != nil {
-		_, _ = conn.Write([]byte{0})
+		_, _ = conn.Write([]byte{statusUnavailable})
 		return
 	}
 	claims, err := verifyCapability(string(raw), time.Now().UTC())
 	if err != nil || !strings.EqualFold(claims.Ingress.Address, r.config.Authority.Identity().Address) || claims.Ingress.IVNPDestination != r.Destination() || claims.GatewayDestination != peer {
-		_, _ = conn.Write([]byte{0})
+		_, _ = conn.Write([]byte{statusUnavailable})
 		return
 	}
-	if err := r.config.OfferReverse(claims.LeaseIdentity.Key(), claims.LeaseID, conn, func() error {
-		_, err := conn.Write([]byte{accepted})
-		return err
-	}); err != nil {
-		status := capacity
-		if errors.Is(err, ErrLeaseUnavailable) {
-			status = 0
-		}
-		_, _ = conn.Write([]byte{status})
-		return
+	// Portal chooses the lease-admission outcome through the offer's response
+	// methods; every byte after verification belongs to the offer protocol.
+	select {
+	case r.offers <- ReverseOffer{IdentityKey: claims.LeaseIdentity.Key(), LeaseID: claims.LeaseID, conn: conn}:
+		handoff = true
+	case <-r.ctx.Done():
 	}
-	_ = conn.SetDeadline(time.Time{})
-	acceptedConn = true
 }
 
 func (r *Runtime) dial(ctx context.Context, destination string) (net.Conn, error) {
@@ -659,10 +717,26 @@ func peerDestination(conn net.Conn) (string, error) {
 
 type bufferedConn struct {
 	net.Conn
-	reader *bufio.Reader
+	reader  *bufio.Reader
+	stop    func() bool
+	release func()
+	close   sync.Once
 }
 
 func (c *bufferedConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
+
+func (c *bufferedConn) Close() error {
+	err := c.Conn.Close()
+	c.close.Do(func() {
+		if c.stop != nil {
+			c.stop()
+		}
+		if c.release != nil {
+			c.release()
+		}
+	})
+	return err
+}
 
 func closeNow(conn net.Conn) {
 	if conn == nil {

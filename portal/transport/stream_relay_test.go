@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestOfferConnReadyWritesProtocolAckBeforeClaimMarker(t *testing.T) {
+func TestReserveOfferCommitsProtocolAckBeforeClaimMarker(t *testing.T) {
 	relay := NewRelayStream("lease", time.Minute, 1)
 	t.Cleanup(relay.Close)
 	server, client := net.Pipe()
@@ -22,10 +22,14 @@ func TestOfferConnReadyWritesProtocolAckBeforeClaimMarker(t *testing.T) {
 		_, _ = client.Read(value[:])
 		ack <- value[0]
 	}()
-	if err := relay.OfferConnReady(server, func() error {
-		_, err := server.Write([]byte{7})
-		return err
-	}); err != nil {
+	reservation, err := relay.ReserveOffer(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.Write([]byte{7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reservation.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if got := <-ack; got != 7 {
@@ -92,7 +96,7 @@ func TestTLSBindingFramingRoundTrip(t *testing.T) {
 	}
 }
 
-func TestOfferConnReadyLeavesRejectedConnectionWithCaller(t *testing.T) {
+func TestReserveOfferLeavesRejectedConnectionWithCaller(t *testing.T) {
 	relay := NewRelayStream("lease", time.Minute, 1)
 	t.Cleanup(relay.Close)
 	firstServer, firstClient := net.Pipe()
@@ -103,12 +107,8 @@ func TestOfferConnReadyLeavesRejectedConnectionWithCaller(t *testing.T) {
 
 	server, client := net.Pipe()
 	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
-	called := false
-	if err := relay.OfferConnReady(server, func() error { called = true; return nil }); err == nil {
+	if _, err := relay.ReserveOffer(server); err == nil {
 		t.Fatal("full queue accepted another connection")
-	}
-	if called {
-		t.Fatal("ready callback ran without a reserved queue slot")
 	}
 	written := make(chan error, 1)
 	go func() {

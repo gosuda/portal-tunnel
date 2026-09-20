@@ -370,6 +370,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeAPIErrorResponse(w, err)
 		return
 	}
+	if record.tcpPort != nil {
+		go s.serveTCPPairs(record.tcpPort, record.Key())
+	}
 
 	utils.WriteAPIData(w, http.StatusCreated, resp)
 }
@@ -501,7 +504,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
 	clientIP := s.registry.policy.ExtractClientIP(r)
 	if s.overlay != nil && s.overlay.Handles(capability) {
-		s.overlay.HandleConnect(w, r, capability, clientIP)
+		client, gateway := s.overlay.HandleConnect(w, r, capability, clientIP)
+		if client != nil {
+			s.proxy.bridge(client, gateway, "", s.registry.policy.BPSManager())
+		}
 		return
 	}
 

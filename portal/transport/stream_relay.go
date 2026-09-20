@@ -33,65 +33,120 @@ type RelayStream struct {
 	ready        []*relaySession
 	idleInterval time.Duration
 	readyLimit   int
+	reserved     int
+	closing      bool
 	closedErr    error
+	closeOnce    sync.Once
 	mu           sync.Mutex
+	cond         *sync.Cond
+}
+
+// OfferReservation owns one reserved ready-queue slot until it is committed
+// or cancelled. The caller retains the connection until Commit succeeds.
+type OfferReservation struct {
+	stream   *RelayStream
+	session  *relaySession
+	finished bool
+	mu       sync.Mutex
 }
 
 func NewRelayStream(identityKey string, idleInterval time.Duration, readyLimit int) *RelayStream {
-	return &RelayStream{
+	stream := &RelayStream{
 		identityKey:  identityKey,
 		idleInterval: idleInterval,
 		readyLimit:   readyLimit,
 		notify:       make(chan struct{}, 1),
 	}
+	stream.cond = sync.NewCond(&stream.mu)
+	return stream
 }
 
 func (b *RelayStream) OfferConn(conn net.Conn) error {
-	err := b.OfferConnReady(conn, nil)
+	reservation, err := b.ReserveOffer(conn)
 	if err != nil && conn != nil {
 		_ = conn.Close()
 	}
-	return err
-}
-
-// OfferConnReady transfers ownership only after ready succeeds while the queue
-// slot is reserved. The caller retains the connection when an error is returned.
-//
-// The ready callback may write one caller-defined protocol acknowledgement
-// byte before the session is queued; that byte precedes every activation
-// marker on the wire and is consumed by the client before the session reaches
-// RunSession, which always starts reading at the first marker.
-func (b *RelayStream) OfferConnReady(conn net.Conn, ready func() error) error {
-	if conn == nil {
-		return errors.New("reverse connection is required")
-	}
-	session := newRelaySession(conn, b.idleInterval)
-
-	b.mu.Lock()
-	if b.closedErr != nil {
-		err := b.closedErr
-		b.mu.Unlock()
+	if err != nil {
 		return err
 	}
-
-	if b.readyLimit > 0 && len(b.ready) >= b.readyLimit {
-		b.mu.Unlock()
-		return errStreamFull
+	if err := reservation.Commit(); err != nil {
+		_ = conn.Close()
+		return err
 	}
-	if ready != nil {
-		if err := ready(); err != nil {
-			b.mu.Unlock()
-			return err
+	return nil
+}
+
+// ReserveOffer reserves ready-queue capacity for conn without taking ownership.
+// Commit transfers ownership and makes the connection available to Claim; Cancel
+// releases the slot and leaves the connection with the caller.
+func (b *RelayStream) ReserveOffer(conn net.Conn) (*OfferReservation, error) {
+	if conn == nil {
+		return nil, errors.New("reverse connection is required")
+	}
+
+	b.mu.Lock()
+	if b.closedErr != nil || b.closing {
+		err := b.closedErr
+		if err == nil {
+			err = net.ErrClosed
 		}
+		b.mu.Unlock()
+		return nil, err
 	}
 
-	session.StartIdle()
-	b.ready = append(b.ready, session)
+	if b.readyLimit > 0 && len(b.ready)+b.reserved >= b.readyLimit {
+		b.mu.Unlock()
+		return nil, errStreamFull
+	}
+	b.reserved++
+	b.mu.Unlock()
+	return &OfferReservation{stream: b, session: newRelaySession(conn, b.idleInterval)}, nil
+}
+
+// Commit transfers the reserved connection to the stream and makes it ready
+// for Claim. A concurrent Close waits for this decision before shutting down.
+func (r *OfferReservation) Commit() error {
+	if r == nil || r.stream == nil || r.session == nil {
+		return net.ErrClosed
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.finished {
+		return net.ErrClosed
+	}
+	r.finished = true
+
+	b := r.stream
+	b.mu.Lock()
+	b.reserved--
+	r.session.StartIdle()
+	b.ready = append(b.ready, r.session)
 	b.signalLocked()
+	b.cond.Broadcast()
 	b.mu.Unlock()
 
-	go b.watchSession(session)
+	go b.watchSession(r.session)
 	return nil
+}
+
+// Cancel releases the reserved slot while leaving the connection with the
+// caller. It is safe to call more than once.
+func (r *OfferReservation) Cancel() {
+	if r == nil || r.stream == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.finished {
+		return
+	}
+	r.finished = true
+
+	b := r.stream
+	b.mu.Lock()
+	b.reserved--
+	b.cond.Broadcast()
+	b.mu.Unlock()
 }
 
 // Claim activates the next ready session for tenant TLS: the relay writes
@@ -108,8 +163,11 @@ func (b *RelayStream) claimRaw(ctx context.Context) (net.Conn, error) {
 func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte, binding [16]byte) (net.Conn, error) {
 	for {
 		b.mu.Lock()
-		if b.closedErr != nil {
+		if b.closedErr != nil || b.closing {
 			err := b.closedErr
+			if err == nil {
+				err = net.ErrClosed
+			}
 			b.mu.Unlock()
 			return nil, err
 		}
@@ -139,18 +197,22 @@ func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte, binding 
 }
 
 func (b *RelayStream) Close() {
-	b.mu.Lock()
-	sessions := b.ready
-	b.ready = nil
-	if b.closedErr == nil {
+	b.closeOnce.Do(func() {
+		b.mu.Lock()
+		b.closing = true
+		for b.reserved > 0 {
+			b.cond.Wait()
+		}
+		sessions := b.ready
+		b.ready = nil
 		b.closedErr = net.ErrClosed
-	}
-	b.signalLocked()
-	b.mu.Unlock()
+		b.signalLocked()
+		b.mu.Unlock()
 
-	for _, session := range sessions {
-		_ = session.Close()
-	}
+		for _, session := range sessions {
+			_ = session.Close()
+		}
+	})
 }
 
 func (b *RelayStream) ReadyCount() int {

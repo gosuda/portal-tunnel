@@ -33,9 +33,10 @@ import (
 )
 
 const (
-	defaultClaimTimeout     = 10 * time.Second
-	defaultClientHelloWait  = 2 * time.Second
-	defaultControlBodyLimit = 4 << 20
+	defaultClaimTimeout          = 10 * time.Second
+	defaultClientHelloWait       = 2 * time.Second
+	defaultControlBodyLimit      = 4 << 20
+	reverseOfferAdmissionWorkers = 16
 )
 
 type ServerConfig struct {
@@ -279,21 +280,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		relaySet:       relaySet,
 		preAuthLimiter: policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 	}
-	server.registry.proxy = &server.proxy
 	if cfg.IVNPConfigPath != "" {
 		server.overlay, err = overlay.New(overlay.Config{
 			ConfigPath: cfg.IVNPConfigPath,
 			Authority:  relayAuthority,
-			OfferReverse: func(identityKey, leaseID string, conn net.Conn, ready func() error) error {
-				lease, err := registry.admitLeaseIdentity(identityKey, leaseID, time.Now().UTC(), false)
-				if err != nil {
-					return fmt.Errorf("%w: %w", overlay.ErrLeaseUnavailable, err)
-				}
-				return lease.stream.OfferConnReady(conn, ready)
-			},
-			Bridge: func(left, right net.Conn) {
-				server.proxy.bridge(left, right, "", registry.policy.BPSManager())
-			},
 		})
 		if err != nil {
 			return nil, err
@@ -541,6 +531,21 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 			}
 			return nil
 		})
+		// A status-byte write may wait for the reverse connection deadline. A
+		// fixed pool prevents one slow peer from blocking all lease admissions
+		// without creating unbounded admission goroutines.
+		for range reverseOfferAdmissionWorkers {
+			group.Go(func() error {
+				for {
+					select {
+					case <-groupCtx.Done():
+						return nil
+					case offer := <-s.overlay.ReverseOffers():
+						s.admitReverseOffer(offer)
+					}
+				}
+			})
+		}
 	}
 	s.acmeManager.Start(serverCtx)
 	group.Go(func() error {
@@ -579,6 +584,44 @@ func (s *Server) Wait() error {
 		return nil
 	}
 	return err
+}
+
+// admitReverseOffer composes overlay admission with the lease stream while a
+// reserved stream slot keeps the accepted status and queued session atomic.
+func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
+	lease, err := s.registry.admitLeaseIdentity(offer.IdentityKey, offer.LeaseID, time.Now().UTC(), false)
+	if err != nil {
+		offer.RejectUnavailable()
+		offer.Close()
+		return
+	}
+
+	reservation, err := lease.stream.ReserveOffer(offer.Connection())
+	if err != nil {
+		offer.RejectCapacity()
+		offer.Close()
+		return
+	}
+	defer reservation.Cancel()
+	if err := offer.Accept(); err != nil {
+		offer.Close()
+		return
+	}
+	if err := reservation.Commit(); err != nil {
+		offer.Close()
+		return
+	}
+	_ = offer.Connection().SetDeadline(time.Time{})
+}
+
+func (s *Server) serveTCPPairs(port *transport.RelayTCPPort, identityKey string) {
+	for {
+		inbound, session, err := port.Accept()
+		if err != nil {
+			return
+		}
+		go s.proxy.bridge(inbound, session, identityKey, s.registry.policy.BPSManager())
+	}
 }
 
 func (s *Server) PolicyRuntime() *policy.Runtime {

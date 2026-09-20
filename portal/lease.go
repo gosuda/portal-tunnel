@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,7 +43,6 @@ type leaseRegistry struct {
 	policy         *policy.Runtime
 	udpPorts       *transport.PortAllocator
 	tcpPorts       *transport.PortAllocator
-	proxy          *proxy
 	bindings       *keyless.BindingRegistry
 	mu             sync.RWMutex
 }
@@ -76,7 +74,6 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 		policy:         runtime,
 		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
-		proxy:          &proxy{},
 		bindings:       keyless.NewBindingRegistry(5 * time.Minute),
 	}, nil
 }
@@ -186,9 +183,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		if !r.policy.IsTCPPortEnabled() {
 			return nil, types.RegisterResponse{}, errTCPPortDisabled
 		}
-		if r.proxy == nil {
-			return nil, types.RegisterResponse{}, errors.New("tcp proxy is not available")
-		}
 	}
 
 	leaseID := utils.RandomID("lease_")
@@ -242,9 +236,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			}
 			return nil, types.RegisterResponse{}, err
 		}
-		record.tcpPort = transport.NewRelayTCPPort(identityKey, port, stream, func(left, right net.Conn) {
-			r.proxy.bridge(left, right, identityKey, r.policy.BPSManager())
-		})
+		record.tcpPort = transport.NewRelayTCPPort(identityKey, port, stream)
 		record.tcpPorts = r.tcpPorts
 	}
 
@@ -252,7 +244,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		record.Close()
 		return nil, types.RegisterResponse{}, err
 	}
-
 	var replaced *leaseRecord
 	replacedIndex := -1
 	r.mu.Lock()

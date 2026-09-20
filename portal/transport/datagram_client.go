@@ -12,13 +12,13 @@ type ClientDatagram struct {
 	session *datagramSession
 }
 
-func NewClientDatagram(onReceiveError func(error)) *ClientDatagram {
+func NewClientDatagram() *ClientDatagram {
 	return &ClientDatagram{
-		session: newDatagramSession(256, false, onReceiveError),
+		session: newDatagramSession(256, false),
 	}
 }
 
-func (d *ClientDatagram) BindBackhaul(conn *quic.Conn) (<-chan struct{}, error) {
+func (d *ClientDatagram) BindBackhaul(conn *quic.Conn) (<-chan error, error) {
 	if d == nil || d.session == nil {
 		if conn != nil {
 			_ = conn.CloseWithError(0, "listener closed")

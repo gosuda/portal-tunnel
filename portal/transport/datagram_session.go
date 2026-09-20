@@ -15,32 +15,30 @@ var errNoConnection = errors.New("no quic backhaul connection registered")
 
 // datagramSession owns one active QUIC DATAGRAM connection and exposes decoded frames.
 type datagramSession struct {
-	incoming       chan types.DatagramFrame
-	dropIncoming   bool
-	onReceiveError func(error)
-	done           chan struct{}
+	incoming     chan types.DatagramFrame
+	dropIncoming bool
+	done         chan struct{}
 
 	mu     sync.Mutex
 	conn   *quic.Conn
 	closed bool
 }
 
-func newDatagramSession(bufferSize int, dropIncoming bool, onReceiveError func(error)) *datagramSession {
+func newDatagramSession(bufferSize int, dropIncoming bool) *datagramSession {
 	if bufferSize <= 0 {
 		bufferSize = 256
 	}
 
 	return &datagramSession{
-		incoming:       make(chan types.DatagramFrame, bufferSize),
-		dropIncoming:   dropIncoming,
-		onReceiveError: onReceiveError,
-		done:           make(chan struct{}),
+		incoming:     make(chan types.DatagramFrame, bufferSize),
+		dropIncoming: dropIncoming,
+		done:         make(chan struct{}),
 	}
 }
 
 // Bind installs a new active backhaul connection and starts the receive loop.
 // Any previously active connection is replaced and closed.
-func (s *datagramSession) Bind(conn *quic.Conn) (<-chan struct{}, error) {
+func (s *datagramSession) Bind(conn *quic.Conn) (<-chan error, error) {
 	if conn == nil {
 		return nil, errors.New("quic backhaul connection is required")
 	}
@@ -59,7 +57,7 @@ func (s *datagramSession) Bind(conn *quic.Conn) (<-chan struct{}, error) {
 		_ = old.CloseWithError(0, "replaced")
 	}
 
-	recvDone := make(chan struct{})
+	recvDone := make(chan error, 1)
 	go s.receiveLoop(conn, recvDone)
 	return recvDone, nil
 }
@@ -119,24 +117,24 @@ func (s *datagramSession) Stop(reason string) {
 	}
 }
 
-func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
-	defer close(recvDone)
+func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan<- error) {
+	var recvErr error
+	defer func() {
+		recvDone <- recvErr
+		close(recvDone)
+	}()
 
 	for {
 		data, err := conn.ReceiveDatagram(context.Background())
 		if err != nil {
 			s.mu.Lock()
-			isActive := s.conn == conn
-			if isActive {
+			if s.conn == conn && !s.closed {
 				s.conn = nil
+				recvErr = err
 			}
-			closed := s.closed
-			onReceiveError := s.onReceiveError
 			s.mu.Unlock()
-
-			if isActive && !closed && onReceiveError != nil {
-				onReceiveError(err)
-			}
+			// Loop exit is intentional: this receive generation reports its
+			// terminal error to its owner through recvDone.
 			return
 		}
 
