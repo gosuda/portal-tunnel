@@ -237,6 +237,19 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `is_denied` | `boolean` | optional; `true` also revokes approval |
 | `bps` | `number` | optional; `0` removes the limit |
 
+`DiscoveryResponse`:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `protocol_version` | `string` | discovery protocol version of the serving relay |
+| `generated_at` | `string` | when the response was generated |
+| `relays` | `RelayDescriptor[]` | signed, routable relay descriptors |
+| `incompatible_relays` | `IncompatibleRelayEntry[]` | optional; relays contacted directly whose discovery protocol version differs |
+| `release_version` | `string` | optional; release of the serving relay itself |
+| `relay_release_versions` | `map` (peer URL → release) | optional; releases directly observed from each peer's own `/discovery` |
+
+`release_version` and `relay_release_versions` are optional, unsigned observation metadata: they never affect routing, trust, signature verification, or compatibility, and older relays omit them. Signed relay identity stays in `RelayDescriptor`.
+
 ## Common Errors
 
 | Code | Meaning |

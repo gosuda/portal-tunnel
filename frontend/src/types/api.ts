@@ -125,6 +125,9 @@ export interface IncompatibleRelayEntry {
 export interface DiscoveryResponse {
   relays?: RelayDescriptor[];
   incompatible_relays?: IncompatibleRelayEntry[];
+  protocol_version?: string;
+  release_version?: string;
+  relay_release_versions?: Record<string, string>;
 }
 
 export type ReputationVote = "up" | "down";

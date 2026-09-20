@@ -43,10 +43,11 @@ import (
 // (notably from ApplyRelayDiscoveryResponse, which holds the write lock for
 // the entire batch).
 type RelaySet struct {
-	mu           sync.RWMutex
-	relays       map[string]RelayState
-	keyIndex     map[string]keyIndexEntry
-	incompatible map[string]types.IncompatibleRelayEntry
+	mu              sync.RWMutex
+	relays          map[string]RelayState
+	keyIndex        map[string]keyIndexEntry
+	incompatible    map[string]types.IncompatibleRelayEntry
+	releaseVersions map[string]relayReleaseObservation
 }
 
 // keyIndexEntry records the rollback anchor for a signing identity.
@@ -57,6 +58,15 @@ type RelaySet struct {
 type keyIndexEntry struct {
 	IssuedAt       time.Time
 	TombstoneUntil time.Time
+}
+
+// relayReleaseObservation is one directly observed peer release. observedAt
+// is the observation's own direct-discovery clock: gossip and announce
+// ingestion never write it, so only a fresh direct poll keeps a release
+// alive.
+type relayReleaseObservation struct {
+	releaseVersion string
+	observedAt     time.Time
 }
 
 // ErrProtocolMismatch reports that a discovery response came from a relay
@@ -75,9 +85,10 @@ const (
 
 func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 	set := &RelaySet{
-		relays:       make(map[string]RelayState),
-		keyIndex:     make(map[string]keyIndexEntry),
-		incompatible: make(map[string]types.IncompatibleRelayEntry),
+		relays:          make(map[string]RelayState),
+		keyIndex:        make(map[string]keyIndexEntry),
+		incompatible:    make(map[string]types.IncompatibleRelayEntry),
+		releaseVersions: make(map[string]relayReleaseObservation),
 	}
 	set.SetBootstrapRelayURLs(bootstrapRelayURLs)
 	return set
@@ -158,8 +169,10 @@ func (s *RelaySet) banFromPoolLocked(relayURL string, now time.Time) {
 	state.Banned = true
 	state.suppressActiveUntil = now.Add(relayPoolBanTTL)
 	s.relays[relayURL] = state
-	// A local ban outranks protocol-mismatch visibility.
+	// A local ban outranks protocol-mismatch visibility and drops the
+	// observed release: both return only after a fresh direct contact.
 	delete(s.incompatible, relayURL)
+	delete(s.releaseVersions, relayURL)
 }
 
 func mergeLocalRelayState(record, existing RelayState) RelayState {
@@ -539,8 +552,10 @@ func (s *RelaySet) BanRelayURL(relayURL string) {
 	state.suppressActiveUntil = time.Time{}
 	state.Banned = true
 	s.relays[relayURL] = state
-	// A local ban outranks protocol-mismatch visibility.
+	// A local ban outranks protocol-mismatch visibility and drops the
+	// observed release: both return only after a fresh direct contact.
 	delete(s.incompatible, relayURL)
+	delete(s.releaseVersions, relayURL)
 }
 
 func (s *RelaySet) DropRelayURLFromActivePool(relayURL string) {
@@ -685,6 +700,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	missingTarget := authoritative && !targetFound
 
 	if authoritative {
+		s.recordReleaseObservationLocked(targetURL, resp.ReleaseVersion, now)
 		if protocolMismatch {
 			s.recordIncompatibleRelayLocked(targetURL, resp.ProtocolVersion, now)
 		} else if !missingTarget {
@@ -771,6 +787,40 @@ func (s *RelaySet) pruneIncompatibleLocked(now time.Time) {
 	}
 }
 
+// pruneReleaseVersionsLocked drops release observations whose last direct
+// poll is older than AnnounceMaxValidity, so the map cannot grow without
+// bound as polled relay URLs churn. The caller must hold s.mu for writing.
+func (s *RelaySet) pruneReleaseVersionsLocked(now time.Time) {
+	for relayURL, observation := range s.releaseVersions {
+		if now.Sub(observation.observedAt) > AnnounceMaxValidity {
+			delete(s.releaseVersions, relayURL)
+		}
+	}
+}
+
+// recordReleaseObservationLocked remembers the release a directly contacted
+// relay reported about itself. The authoritative refresher poll is the only
+// writer — gossip and announce batches carry no release of their own and
+// must not mint or refresh observations. It records regardless of protocol
+// match (#512: the protocol label is only a fallback when no release is
+// known). An empty value — an older build that stopped reporting — drops
+// the observation: latest direct observation wins.
+func (s *RelaySet) recordReleaseObservationLocked(relayURL, releaseVersion string, now time.Time) {
+	if relayURL == "" {
+		return
+	}
+	s.pruneReleaseVersionsLocked(now)
+	releaseVersion = strings.TrimSpace(releaseVersion)
+	if releaseVersion == "" {
+		delete(s.releaseVersions, relayURL)
+		return
+	}
+	s.releaseVersions[relayURL] = relayReleaseObservation{
+		releaseVersion: releaseVersion,
+		observedAt:     now,
+	}
+}
+
 // KnownIncompatibleRelays returns directly observed relays whose discovery
 // protocol version is incompatible with the local one. Entries are sorted by
 // URL for stable output, expire (per AnnounceMaxValidity) without a fresh
@@ -796,6 +846,32 @@ func (s *RelaySet) knownIncompatibleRelaysAt(now time.Time) []types.Incompatible
 		out = append(out, entry)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].URL < out[j].URL })
+	return out
+}
+
+// KnownRelayReleaseVersions returns the release versions this relay observed
+// directly from peer relays' own /discovery responses, keyed by peer relay
+// URL. Like KnownIncompatibleRelays, entries expire (per AnnounceMaxValidity)
+// without a fresh direct observation, and a local ban drops the observation
+// outright rather than hiding it: it returns only after a fresh direct poll.
+// They are unsigned observation metadata: they never participate in routing,
+// trust, signature verification, or compatibility decisions, and are never
+// part of the routable descriptor set.
+func (s *RelaySet) KnownRelayReleaseVersions() map[string]string {
+	return s.knownRelayReleaseVersionsAt(time.Now().UTC())
+}
+
+func (s *RelaySet) knownRelayReleaseVersionsAt(now time.Time) map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make(map[string]string, len(s.releaseVersions))
+	for relayURL, observation := range s.releaseVersions {
+		if now.Sub(observation.observedAt) > AnnounceMaxValidity {
+			continue
+		}
+		out[relayURL] = observation.releaseVersion
+	}
 	return out
 }
 
