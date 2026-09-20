@@ -156,7 +156,7 @@ describe("ServerCard community reputation votes", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Recommend" })));
     expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "up");
 
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Not recommend" })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Do not recommend" })));
     expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "down");
 
     expect(screen.getByText("directory")).toBeTruthy();
