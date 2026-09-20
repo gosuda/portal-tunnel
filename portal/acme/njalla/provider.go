@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -33,7 +34,7 @@ type Provider struct {
 func New(token string) *Provider {
 	return &Provider{
 		token: strings.TrimSpace(token),
-		zones: utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
+		zones: utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
 	}
 }
 

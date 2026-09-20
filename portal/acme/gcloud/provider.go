@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -48,7 +49,7 @@ func New(cfg Config) *Provider {
 			ProjectID:   strings.TrimSpace(cfg.ProjectID),
 			ManagedZone: strings.TrimSpace(cfg.ManagedZone),
 		},
-		zones: utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
+		zones: utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
 	}
 }
 

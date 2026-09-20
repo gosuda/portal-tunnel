@@ -808,13 +808,17 @@ func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
 	if e == nil {
 		return nil, net.ErrClosed
 	}
+	return e.waitReady(ctx, func(status RelayStatus) bool {
+		return status.State == RelayReady
+	})
+}
+
+func (e *Exposure) waitReady(ctx context.Context, matches func(RelayStatus) bool) ([]RelayStatus, error) {
 	if ctx == nil {
 		return nil, errors.New("portal sdk: context is nil")
 	}
 	for {
-		ready, changed := e.readyRelays(func(status RelayStatus) bool {
-			return status.State == RelayReady
-		})
+		ready, changed := e.readyRelays(matches)
 		if len(ready) > 0 {
 			return ready, nil
 		}
@@ -869,25 +873,9 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error)
 	if !e.options.UDPEnabled {
 		return nil, errors.New("exposure does not have udp enabled")
 	}
-	if ctx == nil {
-		return nil, errors.New("portal sdk: context is nil")
-	}
-
-	for {
-		ready, changed := e.readyRelays(func(status RelayStatus) bool {
-			return status.State != RelayFailed && status.UDPAddr != ""
-		})
-		if len(ready) > 0 {
-			return ready, nil
-		}
-		select {
-		case <-e.done:
-			return nil, net.ErrClosed
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-changed:
-		}
-	}
+	return e.waitReady(ctx, func(status RelayStatus) bool {
+		return status.State != RelayFailed && status.UDPAddr != ""
+	})
 }
 
 // WaitTCPReady waits until at least one relay has allocated a public TCP
@@ -896,25 +884,9 @@ func (e *Exposure) WaitTCPReady(ctx context.Context) ([]RelayStatus, error) {
 	if !e.options.TCPEnabled {
 		return nil, errors.New("exposure does not have tcp enabled")
 	}
-	if ctx == nil {
-		return nil, errors.New("portal sdk: context is nil")
-	}
-
-	for {
-		ready, changed := e.readyRelays(func(status RelayStatus) bool {
-			return status.State != RelayFailed && status.TCPAddr != ""
-		})
-		if len(ready) > 0 {
-			return ready, nil
-		}
-		select {
-		case <-e.done:
-			return nil, net.ErrClosed
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-changed:
-		}
-	}
+	return e.waitReady(ctx, func(status RelayStatus) bool {
+		return status.State != RelayFailed && status.TCPAddr != ""
+	})
 }
 
 type exposureConn struct {

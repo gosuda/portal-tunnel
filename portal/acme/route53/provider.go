@@ -50,7 +50,7 @@ func New(cfg Config) *Provider {
 			HostedZoneID:    normalizeZoneID(cfg.HostedZoneID),
 			KMSKeyARN:       strings.TrimSpace(cfg.KMSKeyARN),
 		},
-		zones: utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
+		zones: utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
 	}
 }
 

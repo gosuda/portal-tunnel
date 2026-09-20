@@ -40,7 +40,7 @@ func newManager(cfg Config, controlAddr string) *manager {
 		tunnels:     make(map[string]*managedTunnel, len(cfg.Tunnels)),
 	}
 	for _, tunnelCfg := range cfg.Tunnels {
-		manager.tunnels[tunnelCfg.ID] = newTunnel(tunnelCfg)
+		manager.tunnels[tunnelCfg.ID] = &managedTunnel{cfg: tunnelCfg}
 	}
 	return manager
 }
@@ -48,14 +48,11 @@ func newManager(cfg Config, controlAddr string) *manager {
 func (m *manager) Start(ctx context.Context) {
 	m.mu.Lock()
 	m.rootCtx = ctx
-	m.mu.Unlock()
-
-	m.mu.RLock()
 	tunnels := make([]*managedTunnel, 0, len(m.tunnels))
 	for _, tunnel := range m.tunnels {
 		tunnels = append(tunnels, tunnel)
 	}
-	m.mu.RUnlock()
+	m.mu.Unlock()
 
 	for _, tunnel := range tunnels {
 		tunnel.Start(ctx)
@@ -397,7 +394,7 @@ func (m *manager) ApplyConfig(cfg Config) error {
 		delete(next, id)
 	}
 	for _, tunnelCfg := range next {
-		tunnel := newTunnel(tunnelCfg)
+		tunnel := &managedTunnel{cfg: tunnelCfg}
 		m.tunnels[tunnelCfg.ID] = tunnel
 		toStart = append(toStart, tunnel)
 	}
@@ -448,12 +445,6 @@ type managedTunnel struct {
 	exposure  *sdk.Exposure
 	lastError string
 	runtime   AgentTunnelStatus
-}
-
-func newTunnel(cfg TunnelConfig) *managedTunnel {
-	return &managedTunnel{
-		cfg: cfg,
-	}
 }
 
 func (t *managedTunnel) Start(parent context.Context) {
