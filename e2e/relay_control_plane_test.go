@@ -329,8 +329,8 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 		}
 		// A lonely relay has contacted no peers, so it must not fabricate an
 		// observation about itself.
-		if len(discoveryEnvelope.Data.RelayObservations) != 0 {
-			t.Fatalf("discovery envelope RelayObservations = %+v, want none from a relay with no observed peers", discoveryEnvelope.Data.RelayObservations)
+		if len(discoveryEnvelope.Data.RelayReleaseVersions) != 0 {
+			t.Fatalf("discovery envelope RelayReleaseVersions = %+v, want none from a relay with no observed peers", discoveryEnvelope.Data.RelayReleaseVersions)
 		}
 	})
 

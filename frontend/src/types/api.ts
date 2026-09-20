@@ -121,18 +121,12 @@ export interface IncompatibleRelayEntry {
   last_seen_at?: string;
 }
 
-export interface RelayObservation {
-  url: string;
-  release_version?: string;
-  last_seen_at?: string;
-}
-
 export interface DiscoveryResponse {
   relays?: RelayDescriptor[];
   incompatible_relays?: IncompatibleRelayEntry[];
   protocol_version?: string;
   release_version?: string;
-  relay_observations?: RelayObservation[];
+  relay_release_versions?: Record<string, string>;
 }
 
 export interface LeasePolicyUpdate {

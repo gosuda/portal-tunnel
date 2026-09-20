@@ -502,19 +502,13 @@ func TestApplyRelayDiscoveryResponseRecordsTargetReleaseVersion(t *testing.T) {
 	if state == nil {
 		t.Fatalf("relayStates() has no entry for %q", relayURL)
 	}
-	if state.ReleaseVersion != "v2.6.0" {
-		t.Fatalf("RelayState.ReleaseVersion = %q, want %q", state.ReleaseVersion, "v2.6.0")
+	if state.Trust != RelayVerified {
+		t.Fatalf("RelayState.Trust = %d, want RelayVerified after the authoritative poll", state.Trust)
 	}
 
-	observations := set.KnownRelayObservations()
-	if len(observations) != 1 {
-		t.Fatalf("KnownRelayObservations() = %+v, want one entry for %q", observations, relayURL)
-	}
-	if observations[0].URL != relayURL || observations[0].ReleaseVersion != "v2.6.0" {
-		t.Fatalf("KnownRelayObservations()[0] = %+v, want url %q with release %q", observations[0], relayURL, "v2.6.0")
-	}
-	if observations[0].LastSeenAt.IsZero() {
-		t.Fatal("KnownRelayObservations()[0] should carry LastSeenAt")
+	versions := set.KnownRelayReleaseVersions()
+	if len(versions) != 1 || versions[relayURL] != "v2.6.0" {
+		t.Fatalf("KnownRelayReleaseVersions() = %+v, want {%q: %q}", versions, relayURL, "v2.6.0")
 	}
 }
 
@@ -531,26 +525,102 @@ func TestApplyRelayDiscoveryResponseIgnoresReleaseVersionFromGossip(t *testing.T
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
-	if observations := set.KnownRelayObservations(); len(observations) != 0 {
-		t.Fatalf("KnownRelayObservations() = %+v, want no entries from a gossip batch", observations)
+	if versions := set.KnownRelayReleaseVersions(); len(versions) != 0 {
+		t.Fatalf("KnownRelayReleaseVersions() = %+v, want no entries from a gossip batch", versions)
 	}
 }
 
-func TestKnownRelayObservationsOmitRelayWithoutReleaseVersion(t *testing.T) {
+func TestApplyRelayDiscoveryResponseRetainsReleaseAcrossProtocolMismatch(t *testing.T) {
 	set := NewRelaySet(nil)
 
-	// An older relay omits release_version entirely.
-	mustApplyAuthoritative(t, set, mustRelayDescriptor(t, "https://relay-norelease.example"))
+	relayURL := "https://relay-mismatch-release.example"
+	_, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion + "-older",
+		ReleaseVersion:  "v2.6.0",
+	}, time.Now().UTC())
+	if !errors.Is(err, ErrProtocolMismatch) {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v, want ErrProtocolMismatch", err)
+	}
 
-	if observations := set.KnownRelayObservations(); len(observations) != 0 {
-		t.Fatalf("KnownRelayObservations() = %+v, want no entries when the peer omits its release", observations)
+	// #512: the protocol label is only a fallback for when no release is
+	// known. A directly observed release must survive the mismatch.
+	if versions := set.KnownRelayReleaseVersions(); len(versions) != 1 || versions[relayURL] != "v2.6.0" {
+		t.Fatalf("KnownRelayReleaseVersions() = %+v, want {%q: %q} despite ErrProtocolMismatch", versions, relayURL, "v2.6.0")
 	}
 }
 
-func TestKnownRelayObservationsSuppressBannedRelay(t *testing.T) {
+func TestKnownRelayReleaseVersionsExpireWithoutFreshDirectPoll(t *testing.T) {
 	set := NewRelaySet(nil)
 
-	relayURL := "https://relay-banned-observation.example"
+	relayURL := "https://relay-expire.example"
+	signing := mustSigningIdentity(t)
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+	desc := mustSignedDescriptor(t, signing, relayURL, t0)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{desc},
+		ReleaseVersion:  "v2.6.0",
+	}, t0); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+
+	// A gossip batch re-lists the same relay and refreshes its RelayState
+	// freshness, but it is not a direct contact and carries no release of
+	// its own: it must not extend the release observation's clock.
+	gossipAt := t0.Add(2 * time.Hour)
+	gossipDesc := mustSignedDescriptor(t, signing, relayURL, gossipAt)
+	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{gossipDesc},
+	}, gossipAt); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() gossip error = %v", err)
+	}
+
+	if versions := set.knownRelayReleaseVersionsAt(t0.Add(AnnounceMaxValidity)); versions[relayURL] != "v2.6.0" {
+		t.Fatalf("knownRelayReleaseVersionsAt(validity boundary) = %+v, want %q still fresh on its direct-observation clock", versions, "v2.6.0")
+	}
+	if versions := set.knownRelayReleaseVersionsAt(t0.Add(AnnounceMaxValidity).Add(time.Second)); len(versions) != 0 {
+		t.Fatalf("knownRelayReleaseVersionsAt(validity+1s) = %+v, want empty: gossip must not extend the direct clock", versions)
+	}
+}
+
+func TestApplyRelayDiscoveryResponseDropsReleaseWhenPeerStopsReporting(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-stopped.example"
+	signing := mustSigningIdentity(t)
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+	desc := mustSignedDescriptor(t, signing, relayURL, t0)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{desc},
+		ReleaseVersion:  "v2.6.0",
+	}, t0); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+	if versions := set.KnownRelayReleaseVersions(); versions[relayURL] != "v2.6.0" {
+		t.Fatalf("KnownRelayReleaseVersions() = %+v, want {%q: %q}", versions, relayURL, "v2.6.0")
+	}
+
+	// The peer later answers without a release (an older build that stopped
+	// reporting): the latest direct observation wins.
+	t1 := t0.Add(time.Minute)
+	freshDesc := mustSignedDescriptor(t, signing, relayURL, t1)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{freshDesc},
+	}, t1); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+	if versions := set.KnownRelayReleaseVersions(); len(versions) != 0 {
+		t.Fatalf("KnownRelayReleaseVersions() = %+v, want empty after the peer stopped reporting its release", versions)
+	}
+}
+
+func TestKnownRelayReleaseVersionsSuppressBannedRelay(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-banned-release.example"
 	desc := mustRelayDescriptor(t, relayURL)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
@@ -559,40 +629,12 @@ func TestKnownRelayObservationsSuppressBannedRelay(t *testing.T) {
 	}, time.Now().UTC()); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
-	if observations := set.KnownRelayObservations(); len(observations) != 1 {
-		t.Fatalf("KnownRelayObservations() = %+v, want one entry before ban", observations)
+	if versions := set.KnownRelayReleaseVersions(); len(versions) != 1 {
+		t.Fatalf("KnownRelayReleaseVersions() = %+v, want one entry before ban", versions)
 	}
 
 	set.BanRelayURL(relayURL)
-	if observations := set.KnownRelayObservations(); len(observations) != 0 {
-		t.Fatalf("KnownRelayObservations() = %+v, want empty after local ban", observations)
-	}
-}
-
-func TestKnownRelayObservationsSortByURL(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	// Ingest B first so map iteration order cannot accidentally satisfy the
-	// sorted-output expectation.
-	for _, relay := range []struct{ url, version string }{
-		{url: "https://relay-b.example", version: "v2.6.0"},
-		{url: "https://relay-a.example", version: "v2.5.0"},
-	} {
-		desc := mustRelayDescriptor(t, relay.url)
-		if _, err := set.ApplyRelayDiscoveryResponse(relay.url, types.DiscoveryResponse{
-			ProtocolVersion: types.DiscoveryVersion,
-			Relays:          []types.RelayDescriptor{desc},
-			ReleaseVersion:  relay.version,
-		}, time.Now().UTC()); err != nil {
-			t.Fatalf("ApplyRelayDiscoveryResponse(%q) error = %v", relay.url, err)
-		}
-	}
-
-	observations := set.KnownRelayObservations()
-	if len(observations) != 2 {
-		t.Fatalf("KnownRelayObservations() = %+v, want two entries", observations)
-	}
-	if observations[0].URL != "https://relay-a.example" || observations[1].URL != "https://relay-b.example" {
-		t.Fatalf("KnownRelayObservations() urls = %q, %q; want sorted by URL", observations[0].URL, observations[1].URL)
+	if versions := set.KnownRelayReleaseVersions(); len(versions) != 0 {
+		t.Fatalf("KnownRelayReleaseVersions() = %+v, want empty after local ban", versions)
 	}
 }

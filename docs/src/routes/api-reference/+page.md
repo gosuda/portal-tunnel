@@ -246,17 +246,9 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `relays` | `RelayDescriptor[]` | signed, routable relay descriptors |
 | `incompatible_relays` | `IncompatibleRelayEntry[]` | optional; relays contacted directly whose discovery protocol version differs |
 | `release_version` | `string` | optional; release of the serving relay itself |
-| `relay_observations` | `RelayObservation[]` | optional; release observations about peer relays it contacted directly |
+| `relay_release_versions` | `map` (peer URL → release) | optional; releases directly observed from each peer's own `/discovery` |
 
-`RelayObservation`:
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `url` | `string` | API URL of the peer relay the serving relay contacted directly |
-| `release_version` | `string` | optional; release observed from that relay's own `/discovery` response |
-| `last_seen_at` | `string` | when the serving relay last contacted it |
-
-`release_version` and `relay_observations` are optional, unsigned observation metadata: they never affect routing, trust, signature verification, or compatibility, and older relays omit them. Signed relay identity stays in `RelayDescriptor`.
+`release_version` and `relay_release_versions` are optional, unsigned observation metadata: they never affect routing, trust, signature verification, or compatibility, and older relays omit them. Signed relay identity stays in `RelayDescriptor`.
 
 ## Common Errors
 

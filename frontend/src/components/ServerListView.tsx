@@ -348,13 +348,15 @@ export function ServerListView({
         );
 
         const versions: Record<string, string> = {};
-        discovery?.relay_observations?.forEach((observation) => {
-          const relayURL = normalizeRelayURL(observation.url);
-          const releaseVersion = observation.release_version?.trim() ?? "";
-          if (relayURL !== "" && releaseVersion !== "") {
-            versions[relayURL] = releaseVersion;
+        Object.entries(discovery?.relay_release_versions ?? {}).forEach(
+          ([url, releaseVersion]) => {
+            const relayURL = normalizeRelayURL(url);
+            const trimmedVersion = releaseVersion.trim();
+            if (relayURL !== "" && trimmedVersion !== "") {
+              versions[relayURL] = trimmedVersion;
+            }
           }
-        });
+        );
         nextReleases = {
           versions,
           discovery: {

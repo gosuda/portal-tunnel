@@ -43,10 +43,11 @@ import (
 // (notably from ApplyRelayDiscoveryResponse, which holds the write lock for
 // the entire batch).
 type RelaySet struct {
-	mu           sync.RWMutex
-	relays       map[string]RelayState
-	keyIndex     map[string]keyIndexEntry
-	incompatible map[string]types.IncompatibleRelayEntry
+	mu              sync.RWMutex
+	relays          map[string]RelayState
+	keyIndex        map[string]keyIndexEntry
+	incompatible    map[string]types.IncompatibleRelayEntry
+	releaseVersions map[string]relayReleaseObservation
 }
 
 // keyIndexEntry records the rollback anchor for a signing identity.
@@ -57,6 +58,15 @@ type RelaySet struct {
 type keyIndexEntry struct {
 	IssuedAt       time.Time
 	TombstoneUntil time.Time
+}
+
+// relayReleaseObservation is one directly observed peer release. observedAt
+// is the observation's own direct-discovery clock: gossip and announce
+// ingestion never write it, so only a fresh direct poll keeps a release
+// alive.
+type relayReleaseObservation struct {
+	releaseVersion string
+	observedAt     time.Time
 }
 
 // ErrProtocolMismatch reports that a discovery response came from a relay
@@ -75,9 +85,10 @@ const (
 
 func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 	set := &RelaySet{
-		relays:       make(map[string]RelayState),
-		keyIndex:     make(map[string]keyIndexEntry),
-		incompatible: make(map[string]types.IncompatibleRelayEntry),
+		relays:          make(map[string]RelayState),
+		keyIndex:        make(map[string]keyIndexEntry),
+		incompatible:    make(map[string]types.IncompatibleRelayEntry),
+		releaseVersions: make(map[string]relayReleaseObservation),
 	}
 	set.SetBootstrapRelayURLs(bootstrapRelayURLs)
 	return set
@@ -191,15 +202,6 @@ func mergeLocalRelayState(record, existing RelayState) RelayState {
 		record.DiscoveryRTTAt = existing.DiscoveryRTTAt
 	}
 	record.inheritAdaptiveTelemetry(existing)
-	// ReleaseVersion is only ever recorded from a direct authoritative
-	// observation of that exact relay, so a re-listing that carries no fresh
-	// observation (gossip, announce, or a non-target entry) must not erase
-	// the last one. Like Trust, it never transfers across an identity
-	// change: the previous operator's observation says nothing about whoever
-	// serves the URL next.
-	if record.ReleaseVersion == "" && sameIdentity {
-		record.ReleaseVersion = existing.ReleaseVersion
-	}
 	return record
 }
 
@@ -670,7 +672,6 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	}
 	protocolMismatch := resp.ProtocolVersion != types.DiscoveryVersion
 	authoritative := targetURL != ""
-	observedRelease := strings.TrimSpace(resp.ReleaseVersion)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -695,6 +696,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	missingTarget := authoritative && !targetFound
 
 	if authoritative {
+		s.recordReleaseObservationLocked(targetURL, resp.ReleaseVersion, now)
 		if protocolMismatch {
 			s.recordIncompatibleRelayLocked(targetURL, resp.ProtocolVersion, now)
 		} else if !missingTarget {
@@ -712,10 +714,6 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		isAuthoritativeTarget := !protocolMismatch && !missingTarget && authoritative && relayURL == targetURL
 		if isAuthoritativeTarget {
 			record = markDiscoveryVerified(record)
-			// Latest direct observation wins: an empty value overwrites a
-			// stale one (e.g. after the peer downgraded to a build that
-			// stopped reporting its release).
-			record.ReleaseVersion = observedRelease
 		}
 
 		if upsert := s.upsertDescriptorLocked(record, now, isAuthoritativeTarget); upsert != upsertAccepted {
@@ -728,7 +726,6 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 			if isAuthoritativeTarget && hasExistingAtURL {
 				if existingAtURL.discoveryFailures != 0 || !existingAtURL.nextDiscoveryRefreshAt.IsZero() || !existingAtURL.unhealthySince.IsZero() {
 					existingAtURL = markDiscoveryVerified(existingAtURL)
-					existingAtURL.ReleaseVersion = observedRelease
 					s.relays[relayURL] = existingAtURL
 					relaySetChanged = true
 				}
@@ -786,6 +783,28 @@ func (s *RelaySet) pruneIncompatibleLocked(now time.Time) {
 	}
 }
 
+// recordReleaseObservationLocked remembers the release a directly contacted
+// relay reported about itself. The authoritative refresher poll is the only
+// writer — gossip and announce batches carry no release of their own and
+// must not mint or refresh observations. It records regardless of protocol
+// match (#512: the protocol label is only a fallback when no release is
+// known). An empty value — an older build that stopped reporting — drops
+// the observation: latest direct observation wins.
+func (s *RelaySet) recordReleaseObservationLocked(relayURL, releaseVersion string, now time.Time) {
+	if relayURL == "" {
+		return
+	}
+	releaseVersion = strings.TrimSpace(releaseVersion)
+	if releaseVersion == "" {
+		delete(s.releaseVersions, relayURL)
+		return
+	}
+	s.releaseVersions[relayURL] = relayReleaseObservation{
+		releaseVersion: releaseVersion,
+		observedAt:     now,
+	}
+}
+
 // KnownIncompatibleRelays returns directly observed relays whose discovery
 // protocol version is incompatible with the local one. Entries are sorted by
 // URL for stable output, expire (per AnnounceMaxValidity) without a fresh
@@ -814,36 +833,32 @@ func (s *RelaySet) knownIncompatibleRelaysAt(now time.Time) []types.Incompatible
 	return out
 }
 
-// KnownRelayObservations returns the release versions this relay observed
-// directly from peer relays' own /discovery responses. Like
-// KnownIncompatibleRelays, entries are sorted by URL for stable output, expire
-// (per AnnounceMaxValidity) without a fresh observation, and are suppressed
-// while the relay is locally banned. They are unsigned observation metadata:
-// they never participate in routing, trust, signature verification, or
-// compatibility decisions, and are never part of the routable descriptor set.
-func (s *RelaySet) KnownRelayObservations() []types.RelayObservation {
-	return s.knownRelayObservationsAt(time.Now().UTC())
+// KnownRelayReleaseVersions returns the release versions this relay observed
+// directly from peer relays' own /discovery responses, keyed by peer relay
+// URL. Like KnownIncompatibleRelays, entries expire (per AnnounceMaxValidity)
+// without a fresh direct observation and are suppressed while the relay is
+// locally banned: a local ban outranks release visibility. They are unsigned
+// observation metadata: they never participate in routing, trust, signature
+// verification, or compatibility decisions, and are never part of the
+// routable descriptor set.
+func (s *RelaySet) KnownRelayReleaseVersions() map[string]string {
+	return s.knownRelayReleaseVersionsAt(time.Now().UTC())
 }
 
-func (s *RelaySet) knownRelayObservationsAt(now time.Time) []types.RelayObservation {
+func (s *RelaySet) knownRelayReleaseVersionsAt(now time.Time) map[string]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	out := make([]types.RelayObservation, 0, len(s.relays))
-	for relayURL, state := range s.relays {
-		if state.Banned || state.ReleaseVersion == "" {
+	out := make(map[string]string, len(s.releaseVersions))
+	for relayURL, observation := range s.releaseVersions {
+		if now.Sub(observation.observedAt) > AnnounceMaxValidity {
 			continue
 		}
-		if now.Sub(state.LastSeenAt) > AnnounceMaxValidity {
+		if state, ok := s.relays[relayURL]; ok && state.Banned {
 			continue
 		}
-		out = append(out, types.RelayObservation{
-			URL:            relayURL,
-			ReleaseVersion: state.ReleaseVersion,
-			LastSeenAt:     state.LastSeenAt,
-		})
+		out[relayURL] = observation.releaseVersion
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].URL < out[j].URL })
 	return out
 }
 
