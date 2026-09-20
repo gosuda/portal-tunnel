@@ -130,7 +130,7 @@ export function relayReleaseLabel(
 
   const protocolVersion =
     relay.protocolVersion?.trim() ||
-    (typeof discovery?.protocol_version === "string"
+    (relay.isCurrent && typeof discovery?.protocol_version === "string"
       ? discovery.protocol_version.trim()
       : "");
   if (protocolVersion !== "") {

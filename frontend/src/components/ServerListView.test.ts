@@ -66,6 +66,13 @@ describe("relayReleaseLabel", () => {
     expect(relayReleaseLabel({}, relay)).toBe("discovery 8");
   });
 
+  it("does not borrow the serving relay's protocol version for peers", () => {
+    const relay = { relayURL: "https://relay-peer.example", isCurrent: false };
+    expect(
+      relayReleaseLabel({}, relay, { protocol_version: "9" })
+    ).toBeNull();
+  });
+
   it("returns null when nothing is known about the relay", () => {
     const relay = {
       relayURL: "https://relay-old.example",
