@@ -18,7 +18,7 @@ func NewClientDatagram() *ClientDatagram {
 	}
 }
 
-func (d *ClientDatagram) BindBackhaul(conn *quic.Conn) (<-chan struct{}, error) {
+func (d *ClientDatagram) BindBackhaul(conn *quic.Conn) (<-chan error, error) {
 	if d == nil || d.session == nil {
 		if conn != nil {
 			_ = conn.CloseWithError(0, "listener closed")
@@ -50,14 +50,6 @@ func (d *ClientDatagram) Send(flowID uint32, payload []byte) error {
 
 func (d *ClientDatagram) Connected() bool {
 	return d != nil && d.session != nil && d.session.hasConnection()
-}
-
-// Err reports the receive error that ended the active backhaul loop, if any.
-func (d *ClientDatagram) Err() error {
-	if d == nil || d.session == nil {
-		return nil
-	}
-	return d.session.Err()
 }
 
 func (d *ClientDatagram) Clear(reason string) {

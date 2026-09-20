@@ -19,8 +19,16 @@ type RelayTCPPort struct {
 	port        int
 	listener    net.Listener
 	stream      *RelayStream
+	pairs       chan tcpPair
+	ctx         context.Context
+	cancel      context.CancelFunc
 
 	closeOnce sync.Once
+}
+
+type tcpPair struct {
+	inbound net.Conn
+	session net.Conn
 }
 
 func NewRelayTCPPort(identityKey string, port int, stream *RelayStream) *RelayTCPPort {
@@ -44,6 +52,9 @@ func (t *RelayTCPPort) Start() error {
 		return err
 	}
 	t.listener = listener
+	t.ctx, t.cancel = context.WithCancel(context.Background())
+	t.pairs = make(chan tcpPair)
+	go t.acceptLoop()
 
 	log.Info().
 		Str("component", "tcp-port-relay").
@@ -60,6 +71,9 @@ func (t *RelayTCPPort) Close() {
 	}
 
 	t.closeOnce.Do(func() {
+		if t.cancel != nil {
+			t.cancel()
+		}
 		if t.listener != nil {
 			_ = t.listener.Close()
 		}
@@ -78,31 +92,60 @@ func (t *RelayTCPPort) TCPPort() int {
 	return t.port
 }
 
-// Accept returns the next inbound TCP connection paired with a claimed
-// reverse session. A connection whose reverse session cannot be claimed in
-// time is closed and the wait continues; the returned error ends acceptance.
+// Accept returns the next inbound TCP connection paired with a claimed reverse
+// session. Claims run independently from listener acceptance so a pending
+// reverse session cannot delay later inbound connections.
 func (t *RelayTCPPort) Accept() (net.Conn, net.Conn, error) {
-	if t == nil || t.listener == nil {
+	if t == nil || t.ctx == nil || t.pairs == nil {
 		return nil, nil, net.ErrClosed
 	}
+	select {
+	case pair := <-t.pairs:
+		return pair.inbound, pair.session, nil
+	case <-t.ctx.Done():
+		return nil, nil, net.ErrClosed
+	}
+}
+
+func (t *RelayTCPPort) acceptLoop() {
+	defer t.cancel()
 	for {
 		conn, err := t.listener.Accept()
 		if err != nil {
-			return nil, nil, err
+			if t.ctx.Err() == nil {
+				log.Warn().
+					Str("component", "tcp-port-relay").
+					Str("identity_key", t.identityKey).
+					Err(err).
+					Msg("accept loop exiting")
+			}
+			return
 		}
+		go t.claim(conn)
+	}
+}
 
-		claimCtx, cancel := context.WithTimeout(context.Background(), defaultTCPPortClaimTimeout)
-		session, err := t.stream.claimRaw(claimCtx)
-		cancel()
-		if err != nil {
-			_ = conn.Close()
+func (t *RelayTCPPort) claim(conn net.Conn) {
+	claimCtx, cancel := context.WithTimeout(t.ctx, defaultTCPPortClaimTimeout)
+	defer cancel()
+
+	session, err := t.stream.claimRaw(claimCtx)
+	if err != nil {
+		_ = conn.Close()
+		if t.ctx.Err() == nil {
 			log.Warn().
 				Str("component", "tcp-port-relay").
 				Str("identity_key", t.identityKey).
 				Err(err).
 				Msg("failed to claim reverse session for tcp port connection")
-			continue
 		}
-		return conn, session, nil
+		return
+	}
+
+	select {
+	case t.pairs <- tcpPair{inbound: conn, session: session}:
+	case <-t.ctx.Done():
+		_ = conn.Close()
+		_ = session.Close()
 	}
 }

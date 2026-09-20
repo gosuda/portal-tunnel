@@ -462,7 +462,7 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 	r.outbound++
 	r.activeSources[clientIP]++
 	r.admissionMu.Unlock()
-	defer func() {
+	release := func() {
 		r.admissionMu.Lock()
 		r.outbound--
 		r.activeSources[clientIP]--
@@ -470,6 +470,12 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 			delete(r.activeSources, clientIP)
 		}
 		r.admissionMu.Unlock()
+	}
+	handoff := false
+	defer func() {
+		if !handoff {
+			release()
+		}
 	}()
 
 	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
@@ -479,7 +485,6 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay route is unavailable")
 		return nil, nil
 	}
-	handoff := false
 	defer func() {
 		if !handoff {
 			closeNow(upstream)
@@ -520,10 +525,6 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		log.Warn().Err(err).Str("component", "overlay").Msg("gateway bridge hijack failed")
 		return nil, nil
 	}
-	// The shutdown hook lives past the handoff: when the overlay stops it
-	// closes the hijacked side so the caller's bridge cannot outlive the
-	// runtime.
-	context.AfterFunc(r.ctx, func() { _ = downstream.Close() })
 	if _, err := fmt.Fprint(buffered, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: raw\r\nConnection: Upgrade\r\n\r\n"); err != nil {
 		// The hijacked connection is unusable, so nothing can be reported to
 		// the client; record why the bridge never started.
@@ -538,8 +539,10 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 	}
 	_ = downstream.SetDeadline(time.Time{})
 	_ = upstream.SetDeadline(time.Time{})
-	handoff = true // ownership moves to the caller's bridge
-	return &bufferedConn{Conn: downstream, reader: buffered.Reader}, upstream
+	client := &bufferedConn{Conn: downstream, reader: buffered.Reader, release: release}
+	client.stop = context.AfterFunc(r.ctx, func() { _ = client.Close() })
+	handoff = true // ownership and capacity release move to the caller's bridge
+	return client, upstream
 }
 
 func (r *Runtime) acceptReverse(conn net.Conn) {
@@ -693,10 +696,26 @@ func peerDestination(conn net.Conn) (string, error) {
 
 type bufferedConn struct {
 	net.Conn
-	reader *bufio.Reader
+	reader  *bufio.Reader
+	stop    func() bool
+	release func()
+	close   sync.Once
 }
 
 func (c *bufferedConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
+
+func (c *bufferedConn) Close() error {
+	err := c.Conn.Close()
+	c.close.Do(func() {
+		if c.stop != nil {
+			c.stop()
+		}
+		if c.release != nil {
+			c.release()
+		}
+	})
+	return err
+}
 
 func closeNow(conn net.Conn) {
 	if conn == nil {

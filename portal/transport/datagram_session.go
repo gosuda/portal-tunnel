@@ -18,7 +18,6 @@ type datagramSession struct {
 	incoming     chan types.DatagramFrame
 	dropIncoming bool
 	done         chan struct{}
-	recvErr      error
 
 	mu     sync.Mutex
 	conn   *quic.Conn
@@ -39,7 +38,7 @@ func newDatagramSession(bufferSize int, dropIncoming bool) *datagramSession {
 
 // Bind installs a new active backhaul connection and starts the receive loop.
 // Any previously active connection is replaced and closed.
-func (s *datagramSession) Bind(conn *quic.Conn) (<-chan struct{}, error) {
+func (s *datagramSession) Bind(conn *quic.Conn) (<-chan error, error) {
 	if conn == nil {
 		return nil, errors.New("quic backhaul connection is required")
 	}
@@ -52,28 +51,19 @@ func (s *datagramSession) Bind(conn *quic.Conn) (<-chan struct{}, error) {
 	}
 	old := s.conn
 	s.conn = conn
-	s.recvErr = nil
 	s.mu.Unlock()
 
 	if old != nil {
 		_ = old.CloseWithError(0, "replaced")
 	}
 
-	recvDone := make(chan struct{})
+	recvDone := make(chan error, 1)
 	go s.receiveLoop(conn, recvDone)
 	return recvDone, nil
 }
 
 func (s *datagramSession) Done() <-chan struct{} {
 	return s.done
-}
-
-// Err reports the receive error that ended the active connection's loop, if
-// any. It is cleared on the next Bind.
-func (s *datagramSession) Err() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.recvErr
 }
 
 func (s *datagramSession) hasConnection() bool {
@@ -127,8 +117,12 @@ func (s *datagramSession) Stop(reason string) {
 	}
 }
 
-func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
-	defer close(recvDone)
+func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan<- error) {
+	var recvErr error
+	defer func() {
+		recvDone <- recvErr
+		close(recvDone)
+	}()
 
 	for {
 		data, err := conn.ReceiveDatagram(context.Background())
@@ -136,11 +130,11 @@ func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
 			s.mu.Lock()
 			if s.conn == conn && !s.closed {
 				s.conn = nil
-				s.recvErr = err
+				recvErr = err
 			}
 			s.mu.Unlock()
-			// Loop exit is intentional: the error is recorded for Err() and
-			// owners observe termination through the done signal.
+			// Loop exit is intentional: this receive generation reports its
+			// terminal error to its owner through recvDone.
 			return
 		}
 

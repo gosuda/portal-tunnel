@@ -107,8 +107,7 @@ func (d *RelayDatagram) BindBackhaul(conn *quic.Conn) error {
 		return err
 	}
 	go func() {
-		<-recvDone
-		if err := d.session.Err(); err != nil {
+		if err := <-recvDone; err != nil {
 			log.Warn().
 				Err(err).
 				Str("component", "quic-backhaul").

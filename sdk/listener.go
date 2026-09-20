@@ -776,15 +776,15 @@ func (l *listener) runDatagramLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			l.datagram.Clear("lease stopped")
 			return nil
-		case <-recvDone:
-		}
-		if err := l.datagram.Err(); err != nil {
-			log.Info().
-				Err(err).
-				Str("component", "sdk-quic-backhaul").
-				Str("address", l.identity.Address).
-				Msg("quic backhaul disconnected; waiting to reconnect")
-			l.reportAvailable()
+		case err := <-recvDone:
+			if err != nil {
+				log.Info().
+					Err(err).
+					Str("component", "sdk-quic-backhaul").
+					Str("address", l.identity.Address).
+					Msg("quic backhaul disconnected; waiting to reconnect")
+				l.reportAvailable()
+			}
 		}
 
 		if !utils.SleepOrDone(ctx, time.Second) {
