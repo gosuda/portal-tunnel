@@ -7,6 +7,7 @@ import { TagCombobox } from "@/components/TagCombobox";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import type { BaseServer } from "@/hooks/useList";
 import type { AdminServer, ApprovalMode, UDPSettings, TCPPortSettings } from "@/hooks/useAdmin";
+import type { ReputationVote } from "@/types/api";
 import type { BanFilter, SortOption, StatusFilter } from "@/types/filters";
 import { StatusSelect } from "@/components/select/StatusSelect";
 import { BanStatusButtons } from "@/components/button/BanStatusButtons";
@@ -119,6 +120,7 @@ interface ServerListViewProps {
   onSortByChange: (value: SortOption) => void;
   onTagToggle: (tag: string) => void;
   onToggleFavorite: (serverId: string) => void;
+  onVote?: (hostname: string, vote: ReputationVote) => void;
   isAdmin?: boolean;
   banFilter?: BanFilter;
   approvalMode?: ApprovalMode;
@@ -171,6 +173,7 @@ export function ServerListView({
   onSortByChange,
   onTagToggle,
   onToggleFavorite,
+  onVote,
   isAdmin = false,
   banFilter = "all",
   approvalMode = "auto",
@@ -602,12 +605,15 @@ export function ServerListView({
           serverUrl: server.link,
           paymentEnabled: server.paymentEnabled,
           paymentLabel: server.paymentLabel,
+          reputation: server.reputation,
         }}
         tcpAddr={server.tcpAddr}
         udpAddr={server.udpAddr}
         firstSeen={server.firstSeen}
         isFavorite={favoriteIds.has(server.id)}
         onToggleFavorite={onToggleFavorite}
+        reputation={isAdmin ? undefined : server.reputation}
+        onVote={isAdmin ? undefined : onVote}
         paymentEnabled={server.paymentEnabled}
         paymentLabel={server.paymentLabel}
         showAdminControls={isAdmin && !!adminServer}

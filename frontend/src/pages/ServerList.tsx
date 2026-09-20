@@ -16,6 +16,7 @@ export function ServerList() {
     handleSortByChange,
     handleTagToggle,
     handleToggleFavorite,
+    onVote,
     landingPageEnabled,
   } = useServerList();
 
@@ -35,6 +36,7 @@ export function ServerList() {
         onSortByChange={handleSortByChange}
         onTagToggle={handleTagToggle}
         onToggleFavorite={handleToggleFavorite}
+        onVote={onVote}
       />
     </SsgoiTransition>
   );

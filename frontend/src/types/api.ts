@@ -53,6 +53,7 @@ export interface PolicyLease extends Lease {
 export interface PublicStateResponse {
   leases?: Lease[];
   landing_page_enabled: boolean;
+  reputation?: ReputationSummary[];
 }
 
 export interface PolicyPortSettings {
@@ -125,6 +126,27 @@ export interface DiscoveryResponse {
   relays?: RelayDescriptor[];
   incompatible_relays?: IncompatibleRelayEntry[];
 }
+
+export type ReputationVote = "up" | "down";
+
+// Every reputation response carries viewer_vote; anonymous viewers carry "".
+export type ViewerVote = ReputationVote | "";
+
+export interface ReputationSummary {
+  hostname: string;
+  up: number;
+  down: number;
+  total: number;
+  viewer_vote?: ViewerVote;
+}
+
+export interface ReputationVoteRequest {
+  hostname: string;
+  vote: ReputationVote;
+}
+
+// The vote response is the same aggregate as a directory row, hostname included.
+export type ReputationVoteResponse = ReputationSummary;
 
 export interface LeasePolicyUpdate {
   identity_key: string;

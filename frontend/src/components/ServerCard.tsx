@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
-import { BadgeDollarSign } from "lucide-react";
+import { BadgeDollarSign, ThumbsDown, ThumbsUp } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import type { ReputationSummary, ReputationVote } from "@/types/api";
 
 interface ServerCardProps {
   serverId: string;
@@ -51,6 +52,8 @@ interface ServerCardProps {
   onDenyStatusChange?: (identityKey: string, deny: boolean) => void | Promise<void>;
   isSelected?: boolean;
   onToggleSelect?: (identityKey: string) => void;
+  reputation?: ReputationSummary;
+  onVote?: (hostname: string, vote: ReputationVote) => void | Promise<void>;
 }
 
 export function ServerCard({
@@ -84,11 +87,14 @@ export function ServerCard({
   onDenyStatusChange,
   isSelected = false,
   onToggleSelect,
+  reputation,
+  onVote,
 }: ServerCardProps) {
   const [showBPSModal, setShowBPSModal] = useState(false);
   const [bpsInput, setBpsInput] = useState(bps.toString());
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const [copiedProtocol, setCopiedProtocol] = useState<string | null>(null);
+  const [isVoting, setIsVoting] = useState(false);
   const copyTimeoutRef = useRef<number | undefined>(undefined);
   const effectiveThumbnail = thumbnailFailed ? "" : thumbnail;
   const normalizedPaymentLabel = paymentLabel.trim();
@@ -150,6 +156,22 @@ export function ServerCard({
     event.preventDefault();
     event.stopPropagation();
     onToggleFavorite?.(serverId);
+  };
+
+  // Voting must never navigate into the service, even though the whole card
+  // can be a <Link>.
+  const handleVoteClick = (vote: ReputationVote) => async (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (reputation) {
+      if (!onVote || isVoting) return;
+      setIsVoting(true);
+      try {
+        await onVote(reputation.hostname, vote);
+      } finally {
+        setIsVoting(false);
+      }
+    }
   };
 
   const copyEndpoint = async (protocol: string, address: string) => {
@@ -500,6 +522,7 @@ export function ServerCard({
               )}
             </div>
           )}
+
         </div>
       </div>
     </article>
@@ -519,6 +542,26 @@ export function ServerCard({
         </Link>
       ) : (
         <div className="relative">{cardBody}</div>
+      )}
+
+      {!showAdminControls && reputation && (
+        <div className="flex items-center gap-1.5 mt-1.5">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-white/60">Community</span>
+          <button type="button" onClick={handleVoteClick("up")} disabled={isVoting} aria-label="Recommend" className={clsx(
+            "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
+            isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+            reputation.viewer_vote === "up" ? "border-primary/60 bg-primary/90 text-black" : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
+          )}>
+            <ThumbsUp className="size-3 shrink-0" /><span>{reputation.up}</span>
+          </button>
+          <button type="button" onClick={handleVoteClick("down")} disabled={isVoting} aria-label="Not recommend" className={clsx(
+            "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
+            isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+            reputation.viewer_vote === "down" ? "border-primary/60 bg-primary/90 text-black" : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
+          )}>
+            <ThumbsDown className="size-3 shrink-0" /><span>{reputation.down}</span>
+          </button>
+        </div>
       )}
 
       <Dialog open={showBPSModal} onOpenChange={setShowBPSModal}>
