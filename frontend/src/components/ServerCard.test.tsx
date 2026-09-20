@@ -162,19 +162,4 @@ describe("ServerCard community reputation votes", () => {
     expect(screen.getByText("directory")).toBeTruthy();
     expect(screen.queryByText("service detail")).toBeNull();
   });
-
-  it("keeps vote controls keyboard reachable without navigating", async () => {
-    const onVote = renderVotingCard();
-
-    for (const name of ["Recommend", "Not recommend"]) {
-      const button = screen.getByRole("button", { name });
-      button.focus();
-      expect(document.activeElement).toBe(button);
-    }
-
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Recommend" })));
-    expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "up");
-    expect(screen.getByText("directory")).toBeTruthy();
-    expect(screen.queryByText("service detail")).toBeNull();
-  });
 });

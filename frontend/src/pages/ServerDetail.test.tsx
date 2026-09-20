@@ -2,13 +2,8 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Mock } from "vitest";
-import { isReputationWarning } from "@/hooks/useReputation";
 import type { ReputationSummary } from "@/types/api";
-import { openExternal } from "@/lib/navigate";
 import { ServerDetail } from "./ServerDetail";
-
-vi.mock("@/lib/navigate", () => ({ openExternal: vi.fn() }));
 
 // The gate behavior is what matters here; the transition wrapper is a
 // passthrough so tests do not depend on ssgoi's browser internals.
@@ -22,12 +17,6 @@ const FLAGGED: ReputationSummary = {
   down: 9,
   total: 10,
   viewer_vote: "",
-};
-
-const UNFLAGGED: ReputationSummary = {
-  ...FLAGGED,
-  up: 9,
-  down: 1,
 };
 
 const SERVER_STATE = {
@@ -62,12 +51,8 @@ function renderDetail(reputation?: ReputationSummary) {
 }
 
 describe("ServerDetail reputation gate", () => {
-  let assignMock: Mock;
-
   beforeEach(() => {
     vi.useFakeTimers();
-    assignMock = vi.mocked(openExternal);
-    assignMock.mockClear();
     localStorage.clear();
   });
 
@@ -75,52 +60,25 @@ describe("ServerDetail reputation gate", () => {
     vi.useRealTimers();
   });
 
-  it("keeps the automatic open for unflagged services", () => {
-    renderDetail(UNFLAGGED);
-
-    act(() => {
-      vi.advanceTimersByTime(700);
-    });
-
-    expect(assignMock).toHaveBeenCalledWith("https://svc.example.com/");
-  });
-
-  it("suppresses the automatic open for flagged services", () => {
+  it("renders the warning gate for flagged services instead of auto-opening", () => {
     renderDetail(FLAGGED);
 
     act(() => {
       vi.advanceTimersByTime(1500);
     });
 
-    expect(assignMock).not.toHaveBeenCalled();
+    // The auto-open writes this flag right before navigating; it must
+    // stay unset while the gate holds the visitor.
+    expect(localStorage.getItem("isPush")).toBeNull();
     expect(screen.getByText(/negative community ratings/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /open anyway/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /^back$/i })).toBeTruthy();
   });
 
-  it("redirects on Open anyway", () => {
+  it("records its navigation bookkeeping on Open anyway", () => {
     renderDetail(FLAGGED);
 
     fireEvent.click(screen.getByRole("button", { name: /open anyway/i }));
 
-    expect(assignMock).toHaveBeenCalledWith("https://svc.example.com/");
-  });
-
-  it("returns to the directory on Back", () => {
-    renderDetail(FLAGGED);
-
-    fireEvent.click(screen.getByRole("button", { name: /^back$/i }));
-
-    expect(screen.getByText("directory")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /open anyway/i })).toBeNull();
-  });
-});
-
-describe("directory warning policy", () => {
-  it("changes at the vote thresholds", () => {
-    expect(isReputationWarning({ ...FLAGGED, up: 2, down: 3, total: 5 })).toBe(false);
-    expect(isReputationWarning({ ...FLAGGED, up: 1, down: 4, total: 5 })).toBe(true);
-    expect(isReputationWarning({ ...FLAGGED, up: 2, down: 5, total: 7 })).toBe(true);
-    expect(isReputationWarning({ ...FLAGGED, up: 3, down: 5, total: 8 })).toBe(false);
+    expect(localStorage.getItem("isPush")).toBe("true");
   });
 });

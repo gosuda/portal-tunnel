@@ -3,9 +3,12 @@ import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, BadgeDollarSign, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { isReputationWarning } from "@/hooks/useReputation";
-import { openExternal } from "@/lib/navigate";
 import type { ReputationSummary } from "@/types/api";
+
+// Directory presentation policy; the relay only stores vote aggregates.
+function isReputationWarning(summary: ReputationSummary | undefined): boolean {
+  return summary !== undefined && summary.total >= 5 && summary.down >= 3 && summary.down * 100 >= summary.total * 70;
+}
 
 interface ServerDetailState {
   id: string;
@@ -72,7 +75,7 @@ export function ServerDetail() {
     // Redirect after animation
     const timer = setTimeout(() => {
       localStorage.setItem("isPush", "true");
-      openExternal(server.serverUrl);
+      window.location.assign(server.serverUrl);
     }, 500);
 
     return () => {
@@ -102,15 +105,11 @@ export function ServerDetail() {
 
   const openService = () => {
     localStorage.setItem("isPush", "true");
-    openExternal(server.serverUrl);
+    window.location.assign(server.serverUrl);
   };
 
   const handleBack = () => {
     navigate(-1);
-  };
-
-  const handleOpenAnyway = () => {
-    openService();
   };
 
   // Base size multiplier (1 = default, 2 = 2x size)
@@ -163,7 +162,7 @@ export function ServerDetail() {
                 >
                   Back
                 </Button>
-                <Button onClick={handleOpenAnyway} className="cursor-pointer">
+                <Button onClick={openService} className="cursor-pointer">
                   Open anyway
                 </Button>
               </div>

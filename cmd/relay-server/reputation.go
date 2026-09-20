@@ -41,9 +41,11 @@ const (
 	reputationVoterCookie  = "portal_voter"
 	reputationVoterIDBytes = 32
 
-	// Whole-file JSON is written on each changed vote, so this per-identity
-	// voter cap keeps the work per public POST small.
-	reputationMaxVoters = 64
+	// Whole-file JSON is rewritten on each changed vote so these caps keep
+	// the work per public POST small; identities persist for the life of
+	// the state file, so past the identity cap new identities are rejected.
+	reputationMaxVoters     = 64
+	reputationMaxIdentities = 128
 )
 
 const (
@@ -51,9 +53,8 @@ const (
 	voteDown = "down"
 )
 
-// persistedReputation is the reputation.json schema. The identity set is
-// bounded by live public leases; votes are bounded per identity by
-// reputationMaxVoters.
+// persistedReputation is the reputation.json schema. All collections are
+// bounded by the reputationMax* constants.
 type persistedReputation struct {
 	VoterSecret []byte                       `json:"voter_secret"`
 	Identities  map[string]map[string]string `json:"identities,omitempty"`
@@ -133,6 +134,9 @@ func (s *ReputationStore) castVote(hostname, identity, vote, cookieID, source st
 	previous := s.state.Identities[identity]
 	if previous != nil && previous[hash] == vote {
 		return s.summarize(hostname, previous, hash), minted, nil
+	}
+	if previous == nil && len(s.state.Identities) >= reputationMaxIdentities {
+		return reputationSummary{}, "", errReputationCapacity
 	}
 	nextIdentities := maps.Clone(s.state.Identities)
 	votes := maps.Clone(previous)
@@ -257,7 +261,7 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	hostname := normalizeReputationHostname(req.Hostname)
+	hostname := utils.NormalizeHostname(req.Hostname)
 	if hostname == "" {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "hostname is required")
 		return
@@ -269,7 +273,7 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	}
 	identity := ""
 	for _, lease := range publicIdentityLeases(api.server.PublicLeases(), api.server) {
-		if normalizeReputationHostname(lease.Hostname) == hostname {
+		if utils.NormalizeHostname(lease.Hostname) == hostname {
 			identity = lease.IdentityKey
 			break
 		}
@@ -318,22 +322,14 @@ func setVoterCookie(w http.ResponseWriter, r *http.Request, value string) {
 	})
 }
 
-func normalizeReputationHostname(raw string) string {
-	hostname := strings.ToLower(strings.TrimSpace(raw))
-	if hostname == "" || len(hostname) > 253 {
-		return ""
-	}
-	return hostname
-}
-
 func publicIdentityLeases(public []types.Lease, server *portal.Server) []types.PolicyLease {
 	known := make(map[string]bool)
 	for _, lease := range public {
-		known[normalizeReputationHostname(lease.Hostname)] = true
+		known[utils.NormalizeHostname(lease.Hostname)] = true
 	}
 	leases := make([]types.PolicyLease, 0)
 	for _, lease := range server.PolicyLeases() {
-		if known[normalizeReputationHostname(lease.Hostname)] && lease.IdentityKey != "" {
+		if known[utils.NormalizeHostname(lease.Hostname)] && lease.IdentityKey != "" {
 			leases = append(leases, lease)
 		}
 	}
