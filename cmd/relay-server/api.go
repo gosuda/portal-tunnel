@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
@@ -51,7 +50,7 @@ type RelayAPI struct {
 	landingPageEnabled bool
 }
 
-func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool, reputationRetention time.Duration) (*RelayAPI, error) {
+func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
 	if server == nil {
 		return nil, errors.New("relay api requires portal server")
 	}
@@ -67,7 +66,7 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 	if err != nil {
 		return nil, err
 	}
-	reputationStore, err := newReputationStore(filepath.Join(filepath.Dir(policyStatePath), reputationFilename), reputationRetention)
+	reputationStore, err := newReputationStore(filepath.Join(filepath.Dir(policyStatePath), reputationFilename))
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +97,6 @@ func (api *RelayAPI) Handler() *http.ServeMux {
 	mux.HandleFunc(types.PathPolicy, api.servePolicy)
 	mux.HandleFunc(types.PathPolicyPrefix, api.servePolicy)
 	mux.HandleFunc(types.PathState, api.servePublicState)
-	mux.HandleFunc(pathReputation, api.serveReputation)
 	mux.HandleFunc(pathReputationVote, api.serveReputationVote)
 	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
 		serveInstallScript(w, r, api.server.PortalURL(), false)
@@ -121,10 +119,15 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	api.policyMu.RLock()
 	landingPageEnabled := api.landingPageEnabled
 	api.policyMu.RUnlock()
-	utils.WriteAPIData(w, http.StatusOK, types.PublicStateResponse{
-		Leases:             leases,
-		LandingPageEnabled: landingPageEnabled,
+	utils.WriteAPIData(w, http.StatusOK, publicStateResponse{
+		PublicStateResponse: types.PublicStateResponse{Leases: leases, LandingPageEnabled: landingPageEnabled},
+		Reputation:          api.reputation.summaries(api.reputation.viewerHashFor(voterCookieID(r)), publicIdentityLeases(api.server)),
 	})
+}
+
+type publicStateResponse struct {
+	types.PublicStateResponse
+	Reputation []reputationSummary `json:"reputation,omitempty"`
 }
 
 func (api *RelayAPI) loadPolicyState() error {

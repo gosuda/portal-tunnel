@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/apiClient";
 import { BROWSER_API_PATHS } from "@/lib/apiPaths";
 import type {
-  ReputationAggregatesResponse,
   ReputationSummary,
   ReputationVote,
   ReputationVoteResponse,
@@ -50,13 +49,9 @@ function isUsableSummary(
   );
 }
 
-function collectSummaries(
-  response: ReputationAggregatesResponse | undefined
-): Record<string, ReputationSummary> {
+function collectSummaries(rows: ReputationSummary[]): Record<string, ReputationSummary> {
   const summaries: Record<string, ReputationSummary> = {};
-  for (const summary of Array.isArray(response?.hostnames)
-    ? response.hostnames
-    : []) {
+  for (const summary of rows) {
     if (isUsableSummary(summary)) {
       summaries[normalizeHostname(summary.hostname)] = summary;
     }
@@ -64,31 +59,13 @@ function collectSummaries(
   return summaries;
 }
 
-export function useReputation() {
+export function useReputation(rows: ReputationSummary[]) {
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>(
     {}
   );
   useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const data = await apiClient.get<ReputationAggregatesResponse>(
-          BROWSER_API_PATHS.public.reputation
-        );
-        if (cancelled) {
-          return;
-        }
-        setSummaries(collectSummaries(data));
-      } catch (error) {
-        console.error("Failed to load reputation aggregates", error);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    setSummaries(collectSummaries(rows));
+  }, [rows]);
 
   const vote = async (hostname: string, vote: ReputationVote): Promise<void> => {
     const key = normalizeHostname(hostname);

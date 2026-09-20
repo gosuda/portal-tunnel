@@ -53,6 +53,7 @@ export interface PolicyLease extends Lease {
 export interface PublicStateResponse {
   leases?: Lease[];
   landing_page_enabled: boolean;
+  reputation?: ReputationSummary[];
 }
 
 export interface PolicyPortSettings {
@@ -137,10 +138,6 @@ export interface ReputationSummary {
   down: number;
   total: number;
   viewer_vote?: ViewerVote;
-}
-
-export interface ReputationAggregatesResponse {
-  hostnames?: ReputationSummary[];
 }
 
 export interface ReputationVoteRequest {

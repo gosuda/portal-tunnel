@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -18,94 +17,87 @@ import (
 
 func newTestReputationStore(t *testing.T) *ReputationStore {
 	t.Helper()
-	store, err := newReputationStore(filepath.Join(t.TempDir(), reputationFilename), 720*time.Hour)
+	store, err := newReputationStore(filepath.Join(t.TempDir(), reputationFilename))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return store
 }
 
+func testLeases(names ...string) []types.PolicyLease {
+	leases := make([]types.PolicyLease, 0, len(names))
+	for _, name := range names {
+		leases = append(leases, types.PolicyLease{Lease: types.Lease{Hostname: name}, IdentityKey: "id:" + name})
+	}
+	return leases
+}
+
 func TestReputationVoteSwitchAndRestart(t *testing.T) {
 	store := newTestReputationStore(t)
-	live := map[string]bool{"demo.example.com": true}
-	first, cookie, err := store.castVote("demo.example.com", voteUp, "", "203.0.113.10", live)
+	first, cookie, err := store.castVote("demo.example.com", "id:demo.example.com", voteUp, "", "203.0.113.10")
 	if err != nil || first.Up != 1 || cookie == "" {
 		t.Fatalf("first vote = %+v, cookie=%q, err=%v", first, cookie, err)
 	}
-	seen := store.state.Hostnames["demo.example.com"].LastSeenAt
-	same, _, err := store.castVote("demo.example.com", voteUp, cookie, "203.0.113.10", live)
-	if err != nil || same.Up != 1 || !store.state.Hostnames["demo.example.com"].LastSeenAt.Equal(seen) {
+	same, _, err := store.castVote("demo.example.com", "id:demo.example.com", voteUp, cookie, "203.0.113.10")
+	if err != nil || same.Up != 1 {
 		t.Fatalf("same vote changed state: %+v, err=%v", same, err)
 	}
-	switched, _, err := store.castVote("demo.example.com", voteDown, cookie, "203.0.113.10", live)
+	switched, _, err := store.castVote("demo.example.com", "id:demo.example.com", voteDown, cookie, "203.0.113.10")
 	if err != nil || switched.Up != 0 || switched.Down != 1 || switched.ViewerVote != voteDown {
 		t.Fatalf("switched vote = %+v, err=%v", switched, err)
 	}
-	reloaded, err := newReputationStore(store.path, 720*time.Hour)
+	reloaded, err := newReputationStore(store.path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reloaded.directory(reloaded.viewerHashFor(cookie), live).Hostnames[0]; got.Down != 1 || got.ViewerVote != voteDown {
+	if got := reloaded.summaries(reloaded.viewerHashFor(cookie), testLeases("demo.example.com"))[0]; got.Down != 1 || got.ViewerVote != voteDown {
 		t.Fatalf("reloaded vote = %+v", got)
 	}
 }
 
-func TestReputationKnownHostAndRetention(t *testing.T) {
+func TestReputationRequiresKnownIdentity(t *testing.T) {
 	store := newTestReputationStore(t)
-	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
-	store.now = func() time.Time { return now }
-	if _, _, err := store.castVote("fake.example.com", voteUp, "", "203.0.113.10", nil); !errors.Is(err, errReputationUnknownHostname) {
+	if _, _, err := store.castVote("fake.example.com", "", voteUp, "", "203.0.113.10"); !errors.Is(err, errReputationUnknownHostname) {
 		t.Fatalf("unknown hostname error = %v", err)
 	}
-	live := map[string]bool{"demo.example.com": true}
-	_, cookie, err := store.castVote("demo.example.com", voteUp, "", "203.0.113.10", live)
+	_, cookie, err := store.castVote("demo.example.com", "id:demo.example.com", voteUp, "", "203.0.113.10")
 	if err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(store.retention + time.Second)
-	if _, _, err := store.castVote("demo.example.com", voteDown, cookie, "203.0.113.10", nil); !errors.Is(err, errReputationUnknownHostname) {
-		t.Fatalf("expired absent hostname vote error = %v", err)
-	}
-	if got, _, err := store.castVote("demo.example.com", voteDown, cookie, "203.0.113.10", live); err != nil || got.Down != 1 || got.Up != 0 {
-		t.Fatalf("live hostname vote after retention = %+v, err=%v", got, err)
+	if got, _, err := store.castVote("demo.example.com", "id:demo.example.com", voteDown, cookie, "203.0.113.10"); err != nil || got.Down != 1 || got.Up != 0 {
+		t.Fatalf("vote = %+v, err=%v", got, err)
 	}
 }
 
 func TestReputationPersistFailureRestoresVote(t *testing.T) {
 	store := newTestReputationStore(t)
-	live := map[string]bool{"demo.example.com": true}
-	_, cookie, err := store.castVote("demo.example.com", voteUp, "", "203.0.113.10", live)
+	_, cookie, err := store.castVote("demo.example.com", "id:demo.example.com", voteUp, "", "203.0.113.10")
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.persistFn = func(persistedReputation) error { return errors.New("disk unavailable") }
-	if _, _, err := store.castVote("demo.example.com", voteDown, cookie, "203.0.113.10", live); !errors.Is(err, errReputationPersist) {
+	if _, _, err := store.castVote("demo.example.com", "id:demo.example.com", voteDown, cookie, "203.0.113.10"); !errors.Is(err, errReputationPersist) {
 		t.Fatalf("persist error = %v", err)
 	}
 }
 
 func TestReputationDirectoryProjectsLiveHostsAndViewerVote(t *testing.T) {
 	store := newTestReputationStore(t)
-	live := map[string]bool{"voted.example.com": true, "old.example.com": true}
-	_, cookie, err := store.castVote("voted.example.com", voteUp, "", "203.0.113.10", live)
+	_, cookie, err := store.castVote("voted.example.com", "id:voted.example.com", voteUp, "", "203.0.113.10")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.castVote("old.example.com", voteUp, cookie, "203.0.113.10", live); err != nil {
+	if _, _, err := store.castVote("old.example.com", "id:old.example.com", voteUp, cookie, "203.0.113.10"); err != nil {
 		t.Fatal(err)
 	}
-	// old.example.com drops out of the live set but its record stays within
-	// the retention window, so it keeps its directory row; fresh.example.com
-	// is live with no record yet and must still get a zero-count row.
-	live = map[string]bool{"voted.example.com": true, "fresh.example.com": true}
-	directory := store.directory(store.viewerHashFor(cookie), live)
+	summaries := store.summaries(store.viewerHashFor(cookie), testLeases("voted.example.com", "old.example.com", "fresh.example.com"))
 	want := []reputationSummary{
 		{Hostname: "fresh.example.com"},
 		{Hostname: "old.example.com", Up: 1, Down: 0, Total: 1, ViewerVote: voteUp},
 		{Hostname: "voted.example.com", Up: 1, Down: 0, Total: 1, ViewerVote: voteUp},
 	}
-	if !slices.Equal(directory.Hostnames, want) {
-		t.Fatalf("directory rows = %+v, want %+v", directory.Hostnames, want)
+	if !slices.Equal(summaries, want) {
+		t.Fatalf("directory rows = %+v, want %+v", summaries, want)
 	}
 }
 
@@ -120,7 +112,7 @@ func newTestReputationAPI(t *testing.T) *RelayAPI {
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, filepath.Join(dir, types.RelayPolicyFilename), "admin-test", frontend, false, 720*time.Hour)
+	api, err := NewRelayAPI(server, filepath.Join(dir, types.RelayPolicyFilename), "admin-test", frontend, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,9 +146,9 @@ func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
 		t.Fatal("vote source limit was not enforced")
 	}
 	read := httptest.NewRecorder()
-	api.Handler().ServeHTTP(read, httptest.NewRequest(http.MethodGet, pathReputation, nil))
-	var response types.APIEnvelope[reputationDirectory]
-	if read.Code != http.StatusOK || json.Unmarshal(read.Body.Bytes(), &response) != nil || len(response.Data.Hostnames) != 0 {
+	api.Handler().ServeHTTP(read, httptest.NewRequest(http.MethodGet, types.PathState, nil))
+	var response types.APIEnvelope[publicStateResponse]
+	if read.Code != http.StatusOK || json.Unmarshal(read.Body.Bytes(), &response) != nil || len(response.Data.Reputation) != 0 {
 		t.Fatalf("directory response: status=%d body=%s", read.Code, read.Body.String())
 	}
 }

@@ -8,11 +8,12 @@ import {
   resolveLeasePayment,
   resolveLeaseThumbnail,
 } from "@/lib/metadata";
-import type { Lease, PublicStateResponse } from "@/types/api";
+import type { Lease, PublicStateResponse, ReputationSummary } from "@/types/api";
 
 type PublicState = {
   leases: Lease[];
   landingPageEnabled: boolean;
+  reputation: ReputationSummary[];
 };
 
 function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
@@ -48,8 +49,9 @@ export function useServerList() {
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
     landingPageEnabled: false,
+    reputation: [],
   });
-  const reputation = useReputation();
+  const reputation = useReputation(publicState.reputation);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,11 +67,12 @@ export function useServerList() {
         setPublicState({
           leases: Array.isArray(data?.leases) ? data.leases : [],
           landingPageEnabled: data?.landing_page_enabled ?? false,
+          reputation: Array.isArray(data?.reputation) ? data.reputation : [],
         });
       } catch (error) {
         console.error("Failed to load public relay state", error);
         if (!cancelled) {
-          setPublicState({ leases: [], landingPageEnabled: false });
+          setPublicState({ leases: [], landingPageEnabled: false, reputation: [] });
         }
       }
     })();
