@@ -370,6 +370,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeAPIErrorResponse(w, err)
 		return
 	}
+	if record.tcpPort != nil {
+		go s.serveTCPPairs(record.tcpPort, record.Key())
+	}
 
 	utils.WriteAPIData(w, http.StatusCreated, resp)
 }

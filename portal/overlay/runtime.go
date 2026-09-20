@@ -45,11 +45,10 @@ const (
 	minimumGatewayTTL       = 30 * time.Second
 )
 
-// Reverse-offer status bytes answered on a pending reverse connection.
 const (
-	StatusUnavailable = byte(0)
-	StatusAccepted    = byte(1)
-	StatusCapacity    = byte(2)
+	statusUnavailable = byte(0)
+	statusAccepted    = byte(1)
+	statusCapacity    = byte(2)
 )
 
 func normalizeIVNPDestination(destination string) (string, error) {
@@ -72,12 +71,30 @@ type Config struct {
 }
 
 // ReverseOffer is a capability-verified inbound reverse connection awaiting
-// portal lease admission. Conn ownership transfers with the offer.
+// portal lease admission. Connection ownership transfers with the offer, and
+// its response methods preserve the overlay status-byte protocol.
 type ReverseOffer struct {
 	IdentityKey string
 	LeaseID     string
-	Conn        net.Conn
+	conn        net.Conn
 }
+
+// Connection returns the connection whose ownership transferred with the offer.
+func (o ReverseOffer) Connection() net.Conn { return o.conn }
+
+// Accept writes the accepted status for the reverse-offer protocol.
+func (o ReverseOffer) Accept() error { return o.respond(statusAccepted) }
+
+// RejectUnavailable writes the unavailable status for the reverse-offer protocol.
+func (o ReverseOffer) RejectUnavailable() { _, _ = o.respond(statusUnavailable) }
+
+// RejectCapacity writes the capacity status for the reverse-offer protocol.
+func (o ReverseOffer) RejectCapacity() { _, _ = o.respond(statusCapacity) }
+
+// Close releases the connection transferred with the offer.
+func (o ReverseOffer) Close() { closeNow(o.conn) }
+
+func (o ReverseOffer) respond(status byte) (int, error) { return o.conn.Write([]byte{status}) }
 
 // IssueInput is the complete point-in-time state needed to issue an endpoint.
 type IssueInput struct {
@@ -89,8 +106,9 @@ type IssueInput struct {
 	Descriptors   []types.RelayDescriptor
 }
 
-// Runtime is the sole owner of IVNP gateway selection, capabilities, framing,
-// peer verification, capacity, and connection lifetime.
+// Runtime owns IVNP gateway selection, capabilities, framing, peer
+// verification, and admission. Connection ownership transfers with reverse
+// offers and successful gateway connection pairs.
 type Runtime struct {
 	config Config
 
@@ -504,11 +522,11 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay route is unavailable")
 		return nil, nil
 	}
-	if response[0] == StatusCapacity {
+	if response[0] == statusCapacity {
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay capacity exhausted")
 		return nil, nil
 	}
-	if response[0] != StatusAccepted {
+	if response[0] != statusAccepted {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "reverse capability is invalid")
 		return nil, nil
 	}
@@ -563,18 +581,18 @@ func (r *Runtime) acceptReverse(conn net.Conn) {
 	}
 	peer, err := peerDestination(conn)
 	if err != nil {
-		_, _ = conn.Write([]byte{StatusUnavailable})
+		_, _ = conn.Write([]byte{statusUnavailable})
 		return
 	}
 	claims, err := verifyCapability(string(raw), time.Now().UTC())
 	if err != nil || !strings.EqualFold(claims.Ingress.Address, r.config.Authority.Identity().Address) || claims.Ingress.IVNPDestination != r.Destination() || claims.GatewayDestination != peer {
-		_, _ = conn.Write([]byte{StatusUnavailable})
+		_, _ = conn.Write([]byte{statusUnavailable})
 		return
 	}
-	// The portal owner performs lease admission and answers the status byte;
-	// every byte on this connection after verification belongs to the offer.
+	// Portal chooses the lease-admission outcome through the offer's response
+	// methods; every byte after verification belongs to the offer protocol.
 	select {
-	case r.offers <- ReverseOffer{IdentityKey: claims.LeaseIdentity.Key(), LeaseID: claims.LeaseID, Conn: conn}:
+	case r.offers <- ReverseOffer{IdentityKey: claims.LeaseIdentity.Key(), LeaseID: claims.LeaseID, conn: conn}:
 		handoff = true
 	case <-r.ctx.Done():
 	}
