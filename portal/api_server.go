@@ -218,6 +218,8 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		GeneratedAt:        now,
 		Relays:             s.relaySet.Descriptors(self),
 		IncompatibleRelays: s.relaySet.KnownIncompatibleRelays(),
+		ReleaseVersion:     types.ReleaseVersion,
+		RelayObservations:  s.relaySet.KnownRelayObservations(),
 	})
 }
 

@@ -478,3 +478,121 @@ func TestProtocolMismatchOutranksMissingTarget(t *testing.T) {
 		t.Fatalf("KnownIncompatibleRelays() = %+v, want one entry for %q", known, relayURL)
 	}
 }
+
+func TestApplyRelayDiscoveryResponseRecordsTargetReleaseVersion(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-release.example"
+	desc := mustRelayDescriptor(t, relayURL)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{desc},
+		ReleaseVersion:  "v2.6.0",
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+
+	var state *RelayState
+	for _, candidate := range relayStates(set) {
+		if candidate.Descriptor.APIHTTPSAddr == relayURL {
+			state = &candidate
+			break
+		}
+	}
+	if state == nil {
+		t.Fatalf("relayStates() has no entry for %q", relayURL)
+	}
+	if state.ReleaseVersion != "v2.6.0" {
+		t.Fatalf("RelayState.ReleaseVersion = %q, want %q", state.ReleaseVersion, "v2.6.0")
+	}
+
+	observations := set.KnownRelayObservations()
+	if len(observations) != 1 {
+		t.Fatalf("KnownRelayObservations() = %+v, want one entry for %q", observations, relayURL)
+	}
+	if observations[0].URL != relayURL || observations[0].ReleaseVersion != "v2.6.0" {
+		t.Fatalf("KnownRelayObservations()[0] = %+v, want url %q with release %q", observations[0], relayURL, "v2.6.0")
+	}
+	if observations[0].LastSeenAt.IsZero() {
+		t.Fatal("KnownRelayObservations()[0] should carry LastSeenAt")
+	}
+}
+
+func TestApplyRelayDiscoveryResponseIgnoresReleaseVersionFromGossip(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-gossip.example"
+	desc := mustRelayDescriptor(t, relayURL)
+	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{desc},
+		ReleaseVersion:  "v2.6.0",
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+
+	if observations := set.KnownRelayObservations(); len(observations) != 0 {
+		t.Fatalf("KnownRelayObservations() = %+v, want no entries from a gossip batch", observations)
+	}
+}
+
+func TestKnownRelayObservationsOmitRelayWithoutReleaseVersion(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	// An older relay omits release_version entirely.
+	mustApplyAuthoritative(t, set, mustRelayDescriptor(t, "https://relay-norelease.example"))
+
+	if observations := set.KnownRelayObservations(); len(observations) != 0 {
+		t.Fatalf("KnownRelayObservations() = %+v, want no entries when the peer omits its release", observations)
+	}
+}
+
+func TestKnownRelayObservationsSuppressBannedRelay(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	relayURL := "https://relay-banned-observation.example"
+	desc := mustRelayDescriptor(t, relayURL)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{desc},
+		ReleaseVersion:  "v2.6.0",
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+	if observations := set.KnownRelayObservations(); len(observations) != 1 {
+		t.Fatalf("KnownRelayObservations() = %+v, want one entry before ban", observations)
+	}
+
+	set.BanRelayURL(relayURL)
+	if observations := set.KnownRelayObservations(); len(observations) != 0 {
+		t.Fatalf("KnownRelayObservations() = %+v, want empty after local ban", observations)
+	}
+}
+
+func TestKnownRelayObservationsSortByURL(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	// Ingest B first so map iteration order cannot accidentally satisfy the
+	// sorted-output expectation.
+	for _, relay := range []struct{ url, version string }{
+		{url: "https://relay-b.example", version: "v2.6.0"},
+		{url: "https://relay-a.example", version: "v2.5.0"},
+	} {
+		desc := mustRelayDescriptor(t, relay.url)
+		if _, err := set.ApplyRelayDiscoveryResponse(relay.url, types.DiscoveryResponse{
+			ProtocolVersion: types.DiscoveryVersion,
+			Relays:          []types.RelayDescriptor{desc},
+			ReleaseVersion:  relay.version,
+		}, time.Now().UTC()); err != nil {
+			t.Fatalf("ApplyRelayDiscoveryResponse(%q) error = %v", relay.url, err)
+		}
+	}
+
+	observations := set.KnownRelayObservations()
+	if len(observations) != 2 {
+		t.Fatalf("KnownRelayObservations() = %+v, want two entries", observations)
+	}
+	if observations[0].URL != "https://relay-a.example" || observations[1].URL != "https://relay-b.example" {
+		t.Fatalf("KnownRelayObservations() urls = %q, %q; want sorted by URL", observations[0].URL, observations[1].URL)
+	}
+}

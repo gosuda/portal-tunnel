@@ -114,6 +114,14 @@ type RelayState struct {
 	Dead       bool
 	LastSeenAt time.Time
 
+	// ReleaseVersion is the release string this relay observed directly from
+	// a peer's own /discovery responses (the peer's types.ReleaseVersion).
+	// It is unsigned local observation metadata: it is never gossiped and
+	// never participates in routing, trust, signature verification, or
+	// protocol compatibility. It stays empty when the peer (an older relay)
+	// omits it; LastSeenAt is its freshness anchor.
+	ReleaseVersion string
+
 	DiscoveryRTT   time.Duration
 	DiscoveryRTTAt time.Time
 	EWMARTT        time.Duration

@@ -105,6 +105,51 @@ export function mergeIncompatibleRelays(
   return merged;
 }
 
+// Locally observed release metadata: peer versions collected from the serving
+// relay's own discovery response, plus the response envelope itself.
+interface RelayReleaseInfo {
+  release_version?: string;
+  protocol_version?: string;
+}
+
+interface RelayReleaseObservations {
+  versions: Record<string, string>;
+  discovery?: RelayReleaseInfo;
+}
+
+export function relayReleaseLabel(
+  versions: Record<string, string>,
+  relay: KnownRelay,
+  discovery?: RelayReleaseInfo
+): string | null {
+  const observed =
+    versions[normalizeRelayURL(relay.relayURL)]?.trim() ?? "";
+  if (observed !== "") {
+    return observed;
+  }
+
+  if (relay.isCurrent) {
+    const selfRelease =
+      typeof discovery?.release_version === "string"
+        ? discovery.release_version.trim()
+        : "";
+    if (selfRelease !== "") {
+      return selfRelease;
+    }
+  }
+
+  const protocolVersion =
+    relay.protocolVersion?.trim() ||
+    (typeof discovery?.protocol_version === "string"
+      ? discovery.protocol_version.trim()
+      : "");
+  if (protocolVersion !== "") {
+    return `discovery ${protocolVersion}`;
+  }
+
+  return null;
+}
+
 interface ServerListViewProps {
   title?: string;
   searchQuery: string;
@@ -193,6 +238,9 @@ export function ServerListView({
   onAuthChange,
 }: ServerListViewProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
+  const [relayReleases, setRelayReleases] = useState<RelayReleaseObservations>(
+    { versions: {} }
+  );
   const [knownRelays, setKnownRelays] = useState<KnownRelay[]>([]);
   const [relayDiscoveryLoading, setRelayDiscoveryLoading] = useState(
     () => !isAdmin
@@ -283,10 +331,12 @@ export function ServerListView({
     }
     let cancelled = false;
     setRelayDiscoveryLoading(true);
+    setRelayReleases({ versions: {} });
     setKnownRelays([]);
 
     void (async () => {
       let nextKnownRelays = normalizeKnownRelays(undefined, currentRelayURL);
+      let nextReleases: RelayReleaseObservations = { versions: {} };
 
       try {
         const discovery =
@@ -296,6 +346,22 @@ export function ServerListView({
           discovery?.incompatible_relays,
           currentRelayURL
         );
+
+        const versions: Record<string, string> = {};
+        discovery?.relay_observations?.forEach((observation) => {
+          const relayURL = normalizeRelayURL(observation.url);
+          const releaseVersion = observation.release_version?.trim() ?? "";
+          if (relayURL !== "" && releaseVersion !== "") {
+            versions[relayURL] = releaseVersion;
+          }
+        });
+        nextReleases = {
+          versions,
+          discovery: {
+            release_version: discovery?.release_version,
+            protocol_version: discovery?.protocol_version,
+          },
+        };
       } catch {
         // Keep the current relay fallback when discovery is unavailable.
       }
@@ -305,6 +371,7 @@ export function ServerListView({
       }
 
       setKnownRelays(nextKnownRelays);
+      setRelayReleases(nextReleases);
       setRelayDiscoveryLoading(false);
     })();
 
@@ -865,26 +932,34 @@ export function ServerListView({
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                        {knownRelays.map((relay) => (
-                          <div
-                            key={relay.relayURL}
-                            className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border/70 bg-background px-4 py-3"
-                          >
-                            <a
-                              href={relay.relayURL}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[13px] text-foreground underline-offset-4 hover:underline sm:text-sm"
+                        {knownRelays.map((relay) => {
+                          const releaseLabel = relayReleaseLabel(
+                            relayReleases.versions,
+                            relay,
+                            relayReleases.discovery
+                          );
+
+                          return (
+                            <div
+                              key={relay.relayURL}
+                              className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border/70 bg-background px-4 py-3"
                             >
-                              {relay.relayURL}
-                            </a>
-                            {relay.protocolVersion && (
-                              <span className="shrink-0 rounded-sm bg-secondary/70 px-2.5 py-1 font-mono text-[11px] font-medium text-text-muted ring-1 ring-border">
-                                discovery {relay.protocolVersion}
-                              </span>
-                            )}
-                          </div>
-                        ))}
+                              <a
+                                href={relay.relayURL}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[13px] text-foreground underline-offset-4 hover:underline sm:text-sm"
+                              >
+                                {relay.relayURL}
+                              </a>
+                              {releaseLabel && (
+                                <span className="shrink-0 rounded-sm bg-secondary/70 px-2.5 py-1 font-mono text-[11px] font-medium text-text-muted ring-1 ring-border">
+                                  {releaseLabel}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

@@ -115,6 +115,8 @@ type DiscoveryResponse struct {
 	GeneratedAt        time.Time                `json:"generated_at"`
 	Relays             []RelayDescriptor        `json:"relays"`
 	IncompatibleRelays []IncompatibleRelayEntry `json:"incompatible_relays,omitempty"`
+	ReleaseVersion     string                   `json:"release_version,omitempty"`
+	RelayObservations  []RelayObservation       `json:"relay_observations,omitempty"`
 }
 
 // IncompatibleRelayEntry describes a relay the serving relay contacted
@@ -125,6 +127,15 @@ type IncompatibleRelayEntry struct {
 	URL             string    `json:"url"`
 	ProtocolVersion string    `json:"protocol_version"`
 	LastSeenAt      time.Time `json:"last_seen_at"`
+}
+
+// RelayObservation is unsigned, locally observed operational metadata about a
+// peer relay contacted directly. It never participates in routing, trust,
+// signature verification, or protocol compatibility, and older relays omit it.
+type RelayObservation struct {
+	URL            string    `json:"url"`
+	ReleaseVersion string    `json:"release_version,omitempty"`
+	LastSeenAt     time.Time `json:"last_seen_at"`
 }
 
 type DiscoveryAnnounceRequest struct {
