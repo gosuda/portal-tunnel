@@ -459,7 +459,7 @@ export function ServerCard({
               )}
 
               {displayTags.length > 0 && (
-                <div className="mt-1 w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <div className="pointer-events-auto relative z-30 mt-1 w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   <div className="flex min-w-max gap-1.5">
                     {displayTags.map((tag, index) => (
                       <span
