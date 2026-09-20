@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"slices"
@@ -38,19 +39,8 @@ const (
 
 	reputationFilename = "reputation.json"
 
-	// reputationVoterCookie carries "hex(id).hex(HMAC(secret, id))". The raw
-	// id is never stored; only its digest enters the persisted state.
 	reputationVoterCookie  = "portal_voter"
-	reputationBodyLimit    = 1 << 12
 	reputationVoterIDBytes = 32
-
-	// Vote admission budgets. Fixed constants, not knobs: they are abuse
-	// bounds, not product behavior (see issue #472 MVP scope).
-	reputationVoteSourcePerMinute = 10
-	reputationVoteSourceBurst     = 20
-	reputationVoteGlobalPerMinute = 120
-	reputationVoteGlobalBurst     = 40
-	reputationVoteMintCost        = 10
 
 	// Whole-file JSON is written on each changed vote, so these caps keep
 	// the work per public POST small.
@@ -66,7 +56,7 @@ const (
 // persistedReputation is the reputation.json schema. All collections are
 // bounded by the reputationMax* constants.
 type persistedReputation struct {
-	VoterSecret string                       `json:"voter_secret"`
+	VoterSecret []byte                       `json:"voter_secret"`
 	Identities  map[string]map[string]string `json:"identities,omitempty"`
 }
 
@@ -87,17 +77,12 @@ type reputationSummary struct {
 var (
 	errReputationUnknownHostname = errors.New("hostname is not in the public directory")
 	errReputationCapacity        = errors.New("reputation capacity exhausted")
-	errReputationPersist         = errors.New("reputation persist failed")
 )
 
 // ReputationStore owns only the bounded vote ledger and voter cookie secret.
 type ReputationStore struct {
 	path    string
 	limiter *policy.SourceLimiter
-
-	// persistFn writes the persisted state; a field so tests can swap in a
-	// failing closure and prove the rollback path.
-	persistFn func(persistedReputation) error
 
 	mu     sync.Mutex
 	state  persistedReputation
@@ -110,42 +95,24 @@ func newReputationStore(path string) (*ReputationStore, error) {
 		return nil, errors.New("reputation store requires a state path")
 	}
 	store := &ReputationStore{path: path}
-	loaded, err := utils.ReadJSONFileIfExists(path, &store.state)
+	_, err := utils.ReadJSONFileIfExists(path, &store.state)
 	if err != nil {
 		return nil, fmt.Errorf("load reputation state: %w", err)
 	}
 	if store.state.Identities == nil {
 		store.state.Identities = make(map[string]map[string]string)
 	}
-	secretGenerated := false
-	var secret []byte
-	if store.state.VoterSecret != "" {
-		secret, err = base64.StdEncoding.DecodeString(store.state.VoterSecret)
-		if err != nil {
-			return nil, fmt.Errorf("load reputation voter secret: %w", err)
-		}
-	}
-	if len(secret) == 0 {
-		secret = make([]byte, reputationVoterIDBytes)
-		if _, err := rand.Read(secret); err != nil {
+	if len(store.state.VoterSecret) == 0 {
+		store.state.VoterSecret = make([]byte, reputationVoterIDBytes)
+		if _, err := rand.Read(store.state.VoterSecret); err != nil {
 			return nil, fmt.Errorf("generate reputation voter secret: %w", err)
 		}
-		store.state.VoterSecret = base64.StdEncoding.EncodeToString(secret)
-		secretGenerated = true
-	}
-	store.secret = secret
-	store.limiter = policy.NewSourceLimiter(reputationVoteSourcePerMinute, reputationVoteSourceBurst, reputationVoteGlobalPerMinute, reputationVoteGlobalBurst)
-	store.persistFn = func(state persistedReputation) error { return utils.WriteJSONFile(store.path, state, 0o600) }
-	if secretGenerated {
-		// The secret anchors every voter hash; persist it before the first
-		// mint so voter identity is restart-stable from the start.
-		if err := store.persistFn(store.state); err != nil {
+		if err := utils.WriteJSONFile(store.path, store.state, 0o600); err != nil {
 			return nil, fmt.Errorf("persist reputation voter secret: %w", err)
 		}
 	}
-	if loaded {
-		log.Info().Str("path", path).Int("identities", len(store.state.Identities)).Msg("restored service reputation")
-	}
+	store.secret = store.state.VoterSecret
+	store.limiter = policy.NewSourceLimiter(10, 20, 120, 40)
 	return store, nil
 }
 
@@ -171,13 +138,10 @@ func (s *ReputationStore) castVote(hostname, identity, vote, cookieID, source st
 	if previous == nil && len(s.state.Identities) >= reputationMaxIdentities {
 		return reputationSummary{}, "", errReputationCapacity
 	}
-	nextIdentities := make(map[string]map[string]string, len(s.state.Identities)+1)
-	for key, votes := range s.state.Identities {
-		nextIdentities[key] = votes
-	}
-	votes := make(map[string]string, len(previous)+1)
-	for voter, existing := range previous {
-		votes[voter] = existing
+	nextIdentities := maps.Clone(s.state.Identities)
+	votes := maps.Clone(previous)
+	if votes == nil {
+		votes = make(map[string]string)
 	}
 	if _, exists := votes[hash]; !exists && len(votes) >= reputationMaxVoters {
 		return reputationSummary{}, "", errReputationCapacity
@@ -187,8 +151,8 @@ func (s *ReputationStore) castVote(hostname, identity, vote, cookieID, source st
 	nextState := s.state
 	nextState.Identities = nextIdentities
 
-	if err := s.persistFn(nextState); err != nil {
-		return reputationSummary{}, "", fmt.Errorf("%w: %w", errReputationPersist, err)
+	if err := utils.WriteJSONFile(s.path, nextState, 0o600); err != nil {
+		return reputationSummary{}, "", fmt.Errorf("persist reputation: %w", err)
 	}
 	s.state = nextState
 	return s.summarize(hostname, votes, hash), minted, nil
@@ -214,9 +178,7 @@ func (s *ReputationStore) viewerHashFor(cookieID string) string {
 	if cookieID == "" {
 		return ""
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	hash, ok := s.verifyVoterLocked(cookieID)
+	hash, ok := s.verifyVoter(cookieID)
 	if !ok {
 		return ""
 	}
@@ -227,11 +189,11 @@ func (s *ReputationStore) viewerHashFor(cookieID string) string {
 // cookieless identity. Signed cookies need no persisted global voter registry.
 func (s *ReputationStore) resolveVoterLocked(cookieID, source string) (hash, minted string, err error) {
 	if cookieID != "" {
-		if verified, ok := s.verifyVoterLocked(cookieID); ok {
+		if verified, ok := s.verifyVoter(cookieID); ok {
 			return verified, "", nil
 		}
 	}
-	if retry, _ := s.limiter.Allow(source, reputationVoteMintCost); retry > 0 {
+	if retry, _ := s.limiter.Allow(source, 10); retry > 0 {
 		return "", "", errReputationCapacity
 	}
 	id := make([]byte, reputationVoterIDBytes)
@@ -240,26 +202,16 @@ func (s *ReputationStore) resolveVoterLocked(cookieID, source string) (hash, min
 	}
 	digest := s.voterMAC(id)
 	hash = hex.EncodeToString(digest)
-	return hash, hex.EncodeToString(id) + "." + hash, nil
+	return hash, base64.RawURLEncoding.EncodeToString(append(id, digest...)), nil
 }
 
-// verifyVoterLocked validates "hex(id).hex(mac)" under the store secret.
-// Callers hold the mutex: the secret is read from shared state here.
-func (s *ReputationStore) verifyVoterLocked(cookieID string) (string, bool) {
-	idHex, macHex, ok := strings.Cut(cookieID, ".")
-	if !ok {
+func (s *ReputationStore) verifyVoter(cookieID string) (string, bool) {
+	value, err := base64.RawURLEncoding.DecodeString(cookieID)
+	if err != nil || len(value) != reputationVoterIDBytes+sha256.Size {
 		return "", false
 	}
-	id, err := hex.DecodeString(idHex)
-	if err != nil || len(id) != reputationVoterIDBytes {
-		return "", false
-	}
-	mac, err := hex.DecodeString(macHex)
-	if err != nil || len(mac) != sha256.Size {
-		return "", false
-	}
-	expected := s.voterMAC(id)
-	if subtle.ConstantTimeCompare(expected, mac) != 1 {
+	expected := s.voterMAC(value[:reputationVoterIDBytes])
+	if subtle.ConstantTimeCompare(expected, value[reputationVoterIDBytes:]) != 1 {
 		return "", false
 	}
 	return hex.EncodeToString(expected), true
@@ -277,7 +229,14 @@ func (s *ReputationStore) summarize(hostname string, votes map[string]string, vi
 	if votes == nil {
 		return reputationSummary{Hostname: hostname}
 	}
-	up, down := tallyVotes(votes)
+	up, down := 0, 0
+	for _, vote := range votes {
+		if vote == voteUp {
+			up++
+		} else if vote == voteDown {
+			down++
+		}
+	}
 	return reputationSummary{
 		Hostname:   hostname,
 		Up:         up,
@@ -287,18 +246,6 @@ func (s *ReputationStore) summarize(hostname string, votes map[string]string, vi
 	}
 }
 
-func tallyVotes(votes map[string]string) (up, down int) {
-	for _, vote := range votes {
-		switch vote {
-		case voteUp:
-			up++
-		case voteDown:
-			down++
-		}
-	}
-	return up, down
-}
-
 // serveReputationVote is admission -> decode -> store op. Admission runs
 // before decoding, matching portal's admitPreAuth: rate-limited sources pay
 // no parse cost, and the body bound applies inside decode.
@@ -306,10 +253,13 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if !api.admitReputationVote(w, r) {
+	clientIP := api.server.PolicyRuntime().ExtractClientIP(r)
+	if retry, _ := api.reputation.limiter.Allow(clientIP, 1); retry > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retry.Seconds())))))
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "vote request budget exhausted")
 		return
 	}
-	req, ok := utils.DecodeJSONRequestAs[reputationVoteRequest](w, r, reputationBodyLimit, utils.InvalidRequestError(errors.New("invalid request body")))
+	req, ok := utils.DecodeJSONRequestAs[reputationVoteRequest](w, r, 1<<12, utils.InvalidRequestError(errors.New("invalid request body")))
 	if !ok {
 		return
 	}
@@ -330,7 +280,7 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 			break
 		}
 	}
-	summary, minted, err := api.reputation.castVote(hostname, identity, vote, voterCookieID(r), api.server.PolicyRuntime().ExtractClientIP(r))
+	summary, minted, err := api.reputation.castVote(hostname, identity, vote, voterCookieID(r), clientIP)
 	if err != nil {
 		writeReputationError(w, err)
 		return
@@ -341,30 +291,14 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	utils.WriteAPIData(w, http.StatusOK, summary)
 }
 
-// admitReputationVote bounds vote traffic with the same SourceLimiter shape
-// the pre-auth admission uses: per-source and global token buckets over the
-// client IP, before any decode work.
-func (api *RelayAPI) admitReputationVote(w http.ResponseWriter, r *http.Request) bool {
-	clientIP := api.server.PolicyRuntime().ExtractClientIP(r)
-	retry, _ := api.reputation.limiter.Allow(clientIP, 1)
-	if retry == 0 {
-		return true
-	}
-	w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retry.Seconds())))))
-	utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "vote request budget exhausted")
-	return false
-}
-
 func writeReputationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errReputationCapacity):
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "vote capacity reached")
 	case errors.Is(err, errReputationUnknownHostname):
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "hostname is not in the public directory")
-	case errors.Is(err, errReputationPersist):
-		log.Error().Err(err).Msg("persist reputation vote")
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "reputation could not be persisted")
 	default:
+		log.Error().Err(err).Msg("persist reputation vote")
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "vote failed")
 	}
 }

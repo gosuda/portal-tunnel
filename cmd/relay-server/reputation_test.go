@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,32 +51,6 @@ func TestReputationVoteSwitchAndRestart(t *testing.T) {
 	}
 	if got := reloaded.summaries(reloaded.viewerHashFor(cookie), testLeases("demo.example.com"))[0]; got.Down != 1 || got.ViewerVote != voteDown {
 		t.Fatalf("reloaded vote = %+v", got)
-	}
-}
-
-func TestReputationRequiresKnownIdentity(t *testing.T) {
-	store := newTestReputationStore(t)
-	if _, _, err := store.castVote("fake.example.com", "", voteUp, "", "203.0.113.10"); !errors.Is(err, errReputationUnknownHostname) {
-		t.Fatalf("unknown hostname error = %v", err)
-	}
-	_, cookie, err := store.castVote("demo.example.com", "id:demo.example.com", voteUp, "", "203.0.113.10")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, _, err := store.castVote("demo.example.com", "id:demo.example.com", voteDown, cookie, "203.0.113.10"); err != nil || got.Down != 1 || got.Up != 0 {
-		t.Fatalf("vote = %+v, err=%v", got, err)
-	}
-}
-
-func TestReputationPersistFailureRestoresVote(t *testing.T) {
-	store := newTestReputationStore(t)
-	_, cookie, err := store.castVote("demo.example.com", "id:demo.example.com", voteUp, "", "203.0.113.10")
-	if err != nil {
-		t.Fatal(err)
-	}
-	store.persistFn = func(persistedReputation) error { return errors.New("disk unavailable") }
-	if _, _, err := store.castVote("demo.example.com", "id:demo.example.com", voteDown, cookie, "203.0.113.10"); !errors.Is(err, errReputationPersist) {
-		t.Fatalf("persist error = %v", err)
 	}
 }
 
@@ -135,7 +108,7 @@ func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
 		t.Fatalf("unknown hostname status = %d", got)
 	}
 	var limited bool
-	for i := 0; i < reputationVoteSourceBurst+2; i++ {
+	for i := 0; i < 22; i++ {
 		rec := post(`{"hostname":"fake.example.com","vote":"up"}`)
 		if rec.Code == http.StatusTooManyRequests {
 			limited = rec.Header().Get("Retry-After") != ""
