@@ -617,7 +617,10 @@ func TestApplyRelayDiscoveryResponseDropsReleaseWhenPeerStopsReporting(t *testin
 	}
 }
 
-func TestKnownRelayReleaseVersionsSuppressBannedRelay(t *testing.T) {
+// A local ban drops the release observation outright rather than hiding it:
+// the projection goes empty on ban, stays empty after AllowRelayURL, and
+// returns only after a fresh direct poll.
+func TestBanRelayURLDropsReleaseObservation(t *testing.T) {
 	set := NewRelaySet(nil)
 
 	relayURL := "https://relay-banned-release.example"
@@ -636,5 +639,49 @@ func TestKnownRelayReleaseVersionsSuppressBannedRelay(t *testing.T) {
 	set.BanRelayURL(relayURL)
 	if versions := set.KnownRelayReleaseVersions(); len(versions) != 0 {
 		t.Fatalf("KnownRelayReleaseVersions() = %+v, want empty after local ban", versions)
+	}
+
+	// The observation was dropped, not hidden: unbanning must not resurface
+	// the stale release; it returns only after a fresh direct poll.
+	set.AllowRelayURL(relayURL)
+	if versions := set.KnownRelayReleaseVersions(); len(versions) != 0 {
+		t.Fatalf("KnownRelayReleaseVersions() = %+v, want still empty after unban: a local ban drops the observation", versions)
+	}
+}
+
+// Storage bound: expired release observations are deleted from the map as
+// fresh direct polls arrive (not merely hidden from the projection), so the
+// map cannot grow without bound as polled relay URLs churn.
+func TestRecordReleaseObservationPrunesExpiredEntries(t *testing.T) {
+	set := NewRelaySet(nil)
+
+	signing := mustSigningIdentity(t)
+	relayA := "https://relay-a-release.example"
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+	descA := mustSignedDescriptor(t, signing, relayA, t0)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayA, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{descA},
+		ReleaseVersion:  "v2.6.0",
+	}, t0); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+
+	relayB := "https://relay-b-release.example"
+	t1 := t0.Add(AnnounceMaxValidity).Add(time.Hour)
+	descB := mustSignedDescriptor(t, signing, relayB, t1)
+	if _, err := set.ApplyRelayDiscoveryResponse(relayB, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{descB},
+		ReleaseVersion:  "v2.6.1",
+	}, t1); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+
+	if len(set.releaseVersions) != 1 {
+		t.Fatalf("len(set.releaseVersions) = %d, want 1 after the expired observation is pruned", len(set.releaseVersions))
+	}
+	if observation, ok := set.releaseVersions[relayB]; !ok || observation.releaseVersion != "v2.6.1" {
+		t.Fatalf("set.releaseVersions[%q] = (%+v, %v), want only the fresh observation", relayB, observation, ok)
 	}
 }

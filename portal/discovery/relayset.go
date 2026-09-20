@@ -169,8 +169,10 @@ func (s *RelaySet) banFromPoolLocked(relayURL string, now time.Time) {
 	state.Banned = true
 	state.suppressActiveUntil = now.Add(relayPoolBanTTL)
 	s.relays[relayURL] = state
-	// A local ban outranks protocol-mismatch visibility.
+	// A local ban outranks protocol-mismatch visibility and drops the
+	// observed release: both return only after a fresh direct contact.
 	delete(s.incompatible, relayURL)
+	delete(s.releaseVersions, relayURL)
 }
 
 func mergeLocalRelayState(record, existing RelayState) RelayState {
@@ -550,8 +552,10 @@ func (s *RelaySet) BanRelayURL(relayURL string) {
 	state.suppressActiveUntil = time.Time{}
 	state.Banned = true
 	s.relays[relayURL] = state
-	// A local ban outranks protocol-mismatch visibility.
+	// A local ban outranks protocol-mismatch visibility and drops the
+	// observed release: both return only after a fresh direct contact.
 	delete(s.incompatible, relayURL)
+	delete(s.releaseVersions, relayURL)
 }
 
 func (s *RelaySet) DropRelayURLFromActivePool(relayURL string) {
@@ -783,6 +787,17 @@ func (s *RelaySet) pruneIncompatibleLocked(now time.Time) {
 	}
 }
 
+// pruneReleaseVersionsLocked drops release observations whose last direct
+// poll is older than AnnounceMaxValidity, so the map cannot grow without
+// bound as polled relay URLs churn. The caller must hold s.mu for writing.
+func (s *RelaySet) pruneReleaseVersionsLocked(now time.Time) {
+	for relayURL, observation := range s.releaseVersions {
+		if now.Sub(observation.observedAt) > AnnounceMaxValidity {
+			delete(s.releaseVersions, relayURL)
+		}
+	}
+}
+
 // recordReleaseObservationLocked remembers the release a directly contacted
 // relay reported about itself. The authoritative refresher poll is the only
 // writer — gossip and announce batches carry no release of their own and
@@ -794,6 +809,7 @@ func (s *RelaySet) recordReleaseObservationLocked(relayURL, releaseVersion strin
 	if relayURL == "" {
 		return
 	}
+	s.pruneReleaseVersionsLocked(now)
 	releaseVersion = strings.TrimSpace(releaseVersion)
 	if releaseVersion == "" {
 		delete(s.releaseVersions, relayURL)
@@ -836,11 +852,11 @@ func (s *RelaySet) knownIncompatibleRelaysAt(now time.Time) []types.Incompatible
 // KnownRelayReleaseVersions returns the release versions this relay observed
 // directly from peer relays' own /discovery responses, keyed by peer relay
 // URL. Like KnownIncompatibleRelays, entries expire (per AnnounceMaxValidity)
-// without a fresh direct observation and are suppressed while the relay is
-// locally banned: a local ban outranks release visibility. They are unsigned
-// observation metadata: they never participate in routing, trust, signature
-// verification, or compatibility decisions, and are never part of the
-// routable descriptor set.
+// without a fresh direct observation, and a local ban drops the observation
+// outright rather than hiding it: it returns only after a fresh direct poll.
+// They are unsigned observation metadata: they never participate in routing,
+// trust, signature verification, or compatibility decisions, and are never
+// part of the routable descriptor set.
 func (s *RelaySet) KnownRelayReleaseVersions() map[string]string {
 	return s.knownRelayReleaseVersionsAt(time.Now().UTC())
 }
@@ -852,9 +868,6 @@ func (s *RelaySet) knownRelayReleaseVersionsAt(now time.Time) map[string]string 
 	out := make(map[string]string, len(s.releaseVersions))
 	for relayURL, observation := range s.releaseVersions {
 		if now.Sub(observation.observedAt) > AnnounceMaxValidity {
-			continue
-		}
-		if state, ok := s.relays[relayURL]; ok && state.Banned {
 			continue
 		}
 		out[relayURL] = observation.releaseVersion

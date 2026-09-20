@@ -107,20 +107,10 @@ export function mergeIncompatibleRelays(
 
 // Locally observed release metadata: peer versions collected from the serving
 // relay's own discovery response, plus the response envelope itself.
-interface RelayReleaseInfo {
-  release_version?: string;
-  protocol_version?: string;
-}
-
-interface RelayReleaseObservations {
-  versions: Record<string, string>;
-  discovery?: RelayReleaseInfo;
-}
-
 export function relayReleaseLabel(
   versions: Record<string, string>,
   relay: KnownRelay,
-  discovery?: RelayReleaseInfo
+  discovery?: DiscoveryResponse
 ): string | null {
   const observed =
     versions[normalizeRelayURL(relay.relayURL)]?.trim() ?? "";
@@ -238,9 +228,10 @@ export function ServerListView({
   onAuthChange,
 }: ServerListViewProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
-  const [relayReleases, setRelayReleases] = useState<RelayReleaseObservations>(
-    { versions: {} }
-  );
+  const [relayReleases, setRelayReleases] = useState<{
+    versions: Record<string, string>;
+    discovery?: DiscoveryResponse;
+  }>({ versions: {} });
   const [knownRelays, setKnownRelays] = useState<KnownRelay[]>([]);
   const [relayDiscoveryLoading, setRelayDiscoveryLoading] = useState(
     () => !isAdmin
@@ -336,7 +327,10 @@ export function ServerListView({
 
     void (async () => {
       let nextKnownRelays = normalizeKnownRelays(undefined, currentRelayURL);
-      let nextReleases: RelayReleaseObservations = { versions: {} };
+      let nextReleases: {
+        versions: Record<string, string>;
+        discovery?: DiscoveryResponse;
+      } = { versions: {} };
 
       try {
         const discovery =
