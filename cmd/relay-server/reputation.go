@@ -18,7 +18,6 @@ import (
 	"maps"
 	"math"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,10 +41,9 @@ const (
 	reputationVoterCookie  = "portal_voter"
 	reputationVoterIDBytes = 32
 
-	// Whole-file JSON is written on each changed vote, so these caps keep
-	// the work per public POST small.
-	reputationMaxIdentities = 128
-	reputationMaxVoters     = 64
+	// Whole-file JSON is written on each changed vote, so this per-identity
+	// voter cap keeps the work per public POST small.
+	reputationMaxVoters = 64
 )
 
 const (
@@ -53,8 +51,9 @@ const (
 	voteDown = "down"
 )
 
-// persistedReputation is the reputation.json schema. All collections are
-// bounded by the reputationMax* constants.
+// persistedReputation is the reputation.json schema. The identity set is
+// bounded by live public leases; votes are bounded per identity by
+// reputationMaxVoters.
 type persistedReputation struct {
 	VoterSecret []byte                       `json:"voter_secret"`
 	Identities  map[string]map[string]string `json:"identities,omitempty"`
@@ -135,9 +134,6 @@ func (s *ReputationStore) castVote(hostname, identity, vote, cookieID, source st
 	if previous != nil && previous[hash] == vote {
 		return s.summarize(hostname, previous, hash), minted, nil
 	}
-	if previous == nil && len(s.state.Identities) >= reputationMaxIdentities {
-		return reputationSummary{}, "", errReputationCapacity
-	}
 	nextIdentities := maps.Clone(s.state.Identities)
 	votes := maps.Clone(previous)
 	if votes == nil {
@@ -165,9 +161,6 @@ func (s *ReputationStore) summaries(viewerHash string, leases []types.PolicyLeas
 	for _, lease := range leases {
 		rows = append(rows, s.summarize(lease.Hostname, s.state.Identities[lease.IdentityKey], viewerHash))
 	}
-	slices.SortFunc(rows, func(a, b reputationSummary) int {
-		return strings.Compare(a.Hostname, b.Hostname)
-	})
 	return rows
 }
 
@@ -231,9 +224,10 @@ func (s *ReputationStore) summarize(hostname string, votes map[string]string, vi
 	}
 	up, down := 0, 0
 	for _, vote := range votes {
-		if vote == voteUp {
+		switch vote {
+		case voteUp:
 			up++
-		} else if vote == voteDown {
+		case voteDown:
 			down++
 		}
 	}
@@ -274,7 +268,7 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	identity := ""
-	for _, lease := range publicIdentityLeases(api.server) {
+	for _, lease := range publicIdentityLeases(api.server.PublicLeases(), api.server) {
 		if normalizeReputationHostname(lease.Hostname) == hostname {
 			identity = lease.IdentityKey
 			break
@@ -332,14 +326,14 @@ func normalizeReputationHostname(raw string) string {
 	return hostname
 }
 
-func publicIdentityLeases(server *portal.Server) []types.PolicyLease {
-	public := make(map[string]bool)
-	for _, lease := range server.PublicLeases() {
-		public[normalizeReputationHostname(lease.Hostname)] = true
+func publicIdentityLeases(public []types.Lease, server *portal.Server) []types.PolicyLease {
+	known := make(map[string]bool)
+	for _, lease := range public {
+		known[normalizeReputationHostname(lease.Hostname)] = true
 	}
 	leases := make([]types.PolicyLease, 0)
 	for _, lease := range server.PolicyLeases() {
-		if public[normalizeReputationHostname(lease.Hostname)] && lease.IdentityKey != "" {
+		if known[normalizeReputationHostname(lease.Hostname)] && lease.IdentityKey != "" {
 			leases = append(leases, lease)
 		}
 	}

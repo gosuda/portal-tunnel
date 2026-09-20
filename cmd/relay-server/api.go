@@ -121,7 +121,7 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	api.policyMu.RUnlock()
 	utils.WriteAPIData(w, http.StatusOK, publicStateResponse{
 		PublicStateResponse: types.PublicStateResponse{Leases: leases, LandingPageEnabled: landingPageEnabled},
-		Reputation:          api.reputation.summaries(api.reputation.viewerHashFor(voterCookieID(r)), publicIdentityLeases(api.server)),
+		Reputation:          api.reputation.summaries(api.reputation.viewerHashFor(voterCookieID(r)), publicIdentityLeases(leases, api.server)),
 	})
 }
 

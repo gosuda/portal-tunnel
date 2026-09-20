@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -64,13 +63,26 @@ func TestReputationDirectoryProjectsLiveHostsAndViewerVote(t *testing.T) {
 		t.Fatal(err)
 	}
 	summaries := store.summaries(store.viewerHashFor(cookie), testLeases("voted.example.com", "old.example.com", "fresh.example.com"))
-	want := []reputationSummary{
-		{Hostname: "fresh.example.com"},
-		{Hostname: "old.example.com", Up: 1, Down: 0, Total: 1, ViewerVote: voteUp},
-		{Hostname: "voted.example.com", Up: 1, Down: 0, Total: 1, ViewerVote: voteUp},
+	want := map[string]reputationSummary{
+		"fresh.example.com": {Hostname: "fresh.example.com"},
+		"old.example.com":   {Hostname: "old.example.com", Up: 1, Down: 0, Total: 1, ViewerVote: voteUp},
+		"voted.example.com": {Hostname: "voted.example.com", Up: 1, Down: 0, Total: 1, ViewerVote: voteUp},
 	}
-	if !slices.Equal(summaries, want) {
-		t.Fatalf("directory rows = %+v, want %+v", summaries, want)
+	got := make(map[string]reputationSummary, len(summaries))
+	for _, row := range summaries {
+		got[row.Hostname] = row
+	}
+	if len(summaries) != len(want) || len(got) != len(want) {
+		t.Fatalf("directory rows = %+v, want %d hostnames", summaries, len(want))
+	}
+	for hostname, expected := range want {
+		row, ok := got[hostname]
+		if !ok {
+			t.Fatalf("missing directory row for %s", hostname)
+		}
+		if row != expected {
+			t.Fatalf("directory row %s = %+v, want %+v", hostname, row, expected)
+		}
 	}
 }
 

@@ -3,11 +3,7 @@ import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, BadgeDollarSign, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  isReputationWarning,
-  readOpenAnyway,
-  rememberOpenAnyway,
-} from "@/hooks/useReputation";
+import { isReputationWarning } from "@/hooks/useReputation";
 import { openExternal } from "@/lib/navigate";
 import type { ReputationSummary } from "@/types/api";
 
@@ -30,10 +26,7 @@ export function ServerDetail() {
   const navigate = useNavigate();
   const server = location.state as ServerDetailState | null;
 
-  // The directory interprets vote totals; visitors can skip the gate for
-  // the rest of this browser session after choosing to open anyway.
-  const showGate =
-    isReputationWarning(server?.reputation) && !readOpenAnyway(server?.id ?? "");
+  const showGate = isReputationWarning(server?.reputation);
 
   // Detect back navigation using pageshow event
   useEffect(() => {
@@ -117,7 +110,6 @@ export function ServerDetail() {
   };
 
   const handleOpenAnyway = () => {
-    rememberOpenAnyway(id);
     openService();
   };
 

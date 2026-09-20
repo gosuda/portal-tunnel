@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
-import { isReputationWarning, openAnywaySessionKey } from "@/hooks/useReputation";
+import { isReputationWarning } from "@/hooks/useReputation";
 import type { ReputationSummary } from "@/types/api";
 import { openExternal } from "@/lib/navigate";
 import { ServerDetail } from "./ServerDetail";
@@ -69,7 +69,6 @@ describe("ServerDetail reputation gate", () => {
     assignMock = vi.mocked(openExternal);
     assignMock.mockClear();
     localStorage.clear();
-    sessionStorage.clear();
   });
 
   afterEach(() => {
@@ -99,25 +98,10 @@ describe("ServerDetail reputation gate", () => {
     expect(screen.getByRole("button", { name: /^back$/i })).toBeTruthy();
   });
 
-  it("redirects on Open anyway and remembers it for the session", () => {
+  it("redirects on Open anyway", () => {
     renderDetail(FLAGGED);
 
     fireEvent.click(screen.getByRole("button", { name: /open anyway/i }));
-
-    expect(assignMock).toHaveBeenCalledWith("https://svc.example.com/");
-    expect(
-      sessionStorage.getItem(openAnywaySessionKey("svc.example.com"))
-    ).toBe("1");
-  });
-
-  it("auto-opens a flagged service already opened this session", () => {
-    sessionStorage.setItem(openAnywaySessionKey("svc.example.com"), "1");
-
-    renderDetail(FLAGGED);
-
-    act(() => {
-      vi.advanceTimersByTime(700);
-    });
 
     expect(assignMock).toHaveBeenCalledWith("https://svc.example.com/");
   });

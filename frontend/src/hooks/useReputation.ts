@@ -12,27 +12,6 @@ export function isReputationWarning(summary: ReputationSummary | undefined): boo
   return summary !== undefined && summary.total >= 5 && summary.down >= 3 && summary.down * 100 >= summary.total * 70;
 }
 
-export function openAnywaySessionKey(hostname: string): string {
-  return `portal:reputation:openAnyway:${hostname.trim().toLowerCase()}`;
-}
-
-export function readOpenAnyway(hostname: string): boolean {
-  try {
-    return sessionStorage.getItem(openAnywaySessionKey(hostname)) === "1";
-  } catch {
-    // Session storage can be unavailable (private browsing); the gate then re-asks.
-    return false;
-  }
-}
-
-export function rememberOpenAnyway(hostname: string): void {
-  try {
-    sessionStorage.setItem(openAnywaySessionKey(hostname), "1");
-  } catch {
-    // Same availability caveat: forgetting the skip is acceptable.
-  }
-}
-
 export function normalizeHostname(hostname: string): string {
   return hostname.trim().toLowerCase();
 }
