@@ -61,8 +61,7 @@ const (
 	reputationVoteSourceBurst     = 20
 	reputationVoteGlobalPerMinute = 120
 	reputationVoteGlobalBurst     = 40
-	reputationMintSourcePerMinute = 1
-	reputationMintSourceBurst     = 1
+	reputationVoteMintCost        = 10
 
 	// Whole-file JSON is written on each changed vote, so these caps keep
 	// the work per public POST small.
@@ -74,24 +73,6 @@ const (
 	voteUp   = "up"
 	voteDown = "down"
 )
-
-// ReputationConfig controls how long an absent hostname remains visible.
-type ReputationConfig struct {
-	Retention time.Duration
-}
-
-func defaultReputationConfig() ReputationConfig {
-	return ReputationConfig{
-		Retention: 720 * time.Hour,
-	}
-}
-
-func (c ReputationConfig) validate() error {
-	if c.Retention <= 0 {
-		return errors.New("reputation retention must be positive")
-	}
-	return nil
-}
 
 // reputationRecord is one hostname's vote tally and last activity.
 // Up/down are derived from Voters at read time so counters cannot drift.
@@ -129,37 +110,35 @@ var (
 	errReputationUnknownHostname  = errors.New("hostname is not in the public directory")
 	errReputationHostnameCapacity = errors.New("hostname capacity exhausted")
 	errReputationVoterCapacity    = errors.New("hostname voter capacity exhausted")
-	errReputationMintRate         = errors.New("voter identity mint budget exhausted")
 	errReputationPersist          = errors.New("reputation persist failed")
 )
 
 // ReputationStore is the single owner of relay-local service reputation. One
 // mutex covers resolve/mint/apply/persist and each mutation has local rollback.
 type ReputationStore struct {
-	path        string
-	cfg         ReputationConfig
-	limiter     *policy.SourceLimiter
-	mintLimiter *policy.SourceLimiter
-	now         func() time.Time
+	path      string
+	retention time.Duration
+	limiter   *policy.SourceLimiter
+	now       func() time.Time
 
 	// persistFn writes the persisted state; a field so tests can swap in a
 	// failing closure and prove the rollback path.
-	persistFn func() error
+	persistFn func(persistedReputation) error
 
 	mu     sync.Mutex
 	state  persistedReputation
 	secret []byte
 }
 
-func newReputationStore(path string, cfg ReputationConfig) (*ReputationStore, error) {
+func newReputationStore(path string, retention time.Duration) (*ReputationStore, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, errors.New("reputation store requires a state path")
 	}
-	if err := cfg.validate(); err != nil {
-		return nil, err
+	if retention <= 0 {
+		return nil, errors.New("reputation retention must be positive")
 	}
-	store := &ReputationStore{path: path, cfg: cfg, now: time.Now}
+	store := &ReputationStore{path: path, retention: retention, now: time.Now}
 	loaded, err := utils.ReadJSONFileIfExists(path, &store.state)
 	if err != nil {
 		return nil, fmt.Errorf("load reputation state: %w", err)
@@ -185,12 +164,11 @@ func newReputationStore(path string, cfg ReputationConfig) (*ReputationStore, er
 	}
 	store.secret = secret
 	store.limiter = policy.NewSourceLimiter(reputationVoteSourcePerMinute, reputationVoteSourceBurst, reputationVoteGlobalPerMinute, reputationVoteGlobalBurst)
-	store.mintLimiter = policy.NewSourceLimiter(reputationMintSourcePerMinute, reputationMintSourceBurst, 0, 0)
-	store.persistFn = func() error { return utils.WriteJSONFile(store.path, store.state, 0o600) }
+	store.persistFn = func(state persistedReputation) error { return utils.WriteJSONFile(store.path, state, 0o600) }
 	if secretGenerated {
 		// The secret anchors every voter hash; persist it before the first
 		// mint so voter identity is restart-stable from the start.
-		if err := store.persistFn(); err != nil {
+		if err := store.persistFn(store.state); err != nil {
 			return nil, fmt.Errorf("persist reputation voter secret: %w", err)
 		}
 	}
@@ -221,84 +199,50 @@ func (s *ReputationStore) castVote(hostname, vote, cookieID, source string, live
 		return s.summarize(hostname, previous, hash), minted, nil
 	}
 	var evictedHost string
-	var evictedRecord *reputationRecord
 	if previous == nil && len(s.state.Hostnames) >= reputationMaxHostnames {
 		for candidate, rec := range s.state.Hostnames {
 			if s.visibleLocked(candidate, rec, live) {
 				continue
 			}
-			if evictedRecord == nil || rec.LastSeenAt.Before(evictedRecord.LastSeenAt) {
-				evictedHost, evictedRecord = candidate, rec
+			if evictedHost == "" || rec.LastSeenAt.Before(s.state.Hostnames[evictedHost].LastSeenAt) {
+				evictedHost = candidate
 			}
 		}
-		if evictedRecord == nil {
+		if evictedHost == "" {
 			return reputationSummary{}, "", errReputationHostnameCapacity
 		}
 	}
 	if previous != nil && !s.visibleLocked(hostname, previous, live) {
 		return reputationSummary{}, "", errReputationUnknownHostname
 	}
-	if previous == nil {
-		if evictedRecord != nil {
-			delete(s.state.Hostnames, evictedHost)
-		}
-		s.state.Hostnames[hostname] = &reputationRecord{Voters: make(map[string]string)}
+	nextHostnames := make(map[string]*reputationRecord, len(s.state.Hostnames)+1)
+	for name, rec := range s.state.Hostnames {
+		nextHostnames[name] = rec
 	}
-	rec := s.state.Hostnames[hostname]
+	if evictedHost != "" {
+		delete(nextHostnames, evictedHost)
+	}
+	rec := &reputationRecord{Voters: make(map[string]string)}
+	if previous != nil {
+		rec.LastSeenAt = previous.LastSeenAt
+		for voter, existing := range previous.Voters {
+			rec.Voters[voter] = existing
+		}
+	}
 	if _, exists := rec.Voters[hash]; !exists && len(rec.Voters) >= reputationMaxVotersPerHostname {
-		if previous == nil {
-			delete(s.state.Hostnames, hostname)
-		} else {
-			s.state.Hostnames[hostname] = previous
-		}
-		if evictedRecord != nil {
-			s.state.Hostnames[evictedHost] = evictedRecord
-		}
 		return reputationSummary{}, "", errReputationVoterCapacity
-	}
-	var oldVote string
-	var oldSeen time.Time
-	if previous == rec {
-		oldVote = rec.Voters[hash]
-		oldSeen = rec.LastSeenAt
 	}
 	rec.Voters[hash] = vote
 	rec.LastSeenAt = now
+	nextState := s.state
+	nextState.Hostnames = nextHostnames
+	nextHostnames[hostname] = rec
 
-	if err := s.persistFn(); err != nil {
-		if previous != rec {
-			if previous == nil {
-				delete(s.state.Hostnames, hostname)
-			} else {
-				s.state.Hostnames[hostname] = previous
-			}
-			if evictedRecord != nil {
-				s.state.Hostnames[evictedHost] = evictedRecord
-			}
-		} else {
-			if oldVote == "" {
-				delete(rec.Voters, hash)
-			} else {
-				rec.Voters[hash] = oldVote
-			}
-			rec.LastSeenAt = oldSeen
-		}
+	if err := s.persistFn(nextState); err != nil {
 		return reputationSummary{}, "", fmt.Errorf("%w: %w", errReputationPersist, err)
 	}
+	s.state = nextState
 	return s.summarize(hostname, rec, hash), minted, nil
-}
-
-// summary is the read-side single-hostname view. Reads never mutate: a
-// record that is no longer visible drops out of the view without being
-// deleted, and the hostname is echoed even when unknown or aged out.
-func (s *ReputationStore) summary(hostname, viewerHash string, live map[string]bool) reputationSummary {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rec := s.state.Hostnames[hostname]
-	if rec != nil && !s.visibleLocked(hostname, rec, live) {
-		rec = nil
-	}
-	return s.summarize(hostname, rec, viewerHash)
 }
 
 // directory projects the rows the directory list renders: every currently
@@ -350,10 +294,8 @@ func (s *ReputationStore) resolveVoterLocked(cookieID, source string) (hash, min
 			return verified, "", nil
 		}
 	}
-	if s.mintLimiter != nil {
-		if retry, _ := s.mintLimiter.Allow(source, 1); retry > 0 {
-			return "", "", errReputationMintRate
-		}
+	if retry, _ := s.limiter.Allow(source, reputationVoteMintCost); retry > 0 {
+		return "", "", errReputationVoterCapacity
 	}
 	id := make([]byte, reputationVoterIDBytes)
 	if _, err := rand.Read(id); err != nil {
@@ -400,7 +342,7 @@ func (s *ReputationStore) visibleLocked(hostname string, rec *reputationRecord, 
 	if live[hostname] {
 		return true
 	}
-	return s.now().Sub(rec.LastSeenAt) <= s.cfg.Retention
+	return s.now().Sub(rec.LastSeenAt) <= s.retention
 }
 
 // summarize projects one hostname's row, zero-count when rec is nil so a
@@ -440,10 +382,6 @@ func (api *RelayAPI) serveReputation(w http.ResponseWriter, r *http.Request) {
 	}
 	live := liveHostnames(api.server)
 	viewerHash := api.reputation.viewerHashFor(voterCookieID(r))
-	if hostname := normalizeReputationHostname(r.URL.Query().Get("hostname")); hostname != "" {
-		utils.WriteAPIData(w, http.StatusOK, api.reputation.summary(hostname, viewerHash, live))
-		return
-	}
 	utils.WriteAPIData(w, http.StatusOK, api.reputation.directory(viewerHash, live))
 }
 
@@ -499,8 +437,7 @@ func (api *RelayAPI) admitReputationVote(w http.ResponseWriter, r *http.Request)
 func writeReputationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errReputationHostnameCapacity),
-		errors.Is(err, errReputationVoterCapacity),
-		errors.Is(err, errReputationMintRate):
+		errors.Is(err, errReputationVoterCapacity):
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "vote capacity reached")
 	case errors.Is(err, errReputationUnknownHostname):
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "hostname is not in the public directory")
@@ -512,25 +449,10 @@ func writeReputationError(w http.ResponseWriter, err error) {
 	}
 }
 
-// voterCookieID returns the cookie value when it is structurally valid, else
-// "". MAC verification needs the store secret and happens under the store
-// lock; a structurally valid but forged cookie degrades to the cookieless
-// mint path there.
+// voterCookieID only reads the cookie; parsing and verification belong to the store.
 func voterCookieID(r *http.Request) string {
 	cookie, err := r.Cookie(reputationVoterCookie)
-	if err != nil || cookie.Value == "" {
-		return ""
-	}
-	idHex, macHex, ok := strings.Cut(cookie.Value, ".")
-	if !ok {
-		return ""
-	}
-	id, err := hex.DecodeString(idHex)
-	if err != nil || len(id) != reputationVoterIDBytes {
-		return ""
-	}
-	mac, err := hex.DecodeString(macHex)
-	if err != nil || len(mac) != sha256.Size {
+	if err != nil {
 		return ""
 	}
 	return cookie.Value

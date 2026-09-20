@@ -106,6 +106,5 @@ export function useServerList() {
     ...list,
     landingPageEnabled: publicState.landingPageEnabled,
     onVote: reputation.vote,
-    isVotePending: reputation.isVotePending,
   };
 }

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
@@ -50,7 +51,7 @@ type RelayAPI struct {
 	landingPageEnabled bool
 }
 
-func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool, reputation ReputationConfig) (*RelayAPI, error) {
+func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool, reputationRetention time.Duration) (*RelayAPI, error) {
 	if server == nil {
 		return nil, errors.New("relay api requires portal server")
 	}
@@ -66,7 +67,7 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 	if err != nil {
 		return nil, err
 	}
-	reputationStore, err := newReputationStore(filepath.Join(filepath.Dir(policyStatePath), reputationFilename), reputation)
+	reputationStore, err := newReputationStore(filepath.Join(filepath.Dir(policyStatePath), reputationFilename), reputationRetention)
 	if err != nil {
 		return nil, err
 	}

@@ -162,7 +162,6 @@ interface ServerListViewProps {
   onTagToggle: (tag: string) => void;
   onToggleFavorite: (serverId: string) => void;
   onVote?: (hostname: string, vote: ReputationVote) => void;
-  isVotePending?: (hostname: string) => boolean;
   isAdmin?: boolean;
   banFilter?: BanFilter;
   approvalMode?: ApprovalMode;
@@ -215,7 +214,6 @@ export function ServerListView({
   onTagToggle,
   onToggleFavorite,
   onVote,
-  isVotePending,
   isAdmin = false,
   banFilter = "all",
   approvalMode = "auto",
@@ -662,7 +660,6 @@ export function ServerListView({
         onToggleFavorite={onToggleFavorite}
         reputation={isAdmin ? undefined : server.reputation}
         onVote={isAdmin ? undefined : onVote}
-        votePending={isAdmin ? false : isVotePending?.(server.dns)}
         paymentEnabled={server.paymentEnabled}
         paymentLabel={server.paymentLabel}
         showAdminControls={isAdmin && !!adminServer}

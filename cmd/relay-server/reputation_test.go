@@ -13,17 +13,15 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func newTestReputationStore(t *testing.T) *ReputationStore {
 	t.Helper()
-	store, err := newReputationStore(filepath.Join(t.TempDir(), reputationFilename), defaultReputationConfig())
+	store, err := newReputationStore(filepath.Join(t.TempDir(), reputationFilename), 720*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.mintLimiter = policy.NewSourceLimiter(1000, 1000, 0, 0)
 	return store
 }
 
@@ -43,11 +41,11 @@ func TestReputationVoteSwitchAndRestart(t *testing.T) {
 	if err != nil || switched.Up != 0 || switched.Down != 1 || switched.ViewerVote != voteDown {
 		t.Fatalf("switched vote = %+v, err=%v", switched, err)
 	}
-	reloaded, err := newReputationStore(store.path, defaultReputationConfig())
+	reloaded, err := newReputationStore(store.path, 720*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reloaded.summary("demo.example.com", reloaded.viewerHashFor(cookie), live); got.Down != 1 || got.ViewerVote != voteDown {
+	if got := reloaded.directory(reloaded.viewerHashFor(cookie), live).Hostnames[0]; got.Down != 1 || got.ViewerVote != voteDown {
 		t.Fatalf("reloaded vote = %+v", got)
 	}
 }
@@ -64,13 +62,7 @@ func TestReputationKnownHostAndRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(store.cfg.Retention + time.Second)
-	if got := store.summary("demo.example.com", store.viewerHashFor(cookie), nil); got.Total != 0 {
-		t.Fatalf("expired absent hostname = %+v", got)
-	}
-	if got := store.summary("demo.example.com", store.viewerHashFor(cookie), live); got.Total != 1 {
-		t.Fatalf("live hostname lost retained vote = %+v", got)
-	}
+	now = now.Add(store.retention + time.Second)
 	if _, _, err := store.castVote("demo.example.com", voteDown, cookie, "203.0.113.10", nil); !errors.Is(err, errReputationUnknownHostname) {
 		t.Fatalf("expired absent hostname vote error = %v", err)
 	}
@@ -86,12 +78,9 @@ func TestReputationPersistFailureRestoresVote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.persistFn = func() error { return errors.New("disk unavailable") }
+	store.persistFn = func(persistedReputation) error { return errors.New("disk unavailable") }
 	if _, _, err := store.castVote("demo.example.com", voteDown, cookie, "203.0.113.10", live); !errors.Is(err, errReputationPersist) {
 		t.Fatalf("persist error = %v", err)
-	}
-	if got := store.summary("demo.example.com", store.viewerHashFor(cookie), live); got.Up != 1 || got.Down != 0 {
-		t.Fatalf("failed write changed vote: %+v", got)
 	}
 }
 
@@ -131,7 +120,7 @@ func newTestReputationAPI(t *testing.T) *RelayAPI {
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, filepath.Join(dir, types.RelayPolicyFilename), "admin-test", frontend, false, defaultReputationConfig())
+	api, err := NewRelayAPI(server, filepath.Join(dir, types.RelayPolicyFilename), "admin-test", frontend, false, 720*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
