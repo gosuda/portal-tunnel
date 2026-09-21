@@ -2054,6 +2054,9 @@ func tunnelDashboardName(tunnel AgentTunnelStatus) string {
 }
 
 func tunnelDashboardTarget(tunnel AgentTunnelStatus) string {
+	if tunnel.Serve != "" {
+		return tunnel.Serve
+	}
 	if target := strings.TrimSpace(tunnel.TargetAddr); target != "" {
 		return target
 	}
