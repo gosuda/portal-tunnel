@@ -65,6 +65,9 @@ type exposeFlags struct {
 	owner                string
 	thumbnail            string
 	hide                 bool
+	auth                 bool
+	authAllowedWallets   []string
+	authIdentityHeaders  bool
 	x402PayTo            string
 	x402Testnet          bool
 	x402Network          string
@@ -96,6 +99,9 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
+	utils.BoolFlag(fs, &flags.auth, "auth", false, "Protect HTTP application access with tunnel-local SIWE authentication")
+	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Ethereum wallet allowed to sign in; repeat to allow multiple wallets (empty allows any wallet)")
+	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
 	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
 	utils.StringFlag(fs, &flags.x402Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, and casper:casper-test")
@@ -141,6 +147,14 @@ func runExposeCommand(args []string) error {
 		return errors.New("--cache-ttl requires --cache")
 	case flags.cache && flags.banMITM:
 		return errors.New("--cache permits relay TLS termination and cannot be combined with --ban-mitm")
+	case flags.auth && flags.cache:
+		return errors.New("--auth requires tunnel-side TLS termination and cannot be combined with --cache")
+	case flags.auth && (flags.tcp || flags.udp):
+		return errors.New("--auth protects HTTP applications and cannot be combined with --tcp or --udp")
+	case !flags.auth && len(flags.authAllowedWallets) > 0:
+		return errors.New("--auth-allow requires --auth")
+	case !flags.auth && flags.authIdentityHeaders:
+		return errors.New("--auth-identity-headers requires --auth")
 	case serve != "" && flags.targetAddr != "":
 		printExposeUsage(os.Stderr)
 		return errors.New("target cannot be combined with --serve")
@@ -213,6 +227,9 @@ func runExposeCommand(args []string) error {
 			route.Amount = amount
 		}
 		httpRoutes = append(httpRoutes, route)
+	}
+	if flags.auth && len(httpRoutes) == 0 {
+		httpRoutes = append(httpRoutes, agent.ExposedHTTPRoute{Prefix: "/", Upstream: flags.targetAddr})
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(flags.x402Network)), "casper:") && strings.TrimSpace(flags.x402Asset) == "" {
 		return errors.New("--x402-asset is required for Casper wCSPR payments")
@@ -287,6 +304,20 @@ func runExposeCommand(args []string) error {
 		})
 		if err != nil {
 			return err
+		}
+		if flags.auth {
+			signingKey, err := identity.DeriveToken(listenerIdentity, "application-access-auth")
+			if err != nil {
+				return fmt.Errorf("derive application auth signing key: %w", err)
+			}
+			handler, err = agent.NewApplicationAuth(handler, agent.ApplicationAuthConfig{
+				SigningKey:      []byte(signingKey),
+				AllowedWallets:  flags.authAllowedWallets,
+				IdentityHeaders: flags.authIdentityHeaders,
+			})
+			if err != nil {
+				return err
+			}
 		}
 		return sdk.RunHTTP(ctx, exposure, handler, "")
 	}
@@ -431,6 +462,7 @@ func printRootUsage(w io.Writer) {
 		},
 		[]string{
 			"portal expose 3000",
+			"portal expose 3000 --auth",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
 			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --http-route /=http://127.0.0.1:5173 --x402-pay-to 0x...",
@@ -457,6 +489,7 @@ func printExposeUsage(w io.Writer) {
 		},
 		[]string{
 			"portal expose 3000",
+			"portal expose 3000 --auth --auth-allow 0x1234...",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --serve ./site --name my-app",
 			"portal expose --serve ./site/main.html --name my-app",

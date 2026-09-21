@@ -17,24 +17,27 @@ type AgentStatusResponse struct {
 }
 
 type AgentTunnelStatus struct {
-	ID              string              `json:"id"`
-	Name            string              `json:"name,omitempty"`
-	Address         string              `json:"address,omitempty"`
-	State           string              `json:"state"`
-	TargetAddr      string              `json:"target_addr,omitempty"`
-	Serve           string              `json:"serve,omitempty"`
-	LastError       string              `json:"last_error,omitempty"`
-	Discovery       bool                `json:"discovery"`
-	Overlay         bool                `json:"overlay"`
-	MaxActiveRelays int                 `json:"max_active_relays,omitempty"`
-	Metadata        types.LeaseMetadata `json:"metadata"`
-	X402PayTo       string              `json:"x402_pay_to,omitempty"`
-	X402Testnet     bool                `json:"x402_testnet,omitempty"`
-	X402Network     string              `json:"x402_network,omitempty"`
-	X402Asset       string              `json:"x402_asset,omitempty"`
-	X402Endpoints   []string            `json:"x402_endpoints,omitempty"`
-	HTTPRoutes      []AgentHTTPRoute    `json:"http_routes,omitempty"`
-	Relays          []AgentRelayStatus  `json:"relays,omitempty"`
+	ID                  string              `json:"id"`
+	Name                string              `json:"name,omitempty"`
+	Address             string              `json:"address,omitempty"`
+	State               string              `json:"state"`
+	TargetAddr          string              `json:"target_addr,omitempty"`
+	Serve               string              `json:"serve,omitempty"`
+	LastError           string              `json:"last_error,omitempty"`
+	Discovery           bool                `json:"discovery"`
+	Overlay             bool                `json:"overlay"`
+	MaxActiveRelays     int                 `json:"max_active_relays,omitempty"`
+	Metadata            types.LeaseMetadata `json:"metadata"`
+	Auth                bool                `json:"auth"`
+	AuthAllowedWallets  []string            `json:"auth_allowed_wallets,omitempty"`
+	AuthIdentityHeaders bool                `json:"auth_identity_headers,omitempty"`
+	X402PayTo           string              `json:"x402_pay_to,omitempty"`
+	X402Testnet         bool                `json:"x402_testnet,omitempty"`
+	X402Network         string              `json:"x402_network,omitempty"`
+	X402Asset           string              `json:"x402_asset,omitempty"`
+	X402Endpoints       []string            `json:"x402_endpoints,omitempty"`
+	HTTPRoutes          []AgentHTTPRoute    `json:"http_routes,omitempty"`
+	Relays              []AgentRelayStatus  `json:"relays,omitempty"`
 }
 
 type AgentHTTPRoute struct {
@@ -58,19 +61,22 @@ type AgentRelayStatus struct {
 }
 
 type AgentTunnelRequest struct {
-	ID              string           `json:"id"`
-	Name            string           `json:"name,omitempty"`
-	TargetAddr      string           `json:"target_addr,omitempty"`
-	HTTPRoutes      []AgentHTTPRoute `json:"http_routes,omitempty"`
-	RelayURLs       []string         `json:"relays,omitempty"`
-	Discovery       *bool            `json:"discovery,omitempty"`
-	Overlay         bool             `json:"overlay,omitempty"`
-	MaxActiveRelays int              `json:"max_active_relays,omitempty"`
-	X402PayTo       string           `json:"x402_pay_to,omitempty"`
-	X402Testnet     bool             `json:"x402_testnet,omitempty"`
-	X402Network     string           `json:"x402_network,omitempty"`
-	X402Asset       string           `json:"x402_asset,omitempty"`
-	X402Endpoints   []string         `json:"x402_endpoints,omitempty"`
+	ID                  string           `json:"id"`
+	Name                string           `json:"name,omitempty"`
+	TargetAddr          string           `json:"target_addr,omitempty"`
+	HTTPRoutes          []AgentHTTPRoute `json:"http_routes,omitempty"`
+	RelayURLs           []string         `json:"relays,omitempty"`
+	Discovery           *bool            `json:"discovery,omitempty"`
+	Overlay             bool             `json:"overlay,omitempty"`
+	MaxActiveRelays     int              `json:"max_active_relays,omitempty"`
+	Auth                bool             `json:"auth,omitempty"`
+	AuthAllowedWallets  []string         `json:"auth_allowed_wallets,omitempty"`
+	AuthIdentityHeaders bool             `json:"auth_identity_headers,omitempty"`
+	X402PayTo           string           `json:"x402_pay_to,omitempty"`
+	X402Testnet         bool             `json:"x402_testnet,omitempty"`
+	X402Network         string           `json:"x402_network,omitempty"`
+	X402Asset           string           `json:"x402_asset,omitempty"`
+	X402Endpoints       []string         `json:"x402_endpoints,omitempty"`
 }
 
 type AgentRelayRequest struct {
