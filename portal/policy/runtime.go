@@ -2,7 +2,9 @@ package policy
 
 import (
 	"fmt"
+	"maps"
 	"net"
+	"slices"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -28,7 +30,7 @@ type runtimeConfig struct {
 }
 
 func (cfg runtimeConfig) snapshot() runtimeConfig {
-	cfg.trustedProxyCIDRs = utils.CloneSlice(cfg.trustedProxyCIDRs)
+	cfg.trustedProxyCIDRs = slices.Clone(cfg.trustedProxyCIDRs)
 	return cfg
 }
 
@@ -47,7 +49,7 @@ func NewRuntime(udpEnabled, tcpPortEnabled bool, trustProxyHeaders bool, rawTrus
 			udp:     PortPolicy{enabled: udpEnabled},
 			tcpPort: PortPolicy{enabled: tcpPortEnabled},
 		}, runtimeConfig.snapshot),
-		bannedIdentityKeys: utils.NewSnapshot(map[string]struct{}{}, utils.CloneMap[string, struct{}]),
+		bannedIdentityKeys: utils.NewSnapshot(map[string]struct{}{}, maps.Clone[map[string]struct{}]),
 	}
 	if err := runtime.SetProxyTrust(trustProxyHeaders, rawTrustedProxyCIDRs); err != nil {
 		return nil, err

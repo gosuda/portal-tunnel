@@ -167,10 +167,8 @@ ACME_DNS_PROVIDER=embedded
 ENS_GASLESS_ENABLED=true
 ```
 
-The same provider is used for ACME DNS-01, managed A records, the relay root
-HTTPS/ECH record, tenant HTTPS/ECH records for tunnels that explicitly enable
-ECH, DNSSEC, and ENS TXT records. The default tunnel mode does not create tenant
-ECH records. Valid manual `fullchain.pem` and `privatekey.pem`
+The same provider is used for ACME DNS-01, managed A records, DNSSEC,
+and ENS TXT records. Valid manual `fullchain.pem` and `privatekey.pem`
 under `IDENTITY_PATH` override certificate issuance only when neither
 `acme-account.key` nor `acme-registration.json` exists. Portal still uses the
 selected provider for ENS/DNS automation, so external providers still require

@@ -110,18 +110,12 @@ func (r *Refresher) shouldLogAnnounce(relayURL string, success bool) bool {
 }
 
 // sortRefreshCandidates orders relays so that the most important sources are
-// refreshed first under concurrency limits: bootstrap, then confirmed, then
-// discovered healthy relays, and finally recovery/backoff candidates.
+// refreshed first under concurrency limits: bootstrap, then discovered
+// healthy relays, and finally recovery/backoff candidates.
 func sortRefreshCandidates(states []RelayState) []RelayState {
 	slices.SortFunc(states, func(a, b RelayState) int {
 		if a.Bootstrap != b.Bootstrap {
 			if a.Bootstrap {
-				return -1
-			}
-			return 1
-		}
-		if a.Confirmed != b.Confirmed {
-			if a.Confirmed {
 				return -1
 			}
 			return 1
@@ -175,7 +169,6 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 		return nil
 	}
 	client := r.httpClient
-	var closeClient func()
 	if utils.IsLocalRelayHost(baseURL.Hostname()) {
 		_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)
 		if err != nil {
@@ -185,15 +178,12 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 			return nil
 		}
 		client = localClient
-		closeClient = transport.CloseIdleConnections
+		defer transport.CloseIdleConnections()
 	}
 
 	startedAt := time.Now()
 	var resp types.DiscoveryResponse
 	if err := utils.HTTPDoAPIPath(ctx, client, baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
-		if closeClient != nil {
-			closeClient()
-		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -201,9 +191,6 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 			r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
 		}
 		return nil
-	}
-	if closeClient != nil {
-		closeClient()
 	}
 	measuredAt := time.Now().UTC()
 

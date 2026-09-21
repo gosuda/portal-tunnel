@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -112,23 +111,14 @@ func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 	}
 }
 
-func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
+func TestRegisterLeaseWithUDPAndRawTCP(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, true, true)
-	publicHostname := "demo-ech.example.com"
-	routeHostname := "ech-demo-ech.example.com"
-	_, echConfigList, err := keyless.EncryptedClientHelloMaterials("test-seed", routeHostname)
-	if err != nil {
-		t.Fatalf("EncryptedClientHelloMaterials() error = %v", err)
-	}
 	_, resp, err := registry.Register(types.RegisterChallengeRequest{
-		Identity:      newTestLeaseIdentity(t, "demo-ech"),
-		RouteHostname: routeHostname,
-		HostnameHash:  keyless.ECHHostnameHash(publicHostname),
-		ECHConfigList: echConfigList,
-		UDPEnabled:    true,
-		TCPEnabled:    true,
+		Identity:   newTestLeaseIdentity(t, "demo"),
+		UDPEnabled: true,
+		TCPEnabled: true,
 	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("registry.Register() error = %v", err)
@@ -139,10 +129,7 @@ func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
 	if !resp.UDPEnabled || !resp.TCPEnabled || resp.UDPAddr == "" || resp.TCPAddr == "" {
 		t.Fatalf("RegisterResponse transports = %+v, want UDP and raw TCP endpoints", resp)
 	}
-	if _, ok := registry.Lookup(publicHostname); !ok {
-		t.Fatal("Lookup(public hostname) = false, want ECH fallback route")
-	}
-	if _, ok := registry.Lookup(routeHostname); !ok {
-		t.Fatal("Lookup(route hostname) = false, want registered route")
+	if _, ok := registry.Lookup("demo.example.com"); !ok {
+		t.Fatal("Lookup(derived public hostname) = false, want registered lease")
 	}
 }

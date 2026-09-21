@@ -143,8 +143,8 @@ github.com/googleapis/enterprise-certificate-proxy v0.3.14 h1:yh8ncqsbUY4shRD5dA
 github.com/googleapis/enterprise-certificate-proxy v0.3.14/go.mod h1:vqVt9yG9480NtzREnTlmGSBmFrA+bzb0yl0TxoBQXOg=
 github.com/googleapis/gax-go/v2 v2.21.0 h1:h45NjjzEO3faG9Lg/cFrBh2PgegVVgzqKzuZl/wMbiI=
 github.com/googleapis/gax-go/v2 v2.21.0/go.mod h1:But/NJU6TnZsrLai/xBAQLLz+Hc7fHZJt/hsCz3Fih4=
-github.com/gosuda/keyless_tls v0.0.2-0.20260507061030-5128be6b5008 h1:KuP/5VlPJwqZNyAV5U60C/j8Pc5O8ENkWPTgP7mEvj0=
-github.com/gosuda/keyless_tls v0.0.2-0.20260507061030-5128be6b5008/go.mod h1:BOhUZgiAAQzxKO3QcC4fCXgd/+lqxgIu1OyIYTqtta8=
+github.com/gosuda/keyless_tls v0.0.4-0.20260919135918-b58f4ae3ae41 h1:ijG3C9ff8d/i9ycKT1bupWczSb2SmKPseapa4Fn9biU=
+github.com/gosuda/keyless_tls v0.0.4-0.20260919135918-b58f4ae3ae41/go.mod h1:Kymj8rE/o2D0LVW3dMiXd14P9aVr0wx3oAWO4jBThYo=
 github.com/gosuda/x402-facilitator v0.0.5-0.20260918144508-4423ff00e0f5 h1:GCOTLWjAlY3Cnzn1NmhH5+YMUD1wyNiMn5Xq3tpfnkk=
 github.com/gosuda/x402-facilitator v0.0.5-0.20260918144508-4423ff00e0f5/go.mod h1:TW7ZCwpeo6gUcPoJKXEMSv+29HAzXmPHqvG21NIl0/g=
 github.com/hashicorp/go-cleanhttp v0.5.2 h1:035FKYIWjmULyFRBKPs8TBQoi0x6d9G4xc9neXJWAZQ=

@@ -1,9 +1,9 @@
-// Command portal-loadtest is a Phase 1 uniformity probe that measures
+// Command portal-loadtest is a uniformity probe that measures
 // how evenly MOLS relay selection distributes N synthetic clients
 // across K synthetic relays. It runs entirely in-process — no running
 // portal-tunnel server is required.
 //
-// Flags (Phase 1 only — -capacities and -selector are Phase 2):
+// Flags:
 //
 //	-clients N      number of synthetic clients (default 100)
 //	-relays  K      number of synthetic relays (default 5)
@@ -63,7 +63,7 @@ func main() {
 	picks := make(map[string]int, *relays) // relay URL → count of clients that picked it first
 	for i := 0; i < *clients; i++ {
 		localAddr := fmt.Sprintf("synthetic-client-%d", i)
-		outputURLs := discovery.RankRelayPool(relayStates, localAddr, 0)
+		outputURLs := discovery.RankRelayPool(relayStates, localAddr)
 		if len(outputURLs) == 0 {
 			// All relays were filtered; skip this client.
 			continue

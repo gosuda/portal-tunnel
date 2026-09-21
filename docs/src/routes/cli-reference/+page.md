@@ -91,7 +91,6 @@ not supported.
 | `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
 | `--overlay` | bool | `false` | Prefer IVNP overlay transport when available |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
-| `--ech` | bool | `false` | Enable ECH hostname privacy for TLS stream tunnels; plaintext-SNI routing remains available as fallback |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
 | `--identity-json` | string | | In-memory identity JSON; takes precedence over `--identity-path` without reading or writing that file |
 | `--name` | string | auto | Public hostname prefix, one DNS label |
@@ -129,7 +128,7 @@ rename an existing one. Use a separate `--identity-path` for a new identity.
 
 - Choose one of `<target>`, `--serve`, or `--http-route`.
 - `--serve` cannot be combined with `--tcp` or `--udp`.
-- `--cache` requires `--serve` and cannot be combined with `--ech` or `--ban-mitm`.
+- `--cache` requires `--serve` and cannot be combined with `--ban-mitm`.
 - `--cache-ttl` requires `--cache`; a nonzero value must be between `1s` and
   `8760h` and is clamped by the relay.
 - `--http-route` cannot be combined with `--udp`.

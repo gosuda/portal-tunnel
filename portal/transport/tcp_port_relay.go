@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"errors"
 	"net"
 	"sync"
 	"time"
@@ -12,28 +11,37 @@ import (
 
 const defaultTCPPortClaimTimeout = 10 * time.Second
 
-// RelayTCPPort owns a TCP listener on an allocated port for one lease.
+// RelayTCPPort owns a TCP listener on an allocated port for one lease. Accept
+// pairs each inbound connection with a claimed reverse session; the caller
+// owns the final connection pairing.
 type RelayTCPPort struct {
 	identityKey string
 	port        int
 	listener    net.Listener
 	stream      *RelayStream
-	bridge      func(net.Conn, net.Conn)
+	pairs       chan tcpPair
+	ctx         context.Context
+	cancel      context.CancelFunc
 
-	cancel    context.CancelFunc
 	closeOnce sync.Once
 }
 
-func NewRelayTCPPort(identityKey string, port int, stream *RelayStream, bridge func(net.Conn, net.Conn)) *RelayTCPPort {
+type tcpPair struct {
+	inbound net.Conn
+	session net.Conn
+}
+
+func NewRelayTCPPort(identityKey string, port int, stream *RelayStream) *RelayTCPPort {
 	return &RelayTCPPort{
 		identityKey: identityKey,
 		port:        port,
 		stream:      stream,
-		bridge:      bridge,
 	}
 }
 
-func (t *RelayTCPPort) Start(ctx context.Context) error {
+// Start opens the listener; Accept delivers paired connections after it
+// succeeds.
+func (t *RelayTCPPort) Start() error {
 	if t == nil || t.port <= 0 {
 		return nil
 	}
@@ -44,10 +52,9 @@ func (t *RelayTCPPort) Start(ctx context.Context) error {
 		return err
 	}
 	t.listener = listener
-
-	relayCtx, cancel := context.WithCancel(ctx)
-	t.cancel = cancel
-	go t.acceptLoop(relayCtx)
+	t.ctx, t.cancel = context.WithCancel(context.Background())
+	t.pairs = make(chan tcpPair)
+	go t.acceptLoop()
 
 	log.Info().
 		Str("component", "tcp-port-relay").
@@ -85,48 +92,60 @@ func (t *RelayTCPPort) TCPPort() int {
 	return t.port
 }
 
-func (t *RelayTCPPort) acceptLoop(ctx context.Context) {
-	for {
-		conn, err := t.listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
-			}
-			log.Warn().
-				Str("component", "tcp-port-relay").
-				Str("identity_key", t.identityKey).
-				Err(err).
-				Msg("accept loop exiting")
-			return
-		}
-
-		go t.handleConn(ctx, conn)
+// Accept returns the next inbound TCP connection paired with a claimed reverse
+// session. Claims run independently from listener acceptance so a pending
+// reverse session cannot delay later inbound connections.
+func (t *RelayTCPPort) Accept() (net.Conn, net.Conn, error) {
+	if t == nil || t.ctx == nil || t.pairs == nil {
+		return nil, nil, net.ErrClosed
+	}
+	select {
+	case pair := <-t.pairs:
+		return pair.inbound, pair.session, nil
+	case <-t.ctx.Done():
+		return nil, nil, net.ErrClosed
 	}
 }
 
-func (t *RelayTCPPort) handleConn(ctx context.Context, conn net.Conn) {
-	claimCtx, cancel := context.WithTimeout(ctx, defaultTCPPortClaimTimeout)
+func (t *RelayTCPPort) acceptLoop() {
+	defer t.cancel()
+	for {
+		conn, err := t.listener.Accept()
+		if err != nil {
+			if t.ctx.Err() == nil {
+				log.Warn().
+					Str("component", "tcp-port-relay").
+					Str("identity_key", t.identityKey).
+					Err(err).
+					Msg("accept loop exiting")
+			}
+			return
+		}
+		go t.claim(conn)
+	}
+}
+
+func (t *RelayTCPPort) claim(conn net.Conn) {
+	claimCtx, cancel := context.WithTimeout(t.ctx, defaultTCPPortClaimTimeout)
 	defer cancel()
 
 	session, err := t.stream.claimRaw(claimCtx)
 	if err != nil {
 		_ = conn.Close()
-		log.Warn().
-			Str("component", "tcp-port-relay").
-			Str("identity_key", t.identityKey).
-			Err(err).
-			Msg("failed to claim reverse session for tcp port connection")
+		if t.ctx.Err() == nil {
+			log.Warn().
+				Str("component", "tcp-port-relay").
+				Str("identity_key", t.identityKey).
+				Err(err).
+				Msg("failed to claim reverse session for tcp port connection")
+		}
 		return
 	}
 
-	if t.bridge == nil {
+	select {
+	case t.pairs <- tcpPair{inbound: conn, session: session}:
+	case <-t.ctx.Done():
 		_ = conn.Close()
 		_ = session.Close()
-		return
 	}
-	t.bridge(conn, session)
 }

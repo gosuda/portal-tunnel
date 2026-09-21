@@ -324,6 +324,14 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 		if self := discoveryEnvelope.Data.Relays[0]; self.APIHTTPSAddr != "https://localhost:4017" || self.Signature == "" {
 			t.Fatalf("discovery self descriptor = %+v, want api_https_addr https://localhost:4017 with a signature", self)
 		}
+		if discoveryEnvelope.Data.ReleaseVersion != types.ReleaseVersion {
+			t.Fatalf("discovery envelope ReleaseVersion = %q, want %q", discoveryEnvelope.Data.ReleaseVersion, types.ReleaseVersion)
+		}
+		// A lonely relay has contacted no peers, so it must not fabricate an
+		// observation about itself.
+		if len(discoveryEnvelope.Data.RelayReleaseVersions) != 0 {
+			t.Fatalf("discovery envelope RelayReleaseVersions = %+v, want none from a relay with no observed peers", discoveryEnvelope.Data.RelayReleaseVersions)
+		}
 	})
 
 	t.Run("discovery disabled answers not found", func(t *testing.T) {

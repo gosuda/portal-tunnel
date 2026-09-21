@@ -116,7 +116,6 @@ type options struct {
 	Cache      *cache.SourceConfig
 	UDPEnabled bool
 	TCPEnabled bool
-	ECH        bool
 	BanMITM    bool
 	Overlay    bool
 	Metadata   types.LeaseMetadata
@@ -145,12 +144,9 @@ func WithTCP() Option {
 	return func(opts *options) { opts.TCPEnabled = true }
 }
 
-// WithECH enables ECH hostname privacy for TLS stream tunnels.
-func WithECH() Option {
-	return func(opts *options) { opts.ECH = true }
-}
-
-// WithMITMProtection controls relay MITM self-probing.
+// WithMITMProtection controls relay MITM self-probing. The probe requires a
+// relay tenant TLS stack that exports keying material; exposures with this
+// option enabled fail at start against relays whose stack does not.
 func WithMITMProtection(enabled bool) Option {
 	return func(opts *options) { opts.BanMITM = enabled }
 }
@@ -208,8 +204,8 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	}
 	var source *cache.Source
 	if cfg.Cache != nil {
-		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.ECH || cfg.BanMITM {
-			return nil, errors.New("relay static cache cannot be combined with UDP, raw TCP, ECH, or MITM blocking")
+		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM {
+			return nil, errors.New("relay static cache cannot be combined with UDP, raw TCP, or MITM blocking")
 		}
 		var err error
 		source, err = cache.NewSource(*cfg.Cache)
@@ -812,13 +808,17 @@ func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
 	if e == nil {
 		return nil, net.ErrClosed
 	}
+	return e.waitReady(ctx, func(status RelayStatus) bool {
+		return status.State == RelayReady
+	})
+}
+
+func (e *Exposure) waitReady(ctx context.Context, matches func(RelayStatus) bool) ([]RelayStatus, error) {
 	if ctx == nil {
 		return nil, errors.New("portal sdk: context is nil")
 	}
 	for {
-		ready, changed := e.readyRelays(func(status RelayStatus) bool {
-			return status.State == RelayReady
-		})
+		ready, changed := e.readyRelays(matches)
 		if len(ready) > 0 {
 			return ready, nil
 		}
@@ -873,25 +873,9 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error)
 	if !e.options.UDPEnabled {
 		return nil, errors.New("exposure does not have udp enabled")
 	}
-	if ctx == nil {
-		return nil, errors.New("portal sdk: context is nil")
-	}
-
-	for {
-		ready, changed := e.readyRelays(func(status RelayStatus) bool {
-			return status.State != RelayFailed && status.UDPAddr != ""
-		})
-		if len(ready) > 0 {
-			return ready, nil
-		}
-		select {
-		case <-e.done:
-			return nil, net.ErrClosed
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-changed:
-		}
-	}
+	return e.waitReady(ctx, func(status RelayStatus) bool {
+		return status.State != RelayFailed && status.UDPAddr != ""
+	})
 }
 
 // WaitTCPReady waits until at least one relay has allocated a public TCP
@@ -900,25 +884,9 @@ func (e *Exposure) WaitTCPReady(ctx context.Context) ([]RelayStatus, error) {
 	if !e.options.TCPEnabled {
 		return nil, errors.New("exposure does not have tcp enabled")
 	}
-	if ctx == nil {
-		return nil, errors.New("portal sdk: context is nil")
-	}
-
-	for {
-		ready, changed := e.readyRelays(func(status RelayStatus) bool {
-			return status.State != RelayFailed && status.TCPAddr != ""
-		})
-		if len(ready) > 0 {
-			return ready, nil
-		}
-		select {
-		case <-e.done:
-			return nil, net.ErrClosed
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-changed:
-		}
-	}
+	return e.waitReady(ctx, func(status RelayStatus) bool {
+		return status.State != RelayFailed && status.TCPAddr != ""
+	})
 }
 
 type exposureConn struct {
@@ -1129,7 +1097,6 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			Overlay:    e.options.Overlay,
 			UDPEnabled: e.options.UDPEnabled,
 			TCPEnabled: e.options.TCPEnabled,
-			ECH:        e.options.ECH,
 			BanMITM:    e.options.BanMITM,
 			Metadata:   e.metadata.Copy(),
 		})

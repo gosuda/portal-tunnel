@@ -84,8 +84,8 @@ A value that cannot be parsed is a startup error rather than a silent fallback:
 | `SNI_PORT` | `PORTAL_URL` port, else `443` | int | Local TCP SNI router listen port; an unset value follows the explicit `PORTAL_URL` port when it names one, and it never changes the public port advertised from `PORTAL_URL` |
 
 `PORTAL_URL` owns public semantics and `SNI_PORT` owns local bind semantics.
-Portal derives tenant URLs, reverse endpoints, QUIC connection metadata, and
-ECH HTTPS/SVCB ports from `PORTAL_URL`. An unset `SNI_PORT` follows the
+Portal derives tenant URLs, reverse endpoints, and QUIC connection metadata
+from `PORTAL_URL`. An unset `SNI_PORT` follows the
 explicit `PORTAL_URL` port when it names one, so a direct listener on a
 non-default port needs a single setting:
 
@@ -231,14 +231,14 @@ is the proxy when one sits in front. The trusted proxy must overwrite
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync, the relay ECH record, opt-in tunnel ECH records, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
+| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for a public relay domain and lease hostnames through the selected DNS provider. With `embedded`, local records are signed and the operator publishes the DS at the parent zone; Cloudflare, Google Cloud DNS, Route53, and Vultr use their provider APIs. Hetzner and Njalla do not support ENS DNSSEC automation |
 
 ### Embedded DNS
 
 > This section is the canonical reference for embedded DNS configuration. The deployment and self-hosting guides link here rather than restating the details.
 
-Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` pointing at the relay public IP) and open `53/tcp` + `53/udp`. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A answers for the apex and every covered name are synthesized from the relay public IPv4; ACME DNS-01 TXT and tunnel ECH HTTPS records are served directly. DNSSEC signing is always enabled; ENS TXT automation remains opt-in with `ENS_GASLESS_ENABLED=true`.
+Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` pointing at the relay public IP) and open `53/tcp` + `53/udp`. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A answers for the apex and every covered name are synthesized from the relay public IPv4; ACME DNS-01 TXT records are served directly. DNSSEC signing is always enabled; ENS TXT automation remains opt-in with `ENS_GASLESS_ENABLED=true`.
 
 The relay automatically generates a single ECDSA P-256 CSK (DNSSEC algorithm 13) in `IDENTITY_PATH/dnssec-csk.json`. Preserve and back up this file with the identity volume across restarts, container replacement, and migration: deleting or replacing it changes the DNSKEY and breaks validation against an existing parent DS. Portal uses Go's standard filesystem operations; on Unix a new key is created with mode `0600` and directories created by Portal use mode `0700`. Existing operator-provided directories and key files are loaded without ownership, mode, or ACL policy checks and are not modified. Securing the identity volume, including its Windows ACLs, is the operator's responsibility. Malformed keys and keys for another zone still fail startup rather than triggering automatic replacement.
 
@@ -248,7 +248,7 @@ After NS/glue delegation is reachable, copy the `ds_record` from the relay start
 
 Authoritative RRsets, including apex DNSKEY and denial-of-existence NSEC records, are signed. Signatures last 24 hours, tolerate five minutes of clock skew, and refresh before answering after 12 hours; keep the host clock synchronized. A finite wildcard zone preserves synthesized addresses even below explicit TXT/HTTPS owners and their ancestors. When no public IPv4 is configured yet, genuinely absent names return authenticated NXDOMAIN; existing owners without the requested type return NODATA. DNSSEC records accompany responses only when requested with EDNS DO (or queried directly), and large UDP responses require TCP retry.
 
-External managed providers (`cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, `vultr`) are supported first-class backends; `embedded` remains the canonical default. Keep any vendor as the **parent** DNS provider and delegate only the relay subdomain to embedded DNS. Manual/external certificate ownership remains supported via `fullchain.pem` and `privatekey.pem` when neither ACME state file is present. Certificate loading itself needs no vendor API credentials, and the embedded provider needs none for DNS/ECH management. Selecting an external provider still uses its APIs for DNS/ECH publication and, when `ENS_GASLESS_ENABLED=true`, for ENS/DNSSEC synchronization before certificate loading; a manual certificate does not bypass those credentials.
+External managed providers (`cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, `vultr`) are supported first-class backends; `embedded` remains the canonical default. Keep any vendor as the **parent** DNS provider and delegate only the relay subdomain to embedded DNS. Manual/external certificate ownership remains supported via `fullchain.pem` and `privatekey.pem` when neither ACME state file is present. Certificate loading itself needs no vendor API credentials, and the embedded provider needs none for DNS management. Selecting an external provider still uses its APIs for DNS publication and, when `ENS_GASLESS_ENABLED=true`, for ENS/DNSSEC synchronization before certificate loading; a manual certificate does not bypass those credentials.
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
@@ -362,7 +362,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--serve` | string | | Serve a directory or HTML file with SPA fallback; excludes positional target, `--http-route`, `--tcp`, and `--udp` |
-| `--cache` | bool | `false` | Allow selected relays to store `--serve` content and terminate browser TLS; excludes `--ech` and `--ban-mitm` |
+| `--cache` | bool | `false` | Allow selected relays to store `--serve` content and terminate browser TLS; excludes `--ban-mitm` |
 | `--cache-ttl` | duration | `0` | Offline TTL request; requires `--cache`; `0` uses relay policy, otherwise `1s` to `8760h`, clamped by the relay |
 
 These options have no environment-variable fallback and are not agent TOML
@@ -378,7 +378,6 @@ fields. See [static serving](/cli-reference#serve-a-static-site).
 
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
-| `--ech` | `ECH_ENABLED` | bool | `false` | Enable ECH hostname privacy for uncached TLS stream tunnels |
 | `--udp` | `UDP_ENABLED` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--udp-addr` | `UDP_ADDR` | string | | Local UDP target address for relayed datagrams (`host:port` or port only); defaults to the target when `--udp` is enabled |
 | `--tcp` | `TCP_ENABLED` | bool | `false` | Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers) |
@@ -454,7 +453,7 @@ the agent state directory. Wallet-authenticated agent requests are read-only and
 can only read `/agent/status`.
 
 Supported tunnel fields follow the corresponding `portal expose` options.
-The agent does not currently support `serve`, `cache`, or `cache_ttl`:
+The agent supports `serve` for static sites. It does not support `cache` or `cache_ttl`:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -463,11 +462,11 @@ The agent does not currently support `serve`, `cache`, or `cache_ttl`:
 | `max_active_relays` | int | Auto-selected relay limit; defaults to `3`; explicit relays remain included |
 | `ban_mitm` | bool | Ban on suspected TLS termination; defaults to warning-only |
 | `target` | string | Local TCP target, equivalent to the `portal expose <target>` argument |
-| `http_routes` | table array | HTTP route mappings; cannot be combined with `target` or `udp` |
+| `http_routes` | table array | HTTP route mappings; cannot be combined with `target`, `serve`, or `udp` |
+| `serve` | string | Static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`. Directories use `index.html`; unknown paths fall back to the entry file, which must exist when the tunnel starts |
 | `relays` | string array | Explicit relay API URLs |
 | `discovery` | bool | Include registry and relay discovery expansion |
 | `overlay` | bool | Prefer IVNP overlay transport when available; defaults to direct and retains direct fallback |
-| `ech` | bool | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
@@ -525,7 +524,6 @@ Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors
 | `private_key` | string | secp256k1 private key hex; keep secret |
 | `mnemonic` | string | BIP-39 mnemonic used to derive the secp256k1 identity key; keep secret |
 | `derivation_path` | string | EVM derivation path for `mnemonic`; defaults to `m/44'/60'/0'/0/0` |
-| `encrypted_client_hello_seed` | string | Relay-only HKDF salt for deriving the ECH HPKE private key; generated automatically when missing; keep secret |
 
 An existing identity file or `--identity-json` supplies the saved name as well
 as the key. `--name` applies only when creating a new identity; it does not
@@ -546,9 +544,9 @@ Relay policy settings are stored at `IDENTITY_PATH/policy.json`.
 
 ## ACME DNS Provider Configuration
 
-Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, the relay root HTTPS/ECH record, tenant A and HTTPS/ECH records for tunnels with `ech = true`, and optional ENS gasless DNS records. The default `ech = false` tunnel mode does not create tenant ECH DNS records.
+Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, and optional ENS gasless DNS records.
 
-An empty value selects `embedded`, the canonical managed backend; see [Embedded DNS](#embedded-dns) for NS/glue delegation, DS setup, and persistent signing-key requirements. The external providers below are supported first-class backends. Valid manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH` take precedence over managed certificate issuance only when neither `acme-account.key` nor `acme-registration.json` exists, regardless of provider selection. If either ACME state file remains, Portal treats the PEM files as managed certificate material. Manual overrides do not disable embedded A-record serving, ECH publication, or opt-in ENS automation through the selected provider.
+An empty value selects `embedded`, the canonical managed backend; see [Embedded DNS](#embedded-dns) for NS/glue delegation, DS setup, and persistent signing-key requirements. The external providers below are supported first-class backends. Valid manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH` take precedence over managed certificate issuance only when neither `acme-account.key` nor `acme-registration.json` exists, regardless of provider selection. If either ACME state file remains, Portal treats the PEM files as managed certificate material. Manual overrides do not disable embedded A-record serving or opt-in ENS automation through the selected provider.
 
 For ENS gasless behavior and wallet authentication details, see [Wallet and ENS](/wallet-and-ens).
 
@@ -583,7 +581,7 @@ For ENS gasless behavior and wallet authentication details, see [Wallet and ENS]
 |----------|----------|-------------|
 | `HETZNER_API_TOKEN` | Yes | Hetzner Cloud API token with DNS zone and RRSet write access |
 
-Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PROVIDER=hetzner` supports ACME, A records, and HTTPS/ECH records, but not ENS gasless DNSSEC automation.
+Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PROVIDER=hetzner` supports ACME and A records, but not ENS gasless DNSSEC automation.
 
 ### Njalla DNS (`njalla`)
 
@@ -591,7 +589,7 @@ Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PR
 |----------|----------|-------------|
 | `NJALLA_TOKEN` | Yes | Njalla API token with DNS record write access |
 
-Note: Njalla supports managed ACME, A records, TXT records, and HTTPS/ECH records. Portal does not automate Njalla DNSSEC signing, so `ACME_DNS_PROVIDER=njalla` does not support ENS gasless DNSSEC automation.
+Note: Njalla supports managed ACME, A records, and TXT records. Portal does not automate Njalla DNSSEC signing, so `ACME_DNS_PROVIDER=njalla` does not support ENS gasless DNSSEC automation.
 
 ### Vultr DNS (`vultr`)
 

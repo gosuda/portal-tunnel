@@ -2,7 +2,6 @@ package embedded
 
 import (
 	"context"
-	"encoding/base64"
 	"net"
 	"path/filepath"
 	"strings"
@@ -11,7 +10,6 @@ import (
 	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/miekg/dns"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -125,6 +123,33 @@ func TestAWithoutPublicIPIsNodata(t *testing.T) {
 	}
 }
 
+func TestAWithoutPublicIPRefusesMissingNames(t *testing.T) {
+	p := newTestProvider(t, nil)
+
+	// Missing names are refused without an SOA while the public address is
+	// still pending, so resolvers cannot negative-cache them (issue #516).
+	for _, name := range []string{"tunnel." + testZone, "deep.a.b." + testZone} {
+		resp := exchange(t, p, "tcp", dns.TypeA, name)
+		requireRcode(t, resp, dns.RcodeRefused)
+		if len(resp.Answer) != 0 {
+			t.Fatalf("%s: got %d answers without a public ip, want 0", name, len(resp.Answer))
+		}
+		if len(resp.Ns) != 0 {
+			t.Fatalf("%s: got %d authority records, want no SOA on REFUSED", name, len(resp.Ns))
+		}
+	}
+
+	// Once the address is synced the same names resolve.
+	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+		t.Fatalf("ensure a records: %v", err)
+	}
+	resp := exchange(t, p, "tcp", dns.TypeA, "tunnel."+testZone)
+	requireRcode(t, resp, dns.RcodeSuccess)
+	if len(resp.Answer) != 1 {
+		t.Fatalf("got %d answers after the address synced, want 1", len(resp.Answer))
+	}
+}
+
 func TestTXTRecordLifecycle(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
@@ -189,70 +214,12 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 	if err := p.CleanUp(testZone, "token", keyAuth); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
+	// Without a public address the deleted challenge name is refused, not
+	// negative-cached as a name error.
 	resp = exchange(t, p, "tcp", dns.TypeTXT, info.EffectiveFQDN)
-	requireRcode(t, resp, dns.RcodeNameError)
+	requireRcode(t, resp, dns.RcodeRefused)
 	if len(resp.Answer) != 0 {
 		t.Fatalf("txt survived cleanup")
-	}
-}
-
-func TestHTTPSRecordRoundTrip(t *testing.T) {
-	p := newTestProvider(t, nil)
-	ctx := context.Background()
-	if err := p.EnsureARecords(ctx, testZone, "203.0.113.10"); err != nil {
-		t.Fatal(err)
-	}
-	name := "tunnel." + testZone
-	ech := []byte{0x00, 0x08, 0xfe, 0x0d, 0x00, 0x20, 0x00, 0x01, 0x41, 0x42}
-	svcParams := `ech="` + base64.StdEncoding.EncodeToString(ech) + `" port=8443`
-
-	if err := p.EnsureHTTPSRecord(ctx, name, dnsrecord.HTTPSRecord{Priority: 1, Target: ".", SvcParams: svcParams}); err != nil {
-		t.Fatalf("ensure https record: %v", err)
-	}
-
-	resp := exchange(t, p, "tcp", dns.TypeHTTPS, name)
-	requireRcode(t, resp, dns.RcodeSuccess)
-	if len(resp.Answer) != 1 {
-		t.Fatalf("got %d answers, want 1", len(resp.Answer))
-	}
-	rr, ok := resp.Answer[0].(*dns.HTTPS)
-	if !ok {
-		t.Fatalf("got %T answer, want HTTPS", resp.Answer[0])
-	}
-	if rr.Priority != 1 || rr.Target != "." {
-		t.Fatalf("got priority %d target %q", rr.Priority, rr.Target)
-	}
-	var echSeen []byte
-	var portSeen uint16
-	for _, kv := range rr.Value {
-		switch v := kv.(type) {
-		case *dns.SVCBECHConfig:
-			echSeen = v.ECH
-		case *dns.SVCBPort:
-			portSeen = v.Port
-		}
-	}
-	if string(echSeen) != string(ech) {
-		t.Fatalf("ech mismatch: got %v, want %v", echSeen, ech)
-	}
-	if portSeen != 8443 {
-		t.Fatalf("port mismatch: got %d, want 8443", portSeen)
-	}
-
-	// Hostnames without an HTTPS record resolve via synthesis and answer
-	// NODATA for HTTPS instead of NXDOMAIN.
-	resp = exchange(t, p, "tcp", dns.TypeHTTPS, "other."+testZone)
-	requireRcode(t, resp, dns.RcodeSuccess)
-	if len(resp.Answer) != 0 {
-		t.Fatalf("got %d https answers for absent record", len(resp.Answer))
-	}
-
-	if err := p.DeleteHTTPSRecord(ctx, name); err != nil {
-		t.Fatalf("delete https record: %v", err)
-	}
-	resp = exchange(t, p, "tcp", dns.TypeHTTPS, name)
-	if len(resp.Answer) != 0 {
-		t.Fatalf("https record survived delete")
 	}
 }
 
