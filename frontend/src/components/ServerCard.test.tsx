@@ -12,17 +12,18 @@ function renderCard(props: { tcpAddr?: string; udpAddr?: string }) {
   return render(
     <MemoryRouter>
       <ServerCard
-        serverId="srv-1"
-        name="minecraft"
-        description=""
-        tags={[]}
-        thumbnail=""
-        owner=""
-        online
-        dns="minecraft.relay.example.com"
-        navigationPath="/server/srv-1"
-        navigationState={null}
-        {...props}
+        server={{
+          id: "srv-1",
+          name: "minecraft",
+          description: "",
+          tags: [],
+          thumbnail: "",
+          owner: "",
+          online: true,
+          dns: "minecraft.relay.example.com",
+          link: "/server/srv-1",
+          ...props,
+        }}
       />
     </MemoryRouter>
   );
@@ -123,17 +124,18 @@ function renderVotingCard() {
             <>
               <div>directory</div>
               <ServerCard
-                serverId="srv-1"
-                name="minecraft"
-                description=""
-                tags={[]}
-                thumbnail=""
-                owner=""
-                online
-                dns="minecraft.relay.example.com"
-                navigationPath="/server/srv-1"
-                navigationState={null}
-                reputation={REPUTATION}
+                server={{
+                  id: "srv-1",
+                  name: "minecraft",
+                  description: "",
+                  tags: [],
+                  thumbnail: "",
+                  owner: "",
+                  online: true,
+                  dns: "minecraft.relay.example.com",
+                  link: "/server/srv-1",
+                  reputation: REPUTATION,
+                }}
                 onVote={onVote}
               />
             </>
