@@ -211,6 +211,22 @@ portal agent stop
 portal agent restart
 ```
 
+To serve a static site, add a tunnel to the agent's `config.toml`:
+
+```toml
+[[tunnels]]
+id = "site"
+name = "my-site"
+serve = "./dist"
+```
+
+`serve` accepts a directory containing `index.html` or an HTML file. Relative
+paths resolve from the config file's directory. Files and SPA fallback use the
+same behavior as `portal expose --serve`. The entry file must exist when the
+tunnel starts. `serve` cannot be combined with `target`, `http_routes`, `tcp`,
+or `udp`; relay cache options are not supported in agent TOML. Edit the site
+path in TOML and restart the tunnel or agent to apply it.
+
 The dashboard can edit basic tunnel settings and relays. Add
 Tunnel opens a small form for name, target or HTTP routes, x402 payment settings,
 relays, discovery, and max active relays. After creation, routed HTTP paths,

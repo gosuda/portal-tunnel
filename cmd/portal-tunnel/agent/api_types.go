@@ -22,6 +22,7 @@ type AgentTunnelStatus struct {
 	Address         string              `json:"address,omitempty"`
 	State           string              `json:"state"`
 	TargetAddr      string              `json:"target_addr,omitempty"`
+	Serve           string              `json:"serve,omitempty"`
 	LastError       string              `json:"last_error,omitempty"`
 	Discovery       bool                `json:"discovery"`
 	Overlay         bool                `json:"overlay"`

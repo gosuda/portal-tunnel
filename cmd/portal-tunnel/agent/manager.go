@@ -581,6 +581,7 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		State:           state,
 		TargetAddr:      cfg.TargetAddr,
 		LastError:       lastError,
+		Serve:           cfg.Serve,
 		Discovery:       discovery,
 		Overlay:         cfg.Overlay,
 		MaxActiveRelays: cfg.MaxActiveRelays,
@@ -667,6 +668,27 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.lastError = ""
 	t.mu.Unlock()
 
+	routes := make([]ExposedHTTPRoute, 0, len(cfg.HTTPRoutes)+1)
+	if cfg.Serve != "" {
+		root, index, err := utils.ResolveStaticSite(cfg.Serve)
+		if err != nil {
+			return fmt.Errorf("tunnel %q serve %q: %w", cfg.ID, cfg.Serve, err)
+		}
+		routes = append(routes, ExposedHTTPRoute{
+			Prefix:      "/",
+			StaticRoot:  root,
+			StaticIndex: index,
+		})
+	}
+	for _, route := range cfg.HTTPRoutes {
+		routes = append(routes, ExposedHTTPRoute{
+			Prefix:   route.Prefix,
+			Upstream: route.Upstream,
+			Methods:  route.Methods,
+			Amount:   route.Amount,
+		})
+	}
+
 	discovery := true
 	if cfg.Discovery != nil {
 		discovery = *cfg.Discovery
@@ -720,16 +742,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		_ = exposure.Close()
 	}()
 
-	if len(cfg.HTTPRoutes) > 0 {
-		routes := make([]ExposedHTTPRoute, 0, len(cfg.HTTPRoutes))
-		for _, route := range cfg.HTTPRoutes {
-			routes = append(routes, ExposedHTTPRoute{
-				Prefix:   route.Prefix,
-				Upstream: route.Upstream,
-				Methods:  route.Methods,
-				Amount:   route.Amount,
-			})
-		}
+	if len(routes) > 0 {
 		handler, routeErr := ComposeHTTPRoutes(routes, X402Payment{
 			Testnet:          cfg.X402Testnet,
 			Network:          cfg.X402Network,
