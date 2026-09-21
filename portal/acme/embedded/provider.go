@@ -37,11 +37,6 @@ const (
 	selfCheckTimeout          = 10 * time.Second
 )
 
-// delegationSelfCheck keeps the delegated-path verification to one attempt per
-// process: it needs a full recursive resolver round trip, so repeat
-// EnsureARecords calls must not repeat it.
-var delegationSelfCheck sync.Once
-
 // Config configures the embedded authoritative DNS server.
 type Config struct {
 	// BaseDomain is the delegated zone the relay serves, for example
@@ -79,6 +74,12 @@ type Provider struct {
 	ready     chan struct{}
 	stopOnce  sync.Once
 	stopErr   error
+
+	// started marks a provider created through New, the only caller allowed
+	// to arm the delegated-path self-check: direct constructions (unit tests)
+	// must not launch external resolver lookups as a side effect.
+	started   bool
+	selfCheck sync.Once
 }
 
 // New binds the UDP and TCP listeners and starts serving the zone. Binding
@@ -143,6 +144,7 @@ func New(cfg Config) (*Provider, error) {
 		_ = p.Stop()
 		return nil, fmt.Errorf("embedded dns listeners on %s did not start within %s", p.listenAddr, listenStartTimeout)
 	}
+	p.started = true
 
 	_, ds, message, _ := p.EnsureDNSSEC(context.Background(), p.baseDomain)
 	log.Info().Str("ds_record", ds).Str("key_path", cfg.KeyPath).Msg(message)
@@ -238,9 +240,13 @@ func (p *Provider) EnsureARecords(_ context.Context, baseDomain, publicIPv4 stri
 		p.ipv4 = ip
 		p.bumpSerialLocked()
 	}
-	delegationSelfCheck.Do(func() {
-		go p.verifyDelegatedPath(ip)
-	})
+	if p.started {
+		// One attempt per provider instance: the check needs a full recursive
+		// resolver round trip, so repeat EnsureARecords calls must not repeat it.
+		p.selfCheck.Do(func() {
+			go p.verifyDelegatedPath(ip)
+		})
+	}
 	return nil
 }
 

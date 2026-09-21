@@ -113,9 +113,6 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 		// the whole sync window (issue #516); NXDOMAIN stays reserved for the
 		// genuinely-missing-name case once the zone is address-capable.
 		m.Rcode = dns.RcodeRefused
-		// Window-bounded incident signal (#516): reachable only until the first
-		// successful public-IP sync, unlike the floodable client-error codes.
-		log.Info().Str("qname", name).Msg("embedded dns query refused while address sync is pending")
 		return false
 	}
 	if len(m.Answer) == 0 {

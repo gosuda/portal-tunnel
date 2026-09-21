@@ -92,12 +92,51 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 	consecutiveDNSFailures := 0
 	if m.pendingDNSAddress {
 		consecutiveDNSFailures = 1
+		log.Info().Str("base_domain", m.cfg.BaseDomain).Msg("embedded dns address pending: refusing queries until the public ip syncs")
 	}
 	m.commandMu.RUnlock()
 	retryTimer := time.NewTimer(nextSyncDelay(consecutiveDNSFailures))
 	defer renewTicker.Stop()
 	defer dnsTicker.Stop()
 	defer retryTimer.Stop()
+
+	// rearmRetryTimer stops, drains, and resets the retry timer. The drain is
+	// required because resetting an already-fired timer would make it fire
+	// immediately on every subsequent loop iteration.
+	rearmRetryTimer := func() {
+		if !retryTimer.Stop() {
+			select {
+			case <-retryTimer.C:
+			default:
+			}
+		}
+		retryTimer.Reset(nextSyncDelay(consecutiveDNSFailures))
+	}
+	// syncDNSAttempt centralizes the bookkeeping shared by the regular ticker
+	// and the pending-address retry path: it tracks consecutive failures for
+	// the early backoff and re-arms retryTimer on every attempt. This way a
+	// pending episode discovered by the ticker engages the fast schedule
+	// immediately instead of waiting out the currently armed interval, and the
+	// operator sees one signal per pending transition rather than per query.
+	syncDNSAttempt := func(ctx context.Context) (string, error) {
+		publicIP, err := m.syncDNS(ctx)
+		m.commandMu.RLock()
+		pendingDNSAddress := m.pendingDNSAddress
+		m.commandMu.RUnlock()
+		if pendingDNSAddress {
+			if consecutiveDNSFailures == 0 {
+				log.Info().Str("base_domain", m.cfg.BaseDomain).Msg("embedded dns address pending: refusing queries until the public ip syncs")
+			}
+			consecutiveDNSFailures++
+		} else {
+			if consecutiveDNSFailures > 0 {
+				log.Debug().Str("base_domain", m.cfg.BaseDomain).Msg("embedded dns address synced")
+			}
+			consecutiveDNSFailures = 0
+		}
+		rearmRetryTimer()
+		return publicIP, err
+	}
 
 	for {
 		select {
@@ -121,7 +160,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			}
 		case <-dnsTicker.C:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			_, err := m.syncDNS(syncCtx)
+			_, err := syncDNSAttempt(syncCtx)
 			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync managed dns records")
@@ -134,17 +173,13 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			var publicIP string
 			var err error
 			if pendingDNSAddress {
-				publicIP, err = m.syncDNS(syncCtx)
+				publicIP, err = syncDNSAttempt(syncCtx)
 				m.commandMu.RLock()
 				pendingDNSAddress = m.pendingDNSAddress
 				m.commandMu.RUnlock()
-				if pendingDNSAddress {
-					consecutiveDNSFailures++
-				} else {
-					consecutiveDNSFailures = 0
-				}
 			} else {
 				consecutiveDNSFailures = 0
+				rearmRetryTimer()
 				if m.cfg.ENSGaslessEnabled {
 					publicIP, err = utils.ResolvePublicIPv4(syncCtx)
 				}
@@ -163,7 +198,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
 			}
-			retryTimer.Reset(nextSyncDelay(consecutiveDNSFailures))
 		case <-renewTicker.C:
 			_, _, manual, err := m.manualCertificateOverride()
 			if err != nil || manual || !m.shouldRenew() {
