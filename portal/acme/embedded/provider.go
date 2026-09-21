@@ -8,6 +8,8 @@ import (
 	"cmp"
 	"context"
 	"crypto"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -32,7 +34,13 @@ const (
 	soaRefresh         uint32 = 7200
 	soaRetry           uint32 = 3600
 	soaExpire          uint32 = 1209600
+	selfCheckTimeout          = 10 * time.Second
 )
+
+// delegationSelfCheck keeps the delegated-path verification to one attempt per
+// process: it needs a full recursive resolver round trip, so repeat
+// EnsureARecords calls must not repeat it.
+var delegationSelfCheck sync.Once
 
 // Config configures the embedded authoritative DNS server.
 type Config struct {
@@ -230,7 +238,46 @@ func (p *Provider) EnsureARecords(_ context.Context, baseDomain, publicIPv4 stri
 		p.ipv4 = ip
 		p.bumpSerialLocked()
 	}
+	delegationSelfCheck.Do(func() {
+		go p.verifyDelegatedPath(ip)
+	})
 	return nil
+}
+
+// verifyDelegatedPath performs the one-shot delegated-path self-check: it
+// resolves a fresh random label through the system resolver and compares the
+// answer with the synthesized address, proving the parent delegation actually
+// reaches this server. It is log-only and never blocks the caller.
+func (p *Provider) verifyDelegatedPath(ip net.IP) {
+	label := make([]byte, 8)
+	if _, err := rand.Read(label); err != nil {
+		log.Warn().Err(err).Msg("dns self-check random label")
+		return
+	}
+	name := hex.EncodeToString(label) + "." + p.zone
+	ctx, cancel := context.WithTimeout(context.Background(), selfCheckTimeout)
+	defer cancel()
+	started := time.Now()
+	addrs, err := net.DefaultResolver.LookupIP(ctx, "ip4", name)
+	elapsed := time.Since(started)
+	if err != nil {
+		log.Warn().Err(err).Str("name", name).Dur("elapsed", elapsed).Msg("dns self-check failed")
+		return
+	}
+	if slices.ContainsFunc(addrs, func(addr net.IP) bool { return addr.Equal(ip) }) {
+		log.Info().Str("name", name).Str("resolved", ip.String()).Dur("elapsed", elapsed).Msg("dns self-check passed")
+		return
+	}
+	resolved := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		resolved = append(resolved, addr.String())
+	}
+	log.Warn().
+		Str("name", name).
+		Str("resolved", strings.Join(resolved, ",")).
+		Str("expected", ip.String()).
+		Dur("elapsed", elapsed).
+		Msg("dns self-check resolved a different address")
 }
 
 // EnsureARecord is a no-op: A answers are synthesized zone-wide from the

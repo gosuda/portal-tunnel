@@ -15,44 +15,62 @@ func (p *Provider) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Compress = true
+	question := dns.Question{Name: ".", Qtype: dns.TypeNone}
+	wildcard := false
+	if len(r.Question) == 1 {
+		question = r.Question[0]
+	}
 	if r.Opcode != dns.OpcodeQuery {
 		m.Rcode = dns.RcodeNotImplemented
-		p.writeResponse(w, r, m)
-		return
-	}
-	if len(r.Question) != 1 {
+	} else if len(r.Question) != 1 {
 		m.Rcode = dns.RcodeFormatError
-		p.writeResponse(w, r, m)
-		return
+	} else {
+		wildcard = p.answerQuery(m, r, question)
 	}
-	question := r.Question[0]
+	p.writeResponse(w, r, m)
+	event := log.Debug()
+	if m.Rcode != dns.RcodeSuccess {
+		event = log.Info()
+	}
+	event.
+		Str("qname", question.Name).
+		Str("qtype", dns.TypeToString[question.Qtype]).
+		Str("rcode", dns.RcodeToString[m.Rcode]).
+		Int("answers", len(m.Answer)).
+		Bool("wildcard", wildcard).
+		Str("remote", w.RemoteAddr().String()).
+		Str("transport", w.LocalAddr().Network()).
+		Msg("embedded dns query")
+}
+
+// answerQuery resolves an IN-class query against the current signed snapshot
+// and sets the response code. It reports whether the answer was synthesized
+// from a wildcard owner.
+func (p *Provider) answerQuery(m *dns.Msg, r *dns.Msg, question dns.Question) bool {
 	name := dns.CanonicalName(question.Name)
 	if question.Qclass != dns.ClassINET || !dns.IsSubDomain(p.zone, name) {
 		m.Rcode = dns.RcodeRefused
-		p.writeResponse(w, r, m)
-		return
+		return false
 	}
 	if question.Qtype == dns.TypeANY {
 		m.Authoritative = true
 		m.Rcode = dns.RcodeNotImplemented
-		p.writeResponse(w, r, m)
-		return
+		return false
 	}
 	z, err := p.signedZone(time.Now())
 	if err != nil {
 		m.Rcode = dns.RcodeServerFailure
 		log.Error().Err(err).Msg("sign embedded dns zone")
-		p.writeResponse(w, r, m)
-		return
+		return false
 	}
 	m.Authoritative = true
 	edns := r.IsEdns0()
-	do := edns != nil && edns.Do()
-	p.answer(m, z, name, question.Qtype, do)
-	p.writeResponse(w, r, m)
+	return p.answer(m, z, name, question.Qtype, edns != nil && edns.Do())
 }
 
-func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, do bool) {
+// answer fills the response for the queried name from the signed snapshot. It
+// reports whether the answer was synthesized from a wildcard owner.
+func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, do bool) bool {
 	source := name
 	sets, exists := z.records[name]
 	var nextCloser string
@@ -83,8 +101,16 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 		} else {
 			m.Answer = appendRRSet(m.Answer, sets[qtype], name, do)
 		}
-	} else {
+	} else if _, addressed := z.records["*."+p.zone][dns.TypeA]; addressed {
 		m.Rcode = dns.RcodeNameError
+	} else {
+		// The snapshot carries no synthesized addresses, so every missing name
+		// is a tenant name whose answer is still pending the public IP sync.
+		// REFUSED without an SOA keeps resolvers from negative-caching it for
+		// the whole sync window (issue #516); NXDOMAIN stays reserved for the
+		// genuinely-missing-name case once the zone is address-capable.
+		m.Rcode = dns.RcodeRefused
+		return false
 	}
 	if len(m.Answer) == 0 {
 		m.Ns = appendRRSet(m.Ns, z.records[p.zone][dns.TypeSOA], "", do)
@@ -111,6 +137,7 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 	if qtype == dns.TypeNS && name == p.zone {
 		m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeA], "", do)
 	}
+	return exists && source != name
 }
 
 func (p *Provider) writeResponse(w dns.ResponseWriter, query, m *dns.Msg) {
