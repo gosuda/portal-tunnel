@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useList, type BaseServer } from "@/hooks/useList";
 import type { BanFilter } from "@/types/filters";
-import { BROWSER_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
 import {
   parseLeaseMetadata,
@@ -143,7 +143,7 @@ interface PolicyViewState {
 }
 
 async function loadPolicyState(): Promise<PolicyViewState> {
-  const state = await apiClient.get<PolicyStateResponse>(BROWSER_API_PATHS.policy.state);
+  const state = await apiClient.get<PolicyStateResponse>(RELAY_API_PATHS.policy.state);
   const normalizedLeases = Array.isArray(state?.leases) ? state.leases : [];
 
   return {
@@ -255,7 +255,7 @@ export function useAdmin(enabled = true) {
     setPolicySaving(true);
     try {
       await runAdminAction(async () => {
-        const response = await apiClient.post<PolicySettings>(BROWSER_API_PATHS.policy.root, {
+        const response = await apiClient.post<PolicySettings>(RELAY_API_PATHS.policy.root, {
           ...policySettings,
           ...overrides,
         });
@@ -274,7 +274,7 @@ export function useAdmin(enabled = true) {
     if (!identityKey) {
       throw new Error("Missing lease identity");
     }
-    await apiClient.post<unknown>(BROWSER_API_PATHS.policy.leases, {
+    await apiClient.post<unknown>(RELAY_API_PATHS.policy.leases, {
       identity_key: identityKey,
       ...policy,
     } satisfies LeasePolicyUpdate);
@@ -361,7 +361,7 @@ export function useAdmin(enabled = true) {
             : action === "deny"
               ? { identity_key: identityKey, is_denied: true }
               : { identity_key: identityKey, is_banned: true };
-        return apiClient.post<unknown>(BROWSER_API_PATHS.policy.leases, policy);
+        return apiClient.post<unknown>(RELAY_API_PATHS.policy.leases, policy);
       })
     );
 

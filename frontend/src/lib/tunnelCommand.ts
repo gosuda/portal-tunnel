@@ -1,4 +1,4 @@
-import { BROWSER_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { resolveExposeName } from "@/lib/exposeName";
 import type { ShareKind } from "@/lib/shareLink";
 
@@ -23,15 +23,6 @@ export interface TunnelCommandOptions {
 
 
 export function buildTunnelCommand(options: TunnelCommandOptions): string {
-  const { installLine, exposeHead, exposeOptions } =
-    buildTunnelCommandParts(options);
-
-  return joinTunnelCommand(installLine, exposeHead, exposeOptions);
-}
-
-export function buildTunnelDisplayCommand(
-  options: TunnelCommandOptions
-): string {
   const { installLine, exposeHead, exposeOptions } =
     buildTunnelCommandParts(options);
 
@@ -66,11 +57,11 @@ function buildTunnelCommandParts({
     ? ["--serve", formatToken(servePath, os)]
     : [formatToken(targetValue, os)];
   const installScriptURL = new URL(
-    BROWSER_API_PATHS.install.shell,
+    RELAY_API_PATHS.install.shell,
     currentOrigin
   ).toString();
   const installPowerShellURL = new URL(
-    BROWSER_API_PATHS.install.powershell,
+    RELAY_API_PATHS.install.powershell,
     currentOrigin
   ).toString();
 
