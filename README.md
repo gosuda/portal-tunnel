@@ -29,10 +29,6 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
   account or central operator. Combine self-hosted relays with public relays in
   a pool to split trust across independent operators you choose.
 
-- **Opt-in Static Cache** - `portal expose --serve ./dist --cache` offloads
-  static content to bounded relay disk storage, with optional offline TTL.
-  This explicitly trusts selected relays with the files and browser TLS
-  termination. See [cache usage and trust](cmd/portal-tunnel/README.md#static-content-offload).
 - **End-to-End Tenant TLS** - For ordinary uncached exposures, Portal
   terminates tenant TLS at the user's endpoint instead of the relay.
 
