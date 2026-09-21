@@ -329,8 +329,10 @@ func (cfg TunnelConfig) Validate() error {
 	if err := validateAgentPathComponent("tunnel id", cfg.ID); err != nil {
 		return err
 	}
-	if cfg.Serve != "" && (strings.TrimSpace(cfg.TargetAddr) != "" || len(cfg.HTTPRoutes) > 0 || cfg.TCPEnabled || cfg.UDPEnabled) {
-		return fmt.Errorf("tunnel %q cannot combine serve with target, http_routes, tcp, or udp", cfg.ID)
+	if cfg.Serve != "" {
+		if strings.TrimSpace(cfg.TargetAddr) != "" || len(cfg.HTTPRoutes) > 0 || cfg.TCPEnabled || cfg.UDPEnabled {
+			return fmt.Errorf("tunnel %q cannot combine serve with target, http_routes, tcp, or udp", cfg.ID)
+		}
 	}
 	if strings.TrimSpace(cfg.TargetAddr) == "" && len(cfg.HTTPRoutes) == 0 && cfg.Serve == "" {
 		return fmt.Errorf("tunnel %q requires target, http_routes, or serve", cfg.ID)
