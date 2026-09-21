@@ -22,6 +22,7 @@ function normalizeHostname(hostname: string): string {
 type PublicState = {
   leases: Lease[];
   landingPageEnabled: boolean;
+  stale: boolean;
 };
 
 function collectReputation(
@@ -74,13 +75,16 @@ export function useServerList() {
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
     landingPageEnabled: false,
+    stale: true,
   });
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
 
   useEffect(() => {
     let cancelled = false;
 
-    void (async () => {
+    let timer: number | undefined;
+
+    const refresh = async () => {
       try {
         const data = await apiClient.get<PublicStateResponse>(
           BROWSER_API_PATHS.public.state
@@ -92,18 +96,25 @@ export function useServerList() {
         setPublicState({
           leases: Array.isArray(data?.leases) ? data.leases : [],
           landingPageEnabled: data?.landing_page_enabled ?? false,
+          stale: false,
         });
       } catch (error) {
         console.error("Failed to load public relay state", error);
         if (!cancelled) {
-          setPublicState({ leases: [], landingPageEnabled: false });
-          setSummaries({});
+          setPublicState((previous) => ({ ...previous, stale: true }));
+        }
+      } finally {
+        if (!cancelled) {
+          timer = window.setTimeout(() => void refresh(), 1500);
         }
       }
-    })();
+    };
+
+    void refresh();
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, []);
 
@@ -164,6 +175,8 @@ export function useServerList() {
 
   return {
     ...list,
+    // null means unavailable; an empty array is an authoritative empty snapshot.
+    leases: publicState.stale ? null : publicState.leases,
     landingPageEnabled: publicState.landingPageEnabled,
     onVote: vote,
   };

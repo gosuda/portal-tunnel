@@ -18,12 +18,14 @@ export function ServerList() {
     handleToggleFavorite,
     onVote,
     landingPageEnabled,
+    leases,
   } = useServerList();
 
   return (
     <SsgoiTransition id="/">
       <ServerListView
         landingPageEnabled={landingPageEnabled}
+        leases={leases}
         searchQuery={searchQuery}
         status={status}
         sortBy={sortBy}

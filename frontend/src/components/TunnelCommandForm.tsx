@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useId,
   useMemo,
   useState,
@@ -7,9 +6,7 @@ import {
 } from "react";
 import { Check, Copy, RefreshCw, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { apiClient } from "@/lib/apiClient";
-import { BROWSER_API_PATHS } from "@/lib/apiPaths";
-import type { PublicStateResponse } from "@/types/api";
+import type { Lease } from "@/types/api";
 import { cn } from "@/lib/utils";
 import {
   buildTunnelPreviewURL,
@@ -31,21 +28,24 @@ const SHARE_KIND_LABEL: Record<ShareKind, string> = {
 
 const SHARE_PLACEHOLDER = "file:///Users/me/site/index.html or 3000";
 
-interface TunnelCommandFormProps {
+type TunnelCommandFormProps = {
   className?: string;
   theme?: "light" | "terminal";
-  mode?: "full" | "hero";
-}
+} & (
+  | { mode: "hero"; leases: Lease[] | null }
+  | { mode?: "full"; leases?: never }
+);
 
 type ServiceStatus = "waiting" | "registered" | "alive";
 
 export function TunnelCommandForm({
   className,
   theme = "light",
-  mode = "full",
+  mode,
+  leases,
 }: TunnelCommandFormProps) {
   if (mode === "hero") {
-    return <HeroTunnelCommandForm className={className} theme={theme} />;
+    return <HeroTunnelCommandForm className={className} theme={theme} leases={leases} />;
   }
 
   return <FullTunnelCommandForm className={className} theme={theme} />;
@@ -54,8 +54,9 @@ export function TunnelCommandForm({
 function HeroTunnelCommandForm({
   className,
   theme,
+  leases,
 }: Required<Pick<TunnelCommandFormProps, "theme">> &
-  Pick<TunnelCommandFormProps, "className">) {
+  Pick<TunnelCommandFormProps, "className"> & { leases: Lease[] | null }) {
   const isTerminal = theme === "terminal";
   const {
     currentOrigin,
@@ -75,8 +76,6 @@ function HeroTunnelCommandForm({
     handleShuffleName,
   } = useTunnelCommand();
 
-  const [serviceStatus, setServiceStatus] = useState<ServiceStatus>("waiting");
-
   const previewURL = useMemo(
     () => buildTunnelPreviewURL(currentOrigin, effectiveName, target, nameSeed),
     [currentOrigin, effectiveName, nameSeed, target]
@@ -87,49 +86,12 @@ function HeroTunnelCommandForm({
     [currentOrigin, effectiveName, nameSeed, target]
   );
 
-  useEffect(() => {
-    if (statusHostname === "") {
-      return;
-    }
-
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        const state = await apiClient.get<PublicStateResponse>(
-          BROWSER_API_PATHS.public.state
-        );
-        if (cancelled) {
-          return;
-        }
-
-        const lease = state.leases?.find(
-          (candidate) => candidate.hostname.trim().toLowerCase() === statusHostname
-        );
-        if (!lease) {
-          setServiceStatus("waiting");
-          return;
-        }
-
-        setServiceStatus(lease.ready > 0 ? "alive" : "registered");
-      } catch {
-        if (!cancelled) {
-          setServiceStatus("waiting");
-        }
-      }
-    };
-
-    setServiceStatus("waiting");
-    void poll();
-    const interval = window.setInterval(() => {
-      void poll();
-    }, 1500);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [statusHostname]);
+  const lease = statusHostname === "" ? undefined : leases?.find(
+    (candidate) => candidate.hostname.trim().toLowerCase() === statusHostname
+  );
+  const serviceStatus: ServiceStatus = !lease
+    ? "waiting"
+    : lease.ready > 0 ? "alive" : "registered";
 
   const serviceStatusTone = {
     alive: isTerminal ? "bg-green-400" : "bg-green-600",
