@@ -66,6 +66,19 @@ To test the extension locally:
 
 If you want Linux behavior from WSL, open the folder with `Remote - WSL` first so the extension host runs in WSL instead of Windows.
 
+## Publishing
+
+The release workflow packages the extension once and publishes that exact VSIX to the Visual Studio Marketplace.
+
+1. Configure Marketplace trusted publishing for the `gosuda/portal-tunnel` repository and `.github/workflows/vscode-extension.yml` workflow.
+2. Update `version` in `package.json` and the changelog in the release pull request.
+3. Merge the release pull request.
+4. Tag that commit as `extension-v<version>` and push the tag.
+
+Pull requests and extension changes on `main` build the VSIX without publishing it. Release tags publish with GitHub OIDC. Rerunning the release is safe because duplicate versions are skipped.
+
+For a local package, run `bash ./publish.sh package`. Manual publishing remains available as a recovery path with `VSCE_PAT` set.
+
 ## Release Notes
 
 ### 0.0.3
