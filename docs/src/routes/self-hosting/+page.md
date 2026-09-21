@@ -30,7 +30,7 @@ mkdir -p ./relay-data
 sudo chown 65532:65532 ./relay-data
 # Optional: place valid fullchain.pem/privatekey.pem in ./relay-data to use a
 # manual certificate, only if neither acme-account.key nor acme-registration.json
-# is present. Embedded DNS and ECH management still run.
+# is present. Embedded DNS management still runs.
 ADMIN_TOKEN=$(openssl rand -hex 32)
 # Save ADMIN_TOKEN in your password manager before starting the container.
 docker run -d \

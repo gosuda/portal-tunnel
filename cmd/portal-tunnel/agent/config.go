@@ -43,6 +43,7 @@ type TunnelConfig struct {
 	ID                   string            `koanf:"id"`
 	Name                 string            `koanf:"name"`
 	TargetAddr           string            `koanf:"target"`
+	Serve                string            `koanf:"serve"`
 	HTTPRoutes           []HTTPRouteConfig `koanf:"http_routes"`
 	RelayURLs            []string          `koanf:"relays"`
 	Discovery            *bool             `koanf:"discovery"`
@@ -52,7 +53,6 @@ type TunnelConfig struct {
 	UDPEnabled           bool              `koanf:"udp"`
 	UDPAddr              string            `koanf:"udp_addr"`
 	TCPEnabled           bool              `koanf:"tcp"`
-	ECH                  bool              `koanf:"ech"`
 	BanMITM              *bool             `koanf:"ban_mitm"`
 	MaxActiveRelays      int               `koanf:"max_active_relays"`
 	Description          string            `koanf:"description"`
@@ -174,6 +174,7 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	addStringDocumentField(out, "id", cfg.ID)
 	addStringDocumentField(out, "name", cfg.Name)
 	addStringDocumentField(out, "target", cfg.TargetAddr)
+	addStringDocumentField(out, "serve", cfg.Serve)
 	if len(cfg.HTTPRoutes) > 0 {
 		routes := make([]map[string]any, 0, len(cfg.HTTPRoutes))
 		for _, route := range cfg.HTTPRoutes {
@@ -201,9 +202,6 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	addStringDocumentField(out, "udp_addr", cfg.UDPAddr)
 	if cfg.TCPEnabled {
 		out["tcp"] = cfg.TCPEnabled
-	}
-	if cfg.ECH {
-		out["ech"] = cfg.ECH
 	}
 	addStringDocumentField(out, "description", cfg.Description)
 	addStringSliceDocumentField(out, "tags", cfg.Tags)
@@ -267,6 +265,10 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		t := &cfg.Tunnels[i]
 		t.ID = strings.TrimSpace(t.ID)
 		t.Name = strings.TrimSpace(t.Name)
+		t.Serve = strings.TrimSpace(t.Serve)
+		if t.Serve != "" && !filepath.IsAbs(t.Serve) {
+			t.Serve = filepath.Join(configDir, t.Serve)
+		}
 		t.X402Network = strings.ToLower(strings.TrimSpace(t.X402Network))
 		t.X402Asset = strings.TrimSpace(t.X402Asset)
 		t.X402Endpoints = compactStrings(t.X402Endpoints)
@@ -327,8 +329,13 @@ func (cfg TunnelConfig) Validate() error {
 	if err := validateAgentPathComponent("tunnel id", cfg.ID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(cfg.TargetAddr) == "" && len(cfg.HTTPRoutes) == 0 {
-		return fmt.Errorf("tunnel %q requires target or http_routes", cfg.ID)
+	if cfg.Serve != "" {
+		if strings.TrimSpace(cfg.TargetAddr) != "" || len(cfg.HTTPRoutes) > 0 || cfg.TCPEnabled || cfg.UDPEnabled {
+			return fmt.Errorf("tunnel %q cannot combine serve with target, http_routes, tcp, or udp", cfg.ID)
+		}
+	}
+	if strings.TrimSpace(cfg.TargetAddr) == "" && len(cfg.HTTPRoutes) == 0 && cfg.Serve == "" {
+		return fmt.Errorf("tunnel %q requires target, http_routes, or serve", cfg.ID)
 	}
 	if strings.TrimSpace(cfg.TargetAddr) != "" && len(cfg.HTTPRoutes) > 0 {
 		return fmt.Errorf("tunnel %q cannot combine target and http_routes", cfg.ID)

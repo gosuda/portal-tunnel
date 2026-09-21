@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SortOption, StatusFilter } from "@/types/filters";
+import type { ReputationSummary } from "@/types/api";
 
 export interface BaseServer {
   id: string;
@@ -17,6 +18,7 @@ export interface BaseServer {
   firstSeen?: string;
   paymentEnabled?: boolean;
   paymentLabel?: string;
+  reputation?: ReputationSummary;
 }
 
 export interface UseListOptions<T extends BaseServer> {
@@ -117,7 +119,7 @@ export function useList<T extends BaseServer>({
     const counts = new Map<string, number>();
     servers.forEach((server) => {
       server.tags.forEach((tag) => {
-        const normalizedTag = typeof tag === "string" ? tag.trim().toLowerCase() : "";
+        const normalizedTag = tag.trim().toLowerCase();
         if (!normalizedTag) {
           return;
         }
@@ -215,31 +217,13 @@ export function useList<T extends BaseServer>({
       }
     };
 
-    const sorted = [...filtered].sort(sortByField(sortBy));
-    sorted.sort((a, b) => {
-      const aIsFav = favoriteSet.has(a.id);
-      const bIsFav = favoriteSet.has(b.id);
-      if (aIsFav && !bIsFav) return -1;
-      if (!aIsFav && bIsFav) return 1;
-      return 0;
-    });
-
-    return sorted;
+    const compare = sortByField(sortBy);
+    return filtered.sort((a, b) =>
+      Number(favoriteSet.has(b.id)) - Number(favoriteSet.has(a.id)) || compare(a, b)
+    );
   }, [servers, searchQuery, status, sortBy, selectedTags, favorites, additionalFilter]);
 
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchQuery(value);
-  }, []);
-
-  const handleStatusChange = useCallback((value: StatusFilter) => {
-    setStatus(value);
-  }, []);
-
-  const handleSortByChange = useCallback((value: SortOption) => {
-    setSortBy(value);
-  }, []);
-
-  const handleTagToggle = useCallback((tag: string) => {
+  function handleTagToggle(tag: string): void {
     const normalizedTag = tag.trim().toLowerCase();
     if (!normalizedTag) {
       return;
@@ -250,15 +234,15 @@ export function useList<T extends BaseServer>({
         ? prev.filter((candidate) => candidate !== normalizedTag)
         : [...prev, normalizedTag]
     );
-  }, []);
+  }
 
-  const handleToggleFavorite = useCallback((serverId: string) => {
+  function handleToggleFavorite(serverId: string): void {
     setFavorites((prev) =>
       prev.includes(serverId)
         ? prev.filter((id) => id !== serverId)
         : [...prev, serverId]
     );
-  }, []);
+  }
 
   return {
     searchQuery,
@@ -268,9 +252,9 @@ export function useList<T extends BaseServer>({
     favorites,
     availableTags,
     filteredServers,
-    handleSearchChange,
-    handleStatusChange,
-    handleSortByChange,
+    handleSearchChange: setSearchQuery,
+    handleStatusChange: setStatus,
+    handleSortByChange: setSortBy,
     handleTagToggle,
     handleToggleFavorite,
   };

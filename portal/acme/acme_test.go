@@ -271,7 +271,9 @@ func assertEmbeddedDNSAddress(t *testing.T, client *dns.Client, addr, name, publ
 		t.Fatalf("%s A %s = %v, want authoritative answer", client.Net, name, answer)
 	}
 	if publicIP == "" {
-		if len(answer.Answer) != 0 || (answer.Rcode != dns.RcodeSuccess && answer.Rcode != dns.RcodeNameError) {
+		// Missing names are refused (issue #516) while the address is pending;
+		// names with explicit records answer NODATA.
+		if len(answer.Answer) != 0 || (answer.Rcode != dns.RcodeSuccess && answer.Rcode != dns.RcodeRefused) {
 			t.Fatalf("%s A %s = %v, want no address during discovery outage", client.Net, name, answer)
 		}
 		return

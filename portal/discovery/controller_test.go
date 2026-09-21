@@ -27,7 +27,7 @@ func TestControllerRelayIntentOpsComposeAtomicUnits(t *testing.T) {
 	controller.RemoveRelay(relayA)
 
 	routes := controller.relaySet.SelectRelays(routeState{})
-	if len(routes) != 1 || routes[0].RelayURL != relayB {
+	if len(routes) != 1 || routes[0] != relayB {
 		t.Fatalf("selection after RemoveRelay = %+v, want only relay B", routes)
 	}
 
@@ -103,7 +103,7 @@ func TestControllerReportRuntimeSuppressesRelay(t *testing.T) {
 	routes := controller.relaySet.SelectRelays(routeState{
 		MaxActiveRelays: 1,
 	})
-	if len(routes) != 1 || routes[0].RelayURL != relayB {
+	if len(routes) != 1 || routes[0] != relayB {
 		t.Fatalf("selected routes = %+v, want only relay B after A failure", routes)
 	}
 }
@@ -162,13 +162,12 @@ func TestControllerReportMITMVsRuntimeDistinctOutcomes(t *testing.T) {
 		ExplicitRelayURLs: []string{relayA, relayB},
 	})
 	for _, r := range routes {
-		if r.RelayURL == relayA {
+		if r == relayA {
 			t.Fatal("MITM-banned relay A should not appear in selection")
 		}
 	}
 
-	// Runtime failure suppresses relay B but does not ban it — it can still
-	// appear as an explicit relay (just unconfirmed for auto-selection).
+	// Runtime failure temporarily suppresses relay B without banning it.
 	controller.Report(relayB, FailureRuntime)
 	if !controller.relaySet.IsSuppressed(relayB, time.Now().UTC()) {
 		t.Fatal("relay B should be suppressed after runtime failure")
@@ -219,7 +218,7 @@ func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
 }
 
 func activeFailuresFor(controller *Controller, relayURL string) int {
-	for _, state := range controller.relaySet.AllRelays() {
+	for _, state := range controller.relaySet.currentRelayStates(time.Now().UTC()) {
 		if state.Descriptor.APIHTTPSAddr == relayURL {
 			return state.activeFailures
 		}

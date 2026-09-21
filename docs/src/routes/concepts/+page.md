@@ -63,7 +63,7 @@ Flow:
 2. The relay reads the SNI hostname and finds the matching lease.
 3. The relay claims a waiting reverse session from the tunnel process.
 4. The tunnel process performs the tenant TLS handshake locally.
-5. The relay may sign handshake digests through `/v1/sign`, but it does not
+5. The relay may sign handshake transcripts through `/v1/sign`, but it does not
    receive tenant TLS session keys.
 6. After the handshake, the relay forwards encrypted bytes.
 

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -39,6 +40,9 @@ type RelayAPI struct {
 	frontendFS           fs.FS
 	frontendCache        sync.Map
 	frontendCacheEnabled bool
+	// reputation owns relay-local service reputation state and its
+	// reputation.json file; see reputation.go.
+	reputation *ReputationStore
 	// policyWriteMu serializes mutations including the state-file write;
 	// policyMu guards in-memory state only, so readers never block on disk I/O.
 	policyWriteMu      sync.Mutex
@@ -62,6 +66,10 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 	if err != nil {
 		return nil, err
 	}
+	reputationStore, err := newReputationStore(filepath.Join(filepath.Dir(policyStatePath), reputationFilename))
+	if err != nil {
+		return nil, err
+	}
 
 	api := &RelayAPI{
 		server:               server,
@@ -69,6 +77,7 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 		policyStatePath:      policyStatePath,
 		frontendFS:           frontendFS,
 		frontendCacheEnabled: strings.TrimSpace(frontendDir) == "",
+		reputation:           reputationStore,
 		landingPageEnabled:   landingPageEnabled,
 	}
 	if err := api.loadPolicyState(); err != nil {
@@ -88,6 +97,7 @@ func (api *RelayAPI) Handler() *http.ServeMux {
 	mux.HandleFunc(types.PathPolicy, api.servePolicy)
 	mux.HandleFunc(types.PathPolicyPrefix, api.servePolicy)
 	mux.HandleFunc(types.PathState, api.servePublicState)
+	mux.HandleFunc(pathReputationVote, api.serveReputationVote)
 	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
 		serveInstallScript(w, r, api.server.PortalURL(), false)
 	})
@@ -109,10 +119,15 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	api.policyMu.RLock()
 	landingPageEnabled := api.landingPageEnabled
 	api.policyMu.RUnlock()
-	utils.WriteAPIData(w, http.StatusOK, types.PublicStateResponse{
-		Leases:             leases,
-		LandingPageEnabled: landingPageEnabled,
+	utils.WriteAPIData(w, http.StatusOK, publicStateResponse{
+		PublicStateResponse: types.PublicStateResponse{Leases: leases, LandingPageEnabled: landingPageEnabled},
+		Reputation:          api.reputation.summaries(api.reputation.viewerHashFor(voterCookieID(r)), publicIdentityLeases(leases, api.server)),
 	})
+}
+
+type publicStateResponse struct {
+	types.PublicStateResponse
+	Reputation []reputationSummary `json:"reputation,omitempty"`
 }
 
 func (api *RelayAPI) loadPolicyState() error {

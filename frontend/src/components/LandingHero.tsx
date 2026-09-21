@@ -12,7 +12,7 @@ const coreFeatures = [
     eyebrow: "TLS",
     title: "Keyless end-to-end tenant TLS",
     description:
-      "Relays sign handshakes without session keys; ECH hides SNI and self-probes flag suspected MITM.",
+      "Relays sign handshakes without session keys; self-probes flag suspected MITM.",
   },
   {
     eyebrow: "Relays",

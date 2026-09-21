@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -61,10 +60,7 @@ func StaticSiteRequestPath(prefix, urlPath string) (string, bool) {
 			p = strings.TrimPrefix(p, prefix)
 		}
 	}
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	return path.Clean(p), true
+	return p, true
 }
 
 // NewStaticSiteHandler serves files under root with SPA/CSR fallback: a
@@ -84,7 +80,9 @@ func NewStaticSiteHandler(prefix, root, index string) http.Handler {
 		if rel != "/" && serveStaticFile(w, req, dir, rel) {
 			return
 		}
-		serveStaticIndex(w, req, dir, index)
+		if !serveStaticFile(w, req, dir, "/"+index) {
+			http.NotFound(w, req)
+		}
 	})
 }
 
@@ -107,19 +105,4 @@ func serveStaticFile(w http.ResponseWriter, req *http.Request, dir http.FileSyst
 	}
 	http.ServeContent(w, req, info.Name(), info.ModTime(), f)
 	return true
-}
-
-func serveStaticIndex(w http.ResponseWriter, req *http.Request, dir http.FileSystem, index string) {
-	f, err := dir.Open("/" + index)
-	if err != nil {
-		http.NotFound(w, req)
-		return
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.IsDir() {
-		http.NotFound(w, req)
-		return
-	}
-	http.ServeContent(w, req, info.Name(), info.ModTime(), f)
 }

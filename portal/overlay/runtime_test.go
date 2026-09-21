@@ -120,11 +120,7 @@ func TestIssueEndpointRotatesGatewayWithoutChangingLease(t *testing.T) {
 		}
 	}
 	runtime := &Runtime{
-		config: Config{
-			Authority:    ingressAuthority,
-			OfferReverse: func(string, string, net.Conn, func() error) error { return nil },
-			Bridge:       func(net.Conn, net.Conn) {},
-		},
+		config:      Config{Authority: ingressAuthority},
 		endpoint:    endpointStub{destination: ingressDestination},
 		assignments: make(map[string]string),
 		failures:    make(map[string]map[string]time.Time),

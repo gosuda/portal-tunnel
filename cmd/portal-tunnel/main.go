@@ -79,7 +79,6 @@ type exposeFlags struct {
 	udp                  bool
 	udpAddr              string
 	tcp                  bool
-	ech                  bool
 	maxActiveRelays      int
 	metricsAddr          string
 }
@@ -110,7 +109,6 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
-	utils.BoolFlagEnv(fs, &flags.ech, "ech", false, "Enable ECH hostname privacy for the default TLS stream transport", "ECH_ENABLED")
 	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
 }
@@ -141,8 +139,8 @@ func runExposeCommand(args []string) error {
 		return errors.New("--cache requires --serve")
 	case !flags.cache && flags.cacheTTL != 0:
 		return errors.New("--cache-ttl requires --cache")
-	case flags.cache && (flags.ech || flags.banMITM):
-		return errors.New("--cache permits relay TLS termination and cannot be combined with --ech or --ban-mitm")
+	case flags.cache && flags.banMITM:
+		return errors.New("--cache permits relay TLS termination and cannot be combined with --ban-mitm")
 	case serve != "" && flags.targetAddr != "":
 		printExposeUsage(os.Stderr)
 		return errors.New("target cannot be combined with --serve")
@@ -266,9 +264,6 @@ func runExposeCommand(args []string) error {
 	}
 	if flags.tcp {
 		opts = append(opts, sdk.WithTCP())
-	}
-	if flags.ech {
-		opts = append(opts, sdk.WithECH())
 	}
 	if flags.overlay {
 		opts = append(opts, sdk.WithOverlay())

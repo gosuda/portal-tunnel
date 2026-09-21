@@ -12,9 +12,6 @@ import (
 const (
 	HeaderAccessToken       = "X-Portal-Access-Token"
 	HeaderReverseCapability = "X-Portal-Reverse-Capability"
-	MarkerKeepalive         = byte(0x00)
-	MarkerRawStart          = byte(0x01)
-	MarkerTLSStart          = byte(0x02)
 )
 
 const (

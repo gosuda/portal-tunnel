@@ -43,10 +43,11 @@ import (
 // (notably from ApplyRelayDiscoveryResponse, which holds the write lock for
 // the entire batch).
 type RelaySet struct {
-	mu           sync.RWMutex
-	relays       map[string]RelayState
-	keyIndex     map[string]keyIndexEntry
-	incompatible map[string]types.IncompatibleRelayEntry
+	mu              sync.RWMutex
+	relays          map[string]RelayState
+	keyIndex        map[string]keyIndexEntry
+	incompatible    map[string]types.IncompatibleRelayEntry
+	releaseVersions map[string]relayReleaseObservation
 }
 
 // keyIndexEntry records the rollback anchor for a signing identity.
@@ -57,6 +58,15 @@ type RelaySet struct {
 type keyIndexEntry struct {
 	IssuedAt       time.Time
 	TombstoneUntil time.Time
+}
+
+// relayReleaseObservation is one directly observed peer release. observedAt
+// is the observation's own direct-discovery clock: gossip and announce
+// ingestion never write it, so only a fresh direct poll keeps a release
+// alive.
+type relayReleaseObservation struct {
+	releaseVersion string
+	observedAt     time.Time
 }
 
 // ErrProtocolMismatch reports that a discovery response came from a relay
@@ -75,11 +85,16 @@ const (
 
 func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 	set := &RelaySet{
-		relays:       make(map[string]RelayState),
-		keyIndex:     make(map[string]keyIndexEntry),
-		incompatible: make(map[string]types.IncompatibleRelayEntry),
+		relays:          make(map[string]RelayState),
+		keyIndex:        make(map[string]keyIndexEntry),
+		incompatible:    make(map[string]types.IncompatibleRelayEntry),
+		releaseVersions: make(map[string]relayReleaseObservation),
 	}
-	set.SetBootstrapRelayURLs(bootstrapRelayURLs)
+	for _, relayURL := range bootstrapRelayURLs {
+		state := newRelayState(relayURL)
+		state.Bootstrap = true
+		set.relays[relayURL] = state
+	}
 	return set
 }
 
@@ -158,13 +173,14 @@ func (s *RelaySet) banFromPoolLocked(relayURL string, now time.Time) {
 	state.Banned = true
 	state.suppressActiveUntil = now.Add(relayPoolBanTTL)
 	s.relays[relayURL] = state
-	// A local ban outranks protocol-mismatch visibility.
+	// A local ban outranks protocol-mismatch visibility and drops the
+	// observed release: both return only after a fresh direct contact.
 	delete(s.incompatible, relayURL)
+	delete(s.releaseVersions, relayURL)
 }
 
 func mergeLocalRelayState(record, existing RelayState) RelayState {
 	record.Bootstrap = record.Bootstrap || existing.Bootstrap
-	record.Confirmed = record.Confirmed || existing.Confirmed
 	record.Banned = record.Banned || existing.Banned
 	record.Dead = record.Dead || existing.Dead
 	// Trust never transfers across an identity change on the same URL: a
@@ -190,7 +206,7 @@ func mergeLocalRelayState(record, existing RelayState) RelayState {
 		record.DiscoveryRTT = existing.DiscoveryRTT
 		record.DiscoveryRTTAt = existing.DiscoveryRTTAt
 	}
-	record.inheritAdaptiveTelemetry(existing)
+	record.RTTTracker.samples = append(record.RTTTracker.samples, existing.RTTTracker.samples...)
 	return record
 }
 
@@ -306,106 +322,12 @@ func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allo
 	// Shared untrusted-ingestion invariant: whichever path admitted the
 	// descriptor (announce, hop route, or gossiped discovery response), a
 	// single signing identity never holds more unverified entries than the
-	// per-identity cap. Confirmed entries are never evicted by this cap.
+	// per-identity cap. Verified entries are never evicted by this cap.
 	s.enforceIdentityCapLocked(address)
 	return upsertAccepted
 }
 
-func (s *RelaySet) SetBootstrapRelayURLs(inputs []string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now().UTC()
-	s.clearExpiredPoolBansLocked(now)
-
-	keep := make(map[string]struct{}, len(inputs))
-	for _, relayURL := range inputs {
-		keep[relayURL] = struct{}{}
-	}
-
-	for key, state := range s.relays {
-		_, bootstrap := keep[key]
-		if state.Bootstrap == bootstrap {
-			continue
-		}
-		state.Bootstrap = bootstrap
-		if disposableRelayState(state) {
-			delete(s.relays, key)
-		} else {
-			s.relays[key] = state
-		}
-	}
-
-	for _, relayURL := range inputs {
-		if state, ok := s.relays[relayURL]; ok {
-			if !state.Bootstrap {
-				state.Bootstrap = true
-				s.relays[relayURL] = state
-			}
-			continue
-		}
-
-		state := newRelayState(relayURL)
-		state.Bootstrap = true
-		s.relays[relayURL] = state
-	}
-}
-
-func (s *RelaySet) AddBootstrapRelayURL(relayURL string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	state, ok := s.relays[relayURL]
-	if ok && state.Bootstrap {
-		return
-	}
-	if !ok {
-		state = newRelayState(relayURL)
-	}
-	state.Bootstrap = true
-	s.relays[relayURL] = state
-}
-
-func (s *RelaySet) RemoveBootstrapRelayURL(relayURL string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	state, ok := s.relays[relayURL]
-	if !ok || !state.Bootstrap {
-		return
-	}
-	state.Bootstrap = false
-	if disposableRelayState(state) {
-		delete(s.relays, relayURL)
-	} else {
-		s.relays[relayURL] = state
-	}
-}
-
-func disposableRelayState(state RelayState) bool {
-	return !state.Bootstrap && !state.hasObservedDescriptor() && !state.Banned &&
-		state.discoveryFailures == 0 && state.activeFailures == 0 &&
-		state.nextDiscoveryRefreshAt.IsZero() && state.suppressActiveUntil.IsZero()
-}
-
-func (s *RelaySet) AggregateRelays() []RelayState {
-	return selectAggregate(s.currentRelayStates(time.Now().UTC()))
-}
-
-func (s *RelaySet) AllRelays() []RelayState {
-	return s.currentRelayStates(time.Now().UTC())
-}
-
-func (s *RelaySet) ConfirmedRelays() []RelayState {
-	return selectConfirmed(s.currentRelayStates(time.Now().UTC()))
-}
-
-type Route struct {
-	RelayURL string
-	Explicit bool
-}
-
-func (s *RelaySet) SelectRelays(routeState routeState) []Route {
+func (s *RelaySet) SelectRelays(routeState routeState) []string {
 	now := time.Now().UTC()
 	states := s.currentRelayStates(now)
 	if len(routeState.ExplicitRelayURLs) > 0 {
@@ -428,12 +350,7 @@ func (s *RelaySet) SelectRelays(routeState routeState) []Route {
 		}
 	}
 
-	ranked := SelectPriority(states, routeState)
-	routes := make([]Route, 0, len(ranked))
-	for _, relayURL := range ranked {
-		routes = append(routes, Route{RelayURL: relayURL, Explicit: slices.Contains(routeState.ExplicitRelayURLs, relayURL)})
-	}
-	return routes
+	return SelectPriority(states, routeState)
 }
 
 // filterCandidatePool returns the auto-selected relay pool eligible for MOLS
@@ -539,23 +456,10 @@ func (s *RelaySet) BanRelayURL(relayURL string) {
 	state.suppressActiveUntil = time.Time{}
 	state.Banned = true
 	s.relays[relayURL] = state
-	// A local ban outranks protocol-mismatch visibility.
+	// A local ban outranks protocol-mismatch visibility and drops the
+	// observed release: both return only after a fresh direct contact.
 	delete(s.incompatible, relayURL)
-}
-
-func (s *RelaySet) DropRelayURLFromActivePool(relayURL string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now().UTC()
-	s.clearExpiredPoolBansLocked(now)
-	state, ok := s.relays[relayURL]
-	if !ok || state.Banned {
-		return
-	}
-	state.Confirmed = false
-	state.suppressActiveUntil = now.Add(activeDropTTL)
-	s.relays[relayURL] = state
+	delete(s.releaseVersions, relayURL)
 }
 
 func (s *RelaySet) AllowRelayURL(relayURL string) {
@@ -572,38 +476,6 @@ func (s *RelaySet) AllowRelayURL(relayURL string) {
 	s.relays[relayURL] = state
 }
 
-func (s *RelaySet) ConfirmRelayURL(relayURL string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now().UTC()
-	s.clearExpiredPoolBansLocked(now)
-	state, ok := s.relays[relayURL]
-	if !ok {
-		state = newRelayState(relayURL)
-	}
-	if state.Banned {
-		s.relays[relayURL] = state
-		return
-	}
-	state.Confirmed = true
-	state.activeFailures = 0
-	state.suppressActiveUntil = time.Time{}
-	s.relays[relayURL] = state
-}
-
-func (s *RelaySet) UnconfirmRelayURL(relayURL string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	state, ok := s.relays[relayURL]
-	if !ok {
-		return
-	}
-	state.Confirmed = false
-	s.relays[relayURL] = state
-}
-
 // DeactivateRelayURL drops a relay out of active selection while keeping its
 // discovered descriptor as a candidate.
 func (s *RelaySet) DeactivateRelayURL(relayURL string) {
@@ -614,7 +486,6 @@ func (s *RelaySet) DeactivateRelayURL(relayURL string) {
 	if !ok {
 		return
 	}
-	state.Confirmed = false
 	state.suppressActiveUntil = time.Now().Add(defaultDirectRecoveryBackoff)
 	s.relays[relayURL] = state
 }
@@ -685,6 +556,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	missingTarget := authoritative && !targetFound
 
 	if authoritative {
+		s.recordReleaseObservationLocked(targetURL, resp.ReleaseVersion, now)
 		if protocolMismatch {
 			s.recordIncompatibleRelayLocked(targetURL, resp.ProtocolVersion, now)
 		} else if !missingTarget {
@@ -771,6 +643,40 @@ func (s *RelaySet) pruneIncompatibleLocked(now time.Time) {
 	}
 }
 
+// pruneReleaseVersionsLocked drops release observations whose last direct
+// poll is older than AnnounceMaxValidity, so the map cannot grow without
+// bound as polled relay URLs churn. The caller must hold s.mu for writing.
+func (s *RelaySet) pruneReleaseVersionsLocked(now time.Time) {
+	for relayURL, observation := range s.releaseVersions {
+		if now.Sub(observation.observedAt) > AnnounceMaxValidity {
+			delete(s.releaseVersions, relayURL)
+		}
+	}
+}
+
+// recordReleaseObservationLocked remembers the release a directly contacted
+// relay reported about itself. The authoritative refresher poll is the only
+// writer — gossip and announce batches carry no release of their own and
+// must not mint or refresh observations. It records regardless of protocol
+// match (#512: the protocol label is only a fallback when no release is
+// known). An empty value — an older build that stopped reporting — drops
+// the observation: latest direct observation wins.
+func (s *RelaySet) recordReleaseObservationLocked(relayURL, releaseVersion string, now time.Time) {
+	if relayURL == "" {
+		return
+	}
+	s.pruneReleaseVersionsLocked(now)
+	releaseVersion = strings.TrimSpace(releaseVersion)
+	if releaseVersion == "" {
+		delete(s.releaseVersions, relayURL)
+		return
+	}
+	s.releaseVersions[relayURL] = relayReleaseObservation{
+		releaseVersion: releaseVersion,
+		observedAt:     now,
+	}
+}
+
 // KnownIncompatibleRelays returns directly observed relays whose discovery
 // protocol version is incompatible with the local one. Entries are sorted by
 // URL for stable output, expire (per AnnounceMaxValidity) without a fresh
@@ -799,6 +705,32 @@ func (s *RelaySet) knownIncompatibleRelaysAt(now time.Time) []types.Incompatible
 	return out
 }
 
+// KnownRelayReleaseVersions returns the release versions this relay observed
+// directly from peer relays' own /discovery responses, keyed by peer relay
+// URL. Like KnownIncompatibleRelays, entries expire (per AnnounceMaxValidity)
+// without a fresh direct observation, and a local ban drops the observation
+// outright rather than hiding it: it returns only after a fresh direct poll.
+// They are unsigned observation metadata: they never participate in routing,
+// trust, signature verification, or compatibility decisions, and are never
+// part of the routable descriptor set.
+func (s *RelaySet) KnownRelayReleaseVersions() map[string]string {
+	return s.knownRelayReleaseVersionsAt(time.Now().UTC())
+}
+
+func (s *RelaySet) knownRelayReleaseVersionsAt(now time.Time) map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make(map[string]string, len(s.releaseVersions))
+	for relayURL, observation := range s.releaseVersions {
+		if now.Sub(observation.observedAt) > AnnounceMaxValidity {
+			continue
+		}
+		out[relayURL] = observation.releaseVersion
+	}
+	return out
+}
+
 func (s *RelaySet) RecordDiscoveryRTT(relayURL string, rtt time.Duration, measuredAt time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -808,22 +740,9 @@ func (s *RelaySet) RecordDiscoveryRTT(relayURL string, rtt time.Duration, measur
 		return
 	}
 
-	state.UpdateEWMARTT(rtt)
+	state.RTTTracker.Add(rtt)
 	state.DiscoveryRTT = rtt
 	state.DiscoveryRTTAt = measuredAt
-	s.relays[relayURL] = state
-}
-
-func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	state, ok := s.relays[relayURL]
-	if !ok {
-		return
-	}
-
-	state.UpdateLoad(loadFixed)
 	s.relays[relayURL] = state
 }
 
@@ -837,7 +756,7 @@ func (s *RelaySet) RecordLoadFactor(relayURL string, loadFixed uint32) {
 //     future) and not significantly clock-skewed (IssuedAt no further into
 //     the future than AnnounceClockSkewTolerance, validity window no longer
 //     than AnnounceMaxValidity).
-//  3. Local merge preserves Bootstrap, Confirmed, Banned, Trust, discovery
+//  3. Local merge preserves Bootstrap, Banned, Trust, discovery
 //     retry state, active suppression state, and telemetry from any
 //     pre-existing entry at the same URL.
 //  4. The shared upsertDescriptorLocked method enforces the
@@ -893,7 +812,7 @@ func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) er
 // signing identity holds in the set. Overflow evicts that identity's own
 // oldest candidates by LastSeenAt, so a flooding identity recycles its own
 // slots instead of displacing other relays through the global cap. Bootstrap,
-// banned, verified, and listener-confirmed entries are never evicted here;
+// banned, and verified entries are never evicted here;
 // the keyIndex rollback anchors survive eviction by design. The caller MUST
 // already hold s.mu as a write lock.
 func (s *RelaySet) enforceIdentityCapLocked(address string) {
@@ -907,7 +826,7 @@ func (s *RelaySet) enforceIdentityCapLocked(address string) {
 	}
 	owned := make([]ownedEntry, 0, MaxAnnouncedRelaysPerIdentity+1)
 	for url, state := range s.relays {
-		if state.Bootstrap || state.Banned || state.Confirmed || state.Trust == RelayVerified {
+		if state.Bootstrap || state.Banned || state.Trust == RelayVerified {
 			continue
 		}
 		if strings.ToLower(strings.TrimSpace(state.Descriptor.Address)) != address {
@@ -952,9 +871,9 @@ func validateRelayDescriptorFreshness(desc types.RelayDescriptor, now time.Time)
 }
 
 // enforceCapLocked trims s.relays back to MaxAnnouncedRelays using a
-// two-tier eviction strategy: non-Bootstrap non-Confirmed entries are
-// evicted first (oldest by LastSeenAt), then non-Bootstrap Confirmed
-// entries as a last resort. Bootstrap entries are absolutely pinned.
+// two-tier eviction strategy: candidates are evicted first (oldest by
+// LastSeenAt), then verified entries as a last resort. Bootstrap and banned
+// entries are pinned.
 // An operator misconfig that lists more than MaxAnnouncedRelays bootstraps
 // is surfaced by the resulting overflow rather than silently violating
 // operator intent. Tombstone keyIndex entries whose replay window has
@@ -983,13 +902,13 @@ func (s *RelaySet) enforceCapLocked() {
 		}
 		candidates = append(candidates, ageEntry{
 			url:       url,
-			protected: state.Confirmed || state.Trust == RelayVerified,
+			protected: state.Trust == RelayVerified,
 			seenAt:    state.LastSeenAt,
 		})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		// Candidate entries evict first; verified and listener-confirmed
-		// entries are the last-resort tier. Within each tier, oldest
+		// Candidate entries evict first; verified entries are the
+		// last-resort tier. Within each tier, oldest
 		// LastSeenAt evicts first.
 		if candidates[i].protected != candidates[j].protected {
 			return !candidates[i].protected
