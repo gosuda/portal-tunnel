@@ -125,7 +125,7 @@ const overlayDiagram = `sequenceDiagram
     SDK->>Gateway: GET /sdk/connect (capability)
     Note over Gateway: Verify ingress signature and gateway binding
     Gateway->>Ingress: IVNP stream (same capability; internal multi-hop path)
-    Note over Gateway,Ingress: IVNP owns routers, tunnels, and hop ordering — opaque to Portal
+    Note over Gateway,Ingress: IVNP owns routers, tunnels, and hop ordering (opaque to Portal)
     Note over Ingress: Verify IVNP peer, capability, and lease instance
     Ingress->>Gateway: Admit stream to existing lease queue
     Gateway->>SDK: HTTP 101; bridge SDK socket to IVNP
@@ -133,7 +133,7 @@ const overlayDiagram = `sequenceDiagram
 </script>
 
 <div class="not-prose mb-8 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
-  <strong>Advanced Documentation</strong> — This page covers internal architecture details for contributors and advanced users.
+  <strong>Advanced Documentation</strong>: This page covers internal architecture details for contributors and advanced users.
 </div>
 
 # Architecture
@@ -287,20 +287,20 @@ failed gateway is reported through `POST /sdk/reverse`; the ingress applies the
 lease's overlay preference while rotating the endpoint without replacing the
 lease.
 
-The `Gateway → Ingress` edge is one logical Portal transport edge. IVNP may
+The `Gateway -> Ingress` edge is one logical Portal transport edge. IVNP may
 carry it over multiple internal I2P-style hops, but that internal topology is
 opaque to Portal. Network-level multi-hop belongs to IVNP; Portal does not
 construct an ordered list of intermediate relays.
 
 Ownership split:
 
-- **Portal** — selects and authorizes the public ingress, selects an eligible
+- **Portal**: selects and authorizes the public ingress, selects an eligible
   gateway, issues the delegated reverse capability, and owns lease, admission,
   health, and fallback semantics.
-- **IVNP** — owns destination reachability, the gateway→ingress path, and
+- **IVNP**: owns destination reachability, the gateway-to-ingress path, and
   intermediate router selection and tunnel construction; may use multiple
   internal network hops without exposing that topology to Portal.
-- **SDK** — receives the same generic reverse endpoint, selects no
+- **SDK**: receives the same generic reverse endpoint, selects no
   intermediate hops, and sees no IVNP route topology.
 
 **Portal selects and authorizes endpoints. IVNP connects destinations. Portal does not own the path between them.**
