@@ -71,17 +71,14 @@ type RegisterRequest struct {
 }
 
 type RegisterChallengeRequest struct {
-	Cache         bool          `json:"cache,omitempty"`
-	CacheTTL      int           `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
-	Identity      Identity      `json:"identity"`
-	Metadata      LeaseMetadata `json:"metadata"`
-	Overlay       bool          `json:"overlay,omitempty"`
-	TTL           int           `json:"ttl,omitempty"`
-	UDPEnabled    bool          `json:"udp_enabled,omitempty"`
-	TCPEnabled    bool          `json:"tcp_enabled,omitempty"`
-	RouteHostname string        `json:"route_hostname,omitempty"`
-	HostnameHash  string        `json:"hostname_hash,omitempty"`
-	ECHConfigList []byte        `json:"ech_config_list,omitempty"`
+	Cache      bool          `json:"cache,omitempty"`
+	CacheTTL   int           `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
+	Identity   Identity      `json:"identity"`
+	Metadata   LeaseMetadata `json:"metadata"`
+	Overlay    bool          `json:"overlay,omitempty"`
+	TTL        int           `json:"ttl,omitempty"`
+	UDPEnabled bool          `json:"udp_enabled,omitempty"`
+	TCPEnabled bool          `json:"tcp_enabled,omitempty"`
 }
 
 type RegisterChallengeResponse struct {
@@ -118,6 +115,12 @@ type DiscoveryResponse struct {
 	GeneratedAt        time.Time                `json:"generated_at"`
 	Relays             []RelayDescriptor        `json:"relays"`
 	IncompatibleRelays []IncompatibleRelayEntry `json:"incompatible_relays,omitempty"`
+	ReleaseVersion     string                   `json:"release_version,omitempty"`
+	// RelayReleaseVersions maps peer relay URLs to the release versions this
+	// relay directly observed from those peers' own /discovery responses.
+	// Optional, unsigned observation metadata; never participates in routing,
+	// trust, signature verification, or compatibility decisions.
+	RelayReleaseVersions map[string]string `json:"relay_release_versions,omitempty"`
 }
 
 // IncompatibleRelayEntry describes a relay the serving relay contacted

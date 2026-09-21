@@ -9,11 +9,21 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const defaultSessionWriteLimit = 5 * time.Second
+
+// Reverse-session framing markers (protocol v10). The relay writes a single
+// marker byte to activate a claimed session; markerTLSStart is immediately
+// followed by tlsBindingSize bytes of per-connection binding that the tenant
+// must present on every transcript-signing request.
+const (
+	markerKeepalive = 0x00
+	markerRawStart  = 0x01
+	markerTLSStart  = 0x02
+
+	tlsBindingSize = 16
+)
 
 var errStreamFull = errors.New("stream ready queue full")
 
@@ -23,75 +33,141 @@ type RelayStream struct {
 	ready        []*relaySession
 	idleInterval time.Duration
 	readyLimit   int
+	reserved     int
+	closing      bool
 	closedErr    error
+	closeOnce    sync.Once
 	mu           sync.Mutex
+	cond         *sync.Cond
+}
+
+// OfferReservation owns one reserved ready-queue slot until it is committed
+// or cancelled. The caller retains the connection until Commit succeeds.
+type OfferReservation struct {
+	stream   *RelayStream
+	session  *relaySession
+	finished bool
+	mu       sync.Mutex
 }
 
 func NewRelayStream(identityKey string, idleInterval time.Duration, readyLimit int) *RelayStream {
-	return &RelayStream{
+	stream := &RelayStream{
 		identityKey:  identityKey,
 		idleInterval: idleInterval,
 		readyLimit:   readyLimit,
 		notify:       make(chan struct{}, 1),
 	}
+	stream.cond = sync.NewCond(&stream.mu)
+	return stream
 }
 
 func (b *RelayStream) OfferConn(conn net.Conn) error {
-	err := b.OfferConnReady(conn, nil)
+	reservation, err := b.ReserveOffer(conn)
 	if err != nil && conn != nil {
 		_ = conn.Close()
 	}
-	return err
-}
-
-// OfferConnReady transfers ownership only after ready succeeds while the queue
-// slot is reserved. The caller retains the connection when an error is returned.
-func (b *RelayStream) OfferConnReady(conn net.Conn, ready func() error) error {
-	if conn == nil {
-		return errors.New("reverse connection is required")
-	}
-	session := newRelaySession(conn, b.idleInterval)
-
-	b.mu.Lock()
-	if b.closedErr != nil {
-		err := b.closedErr
-		b.mu.Unlock()
+	if err != nil {
 		return err
 	}
-
-	if b.readyLimit > 0 && len(b.ready) >= b.readyLimit {
-		b.mu.Unlock()
-		return errStreamFull
+	if err := reservation.Commit(); err != nil {
+		_ = conn.Close()
+		return err
 	}
-	if ready != nil {
-		if err := ready(); err != nil {
-			b.mu.Unlock()
-			return err
-		}
-	}
-
-	session.StartIdle()
-	b.ready = append(b.ready, session)
-	b.signalLocked()
-	b.mu.Unlock()
-
-	go b.watchSession(session)
 	return nil
 }
 
-func (b *RelayStream) Claim(ctx context.Context) (net.Conn, error) {
-	return b.claimWithMarker(ctx, types.MarkerTLSStart)
+// ReserveOffer reserves ready-queue capacity for conn without taking ownership.
+// Commit transfers ownership and makes the connection available to Claim; Cancel
+// releases the slot and leaves the connection with the caller.
+func (b *RelayStream) ReserveOffer(conn net.Conn) (*OfferReservation, error) {
+	if conn == nil {
+		return nil, errors.New("reverse connection is required")
+	}
+
+	b.mu.Lock()
+	if b.closedErr != nil || b.closing {
+		err := b.closedErr
+		if err == nil {
+			err = net.ErrClosed
+		}
+		b.mu.Unlock()
+		return nil, err
+	}
+
+	if b.readyLimit > 0 && len(b.ready)+b.reserved >= b.readyLimit {
+		b.mu.Unlock()
+		return nil, errStreamFull
+	}
+	b.reserved++
+	b.mu.Unlock()
+	return &OfferReservation{stream: b, session: newRelaySession(conn, b.idleInterval)}, nil
+}
+
+// Commit transfers the reserved connection to the stream and makes it ready
+// for Claim. A concurrent Close waits for this decision before shutting down.
+func (r *OfferReservation) Commit() error {
+	if r == nil || r.stream == nil || r.session == nil {
+		return net.ErrClosed
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.finished {
+		return net.ErrClosed
+	}
+	r.finished = true
+
+	b := r.stream
+	b.mu.Lock()
+	b.reserved--
+	r.session.StartIdle()
+	b.ready = append(b.ready, r.session)
+	b.signalLocked()
+	b.cond.Broadcast()
+	b.mu.Unlock()
+
+	go b.watchSession(r.session)
+	return nil
+}
+
+// Cancel releases the reserved slot while leaving the connection with the
+// caller. It is safe to call more than once.
+func (r *OfferReservation) Cancel() {
+	if r == nil || r.stream == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.finished {
+		return
+	}
+	r.finished = true
+
+	b := r.stream
+	b.mu.Lock()
+	b.reserved--
+	b.cond.Broadcast()
+	b.mu.Unlock()
+}
+
+// Claim activates the next ready session for tenant TLS: the relay writes
+// markerTLSStart followed by binding, the per-connection value the tenant
+// must present on every /v1/sign request.
+func (b *RelayStream) Claim(ctx context.Context, binding [16]byte) (net.Conn, error) {
+	return b.claimWithMarker(ctx, markerTLSStart, binding)
 }
 
 func (b *RelayStream) claimRaw(ctx context.Context) (net.Conn, error) {
-	return b.claimWithMarker(ctx, types.MarkerRawStart)
+	return b.claimWithMarker(ctx, markerRawStart, [16]byte{})
 }
 
-func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte) (net.Conn, error) {
+func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte, binding [16]byte) (net.Conn, error) {
 	for {
 		b.mu.Lock()
-		if b.closedErr != nil {
+		if b.closedErr != nil || b.closing {
 			err := b.closedErr
+			if err == nil {
+				err = net.ErrClosed
+			}
 			b.mu.Unlock()
 			return nil, err
 		}
@@ -104,7 +180,7 @@ func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte) (net.Con
 			if session.IsClosed() {
 				continue
 			}
-			if err := session.activateWithMarker(marker); err != nil {
+			if err := session.activateWithMarker(marker, binding); err != nil {
 				_ = session.Close()
 				continue
 			}
@@ -121,18 +197,22 @@ func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte) (net.Con
 }
 
 func (b *RelayStream) Close() {
-	b.mu.Lock()
-	sessions := b.ready
-	b.ready = nil
-	if b.closedErr == nil {
+	b.closeOnce.Do(func() {
+		b.mu.Lock()
+		b.closing = true
+		for b.reserved > 0 {
+			b.cond.Wait()
+		}
+		sessions := b.ready
+		b.ready = nil
 		b.closedErr = net.ErrClosed
-	}
-	b.signalLocked()
-	b.mu.Unlock()
+		b.signalLocked()
+		b.mu.Unlock()
 
-	for _, session := range sessions {
-		_ = session.Close()
-	}
+		for _, session := range sessions {
+			_ = session.Close()
+		}
+	})
 }
 
 func (b *RelayStream) ReadyCount() int {
@@ -267,11 +347,7 @@ func (s *relaySession) StartIdle() {
 	go s.runKeepalive(stop, done)
 }
 
-func (s *relaySession) Activate() error {
-	return s.activateWithMarker(types.MarkerTLSStart)
-}
-
-func (s *relaySession) activateWithMarker(marker byte) error {
+func (s *relaySession) activateWithMarker(marker byte, binding [16]byte) error {
 	s.mu.Lock()
 	if s.state != sessionIdle {
 		state := s.state
@@ -298,7 +374,15 @@ func (s *relaySession) activateWithMarker(marker byte) error {
 		return net.ErrClosed
 	}
 	_ = s.conn.SetWriteDeadline(time.Now().Add(defaultSessionWriteLimit))
-	_, err := s.conn.Write([]byte{marker})
+	var err error
+	if marker == markerTLSStart {
+		frame := make([]byte, 0, 1+tlsBindingSize)
+		frame = append(frame, marker)
+		frame = append(frame, binding[:]...)
+		_, err = s.conn.Write(frame)
+	} else {
+		_, err = s.conn.Write([]byte{marker})
+	}
 	_ = s.conn.SetWriteDeadline(time.Time{})
 	if err != nil {
 		_ = s.Close()
@@ -352,7 +436,7 @@ func (s *relaySession) runKeepalive(stop <-chan struct{}, done chan<- struct{}) 
 			return
 		}
 		_ = s.conn.SetWriteDeadline(time.Now().Add(defaultSessionWriteLimit))
-		_, err := s.conn.Write([]byte{types.MarkerKeepalive})
+		_, err := s.conn.Write([]byte{markerKeepalive})
 		_ = s.conn.SetWriteDeadline(time.Time{})
 		s.mu.Unlock()
 		if err != nil {

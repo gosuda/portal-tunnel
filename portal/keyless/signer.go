@@ -13,24 +13,35 @@ import (
 	"github.com/gosuda/keyless_tls/relay/signrpc"
 )
 
+// relayKeyID is the store key of the relay API listener certificate key.
+// Tenant handshakes address it explicitly in every TranscriptSignRequest.
+const relayKeyID = "relay-cert"
+
 const (
-	RelayKeyID         = "relay-cert"
-	defaultAllowedSkew = 5 * time.Minute
+	defaultAllowedSkew = 30 * time.Second
+	// maxSignRequestBody bounds /v1/sign JSON bodies. The transcript carries
+	// full certificate chains, so the budget is generous but finite.
+	maxSignRequestBody = 512 << 10
 )
 
 type Signer struct {
 	service *ksigner.Service
-	keyID   string
 }
 
-func NewSigner(keyPEM []byte) (*Signer, error) {
+// NewSigner builds the relay-side transcript signer bound to Portal's
+// connection-binding policy.
+func NewSigner(keyPEM []byte, bindings *BindingRegistry) (*Signer, error) {
+	if bindings == nil {
+		return nil, errors.New("portal binding registry is required")
+	}
+
 	signingKey, err := ksigner.ParsePrivateKeyPEM(keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("parse keyless signing key: %w", err)
 	}
 
 	store := ksigner.NewStaticKeyStore()
-	if err := store.Put(RelayKeyID, signingKey); err != nil {
+	if err := store.Put(relayKeyID, signingKey); err != nil {
 		return nil, fmt.Errorf("register keyless signing key: %w", err)
 	}
 
@@ -38,64 +49,56 @@ func NewSigner(keyPEM []byte) (*Signer, error) {
 		service: &ksigner.Service{
 			Store:       store,
 			AllowedSkew: defaultAllowedSkew,
+			TranscriptValidator: ksigner.TranscriptValidatorFunc(func(ctx context.Context, req *signrpc.TranscriptSignRequest) error {
+				leaseID, _ := ctx.Value(signLeaseIDContextKey{}).(string)
+				if leaseID == "" {
+					return errors.New("signing request is not bound to a verified lease")
+				}
+				return bindings.ValidateAndConsume(req.Binding, leaseID, req.ClientHello)
+			}),
 		},
-		keyID: RelayKeyID,
 	}, nil
 }
 
-func (s *Signer) KeyID() string {
-	if s == nil {
-		return ""
+type signLeaseIDContextKey struct{}
+
+// ServeHTTP serves one transcript-signing request for an authenticated lease.
+func (s *Signer) ServeHTTP(w http.ResponseWriter, r *http.Request, leaseID string) {
+	r = r.WithContext(context.WithValue(r.Context(), signLeaseIDContextKey{}, leaseID))
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
 	}
-	return s.keyID
-}
-
-func (s *Signer) Sign(ctx context.Context, req *signrpc.SignRequest) (*signrpc.SignResponse, error) {
-	if s == nil || s.service == nil {
-		return nil, errors.New("keyless signer is disabled")
+	if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
+		writeJSONError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+		return
 	}
-	return s.service.Sign(ctx, req)
-}
 
-func (s *Signer) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc(signrpc.SignPath, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
+	r.Body = http.MaxBytesReader(w, r.Body, maxSignRequestBody)
+	defer r.Body.Close()
+
+	var req signrpc.TranscriptSignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	resp, err := s.service.SignTranscript(r.Context(), &req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, ksigner.ErrInvalidArgument):
+			status = http.StatusBadRequest
+		case errors.Is(err, ksigner.ErrPermissionDenied):
+			status = http.StatusForbidden
 		}
-		if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
-			writeJSONError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
-			return
-		}
+		writeJSONError(w, status, err.Error())
+		return
+	}
 
-		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
-		defer r.Body.Close()
-
-		var req signrpc.SignRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid json body")
-			return
-		}
-
-		resp, err := s.Sign(r.Context(), &req)
-		if err != nil {
-			status := http.StatusInternalServerError
-			switch {
-			case errors.Is(err, ksigner.ErrInvalidArgument):
-				status = http.StatusBadRequest
-			case errors.Is(err, ksigner.ErrPermissionDenied):
-				status = http.StatusForbidden
-			}
-			writeJSONError(w, status, err.Error())
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	})
-	return mux
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {

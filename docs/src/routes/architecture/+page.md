@@ -29,7 +29,7 @@ const overviewDiagram = `flowchart TD
     LU["Local UDP Service"]
 
     CB -- TLS ClientHello --> SNI
-    SNI -- SNI route + 0x02 marker --> RC
+    SNI -- SNI route + 0x02 marker + 16B binding --> RC
     RC --> TLS --> LS
 
     ETC -- raw TCP --> TCP
@@ -56,8 +56,8 @@ const tlsStreamDiagram = `sequenceDiagram
 
     Client->>Relay: TLS ClientHello (SNI: name.relay.host)
     Note over Relay: SNI peek, resolve lease, claim reverse session
-    Relay->>SDK: write 0x02 (TLS activation marker)
-    Note over SDK: Starts tenant TLS handshake locally via keyless signer
+    Relay->>SDK: write 0x02 + 16-byte binding (TLS activation)
+    Note over SDK: Terminates tenant TLS via keyless_tls t13server, signing transcripts through /v1/sign with the binding
     Relay->>Client: bridges raw encrypted bytes bidirectionally
     Note over Client,SDK: End-to-end TLS, relay never sees plaintext`
 
@@ -199,7 +199,7 @@ UDP client
 - Reverse TCP marker bytes remain protocol state:
   - `0x00` = idle keepalive
   - `0x01` = raw TCP activation (non-TLS port routing)
-  - `0x02` = TLS passthrough activation
+  - `0x02` = TLS activation (followed by a 16-byte binding that every `/v1/sign` request must echo)
 - `/sdk/connect` remains HTTP/1.1 only.
 
 ### JSON and Shared Contract
@@ -270,8 +270,8 @@ and [cache limits and expiry](/configuration#static-relay-cache).
 4. While idle, the relay writes `0x00` keepalive markers.
 5. A stream client connects to the relay SNI listener.
 6. Relay extracts SNI from ClientHello, resolves a lease, and waits up to `ClaimTimeout` for one reverse session from that lease stream queue.
-7. Relay writes `0x02` to activate the claimed session.
-8. SDK/tunnel receives `0x02`, starts tenant TLS locally using the relay-backed keyless signer, and the relay bridges raw encrypted bytes end-to-end.
+7. Relay writes `0x02` plus a 16-byte binding to activate the claimed session.
+8. SDK/tunnel receives `0x02` and the binding, terminates tenant TLS locally via the `keyless_tls` t13server (transcript signing through the binding-checked `/v1/sign`), and the relay bridges raw encrypted bytes end-to-end.
 
 Result: the relay decides routing, but tenant TLS termination still happens at the SDK/tunnel side.
 
@@ -383,7 +383,7 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
   per source share the gateway's 128 outbound slots. Exceeding either budget
   returns HTTP 429. Source IP follows the configured trusted-proxy policy;
   callers behind the same NAT share a budget.
-- After claim, relay writes `0x02` before switching the session into tenant TLS passthrough.
+- After claim, relay writes `0x02` plus a 16-byte binding before switching the session into tenant TLS passthrough.
 - After hijack, the connection becomes a broker-managed reverse session.
 
 ### 3. Renew
@@ -421,7 +421,7 @@ in `types/paths.go` and `cmd/relay-server`.
 
 ## Keyless TLS Trust Model
 
-For uncached HTTPS tunnels, the relay signs handshake digests via `/v1/sign` without receiving tenant TLS traffic secrets. The SDK/tunnel endpoint runs the full TLS server handshake and derives session keys locally. Relay control-plane TLS and reverse-session setup terminate on the relay's admin/API route and are not protected by the tenant keyless path.
+For uncached HTTPS tunnels, the relay signs handshake transcripts via `/v1/sign` without receiving tenant TLS traffic secrets. The SDK/tunnel endpoint runs the full TLS server handshake and derives session keys locally. Relay control-plane TLS and reverse-session setup terminate on the relay's admin/API route and are not protected by the tenant keyless path.
 
 ## Design Properties
 
@@ -431,7 +431,7 @@ For uncached HTTPS tunnels, the relay signs handshake digests via `/v1/sign` wit
 - Raw public UDP exposure with an internal QUIC datagram backhaul
 - SNI-based routing with root-host fallback
 - End-to-end tenant TLS with relay-backed keyless signing
-- Traffic-triggered detect-only MITM self-probing for probable relay-side TLS termination
+- Traffic-triggered MITM self-probing for probable relay-side TLS termination; the keyless tenant TLS exports keying material on both sides, and callers can opt into relay banning
 - SIWE identity proof for registration plus relay-issued ES256K JWT access tokens for the lease lifecycle
 - Lease-local stream and datagram ownership through per-lease transport runtimes
 - Optional QUIC/UDP datagram transport coexisting with TCP on the same lease

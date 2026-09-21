@@ -1,22 +1,18 @@
-import * as os from "os";
-
-export type ShellTarget = "unix" | "windows";
+type ShellTarget = "unix" | "windows";
 
 export const defaultRelayRegistryURL = "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
 export const defaultTunnelDownloadBaseURL = "https://github.com/gosuda/portal-tunnel/releases/latest/download";
 
 export interface TunnelCommandOptions {
-  host: string;
-  name: string;
-  relayList: string;
-  thumbnail: string;
-  tunnelInstallerURL?: string;
+  readonly host: string;
+  readonly name: string;
+  readonly relayList: string;
+  readonly thumbnail: string;
 }
 
 export interface TunnelCommandRuntime {
-  shellTarget: ShellTarget;
-  platform: NodeJS.Platform;
-  arch: string;
+  readonly platform: NodeJS.Platform;
+  readonly arch: string;
 }
 
 export function validateRelayUrl(value: string): string | undefined {
@@ -36,24 +32,9 @@ export function validateRelayUrl(value: string): string | undefined {
   return undefined;
 }
 
-export function shellTargetForPlatform(platform = os.platform()): ShellTarget {
-  return platform === "win32" ? "windows" : "unix";
-}
-
-export function defaultTunnelCommandRuntime(
-  platform = os.platform(),
-  arch = os.arch()
-): TunnelCommandRuntime {
-  return {
-    shellTarget: shellTargetForPlatform(platform),
-    platform,
-    arch,
-  };
-}
-
 export function resolveTunnelInstallerURL(
-  platform = os.platform(),
-  arch = os.arch()
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch
 ): string | undefined {
   if (arch !== "x64" && arch !== "arm64") {
     return undefined;
@@ -69,13 +50,11 @@ export function resolveTunnelInstallerURL(
 
 export function buildCommand(
   opts: TunnelCommandOptions,
-  runtime = defaultTunnelCommandRuntime()
+  runtime: TunnelCommandRuntime = process
 ): string {
   const { host, name, relayList, thumbnail } = opts;
-  const target = runtime.shellTarget;
-  const tunnelInstallerURL =
-    opts.tunnelInstallerURL?.trim() ||
-    resolveTunnelInstallerURL(runtime.platform, runtime.arch);
+  const target: ShellTarget = runtime.platform === "win32" ? "windows" : "unix";
+  const tunnelInstallerURL = resolveTunnelInstallerURL(runtime.platform, runtime.arch);
   if (!tunnelInstallerURL) {
     throw new Error(
       `Unsupported platform ${runtime.platform}/${runtime.arch}. Portal supports macOS, Linux, and Windows on x64 or arm64.`
@@ -97,19 +76,18 @@ export function buildCommand(
   const exposeCommand = `expose ${[formatToken(host, target), ...exposeArgs].join(" ")}`;
 
   if (target === "windows") {
-    const commandLines = [
+    return [
       `$ProgressPreference = 'SilentlyContinue'`,
       `irm ${formatToken(tunnelInstallerURL, target)} | iex`,
       `$PortalBin = Join-Path $env:LOCALAPPDATA 'portal\\bin\\portal.exe'`,
       `if (-not (Test-Path $PortalBin)) { throw 'Portal install failed: portal.exe not found.' }`,
-    ];
-    commandLines.push(`& $PortalBin ${exposeCommand}`);
-    return commandLines.join("\n");
+      `& $PortalBin ${exposeCommand}`,
+    ].join("\n");
   }
 
-  const commandLines = [
+  return [
     `set -e`,
-    `PORTAL_INSTALLER="$(mktemp "${"$"}{TMPDIR:-/tmp}/portal-install.XXXXXX" 2>/dev/null || mktemp -t portal-install)"`,
+    `PORTAL_INSTALLER="$(mktemp "\${TMPDIR:-/tmp}/portal-install.XXXXXX" 2>/dev/null || mktemp -t portal-install)"`,
     `curl -fsSL ${formatToken(tunnelInstallerURL, target)} -o "$PORTAL_INSTALLER"`,
     `sh "$PORTAL_INSTALLER"`,
     `rm -f "$PORTAL_INSTALLER"`,
@@ -117,9 +95,8 @@ export function buildCommand(
     `if [ -z "$PORTAL_BIN" ] && [ -x "$HOME/.local/bin/portal" ]; then PORTAL_BIN="$HOME/.local/bin/portal"; fi`,
     `if [ -z "$PORTAL_BIN" ] && [ -x "$HOME/bin/portal" ]; then PORTAL_BIN="$HOME/bin/portal"; fi`,
     `if [ -z "$PORTAL_BIN" ]; then echo "Portal install failed: portal executable not found." >&2; exit 1; fi`,
-    `"${"$"}PORTAL_BIN" ${exposeCommand}`,
-  ];
-  return commandLines.join("\n");
+    `"$PORTAL_BIN" ${exposeCommand}`,
+  ].join("\n");
 }
 
 function quoteShellValue(value: string): string {

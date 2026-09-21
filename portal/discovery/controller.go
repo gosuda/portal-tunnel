@@ -65,8 +65,8 @@ func NewController(bootstrapRelayURLs []string) *Controller {
 }
 
 // Report feeds a relay failure into discovery policy. FailureMITM
-// permanently bans the relay; runtime and terminal failures unconfirm
-// the relay and apply backoff suppression. Failures are deduped by
+// permanently bans the relay; runtime and terminal failures apply
+// backoff suppression. Failures are deduped by
 // RelaySet's own suppression state — once a relay is suppressed, further
 // failures are skipped until suppression expires.
 func (c *Controller) Report(relayURL string, kind FailureKind) {
@@ -77,7 +77,6 @@ func (c *Controller) Report(relayURL string, kind FailureKind) {
 	case FailureMITM:
 		c.relaySet.BanRelayURL(relayURL)
 	default:
-		c.relaySet.UnconfirmRelayURL(relayURL)
 		if !c.relaySet.IsSuppressed(relayURL, time.Now().UTC()) {
 			c.relaySet.RecordActiveFailure(relayURL, 1)
 		}
@@ -144,7 +143,6 @@ func (c *Controller) AddRelay(relayURL string) {
 		c.explicitRelays = append(c.explicitRelays, relayURL)
 		slices.Sort(c.explicitRelays)
 	}
-	c.relaySet.EnsureRelayURL(relayURL)
 	c.relaySet.AllowRelayURL(relayURL)
 	c.signal()
 }
@@ -235,11 +233,7 @@ func (c *Controller) Next(ctx context.Context) ([]string, error) {
 			c.refreshAt = time.Now().Add(DiscoveryPollInterval)
 		}
 		rs := c.buildRouteState()
-		routes := c.relaySet.SelectRelays(rs)
-		next := make([]string, 0, len(routes))
-		for _, route := range routes {
-			next = append(next, route.RelayURL)
-		}
+		next := c.relaySet.SelectRelays(rs)
 		if !c.published || !slices.Equal(c.selected, next) {
 			c.selected = append([]string(nil), next...)
 			c.published = true
@@ -309,5 +303,5 @@ func ResolveRelayURLs(explicit []string, includeBootstrap bool) ([]string, error
 	if len(defaults) == 0 {
 		return explicit, nil
 	}
-	return utils.MergeRelayURLs(defaults, nil, explicit)
+	return utils.NormalizeRelayURLs(append(defaults, explicit...)...)
 }

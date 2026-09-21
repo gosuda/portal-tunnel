@@ -80,13 +80,8 @@ which are configured locally by the tunnel process.
 | `tcp_enabled` | `boolean` | no | request dedicated TCP port |
 | `cache` | `boolean` | no | Explicitly permit static storage and relay TLS termination; default `false` |
 | `cache_ttl` | `number` | no | Requested offline seconds; `0` uses relay policy, positive values are clamped |
-| `route_hostname` | `string` | no | Opaque ECH outer-SNI route hostname |
-| `hostname_hash` | `string` | no | Validated hash binding the ECH fallback hostname |
-| `ech_config_list` | `string` | no | Base64-encoded ECHConfigList bytes (Go `[]byte` JSON encoding) |
 
-The ECH fields are prepared together by the SDK's keyless ECH implementation;
-ordinary non-ECH clients omit them. Cache opt-in is incompatible with ECH and
-raw TCP/UDP leases.
+Cache opt-in is incompatible with raw TCP/UDP leases.
 
 `RegisterChallengeResponse`:
 

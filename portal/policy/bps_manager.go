@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"maps"
 	"sync"
 	"time"
 
@@ -15,7 +16,7 @@ type BPSManager struct {
 
 func NewBPSManager() *BPSManager {
 	return &BPSManager{
-		identityBPS:      utils.NewSnapshot(map[string]int64{}, utils.CloneMap[string, int64]),
+		identityBPS:      utils.NewSnapshot(map[string]int64{}, maps.Clone[map[string]int64]),
 		identityLimiters: make(map[string]*bpsLimiter),
 	}
 }

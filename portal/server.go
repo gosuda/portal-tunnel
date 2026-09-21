@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,7 +26,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
@@ -34,9 +34,10 @@ import (
 )
 
 const (
-	defaultClaimTimeout     = 10 * time.Second
-	defaultClientHelloWait  = 2 * time.Second
-	defaultControlBodyLimit = 4 << 20
+	defaultClaimTimeout          = 10 * time.Second
+	defaultClientHelloWait       = 2 * time.Second
+	defaultControlBodyLimit      = 4 << 20
+	reverseOfferAdmissionWorkers = 16
 )
 
 type ServerConfig struct {
@@ -199,7 +200,7 @@ func DefaultSNIPort(portalURL string) int {
 }
 
 func (cfg ServerConfig) snapshot() ServerConfig {
-	cfg.Bootstraps = utils.CloneSlice(cfg.Bootstraps)
+	cfg.Bootstraps = slices.Clone(cfg.Bootstraps)
 	return cfg
 }
 
@@ -218,6 +219,7 @@ type Server struct {
 	authority   identity.Authority
 	acmeManager *acme.Manager
 	proxy       proxy
+	apiKeyPEM   []byte
 
 	apiHandoff       *handoffListener
 	sniListener      net.Listener
@@ -279,21 +281,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		relaySet:       relaySet,
 		preAuthLimiter: policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 	}
-	server.registry.proxy = &server.proxy
 	if cfg.IVNPConfigPath != "" {
 		server.overlay, err = overlay.New(overlay.Config{
 			ConfigPath: cfg.IVNPConfigPath,
 			Authority:  relayAuthority,
-			OfferReverse: func(identityKey, leaseID string, conn net.Conn, ready func() error) error {
-				lease, err := registry.admitLeaseIdentity(identityKey, leaseID, time.Now().UTC(), false)
-				if err != nil {
-					return fmt.Errorf("%w: %w", overlay.ErrLeaseUnavailable, err)
-				}
-				return lease.stream.OfferConnReady(conn, ready)
-			},
-			Bridge: func(left, right net.Conn) {
-				server.proxy.bridge(left, right, "", registry.policy.BPSManager())
-			},
 		})
 		if err != nil {
 			return nil, err
@@ -541,6 +532,21 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 			}
 			return nil
 		})
+		// A status-byte write may wait for the reverse connection deadline. A
+		// fixed pool prevents one slow peer from blocking all lease admissions
+		// without creating unbounded admission goroutines.
+		for range reverseOfferAdmissionWorkers {
+			group.Go(func() error {
+				for {
+					select {
+					case <-groupCtx.Done():
+						return nil
+					case offer := <-s.overlay.ReverseOffers():
+						s.admitReverseOffer(offer)
+					}
+				}
+			})
+		}
 	}
 	s.acmeManager.Start(serverCtx)
 	group.Go(func() error {
@@ -558,8 +564,7 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		Int("max_port", cfg.MaxPort).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
 		Bool("udp_enabled", s.quicBackhaul != nil).
-		Bool("tcp_enabled", s.supportsTCP()).
-		Bool("api_ech_enabled", len(apiTLS.EncryptedClientHelloKeys) > 0)
+		Bool("tcp_enabled", s.supportsTCP())
 	if s.redirectListener != nil {
 		logEvent = logEvent.Str("http_redirect_addr", s.redirectListener.Addr().String())
 	}
@@ -580,6 +585,44 @@ func (s *Server) Wait() error {
 		return nil
 	}
 	return err
+}
+
+// admitReverseOffer composes overlay admission with the lease stream while a
+// reserved stream slot keeps the accepted status and queued session atomic.
+func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
+	lease, err := s.registry.admitLeaseIdentity(offer.IdentityKey, offer.LeaseID, time.Now().UTC(), false)
+	if err != nil {
+		offer.RejectUnavailable()
+		offer.Close()
+		return
+	}
+
+	reservation, err := lease.stream.ReserveOffer(offer.Connection())
+	if err != nil {
+		offer.RejectCapacity()
+		offer.Close()
+		return
+	}
+	defer reservation.Cancel()
+	if err := offer.Accept(); err != nil {
+		offer.Close()
+		return
+	}
+	if err := reservation.Commit(); err != nil {
+		offer.Close()
+		return
+	}
+	_ = offer.Connection().SetDeadline(time.Time{})
+}
+
+func (s *Server) serveTCPPairs(port *transport.RelayTCPPort, identityKey string) {
+	for {
+		inbound, session, err := port.Accept()
+		if err != nil {
+			return
+		}
+		go s.proxy.bridge(inbound, session, identityKey, s.registry.policy.BPSManager())
+	}
 }
 
 func (s *Server) PolicyRuntime() *policy.Runtime {
@@ -629,7 +672,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 		records := s.registry.CloseAll()
 		for _, record := range records {
-			record.deleteDNS(ctx, s.acmeManager, true)
+			record.deleteDNS(ctx, s.acmeManager)
 		}
 
 		if s.quicBackhaul != nil {
@@ -670,11 +713,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return shutdownErr
 }
 
-func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, *acme.Manager, error) {
+func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, *acme.Manager, error) {
 	cfg := s.config()
 	acmeCfg := cfg.ACME
 	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
+		return nil, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name
 	if strings.TrimSpace(acmeCfg.ENSGaslessAddress) == "" {
@@ -683,38 +726,28 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 
 	manager, err := acme.NewManager(acmeCfg)
 	if err != nil {
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("create acme manager: %w", err)
+		return nil, nil, fmt.Errorf("create acme manager: %w", err)
 	}
 
 	certPEM, keyPEM, err := manager.EnsureTLSMaterial(ctx)
 	if err != nil {
 		_ = manager.Stop(ctx)
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("ensure relay certificate: %w", err)
+		return nil, nil, fmt.Errorf("ensure relay certificate: %w", err)
 	}
-
-	apiTLS := keyless.TLSMaterialConfig{
-		CertPEM: certPEM,
-		KeyPEM:  keyPEM,
-	}
-	echKeys, echConfigList, err := keyless.RelayECHMaterials(
-		s.identity.Identity,
-		s.identity.EncryptedClientHelloSeed,
-		s.identity.Name,
-	)
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		_ = manager.Stop(ctx)
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("prepare ech materials: %w", err)
+		return nil, nil, fmt.Errorf("parse relay api keypair: %w", err)
 	}
-	if len(echKeys) > 0 {
-		apiTLS.EncryptedClientHelloKeys = echKeys
-		if err := manager.SyncECHConfig(ctx, s.identity.Name, echConfigList, s.publicPort); err != nil {
-			log.Warn().
-				Err(err).
-				Str("hostname", s.identity.Name).
-				Msg("publish relay ech dns record")
-		}
-	}
+	// The /v1/sign transcript signer shares the API listener key; newAPIServer
+	// reads the PEM to build its handler.
+	s.apiKeyPEM = keyPEM
 
+	apiTLS := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+		NextProtos:   []string{"http/1.1"},
+	}
 	return apiTLS, manager, nil
 }
 
@@ -733,6 +766,7 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 					}
 					return
 				}
+				helloSpan := clientHello.HandshakeMessage
 
 				serverName := utils.NormalizeHostname(clientHello.ServerName)
 				// Go omits the SNI extension for IP-literal hosts and tenant
@@ -759,7 +793,7 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 					_ = wrappedConn.Close()
 					return
 				}
-				if err := s.bridgeLeaseConn(ctx, wrappedConn, record); err != nil {
+				if err := s.bridgeLeaseConn(ctx, wrappedConn, record, helloSpan); err != nil {
 					log.Warn().Err(err).Msg("bridge public ingress")
 					_ = wrappedConn.Close()
 					return
@@ -776,7 +810,7 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 	}
 }
 
-func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord) error {
+func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord, helloSpan []byte) error {
 	if record.isExpired(time.Now()) {
 		return errLeaseNotFound
 	}
@@ -787,9 +821,13 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		return errLeaseRejected
 	}
 	claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-	session, err := record.stream.Claim(claimCtx)
+	binding := s.registry.bindings.Issue(record.id, helloSpan)
+	session, err := record.stream.Claim(claimCtx, binding)
 	cancel()
 	if err != nil {
+		// The binding will never be presented after a failed claim; drop
+		// it instead of leaving a live entry until the TTL sweep.
+		s.registry.bindings.Discard(binding)
 		return fmt.Errorf("claim lease stream: %w", err)
 	}
 	s.proxy.bridge(conn, session, record.Key(), s.registry.policy.BPSManager())
@@ -809,23 +847,21 @@ func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration)
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			records := s.registry.cleanupExpired(time.Now())
+			now := time.Now()
+			records := s.registry.cleanupExpired(now)
+			s.registry.bindings.SweepExpired(now)
 			for _, record := range records {
-				record.deleteDNS(ctx, s.acmeManager, true)
+				record.deleteDNS(ctx, s.acmeManager)
 			}
 		}
 	}
 }
 
-func (s *Server) newQUICBackhaulListener(apiTLS keyless.TLSMaterialConfig) (*quic.Listener, error) {
-	if len(apiTLS.KeyPEM) == 0 {
-		return nil, fmt.Errorf("quic backhaul requires api tls key")
+func (s *Server) newQUICBackhaulListener(apiTLS *tls.Config) (*quic.Listener, error) {
+	if len(apiTLS.Certificates) == 0 {
+		return nil, fmt.Errorf("quic backhaul requires api tls certificate")
 	}
-	tlsCert, err := tls.X509KeyPair(apiTLS.CertPEM, apiTLS.KeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("parse quic backhaul tls keypair: %w", err)
-	}
-	return transport.ListenQUICBackhaul(s.config().SNIListenAddr, tlsCert)
+	return transport.ListenQUICBackhaul(s.config().SNIListenAddr, apiTLS.Certificates[0])
 }
 
 func (s *Server) runQUICBackhaulListener() error {

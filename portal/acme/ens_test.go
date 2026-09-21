@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-acme/lego/v4/challenge"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -95,12 +94,6 @@ func (z *fakeZone) DeleteTXTRecords(_ context.Context, name, matchPrefix string)
 	return nil
 }
 
-func (z *fakeZone) EnsureHTTPSRecord(context.Context, string, dnsrecord.HTTPSRecord) error {
-	return nil
-}
-
-func (z *fakeZone) DeleteHTTPSRecord(context.Context, string) error { return nil }
-
 func (z *fakeZone) EnsureDNSSEC(context.Context, string) (string, string, string, error) {
 	return "", "", "", nil
 }
@@ -111,7 +104,6 @@ func newTestENSManager(cfg Config, dns DNSProvider) *Manager {
 		cfg:         cfg,
 		dns:         dns,
 		stopCh:      make(chan struct{}),
-		echCommands: make(chan echDNSCommand, 8),
 		ensCommands: make(chan ensDNSCommand, 8),
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, dns)),
 	}

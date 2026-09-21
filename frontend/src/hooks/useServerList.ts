@@ -7,13 +7,40 @@ import {
   resolveLeasePayment,
   resolveLeaseThumbnail,
 } from "@/lib/metadata";
-import type { Lease, PublicStateResponse } from "@/types/api";
+import type {
+  Lease,
+  PublicStateResponse,
+  ReputationSummary,
+  ReputationVote,
+  ReputationVoteResponse,
+} from "@/types/api";
+
+function normalizeHostname(hostname: string): string {
+  return hostname.trim().toLowerCase();
+}
 
 type PublicState = {
   leases: Lease[];
   landingPageEnabled: boolean;
   stale: boolean;
 };
+
+function collectReputation(
+  rows: ReputationSummary[] | undefined
+): Record<string, ReputationSummary> {
+  const summaries: Record<string, ReputationSummary> = {};
+  for (const summary of Array.isArray(rows) ? rows : []) {
+    if (
+      summary?.hostname &&
+      typeof summary.up === "number" &&
+      typeof summary.down === "number" &&
+      typeof summary.total === "number"
+    ) {
+      summaries[normalizeHostname(summary.hostname)] = summary;
+    }
+  }
+  return summaries;
+}
 
 function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
   return leases.map((row) => {
@@ -50,6 +77,7 @@ export function useServerList() {
     landingPageEnabled: false,
     stale: true,
   });
+  const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +92,7 @@ export function useServerList() {
         if (cancelled) {
           return;
         }
+        setSummaries(collectReputation(data?.reputation));
         setPublicState({
           leases: Array.isArray(data?.leases) ? data.leases : [],
           landingPageEnabled: data?.landing_page_enabled ?? false,
@@ -89,9 +118,54 @@ export function useServerList() {
     };
   }, []);
 
+  const vote = async (hostname: string, vote: ReputationVote): Promise<void> => {
+    const key = normalizeHostname(hostname);
+    if (key === "") {
+      return;
+    }
+    try {
+      const response = await apiClient.post<ReputationVoteResponse>(
+        RELAY_API_PATHS.public.reputationVote,
+        { hostname: key, vote }
+      );
+      if (
+        typeof response?.up === "number" &&
+        typeof response?.down === "number" &&
+        typeof response?.total === "number"
+      ) {
+        setSummaries((current) => ({
+          ...current,
+          [key]: {
+            hostname: response.hostname || key,
+            up: response.up,
+            down: response.down,
+            total: response.total,
+            viewer_vote: response.viewer_vote ?? "",
+          },
+        }));
+      }
+    } catch (error) {
+      console.error("Failed to submit vote", error);
+      throw error;
+    }
+  };
+
+  // Join the relay's vote aggregate onto each card by hostname.
+  // Deps are plain state (array + record), so the compiler can preserve
+  // this memo — a function identity dep would bail compilation out.
   const servers: BaseServer[] = useMemo(
-    () => convertPublicLeasesToServers(publicState.leases),
-    [publicState.leases]
+    () =>
+      convertPublicLeasesToServers(publicState.leases).map((server) => ({
+        ...server,
+        reputation: summaries[normalizeHostname(server.dns)] ?? {
+          hostname: normalizeHostname(server.dns),
+          up: 0,
+          down: 0,
+          total: 0,
+          viewer_vote: "" as const,
+        },
+      })),
+    [publicState.leases, summaries]
   );
 
   const list = useList({
@@ -104,5 +178,6 @@ export function useServerList() {
     // null means unavailable; an empty array is an authoritative empty snapshot.
     leases: publicState.stale ? null : publicState.leases,
     landingPageEnabled: publicState.landingPageEnabled,
+    onVote: vote,
   };
 }

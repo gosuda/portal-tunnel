@@ -55,19 +55,6 @@ func (s Secp256k1Signature) Raw64() ([]byte, error) {
 	return signature, nil
 }
 
-func (s Secp256k1Signature) DERHex() (string, error) {
-	raw, err := s.Raw64()
-	if err != nil {
-		return "", err
-	}
-
-	signature, err := secp256k1SignatureFromRaw64(raw)
-	if err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(signature.Serialize()), nil
-}
-
 func NormalizeEVMAddress(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -303,30 +290,6 @@ func secp256k1SignatureFromRaw64(signature []byte) (*ecdsa.Signature, error) {
 		return nil, errors.New("invalid es256k signature s")
 	}
 	return ecdsa.NewSignature(&r, &s), nil
-}
-
-func VerifySHA256Secp256k1DER(payload []byte, publicKeyHex, signatureHex string) error {
-	pubKey, err := ParseSecp256k1PublicKeyHex(publicKeyHex)
-	if err != nil {
-		return err
-	}
-
-	sigText := strings.TrimSpace(signatureHex)
-	if sigText == "" {
-		return errors.New("signature is required")
-	}
-	sigText = trimHexPrefix(sigText)
-
-	sigBytes, err := hex.DecodeString(sigText)
-	if err != nil {
-		return errors.New("signature must be hex encoded")
-	}
-	signature, err := ecdsa.ParseDERSignature(sigBytes)
-	if err != nil {
-		return fmt.Errorf("parse signature: %w", err)
-	}
-
-	return verifySHA256Secp256k1Signature(payload, signature, pubKey)
 }
 
 func verifySHA256Secp256k1Signature(payload []byte, signature *ecdsa.Signature, publicKey *secp256k1.PublicKey) error {

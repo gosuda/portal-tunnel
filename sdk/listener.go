@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -43,7 +42,6 @@ type listenerConfig struct {
 	Overlay    bool
 	UDPEnabled bool
 	TCPEnabled bool
-	ECH        bool
 	BanMITM    bool
 	Metadata   types.LeaseMetadata
 }
@@ -126,10 +124,11 @@ type listener struct {
 	warnOverlayDirect sync.Once
 	udpEnabled        bool
 	tcpEnabled        bool
-	echEnabled        bool
+	banMITM           bool
 	cache             *cache.Source
 
 	stream        *transport.ClientStream
+	accepted      chan net.Conn
 	datagram      *transport.ClientDatagram
 	mitmManager   *mitmManager
 	statusUpdates chan listenerStatus
@@ -168,22 +167,16 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		statusUpdates: make(chan listenerStatus),
 		udpEnabled:    cfg.UDPEnabled,
 		tcpEnabled:    cfg.TCPEnabled,
-		echEnabled:    cfg.ECH,
+		banMITM:       cfg.BanMITM,
 		cache:         cfg.Cache,
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l, cfg.BanMITM)
-	l.stream = transport.NewClientStream(defaultReadyTarget, defaultHandshakeTimeout)
+	l.stream = transport.NewClientStream(defaultHandshakeTimeout)
+	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
 	if l.udpEnabled {
-		l.datagram = transport.NewClientDatagram(func(err error) {
-			log.Info().
-				Err(err).
-				Str("component", "sdk-quic-backhaul").
-				Str("address", l.identity.Address).
-				Msg("quic backhaul disconnected; waiting to reconnect")
-			l.reportAvailable()
-		})
+		l.datagram = transport.NewClientDatagram()
 	}
 
 	go l.run(listenerCtx)
@@ -354,8 +347,16 @@ func (l *listener) Close() error {
 
 		lease := l.clearLease("")
 
-		if l.stream != nil {
-			l.stream.Drain()
+	drainAccepted:
+		for {
+			select {
+			case conn := <-l.accepted:
+				if conn != nil {
+					_ = conn.Close()
+				}
+			default:
+				break drainAccepted
+			}
 		}
 		if l.datagram != nil {
 			l.datagram.Close()
@@ -377,19 +378,17 @@ func (l *listener) Close() error {
 }
 
 type listenerSnapshot struct {
-	hostname      string
-	echConfigList []byte
-	udpAddr       string
-	tcpAddr       string
-	accessToken   string
-	reverse       types.ReverseEndpoint
-	expiresAt     time.Time
-	publicPort    int
-	tenantTLS     *keyless.Client
+	hostname    string
+	udpAddr     string
+	tcpAddr     string
+	accessToken string
+	reverse     types.ReverseEndpoint
+	expiresAt   time.Time
+	publicPort  int
+	tenantTLS   *keyless.Client
 }
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
-	s.echConfigList = bytes.Clone(s.echConfigList)
 	return s
 }
 
@@ -427,9 +426,14 @@ func (l *listener) Accept() (net.Conn, error) {
 		return nil, net.ErrClosed
 	}
 	for {
-		conn, err := l.stream.Accept(l.doneCh)
-		if err != nil {
-			return nil, err
+		var conn net.Conn
+		select {
+		case <-l.doneCh:
+			return nil, net.ErrClosed
+		case conn = <-l.accepted:
+			if conn == nil {
+				return nil, net.ErrClosed
+			}
 		}
 
 		nextConn, handled, handleErr := l.mitmManager.maybeHandleConn(conn)
@@ -553,7 +557,7 @@ func (l *listener) runLease(ctx context.Context) error {
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS.TLSConfig(), sessionSlot); err != nil {
+				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot); err != nil {
 					select {
 					case errCh <- err:
 					case <-leaseCtx.Done():
@@ -597,7 +601,7 @@ func (l *listener) runLease(ctx context.Context) error {
 	}
 }
 
-func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Config, sessionSlot int) error {
+func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int) error {
 	if l.stream == nil {
 		return nil
 	}
@@ -635,7 +639,28 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tlsConfig *tls.Con
 		l.reportStreamReady()
 		claimed, err := func() (bool, error) {
 			defer l.reportStreamClosed()
-			return l.stream.RunSession(ctx, conn, tlsConfig)
+			session, err := l.stream.RunSession(ctx, conn)
+			if err != nil {
+				return false, err
+			}
+
+			acceptedConn := session.Conn
+			if len(session.Binding) != 0 {
+				handshakeCtx, cancel := context.WithTimeout(ctx, defaultHandshakeTimeout)
+				defer cancel()
+				acceptedConn, err = tenantTLS.TerminateConn(handshakeCtx, session.Conn, session.Binding)
+				if err != nil {
+					return true, err
+				}
+			}
+
+			select {
+			case <-ctx.Done():
+				_ = acceptedConn.Close()
+				return true, ctx.Err()
+			case l.accepted <- acceptedConn:
+				return true, nil
+			}
 		}()
 		switch {
 		case err == nil:
@@ -751,7 +776,15 @@ func (l *listener) runDatagramLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			l.datagram.Clear("lease stopped")
 			return nil
-		case <-recvDone:
+		case err := <-recvDone:
+			if err != nil {
+				log.Info().
+					Err(err).
+					Str("component", "sdk-quic-backhaul").
+					Str("address", l.identity.Address).
+					Msg("quic backhaul disconnected; waiting to reconnect")
+				l.reportAvailable()
+			}
 		}
 
 		if !utils.SleepOrDone(ctx, time.Second) {
@@ -1035,18 +1068,22 @@ func (l *listener) renewLease(ctx context.Context) error {
 	return nil
 }
 
+// ensureMITMProbeSupport rejects a registration whose tenant TLS stack
+// cannot deliver the requested MITM self-probe. Honoring ban-mitm silently
+// would advertise protection that never runs; a terminal failure drops this
+// relay and lets the exposure fall back to one that can honor the option.
+func (l *listener) ensureMITMProbeSupport(exporterCapable bool) error {
+	if !l.banMITM || exporterCapable {
+		return nil
+	}
+	return fmt.Errorf("%w: mitm self-probe requested (--ban-mitm) but this relay's tenant tls stack does not export keying material; remove the ban-mitm option to expose without probe protection", errRelayIncompatible)
+}
+
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	rootHostname := utils.PortalRootHost(l.api.relayURL.String())
 	publicHostname, err := utils.LeaseHostname(l.identity.Name, rootHostname)
 	if err != nil {
 		return err
-	}
-	var materials keyless.ECHMaterials
-	if l.echEnabled {
-		materials, err = keyless.TenantECHMaterials(l.identity, publicHostname, rootHostname)
-		if err != nil {
-			return err
-		}
 	}
 	registerReq := types.RegisterChallengeRequest{
 		Identity:   l.identity,
@@ -1057,11 +1094,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		TCPEnabled: l.tcpEnabled,
 	}
 	l.cache.ConfigureRegistration(&registerReq)
-	if l.echEnabled {
-		registerReq.RouteHostname = materials.RouteHostname
-		registerReq.HostnameHash = materials.HostnameHash
-		registerReq.ECHConfigList = bytes.Clone(materials.ConfigList)
-	}
 	resp, err := l.api.register(ctx, registerReq, utils.ResolvePublicIP(ctx))
 	if err != nil {
 		return err
@@ -1085,13 +1117,19 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
 		RelayURL:    l.api.relayURL.String(),
 		Hostname:    publicHostname,
-		ECH:         materials,
 		AccessToken: resp.AccessToken,
 	})
 	if err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return err
 	}
+	exporterCapable := tenantTLS.ExportsKeyingMaterial()
+	if err := l.ensureMITMProbeSupport(exporterCapable); err != nil {
+		_ = tenantTLS.Close()
+		_ = l.api.unregister(context.Background(), resp.AccessToken)
+		return err
+	}
+	l.mitmManager.setResponderCapable(exporterCapable)
 
 	if ctx.Err() != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
@@ -1099,15 +1137,14 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return ctx.Err()
 	}
 	next := listenerSnapshot{
-		hostname:      publicHostname,
-		echConfigList: materials.ConfigList,
-		udpAddr:       resp.UDPAddr,
-		tcpAddr:       resp.TCPAddr,
-		accessToken:   resp.AccessToken,
-		reverse:       resp.ReverseEndpoint,
-		expiresAt:     resp.ExpiresAt,
-		publicPort:    resp.SNIPort,
-		tenantTLS:     tenantTLS,
+		hostname:    publicHostname,
+		udpAddr:     resp.UDPAddr,
+		tcpAddr:     resp.TCPAddr,
+		accessToken: resp.AccessToken,
+		reverse:     resp.ReverseEndpoint,
+		expiresAt:   resp.ExpiresAt,
+		publicPort:  resp.SNIPort,
+		tenantTLS:   tenantTLS,
 	}
 	oldLease := l.lease.Swap(next)
 	if oldLease.tenantTLS != nil {
@@ -1127,13 +1164,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	}
 	if l.udpEnabled && l.datagram != nil {
 		l.datagram.Clear("lease updated")
-	}
-	if len(materials.ConfigList) > 0 {
-		log.Debug().
-			Str("address", l.identity.Address).
-			Str("route_hostname", materials.RouteHostname).
-			Str("ech_config_list_base64", base64.StdEncoding.EncodeToString(materials.ConfigList)).
-			Msg("tenant ech config ready")
 	}
 	return nil
 }

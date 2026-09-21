@@ -181,15 +181,15 @@ func TestInsertCandidateCapsFloodPerSigningIdentity(t *testing.T) {
 	}
 }
 
-func TestInsertCandidatePerIdentityCapKeepsConfirmedEntries(t *testing.T) {
+func TestInsertCandidatePerIdentityCapKeepsVerifiedEntries(t *testing.T) {
 	set := NewRelaySet(nil)
 	owner := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	confirmedURL := "https://confirmed.example"
-	set.relays[confirmedURL] = RelayState{
-		Descriptor: mustSignedDescriptor(t, owner, confirmedURL, now),
-		Confirmed:  true,
+	verifiedURL := "https://verified.example"
+	set.relays[verifiedURL] = RelayState{
+		Descriptor: mustSignedDescriptor(t, owner, verifiedURL, now),
+		Trust:      RelayVerified,
 		LastSeenAt: now,
 	}
 	for i := range MaxAnnouncedRelaysPerIdentity * 2 {
@@ -200,9 +200,9 @@ func TestInsertCandidatePerIdentityCapKeepsConfirmedEntries(t *testing.T) {
 		}
 	}
 
-	confirmed, ok := set.relays[confirmedURL]
-	if !ok || !confirmed.Confirmed {
-		t.Fatal("listener-confirmed entry must survive the identity cap")
+	verified, ok := set.relays[verifiedURL]
+	if !ok || verified.Trust != RelayVerified {
+		t.Fatal("directly verified entry must survive the identity cap")
 	}
 }
 

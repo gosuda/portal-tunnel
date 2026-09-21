@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -33,7 +34,7 @@ type Provider struct {
 func New(token string) *Provider {
 	return &Provider{
 		token: strings.TrimSpace(token),
-		zones: utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
+		zones: utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
 	}
 }
 
@@ -167,48 +168,6 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	}
 	if err := deleteRecords(ctx, client, zone, name, "TXT", matchPrefix); err != nil {
 		return fmt.Errorf("delete njalla TXT records %s: %w", name, err)
-	}
-	return nil
-}
-
-func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, record dnsrecord.HTTPSRecord) error {
-	if p == nil {
-		return errors.New("njalla provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	content, err := record.Content()
-	if err != nil {
-		return err
-	}
-
-	client, zone, err := p.clientAndZone(ctx, name)
-	if err != nil {
-		return err
-	}
-	if err := ensureRecord(ctx, client, zone, name, "HTTPS", content); err != nil {
-		return fmt.Errorf("upsert njalla HTTPS record %s: %w", name, err)
-	}
-	return nil
-}
-
-func (p *Provider) DeleteHTTPSRecord(ctx context.Context, name string) error {
-	if p == nil {
-		return errors.New("njalla provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-
-	client, zone, err := p.clientAndZone(ctx, name)
-	if err != nil {
-		return err
-	}
-	if err := deleteRecords(ctx, client, zone, name, "HTTPS", ""); err != nil {
-		return fmt.Errorf("delete njalla HTTPS record %s: %w", name, err)
 	}
 	return nil
 }

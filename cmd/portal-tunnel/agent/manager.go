@@ -40,7 +40,7 @@ func newManager(cfg Config, controlAddr string) *manager {
 		tunnels:     make(map[string]*managedTunnel, len(cfg.Tunnels)),
 	}
 	for _, tunnelCfg := range cfg.Tunnels {
-		manager.tunnels[tunnelCfg.ID] = newTunnel(tunnelCfg)
+		manager.tunnels[tunnelCfg.ID] = &managedTunnel{cfg: tunnelCfg}
 	}
 	return manager
 }
@@ -48,14 +48,11 @@ func newManager(cfg Config, controlAddr string) *manager {
 func (m *manager) Start(ctx context.Context) {
 	m.mu.Lock()
 	m.rootCtx = ctx
-	m.mu.Unlock()
-
-	m.mu.RLock()
 	tunnels := make([]*managedTunnel, 0, len(m.tunnels))
 	for _, tunnel := range m.tunnels {
 		tunnels = append(tunnels, tunnel)
 	}
-	m.mu.RUnlock()
+	m.mu.Unlock()
 
 	for _, tunnel := range tunnels {
 		tunnel.Start(ctx)
@@ -227,7 +224,6 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		Discovery:       &discovery,
 		Overlay:         req.Overlay,
 		MaxActiveRelays: req.MaxActiveRelays,
-		ECH:             req.ECH,
 		X402PayTo:       strings.TrimSpace(req.X402PayTo),
 		X402Testnet:     req.X402Testnet,
 		X402Network:     strings.ToLower(strings.TrimSpace(req.X402Network)),
@@ -398,7 +394,7 @@ func (m *manager) ApplyConfig(cfg Config) error {
 		delete(next, id)
 	}
 	for _, tunnelCfg := range next {
-		tunnel := newTunnel(tunnelCfg)
+		tunnel := &managedTunnel{cfg: tunnelCfg}
 		m.tunnels[tunnelCfg.ID] = tunnel
 		toStart = append(toStart, tunnel)
 	}
@@ -449,12 +445,6 @@ type managedTunnel struct {
 	exposure  *sdk.Exposure
 	lastError string
 	runtime   AgentTunnelStatus
-}
-
-func newTunnel(cfg TunnelConfig) *managedTunnel {
-	return &managedTunnel{
-		cfg: cfg,
-	}
 }
 
 func (t *managedTunnel) Start(parent context.Context) {
@@ -591,10 +581,10 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		State:           state,
 		TargetAddr:      cfg.TargetAddr,
 		LastError:       lastError,
+		Serve:           cfg.Serve,
 		Discovery:       discovery,
 		Overlay:         cfg.Overlay,
 		MaxActiveRelays: cfg.MaxActiveRelays,
-		ECH:             cfg.ECH,
 		Metadata:        metadataFromTunnelConfig(cfg),
 		X402PayTo:       strings.TrimSpace(cfg.X402PayTo),
 		X402Testnet:     cfg.X402Testnet,
@@ -678,6 +668,27 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.lastError = ""
 	t.mu.Unlock()
 
+	routes := make([]ExposedHTTPRoute, 0, len(cfg.HTTPRoutes)+1)
+	if cfg.Serve != "" {
+		root, index, err := utils.ResolveStaticSite(cfg.Serve)
+		if err != nil {
+			return fmt.Errorf("tunnel %q serve %q: %w", cfg.ID, cfg.Serve, err)
+		}
+		routes = append(routes, ExposedHTTPRoute{
+			Prefix:      "/",
+			StaticRoot:  root,
+			StaticIndex: index,
+		})
+	}
+	for _, route := range cfg.HTTPRoutes {
+		routes = append(routes, ExposedHTTPRoute{
+			Prefix:   route.Prefix,
+			Upstream: route.Upstream,
+			Methods:  route.Methods,
+			Amount:   route.Amount,
+		})
+	}
+
 	discovery := true
 	if cfg.Discovery != nil {
 		discovery = *cfg.Discovery
@@ -706,9 +717,6 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if cfg.TCPEnabled {
 		opts = append(opts, sdk.WithTCP())
 	}
-	if cfg.ECH {
-		opts = append(opts, sdk.WithECH())
-	}
 	if cfg.Overlay {
 		opts = append(opts, sdk.WithOverlay())
 	}
@@ -734,16 +742,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		_ = exposure.Close()
 	}()
 
-	if len(cfg.HTTPRoutes) > 0 {
-		routes := make([]ExposedHTTPRoute, 0, len(cfg.HTTPRoutes))
-		for _, route := range cfg.HTTPRoutes {
-			routes = append(routes, ExposedHTTPRoute{
-				Prefix:   route.Prefix,
-				Upstream: route.Upstream,
-				Methods:  route.Methods,
-				Amount:   route.Amount,
-			})
-		}
+	if len(routes) > 0 {
 		handler, routeErr := ComposeHTTPRoutes(routes, X402Payment{
 			Testnet:          cfg.X402Testnet,
 			Network:          cfg.X402Network,

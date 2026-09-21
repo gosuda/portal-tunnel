@@ -58,6 +58,22 @@ description = "Managed web tunnel"
 tags = ["web"]
 ```
 
+Static site config:
+
+```toml
+[[tunnels]]
+id = "site"
+name = "my-site"
+serve = "./dist"
+```
+
+`serve` accepts a directory containing `index.html` or an HTML file such as
+`./dist/main.html`. Relative paths resolve from the directory containing
+`config.toml`. The file's parent directory is served when a file is selected;
+unknown request paths fall back to the entry file, as with `portal expose --serve`.
+The entry file must exist when the tunnel starts. Edit `serve` in TOML and
+restart the tunnel or agent to change the site path.
+
 Routed HTTP config:
 
 ```toml
@@ -205,7 +221,8 @@ Common fields:
 | `id` | Stable local tunnel ID used by the dashboard and control API |
 | `name` | Public lease name, used as the subdomain label |
 | `target` | Local TCP target, equivalent to `portal expose <target>` |
-| `http_routes` | Routed HTTP mappings; cannot be combined with `target` or `udp` |
+| `http_routes` | Routed HTTP mappings; cannot be combined with `target`, `serve`, or `udp` |
+| `serve` | Static site directory or HTML file; relative to the config file's directory |
 | `relays` | Explicit relay API URLs |
 | `discovery` | Include registry and relay discovery expansion |
 | `max_active_relays` | Maximum auto-selected relays kept connected; explicit relays are always included |
@@ -214,7 +231,6 @@ Common fields:
 | `identity_json` | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr` | UDP transport settings |
 | `tcp` | Dedicated raw TCP port setting |
-| `ech` | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
 | `x402_pay_to` | Payment recipient for paid HTTP routes |
@@ -226,12 +242,13 @@ Common fields:
 | `http_routes[].amount` | Optional human payment amount, such as `0.01`, for one HTTP route prefix |
 | `http_routes[].methods` | Optional HTTP methods that require payment on that route; empty means every method |
 
-The agent supports the target and routed HTTP modes below. It does not
-currently accept the CLI static-site options `serve`, `cache`, or `cache_ttl`.
+The agent supports target, routed HTTP, and static site modes. The CLI relay
+cache options `cache` and `cache_ttl` are not supported in agent TOML.
 
 Constraints:
 
 - `target` cannot be combined with `http_routes`.
+- `serve` cannot be combined with `target`, `http_routes`, `tcp`, or `udp`.
 - `http_routes` cannot be combined with `udp`.
 - `http_routes[].amount` requires `x402_pay_to`.
 - `http_routes[].methods` requires `http_routes[].amount`.

@@ -3,7 +3,6 @@ package utils
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -294,40 +293,6 @@ func NormalizeRelayURLs(inputs ...string) ([]string, error) {
 	return normalizeUniqueStrings(out, strings.TrimSpace), nil
 }
 
-func FilterRelayURLs(inputs, excluded []string) []string {
-	if len(inputs) == 0 {
-		return nil
-	}
-	if len(excluded) == 0 {
-		return append([]string(nil), inputs...)
-	}
-
-	skip := make(map[string]struct{}, len(excluded))
-	for _, input := range excluded {
-		input = strings.TrimSpace(input)
-		if input == "" {
-			continue
-		}
-		skip[input] = struct{}{}
-	}
-
-	filtered := make([]string, 0, len(inputs))
-	for _, input := range inputs {
-		input = strings.TrimSpace(input)
-		if input == "" {
-			continue
-		}
-		if _, ok := skip[input]; ok {
-			continue
-		}
-		filtered = append(filtered, input)
-	}
-	if len(filtered) == 0 {
-		return nil
-	}
-	return filtered
-}
-
 func RemoveRelayURL(inputs []string, target string) []string {
 	if len(inputs) == 0 {
 		return nil
@@ -352,23 +317,6 @@ func RemoveRelayURL(inputs []string, target string) []string {
 	return filtered
 }
 
-func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
-	merged, err := NormalizeRelayURLs(append(append([]string(nil), current...), inputs...)...)
-	if err != nil {
-		return nil, err
-	}
-	if len(excluded) == 0 {
-		return merged, nil
-	}
-
-	excluded, err = NormalizeRelayURLs(excluded...)
-	if err != nil {
-		return nil, err
-	}
-
-	return FilterRelayURLs(merged, excluded), nil
-}
-
 func LeaseHostname(name, rootHost string) (string, error) {
 	label, err := NormalizeDNSLabel(name)
 	if err != nil {
@@ -382,19 +330,6 @@ func LeaseHostname(name, rootHost string) (string, error) {
 		rootHost = "localhost"
 	}
 	return label + "." + rootHost, nil
-}
-
-func DecodeBase64URLString(encoded string) (string, error) {
-	decoded, err := base64.URLEncoding.DecodeString(encoded)
-	if err == nil {
-		return string(decoded), nil
-	}
-
-	decoded, err = base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return "", err
-	}
-	return string(decoded), nil
 }
 
 func NormalizeTargetAddr(raw string) (string, error) {

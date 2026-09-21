@@ -8,6 +8,8 @@ import (
 	"cmp"
 	"context"
 	"crypto"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -22,7 +24,6 @@ import (
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -33,6 +34,7 @@ const (
 	soaRefresh         uint32 = 7200
 	soaRetry           uint32 = 3600
 	soaExpire          uint32 = 1209600
+	selfCheckTimeout          = 10 * time.Second
 )
 
 // Config configures the embedded authoritative DNS server.
@@ -52,7 +54,7 @@ type Config struct {
 //
 // A answers for the apex and every covered name are synthesized from the
 // relay public IPv4, so they can never go stale. TXT records (ACME DNS-01
-// and ENS gasless) and HTTPS records (ECH) are stored explicitly.
+// and ENS gasless) are stored explicitly.
 type Provider struct {
 	baseDomain string
 	zone       string
@@ -62,7 +64,6 @@ type Provider struct {
 	mu     sync.RWMutex
 	ipv4   net.IP
 	txt    map[string][]string
-	https  map[string]httpsRecordValue
 	serial uint32
 	key    *dns.DNSKEY
 	signer crypto.Signer
@@ -73,11 +74,12 @@ type Provider struct {
 	ready     chan struct{}
 	stopOnce  sync.Once
 	stopErr   error
-}
 
-type httpsRecordValue struct {
-	priority uint16
-	value    []dns.SVCBKeyValue
+	// started marks a provider created through New, the only caller allowed
+	// to arm the delegated-path self-check: direct constructions (unit tests)
+	// must not launch external resolver lookups as a side effect.
+	started   bool
+	selfCheck sync.Once
 }
 
 // New binds the UDP and TCP listeners and starts serving the zone. Binding
@@ -102,7 +104,6 @@ func New(cfg Config) (*Provider, error) {
 		zone:       dns.Fqdn(baseDomain),
 		nsName:     dns.Fqdn("ns." + baseDomain),
 		txt:        make(map[string][]string),
-		https:      make(map[string]httpsRecordValue),
 		ready:      make(chan struct{}),
 	}
 
@@ -143,6 +144,7 @@ func New(cfg Config) (*Provider, error) {
 		_ = p.Stop()
 		return nil, fmt.Errorf("embedded dns listeners on %s did not start within %s", p.listenAddr, listenStartTimeout)
 	}
+	p.started = true
 
 	_, ds, message, _ := p.EnsureDNSSEC(context.Background(), p.baseDomain)
 	log.Info().Str("ds_record", ds).Str("key_path", cfg.KeyPath).Msg(message)
@@ -238,7 +240,50 @@ func (p *Provider) EnsureARecords(_ context.Context, baseDomain, publicIPv4 stri
 		p.ipv4 = ip
 		p.bumpSerialLocked()
 	}
+	if p.started {
+		// One attempt per provider instance: the check needs a full recursive
+		// resolver round trip, so repeat EnsureARecords calls must not repeat it.
+		p.selfCheck.Do(func() {
+			go p.verifyDelegatedPath(ip)
+		})
+	}
 	return nil
+}
+
+// verifyDelegatedPath performs the one-shot delegated-path self-check: it
+// resolves a fresh random label through the system resolver and compares the
+// answer with the synthesized address, proving the parent delegation actually
+// reaches this server. It is log-only and never blocks the caller.
+func (p *Provider) verifyDelegatedPath(ip net.IP) {
+	label := make([]byte, 8)
+	if _, err := rand.Read(label); err != nil {
+		log.Warn().Err(err).Msg("dns self-check random label")
+		return
+	}
+	name := hex.EncodeToString(label) + "." + p.zone
+	ctx, cancel := context.WithTimeout(context.Background(), selfCheckTimeout)
+	defer cancel()
+	started := time.Now()
+	addrs, err := net.DefaultResolver.LookupIP(ctx, "ip4", name)
+	elapsed := time.Since(started)
+	if err != nil {
+		log.Warn().Err(err).Str("name", name).Dur("elapsed", elapsed).Msg("dns self-check failed")
+		return
+	}
+	if slices.ContainsFunc(addrs, func(addr net.IP) bool { return addr.Equal(ip) }) {
+		log.Info().Str("name", name).Str("resolved", ip.String()).Dur("elapsed", elapsed).Msg("dns self-check passed")
+		return
+	}
+	resolved := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		resolved = append(resolved, addr.String())
+	}
+	log.Warn().
+		Str("name", name).
+		Str("resolved", strings.Join(resolved, ",")).
+		Str("expected", ip.String()).
+		Dur("elapsed", elapsed).
+		Msg("dns self-check resolved a different address")
 }
 
 // EnsureARecord is a no-op: A answers are synthesized zone-wide from the
@@ -313,48 +358,6 @@ func (p *Provider) DeleteTXTRecords(_ context.Context, name, matchPrefix string)
 		p.txt[fqdn] = remaining
 	}
 	p.bumpSerialLocked()
-	return nil
-}
-
-func (p *Provider) EnsureHTTPSRecord(_ context.Context, name string, record dnsrecord.HTTPSRecord) error {
-	if p == nil {
-		return errors.New("embedded dns provider is nil")
-	}
-	fqdn, err := p.zoneHostname(name)
-	if err != nil {
-		return err
-	}
-	record, err = record.Normalized()
-	if err != nil {
-		return err
-	}
-	value, err := parseSvcParams(record.SvcParams)
-	if err != nil {
-		return err
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.https[fqdn] = httpsRecordValue{priority: record.Priority, value: value}
-	p.bumpSerialLocked()
-	return nil
-}
-
-func (p *Provider) DeleteHTTPSRecord(_ context.Context, name string) error {
-	if p == nil {
-		return errors.New("embedded dns provider is nil")
-	}
-	fqdn, err := p.zoneHostname(name)
-	if err != nil {
-		return err
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if _, ok := p.https[fqdn]; ok {
-		delete(p.https, fqdn)
-		p.bumpSerialLocked()
-	}
 	return nil
 }
 
