@@ -123,6 +123,33 @@ func TestAWithoutPublicIPIsNodata(t *testing.T) {
 	}
 }
 
+func TestAWithoutPublicIPRefusesMissingNames(t *testing.T) {
+	p := newTestProvider(t, nil)
+
+	// Missing names are refused without an SOA while the public address is
+	// still pending, so resolvers cannot negative-cache them (issue #516).
+	for _, name := range []string{"tunnel." + testZone, "deep.a.b." + testZone} {
+		resp := exchange(t, p, "tcp", dns.TypeA, name)
+		requireRcode(t, resp, dns.RcodeRefused)
+		if len(resp.Answer) != 0 {
+			t.Fatalf("%s: got %d answers without a public ip, want 0", name, len(resp.Answer))
+		}
+		if len(resp.Ns) != 0 {
+			t.Fatalf("%s: got %d authority records, want no SOA on REFUSED", name, len(resp.Ns))
+		}
+	}
+
+	// Once the address is synced the same names resolve.
+	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+		t.Fatalf("ensure a records: %v", err)
+	}
+	resp := exchange(t, p, "tcp", dns.TypeA, "tunnel."+testZone)
+	requireRcode(t, resp, dns.RcodeSuccess)
+	if len(resp.Answer) != 1 {
+		t.Fatalf("got %d answers after the address synced, want 1", len(resp.Answer))
+	}
+}
+
 func TestTXTRecordLifecycle(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
@@ -187,8 +214,10 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 	if err := p.CleanUp(testZone, "token", keyAuth); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
+	// Without a public address the deleted challenge name is refused, not
+	// negative-cached as a name error.
 	resp = exchange(t, p, "tcp", dns.TypeTXT, info.EffectiveFQDN)
-	requireRcode(t, resp, dns.RcodeNameError)
+	requireRcode(t, resp, dns.RcodeRefused)
 	if len(resp.Answer) != 0 {
 		t.Fatalf("txt survived cleanup")
 	}

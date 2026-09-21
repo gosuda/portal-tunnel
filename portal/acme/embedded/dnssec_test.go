@@ -154,17 +154,13 @@ func TestDNSSECNameErrorAndEmptyNonterminal(t *testing.T) {
 	if err := p.EnsureTXTRecord(context.Background(), "leaf.branch."+testZone, "value"); err != nil {
 		t.Fatal(err)
 	}
-	// No public address means no synthesized wildcard exists yet.
+	// Without a public address no wildcard is synthesized yet, so missing
+	// names are refused without any negative-cachable authority section.
 	for _, name := range []string{"absent." + testZone, "deep.absent.branch." + testZone} {
 		response := dnssecExchange(t, p, "tcp", name, dns.TypeA, 1232)
-		requireRcode(t, response, dns.RcodeNameError)
-		verifySection(t, p.key, response.Ns)
-		if strings.Contains(name, ".branch.") {
-			// One interval denies both absent.branch and *.branch.
-			requireNSEC(t, response, "branch."+testZone, "leaf.branch."+testZone)
-		} else {
-			// One interval denies both absent and the apex wildcard.
-			requireNSEC(t, response, testZone, "branch."+testZone)
+		requireRcode(t, response, dns.RcodeRefused)
+		if len(response.Ns) != 0 {
+			t.Fatalf("%s: REFUSED carried %d authority records, want none", name, len(response.Ns))
 		}
 	}
 	response := dnssecExchange(t, p, "tcp", "branch."+testZone, dns.TypeTXT, 1232)
@@ -173,10 +169,27 @@ func TestDNSSECNameErrorAndEmptyNonterminal(t *testing.T) {
 	if len(response.Answer) != 0 {
 		t.Fatal("empty nonterminal returned data")
 	}
+
+	// With an address the wildcard synthesizes the previously missing names,
+	// and only names a wildcard cannot cover return a proven name error.
+	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"absent." + testZone, "deep.absent.branch." + testZone} {
+		response := dnssecExchange(t, p, "tcp", name, dns.TypeA, 1232)
+		requireRcode(t, response, dns.RcodeSuccess)
+		verifySection(t, p.key, response.Answer)
+	}
+	response = dnssecExchange(t, p, "tcp", "absent.*."+testZone, dns.TypeA, 1232)
+	requireRcode(t, response, dns.RcodeNameError)
+	verifySection(t, p.key, response.Ns)
 }
 
 func TestDNSSECCanonicalDenialIntervals(t *testing.T) {
 	p := newTestProvider(t, nil)
+	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	}
 	for _, owner := range []string{"a.", "z.a.", "aa.", "b."} {
 		if err := p.EnsureTXTRecord(context.Background(), owner+testZone, "value"); err != nil {
 			t.Fatal(err)
@@ -184,26 +197,35 @@ func TestDNSSECCanonicalDenialIntervals(t *testing.T) {
 	}
 	keys := dnssecExchange(t, p, "tcp", testZone, dns.TypeDNSKEY, 1232)
 	key := keys.Answer[0].(*dns.DNSKEY)
-	// RFC 4034 section 6.1 gives this fixed order: apex, a, z.a, aa, b.
-	// These expected intervals deliberately do not sort with the server's code.
+	// RFC 4034 section 6.1 gives this fixed order: apex, *.apex, a, *.a,
+	// z.a, *.z.a, aa, *.aa, b, *.b, ns. A wildcard sorts on its "*" label
+	// octet, before every letter at the same position. TXT queries for
+	// missing names deny them at the closest-encloser wildcard source; the
+	// expected intervals deliberately do not sort with the server's code.
 	for _, network := range []string{"tcp", "udp"} {
 		for _, tc := range []struct {
-			name  string
-			owner string
-			next  string
+			name   string
+			proofs [][2]string
 		}{
-			{name: `\096.`, owner: "", next: "a."},
-			{name: "m.a.", owner: "a.", next: "z.a."},
-			{name: "a0.", owner: "z.a.", next: "aa."},
-			{name: `\0970.`, owner: "z.a.", next: "aa."},
-			{name: "az.", owner: "aa.", next: "b."},
-			{name: "B0.", owner: "b.", next: ""},
+			// The wildcard source exists, so its own NSEC proves the missing
+			// type; next-closer denial brackets the query name itself.
+			{name: `\096.`, proofs: [][2]string{{"*.", "a."}}},
+			{name: "m.a.", proofs: [][2]string{{"*.a.", "z.a."}}},
+			{name: "a0.", proofs: [][2]string{{"*.z.a.", "aa."}, {"*.", "a."}}},
+			{name: `\0970.`, proofs: [][2]string{{"*.z.a.", "aa."}, {"*.", "a."}}},
+			{name: "az.", proofs: [][2]string{{"*.aa.", "b."}, {"*.", "a."}}},
+			{name: "B0.", proofs: [][2]string{{"*.b.", "ns."}, {"*.", "a."}}},
 		} {
 			t.Run(network+"/"+tc.name, func(t *testing.T) {
-				response := dnssecExchange(t, p, network, tc.name+testZone, dns.TypeA, 1232)
-				requireRcode(t, response, dns.RcodeNameError)
+				response := dnssecExchange(t, p, network, tc.name+testZone, dns.TypeTXT, 1232)
+				requireRcode(t, response, dns.RcodeSuccess)
+				if len(response.Answer) != 0 {
+					t.Fatalf("missing name returned data: %v", response.Answer)
+				}
 				verifySection(t, key, response.Ns)
-				requireNSEC(t, response, tc.owner+testZone, tc.next+testZone)
+				for _, proof := range tc.proofs {
+					requireNSEC(t, response, proof[0]+testZone, proof[1]+testZone)
+				}
 			})
 		}
 	}
@@ -266,15 +288,18 @@ func TestDNSSECKeyPersistence(t *testing.T) {
 	}
 }
 
-// Only LocalAddr and WriteMsg are used by ServeDNS. Embedding the interface
-// makes any unexpected writer operation fail rather than silently succeed.
-// Packing here and unpacking in the test assert DNS wire data, not cache state.
+// Only LocalAddr, RemoteAddr, and WriteMsg are used by ServeDNS. Embedding the
+// interface makes any unexpected writer operation fail rather than silently
+// succeed. Packing here and unpacking in the test assert DNS wire data, not
+// cache state.
 type dnssecResponseWriter struct {
 	dns.ResponseWriter
 	wire []byte
 }
 
 func (*dnssecResponseWriter) LocalAddr() net.Addr { return &net.TCPAddr{} }
+
+func (*dnssecResponseWriter) RemoteAddr() net.Addr { return &net.TCPAddr{} }
 
 func (w *dnssecResponseWriter) WriteMsg(m *dns.Msg) error {
 	var err error
@@ -286,6 +311,9 @@ func TestDNSSECRefreshAndMutation(t *testing.T) {
 	// Real listener goroutines stay outside the fake-time bubble so they do
 	// not prevent its clock from advancing while the handler is idle.
 	p := newTestProvider(t, nil)
+	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	}
 	keys := dnssecExchange(t, p, "tcp", testZone, dns.TypeDNSKEY, 1232)
 	key := keys.Answer[0].(*dns.DNSKEY)
 	synctest.Test(t, func(t *testing.T) {
@@ -331,9 +359,12 @@ func TestDNSSECRefreshAndMutation(t *testing.T) {
 			verifySection(t, key, before.Answer)
 			beforeSerial := before.Answer[0].(*dns.SOA).Serial
 			absent := dnssecExchange(t, p, network, name, dns.TypeTXT, 1232)
-			requireRcode(t, absent, dns.RcodeNameError)
+			requireRcode(t, absent, dns.RcodeSuccess)
+			if len(absent.Answer) != 0 {
+				t.Fatalf("absent TXT returned data: %v", absent.Answer)
+			}
 			verifySection(t, key, absent.Ns)
-			requireNSEC(t, absent, testZone, testZone)
+			requireNSEC(t, absent, "*."+testZone, "ns."+testZone)
 
 			if err := p.EnsureTXTRecord(context.Background(), name, "value"); err != nil {
 				t.Fatal(err)
@@ -356,7 +387,7 @@ func TestDNSSECRefreshAndMutation(t *testing.T) {
 			nodata := dnssecExchange(t, p, network, name, dns.TypeAAAA, 1232)
 			requireRcode(t, nodata, dns.RcodeSuccess)
 			verifySection(t, key, nodata.Ns)
-			requireNSEC(t, nodata, name, testZone)
+			requireNSEC(t, nodata, name, "*."+name)
 			for _, nsec := range denialRecords(nodata) {
 				if nsec.Hdr.Name == dns.Fqdn(name) && (!slices.Contains(nsec.TypeBitMap, dns.TypeTXT) || slices.Contains(nsec.TypeBitMap, dns.TypeAAAA)) {
 					t.Fatalf("incorrect new owner type bitmap: %v", nsec)
@@ -367,12 +398,12 @@ func TestDNSSECRefreshAndMutation(t *testing.T) {
 				t.Fatal(err)
 			}
 			response = dnssecExchange(t, p, network, name, dns.TypeTXT, 1232)
-			requireRcode(t, response, dns.RcodeNameError)
+			requireRcode(t, response, dns.RcodeSuccess)
 			if len(response.Answer) != 0 {
 				t.Fatalf("deleted TXT is still served: %v", response.Answer)
 			}
 			verifySection(t, key, response.Ns)
-			requireNSEC(t, response, testZone, testZone)
+			requireNSEC(t, response, "*."+testZone, "ns."+testZone)
 			deletedSerial := response.Ns[0].(*dns.SOA).Serial
 			if deletedSerial <= createdSerial {
 				t.Fatal("TXT deletion did not advance the served SOA serial")
