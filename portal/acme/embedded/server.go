@@ -29,8 +29,11 @@ func (p *Provider) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	p.writeResponse(w, r, m)
 	event := log.Debug()
-	if m.Rcode != dns.RcodeSuccess {
-		event = log.Info()
+	if m.Rcode == dns.RcodeServerFailure {
+		// SERVFAIL is the only internal failure; client-caused codes (REFUSED,
+		// FORMERR, NOTIMP) stay at Debug — :53 is a public listener and every
+		// query can be flooded (issue #518 review).
+		event = log.Warn()
 	}
 	event.
 		Str("qname", question.Name).
@@ -110,6 +113,9 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 		// the whole sync window (issue #516); NXDOMAIN stays reserved for the
 		// genuinely-missing-name case once the zone is address-capable.
 		m.Rcode = dns.RcodeRefused
+		// Window-bounded incident signal (#516): reachable only until the first
+		// successful public-IP sync, unlike the floodable client-error codes.
+		log.Info().Str("qname", name).Msg("embedded dns query refused while address sync is pending")
 		return false
 	}
 	if len(m.Answer) == 0 {
