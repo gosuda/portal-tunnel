@@ -95,12 +95,13 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 	}
 }
 
-func TestApplicationAuthStripsUntrustedIdentityHeaders(t *testing.T) {
-	var user, auth string
+func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
+	var user, auth, cookies string
 	requests := 0
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		user, auth = r.Header.Get("X-Portal-User"), r.Header.Get("X-Portal-Auth")
+		cookies = r.Header.Get("Cookie")
 	})
 	handler := newApplicationAuthTestHandler(t, nil, false, next)
 	gate := handler.(*applicationAuth)
@@ -109,6 +110,7 @@ func TestApplicationAuthStripsUntrustedIdentityHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "https://app.example/", nil)
+	req.AddCookie(&http.Cookie{Name: "app_session", Value: "abc"})
 	req.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: token})
 	req.Header.Set("X-Portal-User", "attacker")
 	req.Header.Set("X-Portal-Auth", "attacker")
@@ -116,6 +118,9 @@ func TestApplicationAuthStripsUntrustedIdentityHeaders(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if user != "" || auth != "" {
 		t.Fatalf("untrusted identity headers reached upstream: %q, %q", user, auth)
+	}
+	if cookies != "app_session=abc" {
+		t.Fatalf("upstream Cookie = %q; want only application cookie", cookies)
 	}
 	for name, requestToken := range map[string]string{
 		"other host": token,

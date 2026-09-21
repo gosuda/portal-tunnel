@@ -32,7 +32,9 @@ sessions expire after 24 hours.
 The auth gate wraps the complete HTTP router, including static files and x402
 routes. Portal removes client-supplied `X-Portal-User` and `X-Portal-Auth`
 headers before routing and only restores verified values when
-`--auth-identity-headers` is enabled. Application auth cannot be combined with
+`--auth-identity-headers` is enabled. It also consumes the Portal session cookie
+at the gate, so upstream applications receive their own cookies but never the
+`__Host-portal_access` credential. Application auth cannot be combined with
 relay caching or raw TCP/UDP exposure.
 
 ## Tenant TLS

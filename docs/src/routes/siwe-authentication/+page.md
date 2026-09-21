@@ -44,7 +44,9 @@ With no `--auth-allow`, any wallet that proves control of its address can sign
 in. Repeat `--auth-allow` to restrict access to specific Ethereum addresses.
 Portal keeps the two-minute, single-use challenge and the 24-hour signed
 session local to the tunnel endpoint. The cookie is `Secure`, `HttpOnly`, and
-`SameSite=Lax`; relay-issued lease tokens are not used for application access.
+`SameSite=Lax`. Portal removes that session cookie before forwarding the
+request, while preserving application-owned cookies; relay-issued lease tokens
+are not used for application access.
 
 Inbound `X-Portal-User` and `X-Portal-Auth` headers are always removed. Add
 `--auth-identity-headers` to inject the verified address and `siwe` auth method

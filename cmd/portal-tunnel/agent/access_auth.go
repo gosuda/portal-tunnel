@@ -160,11 +160,22 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			a.requireLogin(w, r)
 			return
 		}
+		stripApplicationAuthCookie(r)
 		if a.identityHeaders {
 			r.Header.Set("X-Portal-User", address)
 			r.Header.Set("X-Portal-Auth", "siwe")
 		}
 		a.next.ServeHTTP(w, r)
+	}
+}
+
+func stripApplicationAuthCookie(r *http.Request) {
+	cookies := r.Cookies()
+	r.Header.Del("Cookie")
+	for _, cookie := range cookies {
+		if cookie.Name != applicationAuthCookieName {
+			r.AddCookie(cookie)
+		}
 	}
 }
 
