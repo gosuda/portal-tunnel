@@ -590,7 +590,6 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		MaxActiveRelays:     cfg.MaxActiveRelays,
 		Metadata:            metadataFromTunnelConfig(cfg),
 		Auth:                cfg.Auth,
-		AuthAllowedWallets:  append([]string(nil), cfg.AuthAllowedWallets...),
 		AuthIdentityHeaders: cfg.AuthIdentityHeaders,
 		X402PayTo:           strings.TrimSpace(cfg.X402PayTo),
 		X402Testnet:         cfg.X402Testnet,
@@ -764,12 +763,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 			return routeErr
 		}
 		if cfg.Auth {
-			signingKey, keyErr := identity.DeriveToken(listenerIdentity, "application-access-auth")
-			if keyErr != nil {
-				return fmt.Errorf("derive application auth signing key: %w", keyErr)
-			}
-			handler, routeErr = NewApplicationAuth(handler, ApplicationAuthConfig{
-				SigningKey:      []byte(signingKey),
+			handler, routeErr = NewApplicationAuth(handler, listenerIdentity, ApplicationAuthConfig{
 				AllowedWallets:  cfg.AuthAllowedWallets,
 				IdentityHeaders: cfg.AuthIdentityHeaders,
 			})

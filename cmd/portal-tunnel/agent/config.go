@@ -289,7 +289,7 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		if t.ID == "" {
 			t.ID = fmt.Sprintf("tunnel-%d", i+1)
 		}
-		normalizedWallets, err := normalizeApplicationAuthWallets(t.AuthAllowedWallets)
+		normalizedWallets, err := normalizeSIWEAuthAddresses(t.AuthAllowedWallets)
 		if err != nil {
 			return fmt.Errorf("tunnel %q auth_allowed_wallets: %w", t.ID, err)
 		}

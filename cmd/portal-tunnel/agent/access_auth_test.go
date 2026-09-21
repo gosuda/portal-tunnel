@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestApplicationAuthRequiresLogin(t *testing.T) {
@@ -147,7 +148,8 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 
 func newApplicationAuthTestHandler(t *testing.T, allowed []string, identityHeaders bool, next http.Handler) http.Handler {
 	t.Helper()
-	handler, err := NewApplicationAuth(next, ApplicationAuthConfig{SigningKey: []byte(strings.Repeat("k", 32)), AllowedWallets: allowed, IdentityHeaders: identityHeaders})
+	tunnelIdentity := types.Identity{Name: "application-auth-test", Address: "0x0000000000000000000000000000000000000001", TokenSecret: strings.Repeat("k", 32)}
+	handler, err := NewApplicationAuth(next, tunnelIdentity, ApplicationAuthConfig{AllowedWallets: allowed, IdentityHeaders: identityHeaders})
 	if err != nil {
 		t.Fatal(err)
 	}

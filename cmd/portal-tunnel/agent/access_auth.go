@@ -2,7 +2,6 @@ package agent
 
 import (
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -13,10 +12,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const (
@@ -25,10 +24,8 @@ const (
 	applicationAuthVerifyPath    = "/_portal/auth/verify"
 	applicationAuthLogoutPath    = "/_portal/auth/logout"
 	applicationAuthCookieName    = "__Host-portal_access"
-	applicationAuthChallengeTTL  = 2 * time.Minute
 	applicationAuthSessionTTL    = 24 * time.Hour
 	applicationAuthBodyLimit     = 64 << 10
-	applicationAuthChallengeMax  = 4096
 )
 
 const applicationAuthLoginPage = `<!doctype html>
@@ -52,7 +49,6 @@ var parsedApplicationAuthLoginPage = template.Must(template.New("application-aut
 
 // ApplicationAuthConfig configures the tunnel-local SIWE access gate.
 type ApplicationAuthConfig struct {
-	SigningKey      []byte
 	AllowedWallets  []string
 	IdentityHeaders bool
 }
@@ -60,25 +56,14 @@ type ApplicationAuthConfig struct {
 type applicationAuth struct {
 	next            http.Handler
 	signingKey      []byte
-	allowed         map[string]struct{}
+	siwe            *siweAuthenticator
 	identityHeaders bool
-
-	mu         sync.Mutex
-	challenges map[string]applicationAuthChallenge
-}
-
-type applicationAuthChallenge struct {
-	address   string
-	host      string
-	message   string
-	expiresAt time.Time
 }
 
 type applicationAuthClaims struct {
 	Address   string `json:"sub"`
 	Host      string `json:"host"`
 	ExpiresAt int64  `json:"exp"`
-	SessionID string `json:"sid"`
 }
 
 type applicationAuthChallengeRequest struct {
@@ -99,46 +84,29 @@ type applicationAuthVerifyRequest struct {
 
 // NewApplicationAuth protects the complete HTTP gateway with local SIWE
 // authentication. Its reserved login endpoints are the only bypass paths.
-func NewApplicationAuth(next http.Handler, cfg ApplicationAuthConfig) (http.Handler, error) {
+func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg ApplicationAuthConfig) (http.Handler, error) {
 	if next == nil {
 		return nil, errors.New("application auth handler is required")
 	}
-	if len(cfg.SigningKey) < 32 {
-		return nil, errors.New("application auth signing key must be at least 32 bytes")
+	signingKey, err := identity.DeriveToken(tunnelIdentity, "application-access-auth")
+	if err != nil {
+		return nil, fmt.Errorf("derive application auth signing key: %w", err)
 	}
-	allowedWallets, err := normalizeApplicationAuthWallets(cfg.AllowedWallets)
+	siwe, err := newSIWEAuthenticator(siweAuthConfig{
+		AllowedAddresses: cfg.AllowedWallets,
+		AllowAnyAddress:  len(cfg.AllowedWallets) == 0,
+		Statement:        "Sign in to this Portal application",
+		ChallengePrefix:  "pac_",
+	})
 	if err != nil {
 		return nil, err
 	}
-	allowed := make(map[string]struct{}, len(allowedWallets))
-	for _, address := range allowedWallets {
-		allowed[strings.ToLower(address)] = struct{}{}
-	}
 	return &applicationAuth{
 		next:            next,
-		signingKey:      append([]byte(nil), cfg.SigningKey...),
-		allowed:         allowed,
+		signingKey:      []byte(signingKey),
+		siwe:            siwe,
 		identityHeaders: cfg.IdentityHeaders,
-		challenges:      make(map[string]applicationAuthChallenge),
 	}, nil
-}
-
-func normalizeApplicationAuthWallets(values []string) ([]string, error) {
-	normalized := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, raw := range values {
-		address, err := identity.NormalizeEVMAddress(raw)
-		if err != nil {
-			return nil, fmt.Errorf("application auth allowed wallet: %w", err)
-		}
-		key := strings.ToLower(address)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		normalized = append(normalized, address)
-	}
-	return normalized, nil
 }
 
 func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -210,34 +178,18 @@ func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request)
 		a.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	address, err := identity.NormalizeEVMAddress(req.Address)
-	if err != nil || !a.addressAllowed(address) {
-		a.writeJSONError(w, http.StatusUnauthorized, "wallet is not allowed")
-		return
-	}
 	host := strings.TrimSpace(r.Host)
 	now := time.Now().UTC()
-	challengeID := "pac_" + rand.Text()
-	expiresAt := now.Add(applicationAuthChallengeTTL)
-	message, err := identity.FormatSIWEMessage(identity.SIWEMessage{
-		Domain: host, Address: address, URI: "https://" + host,
-		Statement: "Sign in to this Portal application", Nonce: rand.Text(), RequestID: challengeID,
-		IssuedAt: now, ExpiresAt: expiresAt,
-	})
+	challenge, err := a.siwe.Issue(req.Address, host, "https://"+host, now)
 	if err != nil {
-		a.writeJSONError(w, http.StatusBadRequest, "invalid application origin")
+		status := http.StatusUnauthorized
+		if errors.Is(err, errSIWEAuthTooManyChallenges) {
+			status = http.StatusTooManyRequests
+		}
+		a.writeJSONError(w, status, err.Error())
 		return
 	}
-	a.mu.Lock()
-	a.cleanupChallengesLocked(now)
-	if len(a.challenges) >= applicationAuthChallengeMax {
-		a.mu.Unlock()
-		a.writeJSONError(w, http.StatusTooManyRequests, "too many pending sign-in challenges")
-		return
-	}
-	a.challenges[challengeID] = applicationAuthChallenge{address: address, host: host, message: message, expiresAt: expiresAt}
-	a.mu.Unlock()
-	a.writeJSON(w, http.StatusOK, applicationAuthChallengeResponse{ChallengeID: challengeID, Message: message, ExpiresAt: expiresAt})
+	a.writeJSON(w, http.StatusOK, applicationAuthChallengeResponse{ChallengeID: challenge.ID, Message: challenge.Message, ExpiresAt: challenge.ExpiresAt})
 }
 
 func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
@@ -256,26 +208,18 @@ func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	a.mu.Lock()
-	a.cleanupChallengesLocked(now)
-	challenge, ok := a.challenges[strings.TrimSpace(req.ChallengeID)]
-	delete(a.challenges, strings.TrimSpace(req.ChallengeID))
-	a.mu.Unlock()
-	if !ok || challenge.host != strings.TrimSpace(r.Host) || req.Message != challenge.message || now.After(challenge.expiresAt) {
-		a.writeJSONError(w, http.StatusUnauthorized, "sign-in challenge is invalid or expired")
-		return
-	}
-	if err := identity.VerifySIWEMessage(challenge.message, req.Signature, challenge.address, challenge.expiresAt, now); err != nil || !a.addressAllowed(challenge.address) {
+	address, err := a.siwe.Verify(req.ChallengeID, req.Message, req.Signature, r.Host, now)
+	if err != nil {
 		a.writeJSONError(w, http.StatusUnauthorized, "wallet signature is invalid")
 		return
 	}
-	token, err := a.issueSession(challenge.address, challenge.host, now)
+	token, err := a.issueSession(address, strings.TrimSpace(r.Host), now)
 	if err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: applicationAuthCookieName, Value: token, Path: "/", MaxAge: int(applicationAuthSessionTTL.Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
-	a.writeJSON(w, http.StatusOK, map[string]string{"address": challenge.address})
+	a.writeJSON(w, http.StatusOK, map[string]string{"address": address})
 }
 
 func (a *applicationAuth) serveLogout(w http.ResponseWriter, r *http.Request) {
@@ -305,18 +249,18 @@ func (a *applicationAuth) authenticatedAddress(r *http.Request) (string, bool) {
 		return "", false
 	}
 	var claims applicationAuthClaims
-	if err := json.Unmarshal(payload, &claims); err != nil || claims.SessionID == "" || !strings.EqualFold(claims.Host, strings.TrimSpace(r.Host)) || time.Now().UTC().Unix() >= claims.ExpiresAt {
+	if err := json.Unmarshal(payload, &claims); err != nil || !strings.EqualFold(claims.Host, strings.TrimSpace(r.Host)) || time.Now().UTC().Unix() >= claims.ExpiresAt {
 		return "", false
 	}
 	address, err := identity.NormalizeEVMAddress(claims.Address)
-	if err != nil || !a.addressAllowed(address) {
+	if err != nil || !a.siwe.addressAllowed(address) {
 		return "", false
 	}
 	return address, true
 }
 
 func (a *applicationAuth) issueSession(address, host string, now time.Time) (string, error) {
-	payload, err := json.Marshal(applicationAuthClaims{Address: address, Host: host, ExpiresAt: now.Add(applicationAuthSessionTTL).Unix(), SessionID: rand.Text()})
+	payload, err := json.Marshal(applicationAuthClaims{Address: address, Host: host, ExpiresAt: now.Add(applicationAuthSessionTTL).Unix()})
 	if err != nil {
 		return "", err
 	}
@@ -327,22 +271,6 @@ func (a *applicationAuth) sign(payload []byte) []byte {
 	mac := hmac.New(sha256.New, a.signingKey)
 	_, _ = mac.Write(payload)
 	return mac.Sum(nil)
-}
-
-func (a *applicationAuth) addressAllowed(address string) bool {
-	if len(a.allowed) == 0 {
-		return true
-	}
-	_, ok := a.allowed[strings.ToLower(address)]
-	return ok
-}
-
-func (a *applicationAuth) cleanupChallengesLocked(now time.Time) {
-	for id, challenge := range a.challenges {
-		if now.After(challenge.expiresAt) {
-			delete(a.challenges, id)
-		}
-	}
 }
 
 func (a *applicationAuth) requireLogin(w http.ResponseWriter, r *http.Request) {

@@ -306,12 +306,7 @@ func runExposeCommand(args []string) error {
 			return err
 		}
 		if flags.auth {
-			signingKey, err := identity.DeriveToken(listenerIdentity, "application-access-auth")
-			if err != nil {
-				return fmt.Errorf("derive application auth signing key: %w", err)
-			}
-			handler, err = agent.NewApplicationAuth(handler, agent.ApplicationAuthConfig{
-				SigningKey:      []byte(signingKey),
+			handler, err = agent.NewApplicationAuth(handler, listenerIdentity, agent.ApplicationAuthConfig{
 				AllowedWallets:  flags.authAllowedWallets,
 				IdentityHeaders: flags.authIdentityHeaders,
 			})
