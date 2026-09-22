@@ -120,51 +120,6 @@ func TestSelectPriorityStickinessRetainsEligibleActiveRelay(t *testing.T) {
 	}
 }
 
-func TestMOLSGridOrderIsPrimeAndSparse(t *testing.T) {
-	for _, size := range []int{1, 2, 3, 5, 10, 100} {
-		order := molsGridOrder(size)
-		if !isPrime(order) {
-			t.Fatalf("molsGridOrder(%d) = %d, want prime", size, order)
-		}
-		if order < 2*size {
-			t.Fatalf("molsGridOrder(%d) = %d, want >= %d", size, order, 2*size)
-		}
-	}
-	if got, want := molsGridOrder(5), molsGridOrder(4); got != want {
-		t.Fatalf("grid order changed across pool sizes (%d vs %d), want a fixed order", got, want)
-	}
-}
-
-func TestMOLSRankingStableAcrossMembershipChange(t *testing.T) {
-	states := make([]RelayState, 6)
-	for i := range states {
-		states[i] = verifiedRelayState(t, fmt.Sprintf("https://relay-%d.example", i))
-	}
-
-	const salt = 1
-	full := RankRelayPool(states, "client-a", salt)
-	reduced := RankRelayPool(states[:5], "client-a", salt)
-	if len(reduced) != 5 {
-		t.Fatalf("len(RankRelayPool()) = %d, want 5", len(reduced))
-	}
-
-	reducedPos := make(map[string]int, len(reduced))
-	for i, url := range reduced {
-		reducedPos[url] = i
-	}
-	last := -1
-	for _, url := range full {
-		p, ok := reducedPos[url]
-		if !ok {
-			continue
-		}
-		if p < last {
-			t.Fatalf("relative order of surviving relays changed: full=%v reduced=%v", full, reduced)
-		}
-		last = p
-	}
-}
-
 func TestMOLSCongestionModeExcludesFallbackRelays(t *testing.T) {
 	now := time.Now().UTC()
 	healthy := verifiedRelayState(t, "https://healthy.example")
