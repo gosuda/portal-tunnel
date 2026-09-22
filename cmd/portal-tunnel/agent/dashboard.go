@@ -1425,7 +1425,7 @@ func (m agentDashboardModel) renderAddTunnelForm(pane *agentDashboardView, width
 		{label: "Max Relays", input: m.addMaxRelays, field: agentDashboardAddFieldMaxRelays},
 	}
 	for _, row := range rows {
-		pane.addAddTunnelInputRow(width, row.label, row.input, row.field, m.addFocus == row.field)
+		pane.addInputRow(width, row.label, row.input, agentDashboardActionFocusAddTunnelField, row.field, m.addFocus == row.field)
 	}
 }
 
@@ -1532,7 +1532,7 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 		if len(pane.lines)-startLine >= height {
 			return
 		}
-		pane.addSettingsInputRow(width, row.label, row.input, row.field, m.settingsFocus == row.field)
+		pane.addInputRow(width, row.label, row.input, agentDashboardActionFocusSettingsField, row.field, m.settingsFocus == row.field)
 	}
 
 	if len(pane.lines)-startLine >= height {
@@ -1738,7 +1738,7 @@ func (v *agentDashboardView) addClickRow(line string, width int, style lipgloss.
 	})
 }
 
-func (v *agentDashboardView) addSettingsInputRow(width int, label string, input textinput.Model, field int, focused bool) {
+func (v *agentDashboardView) addInputRow(width int, label string, input textinput.Model, action agentDashboardAction, field int, focused bool) {
 	if width <= 0 {
 		width = 1
 	}
@@ -1753,27 +1753,7 @@ func (v *agentDashboardView) addSettingsInputRow(width int, label string, input 
 		x0:     0,
 		x1:     width,
 		y:      y,
-		action: agentDashboardActionFocusSettingsField,
-		field:  field,
-	})
-}
-
-func (v *agentDashboardView) addAddTunnelInputRow(width int, label string, input textinput.Model, field int, focused bool) {
-	if width <= 0 {
-		width = 1
-	}
-	labelStyle := agentDashboardMutedStyle
-	if focused {
-		labelStyle = agentDashboardInputStyle
-	}
-	labelText := agentDashboardCell(label+":", 12)
-	y := len(v.lines)
-	v.lines = append(v.lines, labelStyle.Render(labelText)+" "+input.View())
-	v.regions = append(v.regions, agentDashboardRegion{
-		x0:     0,
-		x1:     width,
-		y:      y,
-		action: agentDashboardActionFocusAddTunnelField,
+		action: action,
 		field:  field,
 	})
 }
