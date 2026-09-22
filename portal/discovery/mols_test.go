@@ -144,21 +144,22 @@ func TestMOLSCongestionModeExcludesFallbackRelays(t *testing.T) {
 	}
 }
 
-func TestMOLSSaltChangesRankings(t *testing.T) {
+func TestMOLSKeyChangesRankings(t *testing.T) {
 	states := make([]RelayState, 6)
 	for i := range states {
 		states[i] = verifiedRelayState(t, fmt.Sprintf("https://relay-%d.example", i))
 	}
 
-	base := RankRelayPool(states, "client-a", 0)
+	base := RankRelayPool(states, "client-a", nil)
 	differ := 0
-	for salt := uint64(1); salt <= 8; salt++ {
-		if !slices.Equal(RankRelayPool(states, "client-a", salt), base) {
+	for i := 1; i <= 8; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		if !slices.Equal(RankRelayPool(states, "client-a", key), base) {
 			differ++
 		}
 	}
 	if differ == 0 {
-		t.Fatal("ranking identical across salts, want salt-mixed hashes to shuffle rankings")
+		t.Fatal("ranking identical across selection keys, want keyed hashes to shuffle rankings")
 	}
 }
 
@@ -168,7 +169,7 @@ func TestMOLSPressureSwapsTopRelayOnly(t *testing.T) {
 		verifiedRelayState(t, "https://relay-b.example"),
 	}
 
-	base := RankRelayPool(pool, "client-a", 0)
+	base := RankRelayPool(pool, "client-a", nil)
 	if len(base) != 2 {
 		t.Fatalf("len(RankRelayPool()) = %d, want 2", len(base))
 	}
@@ -191,7 +192,7 @@ func TestMOLSPressureSwapsTopRelayOnly(t *testing.T) {
 		}
 	}
 
-	got := RankRelayPool(pool, "client-a", 0)
+	got := RankRelayPool(pool, "client-a", nil)
 	if got[0] != base[1] || got[1] != base[0] {
 		t.Fatalf("RankRelayPool() = %v, want adjacent swap of %v", got, base)
 	}

@@ -15,10 +15,11 @@ package discovery
 // (applyActiveStickiness), which retains healthy active relays under the
 // quota.
 //
-// All hashes mix in a per-client selection salt, making rankings
-// unpredictable to outside observers and immune to URL grinding. The sdk
-// derives the salt from the client's persisted identity secret, so rankings
-// stay stable across restarts without any new stored value.
+// All ranking hashes are keyed with a per-client selection key (HMAC-SHA256),
+// making rankings unpredictable to outside observers and immune to URL
+// grinding. The sdk derives the key from the client's persisted identity
+// secret, so rankings stay stable across restarts without any new stored
+// value.
 //
 // Ordering Pipeline:
 //   1. Filter: Apply ban, dead, expiry, and protocol compatibility gates.
@@ -26,6 +27,9 @@ package discovery
 //   3. Demote: Swap out a high-pressure top relay for its healthier peer.
 import (
 	"cmp"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/binary"
 	"math"
 	"slices"
 	"time"
@@ -142,28 +146,18 @@ func molsCongestionScore(row, col, j, m1, m2, order int, ok bool) int {
 	return maxScore - molsScore(row, col, (order-1)-j, m1, m2, order, ok)
 }
 
-// hashToGridIndex maps a string to a stable FNV-1a hash with a 2nd-stage
-// bit-mixing cascade (avalanche diffusion to eliminate clustering), after
-// mixing in the per-client selection salt so rankings are unpredictable to
-// anyone who does not know the salt. Callers fold it into the grid order with
-// % order; the salt only changes across restarts, while the order follows the
-// pool size, so the folded index is stable between membership changes.
-func hashToGridIndex(salt uint64, s string) uint32 {
-	var h uint32 = 2166136261
-	h ^= uint32(salt)
-	h *= 16777619
-	h ^= uint32(salt >> 32)
-	h *= 16777619
-	for i := 0; i < len(s); i++ {
-		h ^= uint32(s[i])
-		h *= 16777619
-	}
-	h ^= h >> 16
-	h *= 0x85ebca6b
-	h ^= h >> 13
-	h *= 0xc2b2ae35
-	h ^= h >> 16
-	return h
+// molsDigest returns a keyed cryptographic digest of s using HMAC-SHA256.
+// The selection key is the per-client secret that makes rankings
+// unpredictable to outside observers and immune to relay URL grinding; the
+// sdk derives it from the client's persisted identity secret, and it stays
+// stable across restarts. The first 8 bytes fold into the grid coordinates
+// (row, col), and the digest also fixes each relay's column order.
+func molsDigest(key []byte, s string) [16]byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(s))
+	var out [16]byte
+	copy(out[:], mac.Sum(nil))
+	return out
 }
 
 // molsCongestionMode reports whether the active pool is congested and whether
@@ -239,9 +233,10 @@ func betterMOLSCandidate(a, b molsCandidate) bool {
 }
 
 // RankRelayPool ranks relay URLs by MOLS priority and observed latency.
-// The salt is the per-client selection secret that makes the ranking
-// unpredictable to outside observers; zero keeps the ranking deterministic.
-func RankRelayPool(autoPool []RelayState, localAddress string, salt uint64) []string {
+// The key is the per-client selection secret that makes the ranking
+// unpredictable to outside observers; a nil key keeps the ranking
+// deterministic (tooling and tests).
+func RankRelayPool(autoPool []RelayState, localAddress string, key []byte) []string {
 	if len(autoPool) == 0 {
 		return nil
 	}
@@ -250,24 +245,24 @@ func RankRelayPool(autoPool []RelayState, localAddress string, salt uint64) []st
 
 	order := len(autoPool)
 	m1, m2, ok := molsMultipliers(order, nonLinear)
-	ingressHash := hashToGridIndex(salt, localAddress)
-	ingressRow := int(ingressHash % uint32(order))
-	ingressCol := int((ingressHash >> 16) % uint32(order))
+	ingressDigest := molsDigest(key, localAddress)
+	ingressRow := int(binary.BigEndian.Uint32(ingressDigest[0:4]) % uint32(order))
+	ingressCol := int(binary.BigEndian.Uint32(ingressDigest[4:8]) % uint32(order))
 
 	type relayHash struct {
-		url  string
-		hash uint32
+		url    string
+		digest [16]byte
 	}
 	sortedRelays := make([]relayHash, order)
 	for i, state := range autoPool {
 		sortedRelays[i] = relayHash{
-			url:  state.Descriptor.APIHTTPSAddr,
-			hash: hashToGridIndex(salt, state.Descriptor.APIHTTPSAddr),
+			url:    state.Descriptor.APIHTTPSAddr,
+			digest: molsDigest(key, state.Descriptor.APIHTTPSAddr),
 		}
 	}
 	slices.SortFunc(sortedRelays, func(a, b relayHash) int {
-		if a.hash != b.hash {
-			return cmp.Compare(a.hash, b.hash)
+		if a.digest != b.digest {
+			return slices.Compare(a.digest[:], b.digest[:])
 		}
 		return cmp.Compare(a.url, b.url)
 	})
@@ -375,7 +370,7 @@ func SelectPriority(states []RelayState, routeState routeState) []string {
 			}
 		}
 	}
-	auto := RankRelayPool(filterCandidatePool(states, routeState, now), routeState.LocalAddress, routeState.SelectionSalt)
+	auto := RankRelayPool(filterCandidatePool(states, routeState, now), routeState.LocalAddress, routeState.SelectionKey)
 	maxActive := routeState.MaxActiveRelays
 	if maxActive <= 0 {
 		maxActive = defaultMaxActiveRelays

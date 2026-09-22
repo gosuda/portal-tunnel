@@ -177,10 +177,11 @@ type routeState struct {
 	// LocalAddress is the ingress identity address used by MOLS route selection to
 	// derive a deterministic row index into the MOLS grid.
 	LocalAddress string
-	// SelectionSalt is the per-client secret mixed into all MOLS hashes. It
-	// makes rankings unpredictable to outside observers and immune to relay
-	// URL grinding; the sdk derives a stable value from the identity private key.
-	SelectionSalt uint64
+	// SelectionKey is the per-client secret key for MOLS ranking hashes. It
+	// makes rankings unpredictable to outside observers and immune to relay URL
+	// grinding; the sdk derives a stable key from the identity private key.
+	// A nil key keeps the ranking deterministic (tooling and tests).
+	SelectionKey []byte
 }
 
 func (state RelayState) supportsRequiredTransports(routeState routeState, now time.Time) bool {

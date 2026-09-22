@@ -52,7 +52,7 @@ type Controller struct {
 	requireUDP      bool
 	requireTCP      bool
 	localAddress    string
-	salt            uint64
+	selectionKey    []byte
 }
 
 // NewController creates a discovery controller from bootstrap relay URLs.
@@ -205,16 +205,16 @@ func (c *Controller) SetLocalAddress(address string) {
 	c.mu.Unlock()
 }
 
-// SetSelectionSalt sets the per-client secret mixed into all MOLS ranking
+// SetSelectionKey sets the per-client secret key mixed into all MOLS ranking
 // hashes, making rankings unpredictable to outside observers and immune to
-// relay URL grinding. The sdk derives a stable value from the identity
-// private key, so rankings stay stable across restarts.
-func (c *Controller) SetSelectionSalt(salt uint64) {
+// relay URL grinding. The sdk derives a stable key from the identity private
+// key, so rankings stay stable across restarts.
+func (c *Controller) SetSelectionKey(key []byte) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
-	c.salt = salt
+	c.selectionKey = append([]byte(nil), key...)
 	c.mu.Unlock()
 }
 
@@ -290,7 +290,7 @@ func (c *Controller) buildRouteState() routeState {
 		RequireUDP:        c.requireUDP,
 		RequireTCP:        c.requireTCP,
 		LocalAddress:      c.localAddress,
-		SelectionSalt:     c.salt,
+		SelectionKey:      append([]byte(nil), c.selectionKey...),
 	}
 }
 
