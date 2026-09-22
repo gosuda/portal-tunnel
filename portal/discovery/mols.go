@@ -1,20 +1,22 @@
 package discovery
 
-// MOLS selection ranks relays on a dynamic NxN grid sized to the current pool.
-// Multipliers are chosen per grid order so m1, m2, and m1-m2 stay coprime to
-// the order; even orders admit no such pair and fall back to a single-square
-// (1,1) score, which remains deterministic and duplicate-free per row.
-// The grid is rebuilt on every selection from the eligible pool, so a node
-// that was evicted or filtered out simply shrinks the grid (N+1 -> N) and the
-// remaining indexes are recomputed mechanically; no stale entries can linger.
-// Because order := len(autoPool), adding, removing, or filtering a relay recomputes
-// all folded indexes and can substantially reshuffle future rankings. This dynamic
-// order trade-off ensures zero stale entries without requiring a fixed grid size.
+// MOLS selection ranks relays on a fixed prime grid sized to at least twice
+// the current pool, so routine membership churn neither reshuffles surviving
+// columns nor folds clients onto new rows; only outgrowing the grid order
+// rebuilds it. Columns are stable hash-based slots (linear probing on
+// collision), so a node that leaves or is filtered out simply frees its slot.
+// The prime order is always odd, so orthogonal multiplier pairs always exist
+// and no single-square fallback is needed.
+//
+// All hashes mix in a per-client selection salt, making rankings
+// unpredictable to outside observers and immune to URL grinding. The sdk
+// derives the salt from the client's persisted identity secret, so rankings
+// stay stable across restarts without any new stored value.
 //
 // Ordering Pipeline:
 //   1. Filter: Apply ban, dead, expiry, and protocol compatibility gates.
 //   2. Rank: Order every eligible candidate deterministically with MOLS.
-//   3. Demote: Move high-latency relays and rising tail latency behind healthier peers.
+//   3. Demote: Swap out a high-pressure top relay for its healthier peer.
 import (
 	"cmp"
 	"math"
@@ -34,6 +36,7 @@ const (
 	molsMinActiveNodes         = 2
 	defaultMaxActiveRelays     = 3
 	molsP2CPressureDelta       = 0.3
+	molsMinGridOrder           = 17
 )
 
 // molsScore computes the MOLS grid score for position (i, j) using multipliers m1 and m2.
@@ -132,12 +135,18 @@ func molsCongestionScore(row, col, j, m1, m2, order int, ok bool) int {
 	return maxScore - molsScore(row, col, (order-1)-j, m1, m2, order, ok)
 }
 
-// hashToGridIndex maps an identity string to a stable FNV-1a hash with a 2nd-stage
-// bit-mixing cascade (avalanche diffusion to eliminate clustering). Callers
-// fold it into the current grid order with % order; the folded index is not
-// stable across orders, so it is recomputed whenever the pool size changes.
-func hashToGridIndex(s string) uint32 {
+// hashToGridIndex maps a string to a stable FNV-1a hash with a 2nd-stage
+// bit-mixing cascade (avalanche diffusion to eliminate clustering), after
+// mixing in the per-client selection salt so rankings are unpredictable to
+// anyone who does not know the salt. Callers fold it into the grid order with
+// % order; the salt and order only change on restart or pool growth, so the
+// folded index is stable across routine membership churn.
+func hashToGridIndex(salt uint64, s string) uint32 {
 	var h uint32 = 2166136261
+	h ^= uint32(salt)
+	h *= 16777619
+	h ^= uint32(salt >> 32)
+	h *= 16777619
 	for i := 0; i < len(s); i++ {
 		h ^= uint32(s[i])
 		h *= 16777619
@@ -148,6 +157,46 @@ func hashToGridIndex(s string) uint32 {
 	h *= 0xc2b2ae35
 	h ^= h >> 16
 	return h
+}
+
+// molsGridOrder returns the fixed MOLS grid order: the smallest prime at
+// least twice the pool size (with a floor), keeping slots sparse enough for
+// linear probing and the order odd so orthogonal multiplier pairs always
+// exist. The order only advances when the pool outgrows it, so adding or
+// removing relays does not reshuffle the surviving columns.
+func molsGridOrder(poolSize int) int {
+	order := max(2*poolSize, molsMinGridOrder)
+	for !isPrime(order) {
+		order++
+	}
+	return order
+}
+
+func isPrime(n int) bool {
+	if n < 2 {
+		return false
+	}
+	for d := 2; d*d <= n; d++ {
+		if n%d == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// molsCongestionMode reports whether the active pool is congested and whether
+// its latency distribution is non-linear. Fallback relays are excluded: their
+// multi-second RTTs reflect unhealthiness, not congestion, and would
+// otherwise flip the ranking into congestion inversion spuriously.
+func molsCongestionMode(states []RelayState) (congested, nonLinear bool) {
+	active := make([]RelayState, 0, len(states))
+	for _, state := range states {
+		if !isRelayFallback(state) {
+			active = append(active, state)
+		}
+	}
+	avgRTT, cv := molsRTTStats(active)
+	return avgRTT > molsCongestionRTTThreshold, cv > molsCVThreshold
 }
 
 // molsRTTStats computes the mean RTT and coefficient of variation across relay states.
@@ -208,18 +257,18 @@ func betterMOLSCandidate(a, b molsCandidate) bool {
 }
 
 // RankRelayPool ranks relay URLs by MOLS priority and observed latency.
-func RankRelayPool(autoPool []RelayState, localAddress string) []string {
+// The salt is the per-client selection secret that makes the ranking
+// unpredictable to outside observers; zero keeps the ranking deterministic.
+func RankRelayPool(autoPool []RelayState, localAddress string, salt uint64) []string {
 	if len(autoPool) == 0 {
 		return nil
 	}
 
-	avgRTT, cv := molsRTTStats(autoPool)
-	congested := avgRTT > molsCongestionRTTThreshold
-	nonLinear := cv > molsCVThreshold
+	congested, nonLinear := molsCongestionMode(autoPool)
 
-	order := len(autoPool)
+	order := molsGridOrder(len(autoPool))
 	m1, m2, ok := molsMultipliers(order, nonLinear)
-	ingressHash := hashToGridIndex(localAddress)
+	ingressHash := hashToGridIndex(salt, localAddress)
 	ingressRow := int(ingressHash % uint32(order))
 	ingressCol := int((ingressHash >> 16) % uint32(order))
 
@@ -227,11 +276,11 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 		url  string
 		hash uint32
 	}
-	sortedRelays := make([]relayHash, order)
+	sortedRelays := make([]relayHash, len(autoPool))
 	for i, state := range autoPool {
 		sortedRelays[i] = relayHash{
 			url:  state.Descriptor.APIHTTPSAddr,
-			hash: hashToGridIndex(state.Descriptor.APIHTTPSAddr),
+			hash: hashToGridIndex(salt, state.Descriptor.APIHTTPSAddr),
 		}
 	}
 	slices.SortFunc(sortedRelays, func(a, b relayHash) int {
@@ -241,8 +290,17 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 		return cmp.Compare(a.url, b.url)
 	})
 
-	relayCols := make(map[string]int, order)
-	for col, rh := range sortedRelays {
+	// Assign each relay a stable column slot: its hash home slot, probing
+	// forward on collision. Surviving relays keep their slots across pool
+	// changes because assignment depends only on the members' hashes.
+	relayCols := make(map[string]int, len(autoPool))
+	used := make([]bool, order)
+	for _, rh := range sortedRelays {
+		col := int(rh.hash % uint32(order))
+		for used[col] {
+			col = (col + 1) % order
+		}
+		used[col] = true
 		relayCols[rh.url] = col
 	}
 
@@ -300,14 +358,13 @@ func RankRelayPool(autoPool []RelayState, localAddress string) []string {
 			return 0
 		})
 
-		// Yield the first candidate's slot when its tail latency exceeds its peer's.
+		// Swap the top slot when its tail latency exceeds its peer's, so a
+		// marginally pressured leader falls one place instead of below worse relays.
 		if len(candidates) >= 2 {
 			p0 := candidates[0].state.Pressure()
 			p1 := candidates[1].state.Pressure()
 			if p0-p1 > molsP2CPressureDelta {
-				overloaded := candidates[0]
-				copy(candidates, candidates[1:])
-				candidates[len(candidates)-1] = overloaded
+				candidates[0], candidates[1] = candidates[1], candidates[0]
 			}
 		}
 
@@ -345,7 +402,7 @@ func SelectPriority(states []RelayState, routeState routeState) []string {
 			}
 		}
 	}
-	auto := RankRelayPool(filterCandidatePool(states, routeState, now), routeState.LocalAddress)
+	auto := RankRelayPool(filterCandidatePool(states, routeState, now), routeState.LocalAddress, routeState.SelectionSalt)
 	maxActive := routeState.MaxActiveRelays
 	if maxActive <= 0 {
 		maxActive = defaultMaxActiveRelays

@@ -119,3 +119,125 @@ func TestSelectPriorityStickinessRetainsEligibleActiveRelay(t *testing.T) {
 		t.Fatalf("SelectPriority() = %v, want the healthy active relay %q retained under the active cap", selected, relayA)
 	}
 }
+
+func TestMOLSGridOrderIsPrimeAndSparse(t *testing.T) {
+	for _, size := range []int{1, 2, 3, 5, 10, 100} {
+		order := molsGridOrder(size)
+		if !isPrime(order) {
+			t.Fatalf("molsGridOrder(%d) = %d, want prime", size, order)
+		}
+		if order < 2*size {
+			t.Fatalf("molsGridOrder(%d) = %d, want >= %d", size, order, 2*size)
+		}
+	}
+	if got, want := molsGridOrder(5), molsGridOrder(4); got != want {
+		t.Fatalf("grid order changed across pool sizes (%d vs %d), want a fixed order", got, want)
+	}
+}
+
+func TestMOLSRankingStableAcrossMembershipChange(t *testing.T) {
+	states := make([]RelayState, 6)
+	for i := range states {
+		states[i] = verifiedRelayState(t, fmt.Sprintf("https://relay-%d.example", i))
+	}
+
+	const salt = 1
+	full := RankRelayPool(states, "client-a", salt)
+	reduced := RankRelayPool(states[:5], "client-a", salt)
+	if len(reduced) != 5 {
+		t.Fatalf("len(RankRelayPool()) = %d, want 5", len(reduced))
+	}
+
+	reducedPos := make(map[string]int, len(reduced))
+	for i, url := range reduced {
+		reducedPos[url] = i
+	}
+	last := -1
+	for _, url := range full {
+		p, ok := reducedPos[url]
+		if !ok {
+			continue
+		}
+		if p < last {
+			t.Fatalf("relative order of surviving relays changed: full=%v reduced=%v", full, reduced)
+		}
+		last = p
+	}
+}
+
+func TestMOLSCongestionModeExcludesFallbackRelays(t *testing.T) {
+	now := time.Now().UTC()
+	healthy := verifiedRelayState(t, "https://healthy.example")
+	healthy.DiscoveryRTT = 80 * time.Millisecond
+	healthy.DiscoveryRTTAt = now
+	fallback := verifiedRelayState(t, "https://fallback.example")
+	fallback.DiscoveryRTT = 5 * time.Second
+	fallback.DiscoveryRTTAt = now
+
+	if congested, _ := molsCongestionMode([]RelayState{healthy, fallback}); congested {
+		t.Fatal("molsCongestionMode() = true, want false: a fallback relay's RTT must not trigger congestion")
+	}
+
+	slowA := verifiedRelayState(t, "https://slow-a.example")
+	slowA.DiscoveryRTT = 600 * time.Millisecond
+	slowA.DiscoveryRTTAt = now
+	slowB := verifiedRelayState(t, "https://slow-b.example")
+	slowB.DiscoveryRTT = 700 * time.Millisecond
+	slowB.DiscoveryRTTAt = now
+	if congested, _ := molsCongestionMode([]RelayState{slowA, slowB}); !congested {
+		t.Fatal("molsCongestionMode() = false, want true for a genuinely slow active pool")
+	}
+}
+
+func TestMOLSSaltChangesRankings(t *testing.T) {
+	states := make([]RelayState, 6)
+	for i := range states {
+		states[i] = verifiedRelayState(t, fmt.Sprintf("https://relay-%d.example", i))
+	}
+
+	base := RankRelayPool(states, "client-a", 0)
+	differ := 0
+	for salt := uint64(1); salt <= 8; salt++ {
+		if !slices.Equal(RankRelayPool(states, "client-a", salt), base) {
+			differ++
+		}
+	}
+	if differ == 0 {
+		t.Fatal("ranking identical across salts, want salt-mixed hashes to shuffle rankings")
+	}
+}
+
+func TestMOLSPressureSwapsTopRelayOnly(t *testing.T) {
+	pool := []RelayState{
+		verifiedRelayState(t, "https://relay-a.example"),
+		verifiedRelayState(t, "https://relay-b.example"),
+	}
+
+	base := RankRelayPool(pool, "client-a", 0)
+	if len(base) != 2 {
+		t.Fatalf("len(RankRelayPool()) = %d, want 2", len(base))
+	}
+
+	// Inflate tail latency on whichever relay MOLS ranked first; the peer
+	// keeps a uniform distribution so its pressure stays zero.
+	top := base[0]
+	for i := range pool {
+		if pool[i].Descriptor.APIHTTPSAddr == top {
+			for j := 0; j < 8; j++ {
+				pool[i].RTTTracker.Add(100 * time.Millisecond)
+			}
+			for j := 0; j < 4; j++ {
+				pool[i].RTTTracker.Add(200 * time.Millisecond)
+			}
+		} else {
+			for j := 0; j < 12; j++ {
+				pool[i].RTTTracker.Add(100 * time.Millisecond)
+			}
+		}
+	}
+
+	got := RankRelayPool(pool, "client-a", 0)
+	if got[0] != base[1] || got[1] != base[0] {
+		t.Fatalf("RankRelayPool() = %v, want adjacent swap of %v", got, base)
+	}
+}

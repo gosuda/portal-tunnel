@@ -2,6 +2,8 @@ package sdk
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -188,6 +190,15 @@ func WithDiscovery(maxActiveRelays int) Option {
 // this mode: the resolved explicit-plus-bootstrap membership must still be
 // non-empty, and without WithDiscovery at least one explicit relay is
 // required.
+// deriveSelectionSalt derives a stable, per-identity secret for MOLS relay
+// ranking from the identity private key, so rankings are unpredictable to
+// outside observers without persisting any new value: the private key is
+// already the long-lived client secret.
+func deriveSelectionSalt(identity types.Identity) uint64 {
+	sum := sha256.Sum256([]byte(identity.PrivateKey))
+	return binary.BigEndian.Uint64(sum[:8])
+}
+
 func Expose(ctx context.Context, identity types.Identity, relays []string, opts ...Option) (*Exposure, error) {
 	var cfg options
 	for _, option := range opts {
@@ -253,6 +264,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		controller.SetMaxActiveRelays(cfg.maxActiveRelays)
 		controller.SetTransportRequirements(cfg.UDPEnabled, cfg.TCPEnabled)
 		controller.SetLocalAddress(identity.Address)
+		controller.SetSelectionSalt(deriveSelectionSalt(identity))
 	} else if len(relayURLs) == 0 {
 		return nil, errors.New("portal sdk: at least one initial relay is required")
 	}
