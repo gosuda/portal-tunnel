@@ -88,7 +88,7 @@ Then ask your agent:
 - Persistent tunnel: “Keep this app available with a persistent Portal agent tunnel and verify the public URL.”
 - Reach a published service: “Check whether `my-app.portal.example.com` is up and fetch its JSON API.”
 
-Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md).
+Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md). Without installing anything, any agent with web access can be told `Read https://<relay>/llms.txt and follow it. Expose my app on port 3000.`; every relay serves that page and it links the skills.
 
 ### Expose a local service
 

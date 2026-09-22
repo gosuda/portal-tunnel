@@ -54,6 +54,15 @@ portal expose --serve ./dist --name my-site --relays %s --discovery=false
 
 ## For AI Agents
 
+You do not need to install anything to help with Portal. Fetch the skill file linked below for the task and follow it as your instructions; it is plain Markdown. If the user only says "read this page and expose my app on port 3000", that is enough: use %s as the relay, choose a DNS-safe public name, and follow the portal-expose skill.
+
+To keep the skills across sessions in a host that supports plugins, install them once from GitHub:
+
+- Claude Code: `claude plugin marketplace add gosuda/portal-tunnel` then `claude plugin install portal-deploy@portal-tunnel`
+- Codex: `codex plugin marketplace add gosuda/portal-tunnel` then `codex plugin add portal-deploy@portal-tunnel`
+- Cursor: reads the same repository manifest; see https://github.com/gosuda/portal-tunnel/blob/main/plugins/portal-deploy/README.md
+- Any other agent: fetch and follow the raw skill files; no install exists or is needed.
+
 If the user asks you to expose, publish, share, tunnel, connect an app to this relay, or create a public preview of a local application, read and follow:
 
 - [portal-expose skill](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md): Inspect the local app, verify it locally, run the same install-and-expose command this relay's page generates (built from the app settings), verify the public endpoint, and hand off lifecycle information.

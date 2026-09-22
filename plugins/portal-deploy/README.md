@@ -84,6 +84,32 @@ The skills appear as `/portal-expose`, `/portal-relay`, and `/portal-connect`.
 
 When importing the whole `portal-tunnel` repository, `.cursor-plugin/marketplace.json` locates the nested `plugins/portal-deploy` plugin root.
 
+## Guide any AI with one sentence
+
+Every Portal relay serves `/llms.txt`, which links these skills and tells an agent that no installation is needed. So the shortest instruction that works in any assistant with web access is:
+
+```text
+Read https://portal.example.com/llms.txt and follow it. Expose my app on port 3000 as my-app.
+```
+
+The agent fetches the skill file from GitHub and follows it. The host-specific installs above only make the skills persist between sessions.
+
+## Keep the app's Portal settings in the repository
+
+Add a short block to the app repository's `AGENTS.md` or `CLAUDE.md` so nobody has to repeat the relay, port, or name:
+
+```markdown
+## Portal
+
+- Publish this app by following https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md
+- Relay: https://portal.example.com, passed as --relays with --discovery=false
+- Share: 3000 (a port, an http URL, or a static directory)
+- Public name: my-app
+- Identity file: ~/.config/portal-tunnel/identities/my-app.json, never committed
+```
+
+An agent working in that repository then has every value the relay's quick-start form would ask for. Projects that prefer a config file can express the same settings as a `portal agent` TOML and point the block at it.
+
 ## Example prompts
 
 - `Deploy the app in this repository with Portal and verify the public URL.`
