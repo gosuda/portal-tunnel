@@ -15,7 +15,7 @@ Run the workflow in order. Open a reference only when that branch is taken: `ref
 Use the smallest mode that satisfies the request:
 
 - Temporary web preview: `portal expose <target>`.
-- Connect the app to a relay the user picked, as its website's quick start does: install from that relay if Portal is missing, then `portal expose <target> --name <name> --relays <relay-url>`, with `--discovery=false` when only that relay should carry the app.
+- Connect the app to a relay the user picked, as its website's quick start does: install Portal from the official GitHub installer if it is missing, then `portal expose <target> --name <name> --relays <relay-url>`, with `--discovery=false` when only that relay should carry the app.
 - Trusted static directory or HTML entry: `portal expose --serve <path>`.
 - Multiple local HTTP services under one URL: repeat `--http-route`.
 - Paid HTTP path: routed HTTP with an explicit x402 payment contract; never enable payment implicitly.
@@ -51,7 +51,7 @@ For x402, do not guess the protected path, payment methods, amount, network, rec
 ### 3. Check Portal
 
 - Run `portal version` when `portal` is available.
-- If Portal is missing, present the install method and request approval before running it because installation writes outside the project: the official GitHub installer, or the chosen relay's own `<relay>/api/install.sh` (`install.ps1` on Windows) when the user is onboarding to that relay from its website. Never run an installer from a relay the user did not choose or from a third-party URL.
+- If Portal is missing, present the official GitHub installer and request approval before running it because installation writes outside the project. A relay also serves an installer at `<relay>/api/install.sh` (`install.ps1` on Windows), but the relay then supplies the script, the binary, and the checksum together, so nothing in that download is verified independently of the relay. Use it only when the user explicitly prefers it, and before running the installed binary compare its SHA-256 with the `checksums.txt` or `.sha256` asset of the matching GitHub release, fetched from github.com rather than from the relay. Never run an installer from a relay the user did not choose or from a third-party URL.
 - Do not assume a hard-coded latest release or stale flags. Use the installed Portal version as the compatibility baseline.
 
 ### 4. Build the Command or Agent Config
