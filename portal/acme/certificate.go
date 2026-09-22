@@ -15,7 +15,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/go-acme/lego/v4/certcrypto"
@@ -75,12 +74,6 @@ func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
 		return false
 	}
 	for _, domain := range domains {
-		if wildcardDomain, ok := strings.CutPrefix(domain, "*."); ok {
-			if cert.VerifyHostname("probe."+wildcardDomain) != nil {
-				return false
-			}
-			continue
-		}
 		if cert.VerifyHostname(domain) != nil {
 			return false
 		}
@@ -182,9 +175,6 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	}
 
 	if err := utils.EnsureParentDir(keyFile); err != nil {
-		return err
-	}
-	if err := utils.EnsureParentDir(certFile); err != nil {
 		return err
 	}
 
