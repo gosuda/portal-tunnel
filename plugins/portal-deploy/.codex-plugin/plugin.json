@@ -8,7 +8,7 @@
   "interface": {
     "displayName": "Portal Deploy",
     "shortDescription": "Expose local apps via Portal",
-    "longDescription": "Start or inspect a local app, publish it through Portal, verify the public HTTPS endpoint, and hand off a safe stop or persistence workflow. Or discover a service that someone else published through Portal, verify it is reachable, and handle x402 payment challenges with explicit approval.",
+    "longDescription": "Start or inspect a local app, publish it through Portal, verify the public HTTPS endpoint, and hand off a safe stop or persistence workflow. Or discover a service that someone else published through Portal, verify it is reachable, and report the terms of an x402 payment challenge without paying.",
     "developerName": "gosuda",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],

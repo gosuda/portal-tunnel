@@ -134,7 +134,7 @@ curl -sS --connect-timeout 5 --max-time 15 -o /dev/null \
 |-------------|---------|
 | `200`..`399` | reachable |
 | `401`, `403` | reachable, application requires auth |
-| `402` | reachable, route is paid; see `x402-client.md` |
+| `402` | reachable, route is paid; read the challenge (next section) and report it |
 | `404` | reachable, path missing on the publisher's app |
 | `5xx`, Portal error page | tunnel up, publisher's app failing |
 | `000`, exit `35` (TLS handshake failure), reset, or immediate close | relay has no live lease for that hostname |
@@ -143,6 +143,23 @@ curl -sS --connect-timeout 5 --max-time 15 -o /dev/null \
 | `healthz` fails | relay down; nothing can be concluded about its services |
 
 The TLS failure case exists because the relay routes on the TLS SNI hostname and closes connections for names it does not know. There is no HTTP layer at that point, so there is no error page. Relays answer wildcard DNS for their zone, so every label under the relay host resolves to the relay itself; a successful lookup is not evidence of a lease.
+
+## Reading a 402 challenge
+
+A paid route answers `402` with `Content-Type: application/json` and the same JSON base64-encoded in the `PAYMENT-REQUIRED` and `X-PAYMENT-REQUIRED` headers:
+
+```json
+{
+  "x402Version": 2,
+  "error": "payment required",
+  "resource": { "url": "https://paid-app.portal.example.com/paid", "description": "", "mimeType": "" },
+  "accepts": [
+    { "scheme": "exact", "network": "sui:testnet", "asset": "0x...::usdc::USDC", "amount": "10000", "payTo": "0x...", "maxTimeoutSeconds": 60, "extra": { "paymentFlow": "upfront" } }
+  ]
+}
+```
+
+`amount` is an integer string in atomic units: Sui USDC has 6 decimals (`"10000"` is 0.01 USDC), Casper wCSPR has 9. `network` says whether it is mainnet or testnet. Report those terms and stop; this skill does not pay, sign, or call `/x402/prepare`.
 
 ## Loopback relay
 

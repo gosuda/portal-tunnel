@@ -104,7 +104,7 @@ require github.com/gosuda/portal-tunnel/v2 v2.5.0
 
 ## Paid routes
 
-The SDK is payment-agnostic. The x402 gateway lives in `cmd/portal-tunnel/agent`, which is CLI composition, not an SDK contract; do not import it into an app. An app that needs x402 wires `github.com/gosuda/x402-facilitator` directly, the way `cmd/payment-app/handler.go` does: build `PaymentRequirements`, create the Sui facilitator, wrap only the paid handler with `x402http.New(...).Wrap(...)`, and mount `suihttp.ClientHandler()` at `/x402/client.js` and `suihttp.NewPrepareHandler(...)` at `/x402/prepare` so browser and native clients can pay. The consumer side of that flow is documented in the `portal-connect` skill.
+The SDK is payment-agnostic. The x402 gateway lives in `cmd/portal-tunnel/agent`, which is CLI composition, not an SDK contract; do not import it into an app. An app that needs x402 wires `github.com/gosuda/x402-facilitator` directly, the way `cmd/payment-app/handler.go` does: build `PaymentRequirements`, create the Sui facilitator, wrap only the paid handler with `x402http.New(...).Wrap(...)`, and mount `suihttp.ClientHandler()` at `/x402/client.js` and `suihttp.NewPrepareHandler(...)` at `/x402/prepare` so browser and native clients can pay. On the consumer side, `portal-connect` recognizes and reports a `402`; paying it is a planned separate skill.
 
 ## Verify like the CLI
 
