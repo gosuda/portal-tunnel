@@ -98,6 +98,24 @@ func TestMarshalSerializesValidIdentity(t *testing.T) {
 	}
 }
 
+func TestSecp256k1RejectsMalformedKeyMaterial(t *testing.T) {
+	for _, raw := range []string{"0x01", "0xzz", strings.Repeat("00", 32)} {
+		t.Run("private "+raw, func(t *testing.T) {
+			if _, err := ResolveSecp256k1Identity(raw); err == nil {
+				t.Fatal("malformed private key accepted")
+			}
+		})
+	}
+
+	for _, raw := range []string{"0x02", "0xzz", strings.Repeat("02", 32)} {
+		t.Run("public "+raw, func(t *testing.T) {
+			if _, err := ParseSecp256k1PublicKeyHex(raw); err == nil {
+				t.Fatal("malformed public key accepted")
+			}
+		})
+	}
+}
+
 func TestNewRegisterChallengeNormalizesWireIdentity(t *testing.T) {
 	generated := mustGenerate(t, "wire-check")
 	challenge, err := NewRegisterChallenge(types.RegisterChallengeRequest{
