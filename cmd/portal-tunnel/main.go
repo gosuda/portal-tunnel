@@ -19,7 +19,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
@@ -178,14 +178,14 @@ func runExposeCommand(args []string) error {
 		return errors.New("--udp cannot be combined with --http-route")
 	}
 
-	httpRoutes := make([]agent.ExposedHTTPRoute, 0, len(httpRouteInputs)+1)
+	httpRoutes := make([]gateway.ExposedHTTPRoute, 0, len(httpRouteInputs)+1)
 	if serve != "" {
 		root, index, err := utils.ResolveStaticSite(serve)
 		if err != nil {
 			printExposeUsage(os.Stderr)
 			return fmt.Errorf("--serve %q: %w", serve, err)
 		}
-		httpRoutes = append(httpRoutes, agent.ExposedHTTPRoute{
+		httpRoutes = append(httpRoutes, gateway.ExposedHTTPRoute{
 			Prefix:      "/",
 			StaticRoot:  root,
 			StaticIndex: index,
@@ -211,7 +211,7 @@ func runExposeCommand(args []string) error {
 		if upstream == "" {
 			return fmt.Errorf("--http-route %q: upstream is required", raw)
 		}
-		route := agent.ExposedHTTPRoute{
+		route := gateway.ExposedHTTPRoute{
 			Prefix:   prefix,
 			Upstream: upstream,
 		}
@@ -229,7 +229,7 @@ func runExposeCommand(args []string) error {
 		httpRoutes = append(httpRoutes, route)
 	}
 	if flags.auth && len(httpRoutes) == 0 {
-		httpRoutes = append(httpRoutes, agent.ExposedHTTPRoute{Prefix: "/", Upstream: flags.targetAddr})
+		httpRoutes = append(httpRoutes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: flags.targetAddr})
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(flags.x402Network)), "casper:") && strings.TrimSpace(flags.x402Asset) == "" {
 		return errors.New("--x402-asset is required for Casper wCSPR payments")
@@ -294,7 +294,7 @@ func runExposeCommand(args []string) error {
 	}
 	if len(httpRoutes) > 0 {
 		defer exposure.Close()
-		handler, err := agent.ComposeHTTPRoutes(httpRoutes, agent.X402Payment{
+		handler, err := gateway.ComposeHTTPRoutes(httpRoutes, gateway.X402Payment{
 			Testnet:          flags.x402Testnet,
 			Network:          flags.x402Network,
 			Asset:            flags.x402Asset,
@@ -306,7 +306,7 @@ func runExposeCommand(args []string) error {
 			return err
 		}
 		if flags.auth {
-			handler, err = agent.NewApplicationAuth(handler, listenerIdentity, agent.ApplicationAuthConfig{
+			handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, gateway.ApplicationAuthConfig{
 				AllowedWallets:  flags.authAllowedWallets,
 				IdentityHeaders: flags.authIdentityHeaders,
 			})

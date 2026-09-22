@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -673,20 +674,20 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.lastError = ""
 	t.mu.Unlock()
 
-	routes := make([]ExposedHTTPRoute, 0, len(cfg.HTTPRoutes)+1)
+	routes := make([]gateway.ExposedHTTPRoute, 0, len(cfg.HTTPRoutes)+1)
 	if cfg.Serve != "" {
 		root, index, err := utils.ResolveStaticSite(cfg.Serve)
 		if err != nil {
 			return fmt.Errorf("tunnel %q serve %q: %w", cfg.ID, cfg.Serve, err)
 		}
-		routes = append(routes, ExposedHTTPRoute{
+		routes = append(routes, gateway.ExposedHTTPRoute{
 			Prefix:      "/",
 			StaticRoot:  root,
 			StaticIndex: index,
 		})
 	}
 	for _, route := range cfg.HTTPRoutes {
-		routes = append(routes, ExposedHTTPRoute{
+		routes = append(routes, gateway.ExposedHTTPRoute{
 			Prefix:   route.Prefix,
 			Upstream: route.Upstream,
 			Methods:  route.Methods,
@@ -694,7 +695,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		})
 	}
 	if cfg.Auth && len(routes) == 0 {
-		routes = append(routes, ExposedHTTPRoute{Prefix: "/", Upstream: cfg.TargetAddr})
+		routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: cfg.TargetAddr})
 	}
 
 	discovery := true
@@ -751,7 +752,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	}()
 
 	if len(routes) > 0 {
-		handler, routeErr := ComposeHTTPRoutes(routes, X402Payment{
+		handler, routeErr := gateway.ComposeHTTPRoutes(routes, gateway.X402Payment{
 			Testnet:          cfg.X402Testnet,
 			Network:          cfg.X402Network,
 			Asset:            cfg.X402Asset,
@@ -763,7 +764,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 			return routeErr
 		}
 		if cfg.Auth {
-			handler, routeErr = NewApplicationAuth(handler, listenerIdentity, ApplicationAuthConfig{
+			handler, routeErr = gateway.NewApplicationAuth(handler, listenerIdentity, gateway.ApplicationAuthConfig{
 				AllowedWallets:  cfg.AuthAllowedWallets,
 				IdentityHeaders: cfg.AuthIdentityHeaders,
 			})
