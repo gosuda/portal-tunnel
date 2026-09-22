@@ -55,10 +55,10 @@ The game server must be running and listening on its expected port before the tu
 portal expose <game-port> --udp --name <name>
 ```
 
-Canonical Palworld example from the docs, with `--udp-addr` stated explicitly:
+UDP-only Palworld example; `--udp-addr` is needed only when the UDP port differs from the positional target:
 
 ```sh
-portal expose localhost:8211 --udp --udp-addr localhost:8211 --name <name>
+portal expose 127.0.0.1:8211 --udp --name <name>
 ```
 
 or for TCP:

@@ -20,8 +20,8 @@ No Portal software is needed on the connecting side. Use the protocol's normal c
 | Minecraft Java | add a multiplayer server with address `<hostname>:<port>` |
 | Minecraft Bedrock (UDP) | add a server with `<hostname>` and the UDP port |
 | SSH | `ssh -p <port> <user>@<hostname>` |
-| PostgreSQL | `psql "host=<hostname> port=<port> sslmode=require dbname=..."` |
-| Redis | `redis-cli -h <hostname> -p <port> --tls` when the server offers TLS |
+| PostgreSQL | `psql "host=<hostname> port=<port> sslmode=verify-full sslrootcert=<CA file from the publisher> dbname=..."`; `require` only encrypts and does not verify the server, so do not send credentials until `verify-full` is configured |
+| Redis | `redis-cli -h <hostname> -p <port> --tls --cacert <CA file from the publisher>` when the server offers TLS |
 | Anything else | the protocol's client, or `nc <hostname> <port>` for a manual session |
 
 ## What the relay can see

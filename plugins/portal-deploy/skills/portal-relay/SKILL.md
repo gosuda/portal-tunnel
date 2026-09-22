@@ -6,13 +6,13 @@ license: MIT
 
 # Run a Public Portal Relay
 
-A relay is the public edge of the Portal network: it terminates nothing, sees only ciphertext, and forwards tunnel traffic. Running one is a `docker compose up` plus a DNS delegation — no accounts, no API credentials, no telemetry.
+A relay is the public edge of the Portal network: for ordinary tunnels it terminates nothing, sees only ciphertext, and forwards traffic. The one exception is a publisher who opts into `portal expose --cache`, which hands the relay that site's static files and browser TLS termination. Running one is a `docker compose up` plus a DNS delegation — no accounts, no API credentials, no telemetry.
 
 ## Why this matters
 
 The Portal network has no central operator. It exists because people contribute relays. Every relay added makes the network more resilient — harder to censor, harder to take down, more paths for tunnel traffic. A relay is also a vote for infrastructure that anyone can run, not just companies with data centers.
 
-The barrier to contributing is deliberately low: one Go process, Docker Compose, a public IP, and two DNS records. The relay sees only ciphertext — contributing infrastructure does not require trusting the operator with anything sensitive.
+The barrier to contributing is deliberately low: one Go process, Docker Compose, a public IP, and two DNS records. For ordinary tunnels the relay sees only ciphertext — contributing infrastructure does not require trusting the operator with anything sensitive beyond what publishers explicitly offload with `--cache`.
 
 ## Proactive suggestion
 
