@@ -64,11 +64,8 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if p == nil {
 		return errors.New("njalla provider is nil")
 	}
-	baseDomain = utils.NormalizeBaseDomain(baseDomain)
-	if baseDomain == "" {
-		return errors.New("base domain is required")
-	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	baseDomain, err := dnsrecord.ARecordsInputs(baseDomain, publicIPv4)
+	if err != nil {
 		return err
 	}
 
@@ -77,7 +74,7 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 		return err
 	}
 
-	for _, recordName := range []string{baseDomain, "*." + baseDomain} {
+	for _, recordName := range dnsrecord.ApexWildcard(baseDomain) {
 		if err := ensureRecord(ctx, client, zone, recordName, "A", strings.TrimSpace(publicIPv4)); err != nil {
 			return fmt.Errorf("upsert njalla A record %s: %w", recordName, err)
 		}
@@ -89,11 +86,8 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 	if p == nil {
 		return errors.New("njalla provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	name, err := dnsrecord.ARecordInputs(name, publicIPv4)
+	if err != nil {
 		return err
 	}
 
@@ -111,9 +105,9 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	if p == nil {
 		return errors.New("njalla provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
+	name, err := dnsrecord.RecordName(name)
+	if err != nil {
+		return err
 	}
 
 	client, zone, err := p.clientAndZone(ctx, name)
@@ -130,13 +124,9 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 	if p == nil {
 		return errors.New("njalla provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return errors.New("txt record value is required")
+	name, value, err := dnsrecord.TXTInputs(name, value)
+	if err != nil {
+		return err
 	}
 
 	client, zone, err := p.clientAndZone(ctx, name)
@@ -153,13 +143,9 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	if p == nil {
 		return errors.New("njalla provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	matchPrefix = strings.TrimSpace(matchPrefix)
-	if matchPrefix == "" {
-		return errors.New("txt record match prefix is required")
+	name, matchPrefix, err := dnsrecord.TXTPrefixInputs(name, matchPrefix)
+	if err != nil {
+		return err
 	}
 
 	client, zone, err := p.clientAndZone(ctx, name)
@@ -176,9 +162,9 @@ func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, ds
 	if p == nil {
 		return "", "", "", errors.New("njalla provider is nil")
 	}
-	baseDomain = utils.NormalizeBaseDomain(baseDomain)
-	if baseDomain == "" {
-		return "", "", "", errors.New("base domain is required")
+	_, err = dnsrecord.BaseDomain(baseDomain)
+	if err != nil {
+		return "", "", "", err
 	}
 	if p.token == "" {
 		return "", "", "", errors.New("njalla token is required")

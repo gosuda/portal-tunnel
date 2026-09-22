@@ -9,6 +9,94 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// RecordName validates a fully qualified record name and returns it
+// normalized.
+func RecordName(raw string) (string, error) {
+	name := utils.NormalizeHostname(raw)
+	if name == "" {
+		return "", errors.New("record name is required")
+	}
+	return name, nil
+}
+
+// BaseDomain validates a zone base domain and returns it normalized.
+func BaseDomain(raw string) (string, error) {
+	name := utils.NormalizeBaseDomain(raw)
+	if name == "" {
+		return "", errors.New("base domain is required")
+	}
+	return name, nil
+}
+
+// ARecordInputs validates an A-record upsert's record name and public IPv4
+// address, returning the normalized record name.
+func ARecordInputs(name, publicIPv4 string) (string, error) {
+	name, err := RecordName(name)
+	if err != nil {
+		return "", err
+	}
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// ARecordsInputs validates an apex and wildcard A-record upsert's base domain
+// and public IPv4 address, returning the normalized base domain.
+func ARecordsInputs(baseDomain, publicIPv4 string) (string, error) {
+	baseDomain, err := BaseDomain(baseDomain)
+	if err != nil {
+		return "", err
+	}
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+		return "", err
+	}
+	return baseDomain, nil
+}
+
+// TXTInputs validates a TXT upsert's record name and value, returning both
+// normalized.
+func TXTInputs(name, value string) (string, string, error) {
+	name, err := RecordName(name)
+	if err != nil {
+		return "", "", err
+	}
+	value, err = required(value, "txt record value")
+	if err != nil {
+		return "", "", err
+	}
+	return name, value, nil
+}
+
+// TXTPrefixInputs validates a TXT deletion's record name and match prefix,
+// returning both normalized.
+func TXTPrefixInputs(name, matchPrefix string) (string, string, error) {
+	name, err := RecordName(name)
+	if err != nil {
+		return "", "", err
+	}
+	matchPrefix, err = required(matchPrefix, "txt record match prefix")
+	if err != nil {
+		return "", "", err
+	}
+	return name, matchPrefix, nil
+}
+
+// ApexWildcard lists the apex and wildcard record names published for a base
+// domain.
+func ApexWildcard(baseDomain string) []string {
+	return []string{baseDomain, "*." + baseDomain}
+}
+
+// required trims raw and reports an empty input as "<label> is required".
+func required(raw, label string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("%s is required", label)
+	}
+	return value, nil
+}
+
 // RelativeName converts a fully qualified record name into the form expected
 // by DNS provider APIs while preserving provider-specific error messages.
 func RelativeName(provider, fqdn, zone string) (string, error) {

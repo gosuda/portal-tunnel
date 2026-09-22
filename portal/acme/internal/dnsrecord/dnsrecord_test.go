@@ -76,6 +76,230 @@ func TestNameMatches(t *testing.T) {
 	}
 }
 
+func TestRecordName(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr string
+	}{
+		{name: "normalized", raw: "Portal.Example.COM.", want: "portal.example.com"},
+		{name: "empty", raw: "", wantErr: "record name is required"},
+		{name: "blank", raw: "   ", wantErr: "record name is required"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := RecordName(tc.raw)
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("RecordName() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RecordName() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("RecordName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBaseDomain(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr string
+	}{
+		{name: "normalized", raw: "Example.COM.", want: "example.com"},
+		{name: "empty", raw: "", wantErr: "base domain is required"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := BaseDomain(tc.raw)
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("BaseDomain() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("BaseDomain() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("BaseDomain() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestARecordInputs(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		recordName string
+		publicIPv4 string
+		want       string
+		wantErr    string
+	}{
+		{name: "valid", recordName: "example.com", publicIPv4: "203.0.113.10", want: "example.com"},
+		{name: "empty name", recordName: "", publicIPv4: "203.0.113.10", wantErr: "record name is required"},
+		{name: "invalid ip", recordName: "example.com", publicIPv4: "not-an-ip", wantErr: `invalid ipv4 address: "not-an-ip"`},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ARecordInputs(tc.recordName, tc.publicIPv4)
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("ARecordInputs() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ARecordInputs() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ARecordInputs() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestARecordsInputs(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		baseDomain string
+		publicIPv4 string
+		want       string
+		wantErr    string
+	}{
+		{name: "valid", baseDomain: "example.com", publicIPv4: "203.0.113.10", want: "example.com"},
+		{name: "empty domain", baseDomain: "", publicIPv4: "203.0.113.10", wantErr: "base domain is required"},
+		{name: "invalid ip", baseDomain: "example.com", publicIPv4: "not-an-ip", wantErr: `invalid ipv4 address: "not-an-ip"`},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ARecordsInputs(tc.baseDomain, tc.publicIPv4)
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("ARecordsInputs() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ARecordsInputs() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ARecordsInputs() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTXTInputs(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		recordName string
+		value      string
+		wantName   string
+		wantValue  string
+		wantErr    string
+	}{
+		{name: "valid", recordName: "_ens.example.com", value: " portal ", wantName: "_ens.example.com", wantValue: "portal"},
+		{name: "empty name", recordName: "", value: "portal", wantErr: "record name is required"},
+		{name: "empty value", recordName: "_ens.example.com", value: "  ", wantErr: "txt record value is required"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotName, gotValue, err := TXTInputs(tc.recordName, tc.value)
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("TXTInputs() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("TXTInputs() error = %v", err)
+			}
+			if gotName != tc.wantName || gotValue != tc.wantValue {
+				t.Fatalf("TXTInputs() = %q, %q, want %q, %q", gotName, gotValue, tc.wantName, tc.wantValue)
+			}
+		})
+	}
+}
+
+func TestTXTPrefixInputs(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		recordName  string
+		matchPrefix string
+		wantName    string
+		wantPrefix  string
+		wantErr     string
+	}{
+		{name: "valid", recordName: "_ens.example.com", matchPrefix: " portal", wantName: "_ens.example.com", wantPrefix: "portal"},
+		{name: "empty name", recordName: "", matchPrefix: "portal", wantErr: "record name is required"},
+		{name: "empty prefix", recordName: "_ens.example.com", matchPrefix: "", wantErr: "txt record match prefix is required"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotName, gotPrefix, err := TXTPrefixInputs(tc.recordName, tc.matchPrefix)
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("TXTPrefixInputs() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("TXTPrefixInputs() error = %v", err)
+			}
+			if gotName != tc.wantName || gotPrefix != tc.wantPrefix {
+				t.Fatalf("TXTPrefixInputs() = %q, %q, want %q, %q", gotName, gotPrefix, tc.wantName, tc.wantPrefix)
+			}
+		})
+	}
+}
+
+func TestApexWildcard(t *testing.T) {
+	t.Parallel()
+
+	got := ApexWildcard("example.com")
+	if len(got) != 2 || got[0] != "example.com" || got[1] != "*.example.com" {
+		t.Fatalf("ApexWildcard() = %v", got)
+	}
+}
+
 func TestTXTContent(t *testing.T) {
 	t.Parallel()
 
