@@ -116,10 +116,7 @@ func main() {
 // (Press et al.). Accurate to ~1e-7 for the parameter ranges used here
 // (s = df/2 ≥ 0.5, x = chi2/2 ≥ 0).
 func igamc(s, x float64) float64 {
-	if x < 0 || s <= 0 {
-		return 1.0
-	}
-	if x == 0 {
+	if x <= 0 || s <= 0 {
 		return 1.0
 	}
 

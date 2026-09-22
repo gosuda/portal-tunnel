@@ -244,7 +244,6 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 	if !utils.FileExists(certFile) || !utils.FileExists(keyFile) {
 		return "", "", false, nil
 	}
-	var err error
 	covered, err := certCoversDomains(certFile, certificateDomains(m.cfg.BaseDomain))
 	if err != nil {
 		return "", "", false, fmt.Errorf("validate relay certificate: %w", err)
