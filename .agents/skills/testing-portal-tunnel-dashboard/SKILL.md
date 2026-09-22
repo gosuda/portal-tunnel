@@ -32,7 +32,14 @@ The `portal-tunnel agent dashboard` TUI looks like it needs a running agent, but
 
 ## Verifying provider input validation without credentials
 
-The six `portal/acme/*` providers (`cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, `vultr`) validate method inputs before touching credentials or the network, and all have exported constructors. A throwaway Go module with `replace github.com/gosuda/portal-tunnel/v2 => <repo>` can call e.g. `p.EnsureARecord(ctx, "", "1.2.3.4")` and assert exact error strings ("record name is required", `invalid ipv4 address: "..."`, etc.). With a syntactically valid input + fake token, several providers (hetzner, njalla, vultr) reach the real HTTP API and return 401s — proof inputs traversed the full path. Set `AWS_EC2_METADATA_DISABLED=true` so route53 credential resolution fails fast instead of probing IMDS; gcloud fails fast on a missing project id.
+The six `portal/acme/*` providers (`cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, `vultr`) validate method inputs in `internal/dnsrecord` before hitting the network, and all have exported constructors. A throwaway Go module with `replace github.com/gosuda/portal-tunnel/v2 => <repo>` can call e.g. `p.EnsureARecord(ctx, "", "1.2.3.4")` and assert exact error strings ("record name is required", `invalid ipv4 address: "..."`, etc.).
+
+Two providers gate before or right after the input checks:
+
+- cloudflare checks `p.token` before validating inputs — construct with any nonempty token (`cloudflare.New("tk")`) or you get `cloudflare token is required` instead of the input error.
+- gcloud validates inputs first, then resolves credentials — an invalid input still yields the input error, but the next failure is `load gcloud credentials` on a machine without ambient ADC, or `gcloud project id is required` when credentials resolve but carry no project.
+
+With a syntactically valid input + fake token, several providers (hetzner, njalla, vultr) reach the real HTTP API and return 401s — proof inputs traversed the full path. Set `AWS_EC2_METADATA_DISABLED=true` so route53 credential resolution fails fast instead of probing IMDS.
 
 ## Repo conventions worth knowing
 
