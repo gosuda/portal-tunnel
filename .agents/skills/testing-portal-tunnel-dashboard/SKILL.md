@@ -39,7 +39,7 @@ Two providers gate before or right after the input checks:
 - cloudflare checks `p.token` before validating inputs — construct with any nonempty token (`cloudflare.New("tk")`) or you get `cloudflare token is required` instead of the input error.
 - gcloud validates inputs first, then resolves credentials — an invalid input still yields the input error, but the next failure is `load gcloud credentials` on a machine without ambient ADC, or `gcloud project id is required` when credentials resolve but carry no project.
 
-With a syntactically valid input + fake token, several providers (hetzner, njalla, vultr) reach the real HTTP API and return 401s — proof inputs traversed the full path. Set `AWS_EC2_METADATA_DISABLED=true` so route53 credential resolution fails fast instead of probing IMDS.
+Set `AWS_EC2_METADATA_DISABLED=true` so route53 credential resolution fails fast instead of probing IMDS. Optional stronger check (hits real APIs — skip for offline runs): with a syntactically valid input + fake token, hetzner, njalla, and vultr reach their real HTTP APIs and return 401s — proof inputs traversed the full path.
 
 ## Repo conventions worth knowing
 
