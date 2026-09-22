@@ -87,12 +87,18 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 		t.Fatalf("identity headers = %q, %q", upstreamUser, upstreamAuth)
 	}
 
+	// A verified challenge is a short-lived proof: replaying it
+	// re-authenticates the same wallet and issues a fresh session
+	// (siweauth keeps no replay state, issue #530).
 	replayReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthVerifyPath, bytes.NewReader(verifyBody))
 	replayReq.Header.Set("Origin", "https://app.example")
 	replayRec := httptest.NewRecorder()
 	handler.ServeHTTP(replayRec, replayReq)
-	if replayRec.Code != http.StatusUnauthorized {
-		t.Fatalf("challenge replay status = %d; want %d", replayRec.Code, http.StatusUnauthorized)
+	if replayRec.Code != http.StatusOK {
+		t.Fatalf("challenge replay status = %d; want %d", replayRec.Code, http.StatusOK)
+	}
+	if len(replayRec.Result().Cookies()) != 1 {
+		t.Fatalf("challenge replay session cookie missing")
 	}
 }
 

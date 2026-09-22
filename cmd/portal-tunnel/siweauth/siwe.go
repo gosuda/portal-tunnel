@@ -6,12 +6,14 @@
 // issuance consumes no server state and an unauthenticated flood of
 // challenge requests cannot exhaust login capacity (issue #530). The token
 // travels to the wallet as the opaque challenge ID; its embedded payload
-// ID doubles as the SIWE request ID. The only stored state is a bounded
-// consumed-replay set that keeps a verified challenge from being used
-// twice. Each authenticator generates its challenge-signing key at
-// construction, so issued challenges are bound to the process: a restart
-// invalidates outstanding and consumed challenges alike. Source IP
-// addresses and
+// ID doubles as the SIWE request ID. Verification keeps no state either:
+// a replayed token within its TTL re-authenticates the same wallet,
+// which cannot create a new identity or bypass signature verification,
+// so replay tracking — and the global capacity failure mode it would
+// reintroduce — is deliberately omitted. Each authenticator generates
+// its challenge-signing key at construction, so issued challenges are
+// bound to the authenticator instance: recreating it invalidates
+// outstanding challenges. Source IP addresses and
 // relay connection identities are deliberately not used to rate-limit
 // issuance: neither is a trustworthy browser identity through relay
 // transport, so limiting on them would only block the wrong clients.
@@ -27,7 +29,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
@@ -37,10 +38,6 @@ import (
 const (
 	// challengeTTL bounds how long a wallet has to sign its challenge.
 	challengeTTL = 2 * time.Minute
-	// consumedMax bounds the replay set. It is not an issuance limit:
-	// once the set holds consumedMax unexpired entries, further
-	// consumption fails closed (issue #530).
-	consumedMax = 4096
 	// hmacKeyLength is the size of the challenge-signing key New
 	// generates for each authenticator.
 	hmacKeyLength = 32
@@ -70,9 +67,6 @@ type Authenticator struct {
 	statement       string
 	challengePrefix string
 	key             []byte
-
-	mu       sync.Mutex
-	consumed map[string]time.Time
 }
 
 // Challenge is one issued sign-in request handed to the wallet.
@@ -99,8 +93,8 @@ type challengePayload struct {
 // New validates the configuration and returns an authenticator. The
 // challenge-signing key is generated fresh per authenticator and never
 // crosses the package boundary, so issued challenges are bound to the
-// process: a restart invalidates outstanding and consumed challenges
-// alike.
+// authenticator instance: recreating it invalidates outstanding
+// challenges.
 func New(cfg Config) (*Authenticator, error) {
 	key := make([]byte, hmacKeyLength)
 	if _, err := rand.Read(key); err != nil {
@@ -123,7 +117,6 @@ func New(cfg Config) (*Authenticator, error) {
 		statement:       cmp.Or(strings.TrimSpace(cfg.Statement), "Sign in to Portal"),
 		challengePrefix: strings.TrimSpace(cfg.ChallengePrefix),
 		key:             key,
-		consumed:        make(map[string]time.Time),
 	}, nil
 }
 
@@ -191,8 +184,10 @@ func (a *Authenticator) Issue(address, domain, uri string, now time.Time) (Chall
 }
 
 // Verify validates a signed challenge token together with the wallet's
-// signature over its message. On success the address is returned and the
-// token is recorded as consumed; a consumed or unknown token answers
+// signature over its message and returns the address. A verified
+// challenge is a short-lived proof: re-submitting the same token and
+// signature within its TTL re-authenticates the same wallet, so there is
+// no replay tracking. An unknown or blank token answers
 // ErrChallengeNotFound.
 func (a *Authenticator) Verify(challengeToken, message, signature, domain string, now time.Time) (string, error) {
 	if a == nil {
@@ -232,9 +227,6 @@ func (a *Authenticator) Verify(challengeToken, message, signature, domain string
 	if !a.AddressAllowed(payload.Address) {
 		return "", ErrUnauthorized
 	}
-	if err := a.consume(challengeToken, payload.ExpiresAt, now); err != nil {
-		return "", err
-	}
 	return payload.Address, nil
 }
 
@@ -261,36 +253,6 @@ func (a *Authenticator) decodeChallengeToken(token string) (challengePayload, er
 		return challengePayload{}, ErrChallengeInvalid
 	}
 	return payload, nil
-}
-
-// consume records the token in the replay set under one lock, so two
-// concurrent verifications of the same token cannot both succeed. Expired
-// entries are dropped first; if the set still holds consumedMax unexpired
-// entries, the new consumption is rejected rather than evicting any
-// unexpired digest, which would reopen a single-use challenge (issue
-// #530).
-func (a *Authenticator) consume(token string, expiresAt, now time.Time) error {
-	digest := sha256.Sum256([]byte(token))
-	id := string(digest[:])
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if _, ok := a.consumed[id]; ok {
-		return ErrChallengeNotFound
-	}
-	a.cleanupExpiredLocked(now)
-	if len(a.consumed) >= consumedMax {
-		return ErrChallengeNotFound
-	}
-	a.consumed[id] = expiresAt
-	return nil
-}
-
-func (a *Authenticator) cleanupExpiredLocked(now time.Time) {
-	for id, expiresAt := range a.consumed {
-		if now.After(expiresAt) {
-			delete(a.consumed, id)
-		}
-	}
 }
 
 // AddressAllowed reports whether address may authenticate.

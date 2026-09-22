@@ -1,9 +1,7 @@
 package siweauth
 
 import (
-	"crypto/sha256"
 	"errors"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -68,9 +66,6 @@ func TestIssueIsStatelessUnderFlood(t *testing.T) {
 	if !strings.EqualFold(address, wallet.Identity().Address) {
 		t.Fatalf("address = %q; want %q", address, wallet.Identity().Address)
 	}
-	if len(auth.consumed) != 1 {
-		t.Fatalf("consumed set = %d entries; want 1", len(auth.consumed))
-	}
 }
 
 func TestVerifyRejectsTamperedToken(t *testing.T) {
@@ -113,7 +108,13 @@ func TestVerifyRejectsExpiredChallenge(t *testing.T) {
 	}
 }
 
-func TestVerifyRejectsReplay(t *testing.T) {
+// TestVerifyAllowsReplayWithinTTL pins the accepted session semantic: a
+// verified challenge is a short-lived proof, so re-submitting the same
+// token and signature re-authenticates the same wallet. Replay tracking
+// is deliberately omitted: it cannot create a new identity, and its
+// global consumed set would reintroduce the capacity failure mode issue
+// #530 removes.
+func TestVerifyAllowsReplayWithinTTL(t *testing.T) {
 	auth := newTestAuthenticator(t)
 	wallet := testWallet(t)
 	now := time.Now().UTC()
@@ -123,15 +124,14 @@ func TestVerifyRejectsReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	address, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now)
-	if err != nil {
-		t.Fatalf("first verify: %v", err)
-	}
-	if !strings.EqualFold(address, wallet.Identity().Address) {
-		t.Fatalf("address = %q; want %q", address, wallet.Identity().Address)
-	}
-	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now); !errors.Is(err, ErrChallengeNotFound) {
-		t.Fatalf("replay err = %v; want ErrChallengeNotFound", err)
+	for i := range 2 {
+		address, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now)
+		if err != nil {
+			t.Fatalf("verify %d: %v", i+1, err)
+		}
+		if !strings.EqualFold(address, wallet.Identity().Address) {
+			t.Fatalf("address = %q; want %q", address, wallet.Identity().Address)
+		}
 	}
 }
 
@@ -169,37 +169,12 @@ func TestVerifyRejectsWrongDomain(t *testing.T) {
 	}
 }
 
-// TestConsumeFailsClosedAtCapacity pins the fail-closed replay cap: when
-// the set already holds consumedMax unexpired entries, a new successful
-// verification is rejected instead of evicting a digest, and every
-// recorded entry survives untouched.
-func TestConsumeFailsClosedAtCapacity(t *testing.T) {
-	auth := newTestAuthenticator(t)
-	wallet := testWallet(t)
-	now := time.Now().UTC()
-	for i := range consumedMax {
-		digest := sha256.Sum256([]byte(strconv.Itoa(i)))
-		auth.consumed[string(digest[:])] = now.Add(time.Hour)
-	}
-
-	challenge := issueTestChallenge(t, auth, wallet, now)
-	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now); !errors.Is(err, ErrChallengeNotFound) {
-		t.Fatalf("verify at capacity err = %v; want ErrChallengeNotFound", err)
-	}
-	if len(auth.consumed) != consumedMax {
-		t.Fatalf("consumed set = %d entries; want %d with no eviction", len(auth.consumed), consumedMax)
-	}
-}
-
-// TestNewKeyIsProcessLocal pins the restart rule: each authenticator
-// signs with its own freshly generated key, so a restarted authenticator
-// rejects challenges issued by the previous process instead of honoring
-// stale outstanding or consumed tokens.
-func TestNewKeyIsProcessLocal(t *testing.T) {
+// TestNewKeyIsInstanceLocal pins the instance rule: each authenticator
+// signs with its own freshly generated key, so a recreated authenticator
+// rejects challenges issued by the previous instance. Challenges are
+// instance-bound, not process-bound: a managed tunnel can recreate its
+// authenticator within the same process.
+func TestNewKeyIsInstanceLocal(t *testing.T) {
 	wallet := testWallet(t)
 	now := time.Now().UTC()
 	first := newTestAuthenticator(t)
@@ -212,8 +187,8 @@ func TestNewKeyIsProcessLocal(t *testing.T) {
 		t.Fatalf("first verify: %v", err)
 	}
 
-	restarted := newTestAuthenticator(t)
-	if _, err := restarted.Verify(challenge.ID, challenge.Message, signature, testDomain, now); !errors.Is(err, ErrChallengeInvalid) {
-		t.Fatalf("post-restart err = %v; want ErrChallengeInvalid", err)
+	recreated := newTestAuthenticator(t)
+	if _, err := recreated.Verify(challenge.ID, challenge.Message, signature, testDomain, now); !errors.Is(err, ErrChallengeInvalid) {
+		t.Fatalf("recreated-instance err = %v; want ErrChallengeInvalid", err)
 	}
 }
