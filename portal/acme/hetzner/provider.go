@@ -15,6 +15,7 @@ import (
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"github.com/hetznercloud/hcloud-go/v2/hcloud/exp/zoneutil"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -59,11 +60,8 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if p == nil {
 		return errors.New("hetzner provider is nil")
 	}
-	baseDomain = utils.NormalizeBaseDomain(baseDomain)
-	if baseDomain == "" {
-		return errors.New("base domain is required")
-	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	baseDomain, err := dnsrecord.ARecordsInputs(baseDomain, publicIPv4)
+	if err != nil {
 		return err
 	}
 
@@ -72,7 +70,7 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 		return err
 	}
 
-	for _, recordName := range []string{baseDomain, "*." + baseDomain} {
+	for _, recordName := range dnsrecord.ApexWildcard(baseDomain) {
 		if err := ensureRecord(ctx, client, zone, recordName, hcloud.ZoneRRSetTypeA, strings.TrimSpace(publicIPv4)); err != nil {
 			return fmt.Errorf("upsert hetzner A record %s: %w", recordName, err)
 		}
@@ -84,11 +82,8 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 	if p == nil {
 		return errors.New("hetzner provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	name, err := dnsrecord.ARecordInputs(name, publicIPv4)
+	if err != nil {
 		return err
 	}
 
@@ -106,9 +101,9 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	if p == nil {
 		return errors.New("hetzner provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
+	name, err := dnsrecord.RecordName(name)
+	if err != nil {
+		return err
 	}
 
 	client, zone, err := p.clientAndZone(ctx, name)
@@ -125,13 +120,9 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 	if p == nil {
 		return errors.New("hetzner provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return errors.New("txt record value is required")
+	name, value, err := dnsrecord.TXTInputs(name, value)
+	if err != nil {
+		return err
 	}
 
 	client, zone, err := p.clientAndZone(ctx, name)
@@ -148,13 +139,9 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	if p == nil {
 		return errors.New("hetzner provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	matchPrefix = strings.TrimSpace(matchPrefix)
-	if matchPrefix == "" {
-		return errors.New("txt record match prefix is required")
+	name, matchPrefix, err := dnsrecord.TXTPrefixInputs(name, matchPrefix)
+	if err != nil {
+		return err
 	}
 
 	client, zone, err := p.clientAndZone(ctx, name)
@@ -171,9 +158,9 @@ func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, ds
 	if p == nil {
 		return "", "", "", errors.New("hetzner provider is nil")
 	}
-	baseDomain = utils.NormalizeBaseDomain(baseDomain)
-	if baseDomain == "" {
-		return "", "", "", errors.New("base domain is required")
+	_, err = dnsrecord.BaseDomain(baseDomain)
+	if err != nil {
+		return "", "", "", err
 	}
 	if p.apiToken == "" {
 		return "", "", "", errors.New("hetzner api token is required")
@@ -246,7 +233,7 @@ func (p *Provider) findZone(ctx context.Context, client *hcloud.Client, domain s
 }
 
 func ensureRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, fqdn string, recordType hcloud.ZoneRRSetType, value string) error {
-	recordName, err := relativeRecordName(fqdn, zone)
+	recordName, err := dnsrecord.RelativeName("hetzner", fqdn, zone.Name)
 	if err != nil {
 		return err
 	}
@@ -285,7 +272,7 @@ func ensureRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone,
 }
 
 func ensureTXTRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, fqdn, value string) error {
-	recordName, err := relativeRecordName(fqdn, zone)
+	recordName, err := dnsrecord.RelativeName("hetzner", fqdn, zone.Name)
 	if err != nil {
 		return err
 	}
@@ -327,7 +314,7 @@ func ensureTXTRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zo
 }
 
 func deleteRRSet(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, fqdn string, recordType hcloud.ZoneRRSetType) error {
-	recordName, err := relativeRecordName(fqdn, zone)
+	recordName, err := dnsrecord.RelativeName("hetzner", fqdn, zone.Name)
 	if err != nil {
 		return err
 	}
@@ -347,7 +334,7 @@ func deleteRRSet(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, 
 }
 
 func deleteTXTRecords(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, fqdn, matchPrefix string) error {
-	recordName, err := relativeRecordName(fqdn, zone)
+	recordName, err := dnsrecord.RelativeName("hetzner", fqdn, zone.Name)
 	if err != nil {
 		return err
 	}
@@ -382,28 +369,6 @@ func deleteTXTRecords(ctx context.Context, client *hcloud.Client, zone *hcloud.Z
 		return err
 	}
 	return waitAction(ctx, client, action)
-}
-
-func relativeRecordName(fqdn string, zone *hcloud.Zone) (string, error) {
-	fqdn = utils.NormalizeHostname(fqdn)
-	if fqdn == "" {
-		return "", errors.New("record name is required")
-	}
-	if zone == nil {
-		return "", errors.New("hetzner zone is required")
-	}
-	zoneName := utils.NormalizeBaseDomain(zone.Name)
-	if zoneName == "" && zone.ID != 0 {
-		return "", errors.New("hetzner zone name is required")
-	}
-	if fqdn == zoneName {
-		return "@", nil
-	}
-	suffix := "." + zoneName
-	if !strings.HasSuffix(fqdn, suffix) {
-		return "", fmt.Errorf("hostname %q is outside hetzner zone %q", fqdn, zoneName)
-	}
-	return strings.TrimSuffix(fqdn, suffix), nil
 }
 
 func sameRecords(current, desired []hcloud.ZoneRRSetRecord) bool {
