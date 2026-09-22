@@ -1,4 +1,4 @@
-package agent
+package siweauth
 
 import (
 	"cmp"
@@ -19,31 +19,31 @@ const (
 )
 
 var (
-	errSIWEAuthUnauthorized      = errors.New("wallet is not allowed")
-	errSIWEAuthChallengeNotFound = errors.New("wallet auth challenge not found")
-	errSIWEAuthChallengeExpired  = errors.New("wallet auth challenge expired")
-	errSIWEAuthInvalidSignature  = errors.New("wallet auth signature is invalid")
-	errSIWEAuthTooManyChallenges = errors.New("too many pending wallet auth challenges")
+	ErrUnauthorized      = errors.New("wallet is not allowed")
+	ErrChallengeNotFound = errors.New("wallet auth challenge not found")
+	ErrChallengeExpired  = errors.New("wallet auth challenge expired")
+	ErrInvalidSignature  = errors.New("wallet auth signature is invalid")
+	ErrTooManyChallenges = errors.New("too many pending wallet auth challenges")
 )
 
-type siweAuthConfig struct {
+type Config struct {
 	AllowedAddresses []string
 	AllowAnyAddress  bool
 	Statement        string
 	ChallengePrefix  string
 }
 
-type siweAuthenticator struct {
+type Authenticator struct {
 	allowed         map[string]struct{}
 	allowAny        bool
 	statement       string
 	challengePrefix string
 
 	mu         sync.Mutex
-	challenges map[string]siweAuthChallenge
+	challenges map[string]Challenge
 }
 
-type siweAuthChallenge struct {
+type Challenge struct {
 	ID        string
 	Address   string
 	Domain    string
@@ -51,8 +51,8 @@ type siweAuthChallenge struct {
 	ExpiresAt time.Time
 }
 
-func newSIWEAuthenticator(cfg siweAuthConfig) (*siweAuthenticator, error) {
-	addresses, err := normalizeSIWEAuthAddresses(cfg.AllowedAddresses)
+func New(cfg Config) (*Authenticator, error) {
+	addresses, err := NormalizeAddresses(cfg.AllowedAddresses)
 	if err != nil {
 		return nil, err
 	}
@@ -63,16 +63,16 @@ func newSIWEAuthenticator(cfg siweAuthConfig) (*siweAuthenticator, error) {
 	for _, address := range addresses {
 		allowed[strings.ToLower(address)] = struct{}{}
 	}
-	return &siweAuthenticator{
+	return &Authenticator{
 		allowed:         allowed,
 		allowAny:        cfg.AllowAnyAddress,
 		statement:       cmp.Or(strings.TrimSpace(cfg.Statement), "Sign in to Portal"),
 		challengePrefix: strings.TrimSpace(cfg.ChallengePrefix),
-		challenges:      make(map[string]siweAuthChallenge),
+		challenges:      make(map[string]Challenge),
 	}, nil
 }
 
-func normalizeSIWEAuthAddresses(values []string) ([]string, error) {
+func NormalizeAddresses(values []string) ([]string, error) {
 	normalized := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, raw := range values {
@@ -90,20 +90,20 @@ func normalizeSIWEAuthAddresses(values []string) ([]string, error) {
 	return normalized, nil
 }
 
-func (a *siweAuthenticator) Issue(address, domain, uri string, now time.Time) (siweAuthChallenge, error) {
+func (a *Authenticator) Issue(address, domain, uri string, now time.Time) (Challenge, error) {
 	if a == nil {
-		return siweAuthChallenge{}, errSIWEAuthUnauthorized
+		return Challenge{}, ErrUnauthorized
 	}
 	address, err := identity.NormalizeEVMAddress(address)
 	if err != nil {
-		return siweAuthChallenge{}, err
+		return Challenge{}, err
 	}
-	if !a.addressAllowed(address) {
-		return siweAuthChallenge{}, errSIWEAuthUnauthorized
+	if !a.AddressAllowed(address) {
+		return Challenge{}, ErrUnauthorized
 	}
 
 	now = now.UTC()
-	challenge := siweAuthChallenge{
+	challenge := Challenge{
 		ID:        utils.RandomID(a.challengePrefix),
 		Address:   address,
 		Domain:    strings.TrimSpace(domain),
@@ -115,26 +115,26 @@ func (a *siweAuthenticator) Issue(address, domain, uri string, now time.Time) (s
 		IssuedAt: now, ExpiresAt: challenge.ExpiresAt,
 	})
 	if err != nil {
-		return siweAuthChallenge{}, fmt.Errorf("build wallet auth message: %w", err)
+		return Challenge{}, fmt.Errorf("build wallet auth message: %w", err)
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.cleanupExpiredLocked(now)
 	if len(a.challenges) >= siweAuthChallengeMax {
-		return siweAuthChallenge{}, errSIWEAuthTooManyChallenges
+		return Challenge{}, ErrTooManyChallenges
 	}
 	a.challenges[challenge.ID] = challenge
 	return challenge, nil
 }
 
-func (a *siweAuthenticator) Verify(challengeID, message, signature, domain string, now time.Time) (string, error) {
+func (a *Authenticator) Verify(challengeID, message, signature, domain string, now time.Time) (string, error) {
 	if a == nil {
-		return "", errSIWEAuthUnauthorized
+		return "", ErrUnauthorized
 	}
 	challengeID = strings.TrimSpace(challengeID)
 	if challengeID == "" {
-		return "", errSIWEAuthChallengeNotFound
+		return "", ErrChallengeNotFound
 	}
 	now = now.UTC()
 
@@ -144,24 +144,24 @@ func (a *siweAuthenticator) Verify(challengeID, message, signature, domain strin
 	a.cleanupExpiredLocked(now)
 	a.mu.Unlock()
 	if !ok {
-		return "", errSIWEAuthChallengeNotFound
+		return "", ErrChallengeNotFound
 	}
 	if now.After(challenge.ExpiresAt) {
-		return "", errSIWEAuthChallengeExpired
+		return "", ErrChallengeExpired
 	}
 	if !strings.EqualFold(challenge.Domain, strings.TrimSpace(domain)) || message != challenge.Message {
-		return "", errSIWEAuthInvalidSignature
+		return "", ErrInvalidSignature
 	}
 	if err := identity.VerifySIWEMessage(challenge.Message, signature, challenge.Address, challenge.ExpiresAt, now); err != nil {
-		return "", errSIWEAuthInvalidSignature
+		return "", ErrInvalidSignature
 	}
-	if !a.addressAllowed(challenge.Address) {
-		return "", errSIWEAuthUnauthorized
+	if !a.AddressAllowed(challenge.Address) {
+		return "", ErrUnauthorized
 	}
 	return challenge.Address, nil
 }
 
-func (a *siweAuthenticator) addressAllowed(address string) bool {
+func (a *Authenticator) AddressAllowed(address string) bool {
 	if a == nil {
 		return false
 	}
@@ -172,7 +172,7 @@ func (a *siweAuthenticator) addressAllowed(address string) bool {
 	return ok
 }
 
-func (a *siweAuthenticator) cleanupExpiredLocked(now time.Time) {
+func (a *Authenticator) cleanupExpiredLocked(now time.Time) {
 	for id, challenge := range a.challenges {
 		if now.After(challenge.ExpiresAt) {
 			delete(a.challenges, id)

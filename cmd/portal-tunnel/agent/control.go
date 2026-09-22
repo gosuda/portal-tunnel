@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -255,9 +256,9 @@ func agentAuthURI(r *http.Request, endpointPath string) string {
 
 func writeAgentWalletAuthError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errSIWEAuthUnauthorized):
+	case errors.Is(err, siweauth.ErrUnauthorized):
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
-	case errors.Is(err, errSIWEAuthChallengeNotFound), errors.Is(err, errSIWEAuthChallengeExpired), errors.Is(err, errSIWEAuthInvalidSignature):
+	case errors.Is(err, siweauth.ErrChallengeNotFound), errors.Is(err, siweauth.ErrChallengeExpired), errors.Is(err, siweauth.ErrInvalidSignature):
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, err.Error())
 	default:
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())

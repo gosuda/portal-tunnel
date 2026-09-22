@@ -1,4 +1,4 @@
-package agent
+package gateway
 
 import (
 	"crypto/hmac"
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -56,7 +57,7 @@ type ApplicationAuthConfig struct {
 type applicationAuth struct {
 	next            http.Handler
 	signingKey      []byte
-	siwe            *siweAuthenticator
+	siwe            *siweauth.Authenticator
 	identityHeaders bool
 }
 
@@ -92,7 +93,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	if err != nil {
 		return nil, fmt.Errorf("derive application auth signing key: %w", err)
 	}
-	siwe, err := newSIWEAuthenticator(siweAuthConfig{
+	siwe, err := siweauth.New(siweauth.Config{
 		AllowedAddresses: cfg.AllowedWallets,
 		AllowAnyAddress:  len(cfg.AllowedWallets) == 0,
 		Statement:        "Sign in to this Portal application",
@@ -183,7 +184,7 @@ func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request)
 	challenge, err := a.siwe.Issue(req.Address, host, "https://"+host, now)
 	if err != nil {
 		status := http.StatusUnauthorized
-		if errors.Is(err, errSIWEAuthTooManyChallenges) {
+		if errors.Is(err, siweauth.ErrTooManyChallenges) {
 			status = http.StatusTooManyRequests
 		}
 		a.writeJSONError(w, status, err.Error())
@@ -253,7 +254,7 @@ func (a *applicationAuth) authenticatedAddress(r *http.Request) (string, bool) {
 		return "", false
 	}
 	address, err := identity.NormalizeEVMAddress(claims.Address)
-	if err != nil || !a.siwe.addressAllowed(address) {
+	if err != nil || !a.siwe.AddressAllowed(address) {
 		return "", false
 	}
 	return address, true

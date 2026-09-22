@@ -1,4 +1,4 @@
-package agent
+package gateway
 
 import (
 	"cmp"
@@ -35,7 +35,7 @@ const (
 	defaultMaxTimeoutSeconds = 60
 )
 
-// X402Payment is the agent-local payment composition contract.
+// X402Payment is the payment composition contract owned by cmd/portal-tunnel/gateway.
 // It was moved here from types/x402.go so that the types layer carries no
 // x402 knowledge; owning packages hold the symbols they use.
 type X402Payment struct {
@@ -51,15 +51,15 @@ type X402Payment struct {
 	ResourceMimeType    string
 }
 
-// X402PreparePath is the agent-owned path for the /x402/prepare endpoint.
+// X402PreparePath is the gateway-owned path for the /x402/prepare endpoint.
 const X402PreparePath = "/x402/prepare"
 
-// X402ClientPath is the agent-owned path for the /x402/client.js endpoint.
+// X402ClientPath is the gateway-owned path for the /x402/client.js endpoint.
 const X402ClientPath = "/x402/client.js"
 
 const x402RequestBodyLimit int64 = 64 << 10
 
-// x402PreparePaymentRequest is the agent-owned prepare endpoint request body.
+// x402PreparePaymentRequest is the gateway-owned prepare endpoint request body.
 type x402PreparePaymentRequest struct {
 	Sender string `json:"sender"`
 	Method string `json:"method,omitempty"`
@@ -161,7 +161,7 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Ha
 
 // composePaidRoute builds the payment layer for one paid route: the settling
 // gate and, for Sui routes, the shared-prepare delegate. The underlying
-// facilitators live as long as the gateway — the agent owns the composition
+// facilitators live as long as the gateway — the gateway owns the composition
 // for its whole process lifetime, so no per-route Close is wired (the same
 // lifetime the previous portal/x402 composition had).
 func composePaidRoute(prefix, amount string, contract X402Payment) (*routePolicy, error) {

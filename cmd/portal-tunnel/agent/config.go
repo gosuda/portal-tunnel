@@ -14,6 +14,7 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -289,7 +290,7 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		if t.ID == "" {
 			t.ID = fmt.Sprintf("tunnel-%d", i+1)
 		}
-		normalizedWallets, err := normalizeSIWEAuthAddresses(t.AuthAllowedWallets)
+		normalizedWallets, err := siweauth.NormalizeAddresses(t.AuthAllowedWallets)
 		if err != nil {
 			return fmt.Errorf("tunnel %q auth_allowed_wallets: %w", t.ID, err)
 		}
