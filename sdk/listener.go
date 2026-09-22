@@ -1120,7 +1120,13 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		return false
 	}
 
-	wait := min(l.retryWait<<min(retries-1, 5), maxRetryWait)
+	wait := l.retryWait
+	for i := 1; i < retries && wait < maxRetryWait; i++ {
+		wait *= 2
+	}
+	if wait > maxRetryWait {
+		wait = maxRetryWait
+	}
 
 	if retries == 1 {
 		transport := ""
