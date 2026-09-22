@@ -8,3 +8,5 @@ base_url = "https://github.com/gosuda/portal-tunnel/releases"
 [protocol]
 tunnel    = "10"
 discovery = "9"
+min_tunnel    = "10"
+min_discovery = "9"

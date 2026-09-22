@@ -1,15 +1,22 @@
 package e2e_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -297,6 +304,52 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 		if domain.Data.ReleaseVersion != types.ReleaseVersion {
 			t.Fatalf("DomainResponse.ReleaseVersion = %q, want %q", domain.Data.ReleaseVersion, types.ReleaseVersion)
 		}
+		negotiateDomain := func(protocolVersion string) types.DomainResponse {
+			req, err := http.NewRequest(http.MethodGet, baseURL+types.PathSDKDomain, nil)
+			if err != nil {
+				t.Fatalf("new domain request: %v", err)
+			}
+			if protocolVersion != "" {
+				req.Header.Set(types.HeaderProtocolVersion, protocolVersion)
+			}
+			domainResp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("GET %s: %v", types.PathSDKDomain, err)
+			}
+			defer domainResp.Body.Close()
+			if domainResp.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s status=%d, want 200", types.PathSDKDomain, domainResp.StatusCode)
+			}
+			var envelope types.APIEnvelope[types.DomainResponse]
+			if err := json.NewDecoder(domainResp.Body).Decode(&envelope); err != nil {
+				t.Fatalf("decode %s response: %v", types.PathSDKDomain, err)
+			}
+			if !envelope.OK {
+				t.Fatalf("GET %s response ok=false", types.PathSDKDomain)
+			}
+			return envelope.Data
+		}
+
+		prevMin := types.SDKVersionMin
+		types.SDKVersionMin = strconv.Itoa(types.ProtocolVersionNum(types.SDKVersion) - 1)
+		defer func() { types.SDKVersionMin = prevMin }()
+
+		inWindow := negotiateDomain(types.SDKVersionMin)
+		if inWindow.ProtocolVersion != types.SDKVersionMin {
+			t.Fatalf("in-window negotiation = %q, want echoed request %q", inWindow.ProtocolVersion, types.SDKVersionMin)
+		}
+		outOfWindow := negotiateDomain("1")
+		if outOfWindow.ProtocolVersion != types.SDKVersion {
+			t.Fatalf("out-of-window negotiation = %q, want current %q", outOfWindow.ProtocolVersion, types.SDKVersion)
+		}
+		if outOfWindow.ProtocolVersionMin != types.SDKVersionMin {
+			t.Fatalf("DomainResponse.ProtocolVersionMin = %q, want %q", outOfWindow.ProtocolVersionMin, types.SDKVersionMin)
+		}
+		legacy := negotiateDomain("")
+		if legacy.ProtocolVersion != types.SDKVersionMin {
+			t.Fatalf("legacy negotiation = %q, want window floor %q", legacy.ProtocolVersion, types.SDKVersionMin)
+		}
+
 		resp, err = client.Get(baseURL + types.PathDiscovery)
 		if err != nil {
 			t.Fatalf("GET %s: %v", types.PathDiscovery, err)
@@ -363,4 +416,169 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 			t.Fatalf("GET %s status=%d, want 404 with discovery disabled", types.PathDiscovery, resp.StatusCode)
 		}
 	})
+}
+
+// startPriorReleaseRelay boots the in-process relay the prior-release
+// binaries dial. PortalURL must stay the SNI dial address: old clients
+// compare the reported reverse endpoint host with the relay URL verbatim.
+func startPriorReleaseRelay(t *testing.T) (int, string) {
+	t.Helper()
+	sniPort := harnessPort(t)
+	keyDir := t.TempDir()
+	server, err := portal.NewServer(portal.ServerConfig{
+		PortalURL:     "https://localhost:" + strconv.Itoa(sniPort),
+		StateDir:      t.TempDir(),
+		ACME:          acme.Config{KeyDir: keyDir},
+		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(sniPort),
+		SNIPort:       sniPort,
+	})
+	if err != nil {
+		t.Fatalf("create portal server: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := server.Start(ctx, nil); err != nil {
+		t.Fatalf("start portal server: %v", err)
+	}
+	t.Cleanup(func() { stopRelay(t, server) })
+	waitForRelayCertificateMaterial(t, keyDir)
+	return sniPort, keyDir
+}
+
+func TestPriorReleaseClientRejectedAtVersionGate(t *testing.T) {
+	priorBinary := buildPriorReleaseBinary(t, "v2.4.3")
+
+	sniPort, keyDir := startPriorReleaseRelay(t)
+
+	runCtx, cancelRun := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelRun()
+	expose := exec.CommandContext(runCtx, priorBinary, "expose",
+		"--relays", "localhost:"+strconv.Itoa(sniPort),
+		"--discovery=false",
+		"127.0.0.1:1")
+	expose.Dir = t.TempDir()
+	expose.Env = append(os.Environ(), "SSL_CERT_FILE="+filepath.Join(keyDir, "fullchain.pem"))
+	output, err := expose.CombinedOutput()
+	if err == nil {
+		t.Fatalf("prior release client succeeded against an incompatible relay; output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "protocol version mismatch") {
+		t.Fatalf("prior release client failed for a reason other than the version gate; output:\n%s", output)
+	}
+}
+
+func buildPriorReleaseBinary(t *testing.T, tag string) string {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("builds the prior release from a git worktree")
+	}
+
+	worktree := t.TempDir()
+	if out, err := exec.Command("git", "worktree", "add", "--detach", worktree, tag).CombinedOutput(); err != nil {
+		t.Skipf("git worktree %s unavailable: %v: %s", tag, err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("git", "worktree", "remove", "--force", worktree).Run()
+	})
+	priorBinary := filepath.Join(t.TempDir(), "portal")
+	build := exec.Command("go", "build", "-o", priorBinary, "./cmd/portal-tunnel")
+	build.Dir = worktree
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Skipf("build %s failed: %v: %s", tag, err, out)
+	}
+	return priorBinary
+}
+
+// TestPriorReleaseClientServesThroughRelay pins the compatibility oracle for
+// the negotiation window floor: the newest released dialect (v2.5.0,
+// protocol 10) must register and serve traffic through the current relay
+// unchanged. Any wire-level change without a protocol bump fails here first.
+func TestPriorReleaseClientServesThroughRelay(t *testing.T) {
+	priorBinary := buildPriorReleaseBinary(t, "v2.5.0")
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("prior-release-ok"))
+	}))
+	defer upstream.Close()
+
+	sniPort, keyDir := startPriorReleaseRelay(t)
+
+	var output syncBuffer
+	pr, pw := io.Pipe()
+	expose := exec.Command(priorBinary, "expose",
+		"--relays", "localhost:"+strconv.Itoa(sniPort),
+		"--discovery=false",
+		strings.TrimPrefix(upstream.URL, "http://"))
+	expose.Dir = t.TempDir()
+	expose.Env = append(os.Environ(), "SSL_CERT_FILE="+filepath.Join(keyDir, "fullchain.pem"))
+	expose.Stdout = pw
+	expose.Stderr = pw
+	if err := expose.Start(); err != nil {
+		t.Fatalf("start prior release client: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- expose.Wait()
+		pw.Close()
+	}()
+
+	publicURLCh := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(pr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			output.append(line)
+			if idx := strings.Index(line, "service ready at "); idx >= 0 {
+				ready := line[idx+len("service ready at "):]
+				if cut := strings.IndexAny(ready, " \t\x1b"); cut >= 0 {
+					ready = ready[:cut]
+				}
+				publicURLCh <- ready
+			}
+		}
+	}()
+
+	var publicURL string
+	select {
+	case publicURL = <-publicURLCh:
+	case err := <-done:
+		t.Fatalf("prior release client exited before readiness: %v\n%s", err, output.String())
+	case <-time.After(30 * time.Second):
+		t.Fatalf("prior release client never reported readiness\n%s", output.String())
+	}
+
+	for i := 0; i < 20; i++ {
+		if body, ok := tenantGet("127.0.0.1:"+strconv.Itoa(sniPort), filepath.Join(keyDir, "fullchain.pem"), publicURL); ok {
+			if !strings.Contains(body, "prior-release-ok") {
+				t.Fatalf("tenant round trip served unexpected body %q", body)
+			}
+			_ = expose.Process.Kill()
+			<-done
+			return
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("prior release client exited after readiness: %v\n%s", err, output.String())
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	t.Fatalf("prior release client registered at %s but the tunnel path never served; client output:\n%s", publicURL, output.String())
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) append(line string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.WriteString(line)
+	b.buf.WriteString("\n")
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

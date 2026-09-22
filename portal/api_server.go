@@ -240,9 +240,9 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	if req.ProtocolVersion != "" && req.ProtocolVersion != types.DiscoveryVersion {
+	if !types.CanServeProtocolVersion(req.ProtocolVersion, types.DiscoveryVersion, types.DiscoveryVersionMin) {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
-			fmt.Sprintf("announce protocol mismatch: relay=%q client=%q", types.DiscoveryVersion, req.ProtocolVersion))
+			fmt.Sprintf("announce protocol mismatch: relay=%q client=%q min=%q", types.DiscoveryVersion, req.ProtocolVersion, types.DiscoveryVersionMin))
 		return
 	}
 
@@ -300,12 +300,15 @@ func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 // own metadata onto this value and serves the result itself. x402
 // facilitator metadata is owned by the application that mounts the
 // facilitator (cmd/relay-server); this report stays x402-blind.
-func (s *Server) DomainReport() types.DomainResponse {
+func (s *Server) DomainReport(r *http.Request) types.DomainResponse {
+	protocolVersion := types.NegotiatedProtocolVersion(
+		r.Header.Get(types.HeaderProtocolVersion), types.SDKVersion, types.SDKVersionMin)
 	return types.DomainResponse{
-		Cache:           s.registry.cache.Limits(),
-		ProtocolVersion: types.SDKVersion,
-		ReleaseVersion:  types.ReleaseVersion,
-		ENS:             s.acmeManager.ENSStatus(),
+		Cache:              s.registry.cache.Limits(),
+		ProtocolVersion:    protocolVersion,
+		ProtocolVersionMin: types.SDKVersionMin,
+		ReleaseVersion:     types.ReleaseVersion,
+		ENS:                s.acmeManager.ENSStatus(),
 	}
 }
 
@@ -313,7 +316,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
-	utils.WriteAPIData(w, http.StatusOK, s.DomainReport())
+	utils.WriteAPIData(w, http.StatusOK, s.DomainReport(r))
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {

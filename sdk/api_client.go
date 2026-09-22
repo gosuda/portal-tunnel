@@ -65,15 +65,16 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 		return err
 	}
 
+	headers := http.Header{types.HeaderProtocolVersion: {types.SDKVersion}}
 	var domainResp types.DomainResponse
-	if err := utils.HTTPDoAPIPath(ctx, httpClient, c.relayURL, http.MethodGet, types.PathSDKDomain, nil, nil, &domainResp); err != nil {
+	if err := utils.HTTPDoAPIPath(ctx, httpClient, c.relayURL, http.MethodGet, types.PathSDKDomain, nil, headers, &domainResp); err != nil {
 		httpTransport.CloseIdleConnections()
 		return fmt.Errorf("check relay compatibility: %w", err)
 	}
 	protocolVersion := strings.TrimSpace(domainResp.ProtocolVersion)
 	if protocolVersion != types.SDKVersion {
 		httpTransport.CloseIdleConnections()
-		return fmt.Errorf("%w: relay sdk protocol version mismatch: relay=%q client=%q", errRelayIncompatible, protocolVersion, types.SDKVersion)
+		return fmt.Errorf("%w: relay sdk protocol version mismatch: relay=%q client=%q min=%q", errRelayIncompatible, protocolVersion, types.SDKVersion, strings.TrimSpace(domainResp.ProtocolVersionMin))
 	}
 
 	c.mu.Lock()

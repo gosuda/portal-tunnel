@@ -310,7 +310,7 @@ func composeRelayHandler(settings x402FacilitatorSettings, server *portal.Server
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
-		report := domainResponse{DomainResponse: server.DomainReport()}
+		report := domainResponse{DomainResponse: server.DomainReport(r)}
 		if settings.Enabled {
 			baseURL := strings.TrimRight(settings.PortalURL, "/")
 			report.X402 = x402FacilitatorInfo{
