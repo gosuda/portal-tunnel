@@ -65,7 +65,7 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
 
 ### Use the local AI agent plugin
 
-The repository includes a `portal-deploy` plugin for Codex, Claude Code, and Cursor. The shared `portal-expose` skill inspects a local app, opens a Portal tunnel, configures explicitly requested x402 paid routes, verifies the public URL and payment challenge, and hands off the lifecycle.
+The repository includes a `portal-deploy` plugin for Codex, Claude Code, and Cursor. The shared `portal-expose` skill inspects a local app, opens a Portal tunnel, configures explicitly requested x402 paid routes, verifies the public URL and payment challenge, and hands off the lifecycle. The `portal-connect` skill covers the other side: it finds a service on a relay, verifies that it is reachable, connects to raw TCP/UDP endpoints, and reports the terms of an x402 challenge without paying.
 
 Install the skill with either CLI:
 
@@ -82,8 +82,9 @@ Then ask your agent:
 - Temporary preview: “Expose this app with Portal and verify the public URL.”
 - x402 paid route: “Expose this app with Portal, protect `GET /paid` with x402, and verify the payment challenge.”
 - Persistent tunnel: “Keep this app available with a persistent Portal agent tunnel and verify the public URL.”
+- Reach a published service: “Check whether `my-app.portal.example.com` is up and fetch its JSON API.”
 
-Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md).
+Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md). Without installing anything, an agent with web access can be pointed at the canonical skill file in this repository and given the relay as input: `Follow https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md to expose my app on port 3000 through https://<relay>.` A relay's `/llms.txt` is discovery data about that relay, not the instruction source.
 
 ### Expose a local service
 

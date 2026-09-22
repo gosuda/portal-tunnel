@@ -2,18 +2,18 @@
 
 Read this when the user asks to host, publish, or share a game server (Minecraft, Terraria, Palworld, Valheim, Rust, or any game with a dedicated server). Game hosting uses Portal's raw TCP/UDP transport, not HTTP — the workflow, prerequisites, and verification differ fundamentally from web exposure.
 
-> **Sync notice**: the compatibility table and relay-setup facts in this file mirror `docs/src/routes/game-server-hosting/+page.md`. When Portal's transport capabilities change (new game support, multi-port allocation, etc.), update both files together. The docs page is the human-facing source; this reference is the agent-facing copy.
+> **Sync notice**: the Minecraft Java, Terraria, Palworld, Valheim, and Rust rows and the relay-setup facts in this file mirror `docs/src/routes/game-server-hosting/+page.md`; the Minecraft Bedrock row and the Transport limits section mirror the Limitations in `docs/src/routes/tcp-udp-tunneling/+page.md` and have no docs-table counterpart. When Portal's transport capabilities change (new game support, multi-port allocation, etc.), update both files together. The docs page is the human-facing source; this reference is the agent-facing copy.
 
 ## Game quick-reference
 
 | Game | Transport | Ports | Status | Notes |
 |---|---|---|---|---|
 | Minecraft Java | TCP | 25565 | Tested | Single TCP port. |
-| Minecraft Bedrock | UDP | 19132 | Compatible | Single UDP port. |
+| Minecraft Bedrock | UDP | 19132 | Untested | Portal caps UDP datagrams at 1350 bytes and Bedrock's default MTU is larger; do not promise Bedrock support. |
 | Terraria | TCP | 7777 | Compatible | Single TCP port. |
 | Palworld | UDP | 8211 | Experimental | Verify real gameplay before sharing. |
-| Valheim | UDP pair | 2456–2457 | Not supported | Requires a base port and the next; Portal allocates one UDP port per lease. |
-| Rust | UDP game + query | separate | Not supported | Requires separate public game and query ports. |
+| Valheim | UDP pair | 2456–2457 | Not supported yet | Requires a base port and the next; Portal allocates one UDP port per lease. |
+| Rust | UDP game + query | separate | Not supported yet | Requires separate public game and query ports. |
 | Custom | Ask user | user-specified | — | Identify the protocol (TCP or UDP) and every port before exposing. |
 
 ## Hard rule: the relay must support raw transport
@@ -22,9 +22,18 @@ Game hosting fails silently if the relay does not have TCP/UDP allocation enable
 
 - Relay must set `TCP_ENABLED` and/or `UDP_ENABLED` with a `MIN_PORT`–`MAX_PORT` range.
 - The relay must publish those ports (`MIN_PORT-MAX_PORT:MIN_PORT-MAX_PORT/tcp` and `/udp` in its compose).
+- For UDP, the relay must additionally publish `443/udp`, the QUIC backhaul on the public `PORTAL_URL` port, not only the lease range. The bundled `docker-compose.yml` ships that line commented out.
 - The relay's cloud firewall must allow the same ports.
 
 If no participating relay has raw transport enabled, tell the user they need a relay that does (self-hosted relay with TCP/UDP enabled, or a community relay that supports it). Do not attempt the tunnel — it will fail without a clear error.
+
+## Transport limits
+
+- UDP datagrams above 1350 bytes are dropped by the relay; check the game's packet size or MTU settings before promising UDP support.
+- UDP flows idle for 5 minutes are forgotten by the relay; protocols that can go quiet need keepalives.
+- One lease may carry both `--tcp` and `--udp` (`portal expose --tcp --udp --udp-addr localhost:19132 localhost:25565`); both ports come from the same `MIN_PORT`–`MAX_PORT` range.
+- A relay serves at most `MAX_PORT - MIN_PORT + 1` concurrent leases per protocol; size the range for the expected number of simultaneous tunnels.
+- Raw TCP/UDP adds no Portal tenant TLS, so game traffic is visible to the relay; rely on the game's own password or allowlist.
 
 ## Workflow
 
@@ -44,6 +53,12 @@ The game server must be running and listening on its expected port before the tu
 
 ```sh
 portal expose <game-port> --udp --name <name>
+```
+
+UDP-only Palworld example; `--udp-addr` is needed only when the UDP port differs from the positional target:
+
+```sh
+portal expose 127.0.0.1:8211 --udp --name <name>
 ```
 
 or for TCP:
