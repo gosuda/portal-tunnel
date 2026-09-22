@@ -1,14 +1,14 @@
 {
   "name": "portal-deploy",
   "version": "0.1.0",
-  "description": "Safely expose and verify local apps with Portal tunnels.",
+  "description": "Safely expose, verify, and reach apps published through Portal tunnels.",
   "author": {
     "name": "gosuda"
   },
   "interface": {
     "displayName": "Portal Deploy",
     "shortDescription": "Expose local apps via Portal",
-    "longDescription": "Start or inspect a local app, publish it through Portal, verify the public HTTPS endpoint, and hand off a safe stop or persistence workflow.",
+    "longDescription": "Start or inspect a local app, publish it through Portal, verify the public HTTPS endpoint, and hand off a safe stop or persistence workflow. Or discover a service that someone else published through Portal, verify it is reachable, and handle x402 payment challenges with explicit approval.",
     "developerName": "gosuda",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
@@ -18,7 +18,8 @@
     "defaultPrompt": [
       "Deploy this local app with Portal and verify the public URL.",
       "Create a temporary Portal preview for this project.",
-      "Run this app as a persistent Portal tunnel."
+      "Run this app as a persistent Portal tunnel.",
+      "Find this service on a Portal relay and check that it is reachable."
     ]
   }
 }

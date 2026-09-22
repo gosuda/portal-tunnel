@@ -1,0 +1,4 @@
+interface:
+  display_name: "Connect to a Portal Service"
+  short_description: "Reach services published via Portal"
+  default_prompt: "Use $portal-connect to find this service on a Portal relay, verify it is reachable, and fetch what I asked for."

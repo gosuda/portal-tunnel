@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "portal-deploy",
   "version": "0.1.0",
-  "description": "Safely expose and verify local apps with Portal tunnels.",
+  "description": "Safely expose, verify, and reach apps published through Portal tunnels.",
   "author": {
     "name": "gosuda",
     "url": "https://github.com/gosuda"
@@ -10,5 +10,5 @@
   "homepage": "https://github.com/gosuda/portal-tunnel/tree/main/plugins/portal-deploy",
   "repository": "https://github.com/gosuda/portal-tunnel",
   "license": "MIT",
-  "keywords": ["portal", "tunnel", "deploy", "preview", "localhost", "expose"]
+  "keywords": ["portal", "tunnel", "deploy", "preview", "localhost", "expose", "connect", "x402"]
 }

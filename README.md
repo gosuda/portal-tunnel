@@ -69,7 +69,7 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
 
 ### Use the local AI agent plugin
 
-The repository includes a `portal-deploy` plugin for Codex, Claude Code, and Cursor. The shared `portal-expose` skill inspects a local app, opens a Portal tunnel, configures explicitly requested x402 paid routes, verifies the public URL and payment challenge, and hands off the lifecycle.
+The repository includes a `portal-deploy` plugin for Codex, Claude Code, and Cursor. The shared `portal-expose` skill inspects a local app, opens a Portal tunnel, configures explicitly requested x402 paid routes, verifies the public URL and payment challenge, and hands off the lifecycle. The `portal-connect` skill covers the other side: it finds a service on a relay, verifies that it is reachable, connects to raw TCP/UDP endpoints, and pays an x402 challenge only after explicit approval.
 
 Install the skill with either CLI:
 
@@ -86,6 +86,7 @@ Then ask your agent:
 - Temporary preview: “Expose this app with Portal and verify the public URL.”
 - x402 paid route: “Expose this app with Portal, protect `GET /paid` with x402, and verify the payment challenge.”
 - Persistent tunnel: “Keep this app available with a persistent Portal agent tunnel and verify the public URL.”
+- Reach a published service: “Check whether `my-app.portal.example.com` is up and fetch its JSON API.”
 
 Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md).
 

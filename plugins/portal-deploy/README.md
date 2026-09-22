@@ -1,6 +1,6 @@
 # Portal Deploy plugin
 
-`portal-deploy` is a portable, skills-only Agent Plugin for exposing and verifying local apps through Portal. Portal keeps the service on the local machine; this plugin does not turn Portal into a cloud build or hosting platform.
+`portal-deploy` is a portable, skills-only Agent Plugin for exposing and verifying local apps through Portal, and for reaching services that others published through it. Portal keeps the service on the local machine; this plugin does not turn Portal into a cloud build or hosting platform.
 
 ## Layout
 
@@ -16,6 +16,10 @@ plugins/portal-deploy/
 |   |-- agents/openai.yaml              # OpenAI-specific skill UI metadata
 |   `-- references/
 |-- skills/portal-relay/SKILL.md
+|-- skills/portal-connect/
+|   |-- SKILL.md
+|   |-- agents/openai.yaml
+|   `-- references/
 `-- README.md
 ```
 
@@ -47,7 +51,7 @@ codex plugin marketplace add gosuda/portal-tunnel
 codex plugin add portal-deploy@portal-tunnel
 ```
 
-Start a new task and invoke `$portal-expose` or `$portal-relay`.
+Start a new task and invoke `$portal-expose`, `$portal-relay`, or `$portal-connect`.
 
 ## Claude Code
 
@@ -65,7 +69,7 @@ claude plugin marketplace add gosuda/portal-tunnel
 claude plugin install portal-deploy@portal-tunnel
 ```
 
-Invoke `/portal-deploy:portal-expose` or `/portal-deploy:portal-relay`.
+Invoke `/portal-deploy:portal-expose`, `/portal-deploy:portal-relay`, or `/portal-deploy:portal-connect`.
 
 ## Cursor
 
@@ -76,7 +80,7 @@ mkdir -p ~/.cursor/plugins/local
 ln -s "$(pwd)/plugins/portal-deploy" ~/.cursor/plugins/local/portal-deploy
 ```
 
-The skills appear as `/portal-expose` and `/portal-relay`.
+The skills appear as `/portal-expose`, `/portal-relay`, and `/portal-connect`.
 
 When importing the whole `portal-tunnel` repository, `.cursor-plugin/marketplace.json` locates the nested `plugins/portal-deploy` plugin root.
 
@@ -86,7 +90,11 @@ When importing the whole `portal-tunnel` repository, `.cursor-plugin/marketplace
 - `Expose this app with Portal, protect GET /paid with x402, and verify the payment challenge.`
 - `Create a temporary Portal preview for the frontend on port 5173.`
 - `Keep this service available through a persistent Portal agent tunnel.`
+- `Connect this app to the relay at https://portal.example.com the way its website suggests, and open the public URL.`
 - `Run a public Portal relay and verify its health endpoint.`
+- `Is my-app.portal.example.com reachable? Fetch /api/health and tell me what it returns.`
+- `List the services currently live on https://portal.example.com.`
+- `Connect to the Minecraft server that was exposed through Portal as "survival" and check that it answers.`
 
 ## Marketplace review cases
 
@@ -98,12 +106,17 @@ Positive:
 - Run this app as a persistent Portal tunnel.
 - Serve this trusted static site through Portal.
 - Create a temporary Portal preview for the frontend on port 5173.
+- Connect this app to https://portal.example.com using the command from the relay's page and verify the URL.
+- Check whether the Portal service at paid-app.portal.example.com is up and what its /paid route costs.
+- List what is live on the relay at https://portal.example.com and fetch the docs service.
 
 Negative:
 
 - Deploy a Portal relay with the app-exposure skill.
 - Publish this plugin to a marketplace.
 - Host this app on generic cloud hosting.
+- Debug a 500 from an API that is not behind Portal.
+- Scan a relay's port range to find open game servers.
 
 ## Development validation
 
@@ -114,6 +127,8 @@ python3 /path/to/skill-creator/scripts/quick_validate.py \
   plugins/portal-deploy/skills/portal-expose
 python3 /path/to/skill-creator/scripts/quick_validate.py \
   plugins/portal-deploy/skills/portal-relay
+python3 /path/to/skill-creator/scripts/quick_validate.py \
+  plugins/portal-deploy/skills/portal-connect
 python3 /path/to/plugin-creator/scripts/validate_plugin.py \
   plugins/portal-deploy
 claude plugin validate ./plugins/portal-deploy --strict
