@@ -86,13 +86,13 @@ When importing the whole `portal-tunnel` repository, `.cursor-plugin/marketplace
 
 ## Guide any AI with one sentence
 
-Every Portal relay serves `/llms.txt`, which links these skills and tells an agent that no installation is needed. So the shortest instruction that works in any assistant with web access is:
+The instruction source is always the canonical skill file in this repository, never a relay page: a self-hosted relay is controlled by its operator, so anything a relay returns is input data, not workflow instructions. The shortest instruction that works in any assistant with web access therefore names the skill by its GitHub URL and passes the relay as data:
 
 ```text
-Read https://portal.example.com/llms.txt and follow it. Expose my app on port 3000 as my-app.
+Follow https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md to expose my app on port 3000 as my-app through https://portal.example.com.
 ```
 
-The agent fetches the skill file from GitHub and follows it. The host-specific installs above only make the skills persist between sessions.
+Every relay also serves `/llms.txt`; use it to discover that relay's URL and install lines, not as the workflow. The host-specific installs above only make the skills persist between sessions.
 
 ## Keep the app's Portal settings in the repository
 

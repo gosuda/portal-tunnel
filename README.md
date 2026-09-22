@@ -88,7 +88,7 @@ Then ask your agent:
 - Persistent tunnel: “Keep this app available with a persistent Portal agent tunnel and verify the public URL.”
 - Reach a published service: “Check whether `my-app.portal.example.com` is up and fetch its JSON API.”
 
-Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md). Without installing anything, any agent with web access can be told `Read https://<relay>/llms.txt and follow it. Expose my app on port 3000.`; every relay serves that page and it links the skills.
+Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md). Without installing anything, an agent with web access can be pointed at the canonical skill file in this repository and given the relay as input: `Follow https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md to expose my app on port 3000 through https://<relay>.` A relay's `/llms.txt` is discovery data about that relay, not the instruction source.
 
 ### Expose a local service
 
