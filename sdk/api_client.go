@@ -27,6 +27,7 @@ const (
 	defaultRenewBefore         = 30 * time.Second
 	defaultReadyTarget         = 2
 	defaultRetryWait           = 3 * time.Second
+	maxRetryWait               = 96 * time.Second
 	defaultHTTPShutdownTimeout = 5 * time.Second
 	defaultIdleTimeout         = 90 * time.Second
 )

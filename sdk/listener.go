@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -1120,6 +1121,12 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		return false
 	}
 
+	wait := l.retryWait << min(retries-1, 5)
+	if wait > maxRetryWait {
+		wait = maxRetryWait
+	}
+	wait = wait/2 + time.Duration(rand.Int64N(int64(wait/2)))
+
 	if retries == 1 {
 		transport := ""
 		switch {
@@ -1132,25 +1139,25 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 			logger.Warn().
 				Err(err).
 				Str("transport", transport).
-				Dur("retry_wait", l.retryWait).
+				Dur("retry_wait", wait).
 				Msg("raw transport port pool exhausted; waiting for a port")
-			return utils.SleepOrDone(ctx, l.retryWait)
+			return utils.SleepOrDone(ctx, wait)
 		}
 		logger.Warn().
 			Err(err).
-			Dur("retry_wait", l.retryWait).
+			Dur("retry_wait", wait).
 			Msg("operation failed; retrying")
-		return utils.SleepOrDone(ctx, l.retryWait)
+		return utils.SleepOrDone(ctx, wait)
 	}
 
 	logger.Debug().
 		Err(err).
 		Int("retry_attempt", retries).
 		Int("retry_count", l.retryCount).
-		Dur("retry_wait", l.retryWait).
+		Dur("retry_wait", wait).
 		Msg("operation failed; retrying")
 
-	return utils.SleepOrDone(ctx, l.retryWait)
+	return utils.SleepOrDone(ctx, wait)
 }
 
 type bufferedConn struct {
