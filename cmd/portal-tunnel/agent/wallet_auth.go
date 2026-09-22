@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"crypto/rand"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -33,20 +31,11 @@ type walletAuthSession struct {
 }
 
 func newWalletAuthenticator(cfg walletAuthConfig) (*walletAuthenticator, error) {
-	// The wallet path has no tunnel identity at construction time, so the
-	// challenge key is generated fresh per process: in-flight challenges
-	// die with the agent process, which is acceptable because wallet
-	// sessions are in-memory and die with it too.
-	challengeKey := make([]byte, 32)
-	if _, err := rand.Read(challengeKey); err != nil {
-		return nil, fmt.Errorf("generate wallet auth challenge key: %w", err)
-	}
 	siwe, err := siweauth.New(siweauth.Config{
 		AllowedAddresses: cfg.AllowedAddresses,
 		AllowAnyAddress:  cfg.AllowAnyAddress,
 		Statement:        cfg.Statement,
 		ChallengePrefix:  "wac_",
-		Key:              challengeKey,
 	})
 	if err != nil {
 		return nil, err

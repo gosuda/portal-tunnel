@@ -5,16 +5,19 @@
 // payload into an HMAC-signed token instead of storing pending state, so
 // issuance consumes no server state and an unauthenticated flood of
 // challenge requests cannot exhaust login capacity (issue #530). The token
-// travels to the wallet as the opaque challenge ID and doubles as the SIWE
-// request ID. The only stored state is a bounded consumed-replay set that
-// keeps a verified challenge from being used twice. Source IP addresses and
+// travels to the wallet as the opaque challenge ID; its embedded payload
+// ID doubles as the SIWE request ID. The only stored state is a bounded
+// consumed-replay set that keeps a verified challenge from being used
+// twice. Each authenticator generates its challenge-signing key at
+// construction, so issued challenges are bound to the process: a restart
+// invalidates outstanding and consumed challenges alike. Source IP
+// addresses and
 // relay connection identities are deliberately not used to rate-limit
 // issuance: neither is a trustworthy browser identity through relay
 // transport, so limiting on them would only block the wrong clients.
 package siweauth
 
 import (
-	"bytes"
 	"cmp"
 	"crypto/hmac"
 	"crypto/rand"
@@ -35,10 +38,12 @@ const (
 	// challengeTTL bounds how long a wallet has to sign its challenge.
 	challengeTTL = 2 * time.Minute
 	// consumedMax bounds the replay set. It is not an issuance limit:
-	// hitting it only evicts the entry closest to expiry.
+	// once the set holds consumedMax unexpired entries, further
+	// consumption fails closed (issue #530).
 	consumedMax = 4096
-	// minKeyLength is the smallest acceptable HMAC key.
-	minKeyLength = 32
+	// hmacKeyLength is the size of the challenge-signing key New
+	// generates for each authenticator.
+	hmacKeyLength = 32
 )
 
 var (
@@ -49,15 +54,12 @@ var (
 	ErrInvalidSignature  = errors.New("wallet auth signature is invalid")
 )
 
-// Config configures the authenticator. Key must be at least minKeyLength
-// bytes of cryptographically random material; it authenticates every
-// issued challenge token.
+// Config configures the authenticator.
 type Config struct {
 	AllowedAddresses []string
 	AllowAnyAddress  bool
 	Statement        string
 	ChallengePrefix  string
-	Key              []byte
 }
 
 // Authenticator issues and verifies stateless SIWE challenges. It is safe
@@ -94,10 +96,15 @@ type challengePayload struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// New validates the configuration and returns an authenticator.
+// New validates the configuration and returns an authenticator. The
+// challenge-signing key is generated fresh per authenticator and never
+// crosses the package boundary, so issued challenges are bound to the
+// process: a restart invalidates outstanding and consumed challenges
+// alike.
 func New(cfg Config) (*Authenticator, error) {
-	if len(cfg.Key) < minKeyLength {
-		return nil, fmt.Errorf("wallet auth challenge key must be at least %d bytes", minKeyLength)
+	key := make([]byte, hmacKeyLength)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate wallet auth challenge key: %w", err)
 	}
 	addresses, err := NormalizeAddresses(cfg.AllowedAddresses)
 	if err != nil {
@@ -115,7 +122,7 @@ func New(cfg Config) (*Authenticator, error) {
 		allowAny:        cfg.AllowAnyAddress,
 		statement:       cmp.Or(strings.TrimSpace(cfg.Statement), "Sign in to Portal"),
 		challengePrefix: strings.TrimSpace(cfg.ChallengePrefix),
-		key:             bytes.Clone(cfg.Key),
+		key:             key,
 		consumed:        make(map[string]time.Time),
 	}, nil
 }
@@ -258,8 +265,10 @@ func (a *Authenticator) decodeChallengeToken(token string) (challengePayload, er
 
 // consume records the token in the replay set under one lock, so two
 // concurrent verifications of the same token cannot both succeed. Expired
-// entries are dropped first; at the cap the earliest-expiring entry is
-// evicted, which legitimate traffic never approaches (issue #530).
+// entries are dropped first; if the set still holds consumedMax unexpired
+// entries, the new consumption is rejected rather than evicting any
+// unexpired digest, which would reopen a single-use challenge (issue
+// #530).
 func (a *Authenticator) consume(token string, expiresAt, now time.Time) error {
 	digest := sha256.Sum256([]byte(token))
 	id := string(digest[:])
@@ -268,11 +277,11 @@ func (a *Authenticator) consume(token string, expiresAt, now time.Time) error {
 	if _, ok := a.consumed[id]; ok {
 		return ErrChallengeNotFound
 	}
-	a.consumed[id] = expiresAt
 	a.cleanupExpiredLocked(now)
-	for len(a.consumed) >= consumedMax {
-		a.evictEarliestLocked()
+	if len(a.consumed) >= consumedMax {
+		return ErrChallengeNotFound
 	}
+	a.consumed[id] = expiresAt
 	return nil
 }
 
@@ -281,20 +290,6 @@ func (a *Authenticator) cleanupExpiredLocked(now time.Time) {
 		if now.After(expiresAt) {
 			delete(a.consumed, id)
 		}
-	}
-}
-
-func (a *Authenticator) evictEarliestLocked() {
-	var earliestKey string
-	var earliest time.Time
-	first := true
-	for id, expiresAt := range a.consumed {
-		if first || expiresAt.Before(earliest) {
-			earliestKey, earliest, first = id, expiresAt, false
-		}
-	}
-	if !first {
-		delete(a.consumed, earliestKey)
 	}
 }
 

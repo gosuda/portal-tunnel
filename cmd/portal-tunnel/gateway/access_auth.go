@@ -93,16 +93,11 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	if err != nil {
 		return nil, fmt.Errorf("derive application auth signing key: %w", err)
 	}
-	challengeKey, err := identity.DeriveToken(tunnelIdentity, "application-auth-challenge")
-	if err != nil {
-		return nil, fmt.Errorf("derive application auth challenge key: %w", err)
-	}
 	siwe, err := siweauth.New(siweauth.Config{
 		AllowedAddresses: cfg.AllowedWallets,
 		AllowAnyAddress:  len(cfg.AllowedWallets) == 0,
 		Statement:        "Sign in to this Portal application",
 		ChallengePrefix:  "pac_",
-		Key:              []byte(challengeKey),
 	})
 	if err != nil {
 		return nil, err

@@ -1,8 +1,9 @@
 package siweauth
 
 import (
-	"crypto/rand"
+	"crypto/sha256"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,11 +15,7 @@ const testDomain = "app.example"
 
 func newTestAuthenticator(t *testing.T) *Authenticator {
 	t.Helper()
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-	auth, err := New(Config{Key: key, AllowAnyAddress: true, Statement: "Sign in to Portal", ChallengePrefix: "test_"})
+	auth, err := New(Config{AllowAnyAddress: true, Statement: "Sign in to Portal", ChallengePrefix: "test_"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,12 +38,6 @@ func issueTestChallenge(t *testing.T, auth *Authenticator, wallet identity.Local
 		t.Fatal(err)
 	}
 	return challenge
-}
-
-func TestNewRejectsShortKey(t *testing.T) {
-	if _, err := New(Config{Key: []byte("too-short"), AllowAnyAddress: true}); err == nil {
-		t.Fatal("short challenge key accepted")
-	}
 }
 
 // TestIssueIsStatelessUnderFlood is the issue #530 regression: issuance
@@ -175,5 +166,54 @@ func TestVerifyRejectsWrongDomain(t *testing.T) {
 	}
 	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, "other.example", now); !errors.Is(err, ErrInvalidSignature) {
 		t.Fatalf("err = %v; want ErrInvalidSignature", err)
+	}
+}
+
+// TestConsumeFailsClosedAtCapacity pins the fail-closed replay cap: when
+// the set already holds consumedMax unexpired entries, a new successful
+// verification is rejected instead of evicting a digest, and every
+// recorded entry survives untouched.
+func TestConsumeFailsClosedAtCapacity(t *testing.T) {
+	auth := newTestAuthenticator(t)
+	wallet := testWallet(t)
+	now := time.Now().UTC()
+	for i := range consumedMax {
+		digest := sha256.Sum256([]byte(strconv.Itoa(i)))
+		auth.consumed[string(digest[:])] = now.Add(time.Hour)
+	}
+
+	challenge := issueTestChallenge(t, auth, wallet, now)
+	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now); !errors.Is(err, ErrChallengeNotFound) {
+		t.Fatalf("verify at capacity err = %v; want ErrChallengeNotFound", err)
+	}
+	if len(auth.consumed) != consumedMax {
+		t.Fatalf("consumed set = %d entries; want %d with no eviction", len(auth.consumed), consumedMax)
+	}
+}
+
+// TestNewKeyIsProcessLocal pins the restart rule: each authenticator
+// signs with its own freshly generated key, so a restarted authenticator
+// rejects challenges issued by the previous process instead of honoring
+// stale outstanding or consumed tokens.
+func TestNewKeyIsProcessLocal(t *testing.T) {
+	wallet := testWallet(t)
+	now := time.Now().UTC()
+	first := newTestAuthenticator(t)
+	challenge := issueTestChallenge(t, first, wallet, now)
+	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Verify(challenge.ID, challenge.Message, signature, testDomain, now); err != nil {
+		t.Fatalf("first verify: %v", err)
+	}
+
+	restarted := newTestAuthenticator(t)
+	if _, err := restarted.Verify(challenge.ID, challenge.Message, signature, testDomain, now); !errors.Is(err, ErrChallengeInvalid) {
+		t.Fatalf("post-restart err = %v; want ErrChallengeInvalid", err)
 	}
 }
