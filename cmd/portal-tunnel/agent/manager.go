@@ -216,19 +216,22 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		return errors.New("max_active_relays cannot be negative")
 	}
 	tunnelCfg := TunnelConfig{
-		ID:              id,
-		Name:            name,
-		TargetAddr:      target,
-		HTTPRoutes:      httpRoutes,
-		RelayURLs:       relayURLs,
-		Discovery:       &discovery,
-		Overlay:         req.Overlay,
-		MaxActiveRelays: req.MaxActiveRelays,
-		X402PayTo:       strings.TrimSpace(req.X402PayTo),
-		X402Testnet:     req.X402Testnet,
-		X402Network:     strings.ToLower(strings.TrimSpace(req.X402Network)),
-		X402Asset:       strings.TrimSpace(req.X402Asset),
-		X402Endpoints:   compactStrings(append([]string(nil), req.X402Endpoints...)),
+		ID:                  id,
+		Name:                name,
+		TargetAddr:          target,
+		HTTPRoutes:          httpRoutes,
+		RelayURLs:           relayURLs,
+		Discovery:           &discovery,
+		Overlay:             req.Overlay,
+		MaxActiveRelays:     req.MaxActiveRelays,
+		Auth:                req.Auth,
+		AuthAllowedWallets:  append([]string(nil), req.AuthAllowedWallets...),
+		AuthIdentityHeaders: req.AuthIdentityHeaders,
+		X402PayTo:           strings.TrimSpace(req.X402PayTo),
+		X402Testnet:         req.X402Testnet,
+		X402Network:         strings.ToLower(strings.TrimSpace(req.X402Network)),
+		X402Asset:           strings.TrimSpace(req.X402Asset),
+		X402Endpoints:       compactStrings(append([]string(nil), req.X402Endpoints...)),
 	}
 	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
 		return fmt.Errorf("tunnel %q already exists", tunnelCfg.ID)
@@ -576,21 +579,23 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	}
 
 	status := AgentTunnelStatus{
-		ID:              cfg.ID,
-		Name:            cfg.Name,
-		State:           state,
-		TargetAddr:      cfg.TargetAddr,
-		LastError:       lastError,
-		Serve:           cfg.Serve,
-		Discovery:       discovery,
-		Overlay:         cfg.Overlay,
-		MaxActiveRelays: cfg.MaxActiveRelays,
-		Metadata:        metadataFromTunnelConfig(cfg),
-		X402PayTo:       strings.TrimSpace(cfg.X402PayTo),
-		X402Testnet:     cfg.X402Testnet,
-		X402Network:     cfg.X402Network,
-		X402Asset:       cfg.X402Asset,
-		X402Endpoints:   append([]string(nil), cfg.X402Endpoints...),
+		ID:                  cfg.ID,
+		Name:                cfg.Name,
+		State:               state,
+		TargetAddr:          cfg.TargetAddr,
+		LastError:           lastError,
+		Serve:               cfg.Serve,
+		Discovery:           discovery,
+		Overlay:             cfg.Overlay,
+		MaxActiveRelays:     cfg.MaxActiveRelays,
+		Metadata:            metadataFromTunnelConfig(cfg),
+		Auth:                cfg.Auth,
+		AuthIdentityHeaders: cfg.AuthIdentityHeaders,
+		X402PayTo:           strings.TrimSpace(cfg.X402PayTo),
+		X402Testnet:         cfg.X402Testnet,
+		X402Network:         cfg.X402Network,
+		X402Asset:           cfg.X402Asset,
+		X402Endpoints:       append([]string(nil), cfg.X402Endpoints...),
 	}
 	if len(cfg.HTTPRoutes) > 0 {
 		status.HTTPRoutes = make([]AgentHTTPRoute, 0, len(cfg.HTTPRoutes))
@@ -688,6 +693,9 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 			Amount:   route.Amount,
 		})
 	}
+	if cfg.Auth && len(routes) == 0 {
+		routes = append(routes, ExposedHTTPRoute{Prefix: "/", Upstream: cfg.TargetAddr})
+	}
 
 	discovery := true
 	if cfg.Discovery != nil {
@@ -753,6 +761,15 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		})
 		if routeErr != nil {
 			return routeErr
+		}
+		if cfg.Auth {
+			handler, routeErr = NewApplicationAuth(handler, listenerIdentity, ApplicationAuthConfig{
+				AllowedWallets:  cfg.AuthAllowedWallets,
+				IdentityHeaders: cfg.AuthIdentityHeaders,
+			})
+			if routeErr != nil {
+				return routeErr
+			}
 		}
 		err = sdk.RunHTTP(ctx, exposure, handler, "")
 	} else {

@@ -111,6 +111,17 @@ Default HTTPS stream for most local web apps:
 portal expose 3000 --name myapp
 ```
 
+Protect an HTTP app with tunnel-local SIWE login:
+
+```text
+portal expose 3000 --auth
+portal expose 3000 --auth --auth-allow 0x1234... --auth-identity-headers
+```
+
+The second form restricts access to the listed wallet and injects verified
+`X-Portal-User` and `X-Portal-Auth` headers. Portal strips inbound copies of
+those headers in both modes.
+
 Static site when you want to publish a local folder or a single HTML file
 without running a server. Pass a directory (served with `index.html`) or an HTML
 file (its folder is served with that file as the SPA/CSR entry). Unknown paths
@@ -184,6 +195,9 @@ Common `portal expose` flags:
 --thumbnail          Service thumbnail URL metadata
 --owner              Service owner metadata
 --hide               Hide service from relay listing screens
+--auth               Protect the complete HTTP application with tunnel-local SIWE login
+--auth-allow         Allowed Ethereum wallet; repeatable; empty allows any valid wallet
+--auth-identity-headers  Inject verified Portal identity headers upstream
 --serve              Serve a local static site: a directory (served with index.html) or an HTML file (folder served with that file as SPA/CSR entry)
 --http-route         HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form
 --x402-pay-to        Payment recipient address for this tunnel
@@ -244,6 +258,7 @@ change them.
   (`..`) is refused, but a symlink inside the folder that points outside it is
   still followed, so only serve folders you trust.
 - `--http-route` cannot be combined with `--udp`.
+- `--auth` cannot be combined with `--cache`, `--tcp`, or `--udp`.
 - Route payment amounts such as `0.01` are part of `--http-route` and require
   `--x402-pay-to`. Sui is the default; Casper additionally requires
   `--x402-network casper:...` and the wCSPR contract in `--x402-asset`.

@@ -148,6 +148,18 @@ Expose a local web app:
 portal expose 3000
 ```
 
+Protect the app with tunnel-local SIWE login:
+
+```bash
+portal expose 3000 --auth
+# Restrict login and pass the verified identity to the upstream.
+portal expose 3000 --auth --auth-allow 0x1234... --auth-identity-headers
+```
+
+Portal protects the complete HTTP gateway, including routed, static, and x402
+paths. It always strips inbound Portal identity headers. The auth gate cannot be
+combined with relay cache mode or raw TCP/UDP exposure.
+
 Use a custom name and relay:
 
 ```bash

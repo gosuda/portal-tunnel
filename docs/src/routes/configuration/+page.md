@@ -344,6 +344,9 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--owner` | | string | | Service owner metadata |
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
+| `--auth` | | bool | `false` | Protect the complete HTTP application with tunnel-local SIWE login; excludes cache, TCP, and UDP |
+| `--auth-allow` | | string | | Allowed Ethereum wallet; repeatable; empty allows any valid wallet and requires `--auth` |
+| `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
 | `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
 | `--x402-network` | | string | | Optional Sui or Casper CAIP-2 network |
@@ -421,6 +424,9 @@ discovery = false
 overlay = true
 description = "Managed web tunnel"
 tags = ["web"]
+auth = true
+auth_allowed_wallets = ["0x1234..."]
+auth_identity_headers = true
 
 [[tunnels]]
 id = "api"
@@ -471,6 +477,9 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
+| `auth` | bool | Require tunnel-local SIWE application login; cannot be combined with TCP or UDP |
+| `auth_allowed_wallets` | string array | Wallets allowed to sign in; empty allows any valid wallet and requires `auth` when set |
+| `auth_identity_headers` | bool | Inject verified Portal identity headers upstream; requires `auth` |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |
 | `x402_testnet` | bool | Use Sui testnet when `x402_network` is omitted; omitted or `false` uses Sui mainnet |
 | `x402_network` | string | Optional CAIP-2 network: `sui:mainnet`, `sui:testnet`, `casper:casper`, or `casper:casper-test` |

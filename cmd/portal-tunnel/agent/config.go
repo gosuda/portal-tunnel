@@ -60,6 +60,9 @@ type TunnelConfig struct {
 	Owner                string            `koanf:"owner"`
 	Thumbnail            string            `koanf:"thumbnail"`
 	Hide                 bool              `koanf:"hide"`
+	Auth                 bool              `koanf:"auth"`
+	AuthAllowedWallets   []string          `koanf:"auth_allowed_wallets"`
+	AuthIdentityHeaders  bool              `koanf:"auth_identity_headers"`
 	X402PayTo            string            `koanf:"x402_pay_to"`
 	X402Testnet          bool              `koanf:"x402_testnet"`
 	X402Network          string            `koanf:"x402_network"`
@@ -210,6 +213,13 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	if cfg.Hide {
 		out["hide"] = cfg.Hide
 	}
+	if cfg.Auth {
+		out["auth"] = cfg.Auth
+	}
+	addStringSliceDocumentField(out, "auth_allowed_wallets", cfg.AuthAllowedWallets)
+	if cfg.AuthIdentityHeaders {
+		out["auth_identity_headers"] = cfg.AuthIdentityHeaders
+	}
 	addStringDocumentField(out, "x402_pay_to", cfg.X402PayTo)
 	if cfg.X402Testnet {
 		out["x402_testnet"] = cfg.X402Testnet
@@ -279,6 +289,11 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		if t.ID == "" {
 			t.ID = fmt.Sprintf("tunnel-%d", i+1)
 		}
+		normalizedWallets, err := normalizeSIWEAuthAddresses(t.AuthAllowedWallets)
+		if err != nil {
+			return fmt.Errorf("tunnel %q auth_allowed_wallets: %w", t.ID, err)
+		}
+		t.AuthAllowedWallets = normalizedWallets
 		if t.IdentityPath == "" {
 			if len(cfg.Tunnels) <= 1 {
 				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, defaultIdentityFilename)
@@ -356,6 +371,15 @@ func (cfg TunnelConfig) Validate() error {
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.X402Network)), "casper:") && strings.TrimSpace(cfg.X402Asset) == "" {
 		return fmt.Errorf("tunnel %q Casper payments require x402_asset", cfg.ID)
+	}
+	if cfg.Auth && (cfg.TCPEnabled || cfg.UDPEnabled) {
+		return fmt.Errorf("tunnel %q auth protects HTTP applications and cannot be combined with tcp or udp", cfg.ID)
+	}
+	if !cfg.Auth && len(cfg.AuthAllowedWallets) > 0 {
+		return fmt.Errorf("tunnel %q auth_allowed_wallets requires auth", cfg.ID)
+	}
+	if !cfg.Auth && cfg.AuthIdentityHeaders {
+		return fmt.Errorf("tunnel %q auth_identity_headers requires auth", cfg.ID)
 	}
 	return nil
 }

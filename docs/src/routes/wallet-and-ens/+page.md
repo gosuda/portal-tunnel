@@ -15,6 +15,7 @@ related, but they do not all mean "connect a browser wallet".
 | Tunnel identity | Local `identity.json` secp256k1 private key, or BIP-39 mnemonic plus derivation path | Signs SIWE lease registration challenges |
 | Relay identity | Relay `IDENTITY_PATH/identity.json` secp256k1 private key, or BIP-39 mnemonic plus derivation path | Signs relay descriptors, lease tokens, reverse capabilities, and ENS base-domain address |
 | Relay admin token | `ADMIN_TOKEN` | Signs in to `/admin` and authorizes relay policy changes |
+| Application wallet | Optional browser wallet allowlist | Signs in to an HTTP application protected by the local tunnel endpoint |
 | Agent wallet | Optional browser wallet allowlist | Reads loopback agent status through `/agent/status` |
 | ENS gasless DNS | DNSSEC plus `ENS1 ...` TXT records | Lets ENS-aware clients resolve the relay domain and lease hostnames to Portal identities |
 
@@ -37,11 +38,15 @@ proof based on the local tunnel key. `identity.json` may store a raw
 `private_key`, or a BIP-39 `mnemonic` with `derivation_path` such as
 `m/44'/60'/0'/0/0`.
 
-There is no `--auth siwe` flag. The current CLI command is:
+Registration itself does not use the application `--auth` flag. The basic CLI
+command is:
 
 ```bash
 portal expose 3000 --name myapp
 ```
+
+To separately require a browser wallet before application requests are
+forwarded, add `--auth`; see [SIWE Authentication](/siwe-authentication#application-access).
 
 Use a stable identity path when the lease identity must survive working
 directory changes:

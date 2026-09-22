@@ -21,6 +21,22 @@ receive the files. Cache mode cannot be combined with `--ban-mitm`.
 Ordinary uncached HTTPS tunnels retain the tenant TLS path described below.
 See [cache configuration](/configuration#static-relay-cache) for expiry and limits.
 
+## Application Access Authentication
+
+`portal expose 3000 --auth` places a SIWE login gate at the local tunnel HTTP
+endpoint. Challenges, the session signing key, cookies, wallet addresses, and
+application plaintext remain outside the relay control plane. Challenges expire
+after two minutes and are consumed on the first verification attempt; signed
+sessions expire after 24 hours.
+
+The auth gate wraps the complete HTTP router, including static files and x402
+routes. Portal removes client-supplied `X-Portal-User` and `X-Portal-Auth`
+headers before routing and only restores verified values when
+`--auth-identity-headers` is enabled. It also consumes the Portal session cookie
+at the gate, so upstream applications receive their own cookies but never the
+`__Host-portal_access` credential. Application auth cannot be combined with
+relay caching or raw TCP/UDP exposure.
+
 ## Tenant TLS
 
 For the default stream path, the relay only peeks at the TLS ClientHello long enough to read SNI and choose a lease. After that it bridges encrypted bytes over a reverse session.
@@ -71,9 +87,9 @@ Raw TCP and UDP port transports do not add tenant TLS. Use application-level enc
 
 Registration uses a SIWE challenge signed by the SDK's secp256k1 identity key. The key is loaded from `identity.json` either as a raw secp256k1 `private_key` or derived from a BIP-39 `mnemonic` and `derivation_path`. The relay then issues a lease-scoped ES256K access token used by renew, unregister, keyless signing, and QUIC datagram authentication, plus a separate reverse-only capability for reverse streams.
 
-Relay admin token login and optional local agent wallet login are separate from
-lease registration. They do not replace the local tunnel identity used for
-registration.
+Application access login, relay admin token login, and optional local agent
+wallet login are separate from lease registration. They do not replace the
+local tunnel identity used for registration.
 
 ## Next Steps
 

@@ -64,3 +64,26 @@ func TestStaticServeConfigModes(t *testing.T) {
 		})
 	}
 }
+
+func TestApplicationAuthConfig(t *testing.T) {
+	validWallet := "0x0000000000000000000000000000000000000001"
+	for _, tc := range []struct {
+		name  string
+		cfg   TunnelConfig
+		valid bool
+	}{
+		{name: "target", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: true}, valid: true},
+		{name: "static", cfg: TunnelConfig{Serve: "./dist", Auth: true, AuthAllowedWallets: []string{validWallet}}, valid: true},
+		{name: "allowlist without auth", cfg: TunnelConfig{TargetAddr: "localhost:3000", AuthAllowedWallets: []string{validWallet}}},
+		{name: "headers without auth", cfg: TunnelConfig{TargetAddr: "localhost:3000", AuthIdentityHeaders: true}},
+		{name: "tcp", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: true, TCPEnabled: true}},
+		{name: "udp", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: true, UDPEnabled: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.ID = "authenticated"
+			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
+				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
+			}
+		})
+	}
+}

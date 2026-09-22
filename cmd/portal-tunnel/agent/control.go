@@ -173,7 +173,7 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 		if !ok {
 			return true
 		}
-		token, walletAddress, err := s.auth.login(req, time.Now().UTC())
+		token, walletAddress, err := s.auth.login(req, agentAuthDomain(r), time.Now().UTC())
 		if err != nil {
 			writeAgentWalletAuthError(w, err)
 			return true
@@ -255,9 +255,9 @@ func agentAuthURI(r *http.Request, endpointPath string) string {
 
 func writeAgentWalletAuthError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errWalletAuthUnauthorized):
+	case errors.Is(err, errSIWEAuthUnauthorized):
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
-	case errors.Is(err, errWalletAuthChallengeNotFound), errors.Is(err, errWalletAuthChallengeExpired), errors.Is(err, errWalletAuthInvalidSignature):
+	case errors.Is(err, errSIWEAuthChallengeNotFound), errors.Is(err, errSIWEAuthChallengeExpired), errors.Is(err, errSIWEAuthInvalidSignature):
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, err.Error())
 	default:
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
