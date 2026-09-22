@@ -199,6 +199,8 @@ Common `portal expose` flags:
 --auth-allow         Allowed Ethereum wallet; repeatable; empty allows any valid wallet
 --auth-identity-headers  Inject verified Portal identity headers upstream
 --serve              Serve a local static site: a directory (served with index.html) or an HTML file (folder served with that file as SPA/CSR entry)
+--cache              Allow selected relays to store --serve content and terminate browser TLS
+--cache-ttl          Requested offline cache lifetime; clamped by relay policy
 --http-route         HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form
 --x402-pay-to        Payment recipient address for this tunnel
 --x402-testnet       Use Sui testnet when --x402-network is omitted
