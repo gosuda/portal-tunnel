@@ -93,11 +93,16 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	if err != nil {
 		return nil, fmt.Errorf("derive application auth signing key: %w", err)
 	}
+	challengeKey, err := identity.DeriveToken(tunnelIdentity, "application-auth-challenge")
+	if err != nil {
+		return nil, fmt.Errorf("derive application auth challenge key: %w", err)
+	}
 	siwe, err := siweauth.New(siweauth.Config{
 		AllowedAddresses: cfg.AllowedWallets,
 		AllowAnyAddress:  len(cfg.AllowedWallets) == 0,
 		Statement:        "Sign in to this Portal application",
 		ChallengePrefix:  "pac_",
+		Key:              []byte(challengeKey),
 	})
 	if err != nil {
 		return nil, err
@@ -181,13 +186,11 @@ func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request)
 	}
 	host := strings.TrimSpace(r.Host)
 	now := time.Now().UTC()
+	// Stateless issuance only fails per-request (address normalization or
+	// policy), so every failure is an unauthorized challenge request.
 	challenge, err := a.siwe.Issue(req.Address, host, "https://"+host, now)
 	if err != nil {
-		status := http.StatusUnauthorized
-		if errors.Is(err, siweauth.ErrTooManyChallenges) {
-			status = http.StatusTooManyRequests
-		}
-		a.writeJSONError(w, status, err.Error())
+		a.writeJSONError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	a.writeJSON(w, http.StatusOK, applicationAuthChallengeResponse{ChallengeID: challenge.ID, Message: challenge.Message, ExpiresAt: challenge.ExpiresAt})
