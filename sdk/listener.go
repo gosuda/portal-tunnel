@@ -71,7 +71,10 @@ func isTerminalRelayError(err error) bool {
 		return true
 	}
 	var apiErr *types.APIRequestError
-	return errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 && apiErr.StatusCode != http.StatusTooManyRequests
 }
 
 func (l *listener) closeForTerminalRelayError(err error) bool {
