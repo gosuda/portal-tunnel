@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -1121,11 +1120,7 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		return false
 	}
 
-	wait := l.retryWait << min(retries-1, 5)
-	if wait > maxRetryWait {
-		wait = maxRetryWait
-	}
-	wait = wait/2 + time.Duration(rand.Int64N(int64(wait/2)))
+	wait := min(l.retryWait<<min(retries-1, 5), maxRetryWait)
 
 	if retries == 1 {
 		transport := ""
