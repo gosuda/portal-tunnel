@@ -482,43 +482,37 @@ func TestListenerBanMITMRequiresKeyingMaterialExporter(t *testing.T) {
 	}
 }
 
-func TestMITMProbeDialAddressUsesRelayHostForLocalRelay(t *testing.T) {
-	relayURL, err := url.Parse("https://localhost:4017")
-	if err != nil {
-		t.Fatalf("url.Parse() error = %v", err)
+func TestMITMProbeDialAddress(t *testing.T) {
+	testCases := []struct {
+		name     string
+		relayURL string
+		input    string
+		want     string
+	}{
+		{name: "local relay uses relay host", relayURL: "https://localhost:4017", input: "https://bravo-gecko-disco.localhost:4017", want: "localhost:4017"},
+		{name: "remote relay uses public URL", relayURL: "https://relay.example", input: "https://bravo-gecko-disco.example", want: "bravo-gecko-disco.example:443"},
 	}
 
-	listener := &listener{
-		api: &apiClient{relayURL: relayURL},
-	}
-	listener.mitmManager = newMITMManager(context.Background(), listener, false)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			relayURL, err := url.Parse(tc.relayURL)
+			if err != nil {
+				t.Fatalf("url.Parse() error = %v", err)
+			}
 
-	got, err := listener.mitmManager.probeDialAddress("https://bravo-gecko-disco.localhost:4017")
-	if err != nil {
-		t.Fatalf("probeDialAddress() error = %v", err)
-	}
-	if got != "localhost:4017" {
-		t.Fatalf("probeDialAddress() = %q, want %q", got, "localhost:4017")
-	}
-}
+			listener := &listener{
+				api: &apiClient{relayURL: relayURL},
+			}
+			listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
-func TestMITMProbeDialAddressUsesPublicURLForRemoteRelay(t *testing.T) {
-	relayURL, err := url.Parse("https://relay.example")
-	if err != nil {
-		t.Fatalf("url.Parse() error = %v", err)
-	}
-
-	listener := &listener{
-		api: &apiClient{relayURL: relayURL},
-	}
-	listener.mitmManager = newMITMManager(context.Background(), listener, false)
-
-	got, err := listener.mitmManager.probeDialAddress("https://bravo-gecko-disco.example")
-	if err != nil {
-		t.Fatalf("probeDialAddress() error = %v", err)
-	}
-	if got != "bravo-gecko-disco.example:443" {
-		t.Fatalf("probeDialAddress() = %q, want %q", got, "bravo-gecko-disco.example:443")
+			got, err := listener.mitmManager.probeDialAddress(tc.input)
+			if err != nil {
+				t.Fatalf("probeDialAddress() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("probeDialAddress() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
