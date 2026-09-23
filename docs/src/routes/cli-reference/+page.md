@@ -99,9 +99,9 @@ not supported.
 | `--thumbnail` | string | | Service thumbnail URL metadata |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
-| `--auth` | bool | `false` | Protect HTTP application access with tunnel-local SIWE authentication |
-| `--auth-allow` | string | | Ethereum wallet allowed to sign in; repeat for multiple wallets (empty allows any wallet) |
-| `--auth-identity-headers` | bool | `false` | Send authenticated `X-Portal-User` and `X-Portal-Auth` headers to HTTP upstreams |
+| `--auth` | bool | `false` | Protect HTTP application access with tunnel-local SIWE authentication; cannot be combined with `--cache` |
+| `--auth-allow` | string | | Ethereum wallet allowed to sign in; repeat for multiple wallets (empty allows any wallet); requires `--auth` |
+| `--auth-identity-headers` | bool | `false` | Send authenticated `X-Portal-User` and `X-Portal-Auth` headers to HTTP upstreams; requires `--auth` |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
 | `--x402-network` | string | | Optional Sui or Casper CAIP-2 network |

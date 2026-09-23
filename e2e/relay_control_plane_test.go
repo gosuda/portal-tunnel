@@ -15,6 +15,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -315,18 +316,17 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 			t.Fatalf("discovery envelope ok=%v ProtocolVersion=%q, want ok envelope with protocol %q",
 				discoveryEnvelope.OK, discoveryEnvelope.Data.ProtocolVersion, types.DiscoveryVersion)
 		}
-		selfCount := 0
-		for _, descriptor := range discoveryEnvelope.Data.Relays {
-			if descriptor.APIHTTPSAddr != "https://localhost:4017" {
-				continue
-			}
-			selfCount++
-			if descriptor.Signature == "" {
-				t.Fatal("discovery self descriptor has no signature")
-			}
+		if len(discoveryEnvelope.Data.Relays) != 1 {
+			t.Fatalf("discovery envelope contains %d relay descriptors, want exactly 1",
+				len(discoveryEnvelope.Data.Relays))
 		}
-		if selfCount != 1 {
-			t.Fatalf("discovery envelope contains %d self descriptors, want 1", selfCount)
+		descriptor := discoveryEnvelope.Data.Relays[0]
+		if descriptor.APIHTTPSAddr != "https://localhost:4017" {
+			t.Fatalf("discovery self descriptor APIHTTPSAddr = %q, want %q",
+				descriptor.APIHTTPSAddr, "https://localhost:4017")
+		}
+		if _, err := discovery.VerifyRelayDescriptor(descriptor); err != nil {
+			t.Fatalf("discovery self descriptor failed signature verification: %v", err)
 		}
 		if discoveryEnvelope.Data.ReleaseVersion != types.ReleaseVersion {
 			t.Fatalf("discovery envelope ReleaseVersion = %q, want %q", discoveryEnvelope.Data.ReleaseVersion, types.ReleaseVersion)
