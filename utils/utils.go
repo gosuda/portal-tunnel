@@ -388,6 +388,9 @@ func EnsurePort(host string) string {
 	if _, _, err := net.SplitHostPort(host); err == nil {
 		return host
 	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
 	return net.JoinHostPort(host, "443")
 }
 

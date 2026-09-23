@@ -56,7 +56,7 @@ func TestLoadOrCreateJSONTakesPrecedenceWithoutPersistence(t *testing.T) {
 
 func TestLoadOrCreateWithoutPathStaysEphemeral(t *testing.T) {
 	resolved := mustLoadOrCreate(t, "", "127.0.0.1:9999", "", "")
-	if resolved.Name == "" || resolved.PrivateKey == "" {
+	if resolved.Name == "" || resolved.PrivateKey == "" || resolved.TokenSecret == "" {
 		t.Fatalf("generated identity incomplete: %+v", resolved)
 	}
 }

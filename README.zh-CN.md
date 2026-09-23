@@ -114,8 +114,8 @@ npx skills add gosuda/portal-tunnel --skill portal-expose
 ```bash
 portal agent run --config config.toml
 portal agent dashboard --config config.toml
-portal agent restart
-portal agent stop
+portal agent restart --config config.toml
+portal agent stop --config config.toml
 
 # 前台模式会跳过 OS 服务安装。
 portal agent run --config config.toml --foreground

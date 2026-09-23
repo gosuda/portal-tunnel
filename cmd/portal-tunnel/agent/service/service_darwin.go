@@ -94,14 +94,7 @@ func launchdPlist(def Definition) string {
 }
 
 func xmlEscape(value string) string {
-	var out []byte
-	_ = xml.EscapeText((*appendWriter)(&out), []byte(value))
-	return string(out)
-}
-
-type appendWriter []byte
-
-func (w *appendWriter) Write(p []byte) (int, error) {
-	*w = append(*w, p...)
-	return len(p), nil
+	var out strings.Builder
+	_ = xml.EscapeText(&out, []byte(value))
+	return out.String()
 }

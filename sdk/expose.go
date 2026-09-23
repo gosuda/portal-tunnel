@@ -839,18 +839,16 @@ func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
 	if !e.options.UDPEnabled {
 		return types.DatagramFrame{}, net.ErrClosed
 	}
-	for {
-		select {
-		case frame := <-e.datagrams:
-			return frame, nil
-		default:
-		}
-		select {
-		case <-e.done:
-			return types.DatagramFrame{}, net.ErrClosed
-		case frame := <-e.datagrams:
-			return frame, nil
-		}
+	select {
+	case frame := <-e.datagrams:
+		return frame, nil
+	default:
+	}
+	select {
+	case <-e.done:
+		return types.DatagramFrame{}, net.ErrClosed
+	case frame := <-e.datagrams:
+		return frame, nil
 	}
 }
 

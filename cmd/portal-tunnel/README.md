@@ -212,6 +212,13 @@ Common `portal expose` flags:
 --metrics-addr       Optional host:port for Prometheus /metrics
 ```
 
+`portal expose --serve` flags (require `--serve`; cannot be combined with a target):
+
+```text
+--cache              Allow selected relays to store --serve content and terminate browser TLS
+--cache-ttl          Requested offline cache lifetime; clamped by relay policy
+```
+
 `--overlay` prefers IVNP-routed overlay transport when an eligible gateway is available and retains direct reverse transport as fallback: Portal selects and authorizes the public ingress and overlay gateway, then issues the delegated reverse capability; IVNP owns the gateway→ingress path and any internal hops it uses; the SDK sees only the same generic reverse endpoint. See [architecture documentation](../../docs/src/routes/architecture/+page.md) for details.
 
 ## Agent

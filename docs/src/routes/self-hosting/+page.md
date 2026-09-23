@@ -132,7 +132,7 @@ resources.
 
 ## Connecting Your Tunnel
 
-Point `portal-tunnel` at your relay with the `--relays` flag:
+Point the `portal` CLI at your relay with the `--relays` flag:
 
 ```bash
 portal expose --relays https://relay.example.com --discovery=false localhost:3000

@@ -82,10 +82,7 @@ func (p *proxy) copy(dst, src net.Conn, identityKey string, bpsManager *policy.B
 		if nr > 0 {
 			data := buf[:nr]
 			for len(data) > 0 {
-				chunkSize := len(data)
-				if bpsManager != nil {
-					chunkSize = bpsManager.ThrottleIdentityBPS(identityKey, chunkSize)
-				}
+				chunkSize := bpsManager.ThrottleIdentityBPS(identityKey, len(data))
 
 				n, err := dst.Write(data[:chunkSize])
 				if n > 0 {

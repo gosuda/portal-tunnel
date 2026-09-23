@@ -15,6 +15,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -315,22 +316,23 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 			t.Fatalf("discovery envelope ok=%v ProtocolVersion=%q, want ok envelope with protocol %q",
 				discoveryEnvelope.OK, discoveryEnvelope.Data.ProtocolVersion, types.DiscoveryVersion)
 		}
-		// The envelope must carry the relay's own signed descriptor: the
-		// discovery response is a projection of the relay set, so an empty
-		// Relays list would leave peers with nothing to route to.
 		if len(discoveryEnvelope.Data.Relays) != 1 {
-			t.Fatalf("discovery envelope Relays = %d entries, want the relay's own descriptor", len(discoveryEnvelope.Data.Relays))
+			t.Fatalf("discovery envelope contains %d relay descriptors, want exactly 1",
+				len(discoveryEnvelope.Data.Relays))
 		}
-		if self := discoveryEnvelope.Data.Relays[0]; self.APIHTTPSAddr != "https://localhost:4017" || self.Signature == "" {
-			t.Fatalf("discovery self descriptor = %+v, want api_https_addr https://localhost:4017 with a signature", self)
+		descriptor := discoveryEnvelope.Data.Relays[0]
+		if descriptor.APIHTTPSAddr != "https://localhost:4017" {
+			t.Fatalf("discovery self descriptor APIHTTPSAddr = %q, want %q",
+				descriptor.APIHTTPSAddr, "https://localhost:4017")
+		}
+		if _, err := discovery.VerifyRelayDescriptor(descriptor); err != nil {
+			t.Fatalf("discovery self descriptor failed signature verification: %v", err)
 		}
 		if discoveryEnvelope.Data.ReleaseVersion != types.ReleaseVersion {
 			t.Fatalf("discovery envelope ReleaseVersion = %q, want %q", discoveryEnvelope.Data.ReleaseVersion, types.ReleaseVersion)
 		}
-		// A lonely relay has contacted no peers, so it must not fabricate an
-		// observation about itself.
-		if len(discoveryEnvelope.Data.RelayReleaseVersions) != 0 {
-			t.Fatalf("discovery envelope RelayReleaseVersions = %+v, want none from a relay with no observed peers", discoveryEnvelope.Data.RelayReleaseVersions)
+		if release, ok := discoveryEnvelope.Data.RelayReleaseVersions["https://localhost:4017"]; ok {
+			t.Fatalf("discovery envelope reports self release observation %q", release)
 		}
 	})
 

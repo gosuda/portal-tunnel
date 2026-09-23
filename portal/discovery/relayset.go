@@ -789,10 +789,10 @@ func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) er
 	s.clearExpiredPoolBansLocked(now)
 
 	relayURL := record.Descriptor.APIHTTPSAddr
-	if existing, ok := s.relays[relayURL]; ok && existing.Banned {
-		return errors.New("relay banned from pool")
-	}
 	if existing, ok := s.relays[relayURL]; ok {
+		if existing.Banned {
+			return errors.New("relay banned from pool")
+		}
 		record = mergeLocalRelayState(record, existing)
 	}
 
