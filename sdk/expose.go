@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -253,6 +254,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		controller.SetMaxActiveRelays(cfg.maxActiveRelays)
 		controller.SetTransportRequirements(cfg.UDPEnabled, cfg.TCPEnabled)
 		controller.SetLocalAddress(identity.Address)
+		controller.SetSelectionKey(deriveSelectionKey(identity))
 	} else if len(relayURLs) == 0 {
 		return nil, errors.New("portal sdk: at least one initial relay is required")
 	}
@@ -310,6 +312,16 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	}()
 
 	return exposure, nil
+}
+
+// deriveSelectionKey derives a stable, per-identity secret key for MOLS relay
+// ranking from the identity private key, so rankings are unpredictable to
+// outside observers without persisting any new value: the private key is
+// already the long-lived client secret. The domain separator keeps this key
+// distinct from any other derivation from the same secret.
+func deriveSelectionKey(identity types.Identity) []byte {
+	sum := sha256.Sum256(append([]byte("portal-tunnel/mols-selection-key\x00"), identity.PrivateKey...))
+	return sum[:]
 }
 
 // applyRelays applies a discovery-selected concrete relay set without

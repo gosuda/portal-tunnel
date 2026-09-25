@@ -52,6 +52,7 @@ type Controller struct {
 	requireUDP      bool
 	requireTCP      bool
 	localAddress    string
+	selectionKey    []byte
 }
 
 // NewController creates a discovery controller from bootstrap relay URLs.
@@ -204,6 +205,19 @@ func (c *Controller) SetLocalAddress(address string) {
 	c.mu.Unlock()
 }
 
+// SetSelectionKey sets the per-client secret key mixed into all MOLS ranking
+// hashes, making rankings unpredictable to outside observers and immune to
+// relay URL grinding. The sdk derives a stable key from the identity private
+// key, so rankings stay stable across restarts.
+func (c *Controller) SetSelectionKey(key []byte) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.selectionKey = append([]byte(nil), key...)
+	c.mu.Unlock()
+}
+
 func (c *Controller) signal() {
 	select {
 	case c.changed <- struct{}{}:
@@ -276,6 +290,7 @@ func (c *Controller) buildRouteState() routeState {
 		RequireUDP:        c.requireUDP,
 		RequireTCP:        c.requireTCP,
 		LocalAddress:      c.localAddress,
+		SelectionKey:      append([]byte(nil), c.selectionKey...),
 	}
 }
 

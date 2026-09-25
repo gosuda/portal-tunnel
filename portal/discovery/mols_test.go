@@ -119,3 +119,81 @@ func TestSelectPriorityStickinessRetainsEligibleActiveRelay(t *testing.T) {
 		t.Fatalf("SelectPriority() = %v, want the healthy active relay %q retained under the active cap", selected, relayA)
 	}
 }
+
+func TestMOLSCongestionModeExcludesFallbackRelays(t *testing.T) {
+	now := time.Now().UTC()
+	healthy := verifiedRelayState(t, "https://healthy.example")
+	healthy.DiscoveryRTT = 80 * time.Millisecond
+	healthy.DiscoveryRTTAt = now
+	fallback := verifiedRelayState(t, "https://fallback.example")
+	fallback.DiscoveryRTT = 5 * time.Second
+	fallback.DiscoveryRTTAt = now
+
+	if congested, _ := molsCongestionMode([]RelayState{healthy, fallback}); congested {
+		t.Fatal("molsCongestionMode() = true, want false: a fallback relay's RTT must not trigger congestion")
+	}
+
+	slowA := verifiedRelayState(t, "https://slow-a.example")
+	slowA.DiscoveryRTT = 600 * time.Millisecond
+	slowA.DiscoveryRTTAt = now
+	slowB := verifiedRelayState(t, "https://slow-b.example")
+	slowB.DiscoveryRTT = 700 * time.Millisecond
+	slowB.DiscoveryRTTAt = now
+	if congested, _ := molsCongestionMode([]RelayState{slowA, slowB}); !congested {
+		t.Fatal("molsCongestionMode() = false, want true for a genuinely slow active pool")
+	}
+}
+
+func TestMOLSKeyChangesRankings(t *testing.T) {
+	states := make([]RelayState, 6)
+	for i := range states {
+		states[i] = verifiedRelayState(t, fmt.Sprintf("https://relay-%d.example", i))
+	}
+
+	base := RankRelayPool(states, "client-a", nil)
+	differ := 0
+	for i := 1; i <= 8; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		if !slices.Equal(RankRelayPool(states, "client-a", key), base) {
+			differ++
+		}
+	}
+	if differ == 0 {
+		t.Fatal("ranking identical across selection keys, want keyed hashes to shuffle rankings")
+	}
+}
+
+func TestMOLSPressureSwapsTopRelayOnly(t *testing.T) {
+	pool := []RelayState{
+		verifiedRelayState(t, "https://relay-a.example"),
+		verifiedRelayState(t, "https://relay-b.example"),
+	}
+
+	base := RankRelayPool(pool, "client-a", nil)
+	if len(base) != 2 {
+		t.Fatalf("len(RankRelayPool()) = %d, want 2", len(base))
+	}
+
+	// Inflate tail latency on whichever relay MOLS ranked first; the peer
+	// keeps a uniform distribution so its pressure stays zero.
+	top := base[0]
+	for i := range pool {
+		if pool[i].Descriptor.APIHTTPSAddr == top {
+			for j := 0; j < 8; j++ {
+				pool[i].RTTTracker.Add(100 * time.Millisecond)
+			}
+			for j := 0; j < 4; j++ {
+				pool[i].RTTTracker.Add(200 * time.Millisecond)
+			}
+		} else {
+			for j := 0; j < 12; j++ {
+				pool[i].RTTTracker.Add(100 * time.Millisecond)
+			}
+		}
+	}
+
+	got := RankRelayPool(pool, "client-a", nil)
+	if got[0] != base[1] || got[1] != base[0] {
+		t.Fatalf("RankRelayPool() = %v, want adjacent swap of %v", got, base)
+	}
+}

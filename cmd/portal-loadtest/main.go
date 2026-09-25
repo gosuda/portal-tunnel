@@ -58,12 +58,13 @@ func main() {
 	}
 
 	// Generate N synthetic client states with UNIQUE LocalAddress values.
-	// MOLS is deterministic on (LocalAddress, relayURL): duplicate addresses
-	// would make all clients pick identically, falsely appearing as 100% imbalance.
+	// MOLS is deterministic on (LocalAddress, relayURL) for a fixed key;
+	// duplicate addresses would make all clients pick identically, falsely
+	// appearing as 100% imbalance. The nil key keeps the run reproducible.
 	picks := make(map[string]int, *relays) // relay URL → count of clients that picked it first
 	for i := 0; i < *clients; i++ {
 		localAddr := fmt.Sprintf("synthetic-client-%d", i)
-		outputURLs := discovery.RankRelayPool(relayStates, localAddr)
+		outputURLs := discovery.RankRelayPool(relayStates, localAddr, nil)
 		if len(outputURLs) == 0 {
 			// All relays were filtered; skip this client.
 			continue
