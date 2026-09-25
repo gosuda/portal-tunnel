@@ -258,7 +258,7 @@ func writeAgentWalletAuthError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, siweauth.ErrUnauthorized):
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
-	case errors.Is(err, siweauth.ErrChallengeNotFound), errors.Is(err, siweauth.ErrChallengeExpired), errors.Is(err, siweauth.ErrInvalidSignature):
+	case errors.Is(err, siweauth.ErrChallengeNotFound), errors.Is(err, siweauth.ErrChallengeExpired), errors.Is(err, siweauth.ErrChallengeInvalid), errors.Is(err, siweauth.ErrInvalidSignature):
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, err.Error())
 	default:
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())

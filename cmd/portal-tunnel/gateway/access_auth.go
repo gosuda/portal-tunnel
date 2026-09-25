@@ -181,13 +181,11 @@ func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request)
 	}
 	host := strings.TrimSpace(r.Host)
 	now := time.Now().UTC()
+	// Stateless issuance only fails per-request (address normalization or
+	// policy), so every failure is an unauthorized challenge request.
 	challenge, err := a.siwe.Issue(req.Address, host, "https://"+host, now)
 	if err != nil {
-		status := http.StatusUnauthorized
-		if errors.Is(err, siweauth.ErrTooManyChallenges) {
-			status = http.StatusTooManyRequests
-		}
-		a.writeJSONError(w, status, err.Error())
+		a.writeJSONError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	a.writeJSON(w, http.StatusOK, applicationAuthChallengeResponse{ChallengeID: challenge.ID, Message: challenge.Message, ExpiresAt: challenge.ExpiresAt})
