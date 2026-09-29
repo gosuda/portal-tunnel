@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Open+Sans:wght@400;500;600;700&display=swap");
+@import url("https://fonts.bunny.net/css?family=manrope:500,600,700,800|open-sans:400,500,600,700&display=swap");
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
