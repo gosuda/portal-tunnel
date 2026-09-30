@@ -32,6 +32,10 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
 - **End-to-End Tenant TLS** - For ordinary uncached exposures, Portal
   terminates tenant TLS at the user's endpoint instead of the relay.
 
+- **IVNP-backed Overlay Networking** - Publish through a public ingress while
+  an independent IVNP overlay network connects it to a selected gateway.
+  Portal selects and authorizes endpoints; IVNP owns the path between them.
+
 - **Built-in MITM Detection** - Portal actively self-probes its own connection
   after real traffic begins. It compares TLS keying material exported on both
   sides and treats a mismatch as suspected relay-side TLS termination. The
@@ -46,6 +50,38 @@ keeps routing and x402 payment policy in the tunnel process, and avoids requirin
   USDC or Casper wCSPR x402 payment before proxying. Browser apps can import
   `/x402/client.js`, and native clients can call `/x402/prepare` directly and
   send `X-PAYMENT`.
+
+## IVNP-backed overlay networking
+
+Portal exposes services through a public ingress without requiring Portal itself
+to own the network path behind that ingress. With an IVNP overlay network,
+network routing can change independently of Portal's endpoint policy: identity,
+lease ownership, authorization, and the SDK's reverse-endpoint contract stay the
+same.
+
+Reverse connections are established outward from the tunnel:
+
+```text
+Direct (default):
+Tunnel / SDK ------------------------------------> Portal ingress
+
+Overlay (opt-in):
+Tunnel / SDK -> Overlay gateway -> IVNP network -> Portal ingress
+                                  (opaque path)
+```
+
+Public clients still connect to the Portal ingress, and the tunnel forwards
+their streams to the local service. IVNP may use multiple internal routers and
+hops; Portal neither chooses their order nor stores them in leases or discovery.
+This is IVNP-owned routing, not a Portal-managed relay chain.
+
+```bash
+portal expose 3000 --overlay
+```
+
+This prefers an available overlay gateway; direct reverse transport remains the
+default and fallback. See [the overlay networking concepts](docs/src/routes/concepts/+page.md#ivnp-backed-overlay-networking)
+and [the detailed architecture](docs/src/routes/architecture/+page.md#ivnp-backed-overlay-networking).
 
 ## Comparison
 
@@ -109,7 +145,7 @@ Portal prints a public HTTPS URL for your local app instantly. More examples:
 # Custom name and relay
 portal expose 3000 --name myapp --relays https://portal.example.com --discovery=false
 
-# Prefer IVNP overlay transport for the reverse stream
+# Prefer the IVNP overlay path for reverse streams
 portal expose 3000 --overlay
 
 # Mount frontend and API behind one URL
@@ -127,8 +163,6 @@ portal expose --name paid-app \
 portal expose localhost:25565 --name minecraft --tcp
 
 ```
-
-**IVNP overlay transport.** `--overlay` prefers IVNP-routed overlay transport: Portal still selects and authorizes the two endpoints (public ingress and overlay gateway) and issues the delegated reverse capability, while IVNP owns the network path between gateway and ingress — it may carry that one logical hop over multiple internal I2P-style router hops that are invisible to Portal. Direct reverse transport remains the default and the fallback; Portal-level multi-hop routing is not a feature (the old relay-chain model and WireGuard mesh were removed). **Portal selects and authorizes endpoints. IVNP connects destinations. Portal does not own the path between them.** See [IVNP overlay transport](docs/src/routes/architecture/+page.md) for the canonical explanation.
 
 See [CLI Reference](cmd/portal-tunnel/README.md) for the full route syntax and
 [API Reference](docs/src/routes/api-reference/+page.md#payments) for the x402

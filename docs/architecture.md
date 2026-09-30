@@ -17,11 +17,19 @@ Relay selection returns public relay priorities. Portal does not construct an
 ordered list of intermediate relays. Explicit relay URLs, transport eligibility,
 admission, expiry, health, and load remain Portal responsibilities.
 
-Direct reverse transport is the tunnel default. When a tunnel
-enables overlay and the relay has an available IVNP gateway, one relay overlay
-runtime carries its reverse TCP streams; direct transport remains the fallback.
+IVNP-backed overlay networking lets Portal expose services through a public
+ingress without owning the network path behind it. Portal selects and authorizes
+the ingress and gateway and owns identity, lease policy, and delegated reverse
+capabilities. IVNP owns the gateway-to-ingress path, including routers, tunnels,
+and internal hop ordering.
+
+Direct reverse transport is the tunnel default. When a tunnel enables overlay
+and the relay has an available IVNP gateway, the relay's overlay runtime bridges
+its reverse TCP streams through IVNP; direct transport remains the fallback.
 The SDK consumes the same generic reverse endpoint in both cases. Discovery
-routes and the lease lifecycle contain no overlay topology.
+routes and leases contain no IVNP-internal topology. See the
+[canonical overlay architecture](src/routes/architecture/+page.md#ivnp-backed-overlay-networking)
+for the ownership boundary and protocol flow.
 
 The public SDK facade is centered on `sdk.Exposure`, a multi-relay
 `net.Listener`. `sdk.Expose` takes its required identity and concrete relay URLs

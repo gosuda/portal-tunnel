@@ -9,7 +9,7 @@
 	<title>Portal - Expose Local Apps to the Public Internet</title>
 	<meta
 		name="description"
-		content="Portal exposes local services through trustless relay transport with client-side tenant TLS, routed HTTP, raw TCP, UDP, and relay pools."
+		content="Expose local services with self-hosted relays, client-side tenant TLS, and IVNP-backed overlay networking: Portal selects endpoints, IVNP owns the path."
 	/>
 </svelte:head>
 

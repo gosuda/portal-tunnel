@@ -89,7 +89,7 @@ not supported.
 | `--relays` | string | registry | Additional relay API URLs, comma-separated |
 | `--discovery` | bool | `true` | Include registry relays and relay discovery expansion |
 | `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
-| `--overlay` | bool | `false` | Prefer IVNP overlay transport when available |
+| `--overlay` | bool | `false` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; retains direct fallback |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
 | `--identity-json` | string | | In-memory identity JSON; takes precedence over `--identity-path` without reading or writing that file |
@@ -117,9 +117,18 @@ not supported.
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
-Direct reverse transport is the default. `--overlay` asks the relay to use an
-IVNP overlay gateway when one is available and retains direct fallback. See
-[IVNP overlay transport](/architecture#optional-relay-overlay).
+### IVNP-backed overlay networking
+
+```bash
+portal expose 3000 --overlay
+```
+
+This asks the relay to prefer an available overlay gateway for reverse streams.
+Portal selects and authorizes the endpoints; IVNP owns the gateway-to-ingress
+path. Direct reverse transport remains the default and fallback. See
+[the overlay networking concepts](/concepts#ivnp-backed-overlay-networking) for
+why endpoint policy and network routing are separate, and
+[the architecture](/architecture#ivnp-backed-overlay-networking) for the protocol.
 
 ### Identity Names
 

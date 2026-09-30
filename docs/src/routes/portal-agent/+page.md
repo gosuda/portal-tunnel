@@ -235,7 +235,7 @@ Common fields:
 | `relays` | Explicit relay API URLs |
 | `discovery` | Include registry and relay discovery expansion |
 | `max_active_relays` | Maximum auto-selected relays kept connected; explicit relays are always included |
-| `overlay` | Prefer [IVNP overlay transport](/architecture#optional-relay-overlay) when available; defaults to direct and retains direct fallback |
+| `overlay` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to direct and retains direct fallback |
 | `identity_path` | Tunnel identity JSON path |
 | `identity_json` | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr` | UDP transport settings |

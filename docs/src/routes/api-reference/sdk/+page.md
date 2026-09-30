@@ -74,7 +74,7 @@ which are configured locally by the tunnel process.
 |-------|------|----------|-------|
 | `identity` | `Identity` | yes | `name` and `address` |
 | `metadata` | `LeaseMetadata` | no | public lease metadata |
-| `overlay` | `boolean` | no | prefer IVNP overlay transport when available; defaults to `false` |
+| `overlay` | `boolean` | no | prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to `false` |
 | `ttl` | `number` | no | requested TTL in seconds |
 | `udp_enabled` | `boolean` | no | request UDP transport |
 | `tcp_enabled` | `boolean` | no | request dedicated TCP port |
@@ -133,8 +133,15 @@ endpoint.
 The relay preserves the `overlay` preference for the lease lifetime. By
 default it issues the ingress relay's direct endpoint. When `overlay` is true,
 it prefers an available overlay gateway and falls back to the direct endpoint.
-The SDK sees no IVNP topology; it consumes the same generic reverse endpoint
-either way. See [IVNP overlay transport](/architecture#optional-relay-overlay).
+Both modes intentionally preserve the same SDK-facing contract: use the returned
+`url` and reverse-only `capability` to open the stream. Portal owns endpoint
+selection, identity, lease policy, and authorization; IVNP owns the network path
+between gateway and ingress. The SDK does not choose IVNP routers or receive
+their topology, and that topology is not part of leases or discovery state.
+
+See [IVNP-backed overlay networking](/concepts#ivnp-backed-overlay-networking)
+for the conceptual model and [the architecture](/architecture#ivnp-backed-overlay-networking)
+for the delegated capability and gateway-to-ingress protocol flow.
 
 ## Renew And Unregister
 

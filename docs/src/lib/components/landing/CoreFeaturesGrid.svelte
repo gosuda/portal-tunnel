@@ -1,10 +1,12 @@
 <script lang="ts">
+	import { base } from '$app/paths';
+
 	const features = [
 		{
-			eyebrow: 'Relay',
-			title: 'Trustless relay transport',
+			eyebrow: 'IVNP',
+			title: 'IVNP-backed overlay networking',
 			description:
-				'Relays own routing and transport, while the tunnel process owns endpoint behavior.'
+				'Portal selects and authorizes the ingress and gateway. IVNP owns the network path between them, including internal routers and hops.'
 		},
 		{
 			eyebrow: 'TLS',
@@ -54,6 +56,12 @@
 			>
 				Built for real localhost publishing
 			</h2>
+			<p class="max-w-3xl text-base leading-7 text-text-muted">
+				Publish through a public ingress while an independent overlay network owns the path
+				behind it. Try <code>portal expose 3000 --overlay</code>; direct reverse transport
+				remains the default and fallback.
+				<a href="{base}/concepts#ivnp-backed-overlay-networking" class="text-primary underline underline-offset-4">Explore IVNP-backed overlay networking</a>.
+			</p>
 		</div>
 	</div>
 	<div class="overflow-hidden border-t" style="border-color: var(--border); background: color-mix(in oklch, var(--border) 70%, transparent);">

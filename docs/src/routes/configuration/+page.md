@@ -176,7 +176,10 @@ startup; replace the old file explicitly when upgrading. Runtime `Logger` and
 `Resolver` collaborators cannot be configured through this file.
 
 This file configures IVNP's router; Portal applies it, while IVNP owns
-destination reachability and path topology. See [IVNP overlay transport](/architecture#optional-relay-overlay).
+destination reachability and path topology. See
+[IVNP-backed overlay networking](/concepts#ivnp-backed-overlay-networking) for
+the ownership boundary and [the architecture](/architecture#ivnp-backed-overlay-networking)
+for the protocol flow.
 
 For explicit router persistence, mount a private writable directory and use:
 
@@ -324,7 +327,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--relays` | | string | _(registry)_ | Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https) |
 | `--discovery` | | bool | `true` | Include public registry relays and discover additional relay bootstraps |
 | `--max-active-relays` | `MAX_ACTIVE_RELAYS` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
-| `--overlay` | `OVERLAY_ENABLED` | bool | `false` | Prefer IVNP overlay transport when available; retains direct fallback |
+| `--overlay` | `OVERLAY_ENABLED` | bool | `false` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; retains direct fallback |
 | `--ban-mitm` | `BAN_MITM` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 
 ### Identity
@@ -472,7 +475,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `serve` | string | Static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`. Directories use `index.html`; unknown paths fall back to the entry file, which must exist when the tunnel starts |
 | `relays` | string array | Explicit relay API URLs |
 | `discovery` | bool | Include registry and relay discovery expansion |
-| `overlay` | bool | Prefer IVNP overlay transport when available; defaults to direct and retains direct fallback |
+| `overlay` | bool | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to direct and retains direct fallback |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |

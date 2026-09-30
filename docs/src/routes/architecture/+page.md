@@ -116,6 +116,14 @@ const registrationDiagram = `sequenceDiagram
     Note over Relay: Allocates TCP/UDP ports if requested
     Relay->>SDK: access_token + reverse_endpoint + lease info (tcp_addr?, udp_addr?, legacy sni_port?)`
 
+const overlayPathDiagram = `flowchart TD
+    Client["Public client"] --> Ingress["Portal public ingress"]
+    Ingress <-->|Direct reverse session: default / fallback| SDK["Portal tunnel / SDK"]
+    Ingress <-->|Overlay path: opt-in| IVNP["IVNP overlay network<br/>Opaque internal routers, tunnels, and hop ordering"]
+    IVNP <--> Gateway["Selected overlay gateway"]
+    Gateway <--> SDK
+    SDK --> Local["Local service"]`
+
 const overlayDiagram = `sequenceDiagram
     participant SDK as SDK / portal-tunnel
     participant Gateway as Selected gateway
@@ -124,11 +132,11 @@ const overlayDiagram = `sequenceDiagram
     Ingress->>SDK: reverse_endpoint (gateway URL + delegated capability)
     SDK->>Gateway: GET /sdk/connect (capability)
     Note over Gateway: Verify ingress signature and gateway binding
-    Gateway->>Ingress: IVNP stream (same capability; internal multi-hop path)
+    Gateway->>Ingress: IVNP stream (same capability, opaque internal path)
     Note over Gateway,Ingress: IVNP owns routers, tunnels, and hop ordering (opaque to Portal)
     Note over Ingress: Verify IVNP peer, capability, and lease instance
     Ingress->>Gateway: Admit stream to existing lease queue
-    Gateway->>SDK: HTTP 101; bridge SDK socket to IVNP
+    Gateway->>SDK: HTTP 101, bridge SDK socket to IVNP
     Note over SDK,Ingress: SDK contract and public lease stay unchanged`
 </script>
 
@@ -145,7 +153,14 @@ Backends connect outward to the relay. Uncached stream traffic is routed by SNI,
 and tenant TLS remains end-to-end between the client and the tunnel endpoint.
 Opt-in static caches terminate browser TLS at the relay.
 
-High-level path:
+With [IVNP-backed overlay networking](/concepts#ivnp-backed-overlay-networking),
+Portal can publish through that same ingress while delegating the
+gateway-to-ingress network path to IVNP. Identity, leases, and authorization stay
+in Portal; internal routers and hop ordering stay in IVNP. The detailed
+[overlay architecture](#ivnp-backed-overlay-networking) describes this boundary
+and the unchanged SDK contract.
+
+High-level paths with direct reverse transport:
 
 ```text
 Stream client
@@ -178,7 +193,7 @@ UDP client
 - Derive lease hostnames from the full normalized `PORTAL_URL` host, not from apex extraction.
 - Preserve explicit root-host fallback through SNI no-route handling to the admin/API handler.
 - Stream ingress is TLS-only. UDP exposure, when enabled, is raw UDP.
-- Overlay transport keeps endpoint policy in Portal and path ownership in IVNP; discovery routes and leases carry no overlay topology.
+- Portal endpoint policy stops at endpoint selection; IVNP owns the network path. Discovery routes and leases carry no IVNP-internal topology.
 
 ### TLS and Identity
 
@@ -277,33 +292,48 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 
 <Mermaid code={tlsStreamDiagram} />
 
-### Optional relay overlay
+<div id="optional-relay-overlay"></div>
+<h3 id="ivnp-backed-overlay-networking">IVNP-backed overlay networking</h3>
 
-With `IVNP_CONFIG` enabled, the ingress may return a gateway URL in the same
-`reverse_endpoint` contract. The SDK neither selects the gateway nor sees an
-IVNP destination. Direct transport is the default. A lease with `overlay=true`
-prefers an available overlay gateway and falls back to direct transport. A
-failed gateway is reported through `POST /sdk/reverse`; the ingress applies the
-lease's overlay preference while rotating the endpoint without replacing the
-lease.
+Separating endpoint policy from network routing lets Portal expose services
+through a public ingress without managing the path behind it. The overlay can
+change its internal routes without changing Portal's lease, identity, or
+SDK-facing reverse-endpoint contract.
 
-The `Gateway -> Ingress` edge is one logical Portal transport edge. IVNP may
-carry it over multiple internal I2P-style hops, but that internal topology is
-opaque to Portal. Network-level multi-hop belongs to IVNP; Portal does not
-construct an ordered list of intermediate relays.
+**Portal endpoint policy stops at endpoint selection; IVNP owns the network path.**
+
+<Mermaid code={overlayPathDiagram} />
+
+The diagram shows alternative stream paths. The tunnel opens the reverse
+connection outward to the ingress or selected gateway; in overlay mode the
+gateway opens an IVNP stream to the ingress. Public clients still use the
+ingress, and the SDK still forwards streams to the local service.
 
 Ownership split:
 
 - **Portal**: selects and authorizes the public ingress, selects an eligible
-  gateway, issues the delegated reverse capability, and owns lease, admission,
-  health, and fallback semantics.
+  gateway, issues the delegated reverse capability, and owns identity, lease,
+  admission, health, and fallback semantics.
 - **IVNP**: owns destination reachability, the gateway-to-ingress path, and
   intermediate router selection and tunnel construction; may use multiple
   internal network hops without exposing that topology to Portal.
 - **SDK**: receives the same generic reverse endpoint, selects no
   intermediate hops, and sees no IVNP route topology.
 
-**Portal selects and authorizes endpoints. IVNP connects destinations. Portal does not own the path between them.**
+The `Gateway -> Ingress` edge is one logical Portal transport edge. IVNP may
+carry it over multiple internal hops, but that topology is opaque to Portal.
+Portal does not construct an ordered relay chain or persist IVNP's internal
+topology in discovery or lease state.
+
+With [`IVNP_CONFIG`](/configuration#ivnp-overlay) enabled, the ingress may return
+a gateway URL in the same `reverse_endpoint` contract. The SDK neither selects
+the gateway nor sees an IVNP destination. Direct reverse transport is the
+default and fallback. A lease with `overlay=true` prefers an available overlay
+gateway. A failed gateway is reported through `POST /sdk/reverse`; the ingress
+applies the lease's overlay preference while rotating the endpoint without
+replacing the lease.
+
+Protocol flow:
 
 <Mermaid code={overlayDiagram} />
 

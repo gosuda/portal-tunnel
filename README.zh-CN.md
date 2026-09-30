@@ -25,11 +25,36 @@ Portal 是一个本地隧道运行时和中继网络。它通过自托管或公�
 
 - **端到端租户 TLS** - 对于未启用缓存的普通暴露，Portal 会在用户端点而不是中继处终止租户 TLS。
 
+- **基于 IVNP 的覆盖网络** - 通过公共入口发布服务，由独立的 IVNP 覆盖网络连接入口与选定的网关。Portal 选择并授权端点；IVNP 负责端点之间的网络路径。
+
 - **内置 MITM 检测** - Portal 会在真实流量开始后主动自探测自己的连接。它会比较两端导出的 TLS 密钥材料，并把不匹配视为疑似中继侧 TLS 终止。当前的 keyless TLS 租户栈支持密钥材料导出，因此租户 TLS 暴露会启用该探测；`--ban-mitm` 会在检测到不匹配时封禁中继。
 
 - **无账户，无 API Key** - 身份认证使用本地生成的 secp256k1 密钥对进行 SIWE 兼容签名。无需邮箱，无需注册，也没有厂商锁定。
 
 - **原生 x402 支付** - Routed HTTP 路径可以在代理前要求 Sui gasless USDC x402 支付。浏览器应用可以导入 `/x402/client.js`，原生客户端可以直接调用 `/x402/prepare` 并发送 `X-PAYMENT`。
+
+## 基于 IVNP 的覆盖网络
+
+Portal 通过公共入口发布服务，而无需自己管理入口后方的网络路径。借助 IVNP 覆盖网络，网络路由可以独立于 Portal 的端点策略变化；身份、租约归属、授权以及 SDK 的反向端点契约保持不变。
+
+反向连接由隧道端向外建立：
+
+```text
+直接连接（默认）：
+隧道 / SDK ------------------------------------> Portal 公共入口
+
+覆盖网络（显式启用）：
+隧道 / SDK -> 覆盖网络网关 -> IVNP 网络 -> Portal 公共入口
+                            （内部路径不透明）
+```
+
+公共客户端仍然连接 Portal 公共入口，隧道负责把流转发到本地服务。IVNP 可以使用多个内部路由器和跳点；Portal 不选择其顺序，也不将其存入租约或发现状态。这些路由由 IVNP 管理，并非 Portal 管理的中继链。
+
+```bash
+portal expose 3000 --overlay
+```
+
+该选项优先使用可用的覆盖网络网关；直接反向传输仍然是默认和回退方式。参阅[覆盖网络概念](docs/src/routes/concepts/+page.md#ivnp-backed-overlay-networking)和[详细架构](docs/src/routes/architecture/+page.md#ivnp-backed-overlay-networking)。
 
 ## 对比
 
@@ -70,7 +95,7 @@ Portal 会立即为你的本地应用打印一个公共 HTTPS URL。更多示例
 # 自定义名称和中继
 portal expose 3000 --name myapp --relays https://portal.example.com --discovery=false
 
-# 优先使用 IVNP overlay transport（当可用时）
+# 优先通过 IVNP 覆盖网络承载反向流（当可用时）
 portal expose 3000 --overlay
 
 # 把前端和 API 挂到同一个 URL 后面
@@ -88,8 +113,6 @@ portal expose --name paid-app \
 portal expose localhost:25565 --name minecraft --tcp
 
 ```
-
-**IVNP overlay transport。** `--overlay` 优先使用 IVNP 路由的 overlay 传输：Portal 仍然选择并授权两个端点（公共 ingress 和 overlay gateway），并签发委托的反向 capability；而 IVNP 拥有 gateway 到 ingress 之间的网络路径——它可能把这一个逻辑跳通过多个内部 I2P 式路由跳来承载，这些跳对 Portal 不可见。直接反向传输仍然是默认和回退方式；Portal 层面的多跳路由不是功能（旧的 relay-chain 模型和 WireGuard mesh 已被移除）。**Portal selects and authorizes endpoints. IVNP connects destinations. Portal does not own the path between them.** 完整说明请参阅 [IVNP overlay transport](docs/src/routes/architecture/+page.md)。
 
 对于付费路由，支付策略运行在隧道进程内，而不是中继上。默认使用 Sui mainnet；加上 `--x402-testnet` 可切换到 Sui testnet，这个选择与中继自身的支付设置无关。隧道会在同一个公共 origin 上提供 `/x402/client.js` 和 `/x402/prepare`。浏览器前端可以导入 `/x402/client.js` 并调用 `x402Fetch()`；原生客户端可以直接调用 `/x402/prepare`，用自己的 Sui 运行时签名返回的交易，并发送签名后的 `X-PAYMENT`。
 
