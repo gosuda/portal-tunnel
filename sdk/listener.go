@@ -551,15 +551,15 @@ func (l *listener) runLease(ctx context.Context) error {
 		}()
 	}
 	if l.stream != nil {
-		// The lease owns its reverse carrier and any transport state it keeps.
-		carrier := newReverseLeaseCarrier(l)
-		defer carrier.Close()
+		// The lease owns its reverse transport and any state it keeps.
+		reverseTransport := newLeaseReverseTransport(l)
+		defer reverseTransport.Close()
 		for sessionSlot := range defaultReadyTarget {
 			sessionSlot++
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot, carrier); err != nil {
+				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot, reverseTransport); err != nil {
 					select {
 					case errCh <- err:
 					case <-leaseCtx.Done():
@@ -603,7 +603,7 @@ func (l *listener) runLease(ctx context.Context) error {
 	}
 }
 
-func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int, carrier *reverseLeaseCarrier) error {
+func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int, reverseTransport *leaseReverseTransport) error {
 	if l.stream == nil {
 		return nil
 	}
@@ -611,7 +611,7 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless
 	var retries int
 	for {
 		lease, _ := l.leaseSnapshot()
-		conn, err := carrier.Open(ctx)
+		conn, err := reverseTransport.Open(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
 				return nil

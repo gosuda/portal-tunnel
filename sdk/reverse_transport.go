@@ -16,11 +16,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-const socketTransportAvailable = runtime.GOOS != "js"
-
-// reverseLeaseCarrier opens raw connections on native runtimes and owns the
+// leaseReverseTransport opens raw connections on native runtimes and owns the
 // WebSocket reverse mux shared by one browser lease.
-type reverseLeaseCarrier struct {
+type leaseReverseTransport struct {
 	listener *listener
 
 	mu     sync.Mutex
@@ -28,36 +26,36 @@ type reverseLeaseCarrier struct {
 	closed bool
 }
 
-func newReverseLeaseCarrier(l *listener) *reverseLeaseCarrier {
-	return &reverseLeaseCarrier{listener: l}
+func newLeaseReverseTransport(l *listener) *leaseReverseTransport {
+	return &leaseReverseTransport{listener: l}
 }
 
-func (c *reverseLeaseCarrier) Open(ctx context.Context) (net.Conn, error) {
+func (t *leaseReverseTransport) Open(ctx context.Context) (net.Conn, error) {
 	if runtime.GOOS == "js" {
-		return c.openMux(ctx)
+		return t.openMux(ctx)
 	}
-	return c.openRaw(ctx)
+	return t.openRaw(ctx)
 }
 
-func (c *reverseLeaseCarrier) Close() error {
+func (t *leaseReverseTransport) Close() error {
 	if runtime.GOOS != "js" {
 		return nil
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.closed = true
-	if c.mux == nil {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closed = true
+	if t.mux == nil {
 		return nil
 	}
-	return c.mux.Close()
+	return t.mux.Close()
 }
 
-func (c *reverseLeaseCarrier) openRaw(ctx context.Context) (net.Conn, error) {
-	reverseURL, capability, err := c.listener.reverseTarget()
+func (t *leaseReverseTransport) openRaw(ctx context.Context) (net.Conn, error) {
+	reverseURL, capability, err := t.listener.reverseTarget()
 	if err != nil {
 		return nil, err
 	}
-	reverseTLS, err := c.listener.reverseTLSConfig(ctx, reverseURL)
+	reverseTLS, err := t.listener.reverseTLSConfig(ctx, reverseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -103,26 +101,26 @@ func (c *reverseLeaseCarrier) openRaw(ctx context.Context) (net.Conn, error) {
 	return wrapBufferedConn(conn, reader), nil
 }
 
-func (c *reverseLeaseCarrier) openMux(ctx context.Context) (net.Conn, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
+func (t *leaseReverseTransport) openMux(ctx context.Context) (net.Conn, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
 		return nil, net.ErrClosed
 	}
-	if c.mux == nil || reverseMuxEnded(c.mux) {
-		reverseURL, capability, err := c.listener.reverseTarget()
-		if err != nil {
-			return nil, err
-		}
+	reverseURL, capability, err := t.listener.reverseTarget()
+	if err != nil {
+		return nil, err
+	}
+	if t.mux == nil || reverseMuxEnded(t.mux) {
 		handshakeCtx, cancel := context.WithTimeout(ctx, defaultHandshakeTimeout)
 		mux, err := transport.DialReverseMux(handshakeCtx, reverseURL, capability)
 		cancel()
 		if err != nil {
 			return nil, err
 		}
-		c.mux = mux
+		t.mux = mux
 	}
-	stream, err := c.mux.Open()
+	stream, err := t.mux.Open(ctx, capability)
 	if err != nil {
 		return nil, fmt.Errorf("open reverse stream: %w", err)
 	}

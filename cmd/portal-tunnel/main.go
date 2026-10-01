@@ -9,9 +9,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -238,7 +240,7 @@ func runExposeCommand(args []string) error {
 		return errors.New("--x402-asset is required for Casper wCSPR payments")
 	}
 
-	ctx, stop := utils.SignalContext()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 	defer stop()
 
 	if flags.metricsAddr != "" {

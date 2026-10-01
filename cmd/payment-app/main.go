@@ -8,7 +8,9 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -101,7 +103,7 @@ func run(args []string) error {
 		return err
 	}
 
-	ctx, stop := utils.SignalContext()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 	defer stop()
 
 	return runPaymentApp(ctx, cfg)

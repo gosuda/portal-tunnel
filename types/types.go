@@ -14,7 +14,7 @@ const (
 	HeaderReverseCapability = "X-Portal-Reverse-Capability"
 
 	// ReverseSubprotocol marks a WebSocket carrying reverse connections as yamux streams;
-	// the capability rides beside it.
+	// an initial capability rides beside it and every logical stream authenticates again.
 	ReverseSubprotocol = "portal.reverse.v1"
 )
 

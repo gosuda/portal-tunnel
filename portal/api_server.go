@@ -523,9 +523,15 @@ func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseM
 
 	log.Info().Str("address", lease.Address).Str("lease_name", lease.Name).Msg("sdk reverse session opened over websocket")
 	for {
-		stream, err := session.Accept()
+		stream, capability, err := session.Accept()
 		if err != nil {
 			return
+		}
+		admitted, authErr := s.registry.admitReverseCapability(capability)
+		authorized := authErr == nil && admitted == lease
+		if err := transport.ConfirmReverseStream(stream, authorized); err != nil || !authorized {
+			_ = stream.Close()
+			continue
 		}
 		// OfferConn closes a stream it turns away, as when the ready queue is full.
 		if err := lease.stream.OfferConn(stream); err != nil {
