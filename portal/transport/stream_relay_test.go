@@ -8,6 +8,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/yamux"
 )
 
 func TestReserveOfferCommitsProtocolAckBeforeClaimMarker(t *testing.T) {
@@ -137,4 +139,58 @@ func TestClaimAfterCloseFailsWithNetErrClosed(t *testing.T) {
 	if !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Claim() after Close() error = %v, want net.ErrClosed", err)
 	}
+}
+
+func TestRelayStreamReplacesReverseSession(t *testing.T) {
+	relay := NewRelayStream("lease", time.Minute, 1)
+	first, firstPeer := newReverseMuxPair(t)
+	firstRelease, err := relay.AttachReverseSession(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, secondPeer := newReverseMuxPair(t)
+	if _, err := relay.AttachReverseSession(second); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstPeer.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("replaced reverse session still open")
+	}
+
+	// The replaced handler may release after the replacement is attached; that must
+	// not detach or close the current session.
+	firstRelease()
+	select {
+	case <-secondPeer.Done():
+		t.Fatal("replaced session release closed the current reverse session")
+	default:
+	}
+
+	relay.Close()
+	select {
+	case <-secondPeer.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("current reverse session still open after its relay stream closed")
+	}
+}
+
+func newReverseMuxPair(t *testing.T) (*ReverseMux, *ReverseMux) {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	server, err := yamux.Server(serverConn, reverseMuxConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := yamux.Client(clientConn, reverseMuxConfig())
+	if err != nil {
+		_ = server.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = client.Close()
+	})
+	return &ReverseMux{session: server}, &ReverseMux{session: client}
 }
