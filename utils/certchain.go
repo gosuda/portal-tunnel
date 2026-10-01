@@ -1,5 +1,3 @@
-//go:build js
-
 package utils
 
 import (
@@ -9,14 +7,20 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// FetchEndpointCertificateChain asks the relay for its public chain because a
-// browser does not expose the peer certificates from its TLS handshake.
-func FetchEndpointCertificateChain(ctx context.Context, endpoint, _ string) ([]byte, error) {
+// FetchEndpointCertificateChain returns the certificate chain presented by endpoint.
+// Browsers ask the relay for the public chain because their TLS stack does not expose
+// peer certificates; native runtimes read it directly from the TLS handshake.
+func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
+	if runtime.GOOS != "js" {
+		return fetchEndpointCertificateChainOverTLS(ctx, endpoint, serverName)
+	}
+
 	raw := strings.TrimSpace(endpoint)
 	if raw == "" {
 		return nil, errors.New("endpoint is required")
