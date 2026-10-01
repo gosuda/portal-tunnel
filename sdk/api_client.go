@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/sdk/internal/control"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -65,13 +65,15 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 		return err
 	}
 
-	domainResp, err := control.NewClient(c.relayURL, httpClient).CheckProtocol(ctx)
-	if err != nil {
+	var domainResp types.DomainResponse
+	if err := utils.HTTPDoAPIPath(ctx, httpClient, c.relayURL, http.MethodGet, types.PathSDKDomain, nil, nil, &domainResp); err != nil {
 		httpTransport.CloseIdleConnections()
-		if errors.Is(err, control.ErrProtocolMismatch) {
-			return fmt.Errorf("%w: %w", errRelayIncompatible, err)
-		}
 		return fmt.Errorf("check relay compatibility: %w", err)
+	}
+	protocolVersion := strings.TrimSpace(domainResp.ProtocolVersion)
+	if protocolVersion != types.SDKVersion {
+		httpTransport.CloseIdleConnections()
+		return fmt.Errorf("%w: relay sdk protocol version mismatch: relay=%q client=%q", errRelayIncompatible, protocolVersion, types.SDKVersion)
 	}
 
 	c.mu.Lock()
@@ -134,17 +136,115 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	if err := c.initHTTPTransport(ctx); err != nil {
 		return types.RegisterResponse{}, err
 	}
-	return control.NewClient(c.relayURL, c.httpClient()).Register(ctx, registerReq, reportedIP)
+
+	var challenge types.RegisterChallengeResponse
+	var request types.RegisterRequest
+	var resp types.RegisterResponse
+	for {
+		var err error
+		if request.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
+			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge)
+			if err == nil {
+				if challenge.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
+					return types.RegisterResponse{}, errors.New("relay returned an invalid or expired registration challenge")
+				}
+				signature, err := identity.NewLocalAuthority(registerReq.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
+				if err != nil {
+					return types.RegisterResponse{}, err
+				}
+				request = types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature, ReportedIP: reportedIP}
+				// Challenge issuance succeeded; keep this signed request until admission
+				// succeeds or the challenge expires. A 429 must not buy another challenge.
+				continue
+			}
+		} else {
+			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegister, request, nil, &resp)
+			if err == nil {
+				break
+			}
+		}
+		apiErr, ok := errors.AsType[*types.APIRequestError](err)
+		if !ok || !apiErr.IsRateLimited() {
+			return types.RegisterResponse{}, err
+		}
+		delay := apiErr.RetryAfter
+		if delay <= 0 {
+			delay = defaultRetryWait
+		}
+		if !utils.SleepOrDone(ctx, delay) {
+			return types.RegisterResponse{}, ctx.Err()
+		}
+	}
+	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
+	if resp.AccessToken == "" {
+		return types.RegisterResponse{}, errors.New("relay did not return access token")
+	}
+	if resp.Identity.Key() != registerReq.Identity.Key() {
+		_ = c.unregister(context.Background(), resp.AccessToken)
+		return types.RegisterResponse{}, errors.New("relay returned mismatched lease identity")
+	}
+	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
+	if err != nil {
+		_ = c.unregister(context.Background(), resp.AccessToken)
+		return types.RegisterResponse{}, err
+	}
+	resp.ReverseEndpoint = reverseEndpoint
+	return resp, nil
 }
 
 func (c *apiClient) renew(ctx context.Context, req types.RenewRequest) (types.RenewResponse, error) {
-	return control.NewClient(c.relayURL, c.httpClient()).Renew(ctx, req)
+	var resp types.RenewResponse
+	if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRenew, req, nil, &resp); err != nil {
+		return types.RenewResponse{}, err
+	}
+	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
+	if resp.AccessToken == "" {
+		return types.RenewResponse{}, errors.New("relay did not return renewed access token")
+	}
+	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
+	if err != nil {
+		return types.RenewResponse{}, err
+	}
+	resp.ReverseEndpoint = reverseEndpoint
+	return resp, nil
 }
 
 func (c *apiClient) requestReverseEndpoint(ctx context.Context, accessToken, failedURL string, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {
-	return control.NewClient(c.relayURL, c.httpClient()).RequestReverseEndpoint(ctx, accessToken, failedURL, leaseExpiresAt)
+	var endpoint types.ReverseEndpoint
+	req := types.ReverseEndpointRequest{AccessToken: accessToken, FailedURL: failedURL}
+	if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKReverse, req, nil, &endpoint); err != nil {
+		return types.ReverseEndpoint{}, err
+	}
+	endpoint, err := validateReverseEndpoint(endpoint, leaseExpiresAt)
+	if err != nil {
+		return types.ReverseEndpoint{}, err
+	}
+	return endpoint, nil
+}
+
+func validateReverseEndpoint(endpoint types.ReverseEndpoint, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {
+	endpoint.URL = strings.TrimSpace(endpoint.URL)
+	endpoint.Capability = strings.TrimSpace(endpoint.Capability)
+	if endpoint.URL == "" || endpoint.Capability == "" {
+		return types.ReverseEndpoint{}, errors.New("relay returned incomplete reverse endpoint")
+	}
+	parsed, err := url.Parse(endpoint.URL)
+	if err != nil || parsed.Host == "" || !strings.EqualFold(parsed.Scheme, "https") {
+		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.EscapedPath() != types.PathSDKConnect {
+		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint target")
+	}
+	if !endpoint.ExpiresAt.After(time.Now().UTC()) || endpoint.ExpiresAt.After(leaseExpiresAt) {
+		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint expiry")
+	}
+	endpoint.URL = parsed.String()
+	return endpoint, nil
 }
 
 func (c *apiClient) unregister(ctx context.Context, accessToken string) error {
-	return control.NewClient(c.relayURL, c.httpClient()).Unregister(ctx, accessToken)
+	err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
+		AccessToken: accessToken,
+	}, nil, nil)
+	return err
 }

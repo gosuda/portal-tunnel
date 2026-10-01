@@ -203,6 +203,9 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if !socketTransportAvailable && (cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM) {
+		return nil, errors.New("portal sdk: this runtime supports HTTPS exposure only")
+	}
 	var source *cache.Source
 	if cfg.Cache != nil {
 		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM {

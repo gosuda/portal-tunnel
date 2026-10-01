@@ -144,6 +144,8 @@ func (s *Server) apiHandler(base http.Handler, keylessSigner *keyless.Signer) ht
 				return
 			}
 			s.handleDomain(w, r)
+		case types.PathSDKCertificateChain:
+			s.handleCertificateChain(w, r)
 		case types.PathSDKRegisterChallenge:
 			s.handleRegisterChallenge(w, r)
 		case types.PathSDKRegister:
@@ -315,6 +317,20 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.WriteAPIData(w, http.StatusOK, s.DomainReport())
+}
+
+// handleCertificateChain serves the public chain already presented by the relay's
+// TLS endpoint to runtimes whose TLS stack does not expose peer certificates.
+func (s *Server) handleCertificateChain(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	if len(s.apiCertPEM) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	_, _ = w.Write(s.apiCertPEM)
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {

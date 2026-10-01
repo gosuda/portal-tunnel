@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/sdk/internal/control"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -25,7 +24,7 @@ func TestValidateReverseEndpoint(t *testing.T) {
 		Capability: " reverse-capability ",
 		ExpiresAt:  leaseExpiry,
 	}
-	validated, err := control.ValidateReverseEndpoint(endpoint, leaseExpiry)
+	validated, err := validateReverseEndpoint(endpoint, leaseExpiry)
 	if err != nil {
 		t.Fatalf("validateReverseEndpoint() error = %v", err)
 	}
@@ -33,7 +32,7 @@ func TestValidateReverseEndpoint(t *testing.T) {
 		t.Fatalf("validated capability = %q", validated.Capability)
 	}
 	endpoint.URL = "https://gateway.example/sdk/connect"
-	if _, err := control.ValidateReverseEndpoint(endpoint, leaseExpiry); err != nil {
+	if _, err := validateReverseEndpoint(endpoint, leaseExpiry); err != nil {
 		t.Fatalf("gateway reverse endpoint rejected: %v", err)
 	}
 
@@ -43,7 +42,7 @@ func TestValidateReverseEndpoint(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := control.ValidateReverseEndpoint(invalid, leaseExpiry); err == nil {
+			if _, err := validateReverseEndpoint(invalid, leaseExpiry); err == nil {
 				t.Fatal("validateReverseEndpoint() error = nil")
 			}
 		})

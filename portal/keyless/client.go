@@ -35,8 +35,6 @@ type ClientConfig struct {
 	RelayURL    string
 	Hostname    string
 	AccessToken string
-	// CertificateChainPEM bypasses socket-based material discovery when supplied.
-	CertificateChainPEM []byte
 }
 
 // Client terminates tenant TLS on raw reverse-session connections. The
@@ -54,10 +52,9 @@ type Client struct {
 	closeErr      error
 }
 
-// NewClient creates one lease-scoped tenant TLS client. It pins a supplied
-// relay certificate chain or resolves one when absent, verifies the chain
-// covers the lease hostname, and wires the remote transcript signer to the
-// relay's /v1/sign endpoint.
+// NewClient creates one lease-scoped tenant TLS client. It resolves and pins
+// the relay certificate chain, verifies the chain covers the lease hostname,
+// and wires the remote transcript signer to the relay's /v1/sign endpoint.
 func NewClient(config ClientConfig) (*Client, error) {
 	normalizedRelayURL, err := utils.NormalizeRelayURL(config.RelayURL)
 	if err != nil {
@@ -73,13 +70,9 @@ func NewClient(config ClientConfig) (*Client, error) {
 		return nil, errors.New("relay hostname is required")
 	}
 
-	certPEM := bytes.Clone(config.CertificateChainPEM)
-	rootCAPEM := bytes.Clone(config.CertificateChainPEM)
-	if len(certPEM) == 0 {
-		certPEM, rootCAPEM, err = resolveMaterials(context.Background(), normalizedRelayURL, serverName)
-		if err != nil {
-			return nil, fmt.Errorf("prepare keyless materials: %w", err)
-		}
+	certPEM, rootCAPEM, err := resolveMaterials(context.Background(), normalizedRelayURL, serverName)
+	if err != nil {
+		return nil, fmt.Errorf("prepare keyless materials: %w", err)
 	}
 	hostname := strings.TrimSpace(config.Hostname)
 	if hostname == "" {

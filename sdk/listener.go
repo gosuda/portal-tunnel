@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -552,12 +551,15 @@ func (l *listener) runLease(ctx context.Context) error {
 		}()
 	}
 	if l.stream != nil {
+		// The lease owns its reverse carrier and any transport state it keeps.
+		carrier := newReverseLeaseCarrier(l)
+		defer carrier.Close()
 		for sessionSlot := range defaultReadyTarget {
 			sessionSlot++
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot); err != nil {
+				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot, carrier); err != nil {
 					select {
 					case errCh <- err:
 					case <-leaseCtx.Done():
@@ -601,7 +603,7 @@ func (l *listener) runLease(ctx context.Context) error {
 	}
 }
 
-func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int) error {
+func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int, carrier *reverseLeaseCarrier) error {
 	if l.stream == nil {
 		return nil
 	}
@@ -609,7 +611,7 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless
 	var retries int
 	for {
 		lease, _ := l.leaseSnapshot()
-		conn, err := l.openReverseSession(ctx)
+		conn, err := carrier.Open(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
 				return nil
@@ -793,67 +795,24 @@ func (l *listener) runDatagramLoop(ctx context.Context) error {
 	}
 }
 
-func (l *listener) openReverseSession(ctx context.Context) (net.Conn, error) {
+// reverseTarget reads the current lease's reverse endpoint and capability.
+func (l *listener) reverseTarget() (*url.URL, string, error) {
 	lease, ok := l.leaseSnapshot()
 	if !ok || lease.reverse.Capability == "" {
-		return nil, errors.New("reverse capability is not available")
+		return nil, "", errors.New("reverse capability is not available")
 	}
 	if !lease.reverse.ExpiresAt.After(time.Now().UTC()) {
-		return nil, errLeaseRefreshRequired
+		return nil, "", errLeaseRefreshRequired
 	}
 	if l.api.tlsConfigClone() == nil {
-		return nil, errors.New("relay tls config is unavailable")
+		return nil, "", errors.New("relay tls config is unavailable")
 	}
 
 	reverseURL, err := url.Parse(lease.reverse.URL)
 	if err != nil {
-		return nil, fmt.Errorf("parse reverse endpoint: %w", err)
+		return nil, "", fmt.Errorf("parse reverse endpoint: %w", err)
 	}
-	reverseTLS, err := l.reverseTLSConfig(ctx, reverseURL)
-	if err != nil {
-		return nil, err
-	}
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: defaultDialTimeout},
-		Config:    reverseTLS,
-	}
-	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(reverseURL.Host))
-	if err != nil {
-		return nil, err
-	}
-
-	req := &http.Request{
-		Method: http.MethodGet,
-		URL:    reverseURL,
-		Host:   reverseURL.Host,
-		Header: make(http.Header),
-	}
-	req.Header.Set(types.HeaderReverseCapability, lease.reverse.Capability)
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "raw")
-
-	_ = conn.SetDeadline(time.Now().Add(defaultHandshakeTimeout))
-	if writeErr := req.Write(conn); writeErr != nil {
-		_ = conn.Close()
-		return nil, writeErr
-	}
-
-	reader := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(reader, req)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		apiErr := utils.DecodeAPIRequestError(resp)
-		_ = conn.Close()
-		return nil, apiErr
-	}
-
-	_ = conn.SetDeadline(time.Time{})
-	return wrapBufferedConn(conn, reader), nil
+	return reverseURL, lease.reverse.Capability, nil
 }
 
 func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tls.Config, error) {

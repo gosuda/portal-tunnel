@@ -54,7 +54,7 @@ func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Durat
 	return rawTLSConfig, httpClient, mustTransportOf(httpClient), nil
 }
 
-func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
+func fetchEndpointCertificateChainOverTLS(ctx context.Context, endpoint, serverName string) ([]byte, error) {
 	raw := strings.TrimSpace(endpoint)
 	if raw == "" {
 		return nil, errors.New("endpoint is required")
