@@ -22,6 +22,8 @@ see [the cache trust boundary](/security-model#opt-in-static-cache).
 
 - **Permissionless**: no SaaS account or API key is required.
 - **Trustless stream path**: tenant TLS terminates locally, not at the relay.
+- **IVNP-backed overlay networking**: Portal selects and authorizes endpoints;
+  IVNP owns the network path between the overlay gateway and public ingress.
 - **Mode-per-service transport**: use HTTPS stream, routed HTTP, raw TCP, or UDP
   depending on the service.
 - **Self-hostable relays**: use the public registry, explicit relay URLs, or your
@@ -42,6 +44,13 @@ Public client
 
 The relay decides where traffic should go. The tunnel process decides what the
 traffic means.
+
+The reverse stream can connect the tunnel directly to the public ingress, or
+pass through a gateway and an independent IVNP overlay network. This lets Portal
+keep its identity, lease, and authorization model while IVNP handles internal
+routers and hop ordering. Direct reverse transport is the default and fallback;
+`portal expose 3000 --overlay` prefers an available overlay path. See
+[IVNP-backed overlay networking](/concepts#ivnp-backed-overlay-networking).
 
 For the default stream path, the tunnel process accepts the connection as a TLS
 server and then proxies bytes to your local target. For routed HTTP mode, the

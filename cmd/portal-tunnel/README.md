@@ -186,7 +186,7 @@ Common `portal expose` flags:
 --relays             Additional relay API URLs, comma-separated
 --discovery          Include registry relays and relay discovery expansion
 --max-active-relays  Maximum auto-selected relays; explicit relays are always included
---overlay            Prefer IVNP overlay transport; direct reverse transport stays default and fallback
+--overlay            Prefer an IVNP overlay path; direct reverse transport stays default and fallback
 --ban-mitm           Ban relay when the MITM self-probe detects termination
 --identity-path      Identity JSON file path; created automatically when missing
 --identity-json      Identity JSON payload kept in memory; takes precedence over --identity-path
@@ -219,7 +219,18 @@ Common `portal expose` flags:
 --cache-ttl          Requested offline cache lifetime; clamped by relay policy
 ```
 
-`--overlay` prefers IVNP-routed overlay transport when an eligible gateway is available and retains direct reverse transport as fallback: Portal selects and authorizes the public ingress and overlay gateway, then issues the delegated reverse capability; IVNP owns the gateway→ingress path and any internal hops it uses; the SDK sees only the same generic reverse endpoint. See [architecture documentation](../../docs/src/routes/architecture/+page.md) for details.
+### IVNP-backed overlay networking
+
+```bash
+portal expose 3000 --overlay
+```
+
+Portal selects and authorizes the public ingress and overlay gateway; IVNP owns
+the network path between them. `--overlay` prefers an eligible gateway when
+available, while direct reverse transport remains the default and fallback.
+The SDK consumes the same generic reverse endpoint in either case. See
+[the overlay networking concepts](../../docs/src/routes/concepts/+page.md#ivnp-backed-overlay-networking)
+and [the detailed architecture](../../docs/src/routes/architecture/+page.md#ivnp-backed-overlay-networking).
 
 ## Agent
 

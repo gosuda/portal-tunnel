@@ -1,6 +1,6 @@
 ---
 title: Concepts
-description: Understand Portal's relay model, transport modes, and end-to-end TLS design.
+description: Understand Portal's relay model, IVNP-backed overlay networking, and end-to-end TLS design.
 ---
 
 # Concepts
@@ -8,6 +8,47 @@ description: Understand Portal's relay model, transport modes, and end-to-end TL
 Portal publishes local services through relay servers. The important design
 choice is that the relay is a transport and routing component, not the owner of
 your application traffic.
+
+<h2 id="ivnp-backed-overlay-networking">IVNP-backed overlay networking</h2>
+
+Portal can expose a service through a public ingress without owning the network
+path behind that ingress. **Portal selects and authorizes endpoints. IVNP owns
+the network path between them.** This separates public service identity and
+access policy from the routers and tunnels used to reach that service.
+
+| Owner | Responsibilities |
+|-------|------------------|
+| Portal | Select and authorize the public ingress and overlay gateway; own identity, lease policy, and delegated reverse capability |
+| IVNP | Construct the gateway-to-ingress path, including routers, tunnels, and internal hop ordering |
+| Tunnel / SDK | Consume the same generic reverse endpoint and forward streams to the local service |
+
+```text
+Direct (default):
+Public client -> Portal ingress -> Tunnel / SDK -> Local service
+
+Overlay (opt-in):
+Public client
+  -> Portal ingress
+  -> IVNP overlay network (opaque internal path)
+  -> Overlay gateway
+  -> Tunnel / SDK
+  -> Local service
+```
+
+The diagram follows a client stream toward the service. Reverse connections are
+opened outward by the tunnel, either to the ingress directly or to a gateway
+that reaches the ingress through IVNP. The overlay path can span multiple
+internal routers, opaque to Portal. Portal does not construct a relay chain or
+store IVNP topology in discovery or leases.
+
+```bash
+portal expose 3000 --overlay
+```
+
+`--overlay` prefers an available overlay gateway. Direct reverse transport is
+still the default and fallback; the lease and SDK-facing reverse-endpoint
+contract stay the same. See [the architecture and protocol flow](/architecture#ivnp-backed-overlay-networking)
+for how Portal delegates reverse authorization while IVNP owns the path.
 
 ## Relay And Tunnel Responsibilities
 
@@ -27,13 +68,6 @@ The tunnel process owns:
 - UDP target forwarding
 - identity keys and lease signing
 - MITM self-probe validation
-
-When configured, the relay's single overlay runtime owns gateway selection,
-delegated reverse authorization, IVNP forwarding, and gateway replacement.
-Those concerns are not part of SDK relay selection or the lease model. Portal's
-routing decision stops at endpoint selection; IVNP owns the gateway→ingress path
-including internal hops, and the SDK keeps consuming the same generic reverse
-endpoint. **Portal selects and authorizes endpoints. IVNP connects destinations. Portal does not own the path between them.** See [IVNP overlay transport](/architecture#optional-relay-overlay).
 
 For uncached HTTPS tunnels, this split keeps tenant plaintext at the endpoint.
 Opt-in `--serve --cache` additionally lets selected relays store static content
