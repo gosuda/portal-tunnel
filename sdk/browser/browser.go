@@ -9,21 +9,21 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
+	"github.com/gosuda/portal-tunnel/v2/sdk/internal/control"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -43,7 +43,8 @@ type Listener struct {
 	relayURL *url.URL
 	identity types.Identity
 	hostname string
-	client   *http.Client
+	control  *control.Client
+	chainPEM []byte
 	stream   *transport.ClientStream
 	accepted chan net.Conn
 
@@ -63,8 +64,12 @@ type lease struct {
 }
 
 // Listen registers id with the relay at relayURL and keeps the lease, registering again
-// if it is lost, until ctx ends or the listener is closed.
-func Listen(ctx context.Context, id types.Identity, relayURL string) (*Listener, error) {
+// if it is lost, until ctx ends or the listener is closed. certificateChainPEM is the
+// public signer chain supplied by the page hosting the socketless runtime.
+func Listen(ctx context.Context, id types.Identity, relayURL string, certificateChainPEM []byte) (*Listener, error) {
+	if len(certificateChainPEM) == 0 {
+		return nil, errors.New("relay certificate chain is required")
+	}
 	normalized, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return nil, err
@@ -78,11 +83,13 @@ func Listen(ctx context.Context, id types.Identity, relayURL string) (*Listener,
 		return nil, err
 	}
 
+	httpClient := &http.Client{Timeout: requestTimeout}
 	l := &Listener{
 		relayURL: parsed,
 		identity: id.Copy(),
 		hostname: hostname,
-		client:   &http.Client{Timeout: requestTimeout},
+		control:  control.NewClient(parsed, httpClient),
+		chainPEM: bytes.Clone(certificateChainPEM),
 		stream:   transport.NewClientStream(handshakeTimeout),
 		accepted: make(chan net.Conn),
 		done:     make(chan struct{}),
@@ -123,7 +130,7 @@ func (l *Listener) Close() error {
 		l.mu.Unlock()
 		if current.accessToken != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err = l.call(ctx, types.PathSDKUnregister, types.UnregisterRequest{AccessToken: current.accessToken}, nil)
+			err = l.control.Unregister(ctx, current.accessToken)
 			cancel()
 		}
 		if current.tenantTLS != nil {
@@ -251,60 +258,27 @@ func (l *Listener) renewLoop(ctx context.Context) error {
 }
 
 func (l *Listener) checkProtocol(ctx context.Context) error {
-	var domain types.DomainResponse
-	if err := utils.HTTPDoAPIPath(ctx, l.client, l.relayURL, http.MethodGet, types.PathSDKDomain, nil, nil, &domain); err != nil {
-		return err
-	}
-	if version := strings.TrimSpace(domain.ProtocolVersion); version != types.SDKVersion {
-		return errors.New("relay sdk protocol version mismatch: relay=" + version + " client=" + types.SDKVersion)
-	}
-	return nil
+	_, err := l.control.CheckProtocol(ctx)
+	return err
 }
 
 func (l *Listener) register(ctx context.Context) error {
-	var challenge types.RegisterChallengeResponse
-	if err := l.call(ctx, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{
+	resp, err := l.control.Register(ctx, types.RegisterChallengeRequest{
 		Identity: l.identity,
 		TTL:      int(leaseTTL / time.Second),
-	}, &challenge); err != nil {
-		return err
-	}
-	signature, err := identity.NewLocalAuthority(l.identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
+	}, "")
 	if err != nil {
 		return err
-	}
-	request := types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature}
-
-	// A rate-limited admission retries the same signed challenge rather than buying a
-	// new one, as the SDK does.
-	var resp types.RegisterResponse
-	for {
-		err := l.call(ctx, types.PathSDKRegister, request, &resp)
-		if err == nil {
-			break
-		}
-		apiErr, ok := errors.AsType[*types.APIRequestError](err)
-		if !ok || !apiErr.IsRateLimited() || !time.Now().Before(challenge.ExpiresAt) {
-			return err
-		}
-		if !utils.SleepOrDone(ctx, max(apiErr.RetryAfter, retryWait)) {
-			return ctx.Err()
-		}
-	}
-	if err := validateLease(resp.AccessToken, resp.ReverseEndpoint); err != nil {
-		return err
-	}
-	if resp.Identity.Key() != l.identity.Key() {
-		return errors.New("relay returned mismatched lease identity")
 	}
 
 	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
-		RelayURL:    l.relayURL.String(),
-		Hostname:    l.hostname,
-		AccessToken: resp.AccessToken,
+		RelayURL:            l.relayURL.String(),
+		Hostname:            l.hostname,
+		AccessToken:         resp.AccessToken,
+		CertificateChainPEM: l.chainPEM,
 	})
 	if err != nil {
-		_ = l.call(context.Background(), types.PathSDKUnregister, types.UnregisterRequest{AccessToken: resp.AccessToken}, nil)
+		_ = l.control.Unregister(context.Background(), resp.AccessToken)
 		return err
 	}
 
@@ -323,14 +297,11 @@ func (l *Listener) renew(ctx context.Context) error {
 	accessToken := l.lease.accessToken
 	l.mu.Unlock()
 
-	var resp types.RenewResponse
-	if err := l.call(ctx, types.PathSDKRenew, types.RenewRequest{
+	resp, err := l.control.Renew(ctx, types.RenewRequest{
 		AccessToken: accessToken,
 		TTL:         int(leaseTTL / time.Second),
-	}, &resp); err != nil {
-		return err
-	}
-	if err := validateLease(resp.AccessToken, resp.ReverseEndpoint); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 
@@ -360,20 +331,6 @@ func (l *Listener) reverseTarget() (*url.URL, string, error) {
 		return nil, "", err
 	}
 	return target, reverse.Capability, nil
-}
-
-func (l *Listener) call(ctx context.Context, path string, payload, out any) error {
-	return utils.HTTPDoAPIPath(ctx, l.client, l.relayURL, http.MethodPost, path, payload, nil, out)
-}
-
-func validateLease(accessToken string, reverse types.ReverseEndpoint) error {
-	if strings.TrimSpace(accessToken) == "" {
-		return errors.New("relay did not return an access token")
-	}
-	if strings.TrimSpace(reverse.URL) == "" || strings.TrimSpace(reverse.Capability) == "" {
-		return errors.New("relay returned an incomplete reverse endpoint")
-	}
-	return nil
 }
 
 func staleLease(err error) bool {
