@@ -394,6 +394,9 @@ Prints the installed version string and exits.
 - When the local stream target is unreachable, the tunnel returns an HTTP 503
   page to browser-style clients.
 - Routed HTTP mode is HTTP-only and runs inside the tunnel process.
+- Routed HTTP mode keeps the browser's `Host` for loopback upstreams and sends
+  `X-Forwarded-Proto: https`; a local dev server that checks `Host` (such as
+  Vite's `server.allowedHosts`) must allow the public hostname.
 - `--tcp` requires relay TCP port transport, a valid `MIN_PORT`/`MAX_PORT`
   range, and TCP port transport enabled in the admin panel.
 - `--udp` requires relay UDP transport, a valid `MIN_PORT`/`MAX_PORT` range, UDP

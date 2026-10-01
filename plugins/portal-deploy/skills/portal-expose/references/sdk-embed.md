@@ -81,7 +81,7 @@ require github.com/gosuda/portal-tunnel/v2 v2.5.0
 
 - Tenant TLS is terminated inside the SDK using the relay's certificate through the keyless signer; session keys never leave the process, and the handler receives plain HTTP. This is the same end-to-end property the CLI gives.
 - `r.TLS` is always nil, because the terminated connection is not a `crypto/tls` conn. Do not gate Secure cookies or scheme detection on it; the public scheme is always `https` for the tunnel hostname.
-- `r.Host` is the real public hostname. `r.RemoteAddr` is the relay end of the SDK's own outbound connection, never the browser. Portal injects no `X-Forwarded-*` headers on tunneled traffic, so the real client IP is not available in-process.
+- `r.Host` is the real public hostname. `r.RemoteAddr` is the relay end of the SDK's own outbound connection, never the browser. `sdk.RunHTTP` sets `X-Forwarded-Proto: https` on tunneled requests, and Portal adds no `X-Forwarded-For` or `X-Real-IP`, so the real client IP is not available in-process.
 - WebSockets and other upgrades work; the tunnel is a byte-transparent `net.Conn`.
 - To proxy to local services instead of handling in-process: `sdk.NewHTTPRoutes([]sdk.HTTPRouteConfig{{Prefix: "/", Upstream: "127.0.0.1:3000"}})` returns an `http.Handler`; `StaticRoot` serves a directory as an SPA. `sdk.Proxy(ctx, exposure, "127.0.0.1:3000")` forwards raw streams and closes the exposure when it returns, so do not also `defer exposure.Close()` on that path.
 

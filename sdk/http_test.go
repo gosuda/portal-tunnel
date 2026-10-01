@@ -1,12 +1,18 @@
 package sdk
 
 import (
+	"bufio"
+	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHTTPRoutesUseLongestPrefix(t *testing.T) {
@@ -73,6 +79,152 @@ func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Set-Cookie"); !strings.Contains(got, "Path=/app/session") {
 		t.Fatalf("Set-Cookie = %q, want rewritten path", got)
+	}
+}
+
+func TestRunHTTPRelayRequestsReachLoopbackUpstreamAsPublicHTTPS(t *testing.T) {
+	t.Parallel()
+
+	gotHeader := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := r.Header.Clone()
+		header.Set("Host", r.Host)
+		gotHeader <- header
+	}))
+	defer upstream.Close()
+
+	routes, err := NewHTTPRoutes([]HTTPRouteConfig{{Prefix: "/", Upstream: upstream.URL}})
+	if err != nil {
+		t.Fatalf("NewHTTPRoutes() error = %v", err)
+	}
+	relay, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- RunHTTP(ctx, relay, routes, "") }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("RunHTTP() error = %v", err)
+		}
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+relay.Addr().String()+"/", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext() error = %v", err)
+	}
+	req.Host = "app.relay.example"
+	// The tunnel ended TLS, so a client cannot downgrade the public scheme.
+	req.Header.Set("X-Forwarded-Proto", "http")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	_ = resp.Body.Close()
+
+	header := <-gotHeader
+	if got := header.Get("Host"); got != "app.relay.example" {
+		t.Fatalf("upstream Host = %q, want app.relay.example", got)
+	}
+	if got := header.Get("X-Forwarded-Proto"); got != "https" {
+		t.Fatalf("upstream X-Forwarded-Proto = %q, want https", got)
+	}
+	if got := header.Get("X-Forwarded-For"); got == "" {
+		t.Fatalf("upstream X-Forwarded-For is empty, want the peer address")
+	}
+}
+
+func TestHTTPRouteHostForUpstream(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		upstream string
+		wantHost string
+	}{
+		{name: "loopback ip keeps the public host", upstream: "http://127.0.0.1:3000", wantHost: "app.relay.example"},
+		{name: "localhost keeps the public host", upstream: "http://localhost:3000", wantHost: "app.relay.example"},
+		{name: "remote upstream is addressed by its own host", upstream: "http://backend.internal:3000", wantHost: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			route, err := newHTTPRoute(HTTPRouteConfig{Prefix: "/", Upstream: tt.upstream})
+			if err != nil {
+				t.Fatalf("newHTTPRoute() error = %v", err)
+			}
+			in := httptest.NewRequest(http.MethodGet, "http://app.relay.example/", nil)
+			pr := &httputil.ProxyRequest{In: in, Out: in.Clone(t.Context())}
+			route.rewriteProxyRequest(pr)
+
+			if pr.Out.Host != tt.wantHost {
+				t.Fatalf("outbound Host = %q, want %q", pr.Out.Host, tt.wantHost)
+			}
+		})
+	}
+}
+
+func TestHTTPRoutesProxyUpgradedConnections(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("Hijack() error = %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: portal-test\r\n\r\n")
+		_ = rw.Flush()
+		line, err := rw.ReadString('\n')
+		if err != nil {
+			return
+		}
+		_, _ = rw.WriteString(line)
+		_ = rw.Flush()
+	}))
+	defer upstream.Close()
+
+	routes, err := NewHTTPRoutes([]HTTPRouteConfig{{Prefix: "/", Upstream: upstream.URL}})
+	if err != nil {
+		t.Fatalf("NewHTTPRoutes() error = %v", err)
+	}
+	front := httptest.NewServer(routes)
+	defer front.Close()
+
+	conn, err := new(net.Dialer).DialContext(t.Context(), "tcp", front.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("DialContext() error = %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := fmt.Fprint(conn, "GET / HTTP/1.1\r\nHost: app.relay.example\r\nConnection: Upgrade\r\nUpgrade: portal-test\r\n\r\n"); err != nil {
+		t.Fatalf("write upgrade request error = %v", err)
+	}
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatalf("ReadResponse() error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101", resp.StatusCode)
+	}
+
+	if _, err := fmt.Fprint(conn, "ping\n"); err != nil {
+		t.Fatalf("write upgraded payload error = %v", err)
+	}
+	got, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read upgraded payload error = %v", err)
+	}
+	if got != "ping\n" {
+		t.Fatalf("echo = %q, want ping", got)
 	}
 }
 

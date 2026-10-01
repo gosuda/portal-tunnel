@@ -37,7 +37,12 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	var relaySrv *http.Server
 	if relayListener != nil {
 		relaySrv = &http.Server{
-			Handler:           handler,
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// The tunnel ended TLS, and every public Portal URL is https, so a
+				// client-sent X-Forwarded-Proto cannot say otherwise.
+				r.Header.Set("X-Forwarded-Proto", "https")
+				handler.ServeHTTP(w, r)
+			}),
 			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
 			IdleTimeout:       defaultHTTPIdleTimeout,
 		}
@@ -305,10 +310,16 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	pr.Out.URL.RawPath = rawPath
 	pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 	pr.SetURL(r.upstream)
+	if utils.IsLocalRelayHost(r.upstreamDomain) {
+		// A local app sees the public host, as in the default stream mode, so its
+		// own origin and CSRF checks agree with the browser's Origin.
+		pr.Out.Host = pr.In.Host
+	}
 	pr.SetXForwarded()
 
-	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy
-	// the inbound X-Forwarded-Proto carries the real client scheme.
+	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy (here
+	// the tunnel itself, see RunHTTP) the inbound X-Forwarded-Proto carries the
+	// real client scheme.
 	if pr.In.TLS == nil {
 		proto, _, _ := strings.Cut(pr.In.Header.Get("X-Forwarded-Proto"), ",")
 		if proto = strings.ToLower(strings.TrimSpace(proto)); proto != "" {
