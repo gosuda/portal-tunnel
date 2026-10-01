@@ -359,6 +359,9 @@ func (cfg TunnelConfig) Validate() error {
 	if len(cfg.HTTPRoutes) > 0 && cfg.UDPEnabled {
 		return fmt.Errorf("tunnel %q cannot combine udp and http_routes", cfg.ID)
 	}
+	if len(cfg.HTTPRoutes) > 0 && cfg.TCPEnabled {
+		return fmt.Errorf("tunnel %q cannot combine tcp and http_routes", cfg.ID)
+	}
 	for _, route := range cfg.HTTPRoutes {
 		if strings.TrimSpace(route.Prefix) == "" || strings.TrimSpace(route.Upstream) == "" {
 			return fmt.Errorf("tunnel %q http_routes require prefix and upstream", cfg.ID)

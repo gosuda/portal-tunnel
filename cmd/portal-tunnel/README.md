@@ -140,6 +140,10 @@ portal expose --name myapp \
   --http-route /=http://127.0.0.1:5173
 ```
 
+An upstream receives the public `Host` and `X-Forwarded-Proto: https`; a dev
+server that checks `Host` (such as Vite's `server.allowedHosts`) must allow the
+public hostname.
+
 Paid routed HTTP with Sui USDC x402:
 
 ```text
@@ -275,7 +279,7 @@ change them.
   `--udp`, or `--tcp`. The `--serve` entry file must exist. Path traversal
   (`..`) is refused, but a symlink inside the folder that points outside it is
   still followed, so only serve folders you trust.
-- `--http-route` cannot be combined with `--udp`.
+- `--http-route` cannot be combined with `--tcp` or `--udp`.
 - `--auth` cannot be combined with `--cache`, `--tcp`, or `--udp`.
 - Route payment amounts such as `0.01` are part of `--http-route` and require
   `--x402-pay-to`. Sui is the default; Casper additionally requires

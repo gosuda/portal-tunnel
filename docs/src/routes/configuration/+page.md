@@ -471,7 +471,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `max_active_relays` | int | Auto-selected relay limit; defaults to `3`; explicit relays remain included |
 | `ban_mitm` | bool | Ban on suspected TLS termination; defaults to warning-only |
 | `target` | string | Local TCP target, equivalent to the `portal expose <target>` argument |
-| `http_routes` | table array | HTTP route mappings; cannot be combined with `target`, `serve`, or `udp` |
+| `http_routes` | table array | HTTP route mappings; cannot be combined with `target`, `serve`, `tcp`, or `udp` |
 | `serve` | string | Static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`. Directories use `index.html`; unknown paths fall back to the entry file, which must exist when the tunnel starts |
 | `relays` | string array | Explicit relay API URLs |
 | `discovery` | bool | Include registry and relay discovery expansion |

@@ -143,7 +143,7 @@ rename an existing one. Use a separate `--identity-path` for a new identity.
 - `--cache` requires `--serve` and cannot be combined with `--ban-mitm`.
 - `--cache-ttl` requires `--cache`; a nonzero value must be between `1s` and
   `8760h` and is clamped by the relay.
-- `--http-route` cannot be combined with `--udp`.
+- `--http-route` cannot be combined with `--tcp` or `--udp`.
 - `--tcp` and `--udp` require matching transport support on the relay.
 - Route payment amounts are part of `--http-route` and require a tunnel-owned
   `--x402-pay-to`.
@@ -394,6 +394,9 @@ Prints the installed version string and exits.
 - When the local stream target is unreachable, the tunnel returns an HTTP 503
   page to browser-style clients.
 - Routed HTTP mode is HTTP-only and runs inside the tunnel process.
+- Routed HTTP mode keeps the browser's `Host` for every upstream and sends
+  `X-Forwarded-Proto: https`; a local dev server that checks `Host` (such as
+  Vite's `server.allowedHosts`) must allow the public hostname.
 - `--tcp` requires relay TCP port transport, a valid `MIN_PORT`/`MAX_PORT`
   range, and TCP port transport enabled in the admin panel.
 - `--udp` requires relay UDP transport, a valid `MIN_PORT`/`MAX_PORT` range, UDP

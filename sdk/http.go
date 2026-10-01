@@ -25,6 +25,12 @@ const (
 	defaultHTTPIdleTimeout       = 90 * time.Second
 )
 
+// RunHTTP serves handler on the relay listener and, when localAddr is set, on
+// that local address too. Requests from the relay listener reach handler with
+// X-Forwarded-Proto set to https, replacing any client-sent value: the tunnel
+// ends TLS for the public hostname. Do not use it on an exposure that enables
+// WithTCP: raw TCP sessions arrive on the same listener unencrypted and would be
+// labeled https too.
 func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
 	if relayListener == nil && localAddr == "" {
 		return errors.New("relay listener or local address is required")
@@ -37,7 +43,12 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	var relaySrv *http.Server
 	if relayListener != nil {
 		relaySrv = &http.Server{
-			Handler:           handler,
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// The tunnel ended TLS, and every public Portal URL is https, so a
+				// client-sent X-Forwarded-Proto cannot say otherwise.
+				r.Header.Set("X-Forwarded-Proto", "https")
+				handler.ServeHTTP(w, r)
+			}),
 			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
 			IdleTimeout:       defaultHTTPIdleTimeout,
 		}
@@ -134,8 +145,9 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 type HTTPRouteConfig struct {
 	// Prefix is the public request path prefix, such as "/api" or "/".
 	Prefix string
-	// Upstream is the target HTTP URL, or a loopback host:port shorthand.
-	// Leave empty when StaticRoot is set.
+	// Upstream is the target HTTP URL, or a loopback host:port shorthand. It
+	// says where to connect; the upstream still receives the request's public
+	// Host. Leave empty when StaticRoot is set.
 	Upstream string
 	// StaticRoot, when set, serves files from this local directory as a static
 	// SPA instead of proxying to an Upstream. Unknown paths fall back to
@@ -280,6 +292,9 @@ func (r *httpRoute) baseHandler() http.Handler {
 	}
 }
 
+// rewriteProxyRequest connects to the upstream but keeps the request authority
+// the browser used: the upstream URL says where to dial, not which Host the app
+// sees.
 func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	path := utils.NormalizeURLPath(pr.In.URL.Path)
 	rawPath := pr.In.URL.RawPath
@@ -305,10 +320,13 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	pr.Out.URL.RawPath = rawPath
 	pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 	pr.SetURL(r.upstream)
+	// SetURL clears Host; routed HTTP keeps the browser-visible authority.
+	pr.Out.Host = pr.In.Host
 	pr.SetXForwarded()
 
-	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy
-	// the inbound X-Forwarded-Proto carries the real client scheme.
+	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy (here
+	// the tunnel itself, see RunHTTP) the inbound X-Forwarded-Proto carries the
+	// real client scheme.
 	if pr.In.TLS == nil {
 		proto, _, _ := strings.Cut(pr.In.Header.Get("X-Forwarded-Proto"), ",")
 		if proto = strings.ToLower(strings.TrimSpace(proto)); proto != "" {
@@ -365,7 +383,9 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 		if err == nil {
 			switch {
 			case parsed.IsAbs():
-				if strings.EqualFold(parsed.Scheme, r.upstream.Scheme) && strings.EqualFold(parsed.Host, r.upstream.Host) {
+				// The upstream's own authority, or the public one it received as Host.
+				if (strings.EqualFold(parsed.Scheme, r.upstream.Scheme) && strings.EqualFold(parsed.Host, r.upstream.Host)) ||
+					strings.EqualFold(parsed.Host, publicHost) {
 					parsed.Scheme = publicScheme
 					parsed.Host = publicHost
 				} else {

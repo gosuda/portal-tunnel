@@ -118,10 +118,18 @@ Routed HTTP mode can:
 
 - match routes longest-prefix-first
 - strip the mounted prefix before proxying
-- forward `X-Forwarded-*`
+- send `X-Forwarded-For` (the relay's address, not the browser's),
+  `X-Forwarded-Host`, and `X-Forwarded-Proto: https`
+- keep the browser's `Host` for every upstream
 - rewrite matching upstream `Location` redirects
 - strip loopback cookie domains
 - remap cookie paths to route prefixes
+
+An upstream sees the public hostname, as it does in the default stream mode: the
+upstream URL says where to connect, not which `Host` the app receives. A dev
+server that checks `Host` (such as Vite's `server.allowedHosts`) must allow the
+public hostname. The `Host` is whatever the client sent, so an app that uses it
+for security decisions should check it against its own allow-list.
 
 Because HTTP is parsed in the tunnel process, this is the right place for
 cooperative HTTP policy such as response headers. It is not a relay-enforced
