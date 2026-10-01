@@ -82,7 +82,7 @@ func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 	}
 }
 
-func TestRunHTTPRelayRequestsReachLoopbackUpstreamAsPublicHTTPS(t *testing.T) {
+func TestRunHTTPRelayRequestsReachUpstreamAsPublicHTTPS(t *testing.T) {
 	t.Parallel()
 
 	gotHeader := make(chan http.Header, 1)
@@ -137,17 +137,16 @@ func TestRunHTTPRelayRequestsReachLoopbackUpstreamAsPublicHTTPS(t *testing.T) {
 	}
 }
 
-func TestHTTPRouteHostForUpstream(t *testing.T) {
+func TestHTTPRoutePreservesPublicHostForEveryUpstream(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
 		upstream string
-		wantHost string
 	}{
-		{name: "loopback ip keeps the public host", upstream: "http://127.0.0.1:3000", wantHost: "app.relay.example"},
-		{name: "localhost keeps the public host", upstream: "http://localhost:3000", wantHost: "app.relay.example"},
-		{name: "remote upstream is addressed by its own host", upstream: "http://backend.internal:3000", wantHost: ""},
+		{name: "loopback ip", upstream: "http://127.0.0.1:3000"},
+		{name: "container host name", upstream: "http://host.docker.internal:3000"},
+		{name: "remote https backend", upstream: "https://backend.example.com"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -161,8 +160,8 @@ func TestHTTPRouteHostForUpstream(t *testing.T) {
 			pr := &httputil.ProxyRequest{In: in, Out: in.Clone(t.Context())}
 			route.rewriteProxyRequest(pr)
 
-			if pr.Out.Host != tt.wantHost {
-				t.Fatalf("outbound Host = %q, want %q", pr.Out.Host, tt.wantHost)
+			if pr.Out.Host != "app.relay.example" {
+				t.Fatalf("outbound Host = %q, want app.relay.example", pr.Out.Host)
 			}
 		})
 	}

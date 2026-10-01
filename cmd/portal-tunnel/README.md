@@ -140,9 +140,9 @@ portal expose --name myapp \
   --http-route /=http://127.0.0.1:5173
 ```
 
-A loopback upstream receives the public `Host` and `X-Forwarded-Proto: https`; a
-dev server that checks `Host` (such as Vite's `server.allowedHosts`) must allow
-the public hostname.
+An upstream receives the public `Host` and `X-Forwarded-Proto: https`; a dev
+server that checks `Host` (such as Vite's `server.allowedHosts`) must allow the
+public hostname.
 
 Paid routed HTTP with Sui USDC x402:
 

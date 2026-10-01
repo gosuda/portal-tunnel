@@ -25,6 +25,11 @@ const (
 	defaultHTTPIdleTimeout       = 90 * time.Second
 )
 
+// RunHTTP serves handler on the relay listener and, when localAddr is set, on
+// that local address too. Requests from the relay listener reach handler with
+// X-Forwarded-Proto set to https, replacing any client-sent value: the tunnel
+// ends TLS for the public hostname. Raw TCP sessions (WithTCP) arrive on the
+// same listener unencrypted and are not told apart.
 func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
 	if relayListener == nil && localAddr == "" {
 		return errors.New("relay listener or local address is required")
@@ -139,8 +144,9 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 type HTTPRouteConfig struct {
 	// Prefix is the public request path prefix, such as "/api" or "/".
 	Prefix string
-	// Upstream is the target HTTP URL, or a loopback host:port shorthand.
-	// Leave empty when StaticRoot is set.
+	// Upstream is the target HTTP URL, or a loopback host:port shorthand. It
+	// says where to connect; the upstream still receives the request's public
+	// Host. Leave empty when StaticRoot is set.
 	Upstream string
 	// StaticRoot, when set, serves files from this local directory as a static
 	// SPA instead of proxying to an Upstream. Unknown paths fall back to
@@ -285,6 +291,9 @@ func (r *httpRoute) baseHandler() http.Handler {
 	}
 }
 
+// rewriteProxyRequest connects to the upstream but keeps the request authority
+// the browser used: the upstream URL says where to dial, not which Host the app
+// sees.
 func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	path := utils.NormalizeURLPath(pr.In.URL.Path)
 	rawPath := pr.In.URL.RawPath
@@ -310,11 +319,8 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	pr.Out.URL.RawPath = rawPath
 	pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 	pr.SetURL(r.upstream)
-	if utils.IsLocalRelayHost(r.upstreamDomain) {
-		// A local app sees the public host, as in the default stream mode, so its
-		// own origin and CSRF checks agree with the browser's Origin.
-		pr.Out.Host = pr.In.Host
-	}
+	// SetURL clears Host; routed HTTP keeps the browser-visible authority.
+	pr.Out.Host = pr.In.Host
 	pr.SetXForwarded()
 
 	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy (here
