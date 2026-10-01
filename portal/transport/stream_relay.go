@@ -37,8 +37,10 @@ type RelayStream struct {
 	closing      bool
 	closedErr    error
 	closeOnce    sync.Once
-	mu           sync.Mutex
-	cond         *sync.Cond
+	// reverseSessions are the multiplexed sessions feeding this stream; they end with it.
+	reverseSessions map[*ReverseMux]struct{}
+	mu              sync.Mutex
+	cond            *sync.Cond
 }
 
 // OfferReservation owns one reserved ready-queue slot until it is committed
@@ -52,10 +54,11 @@ type OfferReservation struct {
 
 func NewRelayStream(identityKey string, idleInterval time.Duration, readyLimit int) *RelayStream {
 	stream := &RelayStream{
-		identityKey:  identityKey,
-		idleInterval: idleInterval,
-		readyLimit:   readyLimit,
-		notify:       make(chan struct{}, 1),
+		identityKey:     identityKey,
+		idleInterval:    idleInterval,
+		readyLimit:      readyLimit,
+		notify:          make(chan struct{}, 1),
+		reverseSessions: make(map[*ReverseMux]struct{}),
 	}
 	stream.cond = sync.NewCond(&stream.mu)
 	return stream
@@ -207,12 +210,37 @@ func (b *RelayStream) Close() {
 		b.ready = nil
 		b.closedErr = net.ErrClosed
 		b.signalLocked()
+		reverseSessions := b.reverseSessions
+		b.reverseSessions = nil
 		b.mu.Unlock()
 
 		for _, session := range sessions {
 			_ = session.Close()
 		}
+		for session := range reverseSessions {
+			_ = session.Close()
+		}
 	})
+}
+
+// AttachReverseSession hands the stream a connector's multiplexed reverse session,
+// which then ends no later than the stream does. The returned release ends it sooner.
+// A closed stream refuses the session and leaves it to the caller.
+func (b *RelayStream) AttachReverseSession(session *ReverseMux) (release func(), err error) {
+	b.mu.Lock()
+	if b.closedErr != nil || b.closing {
+		b.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	b.reverseSessions[session] = struct{}{}
+	b.mu.Unlock()
+
+	return func() {
+		b.mu.Lock()
+		delete(b.reverseSessions, session)
+		b.mu.Unlock()
+		_ = session.Close()
+	}, nil
 }
 
 func (b *RelayStream) ReadyCount() int {

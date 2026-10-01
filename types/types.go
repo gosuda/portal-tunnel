@@ -12,6 +12,10 @@ import (
 const (
 	HeaderAccessToken       = "X-Portal-Access-Token"
 	HeaderReverseCapability = "X-Portal-Reverse-Capability"
+
+	// ReverseSubprotocol marks a WebSocket carrying reverse connections as yamux streams;
+	// the capability rides beside it.
+	ReverseSubprotocol = "portal.reverse.v1"
 )
 
 const (
