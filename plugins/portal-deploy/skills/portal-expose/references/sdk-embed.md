@@ -87,7 +87,7 @@ require github.com/gosuda/portal-tunnel/v2 v2.5.0
 
 ## Raw TCP and UDP
 
-- `sdk.WithTCP()` requests a public TCP port; `exposure.WaitTCPReady(ctx)` returns snapshots with `TCPAddr`. Raw connections arrive on `exposure.Accept()` untouched, with no TLS.
+- `sdk.WithTCP()` requests a public TCP port; `exposure.WaitTCPReady(ctx)` returns snapshots with `TCPAddr`. Raw connections arrive on `exposure.Accept()` untouched, with no TLS, so do not serve such an exposure with `sdk.RunHTTP`: it labels every request it receives `https`, raw ones included.
 - `sdk.WithUDP()` enables datagrams; `exposure.WaitDatagramReady(ctx)` returns `UDPAddr`. The app receives `types.DatagramFrame` values from `exposure.AcceptDatagram()` and must echo the same frame's `FlowID`, `RelayURL`, and `Address` into `exposure.SendDatagram` for replies. `sdk.ProxyUDP` does this against a local UDP target. Flows idle for five minutes are dropped; datagrams above 1350 bytes are dropped.
 - Both wait functions error when the matching option was not set.
 

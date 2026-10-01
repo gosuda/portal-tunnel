@@ -28,8 +28,9 @@ const (
 // RunHTTP serves handler on the relay listener and, when localAddr is set, on
 // that local address too. Requests from the relay listener reach handler with
 // X-Forwarded-Proto set to https, replacing any client-sent value: the tunnel
-// ends TLS for the public hostname. Raw TCP sessions (WithTCP) arrive on the
-// same listener unencrypted and are not told apart.
+// ends TLS for the public hostname. Do not use it on an exposure that enables
+// WithTCP: raw TCP sessions arrive on the same listener unencrypted and would be
+// labeled https too.
 func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
 	if relayListener == nil && localAddr == "" {
 		return errors.New("relay listener or local address is required")
@@ -382,7 +383,9 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 		if err == nil {
 			switch {
 			case parsed.IsAbs():
-				if strings.EqualFold(parsed.Scheme, r.upstream.Scheme) && strings.EqualFold(parsed.Host, r.upstream.Host) {
+				// The upstream's own authority, or the public one it received as Host.
+				if (strings.EqualFold(parsed.Scheme, r.upstream.Scheme) && strings.EqualFold(parsed.Host, r.upstream.Host)) ||
+					strings.EqualFold(parsed.Host, publicHost) {
 					parsed.Scheme = publicScheme
 					parsed.Host = publicHost
 				} else {

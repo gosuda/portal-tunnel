@@ -65,6 +65,26 @@ func TestStaticServeConfigModes(t *testing.T) {
 	}
 }
 
+func TestHTTPRoutesConfigModes(t *testing.T) {
+	routes := []HTTPRouteConfig{{Prefix: "/", Upstream: "http://localhost:3000"}}
+	for _, tc := range []struct {
+		name  string
+		cfg   TunnelConfig
+		valid bool
+	}{
+		{name: "routes", cfg: TunnelConfig{HTTPRoutes: routes}, valid: true},
+		{name: "tcp", cfg: TunnelConfig{HTTPRoutes: routes, TCPEnabled: true}},
+		{name: "udp", cfg: TunnelConfig{HTTPRoutes: routes, UDPEnabled: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.ID = "routed"
+			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
+				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
+			}
+		})
+	}
+}
+
 func TestApplicationAuthConfig(t *testing.T) {
 	validWallet := "0x0000000000000000000000000000000000000001"
 	for _, tc := range []struct {

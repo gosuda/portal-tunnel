@@ -82,6 +82,46 @@ func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 	}
 }
 
+func TestHTTPRoutesRewriteRedirectsToThePublicAuthority(t *testing.T) {
+	t.Parallel()
+
+	// The upstream receives the public Host, so an app that builds an absolute
+	// Location from it names the public authority, with whichever scheme it assumes.
+	tests := []struct {
+		name     string
+		location string
+		want     string
+	}{
+		{name: "app assumes http", location: "http://public.example/base/login", want: "https://public.example/app/login"},
+		{name: "app assumes https", location: "https://public.example/base/login", want: "https://public.example/app/login"},
+		{name: "unrelated authority", location: "https://other.example/base/login", want: "https://other.example/base/login"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Location", tt.location)
+				w.WriteHeader(http.StatusFound)
+			}))
+			defer upstream.Close()
+
+			handler, err := NewHTTPRoutes([]HTTPRouteConfig{{Prefix: "/app", Upstream: upstream.URL + "/base"}})
+			if err != nil {
+				t.Fatalf("NewHTTPRoutes() error = %v", err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "http://public.example/app/dashboard", nil)
+			req.Header.Set("X-Forwarded-Proto", "https")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if got := rec.Header().Get("Location"); got != tt.want {
+				t.Fatalf("Location = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunHTTPRelayRequestsReachUpstreamAsPublicHTTPS(t *testing.T) {
 	t.Parallel()
 

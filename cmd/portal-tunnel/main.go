@@ -176,6 +176,9 @@ func runExposeCommand(args []string) error {
 	case len(httpRouteInputs) > 0 && flags.udp:
 		printExposeUsage(os.Stderr)
 		return errors.New("--udp cannot be combined with --http-route")
+	case len(httpRouteInputs) > 0 && flags.tcp:
+		printExposeUsage(os.Stderr)
+		return errors.New("--tcp cannot be combined with --http-route")
 	}
 
 	httpRoutes := make([]gateway.ExposedHTTPRoute, 0, len(httpRouteInputs)+1)

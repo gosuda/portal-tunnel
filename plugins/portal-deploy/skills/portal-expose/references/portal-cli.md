@@ -89,7 +89,7 @@ portal expose 127.0.0.1:19132 --name game --udp --identity-path /absolute/path/t
 
 `--udp` adds a UDP relay on the default stream lease for the positional target. For a UDP-only request, the positional target must be that UDP service. `--udp-addr` is only for an explicit combined stream-plus-UDP request, for example `portal expose 127.0.0.1:8080 --udp --udp-addr 127.0.0.1:19132`. Do not point the positional target at an unrelated HTTP app just to attach UDP.
 
-`--tcp` and `--udp` require relay-side support. `--http-route` cannot be combined with `--udp`; `--serve` cannot be combined with a target, HTTP routes, TCP, or UDP. `--cache` requires `--serve` and cannot be combined with `--ban-mitm`; `--cache-ttl` requires `--cache` and must be `0` or between `1s` and `8760h`.
+`--tcp` and `--udp` require relay-side support. `--http-route` cannot be combined with `--tcp` or `--udp`; `--serve` cannot be combined with a target, HTTP routes, TCP, or UDP. `--cache` requires `--serve` and cannot be combined with `--ban-mitm`; `--cache-ttl` requires `--cache` and must be `0` or between `1s` and `8760h`.
 
 ### Flags
 

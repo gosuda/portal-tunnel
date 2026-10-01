@@ -143,7 +143,7 @@ rename an existing one. Use a separate `--identity-path` for a new identity.
 - `--cache` requires `--serve` and cannot be combined with `--ban-mitm`.
 - `--cache-ttl` requires `--cache`; a nonzero value must be between `1s` and
   `8760h` and is clamped by the relay.
-- `--http-route` cannot be combined with `--udp`.
+- `--http-route` cannot be combined with `--tcp` or `--udp`.
 - `--tcp` and `--udp` require matching transport support on the relay.
 - Route payment amounts are part of `--http-route` and require a tunnel-owned
   `--x402-pay-to`.

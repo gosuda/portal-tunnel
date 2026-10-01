@@ -230,7 +230,7 @@ Common fields:
 | `id` | Stable local tunnel ID used by the dashboard and control API |
 | `name` | Public lease name, used as the subdomain label |
 | `target` | Local TCP target, equivalent to `portal expose <target>` |
-| `http_routes` | Routed HTTP mappings; cannot be combined with `target`, `serve`, or `udp` |
+| `http_routes` | Routed HTTP mappings; cannot be combined with `target`, `serve`, `tcp`, or `udp` |
 | `serve` | Static site directory or HTML file; relative to the config file's directory |
 | `relays` | Explicit relay API URLs |
 | `discovery` | Include registry and relay discovery expansion |
@@ -261,7 +261,7 @@ Constraints:
 
 - `target` cannot be combined with `http_routes`.
 - `serve` cannot be combined with `target`, `http_routes`, `tcp`, or `udp`.
-- `http_routes` cannot be combined with `udp`.
+- `http_routes` cannot be combined with `tcp` or `udp`.
 - `auth` cannot be combined with `tcp` or `udp`; auth allowlists and identity headers require `auth`.
 - `http_routes[].amount` requires `x402_pay_to`.
 - `http_routes[].methods` requires `http_routes[].amount`.
