@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -564,9 +565,18 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	requestedVersion := strings.TrimSpace(r.URL.Query().Get("version"))
+	if requestedVersion != "" && requestedVersion != types.ReleaseVersion {
+		http.Error(w, "artifact version does not match this relay", http.StatusConflict)
+		return
+	}
 	data, err := embeddedDistFS.ReadFile("dist/tunnel/" + filename)
 	if err != nil {
-		redirectURL := types.OfficialReleaseBaseURL + "/latest/download/" + filename
+		releasePath := "/latest/download/"
+		if requestedVersion != "" {
+			releasePath = "/download/" + url.PathEscape(types.ReleaseVersion) + "/"
+		}
+		redirectURL := types.OfficialReleaseBaseURL + releasePath + filename
 		if checksumRequest {
 			redirectURL += ".sha256"
 		}
@@ -584,8 +594,22 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	contentType := "application/octet-stream"
+	if strings.HasSuffix(filename, ".wasm") {
+		contentType = "application/wasm"
+	} else if strings.HasSuffix(filename, ".js") {
+		contentType = "text/javascript; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", contentType)
+	if contentType == "application/octet-stream" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	}
+	if requestedVersion == types.ReleaseVersion {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	w.Header().Set("ETag", `"`+checksumHex+`"`)
 	w.Header().Set("X-Checksum-Sha256", checksumHex)
 	if r.Method == http.MethodGet {
 		_, _ = w.Write(data)

@@ -95,7 +95,7 @@ func runTCPCommand(args []string) error {
 	}
 	cfg.name = normalizedName
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	return runTCPDemo(ctx, cfg)
@@ -128,7 +128,7 @@ func runUDPCommand(args []string) error {
 	}
 	cfg.name = normalizedName
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	return runUDPDemo(ctx, cfg)

@@ -5,6 +5,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { Check, Copy, RefreshCw, X } from "lucide-react";
+import { BrowserTunnelForm } from "@/components/BrowserTunnelForm";
 import { Input } from "@/components/ui/input";
 import type { Lease } from "@/types/api";
 import { cn } from "@/lib/utils";
@@ -12,6 +13,7 @@ import {
   buildTunnelPreviewURL,
   buildServiceStatusHostname,
   normalizeAbsoluteHTTPURL,
+  type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 import {
   DEFAULT_HOST,
@@ -19,6 +21,7 @@ import {
   useTunnelCommand,
 } from "@/hooks/useTunnelCommand";
 import type { ShareKind } from "@/lib/shareLink";
+import type { BrowserTunnelController } from "@/hooks/useBrowserTunnel";
 
 const SHARE_KIND_LABEL: Record<ShareKind, string> = {
   url: "URL",
@@ -29,6 +32,7 @@ const SHARE_KIND_LABEL: Record<ShareKind, string> = {
 const SHARE_PLACEHOLDER = "file:///Users/me/site/index.html or 3000";
 
 type TunnelCommandFormProps = {
+  browserTunnel: BrowserTunnelController;
   className?: string;
   theme?: "light" | "terminal";
 } & (
@@ -37,27 +41,47 @@ type TunnelCommandFormProps = {
 );
 
 type ServiceStatus = "waiting" | "registered" | "alive";
+type TunnelTarget = TunnelCommandOS | "browser";
 
 export function TunnelCommandForm({
   className,
   theme = "light",
   mode,
   leases,
+  browserTunnel,
 }: TunnelCommandFormProps) {
   if (mode === "hero") {
-    return <HeroTunnelCommandForm className={className} theme={theme} leases={leases} />;
+    return (
+      <HeroTunnelCommandForm
+        browserTunnel={browserTunnel}
+        className={className}
+        theme={theme}
+        leases={leases}
+      />
+    );
   }
 
-  return <FullTunnelCommandForm className={className} theme={theme} />;
+  return (
+    <FullTunnelCommandForm
+      browserTunnel={browserTunnel}
+      className={className}
+      theme={theme}
+    />
+  );
 }
 
 function HeroTunnelCommandForm({
   className,
   theme,
   leases,
+  browserTunnel,
 }: Required<Pick<TunnelCommandFormProps, "theme">> &
-  Pick<TunnelCommandFormProps, "className"> & { leases: Lease[] | null }) {
+  Pick<TunnelCommandFormProps, "browserTunnel" | "className"> & {
+    leases: Lease[] | null;
+  }) {
   const isTerminal = theme === "terminal";
+  const [tunnelTarget, setTunnelTarget] = useState<TunnelTarget>("unix");
+  const browserSelected = tunnelTarget === "browser";
   const {
     currentOrigin,
     nameSeed,
@@ -65,7 +89,6 @@ function HeroTunnelCommandForm({
     setTarget,
     copied,
     os,
-    setOs,
     generatedName,
     effectiveName,
     shareKind,
@@ -74,7 +97,9 @@ function HeroTunnelCommandForm({
     handleCopy,
     handleNameChange,
     handleShuffleName,
-  } = useTunnelCommand();
+  } = useTunnelCommand({
+    os: tunnelTarget === "windows" ? "windows" : "unix",
+  });
 
   const previewURL = useMemo(
     () => buildTunnelPreviewURL(currentOrigin, effectiveName, target, nameSeed),
@@ -151,7 +176,8 @@ function HeroTunnelCommandForm({
   );
   return (
     <div className={cn("space-y-5", className)}>
-      <div className="space-y-2">
+      {!browserSelected && (
+        <div className="space-y-2">
         <div className="space-y-1.5">
           <p className={heroSectionLabelClass}>
             1. Paste what you want to share
@@ -173,28 +199,44 @@ function HeroTunnelCommandForm({
             so nothing needs to be running locally.
           </p>
         </div>
-      </div>
+        </div>
+      )}
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className={heroSectionLabelClass}>2. Run this command</p>
+          <p className={heroSectionLabelClass}>
+            {browserSelected ? "Run in this browser" : "2. Run this command"}
+          </p>
           <div className={platformButtonGroupClass}>
             <button
               type="button"
-              onClick={() => setOs("unix")}
-              className={platformButtonClass(os === "unix")}
+              onClick={() => setTunnelTarget("unix")}
+              className={platformButtonClass(!browserSelected && os === "unix")}
             >
               Linux
             </button>
             <button
               type="button"
-              onClick={() => setOs("windows")}
-              className={platformButtonClass(os === "windows")}
+              onClick={() => setTunnelTarget("windows")}
+              className={platformButtonClass(
+                !browserSelected && os === "windows"
+              )}
             >
               Windows
             </button>
+            <button
+              type="button"
+              onClick={() => setTunnelTarget("browser")}
+              className={platformButtonClass(browserSelected)}
+            >
+              Browser
+            </button>
           </div>
         </div>
+        {browserSelected ? (
+          <BrowserTunnelForm tunnel={browserTunnel} theme={theme} />
+        ) : (
+          <>
         <div className="space-y-2">
           <div className="flex min-w-0 items-center gap-2">
             <span className={heroControlLabelClass}>Share</span>
@@ -271,9 +313,12 @@ function HeroTunnelCommandForm({
             <span className="mt-2 block">{runBlock}</span>
           </pre>
         </div>
+          </>
+        )}
       </div>
 
-      <div className="space-y-2 pt-1">
+      {!browserSelected && (
+        <div className="space-y-2 pt-1">
         <p className={heroSectionLabelClass}>3. Open this public URL</p>
         <div
           className={cn(
@@ -313,7 +358,8 @@ function HeroTunnelCommandForm({
             </a>
           )}
         </div>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -321,10 +367,13 @@ function HeroTunnelCommandForm({
 function FullTunnelCommandForm({
   className,
   theme,
+  browserTunnel,
 }: Required<Pick<TunnelCommandFormProps, "theme">> &
-  Pick<TunnelCommandFormProps, "className">) {
+  Pick<TunnelCommandFormProps, "browserTunnel" | "className">) {
   const inputId = useId();
   const isTerminal = theme === "terminal";
+  const [tunnelTarget, setTunnelTarget] = useState<TunnelTarget>("unix");
+  const browserSelected = tunnelTarget === "browser";
   const currentOrigin = readCurrentOrigin();
 
   const [relayUrls, setRelayUrls] = useState<string[]>(() => [
@@ -355,7 +404,6 @@ function FullTunnelCommandForm({
     name,
     copied,
     os,
-    setOs,
     generatedName,
     shareKind,
     installBlock,
@@ -368,6 +416,7 @@ function FullTunnelCommandForm({
     thumbnailURL: normalizedThumbnailURL,
     enableUDP,
     udpPort,
+    os: tunnelTarget === "windows" ? "windows" : "unix",
   });
 
   const addRelayURL = (url: string) => {
@@ -453,6 +502,37 @@ function FullTunnelCommandForm({
 
   return (
     <div className={cn("space-y-4 py-1", className)}>
+      <div className="space-y-2">
+        <label className={sectionLabelClass}>Target</label>
+        <div className={osGroupClass}>
+          <button
+            type="button"
+            onClick={() => setTunnelTarget("unix")}
+            className={osButtonClass(!browserSelected && os === "unix")}
+          >
+            Linux / macOS
+          </button>
+          <button
+            type="button"
+            onClick={() => setTunnelTarget("windows")}
+            className={osButtonClass(!browserSelected && os === "windows")}
+          >
+            Windows
+          </button>
+          <button
+            type="button"
+            onClick={() => setTunnelTarget("browser")}
+            className={osButtonClass(browserSelected)}
+          >
+            Browser
+          </button>
+        </div>
+      </div>
+
+      {browserSelected ? (
+        <BrowserTunnelForm tunnel={browserTunnel} theme={theme} />
+      ) : (
+        <>
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <label htmlFor={`${inputId}-host`} className={sectionLabelClass}>
@@ -558,26 +638,6 @@ function FullTunnelCommandForm({
         <p className={helpTextClass}>
           Press Enter to add. Multiple relay servers for redundancy.
         </p>
-      </div>
-
-      <div className="space-y-2">
-        <label className={sectionLabelClass}>Operating System</label>
-        <div className={osGroupClass}>
-          <button
-            type="button"
-            onClick={() => setOs("unix")}
-            className={osButtonClass(os === "unix")}
-          >
-            Linux / macOS
-          </button>
-          <button
-            type="button"
-            onClick={() => setOs("windows")}
-            className={osButtonClass(os === "windows")}
-          >
-            Windows (PowerShell)
-          </button>
-        </div>
       </div>
 
       <div className="space-y-2">
@@ -698,6 +758,8 @@ function FullTunnelCommandForm({
             </div>
           )}
         </div>
+      )}
+        </>
       )}
     </div>
   );

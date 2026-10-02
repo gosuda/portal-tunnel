@@ -132,9 +132,13 @@ build-tunnel:
 			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build $(GO_BUILD_FLAGS) -o "$${OUT}" ./cmd/portal-tunnel; \
 		done; \
 	done
+	@echo " - cmd/relay-server/dist/tunnel/portal-js-wasm.wasm"
+	@test "$$(go env GOVERSION)" = "$(GO_TOOLCHAIN_VERSION)"
+	@CGO_ENABLED=0 GOOS=js GOARCH=wasm go build $(GO_BUILD_FLAGS) -o cmd/relay-server/dist/tunnel/portal-js-wasm.wasm ./cmd/portal-tunnel/wasm
+	@cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/relay-server/dist/tunnel/wasm_exec.js
 
 # Build Go relay server
-build-server: build-frontend build-server-bin
+build-server: build-tunnel build-frontend build-server-bin
 
 # Binary only; assumes frontend assets already exist in cmd/relay-server/dist/app.
 build-server-bin:

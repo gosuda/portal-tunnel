@@ -1,8 +1,10 @@
 import { SsgoiTransition } from "@ssgoi/react";
 import { useServerList } from "@/hooks/useServerList";
+import { useBrowserTunnel } from "@/hooks/useBrowserTunnel";
 import { ServerListView } from "@/components/ServerListView";
 
 export function ServerList() {
+  const browserTunnel = useBrowserTunnel();
   const {
     searchQuery,
     status,
@@ -24,6 +26,7 @@ export function ServerList() {
   return (
     <SsgoiTransition id="/">
       <ServerListView
+        browserTunnel={browserTunnel}
         landingPageEnabled={landingPageEnabled}
         leases={leases}
         searchQuery={searchQuery}
