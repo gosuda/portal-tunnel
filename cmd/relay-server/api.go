@@ -573,6 +573,11 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 		return
 	}
+	requestedVersion := strings.TrimSpace(r.URL.Query().Get("version"))
+	if requestedVersion != "" && requestedVersion != types.ReleaseVersion {
+		http.Error(w, "browser artifact version does not match this relay", http.StatusConflict)
+		return
+	}
 	sum := sha256.Sum256(data)
 	checksumHex := hex.EncodeToString(sum[:])
 
@@ -584,8 +589,22 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	contentType := "application/octet-stream"
+	if strings.HasSuffix(filename, ".wasm") {
+		contentType = "application/wasm"
+	} else if strings.HasSuffix(filename, ".js") {
+		contentType = "text/javascript; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", contentType)
+	if contentType == "application/octet-stream" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	}
+	if requestedVersion == types.ReleaseVersion {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	w.Header().Set("ETag", `"`+checksumHex+`"`)
 	w.Header().Set("X-Checksum-Sha256", checksumHex)
 	if r.Method == http.MethodGet {
 		_, _ = w.Write(data)

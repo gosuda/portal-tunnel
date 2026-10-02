@@ -47,6 +47,9 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Compile tunnel targets
+        run: make build-tunnel
+
       - name: Run Make checks
         run: |
           make vet

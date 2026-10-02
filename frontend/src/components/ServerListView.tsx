@@ -282,6 +282,9 @@ export function ServerListView({
           <a href={ROUTE_PATHS.admin} className="transition-colors hover:text-foreground">
             Admin
           </a>
+          <a href={ROUTE_PATHS.browserTunnel} className="transition-colors hover:text-foreground">
+            Browser tunnel
+          </a>
           <a
             href={REPOSITORY_URL}
             target="_blank"

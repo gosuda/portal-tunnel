@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { useAuth } from "@/hooks/useAuth";
 import { apiClient } from "@/lib/apiClient";
-import { RELAY_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
 import type { DomainResponse } from "@/types/api";
 import {
   Tooltip,
@@ -124,6 +124,12 @@ export function Header({
         </div>
         {!isAdmin && (
           <nav className="hidden items-center gap-4 pl-2 text-sm font-semibold text-text-muted xl:flex xl:pl-3 2xl:gap-6 2xl:text-base">
+            <a
+              href={ROUTE_PATHS.browserTunnel}
+              className="whitespace-nowrap transition-colors hover:text-foreground"
+            >
+              Browser tunnel
+            </a>
             {showQuickStartLink && (
               <a
                 href="#quick-start"

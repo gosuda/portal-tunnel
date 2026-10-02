@@ -108,6 +108,7 @@ jobs:
           make build-tunnel
           mkdir -p release
           cp cmd/relay-server/dist/tunnel/portal-* release/
+          cp cmd/relay-server/dist/tunnel/wasm_exec.js release/
           cp cmd/portal-tunnel/installer/install.sh release/install.sh
           cp cmd/portal-tunnel/installer/install.ps1 release/install.ps1
 
@@ -115,7 +116,7 @@ jobs:
         shell: bash
         run: |
           cd release
-          sha256sum portal-* > checksums.txt
+          sha256sum portal-* wasm_exec.js > checksums.txt
           while read -r sum file; do
             printf '%s  %s\n' "$sum" "$file" > "${file}.sha256"
           done < checksums.txt
