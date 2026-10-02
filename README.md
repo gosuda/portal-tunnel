@@ -166,10 +166,11 @@ portal expose localhost:25565 --name minecraft --tcp
 
 ### Expose a handler from the browser
 
-Open `/browser` on a Portal relay to start the supported WebAssembly connector.
-It publishes an HTTPS text response from the current tab and shows the public
-URL and lifecycle state. Browser connectors intentionally omit native-only raw
-TCP, UDP, overlay, local-file, and local-port features.
+Choose the Browser target in a Portal relay's Quick Start form to start the
+supported WebAssembly connector. It publishes an HTTPS text response from the
+current tab and shows the public URL and lifecycle state. Browser connectors
+intentionally omit native-only raw TCP, UDP, overlay, local-file, and local-port
+features.
 
 The relay serves `portal-js-wasm.wasm` and its pinned Go runtime glue through
 the same tunnel artifact path. The frontend requests both with the relay's

@@ -37,5 +37,4 @@ export const ROUTE_PATHS = {
   home: "/",
   serverDetail: "/server/:id",
   admin: "/admin",
-  browserTunnel: "/browser",
 } as const;

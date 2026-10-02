@@ -39,13 +39,6 @@ type TunnelCommandFormProps = {
 
 type ServiceStatus = "waiting" | "registered" | "alive";
 
-function browserTargetRequested(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("platform") === "browser"
-  );
-}
-
 export function TunnelCommandForm({
   className,
   theme = "light",
@@ -66,7 +59,7 @@ function HeroTunnelCommandForm({
 }: Required<Pick<TunnelCommandFormProps, "theme">> &
   Pick<TunnelCommandFormProps, "className"> & { leases: Lease[] | null }) {
   const isTerminal = theme === "terminal";
-  const [browserSelected, setBrowserSelected] = useState(browserTargetRequested);
+  const [browserSelected, setBrowserSelected] = useState(false);
   const {
     currentOrigin,
     nameSeed,
@@ -361,7 +354,7 @@ function FullTunnelCommandForm({
   Pick<TunnelCommandFormProps, "className">) {
   const inputId = useId();
   const isTerminal = theme === "terminal";
-  const [browserSelected, setBrowserSelected] = useState(browserTargetRequested);
+  const [browserSelected, setBrowserSelected] = useState(false);
   const currentOrigin = readCurrentOrigin();
 
   const [relayUrls, setRelayUrls] = useState<string[]>(() => [
