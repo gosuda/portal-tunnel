@@ -14,8 +14,9 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -345,54 +346,89 @@ func (cfg TunnelConfig) Validate() error {
 	if err := validateAgentPathComponent("tunnel id", cfg.ID); err != nil {
 		return err
 	}
-	if cfg.Serve != "" {
-		if strings.TrimSpace(cfg.TargetAddr) != "" || len(cfg.HTTPRoutes) > 0 || cfg.TCPEnabled || cfg.UDPEnabled {
-			return fmt.Errorf("tunnel %q cannot combine serve with target, http_routes, tcp, or udp", cfg.ID)
-		}
-	}
-	if strings.TrimSpace(cfg.TargetAddr) == "" && len(cfg.HTTPRoutes) == 0 && cfg.Serve == "" {
-		return fmt.Errorf("tunnel %q requires target, http_routes, or serve", cfg.ID)
-	}
-	if strings.TrimSpace(cfg.TargetAddr) != "" && len(cfg.HTTPRoutes) > 0 {
-		return fmt.Errorf("tunnel %q cannot combine target and http_routes", cfg.ID)
-	}
-	if len(cfg.HTTPRoutes) > 0 && cfg.UDPEnabled {
-		return fmt.Errorf("tunnel %q cannot combine udp and http_routes", cfg.ID)
-	}
-	if len(cfg.HTTPRoutes) > 0 && cfg.TCPEnabled {
-		return fmt.Errorf("tunnel %q cannot combine tcp and http_routes", cfg.ID)
-	}
-	for _, route := range cfg.HTTPRoutes {
-		if strings.TrimSpace(route.Prefix) == "" || strings.TrimSpace(route.Upstream) == "" {
-			return fmt.Errorf("tunnel %q http_routes require prefix and upstream", cfg.ID)
-		}
-		if strings.TrimSpace(route.Amount) != "" && strings.TrimSpace(cfg.X402PayTo) == "" {
-			return fmt.Errorf("tunnel %q http route %q amount requires x402_pay_to", cfg.ID, strings.TrimSpace(route.Prefix))
-		}
-		if strings.TrimSpace(route.Amount) == "" && len(route.Methods) > 0 {
-			return fmt.Errorf("tunnel %q http route %q methods require amount", cfg.ID, strings.TrimSpace(route.Prefix))
-		}
-	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.X402Network)), "casper:") && strings.TrimSpace(cfg.X402Asset) == "" {
-		return fmt.Errorf("tunnel %q Casper payments require x402_asset", cfg.ID)
-	}
-	provider := cfg.Auth
-	if provider != "" && provider != gateway.ApplicationAuthProviderSIWE && provider != gateway.ApplicationAuthProviderCredential {
-		return fmt.Errorf("tunnel %q auth must be siwe or credential", cfg.ID)
-	}
-	if provider != "" && (cfg.TCPEnabled || cfg.UDPEnabled) {
-		return fmt.Errorf("tunnel %q auth protects HTTP applications and cannot be combined with tcp or udp", cfg.ID)
-	}
-	if provider == "" && len(cfg.AuthAllowedWallets) > 0 {
+	if cfg.Auth == "" && len(cfg.AuthAllowedWallets) > 0 {
 		return fmt.Errorf("tunnel %q auth_allowed_wallets requires auth", cfg.ID)
 	}
-	if provider == gateway.ApplicationAuthProviderCredential && len(cfg.AuthAllowedWallets) > 0 {
-		return fmt.Errorf("tunnel %q auth_allowed_wallets requires auth = siwe", cfg.ID)
-	}
-	if provider == "" && cfg.AuthIdentityHeaders {
+	if cfg.Auth == "" && cfg.AuthIdentityHeaders {
 		return fmt.Errorf("tunnel %q auth_identity_headers requires auth", cfg.ID)
 	}
+	if err := tunnelSpecFromConfig(cfg).Validate(); err != nil {
+		return fmt.Errorf("tunnel %q: %w", cfg.ID, err)
+	}
 	return nil
+}
+
+func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
+	discovery := true
+	if cfg.Discovery != nil {
+		discovery = *cfg.Discovery
+	}
+	banMITM := false
+	if cfg.BanMITM != nil {
+		banMITM = *cfg.BanMITM
+	}
+	spec := tunnel.Spec{
+		Identity: tunnel.IdentitySpec{Name: cfg.Name, Path: cfg.IdentityPath, JSON: cfg.IdentityJSON},
+		Relays: tunnel.RelaySpec{
+			URLs: append([]string(nil), cfg.RelayURLs...), Discovery: discovery,
+			MaxActive: cfg.MaxActiveRelays, Overlay: cfg.Overlay, BanMITM: banMITM,
+		},
+		Metadata:  metadataFromTunnelConfig(cfg),
+		Transport: tunnel.TransportSpec{Target: cfg.TargetAddr, TCP: cfg.TCPEnabled},
+	}
+	if cfg.UDPEnabled {
+		spec.Transport.UDP = &tunnel.UDPConfig{Target: cfg.UDPAddr}
+	}
+	if cfg.Serve != "" || len(cfg.HTTPRoutes) > 0 || cfg.Auth != "" {
+		routes := make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
+		for _, route := range cfg.HTTPRoutes {
+			routes = append(routes, tunnel.HTTPRoute{
+				Prefix: route.Prefix, Upstream: route.Upstream,
+				Methods: append([]string(nil), route.Methods...), Amount: route.Amount,
+			})
+		}
+		spec.HTTP = &tunnel.HTTPConfig{
+			Serve: cfg.Serve, Routes: routes,
+			Payment: tunnel.PaymentConfig{
+				Testnet: cfg.X402Testnet, Network: cfg.X402Network, Asset: cfg.X402Asset,
+				PayTo: cfg.X402PayTo, Endpoints: append([]string(nil), cfg.X402Endpoints...),
+				FacilitatorToken: cmp.Or(strings.TrimSpace(cfg.X402FacilitatorToken), strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY"))),
+			},
+		}
+		if cfg.Auth != "" {
+			spec.HTTP.Auth = &tunnel.AuthConfig{
+				Provider: cfg.Auth, AllowedWallets: append([]string(nil), cfg.AuthAllowedWallets...),
+				IdentityHeaders: cfg.AuthIdentityHeaders,
+			}
+		}
+	}
+	return spec
+}
+
+func metadataFromTunnelConfig(cfg TunnelConfig) types.LeaseMetadata {
+	return types.LeaseMetadata{
+		Description: strings.TrimSpace(cfg.Description),
+		Tags:        normalizeAgentMetadataTags(cfg.Tags),
+		Owner:       strings.TrimSpace(cfg.Owner),
+		Thumbnail:   strings.TrimSpace(cfg.Thumbnail),
+		Hide:        cfg.Hide,
+	}
+}
+
+func normalizeAgentMetadataTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if tag = strings.TrimSpace(tag); tag != "" {
+			out = append(out, tag)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func compactStrings(values []string) []string {
