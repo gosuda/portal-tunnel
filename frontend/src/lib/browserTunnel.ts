@@ -1,3 +1,5 @@
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
+
 type GoRuntime = {
   importObject: WebAssembly.Imports;
   run(instance: WebAssembly.Instance): Promise<void>;
@@ -56,9 +58,7 @@ async function waitForRuntime(): Promise<PortalTunnelRuntime> {
 }
 
 export function loadBrowserTunnel(
-  releaseVersion: string,
-  wasmExecPath: string,
-  wasmPath: string
+  releaseVersion: string
 ): Promise<PortalTunnelRuntime> {
   const version = releaseVersion.trim();
   if (version === "") {
@@ -75,14 +75,15 @@ export function loadBrowserTunnel(
 
   loadedVersion = version;
   const pending = (async () => {
-    await loadScript(versionedURL(wasmExecPath, version));
+    await loadScript(versionedURL(RELAY_API_PATHS.install.wasmExec, version));
     if (!window.Go) {
       throw new Error("The Go WASM runtime is unavailable.");
     }
     const go = new window.Go();
-    const response = await fetch(versionedURL(wasmPath, version), {
-      cache: "force-cache",
-    });
+    const response = await fetch(
+      versionedURL(RELAY_API_PATHS.install.browserWasm, version),
+      { cache: "force-cache" }
+    );
     if (!response.ok) {
       throw new Error(`Could not load the browser connector (${response.status}).`);
     }

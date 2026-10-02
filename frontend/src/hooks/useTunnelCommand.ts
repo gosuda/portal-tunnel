@@ -62,6 +62,7 @@ interface TunnelCommandExtras {
   thumbnailURL?: string;
   enableUDP?: boolean;
   udpPort?: string;
+  os?: TunnelCommandOS;
 }
 
 export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
@@ -74,7 +75,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
   const [name, setName] = useState("");
   const [nameShuffleKey, setNameShuffleKey] = useState("default");
   const [copied, setCopied] = useState(false);
-  const [os, setOs] = useState<TunnelCommandOS>("unix");
+  const os = extras.os ?? "unix";
 
   const resolvedNameSeed = `${nameSeed}:${nameShuffleKey}`;
   const share = useMemo(() => classifyShareInput(target), [target]);
@@ -171,7 +172,6 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
     name,
     copied,
     os,
-    setOs,
     generatedName,
     effectiveName,
     shareKind: share.kind,

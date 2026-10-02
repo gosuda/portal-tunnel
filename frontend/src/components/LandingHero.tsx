@@ -1,5 +1,6 @@
 import type { Lease } from "@/types/api";
 import { TunnelCommandForm } from "@/components/TunnelCommandForm";
+import type { BrowserTunnelController } from "@/hooks/useBrowserTunnel";
 
 const coreFeatures = [
   {
@@ -40,7 +41,13 @@ const coreFeatures = [
   },
 ] as const;
 
-export function LandingHero({ leases }: { leases: Lease[] | null }) {
+export function LandingHero({
+  browserTunnel,
+  leases,
+}: {
+  browserTunnel: BrowserTunnelController;
+  leases: Lease[] | null;
+}) {
   return (
     <section
       aria-labelledby="landing-title"
@@ -108,7 +115,12 @@ export function LandingHero({ leases }: { leases: Lease[] | null }) {
                 </h2>
               </div>
             </div>
-            <TunnelCommandForm theme="terminal" mode="hero" leases={leases} />
+            <TunnelCommandForm
+              browserTunnel={browserTunnel}
+              theme="terminal"
+              mode="hero"
+              leases={leases}
+            />
           </div>
         </div>
       </div>

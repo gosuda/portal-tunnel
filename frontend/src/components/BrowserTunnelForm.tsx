@@ -1,76 +1,32 @@
-import { useEffect, useId, useState } from "react";
+import { useId } from "react";
 import { Loader2, Square, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiClient } from "@/lib/apiClient";
-import { RELAY_API_PATHS } from "@/lib/apiPaths";
-import { loadBrowserTunnel } from "@/lib/browserTunnel";
 import { cn } from "@/lib/utils";
-import type { DomainResponse } from "@/types/api";
-
-type TunnelState = "idle" | "starting" | "ready" | "stopping" | "error";
-
-function initialName(): string {
-  return `browser-${crypto.randomUUID().slice(0, 8)}`;
-}
+import type { BrowserTunnelController } from "@/hooks/useBrowserTunnel";
 
 type BrowserTunnelFormProps = {
+  tunnel: BrowserTunnelController;
   theme?: "light" | "terminal";
 };
 
 export function BrowserTunnelForm({
+  tunnel,
   theme = "light",
 }: BrowserTunnelFormProps) {
   const isTerminal = theme === "terminal";
   const titleId = useId();
-  const [name, setName] = useState(initialName);
-  const [body, setBody] = useState("Hello from this browser.");
-  const [state, setState] = useState<TunnelState>("idle");
-  const [publicURL, setPublicURL] = useState("");
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    return () => {
-      void window.portalTunnel?.stop();
-    };
-  }, []);
-
-  const start = async () => {
-    setState("starting");
-    setPublicURL("");
-    setError("");
-    try {
-      const domain = await apiClient.get<DomainResponse>(RELAY_API_PATHS.sdk.domain);
-      const runtime = await loadBrowserTunnel(
-        domain.release_version ?? "",
-        RELAY_API_PATHS.install.wasmExec,
-        RELAY_API_PATHS.install.browserWasm
-      );
-      const result = await runtime.start({
-        name: name.trim(),
-        relayURL: window.location.origin,
-        body,
-      });
-      setPublicURL(result.publicURL);
-      setState("ready");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not start the browser tunnel.");
-      setState("error");
-    }
-  };
-
-  const stop = async () => {
-    setState("stopping");
-    setError("");
-    try {
-      await window.portalTunnel?.stop();
-      setPublicURL("");
-      setState("idle");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not stop the browser tunnel.");
-      setState("error");
-    }
-  };
+  const {
+    name,
+    setName,
+    body,
+    setBody,
+    state,
+    publicURL,
+    error,
+    start,
+    stop,
+  } = tunnel;
 
   const busy = state === "starting" || state === "stopping";
   return (

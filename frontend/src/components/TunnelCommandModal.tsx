@@ -9,8 +9,13 @@ import {
 import { Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TunnelCommandForm } from "@/components/TunnelCommandForm";
+import type { BrowserTunnelController } from "@/hooks/useBrowserTunnel";
 
-export function TunnelCommandModal() {
+export function TunnelCommandModal({
+  browserTunnel,
+}: {
+  browserTunnel: BrowserTunnelController;
+}) {
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -34,7 +39,7 @@ export function TunnelCommandModal() {
         </DialogHeader>
 
         <div className="px-6 pb-6">
-          <TunnelCommandForm />
+          <TunnelCommandForm browserTunnel={browserTunnel} />
         </div>
       </DialogContent>
     </Dialog>
