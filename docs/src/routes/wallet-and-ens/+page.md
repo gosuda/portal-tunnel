@@ -46,7 +46,8 @@ portal expose 3000 --name myapp
 ```
 
 To separately require a browser wallet before application requests are
-forwarded, add `--auth`; see [SIWE Authentication](/siwe-authentication#application-access).
+forwarded, enable an application auth provider; see
+[Application Access Authentication](/siwe-authentication).
 
 Use a stable identity path when the lease identity must survive working
 directory changes:

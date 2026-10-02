@@ -112,7 +112,11 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	})
 	handler := newApplicationAuthTestHandler(t, nil, false, next)
 	gate := handler.(*applicationAuth)
-	token, err := gate.issueSession(applicationAuthTestWallet(t, "2").Identity().Address, "app.example", applicationAuthTestTime())
+	token, err := gate.issueSession(applicationAuthTestWallet(t, "2").Identity().Address, ApplicationAuthProviderSIWE, "app.example", applicationAuthTestTime().Add(applicationAuthSessionTTL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerlessToken, err := encodeSignedApplicationAuthJSON(gate.signingKey, applicationAuthClaims{Subject: applicationAuthTestWallet(t, "2").Identity().Address, Host: "app.example", ExpiresAt: applicationAuthTestTime().Add(applicationAuthSessionTTL).Unix()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,8 +134,9 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 		t.Fatalf("upstream Cookie = %q; want only application cookie", cookies)
 	}
 	for name, requestToken := range map[string]string{
-		"other host": token,
-		"tampered":   "x" + token[1:],
+		"other host":       token,
+		"tampered":         "x" + token[1:],
+		"missing provider": providerlessToken,
 	} {
 		t.Run(name, func(t *testing.T) {
 			host := "app.example"
@@ -152,14 +157,101 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	}
 }
 
+func TestApplicationAuthCredential(t *testing.T) {
+	tunnelIdentity := applicationAuthTestIdentity()
+	var upstreamUser, upstreamAuth, upstreamCredential string
+	upstreamRequests := 0
+	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests++
+		upstreamUser, upstreamAuth = r.Header.Get("X-Portal-User"), r.Header.Get("X-Portal-Auth")
+		upstreamCredential = r.Header.Get(types.HeaderAccessCredential)
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
+	req := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthRedeemPath, bytes.NewReader(body))
+	req.Header.Set("Origin", "https://app.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("redeem status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies = %#v", cookies)
+	}
+	protected := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
+	protected.AddCookie(cookies[0])
+	protectedRec := httptest.NewRecorder()
+	handler.ServeHTTP(protectedRec, protected)
+	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ApplicationAuthProviderCredential {
+		t.Fatalf("protected status = %d, identity = %q/%q", protectedRec.Code, upstreamUser, upstreamAuth)
+	}
+	direct := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	direct.Header.Set(types.HeaderAccessCredential, credential)
+	directRec := httptest.NewRecorder()
+	handler.ServeHTTP(directRec, direct)
+	if directRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ApplicationAuthProviderCredential || upstreamCredential != "" {
+		t.Fatalf("credential header status = %d, identity = %q/%q, upstream credential = %q", directRec.Code, upstreamUser, upstreamAuth, upstreamCredential)
+	}
+	bobCredential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "bob", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialAndCookie := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	credentialAndCookie.AddCookie(cookies[0])
+	credentialAndCookie.Header.Set(types.HeaderAccessCredential, bobCredential)
+	credentialAndCookieRec := httptest.NewRecorder()
+	handler.ServeHTTP(credentialAndCookieRec, credentialAndCookie)
+	if credentialAndCookieRec.Code != http.StatusNoContent || upstreamUser != "bob" {
+		t.Fatalf("credential with cookie status = %d, user = %q; want bob", credentialAndCookieRec.Code, upstreamUser)
+	}
+	invalidCredential := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	invalidCredential.AddCookie(cookies[0])
+	invalidCredential.Header.Set(types.HeaderAccessCredential, "invalid")
+	invalidCredentialRec := httptest.NewRecorder()
+	handler.ServeHTTP(invalidCredentialRec, invalidCredential)
+	if invalidCredentialRec.Code == http.StatusNoContent || upstreamRequests != 3 {
+		t.Fatalf("invalid credential with cookie status = %d, upstream requests = %d; want rejection", invalidCredentialRec.Code, upstreamRequests)
+	}
+}
+
+func TestApplicationCredentialRejectsOtherHostAndExpiry(t *testing.T) {
+	tunnelIdentity := applicationAuthTestIdentity()
+	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyApplicationCredential([]byte(key), tunnelIdentity, "other.example", credential, time.Now().UTC()); err == nil {
+		t.Fatal("other host accepted")
+	}
+	if _, err := verifyApplicationCredential([]byte(key), tunnelIdentity, "app.example", credential, time.Now().UTC().Add(2*time.Hour)); err == nil {
+		t.Fatal("expired credential accepted")
+	}
+}
+
 func newApplicationAuthTestHandler(t *testing.T, allowed []string, identityHeaders bool, next http.Handler) http.Handler {
 	t.Helper()
-	tunnelIdentity := types.Identity{Name: "application-auth-test", Address: "0x0000000000000000000000000000000000000001", TokenSecret: strings.Repeat("k", 32)}
-	handler, err := NewApplicationAuth(next, tunnelIdentity, ApplicationAuthConfig{AllowedWallets: allowed, IdentityHeaders: identityHeaders})
+	tunnelIdentity := applicationAuthTestIdentity()
+	handler, err := NewApplicationAuth(next, tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, AllowedWallets: allowed, IdentityHeaders: identityHeaders})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler
+}
+
+func applicationAuthTestIdentity() types.Identity {
+	return types.Identity{Name: "application-auth-test", Address: "0x0000000000000000000000000000000000000001", TokenSecret: strings.Repeat("k", 32)}
 }
 
 func applicationAuthTestWallet(t *testing.T, digit string) identity.LocalAuthority {

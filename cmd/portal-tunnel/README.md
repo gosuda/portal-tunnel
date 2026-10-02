@@ -114,13 +114,15 @@ portal expose 3000 --name myapp
 Protect an HTTP app with tunnel-local SIWE login:
 
 ```text
-portal expose 3000 --auth
-portal expose 3000 --auth --auth-allow 0x1234... --auth-identity-headers
+portal expose 3000 --auth siwe
+portal expose 3000 --auth credential
+portal auth issue myapp.example.com --subject alice --expires 720h
+portal expose 3000 --auth siwe --auth-allow 0x1234... --auth-identity-headers
 ```
 
-The second form restricts access to the listed wallet and injects verified
+The last form restricts SIWE access to the listed wallet and injects verified
 `X-Portal-User` and `X-Portal-Auth` headers. Portal strips inbound copies of
-those headers in both modes.
+those headers for either provider.
 
 Static site when you want to publish a local folder or a single HTML file
 without running a server. Pass a directory (served with `index.html`) or an HTML
@@ -199,8 +201,8 @@ Common `portal expose` flags:
 --thumbnail          Service thumbnail URL metadata
 --owner              Service owner metadata
 --hide               Hide service from relay listing screens
---auth               Protect the complete HTTP application with tunnel-local SIWE login
---auth-allow         Allowed Ethereum wallet; repeatable; empty allows any valid wallet
+--auth               Protect the complete HTTP application with siwe or credential
+--auth-allow         Allowed Ethereum wallet; repeatable; empty allows any valid wallet (SIWE only)
 --auth-identity-headers  Inject verified Portal identity headers upstream
 --serve              Serve a local static site: a directory (served with index.html) or an HTML file (folder served with that file as SPA/CSR entry)
 --http-route         HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form

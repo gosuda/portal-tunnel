@@ -23,11 +23,18 @@ See [cache configuration](/configuration#static-relay-cache) for expiry and limi
 
 ## Application Access Authentication
 
-`portal expose 3000 --auth` places a SIWE login gate at the local tunnel HTTP
-endpoint. Challenges, the session signing key, cookies, wallet addresses, and
-application plaintext remain outside the relay control plane. Challenges expire
-after two minutes and are consumed on the first verification attempt; signed
-sessions expire after 24 hours.
+`portal expose 3000 --auth siwe` places a SIWE login gate at the local tunnel
+HTTP endpoint. `--auth credential` uses Portal-native credentials instead. Those
+credentials are signed by a distinct
+key derived from the tunnel identity and bind the subject, tunnel identity,
+host, and expiry. Redeem URLs place the credential in the URL fragment, then
+exchange it at the tunnel endpoint for the same tunnel-local session cookie.
+The session cannot outlive the credential.
+
+Credential signing keys, SIWE challenges, session signing keys, cookies,
+subjects, and application plaintext remain outside the relay control plane.
+SIWE challenges expire after two minutes; signed sessions expire after at most
+24 hours.
 
 The auth gate wraps the complete HTTP router, including static files and x402
 routes. Portal removes client-supplied `X-Portal-User` and `X-Portal-Auth`
@@ -36,6 +43,13 @@ headers before routing and only restores verified values when
 at the gate, so upstream applications receive their own cookies but never the
 `__Host-portal_access` credential. Application auth cannot be combined with
 relay caching or raw TCP/UDP exposure.
+
+API clients may submit the signed credential in
+`X-Portal-Access-Credential`. The tunnel validates it on every request and
+removes the header before routing, so the upstream never receives the bearer
+credential. When a request also carries a Portal session cookie, the explicit
+credential header is authoritative; an invalid credential is rejected instead
+of falling back to the session.
 
 ## Tenant TLS
 

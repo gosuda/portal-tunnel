@@ -14,6 +14,7 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -61,7 +62,7 @@ type TunnelConfig struct {
 	Owner                string            `koanf:"owner"`
 	Thumbnail            string            `koanf:"thumbnail"`
 	Hide                 bool              `koanf:"hide"`
-	Auth                 bool              `koanf:"auth"`
+	Auth                 string            `koanf:"auth"`
 	AuthAllowedWallets   []string          `koanf:"auth_allowed_wallets"`
 	AuthIdentityHeaders  bool              `koanf:"auth_identity_headers"`
 	X402PayTo            string            `koanf:"x402_pay_to"`
@@ -214,9 +215,7 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	if cfg.Hide {
 		out["hide"] = cfg.Hide
 	}
-	if cfg.Auth {
-		out["auth"] = cfg.Auth
-	}
+	addStringDocumentField(out, "auth", cfg.Auth)
 	addStringSliceDocumentField(out, "auth_allowed_wallets", cfg.AuthAllowedWallets)
 	if cfg.AuthIdentityHeaders {
 		out["auth_identity_headers"] = cfg.AuthIdentityHeaders
@@ -281,6 +280,7 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 			t.Serve = filepath.Join(configDir, t.Serve)
 		}
 		t.X402Network = strings.ToLower(strings.TrimSpace(t.X402Network))
+		t.Auth = strings.ToLower(strings.TrimSpace(t.Auth))
 		t.X402Asset = strings.TrimSpace(t.X402Asset)
 		t.X402Endpoints = compactStrings(t.X402Endpoints)
 		t.X402FacilitatorToken = strings.TrimSpace(t.X402FacilitatorToken)
@@ -376,13 +376,20 @@ func (cfg TunnelConfig) Validate() error {
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.X402Network)), "casper:") && strings.TrimSpace(cfg.X402Asset) == "" {
 		return fmt.Errorf("tunnel %q Casper payments require x402_asset", cfg.ID)
 	}
-	if cfg.Auth && (cfg.TCPEnabled || cfg.UDPEnabled) {
+	provider := cfg.Auth
+	if provider != "" && provider != gateway.ApplicationAuthProviderSIWE && provider != gateway.ApplicationAuthProviderCredential {
+		return fmt.Errorf("tunnel %q auth must be siwe or credential", cfg.ID)
+	}
+	if provider != "" && (cfg.TCPEnabled || cfg.UDPEnabled) {
 		return fmt.Errorf("tunnel %q auth protects HTTP applications and cannot be combined with tcp or udp", cfg.ID)
 	}
-	if !cfg.Auth && len(cfg.AuthAllowedWallets) > 0 {
+	if provider == "" && len(cfg.AuthAllowedWallets) > 0 {
 		return fmt.Errorf("tunnel %q auth_allowed_wallets requires auth", cfg.ID)
 	}
-	if !cfg.Auth && cfg.AuthIdentityHeaders {
+	if provider == gateway.ApplicationAuthProviderCredential && len(cfg.AuthAllowedWallets) > 0 {
+		return fmt.Errorf("tunnel %q auth_allowed_wallets requires auth = siwe", cfg.ID)
+	}
+	if provider == "" && cfg.AuthIdentityHeaders {
 		return fmt.Errorf("tunnel %q auth_identity_headers requires auth", cfg.ID)
 	}
 	return nil

@@ -60,7 +60,7 @@ export const guidesNavigation: NavSection[] = [
 			{ title: 'TCP/UDP Tunneling', href: '/tcp-udp-tunneling' },
 			{ title: 'Game Server Hosting', href: '/game-server-hosting' },
 			{ title: 'Wallet and ENS', href: '/wallet-and-ens' },
-			{ title: 'SIWE Authentication', href: '/siwe-authentication' },
+			{ title: 'Application Authentication', href: '/siwe-authentication' },
 			{ title: 'Deployment', href: '/deployment' },
 			{ title: 'Configuration', href: '/configuration' }
 		]
