@@ -51,6 +51,26 @@ Client browser
 
 Tenant TLS terminates on the SDK side. The local service receives the decrypted stream from the tunnel process, while the relay only handles routing metadata and ciphertext.
 
+<div id="browser-wasm-transport"></div>
+
+### Browser/WASM transport
+
+For an ordinary uncached exposure, running the SDK in WebAssembly changes the
+reverse carrier, not the tenant TLS boundary. The browser connector reaches the
+relay through WebSocket and carries reverse connections as yamux streams, but
+the encrypted tenant stream still terminates in the SDK runtime. The relay
+terminates the outer WebSocket TLS and observes multiplexing metadata, while
+tenant HTTP headers, bodies, and session keys remain protected by the normal
+tenant TLS path.
+
+Each logical yamux stream is authorized with the current short-lived reverse
+capability before the relay can offer it to the lease. Keeping a WebSocket open
+does not extend an expired capability's authority to open new streams.
+
+Browser runtimes support HTTPS handler exposure only. Raw TCP, UDP, overlay,
+and the native MITM self-probe require socket capabilities that the browser
+runtime does not provide.
+
 ## Keyless Signing
 
 For relay-hosted names, the SDK terminates tenant TLS with a `keyless_tls` t13server backed by the relay's `/v1/sign` endpoint. The relay signs handshake transcripts with its certificate key, but it does not receive the negotiated tenant TLS session keys.

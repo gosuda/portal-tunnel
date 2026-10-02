@@ -28,8 +28,6 @@ export const RELAY_API_PATHS = {
   install: {
     shell: "/api/install.sh",
     powershell: "/api/install.ps1",
-    browserWasm: "/api/install/bin/js-wasm",
-    wasmExec: "/api/install/bin/wasm-exec",
   },
 } as const;
 
