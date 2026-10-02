@@ -116,6 +116,10 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	providerlessToken, err := encodeSignedApplicationAuthJSON(gate.signingKey, applicationAuthClaims{Subject: applicationAuthTestWallet(t, "2").Identity().Address, Host: "app.example", ExpiresAt: applicationAuthTestTime().Add(applicationAuthSessionTTL).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	req := httptest.NewRequest(http.MethodGet, "https://app.example/", nil)
 	req.AddCookie(&http.Cookie{Name: "app_session", Value: "abc"})
 	req.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: token})
@@ -130,8 +134,9 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 		t.Fatalf("upstream Cookie = %q; want only application cookie", cookies)
 	}
 	for name, requestToken := range map[string]string{
-		"other host": token,
-		"tampered":   "x" + token[1:],
+		"other host":       token,
+		"tampered":         "x" + token[1:],
+		"missing provider": providerlessToken,
 	} {
 		t.Run(name, func(t *testing.T) {
 			host := "app.example"
@@ -155,7 +160,9 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 func TestApplicationAuthCredential(t *testing.T) {
 	tunnelIdentity := applicationAuthTestIdentity()
 	var upstreamUser, upstreamAuth, upstreamCredential string
+	upstreamRequests := 0
 	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests++
 		upstreamUser, upstreamAuth = r.Header.Get("X-Portal-User"), r.Header.Get("X-Portal-Auth")
 		upstreamCredential = r.Header.Get(types.HeaderAccessCredential)
 		w.WriteHeader(http.StatusNoContent)
@@ -192,6 +199,26 @@ func TestApplicationAuthCredential(t *testing.T) {
 	handler.ServeHTTP(directRec, direct)
 	if directRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ApplicationAuthProviderCredential || upstreamCredential != "" {
 		t.Fatalf("credential header status = %d, identity = %q/%q, upstream credential = %q", directRec.Code, upstreamUser, upstreamAuth, upstreamCredential)
+	}
+	bobCredential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "bob", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialAndCookie := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	credentialAndCookie.AddCookie(cookies[0])
+	credentialAndCookie.Header.Set(types.HeaderAccessCredential, bobCredential)
+	credentialAndCookieRec := httptest.NewRecorder()
+	handler.ServeHTTP(credentialAndCookieRec, credentialAndCookie)
+	if credentialAndCookieRec.Code != http.StatusNoContent || upstreamUser != "bob" {
+		t.Fatalf("credential with cookie status = %d, user = %q; want bob", credentialAndCookieRec.Code, upstreamUser)
+	}
+	invalidCredential := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	invalidCredential.AddCookie(cookies[0])
+	invalidCredential.Header.Set(types.HeaderAccessCredential, "invalid")
+	invalidCredentialRec := httptest.NewRecorder()
+	handler.ServeHTTP(invalidCredentialRec, invalidCredential)
+	if invalidCredentialRec.Code == http.StatusNoContent || upstreamRequests != 3 {
+		t.Fatalf("invalid credential with cookie status = %d, upstream requests = %d; want rejection", invalidCredentialRec.Code, upstreamRequests)
 	}
 }
 

@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"cmp"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -312,16 +311,17 @@ func (a *applicationAuth) serveLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *applicationAuth) authenticate(r *http.Request, credential string) (string, string, bool) {
-	if subject, provider, ok := a.authenticateSession(r); ok {
-		return subject, provider, true
-	}
-	if a.provider == ApplicationAuthProviderCredential && credential != "" {
+	if credential != "" {
+		if a.provider != ApplicationAuthProviderCredential {
+			return "", "", false
+		}
 		claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
 		if err == nil {
 			return claims.Subject, ApplicationAuthProviderCredential, true
 		}
+		return "", "", false
 	}
-	return "", "", false
+	return a.authenticateSession(r)
 }
 
 func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, bool) {
@@ -333,7 +333,7 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, 
 	if err := decodeSignedApplicationAuthJSON(a.signingKey, cookie.Value, &claims); err != nil || !strings.EqualFold(claims.Host, strings.TrimSpace(r.Host)) || time.Now().UTC().Unix() >= claims.ExpiresAt {
 		return "", "", false
 	}
-	provider := cmp.Or(claims.Provider, ApplicationAuthProviderSIWE)
+	provider := claims.Provider
 	if provider != a.provider {
 		return "", "", false
 	}

@@ -47,7 +47,9 @@ relay caching or raw TCP/UDP exposure.
 API clients may submit the signed credential in
 `X-Portal-Access-Credential`. The tunnel validates it on every request and
 removes the header before routing, so the upstream never receives the bearer
-credential.
+credential. When a request also carries a Portal session cookie, the explicit
+credential header is authoritative; an invalid credential is rejected instead
+of falling back to the session.
 
 ## Tenant TLS
 

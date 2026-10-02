@@ -1,4 +1,4 @@
-.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean load-test check-env-example env-reference
+.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean check-env-example env-reference
 
 .DEFAULT_GOAL := help
 
@@ -150,13 +150,3 @@ clean:
 	rm -rf cmd/relay-server/dist/tunnel
 	rm -rf cmd/relay-server/dist/app
 	rm -rf frontend/dist
-
-# Run the uniformity probe. Extra flags are passed through after the target name:
-#   make load-test -- -clients 1000 -relays 5
-# GNU make consumes '--' and forwards remaining goals; the catch-all '%:' rule
-# below silently absorbs them so make does not error with "no rule to make target."
-load-test:
-	go run ./cmd/portal-loadtest $(filter-out $@,$(MAKECMDGOALS))
-
-%:
-	@:
