@@ -40,6 +40,7 @@ not create a config file.
 | Command | Purpose |
 |---------|---------|
 | `portal expose` | Expose one local service or one routed HTTP bundle |
+| `portal auth issue` | Issue a Portal-native application access credential |
 | `portal list` | Print relay URLs resolved for this invocation |
 | `portal agent` | Run a durable local multi-tunnel agent |
 | `portal update` | Replace the CLI with the latest release |
@@ -99,8 +100,8 @@ not supported.
 | `--thumbnail` | string | | Service thumbnail URL metadata |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
-| `--auth` | bool | `false` | Protect HTTP application access with tunnel-local SIWE authentication; cannot be combined with `--cache` |
-| `--auth-allow` | string | | Ethereum wallet allowed to sign in; repeat for multiple wallets (empty allows any wallet); requires `--auth` |
+| `--auth` | string | | Protect HTTP application access with `siwe` or `token`; bare `--auth` means `siwe`; cannot be combined with `--cache` |
+| `--auth-allow` | string | | Ethereum wallet allowed to sign in; repeat for multiple wallets (empty allows any wallet); requires `--auth siwe` |
 | `--auth-identity-headers` | bool | `false` | Send authenticated `X-Portal-User` and `X-Portal-Auth` headers to HTTP upstreams; requires `--auth` |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
@@ -165,7 +166,15 @@ Protect the app with tunnel-local SIWE login:
 ```bash
 portal expose 3000 --auth
 # Restrict login and pass the verified identity to the upstream.
-portal expose 3000 --auth --auth-allow 0x1234... --auth-identity-headers
+portal expose 3000 --auth siwe --auth-allow 0x1234... --auth-identity-headers
+```
+
+Protect it without requiring a browser wallet, then issue a host-scoped
+credential from the tunnel identity:
+
+```bash
+portal expose 3000 --auth token
+portal auth issue myapp.example.com --subject alice --expires 30d
 ```
 
 Portal protects the complete HTTP gateway, including routed, static, and x402
@@ -305,6 +314,25 @@ origin. The requested TTL is an upper request subject to relay policy, not a
 hosting guarantee; cached files may be evicted or lost on relay restart.
 See [cache configuration](/configuration#static-relay-cache) and
 [the TLS boundary](/security-model#opt-in-static-cache).
+
+## `portal auth issue`
+
+Issue a host-scoped credential using an existing tunnel identity:
+
+```bash
+portal auth issue [flags] <tunnel>
+portal auth issue myapp.example.com --subject alice --expires 30d
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--subject` | string | required | Subject placed in the credential and optional upstream identity header |
+| `--expires` | duration | `30d` | Credential lifetime; accepts Go duration units plus days |
+| `--identity-path` | string | `identity.json` | Existing tunnel identity; no identity is created by this command |
+| `--identity-json` | string | `IDENTITY_JSON` | In-memory existing tunnel identity; takes precedence over the path |
+
+The command prints a bearer credential and an HTTPS redeem URL. Use it with a
+tunnel started via `portal expose ... --auth token`.
 
 ## `portal list`
 

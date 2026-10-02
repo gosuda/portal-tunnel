@@ -14,6 +14,22 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// LoadExisting loads an identity without generating or persisting one.
+func LoadExisting(path, rawJSON string) (types.Identity, error) {
+	if raw := strings.TrimSpace(rawJSON); raw != "" {
+		return Parse([]byte(raw))
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return types.Identity{}, errors.New("identity path or JSON is required")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
+	}
+	return Parse(data)
+}
+
 // LoadOrCreate returns the client identity for the expose flags. A raw JSON
 // payload is an in-memory source and wins; otherwise an existing identity
 // file at path is parsed as-is; a new identity is generated only when no

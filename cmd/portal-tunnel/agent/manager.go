@@ -226,6 +226,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		Overlay:             req.Overlay,
 		MaxActiveRelays:     req.MaxActiveRelays,
 		Auth:                req.Auth,
+		AuthProvider:        strings.ToLower(strings.TrimSpace(req.AuthProvider)),
 		AuthAllowedWallets:  append([]string(nil), req.AuthAllowedWallets...),
 		AuthIdentityHeaders: req.AuthIdentityHeaders,
 		X402PayTo:           strings.TrimSpace(req.X402PayTo),
@@ -590,7 +591,8 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		Overlay:             cfg.Overlay,
 		MaxActiveRelays:     cfg.MaxActiveRelays,
 		Metadata:            metadataFromTunnelConfig(cfg),
-		Auth:                cfg.Auth,
+		Auth:                cfg.Auth || cfg.AuthProvider != "",
+		AuthProvider:        cfg.AuthProvider,
 		AuthIdentityHeaders: cfg.AuthIdentityHeaders,
 		X402PayTo:           strings.TrimSpace(cfg.X402PayTo),
 		X402Testnet:         cfg.X402Testnet,
@@ -694,7 +696,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 			Amount:   route.Amount,
 		})
 	}
-	if cfg.Auth && len(routes) == 0 {
+	if (cfg.Auth || cfg.AuthProvider != "") && len(routes) == 0 {
 		routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: cfg.TargetAddr})
 	}
 
@@ -763,8 +765,9 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 		if routeErr != nil {
 			return routeErr
 		}
-		if cfg.Auth {
+		if cfg.Auth || cfg.AuthProvider != "" {
 			handler, routeErr = gateway.NewApplicationAuth(handler, listenerIdentity, gateway.ApplicationAuthConfig{
+				Provider:        cfg.AuthProvider,
 				AllowedWallets:  cfg.AuthAllowedWallets,
 				IdentityHeaders: cfg.AuthIdentityHeaders,
 			})

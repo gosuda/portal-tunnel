@@ -23,13 +23,14 @@ const (
 	applicationAuthLoginPath     = "/_portal/auth/login"
 	applicationAuthChallengePath = "/_portal/auth/challenge"
 	applicationAuthVerifyPath    = "/_portal/auth/verify"
+	applicationAuthRedeemPath    = "/_portal/auth/redeem"
 	applicationAuthLogoutPath    = "/_portal/auth/logout"
 	applicationAuthCookieName    = "__Host-portal_access"
 	applicationAuthSessionTTL    = 24 * time.Hour
 	applicationAuthBodyLimit     = 64 << 10
 )
 
-const applicationAuthLoginPage = `<!doctype html>
+const applicationAuthSIWELoginPage = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in to Portal</title><style>
 :root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#eef2ff;font:16px/1.5 system-ui,sans-serif}.card{width:min(30rem,calc(100% - 3rem));padding:2rem;border:1px solid #334155;border-radius:1rem;background:#111827;box-shadow:0 1.5rem 4rem #0008}h1{margin:0 0 .5rem;font-size:1.6rem}p{color:#cbd5e1}button{width:100%;padding:.8rem 1rem;border:0;border-radius:.6rem;background:#6366f1;color:white;font:inherit;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}#status{min-height:1.5rem;color:#fca5a5;font-size:.9rem}
@@ -46,23 +47,43 @@ const verifyResponse=await fetch('/_portal/auth/verify',{method:'POST',headers:{
 }catch(error){status.textContent=error&&error.message?error.message:String(error);button.disabled=false;}});
 </script></body></html>`
 
-var parsedApplicationAuthLoginPage = template.Must(template.New("application-auth-login").Parse(applicationAuthLoginPage))
+const applicationAuthTokenLoginPage = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in to Portal</title><style>
+:root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#eef2ff;font:16px/1.5 system-ui,sans-serif}.card{width:min(30rem,calc(100% - 3rem));padding:2rem;border:1px solid #334155;border-radius:1rem;background:#111827;box-shadow:0 1.5rem 4rem #0008}h1{margin:0 0 .5rem;font-size:1.6rem}p{color:#cbd5e1}textarea,button{box-sizing:border-box;width:100%;padding:.8rem 1rem;border-radius:.6rem;font:inherit}textarea{min-height:7rem;background:#0b1020;color:#eef2ff;border:1px solid #475569;resize:vertical}button{margin-top:.75rem;border:0;background:#6366f1;color:white;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}#status{min-height:1.5rem;color:#fca5a5;font-size:.9rem}
+</style></head><body><main class="card"><h1>Sign in to continue</h1><p>This application is protected by Portal. Paste the access credential provided by its owner.</p><textarea id="credential" aria-label="Access credential" placeholder="pat_..."></textarea><button id="signin">Sign in</button><p id="status" role="alert"></p></main>
+<script>
+const button=document.querySelector('#signin'),input=document.querySelector('#credential'),status=document.querySelector('#status');
+const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')?value:'/'};
+const redeem=async()=>{button.disabled=true;status.textContent='';try{const credential=input.value.trim();if(!credential)throw new Error('An access credential is required.');const response=await fetch('/_portal/auth/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential})});const result=await response.json();if(!response.ok)throw new Error(result.error||'The credential could not be verified.');location.assign(next());}catch(error){status.textContent=error&&error.message?error.message:String(error);button.disabled=false;}};
+button.addEventListener('click',redeem);const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('credential')){input.value=fragment.get('credential');history.replaceState(null,'',location.pathname+location.search);redeem();}
+</script></body></html>`
 
-// ApplicationAuthConfig configures the tunnel-local SIWE access gate.
+var (
+	parsedApplicationAuthSIWELoginPage  = template.Must(template.New("application-auth-siwe-login").Parse(applicationAuthSIWELoginPage))
+	parsedApplicationAuthTokenLoginPage = template.Must(template.New("application-auth-token-login").Parse(applicationAuthTokenLoginPage))
+)
+
+// ApplicationAuthConfig configures the tunnel-local application access gate.
 type ApplicationAuthConfig struct {
+	Provider        string
 	AllowedWallets  []string
 	IdentityHeaders bool
 }
 
 type applicationAuth struct {
 	next            http.Handler
+	provider        string
+	tunnelIdentity  types.Identity
 	signingKey      []byte
+	credentialKey   []byte
 	siwe            *siweauth.Authenticator
 	identityHeaders bool
 }
 
 type applicationAuthClaims struct {
-	Address   string `json:"sub"`
+	Subject   string `json:"sub"`
+	Provider  string `json:"auth,omitempty"`
 	Host      string `json:"host"`
 	ExpiresAt int64  `json:"exp"`
 }
@@ -83,7 +104,11 @@ type applicationAuthVerifyRequest struct {
 	Signature   string `json:"signature"`
 }
 
-// NewApplicationAuth protects the complete HTTP gateway with local SIWE
+type applicationAuthRedeemRequest struct {
+	Credential string `json:"credential"`
+}
+
+// NewApplicationAuth protects the complete HTTP gateway with tunnel-local
 // authentication. Its reserved login endpoints are the only bypass paths.
 func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg ApplicationAuthConfig) (http.Handler, error) {
 	if next == nil {
@@ -93,18 +118,29 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	if err != nil {
 		return nil, fmt.Errorf("derive application auth signing key: %w", err)
 	}
-	siwe, err := siweauth.New(siweauth.Config{
-		AllowedAddresses: cfg.AllowedWallets,
-		AllowAnyAddress:  len(cfg.AllowedWallets) == 0,
-		Statement:        "Sign in to this Portal application",
-		ChallengePrefix:  "pac_",
-	})
+	provider, err := NormalizeApplicationAuthProvider(cfg.Provider)
 	if err != nil {
 		return nil, err
 	}
+	var siwe *siweauth.Authenticator
+	if provider == ApplicationAuthProviderSIWE {
+		siwe, err = siweauth.New(siweauth.Config{AllowedAddresses: cfg.AllowedWallets, AllowAnyAddress: len(cfg.AllowedWallets) == 0, Statement: "Sign in to this Portal application", ChallengePrefix: "pac_"})
+		if err != nil {
+			return nil, err
+		}
+	} else if len(cfg.AllowedWallets) != 0 {
+		return nil, errors.New("allowed wallets require the siwe application auth provider")
+	}
+	credentialKey, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
+	if err != nil {
+		return nil, fmt.Errorf("derive application credential key: %w", err)
+	}
 	return &applicationAuth{
 		next:            next,
+		provider:        provider,
+		tunnelIdentity:  tunnelIdentity,
 		signingKey:      []byte(signingKey),
+		credentialKey:   []byte(credentialKey),
 		siwe:            siwe,
 		identityHeaders: cfg.IdentityHeaders,
 	}, nil
@@ -121,18 +157,20 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.serveChallenge(w, r)
 	case applicationAuthVerifyPath:
 		a.serveVerify(w, r)
+	case applicationAuthRedeemPath:
+		a.serveRedeem(w, r)
 	case applicationAuthLogoutPath:
 		a.serveLogout(w, r)
 	default:
-		address, ok := a.authenticatedAddress(r)
+		subject, provider, ok := a.authenticatedSubject(r)
 		if !ok {
 			a.requireLogin(w, r)
 			return
 		}
 		stripApplicationAuthCookie(r)
 		if a.identityHeaders {
-			r.Header.Set("X-Portal-User", address)
-			r.Header.Set("X-Portal-Auth", "siwe")
+			r.Header.Set("X-Portal-User", subject)
+			r.Header.Set("X-Portal-Auth", provider)
 		}
 		a.next.ServeHTTP(w, r)
 	}
@@ -161,10 +199,18 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		return
 	}
-	_ = parsedApplicationAuthLoginPage.Execute(w, nil)
+	page := parsedApplicationAuthSIWELoginPage
+	if a.provider == ApplicationAuthProviderToken {
+		page = parsedApplicationAuthTokenLoginPage
+	}
+	_ = page.Execute(w, nil)
 }
 
 func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request) {
+	if a.provider != ApplicationAuthProviderSIWE {
+		a.writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -192,6 +238,10 @@ func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
+	if a.provider != ApplicationAuthProviderSIWE {
+		a.writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -212,13 +262,52 @@ func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
 		a.writeJSONError(w, http.StatusUnauthorized, "wallet signature is invalid")
 		return
 	}
-	token, err := a.issueSession(address, strings.TrimSpace(r.Host), now)
+	token, err := a.issueSession(address, ApplicationAuthProviderSIWE, strings.TrimSpace(r.Host), now.Add(applicationAuthSessionTTL))
 	if err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: applicationAuthCookieName, Value: token, Path: "/", MaxAge: int(applicationAuthSessionTTL.Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 	a.writeJSON(w, http.StatusOK, map[string]string{"address": address})
+}
+
+func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
+	if a.provider != ApplicationAuthProviderToken {
+		a.writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !sameOrigin(r) {
+		a.writeJSONError(w, http.StatusForbidden, "request origin is not allowed")
+		return
+	}
+	var req applicationAuthRedeemRequest
+	if err := decodeApplicationAuthJSON(w, r, &req); err != nil {
+		a.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, req.Credential, now)
+	if err != nil {
+		a.writeJSONError(w, http.StatusUnauthorized, "application credential is invalid or expired")
+		return
+	}
+	expiresAt := time.Unix(claims.ExpiresAt, 0)
+	if sessionExpiry := now.Add(applicationAuthSessionTTL); sessionExpiry.Before(expiresAt) {
+		expiresAt = sessionExpiry
+	}
+	token, err := a.issueSession(claims.Subject, ApplicationAuthProviderToken, strings.TrimSpace(r.Host), expiresAt)
+	if err != nil {
+		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
+		return
+	}
+	maxAge := max(1, int(expiresAt.Sub(now).Seconds()))
+	http.SetCookie(w, &http.Cookie{Name: applicationAuthCookieName, Value: token, Path: "/", MaxAge: maxAge, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	a.writeJSON(w, http.StatusOK, map[string]string{"subject": claims.Subject})
 }
 
 func (a *applicationAuth) serveLogout(w http.ResponseWriter, r *http.Request) {
@@ -230,36 +319,50 @@ func (a *applicationAuth) serveLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *applicationAuth) authenticatedAddress(r *http.Request) (string, bool) {
+func (a *applicationAuth) authenticatedSubject(r *http.Request) (string, string, bool) {
 	cookie, err := r.Cookie(applicationAuthCookieName)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	parts := strings.Split(cookie.Value, ".")
 	if len(parts) != 2 {
-		return "", false
+		return "", "", false
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || !hmac.Equal(signature, a.sign(payload)) {
-		return "", false
+		return "", "", false
 	}
 	var claims applicationAuthClaims
 	if err := json.Unmarshal(payload, &claims); err != nil || !strings.EqualFold(claims.Host, strings.TrimSpace(r.Host)) || time.Now().UTC().Unix() >= claims.ExpiresAt {
-		return "", false
+		return "", "", false
 	}
-	address, err := identity.NormalizeEVMAddress(claims.Address)
-	if err != nil || !a.siwe.AddressAllowed(address) {
-		return "", false
+	provider := claims.Provider
+	if provider == "" {
+		provider = ApplicationAuthProviderSIWE
 	}
-	return address, true
+	if provider != a.provider {
+		return "", "", false
+	}
+	if provider == ApplicationAuthProviderSIWE {
+		address, err := identity.NormalizeEVMAddress(claims.Subject)
+		if err != nil || a.siwe == nil || !a.siwe.AddressAllowed(address) {
+			return "", "", false
+		}
+		return address, provider, true
+	}
+	subject, err := normalizeApplicationAuthSubject(claims.Subject)
+	if err != nil {
+		return "", "", false
+	}
+	return subject, provider, true
 }
 
-func (a *applicationAuth) issueSession(address, host string, now time.Time) (string, error) {
-	payload, err := json.Marshal(applicationAuthClaims{Address: address, Host: host, ExpiresAt: now.Add(applicationAuthSessionTTL).Unix()})
+func (a *applicationAuth) issueSession(subject, provider, host string, expiresAt time.Time) (string, error) {
+	payload, err := json.Marshal(applicationAuthClaims{Subject: subject, Provider: provider, Host: host, ExpiresAt: expiresAt.Unix()})
 	if err != nil {
 		return "", err
 	}

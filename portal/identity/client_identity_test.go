@@ -92,3 +92,13 @@ func TestLoadOrCreateRejectsKeylessFile(t *testing.T) {
 		t.Fatal("keyless identity file must fail instead of generating a key")
 	}
 }
+
+func TestLoadExistingNeverGeneratesIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.json")
+	if _, err := LoadExisting(path, ""); err == nil {
+		t.Fatal("missing identity was generated")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("identity file exists after failure: %v", err)
+	}
+}

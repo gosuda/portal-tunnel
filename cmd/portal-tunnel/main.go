@@ -36,6 +36,7 @@ func main() {
 	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
 		"expose": runExposeCommand,
 		"agent":  runAgentCommand,
+		"auth":   runAuthCommand,
 		"list":   runListCommand,
 		"update": runUpdateCommand,
 		"version": func(args []string) error {
@@ -45,6 +46,7 @@ func main() {
 		"help": utils.MakeHelpCommand(printRootUsage, []utils.HelpTopic{
 			{Name: "expose", Usage: printExposeUsage},
 			{Name: "agent", Usage: printAgentUsage},
+			{Name: "auth", Usage: printAuthUsage},
 			{Name: "list", Usage: printListUsage},
 			{Name: "update", Usage: printUpdateUsage},
 		}),
@@ -67,7 +69,7 @@ type exposeFlags struct {
 	owner                string
 	thumbnail            string
 	hide                 bool
-	auth                 bool
+	authProvider         string
 	authAllowedWallets   []string
 	authIdentityHeaders  bool
 	x402PayTo            string
@@ -101,7 +103,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
-	utils.BoolFlag(fs, &flags.auth, "auth", false, "Protect HTTP application access with tunnel-local SIWE authentication")
+	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe or token authentication (bare --auth means siwe)")
 	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Ethereum wallet allowed to sign in; repeat to allow multiple wallets (empty allows any wallet)")
 	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
@@ -127,14 +129,21 @@ func runExposeCommand(args []string) error {
 	flags := exposeFlags{}
 	fs := utils.NewFlagSet("expose", printExposeUsage)
 	registerExposeFlags(fs, &flags)
-	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
+	if err := utils.ParseFlagSet(fs, normalizeExposeAuthArgs(args), printExposeUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-
 	var err error
+	if strings.TrimSpace(flags.authProvider) != "" {
+		flags.authProvider, err = gateway.NormalizeApplicationAuthProvider(flags.authProvider)
+		if err != nil {
+			return err
+		}
+	}
+	authEnabled := flags.authProvider != ""
+
 	flags.targetAddr, err = utils.OptionalSingleArg(fs.Args(), "target")
 	if err != nil {
 		printExposeUsage(os.Stderr)
@@ -149,13 +158,15 @@ func runExposeCommand(args []string) error {
 		return errors.New("--cache-ttl requires --cache")
 	case flags.cache && flags.banMITM:
 		return errors.New("--cache permits relay TLS termination and cannot be combined with --ban-mitm")
-	case flags.auth && flags.cache:
+	case authEnabled && flags.cache:
 		return errors.New("--auth requires tunnel-side TLS termination and cannot be combined with --cache")
-	case flags.auth && (flags.tcp || flags.udp):
+	case authEnabled && (flags.tcp || flags.udp):
 		return errors.New("--auth protects HTTP applications and cannot be combined with --tcp or --udp")
-	case !flags.auth && len(flags.authAllowedWallets) > 0:
+	case !authEnabled && len(flags.authAllowedWallets) > 0:
 		return errors.New("--auth-allow requires --auth")
-	case !flags.auth && flags.authIdentityHeaders:
+	case flags.authProvider == gateway.ApplicationAuthProviderToken && len(flags.authAllowedWallets) > 0:
+		return errors.New("--auth-allow requires --auth siwe")
+	case !authEnabled && flags.authIdentityHeaders:
 		return errors.New("--auth-identity-headers requires --auth")
 	case serve != "" && flags.targetAddr != "":
 		printExposeUsage(os.Stderr)
@@ -233,7 +244,7 @@ func runExposeCommand(args []string) error {
 		}
 		httpRoutes = append(httpRoutes, route)
 	}
-	if flags.auth && len(httpRoutes) == 0 {
+	if authEnabled && len(httpRoutes) == 0 {
 		httpRoutes = append(httpRoutes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: flags.targetAddr})
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(flags.x402Network)), "casper:") && strings.TrimSpace(flags.x402Asset) == "" {
@@ -310,8 +321,9 @@ func runExposeCommand(args []string) error {
 		if err != nil {
 			return err
 		}
-		if flags.auth {
+		if authEnabled {
 			handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, gateway.ApplicationAuthConfig{
+				Provider:        flags.authProvider,
 				AllowedWallets:  flags.authAllowedWallets,
 				IdentityHeaders: flags.authIdentityHeaders,
 			})
@@ -329,6 +341,90 @@ func runExposeCommand(args []string) error {
 		TCPTarget: flags.targetAddr,
 		UDPTarget: udpTarget,
 	})
+}
+
+func normalizeExposeAuthArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] != "--auth" && args[i] != "-auth" {
+			out = append(out, args[i])
+			continue
+		}
+		provider := gateway.ApplicationAuthProviderSIWE
+		if i+1 < len(args) {
+			next := strings.ToLower(strings.TrimSpace(args[i+1]))
+			if next == gateway.ApplicationAuthProviderSIWE || next == gateway.ApplicationAuthProviderToken {
+				provider = next
+				i++
+			}
+		}
+		out = append(out, "--auth="+provider)
+	}
+	return out
+}
+
+func runAuthCommand(args []string) error {
+	if len(args) == 0 || args[0] != "issue" {
+		printAuthUsage(os.Stderr)
+		return errors.New("auth subcommand must be issue")
+	}
+	var subject, identityPath, identityJSON, expiresRaw string
+	fs := utils.NewFlagSet("auth issue", printAuthUsage)
+	utils.StringFlag(fs, &subject, "subject", "", "Subject granted access")
+	utils.StringFlag(fs, &expiresRaw, "expires", "30d", "Credential lifetime")
+	utils.StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
+	if err := utils.ParseFlagSet(fs, args[1:], printAuthUsage); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	host, err := utils.OptionalSingleArg(fs.Args(), "tunnel")
+	if err != nil || host == "" {
+		printAuthUsage(os.Stderr)
+		if err != nil {
+			return err
+		}
+		return errors.New("tunnel is required")
+	}
+	if strings.TrimSpace(subject) == "" {
+		return errors.New("--subject is required")
+	}
+	expires, err := parseCredentialLifetime(expiresRaw)
+	if err != nil {
+		return fmt.Errorf("--expires: %w", err)
+	}
+	tunnelIdentity, err := identity.LoadExisting(identityPath, identityJSON)
+	if err != nil {
+		return fmt.Errorf("load tunnel identity: %w", err)
+	}
+	credential, err := gateway.IssueApplicationCredential(tunnelIdentity, host, subject, time.Now().UTC().Add(expires))
+	if err != nil {
+		return err
+	}
+	redeemURL, err := gateway.ApplicationCredentialRedeemURL(host, credential)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "Credential: %s\nRedeem URL: %s\n", credential, redeemURL)
+	return nil
+}
+
+func parseCredentialLifetime(raw string) (time.Duration, error) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if strings.HasSuffix(raw, "d") {
+		days, err := time.ParseDuration(strings.TrimSuffix(raw, "d") + "h")
+		if err != nil || days <= 0 || days > time.Duration(1<<63-1)/24 {
+			return 0, errors.New("expected a positive duration such as 12h or 30d")
+		}
+		raw = (days * 24).String()
+	}
+	duration, err := time.ParseDuration(raw)
+	if err != nil || duration <= 0 {
+		return 0, errors.New("expected a positive duration such as 12h or 30d")
+	}
+	return duration, nil
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {
@@ -453,6 +549,7 @@ func printRootUsage(w io.Writer) {
 			"portal expose [flags] <target>",
 			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]\" [...]",
 			"portal agent run [flags]",
+			"portal auth issue [flags] <tunnel>",
 			"portal agent dashboard [flags]",
 			"portal agent stop [flags]",
 			"portal agent restart [flags]",
@@ -463,6 +560,8 @@ func printRootUsage(w io.Writer) {
 		[]string{
 			"portal expose 3000",
 			"portal expose 3000 --auth",
+			"portal expose 3000 --auth token",
+			"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 30d",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
 			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --http-route /=http://127.0.0.1:5173 --x402-pay-to 0x...",
@@ -489,7 +588,7 @@ func printExposeUsage(w io.Writer) {
 		},
 		[]string{
 			"portal expose 3000",
-			"portal expose 3000 --auth --auth-allow 0x1234...",
+			"portal expose 3000 --auth siwe --auth-allow 0x1234...",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --serve ./site --name my-app",
 			"portal expose --serve ./site/main.html --name my-app",
@@ -511,6 +610,17 @@ func printExposeUsage(w io.Writer) {
 	utils.WriteHelpSection(w, "Ready", []string{
 		"On success the process logs a line starting with: service ready at",
 	})
+}
+
+func printAuthUsage(w io.Writer) {
+	utils.WriteCommandUsage(w, []string{"portal auth issue [flags] <tunnel>"}, []string{"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 30d"})
+	fs := utils.NewFlagSet("auth issue", nil)
+	var subject, identityPath, identityJSON, expiresRaw string
+	utils.StringFlag(fs, &subject, "subject", "", "Subject granted access")
+	utils.StringFlag(fs, &expiresRaw, "expires", "30d", "Credential lifetime")
+	utils.StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
+	utils.WriteFlagDefaults(w, fs)
 }
 
 func printListUsage(w io.Writer) {

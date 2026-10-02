@@ -29,6 +29,7 @@ type AgentTunnelStatus struct {
 	MaxActiveRelays     int                 `json:"max_active_relays,omitempty"`
 	Metadata            types.LeaseMetadata `json:"metadata"`
 	Auth                bool                `json:"auth"`
+	AuthProvider        string              `json:"auth_provider,omitempty"`
 	AuthIdentityHeaders bool                `json:"auth_identity_headers,omitempty"`
 	X402PayTo           string              `json:"x402_pay_to,omitempty"`
 	X402Testnet         bool                `json:"x402_testnet,omitempty"`
@@ -69,6 +70,7 @@ type AgentTunnelRequest struct {
 	Overlay             bool             `json:"overlay,omitempty"`
 	MaxActiveRelays     int              `json:"max_active_relays,omitempty"`
 	Auth                bool             `json:"auth,omitempty"`
+	AuthProvider        string           `json:"auth_provider,omitempty"`
 	AuthAllowedWallets  []string         `json:"auth_allowed_wallets,omitempty"`
 	AuthIdentityHeaders bool             `json:"auth_identity_headers,omitempty"`
 	X402PayTo           string           `json:"x402_pay_to,omitempty"`

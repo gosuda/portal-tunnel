@@ -77,8 +77,9 @@ unknown request paths fall back to the entry file, as with `portal expose --serv
 The entry file must exist when the tunnel starts. Edit `serve` in TOML and
 restart the tunnel or agent to change the site path.
 
-Set `auth = true` on a target, routed HTTP, or static tunnel to require SIWE
-login before any application route is served. `auth_allowed_wallets` optionally
+Set `auth_provider = "token"` on a target, routed HTTP, or static tunnel for
+Portal-native credentials, or use `auth_provider = "siwe"`. Legacy
+`auth = true` means SIWE. `auth_allowed_wallets` optionally
 restricts login to listed Ethereum addresses. `auth_identity_headers = true`
 injects the verified address as `X-Portal-User` and `siwe` as `X-Portal-Auth`;
 Portal always strips client-supplied copies first.
@@ -242,7 +243,8 @@ Common fields:
 | `tcp` | Dedicated raw TCP port setting |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
-| `auth` | Require tunnel-local SIWE login for the complete HTTP application |
+| `auth` | Legacy shorthand for tunnel-local SIWE login |
+| `auth_provider` | Application login provider: `siwe` or `token` |
 | `auth_allowed_wallets` | Optional allowed Ethereum wallet array; empty allows any valid wallet |
 | `auth_identity_headers` | Inject verified Portal identity headers into upstream requests |
 | `x402_pay_to` | Payment recipient for paid HTTP routes |
@@ -262,7 +264,7 @@ Constraints:
 - `target` cannot be combined with `http_routes`.
 - `serve` cannot be combined with `target`, `http_routes`, `tcp`, or `udp`.
 - `http_routes` cannot be combined with `tcp` or `udp`.
-- `auth` cannot be combined with `tcp` or `udp`; auth allowlists and identity headers require `auth`.
+- Application auth cannot be combined with `tcp` or `udp`; wallet allowlists require the SIWE provider and identity headers require application auth.
 - `http_routes[].amount` requires `x402_pay_to`.
 - `http_routes[].methods` requires `http_routes[].amount`.
 
