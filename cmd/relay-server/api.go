@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -564,18 +565,22 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	requestedVersion := strings.TrimSpace(r.URL.Query().Get("version"))
+	if requestedVersion != "" && requestedVersion != types.ReleaseVersion {
+		http.Error(w, "artifact version does not match this relay", http.StatusConflict)
+		return
+	}
 	data, err := embeddedDistFS.ReadFile("dist/tunnel/" + filename)
 	if err != nil {
-		redirectURL := types.OfficialReleaseBaseURL + "/latest/download/" + filename
+		releasePath := "/latest/download/"
+		if requestedVersion != "" {
+			releasePath = "/download/" + url.PathEscape(types.ReleaseVersion) + "/"
+		}
+		redirectURL := types.OfficialReleaseBaseURL + releasePath + filename
 		if checksumRequest {
 			redirectURL += ".sha256"
 		}
 		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
-		return
-	}
-	requestedVersion := strings.TrimSpace(r.URL.Query().Get("version"))
-	if requestedVersion != "" && requestedVersion != types.ReleaseVersion {
-		http.Error(w, "browser artifact version does not match this relay", http.StatusConflict)
 		return
 	}
 	sum := sha256.Sum256(data)
