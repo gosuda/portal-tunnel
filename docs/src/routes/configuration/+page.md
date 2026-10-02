@@ -431,9 +431,6 @@ auth = "siwe"
 auth_allowed_wallets = ["0x1234..."]
 auth_identity_headers = true
 
-# Or use Portal-native credentials without a browser wallet:
-# auth = "credential"
-
 [[tunnels]]
 id = "api"
 name = "myapp"
@@ -449,6 +446,18 @@ amount = "0.01"
 [[tunnels.http_routes]]
 prefix = "/"
 upstream = "http://127.0.0.1:5173"
+```
+
+Portal-native credential authentication is an alternative to SIWE and does not
+use `auth_allowed_wallets`:
+
+```toml
+[[tunnels]]
+id = "credential-web"
+name = "credential-app"
+target = "127.0.0.1:3000"
+auth = "credential"
+auth_identity_headers = true
 ```
 
 Agent fields:

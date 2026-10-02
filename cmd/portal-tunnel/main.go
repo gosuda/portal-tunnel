@@ -513,7 +513,7 @@ func printRootUsage(w io.Writer) {
 			"portal expose [flags] <target>",
 			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]\" [...]",
 			"portal agent run [flags]",
-			"portal auth issue [flags] <tunnel>",
+			"portal auth issue [flags] <host>",
 			"portal agent dashboard [flags]",
 			"portal agent stop [flags]",
 			"portal agent restart [flags]",
@@ -577,7 +577,7 @@ func printExposeUsage(w io.Writer) {
 }
 
 func printAuthUsage(w io.Writer) {
-	utils.WriteCommandUsage(w, []string{"portal auth issue [flags] <tunnel>"}, []string{"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h"})
+	utils.WriteCommandUsage(w, []string{"portal auth issue [flags] <host>"}, []string{"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h"})
 	fs := utils.NewFlagSet("auth issue", nil)
 	var subject, identityPath, identityJSON string
 	var expires time.Duration

@@ -320,7 +320,7 @@ See [cache configuration](/configuration#static-relay-cache) and
 Issue a host-scoped credential using an existing tunnel identity:
 
 ```bash
-portal auth issue [flags] <tunnel>
+portal auth issue [flags] <host>
 portal auth issue myapp.example.com --subject alice --expires 720h
 ```
 
@@ -329,7 +329,7 @@ portal auth issue myapp.example.com --subject alice --expires 720h
 | `--subject` | string | required | Subject placed in the credential and optional upstream identity header |
 | `--expires` | duration | `720h` | Credential lifetime |
 | `--identity-path` | string | `identity.json` | Existing tunnel identity; no identity is created by this command |
-| `--identity-json` | string | `IDENTITY_JSON` | In-memory existing tunnel identity; takes precedence over the path |
+| `--identity-json` | string | | In-memory existing tunnel identity; `IDENTITY_JSON` environment variable; takes precedence over the path |
 
 The command prints a bearer credential and an HTTPS redeem URL. Use it with a
 tunnel started via `portal expose ... --auth credential`. API clients can send

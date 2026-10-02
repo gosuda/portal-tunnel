@@ -78,10 +78,12 @@ The entry file must exist when the tunnel starts. Edit `serve` in TOML and
 restart the tunnel or agent to change the site path.
 
 Set `auth = "credential"` on a target, routed HTTP, or static tunnel for
-Portal-native credentials, or use `auth = "siwe"`. `auth_allowed_wallets` optionally
-restricts login to listed Ethereum addresses. `auth_identity_headers = true`
-injects the verified address as `X-Portal-User` and `siwe` as `X-Portal-Auth`;
-Portal always strips client-supplied copies first.
+Portal-native credentials, or use `auth = "siwe"`. With SIWE,
+`auth_allowed_wallets` optionally restricts login to listed Ethereum addresses.
+`auth_identity_headers = true` injects the verified wallet address and `siwe`
+for SIWE, or the credential subject and `credential` for credential auth, as
+`X-Portal-User` and `X-Portal-Auth`; Portal always strips client-supplied copies
+first.
 
 Routed HTTP config:
 

@@ -120,9 +120,9 @@ portal auth issue myapp.example.com --subject alice --expires 720h
 portal expose 3000 --auth siwe --auth-allow 0x1234... --auth-identity-headers
 ```
 
-The second form restricts access to the listed wallet and injects verified
+The last form restricts SIWE access to the listed wallet and injects verified
 `X-Portal-User` and `X-Portal-Auth` headers. Portal strips inbound copies of
-those headers in both modes.
+those headers for either provider.
 
 Static site when you want to publish a local folder or a single HTML file
 without running a server. Pass a directory (served with `index.html`) or an HTML
