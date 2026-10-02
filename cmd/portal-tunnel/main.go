@@ -127,6 +127,9 @@ func runExposeCommand(args []string) error {
 		if !ok {
 			return fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
 		}
+		if !strings.HasPrefix(prefix, "/") {
+			return fmt.Errorf("--http-route %q: path must start with /", raw)
+		}
 		route := agent.HTTPRouteConfig{
 			Prefix:   prefix,
 			Upstream: upstream,
@@ -146,7 +149,7 @@ func runExposeCommand(args []string) error {
 
 	runtime, err := agent.StartTunnel(ctx, flags.TunnelConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("expose: %w (see portal expose --help)", err)
 	}
 	defer runtime.Close()
 

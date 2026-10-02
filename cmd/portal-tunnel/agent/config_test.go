@@ -84,6 +84,32 @@ func TestHTTPRoutesConfigModes(t *testing.T) {
 	}
 }
 
+func TestManagedConfigCompatibility(t *testing.T) {
+	for _, source := range []string{
+		"http_routes = [{prefix = 'api', upstream = 'localhost:3000'}]",
+		"serve = './dist'\n- = 1",
+		"serve = './dist'\ncache = true\ncache_ttl = '1m'",
+	} {
+		t.Run(source, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			data := "[[tunnels]]\nid = 'existing'\n" + source + "\n[[tunnels]]\nid = 'healthy'\ntarget = '3000'\n"
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadExistingConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cfg.Tunnels) != 2 || cfg.Tunnels[1].TargetAddr != "3000" {
+				t.Fatal("an invalid route must not prevent other managed tunnels from loading")
+			}
+			if cfg.Tunnels[0].Cache || cfg.Tunnels[0].CacheTTL != 0 {
+				t.Fatal("managed config must not enable CLI-only relay caching")
+			}
+		})
+	}
+}
+
 func TestApplicationAuthConfig(t *testing.T) {
 	validWallet := "0x0000000000000000000000000000000000000001"
 	for _, tc := range []struct {

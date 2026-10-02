@@ -280,6 +280,8 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 
 	for i := range cfg.Tunnels {
 		t := &cfg.Tunnels[i]
+		// koanf's decoder treats "-" as a key, so enforce the CLI-only policy here.
+		t.Cache, t.CacheTTL = false, 0
 		t.ID = strings.TrimSpace(t.ID)
 		t.Name = strings.TrimSpace(t.Name)
 		t.Serve = strings.TrimSpace(t.Serve)
@@ -389,8 +391,8 @@ func (cfg TunnelConfig) Validate() error {
 	}
 	for _, route := range cfg.HTTPRoutes {
 		prefix := strings.TrimSpace(route.Prefix)
-		if !strings.HasPrefix(prefix, "/") || strings.TrimSpace(route.Upstream) == "" {
-			return errors.New("http_routes require a prefix starting with / and an upstream")
+		if prefix == "" || strings.TrimSpace(route.Upstream) == "" {
+			return errors.New("HTTP routes require a prefix and an upstream")
 		}
 		if strings.TrimSpace(route.Amount) != "" && strings.TrimSpace(cfg.X402PayTo) == "" {
 			return fmt.Errorf("http route %q amount requires x402_pay_to", prefix)
