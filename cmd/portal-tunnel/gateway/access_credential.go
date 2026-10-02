@@ -96,7 +96,12 @@ func NormalizeApplicationAuthHost(raw string) (string, error) {
 		raw = "https://" + raw
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil {
+		return "", errors.New("application auth host must be an HTTPS URL or hostname without a path")
+	}
+	validAuthority := strings.EqualFold(parsed.Scheme, "https") && parsed.Host != "" && parsed.User == nil
+	rootPath := parsed.Path == "" || parsed.Path == "/"
+	if !validAuthority || !rootPath || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errors.New("application auth host must be an HTTPS URL or hostname without a path")
 	}
 	return strings.ToLower(strings.TrimSuffix(parsed.Host, ".")), nil

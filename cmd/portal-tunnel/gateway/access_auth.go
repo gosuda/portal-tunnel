@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -332,10 +333,7 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, 
 	if err := decodeSignedApplicationAuthJSON(a.signingKey, cookie.Value, &claims); err != nil || !strings.EqualFold(claims.Host, strings.TrimSpace(r.Host)) || time.Now().UTC().Unix() >= claims.ExpiresAt {
 		return "", "", false
 	}
-	provider := claims.Provider
-	if provider == "" {
-		provider = ApplicationAuthProviderSIWE
-	}
+	provider := cmp.Or(claims.Provider, ApplicationAuthProviderSIWE)
 	if provider != a.provider {
 		return "", "", false
 	}
