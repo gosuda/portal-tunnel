@@ -240,7 +240,7 @@ func runExposeCommand(args []string) error {
 		return errors.New("--x402-asset is required for Casper wCSPR payments")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	if flags.metricsAddr != "" {
