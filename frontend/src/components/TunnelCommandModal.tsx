@@ -9,13 +9,8 @@ import {
 import { Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TunnelCommandForm } from "@/components/TunnelCommandForm";
-import type { BrowserTunnelController } from "@/hooks/useBrowserTunnel";
 
-export function TunnelCommandModal({
-  browserTunnel,
-}: {
-  browserTunnel: BrowserTunnelController;
-}) {
+export function TunnelCommandModal() {
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -33,13 +28,12 @@ export function TunnelCommandModal({
             Start a Tunnel
           </DialogTitle>
           <DialogDescription className="max-w-[34ch] pt-1 text-sm leading-6 text-muted-foreground dark:text-zinc-400">
-            Choose a target, then run a native command or start the browser
-            connector directly.
+            Choose a target, then run the generated command.
           </DialogDescription>
         </DialogHeader>
 
         <div className="px-6 pb-6">
-          <TunnelCommandForm browserTunnel={browserTunnel} />
+          <TunnelCommandForm />
         </div>
       </DialogContent>
     </Dialog>

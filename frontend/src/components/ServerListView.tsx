@@ -10,7 +10,6 @@ import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
 import { apiClient } from "@/lib/apiClient";
 import { RELAY_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
 import type { Lease, ReputationVote, DiscoveryResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
-import type { BrowserTunnelController } from "@/hooks/useBrowserTunnel";
 
 export interface KnownRelay {
   relayURL: string;
@@ -127,7 +126,6 @@ export function relayReleaseLabel(
 }
 
 interface ServerListViewProps {
-  browserTunnel: BrowserTunnelController;
   title?: string;
   searchQuery: string;
   status: StatusFilter;
@@ -147,7 +145,6 @@ interface ServerListViewProps {
 }
 
 export function ServerListView({
-  browserTunnel,
   title = "PORTAL",
   searchQuery,
   status,
@@ -313,7 +310,7 @@ export function ServerListView({
           <main className="z-0 flex-1 pb-14">
             {landingPageEnabled && (
               <section className="border-b border-border/80 px-4 pt-6 pb-8 sm:px-6 sm:pb-10 md:px-8">
-                <LandingHero browserTunnel={browserTunnel} leases={leases} />
+                <LandingHero leases={leases} />
               </section>
             )}
             <section
@@ -333,7 +330,7 @@ export function ServerListView({
                     Browse live apps
                   </h2>
                 </div>
-                <TunnelCommandModal browserTunnel={browserTunnel} />
+                <TunnelCommandModal />
               </div>
 
               {filteredServers.length > 0 ? (
