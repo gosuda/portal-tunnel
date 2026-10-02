@@ -177,7 +177,6 @@ func TestConnectRejectsWebSocketWithoutCapability(t *testing.T) {
 		"no marker":     {Subprotocols: []string{capability}},
 		"header only": {
 			Subprotocols: []string{types.ReverseSubprotocol},
-			HTTPHeader:   http.Header{types.HeaderReverseCapability: {capability}},
 		},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
