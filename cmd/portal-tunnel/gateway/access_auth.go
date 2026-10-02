@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
 	"net/http"
 	"net/url"
@@ -58,11 +57,6 @@ const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/
 const redeem=async()=>{button.disabled=true;status.textContent='';try{const credential=input.value.trim();if(!credential)throw new Error('An access credential is required.');const response=await fetch('/_portal/auth/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential})});const result=await response.json();if(!response.ok)throw new Error(result.error||'The credential could not be verified.');location.assign(next());}catch(error){status.textContent=error&&error.message?error.message:String(error);button.disabled=false;}};
 button.addEventListener('click',redeem);const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('credential')){input.value=fragment.get('credential');history.replaceState(null,'',location.pathname+location.search);redeem();}
 </script></body></html>`
-
-var (
-	parsedApplicationAuthSIWELoginPage       = template.Must(template.New("application-auth-siwe-login").Parse(applicationAuthSIWELoginPage))
-	parsedApplicationAuthCredentialLoginPage = template.Must(template.New("application-auth-credential-login").Parse(applicationAuthCredentialLoginPage))
-)
 
 // ApplicationAuthConfig configures the tunnel-local application access gate.
 type ApplicationAuthConfig struct {
@@ -164,13 +158,7 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case applicationAuthLogoutPath:
 		a.serveLogout(w, r)
 	default:
-		subject, provider, ok := a.authenticatedSubject(r)
-		if !ok && a.provider == ApplicationAuthProviderCredential && credential != "" {
-			claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
-			if err == nil {
-				subject, provider, ok = claims.Subject, ApplicationAuthProviderCredential, true
-			}
-		}
+		subject, provider, ok := a.authenticate(r, credential)
 		if !ok {
 			a.requireLogin(w, r)
 			return
@@ -207,11 +195,11 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		return
 	}
-	page := parsedApplicationAuthSIWELoginPage
+	page := applicationAuthSIWELoginPage
 	if a.provider == ApplicationAuthProviderCredential {
-		page = parsedApplicationAuthCredentialLoginPage
+		page = applicationAuthCredentialLoginPage
 	}
-	_ = page.Execute(w, nil)
+	_, _ = io.WriteString(w, page)
 }
 
 func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request) {
@@ -270,12 +258,10 @@ func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
 		a.writeJSONError(w, http.StatusUnauthorized, "wallet signature is invalid")
 		return
 	}
-	token, err := a.issueSession(address, ApplicationAuthProviderSIWE, strings.TrimSpace(r.Host), now.Add(applicationAuthSessionTTL))
-	if err != nil {
+	if err := a.setSession(w, address, ApplicationAuthProviderSIWE, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: applicationAuthCookieName, Value: token, Path: "/", MaxAge: int(applicationAuthSessionTTL.Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 	a.writeJSON(w, http.StatusOK, map[string]string{"address": address})
 }
 
@@ -308,13 +294,10 @@ func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
 	if sessionExpiry := now.Add(applicationAuthSessionTTL); sessionExpiry.Before(expiresAt) {
 		expiresAt = sessionExpiry
 	}
-	token, err := a.issueSession(claims.Subject, ApplicationAuthProviderCredential, strings.TrimSpace(r.Host), expiresAt)
-	if err != nil {
+	if err := a.setSession(w, claims.Subject, ApplicationAuthProviderCredential, strings.TrimSpace(r.Host), now, expiresAt); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
-	maxAge := max(1, int(expiresAt.Sub(now).Seconds()))
-	http.SetCookie(w, &http.Cookie{Name: applicationAuthCookieName, Value: token, Path: "/", MaxAge: maxAge, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 	a.writeJSON(w, http.StatusOK, map[string]string{"subject": claims.Subject})
 }
 
@@ -327,25 +310,26 @@ func (a *applicationAuth) serveLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *applicationAuth) authenticatedSubject(r *http.Request) (string, string, bool) {
+func (a *applicationAuth) authenticate(r *http.Request, credential string) (string, string, bool) {
+	if subject, provider, ok := a.authenticateSession(r); ok {
+		return subject, provider, true
+	}
+	if a.provider == ApplicationAuthProviderCredential && credential != "" {
+		claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
+		if err == nil {
+			return claims.Subject, ApplicationAuthProviderCredential, true
+		}
+	}
+	return "", "", false
+}
+
+func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, bool) {
 	cookie, err := r.Cookie(applicationAuthCookieName)
 	if err != nil {
 		return "", "", false
 	}
-	parts := strings.Split(cookie.Value, ".")
-	if len(parts) != 2 {
-		return "", "", false
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return "", "", false
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil || !hmac.Equal(signature, a.sign(payload)) {
-		return "", "", false
-	}
 	var claims applicationAuthClaims
-	if err := json.Unmarshal(payload, &claims); err != nil || !strings.EqualFold(claims.Host, strings.TrimSpace(r.Host)) || time.Now().UTC().Unix() >= claims.ExpiresAt {
+	if err := decodeSignedApplicationAuthJSON(a.signingKey, cookie.Value, &claims); err != nil || !strings.EqualFold(claims.Host, strings.TrimSpace(r.Host)) || time.Now().UTC().Unix() >= claims.ExpiresAt {
 		return "", "", false
 	}
 	provider := claims.Provider
@@ -370,15 +354,44 @@ func (a *applicationAuth) authenticatedSubject(r *http.Request) (string, string,
 }
 
 func (a *applicationAuth) issueSession(subject, provider, host string, expiresAt time.Time) (string, error) {
-	payload, err := json.Marshal(applicationAuthClaims{Subject: subject, Provider: provider, Host: host, ExpiresAt: expiresAt.Unix()})
+	return encodeSignedApplicationAuthJSON(a.signingKey, applicationAuthClaims{Subject: subject, Provider: provider, Host: host, ExpiresAt: expiresAt.Unix()})
+}
+
+func (a *applicationAuth) setSession(w http.ResponseWriter, subject, provider, host string, now, expiresAt time.Time) error {
+	token, err := a.issueSession(subject, provider, host, expiresAt)
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, &http.Cookie{Name: applicationAuthCookieName, Value: token, Path: "/", MaxAge: max(1, int(expiresAt.Sub(now).Seconds())), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	return nil
+}
+
+func encodeSignedApplicationAuthJSON(key []byte, value any) (string, error) {
+	payload, err := json.Marshal(value)
 	if err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(a.sign(payload)), nil
+	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signApplicationAuthPayload(key, payload)), nil
 }
 
-func (a *applicationAuth) sign(payload []byte) []byte {
-	mac := hmac.New(sha256.New, a.signingKey)
+func decodeSignedApplicationAuthJSON(key []byte, token string, dst any) error {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return errors.New("invalid signed value")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return errors.New("invalid signed value")
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || !hmac.Equal(signature, signApplicationAuthPayload(key, payload)) {
+		return errors.New("invalid signed value")
+	}
+	return json.Unmarshal(payload, dst)
+}
+
+func signApplicationAuthPayload(key, payload []byte) []byte {
+	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write(payload)
 	return mac.Sum(nil)
 }

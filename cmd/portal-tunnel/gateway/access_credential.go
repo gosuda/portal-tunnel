@@ -1,10 +1,6 @@
 package gateway
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -66,7 +62,7 @@ func IssueApplicationCredential(tunnelIdentity types.Identity, host, subject str
 	if err != nil {
 		return "", fmt.Errorf("derive application credential key: %w", err)
 	}
-	payload, err := json.Marshal(applicationCredentialClaims{
+	token, err := encodeSignedApplicationAuthJSON([]byte(key), applicationCredentialClaims{
 		Version:   applicationCredentialVersion,
 		Subject:   subject,
 		Tunnel:    tunnelIdentity.Key(),
@@ -76,7 +72,7 @@ func IssueApplicationCredential(tunnelIdentity types.Identity, host, subject str
 	if err != nil {
 		return "", err
 	}
-	return applicationCredentialPrefix + base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signApplicationCredential([]byte(key), payload)), nil
+	return applicationCredentialPrefix + token, nil
 }
 
 func ApplicationCredentialRedeemURL(host, credential string) (string, error) {
@@ -111,20 +107,8 @@ func verifyApplicationCredential(key []byte, tunnelIdentity types.Identity, host
 	if !strings.HasPrefix(credential, applicationCredentialPrefix) {
 		return applicationCredentialClaims{}, errors.New("application credential is invalid")
 	}
-	parts := strings.Split(strings.TrimPrefix(credential, applicationCredentialPrefix), ".")
-	if len(parts) != 2 {
-		return applicationCredentialClaims{}, errors.New("application credential is invalid")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return applicationCredentialClaims{}, errors.New("application credential is invalid")
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil || !hmac.Equal(signature, signApplicationCredential(key, payload)) {
-		return applicationCredentialClaims{}, errors.New("application credential is invalid")
-	}
 	var claims applicationCredentialClaims
-	if err := json.Unmarshal(payload, &claims); err != nil || claims.Version != applicationCredentialVersion || claims.Tunnel != tunnelIdentity.Key() {
+	if err := decodeSignedApplicationAuthJSON(key, strings.TrimPrefix(credential, applicationCredentialPrefix), &claims); err != nil || claims.Version != applicationCredentialVersion || claims.Tunnel != tunnelIdentity.Key() {
 		return applicationCredentialClaims{}, errors.New("application credential is invalid")
 	}
 	normalizedHost, err := NormalizeApplicationAuthHost(host)
@@ -144,10 +128,4 @@ func normalizeApplicationAuthSubject(subject string) (string, error) {
 		return "", errors.New("application credential subject must be 1 to 256 printable characters")
 	}
 	return subject, nil
-}
-
-func signApplicationCredential(key, payload []byte) []byte {
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write(payload)
-	return mac.Sum(nil)
 }
