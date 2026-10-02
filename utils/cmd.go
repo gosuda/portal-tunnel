@@ -1,18 +1,15 @@
 package utils
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -314,10 +311,6 @@ func flagUsage(usage string, envNames ...string) string {
 		return "(env: " + envUsage + ")"
 	}
 	return usage + " (env: " + envUsage + ")"
-}
-
-func SignalContext() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 }
 
 func RunCommands(

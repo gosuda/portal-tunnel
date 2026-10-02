@@ -10,7 +10,9 @@ import (
 	"io/fs"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -93,7 +95,7 @@ func runTCPCommand(args []string) error {
 	}
 	cfg.name = normalizedName
 
-	ctx, stop := utils.SignalContext()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 	defer stop()
 
 	return runTCPDemo(ctx, cfg)
@@ -126,7 +128,7 @@ func runUDPCommand(args []string) error {
 	}
 	cfg.name = normalizedName
 
-	ctx, stop := utils.SignalContext()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 	defer stop()
 
 	return runUDPDemo(ctx, cfg)

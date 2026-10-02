@@ -23,6 +23,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -143,6 +144,8 @@ func (s *Server) apiHandler(base http.Handler, keylessSigner *keyless.Signer) ht
 				return
 			}
 			s.handleDomain(w, r)
+		case types.PathSDKCertificateChain:
+			s.handleCertificateChain(w, r)
 		case types.PathSDKRegisterChallenge:
 			s.handleRegisterChallenge(w, r)
 		case types.PathSDKRegister:
@@ -314,6 +317,20 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.WriteAPIData(w, http.StatusOK, s.DomainReport())
+}
+
+// handleCertificateChain serves the public chain already presented by the relay's
+// TLS endpoint to runtimes whose TLS stack does not expose peer certificates.
+func (s *Server) handleCertificateChain(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	if len(s.apiCertPEM) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	_, _ = w.Write(s.apiCertPEM)
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -494,6 +511,36 @@ func (s *Server) handleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, endpoint)
 }
 
+// serveReverseMux offers each stream the connector opens on session to the lease like
+// any other reverse connection. The lease owns the session, so it ends with the lease.
+func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseMux, clientIP string) {
+	release, err := lease.stream.AttachReverseSession(session)
+	if err != nil {
+		_ = session.Close()
+		return
+	}
+	defer release()
+
+	log.Info().Str("address", lease.Address).Str("lease_name", lease.Name).Msg("sdk reverse session opened over websocket")
+	for {
+		stream, capability, err := session.Accept()
+		if err != nil {
+			return
+		}
+		admitted, authErr := s.registry.admitReverseCapability(capability)
+		authorized := authErr == nil && admitted == lease
+		if err := transport.ConfirmReverseStream(stream, authorized); err != nil || !authorized {
+			_ = stream.Close()
+			continue
+		}
+		// OfferConn closes a stream it turns away, as when the ready queue is full.
+		if err := lease.stream.OfferConn(stream); err != nil {
+			continue
+		}
+		s.registry.Touch(lease.Key(), clientIP, time.Now())
+	}
+}
+
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
@@ -503,8 +550,24 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
 	clientIP := s.registry.policy.ExtractClientIP(r)
+	// The WebSocket carrier has its own credential grammar, and overlay routing only
+	// speaks the raw carrier, so it is told apart before either is read.
+	if transport.IsReverseMuxRequest(r) {
+		lease, err := s.registry.admitReverseCapability(transport.ReverseMuxCapability(r))
+		if err != nil {
+			writeAPIErrorResponse(w, err)
+			return
+		}
+		session, err := transport.AcceptReverseMux(w, r)
+		if err != nil {
+			return
+		}
+		s.serveReverseMux(lease, session, clientIP)
+		return
+	}
+
+	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
 	if s.overlay != nil && s.overlay.Handles(capability) {
 		client, gateway := s.overlay.HandleConnect(w, r, capability, clientIP)
 		if client != nil {

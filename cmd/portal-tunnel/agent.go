@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -59,7 +61,7 @@ func runAgentRunCommand(args []string) error {
 		return err
 	}
 	if serviceMode {
-		ctx, stop := utils.SignalContext()
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 		defer stop()
 		return service.Run(ctx, cfg.Agent.ServiceName, func(ctx context.Context) error {
 			return agent.Run(ctx, cfg)
@@ -156,7 +158,7 @@ func startAgentService(ctx context.Context, configPath string, cfg agent.Config)
 }
 
 func runAgentForeground(configPath string, cfg agent.Config) error {
-	ctx, stop := utils.SignalContext()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 	defer stop()
 
 	if !agentCLIInteractive() {

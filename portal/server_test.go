@@ -1,9 +1,17 @@
 package portal
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/coder/websocket"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -132,4 +140,103 @@ func TestRegisterLeaseWithUDPAndRawTCP(t *testing.T) {
 	if _, ok := registry.Lookup("demo.example.com"); !ok {
 		t.Fatal("Lookup(derived public hostname) = false, want registered lease")
 	}
+}
+
+// A connector that cannot open a raw stream - a browser - reaches the reverse session
+// over a WebSocket, carrying the reverse capability as a subprotocol since the WebSocket
+// constructor cannot set headers.
+func TestConnectAcceptsWebSocketReverseSession(t *testing.T) {
+	t.Parallel()
+
+	_, relayURL, capability := newConnectTestRelay(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	socket, _, err := websocket.Dial(ctx, wsURL(relayURL), &websocket.DialOptions{
+		Subprotocols: []string{types.ReverseSubprotocol, capability},
+	})
+	if err != nil {
+		t.Fatalf("Dial() error = %v, want an accepted reverse session", err)
+	}
+	t.Cleanup(func() { _ = socket.CloseNow() })
+
+	// Only the marker comes back, so the handshake response does not echo the credential.
+	if got := socket.Subprotocol(); got != types.ReverseSubprotocol {
+		t.Fatalf("Subprotocol() = %q, want %q", got, types.ReverseSubprotocol)
+	}
+}
+
+// The WebSocket carrier takes its capability only from the subprotocols, beside the
+// marker; the raw carrier's header does not admit it.
+func TestConnectRejectsWebSocketWithoutCapability(t *testing.T) {
+	t.Parallel()
+
+	_, relayURL, capability := newConnectTestRelay(t)
+	for name, opts := range map[string]*websocket.DialOptions{
+		"no capability": {Subprotocols: []string{types.ReverseSubprotocol}},
+		"no marker":     {Subprotocols: []string{capability}},
+		"header only": {
+			Subprotocols: []string{types.ReverseSubprotocol},
+			HTTPHeader:   http.Header{types.HeaderReverseCapability: {capability}},
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		socket, _, err := websocket.Dial(ctx, wsURL(relayURL), opts)
+		cancel()
+		if err == nil {
+			_ = socket.CloseNow()
+			t.Errorf("%s: Dial() error = nil, want the session refused", name)
+		}
+	}
+}
+
+// The session is admitted for one lease and ends with it.
+func TestConnectEndsWebSocketSessionWithTheLease(t *testing.T) {
+	t.Parallel()
+
+	server, relayURL, capability := newConnectTestRelay(t)
+	lease, err := server.registry.admitReverseCapability(capability)
+	if err != nil {
+		t.Fatalf("admitReverseCapability() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	session, err := transport.DialReverseMux(ctx, relayURL, capability)
+	if err != nil {
+		t.Fatalf("DialReverseMux() error = %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	lease.stream.Close()
+	select {
+	case <-session.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("reverse session still open after its lease closed")
+	}
+}
+
+func newConnectTestRelay(t *testing.T) (*Server, *url.URL, string) {
+	t.Helper()
+
+	registry := newTestRegistry(t, false, false)
+	_, registered, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "browser"),
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	server := &Server{registry: registry}
+	relay := httptest.NewServer(http.HandlerFunc(server.handleConnect))
+	t.Cleanup(relay.Close)
+
+	relayURL, err := url.Parse(relay.URL + types.PathSDKConnect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server, relayURL, registered.ReverseEndpoint.Capability
+}
+
+func wsURL(relayURL *url.URL) string {
+	return strings.Replace(relayURL.String(), "http://", "ws://", 1)
 }

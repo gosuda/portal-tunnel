@@ -22,6 +22,7 @@ export const RELAY_API_PATHS = {
   },
   sdk: {
     domain: "/sdk/domain",
+    certificateChain: "/sdk/certificate-chain",
   },
   discovery: "/discovery",
   install: {
