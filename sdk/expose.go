@@ -204,7 +204,8 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if runtime.GOOS == "js" && (cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM) {
+	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
+	if runtime.GOOS == "js" && requiresSocketTransport {
 		return nil, errors.New("portal sdk: this runtime supports HTTPS exposure only")
 	}
 	var source *cache.Source
