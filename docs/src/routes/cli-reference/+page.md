@@ -100,7 +100,7 @@ not supported.
 | `--thumbnail` | string | | Service thumbnail URL metadata |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
-| `--auth` | string | | Protect HTTP application access with `siwe` or `token`; bare `--auth` means `siwe`; cannot be combined with `--cache` |
+| `--auth` | string | | Protect HTTP application access with `siwe` or `token`; cannot be combined with `--cache` |
 | `--auth-allow` | string | | Ethereum wallet allowed to sign in; repeat for multiple wallets (empty allows any wallet); requires `--auth siwe` |
 | `--auth-identity-headers` | bool | `false` | Send authenticated `X-Portal-User` and `X-Portal-Auth` headers to HTTP upstreams; requires `--auth` |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
@@ -164,7 +164,7 @@ portal expose 3000
 Protect the app with tunnel-local SIWE login:
 
 ```bash
-portal expose 3000 --auth
+portal expose 3000 --auth siwe
 # Restrict login and pass the verified identity to the upstream.
 portal expose 3000 --auth siwe --auth-allow 0x1234... --auth-identity-headers
 ```
@@ -174,7 +174,7 @@ credential from the tunnel identity:
 
 ```bash
 portal expose 3000 --auth token
-portal auth issue myapp.example.com --subject alice --expires 30d
+portal auth issue myapp.example.com --subject alice --expires 720h
 ```
 
 Portal protects the complete HTTP gateway, including routed, static, and x402
@@ -321,13 +321,13 @@ Issue a host-scoped credential using an existing tunnel identity:
 
 ```bash
 portal auth issue [flags] <tunnel>
-portal auth issue myapp.example.com --subject alice --expires 30d
+portal auth issue myapp.example.com --subject alice --expires 720h
 ```
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--subject` | string | required | Subject placed in the credential and optional upstream identity header |
-| `--expires` | duration | `30d` | Credential lifetime; accepts Go duration units plus days |
+| `--expires` | duration | `720h` | Credential lifetime |
 | `--identity-path` | string | `identity.json` | Existing tunnel identity; no identity is created by this command |
 | `--identity-json` | string | `IDENTITY_JSON` | In-memory existing tunnel identity; takes precedence over the path |
 

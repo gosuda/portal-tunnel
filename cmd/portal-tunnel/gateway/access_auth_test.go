@@ -208,7 +208,7 @@ func TestApplicationCredentialRejectsOtherHostAndExpiry(t *testing.T) {
 func newApplicationAuthTestHandler(t *testing.T, allowed []string, identityHeaders bool, next http.Handler) http.Handler {
 	t.Helper()
 	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := NewApplicationAuth(next, tunnelIdentity, ApplicationAuthConfig{AllowedWallets: allowed, IdentityHeaders: identityHeaders})
+	handler, err := NewApplicationAuth(next, tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, AllowedWallets: allowed, IdentityHeaders: identityHeaders})
 	if err != nil {
 		t.Fatal(err)
 	}

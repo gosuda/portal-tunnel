@@ -38,7 +38,7 @@ EIP-1193 browser extension:
 
 ```bash
 portal expose 3000 --auth token
-portal auth issue myapp.example.com --subject alice --expires 30d
+portal auth issue myapp.example.com --subject alice --expires 720h
 ```
 
 The issue command loads the same existing `identity.json` used by the tunnel;
@@ -58,10 +58,9 @@ secret.
 ## SIWE Application Access
 
 Use `--auth siwe` to require a browser wallet login before Portal forwards an
-HTTP request. Bare `--auth` remains an alias for `--auth siwe`:
+HTTP request:
 
 ```bash
-portal expose 3000 --auth
 portal expose 3000 --auth siwe --auth-allow 0x1234...
 ```
 

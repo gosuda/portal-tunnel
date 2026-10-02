@@ -36,7 +36,7 @@ type applicationCredentialClaims struct {
 func NormalizeApplicationAuthProvider(provider string) (string, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	switch provider {
-	case "", ApplicationAuthProviderSIWE:
+	case ApplicationAuthProviderSIWE:
 		return ApplicationAuthProviderSIWE, nil
 	case ApplicationAuthProviderToken:
 		return ApplicationAuthProviderToken, nil

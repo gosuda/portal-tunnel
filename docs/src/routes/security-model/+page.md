@@ -24,8 +24,8 @@ See [cache configuration](/configuration#static-relay-cache) for expiry and limi
 ## Application Access Authentication
 
 `portal expose 3000 --auth siwe` places a SIWE login gate at the local tunnel
-HTTP endpoint; bare `--auth` is the compatible shorthand. `--auth token` uses
-Portal-native credentials instead. Those credentials are signed by a distinct
+HTTP endpoint. `--auth token` uses Portal-native credentials instead. Those
+credentials are signed by a distinct
 key derived from the tunnel identity and bind the subject, tunnel identity,
 host, and expiry. Redeem URLs place the credential in the URL fragment, then
 exchange it at the tunnel endpoint for the same tunnel-local session cookie.

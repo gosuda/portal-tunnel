@@ -56,7 +56,7 @@ relays = ["https://portal.example.com"]
 discovery = false
 description = "Managed web tunnel"
 tags = ["web"]
-auth = true
+auth = "siwe"
 auth_allowed_wallets = ["0x1234..."]
 auth_identity_headers = true
 ```
@@ -77,9 +77,8 @@ unknown request paths fall back to the entry file, as with `portal expose --serv
 The entry file must exist when the tunnel starts. Edit `serve` in TOML and
 restart the tunnel or agent to change the site path.
 
-Set `auth_provider = "token"` on a target, routed HTTP, or static tunnel for
-Portal-native credentials, or use `auth_provider = "siwe"`. Legacy
-`auth = true` means SIWE. `auth_allowed_wallets` optionally
+Set `auth = "token"` on a target, routed HTTP, or static tunnel for
+Portal-native credentials, or use `auth = "siwe"`. `auth_allowed_wallets` optionally
 restricts login to listed Ethereum addresses. `auth_identity_headers = true`
 injects the verified address as `X-Portal-User` and `siwe` as `X-Portal-Auth`;
 Portal always strips client-supplied copies first.
@@ -243,8 +242,7 @@ Common fields:
 | `tcp` | Dedicated raw TCP port setting |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
-| `auth` | Legacy shorthand for tunnel-local SIWE login |
-| `auth_provider` | Application login provider: `siwe` or `token` |
+| `auth` | Application login provider: `siwe` or `token` |
 | `auth_allowed_wallets` | Optional allowed Ethereum wallet array; empty allows any valid wallet |
 | `auth_identity_headers` | Inject verified Portal identity headers into upstream requests |
 | `x402_pay_to` | Payment recipient for paid HTTP routes |

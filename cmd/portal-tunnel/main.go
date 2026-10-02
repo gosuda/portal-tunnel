@@ -103,7 +103,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
-	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe or token authentication (bare --auth means siwe)")
+	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe or token authentication")
 	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Ethereum wallet allowed to sign in; repeat to allow multiple wallets (empty allows any wallet)")
 	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
@@ -129,14 +129,14 @@ func runExposeCommand(args []string) error {
 	flags := exposeFlags{}
 	fs := utils.NewFlagSet("expose", printExposeUsage)
 	registerExposeFlags(fs, &flags)
-	if err := utils.ParseFlagSet(fs, normalizeExposeAuthArgs(args), printExposeUsage); err != nil {
+	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
 	var err error
-	if strings.TrimSpace(flags.authProvider) != "" {
+	if flags.authProvider != "" {
 		flags.authProvider, err = gateway.NormalizeApplicationAuthProvider(flags.authProvider)
 		if err != nil {
 			return err
@@ -343,35 +343,16 @@ func runExposeCommand(args []string) error {
 	})
 }
 
-func normalizeExposeAuthArgs(args []string) []string {
-	out := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		if args[i] != "--auth" && args[i] != "-auth" {
-			out = append(out, args[i])
-			continue
-		}
-		provider := gateway.ApplicationAuthProviderSIWE
-		if i+1 < len(args) {
-			next := strings.ToLower(strings.TrimSpace(args[i+1]))
-			if next == gateway.ApplicationAuthProviderSIWE || next == gateway.ApplicationAuthProviderToken {
-				provider = next
-				i++
-			}
-		}
-		out = append(out, "--auth="+provider)
-	}
-	return out
-}
-
 func runAuthCommand(args []string) error {
 	if len(args) == 0 || args[0] != "issue" {
 		printAuthUsage(os.Stderr)
 		return errors.New("auth subcommand must be issue")
 	}
-	var subject, identityPath, identityJSON, expiresRaw string
+	var subject, identityPath, identityJSON string
+	var expires time.Duration
 	fs := utils.NewFlagSet("auth issue", printAuthUsage)
 	utils.StringFlag(fs, &subject, "subject", "", "Subject granted access")
-	utils.StringFlag(fs, &expiresRaw, "expires", "30d", "Credential lifetime")
+	fs.DurationVar(&expires, "expires", 30*24*time.Hour, "Credential lifetime")
 	utils.StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
 	if err := utils.ParseFlagSet(fs, args[1:], printAuthUsage); err != nil {
@@ -391,9 +372,8 @@ func runAuthCommand(args []string) error {
 	if strings.TrimSpace(subject) == "" {
 		return errors.New("--subject is required")
 	}
-	expires, err := parseCredentialLifetime(expiresRaw)
-	if err != nil {
-		return fmt.Errorf("--expires: %w", err)
+	if expires <= 0 {
+		return errors.New("--expires must be positive")
 	}
 	tunnelIdentity, err := identity.LoadExisting(identityPath, identityJSON)
 	if err != nil {
@@ -409,22 +389,6 @@ func runAuthCommand(args []string) error {
 	}
 	fmt.Fprintf(os.Stdout, "Credential: %s\nRedeem URL: %s\n", credential, redeemURL)
 	return nil
-}
-
-func parseCredentialLifetime(raw string) (time.Duration, error) {
-	raw = strings.ToLower(strings.TrimSpace(raw))
-	if strings.HasSuffix(raw, "d") {
-		days, err := time.ParseDuration(strings.TrimSuffix(raw, "d") + "h")
-		if err != nil || days <= 0 || days > time.Duration(1<<63-1)/24 {
-			return 0, errors.New("expected a positive duration such as 12h or 30d")
-		}
-		raw = (days * 24).String()
-	}
-	duration, err := time.ParseDuration(raw)
-	if err != nil || duration <= 0 {
-		return 0, errors.New("expected a positive duration such as 12h or 30d")
-	}
-	return duration, nil
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {
@@ -559,9 +523,9 @@ func printRootUsage(w io.Writer) {
 		},
 		[]string{
 			"portal expose 3000",
-			"portal expose 3000 --auth",
+			"portal expose 3000 --auth siwe",
 			"portal expose 3000 --auth token",
-			"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 30d",
+			"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
 			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --http-route /=http://127.0.0.1:5173 --x402-pay-to 0x...",
@@ -613,11 +577,12 @@ func printExposeUsage(w io.Writer) {
 }
 
 func printAuthUsage(w io.Writer) {
-	utils.WriteCommandUsage(w, []string{"portal auth issue [flags] <tunnel>"}, []string{"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 30d"})
+	utils.WriteCommandUsage(w, []string{"portal auth issue [flags] <tunnel>"}, []string{"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h"})
 	fs := utils.NewFlagSet("auth issue", nil)
-	var subject, identityPath, identityJSON, expiresRaw string
+	var subject, identityPath, identityJSON string
+	var expires time.Duration
 	utils.StringFlag(fs, &subject, "subject", "", "Subject granted access")
-	utils.StringFlag(fs, &expiresRaw, "expires", "30d", "Credential lifetime")
+	fs.DurationVar(&expires, "expires", 30*24*time.Hour, "Credential lifetime")
 	utils.StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
 	utils.WriteFlagDefaults(w, fs)
