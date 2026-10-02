@@ -1,9 +1,8 @@
 import { Admin } from "@/pages/Admin";
-import { BrowserTunnel } from "@/pages/BrowserTunnel";
 import { ServerDetail } from "@/pages/ServerDetail";
 import { ServerList } from "@/pages/ServerList";
 import { ROUTE_PATHS } from "@/lib/apiPaths";
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 
 function App() {
   return (
@@ -11,7 +10,10 @@ function App() {
       <Route path={ROUTE_PATHS.home} element={<ServerList />} />
       <Route path={ROUTE_PATHS.serverDetail} element={<ServerDetail />} />
       <Route path={ROUTE_PATHS.admin} element={<Admin />} />
-      <Route path={ROUTE_PATHS.browserTunnel} element={<BrowserTunnel />} />
+      <Route
+        path={ROUTE_PATHS.browserTunnel}
+        element={<Navigate to="/?platform=browser#quick-start" replace />}
+      />
     </Routes>
   );
 }

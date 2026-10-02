@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Loader2, Square, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiClient } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { loadBrowserTunnel } from "@/lib/browserTunnel";
+import { cn } from "@/lib/utils";
 import type { DomainResponse } from "@/types/api";
 
 type TunnelState = "idle" | "starting" | "ready" | "stopping" | "error";
@@ -13,7 +14,15 @@ function initialName(): string {
   return `browser-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-export function BrowserTunnelForm() {
+type BrowserTunnelFormProps = {
+  theme?: "light" | "terminal";
+};
+
+export function BrowserTunnelForm({
+  theme = "light",
+}: BrowserTunnelFormProps) {
+  const isTerminal = theme === "terminal";
+  const titleId = useId();
   const [name, setName] = useState(initialName);
   const [body, setBody] = useState("Hello from this browser.");
   const [state, setState] = useState<TunnelState>("idle");
@@ -66,9 +75,8 @@ export function BrowserTunnelForm() {
   const busy = state === "starting" || state === "stopping";
   return (
     <section
-      id="browser-tunnel"
-      aria-labelledby="browser-tunnel-title"
-      className="mx-auto mt-6 w-full max-w-150 rounded-lg border border-border/80 bg-background p-5 text-left shadow-sm sm:p-6"
+      aria-labelledby={titleId}
+      className="w-full pt-1 text-left"
     >
       <div className="flex items-start gap-3">
         <div className="mt-0.5 rounded-md bg-primary/10 p-2 text-primary">
@@ -78,10 +86,21 @@ export function BrowserTunnelForm() {
           <p className="text-xs font-semibold uppercase tracking-normal text-primary">
             Browser connector
           </p>
-          <h2 id="browser-tunnel-title" className="mt-1 text-xl font-bold text-foreground">
+          <h2
+            id={titleId}
+            className={cn(
+              "mt-1 text-xl font-bold",
+              isTerminal ? "text-slate-100" : "text-foreground"
+            )}
+          >
             Publish a response from this tab
           </h2>
-          <p className="mt-1 text-sm leading-6 text-text-muted">
+          <p
+            className={cn(
+              "mt-1 text-sm leading-6",
+              isTerminal ? "text-slate-400" : "text-text-muted"
+            )}
+          >
             HTTPS only. The tunnel runs in this browser and stops when this page closes.
           </p>
         </div>
@@ -94,6 +113,10 @@ export function BrowserTunnelForm() {
           disabled={busy || state === "ready"}
           aria-label="Browser tunnel name"
           placeholder="Public tunnel name"
+          className={cn(
+            isTerminal &&
+              "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
+          )}
         />
         <Input
           value={body}
@@ -101,6 +124,10 @@ export function BrowserTunnelForm() {
           disabled={busy || state === "ready"}
           aria-label="Browser tunnel response"
           placeholder="Response body"
+          className={cn(
+            isTerminal &&
+              "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
+          )}
         />
       </div>
 
@@ -116,7 +143,13 @@ export function BrowserTunnelForm() {
             {state === "starting" ? "Starting…" : "Start in browser"}
           </Button>
         )}
-        <span className="text-sm text-text-muted" aria-live="polite">
+        <span
+          className={cn(
+            "text-sm",
+            isTerminal ? "text-slate-400" : "text-text-muted"
+          )}
+          aria-live="polite"
+        >
           {state === "idle" && "Not running"}
           {state === "starting" && "Connecting to this relay…"}
           {state === "stopping" && "Stopping…"}
@@ -130,7 +163,10 @@ export function BrowserTunnelForm() {
           href={publicURL}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-4 block overflow-x-auto whitespace-nowrap rounded-md bg-secondary/60 px-3 py-2 font-mono text-sm font-semibold text-primary underline-offset-4 hover:underline"
+          className={cn(
+            "mt-4 block overflow-x-auto whitespace-nowrap rounded-md px-3 py-2 font-mono text-sm font-semibold underline-offset-4 hover:underline",
+            isTerminal ? "bg-white/5 text-sky-300" : "bg-secondary/60 text-primary"
+          )}
         >
           {publicURL}
         </a>
