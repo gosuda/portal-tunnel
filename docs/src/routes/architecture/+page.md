@@ -292,6 +292,29 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 
 <Mermaid code={tlsStreamDiagram} />
 
+### Browser reverse transport
+
+Browser runtimes cannot open the raw TCP connection used by the native reverse
+transport. When the SDK runs with `GOOS=js`, it keeps the same registration,
+lease-renewal, reverse-endpoint, and tenant-stream contracts but changes the
+carrier:
+
+1. The SDK opens one WebSocket to the lease's reverse endpoint and authenticates
+   the handshake with the reverse capability and the `portal.reverse.v1`
+   subprotocol marker.
+2. A yamux session runs inside that WebSocket. Each yamux stream represents one
+   reverse connection that native runtimes would open as a separate raw
+   connection.
+3. Every logical stream presents the capability current when that stream is
+   opened. The relay verifies its signature, expiry, active lease, and lease
+   identity before offering the stream to ingress.
+4. Tenant protocol bytes then use the same activation markers and tenant TLS
+   path as the native transport.
+
+The WebSocket and yamux layers are therefore a browser-compatible carrier, not
+a separate lease or application protocol. Native runtimes continue to use the
+raw reverse path and do not pay the multiplexing cost.
+
 <div id="optional-relay-overlay"></div>
 <h3 id="ivnp-backed-overlay-networking">IVNP-backed overlay networking</h3>
 

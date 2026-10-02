@@ -8,7 +8,7 @@ description: Portal SDK endpoints for relay discovery, lease lifecycle, and reve
 SDK endpoints are the stable lease protocol between a Portal tunnel process and
 a relay. Normal JSON endpoints use the shared envelope from
 [API Reference](/api-reference). `GET /sdk/connect` is the only SDK endpoint
-that switches to a raw stream after a successful HTTP/1.1 response.
+that upgrades from ordinary HTTP into the reverse transport.
 
 ## Flow
 
@@ -31,7 +31,7 @@ that switches to a raw stream after a successful HTTP/1.1 response.
 | `POST` | `/sdk/renew` | lease token body | `RenewRequest` | `RenewResponse` |
 | `POST` | `/sdk/reverse` | lease token body | `ReverseEndpointRequest` | `ReverseEndpoint` |
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
-| `GET` | `/sdk/connect` | reverse capability header | none | hijacked stream |
+| `GET` | `/sdk/connect` | reverse capability header or WebSocket subprotocol | none | raw stream or WebSocket/yamux session |
 | `POST` | `/sdk/cache` | lease token header | `StaticCacheManifest` JSON | `StaticCacheStatus` |
 | `PUT` | `/sdk/cache` | lease token header | manifest and file bytes as multipart | `StaticCacheStatus` |
 | `DELETE` | `/sdk/cache` | lease token header | none | `StaticCacheStatus` |
@@ -220,20 +220,75 @@ limits and [the TLS boundary](/security-model#opt-in-static-cache).
 
 ## Reverse Connect
 
-`GET /sdk/connect` opens a reverse tunnel stream.
+`GET /sdk/connect` opens a native reverse tunnel stream or establishes the
+browser reverse multiplexer.
 
 Requirements:
 
 | Requirement | Value |
 |-------------|-------|
 | HTTP version | HTTP/1.1 |
-| Header | `X-Portal-Reverse-Capability: <opaque capability>` |
-| Connection | keep-alive capable connection that supports hijack |
+| Native authentication | `X-Portal-Reverse-Capability: <opaque capability>` header |
+| Native connection | keep-alive capable connection that supports hijack |
+| Browser authentication | `portal.reverse.v1` and the opaque capability offered as WebSocket subprotocols |
+| Browser connection | WebSocket carrying a yamux session; each logical stream presents the current capability again |
 
-On success, the relay writes `HTTP/1.1 101 Switching Protocols` and hijacks the TCP connection.
-There is no JSON response body. Before the hijack, failures still use the
-standard JSON error envelope.
+For a native connection, the relay writes `HTTP/1.1 101 Switching Protocols`
+and hijacks the TCP connection. There is no JSON response body. For a browser
+connection, it completes the WebSocket handshake and accepts reverse
+connections as yamux streams. Failures before either upgrade use the standard
+JSON error envelope.
 
 The SDK keeps several ready reverse streams open. When an end user connects to
 the lease hostname, the relay claims one ready stream and bridges encrypted
 tenant bytes between the browser side and the SDK side.
+
+<div id="browser-wasm-sdk-runtime"></div>
+
+## Browser/WASM SDK Runtime
+
+The same `sdk.Expose` and `sdk.RunHTTP` lifecycle can run in a Go WebAssembly
+application. The application supplies the HTTP handler; the browser runtime is
+not a general-purpose bridge to a local port or file.
+
+```go
+id, err := identity.Generate("browser-preview")
+if err != nil {
+    return err
+}
+
+exposure, err := sdk.Expose(ctx, id, []string{relayURL})
+if err != nil {
+    return err
+}
+defer exposure.Close()
+
+handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    _, _ = io.WriteString(w, renderCurrentPreview())
+})
+return sdk.RunHTTP(ctx, exposure, handler, "")
+```
+
+Compile the application with `GOOS=js GOARCH=wasm`. The SDK detects the JS
+runtime and uses WebSocket plus yamux for reverse connections; callers do not
+select that transport through an option.
+
+A relay exposes the maintained connector and matching Go runtime glue at
+`/api/install/bin/js-wasm` and `/api/install/bin/wasm-exec`. Use the
+`release_version` returned by `/sdk/domain` as their `version` query parameter
+so the relay rejects an incompatible cached artifact.
+
+Browser runtime limits:
+
+- HTTPS handler exposure only
+- no raw TCP or UDP exposure
+- no overlay transport
+- no native MITM self-probe or `WithMITMProtection(true)`
+- lifetime bound to the page and application context
+
+The repository's
+[`cmd/portal-tunnel/wasm`](https://github.com/gosuda/portal-tunnel/tree/main/cmd/portal-tunnel/wasm)
+command is the maintained JS interop reference. See
+[Browser reverse transport](/architecture#browser-reverse-transport) for the
+carrier protocol and [Browser/WASM transport](/security-model#browser-wasm-transport)
+for its trust boundary.
