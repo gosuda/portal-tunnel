@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestStaticServeConfigRoundTrip(t *testing.T) {
@@ -57,7 +58,6 @@ func TestStaticServeConfigModes(t *testing.T) {
 		{name: "udp", cfg: TunnelConfig{Serve: "./dist", UDPEnabled: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.cfg.ID = "site"
 			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
 				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
 			}
@@ -77,7 +77,6 @@ func TestHTTPRoutesConfigModes(t *testing.T) {
 		{name: "udp", cfg: TunnelConfig{HTTPRoutes: routes, UDPEnabled: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.cfg.ID = "routed"
 			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
 				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
 			}
@@ -94,6 +93,7 @@ func TestApplicationAuthConfig(t *testing.T) {
 	}{
 		{name: "target", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe"}, valid: true},
 		{name: "credential", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "credential"}, valid: true},
+		{name: "blank provider", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: " "}},
 		{name: "unknown provider", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "unknown"}},
 		{name: "credential allowlist", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "credential", AuthAllowedWallets: []string{validWallet}}},
 		{name: "static", cfg: TunnelConfig{Serve: "./dist", Auth: "siwe", AuthAllowedWallets: []string{validWallet}}, valid: true},
@@ -103,10 +103,50 @@ func TestApplicationAuthConfig(t *testing.T) {
 		{name: "udp", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe", UDPEnabled: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.cfg.ID = "authenticated"
 			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
 				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
 			}
 		})
+	}
+}
+
+func TestTunnelHTTPFeatureValidation(t *testing.T) {
+	protectedCache := TunnelConfig{Serve: "./dist", Cache: true, BanMITM: new(bool)}
+	*protectedCache.BanMITM = true
+	for _, tc := range []struct {
+		name  string
+		cfg   TunnelConfig
+		valid bool
+	}{
+		{name: "raw TCP", cfg: TunnelConfig{TargetAddr: "3000", TCPEnabled: true}, valid: true},
+		{name: "UDP", cfg: TunnelConfig{TargetAddr: "3000", UDPEnabled: true}, valid: true},
+		{name: "static cache", cfg: TunnelConfig{Serve: "./dist", Cache: true}, valid: true},
+		{name: "cache target", cfg: TunnelConfig{TargetAddr: "3000", Cache: true}},
+		{name: "cache TTL without cache", cfg: TunnelConfig{Serve: "./dist", CacheTTL: time.Minute}},
+		{name: "cache with auth", cfg: TunnelConfig{Serve: "./dist", Cache: true, Auth: "siwe"}},
+		{name: "cache with MITM ban", cfg: protectedCache},
+		{name: "payment recipient", cfg: TunnelConfig{HTTPRoutes: []HTTPRouteConfig{
+			{Prefix: "/paid", Upstream: "3000", Amount: "1"},
+		}}},
+		{name: "paid route", cfg: TunnelConfig{X402PayTo: "recipient", HTTPRoutes: []HTTPRouteConfig{
+			{Prefix: "/paid", Upstream: "3000", Methods: []string{"GET"}, Amount: "1"},
+		}}, valid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
+				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
+			}
+		})
+	}
+}
+
+func TestManagedTunnelRequiresValidID(t *testing.T) {
+	for _, id := range []string{"", "..", "a/b", "web"} {
+		cfg := Config{Agent: AgentConfig{
+			StateDir: t.TempDir(), ControlAddr: DefaultControlAddr, ServiceName: DefaultServiceName,
+		}, Tunnels: []TunnelConfig{{ID: id, TargetAddr: "3000"}}}
+		if err := cfg.Validate(); (err == nil) != (id == "web") {
+			t.Fatalf("id %q: Validate() = %v", id, err)
+		}
 	}
 }

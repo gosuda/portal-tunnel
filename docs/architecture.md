@@ -50,12 +50,21 @@ transport requirements — and never interact with the discovery controller,
 watch callbacks, or failure feedback directly. Readiness and accept operations
 do not infer source exhaustion from the current membership; they wait for a
 future membership update, context cancellation, or exposure closure. Local
-TCP/UDP targets belong to `sdk.ProxyConfig`, identity file loading belongs to
-CLI or agent callers, routed HTTP route tables belong to `sdk.NewHTTPRoutes`,
-and x402 payment gating belongs to the CLI and agent composition over
-`portal/x402`. `Exposure` owns one canonical relay-status map; listener
+TCP/UDP targets belong to `sdk.ProxyConfig`, routed HTTP route tables belong
+to `sdk.NewHTTPRoutes`, and application auth and x402 payment gating belong
+to `cmd/portal-tunnel/gateway`. `Exposure` owns one canonical relay-status map; listener
 events update it, while `Relays`, `Updates`, and `WaitReady` read from that
 state. Agent status types are not part of the SDK contract.
+
+The foreground CLI and managed agent share `agent.TunnelConfig` and
+`agent.StartTunnel`. The CLI binds flags to that configuration; the agent
+loads it from TOML and owns managed IDs, path defaults, persistence, status,
+and retries. `StartTunnel` validates modes, loads identity, assembles relay
+options and the gateway, and returns a `TunnelRuntime` whose caller owns
+`Run` and `Close`. HTTP authentication wraps the complete gateway, including
+paid routes. Static relay caching remains an explicit foreground CLI option.
+The dependency direction is `main -> agent -> gateway/SDK`; the common runtime
+uses the existing agent package and does not start its control API or service.
 
 `portal/keyless` is the tenant TLS feature boundary: it owns tenant TLS
 termination via the `keyless_tls` t13server and keyless remote signing —

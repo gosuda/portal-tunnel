@@ -456,3 +456,18 @@ func normalizeUniqueStrings(inputs []string, normalize func(string) string) []st
 	}
 	return out
 }
+
+// CompactStrings returns a trimmed copy with empty entries removed.
+func CompactStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	// Preserve absent metadata when all entries are empty.
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

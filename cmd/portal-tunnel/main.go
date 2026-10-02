@@ -21,11 +21,11 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -57,69 +57,44 @@ func main() {
 }
 
 type exposeFlags struct {
-	relayCSV             string
-	discovery            bool
-	overlay              bool
-	banMITM              bool
-	identityPath         string
-	identityJSON         string
-	name                 string
-	desc                 string
-	tags                 string
-	owner                string
-	thumbnail            string
-	hide                 bool
-	authProvider         string
-	authAllowedWallets   []string
-	authIdentityHeaders  bool
-	x402PayTo            string
-	x402Testnet          bool
-	x402Network          string
-	x402Asset            string
-	x402Endpoints        []string
-	x402FacilitatorToken string
-	targetAddr           string
-	httpRoutes           []string
-	serve                string
-	cache                bool
-	cacheTTL             time.Duration
-	udp                  bool
-	udpAddr              string
-	tcp                  bool
-	maxActiveRelays      int
-	metricsAddr          string
+	agent.TunnelConfig
+	relayCSV    string
+	tags        string
+	httpRoutes  []string
+	metricsAddr string
 }
 
 func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
+	flags.Discovery, flags.BanMITM = new(bool), new(bool)
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
-	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
-	utils.BoolFlagEnv(fs, &flags.overlay, "overlay", false, "Prefer IVNP overlay transport when available", "OVERLAY_ENABLED")
-	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
-	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &flags.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
-	utils.StringFlag(fs, &flags.name, "name", "", "Public hostname prefix (single DNS label); auto-generated when omitted")
-	utils.StringFlag(fs, &flags.desc, "description", "", "Service description metadata")
+	utils.BoolFlag(fs, flags.Discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
+	utils.BoolFlagEnv(fs, &flags.Overlay, "overlay", false, "Prefer IVNP overlay transport when available", "OVERLAY_ENABLED")
+	utils.BoolFlagEnv(fs, flags.BanMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
+	utils.StringFlagEnv(fs, &flags.IdentityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &flags.IdentityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
+	utils.StringFlag(fs, &flags.Name, "name", "", "Public hostname prefix (single DNS label); auto-generated when omitted")
+	utils.StringFlag(fs, &flags.Description, "description", "", "Service description metadata")
 	utils.StringFlag(fs, &flags.tags, "tags", "", "Service tags metadata (comma-separated)")
-	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
-	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
-	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
-	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe or credential authentication")
-	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Ethereum wallet allowed to sign in; repeat to allow multiple wallets (empty allows any wallet)")
-	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
-	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
-	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
-	utils.StringFlag(fs, &flags.x402Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, and casper:casper-test")
-	utils.StringFlag(fs, &flags.x402Asset, "x402-asset", "", "Payment asset contract; required for Casper wCSPR")
-	utils.RepeatedStringFlag(fs, &flags.x402Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint")
-	utils.StringFlagEnv(fs, &flags.x402FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
+	utils.StringFlag(fs, &flags.Owner, "owner", "", "Service owner metadata")
+	utils.StringFlag(fs, &flags.Thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
+	utils.BoolFlag(fs, &flags.Hide, "hide", false, "Hide service from relay listing screens")
+	utils.StringFlag(fs, &flags.Auth, "auth", "", "Protect HTTP application access with siwe or credential authentication")
+	utils.RepeatedStringFlag(fs, &flags.AuthAllowedWallets, "auth-allow", "Ethereum wallet allowed to sign in; repeat to allow multiple wallets (empty allows any wallet)")
+	utils.BoolFlag(fs, &flags.AuthIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
+	utils.StringFlag(fs, &flags.X402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
+	utils.BoolFlag(fs, &flags.X402Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
+	utils.StringFlag(fs, &flags.X402Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, and casper:casper-test")
+	utils.StringFlag(fs, &flags.X402Asset, "x402-asset", "", "Payment asset contract; required for Casper wCSPR")
+	utils.RepeatedStringFlag(fs, &flags.X402Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint")
+	utils.StringFlagEnv(fs, &flags.X402FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
 	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
-	utils.StringFlag(fs, &flags.serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
-	utils.BoolFlag(fs, &flags.cache, "cache", false, "Allow selected relays to store --serve content and terminate browser TLS; cached responses lose end-to-end TLS to this client")
-	fs.DurationVar(&flags.cacheTTL, "cache-ttl", 0, "Requested offline cache lifetime, clamped by the relay; 0 uses relay policy (requires --cache)")
-	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
-	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
-	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
-	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
+	utils.StringFlag(fs, &flags.Serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
+	utils.BoolFlag(fs, &flags.Cache, "cache", false, "Allow selected relays to store --serve content and terminate browser TLS; cached responses lose end-to-end TLS to this client")
+	fs.DurationVar(&flags.CacheTTL, "cache-ttl", 0, "Requested offline cache lifetime, clamped by the relay; 0 uses relay policy (requires --cache)")
+	utils.BoolFlagEnv(fs, &flags.UDPEnabled, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
+	utils.StringFlagEnv(fs, &flags.UDPAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
+	utils.BoolFlagEnv(fs, &flags.TCPEnabled, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
+	utils.IntFlagEnv(fs, &flags.MaxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
 }
 
@@ -136,78 +111,14 @@ func runExposeCommand(args []string) error {
 		return err
 	}
 	var err error
-	if flags.authProvider != "" {
-		flags.authProvider, err = gateway.NormalizeApplicationAuthProvider(flags.authProvider)
-		if err != nil {
-			return err
-		}
-	}
-	authEnabled := flags.authProvider != ""
-
-	flags.targetAddr, err = utils.OptionalSingleArg(fs.Args(), "target")
+	flags.TargetAddr, err = utils.OptionalSingleArg(fs.Args(), "target")
 	if err != nil {
 		printExposeUsage(os.Stderr)
 		return err
 	}
-	httpRouteInputs := append([]string(nil), flags.httpRoutes...)
-	serve := strings.TrimSpace(flags.serve)
-	switch {
-	case flags.cache && serve == "":
-		return errors.New("--cache requires --serve")
-	case !flags.cache && flags.cacheTTL != 0:
-		return errors.New("--cache-ttl requires --cache")
-	case flags.cache && flags.banMITM:
-		return errors.New("--cache permits relay TLS termination and cannot be combined with --ban-mitm")
-	case authEnabled && flags.cache:
-		return errors.New("--auth requires tunnel-side TLS termination and cannot be combined with --cache")
-	case authEnabled && (flags.tcp || flags.udp):
-		return errors.New("--auth protects HTTP applications and cannot be combined with --tcp or --udp")
-	case !authEnabled && len(flags.authAllowedWallets) > 0:
-		return errors.New("--auth-allow requires --auth")
-	case flags.authProvider == gateway.ApplicationAuthProviderCredential && len(flags.authAllowedWallets) > 0:
-		return errors.New("--auth-allow requires --auth siwe")
-	case !authEnabled && flags.authIdentityHeaders:
-		return errors.New("--auth-identity-headers requires --auth")
-	case serve != "" && flags.targetAddr != "":
-		printExposeUsage(os.Stderr)
-		return errors.New("target cannot be combined with --serve")
-	case serve != "" && len(httpRouteInputs) > 0:
-		printExposeUsage(os.Stderr)
-		return errors.New("--serve cannot be combined with --http-route")
-	case serve != "" && flags.udp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--serve cannot be combined with --udp")
-	case serve != "" && flags.tcp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--serve cannot be combined with --tcp")
-	case serve == "" && flags.targetAddr == "" && len(httpRouteInputs) == 0:
-		printExposeUsage(os.Stderr)
-		return errors.New("target, --serve, or at least one --http-route is required")
-	case flags.targetAddr != "" && len(flags.httpRoutes) > 0:
-		printExposeUsage(os.Stderr)
-		return errors.New("target cannot be combined with --http-route")
-	case len(httpRouteInputs) > 0 && flags.udp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--udp cannot be combined with --http-route")
-	case len(httpRouteInputs) > 0 && flags.tcp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--tcp cannot be combined with --http-route")
-	}
-
-	httpRoutes := make([]gateway.ExposedHTTPRoute, 0, len(httpRouteInputs)+1)
-	if serve != "" {
-		root, index, err := utils.ResolveStaticSite(serve)
-		if err != nil {
-			printExposeUsage(os.Stderr)
-			return fmt.Errorf("--serve %q: %w", serve, err)
-		}
-		httpRoutes = append(httpRoutes, gateway.ExposedHTTPRoute{
-			Prefix:      "/",
-			StaticRoot:  root,
-			StaticIndex: index,
-		})
-	}
-	for _, raw := range httpRouteInputs {
+	flags.RelayURLs = utils.SplitCSV(flags.relayCSV)
+	flags.Tags = utils.SplitCSV(flags.tags)
+	for _, raw := range flags.httpRoutes {
 		fields := strings.Fields(raw)
 		if len(fields) == 0 || len(fields) > 2 {
 			return fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
@@ -216,18 +127,7 @@ func runExposeCommand(args []string) error {
 		if !ok {
 			return fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
 		}
-		prefix = strings.TrimSpace(prefix)
-		if prefix == "" {
-			return fmt.Errorf("--http-route %q: path is required", raw)
-		}
-		if !strings.HasPrefix(prefix, "/") {
-			return fmt.Errorf("--http-route %q: path must start with /", raw)
-		}
-		upstream = strings.TrimSpace(upstream)
-		if upstream == "" {
-			return fmt.Errorf("--http-route %q: upstream is required", raw)
-		}
-		route := gateway.ExposedHTTPRoute{
+		route := agent.HTTPRouteConfig{
 			Prefix:   prefix,
 			Upstream: upstream,
 		}
@@ -236,23 +136,19 @@ func runExposeCommand(args []string) error {
 			if err != nil {
 				return fmt.Errorf("--http-route %q: %w", raw, err)
 			}
-			if strings.TrimSpace(flags.x402PayTo) == "" {
-				return fmt.Errorf("--http-route %q: payment amount requires --x402-pay-to", raw)
-			}
 			route.Methods = methods
 			route.Amount = amount
 		}
-		httpRoutes = append(httpRoutes, route)
+		flags.HTTPRoutes = append(flags.HTTPRoutes, route)
 	}
-	if authEnabled && len(httpRoutes) == 0 {
-		httpRoutes = append(httpRoutes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: flags.targetAddr})
-	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(flags.x402Network)), "casper:") && strings.TrimSpace(flags.x402Asset) == "" {
-		return errors.New("--x402-asset is required for Casper wCSPR payments")
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
+
+	runtime, err := agent.StartTunnel(ctx, flags.TunnelConfig)
+	if err != nil {
+		return err
+	}
+	defer runtime.Close()
 
 	if flags.metricsAddr != "" {
 		mux := http.NewServeMux()
@@ -270,77 +166,7 @@ func runExposeCommand(args []string) error {
 		}()
 	}
 
-	listenerIdentity, err := identity.LoadOrCreate(flags.name, flags.targetAddr, flags.identityPath, flags.identityJSON)
-	if err != nil {
-		return fmt.Errorf("resolve identity: %w", err)
-	}
-
-	explicitRelayURLs, err := utils.NormalizeRelayURLs(utils.SplitCSV(flags.relayCSV)...)
-	if err != nil {
-		return err
-	}
-	opts := []sdk.Option{
-		sdk.WithMITMProtection(flags.banMITM),
-		sdk.WithMetadata(types.LeaseMetadata{
-			Description: flags.desc,
-			Tags:        utils.SplitCSV(flags.tags),
-			Owner:       flags.owner,
-			Thumbnail:   flags.thumbnail,
-			Hide:        flags.hide,
-		}),
-	}
-	if flags.udp {
-		opts = append(opts, sdk.WithUDP())
-	}
-	if flags.cache {
-		opts = append(opts, sdk.WithStaticRelayCache(serve, flags.cacheTTL))
-	}
-	if flags.tcp {
-		opts = append(opts, sdk.WithTCP())
-	}
-	if flags.overlay {
-		opts = append(opts, sdk.WithOverlay())
-	}
-	if flags.discovery {
-		opts = append(opts, sdk.WithDiscovery(flags.maxActiveRelays))
-	}
-	exposure, err := sdk.Expose(ctx, listenerIdentity, explicitRelayURLs, opts...)
-	if err != nil {
-		return fmt.Errorf("failed to start relays: %w", err)
-	}
-	if len(httpRoutes) > 0 {
-		defer exposure.Close()
-		handler, err := gateway.ComposeHTTPRoutes(httpRoutes, gateway.X402Payment{
-			Testnet:          flags.x402Testnet,
-			Network:          flags.x402Network,
-			Asset:            flags.x402Asset,
-			PayTo:            flags.x402PayTo,
-			Endpoints:        append([]string(nil), flags.x402Endpoints...),
-			FacilitatorToken: flags.x402FacilitatorToken,
-		})
-		if err != nil {
-			return err
-		}
-		if authEnabled {
-			handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, gateway.ApplicationAuthConfig{
-				Provider:        flags.authProvider,
-				AllowedWallets:  flags.authAllowedWallets,
-				IdentityHeaders: flags.authIdentityHeaders,
-			})
-			if err != nil {
-				return err
-			}
-		}
-		return sdk.RunHTTP(ctx, exposure, handler, "")
-	}
-	udpTarget := ""
-	if flags.udp {
-		udpTarget = utils.StringOrDefault(flags.udpAddr, flags.targetAddr)
-	}
-	return sdk.ProxyWithConfig(ctx, exposure, sdk.ProxyConfig{
-		TCPTarget: flags.targetAddr,
-		UDPTarget: udpTarget,
-	})
+	return runtime.Run(ctx)
 }
 
 func runAuthCommand(args []string) error {
