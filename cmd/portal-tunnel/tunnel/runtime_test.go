@@ -1,6 +1,10 @@
 package tunnel
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+)
 
 func TestSpecValidateModes(t *testing.T) {
 	tests := []struct {
@@ -35,10 +39,11 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 		edit  func(*Spec)
 		valid bool
 	}{
-		{name: "siwe", edit: func(spec *Spec) { spec.HTTP.Auth = &AuthConfig{Provider: "siwe"} }, valid: true},
-		{name: "unknown auth", edit: func(spec *Spec) { spec.HTTP.Auth = &AuthConfig{Provider: "unknown"} }},
+		{name: "siwe", edit: func(spec *Spec) { spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe"} }, valid: true},
+		{name: "unknown auth", edit: func(spec *Spec) { spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "unknown"} }},
+		{name: "missing auth provider", edit: func(spec *Spec) { spec.HTTP.Auth = &gateway.ApplicationAuthConfig{IdentityHeaders: true} }},
 		{name: "credential allowlist", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &AuthConfig{Provider: "credential", AllowedWallets: []string{"wallet"}}
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "credential", AllowedWallets: []string{"wallet"}}
 		}},
 		{name: "paid route", edit: func(spec *Spec) {
 			spec.Transport.Target = ""

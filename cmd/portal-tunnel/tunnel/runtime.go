@@ -52,7 +52,7 @@ type UDPConfig struct {
 type HTTPConfig struct {
 	Routes  []HTTPRoute
 	Serve   string
-	Auth    *AuthConfig
+	Auth    *gateway.ApplicationAuthConfig
 	Payment PaymentConfig
 	Cache   *CacheConfig
 }
@@ -62,12 +62,6 @@ type HTTPRoute struct {
 	Upstream string
 	Methods  []string
 	Amount   string
-}
-
-type AuthConfig struct {
-	Provider        string
-	AllowedWallets  []string
-	IdentityHeaders bool
 }
 
 type PaymentConfig struct {
@@ -133,7 +127,7 @@ func (spec Spec) Validate() error {
 		}
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(httpConfig.Payment.Network)), "casper:") && strings.TrimSpace(httpConfig.Payment.Asset) == "" {
-		return errors.New("Casper payments require an asset")
+		return errors.New("casper payments require an asset")
 	}
 	if auth := httpConfig.Auth; auth != nil {
 		provider, err := gateway.NormalizeApplicationAuthProvider(auth.Provider)
@@ -228,11 +222,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 		FacilitatorToken: payment.FacilitatorToken,
 	})
 	if err == nil && spec.HTTP.Auth != nil {
-		auth := spec.HTTP.Auth
-		handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, gateway.ApplicationAuthConfig{
-			Provider: auth.Provider, AllowedWallets: append([]string(nil), auth.AllowedWallets...),
-			IdentityHeaders: auth.IdentityHeaders,
-		})
+		handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, *spec.HTTP.Auth)
 	}
 	if err != nil {
 		_ = exposure.Close()

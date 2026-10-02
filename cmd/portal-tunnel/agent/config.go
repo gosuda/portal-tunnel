@@ -14,6 +14,7 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -346,12 +347,6 @@ func (cfg TunnelConfig) Validate() error {
 	if err := validateAgentPathComponent("tunnel id", cfg.ID); err != nil {
 		return err
 	}
-	if cfg.Auth == "" && len(cfg.AuthAllowedWallets) > 0 {
-		return fmt.Errorf("tunnel %q auth_allowed_wallets requires auth", cfg.ID)
-	}
-	if cfg.Auth == "" && cfg.AuthIdentityHeaders {
-		return fmt.Errorf("tunnel %q auth_identity_headers requires auth", cfg.ID)
-	}
 	if err := tunnelSpecFromConfig(cfg).Validate(); err != nil {
 		return fmt.Errorf("tunnel %q: %w", cfg.ID, err)
 	}
@@ -379,7 +374,7 @@ func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
 	if cfg.UDPEnabled {
 		spec.Transport.UDP = &tunnel.UDPConfig{Target: cfg.UDPAddr}
 	}
-	if cfg.Serve != "" || len(cfg.HTTPRoutes) > 0 || cfg.Auth != "" {
+	if cfg.Serve != "" || len(cfg.HTTPRoutes) > 0 || cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders {
 		routes := make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
 		for _, route := range cfg.HTTPRoutes {
 			routes = append(routes, tunnel.HTTPRoute{
@@ -395,8 +390,8 @@ func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
 				FacilitatorToken: cmp.Or(strings.TrimSpace(cfg.X402FacilitatorToken), strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY"))),
 			},
 		}
-		if cfg.Auth != "" {
-			spec.HTTP.Auth = &tunnel.AuthConfig{
+		if cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
 				Provider: cfg.Auth, AllowedWallets: append([]string(nil), cfg.AuthAllowedWallets...),
 				IdentityHeaders: cfg.AuthIdentityHeaders,
 			}

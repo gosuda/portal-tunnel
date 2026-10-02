@@ -178,13 +178,6 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 	if !flags.cache && flags.cacheTTL != 0 {
 		return tunnel.Spec{}, errors.New("--cache-ttl requires --cache")
 	}
-	if flags.authProvider == "" && len(flags.authAllowedWallets) > 0 {
-		return tunnel.Spec{}, errors.New("--auth-allow requires --auth")
-	}
-	if flags.authProvider == "" && flags.authIdentityHeaders {
-		return tunnel.Spec{}, errors.New("--auth-identity-headers requires --auth")
-	}
-
 	routes := make([]tunnel.HTTPRoute, 0, len(flags.httpRoutes))
 	for _, raw := range flags.httpRoutes {
 		fields := strings.Fields(raw)
@@ -233,7 +226,7 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 	if flags.udp {
 		spec.Transport.UDP = &tunnel.UDPConfig{Target: flags.udpAddr}
 	}
-	if strings.TrimSpace(flags.serve) != "" || len(routes) > 0 || flags.authProvider != "" || flags.cache {
+	if strings.TrimSpace(flags.serve) != "" || len(routes) > 0 || flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders || flags.cache {
 		spec.HTTP = &tunnel.HTTPConfig{
 			Routes: routes,
 			Serve:  strings.TrimSpace(flags.serve),
@@ -247,8 +240,8 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 	if flags.cache {
 		spec.HTTP.Cache = &tunnel.CacheConfig{TTL: flags.cacheTTL}
 	}
-	if flags.authProvider != "" {
-		spec.HTTP.Auth = &tunnel.AuthConfig{
+	if flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders {
+		spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
 			Provider:        flags.authProvider,
 			AllowedWallets:  append([]string(nil), flags.authAllowedWallets...),
 			IdentityHeaders: flags.authIdentityHeaders,
