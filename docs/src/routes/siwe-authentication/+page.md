@@ -33,11 +33,11 @@ portal expose 3000 --name myapp
 
 ## Portal Credentials
 
-Use the `token` provider when visitors should not need an Ethereum wallet or
+Use the `credential` provider when visitors should not need an Ethereum wallet or
 EIP-1193 browser extension:
 
 ```bash
-portal expose 3000 --auth token
+portal expose 3000 --auth credential
 portal auth issue myapp.example.com --subject alice --expires 720h
 ```
 
@@ -54,6 +54,14 @@ with a key derived locally from the tunnel identity. A session never outlives
 the credential it redeemed. The credential remains redeemable until expiry, so
 operators should use a suitably short lifetime and deliver it as a bearer
 secret.
+
+API clients can present the same credential on each request:
+
+```bash
+curl -H "X-Portal-Access-Credential: $PORTAL_CREDENTIAL" https://myapp.example.com/api
+```
+
+Portal validates and removes this header before forwarding the request.
 
 ## SIWE Application Access
 
@@ -74,7 +82,7 @@ are not used for application access.
 
 Inbound `X-Portal-User` and `X-Portal-Auth` headers are always removed. Add
 `--auth-identity-headers` to inject the verified subject and provider (`siwe`
-or `token`) after login. Upstreams must only trust these headers when they cannot be
+or `credential`) after login. Upstreams must only trust these headers when they cannot be
 reached except through this local Portal proxy.
 
 Application auth covers proxied HTTP routes, static sites, and x402 endpoints.

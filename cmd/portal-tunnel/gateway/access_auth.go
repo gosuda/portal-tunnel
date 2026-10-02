@@ -47,11 +47,11 @@ const verifyResponse=await fetch('/_portal/auth/verify',{method:'POST',headers:{
 }catch(error){status.textContent=error&&error.message?error.message:String(error);button.disabled=false;}});
 </script></body></html>`
 
-const applicationAuthTokenLoginPage = `<!doctype html>
+const applicationAuthCredentialLoginPage = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in to Portal</title><style>
 :root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#eef2ff;font:16px/1.5 system-ui,sans-serif}.card{width:min(30rem,calc(100% - 3rem));padding:2rem;border:1px solid #334155;border-radius:1rem;background:#111827;box-shadow:0 1.5rem 4rem #0008}h1{margin:0 0 .5rem;font-size:1.6rem}p{color:#cbd5e1}textarea,button{box-sizing:border-box;width:100%;padding:.8rem 1rem;border-radius:.6rem;font:inherit}textarea{min-height:7rem;background:#0b1020;color:#eef2ff;border:1px solid #475569;resize:vertical}button{margin-top:.75rem;border:0;background:#6366f1;color:white;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}#status{min-height:1.5rem;color:#fca5a5;font-size:.9rem}
-</style></head><body><main class="card"><h1>Sign in to continue</h1><p>This application is protected by Portal. Paste the access credential provided by its owner.</p><textarea id="credential" aria-label="Access credential" placeholder="pat_..."></textarea><button id="signin">Sign in</button><p id="status" role="alert"></p></main>
+</style></head><body><main class="card"><h1>Sign in to continue</h1><p>This application is protected by Portal. Paste the access credential provided by its owner.</p><textarea id="credential" aria-label="Access credential" placeholder="pcred_..."></textarea><button id="signin">Sign in</button><p id="status" role="alert"></p></main>
 <script>
 const button=document.querySelector('#signin'),input=document.querySelector('#credential'),status=document.querySelector('#status');
 const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')?value:'/'};
@@ -60,8 +60,8 @@ button.addEventListener('click',redeem);const fragment=new URLSearchParams(locat
 </script></body></html>`
 
 var (
-	parsedApplicationAuthSIWELoginPage  = template.Must(template.New("application-auth-siwe-login").Parse(applicationAuthSIWELoginPage))
-	parsedApplicationAuthTokenLoginPage = template.Must(template.New("application-auth-token-login").Parse(applicationAuthTokenLoginPage))
+	parsedApplicationAuthSIWELoginPage       = template.Must(template.New("application-auth-siwe-login").Parse(applicationAuthSIWELoginPage))
+	parsedApplicationAuthCredentialLoginPage = template.Must(template.New("application-auth-credential-login").Parse(applicationAuthCredentialLoginPage))
 )
 
 // ApplicationAuthConfig configures the tunnel-local application access gate.
@@ -147,6 +147,8 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 }
 
 func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	credential := strings.TrimSpace(r.Header.Get(types.HeaderAccessCredential))
+	r.Header.Del(types.HeaderAccessCredential)
 	r.Header.Del("X-Portal-User")
 	r.Header.Del("X-Portal-Auth")
 
@@ -163,6 +165,12 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.serveLogout(w, r)
 	default:
 		subject, provider, ok := a.authenticatedSubject(r)
+		if !ok && a.provider == ApplicationAuthProviderCredential && credential != "" {
+			claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
+			if err == nil {
+				subject, provider, ok = claims.Subject, ApplicationAuthProviderCredential, true
+			}
+		}
 		if !ok {
 			a.requireLogin(w, r)
 			return
@@ -200,8 +208,8 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := parsedApplicationAuthSIWELoginPage
-	if a.provider == ApplicationAuthProviderToken {
-		page = parsedApplicationAuthTokenLoginPage
+	if a.provider == ApplicationAuthProviderCredential {
+		page = parsedApplicationAuthCredentialLoginPage
 	}
 	_ = page.Execute(w, nil)
 }
@@ -272,7 +280,7 @@ func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ApplicationAuthProviderToken {
+	if a.provider != ApplicationAuthProviderCredential {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -300,7 +308,7 @@ func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
 	if sessionExpiry := now.Add(applicationAuthSessionTTL); sessionExpiry.Before(expiresAt) {
 		expiresAt = sessionExpiry
 	}
-	token, err := a.issueSession(claims.Subject, ApplicationAuthProviderToken, strings.TrimSpace(r.Host), expiresAt)
+	token, err := a.issueSession(claims.Subject, ApplicationAuthProviderCredential, strings.TrimSpace(r.Host), expiresAt)
 	if err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return

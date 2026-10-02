@@ -152,13 +152,14 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	}
 }
 
-func TestApplicationAuthTokenRedeem(t *testing.T) {
+func TestApplicationAuthCredential(t *testing.T) {
 	tunnelIdentity := applicationAuthTestIdentity()
-	var upstreamUser, upstreamAuth string
+	var upstreamUser, upstreamAuth, upstreamCredential string
 	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamUser, upstreamAuth = r.Header.Get("X-Portal-User"), r.Header.Get("X-Portal-Auth")
+		upstreamCredential = r.Header.Get(types.HeaderAccessCredential)
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderToken, IdentityHeaders: true})
+	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,8 +183,15 @@ func TestApplicationAuthTokenRedeem(t *testing.T) {
 	protected.AddCookie(cookies[0])
 	protectedRec := httptest.NewRecorder()
 	handler.ServeHTTP(protectedRec, protected)
-	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ApplicationAuthProviderToken {
+	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ApplicationAuthProviderCredential {
 		t.Fatalf("protected status = %d, identity = %q/%q", protectedRec.Code, upstreamUser, upstreamAuth)
+	}
+	direct := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	direct.Header.Set(types.HeaderAccessCredential, credential)
+	directRec := httptest.NewRecorder()
+	handler.ServeHTTP(directRec, direct)
+	if directRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ApplicationAuthProviderCredential || upstreamCredential != "" {
+		t.Fatalf("credential header status = %d, identity = %q/%q, upstream credential = %q", directRec.Code, upstreamUser, upstreamAuth, upstreamCredential)
 	}
 }
 

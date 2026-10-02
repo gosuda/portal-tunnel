@@ -100,7 +100,7 @@ not supported.
 | `--thumbnail` | string | | Service thumbnail URL metadata |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
-| `--auth` | string | | Protect HTTP application access with `siwe` or `token`; cannot be combined with `--cache` |
+| `--auth` | string | | Protect HTTP application access with `siwe` or `credential`; cannot be combined with `--cache` |
 | `--auth-allow` | string | | Ethereum wallet allowed to sign in; repeat for multiple wallets (empty allows any wallet); requires `--auth siwe` |
 | `--auth-identity-headers` | bool | `false` | Send authenticated `X-Portal-User` and `X-Portal-Auth` headers to HTTP upstreams; requires `--auth` |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
@@ -173,7 +173,7 @@ Protect it without requiring a browser wallet, then issue a host-scoped
 credential from the tunnel identity:
 
 ```bash
-portal expose 3000 --auth token
+portal expose 3000 --auth credential
 portal auth issue myapp.example.com --subject alice --expires 720h
 ```
 
@@ -332,7 +332,9 @@ portal auth issue myapp.example.com --subject alice --expires 720h
 | `--identity-json` | string | `IDENTITY_JSON` | In-memory existing tunnel identity; takes precedence over the path |
 
 The command prints a bearer credential and an HTTPS redeem URL. Use it with a
-tunnel started via `portal expose ... --auth token`.
+tunnel started via `portal expose ... --auth credential`. API clients can send
+the credential in `X-Portal-Access-Credential`; Portal validates and removes
+that header before forwarding the request upstream.
 
 ## `portal list`
 

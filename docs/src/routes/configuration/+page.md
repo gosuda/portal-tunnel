@@ -347,7 +347,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--owner` | | string | | Service owner metadata |
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
-| `--auth` | | string | | Protect the complete HTTP application with `siwe` or `token`; excludes cache, TCP, and UDP |
+| `--auth` | | string | | Protect the complete HTTP application with `siwe` or `credential`; excludes cache, TCP, and UDP |
 | `--auth-allow` | | string | | Allowed Ethereum wallet; repeatable; empty allows any valid wallet and requires `--auth siwe` |
 | `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
 | `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
@@ -432,7 +432,7 @@ auth_allowed_wallets = ["0x1234..."]
 auth_identity_headers = true
 
 # Or use Portal-native credentials without a browser wallet:
-# auth = "token"
+# auth = "credential"
 
 [[tunnels]]
 id = "api"
@@ -483,7 +483,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
-| `auth` | string | Application login provider: `siwe` or `token`; cannot be combined with TCP or UDP |
+| `auth` | string | Application login provider: `siwe` or `credential`; cannot be combined with TCP or UDP |
 | `auth_allowed_wallets` | string array | Wallets allowed to sign in; empty allows any valid wallet and requires the `siwe` provider when set |
 | `auth_identity_headers` | bool | Inject verified Portal identity headers upstream; requires `auth` |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |

@@ -93,9 +93,9 @@ func TestApplicationAuthConfig(t *testing.T) {
 		valid bool
 	}{
 		{name: "target", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe"}, valid: true},
-		{name: "token", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "token"}, valid: true},
+		{name: "credential", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "credential"}, valid: true},
 		{name: "unknown provider", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "unknown"}},
-		{name: "token allowlist", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "token", AuthAllowedWallets: []string{validWallet}}},
+		{name: "credential allowlist", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "credential", AuthAllowedWallets: []string{validWallet}}},
 		{name: "static", cfg: TunnelConfig{Serve: "./dist", Auth: "siwe", AuthAllowedWallets: []string{validWallet}}, valid: true},
 		{name: "allowlist without auth", cfg: TunnelConfig{TargetAddr: "localhost:3000", AuthAllowedWallets: []string{validWallet}}},
 		{name: "headers without auth", cfg: TunnelConfig{TargetAddr: "localhost:3000", AuthIdentityHeaders: true}},

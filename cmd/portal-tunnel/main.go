@@ -103,7 +103,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
-	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe or token authentication")
+	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe or credential authentication")
 	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Ethereum wallet allowed to sign in; repeat to allow multiple wallets (empty allows any wallet)")
 	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
@@ -164,7 +164,7 @@ func runExposeCommand(args []string) error {
 		return errors.New("--auth protects HTTP applications and cannot be combined with --tcp or --udp")
 	case !authEnabled && len(flags.authAllowedWallets) > 0:
 		return errors.New("--auth-allow requires --auth")
-	case flags.authProvider == gateway.ApplicationAuthProviderToken && len(flags.authAllowedWallets) > 0:
+	case flags.authProvider == gateway.ApplicationAuthProviderCredential && len(flags.authAllowedWallets) > 0:
 		return errors.New("--auth-allow requires --auth siwe")
 	case !authEnabled && flags.authIdentityHeaders:
 		return errors.New("--auth-identity-headers requires --auth")
@@ -524,7 +524,7 @@ func printRootUsage(w io.Writer) {
 		[]string{
 			"portal expose 3000",
 			"portal expose 3000 --auth siwe",
-			"portal expose 3000 --auth token",
+			"portal expose 3000 --auth credential",
 			"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",

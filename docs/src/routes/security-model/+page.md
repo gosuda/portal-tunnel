@@ -24,7 +24,7 @@ See [cache configuration](/configuration#static-relay-cache) for expiry and limi
 ## Application Access Authentication
 
 `portal expose 3000 --auth siwe` places a SIWE login gate at the local tunnel
-HTTP endpoint. `--auth token` uses Portal-native credentials instead. Those
+HTTP endpoint. `--auth credential` uses Portal-native credentials instead. Those
 credentials are signed by a distinct
 key derived from the tunnel identity and bind the subject, tunnel identity,
 host, and expiry. Redeem URLs place the credential in the URL fragment, then
@@ -43,6 +43,11 @@ headers before routing and only restores verified values when
 at the gate, so upstream applications receive their own cookies but never the
 `__Host-portal_access` credential. Application auth cannot be combined with
 relay caching or raw TCP/UDP exposure.
+
+API clients may submit the signed credential in
+`X-Portal-Access-Credential`. The tunnel validates it on every request and
+removes the header before routing, so the upstream never receives the bearer
+credential.
 
 ## Tenant TLS
 

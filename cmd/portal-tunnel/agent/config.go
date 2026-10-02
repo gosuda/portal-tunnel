@@ -377,8 +377,8 @@ func (cfg TunnelConfig) Validate() error {
 		return fmt.Errorf("tunnel %q Casper payments require x402_asset", cfg.ID)
 	}
 	provider := cfg.Auth
-	if provider != "" && provider != gateway.ApplicationAuthProviderSIWE && provider != gateway.ApplicationAuthProviderToken {
-		return fmt.Errorf("tunnel %q auth must be siwe or token", cfg.ID)
+	if provider != "" && provider != gateway.ApplicationAuthProviderSIWE && provider != gateway.ApplicationAuthProviderCredential {
+		return fmt.Errorf("tunnel %q auth must be siwe or credential", cfg.ID)
 	}
 	if provider != "" && (cfg.TCPEnabled || cfg.UDPEnabled) {
 		return fmt.Errorf("tunnel %q auth protects HTTP applications and cannot be combined with tcp or udp", cfg.ID)
@@ -386,7 +386,7 @@ func (cfg TunnelConfig) Validate() error {
 	if provider == "" && len(cfg.AuthAllowedWallets) > 0 {
 		return fmt.Errorf("tunnel %q auth_allowed_wallets requires auth", cfg.ID)
 	}
-	if provider == gateway.ApplicationAuthProviderToken && len(cfg.AuthAllowedWallets) > 0 {
+	if provider == gateway.ApplicationAuthProviderCredential && len(cfg.AuthAllowedWallets) > 0 {
 		return fmt.Errorf("tunnel %q auth_allowed_wallets requires auth = siwe", cfg.ID)
 	}
 	if provider == "" && cfg.AuthIdentityHeaders {

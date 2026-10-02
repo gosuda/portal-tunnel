@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	ApplicationAuthProviderSIWE  = "siwe"
-	ApplicationAuthProviderToken = "token"
+	ApplicationAuthProviderSIWE       = "siwe"
+	ApplicationAuthProviderCredential = "credential"
 
-	applicationCredentialPrefix  = "pat_"
+	applicationCredentialPrefix  = "pcred_"
 	applicationCredentialVersion = 1
 	applicationCredentialKeyUse  = "application-access-credential"
 )
@@ -38,8 +38,8 @@ func NormalizeApplicationAuthProvider(provider string) (string, error) {
 	switch provider {
 	case ApplicationAuthProviderSIWE:
 		return ApplicationAuthProviderSIWE, nil
-	case ApplicationAuthProviderToken:
-		return ApplicationAuthProviderToken, nil
+	case ApplicationAuthProviderCredential:
+		return ApplicationAuthProviderCredential, nil
 	default:
 		return "", fmt.Errorf("unsupported application auth provider %q", provider)
 	}
