@@ -36,8 +36,8 @@ const (
 	// Whole-file JSON is rewritten on each changed vote so these caps keep
 	// the work per public POST small; identities persist for the life of
 	// the state file, so past the identity cap new identities are rejected.
-	reputationMaxVoters     = 64
-	reputationMaxIdentities = 128
+	reputationMaxVoters     = 1024
+	reputationMaxIdentities = 4096
 )
 
 // persistedReputation is the reputation.json schema. All collections are
