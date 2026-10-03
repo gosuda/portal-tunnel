@@ -352,6 +352,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--auth` | | string | | Protect the complete HTTP application with `siwe` or `credential`; excludes cache, TCP, and UDP |
 | `--auth-allow` | | string | | Allowed Ethereum wallet; repeatable; empty allows any valid wallet and requires `--auth siwe` |
 | `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
+| `--strip-request-header` | | string | | Request header removed before forwarding to HTTP upstreams; repeat for multiple headers; case-insensitive; prevents clients from injecting headers the upstream may blindly trust |
 | `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
 | `--x402-network` | | string | | Optional Sui or Casper CAIP-2 network |
@@ -497,6 +498,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `auth` | string | Application login provider: `siwe` or `credential`; cannot be combined with TCP or UDP |
 | `auth_allowed_wallets` | string array | Wallets allowed to sign in; empty allows any valid wallet and requires the `siwe` provider when set |
 | `auth_identity_headers` | bool | Inject verified Portal identity headers upstream; requires `auth` |
+| `strip_request_headers` | string array | Request headers removed before forwarding to HTTP upstreams; case-insensitive; prevents clients from injecting headers the upstream may blindly trust |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |
 | `x402_testnet` | bool | Use Sui testnet when `x402_network` is omitted; omitted or `false` uses Sui mainnet |
 | `x402_network` | string | Optional CAIP-2 network: `sui:mainnet`, `sui:testnet`, `casper:casper`, or `casper:casper-test` |
@@ -657,3 +659,28 @@ Since v2.4.3, startup explicitly removes legacy `banned_ips` from `policy.json`.
 Identity approvals, denials, bans, and bandwidth settings are preserved.
 Operators requiring network IP blocks should configure their firewall or
 trusted ingress proxy.
+
+### Upstream request-header trust contract
+
+Portal's HTTP tunnel forwards client request headers to upstream applications
+almost unchanged: it rewrites only the headers it owns (`X-Forwarded-Proto`,
+`X-Forwarded-For`, `X-Forwarded-Prefix`, `X-Portal-User`, `X-Portal-Auth`).
+Any other header an Internet client sends arrives at the upstream verbatim.
+
+Upstream applications **must not** trust arbitrary request headers as proof of
+identity. If the upstream runs behind another reverse proxy or VPN that sets
+identity headers (for example `Tailscale-User-Login`, `X-Remote-User`, or
+`X-Real-IP`), a Portal visitor can trivially forge them. Use
+`--strip-request-header` (repeatable, case-insensitive) to remove such headers
+before they reach the upstream:
+
+```
+portal expose \
+  --http-route /=http://127.0.0.1:3000 \
+  --strip-request-header Tailscale-User-Login \
+  --strip-request-header X-Remote-User
+```
+
+The same policy applies automatically to WebSocket upgrade requests routed
+through `--http-route`. Portal-owned forwarding headers are set after stripping,
+so they remain correct and trusted.

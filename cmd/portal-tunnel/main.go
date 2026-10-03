@@ -80,6 +80,7 @@ type exposeFlags struct {
 	x402FacilitatorToken string
 	targetAddr           string
 	httpRoutes           []string
+	stripRequestHeaders  []string
 	serve                string
 	cache                bool
 	cacheTTL             time.Duration
@@ -113,6 +114,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.RepeatedStringFlag(fs, &flags.x402Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint")
 	utils.StringFlagEnv(fs, &flags.x402FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
 	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
+	utils.RepeatedStringFlag(fs, &flags.stripRequestHeaders, "strip-request-header", "Request header removed before forwarding to HTTP upstreams; repeat for multiple headers; case-insensitive")
 	utils.StringFlag(fs, &flags.serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
 	utils.BoolFlag(fs, &flags.cache, "cache", false, "Allow selected relays to store --serve content and terminate browser TLS; cached responses lose end-to-end TLS to this client")
 	fs.DurationVar(&flags.cacheTTL, "cache-ttl", 0, "Requested offline cache lifetime, clamped by the relay; 0 uses relay policy (requires --cache)")
@@ -240,6 +242,12 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 				},
 			},
 		}
+	}
+	if len(flags.stripRequestHeaders) > 0 && spec.HTTP == nil {
+		return tunnel.Spec{}, errors.New("--strip-request-header requires an HTTP tunnel (--http-route, --serve, or --target)")
+	}
+	if spec.HTTP != nil {
+		spec.HTTP.StripRequestHeaders = append([]string(nil), flags.stripRequestHeaders...)
 	}
 	if flags.cache {
 		spec.HTTP.Cache = &tunnel.CacheConfig{TTL: flags.cacheTTL}

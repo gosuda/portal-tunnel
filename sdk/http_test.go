@@ -312,3 +312,44 @@ func TestHTTPRoutesServeStaticRoute(t *testing.T) {
 		t.Fatalf("body = %q, want the configured entry file", got)
 	}
 }
+
+func TestHTTPRoutesStripRequestHeaders(t *testing.T) {
+	t.Parallel()
+	var gotHeaders http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
+		{Prefix: "/", Upstream: upstream.URL, StripRequestHeaders: []string{"X-Custom", "Authorization"}},
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPRoutes() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req.Header.Set("X-Custom", "secret")
+	req.Header.Set("Authorization", "Bearer abc")
+	req.Header.Set("X-Keep", "keep")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotHeaders.Get("X-Custom") != "" {
+		t.Fatalf("X-Custom forwarded: %q", gotHeaders.Get("X-Custom"))
+	}
+	if gotHeaders.Get("Authorization") != "" {
+		t.Fatalf("Authorization forwarded: %q", gotHeaders.Get("Authorization"))
+	}
+	if gotHeaders.Get("X-Keep") != "keep" {
+		t.Fatalf("X-Keep = %q, want keep", gotHeaders.Get("X-Keep"))
+	}
+	req2 := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req2.Header.Set("x-custom", "secret")
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	if gotHeaders.Get("X-Custom") != "" {
+		t.Fatalf("x-custom forwarded after case-insensitive strip")
+	}
+}

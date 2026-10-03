@@ -50,11 +50,12 @@ type UDPConfig struct {
 }
 
 type HTTPConfig struct {
-	Routes  []HTTPRoute
-	Serve   string
-	Auth    *gateway.ApplicationAuthConfig
-	Payment gateway.X402Payment
-	Cache   *CacheConfig
+	Routes              []HTTPRoute                    `koanf:"routes"`
+	Serve               string                         `koanf:"serve"`
+	Auth                *gateway.ApplicationAuthConfig `koanf:"auth"`
+	Payment             gateway.X402Payment            `koanf:"payment"`
+	Cache               *CacheConfig                   `koanf:"cache"`
+	StripRequestHeaders []string                       `koanf:"strip_request_headers"`
 }
 
 type HTTPRoute struct {
@@ -148,21 +149,23 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 
 	routes := make([]gateway.ExposedHTTPRoute, 0)
 	if spec.HTTP != nil {
+		stripHeaders := append([]string(nil), spec.HTTP.StripRequestHeaders...)
 		if serve := strings.TrimSpace(spec.HTTP.Serve); serve != "" {
 			root, index, err := utils.ResolveStaticSite(serve)
 			if err != nil {
 				return nil, fmt.Errorf("resolve static site %q: %w", serve, err)
 			}
-			routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", StaticRoot: root, StaticIndex: index})
+			routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", StaticRoot: root, StaticIndex: index, StripRequestHeaders: stripHeaders})
 		}
 		for _, route := range spec.HTTP.Routes {
 			routes = append(routes, gateway.ExposedHTTPRoute{
 				Prefix: route.Prefix, Upstream: route.Upstream,
 				Methods: append([]string(nil), route.Methods...), Amount: route.Amount,
+				StripRequestHeaders: append([]string(nil), stripHeaders...),
 			})
 		}
 		if len(routes) == 0 {
-			routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: spec.Transport.Target})
+			routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: spec.Transport.Target, StripRequestHeaders: stripHeaders})
 		}
 	}
 

@@ -156,6 +156,11 @@ type HTTPRouteConfig struct {
 	// StaticIndex is the SPA entry file served for the root and any unknown
 	// path under a static route. Defaults to "index.html" when empty.
 	StaticIndex string
+	// StripRequestHeaders lists request headers removed before forwarding to
+	// the upstream. Use it to prevent clients from injecting headers the
+	// upstream may blindly trust (e.g. identity headers set by a companion
+	// reverse proxy). Matching is case-insensitive.
+	StripRequestHeaders []string
 }
 
 // HTTPRoutes serves HTTPRouteConfig upstreams over one shared handler.
@@ -220,6 +225,7 @@ type httpRoute struct {
 	staticRoot     string
 	staticIndex    string
 	handler        http.Handler
+	stripHeaders   []string
 }
 
 func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
@@ -232,13 +238,21 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	}
 	prefix = utils.NormalizeURLPath(prefix)
 
+	stripHeaders := make([]string, 0, len(routeConfig.StripRequestHeaders))
+	for _, h := range routeConfig.StripRequestHeaders {
+		if h = strings.TrimSpace(h); h != "" {
+			stripHeaders = append(stripHeaders, http.CanonicalHeaderKey(h))
+		}
+	}
+
 	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
 		staticIndex := strings.TrimSpace(routeConfig.StaticIndex)
 		staticIndex = cmp.Or(staticIndex, utils.DefaultStaticIndex)
 		return &httpRoute{
-			prefix:      prefix,
-			staticRoot:  staticRoot,
-			staticIndex: staticIndex,
+			prefix:       prefix,
+			staticRoot:   staticRoot,
+			staticIndex:  staticIndex,
+			stripHeaders: stripHeaders,
 		}, nil
 	}
 
@@ -272,6 +286,7 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 		upstream:       upstream,
 		upstreamPath:   upstream.Path,
 		upstreamDomain: utils.NormalizeHostname(upstream.Hostname()),
+		stripHeaders:   stripHeaders,
 	}, nil
 }
 
@@ -336,6 +351,10 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 
 	if r.prefix != "/" {
 		pr.Out.Header.Set("X-Forwarded-Prefix", r.prefix)
+	}
+
+	for _, h := range r.stripHeaders {
+		pr.Out.Header.Del(h)
 	}
 }
 

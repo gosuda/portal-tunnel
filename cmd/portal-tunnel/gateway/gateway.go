@@ -94,6 +94,9 @@ type ExposedHTTPRoute struct {
 	// the contract's settlement asset (USDC on Sui, wCSPR on Casper), such
 	// as "0.01"; empty means the route is unpaid.
 	Amount string
+	// StripRequestHeaders lists request headers removed before forwarding.
+	// Matching is case-insensitive.
+	StripRequestHeaders []string
 }
 
 // ComposeHTTPRoutes builds the payment-agnostic sdk router and explicitly
@@ -117,10 +120,11 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Ha
 		}
 		policy := routePolicy{prefix: prefix}
 		sdkConfigs = append(sdkConfigs, sdk.HTTPRouteConfig{
-			Prefix:      prefix,
-			Upstream:    route.Upstream,
-			StaticRoot:  route.StaticRoot,
-			StaticIndex: route.StaticIndex,
+			Prefix:              prefix,
+			Upstream:            route.Upstream,
+			StaticRoot:          route.StaticRoot,
+			StaticIndex:         route.StaticIndex,
+			StripRequestHeaders: append([]string(nil), route.StripRequestHeaders...),
 		})
 
 		amount := strings.TrimSpace(route.Amount)
