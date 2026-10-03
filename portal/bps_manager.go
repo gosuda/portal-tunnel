@@ -1,4 +1,4 @@
-package policy
+package portal
 
 import (
 	"maps"
@@ -65,6 +65,18 @@ func (m *BPSManager) DeleteIdentityBPS(key string) {
 		m.identityBPS.UpdateCopy(func(limits *map[string]int64) {
 			delete(*limits, key)
 		})
+	}
+	m.mu.Lock()
+	delete(m.identityLimiters, key)
+	m.mu.Unlock()
+}
+
+// ResetIdentityLimiter drops only the accumulated token-bucket state for an
+// identity. The configured limit itself is operator-owned and survives lease
+// churn: a replacement lease restarts shaping with a full bucket.
+func (m *BPSManager) ResetIdentityLimiter(key string) {
+	if m == nil || key == "" {
+		return
 	}
 	m.mu.Lock()
 	delete(m.identityLimiters, key)

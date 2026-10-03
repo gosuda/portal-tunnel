@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -22,6 +23,7 @@ type RelayTCPPort struct {
 	pairs       chan tcpPair
 	ctx         context.Context
 	cancel      context.CancelFunc
+	routable    atomic.Bool
 
 	closeOnce sync.Once
 }
@@ -37,6 +39,16 @@ func NewRelayTCPPort(identityKey string, port int, stream *RelayStream) *RelayTC
 		port:        port,
 		stream:      stream,
 	}
+}
+
+// SetRoutable applies the relay's current access result to this TCP endpoint.
+// The listener stays bound so an allow can take effect without replacing the
+// live lease; blocked inbound connections close before claiming a stream.
+func (t *RelayTCPPort) SetRoutable(routable bool) {
+	if t == nil {
+		return
+	}
+	t.routable.Store(routable)
 }
 
 // Start opens the listener; Accept delivers paired connections after it
@@ -126,6 +138,10 @@ func (t *RelayTCPPort) acceptLoop() {
 }
 
 func (t *RelayTCPPort) claim(conn net.Conn) {
+	if !t.routable.Load() {
+		_ = conn.Close()
+		return
+	}
 	claimCtx, cancel := context.WithTimeout(t.ctx, defaultTCPPortClaimTimeout)
 	defer cancel()
 

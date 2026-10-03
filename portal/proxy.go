@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
-
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 )
 
 type proxy struct {
@@ -21,22 +19,21 @@ type proxy struct {
 	tcpLoadBytes int64
 }
 
-func (p *proxy) bridge(left, right net.Conn, identityKey string, bpsManager *policy.BPSManager) {
+func (p *proxy) bridge(left, right net.Conn, identityKey string, bpsManager *BPSManager) {
 	p.activeConns.Add(1)
 	defer p.activeConns.Add(-1)
 
 	defer left.Close()
 	defer right.Close()
 
-	throttled := bpsManager != nil && bpsManager.IdentityBPS(identityKey) > 0
 	var group errgroup.Group
 	group.Go(func() error {
-		err := p.copy(right, left, identityKey, bpsManager, throttled)
+		err := p.copy(right, left, identityKey, bpsManager)
 		closeWrite(right)
 		return err
 	})
 	group.Go(func() error {
-		err := p.copy(left, right, identityKey, bpsManager, throttled)
+		err := p.copy(left, right, identityKey, bpsManager)
 		closeWrite(left)
 		return err
 	})
@@ -69,13 +66,10 @@ func (p *proxy) currentTCPBPS(now time.Time) float64 {
 	return 0
 }
 
-func (p *proxy) copy(dst, src net.Conn, identityKey string, bpsManager *policy.BPSManager, throttled bool) error {
-	// fast path
-	if !throttled {
-		_, err := io.Copy(&countingConn{Conn: dst, bytes: &p.tcpBytes}, src)
-		return err
-	}
-
+// copy re-reads the identity's BPS limit for every chunk so runtime updates
+// apply to already-open connections: an added limit starts shaping the next
+// write, and a removed limit restores full speed without reconnecting.
+func (p *proxy) copy(dst, src net.Conn, identityKey string, bpsManager *BPSManager) error {
 	buf := make([]byte, 32*1024)
 	for {
 		nr, readErr := src.Read(buf)
@@ -104,32 +98,6 @@ func (p *proxy) copy(dst, src net.Conn, identityKey string, bpsManager *policy.B
 			return readErr
 		}
 	}
-}
-
-type countingConn struct {
-	net.Conn
-	bytes *atomic.Int64
-}
-
-func (c *countingConn) Write(p []byte) (int, error) {
-	n, err := c.Conn.Write(p)
-	if n > 0 {
-		c.bytes.Add(int64(n))
-	}
-	return n, err
-}
-
-func (c *countingConn) ReadFrom(r io.Reader) (int64, error) {
-	readerFrom, ok := c.Conn.(io.ReaderFrom)
-	if !ok {
-		return io.Copy(struct{ io.Writer }{Writer: c}, r)
-	}
-
-	n, err := readerFrom.ReadFrom(r)
-	if n > 0 {
-		c.bytes.Add(n)
-	}
-	return n, err
 }
 
 func closeWrite(conn net.Conn) {

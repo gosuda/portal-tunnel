@@ -28,7 +28,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
+
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -127,7 +127,7 @@ type Runtime struct {
 	close         sync.Once
 	inbound       chan struct{}
 	offers        chan ReverseOffer
-	sourceLimiter *policy.SourceLimiter
+	sourceLimiter *utils.SourceLimiter
 	admissionMu   sync.Mutex
 	outbound      int
 	activeSources map[string]int
@@ -146,7 +146,7 @@ func New(config Config) (*Runtime, error) {
 		config:        config,
 		inbound:       make(chan struct{}, connectionLimit),
 		offers:        make(chan ReverseOffer),
-		sourceLimiter: policy.NewSourceLimiter(sourceRequestsPerMinute, sourceRequestBurst, 0, 0),
+		sourceLimiter: utils.NewSourceLimiter(sourceRequestsPerMinute, sourceRequestBurst, 0, 0),
 		activeSources: make(map[string]int),
 		assignments:   make(map[string]string),
 		failures:      make(map[string]map[string]time.Time),
@@ -458,8 +458,9 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay is unavailable")
 		return nil, nil
 	}
-	// The server resolves clientIP using its trusted-proxy policy. Caller-chosen
-	// signing keys and lease IDs must not create fresh admission budgets.
+	// The relay resolves clientIP once at its ingress and passes it down as a
+	// value. Caller-chosen signing keys and lease IDs must not create fresh
+	// admission budgets.
 	if retry, _ := r.sourceLimiter.Allow(clientIP, 1); retry > 0 {
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay request rate exceeded")
 		return nil, nil

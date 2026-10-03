@@ -16,7 +16,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -40,14 +39,23 @@ type leaseRegistry struct {
 	reverseURL     string
 	overlay        *overlay.Runtime
 	cache          *cache.Manager
-	policy         *policy.Runtime
-	udpPorts       *transport.PortAllocator
-	tcpPorts       *transport.PortAllocator
-	bindings       *keyless.BindingRegistry
-	mu             sync.RWMutex
+	bps            *BPSManager
+	// blocked holds the relay-pushed access results for identities the relay
+	// currently declines to route. Entries outlive their leases so a denied
+	// identity stays blocked across churn; the janitor prunes entries that
+	// have no live lease after they go stale.
+	blocked map[string]time.Time
+	// Transport enablement and capacity are pushed down by the relay; the
+	// registry only enforces them.
+	udpEnabled, tcpEnabled     bool
+	udpMaxLeases, tcpMaxLeases int
+	udpPorts                   *transport.PortAllocator
+	tcpPorts                   *transport.PortAllocator
+	bindings                   *keyless.BindingRegistry
+	mu                         sync.RWMutex
 }
 
-func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, rootHostname string, publicPort int, tokenAuthority identity.Authority, tokenIssuer string, trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*leaseRegistry, error) {
+func newLeaseRegistry(udpEnabled, tcpEnabled bool, minPort, maxPort int, rootHostname string, publicPort int, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
 	if tokenAuthority == nil {
 		return nil, errors.New("lease token authority is required")
 	}
@@ -59,10 +67,6 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 	if err != nil || issuerURL.Host == "" {
 		return nil, errors.New("lease token issuer must be an absolute URL")
 	}
-	runtime, err := policy.NewRuntime(udpEnabled, tcpPortEnabled, trustProxyHeaders, rawTrustedProxyCIDRs)
-	if err != nil {
-		return nil, err
-	}
 
 	return &leaseRegistry{
 		records:        make([]*leaseRecord, 0),
@@ -71,11 +75,75 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 		tokenAuthority: tokenAuthority,
 		tokenIssuer:    tokenIssuer,
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
-		policy:         runtime,
+		bps:            NewBPSManager(),
+		blocked:        make(map[string]time.Time),
+		udpEnabled:     udpEnabled,
+		tcpEnabled:     tcpEnabled,
 		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		bindings:       keyless.NewBindingRegistry(5 * time.Minute),
 	}, nil
+}
+
+// setTransportPolicy applies the relay-pushed transport enablement and
+// capacity values the registry enforces.
+func (r *leaseRegistry) setTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) {
+	r.mu.Lock()
+	r.udpEnabled, r.udpMaxLeases = udpEnabled, udpMaxLeases
+	r.tcpEnabled, r.tcpMaxLeases = tcpEnabled, tcpMaxLeases
+	r.mu.Unlock()
+}
+
+func (r *leaseRegistry) transportPolicy() (udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.udpEnabled, r.udpMaxLeases, r.tcpEnabled, r.tcpMaxLeases
+}
+
+// setIdentityRoutable applies the relay-pushed access result for one
+// identity. A non-routable identity also loses its cached content
+// immediately: cached sites must never outlive the relay's decision to route
+// their owner.
+func (r *leaseRegistry) setIdentityRoutable(key string, routable bool) {
+	if r == nil || key == "" {
+		return
+	}
+	r.mu.Lock()
+	if routable {
+		delete(r.blocked, key)
+	} else {
+		r.blocked[key] = time.Now()
+	}
+	for _, record := range r.records {
+		if record == nil || record.Key() != key {
+			continue
+		}
+		if record.datagram != nil {
+			record.datagram.SetRoutable(routable)
+		}
+		if record.tcpPort != nil {
+			record.tcpPort.SetRoutable(routable)
+		}
+	}
+	r.mu.Unlock()
+	if !routable {
+		r.cache.DetachOwner(key)
+	}
+}
+
+func (r *leaseRegistry) isRoutable(key string) bool {
+	if r == nil || key == "" {
+		return true
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.isRoutableLocked(key)
+}
+
+// isRoutableLocked reads the pushed access result; the caller must hold r.mu.
+func (r *leaseRegistry) isRoutableLocked(key string) bool {
+	_, blocked := r.blocked[key]
+	return !blocked
 }
 
 func (r *leaseRegistry) CloseAll() []*leaseRecord {
@@ -83,7 +151,7 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 	out := r.records
 	for _, record := range out {
 		if record != nil && record.stream != nil {
-			r.policy.ForgetIdentity(record.Key())
+			r.bps.ResetIdentityLimiter(record.Key())
 		}
 		if record != nil && r.overlay != nil {
 			r.overlay.ForgetLease(record.id)
@@ -176,13 +244,12 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
 	}
-	if req.UDPEnabled && !r.policy.IsUDPEnabled() {
+	udpEnabled, _, tcpEnabled, _ := r.transportPolicy()
+	if req.UDPEnabled && !udpEnabled {
 		return nil, types.RegisterResponse{}, errUDPDisabled
 	}
-	if req.TCPEnabled {
-		if !r.policy.IsTCPPortEnabled() {
-			return nil, types.RegisterResponse{}, errTCPPortDisabled
-		}
+	if req.TCPEnabled && !tcpEnabled {
+		return nil, types.RegisterResponse{}, errTCPPortDisabled
 	}
 
 	leaseID := utils.RandomID("lease_")
@@ -277,14 +344,14 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		}
 	}
 	if record.datagram != nil {
-		if max := r.policy.UDPMaxLeases(); max > 0 && udpLeases >= max {
+		if max := r.udpMaxLeases; max > 0 && udpLeases >= max {
 			r.mu.Unlock()
 			record.Close()
 			return nil, types.RegisterResponse{}, errUDPCapacityExceeded
 		}
 	}
 	if record.tcpPort != nil {
-		if max := r.policy.TCPPortMaxLeases(); max > 0 && tcpLeases >= max {
+		if max := r.tcpMaxLeases; max > 0 && tcpLeases >= max {
 			r.mu.Unlock()
 			record.Close()
 			return nil, types.RegisterResponse{}, errTCPPortCapacityExceeded
@@ -302,7 +369,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 	r.cache.Register(record.cacheLease(), req)
 	if replacedIndex >= 0 {
-		r.policy.ForgetIdentity(identityKey)
+		r.bps.ResetIdentityLimiter(identityKey)
 		r.records[replacedIndex] = record
 	} else {
 		r.records = append(r.records, record)
@@ -326,7 +393,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		for i, current := range r.records {
 			if current == record {
 				r.deleteRecord(i)
-				r.policy.ForgetIdentity(identityKey)
+				r.bps.ResetIdentityLimiter(identityKey)
 				break
 			}
 		}
@@ -387,7 +454,7 @@ func (r *leaseRegistry) admitLeaseIdentity(key, leaseID string, now time.Time, r
 	if err != nil {
 		return nil, err
 	}
-	if !r.policy.IsIdentityRoutable(record.Key()) {
+	if !r.isRoutable(record.Key()) {
 		return nil, errLeaseRejected
 	}
 	if record.stream == nil || (requireDatagram && record.datagram == nil) {
@@ -550,7 +617,7 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 			continue
 		}
 		r.deleteRecord(i)
-		r.policy.ForgetIdentity(key)
+		r.bps.ResetIdentityLimiter(key)
 		r.mu.Unlock()
 		record.Close()
 		return record, nil
@@ -654,7 +721,7 @@ func (r *leaseRegistry) verifySigningAccessTokenLease(req *http.Request) (string
 	if !record.isPublicEntry() {
 		return "", false
 	}
-	if !r.policy.IsIdentityRoutable(record.Key()) {
+	if !r.isRoutableLocked(record.Key()) {
 		return "", false
 	}
 	return claims.LeaseID, true
@@ -683,12 +750,21 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 		if record != nil && record.isExpired(now) {
 			expired = append(expired, record)
 			if record.stream != nil {
-				r.policy.ForgetIdentity(record.Key())
+				r.bps.ResetIdentityLimiter(record.Key())
 			}
 			r.deleteRecord(i)
 			continue
 		}
 		i++
+	}
+	// Pushed access results outlive their leases so a denied identity stays
+	// blocked across churn; prune only entries with no live lease once they
+	// go stale.
+	for key, pushedAt := range r.blocked {
+		if r.recordByKey(key, now) != nil || now.Sub(pushedAt) < defaultRegisterChallengeTTL {
+			continue
+		}
+		delete(r.blocked, key)
 	}
 	r.mu.Unlock()
 
@@ -712,7 +788,7 @@ func (r *leaseRegistry) PublicLeases(now time.Time) []types.Lease {
 		}
 		if record.stream != nil {
 			identityKey := record.Key()
-			if !r.policy.IsIdentityRoutable(identityKey) {
+			if !r.isRoutableLocked(identityKey) {
 				continue
 			}
 			since := time.Duration(0)
@@ -743,12 +819,9 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 			Lease:       r.publicLease(record),
 			IdentityKey: identityKey,
 			Address:     record.Address,
-			BPS:         r.policy.BPSManager().IdentityBPS(identityKey),
+			BPS:         r.bps.IdentityBPS(identityKey),
 			ClientIP:    clientIP,
 			ReportedIP:  record.ReportedIP,
-			IsApproved:  r.policy.EffectiveApproval(identityKey),
-			IsBanned:    r.policy.IsIdentityBanned(identityKey),
-			IsDenied:    r.policy.IsIdentityDenied(identityKey),
 		})
 	}
 	return leases

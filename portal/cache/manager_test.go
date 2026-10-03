@@ -16,17 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func testManager(t *testing.T, budget int) *Manager {
 	t.Helper()
-	policy, err := policy.NewRuntime(false, false, false, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := New(Config{Enabled: true, MaxBytes: budget, MaxTTL: time.Minute}, t.TempDir(), policy)
+	c, err := New(Config{Enabled: true, MaxBytes: budget, MaxTTL: time.Minute}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,17 +74,13 @@ func TestNewRejectsEmptyDirectoryWithoutFilesystemChanges(t *testing.T) {
 	if err := os.WriteFile(untouched, []byte("existing"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := policy.NewRuntime(false, false, false, "")
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, dir := range []string{"", " \t"} {
-		manager, err := New(Config{Enabled: true, MaxBytes: 32, MaxTTL: time.Minute}, dir, runtime)
+		manager, err := New(Config{Enabled: true, MaxBytes: 32, MaxTTL: time.Minute}, dir)
 		if err == nil || manager != nil {
 			t.Fatalf("enabled cache accepted empty directory %q", dir)
 		}
 	}
-	if manager, err := New(Config{}, "", runtime); err != nil || manager != nil {
+	if manager, err := New(Config{}, ""); err != nil || manager != nil {
 		t.Fatalf("disabled cache requires storage: %v", err)
 	}
 	if content, err := os.ReadFile(untouched); err != nil || string(content) != "existing" {
@@ -497,26 +488,29 @@ func TestLeaseReplacementRejectsInFlightUpload(t *testing.T) {
 	}
 }
 
-func TestPolicyBanSuppressesCacheRouting(t *testing.T) {
-	runtime, err := policy.NewRuntime(false, false, false, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := New(Config{Enabled: true, MaxBytes: 16, MaxTTL: time.Minute}, t.TempDir(), runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
+// Blocking an identity retires its published sites while keeping the lease
+// entry: an identity the relay re-allows can republish on the same lease.
+func TestDetachOwnerSuppressesCacheRoutingButKeepsLease(t *testing.T) {
+	c := testManager(t, 16)
 	l := testLease(c, "site")
 	w := httptest.NewRecorder()
 	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
-	runtime.BanIdentity(l.Owner)
-	if c.Has(l.Hostname) || c.Eligible(l.ID) {
-		t.Fatal("banned identity remained routable from cache")
+	c.DetachOwner(l.Owner)
+	if c.Has(l.Hostname) {
+		t.Fatal("detached owner remained routable from cache")
 	}
 	if c.Serve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "https://"+l.Hostname+"/", nil), l.Hostname) {
-		t.Fatal("banned identity was still served from cache")
+		t.Fatal("detached owner was still served from cache")
+	}
+	if !c.Eligible(l.ID) {
+		t.Fatal("detached owner lost its cache lease eligibility")
+	}
+	w = httptest.NewRecorder()
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+	if w.Code != http.StatusOK || !c.Has(l.Hostname) {
+		t.Fatalf("re-allowed owner could not republish: %d %s", w.Code, w.Body.String())
 	}
 }

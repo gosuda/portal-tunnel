@@ -129,7 +129,7 @@ func TestRelayServeRoutesAndCancellation(t *testing.T) {
 		defer cancel()
 		serveResult := make(chan error, 1)
 		go func() {
-			serveResult <- server.Serve(ctx, appHandler)
+			serveResult <- server.Serve(ctx, relayHandler(server, appHandler))
 		}()
 
 		waitForRelayCertificateMaterial(t, stateDir)
@@ -219,7 +219,7 @@ func TestRelayStartInitializesLocalACMEAndGatesSignPath(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := server.Start(ctx, nil); err != nil {
+	if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
 		t.Fatalf("start portal server: %v", err)
 	}
 	defer stopRelay(t, server)
@@ -264,7 +264,7 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := server.Start(ctx, nil); err != nil {
+		if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
 			t.Fatalf("start portal server: %v", err)
 		}
 		defer stopRelay(t, server)
@@ -349,7 +349,7 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := server.Start(ctx, nil); err != nil {
+		if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
 			t.Fatalf("start portal server: %v", err)
 		}
 		defer stopRelay(t, server)

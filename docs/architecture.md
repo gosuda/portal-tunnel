@@ -89,14 +89,24 @@ the rest of the system.
 
 ## Admission and identity policy
 
-The relay hands root/API and cache TLS connections from its SNI ingress directly
-to the API server, preserving the original socket peer without a local TCP hop.
-Forwarded HTTP headers are accepted only from explicitly trusted proxies.
+The relay owns the top-level route table. Its SNI ingress preserves the
+original socket peer without a local TCP hop; the application mux resolves
+the client IP once at the edge and accepts forwarded headers only from
+explicitly trusted proxies. Every portal handler receives that client IP as
+a plain value.
+
+Registration challenges, registration attempts, and discovery announces share
+weighted per-source and global budgets owned by `utils.SourceLimiter` in
+`cmd/relay-server/policy`. The mux applies them after the method check and
+before any decoding or signature work, returns 429 with retry guidance, and
+records bounded rejection metrics. Authenticated lease operations do not
+spend the source budget.
 
 Durable approval, denial, banning, and routing are keyed by verified Portal
-identity. Source IP remains diagnostic metadata and an ephemeral pre-auth
-admission signal. Registration challenges, registration attempts, and discovery
-announces share weighted per-source and global budgets owned by
-`portal/policy.SourceLimiter`. The server applies these before decoding and
-signature work, returns 429 with retry guidance, and records bounded rejection
-metrics. Authenticated lease operations do not spend the source budget.
+identity and owned by `cmd/relay-server/policy.Access`. The relay pushes
+each decision into the data path before the affected lease is observable:
+portal holds only the pushed enforcement values (a routable flag per
+identity, per-identity BPS limits, and the UDP/TCP operator policy), so
+runtime updates reach already-open connections and already-bound
+transports. Source IP remains diagnostic metadata; IP bans are not
+persisted.
