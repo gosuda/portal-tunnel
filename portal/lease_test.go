@@ -34,6 +34,12 @@ func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegist
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
+	registry.names, err = loadNameReservations(
+		filepath.Join(t.TempDir(), "name-reservations.json"), relay.Name, DefaultNameReservationTTL,
+	)
+	if err != nil {
+		t.Fatalf("load name reservations: %v", err)
+	}
 	registry.setUDPPolicy(udpEnabled, 0)
 	registry.setTCPPortPolicy(tcpPortEnabled, 0)
 	// Registered leases bind UDP and raw-TCP relays; releasing them keeps

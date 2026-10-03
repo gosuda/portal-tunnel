@@ -118,3 +118,12 @@ global budgets owned by the relay's admission limiter. The relay applies these
 before decoding and signature work, returns 429 with retry guidance, and
 records bounded rejection metrics. Authenticated lease operations do not spend
 the source budget.
+
+## Public name ownership
+
+The relay persists hostname-to-identity reservations independently of active
+transport leases. Registration and renewal serialize the ownership decision,
+durable reservation write, and lease publication under the registry lock. Name
+ownership survives unregister, expiry and restart without retaining transport
+resources. The configuration reference defines the bounded reservation window
+and state-volume requirements.

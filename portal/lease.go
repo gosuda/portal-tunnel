@@ -23,6 +23,7 @@ import (
 
 const (
 	defaultLeaseTTL                          = 2 * time.Minute
+	maxLeaseTTL                              = time.Hour
 	defaultRegisterChallengeTTL              = 2 * time.Minute
 	defaultRegisterChallengeOutstandingPerIP = 32
 	defaultPortReservationGrace              = 5 * time.Minute
@@ -38,6 +39,7 @@ type leaseRegistry struct {
 	tokenIssuer    string
 	reverseURL     string
 	overlay        *overlay.Runtime
+	names          *nameReservations
 	cache          *cache.Manager
 	bps            *BPSManager
 	udpPorts       *transport.PortAllocator
@@ -270,7 +272,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 
 	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
-		ttl = time.Duration(req.TTL) * time.Second
+		ttl = time.Duration(min(req.TTL, int(maxLeaseTTL/time.Second))) * time.Second
 	}
 
 	identityKey := leaseIdentity.Key()
@@ -391,6 +393,11 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			record.Close()
 			return nil, types.RegisterResponse{}, errTCPPortCapacityExceeded
 		}
+	}
+	if err := r.names.Reserve(record, expiresAt, now); err != nil {
+		r.mu.Unlock()
+		record.Close()
+		return nil, types.RegisterResponse{}, err
 	}
 	for i := 0; i < len(r.records); i++ {
 		existing := r.records[i]
@@ -516,7 +523,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}
 	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
-		ttl = time.Duration(req.TTL) * time.Second
+		ttl = time.Duration(min(req.TTL, int(maxLeaseTTL/time.Second))) * time.Second
 	}
 
 	leaseKey := claims.Identity.Key()
@@ -530,6 +537,10 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 
 	now := time.Now()
 	expiresAt := now.Add(ttl).UTC().Truncate(time.Second)
+	if err := r.names.Reserve(record, expiresAt, now); err != nil {
+		r.mu.Unlock()
+		return types.RenewResponse{}, reverseEndpointInput{}, err
+	}
 	record.ExpiresAt = expiresAt
 	record.LastSeenAt = now
 	if strings.TrimSpace(clientIP) != "" {

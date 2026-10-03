@@ -1,0 +1,321 @@
+package portal
+
+import (
+	"errors"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
+)
+
+func TestNameReservationSurvivesLeaseLifecycle(t *testing.T) {
+	t.Parallel()
+	for _, offline := range []string{"unregister", "expiry", "restart"} {
+		t.Run(offline, func(t *testing.T) {
+			registry := newTestRegistry(t, false, false)
+			alice := newTestLeaseIdentity(t, "stable")
+			_, response, err := registry.Register(
+				types.RegisterChallengeRequest{Identity: alice, Metadata: types.LeaseMetadata{Hide: true}},
+				"203.0.113.1", "", types.RelayDescriptor{}, nil,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch offline {
+			case "unregister":
+				if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: response.AccessToken}); err != nil {
+					t.Fatal(err)
+				}
+			case "expiry":
+				registry.cleanupExpired(response.ExpiresAt)
+			case "restart":
+				registry.CloseAll()
+				restored, err := loadNameReservations(registry.names.path, registry.rootHostname, registry.names.ttl)
+				if err != nil {
+					t.Fatal(err)
+				}
+				registry.names = restored
+			}
+			if _, ok := registry.Lookup("stable.example.com"); ok {
+				t.Fatal("offline name must have no route")
+			}
+			bob := newTestLeaseIdentity(t, "stable")
+			if _, _, err := registry.Register(
+				types.RegisterChallengeRequest{Identity: bob}, "203.0.113.1", "", types.RelayDescriptor{}, nil,
+			); !errors.Is(err, errHostnameConflict) {
+				t.Fatalf("different identity, same IP: %v, want hostname_conflict", err)
+			}
+			if _, _, err := registry.Register(
+				types.RegisterChallengeRequest{Identity: alice}, "203.0.113.2", "", types.RelayDescriptor{}, nil,
+			); err != nil {
+				t.Fatalf("same identity, changed IP: %v", err)
+			}
+		})
+	}
+}
+
+func TestNameReservationExpiryAndRefresh(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "names.json")
+	store, err := loadNameReservations(path, "example.com", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	alice := &leaseRecord{Identity: newTestLeaseIdentity(t, "stable"), Hostname: "stable.example.com"}
+	bob := &leaseRecord{Identity: newTestLeaseIdentity(t, "stable"), Hostname: alice.Hostname}
+	if err := store.Reserve(alice, now.Add(time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+	firstDeadline := store.entries[alice.Hostname].ReservedUntil
+	if err := store.Reserve(bob, firstDeadline, firstDeadline.Add(-time.Nanosecond)); !errors.Is(err, errHostnameConflict) {
+		t.Fatalf("early takeover: %v", err)
+	}
+	if err := store.Reserve(alice, now.Add(20*time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := loadNameReservations(path, "example.com", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := refreshed.Reserve(bob, firstDeadline, firstDeadline); !errors.Is(err, errHostnameConflict) {
+		t.Fatalf("renewed reservation lost after restart: %v", err)
+	}
+	deadline := refreshed.entries[alice.Hostname].ReservedUntil
+	if err := refreshed.Reserve(bob, deadline.Add(time.Minute), deadline); err != nil {
+		t.Fatalf("takeover at expiration: %v", err)
+	}
+	if err := refreshed.Reserve(alice, deadline.Add(time.Minute), deadline); !errors.Is(err, errHostnameConflict) {
+		t.Fatalf("old owner retained ownership after takeover: %v", err)
+	}
+}
+
+func TestNameReservationRenewalIsDurable(t *testing.T) {
+	t.Parallel()
+	registry := newTestRegistry(t, false, false)
+	_, response, err := registry.Register(
+		types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "stable")},
+		"203.0.113.1", "", types.RelayDescriptor{}, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed, _, err := registry.Renew(types.RenewRequest{AccessToken: response.AccessToken, TTL: 3600}, "203.0.113.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := loadNameReservations(registry.names.path, registry.rootHostname, registry.names.ttl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := renewed.ExpiresAt.Add(registry.names.ttl)
+	if got := restored.entries["stable.example.com"].ReservedUntil; got.Before(want) || got.After(want.Add(time.Hour)) {
+		t.Fatalf("persisted deadline = %v, want %v", got, want)
+	}
+}
+
+func TestNameReservationConcurrentClaims(t *testing.T) {
+	t.Parallel()
+	registry := newTestRegistry(t, false, false)
+	results := make(chan error, 8)
+	identities := make([]types.Identity, cap(results))
+	for i := range identities {
+		identities[i] = newTestLeaseIdentity(t, "stable")
+	}
+	var group sync.WaitGroup
+	for _, claimant := range identities {
+		group.Go(func() {
+			_, _, err := registry.Register(
+				types.RegisterChallengeRequest{Identity: claimant}, "203.0.113.1", "", types.RelayDescriptor{}, nil,
+			)
+			results <- err
+		})
+	}
+	group.Wait()
+	close(results)
+	winners := 0
+	for err := range results {
+		if err == nil {
+			winners++
+			continue
+		}
+		if !errors.Is(err, errHostnameConflict) {
+			t.Fatal(err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("successful owners = %d, want 1", winners)
+	}
+	active, ok := registry.Lookup("stable.example.com")
+	if !ok {
+		t.Fatal("winner has no route")
+	}
+	restored, err := loadNameReservations(registry.names.path, registry.rootHostname, registry.names.ttl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.entries[active.Hostname].Owner; got != active.Key() {
+		t.Fatalf("durable owner = %q, active owner = %q", got, active.Key())
+	}
+}
+
+func TestNameReservationWriteFailureCannotPublishLease(t *testing.T) {
+	t.Parallel()
+	registry := newTestRegistry(t, false, false)
+	if err := os.Mkdir(registry.names.path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := registry.Register(
+		types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "stable")},
+		"203.0.113.1", "", types.RelayDescriptor{}, nil,
+	)
+	if err == nil {
+		t.Fatal("registration must fail if reservations cannot be persisted")
+	}
+	api, ok := errors.AsType[*apiError](err)
+	if !ok || api.status != http.StatusInternalServerError {
+		t.Fatalf("storage failure = %v, want internal server error", err)
+	}
+	if _, ok := registry.Lookup("stable.example.com"); ok {
+		t.Fatal("failed durable write published a route")
+	}
+}
+
+func TestNameReservationRejectsCorruptState(t *testing.T) {
+	t.Parallel()
+	for _, data := range []string{"{", "null", `{"stable.example.com":{"owner_identity_key":"wrong","reserved_until":"2030-01-01T00:00:00Z"}}`} {
+		path := filepath.Join(t.TempDir(), "name-reservations.json")
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadNameReservations(path, "example.com", time.Hour); err == nil {
+			t.Fatalf("accepted corrupt state %q", data)
+		}
+	}
+}
+
+func TestNameReservationTTLValidation(t *testing.T) {
+	t.Parallel()
+	for _, ttl := range []time.Duration{-time.Second, time.Nanosecond, 366 * 24 * time.Hour} {
+		if _, err := ValidateServerConfig(ServerConfig{
+			PortalURL: "https://example.com", StateDir: t.TempDir(), NameReservationTTL: ttl,
+		}); err == nil {
+			t.Fatalf("accepted TTL %v", ttl)
+		}
+	}
+	cfg, err := ValidateServerConfig(ServerConfig{PortalURL: "https://example.com", StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NameReservationTTL != DefaultNameReservationTTL {
+		t.Fatalf("default TTL = %v", cfg.NameReservationTTL)
+	}
+}
+
+func TestNameReservationBoundsClientLeaseTTL(t *testing.T) {
+	t.Parallel()
+	registry := newTestRegistry(t, false, false)
+	started := time.Now().UTC()
+	_, response, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "stable"), TTL: int(^uint(0) >> 1),
+	}, "203.0.113.1", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ExpiresAt.Before(started.Add(maxLeaseTTL-time.Second)) || response.ExpiresAt.After(time.Now().Add(maxLeaseTTL)) {
+		t.Fatalf("unbounded or overflowed registration expiry: %v", response.ExpiresAt)
+	}
+	started = time.Now().UTC()
+	renewed, _, err := registry.Renew(types.RenewRequest{AccessToken: response.AccessToken, TTL: int(^uint(0) >> 1)}, "203.0.113.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.ExpiresAt.Before(started.Add(maxLeaseTTL-time.Second)) || renewed.ExpiresAt.After(time.Now().Add(maxLeaseTTL)) {
+		t.Fatalf("unbounded or overflowed renewal expiry: %v", renewed.ExpiresAt)
+	}
+	restored, err := loadNameReservations(registry.names.path, registry.rootHostname, registry.names.ttl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := restored.entries["stable.example.com"].ReservedUntil
+	if deadline.After(time.Now().Add(maxLeaseTTL + registry.names.ttl + time.Hour)) {
+		t.Fatalf("unbounded reservation: %v", deadline)
+	}
+}
+
+func TestNameReservationRenewalReusesDurableWindow(t *testing.T) {
+	t.Parallel()
+	for _, failure := range []string{"unwritable path", "post-rename uncertainty"} {
+		t.Run(failure, func(t *testing.T) {
+			registry := newTestRegistry(t, false, false)
+			_, response, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "stable")}, "203.0.113.1", "", types.RelayDescriptor{}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := registry.names.durable["stable.example.com"]
+			if failure == "unwritable path" {
+				registry.names.path = filepath.Join(t.TempDir(), "missing", "names.json")
+			} else {
+				registry.names.writeErr = errors.New("directory sync failed")
+				// A tentative new owner must not inherit the confirmed owner's fast path.
+				tentative := &leaseRecord{Identity: newTestLeaseIdentity(t, "tentative"), Hostname: "tentative.example.com"}
+				registry.names.entries = map[string]nameReservation{
+					"stable.example.com": original,
+					tentative.Hostname:   {Owner: tentative.Key(), ReservedUntil: original.ReservedUntil},
+				}
+				if err := registry.names.Reserve(tentative, response.ExpiresAt, time.Now()); err == nil {
+					t.Fatal("uncertain ownership was published")
+				}
+			}
+			for range 200 {
+				if _, _, err := registry.Renew(types.RenewRequest{AccessToken: response.AccessToken, TTL: 120}, "203.0.113.1"); err != nil {
+					t.Fatalf("covered renewal failed: %v", err)
+				}
+			}
+			if got := registry.names.durable["stable.example.com"]; got != original {
+				t.Fatal("covered renewals rewrote durable state")
+			}
+			if err := registry.names.Reserve(&leaseRecord{Identity: newTestLeaseIdentity(t, "new"), Hostname: "new.example.com"}, response.ExpiresAt, time.Now()); err == nil {
+				t.Fatal("new ownership published during storage failure")
+			}
+			active, ok := registry.Lookup("stable.example.com")
+			if !ok {
+				t.Fatal("renewed route missing")
+			}
+			if err := registry.names.Reserve(active, original.ReservedUntil, time.Now()); err == nil {
+				t.Fatal("uncovered extension accepted during storage failure")
+			}
+		})
+	}
+}
+
+func TestNameReservationDomainChangePreservesNamespaces(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	alice := newTestLeaseIdentity(t, "stable")
+	for _, root := range []string{"example.com", "new-domain.example", "example.com"} {
+		server, err := NewServer(ServerConfig{PortalURL: "https://" + root, StateDir: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry := server.registry
+		if root == "example.com" && len(registry.names.entries) != 0 {
+			_, _, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "stable")}, "203.0.113.1", "", types.RelayDescriptor{}, nil)
+			if !errors.Is(err, errHostnameConflict) {
+				t.Fatalf("returning domain lost old owner: %v", err)
+			}
+		}
+		_, _, err = registry.Register(types.RegisterChallengeRequest{Identity: alice}, "203.0.113.1", "", types.RelayDescriptor{}, nil)
+		registry.CloseAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if nameReservationsPath(dir, "127.0.0.1") != nameReservationsPath(dir, "localhost") {
+		t.Fatal("same public namespace has different files")
+	}
+}
