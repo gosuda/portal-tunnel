@@ -31,7 +31,7 @@ func TestCertificateSignerMismatchRejectsStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create relay: %v", err)
 	}
-	err = relay.Start(context.Background(), nil)
+	err = relay.Start(context.Background(), relayHandler(relay, nil))
 	if err == nil {
 		_ = relay.Shutdown(context.Background())
 		t.Fatal("start relay with mismatched certificate and signer succeeded")

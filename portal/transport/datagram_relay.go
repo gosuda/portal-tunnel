@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -33,6 +34,7 @@ type RelayDatagram struct {
 	flowTable   map[uint32]*flowState
 	addrIndex   map[string]uint32
 	nextFlow    uint32
+	routable    atomic.Bool
 
 	conn *net.UDPConn
 
@@ -166,6 +168,16 @@ func (d *RelayDatagram) UDPPort() int {
 	return d.port
 }
 
+// SetRoutable applies the relay's current access result to both directions of
+// this UDP endpoint. The endpoint stays bound so an allow can take effect
+// without replacing the live lease.
+func (d *RelayDatagram) SetRoutable(routable bool) {
+	if d == nil {
+		return
+	}
+	d.routable.Store(routable)
+}
+
 func (d *RelayDatagram) runDispatchLoop() {
 	for {
 		select {
@@ -178,6 +190,9 @@ func (d *RelayDatagram) runDispatchLoop() {
 }
 
 func (d *RelayDatagram) dispatch(frame types.DatagramFrame) {
+	if !d.routable.Load() {
+		return
+	}
 	d.mu.Lock()
 	flow, ok := d.flowTable[frame.FlowID]
 	if !ok || flow == nil || flow.reply == nil {
@@ -268,8 +283,14 @@ func (d *RelayDatagram) readLoop(ctx context.Context) {
 				Msg("readLoop exiting: unexpected read error")
 			return
 		}
+		if !d.routable.Load() {
+			continue
+		}
 
 		flowID := d.touchFlow("udp:"+clientAddr.String(), func(payload []byte) error {
+			if !d.routable.Load() {
+				return nil
+			}
 			_, err := d.conn.WriteToUDP(payload, clientAddr)
 			return err
 		})

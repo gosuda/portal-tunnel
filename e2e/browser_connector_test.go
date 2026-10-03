@@ -116,7 +116,7 @@ func TestPackagedBrowserWASM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create relay: %v", err)
 	}
-	if err := relay.Start(ctx, mux); err != nil {
+	if err := relay.Start(ctx, relayHandler(relay, mux)); err != nil {
 		t.Fatalf("start relay: %v", err)
 	}
 	t.Cleanup(func() {

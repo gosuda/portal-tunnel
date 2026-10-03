@@ -126,7 +126,7 @@ func startMembershipRelay(t *testing.T, ctx context.Context) membershipRelay {
 	if err != nil {
 		t.Fatalf("create relay: %v", err)
 	}
-	if err := relay.Start(ctx, nil); err != nil {
+	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
 		t.Fatalf("start relay: %v", err)
 	}
 	t.Cleanup(func() {

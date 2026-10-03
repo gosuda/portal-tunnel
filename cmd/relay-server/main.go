@@ -20,8 +20,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -41,6 +41,11 @@ func main() {
 
 type appConfig struct {
 	Relay              portal.ServerConfig
+	UDPEnabled         bool
+	TCPEnabled         bool
+	PreAuth            types.PreAuthConfig
+	TrustProxyHeaders  bool
+	TrustedProxyCIDRs  string
 	FrontendDir        string
 	LandingPageEnabled bool
 	AdminToken         string
@@ -79,13 +84,13 @@ func resolveAppConfig(args []string) (appConfig, error) {
 
 func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	preAuthDefaults := policy.DefaultPreAuthConfig()
-	utils.IntFlagEnv(fs, &cfg.Relay.PreAuth.SourcePerMinute, "preauth-source-per-minute", preAuthDefaults.SourcePerMinute, nil, "per-source pre-auth units refilled per minute", "PREAUTH_SOURCE_PER_MINUTE")
-	utils.IntFlagEnv(fs, &cfg.Relay.PreAuth.SourceBurst, "preauth-source-burst", preAuthDefaults.SourceBurst, nil, "per-source pre-auth burst units", "PREAUTH_SOURCE_BURST")
-	utils.IntFlagEnv(fs, &cfg.Relay.PreAuth.GlobalPerMinute, "preauth-global-per-minute", preAuthDefaults.GlobalPerMinute, nil, "global pre-auth units refilled per minute", "PREAUTH_GLOBAL_PER_MINUTE")
-	utils.IntFlagEnv(fs, &cfg.Relay.PreAuth.GlobalBurst, "preauth-global-burst", preAuthDefaults.GlobalBurst, nil, "global pre-auth burst units", "PREAUTH_GLOBAL_BURST")
-	utils.IntFlagEnv(fs, &cfg.Relay.PreAuth.ChallengeCost, "preauth-challenge-cost", preAuthDefaults.ChallengeCost, nil, "pre-auth units per registration challenge", "PREAUTH_CHALLENGE_COST")
-	utils.IntFlagEnv(fs, &cfg.Relay.PreAuth.AnnounceCost, "preauth-announce-cost", preAuthDefaults.AnnounceCost, nil, "pre-auth units per discovery announce", "PREAUTH_ANNOUNCE_COST")
-	utils.IntFlagEnv(fs, &cfg.Relay.PreAuth.RegisterCost, "preauth-register-cost", preAuthDefaults.RegisterCost, nil, "pre-auth units per registration attempt", "PREAUTH_REGISTER_COST")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.SourcePerMinute, "preauth-source-per-minute", preAuthDefaults.SourcePerMinute, nil, "per-source pre-auth units refilled per minute", "PREAUTH_SOURCE_PER_MINUTE")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.SourceBurst, "preauth-source-burst", preAuthDefaults.SourceBurst, nil, "per-source pre-auth burst units", "PREAUTH_SOURCE_BURST")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.GlobalPerMinute, "preauth-global-per-minute", preAuthDefaults.GlobalPerMinute, nil, "global pre-auth units refilled per minute", "PREAUTH_GLOBAL_PER_MINUTE")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.GlobalBurst, "preauth-global-burst", preAuthDefaults.GlobalBurst, nil, "global pre-auth burst units", "PREAUTH_GLOBAL_BURST")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.ChallengeCost, "preauth-challenge-cost", preAuthDefaults.ChallengeCost, nil, "pre-auth units per registration challenge", "PREAUTH_CHALLENGE_COST")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.AnnounceCost, "preauth-announce-cost", preAuthDefaults.AnnounceCost, nil, "pre-auth units per discovery announce", "PREAUTH_ANNOUNCE_COST")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.RegisterCost, "preauth-register-cost", preAuthDefaults.RegisterCost, nil, "pre-auth units per registration attempt", "PREAUTH_REGISTER_COST")
 
 	utils.BoolFlagEnv(fs, &cfg.Relay.Cache.Enabled, "cache-enabled", true, "allow explicitly opted-in static exposures to use the relay disk cache", "CACHE_ENABLED")
 	utils.IntFlagEnv(fs, &cfg.Relay.Cache.MaxBytes, "cache-max-bytes", 1<<30, nil, "maximum relay cached and staging payload bytes", "CACHE_MAX_BYTES")
@@ -103,11 +108,11 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.StringFlagEnv(fs, &cfg.Relay.HTTPRedirect.Addr, "http-redirect-addr", types.DefaultHTTPRedirectAddr, "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
 	utils.BoolFlagEnv(fs, &cfg.Relay.HTTPRedirect.HSTS, "http-redirect-hsts", false, "include HSTS max-age=31536000 on redirects; browsers ignore HSTS received over HTTP", "HTTP_REDIRECT_HSTS")
 	utils.IntFlagEnv(fs, &cfg.Relay.SNIPort, "sni-port", 0, utils.ParsePortNumber, "local TCP SNI router listen port (0 follows the PORTAL_URL port when it names one, else 443)", "SNI_PORT")
-	utils.BoolFlagEnv(fs, &cfg.Relay.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
-	utils.StringFlagEnv(fs, &cfg.Relay.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "explicit trusted proxy CIDR allowlist for forwarded headers, comma-separated; empty trusts no proxies", "TRUSTED_PROXY_CIDRS")
+	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
+	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "explicit trusted proxy CIDR allowlist for forwarded headers, comma-separated; empty trusts no proxies", "TRUSTED_PROXY_CIDRS")
 
-	utils.BoolFlagEnv(fs, &cfg.Relay.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
-	utils.BoolFlagEnv(fs, &cfg.Relay.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
+	utils.BoolFlagEnv(fs, &cfg.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
+	utils.BoolFlagEnv(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "show the dashboard landing page", "LANDING_PAGE_ENABLED")
 	utils.IntFlagEnv(fs, &cfg.Relay.MinPort, "min-port", 0, utils.ParseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
 	utils.IntFlagEnv(fs, &cfg.Relay.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
@@ -162,9 +167,35 @@ func runServeCommand(args []string) error {
 	return runServer(ctx, cfg)
 }
 
+// validateRelaySettings normalizes and checks the relay-owned admission and
+// ingress settings that live outside portal.ServerConfig, so the config
+// report and startup apply the same validation.
+func validateRelaySettings(cfg *appConfig) error {
+	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
+		return err
+	}
+	if _, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs); err != nil {
+		return err
+	}
+	if cfg.UDPEnabled || cfg.TCPEnabled {
+		switch {
+		case cfg.Relay.MinPort <= 0 || cfg.Relay.MaxPort <= 0:
+			return errors.New("udp and tcp relay transport require a valid min port and max port range")
+		case cfg.Relay.MinPort > 65535 || cfg.Relay.MaxPort > 65535:
+			return errors.New("min port and max port must be between 1 and 65535")
+		case cfg.Relay.MinPort > cfg.Relay.MaxPort:
+			return errors.New("min port must be less than or equal to max port")
+		}
+	}
+	return nil
+}
+
 func runServer(ctx context.Context, cfg appConfig) error {
 	x402Settings, err := resolveX402Facilitator(cfg)
 	if err != nil {
+		return fmt.Errorf("create relay server: %w", err)
+	}
+	if err := validateRelaySettings(&cfg); err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
 	// This application always serves /sdk/domain by composing facilitator metadata
@@ -174,6 +205,11 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
+	ingress, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return fmt.Errorf("create relay server: %w", err)
+	}
+	access := policy.NewAccess()
 	if x402Settings.Enabled {
 		// NewServer already validated the URL; keep metadata consistent with
 		// the normalized URL the relay advertises.
@@ -184,15 +220,24 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	}
 
 	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
-	relayAPI, err := NewRelayAPI(server, policyPath, cfg.AdminToken, cfg.FrontendDir, cfg.LandingPageEnabled)
+	initialPolicy := types.PolicySettings{
+		ApprovalMode:       string(policy.ModeAuto),
+		LandingPageEnabled: cfg.LandingPageEnabled,
+		UDP:                types.PolicyPortSettings{Enabled: cfg.UDPEnabled},
+		TCPPort:            types.PolicyPortSettings{Enabled: cfg.TCPEnabled},
+	}
+	relayAPI, err := NewRelayAPI(server, access, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}
 
-	handler, err := composeRelayHandler(x402Settings, server, relayAPI.Handler())
+	base, err := composeRelayHandler(x402Settings, server, relayAPI.Handler())
 	if err != nil {
 		return err
 	}
+	handler := policy.Mux(server, base, ingress,
+		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
+		access, cfg.PreAuth)
 	if !cfg.PprofEnabled {
 		return server.Serve(ctx, handler)
 	}

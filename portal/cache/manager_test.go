@@ -16,17 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func testManager(t *testing.T, budget int) *Manager {
 	t.Helper()
-	policy, err := policy.NewRuntime(false, false, false, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := New(Config{Enabled: true, MaxBytes: budget, MaxTTL: time.Minute}, t.TempDir(), policy)
+	c, err := New(Config{Enabled: true, MaxBytes: budget, MaxTTL: time.Minute}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,17 +74,13 @@ func TestNewRejectsEmptyDirectoryWithoutFilesystemChanges(t *testing.T) {
 	if err := os.WriteFile(untouched, []byte("existing"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := policy.NewRuntime(false, false, false, "")
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, dir := range []string{"", " \t"} {
-		manager, err := New(Config{Enabled: true, MaxBytes: 32, MaxTTL: time.Minute}, dir, runtime)
+		manager, err := New(Config{Enabled: true, MaxBytes: 32, MaxTTL: time.Minute}, dir)
 		if err == nil || manager != nil {
 			t.Fatalf("enabled cache accepted empty directory %q", dir)
 		}
 	}
-	if manager, err := New(Config{}, "", runtime); err != nil || manager != nil {
+	if manager, err := New(Config{}, ""); err != nil || manager != nil {
 		t.Fatalf("disabled cache requires storage: %v", err)
 	}
 	if content, err := os.ReadFile(untouched); err != nil || string(content) != "existing" {
@@ -101,7 +92,7 @@ func TestAdmissionPreservesTenantAndObjectBounds(t *testing.T) {
 	c := testManager(t, 32)
 	lease := testLease(c, "site")
 	w := httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "12345678"), lease.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "12345678"), lease.ID, c.Generation(lease.ID))
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
@@ -116,7 +107,7 @@ func TestAdmissionPreservesTenantAndObjectBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	w = httptest.NewRecorder()
-	c.Handle(w, httptest.NewRequest(http.MethodPost, types.PathSDKCache, bytes.NewReader(raw)), lease.ID)
+	c.Handle(w, httptest.NewRequest(http.MethodPost, types.PathSDKCache, bytes.NewReader(raw)), lease.ID, c.Generation(lease.ID))
 	if w.Code != http.StatusBadRequest || c.used != 8 || !c.Has(lease.Hostname) {
 		t.Fatalf("over-budget exposure modified storage: %d, %d", w.Code, c.used)
 	}
@@ -131,7 +122,7 @@ func TestAdmissionPreservesTenantAndObjectBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	w = httptest.NewRecorder()
-	c.Handle(w, httptest.NewRequest(http.MethodPost, types.PathSDKCache, bytes.NewReader(raw)), lease.ID)
+	c.Handle(w, httptest.NewRequest(http.MethodPost, types.PathSDKCache, bytes.NewReader(raw)), lease.ID, c.Generation(lease.ID))
 	if w.Code != http.StatusBadRequest || c.used != 0 {
 		t.Fatalf("oversized object admitted: %d, %d", w.Code, c.used)
 	}
@@ -143,7 +134,7 @@ func TestStorageBoundIncludesReadersAndStaging(t *testing.T) {
 	for _, name := range []string{"first", "second", "third", "fourth"} {
 		lease := testLease(c, name)
 		w := httptest.NewRecorder()
-		c.Handle(w, testRequest(t, http.MethodPut, "123456"), lease.ID)
+		c.Handle(w, testRequest(t, http.MethodPut, "123456"), lease.ID, c.Generation(lease.ID))
 		if w.Code != http.StatusOK {
 			t.Fatal(w.Body.String())
 		}
@@ -156,13 +147,13 @@ func TestStorageBoundIncludesReadersAndStaging(t *testing.T) {
 	}()
 	next := testLease(c, "next")
 	w := httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "new"), next.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "new"), next.ID, c.Generation(next.ID))
 	if w.Code != http.StatusServiceUnavailable || c.used != 24 {
 		t.Fatalf("pinned bound: %d, %d", w.Code, c.used)
 	}
 	c.release(pinned[0])
 	w = httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "new"), next.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "new"), next.ID, c.Generation(next.ID))
 	if w.Code != http.StatusOK || c.used != 21 || c.snapshots != 4 {
 		t.Fatalf("eviction: %d, %d", w.Code, c.used)
 	}
@@ -203,13 +194,13 @@ func TestFailedStagingReleasesCapacity(t *testing.T) {
 	}
 	c.dir = blocked
 	w := httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID, c.Generation(l.ID))
 	if w.Code == http.StatusOK || c.used != 0 || c.snapshots != 0 {
 		t.Fatal("failed staging accepted or retained a reservation")
 	}
 	c.dir = dir
 	w = httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID, c.Generation(l.ID))
 	if w.Code != http.StatusOK {
 		t.Fatalf("retry after failed staging: %d %s", w.Code, w.Body.String())
 	}
@@ -225,7 +216,7 @@ func TestRejectsUnsafeAndOversizedManifest(t *testing.T) {
 			req.Body = io.NopCloser(strings.NewReader(strings.ReplaceAll(string(raw), "index.html", "../index.html")))
 		}
 		w := httptest.NewRecorder()
-		c.Handle(w, req, l.ID)
+		c.Handle(w, req, l.ID, c.Generation(l.ID))
 		if w.Code != http.StatusBadRequest || c.used != 0 {
 			t.Fatalf("invalid admission: %d, %d", w.Code, c.used)
 		}
@@ -236,7 +227,7 @@ func TestLeaseEventsBoundOfflineLifetime(t *testing.T) {
 	c := testManager(t, 32)
 	l := testLease(c, "site")
 	w := httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID, c.Generation(l.ID))
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
@@ -267,7 +258,7 @@ func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 			c := testManager(t, 16)
 			l := testLease(c, "site")
 			w := httptest.NewRecorder()
-			c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+			c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID, c.Generation(l.ID))
 			if w.Code != http.StatusOK {
 				t.Fatal(w.Body.String())
 			}
@@ -275,7 +266,7 @@ func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 			for _, name := range []string{"second", "third", "fourth"} {
 				other := testLease(c, name)
 				fill := httptest.NewRecorder()
-				c.Handle(fill, testRequest(t, http.MethodPut, "fill"), other.ID)
+				c.Handle(fill, testRequest(t, http.MethodPut, "fill"), other.ID, c.Generation(other.ID))
 				if fill.Code != http.StatusOK {
 					t.Fatal(fill.Body.String())
 				}
@@ -300,7 +291,7 @@ func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 			}
 			if failure != "method" {
 				w = httptest.NewRecorder()
-				c.Handle(w, testRequest(t, http.MethodPost, "site"), l.ID)
+				c.Handle(w, testRequest(t, http.MethodPost, "site"), l.ID, c.Generation(l.ID))
 				var response struct {
 					Data types.StaticCacheStatus `json:"data"`
 				}
@@ -311,7 +302,7 @@ func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 					t.Fatal("broken snapshot still reported present")
 				}
 				w = httptest.NewRecorder()
-				c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+				c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID, c.Generation(l.ID))
 				if w.Code != http.StatusOK || !c.Has(l.Hostname) {
 					t.Fatalf("snapshot did not recover: %d %s", w.Code, w.Body.String())
 				}
@@ -319,7 +310,7 @@ func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 			// The entire budget is reclaimable before any origin request ends.
 			other := testLease(c, "other")
 			w = httptest.NewRecorder()
-			c.Handle(w, testRequest(t, http.MethodPut, "next"), other.ID)
+			c.Handle(w, testRequest(t, http.MethodPut, "next"), other.ID, c.Generation(other.ID))
 			if w.Code != http.StatusOK {
 				t.Fatalf("fallback blocked eviction: %s", w.Body.String())
 			}
@@ -331,10 +322,10 @@ func TestFailedOldReaderDoesNotDiscardReplacement(t *testing.T) {
 	c := testManager(t, 32)
 	l := testLease(c, "site")
 	w := httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "old"), l.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "old"), l.ID, c.Generation(l.ID))
 	old := c.acquire(l.Hostname)
 	w = httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "new"), l.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "new"), l.ID, c.Generation(l.ID))
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
@@ -371,7 +362,7 @@ func TestAdmissionKeepsChecksAndUploadsIndependentlyBounded(t *testing.T) {
 		req := testRequest(t, method, "site")
 		req.Body = &gatedBody{ReadCloser: req.Body, started: started, resume: resume}
 		workers.Add(1)
-		go func() { defer workers.Done(); c.Handle(httptest.NewRecorder(), req, l.ID) }()
+		go func() { defer workers.Done(); c.Handle(httptest.NewRecorder(), req, l.ID, c.Generation(l.ID)) }()
 		select {
 		case <-started:
 		case <-time.After(5 * time.Second):
@@ -380,7 +371,7 @@ func TestAdmissionKeepsChecksAndUploadsIndependentlyBounded(t *testing.T) {
 	}
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
 		w := httptest.NewRecorder()
-		c.Handle(w, testRequest(t, method, "site"), l.ID)
+		c.Handle(w, testRequest(t, method, "site"), l.ID, c.Generation(l.ID))
 		if w.Code != http.StatusServiceUnavailable {
 			t.Fatalf("%s exceeded its internal bound: %d", method, w.Code)
 		}
@@ -401,7 +392,7 @@ func TestReadFailureAfterHeadersInvalidatesSnapshot(t *testing.T) {
 	c := testManager(t, 16)
 	l := testLease(c, "site")
 	w := httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID, c.Generation(l.ID))
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
@@ -425,12 +416,12 @@ func TestUploadRequiresOptedInLease(t *testing.T) {
 	l := Lease{ID: "plain-id", Owner: "plain", Hostname: "plain.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
 	c.Register(l, types.RegisterChallengeRequest{Cache: false})
 	w := httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID, c.Generation(l.ID))
 	if w.Code != http.StatusForbidden || c.Eligible(l.ID) || c.Has(l.Hostname) || c.used != 0 {
 		t.Fatalf("non-opted-in lease admitted an upload: %d", w.Code)
 	}
 	w = httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "site"), "unknown-id")
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), "unknown-id", c.Generation("unknown-id"))
 	if w.Code != http.StatusForbidden || c.used != 0 {
 		t.Fatalf("unknown lease admitted an upload: %d", w.Code)
 	}
@@ -448,7 +439,7 @@ func TestObjectDigestMismatchRejectsUpload(t *testing.T) {
 	// matches the manifest and only the SHA-256 comparison can reject.
 	req.Body = io.NopCloser(strings.NewReader(strings.Replace(string(raw), "site", "sita", 1)))
 	w := httptest.NewRecorder()
-	c.Handle(w, req, l.ID)
+	c.Handle(w, req, l.ID, c.Generation(l.ID))
 	if w.Code != http.StatusBadRequest || c.Has(l.Hostname) || c.used != 0 {
 		t.Fatalf("corrupt object admitted: %d, %d", w.Code, c.used)
 	}
@@ -465,7 +456,7 @@ func TestLeaseReplacementRejectsInFlightUpload(t *testing.T) {
 	codes := make(chan int, 1)
 	go func() {
 		w := httptest.NewRecorder()
-		c.Handle(w, req, first.ID)
+		c.Handle(w, req, first.ID, c.Generation(first.ID))
 		codes <- w.Code
 	}()
 	select {
@@ -491,32 +482,77 @@ func TestLeaseReplacementRejectsInFlightUpload(t *testing.T) {
 		t.Fatal("replacement lease lost upload eligibility")
 	}
 	w := httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "site"), replacement.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), replacement.ID, c.Generation(replacement.ID))
 	if w.Code != http.StatusOK || !c.Has(replacement.Hostname) {
 		t.Fatalf("replacement lease could not publish: %d %s", w.Code, w.Body.String())
 	}
 }
 
-func TestPolicyBanSuppressesCacheRouting(t *testing.T) {
-	runtime, err := policy.NewRuntime(false, false, false, "")
-	if err != nil {
-		t.Fatal(err)
+func TestDetachOwnerRejectsInFlightCacheRequests(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodPut} {
+		t.Run(method, func(t *testing.T) {
+			c := testManager(t, 128)
+			lease := testLease(c, "site")
+			started := make(chan struct{})
+			resume := make(chan struct{})
+			req := testRequest(t, method, "old")
+			req.Body = &gatedBody{ReadCloser: req.Body, started: started, resume: resume}
+			codes := make(chan int, 1)
+			generation := c.Generation(lease.ID)
+			go func() {
+				response := httptest.NewRecorder()
+				c.Handle(response, req, lease.ID, generation)
+				codes <- response.Code
+			}()
+			<-started
+			c.DetachOwner(lease.Owner)
+			// After access is restored, a fresh request can republish on the
+			// retained lease. The older request must not replace or retire it.
+			fresh := httptest.NewRecorder()
+			c.Handle(fresh, testRequest(t, http.MethodPut, "new"), lease.ID, c.Generation(lease.ID))
+			close(resume)
+			code := <-codes
+			if code != http.StatusForbidden || fresh.Code != http.StatusOK {
+				t.Fatalf("old request = %d, fresh upload = %d", code, fresh.Code)
+			}
+			served := httptest.NewRecorder()
+			if !c.Serve(served, httptest.NewRequest(http.MethodGet, "https://"+lease.Hostname+"/", nil), lease.Hostname) || served.Body.String() != "new" {
+				t.Fatalf("old request changed fresh content: %q", served.Body.String())
+			}
+		})
 	}
-	c, err := New(Config{Enabled: true, MaxBytes: 16, MaxTTL: time.Minute}, t.TempDir(), runtime)
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestCacheGenerationFencesDelayedAdmission(t *testing.T) {
+	c := testManager(t, 32)
+	lease := testLease(c, "site")
+	generation := c.Generation(lease.ID)
+	c.DetachOwner(lease.Owner)
+	response := httptest.NewRecorder()
+	c.Handle(response, testRequest(t, http.MethodPut, "old"), lease.ID, generation)
+	if response.Code != http.StatusForbidden || c.Has(lease.Hostname) {
+		t.Fatal("request admitted before revocation published afterward")
 	}
+}
+
+func TestDetachOwnerSuppressesCacheRouting(t *testing.T) {
+	c := testManager(t, 16)
 	l := testLease(c, "site")
 	w := httptest.NewRecorder()
-	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID)
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID, c.Generation(l.ID))
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
-	runtime.BanIdentity(l.Owner)
-	if c.Has(l.Hostname) || c.Eligible(l.ID) {
-		t.Fatal("banned identity remained routable from cache")
+	// The relay drives this event when its access state stops routing the
+	// owner; cached content must not outlive that decision.
+	c.DetachOwner(l.Owner)
+	if c.Has(l.Hostname) {
+		t.Fatal("detached identity remained routable from cache")
+	}
+	if !c.Eligible(l.ID) {
+		t.Fatal("detaching cached content removed the live cache lease")
 	}
 	if c.Serve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "https://"+l.Hostname+"/", nil), l.Hostname) {
-		t.Fatal("banned identity was still served from cache")
+		t.Fatal("detached identity was still served from cache")
 	}
 }

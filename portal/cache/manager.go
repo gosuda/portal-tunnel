@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -20,7 +19,6 @@ type Manager struct {
 	cfg        Config
 	dir        string
 	limits     types.StaticCacheLimits
-	policy     *policy.Runtime
 	leases     map[string]leaseState
 	entries    map[string]*cachedSite
 	retired    []*cachedSite
@@ -28,6 +26,7 @@ type Manager struct {
 	snapshots  int
 	population chan struct{}
 	checks     chan struct{}
+	generation uint64
 }
 
 type cachedSite struct {
@@ -42,7 +41,7 @@ type cachedSite struct {
 
 // New requires an explicit storage directory from the host application.
 // It never infers a cleanup location from the process working directory.
-func New(cfg Config, dir string, policy *policy.Runtime) (*Manager, error) {
+func New(cfg Config, dir string) (*Manager, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -55,9 +54,6 @@ func New(cfg Config, dir string, policy *policy.Runtime) (*Manager, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
-	}
-	if policy == nil {
-		return nil, errors.New("cache policy runtime is required")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -79,7 +75,7 @@ func New(cfg Config, dir string, policy *policy.Runtime) (*Manager, error) {
 	// 64 MiB, with a one-byte minimum for tiny budgets.
 	exposureBytes := min(64<<20, max(1, cfg.MaxBytes/4))
 	return &Manager{
-		cfg: cfg, dir: dir, policy: policy,
+		cfg: cfg, dir: dir,
 		limits: types.StaticCacheLimits{MaxExposureBytes: int64(exposureBytes), MaxObjectSize: int64(min(10<<20, exposureBytes))},
 		leases: make(map[string]leaseState), entries: make(map[string]*cachedSite),
 		population: make(chan struct{}, 2),
@@ -103,7 +99,8 @@ type Lease struct {
 
 type leaseState struct {
 	Lease
-	ttl time.Duration
+	ttl        time.Duration
+	generation uint64
 }
 
 const observationWindow = 2 * time.Minute
@@ -149,7 +146,8 @@ func (c *Manager) Register(lease Lease, req types.RegisterChallengeRequest) {
 	if req.CacheTTL > 0 && int64(req.CacheTTL) < int64(ttl/time.Second) {
 		ttl = time.Duration(req.CacheTTL) * time.Second
 	}
-	c.leases[lease.ID] = leaseState{Lease: lease, ttl: ttl}
+	c.generation++
+	c.leases[lease.ID] = leaseState{Lease: lease, ttl: ttl, generation: c.generation}
 }
 
 func (c *Manager) Renew(lease Lease) {
@@ -216,8 +214,26 @@ func (c *Manager) Limits() *types.StaticCacheLimits {
 	return &limits
 }
 
-// Eligible checks the current lease event and the live policy owner. It is
-// also used immediately before publishing to reject late/revoked uploads.
+// Owners returns identities with a retained published snapshot. The relay uses
+// this observation to project access changes after the live lease is gone.
+func (c *Manager) Owners() []string {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	owners := make(map[string]struct{})
+	for _, site := range c.entries {
+		owners[site.owner] = struct{}{}
+	}
+	out := make([]string, 0, len(owners))
+	for owner := range owners {
+		out = append(out, owner)
+	}
+	return out
+}
+
+// Eligible reports whether the live lease supports cache operations.
 func (c *Manager) Eligible(id string) bool {
 	if c == nil {
 		return false
@@ -229,7 +245,41 @@ func (c *Manager) Eligible(id string) bool {
 
 func (c *Manager) eligibleLocked(id string) bool {
 	lease, ok := c.leases[id]
-	return ok && time.Now().Before(lease.ExpiresAt) && c.policy.IsIdentityRoutable(lease.Owner)
+	return ok && time.Now().Before(lease.ExpiresAt)
+}
+
+// Generation identifies this lease's current cache admission. Capture it before
+// checking external access; Handle rejects the request if revocation intervenes.
+func (c *Manager) Generation(id string) uint64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.leases[id].generation
+}
+
+// DetachOwner immediately revokes cached content owned by one identity while
+// retaining its live cache lease. If the relay routes the identity again, the
+// same lease may publish fresh content without re-registering.
+func (c *Manager) DetachOwner(owner string) {
+	if c == nil || owner == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.generation++
+	for id, lease := range c.leases {
+		if lease.Owner == owner {
+			lease.generation = c.generation
+			c.leases[id] = lease
+		}
+	}
+	for _, site := range c.entries {
+		if site.owner == owner {
+			c.retireLocked(site)
+		}
+	}
 }
 
 func (c *Manager) collect(now time.Time) {
@@ -315,7 +365,7 @@ func (c *Manager) Has(host string) bool {
 
 func (c *Manager) lookupLocked(host string) *cachedSite {
 	site := c.entries[host]
-	if site == nil || !time.Now().Before(site.expiresAt) || !c.policy.IsIdentityRoutable(site.owner) {
+	if site == nil || !time.Now().Before(site.expiresAt) {
 		return nil
 	}
 	return site

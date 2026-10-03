@@ -52,7 +52,7 @@ func TestRelayHTTPRedirect(t *testing.T) {
 				}
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
-				if err := server.Start(ctx, nil); err != nil {
+				if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
 					t.Fatalf("start portal server: %v", err)
 				}
 
@@ -120,7 +120,7 @@ func TestRelayHTTPRedirect(t *testing.T) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := server.Start(ctx, nil); err != nil {
+		if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
 			t.Fatalf("start portal server: %v", err)
 		}
 
@@ -164,7 +164,7 @@ func TestRelayHTTPRedirect(t *testing.T) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if startErr := server.Start(ctx, nil); startErr == nil {
+		if startErr := server.Start(ctx, relayHandler(server, nil)); startErr == nil {
 			stopRelay(t, server)
 			t.Fatal("Start() succeeded with the redirect address already occupied")
 		}
@@ -182,7 +182,7 @@ func TestRelayHTTPRedirect(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create retry portal server: %v", err)
 		}
-		if err := retry.Start(ctx, nil); err != nil {
+		if err := retry.Start(ctx, relayHandler(retry, nil)); err != nil {
 			t.Fatalf("retry Start() after releasing the redirect address: %v", err)
 		}
 		client := &http.Client{
