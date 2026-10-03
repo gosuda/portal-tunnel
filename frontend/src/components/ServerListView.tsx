@@ -248,6 +248,7 @@ export function ServerListView({
 
   const searchBar = (
     <SearchBar
+      allowRecommendationSort
       searchQuery={searchQuery}
       onSearchChange={onSearchChange}
       status={status}

@@ -3,6 +3,7 @@ export type BanFilter = "all" | "banned" | "active";
 
 export type SortOption =
   | "default"
+  | "recommended"
   | "description"
   | "tags"
   | "owner"
