@@ -353,3 +353,102 @@ func TestHTTPRoutesStripRequestHeaders(t *testing.T) {
 		t.Fatalf("x-custom forwarded after case-insensitive strip")
 	}
 }
+
+func TestHTTPRoutesStripRequestHeadersKeepPortalHeaders(t *testing.T) {
+	t.Parallel()
+
+	route, err := newHTTPRoute(HTTPRouteConfig{
+		Prefix:   "/",
+		Upstream: "http://127.0.0.1:3000",
+		// Listing Portal-owned headers must not disable them: stripping runs
+		// before the tunnel writes X-Forwarded-*, so the upstream still
+		// receives the tunnel-generated values without client forgeries.
+		StripRequestHeaders: []string{"x-forwarded-for", "X-Forwarded-Proto", "X-Forwarded-Host"},
+	})
+	if err != nil {
+		t.Fatalf("newHTTPRoute() error = %v", err)
+	}
+
+	in := httptest.NewRequest(http.MethodGet, "http://app.relay.example/", nil)
+	in.Header.Set("X-Forwarded-For", "6.6.6.6")
+	in.Header.Set("X-Forwarded-Proto", "https")
+	pr := &httputil.ProxyRequest{In: in, Out: in.Clone(t.Context())}
+	route.rewriteProxyRequest(pr)
+
+	if got := pr.Out.Header.Get("X-Forwarded-For"); got == "" || strings.Contains(got, "6.6.6.6") {
+		t.Fatalf("outbound X-Forwarded-For = %q, want only the tunnel-observed peer", got)
+	}
+	if got := pr.Out.Header.Get("X-Forwarded-Proto"); got != "https" {
+		t.Fatalf("outbound X-Forwarded-Proto = %q, want the tunnel-generated https", got)
+	}
+	if got := pr.Out.Header.Get("X-Forwarded-Host"); got != "app.relay.example" {
+		t.Fatalf("outbound X-Forwarded-Host = %q, want the public host", got)
+	}
+}
+
+func TestHTTPRoutesStripRequestHeadersOnUpgrades(t *testing.T) {
+	t.Parallel()
+
+	gotStripped := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotStripped <- r.Header.Get("X-Custom")
+		conn, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("Hijack() error = %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: portal-test\r\n\r\n")
+		_ = rw.Flush()
+	}))
+	defer upstream.Close()
+
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		routes, err := NewHTTPRoutes([]HTTPRouteConfig{{
+			Prefix: "/", Upstream: upstream.URL,
+			StripRequestHeaders: []string{"x-custom"},
+		}})
+		if err != nil {
+			t.Errorf("NewHTTPRoutes() error = %v", err)
+			return
+		}
+		routes.ServeHTTP(w, r)
+	}))
+	defer front.Close()
+
+	conn, err := new(net.Dialer).DialContext(t.Context(), "tcp", front.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("DialContext() error = %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := fmt.Fprint(conn, "GET / HTTP/1.1\r\nHost: app.relay.example\r\nConnection: Upgrade\r\nUpgrade: portal-test\r\nX-Custom: forged\r\n\r\n"); err != nil {
+		t.Fatalf("write upgrade request error = %v", err)
+	}
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatalf("ReadResponse() error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101", resp.StatusCode)
+	}
+	if got := <-gotStripped; got != "" {
+		t.Fatalf("upgrade request X-Custom = %q, want stripped", got)
+	}
+}
+
+func TestHTTPRoutesRejectInvalidStripHeaderNames(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"", "  ", "X Custom", "X-Custom:"} {
+		_, err := NewHTTPRoutes([]HTTPRouteConfig{{
+			Prefix: "/", Upstream: "http://127.0.0.1:3000",
+			StripRequestHeaders: []string{name},
+		}})
+		if err == nil {
+			t.Fatalf("NewHTTPRoutes(strip %q) error = nil, want invalid name error", name)
+		}
+	}
+}

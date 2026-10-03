@@ -224,6 +224,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		Name:                name,
 		TargetAddr:          target,
 		HTTPRoutes:          httpRoutes,
+		StripRequestHeaders: append([]string(nil), req.StripRequestHeaders...),
 		RelayURLs:           relayURLs,
 		Discovery:           &discovery,
 		Overlay:             req.Overlay,

@@ -238,11 +238,9 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	}
 	prefix = utils.NormalizeURLPath(prefix)
 
-	stripHeaders := make([]string, 0, len(routeConfig.StripRequestHeaders))
-	for _, h := range routeConfig.StripRequestHeaders {
-		if h = strings.TrimSpace(h); h != "" {
-			stripHeaders = append(stripHeaders, http.CanonicalHeaderKey(h))
-		}
+	stripHeaders, err := utils.NormalizeHeaderNames(routeConfig.StripRequestHeaders)
+	if err != nil {
+		return nil, fmt.Errorf("http route %q strip request headers: %w", prefix, err)
 	}
 
 	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
@@ -311,6 +309,14 @@ func (r *httpRoute) baseHandler() http.Handler {
 // the browser used: the upstream URL says where to dial, not which Host the app
 // sees.
 func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
+	// Strip client-supplied headers before any Portal-owned header is
+	// written: SetXForwarded and the X-Forwarded-* rewrites below run after
+	// this loop, so Host and X-Forwarded-* reach the upstream exactly as the
+	// tunnel generated them, even when the strip list names them.
+	for _, name := range r.stripHeaders {
+		pr.Out.Header.Del(name)
+	}
+
 	path := utils.NormalizeURLPath(pr.In.URL.Path)
 	rawPath := pr.In.URL.RawPath
 	if r.prefix != "/" {
@@ -351,10 +357,6 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 
 	if r.prefix != "/" {
 		pr.Out.Header.Set("X-Forwarded-Prefix", r.prefix)
-	}
-
-	for _, h := range r.stripHeaders {
-		pr.Out.Header.Del(h)
 	}
 }
 

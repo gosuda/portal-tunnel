@@ -48,6 +48,7 @@ type TunnelConfig struct {
 	Name                string             `koanf:"name"`
 	TargetAddr          string             `koanf:"target"`
 	Serve               string             `koanf:"serve"`
+	StripRequestHeaders []string           `koanf:"strip_request_headers"`
 	HTTPRoutes          []tunnel.HTTPRoute `koanf:"http_routes"`
 	RelayURLs           []string           `koanf:"relays"`
 	Discovery           *bool              `koanf:"discovery"`
@@ -182,6 +183,7 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 		}
 		out["http_routes"] = routes
 	}
+	addStringSliceDocumentField(out, "strip_request_headers", cfg.StripRequestHeaders)
 	addStringSliceDocumentField(out, "relays", cfg.RelayURLs)
 	if cfg.Discovery != nil {
 		out["discovery"] = *cfg.Discovery
@@ -362,7 +364,7 @@ func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
 	if cfg.UDPEnabled {
 		spec.Transport.UDP = &tunnel.UDPConfig{Target: cfg.UDPAddr}
 	}
-	if cfg.Serve != "" || len(cfg.HTTPRoutes) > 0 || cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders {
+	if cfg.Serve != "" || len(cfg.HTTPRoutes) > 0 || cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders || len(cfg.StripRequestHeaders) > 0 {
 		routes := make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
 		for _, route := range cfg.HTTPRoutes {
 			routes = append(routes, tunnel.HTTPRoute{
@@ -374,7 +376,8 @@ func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
 		payment.FacilitatorToken = cmp.Or(strings.TrimSpace(cfg.FacilitatorToken), strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
 		spec.HTTP = &tunnel.HTTPConfig{
 			Serve: cfg.Serve, Routes: routes,
-			Payment: payment,
+			StripRequestHeaders: append([]string(nil), cfg.StripRequestHeaders...),
+			Payment:             payment,
 		}
 		if cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders {
 			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{

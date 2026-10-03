@@ -50,12 +50,15 @@ type UDPConfig struct {
 }
 
 type HTTPConfig struct {
-	Routes              []HTTPRoute                    `koanf:"routes"`
-	Serve               string                         `koanf:"serve"`
-	Auth                *gateway.ApplicationAuthConfig `koanf:"auth"`
-	Payment             gateway.X402Payment            `koanf:"payment"`
-	Cache               *CacheConfig                   `koanf:"cache"`
-	StripRequestHeaders []string                       `koanf:"strip_request_headers"`
+	Routes  []HTTPRoute
+	Serve   string
+	Auth    *gateway.ApplicationAuthConfig
+	Payment gateway.X402Payment
+	Cache   *CacheConfig
+	// StripRequestHeaders lists client request headers removed before
+	// forwarding to every routed HTTP upstream. It requires at least one
+	// upstream route: static-only exposures forward nothing.
+	StripRequestHeaders []string
 }
 
 type HTTPRoute struct {
@@ -118,6 +121,14 @@ func (spec Spec) Validate() error {
 			return fmt.Errorf("HTTP route %q methods require a payment amount", prefix)
 		}
 	}
+	if len(httpConfig.StripRequestHeaders) > 0 {
+		if _, err := utils.NormalizeHeaderNames(httpConfig.StripRequestHeaders); err != nil {
+			return fmt.Errorf("strip request headers: %w", err)
+		}
+		if strings.TrimSpace(httpConfig.Serve) != "" || (len(httpConfig.Routes) == 0 && httpConfig.Auth == nil) {
+			return errors.New("strip request headers require an HTTP upstream route")
+		}
+	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(httpConfig.Payment.Network)), "casper:") && strings.TrimSpace(httpConfig.Payment.Asset) == "" {
 		return errors.New("casper payments require an asset")
 	}
@@ -155,13 +166,13 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 			if err != nil {
 				return nil, fmt.Errorf("resolve static site %q: %w", serve, err)
 			}
-			routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", StaticRoot: root, StaticIndex: index, StripRequestHeaders: stripHeaders})
+			routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", StaticRoot: root, StaticIndex: index})
 		}
 		for _, route := range spec.HTTP.Routes {
 			routes = append(routes, gateway.ExposedHTTPRoute{
 				Prefix: route.Prefix, Upstream: route.Upstream,
 				Methods: append([]string(nil), route.Methods...), Amount: route.Amount,
-				StripRequestHeaders: append([]string(nil), stripHeaders...),
+				StripRequestHeaders: stripHeaders,
 			})
 		}
 		if len(routes) == 0 {
