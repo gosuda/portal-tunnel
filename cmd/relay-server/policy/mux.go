@@ -11,6 +11,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+const accessPublishAttempts = 8
+
 // Mux composes the relay's protocol route table: portal handlers mounted
 // under their SDK paths and wrapped with ingress client-IP resolution and
 // weighted pre-auth admission. Everything else falls through to the caller's
@@ -29,15 +31,20 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 		fallback = root
 	}
 	// A newer committed snapshot may reach Portal while this request is
-	// paused. Retry only when Portal rejects the older revision; stale values
-	// are never applied, and no relay lock is held across the Portal call.
-	publishAccess := func(key string) {
-		for {
+	// paused. Retry a bounded number of times when Portal rejects the older
+	// revision; stale values are never applied, and no relay lock is held
+	// across the Portal call.
+	publishAccess := func(key string) bool {
+		if access == nil {
+			return s.SetIdentityRoutable(key, true, 0)
+		}
+		for range accessPublishAttempts {
 			state := access.Snapshot()
 			if s.SetIdentityRoutable(key, state.Routable(key), state.Revision()) {
-				return
+				return true
 			}
 		}
+		return false
 	}
 
 	// admit spends the weighted pre-auth budget before any decoding or
@@ -82,17 +89,25 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	mux.HandleFunc(types.PathSDKCertificateChain, s.HandleCertificateChain)
 	mux.HandleFunc(types.PathSDKRegisterChallenge, requireMethod(http.MethodPost, admit(preAuth.ChallengeCost, func(w http.ResponseWriter, r *http.Request) {
 		key, response, ok := s.HandleRegisterChallenge(w, r, ingress.ClientIP(r))
-		publishAccess(key)
-		if ok {
-			utils.WriteAPIData(w, http.StatusCreated, response)
+		if !ok {
+			return
 		}
+		if !publishAccess(key) {
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
+			return
+		}
+		utils.WriteAPIData(w, http.StatusCreated, response)
 	})))
 	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request) {
 		key, response, ok := s.HandleRegister(w, r, ingress.ClientIP(r))
-		publishAccess(key)
-		if ok {
-			utils.WriteAPIData(w, http.StatusCreated, response)
+		if !ok {
+			return
 		}
+		if !publishAccess(key) {
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
+			return
+		}
+		utils.WriteAPIData(w, http.StatusCreated, response)
 	})))
 	mux.HandleFunc(types.PathSDKRenew, withClient(s.HandleRenew))
 	mux.HandleFunc(types.PathSDKReverse, s.HandleReverseEndpoint)
