@@ -231,7 +231,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
-	registry, err := newLeaseRegistry(false, false, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, relayAuthority, cfg.PortalURL)
+	registry, err := newLeaseRegistry(cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, relayAuthority, cfg.PortalURL)
 	if err != nil {
 		return nil, err
 	}

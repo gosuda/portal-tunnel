@@ -30,10 +30,12 @@ func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegist
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
-	registry, err := newLeaseRegistry(udpEnabled, tcpPortEnabled, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com")
+	registry, err := newLeaseRegistry(10000, 10100, relay.Name, 443, relayAuthority, "https://example.com")
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
+	registry.setUDPPolicy(udpEnabled, 0)
+	registry.setTCPPortPolicy(tcpPortEnabled, 0)
 	// Registered leases bind UDP and raw-TCP relays; releasing them keeps
 	// repeated runs in one process free of port collisions.
 	t.Cleanup(func() { registry.CloseAll() })
@@ -290,7 +292,7 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
 	newRegistry := func() *leaseRegistry {
 		t.Helper()
-		registry, registryErr := newLeaseRegistry(false, false, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com")
+		registry, registryErr := newLeaseRegistry(10000, 10100, relay.Name, 443, relayAuthority, "https://example.com")
 		if registryErr != nil {
 			t.Fatalf("newLeaseRegistry() error = %v", registryErr)
 		}

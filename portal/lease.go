@@ -55,7 +55,7 @@ type leaseRegistry struct {
 	mu sync.RWMutex
 }
 
-func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, rootHostname string, publicPort int, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
+func newLeaseRegistry(minPort, maxPort int, rootHostname string, publicPort int, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
 	if tokenAuthority == nil {
 		return nil, errors.New("lease token authority is required")
 	}
@@ -77,8 +77,6 @@ func newLeaseRegistry(udpEnabled, tcpPortEnabled bool, minPort, maxPort int, roo
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
 		bps:            NewBPSManager(),
 		blocked:        make(map[string]time.Time),
-		udpEnabled:     udpEnabled,
-		tcpPortEnabled: tcpPortEnabled,
 		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		bindings:       keyless.NewBindingRegistry(5 * time.Minute),
