@@ -77,6 +77,9 @@ func TestHTTPRoutesConfigModes(t *testing.T) {
 		{name: "routes", cfg: TunnelConfig{HTTPRoutes: routes}, valid: true},
 		{name: "tcp", cfg: TunnelConfig{HTTPRoutes: routes, TCPEnabled: true}},
 		{name: "udp", cfg: TunnelConfig{HTTPRoutes: routes, UDPEnabled: true}},
+		{name: "strip request headers", cfg: TunnelConfig{HTTPRoutes: routes, StripRequestHeaders: []string{"X-Tenant-User"}}, valid: true},
+		{name: "strip request headers on static", cfg: TunnelConfig{Serve: "./dist", StripRequestHeaders: []string{"X-Tenant-User"}}},
+		{name: "strip request header without upstream", cfg: TunnelConfig{Auth: "siwe", TargetAddr: "", StripRequestHeaders: []string{"X-Tenant-User"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.cfg.ID = "routed"

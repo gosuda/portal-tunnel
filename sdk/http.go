@@ -334,6 +334,12 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 		}
 	}
 
+	// X-Forwarded-Prefix is only meaningful for non-root routes. Always
+	// remove any client-supplied value first, then set the trusted one
+	// only when the route carries a non-root prefix. Root routes leave
+	// the header absent so upstream applications do not see a spoofed
+	// value.
+	pr.Out.Header.Del("X-Forwarded-Prefix")
 	if r.prefix != "/" {
 		pr.Out.Header.Set("X-Forwarded-Prefix", r.prefix)
 	}

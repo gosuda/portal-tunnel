@@ -110,6 +110,7 @@ not supported.
 | `--x402-endpoint` | string | | Optional Sui RPC or Casper facilitator endpoint; repeatable |
 | `--x402-facilitator-token` | string | `CSPR_CLOUD_API_KEY` | Casper facilitator authorization token; prefer the environment variable so the secret is not exposed in the process arguments |
 | `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]` form; repeatable; route amounts require `--x402-pay-to` |
+| `--strip-request-header` | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (`Host`, `X-Forwarded-*`) are always rewritten after stripping; requires `--http-route` or `--auth` |
 | `--serve` | string | | Serve a local directory or HTML file; unknown paths fall back to the entry HTML |
 | `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
 | `--cache-ttl` | duration | `0` | Requested offline cache lifetime; `0` uses relay policy; requires `--cache` |
@@ -145,6 +146,9 @@ rename an existing one. Use a separate `--identity-path` for a new identity.
 - `--cache-ttl` requires `--cache`; a nonzero value must be between `1s` and
   `8760h` and is clamped by the relay.
 - `--http-route` cannot be combined with `--tcp` or `--udp`.
+- `--strip-request-header` requires `--http-route` or `--auth`; it applies to
+  every routed HTTP upstream, including WebSocket upgrades, and Portal-owned
+  headers (`Host`, `X-Forwarded-*`) cannot be removed by it.
 - `--tcp` and `--udp` require matching transport support on the relay.
 - Route payment amounts are part of `--http-route` and require a tunnel-owned
   `--x402-pay-to`.

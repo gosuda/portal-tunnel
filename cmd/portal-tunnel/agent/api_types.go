@@ -55,6 +55,7 @@ type AgentTunnelRequest struct {
 	Name                string             `json:"name,omitempty"`
 	TargetAddr          string             `json:"target_addr,omitempty"`
 	HTTPRoutes          []tunnel.HTTPRoute `json:"http_routes,omitempty"`
+	StripRequestHeaders []string           `json:"strip_request_headers,omitempty"`
 	RelayURLs           []string           `json:"relays,omitempty"`
 	Discovery           *bool              `json:"discovery,omitempty"`
 	Overlay             bool               `json:"overlay,omitempty"`

@@ -206,6 +206,7 @@ Common `portal expose` flags:
 --auth-identity-headers  Inject verified Portal identity headers upstream
 --serve              Serve a local static site: a directory (served with index.html) or an HTML file (folder served with that file as SPA/CSR entry)
 --http-route         HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form
+--strip-request-header  Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; requires --http-route or --auth
 --x402-pay-to        Payment recipient address for this tunnel
 --x402-testnet       Use Sui testnet when --x402-network is omitted
 --x402-network       Optional Sui or Casper CAIP-2 network
@@ -283,6 +284,9 @@ change them.
   still followed, so only serve folders you trust.
 - `--http-route` cannot be combined with `--tcp` or `--udp`.
 - `--auth` cannot be combined with `--cache`, `--tcp`, or `--udp`.
+- `--strip-request-header` requires `--http-route` or `--auth`; it applies to
+  every routed HTTP upstream, including WebSocket upgrades, and Portal-owned
+  headers (`Host`, `X-Forwarded-*`) cannot be removed by it.
 - Route payment amounts such as `0.01` are part of `--http-route` and require
   `--x402-pay-to`. Sui is the default; Casper additionally requires
   `--x402-network casper:...` and the wCSPR contract in `--x402-asset`.

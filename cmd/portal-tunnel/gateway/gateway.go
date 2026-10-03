@@ -96,6 +96,61 @@ type ExposedHTTPRoute struct {
 	Amount string
 }
 
+// NewStripRequestHeaders wraps next with a middleware that removes the listed
+// client request headers before any Portal processing runs.  This is the trust
+// boundary: client-spoofed headers are removed before application auth injects
+// verified identity headers and before the reverse proxy regenerates
+// X-Forwarded-* values.  Host is rejected because Go stores it in
+// Request.Host, not Header, so Header.Del("Host") is a silent no-op.
+func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, error) {
+	headers := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, errors.New("strip request header name is required")
+		}
+		if !isValidHeaderName(name) {
+			return nil, fmt.Errorf("invalid strip request header name %q", name)
+		}
+		canonical := http.CanonicalHeaderKey(name)
+		switch canonical {
+		case "Host":
+			return nil, errors.New(`"Host" cannot be stripped: Go stores it in Request.Host, not Header`)
+		case "X-Forwarded-Proto":
+			return nil, errors.New(`"X-Forwarded-Proto" cannot be stripped: RunHTTP always overwrites it with the trusted https value before this middleware runs`)
+		}
+		if _, ok := seen[canonical]; ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		headers = append(headers, canonical)
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range headers {
+			r.Header.Del(h)
+		}
+		next.ServeHTTP(w, r)
+	}), nil
+}
+
+// isValidHeaderName reports whether name is an RFC 9110 token.
+func isValidHeaderName(name string) bool {
+	for i := range len(name) {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		default:
+			switch c {
+			case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // ComposeHTTPRoutes builds the payment-agnostic sdk router and explicitly
 // wraps only the routes carrying an x402 amount with payment gates. The
 // returned handler also serves the shared x402 client and prepare endpoints

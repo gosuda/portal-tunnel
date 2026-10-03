@@ -60,6 +60,42 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 			spec.HTTP.Cache = &CacheConfig{}
 		}, valid: true},
 		{name: "cache target", edit: func(spec *Spec) { spec.HTTP.Cache = &CacheConfig{} }},
+		{name: "strip request headers", edit: func(spec *Spec) {
+			spec.Transport.Target = ""
+			spec.HTTP.Routes = []HTTPRoute{{Prefix: "/", Upstream: "http://localhost:4000"}}
+			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
+		}, valid: true},
+		{name: "strip request headers with auth target", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe"}
+			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
+		}, valid: true},
+		{name: "strip request headers on static", edit: func(spec *Spec) {
+			spec.Transport.Target = ""
+			spec.HTTP.Serve = "./dist"
+			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
+		}},
+		{name: "strip request headers on target only", edit: func(spec *Spec) {
+			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
+		}, valid: true},
+		{name: "strip Host", edit: func(spec *Spec) {
+			spec.HTTP.StripRequestHeaders = []string{"Host"}
+		}},
+		{name: "strip X-Forwarded-Proto", edit: func(spec *Spec) {
+			spec.HTTP.StripRequestHeaders = []string{"X-Forwarded-Proto"}
+		}},
+		{name: "strip X-Portal-User with auth identity headers", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe", IdentityHeaders: true}
+			spec.HTTP.StripRequestHeaders = []string{"X-Portal-User"}
+		}, valid: true},
+		{name: "strip X-Portal-Auth without auth identity headers", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe"}
+			spec.HTTP.StripRequestHeaders = []string{"X-Portal-Auth"}
+		}, valid: true},
+		{name: "invalid strip request header name", edit: func(spec *Spec) {
+			spec.Transport.Target = ""
+			spec.HTTP.Routes = []HTTPRoute{{Prefix: "/", Upstream: "http://localhost:4000"}}
+			spec.HTTP.StripRequestHeaders = []string{"X Tenant"}
+		}, valid: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -80,6 +80,7 @@ type exposeFlags struct {
 	x402FacilitatorToken string
 	targetAddr           string
 	httpRoutes           []string
+	stripRequestHeaders  []string
 	serve                string
 	cache                bool
 	cacheTTL             time.Duration
@@ -113,6 +114,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.RepeatedStringFlag(fs, &flags.x402Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint")
 	utils.StringFlagEnv(fs, &flags.x402FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
 	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
+	utils.RepeatedStringFlag(fs, &flags.stripRequestHeaders, "strip-request-header", "Client request header removed before routed HTTP forwards it upstream; repeat for multiple headers; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (Host, X-Forwarded-*) are always rewritten by the tunnel; requires --http-route or --auth")
 	utils.StringFlag(fs, &flags.serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
 	utils.BoolFlag(fs, &flags.cache, "cache", false, "Allow selected relays to store --serve content and terminate browser TLS; cached responses lose end-to-end TLS to this client")
 	fs.DurationVar(&flags.cacheTTL, "cache-ttl", 0, "Requested offline cache lifetime, clamped by the relay; 0 uses relay policy (requires --cache)")
@@ -228,10 +230,17 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 	}
 	serve := strings.TrimSpace(flags.serve)
 	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders
-	if serve != "" || len(routes) > 0 || authEnabled || flags.cache {
+	hasStripPolicy := len(flags.stripRequestHeaders) > 0
+	hasHTTPUpstream := len(routes) > 0 || strings.TrimSpace(flags.targetAddr) != ""
+	if hasStripPolicy && serve == "" && !hasHTTPUpstream && !authEnabled && !flags.cache {
+		return tunnel.Spec{}, errors.New("--strip-request-header requires --http-route, --target, or --auth")
+	}
+	useHTTP := serve != "" || len(routes) > 0 || authEnabled || flags.cache || hasStripPolicy
+	if useHTTP {
 		spec.HTTP = &tunnel.HTTPConfig{
-			Routes: routes,
-			Serve:  serve,
+			Routes:              routes,
+			Serve:               serve,
+			StripRequestHeaders: append([]string(nil), flags.stripRequestHeaders...),
 			Payment: gateway.X402Payment{
 				X402Config: gateway.X402Config{
 					Testnet: flags.x402Testnet, Network: flags.x402Network, Asset: flags.x402Asset,

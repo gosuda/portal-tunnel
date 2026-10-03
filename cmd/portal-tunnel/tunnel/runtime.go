@@ -55,6 +55,10 @@ type HTTPConfig struct {
 	Auth    *gateway.ApplicationAuthConfig
 	Payment gateway.X402Payment
 	Cache   *CacheConfig
+	// StripRequestHeaders lists client request headers removed before
+	// forwarding to every routed HTTP upstream. It requires at least one
+	// upstream route: static-only exposures forward nothing.
+	StripRequestHeaders []string
 }
 
 type HTTPRoute struct {
@@ -115,6 +119,23 @@ func (spec Spec) Validate() error {
 		}
 		if strings.TrimSpace(route.Amount) == "" && len(route.Methods) > 0 {
 			return fmt.Errorf("HTTP route %q methods require a payment amount", prefix)
+		}
+	}
+	if len(httpConfig.StripRequestHeaders) > 0 {
+		if strings.TrimSpace(httpConfig.Serve) != "" {
+			return errors.New("strip request headers cannot be combined with static serving (--serve); static sites do not proxy request headers")
+		}
+		hasHTTPUpstream := len(httpConfig.Routes) > 0 || strings.TrimSpace(target) != "" || httpConfig.Auth != nil
+		if !hasHTTPUpstream {
+			return errors.New("strip request headers require an HTTP upstream route or target")
+		}
+		for _, h := range httpConfig.StripRequestHeaders {
+			if strings.EqualFold(strings.TrimSpace(h), "Host") {
+				return errors.New(`strip request header "Host" is not supported: Go stores it in Request.Host, not Header`)
+			}
+			if strings.EqualFold(strings.TrimSpace(h), "X-Forwarded-Proto") {
+				return errors.New(`strip request header "X-Forwarded-Proto" is not supported: RunHTTP always overwrites it with the trusted https value`)
+			}
 		}
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(httpConfig.Payment.Network)), "casper:") && strings.TrimSpace(httpConfig.Payment.Asset) == "" {
@@ -209,6 +230,9 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	handler, err := gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment)
 	if err == nil && spec.HTTP.Auth != nil {
 		handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, *spec.HTTP.Auth)
+	}
+	if err == nil && len(spec.HTTP.StripRequestHeaders) > 0 {
+		handler, err = gateway.NewStripRequestHeaders(handler, spec.HTTP.StripRequestHeaders)
 	}
 	if err != nil {
 		_ = exposure.Close()
