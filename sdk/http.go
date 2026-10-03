@@ -242,6 +242,11 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	if err != nil {
 		return nil, fmt.Errorf("http route %q strip request headers: %w", prefix, err)
 	}
+	for _, h := range stripHeaders {
+		if strings.HasPrefix(h, "X-Forwarded-") || strings.HasPrefix(h, "X-Portal-") {
+			return nil, fmt.Errorf("http route %q strip request header %q: Portal-owned forwarding headers cannot be stripped", prefix, h)
+		}
+	}
 
 	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
 		staticIndex := strings.TrimSpace(routeConfig.StaticIndex)

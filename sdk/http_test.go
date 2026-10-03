@@ -357,32 +357,18 @@ func TestHTTPRoutesStripRequestHeaders(t *testing.T) {
 func TestHTTPRoutesStripRequestHeadersKeepPortalHeaders(t *testing.T) {
 	t.Parallel()
 
-	route, err := newHTTPRoute(HTTPRouteConfig{
-		Prefix:   "/",
-		Upstream: "http://127.0.0.1:3000",
-		// Listing Portal-owned headers must not disable them: stripping runs
-		// before the tunnel writes X-Forwarded-*, so the upstream still
-		// receives the tunnel-generated values without client forgeries.
-		StripRequestHeaders: []string{"x-forwarded-for", "X-Forwarded-Proto", "X-Forwarded-Host"},
-	})
-	if err != nil {
-		t.Fatalf("newHTTPRoute() error = %v", err)
-	}
-
-	in := httptest.NewRequest(http.MethodGet, "http://app.relay.example/", nil)
-	in.Header.Set("X-Forwarded-For", "6.6.6.6")
-	in.Header.Set("X-Forwarded-Proto", "https")
-	pr := &httputil.ProxyRequest{In: in, Out: in.Clone(t.Context())}
-	route.rewriteProxyRequest(pr)
-
-	if got := pr.Out.Header.Get("X-Forwarded-For"); got == "" || strings.Contains(got, "6.6.6.6") {
-		t.Fatalf("outbound X-Forwarded-For = %q, want only the tunnel-observed peer", got)
-	}
-	if got := pr.Out.Header.Get("X-Forwarded-Proto"); got != "https" {
-		t.Fatalf("outbound X-Forwarded-Proto = %q, want the tunnel-generated https", got)
-	}
-	if got := pr.Out.Header.Get("X-Forwarded-Host"); got != "app.relay.example" {
-		t.Fatalf("outbound X-Forwarded-Host = %q, want the public host", got)
+	// Portal-owned forwarding headers must be rejected at construction time:
+	// they cannot appear in the strip list because that would let a
+	// configuration suppress trusted values Portal regenerates.
+	for _, h := range []string{"x-forwarded-for", "X-Forwarded-Proto", "X-Forwarded-Host"} {
+		_, err := newHTTPRoute(HTTPRouteConfig{
+			Prefix:              "/",
+			Upstream:            "http://127.0.0.1:3000",
+			StripRequestHeaders: []string{h},
+		})
+		if err == nil {
+			t.Fatalf("newHTTPRoute accepted Portal-owned header %q in strip list", h)
+		}
 	}
 }
 
@@ -450,5 +436,61 @@ func TestHTTPRoutesRejectInvalidStripHeaderNames(t *testing.T) {
 		if err == nil {
 			t.Fatalf("NewHTTPRoutes(strip %q) error = nil, want invalid name error", name)
 		}
+	}
+}
+
+func TestHTTPRoutesRejectPortalOwnedStripHeaders(t *testing.T) {
+	t.Parallel()
+	for _, h := range []string{"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host", "X-Forwarded-Prefix", "X-Portal-User", "X-Portal-Auth"} {
+		_, err := NewHTTPRoutes([]HTTPRouteConfig{
+			{Prefix: "/", Upstream: "http://127.0.0.1:1", StripRequestHeaders: []string{h}},
+		})
+		if err == nil {
+			t.Fatalf("NewHTTPRoutes accepted Portal-owned header %q in strip list", h)
+		}
+	}
+}
+
+func TestHTTPRoutesPreservesPortalGeneratedHeaders(t *testing.T) {
+	t.Parallel()
+	var gotHeaders http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	handler, err := NewHTTPRoutes([]HTTPRouteConfig{
+		{Prefix: "/", Upstream: upstream.URL, StripRequestHeaders: []string{"X-Custom"}},
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPRoutes() error = %v", err)
+	}
+	// Simulate a client that sends a spoofed X-Forwarded-For and X-Forwarded-Proto,
+	// plus an arbitrary header that should be stripped. RunHTTP sets
+	// X-Forwarded-Proto before the request reaches the route handler.
+	req := httptest.NewRequest(http.MethodGet, "https://public.example/", nil)
+	req.Header.Set("X-Forwarded-For", "spoofed")
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.Header.Set("X-Custom", "remove-me")
+	req.Header.Set("X-Keep", "keep")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	// X-Custom must be stripped.
+	if gotHeaders.Get("X-Custom") != "" {
+		t.Fatalf("X-Custom forwarded: %q", gotHeaders.Get("X-Custom"))
+	}
+	// X-Forwarded-For must be regenerated (not the spoofed value).
+	if got := gotHeaders.Get("X-Forwarded-For"); got == "spoofed" {
+		t.Fatalf("spoofed X-Forwarded-For forwarded: %q", got)
+	}
+	// X-Forwarded-Proto must be present and not the spoofed value.
+	if got := gotHeaders.Get("X-Forwarded-Proto"); got == "http" {
+		t.Fatalf("spoofed X-Forwarded-Proto forwarded: %q", got)
+	}
+	if gotHeaders.Get("X-Keep") != "keep" {
+		t.Fatalf("X-Keep = %q, want keep", gotHeaders.Get("X-Keep"))
 	}
 }
