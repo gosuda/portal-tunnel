@@ -303,9 +303,10 @@ func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.Reverse
 }
 
 // SetTransportPolicy applies relay-owned transport enablement and capacity
-// values to lease enforcement. UDP enablement is fixed once listeners start;
-// changing it at runtime would otherwise report a state with no matching QUIC
-// backhaul listener.
+// values to lease enforcement. Disabling UDP takes effect immediately: the
+// QUIC backhaul listener keeps serving live transports, but the registry
+// stops admitting new UDP leases. Enabling UDP at runtime is refused when no
+// backhaul listener exists, since a listener cannot be created post-start.
 func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
 	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
 		return errors.New("transport max leases must be non-negative")
@@ -314,8 +315,8 @@ func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnable
 	if (udpEnabled || tcpEnabled) && !cfg.hasLeasePortRange() {
 		return errors.New("transport enablement requires a lease port range")
 	}
-	if s.group != nil && udpEnabled != (s.quicBackhaul != nil) {
-		return errors.New("udp enablement requires a relay restart")
+	if s.group != nil && udpEnabled && s.quicBackhaul == nil {
+		return errors.New("enabling udp requires a relay restart")
 	}
 	s.registry.setUDPPolicy(udpEnabled, udpMaxLeases)
 	s.registry.setTCPPortPolicy(tcpEnabled, tcpMaxLeases)

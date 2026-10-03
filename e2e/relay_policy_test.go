@@ -247,3 +247,36 @@ func TestManualModeRevokesOfflineCache(t *testing.T) {
 		t.Fatal("manual mode left an unapproved offline cache routable")
 	}
 }
+
+// Runtime UDP toggling must preserve pre-refactor semantics: disabling UDP
+// takes effect immediately even while the QUIC backhaul listener is live,
+// while enabling UDP without a listener stays a restart-required operation.
+func TestUDPRuntimeToggle(t *testing.T) {
+	headers := http.Header{"Authorization": {"Bearer admin-test"}}
+
+	t.Run("disable while listener is live", func(t *testing.T) {
+		lo, hi := ephemeralPortRange()
+		ctx, base, client := startPolicyRelay(t, t.TempDir(),
+			"--udp-enabled=true",
+			"--min-port="+strconv.Itoa(lo),
+			"--max-port="+strconv.Itoa(hi),
+		)
+		var settings types.PolicySettings
+		if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy,
+			types.PolicySettings{ApprovalMode: "auto"}, headers, &settings); err != nil {
+			t.Fatalf("runtime udp disable: %v", err)
+		}
+		if settings.UDP.Enabled {
+			t.Fatal("udp policy still enabled after runtime disable")
+		}
+	})
+
+	t.Run("enable without listener requires restart", func(t *testing.T) {
+		ctx, base, client := startPolicyRelay(t, t.TempDir())
+		err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy,
+			types.PolicySettings{ApprovalMode: "auto", UDP: types.PolicyPortSettings{Enabled: true}}, headers, new(types.PolicySettings))
+		if err == nil {
+			t.Fatal("enabling udp without a backhaul listener must be refused")
+		}
+	})
+}
