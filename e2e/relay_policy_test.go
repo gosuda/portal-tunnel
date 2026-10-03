@@ -181,7 +181,8 @@ func TestManualModeRevokesOfflineCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exposure, err := sdk.Expose(ctx, leaseIdentity, []string{base.String()}, sdk.WithStaticRelayCache(siteDir, 30*time.Second))
+	relayURL := "https://localhost:" + base.Port()
+	exposure, err := sdk.Expose(ctx, leaseIdentity, []string{relayURL}, sdk.WithStaticRelayCache(siteDir, 30*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
