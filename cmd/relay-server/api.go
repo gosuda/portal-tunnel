@@ -340,8 +340,8 @@ func (api *RelayAPI) commitAccess(next policy.AccessState) {
 			keys[key] = struct{}{}
 		}
 	}
-	for _, lease := range api.server.PolicyLeases() {
-		keys[lease.IdentityKey] = struct{}{}
+	for _, key := range api.server.AccessProjectionKeys() {
+		keys[key] = struct{}{}
 	}
 	for key := range keys {
 		api.server.SetIdentityRoutable(key, committed.Routable(key), committed.Revision())

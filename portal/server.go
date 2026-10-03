@@ -645,6 +645,27 @@ func (s *Server) PolicyLeases() []types.PolicyLease {
 	return s.registry.PolicyLeases(time.Now())
 }
 
+// AccessProjectionKeys returns identities whose live lease or retained cache
+// content needs the relay's current access decision.
+func (s *Server) AccessProjectionKeys() []string {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	keys := make(map[string]struct{})
+	for _, lease := range s.registry.PolicyLeases(time.Now()) {
+		keys[lease.IdentityKey] = struct{}{}
+	}
+	for _, owner := range s.registry.cache.Owners() {
+		keys[owner] = struct{}{}
+	}
+	out := make([]string, 0, len(keys))
+	for key := range keys {
+		out = append(out, key)
+	}
+	slices.Sort(out)
+	return out
+}
+
 func (s *Server) RelayIdentity() identity.RelayIdentity {
 	if s == nil {
 		return identity.RelayIdentity{}

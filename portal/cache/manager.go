@@ -214,6 +214,25 @@ func (c *Manager) Limits() *types.StaticCacheLimits {
 	return &limits
 }
 
+// Owners returns identities with a retained published snapshot. The relay uses
+// this observation to project access changes after the live lease is gone.
+func (c *Manager) Owners() []string {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	owners := make(map[string]struct{})
+	for _, site := range c.entries {
+		owners[site.owner] = struct{}{}
+	}
+	out := make([]string, 0, len(owners))
+	for owner := range owners {
+		out = append(out, owner)
+	}
+	return out
+}
+
 // Eligible reports whether the live lease supports cache operations.
 func (c *Manager) Eligible(id string) bool {
 	if c == nil {

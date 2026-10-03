@@ -101,7 +101,9 @@ persists the complete candidate, then commits it with a monotonically increasing
 revision. The relay publishes identity, routability, and revision values to
 Portal before acknowledging the update. Portal rejects revisions older than the
 newest complete snapshot it has observed, including after idle identity cleanup.
-Registration reloads the committed snapshot if its publication is rejected.
+Projection targets include live lease identities and owners of retained offline
+cache snapshots, so mode changes also revoke cache-only identities. Registration
+reloads the committed snapshot if its publication is rejected.
 Revisions are local to a running relay; both sides start fresh on restart.
 
 Revocation detaches cached content and advances the retained lease's cache
