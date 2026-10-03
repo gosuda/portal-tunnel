@@ -24,6 +24,7 @@ import (
 
 const (
 	defaultLeaseTTL                          = 2 * time.Minute
+	maxLeaseTTL                              = time.Hour
 	defaultRegisterChallengeTTL              = 2 * time.Minute
 	defaultRegisterChallengeOutstandingPerIP = 32
 	defaultPortReservationGrace              = 5 * time.Minute
@@ -169,7 +170,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 
 	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
-		ttl = time.Duration(req.TTL) * time.Second
+		ttl = time.Duration(min(req.TTL, int(maxLeaseTTL/time.Second))) * time.Second
 	}
 
 	identityKey := leaseIdentity.Key()
@@ -420,7 +421,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}
 	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
-		ttl = time.Duration(req.TTL) * time.Second
+		ttl = time.Duration(min(req.TTL, int(maxLeaseTTL/time.Second))) * time.Second
 	}
 
 	leaseKey := claims.Identity.Key()
@@ -459,14 +460,14 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}
 
 	return types.RenewResponse{
-			ExpiresAt:   expiresAt,
-			AccessToken: nextAccessToken,
-		}, reverseEndpointInput{
-			leaseIdentity: recordIdentity,
-			leaseID:       leaseID,
-			expiresAt:     expiresAt,
-			useOverlay:    useOverlay,
-		}, nil
+		ExpiresAt:   expiresAt,
+		AccessToken: nextAccessToken,
+	}, reverseEndpointInput{
+		leaseIdentity: recordIdentity,
+		leaseID:       leaseID,
+		expiresAt:     expiresAt,
+		useOverlay:    useOverlay,
+	}, nil
 }
 
 func (r *leaseRegistry) issueReverseEndpoint(input reverseEndpointInput, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {

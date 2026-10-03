@@ -272,7 +272,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 	registry.names, err = loadNameReservations(
-		filepath.Join(cfg.StateDir, types.RelayNameReservationsFilename),
+		nameReservationsPath(cfg.StateDir, relayIdentity.Name),
 		relayIdentity.Name,
 		cfg.NameReservationTTL,
 	)

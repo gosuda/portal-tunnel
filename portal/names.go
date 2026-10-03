@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,7 +31,15 @@ type nameReservations struct {
 	path     string
 	ttl      time.Duration
 	entries  map[string]nameReservation
+	durable  map[string]nameReservation
 	writeErr error
+}
+
+// Hash the effective public namespace, including loopback normalization. Domain
+// changes preserve the old namespace so switching back restores its ownership.
+func nameReservationsPath(dir, root string) string {
+	hostname, _ := utils.LeaseHostname("namespace", root)
+	return filepath.Join(dir, fmt.Sprintf("name-reservations-%x.json", sha256.Sum256([]byte(hostname))))
 }
 
 func loadNameReservations(path, root string, ttl time.Duration) (*nameReservations, error) {
@@ -38,6 +47,7 @@ func loadNameReservations(path, root string, ttl time.Duration) (*nameReservatio
 		path: path, ttl: ttl,
 		entries: make(map[string]nameReservation),
 	}
+	store.durable = store.entries
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return store, nil
@@ -63,6 +73,7 @@ func loadNameReservations(path, root string, ttl time.Duration) (*nameReservatio
 			return nil, fmt.Errorf("invalid name reservation for %q", hostname)
 		}
 	}
+	store.durable = store.entries
 	return store, nil
 }
 
@@ -83,18 +94,25 @@ func (s *nameReservations) Reserve(record *leaseRecord, expiresAt, now time.Time
 			}
 		}
 	}()
-	if s.writeErr != nil {
-		return s.writeErr
-	}
 	owner := record.Key()
 	entry, exists := s.entries[record.Hostname]
 	if exists && entry.Owner != owner && now.Before(entry.ReservedUntil) {
 		return errHostnameConflict
 	}
 	until := expiresAt.Add(s.ttl)
-	if exists && entry.Owner == owner && !until.After(entry.ReservedUntil) {
+	// Only a confirmed durable entry may authorize publication without a write.
+	// A failed post-rename sync may protect a new owner in entries, but must
+	// never be mistaken for acknowledged durable ownership.
+	confirmed := s.durable[record.Hostname]
+	if confirmed.Owner == owner && !until.After(confirmed.ReservedUntil) {
 		return nil
 	}
+	if s.writeErr != nil {
+		return s.writeErr
+	}
+	// Reserve a bounded refresh margin to amortize full-file fsyncs while
+	// always retaining at least ttl beyond every acknowledged lease expiry.
+	until = until.Add(min(s.ttl/8, time.Hour))
 	next := make(map[string]nameReservation, len(s.entries)+1)
 	for hostname, reserved := range s.entries {
 		if now.Before(reserved.ReservedUntil) {

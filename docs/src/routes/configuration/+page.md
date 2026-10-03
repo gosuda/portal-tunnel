@@ -10,23 +10,30 @@ Complete reference for all Portal environment variables, CLI flags, and configur
 ## Public name ownership
 
 `NAME_RESERVATION_TTL` / `--name-reservation-ttl` defaults to `168h` (seven
-days), with an allowed range of `1s` to `8760h`. Each successful registration
-and renewal reserves its public hostname to the verified Portal identity until
-the granted lease expiry plus this TTL. A shorter renewal or early unregister
-does not shorten an existing reservation. Routing stops when the lease stops;
-only name ownership remains. Hidden listings reserve their hostname too.
+days), with an allowed range of `1s` to `8760h`. Registration and renewal
+reserve the public hostname to the verified Portal identity for at least the
+granted lease expiry plus this TTL. Lease TTLs are capped at one hour on the
+server. Durable writes include a refresh margin of one eighth of the reservation
+TTL, capped at one hour, so ordinary renewals reuse the persisted reservation.
+A registration that fails after reserving the name conservatively retains it. A shorter renewal or early unregister
+does not shorten an existing reservation. Live routing stops when the lease stops; the opt-in static cache can still
+serve the previous owner’s content until its separate cache TTL expires. Hidden listings reserve their hostname too.
 
 The same persisted identity can reconnect immediately. Another identity gets
 `hostname_conflict` until the reservation expires. Losing the local identity
 file is distinct from losing a connection: a new identity cannot reclaim a
 still-reserved name. Names are scoped to the relay domain, not globally.
 
-Reservations live in `IDENTITY_PATH/name-reservations.json`, separate from
-active leases and disposable cache. Keep that file and relay identity on a
+Reservations live in `IDENTITY_PATH/name-reservations-<namespace-hash>.json`,
+separate from active leases and disposable cache. Each relay domain has its own
+file; changing `PORTAL_URL` preserves the old domain’s reservations, and changing
+back restores them. Keep these files and relay identity on a
 durable volume exclusive to one relay process. A restart loads the reservations
 before serving; corrupt state or a failed durable write prevents new ownership
-publication rather than silently releasing a browser origin. Do not delete this
-file to clear inactive tunnels. Expired entries are pruned on the next write.
+publication rather than silently releasing a browser origin. Renewals covered
+by a confirmed durable reservation continue without a write during storage
+faults; an extension beyond that window still requires durable storage. Do not
+delete these files to clear inactive tunnels. Expired entries are pruned on the next write.
 Names released before upgrading cannot be recovered automatically.
 
 ## Static relay cache

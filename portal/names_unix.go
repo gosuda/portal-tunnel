@@ -25,5 +25,8 @@ func (s *nameReservations) commit(temp string, next map[string]nameReservation) 
 	if err != nil {
 		s.writeErr = fmt.Errorf("sync name reservation directory: %w", err)
 	}
+	if s.writeErr == nil {
+		s.durable = next
+	}
 	return s.writeErr
 }

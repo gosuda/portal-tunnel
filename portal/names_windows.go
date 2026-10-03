@@ -21,5 +21,6 @@ func (s *nameReservations) commit(temp string, next map[string]nameReservation) 
 		return fmt.Errorf("replace name reservations: %w", err)
 	}
 	s.entries = next
+	s.durable = next
 	return nil
 }
