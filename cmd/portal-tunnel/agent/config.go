@@ -364,7 +364,9 @@ func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
 	if cfg.UDPEnabled {
 		spec.Transport.UDP = &tunnel.UDPConfig{Target: cfg.UDPAddr}
 	}
-	if cfg.Serve != "" || len(cfg.HTTPRoutes) > 0 || cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders || len(cfg.StripRequestHeaders) > 0 {
+	hasAuth := cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders
+	hasHTTPSource := cfg.Serve != "" || len(cfg.HTTPRoutes) > 0 || hasAuth || len(cfg.StripRequestHeaders) > 0
+	if hasHTTPSource {
 		routes := make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
 		for _, route := range cfg.HTTPRoutes {
 			routes = append(routes, tunnel.HTTPRoute{

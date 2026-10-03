@@ -125,8 +125,17 @@ func (spec Spec) Validate() error {
 		if _, err := utils.NormalizeHeaderNames(httpConfig.StripRequestHeaders); err != nil {
 			return fmt.Errorf("strip request headers: %w", err)
 		}
-		if strings.TrimSpace(httpConfig.Serve) != "" || (len(httpConfig.Routes) == 0 && httpConfig.Auth == nil) {
-			return errors.New("strip request headers require an HTTP upstream route")
+		hasHTTPUpstream := strings.TrimSpace(httpConfig.Serve) == "" &&
+			(len(httpConfig.Routes) > 0 || strings.TrimSpace(target) != "" || httpConfig.Auth != nil)
+		if !hasHTTPUpstream {
+			return errors.New("strip request headers require an HTTP upstream route or target")
+		}
+		if auth := httpConfig.Auth; auth != nil && auth.IdentityHeaders {
+			for _, h := range httpConfig.StripRequestHeaders {
+				if h = strings.TrimSpace(h); strings.EqualFold(h, "X-Portal-User") || strings.EqualFold(h, "X-Portal-Auth") {
+					return fmt.Errorf("strip request header %q conflicts with --auth-identity-headers: verified identity headers cannot be stripped", h)
+				}
+			}
 		}
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(httpConfig.Payment.Network)), "casper:") && strings.TrimSpace(httpConfig.Payment.Asset) == "" {

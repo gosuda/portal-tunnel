@@ -230,10 +230,12 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 	}
 	serve := strings.TrimSpace(flags.serve)
 	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders
-	if len(flags.stripRequestHeaders) > 0 && serve == "" && len(routes) == 0 && !authEnabled && !flags.cache && strings.TrimSpace(flags.targetAddr) == "" {
+	hasStripPolicy := len(flags.stripRequestHeaders) > 0
+	hasHTTPSource := serve != "" || len(routes) > 0 || authEnabled || flags.cache || strings.TrimSpace(flags.targetAddr) != ""
+	if hasStripPolicy && !hasHTTPSource {
 		return tunnel.Spec{}, errors.New("--strip-request-header requires --http-route, --serve, --target, or --auth")
 	}
-	if serve != "" || len(routes) > 0 || authEnabled || flags.cache || len(flags.stripRequestHeaders) > 0 {
+	if hasHTTPSource || hasStripPolicy {
 		spec.HTTP = &tunnel.HTTPConfig{
 			Routes:              routes,
 			Serve:               serve,

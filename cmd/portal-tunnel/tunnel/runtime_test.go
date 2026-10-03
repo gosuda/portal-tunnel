@@ -74,6 +74,21 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 			spec.HTTP.Serve = "./dist"
 			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
 		}},
+		{name: "strip request headers on target only", edit: func(spec *Spec) {
+			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
+		}, valid: true},
+		{name: "strip X-Portal-User with auth identity headers", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe", IdentityHeaders: true}
+			spec.HTTP.StripRequestHeaders = []string{"X-Portal-User"}
+		}},
+		{name: "strip X-Portal-Auth with auth identity headers", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe", IdentityHeaders: true}
+			spec.HTTP.StripRequestHeaders = []string{"X-Portal-Auth"}
+		}},
+		{name: "strip X-Portal-User without auth identity headers", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe"}
+			spec.HTTP.StripRequestHeaders = []string{"X-Portal-User"}
+		}, valid: true},
 		{name: "invalid strip request header name", edit: func(spec *Spec) {
 			spec.Transport.Target = ""
 			spec.HTTP.Routes = []HTTPRoute{{Prefix: "/", Upstream: "http://localhost:4000"}}
