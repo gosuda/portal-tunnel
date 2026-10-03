@@ -3,9 +3,7 @@ package policy
 import (
 	"fmt"
 	"maps"
-	"sync"
 
-	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -16,34 +14,23 @@ const (
 	ModeManual Mode = "manual"
 )
 
-// Access owns relay-local identity access decisions: the approval mode,
-// approved and denied identities, and identity bans. It is the single writer
-// of the routability results the relay pushes into the portal data path;
-// portal code consumes pushed values and never reads this state.
+// Access owns committed relay access decisions. A transaction edits a detached
+// Snapshot, persists it, then commits the complete state with a new revision.
 type Access struct {
-	// Hold across decision reads and Portal writes so an old allow cannot
-	// arrive after a newer denial has been applied.
-	applyMu sync.RWMutex
-	state   *utils.Snapshot[accessState]
+	state *utils.Snapshot[AccessState]
 }
 
-type accessState struct {
+// AccessState is a detached set of decisions. Editing it never changes the live
+// relay policy; Commit installs the whole state once persistence has succeeded.
+type AccessState struct {
+	revision uint64
 	mode     Mode
 	approved map[string]struct{}
 	denied   map[string]struct{}
 	banned   map[string]struct{}
 }
 
-func newAccessState() accessState {
-	return accessState{
-		mode:     ModeAuto,
-		approved: make(map[string]struct{}),
-		denied:   make(map[string]struct{}),
-		banned:   make(map[string]struct{}),
-	}
-}
-
-func (s accessState) snapshot() accessState {
+func (s AccessState) snapshot() AccessState {
 	s.approved = maps.Clone(s.approved)
 	s.denied = maps.Clone(s.denied)
 	s.banned = maps.Clone(s.banned)
@@ -51,249 +38,154 @@ func (s accessState) snapshot() accessState {
 }
 
 func NewAccess() *Access {
-	return &Access{state: utils.NewSnapshot(newAccessState(), accessState.snapshot)}
+	return &Access{state: utils.NewSnapshot(AccessState{}, AccessState.snapshot)}
 }
 
-func (a *Access) current() accessState {
-	if a == nil || a.state == nil {
-		return newAccessState()
+// Snapshot returns an independent copy for readers or a proposed transaction.
+func (a *Access) Snapshot() AccessState {
+	if a == nil {
+		return AccessState{}
 	}
 	return a.state.Load()
 }
 
-// Routable reports whether the relay routes the identity: not banned, not
-// denied, and approved when the approval mode is manual. It is the only
-// decision the portal data path consumes, as a value pushed by the relay.
-func (a *Access) Routable(key string) bool {
+// Commit installs a durably saved candidate as one immutable revision. The
+// relay serializes transactions from Snapshot through persistence and Commit.
+// Revisions belong to this running relay; both Access and Portal start fresh
+// on restart, so policy.json needs no revision field or schema migration.
+func (a *Access) Commit(next AccessState) AccessState {
+	return a.state.Update(func(previous AccessState) AccessState {
+		next.revision = previous.revision + 1
+		return next
+	})
+}
+
+func (s AccessState) Revision() uint64 {
+	return s.revision
+}
+
+func (s AccessState) Routable(key string) bool {
 	if key == "" {
 		return true
 	}
-	state := a.current()
-	if _, ok := state.banned[key]; ok {
-		return false
-	}
-	if _, ok := state.denied[key]; ok {
-		return false
-	}
-	if state.mode == ModeAuto {
-		return true
-	}
-	_, ok := state.approved[key]
-	return ok
+	return !s.IsBanned(key) && !s.IsDenied(key) && s.EffectiveApproval(key)
 }
 
-// Apply pushes the current decision into Portal before a lease response or
-// policy update is acknowledged. Mutations wait for in-flight pushes, so a
-// delayed registration cannot overwrite a newer access decision.
-func (a *Access) Apply(server *portal.Server, key string) {
-	if key == "" {
-		return
+func (s AccessState) Mode() Mode {
+	if s.mode == "" {
+		return ModeAuto
 	}
-	if a != nil {
-		a.applyMu.RLock()
-		defer a.applyMu.RUnlock()
-	}
-	server.SetIdentityRoutable(key, a.Routable(key))
+	return s.mode
 }
 
-func (a *Access) Mode() Mode {
-	return a.current().mode
-}
-
-func (a *Access) SetMode(mode Mode) error {
+func (s *AccessState) SetMode(mode Mode) error {
 	if mode != ModeAuto && mode != ModeManual {
 		return fmt.Errorf("invalid approval mode: %q", mode)
 	}
-	if a == nil || a.state == nil {
-		return nil
-	}
-	a.applyMu.Lock()
-	defer a.applyMu.Unlock()
-	a.state.UpdateCopy(func(state *accessState) {
-		state.mode = mode
-	})
+	s.mode = mode
 	return nil
 }
 
-// EffectiveApproval reports the approval that governs routing: automatic in
-// auto mode, explicit otherwise.
-func (a *Access) EffectiveApproval(key string) bool {
-	state := a.current()
-	if state.mode == ModeAuto {
+func (s AccessState) EffectiveApproval(key string) bool {
+	if s.Mode() == ModeAuto {
 		return true
 	}
-	_, ok := state.approved[key]
+	_, ok := s.approved[key]
 	return ok
 }
 
-func (a *Access) Approve(key string) {
-	if a == nil || a.state == nil {
-		return
+func (s *AccessState) Approve(key string) {
+	if s.approved == nil {
+		s.approved = make(map[string]struct{})
 	}
-	a.applyMu.Lock()
-	defer a.applyMu.Unlock()
-	a.state.UpdateCopy(func(state *accessState) {
-		if state.approved == nil {
-			state.approved = make(map[string]struct{})
-		}
-		state.approved[key] = struct{}{}
-		delete(state.denied, key)
-	})
+	s.approved[key] = struct{}{}
+	delete(s.denied, key)
 }
 
-func (a *Access) Revoke(key string) {
-	if a == nil || a.state == nil {
-		return
-	}
-	a.applyMu.Lock()
-	defer a.applyMu.Unlock()
-	a.state.UpdateCopy(func(state *accessState) {
-		delete(state.approved, key)
-	})
+func (s *AccessState) Revoke(key string) {
+	delete(s.approved, key)
 }
 
-func (a *Access) ApprovedKeys() []string {
-	approved := a.current().approved
-	out := make([]string, 0, len(approved))
-	for key := range approved {
+func (s AccessState) ApprovedKeys() []string {
+	out := make([]string, 0, len(s.approved))
+	for key := range s.approved {
 		out = append(out, key)
 	}
 	return out
 }
 
-func (a *Access) IsDenied(key string) bool {
-	_, ok := a.current().denied[key]
+func (s AccessState) IsDenied(key string) bool {
+	_, ok := s.denied[key]
 	return ok
 }
 
-func (a *Access) Deny(key string) {
-	if a == nil || a.state == nil {
-		return
+func (s *AccessState) Deny(key string) {
+	if s.denied == nil {
+		s.denied = make(map[string]struct{})
 	}
-	a.applyMu.Lock()
-	defer a.applyMu.Unlock()
-	a.state.UpdateCopy(func(state *accessState) {
-		if state.denied == nil {
-			state.denied = make(map[string]struct{})
-		}
-		state.denied[key] = struct{}{}
-		delete(state.approved, key)
-	})
+	s.denied[key] = struct{}{}
+	delete(s.approved, key)
 }
 
-func (a *Access) Undeny(key string) {
-	if a == nil || a.state == nil {
-		return
-	}
-	a.applyMu.Lock()
-	defer a.applyMu.Unlock()
-	a.state.UpdateCopy(func(state *accessState) {
-		delete(state.denied, key)
-	})
+func (s *AccessState) Undeny(key string) {
+	delete(s.denied, key)
 }
 
-func (a *Access) DeniedKeys() []string {
-	denied := a.current().denied
-	out := make([]string, 0, len(denied))
-	for key := range denied {
+func (s AccessState) DeniedKeys() []string {
+	out := make([]string, 0, len(s.denied))
+	for key := range s.denied {
 		out = append(out, key)
 	}
 	return out
 }
 
-// SetDecisions replaces the approval decisions wholesale, keeping a denied
-// key from also counting as approved regardless of input order.
-func (a *Access) SetDecisions(approvedKeys, deniedKeys []string) {
-	if a == nil {
-		return
-	}
-
-	approved := make(map[string]struct{}, len(approvedKeys))
+// SetDecisions keeps denied keys from also counting as approved.
+func (s *AccessState) SetDecisions(approvedKeys, deniedKeys []string) {
+	s.approved = make(map[string]struct{}, len(approvedKeys))
 	for _, key := range approvedKeys {
-		if key == "" {
-			continue
+		if key != "" {
+			s.approved[key] = struct{}{}
 		}
-		approved[key] = struct{}{}
 	}
-
-	denied := make(map[string]struct{}, len(deniedKeys))
+	s.denied = make(map[string]struct{}, len(deniedKeys))
 	for _, key := range deniedKeys {
-		if key == "" {
-			continue
+		if key != "" {
+			delete(s.approved, key)
+			s.denied[key] = struct{}{}
 		}
-		delete(approved, key)
-		denied[key] = struct{}{}
 	}
-
-	if a.state == nil {
-		return
-	}
-	a.applyMu.Lock()
-	defer a.applyMu.Unlock()
-	a.state.Update(func(state accessState) accessState {
-		state.approved = approved
-		state.denied = denied
-		return state
-	})
 }
 
-func (a *Access) IsBanned(key string) bool {
-	if key == "" {
-		return false
-	}
-	_, ok := a.current().banned[key]
+func (s AccessState) IsBanned(key string) bool {
+	_, ok := s.banned[key]
 	return ok
 }
 
-func (a *Access) Ban(key string) {
-	if a == nil || a.state == nil || key == "" {
+func (s *AccessState) Ban(key string) {
+	if key == "" {
 		return
 	}
-	a.applyMu.Lock()
-	defer a.applyMu.Unlock()
-	a.state.UpdateCopy(func(state *accessState) {
-		if state.banned == nil {
-			state.banned = make(map[string]struct{})
-		}
-		state.banned[key] = struct{}{}
-	})
-}
-
-func (a *Access) Unban(key string) {
-	if a == nil || a.state == nil || key == "" {
-		return
+	if s.banned == nil {
+		s.banned = make(map[string]struct{})
 	}
-	a.applyMu.Lock()
-	defer a.applyMu.Unlock()
-	a.state.UpdateCopy(func(state *accessState) {
-		delete(state.banned, key)
-	})
+	s.banned[key] = struct{}{}
 }
 
-func (a *Access) BannedKeys() []string {
-	banned := a.current().banned
-	out := make([]string, 0, len(banned))
-	for key := range banned {
+func (s *AccessState) Unban(key string) {
+	delete(s.banned, key)
+}
+
+func (s AccessState) BannedKeys() []string {
+	out := make([]string, 0, len(s.banned))
+	for key := range s.banned {
 		out = append(out, key)
 	}
 	return out
 }
 
-// SetBannedKeys replaces the ban set wholesale.
-func (a *Access) SetBannedKeys(keys []string) {
-	if a == nil || a.state == nil {
-		return
-	}
-	banned := make(map[string]struct{}, len(keys))
+func (s *AccessState) SetBannedKeys(keys []string) {
+	s.banned = make(map[string]struct{}, len(keys))
 	for _, key := range keys {
-		if key == "" {
-			continue
-		}
-		banned[key] = struct{}{}
+		s.Ban(key)
 	}
-	a.applyMu.Lock()
-	defer a.applyMu.Unlock()
-	a.state.UpdateCopy(func(state *accessState) {
-		state.banned = banned
-	})
 }

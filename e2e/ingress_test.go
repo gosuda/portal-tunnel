@@ -134,8 +134,10 @@ func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	}
 	// The relay pushes its ban decision into the data path; the public
 	// connect endpoint must answer before any connection is offered.
-	access.Ban(leases[0].IdentityKey)
-	access.Apply(server, leases[0].IdentityKey)
+	proposedAccess := access.Snapshot()
+	proposedAccess.Ban(leases[0].IdentityKey)
+	committed := access.Commit(proposedAccess)
+	server.SetIdentityRoutable(leases[0].IdentityKey, committed.Routable(leases[0].IdentityKey), committed.Revision())
 
 	// A new challenge pushes the current relay decision again. It must not
 	// restore access to the existing lease after the ban has been applied.

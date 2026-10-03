@@ -28,6 +28,17 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 		root.HandleFunc("/{$}", s.HandleRoot)
 		fallback = root
 	}
+	// A newer committed snapshot may reach Portal while this request is
+	// paused. Retry only when Portal rejects the older revision; stale values
+	// are never applied, and no relay lock is held across the Portal call.
+	publishAccess := func(key string) {
+		for {
+			state := access.Snapshot()
+			if s.SetIdentityRoutable(key, state.Routable(key), state.Revision()) {
+				return
+			}
+		}
+	}
 
 	// admit spends the weighted pre-auth budget before any decoding or
 	// signature work, preserving the source -> global ordering established
@@ -71,14 +82,14 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	mux.HandleFunc(types.PathSDKCertificateChain, s.HandleCertificateChain)
 	mux.HandleFunc(types.PathSDKRegisterChallenge, requireMethod(http.MethodPost, admit(preAuth.ChallengeCost, func(w http.ResponseWriter, r *http.Request) {
 		key, response, ok := s.HandleRegisterChallenge(w, r, ingress.ClientIP(r))
-		access.Apply(s, key)
+		publishAccess(key)
 		if ok {
 			utils.WriteAPIData(w, http.StatusCreated, response)
 		}
 	})))
 	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request) {
 		key, response, ok := s.HandleRegister(w, r, ingress.ClientIP(r))
-		access.Apply(s, key)
+		publishAccess(key)
 		if ok {
 			utils.WriteAPIData(w, http.StatusCreated, response)
 		}

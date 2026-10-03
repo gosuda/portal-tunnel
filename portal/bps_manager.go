@@ -202,7 +202,8 @@ func (l *bpsLimiter) reserve(bytes, bps float64) time.Duration {
 	}
 
 	missing := bytes - l.tokens
-	l.tokens = 0
+	// Waiting must retain accrued credit; otherwise an early retry discards
+	// progress and can keep an open connection throttled indefinitely.
 	l.updatedAt = now
 	return time.Duration(missing / bps * float64(time.Second))
 }

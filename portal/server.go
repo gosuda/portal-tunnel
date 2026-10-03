@@ -307,17 +307,6 @@ func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.Reverse
 // changing it at runtime would otherwise report a state with no matching QUIC
 // backhaul listener.
 func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
-	if err := s.ValidateTransportPolicy(udpEnabled, udpMaxLeases, tcpEnabled, tcpMaxLeases); err != nil {
-		return err
-	}
-	s.registry.setUDPPolicy(udpEnabled, udpMaxLeases)
-	s.registry.setTCPPortPolicy(tcpEnabled, tcpMaxLeases)
-	return nil
-}
-
-// ValidateTransportPolicy checks whether the Portal data path can apply the
-// relay's proposed transport policy without changing current state.
-func (s *Server) ValidateTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
 	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
 		return errors.New("transport max leases must be non-negative")
 	}
@@ -328,6 +317,8 @@ func (s *Server) ValidateTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpE
 	if s.group != nil && udpEnabled != (s.quicBackhaul != nil) {
 		return errors.New("udp enablement requires a relay restart")
 	}
+	s.registry.setUDPPolicy(udpEnabled, udpMaxLeases)
+	s.registry.setTCPPortPolicy(tcpEnabled, tcpMaxLeases)
 	return nil
 }
 
@@ -602,13 +593,16 @@ func (s *Server) serveTCPPairs(port *transport.RelayTCPPort, identityKey string)
 	}
 }
 
-// SetIdentityRoutability atomically advances Portal to one relay access
-// revision and applies the supplied per-identity values.
-func (s *Server) SetIdentityRoutability(decisions map[string]bool, revision uint64) {
+// SetIdentityRoutable applies the relay's current access decision for one
+// identity to the portal data path. The relay owns the decision; this only
+// carries the result across the boundary, including revoking cached content.
+// False means a newer relay snapshot has already reached Portal: the caller
+// must reload the committed snapshot before retrying. Stale values never apply.
+func (s *Server) SetIdentityRoutable(key string, routable bool, revision uint64) bool {
 	if s == nil || s.registry == nil {
-		return
+		return true
 	}
-	s.registry.setIdentityRoutability(decisions, revision)
+	return s.registry.setIdentityRoutable(key, routable, revision)
 }
 
 // DiscoveryEnabled and ApplicationOwnsDomainReport report the routing flags

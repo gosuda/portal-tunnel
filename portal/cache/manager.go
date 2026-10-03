@@ -26,6 +26,7 @@ type Manager struct {
 	snapshots  int
 	population chan struct{}
 	checks     chan struct{}
+	generation uint64
 }
 
 type cachedSite struct {
@@ -145,7 +146,8 @@ func (c *Manager) Register(lease Lease, req types.RegisterChallengeRequest) {
 	if req.CacheTTL > 0 && int64(req.CacheTTL) < int64(ttl/time.Second) {
 		ttl = time.Duration(req.CacheTTL) * time.Second
 	}
-	c.leases[lease.ID] = leaseState{Lease: lease, ttl: ttl}
+	c.generation++
+	c.leases[lease.ID] = leaseState{Lease: lease, ttl: ttl, generation: c.generation}
 }
 
 func (c *Manager) Renew(lease Lease) {
@@ -212,8 +214,7 @@ func (c *Manager) Limits() *types.StaticCacheLimits {
 	return &limits
 }
 
-// Eligible checks the current lease event. It is also used immediately before
-// publishing to reject late/revoked uploads.
+// Eligible reports whether the live lease supports cache operations.
 func (c *Manager) Eligible(id string) bool {
 	if c == nil {
 		return false
@@ -228,6 +229,17 @@ func (c *Manager) eligibleLocked(id string) bool {
 	return ok && time.Now().Before(lease.ExpiresAt)
 }
 
+// Generation identifies this lease's current cache admission. Capture it before
+// checking external access; Handle rejects the request if revocation intervenes.
+func (c *Manager) Generation(id string) uint64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.leases[id].generation
+}
+
 // DetachOwner immediately revokes cached content owned by one identity while
 // retaining its live cache lease. If the relay routes the identity again, the
 // same lease may publish fresh content without re-registering.
@@ -237,9 +249,10 @@ func (c *Manager) DetachOwner(owner string) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.generation++
 	for id, lease := range c.leases {
 		if lease.Owner == owner {
-			lease.generation++
+			lease.generation = c.generation
 			c.leases[id] = lease
 		}
 	}

@@ -6,46 +6,54 @@ func TestAccessDecisionsAreMutuallyExclusive(t *testing.T) {
 	t.Parallel()
 
 	const key = "demo:0x1234"
-	access := NewAccess()
-	if err := access.Replace(ModeManual, []string{key}, nil, nil); err != nil {
+	access := NewAccess().Snapshot()
+	if err := access.SetMode(ModeManual); err != nil {
 		t.Fatal(err)
-	}
-	if !access.EffectiveApproval(key) || access.IsDenied(key) {
-		t.Fatal("approved identity was not exclusively approved")
 	}
 
-	if err := access.Replace(ModeManual, []string{key}, []string{key}, nil); err != nil {
-		t.Fatal(err)
+	access.Approve(key)
+	if !access.EffectiveApproval(key) || access.IsDenied(key) {
+		t.Fatal("Approve() did not leave the identity exclusively approved")
 	}
+
+	access.Deny(key)
 	if access.EffectiveApproval(key) || !access.IsDenied(key) {
-		t.Fatal("denied identity was not exclusively denied")
+		t.Fatal("Deny() did not leave the identity exclusively denied")
 	}
 
-	if err := access.Replace(ModeManual, []string{key}, nil, nil); err != nil {
-		t.Fatal(err)
-	}
+	access.Approve(key)
 	if !access.EffectiveApproval(key) || access.IsDenied(key) {
-		t.Fatal("approved identity retained its prior denial")
+		t.Fatal("Approve() did not clear the prior denial")
 	}
 }
 
-func TestAccessRevisionChangesOnlyWithCommittedState(t *testing.T) {
-	t.Parallel()
-
+func TestAccessCommitsCompoundDecisionsAtomically(t *testing.T) {
 	const key = "demo:0x1234"
 	access := NewAccess()
-	initial := access.Decision(key)
-	if err := access.Replace(ModeManual, nil, []string{key}, nil); err != nil {
-		t.Fatal(err)
+	initial := access.Snapshot()
+	initial.Ban(key)
+	access.Commit(initial)
+
+	proposed := access.Snapshot()
+	proposed.Unban(key)
+	// A registration arriving between the two edits must still see the
+	// committed ban, even though the proposed state temporarily permits it.
+	observed := make(chan bool, 1)
+	go func() { observed <- access.Snapshot().Routable(key) }()
+	if <-observed {
+		t.Fatal("uncommitted unban became routable")
 	}
-	denied := access.Decision(key)
-	if denied.Revision <= initial.Revision || denied.Routable {
-		t.Fatalf("denied decision = %+v, initial = %+v", denied, initial)
+	proposed.Deny(key)
+	access.Commit(proposed)
+	committed := access.Snapshot()
+	if committed.Revision() != 2 {
+		t.Fatalf("committed revision = %d, want 2", committed.Revision())
 	}
-	if err := access.Replace(ModeManual, nil, []string{key}, nil); err != nil {
-		t.Fatal(err)
+	if committed.IsBanned(key) || !committed.IsDenied(key) || committed.Routable(key) {
+		t.Fatal("compound change did not atomically replace the ban with a denial")
 	}
-	if unchanged := access.Decision(key); unchanged.Revision != denied.Revision {
-		t.Fatalf("unchanged state advanced revision from %d to %d", denied.Revision, unchanged.Revision)
+	proposed.Undeny(key)
+	if access.Snapshot().Routable(key) {
+		t.Fatal("editing the proposal after commit changed live access")
 	}
 }

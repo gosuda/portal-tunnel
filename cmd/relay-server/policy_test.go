@@ -55,7 +55,7 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !api.access.IsBanned("blocked:addr") || !api.access.Routable("allowed:addr") {
+	if !api.access.Snapshot().IsBanned("blocked:addr") || !api.access.Snapshot().Routable("allowed:addr") {
 		t.Fatal("identity policy lost during migration")
 	}
 	data, err := os.ReadFile(path)
@@ -88,13 +88,13 @@ func TestPolicyLoadNormalizesUnnormalizedIdentityKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !api.access.IsBanned("blocked:addr") {
+	if !api.access.Snapshot().IsBanned("blocked:addr") {
 		t.Fatal("unnormalized ban not applied to canonical key")
 	}
-	if !api.access.Routable("allowed:addr") {
+	if !api.access.Snapshot().Routable("allowed:addr") {
 		t.Fatal("unnormalized approval not effective for canonical key")
 	}
-	if !api.access.IsDenied("denied:key") {
+	if !api.access.Snapshot().IsDenied("denied:key") {
 		t.Fatal("unnormalized denial not applied to canonical key")
 	}
 	limits := server.BPSManager().IdentityBPSLimits()

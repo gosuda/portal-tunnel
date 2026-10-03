@@ -229,6 +229,61 @@ func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 	}
 }
 
+func TestAccessRevisionRejectsInFlightAllow(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	leaseIdentity := newTestLeaseIdentity(t, "revision")
+	_, lease, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.20", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := leaseIdentity.Key()
+	registry.setIdentityRoutable(key, true, 1)
+	loaded := make(chan struct{})
+	resume := make(chan struct{})
+	applied := make(chan bool, 1)
+	go func() {
+		// An old registration has already read revision 1's allow but has
+		// not delivered it. Force it to arrive after the denial completes.
+		close(loaded)
+		<-resume
+		applied <- registry.setIdentityRoutable(key, true, 1)
+	}()
+	<-loaded
+	registry.setIdentityRoutable(key, false, 2)
+	close(resume)
+	if <-applied {
+		t.Fatal("stale allow was applied after the newer denial")
+	}
+	if _, err := registry.admitLeaseByToken(lease.AccessToken, false); !errors.Is(err, errLeaseRejected) {
+		t.Fatalf("delayed allow bypassed denial: %v", err)
+	}
+	registry.setIdentityRoutable(key, true, 3)
+	if _, err := registry.admitLeaseByToken(lease.AccessToken, false); err != nil {
+		t.Fatalf("newer allow failed to restore access: %v", err)
+	}
+}
+
+func TestAccessRevisionSurvivesIdleCleanupAndRegistration(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	const key = "revision:identity"
+	registry.setIdentityRoutable(key, false, 2)
+	registry.cleanupExpired(time.Now().Add(defaultRegisterChallengeTTL + time.Second))
+	if registry.setIdentityRoutable(key, true, 1) {
+		t.Fatal("idle cleanup forgot the revision fence")
+	}
+	registry.setIdentityRoutable(key, true, 3)
+	registry.suspendIdentity(key)
+	if registry.isRoutable(key) {
+		t.Fatal("registration was not fail-closed")
+	}
+	if registry.setIdentityRoutable(key, true, 2) {
+		t.Fatal("registration accepted an older revision")
+	}
+	if !registry.setIdentityRoutable(key, true, 3) || !registry.isRoutable(key) {
+		t.Fatal("current committed revision did not release registration")
+	}
+}
+
 func TestLeaseRegistryCleanupExpiredPreservesIdentityBPS(t *testing.T) {
 	t.Parallel()
 
