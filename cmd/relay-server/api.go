@@ -33,6 +33,12 @@ var embeddedDistFS embed.FS
 
 const (
 	controlBodyLimit = 1 << 16
+
+	// Relay-local wire paths. Deliberately not in types/paths.go: no Go
+	// package outside cmd/relay-server needs them.
+	pathReputationVote    = types.PathAPIPrefix + "/reputation/vote"
+	reputationFilename    = "reputation.json"
+	reputationVoterCookie = "portal_voter"
 )
 
 type RelayAPI struct {
@@ -758,25 +764,29 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	}
 	summary, minted, err := api.reputation.CastVote(hostname, identity, vote, voterCookieID(r), clientIP)
 	if err != nil {
-		writeReputationError(w, err)
+		switch {
+		case errors.Is(err, policy.ErrReputationCapacity):
+			utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "vote capacity reached")
+		case errors.Is(err, policy.ErrReputationUnknownHostname):
+			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "hostname is not in the public directory")
+		default:
+			log.Error().Err(err).Msg("persist reputation vote")
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "vote failed")
+		}
 		return
 	}
 	if minted != "" {
-		setVoterCookie(w, r, minted)
+		http.SetCookie(w, &http.Cookie{
+			Name:     reputationVoterCookie,
+			Value:    minted,
+			Path:     types.PathAPIPrefix,
+			MaxAge:   int((10 * 365 * 24 * time.Hour).Seconds()),
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   r.TLS != nil,
+		})
 	}
 	utils.WriteAPIData(w, http.StatusOK, summary)
-}
-
-func writeReputationError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, policy.ErrReputationCapacity):
-		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "vote capacity reached")
-	case errors.Is(err, policy.ErrReputationUnknownHostname):
-		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "hostname is not in the public directory")
-	default:
-		log.Error().Err(err).Msg("persist reputation vote")
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "vote failed")
-	}
 }
 
 // voterCookieID only reads the cookie; parsing and verification belong to the store.
@@ -813,13 +823,3 @@ func publicIdentityLeases(public []types.Lease, server *portal.Server) []types.P
 	}
 	return leases
 }
-
-const (
-	// Relay-local wire paths. Deliberately not in types/paths.go: no Go
-	// package outside cmd/relay-server needs them.
-	pathReputationVote = types.PathAPIPrefix + "/reputation/vote"
-
-	reputationFilename = "reputation.json"
-
-	reputationVoterCookie = "portal_voter"
-)
