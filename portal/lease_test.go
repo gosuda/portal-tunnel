@@ -35,6 +35,12 @@ func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegist
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
+	registry.names, err = loadNameReservations(
+		filepath.Join(t.TempDir(), "name-reservations.json"), relay.Name, DefaultNameReservationTTL,
+	)
+	if err != nil {
+		t.Fatalf("load name reservations: %v", err)
+	}
 	// Registered leases bind UDP and raw-TCP relays; releasing them keeps
 	// repeated runs in one process free of port collisions.
 	t.Cleanup(func() { registry.CloseAll() })

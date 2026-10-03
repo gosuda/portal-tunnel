@@ -39,6 +39,7 @@ type leaseRegistry struct {
 	tokenIssuer    string
 	reverseURL     string
 	overlay        *overlay.Runtime
+	names          *nameReservations
 	cache          *cache.Manager
 	policy         *policy.Runtime
 	udpPorts       *transport.PortAllocator
@@ -290,6 +291,11 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			return nil, types.RegisterResponse{}, errTCPPortCapacityExceeded
 		}
 	}
+	if err := r.names.Reserve(record, expiresAt, now); err != nil {
+		r.mu.Unlock()
+		record.Close()
+		return nil, types.RegisterResponse{}, err
+	}
 	for i := 0; i < len(r.records); i++ {
 		existing := r.records[i]
 		if existing == nil || existing.stream != nil || !existing.isPublicEntry() || existing.Key() != identityKey {
@@ -428,6 +434,10 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 
 	now := time.Now()
 	expiresAt := now.Add(ttl).UTC().Truncate(time.Second)
+	if err := r.names.Reserve(record, expiresAt, now); err != nil {
+		r.mu.Unlock()
+		return types.RenewResponse{}, reverseEndpointInput{}, err
+	}
 	record.ExpiresAt = expiresAt
 	record.LastSeenAt = now
 	if strings.TrimSpace(clientIP) != "" {
@@ -449,14 +459,14 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}
 
 	return types.RenewResponse{
-		ExpiresAt:   expiresAt,
-		AccessToken: nextAccessToken,
-	}, reverseEndpointInput{
-		leaseIdentity: recordIdentity,
-		leaseID:       leaseID,
-		expiresAt:     expiresAt,
-		useOverlay:    useOverlay,
-	}, nil
+			ExpiresAt:   expiresAt,
+			AccessToken: nextAccessToken,
+		}, reverseEndpointInput{
+			leaseIdentity: recordIdentity,
+			leaseID:       leaseID,
+			expiresAt:     expiresAt,
+			useOverlay:    useOverlay,
+		}, nil
 }
 
 func (r *leaseRegistry) issueReverseEndpoint(input reverseEndpointInput, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {

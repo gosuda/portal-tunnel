@@ -59,6 +59,8 @@ type ServerConfig struct {
 	MaxPort           int
 	ACME              acme.Config
 
+	NameReservationTTL time.Duration
+
 	// ApplicationOwnsDomainReport delegates types.PathSDKDomain to the
 	// application handler, which can compose Server.DomainReport() itself.
 	ApplicationOwnsDomainReport bool
@@ -118,6 +120,12 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.StateDir = strings.TrimSpace(cfg.StateDir)
 	if cfg.StateDir == "" {
 		return ServerConfig{}, errors.New("state directory is required")
+	}
+	if cfg.NameReservationTTL == 0 {
+		cfg.NameReservationTTL = DefaultNameReservationTTL
+	}
+	if cfg.NameReservationTTL < time.Second || cfg.NameReservationTTL > 365*24*time.Hour {
+		return ServerConfig{}, errors.New("name reservation TTL must be between 1s and 8760h")
 	}
 	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
 		cfg.ACME.KeyDir = cfg.StateDir
@@ -260,6 +268,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
 	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, relayAuthority, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return nil, err
+	}
+	registry.names, err = loadNameReservations(
+		filepath.Join(cfg.StateDir, types.RelayNameReservationsFilename),
+		relayIdentity.Name,
+		cfg.NameReservationTTL,
+	)
 	if err != nil {
 		return nil, err
 	}

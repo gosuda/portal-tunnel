@@ -7,6 +7,28 @@ description: Complete reference for all Portal environment variables, CLI flags,
 
 Complete reference for all Portal environment variables, CLI flags, and configuration files.
 
+## Public name ownership
+
+`NAME_RESERVATION_TTL` / `--name-reservation-ttl` defaults to `168h` (seven
+days), with an allowed range of `1s` to `8760h`. Each successful registration
+and renewal reserves its public hostname to the verified Portal identity until
+the granted lease expiry plus this TTL. A shorter renewal or early unregister
+does not shorten an existing reservation. Routing stops when the lease stops;
+only name ownership remains. Hidden listings reserve their hostname too.
+
+The same persisted identity can reconnect immediately. Another identity gets
+`hostname_conflict` until the reservation expires. Losing the local identity
+file is distinct from losing a connection: a new identity cannot reclaim a
+still-reserved name. Names are scoped to the relay domain, not globally.
+
+Reservations live in `IDENTITY_PATH/name-reservations.json`, separate from
+active leases and disposable cache. Keep that file and relay identity on a
+durable volume exclusive to one relay process. A restart loads the reservations
+before serving; corrupt state or a failed durable write prevents new ownership
+publication rather than silently releasing a browser origin. Do not delete this
+file to clear inactive tunnels. Expired entries are pruned on the next write.
+Names released before upgrading cannot be recovered automatically.
+
 ## Static relay cache
 
 Capability is enabled by default in the relay binary. Exposures are eligible
