@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/textproto"
 	"net/url"
 	"path"
 	"strconv"
@@ -292,50 +291,6 @@ func NormalizeRelayURLs(inputs ...string) ([]string, error) {
 	}
 
 	return normalizeUniqueStrings(out, strings.TrimSpace), nil
-}
-
-// NormalizeHeaderNames canonicalizes HTTP header names for policy matching:
-// each name is trimmed, must be a non-empty RFC 9110 token, and is
-// canonicalized; duplicate names collapse. Invalid names are rejected rather
-// than silently never matching, because a mistyped policy entry must fail
-// closed.
-func NormalizeHeaderNames(raw []string) ([]string, error) {
-	out := make([]string, 0, len(raw))
-	seen := make(map[string]struct{}, len(raw))
-	for _, name := range raw {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return nil, errors.New("header name is required")
-		}
-		if !validHeaderName(name) {
-			return nil, fmt.Errorf("invalid header name %q", name)
-		}
-		canonical := textproto.CanonicalMIMEHeaderKey(name)
-		if _, ok := seen[canonical]; ok {
-			continue
-		}
-		seen[canonical] = struct{}{}
-		out = append(out, canonical)
-	}
-	return out, nil
-}
-
-// validHeaderName reports whether name is an RFC 9110 token: the grammar
-// net/http accepts for header field names.
-func validHeaderName(name string) bool {
-	for i := range len(name) {
-		c := name[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		default:
-			switch c {
-			case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
-			default:
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func RemoveRelayURL(inputs []string, target string) []string {

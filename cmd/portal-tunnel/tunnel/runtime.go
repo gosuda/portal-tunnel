@@ -122,9 +122,6 @@ func (spec Spec) Validate() error {
 		}
 	}
 	if len(httpConfig.StripRequestHeaders) > 0 {
-		if _, err := utils.NormalizeHeaderNames(httpConfig.StripRequestHeaders); err != nil {
-			return fmt.Errorf("strip request headers: %w", err)
-		}
 		if strings.TrimSpace(httpConfig.Serve) != "" {
 			return errors.New("strip request headers cannot be combined with static serving (--serve); static sites do not proxy request headers")
 		}
@@ -132,11 +129,9 @@ func (spec Spec) Validate() error {
 		if !hasHTTPUpstream {
 			return errors.New("strip request headers require an HTTP upstream route or target")
 		}
-		if auth := httpConfig.Auth; auth != nil && auth.IdentityHeaders {
-			for _, h := range httpConfig.StripRequestHeaders {
-				if h = strings.TrimSpace(h); strings.EqualFold(h, "X-Portal-User") || strings.EqualFold(h, "X-Portal-Auth") {
-					return fmt.Errorf("strip request header %q conflicts with --auth-identity-headers: verified identity headers cannot be stripped", h)
-				}
+		for _, h := range httpConfig.StripRequestHeaders {
+			if strings.EqualFold(strings.TrimSpace(h), "Host") {
+				return errors.New(`strip request header "Host" is not supported: Go stores it in Request.Host, not Header`)
 			}
 		}
 	}
@@ -171,7 +166,6 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 
 	routes := make([]gateway.ExposedHTTPRoute, 0)
 	if spec.HTTP != nil {
-		stripHeaders := append([]string(nil), spec.HTTP.StripRequestHeaders...)
 		if serve := strings.TrimSpace(spec.HTTP.Serve); serve != "" {
 			root, index, err := utils.ResolveStaticSite(serve)
 			if err != nil {
@@ -183,11 +177,10 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 			routes = append(routes, gateway.ExposedHTTPRoute{
 				Prefix: route.Prefix, Upstream: route.Upstream,
 				Methods: append([]string(nil), route.Methods...), Amount: route.Amount,
-				StripRequestHeaders: stripHeaders,
 			})
 		}
 		if len(routes) == 0 {
-			routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: spec.Transport.Target, StripRequestHeaders: stripHeaders})
+			routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: spec.Transport.Target})
 		}
 	}
 
@@ -234,6 +227,9 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	handler, err := gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment)
 	if err == nil && spec.HTTP.Auth != nil {
 		handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, *spec.HTTP.Auth)
+	}
+	if err == nil && len(spec.HTTP.StripRequestHeaders) > 0 {
+		handler, err = gateway.NewStripRequestHeaders(handler, spec.HTTP.StripRequestHeaders)
 	}
 	if err != nil {
 		_ = exposure.Close()

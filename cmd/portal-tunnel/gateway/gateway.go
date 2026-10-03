@@ -94,9 +94,58 @@ type ExposedHTTPRoute struct {
 	// the contract's settlement asset (USDC on Sui, wCSPR on Casper), such
 	// as "0.01"; empty means the route is unpaid.
 	Amount string
-	// StripRequestHeaders lists request headers removed before forwarding.
-	// Matching is case-insensitive.
-	StripRequestHeaders []string
+}
+
+// NewStripRequestHeaders wraps next with a middleware that removes the listed
+// client request headers before any Portal processing runs.  This is the trust
+// boundary: client-spoofed headers are removed before application auth injects
+// verified identity headers and before the reverse proxy regenerates
+// X-Forwarded-* values.  Host is rejected because Go stores it in
+// Request.Host, not Header, so Header.Del("Host") is a silent no-op.
+func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, error) {
+	headers := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, errors.New("strip request header name is required")
+		}
+		if !isValidHeaderName(name) {
+			return nil, fmt.Errorf("invalid strip request header name %q", name)
+		}
+		canonical := http.CanonicalHeaderKey(name)
+		if canonical == "Host" {
+			return nil, errors.New(`"Host" cannot be stripped: Go stores it in Request.Host, not Header`)
+		}
+		if _, ok := seen[canonical]; ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		headers = append(headers, canonical)
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range headers {
+			r.Header.Del(h)
+		}
+		next.ServeHTTP(w, r)
+	}), nil
+}
+
+// isValidHeaderName reports whether name is an RFC 9110 token.
+func isValidHeaderName(name string) bool {
+	for i := range len(name) {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		default:
+			switch c {
+			case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // ComposeHTTPRoutes builds the payment-agnostic sdk router and explicitly
@@ -120,11 +169,10 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Ha
 		}
 		policy := routePolicy{prefix: prefix}
 		sdkConfigs = append(sdkConfigs, sdk.HTTPRouteConfig{
-			Prefix:              prefix,
-			Upstream:            route.Upstream,
-			StaticRoot:          route.StaticRoot,
-			StaticIndex:         route.StaticIndex,
-			StripRequestHeaders: append([]string(nil), route.StripRequestHeaders...),
+			Prefix:      prefix,
+			Upstream:    route.Upstream,
+			StaticRoot:  route.StaticRoot,
+			StaticIndex: route.StaticIndex,
 		})
 
 		amount := strings.TrimSpace(route.Amount)

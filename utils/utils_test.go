@@ -93,30 +93,3 @@ func TestEnsurePortHandlesBracketedIPv6(t *testing.T) {
 		})
 	}
 }
-
-func TestNormalizeHeaderNames(t *testing.T) {
-	t.Parallel()
-
-	got, err := NormalizeHeaderNames([]string{" x-tenant-user ", "X-Tenant-User", "Tailscale-User-Login"})
-	if err != nil {
-		t.Fatalf("NormalizeHeaderNames() error = %v", err)
-	}
-	want := []string{"X-Tenant-User", "Tailscale-User-Login"}
-	if len(got) != len(want) {
-		t.Fatalf("NormalizeHeaderNames() = %v, want %v", got, want)
-	}
-	for i := range len(want) {
-		if got[i] != want[i] {
-			t.Fatalf("NormalizeHeaderNames()[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-
-	for _, name := range []string{"", "   ", "X Tenant", "X-Tustom:"} {
-		if _, err := NormalizeHeaderNames([]string{name}); err == nil {
-			t.Fatalf("NormalizeHeaderNames(%q) error = nil, want invalid name error", name)
-		}
-	}
-	if got, err := NormalizeHeaderNames(nil); err != nil || len(got) != 0 {
-		t.Fatalf("NormalizeHeaderNames(nil) = (%v, %v), want empty and nil error", got, err)
-	}
-}
