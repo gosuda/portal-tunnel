@@ -144,9 +144,13 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	api.policyMu.RLock()
 	landingPageEnabled := api.landingPageEnabled
 	api.policyMu.RUnlock()
+	voterCookieID := ""
+	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
+		voterCookieID = cookie.Value
+	}
 	utils.WriteAPIData(w, http.StatusOK, publicStateResponse{
 		PublicStateResponse: types.PublicStateResponse{Leases: leases, LandingPageEnabled: landingPageEnabled},
-		Reputation:          api.reputation.Summaries(api.reputation.ViewerHashFor(voterCookieID(r)), publicIdentityLeases(leases, api.server)),
+		Reputation:          api.reputation.Summaries(api.reputation.ViewerHashFor(voterCookieID), publicIdentityLeases(leases, api.server)),
 	})
 }
 
@@ -762,7 +766,11 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 			break
 		}
 	}
-	summary, minted, err := api.reputation.CastVote(hostname, identity, vote, voterCookieID(r), clientIP)
+	voterCookieID := ""
+	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
+		voterCookieID = cookie.Value
+	}
+	summary, minted, err := api.reputation.CastVote(hostname, identity, vote, voterCookieID, clientIP)
 	if err != nil {
 		switch {
 		case errors.Is(err, policy.ErrReputationCapacity):
@@ -787,15 +795,6 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 		})
 	}
 	utils.WriteAPIData(w, http.StatusOK, summary)
-}
-
-// voterCookieID only reads the cookie; parsing and verification belong to the store.
-func voterCookieID(r *http.Request) string {
-	cookie, err := r.Cookie(reputationVoterCookie)
-	if err != nil {
-		return ""
-	}
-	return cookie.Value
 }
 
 func setVoterCookie(w http.ResponseWriter, r *http.Request, value string) {
