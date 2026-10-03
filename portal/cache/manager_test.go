@@ -509,3 +509,38 @@ func TestDetachOwnerSuppressesCacheRouting(t *testing.T) {
 		t.Fatal("detached identity was still served from cache")
 	}
 }
+
+func TestDetachOwnerRejectsInFlightUpload(t *testing.T) {
+	c := testManager(t, 32)
+	lease := testLease(c, "site")
+	started := make(chan struct{})
+	resume := make(chan struct{})
+	req := testRequest(t, http.MethodPut, "site")
+	req.Body = &gatedBody{ReadCloser: req.Body, started: started, resume: resume}
+	codes := make(chan int, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		c.Handle(w, req, lease.ID)
+		codes <- w.Code
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload never started reading its body")
+	}
+	c.DetachOwner(lease.Owner)
+	close(resume)
+	select {
+	case code := <-codes:
+		if code != http.StatusForbidden || c.Has(lease.Hostname) {
+			t.Fatalf("revoked owner published an in-flight upload: %d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("revoked upload never completed")
+	}
+	w := httptest.NewRecorder()
+	c.Handle(w, testRequest(t, http.MethodPut, "site"), lease.ID)
+	if w.Code != http.StatusOK || !c.Has(lease.Hostname) {
+		t.Fatalf("fresh upload after revocation could not publish: %d %s", w.Code, w.Body.String())
+	}
+}

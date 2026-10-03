@@ -36,16 +36,11 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			return
 		}
 		if access == nil {
-			s.SetIdentityRoutable(key, true)
+			s.SetIdentityRoutability(map[string]bool{key: true}, 1)
 			return
 		}
-		for {
-			routable := access.Routable(key)
-			s.SetIdentityRoutable(key, routable)
-			if routable == access.Routable(key) {
-				return
-			}
-		}
+		decision := access.Decision(key)
+		s.SetIdentityRoutability(map[string]bool{key: decision.Routable}, decision.Revision)
 	}
 	// admit spends the weighted pre-auth budget before any decoding or
 	// signature work, preserving the source -> global ordering established

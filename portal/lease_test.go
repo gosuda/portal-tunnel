@@ -190,7 +190,7 @@ func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 
 	registry := newTestRegistry(t, false, false)
 	identity := newTestLeaseIdentity(t, "demo")
-	registry.setIdentityRoutable(identity.Key(), false)
+	registry.setIdentityRoutable(identity.Key(), false, 1)
 	record, resp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: identity,
 	}, "203.0.113.20", "", types.RelayDescriptor{}, nil)
@@ -208,12 +208,24 @@ func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 		t.Fatalf("admitLeaseByToken() error = %v, want lease rejected while not routable", err)
 	}
 
-	registry.setIdentityRoutable(identityKey, true)
+	registry.setIdentityRoutable(identityKey, true, 2)
 	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 {
 		t.Fatalf("PublicLeases() length = %d, want 1 after the relay routes the identity", len(leases))
 	}
 	if _, err := registry.admitLeaseByToken(resp.AccessToken, false); err != nil {
 		t.Fatalf("admitLeaseByToken() error = %v, want admitted once routable", err)
+	}
+
+	registry.setIdentityRoutability(map[string]bool{identityKey: false}, 3)
+	registry.setIdentityRoutable(identityKey, true, 2)
+	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
+		t.Fatalf("PublicLeases() length = %d, want stale allow rejected", len(leases))
+	}
+	const pendingKey = "pending:0x1234"
+	registry.setIdentityRoutable(pendingKey, false, 0)
+	registry.setIdentityRoutable(pendingKey, true, 2)
+	if registry.isRoutable(pendingKey) {
+		t.Fatal("global access revision accepted a stale allow for a pending identity")
 	}
 }
 

@@ -132,7 +132,7 @@ func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	}
 	// The relay pushes its ban decision into the data path; the public
 	// connect endpoint must answer before any connection is offered.
-	server.SetIdentityRoutable(leases[0].IdentityKey, false)
+	server.SetIdentityRoutability(map[string]bool{leases[0].IdentityKey: false}, 1)
 
 	connect, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://127.0.0.1:"+strconv.Itoa(sniPort)+types.PathSDKConnect, nil)
 	if err != nil {

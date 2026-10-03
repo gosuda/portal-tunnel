@@ -44,15 +44,21 @@ type leaseRegistry struct {
 	tcpPorts       *transport.PortAllocator
 	bindings       *keyless.BindingRegistry
 
-	// blocked holds the relay-pushed access results for identities the relay
-	// does not route. Presence is the decision; the timestamp bounds stale
-	// entries for identities whose registration never completed.
-	blocked map[string]time.Time
+	// access holds revisioned relay-pushed routability values. Portal applies
+	// only the newest value it has seen for each identity.
+	access         map[string]appliedAccess
+	accessRevision uint64
 
 	udpEnabled, tcpPortEnabled bool
 	udpMaxLeases, tcpMaxLeases int
 
 	mu sync.RWMutex
+}
+
+type appliedAccess struct {
+	revision uint64
+	routable bool
+	pushedAt time.Time
 }
 
 func newLeaseRegistry(minPort, maxPort int, rootHostname string, publicPort int, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
@@ -76,7 +82,7 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, publicPort int,
 		tokenIssuer:    tokenIssuer,
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
 		bps:            NewBPSManager(),
-		blocked:        make(map[string]time.Time),
+		access:         make(map[string]appliedAccess),
 		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
 		bindings:       keyless.NewBindingRegistry(5 * time.Minute),
@@ -115,16 +121,36 @@ func (r *leaseRegistry) tcpPortPolicy() (bool, int) {
 // identity. A non-routable identity also loses its cached content
 // immediately: cached sites must never outlive the relay's decision to route
 // their owner.
-func (r *leaseRegistry) setIdentityRoutable(key string, routable bool) {
+func (r *leaseRegistry) setIdentityRoutable(key string, routable bool, revision uint64) {
 	if r == nil || key == "" {
 		return
 	}
 	r.mu.Lock()
-	if routable {
-		delete(r.blocked, key)
-	} else {
-		r.blocked[key] = time.Now()
+	current := r.access[key]
+	if revision != 0 && (revision < current.revision || revision < r.accessRevision) {
+		r.mu.Unlock()
+		return
 	}
+	if revision != 0 {
+		r.accessRevision = max(r.accessRevision, revision)
+	}
+	r.applyIdentityRoutableLocked(key, routable, revision)
+	r.mu.Unlock()
+	if !routable {
+		r.cache.DetachOwner(key)
+	}
+}
+
+func (r *leaseRegistry) applyIdentityRoutableLocked(key string, routable bool, revision uint64) {
+	current := r.access[key]
+	// Revision zero is the registration path's provisional fail-closed value;
+	// it must not lower the last relay revision applied for the identity.
+	current.routable = routable
+	current.pushedAt = time.Now()
+	if revision != 0 {
+		current.revision = revision
+	}
+	r.access[key] = current
 	for _, record := range r.records {
 		if record == nil || record.Key() != key {
 			continue
@@ -136,8 +162,33 @@ func (r *leaseRegistry) setIdentityRoutable(key string, routable bool) {
 			record.tcpPort.SetRoutable(routable)
 		}
 	}
+}
+
+func (r *leaseRegistry) setIdentityRoutability(decisions map[string]bool, revision uint64) {
+	if r == nil || revision == 0 {
+		return
+	}
+	r.mu.Lock()
+	if revision < r.accessRevision {
+		r.mu.Unlock()
+		return
+	}
+	r.accessRevision = revision
+	var detached []string
+	for key, routable := range decisions {
+		if key == "" {
+			continue
+		}
+		if revision < r.access[key].revision {
+			continue
+		}
+		r.applyIdentityRoutableLocked(key, routable, revision)
+		if !routable {
+			detached = append(detached, key)
+		}
+	}
 	r.mu.Unlock()
-	if !routable {
+	for _, key := range detached {
 		r.cache.DetachOwner(key)
 	}
 }
@@ -153,8 +204,8 @@ func (r *leaseRegistry) isRoutable(key string) bool {
 
 // isRoutableLocked reads the pushed access result; the caller must hold r.mu.
 func (r *leaseRegistry) isRoutableLocked(key string) bool {
-	_, blocked := r.blocked[key]
-	return !blocked
+	decision, ok := r.access[key]
+	return !ok || decision.routable
 }
 
 func (r *leaseRegistry) CloseAll() []*leaseRecord {
@@ -773,12 +824,12 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 	// registration never completed or the lease is gone, and the next
 	// registration re-pushes the relay's current decision first. Fresh
 	// entries survive so an in-flight registration cannot lose its decision.
-	for key, pushedAt := range r.blocked {
-		if now.Sub(pushedAt) <= defaultRegisterChallengeTTL {
+	for key, decision := range r.access {
+		if now.Sub(decision.pushedAt) <= defaultRegisterChallengeTTL {
 			continue
 		}
 		if r.recordByKey(key, now) == nil {
-			delete(r.blocked, key)
+			delete(r.access, key)
 		}
 	}
 	r.mu.Unlock()

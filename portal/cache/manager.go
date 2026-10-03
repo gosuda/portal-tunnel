@@ -98,7 +98,8 @@ type Lease struct {
 
 type leaseState struct {
 	Lease
-	ttl time.Duration
+	ttl        time.Duration
+	generation uint64
 }
 
 const observationWindow = 2 * time.Minute
@@ -236,6 +237,12 @@ func (c *Manager) DetachOwner(owner string) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for id, lease := range c.leases {
+		if lease.Owner == owner {
+			lease.generation++
+			c.leases[id] = lease
+		}
+	}
 	for _, site := range c.entries {
 		if site.owner == owner {
 			c.retireLocked(site)

@@ -295,7 +295,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 	identityKey := challenge.Request.Identity.Key()
 	// A registering identity starts fail-closed. Mux replaces this projection
 	// with the relay's current access decision before publishing success.
-	s.SetIdentityRoutable(identityKey, false)
+	s.registry.setIdentityRoutable(identityKey, false, 0)
 
 	var self types.RelayDescriptor
 	var descriptors []types.RelayDescriptor

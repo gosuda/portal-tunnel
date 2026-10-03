@@ -28,6 +28,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	c.mu.Lock()
 	lease := c.leases[leaseID]
 	allowed := c.eligibleLocked(leaseID)
+	generation := lease.generation
 	c.mu.Unlock()
 	if !allowed {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "cache lease unavailable")
@@ -171,7 +172,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	}
 	c.mu.Lock()
 	var status types.StaticCacheStatus
-	if c.eligibleLocked(site.leaseID) {
+	if c.eligibleLocked(site.leaseID) && c.leases[site.leaseID].generation == generation {
 		active := c.leases[site.leaseID]
 		if previous := c.entries[site.host]; previous != nil {
 			c.retireLocked(previous)
