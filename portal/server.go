@@ -50,8 +50,6 @@ type ServerConfig struct {
 	SNIPort          int
 	HTTPRedirect     types.HTTPRedirectConfig
 	SNIListenAddr    string
-	UDPEnabled       bool
-	TCPEnabled       bool
 	MinPort          int
 	MaxPort          int
 	ACME             acme.Config
@@ -151,20 +149,6 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
-	hasPortRange := cfg.MinPort > 0 && cfg.MaxPort > 0
-	if cfg.UDPEnabled || cfg.TCPEnabled {
-		switch {
-		case !hasPortRange:
-			return ServerConfig{}, errors.New("udp and tcp relay transport require a valid min port and max port range")
-		case cfg.MinPort > 65535 || cfg.MaxPort > 65535:
-			return ServerConfig{}, errors.New("min port and max port must be between 1 and 65535")
-		case cfg.MinPort > cfg.MaxPort:
-			return ServerConfig{}, errors.New("min port must be less than or equal to max port")
-		}
-	}
-
-	cfg.UDPEnabled = cfg.UDPEnabled && cfg.hasLeasePortRange()
-	cfg.TCPEnabled = cfg.TCPEnabled && cfg.hasLeasePortRange()
 	return cfg, nil
 }
 
@@ -247,7 +231,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
-	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, relayAuthority, cfg.PortalURL)
+	registry, err := newLeaseRegistry(false, false, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, relayAuthority, cfg.PortalURL)
 	if err != nil {
 		return nil, err
 	}
@@ -335,10 +319,6 @@ func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnable
 	}
 	s.registry.setUDPPolicy(udpEnabled, udpMaxLeases)
 	s.registry.setTCPPortPolicy(tcpEnabled, tcpMaxLeases)
-	s.cfg.UpdateCopy(func(cfg *ServerConfig) {
-		cfg.UDPEnabled = udpEnabled
-		cfg.TCPEnabled = tcpEnabled
-	})
 	return nil
 }
 
@@ -456,7 +436,7 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		}
 	}
 
-	if cfg.UDPEnabled {
+	if udpEnabled, _ := s.registry.udpPolicy(); udpEnabled {
 		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
 		if err != nil {
 			return fmt.Errorf("listen quic backhaul: %w", err)

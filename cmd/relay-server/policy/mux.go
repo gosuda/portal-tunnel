@@ -114,13 +114,13 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 		}
 		s.HandleRelayDiscovery(w, r)
 	})
-	mux.HandleFunc(types.PathDiscoveryAnnounce, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(types.PathDiscoveryAnnounce, requireMethod(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
 		if !s.DiscoveryEnabled() {
 			fallback.ServeHTTP(w, r)
 			return
 		}
 		admit(preAuth.AnnounceCost, withClient(s.HandleRelayDiscoveryAnnounce)).ServeHTTP(w, r)
-	})
+	}))
 	mux.Handle("/", fallback)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

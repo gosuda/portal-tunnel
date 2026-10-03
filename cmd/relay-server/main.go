@@ -41,6 +41,8 @@ func main() {
 
 type appConfig struct {
 	Relay              portal.ServerConfig
+	UDPEnabled         bool
+	TCPEnabled         bool
 	PreAuth            types.PreAuthConfig
 	TrustProxyHeaders  bool
 	TrustedProxyCIDRs  string
@@ -107,8 +109,8 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
 	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "explicit trusted proxy CIDR allowlist for forwarded headers, comma-separated; empty trusts no proxies", "TRUSTED_PROXY_CIDRS")
 
-	utils.BoolFlagEnv(fs, &cfg.Relay.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
-	utils.BoolFlagEnv(fs, &cfg.Relay.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
+	utils.BoolFlagEnv(fs, &cfg.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
+	utils.BoolFlagEnv(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "show the dashboard landing page", "LANDING_PAGE_ENABLED")
 	utils.IntFlagEnv(fs, &cfg.Relay.MinPort, "min-port", 0, utils.ParseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
 	utils.IntFlagEnv(fs, &cfg.Relay.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
@@ -173,6 +175,16 @@ func validateRelaySettings(cfg *appConfig) error {
 	if _, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs); err != nil {
 		return err
 	}
+	if cfg.UDPEnabled || cfg.TCPEnabled {
+		switch {
+		case cfg.Relay.MinPort <= 0 || cfg.Relay.MaxPort <= 0:
+			return errors.New("udp and tcp relay transport require a valid min port and max port range")
+		case cfg.Relay.MinPort > 65535 || cfg.Relay.MaxPort > 65535:
+			return errors.New("min port and max port must be between 1 and 65535")
+		case cfg.Relay.MinPort > cfg.Relay.MaxPort:
+			return errors.New("min port must be less than or equal to max port")
+		}
+	}
 	return nil
 }
 
@@ -209,8 +221,8 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	initialPolicy := types.PolicySettings{
 		ApprovalMode:       string(policy.ModeAuto),
 		LandingPageEnabled: cfg.LandingPageEnabled,
-		UDP:                types.PolicyPortSettings{Enabled: cfg.Relay.UDPEnabled},
-		TCPPort:            types.PolicyPortSettings{Enabled: cfg.Relay.TCPEnabled},
+		UDP:                types.PolicyPortSettings{Enabled: cfg.UDPEnabled},
+		TCPPort:            types.PolicyPortSettings{Enabled: cfg.TCPEnabled},
 	}
 	relayAPI, err := NewRelayAPI(server, access, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
 	if err != nil {

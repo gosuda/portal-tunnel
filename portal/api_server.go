@@ -173,9 +173,6 @@ func (s *Server) HandleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Request, clientIP string) {
-	if !utils.RequireMethod(w, r, http.MethodPost) {
-		return
-	}
 	if s.relaySet == nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay discovery disabled")
 		return
@@ -280,10 +277,6 @@ func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) 
 // decision, then writes the response so the lease cannot become observable
 // before its routability is known.
 func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP string) (string, types.RegisterResponse, bool) {
-	if !utils.RequireMethod(w, r, http.MethodPost) {
-		return "", types.RegisterResponse{}, false
-	}
-
 	req, ok := utils.DecodeJSONRequest[types.RegisterRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return "", types.RegisterResponse{}, false
@@ -344,10 +337,6 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 // HandleRegisterChallenge issues a registration challenge without publishing
 // the success response, allowing the relay to apply access state first.
 func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request, clientIP string) (string, types.RegisterChallengeResponse, bool) {
-	if !utils.RequireMethod(w, r, http.MethodPost) {
-		return "", types.RegisterChallengeResponse{}, false
-	}
-
 	req, ok := utils.DecodeJSONRequest[types.RegisterChallengeRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return "", types.RegisterChallengeResponse{}, false

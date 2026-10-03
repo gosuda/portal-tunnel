@@ -94,11 +94,6 @@ func (a *Access) SetMode(mode Mode) error {
 	return nil
 }
 
-func (a *Access) IsApproved(key string) bool {
-	_, ok := a.current().approved[key]
-	return ok
-}
-
 // EffectiveApproval reports the approval that governs routing: automatic in
 // auto mode, explicit otherwise.
 func (a *Access) EffectiveApproval(key string) bool {

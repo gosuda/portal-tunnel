@@ -88,6 +88,11 @@ func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.I
 		tcpPortPolicy:        initialSettings.TCPPort,
 		landingPageEnabled:   initialSettings.LandingPageEnabled,
 	}
+	if mode := strings.TrimSpace(initialSettings.ApprovalMode); mode != "" {
+		if err := api.access.SetMode(policy.Mode(mode)); err != nil {
+			return nil, err
+		}
+	}
 	if err := api.server.SetTransportPolicy(api.udpPolicy.Enabled, api.udpPolicy.MaxLeases, api.tcpPortPolicy.Enabled, api.tcpPortPolicy.MaxLeases); err != nil {
 		return nil, err
 	}
