@@ -352,7 +352,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--auth` | | string | | Protect the complete HTTP application with `siwe` or `credential`; excludes cache, TCP, and UDP |
 | `--auth-allow` | | string | | Allowed Ethereum wallet; repeatable; empty allows any valid wallet and requires `--auth siwe` |
 | `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
-| `--strip-request-header` | | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; `X-Forwarded-For`/`Host`/`Proto` cannot be stripped (always regenerated); `X-Forwarded-Prefix` and `X-Portal-User`/`Auth` are allowed; requires `--http-route`, `--target`, or `--auth` |
+| `--strip-request-header` | | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; `Host`, `X-Forwarded-For`/`Host`/`Proto` cannot be stripped (always regenerated); `X-Forwarded-Prefix` and `X-Portal-User`/`Auth` are allowed; requires `--http-route`, `--target`, or `--auth` |
 | `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
 | `--x402-network` | | string | | Optional Sui or Casper CAIP-2 network |
@@ -498,7 +498,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `auth` | string | Application login provider: `siwe` or `credential`; cannot be combined with TCP or UDP |
 | `auth_allowed_wallets` | string array | Wallets allowed to sign in; empty allows any valid wallet and requires the `siwe` provider when set |
 | `auth_identity_headers` | bool | Inject verified Portal identity headers upstream; requires `auth` |
-| `strip_request_headers` | string array | Client request headers removed before routed HTTP forwards them upstream; case-insensitive; `X-Forwarded-For`/`Host`/`Proto` cannot be listed (always regenerated); `X-Portal-User`/`Auth` conflict with `auth_identity_headers`; requires `http_routes` or a `target` |
+| `strip_request_headers` | string array | Client request headers removed before routed HTTP forwards them upstream; case-insensitive; `Host`, `X-Forwarded-For`/`Host`/`Proto` cannot be listed (always regenerated); `X-Portal-User`/`Auth` conflict with `auth_identity_headers`; requires `http_routes` or a `target` |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |
 | `x402_testnet` | bool | Use Sui testnet when `x402_network` is omitted; omitted or `false` uses Sui mainnet |
 | `x402_network` | string | Optional CAIP-2 network: `sui:mainnet`, `sui:testnet`, `casper:casper`, or `casper:casper-test` |
@@ -688,7 +688,7 @@ portal expose 127.0.0.1:3000 \
 
 `--strip-request-header` works with `--http-route`, `--target`, or `--auth`.
 It cannot be combined with `--serve` because static sites do not proxy request
-headers. `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` are
+headers. `Host`, `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` are
 always regenerated and cannot be suppressed through this option.
 
 The same policy applies automatically to WebSocket upgrade requests routed
