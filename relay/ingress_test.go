@@ -1,4 +1,4 @@
-package policy
+package relay
 
 import (
 	"net"
@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestExtractClientIPDoesNotTrustImplicitProxies(t *testing.T) {
-	runtime, err := NewRuntime(false, false, true, "")
+func TestClientIPDoesNotTrustImplicitProxies(t *testing.T) {
+	ingress, err := NewIngress(true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestExtractClientIPDoesNotTrustImplicitProxies(t *testing.T) {
 			for _, claimed := range []string{"198.51.100.1", "198.51.100.2"} {
 				req.Header.Set("X-Forwarded-For", claimed)
 				req.Header.Set("X-Real-IP", claimed)
-				if got := runtime.ExtractClientIP(req); got != peer {
+				if got := ingress.ClientIP(req); got != peer {
 					t.Fatalf("claimed IP %q changed source key to %q, want socket peer %q", claimed, got, peer)
 				}
 			}
@@ -30,7 +30,7 @@ func TestExtractClientIPDoesNotTrustImplicitProxies(t *testing.T) {
 	}
 }
 
-func TestExtractClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
+func TestClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		enabled bool
@@ -49,7 +49,7 @@ func TestExtractClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
 		{name: "invalid headers", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "invalid", xri: "invalid", want: "172.31.240.2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			runtime, err := NewRuntime(false, false, tc.enabled, tc.cidrs)
+			ingress, err := NewIngress(tc.enabled, tc.cidrs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -57,28 +57,45 @@ func TestExtractClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
 			req.RemoteAddr = net.JoinHostPort(tc.peer, "12345")
 			req.Header.Set("X-Forwarded-For", tc.xff)
 			req.Header.Set("X-Real-IP", tc.xri)
-			if got := runtime.ExtractClientIP(req); got != tc.want {
+			if got := ingress.ClientIP(req); got != tc.want {
 				t.Fatalf("client IP = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestExtractClientIPRevokesRemovedProxy(t *testing.T) {
-	runtime, err := NewRuntime(false, false, true, "172.31.240.2/32")
+// The relay's ingress rejects an unparseable proxy CIDR allowlist with the
+// same parse the config report reports, so a deployment cannot call a list
+// valid that startup rejects.
+func TestNewIngressRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
+	if _, err := NewIngress(false, "192.0.2.0/24,not-a-cidr"); err == nil {
+		t.Fatal("NewIngress() error = nil, want error for invalid trusted proxy CIDR")
+	}
+	if _, err := NewIngress(false, "192.0.2.0/24,2001:db8::/32"); err != nil {
+		t.Fatalf("NewIngress() error = %v, want nil for valid CIDR list", err)
+	}
+	if _, err := NewIngress(false, ""); err != nil {
+		t.Fatalf("NewIngress() error = %v, want nil for empty CIDR list", err)
+	}
+}
+
+func TestClientIPRevokesRemovedProxy(t *testing.T) {
+	ingress, err := NewIngress(true, "172.31.240.2/32")
 	if err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("GET", "/api/connect", nil)
 	req.RemoteAddr = "172.31.240.2:12345"
 	req.Header.Set("X-Forwarded-For", "198.51.100.1")
-	if got := runtime.ExtractClientIP(req); got != "198.51.100.1" {
+	if got := ingress.ClientIP(req); got != "198.51.100.1" {
 		t.Fatalf("client IP before removing proxy = %q, want forwarded address", got)
 	}
-	if err := runtime.SetProxyTrust(true, ""); err != nil {
+	// Reconfiguring the relay without that proxy revokes its trust.
+	ingress, err = NewIngress(true, "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := runtime.ExtractClientIP(req); got != "172.31.240.2" {
+	if got := ingress.ClientIP(req); got != "172.31.240.2" {
 		t.Fatalf("client IP after removing proxy = %q, want socket peer", got)
 	}
 }

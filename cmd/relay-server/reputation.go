@@ -16,9 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +24,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
+	"github.com/gosuda/portal-tunnel/v2/relay"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -82,7 +80,7 @@ var (
 // ReputationStore owns only the bounded vote ledger and voter cookie secret.
 type ReputationStore struct {
 	path    string
-	limiter *policy.SourceLimiter
+	limiter *relay.SourceLimiter
 
 	mu     sync.Mutex
 	state  persistedReputation
@@ -112,7 +110,7 @@ func newReputationStore(path string) (*ReputationStore, error) {
 		}
 	}
 	store.secret = store.state.VoterSecret
-	store.limiter = policy.NewSourceLimiter(10, 20, 120, 40)
+	store.limiter = relay.NewSourceLimiter(10, 20, 120, 40)
 	return store, nil
 }
 
@@ -251,10 +249,9 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	clientIP := api.server.PolicyRuntime().ExtractClientIP(r)
+	clientIP := api.ingress.ClientIP(r)
 	if retry, _ := api.reputation.limiter.Allow(clientIP, 1); retry > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retry.Seconds())))))
-		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "vote request budget exhausted")
+		relay.WriteRetryAfter(w, retry, "vote request budget exhausted")
 		return
 	}
 	req, ok := utils.DecodeJSONRequestAs[reputationVoteRequest](w, r, 1<<12, utils.InvalidRequestError(errors.New("invalid request body")))

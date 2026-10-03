@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
-
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 )
 
 type proxy struct {
@@ -21,7 +19,7 @@ type proxy struct {
 	tcpLoadBytes int64
 }
 
-func (p *proxy) bridge(left, right net.Conn, identityKey string, bpsManager *policy.BPSManager) {
+func (p *proxy) bridge(left, right net.Conn, identityKey string, bpsManager *BPSManager) {
 	p.activeConns.Add(1)
 	defer p.activeConns.Add(-1)
 
@@ -69,7 +67,7 @@ func (p *proxy) currentTCPBPS(now time.Time) float64 {
 	return 0
 }
 
-func (p *proxy) copy(dst, src net.Conn, identityKey string, bpsManager *policy.BPSManager, throttled bool) error {
+func (p *proxy) copy(dst, src net.Conn, identityKey string, bpsManager *BPSManager, throttled bool) error {
 	// fast path
 	if !throttled {
 		_, err := io.Copy(&countingConn{Conn: dst, bytes: &p.tcpBytes}, src)

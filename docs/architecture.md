@@ -19,7 +19,7 @@ admission, expiry, health, and load remain Portal responsibilities.
 
 IVNP-backed overlay networking lets Portal expose services through a public
 ingress without owning the network path behind it. Portal selects and authorizes
-the ingress and gateway and owns identity, lease policy, and delegated reverse
+the ingress and gateway and owns identity, leases, and delegated reverse
 capabilities. IVNP owns the gateway-to-ingress path, including routers, tunnels,
 and internal hop ordering.
 
@@ -91,12 +91,17 @@ the rest of the system.
 
 The relay hands root/API and cache TLS connections from its SNI ingress directly
 to the API server, preserving the original socket peer without a local TCP hop.
-Forwarded HTTP headers are accepted only from explicitly trusted proxies.
+Forwarded HTTP headers are accepted only from explicitly trusted proxies; the
+relay resolves the client source once at its ingress and passes the result to
+protocol handlers and diagnostics as a value.
 
 Durable approval, denial, banning, and routing are keyed by verified Portal
-identity. Source IP remains diagnostic metadata and an ephemeral pre-auth
-admission signal. Registration challenges, registration attempts, and discovery
-announces share weighted per-source and global budgets owned by
-`portal/policy.SourceLimiter`. The server applies these before decoding and
-signature work, returns 429 with retry guidance, and records bounded rejection
-metrics. Authenticated lease operations do not spend the source budget.
+identity and owned by the relay. The relay pushes the resulting routability to
+the portal data path, which keeps only that result — including detaching cached
+content for identities the relay stops routing. Source IP remains diagnostic
+metadata and an ephemeral pre-auth admission signal. Registration challenges,
+registration attempts, and discovery announces share weighted per-source and
+global budgets owned by the relay's admission limiter. The relay applies these
+before decoding and signature work, returns 429 with retry guidance, and
+records bounded rejection metrics. Authenticated lease operations do not spend
+the source budget.

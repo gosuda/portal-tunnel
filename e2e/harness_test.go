@@ -20,10 +20,19 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/relay"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
 const marker = "portal-e2e-ok"
+
+// relayHandler composes the relay's protocol route table the way
+// cmd/relay-server does: portal handlers under their SDK paths wrapped with
+// relay admission and ingress resolution. The zero dependencies here mean no
+// proxy trust, the default pre-auth budget, and automatic approval.
+func relayHandler(server *portal.Server, fallback http.Handler) http.Handler {
+	return relay.Mux(server, fallback, nil, nil, nil, relay.DefaultPreAuthConfig())
+}
 
 type harness struct {
 	t           *testing.T
@@ -65,7 +74,7 @@ func newHarness(t *testing.T, opts ...sdk.Option) *harness {
 		service.Close()
 		t.Fatalf("create relay: %v", err)
 	}
-	if err := relay.Start(ctx, nil); err != nil {
+	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
 		cancel()
 		service.Close()
 		t.Fatalf("start relay: %v", err)

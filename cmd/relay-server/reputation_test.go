@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/relay"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -97,7 +98,7 @@ func newTestReputationAPI(t *testing.T) *RelayAPI {
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, filepath.Join(dir, types.RelayPolicyFilename), "admin-test", frontend, false)
+	api, err := NewRelayAPI(server, relay.NewAccess(), nil, filepath.Join(dir, types.RelayPolicyFilename), "admin-test", frontend, false)
 	if err != nil {
 		t.Fatal(err)
 	}

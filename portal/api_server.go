@@ -8,12 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -86,17 +84,16 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.Server, io.Closer, error) {
-	var keylessSigner *keyless.Signer
 	if len(s.apiKeyPEM) > 0 {
 		signer, err := keyless.NewSigner(s.apiKeyPEM, s.registry.bindings)
 		if err != nil {
 			return nil, nil, fmt.Errorf("configure api signer: %w", err)
 		}
-		keylessSigner = signer
+		s.signer = signer
 	}
 
 	apiServer := &http.Server{
-		Handler:           s.apiHandler(handler, keylessSigner),
+		Handler:           s.apiHandler(handler),
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		TLSConfig:         apiTLS,
@@ -104,7 +101,12 @@ func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.S
 	return apiServer, nil, nil
 }
 
-func (s *Server) apiHandler(base http.Handler, keylessSigner *keyless.Signer) http.Handler {
+// apiHandler keeps the tenant data path ahead of the composed route table:
+// a tenant TLS connection is bound to its own Host, and cached tenant sites
+// never reach the relay control plane. Route dispatch itself is composed by
+// the relay (see the relay package); this layer only owns portal data-path
+// routing.
+func (s *Server) apiHandler(base http.Handler) http.Handler {
 	// A nil *http.ServeMux reaches this handler as a typed-nil interface: it
 	// compares non-nil, then panics on the first ServeHTTP call. Normalize it
 	// so the root fallback below still covers Start(ctx, nil).
@@ -113,7 +115,7 @@ func (s *Server) apiHandler(base http.Handler, keylessSigner *keyless.Signer) ht
 	}
 	if base == nil {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/{$}", s.handleRoot)
+		mux.HandleFunc("/{$}", s.HandleRoot)
 		base = mux
 	}
 
@@ -132,75 +134,20 @@ func (s *Server) apiHandler(base http.Handler, keylessSigner *keyless.Signer) ht
 			s.serveCachedSite(w, r, host)
 			return
 		}
-		if utils.HandleAPICORS(w, r) {
-			return
-		}
-		switch strings.TrimSpace(r.URL.Path) {
-		case types.PathHealthz:
-			s.handleHealthz(w, r)
-		case types.PathSDKDomain:
-			if s.config().ApplicationOwnsDomainReport {
-				base.ServeHTTP(w, r)
-				return
-			}
-			s.handleDomain(w, r)
-		case types.PathSDKCertificateChain:
-			s.handleCertificateChain(w, r)
-		case types.PathSDKRegisterChallenge:
-			s.handleRegisterChallenge(w, r)
-		case types.PathSDKRegister:
-			s.handleRegister(w, r)
-		case types.PathSDKRenew:
-			s.handleRenew(w, r)
-		case types.PathSDKReverse:
-			s.handleReverseEndpoint(w, r)
-		case types.PathSDKUnregister:
-			s.handleUnregister(w, r)
-		case types.PathSDKConnect:
-			s.handleConnect(w, r)
-		case types.PathSDKCache:
-			s.handleStaticCache(w, r)
-		case types.PathDiscovery:
-			if !s.config().DiscoveryEnabled {
-				base.ServeHTTP(w, r)
-				return
-			}
-			s.handleRelayDiscovery(w, r)
-		case types.PathDiscoveryAnnounce:
-			if !s.config().DiscoveryEnabled {
-				base.ServeHTTP(w, r)
-				return
-			}
-			s.handleRelayDiscoveryAnnounce(w, r)
-		case types.PathV1Sign:
-			if keylessSigner == nil {
-				http.NotFound(w, r)
-				return
-			}
-			leaseID, ok := s.registry.verifySigningAccessTokenLease(r)
-			if !ok {
-				writeAPIErrorResponse(w, errUnauthorized)
-				return
-			}
-			keylessSigner.ServeHTTP(w, r, leaseID)
-		default:
-			base.ServeHTTP(w, r)
-		}
+		base.ServeHTTP(w, r)
 	})
 }
 
-func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
+// HandleRoot answers the relay's own root document when no application
+// handler owns the path.
+func (s *Server) HandleRoot(w http.ResponseWriter, _ *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{
 		"service": "portal-relay",
 		"root":    s.identity.Name,
 	})
 }
 
-func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	utils.WriteAPIData(w, http.StatusOK, map[string]any{"status": "ok"})
-}
-
-func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -226,16 +173,12 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Request, clientIP string) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if s.relaySet == nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay discovery disabled")
-		return
-	}
-	clientIP := s.registry.policy.ExtractClientIP(r)
-	if !s.admitPreAuth(w, r, clientIP, s.config().PreAuth.AnnounceCost) {
 		return
 	}
 
@@ -312,7 +255,7 @@ func (s *Server) DomainReport() types.DomainResponse {
 	}
 }
 
-func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleDomain(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -321,7 +264,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 
 // handleCertificateChain serves the public chain already presented by the relay's
 // TLS endpoint to runtimes whose TLS stack does not expose peer certificates.
-func (s *Server) handleCertificateChain(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -333,19 +276,18 @@ func (s *Server) handleCertificateChain(w http.ResponseWriter, r *http.Request) 
 	_, _ = w.Write(s.apiCertPEM)
 }
 
-func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+// HandleRegister completes a verified registration. The relay resolves the
+// client IP and spends the pre-auth budget before this handler runs; the
+// returned identity key lets the relay push its access decision for the new
+// lease into the data path.
+func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP string) string {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
-		return
-	}
-
-	clientIP := s.registry.policy.ExtractClientIP(r)
-	if !s.admitPreAuth(w, r, clientIP, s.config().PreAuth.RegisterCost) {
-		return
+		return ""
 	}
 
 	req, ok := utils.DecodeJSONRequest[types.RegisterRequest](w, r, defaultControlBodyLimit)
 	if !ok {
-		return
+		return ""
 	}
 
 	challenge, err := s.registry.consumeVerifiedRegisterChallenge(req)
@@ -356,7 +298,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		default:
 			utils.InvalidRequestError(err).Write(w)
 		}
-		return
+		return ""
 	}
 
 	var self types.RelayDescriptor
@@ -372,7 +314,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	record, resp, err := s.registry.Register(challenge.Request, clientIP, req.ReportedIP, self, descriptors)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
-		return
+		return ""
 	}
 	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
 	err = record.syncENSGaslessDNS(dnsCtx, s.acmeManager)
@@ -387,28 +329,27 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		removed.deleteDNS(cleanupCtx, s.acmeManager)
 		cleanupCancel()
 		writeAPIErrorResponse(w, err)
-		return
+		return ""
 	}
 	if record.tcpPort != nil {
 		go s.serveTCPPairs(record.tcpPort, record.Key())
 	}
 
 	utils.WriteAPIData(w, http.StatusCreated, resp)
+	return record.Key()
 }
 
-func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request) {
+// HandleRegisterChallenge issues a registration challenge. The returned
+// identity key lets the relay push its access decision before the lease
+// exists, so a fresh lease is never routed ahead of the relay's decision.
+func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request, clientIP string) string {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
-		return
-	}
-
-	clientIP := s.registry.policy.ExtractClientIP(r)
-	if !s.admitPreAuth(w, r, clientIP, s.config().PreAuth.ChallengeCost) {
-		return
+		return ""
 	}
 
 	req, ok := utils.DecodeJSONRequest[types.RegisterChallengeRequest](w, r, defaultControlBodyLimit)
 	if !ok {
-		return
+		return ""
 	}
 
 	scheme := "https"
@@ -426,29 +367,28 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 	if req.UDPEnabled && !s.supportsUDP() {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled,
 			"UDP transport is disabled on this relay")
-		return
+		return ""
 	}
 	if req.TCPEnabled && !s.supportsTCP() {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTCPPortDisabled,
 			"raw TCP transport is disabled on this relay")
-		return
+		return ""
 	}
 
 	resp, err := s.registry.issueRegisterChallenge(req, domain, registerURI, clientIP)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
-		return
+		return ""
 	}
 
 	utils.WriteAPIData(w, http.StatusCreated, resp)
+	return req.Identity.Key()
 }
 
-func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleRenew(w http.ResponseWriter, r *http.Request, clientIP string) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-
-	clientIP := s.registry.policy.ExtractClientIP(r)
 
 	req, ok := utils.DecodeJSONRequest[types.RenewRequest](w, r, defaultControlBodyLimit)
 	if !ok {
@@ -469,7 +409,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleUnregister(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -490,7 +430,7 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 }
 
-func (s *Server) handleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -541,7 +481,7 @@ func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseM
 	}
 }
 
-func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, clientIP string) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -550,7 +490,6 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP := s.registry.policy.ExtractClientIP(r)
 	// The WebSocket carrier has its own credential grammar, and overlay routing only
 	// speaks the raw carrier, so it is told apart before either is read.
 	if transport.IsReverseMuxRequest(r) {
@@ -571,7 +510,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if s.overlay != nil && s.overlay.Handles(capability) {
 		client, gateway := s.overlay.HandleConnect(w, r, capability, clientIP)
 		if client != nil {
-			s.proxy.bridge(client, gateway, "", s.registry.policy.BPSManager())
+			s.proxy.bridge(client, gateway, "", s.registry.bps)
 		}
 		return
 	}
@@ -626,13 +565,28 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Msg("sdk reverse connected")
 }
 
-func (s *Server) handleStaticCache(w http.ResponseWriter, req *http.Request) {
+func (s *Server) HandleStaticCache(w http.ResponseWriter, req *http.Request) {
 	record, err := s.registry.admitLeaseByToken(req.Header.Get(types.HeaderAccessToken), false)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return
 	}
 	s.registry.cache.Handle(w, req, record.id)
+}
+
+// HandleSign authenticates a transcript-signing request and binds the
+// signature to the live lease the access token belongs to.
+func (s *Server) HandleSign(w http.ResponseWriter, r *http.Request) {
+	if s.signer == nil {
+		http.NotFound(w, r)
+		return
+	}
+	leaseID, ok := s.registry.verifySigningAccessTokenLease(r)
+	if !ok {
+		writeAPIErrorResponse(w, errUnauthorized)
+		return
+	}
+	s.signer.ServeHTTP(w, r, leaseID)
 }
 
 // Tenant hosts never reach the relay control plane, including on a connection
@@ -649,7 +603,7 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	// Reuse the reverse stream for fallback, never dial a user-supplied URL.
 	// This already-terminated connection remains within the cache trust opt-in.
 	record, ok := s.registry.Lookup(host)
-	if !ok || !s.registry.cache.Eligible(record.id) {
+	if !ok || !s.registry.isRoutable(record.Key()) || !s.registry.cache.Eligible(record.id) {
 		http.Error(w, "static origin unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -689,16 +643,4 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "https", Host: host})
 	proxy.Transport = transport
 	proxy.ServeHTTP(w, req.WithContext(ctx))
-}
-
-// Admission runs before decoding or signature work. Verified lease operations
-// use identity policy and do not consume a shared NAT source budget.
-func (s *Server) admitPreAuth(w http.ResponseWriter, r *http.Request, clientIP string, cost int) bool {
-	retry, _ := s.preAuthLimiter.Allow(clientIP, cost)
-	if retry == 0 {
-		return true
-	}
-	w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retry.Seconds())))))
-	utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "pre-auth request budget exhausted")
-	return false
 }

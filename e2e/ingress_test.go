@@ -32,7 +32,7 @@ func TestPublicIngressPreservesRegistrationPeer(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := server.Start(ctx, nil); err != nil {
+	if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
 		t.Fatalf("start portal server: %v", err)
 	}
 	// A distinct loopback source detects an accidental internal TCP re-dial.
@@ -91,7 +91,7 @@ func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := server.Start(ctx, nil); err != nil {
+	if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
 		t.Fatalf("start portal server: %v", err)
 	}
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext, TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: "localhost"}}
@@ -130,7 +130,9 @@ func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	if len(leases) != 1 || leases[0].IdentityKey == "" {
 		t.Fatalf("policy leases = %+v, want the registered identity key", leases)
 	}
-	server.PolicyRuntime().BanIdentity(leases[0].IdentityKey)
+	// The relay pushes its ban decision into the data path; the public
+	// connect endpoint must answer before any connection is offered.
+	server.SetIdentityRoutable(leases[0].IdentityKey, false)
 
 	connect, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://127.0.0.1:"+strconv.Itoa(sniPort)+types.PathSDKConnect, nil)
 	if err != nil {

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -31,7 +30,7 @@ func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegist
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
-	registry, err := newLeaseRegistry(udpEnabled, tcpPortEnabled, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com", false, "")
+	registry, err := newLeaseRegistry(udpEnabled, tcpPortEnabled, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com")
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
@@ -184,37 +183,34 @@ func TestLeaseRegistryHostnameConflict(t *testing.T) {
 	}
 }
 
-func TestLeaseRegistryPolicyViewsUseRoutablePolicy(t *testing.T) {
+func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
-	if err := registry.policy.Approver().SetMode(policy.ModeManual); err != nil {
-		t.Fatalf("SetMode() error = %v", err)
-	}
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+	record, resp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "demo"),
-	}, "203.0.113.20", "", types.RelayDescriptor{}, nil); err != nil {
+	}, "203.0.113.20", "", types.RelayDescriptor{}, nil)
+	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
+	identityKey := record.Key()
 
+	// The relay pushes this result for identities it does not route, as with a
+	// pending identity under manual approval.
+	registry.setIdentityRoutable(identityKey, false)
 	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
-		t.Fatalf("PublicLeases() length = %d, want 0 before approval", len(leases))
+		t.Fatalf("PublicLeases() length = %d, want 0 while not routable", len(leases))
 	}
-	leases := registry.PolicyLeases(time.Now())
-	if len(leases) != 1 {
-		t.Fatalf("PolicyLeases() length = %d, want 1", len(leases))
-	}
-	if leases[0].IsApproved {
-		t.Fatal("PolicyLeases()[0].IsApproved = true, want false before approval")
+	if _, err := registry.admitLeaseByToken(resp.AccessToken, false); !errors.Is(err, errLeaseRejected) {
+		t.Fatalf("admitLeaseByToken() error = %v, want lease rejected while not routable", err)
 	}
 
-	registry.policy.Approver().Approve(leases[0].IdentityKey)
+	registry.setIdentityRoutable(identityKey, true)
 	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 {
-		t.Fatalf("PublicLeases() length = %d, want 1 after approval", len(leases))
+		t.Fatalf("PublicLeases() length = %d, want 1 after the relay routes the identity", len(leases))
 	}
-	leases = registry.PolicyLeases(time.Now())
-	if len(leases) != 1 || !leases[0].IsApproved {
-		t.Fatalf("PolicyLeases() = %+v, want the approved lease", leases)
+	if _, err := registry.admitLeaseByToken(resp.AccessToken, false); err != nil {
+		t.Fatalf("admitLeaseByToken() error = %v, want admitted once routable", err)
 	}
 }
 
@@ -228,7 +224,7 @@ func TestLeaseRegistryCleanupExpiredForgetsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	registry.policy.BPSManager().SetIdentityBPS(record.Key(), 1024)
+	registry.bps.SetIdentityBPS(record.Key(), 1024)
 
 	registry.mu.Lock()
 	record.ExpiresAt = time.Now().Add(-time.Second)
@@ -238,7 +234,7 @@ func TestLeaseRegistryCleanupExpiredForgetsIdentity(t *testing.T) {
 	if _, ok := registry.Lookup("expired.example.com"); ok {
 		t.Fatal("Lookup() after cleanupExpired() = true, want false")
 	}
-	if bps := registry.policy.BPSManager().IdentityBPS(record.Key()); bps != 0 {
+	if bps := registry.bps.IdentityBPS(record.Key()); bps != 0 {
 		t.Fatalf("IdentityBPS() after cleanupExpired() = %d, want identity forgotten", bps)
 	}
 }
@@ -293,7 +289,7 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
 	newRegistry := func() *leaseRegistry {
 		t.Helper()
-		registry, registryErr := newLeaseRegistry(false, false, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com", false, "")
+		registry, registryErr := newLeaseRegistry(false, false, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com")
 		if registryErr != nil {
 			t.Fatalf("newLeaseRegistry() error = %v", registryErr)
 		}

@@ -22,7 +22,7 @@ import (
 	portaltunnel "github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
+	"github.com/gosuda/portal-tunnel/v2/relay"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -36,6 +36,8 @@ const (
 
 type RelayAPI struct {
 	server               *portal.Server
+	access               *relay.Access
+	ingress              *relay.Ingress
 	adminToken           string
 	policyStatePath      string
 	frontendFS           fs.FS
@@ -51,13 +53,12 @@ type RelayAPI struct {
 	landingPageEnabled bool
 }
 
-func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
+func NewRelayAPI(server *portal.Server, access *relay.Access, ingress *relay.Ingress, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
 	if server == nil {
 		return nil, errors.New("relay api requires portal server")
 	}
-	runtime := server.PolicyRuntime()
-	if runtime == nil {
-		return nil, errors.New("relay api requires policy runtime")
+	if access == nil {
+		return nil, errors.New("relay api requires access state")
 	}
 	policyStatePath = strings.TrimSpace(policyStatePath)
 	if policyStatePath == "" {
@@ -74,6 +75,8 @@ func NewRelayAPI(server *portal.Server, policyStatePath, adminToken, frontendDir
 
 	api := &RelayAPI{
 		server:               server,
+		access:               access,
+		ingress:              ingress,
 		adminToken:           strings.TrimSpace(adminToken),
 		policyStatePath:      policyStatePath,
 		frontendFS:           frontendFS,
@@ -147,7 +150,7 @@ func (api *RelayAPI) loadPolicyState() error {
 		return err
 	}
 	if len(payload.LegacyBannedIPs) > 0 {
-		if err := api.savePolicyState(api.policyState(api.server.PolicyRuntime())); err != nil {
+		if err := api.savePolicyState(api.policyState()); err != nil {
 			return fmt.Errorf("remove legacy IP bans: %w", err)
 		}
 		log.Info().Msg("removed legacy IP bans; durable blocking now uses identity keys")
@@ -208,7 +211,6 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runtime := api.server.PolicyRuntime()
 	invalidRequestBody := utils.InvalidRequestError(errors.New("invalid request body"))
 
 	switch path {
@@ -216,7 +218,7 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			api.policyMu.RLock()
-			settings := api.policySettings(runtime)
+			settings := api.policySettings()
 			api.policyMu.RUnlock()
 			utils.WriteAPIData(w, http.StatusOK, settings)
 		case http.MethodPost:
@@ -227,13 +229,13 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			api.policyWriteMu.Lock()
 			defer api.policyWriteMu.Unlock()
 			api.policyMu.Lock()
-			previous := api.policyState(runtime)
-			if !api.applyPolicySettings(w, runtime, req) {
+			previous := api.policyState()
+			if !api.applyPolicySettings(w, req) {
 				api.policyMu.Unlock()
 				return
 			}
-			payload := api.policyState(runtime)
-			settings := api.policySettings(runtime)
+			payload := api.policyState()
+			settings := api.policySettings()
 			api.policyMu.Unlock()
 			if !api.persistPolicyState(w, previous, payload) {
 				return
@@ -248,9 +250,9 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		api.policyMu.RLock()
-		settings := api.policySettings(runtime)
+		settings := api.policySettings()
 		api.policyMu.RUnlock()
-		leases := api.server.PolicyLeases()
+		leases := api.policyLeases()
 		utils.WriteAPIData(w, http.StatusOK, types.PolicyStateResponse{
 			Policy: settings,
 			Leases: leases,
@@ -270,12 +272,12 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		api.policyWriteMu.Lock()
 		defer api.policyWriteMu.Unlock()
 		api.policyMu.Lock()
-		previous := api.policyState(runtime)
-		if !applyLeasePolicyUpdate(w, runtime, identityKey, req) {
+		previous := api.policyState()
+		if !api.applyLeasePolicyUpdate(w, identityKey, req) {
 			api.policyMu.Unlock()
 			return
 		}
-		payload := api.policyState(runtime)
+		payload := api.policyState()
 		api.policyMu.Unlock()
 		if !api.persistPolicyState(w, previous, payload) {
 			return
@@ -286,33 +288,80 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (api *RelayAPI) policySettings(runtime *policy.Runtime) types.PolicySettings {
+// policyLeases decorates the portal's lease listing with the relay's access
+// decisions for the admin surface.
+func (api *RelayAPI) policyLeases() []types.PolicyLease {
+	leases := api.server.PolicyLeases()
+	for i := range leases {
+		key := leases[i].IdentityKey
+		leases[i].IsApproved = api.access.EffectiveApproval(key)
+		leases[i].IsBanned = api.access.IsBanned(key)
+		leases[i].IsDenied = api.access.IsDenied(key)
+	}
+	return leases
+}
+
+// pushAccess mirrors the relay's current access decisions into the portal
+// data path for the named identities, or for every identity the relay knows
+// when none are named: its decision lists plus live leases. The portal
+// consumes only the resulting routability values.
+func (api *RelayAPI) pushAccess(keys ...string) {
+	push := func(key string) {
+		if key == "" {
+			return
+		}
+		api.server.SetIdentityRoutable(key, api.access.Routable(key))
+	}
+	if len(keys) > 0 {
+		for _, key := range keys {
+			push(key)
+		}
+		return
+	}
+	for _, key := range api.access.BannedKeys() {
+		push(key)
+	}
+	for _, key := range api.access.DeniedKeys() {
+		push(key)
+	}
+	for _, key := range api.access.ApprovedKeys() {
+		push(key)
+	}
+	for _, lease := range api.server.PolicyLeases() {
+		push(lease.IdentityKey)
+	}
+}
+
+func (api *RelayAPI) policySettings() types.PolicySettings {
+	udpEnabled, udpMaxLeases := api.server.UDPPolicy()
+	tcpEnabled, tcpMaxLeases := api.server.TCPPortPolicy()
 	return types.PolicySettings{
-		ApprovalMode:       string(runtime.Approver().Mode()),
+		ApprovalMode:       string(api.access.Mode()),
 		LandingPageEnabled: api.landingPageEnabled,
 		UDP: types.PolicyPortSettings{
-			Enabled:   runtime.IsUDPEnabled(),
-			MaxLeases: runtime.UDPMaxLeases(),
+			Enabled:   udpEnabled,
+			MaxLeases: udpMaxLeases,
 		},
 		TCPPort: types.PolicyPortSettings{
-			Enabled:   runtime.IsTCPPortEnabled(),
-			MaxLeases: runtime.TCPPortMaxLeases(),
+			Enabled:   tcpEnabled,
+			MaxLeases: tcpMaxLeases,
 		},
 	}
 }
 
-func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, runtime *policy.Runtime, req types.PolicySettings) bool {
+func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, req types.PolicySettings) bool {
 	if req.UDP.MaxLeases < 0 || req.TCPPort.MaxLeases < 0 {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
 		return false
 	}
-	if err := runtime.Approver().SetMode(policy.Mode(strings.TrimSpace(req.ApprovalMode))); err != nil {
+	if err := api.access.SetMode(relay.Mode(strings.TrimSpace(req.ApprovalMode))); err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "approval_mode must be 'auto' or 'manual'")
 		return false
 	}
 	api.server.SetUDPPolicy(req.UDP.Enabled, req.UDP.MaxLeases)
 	api.server.SetTCPPortPolicy(req.TCPPort.Enabled, req.TCPPort.MaxLeases)
 	api.landingPageEnabled = req.LandingPageEnabled
+	api.pushAccess()
 	return true
 }
 
@@ -329,7 +378,7 @@ func normalizePolicyIdentityKey(w http.ResponseWriter, raw string) (string, bool
 	}
 	return key, true
 }
-func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, identityKey string, req types.LeasePolicyUpdate) bool {
+func (api *RelayAPI) applyLeasePolicyUpdate(w http.ResponseWriter, identityKey string, req types.LeasePolicyUpdate) bool {
 	if req.IsBanned == nil && req.IsApproved == nil && req.IsDenied == nil && req.BPS == nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "lease policy update is empty")
 		return false
@@ -344,36 +393,35 @@ func applyLeasePolicyUpdate(w http.ResponseWriter, runtime *policy.Runtime, iden
 			return false
 		}
 		if *req.BPS == 0 {
-			runtime.BPSManager().DeleteIdentityBPS(identityKey)
+			api.server.BPSManager().DeleteIdentityBPS(identityKey)
 		} else {
-			runtime.BPSManager().SetIdentityBPS(identityKey, *req.BPS)
+			api.server.BPSManager().SetIdentityBPS(identityKey, *req.BPS)
 		}
 	}
 	if req.IsBanned != nil {
 		if *req.IsBanned {
-			runtime.BanIdentity(identityKey)
+			api.access.Ban(identityKey)
 		} else {
-			runtime.UnbanIdentity(identityKey)
+			api.access.Unban(identityKey)
 		}
 	}
-	approver := runtime.Approver()
 	if req.IsDenied != nil {
 		if *req.IsDenied {
-			approver.Deny(identityKey)
+			api.access.Deny(identityKey)
 		} else {
-			approver.Undeny(identityKey)
+			api.access.Undeny(identityKey)
 		}
 	}
 	if req.IsApproved != nil {
 		if *req.IsApproved {
-			approver.Approve(identityKey)
+			api.access.Approve(identityKey)
 		} else {
-			approver.Revoke(identityKey)
+			api.access.Revoke(identityKey)
 		}
 	}
+	api.pushAccess(identityKey)
 	return true
 }
-
 func (api *RelayAPI) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	req, ok := utils.DecodeJSONRequestAs[types.AdminAuthLoginRequest](w, r, controlBodyLimit, utils.InvalidRequestError(errors.New("invalid request body")))
 	if !ok {
@@ -428,19 +476,16 @@ func (api *RelayAPI) savePolicyState(payload persistedPolicyState) error {
 	return utils.WriteJSONFile(api.policyStatePath, payload, 0o600)
 }
 
-func (api *RelayAPI) policyState(runtime *policy.Runtime) persistedPolicyState {
-	approver := runtime.Approver()
-	udpEnabled := runtime.IsUDPEnabled()
-	udpMaxLeases := runtime.UDPMaxLeases()
-	tcpPortEnabled := runtime.IsTCPPortEnabled()
-	tcpPortMaxLeases := runtime.TCPPortMaxLeases()
+func (api *RelayAPI) policyState() persistedPolicyState {
+	udpEnabled, udpMaxLeases := api.server.UDPPolicy()
+	tcpPortEnabled, tcpPortMaxLeases := api.server.TCPPortPolicy()
 	landingPageEnabled := api.landingPageEnabled
 	return persistedPolicyState{
-		ApprovalMode:         string(approver.Mode()),
-		ApprovedIdentityKeys: approver.ApprovedKeys(),
-		DeniedIdentityKeys:   approver.DeniedKeys(),
-		BannedIdentityKeys:   runtime.BannedIdentityKeys(),
-		IdentityBPS:          runtime.BPSManager().IdentityBPSLimits(),
+		ApprovalMode:         string(api.access.Mode()),
+		ApprovedIdentityKeys: api.access.ApprovedKeys(),
+		DeniedIdentityKeys:   api.access.DeniedKeys(),
+		BannedIdentityKeys:   api.access.BannedKeys(),
+		IdentityBPS:          api.server.BPSManager().IdentityBPSLimits(),
 		UDPEnabled:           &udpEnabled,
 		UDPMaxLeases:         &udpMaxLeases,
 		TCPPortEnabled:       &tcpPortEnabled,
@@ -462,12 +507,11 @@ type persistedPolicyState struct {
 	LandingPageEnabled   *bool            `json:"landing_page_enabled,omitempty"`
 }
 
-func applyOptionalPolicy(enabled *bool, maxLeases *int, getEnabled func() bool, getMax func() int, set func(bool, int)) {
+func applyOptionalPolicy(enabled *bool, maxLeases *int, get func() (bool, int), set func(bool, int)) {
 	if enabled == nil && maxLeases == nil {
 		return
 	}
-	e := getEnabled()
-	m := getMax()
+	e, m := get()
 	if enabled != nil {
 		e = *enabled
 	}
@@ -478,9 +522,8 @@ func applyOptionalPolicy(enabled *bool, maxLeases *int, getEnabled func() bool, 
 }
 
 func (s persistedPolicyState) apply(api *RelayAPI) error {
-	runtime := api.server.PolicyRuntime()
 	if mode := strings.TrimSpace(s.ApprovalMode); mode != "" {
-		if err := runtime.Approver().SetMode(policy.Mode(mode)); err != nil {
+		if err := api.access.SetMode(relay.Mode(mode)); err != nil {
 			return err
 		}
 	}
@@ -497,14 +540,15 @@ func (s persistedPolicyState) apply(api *RelayAPI) error {
 	if err != nil {
 		return err
 	}
-	runtime.Approver().SetDecisions(s.ApprovedIdentityKeys, s.DeniedIdentityKeys)
-	runtime.SetBannedIdentityKeys(s.BannedIdentityKeys)
-	runtime.BPSManager().SetIdentityBPSLimits(identityBPS)
-	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, api.server.SetUDPPolicy)
-	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, api.server.SetTCPPortPolicy)
+	api.access.SetDecisions(s.ApprovedIdentityKeys, s.DeniedIdentityKeys)
+	api.access.SetBannedKeys(s.BannedIdentityKeys)
+	api.server.BPSManager().SetIdentityBPSLimits(identityBPS)
+	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, api.server.UDPPolicy, api.server.SetUDPPolicy)
+	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, api.server.TCPPortPolicy, api.server.SetTCPPortPolicy)
 	if s.LandingPageEnabled != nil {
 		api.landingPageEnabled = *s.LandingPageEnabled
 	}
+	api.pushAccess()
 	return nil
 }
 
