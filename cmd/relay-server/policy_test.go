@@ -33,7 +33,7 @@ func newPolicyAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, e
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, false)
+	api, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, types.PolicySettings{})
 	return api, server, err
 }
 
@@ -51,7 +51,7 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, false)
+	api, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, types.PolicySettings{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if _, ok := fields["banned_ips"]; ok {
 		t.Fatal("legacy bans remain persisted")
 	}
-	if _, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, false); err != nil {
+	if _, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, types.PolicySettings{}); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	for _, method := range []string{http.MethodGet, http.MethodPost} {

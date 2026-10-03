@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -24,6 +25,7 @@ type RelayTCPPort struct {
 	cancel      context.CancelFunc
 
 	closeOnce sync.Once
+	routable  atomic.Bool
 }
 
 type tcpPair struct {
@@ -92,6 +94,15 @@ func (t *RelayTCPPort) TCPPort() int {
 	return t.port
 }
 
+// SetRoutable applies the relay's current access result without tearing down
+// the listener, so an allow can reactivate the live lease.
+func (t *RelayTCPPort) SetRoutable(routable bool) {
+	if t == nil {
+		return
+	}
+	t.routable.Store(routable)
+}
+
 // Accept returns the next inbound TCP connection paired with a claimed reverse
 // session. Claims run independently from listener acceptance so a pending
 // reverse session cannot delay later inbound connections.
@@ -126,6 +137,10 @@ func (t *RelayTCPPort) acceptLoop() {
 }
 
 func (t *RelayTCPPort) claim(conn net.Conn) {
+	if !t.routable.Load() {
+		_ = conn.Close()
+		return
+	}
 	claimCtx, cancel := context.WithTimeout(t.ctx, defaultTCPPortClaimTimeout)
 	defer cancel()
 
@@ -139,6 +154,11 @@ func (t *RelayTCPPort) claim(conn net.Conn) {
 				Err(err).
 				Msg("failed to claim reverse session for tcp port connection")
 		}
+		return
+	}
+	if !t.routable.Load() {
+		_ = conn.Close()
+		_ = session.Close()
 		return
 	}
 

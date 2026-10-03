@@ -50,10 +50,12 @@ type RelayAPI struct {
 	// policyMu guards in-memory state only, so readers never block on disk I/O.
 	policyWriteMu      sync.Mutex
 	policyMu           sync.RWMutex
+	udpPolicy          types.PolicyPortSettings
+	tcpPortPolicy      types.PolicyPortSettings
 	landingPageEnabled bool
 }
 
-func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.Ingress, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
+func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.Ingress, policyStatePath, adminToken, frontendDir string, initialSettings types.PolicySettings) (*RelayAPI, error) {
 	if server == nil {
 		return nil, errors.New("relay api requires portal server")
 	}
@@ -82,7 +84,12 @@ func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.I
 		frontendFS:           frontendFS,
 		frontendCacheEnabled: strings.TrimSpace(frontendDir) == "",
 		reputation:           reputationStore,
-		landingPageEnabled:   landingPageEnabled,
+		udpPolicy:            initialSettings.UDP,
+		tcpPortPolicy:        initialSettings.TCPPort,
+		landingPageEnabled:   initialSettings.LandingPageEnabled,
+	}
+	if err := api.server.SetTransportPolicy(api.udpPolicy.Enabled, api.udpPolicy.MaxLeases, api.tcpPortPolicy.Enabled, api.tcpPortPolicy.MaxLeases); err != nil {
+		return nil, err
 	}
 	if err := api.loadPolicyState(); err != nil {
 		return nil, err
@@ -240,6 +247,7 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			if !api.persistPolicyState(w, previous, payload) {
 				return
 			}
+			api.pushAccess()
 			utils.WriteAPIData(w, http.StatusOK, settings)
 		default:
 			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
@@ -282,6 +290,7 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		if !api.persistPolicyState(w, previous, payload) {
 			return
 		}
+		api.pushAccess(identityKey)
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 	default:
 		http.NotFound(w, r)
@@ -310,7 +319,13 @@ func (api *RelayAPI) pushAccess(keys ...string) {
 		if key == "" {
 			return
 		}
-		api.server.SetIdentityRoutable(key, api.access.Routable(key))
+		for {
+			routable := api.access.Routable(key)
+			api.server.SetIdentityRoutable(key, routable)
+			if routable == api.access.Routable(key) {
+				return
+			}
+		}
 	}
 	if len(keys) > 0 {
 		for _, key := range keys {
@@ -333,19 +348,11 @@ func (api *RelayAPI) pushAccess(keys ...string) {
 }
 
 func (api *RelayAPI) policySettings() types.PolicySettings {
-	udpEnabled, udpMaxLeases := api.server.UDPPolicy()
-	tcpEnabled, tcpMaxLeases := api.server.TCPPortPolicy()
 	return types.PolicySettings{
 		ApprovalMode:       string(api.access.Mode()),
 		LandingPageEnabled: api.landingPageEnabled,
-		UDP: types.PolicyPortSettings{
-			Enabled:   udpEnabled,
-			MaxLeases: udpMaxLeases,
-		},
-		TCPPort: types.PolicyPortSettings{
-			Enabled:   tcpEnabled,
-			MaxLeases: tcpMaxLeases,
-		},
+		UDP:                api.udpPolicy,
+		TCPPort:            api.tcpPortPolicy,
 	}
 }
 
@@ -354,14 +361,19 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, req types.Policy
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
 		return false
 	}
-	if err := api.access.SetMode(policy.Mode(strings.TrimSpace(req.ApprovalMode))); err != nil {
+	mode := policy.Mode(strings.TrimSpace(req.ApprovalMode))
+	if mode != policy.ModeAuto && mode != policy.ModeManual {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "approval_mode must be 'auto' or 'manual'")
 		return false
 	}
-	api.server.SetUDPPolicy(req.UDP.Enabled, req.UDP.MaxLeases)
-	api.server.SetTCPPortPolicy(req.TCPPort.Enabled, req.TCPPort.MaxLeases)
+	if err := api.server.SetTransportPolicy(req.UDP.Enabled, req.UDP.MaxLeases, req.TCPPort.Enabled, req.TCPPort.MaxLeases); err != nil {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
+		return false
+	}
+	_ = api.access.SetMode(mode)
+	api.udpPolicy = req.UDP
+	api.tcpPortPolicy = req.TCPPort
 	api.landingPageEnabled = req.LandingPageEnabled
-	api.pushAccess()
 	return true
 }
 
@@ -419,7 +431,6 @@ func (api *RelayAPI) applyLeasePolicyUpdate(w http.ResponseWriter, identityKey s
 			api.access.Revoke(identityKey)
 		}
 	}
-	api.pushAccess(identityKey)
 	return true
 }
 func (api *RelayAPI) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
@@ -477,8 +488,8 @@ func (api *RelayAPI) savePolicyState(payload persistedPolicyState) error {
 }
 
 func (api *RelayAPI) policyState() persistedPolicyState {
-	udpEnabled, udpMaxLeases := api.server.UDPPolicy()
-	tcpPortEnabled, tcpPortMaxLeases := api.server.TCPPortPolicy()
+	udpEnabled, udpMaxLeases := api.udpPolicy.Enabled, api.udpPolicy.MaxLeases
+	tcpPortEnabled, tcpPortMaxLeases := api.tcpPortPolicy.Enabled, api.tcpPortPolicy.MaxLeases
 	landingPageEnabled := api.landingPageEnabled
 	return persistedPolicyState{
 		ApprovalMode:         string(api.access.Mode()),
@@ -507,25 +518,27 @@ type persistedPolicyState struct {
 	LandingPageEnabled   *bool            `json:"landing_page_enabled,omitempty"`
 }
 
-func applyOptionalPolicy(enabled *bool, maxLeases *int, get func() (bool, int), set func(bool, int)) {
+func applyOptionalPolicy(enabled *bool, maxLeases *int, current types.PolicyPortSettings) types.PolicyPortSettings {
 	if enabled == nil && maxLeases == nil {
-		return
+		return current
 	}
-	e, m := get()
 	if enabled != nil {
-		e = *enabled
+		current.Enabled = *enabled
 	}
 	if maxLeases != nil {
-		m = *maxLeases
+		current.MaxLeases = *maxLeases
 	}
-	set(e, m)
+	return current
 }
 
 func (s persistedPolicyState) apply(api *RelayAPI) error {
-	if mode := strings.TrimSpace(s.ApprovalMode); mode != "" {
-		if err := api.access.SetMode(policy.Mode(mode)); err != nil {
-			return err
+	mode := api.access.Mode()
+	if rawMode := strings.TrimSpace(s.ApprovalMode); rawMode != "" {
+		parsed := policy.Mode(rawMode)
+		if parsed != policy.ModeAuto && parsed != policy.ModeManual {
+			return fmt.Errorf("invalid approval mode: %q", rawMode)
 		}
+		mode = parsed
 	}
 	if err := canonicalizeIdentityKeyList("approved_identity_keys", s.ApprovedIdentityKeys); err != nil {
 		return err
@@ -540,11 +553,17 @@ func (s persistedPolicyState) apply(api *RelayAPI) error {
 	if err != nil {
 		return err
 	}
+	udpPolicy := applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, api.udpPolicy)
+	tcpPortPolicy := applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, api.tcpPortPolicy)
+	if err := api.server.SetTransportPolicy(udpPolicy.Enabled, udpPolicy.MaxLeases, tcpPortPolicy.Enabled, tcpPortPolicy.MaxLeases); err != nil {
+		return err
+	}
+	_ = api.access.SetMode(mode)
 	api.access.SetDecisions(s.ApprovedIdentityKeys, s.DeniedIdentityKeys)
 	api.access.SetBannedKeys(s.BannedIdentityKeys)
 	api.server.BPSManager().SetIdentityBPSLimits(identityBPS)
-	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, api.server.UDPPolicy, api.server.SetUDPPolicy)
-	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, api.server.TCPPortPolicy, api.server.SetTCPPortPolicy)
+	api.udpPolicy = udpPolicy
+	api.tcpPortPolicy = tcpPortPolicy
 	if s.LandingPageEnabled != nil {
 		api.landingPageEnabled = *s.LandingPageEnabled
 	}

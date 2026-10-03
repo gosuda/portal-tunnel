@@ -206,7 +206,13 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	}
 
 	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
-	relayAPI, err := NewRelayAPI(server, access, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, cfg.LandingPageEnabled)
+	initialPolicy := types.PolicySettings{
+		ApprovalMode:       string(policy.ModeAuto),
+		LandingPageEnabled: cfg.LandingPageEnabled,
+		UDP:                types.PolicyPortSettings{Enabled: cfg.Relay.UDPEnabled},
+		TCPPort:            types.PolicyPortSettings{Enabled: cfg.Relay.TCPEnabled},
+	}
+	relayAPI, err := NewRelayAPI(server, access, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}

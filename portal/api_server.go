@@ -275,18 +275,18 @@ func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) 
 	_, _ = w.Write(s.apiCertPEM)
 }
 
-// HandleRegister completes a verified registration. The relay resolves the
-// client IP and spends the pre-auth budget before this handler runs; the
-// returned identity key lets the relay push its access decision for the new
-// lease into the data path.
-func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP string) string {
+// HandleRegister completes a verified registration without publishing the
+// success response. The relay first applies the returned identity's access
+// decision, then writes the response so the lease cannot become observable
+// before its routability is known.
+func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP string) (string, types.RegisterResponse, bool) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
-		return ""
+		return "", types.RegisterResponse{}, false
 	}
 
 	req, ok := utils.DecodeJSONRequest[types.RegisterRequest](w, r, defaultControlBodyLimit)
 	if !ok {
-		return ""
+		return "", types.RegisterResponse{}, false
 	}
 
 	challenge, err := s.registry.consumeVerifiedRegisterChallenge(req)
@@ -297,8 +297,12 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 		default:
 			utils.InvalidRequestError(err).Write(w)
 		}
-		return ""
+		return "", types.RegisterResponse{}, false
 	}
+	identityKey := challenge.Request.Identity.Key()
+	// A registering identity starts fail-closed. Mux replaces this projection
+	// with the relay's current access decision before publishing success.
+	s.SetIdentityRoutable(identityKey, false)
 
 	var self types.RelayDescriptor
 	var descriptors []types.RelayDescriptor
@@ -313,7 +317,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 	record, resp, err := s.registry.Register(challenge.Request, clientIP, req.ReportedIP, self, descriptors)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
-		return ""
+		return identityKey, types.RegisterResponse{}, false
 	}
 	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
 	err = record.syncENSGaslessDNS(dnsCtx, s.acmeManager)
@@ -328,27 +332,25 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 		removed.deleteDNS(cleanupCtx, s.acmeManager)
 		cleanupCancel()
 		writeAPIErrorResponse(w, err)
-		return ""
+		return identityKey, types.RegisterResponse{}, false
 	}
 	if record.tcpPort != nil {
 		go s.serveTCPPairs(record.tcpPort, record.Key())
 	}
 
-	utils.WriteAPIData(w, http.StatusCreated, resp)
-	return record.Key()
+	return record.Key(), resp, true
 }
 
-// HandleRegisterChallenge issues a registration challenge. The returned
-// identity key lets the relay push its access decision before the lease
-// exists, so a fresh lease is never routed ahead of the relay's decision.
-func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request, clientIP string) string {
+// HandleRegisterChallenge issues a registration challenge without publishing
+// the success response, allowing the relay to apply access state first.
+func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request, clientIP string) (string, types.RegisterChallengeResponse, bool) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
-		return ""
+		return "", types.RegisterChallengeResponse{}, false
 	}
 
 	req, ok := utils.DecodeJSONRequest[types.RegisterChallengeRequest](w, r, defaultControlBodyLimit)
 	if !ok {
-		return ""
+		return "", types.RegisterChallengeResponse{}, false
 	}
 
 	scheme := "https"
@@ -366,22 +368,21 @@ func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request,
 	if req.UDPEnabled && !s.supportsUDP() {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled,
 			"UDP transport is disabled on this relay")
-		return ""
+		return "", types.RegisterChallengeResponse{}, false
 	}
 	if req.TCPEnabled && !s.supportsTCP() {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTCPPortDisabled,
 			"raw TCP transport is disabled on this relay")
-		return ""
+		return "", types.RegisterChallengeResponse{}, false
 	}
 
 	resp, err := s.registry.issueRegisterChallenge(req, domain, registerURI, clientIP)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
-		return ""
+		return req.Identity.Key(), types.RegisterChallengeResponse{}, false
 	}
 
-	utils.WriteAPIData(w, http.StatusCreated, resp)
-	return req.Identity.Key()
+	return req.Identity.Key(), resp, true
 }
 
 func (s *Server) HandleRenew(w http.ResponseWriter, r *http.Request, clientIP string) {

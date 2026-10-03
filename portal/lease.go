@@ -127,6 +127,17 @@ func (r *leaseRegistry) setIdentityRoutable(key string, routable bool) {
 	} else {
 		r.blocked[key] = time.Now()
 	}
+	for _, record := range r.records {
+		if record == nil || record.Key() != key {
+			continue
+		}
+		if record.datagram != nil {
+			record.datagram.SetRoutable(routable)
+		}
+		if record.tcpPort != nil {
+			record.tcpPort.SetRoutable(routable)
+		}
+	}
 	r.mu.Unlock()
 	if !routable {
 		r.cache.DetachOwner(key)
@@ -153,7 +164,7 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 	out := r.records
 	for _, record := range out {
 		if record != nil && record.stream != nil {
-			r.bps.DeleteIdentityBPS(record.Key())
+			r.bps.ResetIdentityLimiter(record.Key())
 		}
 		if record != nil && r.overlay != nil {
 			r.overlay.ForgetLease(record.id)
@@ -372,7 +383,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 	r.cache.Register(record.cacheLease(), req)
 	if replacedIndex >= 0 {
-		r.bps.DeleteIdentityBPS(identityKey)
+		r.bps.ResetIdentityLimiter(identityKey)
 		r.records[replacedIndex] = record
 	} else {
 		r.records = append(r.records, record)
@@ -396,7 +407,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		for i, current := range r.records {
 			if current == record {
 				r.deleteRecord(i)
-				r.bps.DeleteIdentityBPS(identityKey)
+				r.bps.ResetIdentityLimiter(identityKey)
 				break
 			}
 		}
@@ -620,7 +631,7 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 			continue
 		}
 		r.deleteRecord(i)
-		r.bps.DeleteIdentityBPS(key)
+		r.bps.ResetIdentityLimiter(key)
 		r.mu.Unlock()
 		record.Close()
 		return record, nil
@@ -753,7 +764,7 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 		if record != nil && record.isExpired(now) {
 			expired = append(expired, record)
 			if record.stream != nil {
-				r.bps.DeleteIdentityBPS(record.Key())
+				r.bps.ResetIdentityLimiter(record.Key())
 			}
 			r.deleteRecord(i)
 			continue

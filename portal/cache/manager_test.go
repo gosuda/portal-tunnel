@@ -499,8 +499,11 @@ func TestDetachOwnerSuppressesCacheRouting(t *testing.T) {
 	// The relay drives this event when its access state stops routing the
 	// owner; cached content must not outlive that decision.
 	c.DetachOwner(l.Owner)
-	if c.Has(l.Hostname) || c.Eligible(l.ID) {
+	if c.Has(l.Hostname) {
 		t.Fatal("detached identity remained routable from cache")
+	}
+	if !c.Eligible(l.ID) {
+		t.Fatal("detaching cached content removed the live cache lease")
 	}
 	if c.Serve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "https://"+l.Hostname+"/", nil), l.Hostname) {
 		t.Fatal("detached identity was still served from cache")

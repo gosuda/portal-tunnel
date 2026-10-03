@@ -71,6 +71,17 @@ func (m *BPSManager) DeleteIdentityBPS(key string) {
 	m.mu.Unlock()
 }
 
+// ResetIdentityLimiter forgets ephemeral token state while preserving the
+// operator-configured limit for the stable identity.
+func (m *BPSManager) ResetIdentityLimiter(key string) {
+	if m == nil || key == "" {
+		return
+	}
+	m.mu.Lock()
+	delete(m.identityLimiters, key)
+	m.mu.Unlock()
+}
+
 func (m *BPSManager) IdentityBPSLimits() map[string]int64 {
 	if m == nil {
 		return nil

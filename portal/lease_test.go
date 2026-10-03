@@ -187,17 +187,18 @@ func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
+	identity := newTestLeaseIdentity(t, "demo")
+	registry.setIdentityRoutable(identity.Key(), false)
 	record, resp, err := registry.Register(types.RegisterChallengeRequest{
-		Identity: newTestLeaseIdentity(t, "demo"),
+		Identity: identity,
 	}, "203.0.113.20", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	identityKey := record.Key()
 
-	// The relay pushes this result for identities it does not route, as with a
-	// pending identity under manual approval.
-	registry.setIdentityRoutable(identityKey, false)
+	// The relay pushes the fail-closed result before registration so a new
+	// lease cannot appear in public state before its access decision.
 	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
 		t.Fatalf("PublicLeases() length = %d, want 0 while not routable", len(leases))
 	}
@@ -214,7 +215,7 @@ func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 	}
 }
 
-func TestLeaseRegistryCleanupExpiredForgetsIdentity(t *testing.T) {
+func TestLeaseRegistryCleanupExpiredPreservesIdentityBPS(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
@@ -234,8 +235,8 @@ func TestLeaseRegistryCleanupExpiredForgetsIdentity(t *testing.T) {
 	if _, ok := registry.Lookup("expired.example.com"); ok {
 		t.Fatal("Lookup() after cleanupExpired() = true, want false")
 	}
-	if bps := registry.bps.IdentityBPS(record.Key()); bps != 0 {
-		t.Fatalf("IdentityBPS() after cleanupExpired() = %d, want identity forgotten", bps)
+	if bps := registry.bps.IdentityBPS(record.Key()); bps != 1024 {
+		t.Fatalf("IdentityBPS() after cleanupExpired() = %d, want configured limit preserved", bps)
 	}
 }
 

@@ -219,9 +219,9 @@ type Server struct {
 	redirectServer   *http.Server
 	quicBackhaul     *quic.Listener
 
-	relaySet  *discovery.RelaySet
-	registry  *leaseRegistry
-	overlay   *overlay.Runtime
+	relaySet *discovery.RelaySet
+	registry *leaseRegistry
+	overlay  *overlay.Runtime
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -262,12 +262,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	server := &Server{
-		cfg:         utils.NewSnapshot(cfg, ServerConfig.snapshot),
-		identity:    relayIdentity,
-		authority:   relayAuthority,
-		publicPort:  publicPort,
-		registry:    registry,
-		relaySet:    relaySet,
+		cfg:        utils.NewSnapshot(cfg, ServerConfig.snapshot),
+		identity:   relayIdentity,
+		authority:  relayAuthority,
+		publicPort: publicPort,
+		registry:   registry,
+		relaySet:   relaySet,
 	}
 	if cfg.IVNPConfigPath != "" {
 		server.overlay, err = overlay.New(overlay.Config{
@@ -318,33 +318,28 @@ func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.Reverse
 	return endpoint, nil
 }
 
-func (s *Server) SetUDPPolicy(enabled bool, maxLeases int) {
-	if enabled && !s.config().hasLeasePortRange() {
-		enabled = false
+// SetTransportPolicy applies relay-owned transport enablement and capacity
+// values to lease enforcement. UDP enablement is fixed once listeners start;
+// changing it at runtime would otherwise report a state with no matching QUIC
+// backhaul listener.
+func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
+	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
+		return errors.New("transport max leases must be non-negative")
 	}
-	s.registry.setUDPPolicy(enabled, maxLeases)
-	s.cfg.UpdateCopy(func(cfg *ServerConfig) {
-		cfg.UDPEnabled = enabled
-	})
-}
-
-func (s *Server) SetTCPPortPolicy(enabled bool, maxLeases int) {
-	if enabled && !s.config().hasLeasePortRange() {
-		enabled = false
+	cfg := s.config()
+	if (udpEnabled || tcpEnabled) && !cfg.hasLeasePortRange() {
+		return errors.New("transport enablement requires a lease port range")
 	}
-	s.registry.setTCPPortPolicy(enabled, maxLeases)
+	if s.group != nil && udpEnabled != (s.quicBackhaul != nil) {
+		return errors.New("udp enablement requires a relay restart")
+	}
+	s.registry.setUDPPolicy(udpEnabled, udpMaxLeases)
+	s.registry.setTCPPortPolicy(tcpEnabled, tcpMaxLeases)
 	s.cfg.UpdateCopy(func(cfg *ServerConfig) {
-		cfg.TCPEnabled = enabled
+		cfg.UDPEnabled = udpEnabled
+		cfg.TCPEnabled = tcpEnabled
 	})
-}
-
-// UDPPolicy and TCPPortPolicy report the applied relay capacity values.
-func (s *Server) UDPPolicy() (enabled bool, maxLeases int) {
-	return s.registry.udpPolicy()
-}
-
-func (s *Server) TCPPortPolicy() (enabled bool, maxLeases int) {
-	return s.registry.tcpPortPolicy()
+	return nil
 }
 
 func (s *Server) supportsUDP() bool {
@@ -464,8 +459,7 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	if cfg.UDPEnabled {
 		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
 		if err != nil {
-			log.Warn().Err(err).Msg("quic backhaul listener disabled")
-			quicBackhaul = nil
+			return fmt.Errorf("listen quic backhaul: %w", err)
 		}
 	}
 	if s.overlay != nil {
@@ -609,6 +603,11 @@ func (s *Server) serveTCPPairs(port *transport.RelayTCPPort, identityKey string)
 		inbound, session, err := port.Accept()
 		if err != nil {
 			return
+		}
+		if !s.registry.isRoutable(identityKey) {
+			_ = inbound.Close()
+			_ = session.Close()
+			continue
 		}
 		go s.proxy.bridge(inbound, session, identityKey, s.registry.bps)
 	}

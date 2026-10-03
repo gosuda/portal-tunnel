@@ -227,9 +227,9 @@ func (c *Manager) eligibleLocked(id string) bool {
 	return ok && time.Now().Before(lease.ExpiresAt)
 }
 
-// DetachOwner immediately revokes cached content owned by one identity. The
-// relay calls it when its access state stops routing that identity; cache
-// state itself stays about leases, TTLs, and bytes.
+// DetachOwner immediately revokes cached content owned by one identity while
+// retaining its live cache lease. If the relay routes the identity again, the
+// same lease may publish fresh content without re-registering.
 func (c *Manager) DetachOwner(owner string) {
 	if c == nil || owner == "" {
 		return
@@ -239,11 +239,6 @@ func (c *Manager) DetachOwner(owner string) {
 	for _, site := range c.entries {
 		if site.owner == owner {
 			c.retireLocked(site)
-		}
-	}
-	for id, lease := range c.leases {
-		if lease.Owner == owner {
-			delete(c.leases, id)
 		}
 	}
 }

@@ -32,10 +32,20 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	// noteAccess pushes the relay's current routability decision for a newly
 	// seen identity into the portal data path before its lease can be claimed.
 	noteAccess := func(key string) {
-		if key == "" || access == nil {
+		if key == "" {
 			return
 		}
-		s.SetIdentityRoutable(key, access.Routable(key))
+		if access == nil {
+			s.SetIdentityRoutable(key, true)
+			return
+		}
+		for {
+			routable := access.Routable(key)
+			s.SetIdentityRoutable(key, routable)
+			if routable == access.Routable(key) {
+				return
+			}
+		}
 	}
 	// admit spends the weighted pre-auth budget before any decoding or
 	// signature work, preserving the source -> global ordering established
@@ -49,6 +59,14 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 				}
 			}
 			next.ServeHTTP(w, r)
+		}
+	}
+	requireMethod := func(method string, next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !utils.RequireMethod(w, r, method) {
+				return
+			}
+			next(w, r)
 		}
 	}
 	withClient := func(next func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
@@ -69,12 +87,20 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 		s.HandleDomain(w, r)
 	})
 	mux.HandleFunc(types.PathSDKCertificateChain, s.HandleCertificateChain)
-	mux.HandleFunc(types.PathSDKRegisterChallenge, admit(preAuth.ChallengeCost, func(w http.ResponseWriter, r *http.Request) {
-		noteAccess(s.HandleRegisterChallenge(w, r, ingress.ClientIP(r)))
-	}))
-	mux.HandleFunc(types.PathSDKRegister, admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request) {
-		noteAccess(s.HandleRegister(w, r, ingress.ClientIP(r)))
-	}))
+	mux.HandleFunc(types.PathSDKRegisterChallenge, requireMethod(http.MethodPost, admit(preAuth.ChallengeCost, func(w http.ResponseWriter, r *http.Request) {
+		key, response, ok := s.HandleRegisterChallenge(w, r, ingress.ClientIP(r))
+		noteAccess(key)
+		if ok {
+			utils.WriteAPIData(w, http.StatusCreated, response)
+		}
+	})))
+	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request) {
+		key, response, ok := s.HandleRegister(w, r, ingress.ClientIP(r))
+		noteAccess(key)
+		if ok {
+			utils.WriteAPIData(w, http.StatusCreated, response)
+		}
+	})))
 	mux.HandleFunc(types.PathSDKRenew, withClient(s.HandleRenew))
 	mux.HandleFunc(types.PathSDKReverse, s.HandleReverseEndpoint)
 	mux.HandleFunc(types.PathSDKUnregister, s.HandleUnregister)
