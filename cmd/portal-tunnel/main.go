@@ -231,11 +231,12 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 	serve := strings.TrimSpace(flags.serve)
 	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders
 	hasStripPolicy := len(flags.stripRequestHeaders) > 0
-	hasHTTPSource := serve != "" || len(routes) > 0 || authEnabled || flags.cache || strings.TrimSpace(flags.targetAddr) != ""
-	if hasStripPolicy && !hasHTTPSource {
-		return tunnel.Spec{}, errors.New("--strip-request-header requires --http-route, --serve, --target, or --auth")
+	hasHTTPUpstream := len(routes) > 0 || strings.TrimSpace(flags.targetAddr) != ""
+	if hasStripPolicy && serve == "" && !hasHTTPUpstream && !authEnabled && !flags.cache {
+		return tunnel.Spec{}, errors.New("--strip-request-header requires --http-route, --target, or --auth")
 	}
-	if hasHTTPSource || hasStripPolicy {
+	useHTTP := serve != "" || len(routes) > 0 || authEnabled || flags.cache || hasStripPolicy
+	if useHTTP {
 		spec.HTTP = &tunnel.HTTPConfig{
 			Routes:              routes,
 			Serve:               serve,

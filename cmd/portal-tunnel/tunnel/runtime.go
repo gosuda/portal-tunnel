@@ -125,8 +125,10 @@ func (spec Spec) Validate() error {
 		if _, err := utils.NormalizeHeaderNames(httpConfig.StripRequestHeaders); err != nil {
 			return fmt.Errorf("strip request headers: %w", err)
 		}
-		hasHTTPUpstream := strings.TrimSpace(httpConfig.Serve) == "" &&
-			(len(httpConfig.Routes) > 0 || strings.TrimSpace(target) != "" || httpConfig.Auth != nil)
+		if strings.TrimSpace(httpConfig.Serve) != "" {
+			return errors.New("strip request headers cannot be combined with static serving (--serve); static sites do not proxy request headers")
+		}
+		hasHTTPUpstream := len(httpConfig.Routes) > 0 || strings.TrimSpace(target) != "" || httpConfig.Auth != nil
 		if !hasHTTPUpstream {
 			return errors.New("strip request headers require an HTTP upstream route or target")
 		}
