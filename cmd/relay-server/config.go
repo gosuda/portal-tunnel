@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -175,6 +176,10 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 	if _, err := portal.ValidateServerConfig(cfg.Relay); err != nil {
 		fmt.Fprintf(w, "  INVALID %s\n", err)
 	} else if _, err := resolveX402Facilitator(cfg); err != nil {
+		fmt.Fprintf(w, "  INVALID %s\n", err)
+	} else if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
+		fmt.Fprintf(w, "  INVALID %s\n", err)
+	} else if _, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs); err != nil {
 		fmt.Fprintf(w, "  INVALID %s\n", err)
 	} else {
 		fmt.Fprintln(w, "  OK relay configuration is valid")

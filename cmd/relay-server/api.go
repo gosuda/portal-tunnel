@@ -359,11 +359,15 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, req types.Policy
 		return false
 	}
 	mode := policy.Mode(strings.TrimSpace(req.ApprovalMode))
+	previousMode := api.access.Mode()
 	if err := api.access.SetMode(mode); err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "approval_mode must be 'auto' or 'manual'")
 		return false
 	}
 	if err := api.server.SetTransportPolicy(req.UDP, req.TCPPort); err != nil {
+		// A rejected request must leave nothing applied: the mode change is
+		// rolled back so a 400 never partially mutates the policy.
+		_ = api.access.SetMode(previousMode)
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return false
 	}
