@@ -797,18 +797,6 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	utils.WriteAPIData(w, http.StatusOK, summary)
 }
 
-func setVoterCookie(w http.ResponseWriter, r *http.Request, value string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     reputationVoterCookie,
-		Value:    value,
-		Path:     types.PathAPIPrefix,
-		MaxAge:   int((10 * 365 * 24 * time.Hour).Seconds()),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
-	})
-}
-
 func publicIdentityLeases(public []types.Lease, server *portal.Server) []types.PolicyLease {
 	known := make(map[string]bool)
 	for _, lease := range public {
