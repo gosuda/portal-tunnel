@@ -32,7 +32,9 @@ durable volume exclusive to one relay process. A restart loads the reservations
 before serving; corrupt state or a failed durable write prevents new ownership
 publication rather than silently releasing a browser origin. Renewals covered
 by a confirmed durable reservation continue without a write during storage
-faults; an extension beyond that window still requires durable storage. Do not
+faults; an extension beyond that window still requires durable storage. After
+a POSIX replacement succeeds but directory open/sync fails, new publication
+remains blocked until storage is repaired and the relay is restarted. Do not
 delete these files to clear inactive tunnels. Expired entries are pruned on the next write.
 Names released before upgrading cannot be recovered automatically.
 
