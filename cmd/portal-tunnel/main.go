@@ -23,9 +23,9 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -136,119 +136,15 @@ func runExposeCommand(args []string) error {
 		return err
 	}
 	var err error
-	if flags.authProvider != "" {
-		flags.authProvider, err = gateway.NormalizeApplicationAuthProvider(flags.authProvider)
-		if err != nil {
-			return err
-		}
-	}
-	authEnabled := flags.authProvider != ""
-
 	flags.targetAddr, err = utils.OptionalSingleArg(fs.Args(), "target")
 	if err != nil {
 		printExposeUsage(os.Stderr)
 		return err
 	}
-	httpRouteInputs := append([]string(nil), flags.httpRoutes...)
-	serve := strings.TrimSpace(flags.serve)
-	switch {
-	case flags.cache && serve == "":
-		return errors.New("--cache requires --serve")
-	case !flags.cache && flags.cacheTTL != 0:
-		return errors.New("--cache-ttl requires --cache")
-	case flags.cache && flags.banMITM:
-		return errors.New("--cache permits relay TLS termination and cannot be combined with --ban-mitm")
-	case authEnabled && flags.cache:
-		return errors.New("--auth requires tunnel-side TLS termination and cannot be combined with --cache")
-	case authEnabled && (flags.tcp || flags.udp):
-		return errors.New("--auth protects HTTP applications and cannot be combined with --tcp or --udp")
-	case !authEnabled && len(flags.authAllowedWallets) > 0:
-		return errors.New("--auth-allow requires --auth")
-	case flags.authProvider == gateway.ApplicationAuthProviderCredential && len(flags.authAllowedWallets) > 0:
-		return errors.New("--auth-allow requires --auth siwe")
-	case !authEnabled && flags.authIdentityHeaders:
-		return errors.New("--auth-identity-headers requires --auth")
-	case serve != "" && flags.targetAddr != "":
+	spec, err := tunnelSpecFromExposeFlags(flags)
+	if err != nil {
 		printExposeUsage(os.Stderr)
-		return errors.New("target cannot be combined with --serve")
-	case serve != "" && len(httpRouteInputs) > 0:
-		printExposeUsage(os.Stderr)
-		return errors.New("--serve cannot be combined with --http-route")
-	case serve != "" && flags.udp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--serve cannot be combined with --udp")
-	case serve != "" && flags.tcp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--serve cannot be combined with --tcp")
-	case serve == "" && flags.targetAddr == "" && len(httpRouteInputs) == 0:
-		printExposeUsage(os.Stderr)
-		return errors.New("target, --serve, or at least one --http-route is required")
-	case flags.targetAddr != "" && len(flags.httpRoutes) > 0:
-		printExposeUsage(os.Stderr)
-		return errors.New("target cannot be combined with --http-route")
-	case len(httpRouteInputs) > 0 && flags.udp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--udp cannot be combined with --http-route")
-	case len(httpRouteInputs) > 0 && flags.tcp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--tcp cannot be combined with --http-route")
-	}
-
-	httpRoutes := make([]gateway.ExposedHTTPRoute, 0, len(httpRouteInputs)+1)
-	if serve != "" {
-		root, index, err := utils.ResolveStaticSite(serve)
-		if err != nil {
-			printExposeUsage(os.Stderr)
-			return fmt.Errorf("--serve %q: %w", serve, err)
-		}
-		httpRoutes = append(httpRoutes, gateway.ExposedHTTPRoute{
-			Prefix:      "/",
-			StaticRoot:  root,
-			StaticIndex: index,
-		})
-	}
-	for _, raw := range httpRouteInputs {
-		fields := strings.Fields(raw)
-		if len(fields) == 0 || len(fields) > 2 {
-			return fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
-		}
-		prefix, upstream, ok := strings.Cut(fields[0], "=")
-		if !ok {
-			return fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
-		}
-		prefix = strings.TrimSpace(prefix)
-		if prefix == "" {
-			return fmt.Errorf("--http-route %q: path is required", raw)
-		}
-		if !strings.HasPrefix(prefix, "/") {
-			return fmt.Errorf("--http-route %q: path must start with /", raw)
-		}
-		upstream = strings.TrimSpace(upstream)
-		if upstream == "" {
-			return fmt.Errorf("--http-route %q: upstream is required", raw)
-		}
-		route := gateway.ExposedHTTPRoute{
-			Prefix:   prefix,
-			Upstream: upstream,
-		}
-		if len(fields) == 2 {
-			methods, amount, err := parseHTTPRoutePayment(fields[1])
-			if err != nil {
-				return fmt.Errorf("--http-route %q: %w", raw, err)
-			}
-			if strings.TrimSpace(flags.x402PayTo) == "" {
-				return fmt.Errorf("--http-route %q: payment amount requires --x402-pay-to", raw)
-			}
-			route.Methods = methods
-			route.Amount = amount
-		}
-		httpRoutes = append(httpRoutes, route)
-	}
-	if authEnabled && len(httpRoutes) == 0 {
-		httpRoutes = append(httpRoutes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: flags.targetAddr})
-	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(flags.x402Network)), "casper:") && strings.TrimSpace(flags.x402Asset) == "" {
-		return errors.New("--x402-asset is required for Casper wCSPR payments")
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
@@ -270,77 +166,92 @@ func runExposeCommand(args []string) error {
 		}()
 	}
 
-	listenerIdentity, err := identity.LoadOrCreate(flags.name, flags.targetAddr, flags.identityPath, flags.identityJSON)
-	if err != nil {
-		return fmt.Errorf("resolve identity: %w", err)
-	}
-
-	explicitRelayURLs, err := utils.NormalizeRelayURLs(utils.SplitCSV(flags.relayCSV)...)
+	runtime, err := tunnel.Start(ctx, spec)
 	if err != nil {
 		return err
 	}
-	opts := []sdk.Option{
-		sdk.WithMITMProtection(flags.banMITM),
-		sdk.WithMetadata(types.LeaseMetadata{
-			Description: flags.desc,
-			Tags:        utils.SplitCSV(flags.tags),
-			Owner:       flags.owner,
-			Thumbnail:   flags.thumbnail,
-			Hide:        flags.hide,
-		}),
+	defer runtime.Close()
+	return runtime.Run(ctx)
+}
+
+func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
+	if !flags.cache && flags.cacheTTL != 0 {
+		return tunnel.Spec{}, errors.New("--cache-ttl requires --cache")
+	}
+	routes := make([]tunnel.HTTPRoute, 0, len(flags.httpRoutes))
+	for _, raw := range flags.httpRoutes {
+		fields := strings.Fields(raw)
+		if len(fields) == 0 || len(fields) > 2 {
+			return tunnel.Spec{}, fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
+		}
+		prefix, upstream, ok := strings.Cut(fields[0], "=")
+		if !ok {
+			return tunnel.Spec{}, fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
+		}
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			return tunnel.Spec{}, fmt.Errorf("--http-route %q: path is required", raw)
+		}
+		upstream = strings.TrimSpace(upstream)
+		if upstream == "" {
+			return tunnel.Spec{}, fmt.Errorf("--http-route %q: upstream is required", raw)
+		}
+		route := tunnel.HTTPRoute{
+			Prefix:   prefix,
+			Upstream: upstream,
+		}
+		if len(fields) == 2 {
+			methods, amount, err := parseHTTPRoutePayment(fields[1])
+			if err != nil {
+				return tunnel.Spec{}, fmt.Errorf("--http-route %q: %w", raw, err)
+			}
+			route.Methods = methods
+			route.Amount = amount
+		}
+		routes = append(routes, route)
+	}
+
+	spec := tunnel.Spec{
+		Identity: tunnel.IdentitySpec{Name: flags.name, Path: flags.identityPath, JSON: flags.identityJSON},
+		Relays: tunnel.RelaySpec{
+			URLs: utils.SplitCSV(flags.relayCSV), Discovery: flags.discovery,
+			MaxActive: flags.maxActiveRelays, Overlay: flags.overlay, BanMITM: flags.banMITM,
+		},
+		Metadata: types.LeaseMetadata{
+			Description: flags.desc, Tags: utils.SplitCSV(flags.tags), Owner: flags.owner,
+			Thumbnail: flags.thumbnail, Hide: flags.hide,
+		},
+		Transport: tunnel.TransportSpec{Target: flags.targetAddr, TCP: flags.tcp},
 	}
 	if flags.udp {
-		opts = append(opts, sdk.WithUDP())
+		spec.Transport.UDP = &tunnel.UDPConfig{Target: flags.udpAddr}
+	}
+	serve := strings.TrimSpace(flags.serve)
+	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders
+	if serve != "" || len(routes) > 0 || authEnabled || flags.cache {
+		spec.HTTP = &tunnel.HTTPConfig{
+			Routes: routes,
+			Serve:  serve,
+			Payment: gateway.X402Payment{
+				X402Config: gateway.X402Config{
+					Testnet: flags.x402Testnet, Network: flags.x402Network, Asset: flags.x402Asset,
+					PayTo: flags.x402PayTo, Endpoints: append([]string(nil), flags.x402Endpoints...),
+					FacilitatorToken: flags.x402FacilitatorToken,
+				},
+			},
+		}
 	}
 	if flags.cache {
-		opts = append(opts, sdk.WithStaticRelayCache(serve, flags.cacheTTL))
+		spec.HTTP.Cache = &tunnel.CacheConfig{TTL: flags.cacheTTL}
 	}
-	if flags.tcp {
-		opts = append(opts, sdk.WithTCP())
-	}
-	if flags.overlay {
-		opts = append(opts, sdk.WithOverlay())
-	}
-	if flags.discovery {
-		opts = append(opts, sdk.WithDiscovery(flags.maxActiveRelays))
-	}
-	exposure, err := sdk.Expose(ctx, listenerIdentity, explicitRelayURLs, opts...)
-	if err != nil {
-		return fmt.Errorf("failed to start relays: %w", err)
-	}
-	if len(httpRoutes) > 0 {
-		defer exposure.Close()
-		handler, err := gateway.ComposeHTTPRoutes(httpRoutes, gateway.X402Payment{
-			Testnet:          flags.x402Testnet,
-			Network:          flags.x402Network,
-			Asset:            flags.x402Asset,
-			PayTo:            flags.x402PayTo,
-			Endpoints:        append([]string(nil), flags.x402Endpoints...),
-			FacilitatorToken: flags.x402FacilitatorToken,
-		})
-		if err != nil {
-			return err
+	if authEnabled {
+		spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+			Provider:        flags.authProvider,
+			AllowedWallets:  append([]string(nil), flags.authAllowedWallets...),
+			IdentityHeaders: flags.authIdentityHeaders,
 		}
-		if authEnabled {
-			handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, gateway.ApplicationAuthConfig{
-				Provider:        flags.authProvider,
-				AllowedWallets:  flags.authAllowedWallets,
-				IdentityHeaders: flags.authIdentityHeaders,
-			})
-			if err != nil {
-				return err
-			}
-		}
-		return sdk.RunHTTP(ctx, exposure, handler, "")
 	}
-	udpTarget := ""
-	if flags.udp {
-		udpTarget = utils.StringOrDefault(flags.udpAddr, flags.targetAddr)
-	}
-	return sdk.ProxyWithConfig(ctx, exposure, sdk.ProxyConfig{
-		TCPTarget: flags.targetAddr,
-		UDPTarget: udpTarget,
-	})
+	return spec, spec.Validate()
 }
 
 func runAuthCommand(args []string) error {

@@ -35,18 +35,27 @@ const (
 	defaultMaxTimeoutSeconds = 60
 )
 
-// X402Payment is the payment composition contract owned by cmd/portal-tunnel/gateway.
-// It was moved here from types/x402.go so that the types layer carries no
-// x402 knowledge; owning packages hold the symbols they use.
+// X402Config is the gateway-owned x402 configuration shared by frontends and
+// tunnel runtime assembly.
+type X402Config struct {
+	Testnet          bool     `json:"x402_testnet,omitempty" koanf:"x402_testnet"`
+	Network          string   `json:"x402_network,omitempty" koanf:"x402_network"`
+	Asset            string   `json:"x402_asset,omitempty" koanf:"x402_asset"`
+	PayTo            string   `json:"x402_pay_to,omitempty" koanf:"x402_pay_to"`
+	Endpoints        []string `json:"x402_endpoints,omitempty" koanf:"x402_endpoints"`
+	FacilitatorToken string   `json:"-" koanf:"x402_facilitator_token"`
+}
+
+func (c X402Config) Copy() X402Config {
+	c.Endpoints = append([]string(nil), c.Endpoints...)
+	return c
+}
+
+// X402Payment adds gateway-only composition controls to X402Config.
 type X402Payment struct {
-	Testnet             bool
-	Network             string
-	Asset               string
-	PayTo               string
+	X402Config
 	MaxTimeoutSeconds   int
 	RequestTimeout      time.Duration
-	Endpoints           []string
-	FacilitatorToken    string
 	ResourceDescription string
 	ResourceMimeType    string
 }

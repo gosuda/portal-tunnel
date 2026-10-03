@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -30,20 +32,9 @@ type AgentTunnelStatus struct {
 	Metadata            types.LeaseMetadata `json:"metadata"`
 	Auth                string              `json:"auth,omitempty"`
 	AuthIdentityHeaders bool                `json:"auth_identity_headers,omitempty"`
-	X402PayTo           string              `json:"x402_pay_to,omitempty"`
-	X402Testnet         bool                `json:"x402_testnet,omitempty"`
-	X402Network         string              `json:"x402_network,omitempty"`
-	X402Asset           string              `json:"x402_asset,omitempty"`
-	X402Endpoints       []string            `json:"x402_endpoints,omitempty"`
-	HTTPRoutes          []AgentHTTPRoute    `json:"http_routes,omitempty"`
-	Relays              []AgentRelayStatus  `json:"relays,omitempty"`
-}
-
-type AgentHTTPRoute struct {
-	Prefix   string   `json:"prefix"`
-	Upstream string   `json:"upstream"`
-	Methods  []string `json:"methods,omitempty"`
-	Amount   string   `json:"amount,omitempty"`
+	gateway.X402Config
+	HTTPRoutes []tunnel.HTTPRoute `json:"http_routes,omitempty"`
+	Relays     []AgentRelayStatus `json:"relays,omitempty"`
 }
 
 type AgentRelayStatus struct {
@@ -60,22 +51,18 @@ type AgentRelayStatus struct {
 }
 
 type AgentTunnelRequest struct {
-	ID                  string           `json:"id"`
-	Name                string           `json:"name,omitempty"`
-	TargetAddr          string           `json:"target_addr,omitempty"`
-	HTTPRoutes          []AgentHTTPRoute `json:"http_routes,omitempty"`
-	RelayURLs           []string         `json:"relays,omitempty"`
-	Discovery           *bool            `json:"discovery,omitempty"`
-	Overlay             bool             `json:"overlay,omitempty"`
-	MaxActiveRelays     int              `json:"max_active_relays,omitempty"`
-	Auth                string           `json:"auth,omitempty"`
-	AuthAllowedWallets  []string         `json:"auth_allowed_wallets,omitempty"`
-	AuthIdentityHeaders bool             `json:"auth_identity_headers,omitempty"`
-	X402PayTo           string           `json:"x402_pay_to,omitempty"`
-	X402Testnet         bool             `json:"x402_testnet,omitempty"`
-	X402Network         string           `json:"x402_network,omitempty"`
-	X402Asset           string           `json:"x402_asset,omitempty"`
-	X402Endpoints       []string         `json:"x402_endpoints,omitempty"`
+	ID                  string             `json:"id"`
+	Name                string             `json:"name,omitempty"`
+	TargetAddr          string             `json:"target_addr,omitempty"`
+	HTTPRoutes          []tunnel.HTTPRoute `json:"http_routes,omitempty"`
+	RelayURLs           []string           `json:"relays,omitempty"`
+	Discovery           *bool              `json:"discovery,omitempty"`
+	Overlay             bool               `json:"overlay,omitempty"`
+	MaxActiveRelays     int                `json:"max_active_relays,omitempty"`
+	Auth                string             `json:"auth,omitempty"`
+	AuthAllowedWallets  []string           `json:"auth_allowed_wallets,omitempty"`
+	AuthIdentityHeaders bool               `json:"auth_identity_headers,omitempty"`
+	gateway.X402Config
 }
 
 type AgentRelayRequest struct {

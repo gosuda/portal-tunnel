@@ -14,10 +14,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -189,9 +187,9 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		return err
 	}
 	target := strings.TrimSpace(req.TargetAddr)
-	httpRoutes := make([]HTTPRouteConfig, 0, len(req.HTTPRoutes))
+	httpRoutes := make([]tunnel.HTTPRoute, 0, len(req.HTTPRoutes))
 	for _, route := range req.HTTPRoutes {
-		httpRoutes = append(httpRoutes, HTTPRouteConfig{
+		httpRoutes = append(httpRoutes, tunnel.HTTPRoute{
 			Prefix:   strings.TrimSpace(route.Prefix),
 			Upstream: strings.TrimSpace(route.Upstream),
 			Methods:  normalizeAgentHTTPRouteMethods(route.Methods),
@@ -216,6 +214,11 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 	if req.MaxActiveRelays < 0 {
 		return errors.New("max_active_relays cannot be negative")
 	}
+	x402 := req.Copy()
+	x402.PayTo = strings.TrimSpace(x402.PayTo)
+	x402.Network = strings.ToLower(strings.TrimSpace(x402.Network))
+	x402.Asset = strings.TrimSpace(x402.Asset)
+	x402.Endpoints = compactStrings(x402.Endpoints)
 	tunnelCfg := TunnelConfig{
 		ID:                  id,
 		Name:                name,
@@ -228,11 +231,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		Auth:                strings.ToLower(strings.TrimSpace(req.Auth)),
 		AuthAllowedWallets:  append([]string(nil), req.AuthAllowedWallets...),
 		AuthIdentityHeaders: req.AuthIdentityHeaders,
-		X402PayTo:           strings.TrimSpace(req.X402PayTo),
-		X402Testnet:         req.X402Testnet,
-		X402Network:         strings.ToLower(strings.TrimSpace(req.X402Network)),
-		X402Asset:           strings.TrimSpace(req.X402Asset),
-		X402Endpoints:       compactStrings(append([]string(nil), req.X402Endpoints...)),
+		X402Config:          x402,
 	}
 	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
 		return fmt.Errorf("tunnel %q already exists", tunnelCfg.ID)
@@ -448,7 +447,8 @@ type managedTunnel struct {
 	done      chan struct{}
 	exposure  *sdk.Exposure
 	lastError string
-	runtime   AgentTunnelStatus
+	address   string
+	relays    []AgentRelayStatus
 }
 
 func (t *managedTunnel) Start(parent context.Context) {
@@ -553,7 +553,8 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	lastError := t.lastError
 	exposure := t.exposure
 	done := t.done
-	runtime := t.runtime
+	address := t.address
+	relays := append([]AgentRelayStatus(nil), t.relays...)
 	t.mu.RUnlock()
 
 	running := false
@@ -579,6 +580,8 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		discovery = *cfg.Discovery
 	}
 
+	x402 := cfg.Copy()
+	x402.PayTo = strings.TrimSpace(x402.PayTo)
 	status := AgentTunnelStatus{
 		ID:                  cfg.ID,
 		Name:                cfg.Name,
@@ -592,16 +595,12 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		Metadata:            metadataFromTunnelConfig(cfg),
 		Auth:                cfg.Auth,
 		AuthIdentityHeaders: cfg.AuthIdentityHeaders,
-		X402PayTo:           strings.TrimSpace(cfg.X402PayTo),
-		X402Testnet:         cfg.X402Testnet,
-		X402Network:         cfg.X402Network,
-		X402Asset:           cfg.X402Asset,
-		X402Endpoints:       append([]string(nil), cfg.X402Endpoints...),
+		X402Config:          x402,
 	}
 	if len(cfg.HTTPRoutes) > 0 {
-		status.HTTPRoutes = make([]AgentHTTPRoute, 0, len(cfg.HTTPRoutes))
+		status.HTTPRoutes = make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
 		for _, route := range cfg.HTTPRoutes {
-			status.HTTPRoutes = append(status.HTTPRoutes, AgentHTTPRoute{
+			status.HTTPRoutes = append(status.HTTPRoutes, tunnel.HTTPRoute{
 				Prefix:   route.Prefix,
 				Upstream: route.Upstream,
 				Methods:  append([]string(nil), route.Methods...),
@@ -610,24 +609,19 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		}
 	}
 	if exposure == nil {
-		if strings.TrimSpace(runtime.Address) != "" {
-			status.Address = runtime.Address
-		}
-		if strings.TrimSpace(runtime.TargetAddr) != "" {
-			status.TargetAddr = runtime.TargetAddr
-		}
-		status.Relays = append([]AgentRelayStatus(nil), runtime.Relays...)
+		status.Address = address
+		status.Relays = relays
 		return status
 	}
-	relays := agentRelayStatuses(exposure.Relays())
+	relays = agentRelayStatuses(exposure.Relays())
 	t.mu.Lock()
 	if t.exposure == exposure {
-		t.runtime.Relays = append([]AgentRelayStatus(nil), relays...)
+		t.relays = append([]AgentRelayStatus(nil), relays...)
 	}
-	runtime = t.runtime
+	address = t.address
 	t.mu.Unlock()
 
-	status.Address = runtime.Address
+	status.Address = address
 	status.Relays = relays
 	return status
 }
@@ -674,144 +668,23 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.lastError = ""
 	t.mu.Unlock()
 
-	routes := make([]gateway.ExposedHTTPRoute, 0, len(cfg.HTTPRoutes)+1)
-	if cfg.Serve != "" {
-		root, index, err := utils.ResolveStaticSite(cfg.Serve)
-		if err != nil {
-			return fmt.Errorf("tunnel %q serve %q: %w", cfg.ID, cfg.Serve, err)
-		}
-		routes = append(routes, gateway.ExposedHTTPRoute{
-			Prefix:      "/",
-			StaticRoot:  root,
-			StaticIndex: index,
-		})
-	}
-	for _, route := range cfg.HTTPRoutes {
-		routes = append(routes, gateway.ExposedHTTPRoute{
-			Prefix:   route.Prefix,
-			Upstream: route.Upstream,
-			Methods:  route.Methods,
-			Amount:   route.Amount,
-		})
-	}
-	if cfg.Auth != "" && len(routes) == 0 {
-		routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: cfg.TargetAddr})
-	}
-
-	discovery := true
-	if cfg.Discovery != nil {
-		discovery = *cfg.Discovery
-	}
-	banMITM := false
-	if cfg.BanMITM != nil {
-		banMITM = *cfg.BanMITM
-	}
-	x402FacilitatorToken := strings.TrimSpace(cfg.X402FacilitatorToken)
-	x402FacilitatorToken = cmp.Or(x402FacilitatorToken, strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
-	listenerIdentity, err := identity.LoadOrCreate(cfg.Name, cfg.TargetAddr, cfg.IdentityPath, cfg.IdentityJSON)
-	if err != nil {
-		return fmt.Errorf("resolve identity: %w", err)
-	}
-	explicitRelayURLs, err := utils.NormalizeRelayURLs(cfg.RelayURLs...)
+	spec := tunnelSpecFromConfig(cfg)
+	runtime, err := tunnel.Start(ctx, spec)
 	if err != nil {
 		return err
 	}
-	opts := []sdk.Option{
-		sdk.WithMITMProtection(banMITM),
-		sdk.WithMetadata(metadataFromTunnelConfig(cfg)),
-	}
-	if cfg.UDPEnabled {
-		opts = append(opts, sdk.WithUDP())
-	}
-	if cfg.TCPEnabled {
-		opts = append(opts, sdk.WithTCP())
-	}
-	if cfg.Overlay {
-		opts = append(opts, sdk.WithOverlay())
-	}
-	if discovery {
-		opts = append(opts, sdk.WithDiscovery(cfg.MaxActiveRelays))
-	}
-	exposure, err := sdk.Expose(ctx, listenerIdentity, explicitRelayURLs, opts...)
-	if err != nil {
-		return err
-	}
+	exposure := runtime.Exposure
 	t.mu.Lock()
 	t.exposure = exposure
-	t.runtime = AgentTunnelStatus{
-		Address:         listenerIdentity.Address,
-		TargetAddr:      cfg.TargetAddr,
-		MaxActiveRelays: cfg.MaxActiveRelays,
-		Relays:          agentRelayStatuses(exposure.Relays()),
-	}
+	t.address = runtime.Identity.Address
+	t.relays = agentRelayStatuses(exposure.Relays())
 	t.lastError = ""
 	t.mu.Unlock()
 
-	defer func() {
-		_ = exposure.Close()
-	}()
-
-	if len(routes) > 0 {
-		handler, routeErr := gateway.ComposeHTTPRoutes(routes, gateway.X402Payment{
-			Testnet:          cfg.X402Testnet,
-			Network:          cfg.X402Network,
-			Asset:            cfg.X402Asset,
-			PayTo:            cfg.X402PayTo,
-			Endpoints:        append([]string(nil), cfg.X402Endpoints...),
-			FacilitatorToken: x402FacilitatorToken,
-		})
-		if routeErr != nil {
-			return routeErr
-		}
-		if cfg.Auth != "" {
-			handler, routeErr = gateway.NewApplicationAuth(handler, listenerIdentity, gateway.ApplicationAuthConfig{
-				Provider:        cfg.Auth,
-				AllowedWallets:  cfg.AuthAllowedWallets,
-				IdentityHeaders: cfg.AuthIdentityHeaders,
-			})
-			if routeErr != nil {
-				return routeErr
-			}
-		}
-		err = sdk.RunHTTP(ctx, exposure, handler, "")
-	} else {
-		udpTarget := ""
-		if cfg.UDPEnabled {
-			udpTarget = utils.StringOrDefault(cfg.UDPAddr, cfg.TargetAddr)
-		}
-		err = sdk.ProxyWithConfig(ctx, exposure, sdk.ProxyConfig{
-			TCPTarget: cfg.TargetAddr,
-			UDPTarget: udpTarget,
-		})
-	}
+	defer runtime.Close()
+	err = runtime.Run(ctx)
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return ctx.Err()
 	}
 	return err
-}
-
-func metadataFromTunnelConfig(cfg TunnelConfig) types.LeaseMetadata {
-	return types.LeaseMetadata{
-		Description: strings.TrimSpace(cfg.Description),
-		Tags:        normalizeAgentMetadataTags(cfg.Tags),
-		Owner:       strings.TrimSpace(cfg.Owner),
-		Thumbnail:   strings.TrimSpace(cfg.Thumbnail),
-		Hide:        cfg.Hide,
-	}
-}
-
-func normalizeAgentMetadataTags(tags []string) []string {
-	if len(tags) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		if tag = strings.TrimSpace(tag); tag != "" {
-			out = append(out, tag)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
