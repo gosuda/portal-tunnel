@@ -230,10 +230,12 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 		spec.HTTP = &tunnel.HTTPConfig{
 			Routes: routes,
 			Serve:  strings.TrimSpace(flags.serve),
-			Payment: tunnel.PaymentConfig{
-				Testnet: flags.x402Testnet, Network: flags.x402Network, Asset: flags.x402Asset,
-				PayTo: flags.x402PayTo, Endpoints: append([]string(nil), flags.x402Endpoints...),
-				FacilitatorToken: flags.x402FacilitatorToken,
+			Payment: gateway.X402Payment{
+				X402Config: gateway.X402Config{
+					Testnet: flags.x402Testnet, Network: flags.x402Network, Asset: flags.x402Asset,
+					PayTo: flags.x402PayTo, Endpoints: append([]string(nil), flags.x402Endpoints...),
+					FacilitatorToken: flags.x402FacilitatorToken,
+				},
 			},
 		}
 	}

@@ -16,6 +16,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -1028,20 +1030,19 @@ func (m agentDashboardModel) addTunnelRequest() (AgentTunnelRequest, error) {
 		RelayURLs:       utils.SplitCSV(m.addRelays.Value()),
 		Discovery:       &discovery,
 		MaxActiveRelays: maxRelays,
-		X402PayTo:       payTo,
-		X402Testnet:     x402Testnet,
-		X402Network:     x402Network,
-		X402Asset:       x402Asset,
-		X402Endpoints:   x402Endpoints,
+		X402Config: gateway.X402Config{
+			PayTo: payTo, Testnet: x402Testnet, Network: x402Network,
+			Asset: x402Asset, Endpoints: x402Endpoints,
+		},
 	}, nil
 }
 
-func agentDashboardParseAddHTTPRoutes(value string) ([]AgentHTTPRoute, error) {
+func agentDashboardParseAddHTTPRoutes(value string) ([]tunnel.HTTPRoute, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil, nil
 	}
-	var routes []AgentHTTPRoute
+	var routes []tunnel.HTTPRoute
 	seen := make(map[string]struct{})
 
 	for rawSegment := range strings.SplitSeq(value, ";") {
@@ -1079,7 +1080,7 @@ func agentDashboardParseAddHTTPRoutes(value string) ([]AgentHTTPRoute, error) {
 		}
 		seen[prefix] = struct{}{}
 
-		route := AgentHTTPRoute{
+		route := tunnel.HTTPRoute{
 			Prefix:   prefix,
 			Upstream: parts[0],
 		}
@@ -1546,7 +1547,7 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 			paidRouteCount++
 		}
 	}
-	payTo := strings.TrimSpace(tunnel.X402PayTo)
+	payTo := strings.TrimSpace(tunnel.PayTo)
 	if payTo == "" && len(tunnel.HTTPRoutes) == 0 {
 		return
 	}
@@ -1568,10 +1569,10 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 		if len(pane.lines)-startLine >= height {
 			return
 		}
-		pane.addMeta(width, 0, "Network", agentDashboardX402Network(tunnel.X402Network, tunnel.X402Testnet))
+		pane.addMeta(width, 0, "Network", agentDashboardX402Network(tunnel.Network, tunnel.Testnet))
 	}
-	if strings.TrimSpace(tunnel.X402Asset) != "" && len(pane.lines)-startLine < height {
-		pane.addMeta(width, 0, "Asset", tunnel.X402Asset)
+	if strings.TrimSpace(tunnel.Asset) != "" && len(pane.lines)-startLine < height {
+		pane.addMeta(width, 0, "Asset", tunnel.Asset)
 	}
 	if len(tunnel.HTTPRoutes) == 0 {
 		if len(pane.lines)-startLine >= height {
@@ -1892,7 +1893,7 @@ func relayDashboardConnected(tunnel AgentTunnelStatus, relay AgentRelayStatus) b
 	return relay.PublicURL != ""
 }
 
-func agentDashboardHTTPRouteSummary(route AgentHTTPRoute) string {
+func agentDashboardHTTPRouteSummary(route tunnel.HTTPRoute) string {
 	prefix := strings.TrimSpace(route.Prefix)
 	prefix = cmp.Or(prefix, "-")
 	upstream := strings.TrimSpace(route.Upstream)

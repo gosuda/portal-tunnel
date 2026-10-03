@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 )
 
 func TestStaticServeConfigRoundTrip(t *testing.T) {
@@ -52,7 +54,7 @@ func TestStaticServeConfigModes(t *testing.T) {
 		{name: "static", cfg: TunnelConfig{Serve: "./dist"}, valid: true},
 		{name: "missing source", cfg: TunnelConfig{}},
 		{name: "target", cfg: TunnelConfig{Serve: "./dist", TargetAddr: "localhost:3000"}},
-		{name: "routes", cfg: TunnelConfig{Serve: "./dist", HTTPRoutes: []HTTPRouteConfig{{Prefix: "/", Upstream: "http://localhost:3000"}}}},
+		{name: "routes", cfg: TunnelConfig{Serve: "./dist", HTTPRoutes: []tunnel.HTTPRoute{{Prefix: "/", Upstream: "http://localhost:3000"}}}},
 		{name: "tcp", cfg: TunnelConfig{Serve: "./dist", TCPEnabled: true}},
 		{name: "udp", cfg: TunnelConfig{Serve: "./dist", UDPEnabled: true}},
 	} {
@@ -66,7 +68,7 @@ func TestStaticServeConfigModes(t *testing.T) {
 }
 
 func TestHTTPRoutesConfigModes(t *testing.T) {
-	routes := []HTTPRouteConfig{{Prefix: "/", Upstream: "http://localhost:3000"}}
+	routes := []tunnel.HTTPRoute{{Prefix: "/", Upstream: "http://localhost:3000"}}
 	for _, tc := range []struct {
 		name  string
 		cfg   TunnelConfig

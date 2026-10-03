@@ -44,42 +44,30 @@ type AgentConfig struct {
 }
 
 type TunnelConfig struct {
-	ID                   string            `koanf:"id"`
-	Name                 string            `koanf:"name"`
-	TargetAddr           string            `koanf:"target"`
-	Serve                string            `koanf:"serve"`
-	HTTPRoutes           []HTTPRouteConfig `koanf:"http_routes"`
-	RelayURLs            []string          `koanf:"relays"`
-	Discovery            *bool             `koanf:"discovery"`
-	Overlay              bool              `koanf:"overlay"`
-	IdentityPath         string            `koanf:"identity_path"`
-	IdentityJSON         string            `koanf:"identity_json"`
-	UDPEnabled           bool              `koanf:"udp"`
-	UDPAddr              string            `koanf:"udp_addr"`
-	TCPEnabled           bool              `koanf:"tcp"`
-	BanMITM              *bool             `koanf:"ban_mitm"`
-	MaxActiveRelays      int               `koanf:"max_active_relays"`
-	Description          string            `koanf:"description"`
-	Tags                 []string          `koanf:"tags"`
-	Owner                string            `koanf:"owner"`
-	Thumbnail            string            `koanf:"thumbnail"`
-	Hide                 bool              `koanf:"hide"`
-	Auth                 string            `koanf:"auth"`
-	AuthAllowedWallets   []string          `koanf:"auth_allowed_wallets"`
-	AuthIdentityHeaders  bool              `koanf:"auth_identity_headers"`
-	X402PayTo            string            `koanf:"x402_pay_to"`
-	X402Testnet          bool              `koanf:"x402_testnet"`
-	X402Network          string            `koanf:"x402_network"`
-	X402Asset            string            `koanf:"x402_asset"`
-	X402Endpoints        []string          `koanf:"x402_endpoints"`
-	X402FacilitatorToken string            `koanf:"x402_facilitator_token"`
-}
-
-type HTTPRouteConfig struct {
-	Prefix   string   `koanf:"prefix"`
-	Upstream string   `koanf:"upstream"`
-	Methods  []string `koanf:"methods"`
-	Amount   string   `koanf:"amount"`
+	ID                  string             `koanf:"id"`
+	Name                string             `koanf:"name"`
+	TargetAddr          string             `koanf:"target"`
+	Serve               string             `koanf:"serve"`
+	HTTPRoutes          []tunnel.HTTPRoute `koanf:"http_routes"`
+	RelayURLs           []string           `koanf:"relays"`
+	Discovery           *bool              `koanf:"discovery"`
+	Overlay             bool               `koanf:"overlay"`
+	IdentityPath        string             `koanf:"identity_path"`
+	IdentityJSON        string             `koanf:"identity_json"`
+	UDPEnabled          bool               `koanf:"udp"`
+	UDPAddr             string             `koanf:"udp_addr"`
+	TCPEnabled          bool               `koanf:"tcp"`
+	BanMITM             *bool              `koanf:"ban_mitm"`
+	MaxActiveRelays     int                `koanf:"max_active_relays"`
+	Description         string             `koanf:"description"`
+	Tags                []string           `koanf:"tags"`
+	Owner               string             `koanf:"owner"`
+	Thumbnail           string             `koanf:"thumbnail"`
+	Hide                bool               `koanf:"hide"`
+	Auth                string             `koanf:"auth"`
+	AuthAllowedWallets  []string           `koanf:"auth_allowed_wallets"`
+	AuthIdentityHeaders bool               `koanf:"auth_identity_headers"`
+	gateway.X402Config  `koanf:",squash"`
 }
 
 func LoadExistingConfig(path string) (Config, error) {
@@ -222,14 +210,14 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	if cfg.AuthIdentityHeaders {
 		out["auth_identity_headers"] = cfg.AuthIdentityHeaders
 	}
-	addStringDocumentField(out, "x402_pay_to", cfg.X402PayTo)
-	if cfg.X402Testnet {
-		out["x402_testnet"] = cfg.X402Testnet
+	addStringDocumentField(out, "x402_pay_to", cfg.PayTo)
+	if cfg.Testnet {
+		out["x402_testnet"] = cfg.Testnet
 	}
-	addStringDocumentField(out, "x402_network", cfg.X402Network)
-	addStringDocumentField(out, "x402_asset", cfg.X402Asset)
-	addStringSliceDocumentField(out, "x402_endpoints", cfg.X402Endpoints)
-	addStringDocumentField(out, "x402_facilitator_token", cfg.X402FacilitatorToken)
+	addStringDocumentField(out, "x402_network", cfg.Network)
+	addStringDocumentField(out, "x402_asset", cfg.Asset)
+	addStringSliceDocumentField(out, "x402_endpoints", cfg.Endpoints)
+	addStringDocumentField(out, "x402_facilitator_token", cfg.FacilitatorToken)
 	return out
 }
 
@@ -281,11 +269,11 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		if t.Serve != "" && !filepath.IsAbs(t.Serve) {
 			t.Serve = filepath.Join(configDir, t.Serve)
 		}
-		t.X402Network = strings.ToLower(strings.TrimSpace(t.X402Network))
+		t.Network = strings.ToLower(strings.TrimSpace(t.Network))
 		t.Auth = strings.ToLower(strings.TrimSpace(t.Auth))
-		t.X402Asset = strings.TrimSpace(t.X402Asset)
-		t.X402Endpoints = compactStrings(t.X402Endpoints)
-		t.X402FacilitatorToken = strings.TrimSpace(t.X402FacilitatorToken)
+		t.Asset = strings.TrimSpace(t.Asset)
+		t.Endpoints = compactStrings(t.Endpoints)
+		t.FacilitatorToken = strings.TrimSpace(t.FacilitatorToken)
 		if t.ID == "" {
 			t.ID = t.Name
 		}
@@ -382,13 +370,11 @@ func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
 				Methods: append([]string(nil), route.Methods...), Amount: route.Amount,
 			})
 		}
+		payment := gateway.X402Payment{X402Config: cfg.X402Config.Copy()}
+		payment.FacilitatorToken = cmp.Or(strings.TrimSpace(cfg.FacilitatorToken), strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
 		spec.HTTP = &tunnel.HTTPConfig{
 			Serve: cfg.Serve, Routes: routes,
-			Payment: tunnel.PaymentConfig{
-				Testnet: cfg.X402Testnet, Network: cfg.X402Network, Asset: cfg.X402Asset,
-				PayTo: cfg.X402PayTo, Endpoints: append([]string(nil), cfg.X402Endpoints...),
-				FacilitatorToken: cmp.Or(strings.TrimSpace(cfg.X402FacilitatorToken), strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY"))),
-			},
+			Payment: payment,
 		}
 		if cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders {
 			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{

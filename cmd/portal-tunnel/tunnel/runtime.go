@@ -53,24 +53,15 @@ type HTTPConfig struct {
 	Routes  []HTTPRoute
 	Serve   string
 	Auth    *gateway.ApplicationAuthConfig
-	Payment PaymentConfig
+	Payment gateway.X402Payment
 	Cache   *CacheConfig
 }
 
 type HTTPRoute struct {
-	Prefix   string
-	Upstream string
-	Methods  []string
-	Amount   string
-}
-
-type PaymentConfig struct {
-	Testnet          bool
-	Network          string
-	Asset            string
-	PayTo            string
-	Endpoints        []string
-	FacilitatorToken string
+	Prefix   string   `json:"prefix" koanf:"prefix"`
+	Upstream string   `json:"upstream" koanf:"upstream"`
+	Methods  []string `json:"methods,omitempty" koanf:"methods"`
+	Amount   string   `json:"amount,omitempty" koanf:"amount"`
 }
 
 type CacheConfig struct {
@@ -215,12 +206,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 		return runtime, nil
 	}
 
-	payment := spec.HTTP.Payment
-	handler, err := gateway.ComposeHTTPRoutes(routes, gateway.X402Payment{
-		Testnet: payment.Testnet, Network: payment.Network, Asset: payment.Asset,
-		PayTo: payment.PayTo, Endpoints: append([]string(nil), payment.Endpoints...),
-		FacilitatorToken: payment.FacilitatorToken,
-	})
+	handler, err := gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment)
 	if err == nil && spec.HTTP.Auth != nil {
 		handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, *spec.HTTP.Auth)
 	}
