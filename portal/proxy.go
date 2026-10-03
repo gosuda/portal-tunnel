@@ -2,6 +2,7 @@ package portal
 
 import (
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
