@@ -35,8 +35,11 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	// revision; stale values are never applied, and no relay lock is held
 	// across the Portal call.
 	publishAccess := func(key string) bool {
+		if key == "" {
+			return true
+		}
 		if access == nil {
-			return s.SetIdentityRoutable(key, true, 0)
+			return s.SetIdentityRoutable(key, true, 1)
 		}
 		for range accessPublishAttempts {
 			state := access.Snapshot()
@@ -89,25 +92,27 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	mux.HandleFunc(types.PathSDKCertificateChain, s.HandleCertificateChain)
 	mux.HandleFunc(types.PathSDKRegisterChallenge, requireMethod(http.MethodPost, admit(preAuth.ChallengeCost, func(w http.ResponseWriter, r *http.Request) {
 		key, response, ok := s.HandleRegisterChallenge(w, r, ingress.ClientIP(r))
-		if !ok {
-			return
-		}
 		if !publishAccess(key) {
-			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
+			if ok {
+				utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
+			}
 			return
 		}
-		utils.WriteAPIData(w, http.StatusCreated, response)
+		if ok {
+			utils.WriteAPIData(w, http.StatusCreated, response)
+		}
 	})))
 	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request) {
 		key, response, ok := s.HandleRegister(w, r, ingress.ClientIP(r))
-		if !ok {
-			return
-		}
 		if !publishAccess(key) {
-			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
+			if ok {
+				utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
+			}
 			return
 		}
-		utils.WriteAPIData(w, http.StatusCreated, response)
+		if ok {
+			utils.WriteAPIData(w, http.StatusCreated, response)
+		}
 	})))
 	mux.HandleFunc(types.PathSDKRenew, withClient(s.HandleRenew))
 	mux.HandleFunc(types.PathSDKReverse, s.HandleReverseEndpoint)
