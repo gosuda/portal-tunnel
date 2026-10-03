@@ -129,7 +129,9 @@ func (s *Server) apiHandler(base http.Handler) http.Handler {
 			s.serveCachedSite(w, r, host)
 			return
 		}
-		if s.registry.cache != nil && host != s.identity.Name {
+		// An IP-literal Host carries no tenant identity (cache entries are
+		// keyed by hostname), so it stays on the control plane.
+		if s.registry.cache != nil && host != s.identity.Name && net.ParseIP(host) == nil {
 			s.serveCachedSite(w, r, host)
 			return
 		}
