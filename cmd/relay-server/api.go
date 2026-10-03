@@ -43,9 +43,9 @@ type RelayAPI struct {
 	frontendFS           fs.FS
 	frontendCache        sync.Map
 	frontendCacheEnabled bool
-	// reputation owns relay-local service reputation state and its
-	// reputation.json file; see reputation.go.
-	reputation *ReputationStore
+	// reputation is the relay-local vote ledger owned by the policy
+	// package and persisted in reputation.json.
+	reputation *policy.ReputationStore
 	// policyWriteMu serializes mutations including the state-file write;
 	// policyMu guards in-memory state only, so readers never block on disk I/O.
 	policyWriteMu      sync.Mutex
@@ -68,7 +68,7 @@ func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.I
 	if err != nil {
 		return nil, err
 	}
-	reputationStore, err := newReputationStore(filepath.Join(filepath.Dir(policyStatePath), reputationFilename))
+	reputationStore, err := policy.NewReputationStore(filepath.Join(filepath.Dir(policyStatePath), reputationFilename))
 	if err != nil {
 		return nil, err
 	}
@@ -125,13 +125,13 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	api.policyMu.RUnlock()
 	utils.WriteAPIData(w, http.StatusOK, publicStateResponse{
 		PublicStateResponse: types.PublicStateResponse{Leases: leases, LandingPageEnabled: landingPageEnabled},
-		Reputation:          api.reputation.summaries(api.reputation.viewerHashFor(voterCookieID(r)), publicIdentityLeases(leases, api.server)),
+		Reputation:          api.reputation.Summaries(api.reputation.ViewerHashFor(voterCookieID(r)), publicIdentityLeases(leases, api.server)),
 	})
 }
 
 type publicStateResponse struct {
 	types.PublicStateResponse
-	Reputation []reputationSummary `json:"reputation,omitempty"`
+	Reputation []policy.ReputationSummary `json:"reputation,omitempty"`
 }
 
 func (api *RelayAPI) loadPolicyState() error {

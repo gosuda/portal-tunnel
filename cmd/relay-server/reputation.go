@@ -1,24 +1,14 @@
 package main
 
-// Service reputation: relay-local, stable-identity-keyed up/down votes.
-//
-// The relay's lease registry owns service lifecycle. This file only maps a
-// current public hostname to its stable identity and stores that identity's
-// bounded voter ledger. portal.Server and shared lease types stay unchanged.
+// Service reputation vote wiring: relay-local HTTP glue over the policy
+// package's vote ledger. The relay's lease registry owns service lifecycle;
+// this file maps a current public hostname to its stable identity and handles
+// the voter cookie. portal.Server and shared lease types stay unchanged.
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
-	"fmt"
-	"maps"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -36,27 +26,8 @@ const (
 
 	reputationFilename = "reputation.json"
 
-	reputationVoterCookie  = "portal_voter"
-	reputationVoterIDBytes = 32
-
-	// Whole-file JSON is rewritten on each changed vote so these caps keep
-	// the work per public POST small; identities persist for the life of
-	// the state file, so past the identity cap new identities are rejected.
-	reputationMaxVoters     = 64
-	reputationMaxIdentities = 128
+	reputationVoterCookie = "portal_voter"
 )
-
-const (
-	voteUp   = "up"
-	voteDown = "down"
-)
-
-// persistedReputation is the reputation.json schema. All collections are
-// bounded by the reputationMax* constants.
-type persistedReputation struct {
-	VoterSecret []byte                       `json:"voter_secret"`
-	Identities  map[string]map[string]string `json:"identities,omitempty"`
-}
 
 // Wire contracts. Local to the relay on purpose; the frontend mirrors them.
 type reputationVoteRequest struct {
@@ -64,193 +35,15 @@ type reputationVoteRequest struct {
 	Vote     string `json:"vote"`
 }
 
-type reputationSummary struct {
-	Hostname   string `json:"hostname"`
-	Up         int    `json:"up"`
-	Down       int    `json:"down"`
-	Total      int    `json:"total"`
-	ViewerVote string `json:"viewer_vote"` // "" | "up" | "down"
-}
-
-var (
-	errReputationUnknownHostname = errors.New("hostname is not in the public directory")
-	errReputationCapacity        = errors.New("reputation capacity exhausted")
-)
-
-// ReputationStore owns only the bounded vote ledger and voter cookie secret.
-type ReputationStore struct {
-	path    string
-	limiter *policy.SourceLimiter
-
-	mu     sync.Mutex
-	state  persistedReputation
-	secret []byte
-}
-
-func newReputationStore(path string) (*ReputationStore, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil, errors.New("reputation store requires a state path")
-	}
-	store := &ReputationStore{path: path}
-	_, err := utils.ReadJSONFileIfExists(path, &store.state)
-	if err != nil {
-		return nil, fmt.Errorf("load reputation state: %w", err)
-	}
-	if store.state.Identities == nil {
-		store.state.Identities = make(map[string]map[string]string)
-	}
-	if len(store.state.VoterSecret) == 0 {
-		store.state.VoterSecret = make([]byte, reputationVoterIDBytes)
-		if _, err := rand.Read(store.state.VoterSecret); err != nil {
-			return nil, fmt.Errorf("generate reputation voter secret: %w", err)
-		}
-		if err := utils.WriteJSONFile(store.path, store.state, 0o600); err != nil {
-			return nil, fmt.Errorf("persist reputation voter secret: %w", err)
-		}
-	}
-	store.secret = store.state.VoterSecret
-	store.limiter = policy.NewSourceLimiter(10, 20, 120, 40)
-	return store, nil
-}
-
-// castVote resolves the voter (minting a cookieless identity when needed),
-// applies the vote, and persists atomically under one lock. The returned
-// mint value is a fresh cookie value, set only when a new voter was minted.
-// The identity comes from the relay's current public leases.
-func (s *ReputationStore) castVote(hostname, identity, vote, cookieID, source string) (reputationSummary, string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if identity == "" {
-		return reputationSummary{}, "", errReputationUnknownHostname
-	}
-	hash, minted, err := s.resolveVoterLocked(cookieID, source)
-	if err != nil {
-		return reputationSummary{}, "", err
-	}
-
-	previous := s.state.Identities[identity]
-	if previous != nil && previous[hash] == vote {
-		return s.summarize(hostname, previous, hash), minted, nil
-	}
-	if previous == nil && len(s.state.Identities) >= reputationMaxIdentities {
-		return reputationSummary{}, "", errReputationCapacity
-	}
-	nextIdentities := maps.Clone(s.state.Identities)
-	votes := maps.Clone(previous)
-	if votes == nil {
-		votes = make(map[string]string)
-	}
-	if _, exists := votes[hash]; !exists && len(votes) >= reputationMaxVoters {
-		return reputationSummary{}, "", errReputationCapacity
-	}
-	votes[hash] = vote
-	nextIdentities[identity] = votes
-	nextState := s.state
-	nextState.Identities = nextIdentities
-
-	if err := utils.WriteJSONFile(s.path, nextState, 0o600); err != nil {
-		return reputationSummary{}, "", fmt.Errorf("persist reputation: %w", err)
-	}
-	s.state = nextState
-	return s.summarize(hostname, votes, hash), minted, nil
-}
-
-func (s *ReputationStore) summaries(viewerHash string, leases []types.PolicyLease) []reputationSummary {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rows := make([]reputationSummary, 0, len(leases))
-	for _, lease := range leases {
-		rows = append(rows, s.summarize(lease.Hostname, s.state.Identities[lease.IdentityKey], viewerHash))
-	}
-	return rows
-}
-
-// viewerHashFor resolves a cookie to its voter digest for read paths. A
-// forged or malformed cookie reads as anonymous; the cookieless mint path
-// exists only on votes.
-func (s *ReputationStore) viewerHashFor(cookieID string) string {
-	if cookieID == "" {
-		return ""
-	}
-	hash, ok := s.verifyVoter(cookieID)
-	if !ok {
-		return ""
-	}
-	return hash
-}
-
-// resolveVoterLocked returns the digest for a verified cookie or mints a new
-// cookieless identity. Signed cookies need no persisted global voter registry.
-func (s *ReputationStore) resolveVoterLocked(cookieID, source string) (hash, minted string, err error) {
-	if cookieID != "" {
-		if verified, ok := s.verifyVoter(cookieID); ok {
-			return verified, "", nil
-		}
-	}
-	if retry, _ := s.limiter.Allow(source, 10); retry > 0 {
-		return "", "", errReputationCapacity
-	}
-	id := make([]byte, reputationVoterIDBytes)
-	if _, err := rand.Read(id); err != nil {
-		return "", "", fmt.Errorf("generate voter id: %w", err)
-	}
-	digest := s.voterMAC(id)
-	hash = hex.EncodeToString(digest)
-	return hash, base64.RawURLEncoding.EncodeToString(append(id, digest...)), nil
-}
-
-func (s *ReputationStore) verifyVoter(cookieID string) (string, bool) {
-	value, err := base64.RawURLEncoding.DecodeString(cookieID)
-	if err != nil || len(value) != reputationVoterIDBytes+sha256.Size {
-		return "", false
-	}
-	expected := s.voterMAC(value[:reputationVoterIDBytes])
-	if subtle.ConstantTimeCompare(expected, value[reputationVoterIDBytes:]) != 1 {
-		return "", false
-	}
-	return hex.EncodeToString(expected), true
-}
-
-func (s *ReputationStore) voterMAC(id []byte) []byte {
-	mac := hmac.New(sha256.New, s.secret)
-	mac.Write(id)
-	return mac.Sum(nil)
-}
-
-// summarize projects one hostname's row, zero-count when rec is nil so a
-// newly live hostname without a record still renders with vote controls.
-func (s *ReputationStore) summarize(hostname string, votes map[string]string, viewerHash string) reputationSummary {
-	if votes == nil {
-		return reputationSummary{Hostname: hostname}
-	}
-	up, down := 0, 0
-	for _, vote := range votes {
-		switch vote {
-		case voteUp:
-			up++
-		case voteDown:
-			down++
-		}
-	}
-	return reputationSummary{
-		Hostname:   hostname,
-		Up:         up,
-		Down:       down,
-		Total:      up + down,
-		ViewerVote: votes[viewerHash],
-	}
-}
-
 // serveReputationVote is admission -> decode -> store op. Admission runs
-// before decoding, matching portal's admitPreAuth: rate-limited sources pay
+// before decoding, matching the pre-auth routes: rate-limited sources pay
 // no parse cost, and the body bound applies inside decode.
 func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	clientIP := api.ingress.ClientIP(r)
-	if retry, _ := api.reputation.limiter.Allow(clientIP, 1); retry > 0 {
+	if retry := api.reputation.AllowVote(clientIP); retry > 0 {
 		policy.WriteRetryAfter(w, retry, "vote request budget exhausted")
 		return
 	}
@@ -264,7 +57,7 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	vote := strings.TrimSpace(req.Vote)
-	if vote != voteUp && vote != voteDown {
+	if vote != policy.VoteUp && vote != policy.VoteDown {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "vote must be 'up' or 'down'")
 		return
 	}
@@ -275,7 +68,7 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 			break
 		}
 	}
-	summary, minted, err := api.reputation.castVote(hostname, identity, vote, voterCookieID(r), clientIP)
+	summary, minted, err := api.reputation.CastVote(hostname, identity, vote, voterCookieID(r), clientIP)
 	if err != nil {
 		writeReputationError(w, err)
 		return
@@ -288,9 +81,9 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 
 func writeReputationError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errReputationCapacity):
+	case errors.Is(err, policy.ErrReputationCapacity):
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "vote capacity reached")
-	case errors.Is(err, errReputationUnknownHostname):
+	case errors.Is(err, policy.ErrReputationUnknownHostname):
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "hostname is not in the public directory")
 	default:
 		log.Error().Err(err).Msg("persist reputation vote")
