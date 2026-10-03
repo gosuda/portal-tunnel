@@ -1,38 +1,36 @@
 package policy
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func isTrustedProxyRemoteAddr(remoteAddr string, trustedProxyCIDRs []*net.IPNet) bool {
-	remoteIP := parseRemoteAddrIP(remoteAddr)
-	if remoteIP == nil {
-		return false
-	}
-
-	for _, network := range trustedProxyCIDRs {
-		if network != nil && network.Contains(remoteIP) {
-			return true
-		}
-	}
-	return false
+// Ingress resolves the client source for relay admission and diagnostics.
+// Forwarded headers are trusted only when the direct peer is inside an
+// explicitly configured trusted proxy CIDR. The resolved value flows to lower
+// layers as a plain string; portal code never inspects proxy headers itself.
+type Ingress struct {
+	trustProxyHeaders bool
+	trustedProxyCIDRs []*net.IPNet
 }
 
-func (r *Runtime) ExtractClientIP(req *http.Request) string {
-	if r == nil {
-		return ""
+func NewIngress(trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*Ingress, error) {
+	trustedProxyCIDRs, err := utils.ParseCIDRs(rawTrustedProxyCIDRs)
+	if err != nil {
+		return nil, fmt.Errorf("parse trusted proxy cidrs: %w", err)
 	}
+	return &Ingress{trustProxyHeaders: trustProxyHeaders, trustedProxyCIDRs: trustedProxyCIDRs}, nil
+}
+
+func (i *Ingress) ClientIP(req *http.Request) string {
 	if req == nil {
 		return ""
 	}
-
-	cfg := runtimeConfig{}
-	if r.config != nil {
-		cfg = r.config.Load()
-	}
-	if cfg.trustProxyHeaders && isTrustedProxyRemoteAddr(req.RemoteAddr, cfg.trustedProxyCIDRs) {
+	if i != nil && i.trustProxyHeaders && isTrustedProxyRemoteAddr(req.RemoteAddr, i.trustedProxyCIDRs) {
 		if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
 			if before, _, ok := strings.Cut(xff, ","); ok {
 				if ip := normalizeClientIPCandidate(before); ip != "" {
@@ -57,6 +55,20 @@ func (r *Runtime) ExtractClientIP(req *http.Request) string {
 		return normalized
 	}
 	return strings.TrimSpace(host)
+}
+
+func isTrustedProxyRemoteAddr(remoteAddr string, trustedProxyCIDRs []*net.IPNet) bool {
+	remoteIP := parseRemoteAddrIP(remoteAddr)
+	if remoteIP == nil {
+		return false
+	}
+
+	for _, network := range trustedProxyCIDRs {
+		if network != nil && network.Contains(remoteIP) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseRemoteAddrIP(remoteAddr string) net.IP {

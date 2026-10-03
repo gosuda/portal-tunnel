@@ -45,7 +45,7 @@ func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
 	}
 	serverCtx, serverCancel := context.WithCancel(context.Background())
 	t.Cleanup(serverCancel)
-	if err := restarted.Start(serverCtx, nil); err != nil {
+	if err := restarted.Start(serverCtx, relayHandler(restarted, nil)); err != nil {
 		t.Fatalf("start restarted relay: %v", err)
 	}
 	h.server = restarted

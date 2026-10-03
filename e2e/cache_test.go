@@ -43,7 +43,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := relay.Start(ctx, nil); err != nil {
+	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

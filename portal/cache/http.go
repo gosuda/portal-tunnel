@@ -15,7 +15,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID string) {
+func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID string, generation uint64) {
 	if c == nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "cache unavailable")
 		return
@@ -27,7 +27,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	}
 	c.mu.Lock()
 	lease := c.leases[leaseID]
-	allowed := c.eligibleLocked(leaseID)
+	allowed := c.eligibleLocked(leaseID) && lease.generation == generation
 	c.mu.Unlock()
 	if !allowed {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "cache lease unavailable")
@@ -36,7 +36,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	site := &cachedSite{host: lease.Hostname, owner: lease.Owner, leaseID: lease.ID, ttl: lease.ttl, expiresAt: lease.cacheExpiry(), usedAt: time.Now()}
 	if req.Method == http.MethodDelete {
 		c.mu.Lock()
-		if existing := c.entries[site.host]; existing != nil && existing.leaseID == site.leaseID && c.eligibleLocked(site.leaseID) {
+		if existing := c.entries[site.host]; existing != nil && existing.leaseID == site.leaseID && c.eligibleLocked(site.leaseID) && c.leases[site.leaseID].generation == generation {
 			c.retireLocked(existing)
 		}
 		c.mu.Unlock()
@@ -94,7 +94,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	}
 	if req.Method == http.MethodPost {
 		c.mu.Lock()
-		if !c.eligibleLocked(site.leaseID) {
+		if !c.eligibleLocked(site.leaseID) || c.leases[site.leaseID].generation != generation {
 			c.mu.Unlock()
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "cache lease unavailable")
 			return
@@ -171,7 +171,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	}
 	c.mu.Lock()
 	var status types.StaticCacheStatus
-	if c.eligibleLocked(site.leaseID) {
+	if c.eligibleLocked(site.leaseID) && c.leases[site.leaseID].generation == generation {
 		active := c.leases[site.leaseID]
 		if previous := c.entries[site.host]; previous != nil {
 			c.retireLocked(previous)

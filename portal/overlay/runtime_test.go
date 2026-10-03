@@ -18,7 +18,6 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -164,7 +163,7 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 	}
 	// A fresh ingress signer is enough to pass signature checks. Source
 	// admission must still bound these requests without any discovery catalog.
-	gate.sourceLimiter = policy.NewSourceLimiter(1, 2, 0, 0)
+	gate.sourceLimiter = newSourceLimiter(1, 2)
 	// Within the per-source budget the request reaches the dial and reports
 	// the dial failure; past the budget it is rejected before any dial occurs
 	// — admission-before-dial is the resource invariant under rate pressure.
@@ -188,7 +187,7 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 	t.Parallel()
 	gate, capability := testGateway(t)
-	gate.sourceLimiter = policy.NewSourceLimiter(1000, 1000, 0, 0)
+	gate.sourceLimiter = newSourceLimiter(1000, 1000)
 	entered := make(chan struct{}, sourceConnectionLimit+1)
 	release := make(chan struct{})
 	gate.endpoint = endpointStub{

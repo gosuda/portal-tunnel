@@ -26,8 +26,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -41,23 +41,18 @@ const (
 )
 
 type ServerConfig struct {
-	PreAuth           types.PreAuthConfig
-	Cache             cache.Config
-	IVNPConfigPath    string
-	PortalURL         string
-	StateDir          string
-	Bootstraps        []string
-	DiscoveryEnabled  bool
-	SNIPort           int
-	HTTPRedirect      types.HTTPRedirectConfig
-	SNIListenAddr     string
-	TrustProxyHeaders bool
-	TrustedProxyCIDRs string
-	UDPEnabled        bool
-	TCPEnabled        bool
-	MinPort           int
-	MaxPort           int
-	ACME              acme.Config
+	Cache            cache.Config
+	IVNPConfigPath   string
+	PortalURL        string
+	StateDir         string
+	Bootstraps       []string
+	DiscoveryEnabled bool
+	SNIPort          int
+	HTTPRedirect     types.HTTPRedirectConfig
+	SNIListenAddr    string
+	MinPort          int
+	MaxPort          int
+	ACME             acme.Config
 
 	// ApplicationOwnsDomainReport delegates types.PathSDKDomain to the
 	// application handler, which can compose Server.DomainReport() itself.
@@ -107,9 +102,6 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 // ValidateServerConfig normalizes server configuration and checks the
 // side-effect-free invariants required before runtime resources are created.
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
-	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
-		return ServerConfig{}, err
-	}
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
 	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
 		return ServerConfig{}, errors.New("relay overlay requires discovery")
@@ -157,26 +149,6 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
-	// The runtime parses the proxy CIDR allowlist in policy.NewRuntime before
-	// serving; validate it here so the config report and startup agree on the
-	// same parse instead of the report calling an invalid list valid.
-	if _, err := utils.ParseCIDRs(cfg.TrustedProxyCIDRs); err != nil {
-		return ServerConfig{}, fmt.Errorf("parse trusted proxy cidrs: %w", err)
-	}
-	hasPortRange := cfg.MinPort > 0 && cfg.MaxPort > 0
-	if cfg.UDPEnabled || cfg.TCPEnabled {
-		switch {
-		case !hasPortRange:
-			return ServerConfig{}, errors.New("udp and tcp relay transport require a valid min port and max port range")
-		case cfg.MinPort > 65535 || cfg.MaxPort > 65535:
-			return ServerConfig{}, errors.New("min port and max port must be between 1 and 65535")
-		case cfg.MinPort > cfg.MaxPort:
-			return ServerConfig{}, errors.New("min port must be less than or equal to max port")
-		}
-	}
-
-	cfg.UDPEnabled = cfg.UDPEnabled && cfg.hasLeasePortRange()
-	cfg.TCPEnabled = cfg.TCPEnabled && cfg.hasLeasePortRange()
 	return cfg, nil
 }
 
@@ -221,6 +193,7 @@ type Server struct {
 	proxy       proxy
 	apiKeyPEM   []byte
 	apiCertPEM  []byte
+	signer      *keyless.Signer
 
 	apiHandoff       *handoffListener
 	sniListener      net.Listener
@@ -230,10 +203,9 @@ type Server struct {
 	redirectServer   *http.Server
 	quicBackhaul     *quic.Listener
 
-	relaySet       *discovery.RelaySet
-	preAuthLimiter *policy.SourceLimiter
-	registry       *leaseRegistry
-	overlay        *overlay.Runtime
+	relaySet *discovery.RelaySet
+	registry *leaseRegistry
+	overlay  *overlay.Runtime
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -259,7 +231,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
-	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, relayAuthority, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	registry, err := newLeaseRegistry(cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, relayAuthority, cfg.PortalURL)
 	if err != nil {
 		return nil, err
 	}
@@ -274,13 +246,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	server := &Server{
-		cfg:            utils.NewSnapshot(cfg, ServerConfig.snapshot),
-		identity:       relayIdentity,
-		authority:      relayAuthority,
-		publicPort:     publicPort,
-		registry:       registry,
-		relaySet:       relaySet,
-		preAuthLimiter: policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
+		cfg:        utils.NewSnapshot(cfg, ServerConfig.snapshot),
+		identity:   relayIdentity,
+		authority:  relayAuthority,
+		publicPort: publicPort,
+		registry:   registry,
+		relaySet:   relaySet,
 	}
 	if cfg.IVNPConfigPath != "" {
 		server.overlay, err = overlay.New(overlay.Config{
@@ -331,52 +302,45 @@ func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.Reverse
 	return endpoint, nil
 }
 
-func (s *Server) SetUDPPolicy(enabled bool, maxLeases int) {
-	if enabled && !s.config().hasLeasePortRange() {
-		enabled = false
+// SetTransportPolicy applies relay-owned transport enablement and capacity
+// values to lease enforcement. Disabling UDP takes effect immediately: the
+// QUIC backhaul listener keeps serving live transports, but the registry
+// stops admitting new UDP leases. Enabling UDP at runtime is refused when no
+// backhaul listener exists, since a listener cannot be created post-start.
+func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
+	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
+		return errors.New("transport max leases must be non-negative")
 	}
-	if runtime := s.PolicyRuntime(); runtime != nil {
-		runtime.SetUDPPolicy(enabled, maxLeases)
+	cfg := s.config()
+	if (udpEnabled || tcpEnabled) && !cfg.hasLeasePortRange() {
+		return errors.New("transport enablement requires a lease port range")
 	}
-	s.cfg.UpdateCopy(func(cfg *ServerConfig) {
-		cfg.UDPEnabled = enabled
-	})
-}
-
-func (s *Server) SetTCPPortPolicy(enabled bool, maxLeases int) {
-	if enabled && !s.config().hasLeasePortRange() {
-		enabled = false
+	if s.group != nil && udpEnabled && s.quicBackhaul == nil {
+		return errors.New("enabling udp requires a relay restart")
 	}
-	if runtime := s.PolicyRuntime(); runtime != nil {
-		runtime.SetTCPPortPolicy(enabled, maxLeases)
-	}
-	s.cfg.UpdateCopy(func(cfg *ServerConfig) {
-		cfg.TCPEnabled = enabled
-	})
+	s.registry.setUDPPolicy(udpEnabled, udpMaxLeases)
+	s.registry.setTCPPortPolicy(tcpEnabled, tcpMaxLeases)
+	return nil
 }
 
 func (s *Server) supportsUDP() bool {
-	runtime := s.PolicyRuntime()
-	if runtime == nil || !runtime.IsUDPEnabled() {
+	enabled, _ := s.registry.udpPolicy()
+	if !enabled {
 		return false
 	}
 	return s.group == nil || s.quicBackhaul != nil
 }
 
 func (s *Server) supportsTCP() bool {
-	runtime := s.PolicyRuntime()
-	return runtime != nil && runtime.IsTCPPortEnabled()
+	enabled, _ := s.registry.tcpPortPolicy()
+	return enabled
 }
 
-// Serve runs the complete relay lifecycle around the application handler.
+// Serve runs the complete relay lifecycle around the composed handler: the
+// relay's route table (see the relay package), admin API, and application
+// routes all arrive as one handler.
 func (s *Server) Serve(ctx context.Context, handler http.Handler) error {
-	mux := http.NewServeMux()
-	if handler == nil {
-		mux.HandleFunc("/{$}", s.handleRoot)
-	} else {
-		mux.Handle("/", handler)
-	}
-	if err := s.start(ctx, mux); err != nil {
+	if err := s.start(ctx, handler); err != nil {
 		return fmt.Errorf("start relay server: %w", err)
 	}
 	return s.Wait()
@@ -385,8 +349,8 @@ func (s *Server) Serve(ctx context.Context, handler http.Handler) error {
 // Start starts the relay and returns after its listeners are ready. Serve is
 // the normal lifecycle entry point; Start and Wait remain available to callers
 // that need explicit lifecycle control.
-func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
-	return s.start(ctx, apiMux)
+func (s *Server) Start(ctx context.Context, handler http.Handler) error {
+	return s.start(ctx, handler)
 }
 
 func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
@@ -394,7 +358,7 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		return errors.New("server already started")
 	}
 	cfg := s.config()
-	cacheManager, cacheErr := cache.New(cfg.Cache, filepath.Join(cfg.StateDir, "static-cache"), s.registry.policy)
+	cacheManager, cacheErr := cache.New(cfg.Cache, filepath.Join(cfg.StateDir, "static-cache"))
 	if cacheErr != nil {
 		log.Warn().Err(cacheErr).Msg("relay cache unavailable; using origin tunnels")
 	}
@@ -473,11 +437,10 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		}
 	}
 
-	if cfg.UDPEnabled {
+	if udpEnabled, _ := s.registry.udpPolicy(); udpEnabled {
 		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
 		if err != nil {
-			log.Warn().Err(err).Msg("quic backhaul listener disabled")
-			quicBackhaul = nil
+			return fmt.Errorf("listen quic backhaul: %w", err)
 		}
 	}
 	if s.overlay != nil {
@@ -622,15 +585,44 @@ func (s *Server) serveTCPPairs(port *transport.RelayTCPPort, identityKey string)
 		if err != nil {
 			return
 		}
-		go s.proxy.bridge(inbound, session, identityKey, s.registry.policy.BPSManager())
+		if !s.registry.isRoutable(identityKey) {
+			_ = inbound.Close()
+			_ = session.Close()
+			continue
+		}
+		go s.proxy.bridge(inbound, session, identityKey, s.registry.bps)
 	}
 }
 
-func (s *Server) PolicyRuntime() *policy.Runtime {
+// SetIdentityRoutable applies the relay's current access decision for one
+// identity to the portal data path. The relay owns the decision; this only
+// carries the result across the boundary, including revoking cached content.
+// False means a newer relay snapshot has already reached Portal: the caller
+// must reload the committed snapshot before retrying. Stale values never apply.
+func (s *Server) SetIdentityRoutable(key string, routable bool, revision uint64) bool {
+	if s == nil || s.registry == nil {
+		return true
+	}
+	return s.registry.setIdentityRoutable(key, routable, revision)
+}
+
+// DiscoveryEnabled and ApplicationOwnsDomainReport report the routing flags
+// the relay's composed route table dispatches on.
+func (s *Server) DiscoveryEnabled() bool {
+	return s.config().DiscoveryEnabled
+}
+
+func (s *Server) ApplicationOwnsDomainReport() bool {
+	return s.config().ApplicationOwnsDomainReport
+}
+
+// BPSManager is the portal-owned per-identity traffic shaper configured by
+// the relay's operator surface.
+func (s *Server) BPSManager() *BPSManager {
 	if s == nil || s.registry == nil {
 		return nil
 	}
-	return s.registry.policy
+	return s.registry.bps
 }
 
 func (s *Server) PortalURL() string {
@@ -652,6 +644,27 @@ func (s *Server) PolicyLeases() []types.PolicyLease {
 		return nil
 	}
 	return s.registry.PolicyLeases(time.Now())
+}
+
+// AccessProjectionKeys returns identities whose live lease or retained cache
+// content needs the relay's current access decision.
+func (s *Server) AccessProjectionKeys() []string {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	keys := make(map[string]struct{})
+	for _, lease := range s.registry.PolicyLeases(time.Now()) {
+		keys[lease.IdentityKey] = struct{}{}
+	}
+	for _, owner := range s.registry.cache.Owners() {
+		keys[owner] = struct{}{}
+	}
+	out := make([]string, 0, len(keys))
+	for key := range keys {
+		out = append(out, key)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func (s *Server) RelayIdentity() identity.RelayIdentity {
@@ -819,7 +832,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	if record.stream == nil {
 		return errors.New("lease stream is not ready")
 	}
-	if !s.registry.policy.IsIdentityRoutable(record.Key()) {
+	if !s.registry.isRoutable(record.Key()) {
 		return errLeaseRejected
 	}
 	claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
@@ -832,7 +845,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		s.registry.bindings.Discard(binding)
 		return fmt.Errorf("claim lease stream: %w", err)
 	}
-	s.proxy.bridge(conn, session, record.Key(), s.registry.policy.BPSManager())
+	s.proxy.bridge(conn, session, record.Key(), s.registry.bps)
 	return nil
 }
 

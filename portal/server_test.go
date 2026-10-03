@@ -15,28 +15,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// The runtime rejects an unparseable proxy CIDR allowlist inside
-// policy.NewRuntime; validation must parse it the same way so `relay-server
-// config` cannot call a list valid that startup rejects.
-func TestValidateServerConfigRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
-	cfg := ServerConfig{
-		PortalURL:         "https://localhost:4017",
-		StateDir:          t.TempDir(),
-		TrustedProxyCIDRs: "192.0.2.0/24,not-a-cidr",
-	}
-	if _, err := ValidateServerConfig(cfg); err == nil {
-		t.Fatal("ValidateServerConfig() error = nil, want error for invalid trusted proxy CIDR")
-	}
-	cfg.TrustedProxyCIDRs = "192.0.2.0/24,2001:db8::/32"
-	if _, err := ValidateServerConfig(cfg); err != nil {
-		t.Fatalf("ValidateServerConfig() error = %v, want nil for valid CIDR list", err)
-	}
-	cfg.TrustedProxyCIDRs = ""
-	if _, err := ValidateServerConfig(cfg); err != nil {
-		t.Fatalf("ValidateServerConfig() error = %v, want nil for empty CIDR list", err)
-	}
-}
-
 func TestNewServerRejectsPortalURLCredentialsWithoutEchoingThem(t *testing.T) {
 	_, err := NewServer(ServerConfig{
 		PortalURL: "https://user:secret@localhost",
@@ -226,7 +204,9 @@ func newConnectTestRelay(t *testing.T) (*Server, *url.URL, string) {
 		t.Fatalf("Register() error = %v", err)
 	}
 	server := &Server{registry: registry}
-	relay := httptest.NewServer(http.HandlerFunc(server.handleConnect))
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server.HandleConnect(w, r, "203.0.113.10")
+	}))
 	t.Cleanup(relay.Close)
 
 	relayURL, err := url.Parse(relay.URL + types.PathSDKConnect)

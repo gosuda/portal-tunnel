@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -31,10 +30,12 @@ func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegist
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
-	registry, err := newLeaseRegistry(udpEnabled, tcpPortEnabled, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com", false, "")
+	registry, err := newLeaseRegistry(10000, 10100, relay.Name, 443, relayAuthority, "https://example.com")
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
+	registry.setUDPPolicy(udpEnabled, 0)
+	registry.setTCPPortPolicy(tcpPortEnabled, 0)
 	// Registered leases bind UDP and raw-TCP relays; releasing them keeps
 	// repeated runs in one process free of port collisions.
 	t.Cleanup(func() { registry.CloseAll() })
@@ -184,41 +185,94 @@ func TestLeaseRegistryHostnameConflict(t *testing.T) {
 	}
 }
 
-func TestLeaseRegistryPolicyViewsUseRoutablePolicy(t *testing.T) {
+func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
-	if err := registry.policy.Approver().SetMode(policy.ModeManual); err != nil {
-		t.Fatalf("SetMode() error = %v", err)
-	}
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
-		Identity: newTestLeaseIdentity(t, "demo"),
-	}, "203.0.113.20", "", types.RelayDescriptor{}, nil); err != nil {
+	identity := newTestLeaseIdentity(t, "demo")
+	registry.setIdentityRoutable(identity.Key(), false, 1)
+	record, resp, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: identity,
+	}, "203.0.113.20", "", types.RelayDescriptor{}, nil)
+	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
+	identityKey := record.Key()
 
+	// The relay pushes the fail-closed result before registration so a new
+	// lease cannot appear in public state before its access decision.
 	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
-		t.Fatalf("PublicLeases() length = %d, want 0 before approval", len(leases))
+		t.Fatalf("PublicLeases() length = %d, want 0 while not routable", len(leases))
 	}
-	leases := registry.PolicyLeases(time.Now())
-	if len(leases) != 1 {
-		t.Fatalf("PolicyLeases() length = %d, want 1", len(leases))
-	}
-	if leases[0].IsApproved {
-		t.Fatal("PolicyLeases()[0].IsApproved = true, want false before approval")
+	if _, err := registry.admitLeaseByToken(resp.AccessToken, false); !errors.Is(err, errLeaseRejected) {
+		t.Fatalf("admitLeaseByToken() error = %v, want lease rejected while not routable", err)
 	}
 
-	registry.policy.Approver().Approve(leases[0].IdentityKey)
+	registry.setIdentityRoutable(identityKey, true, 2)
 	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 {
-		t.Fatalf("PublicLeases() length = %d, want 1 after approval", len(leases))
+		t.Fatalf("PublicLeases() length = %d, want 1 after the relay routes the identity", len(leases))
 	}
-	leases = registry.PolicyLeases(time.Now())
-	if len(leases) != 1 || !leases[0].IsApproved {
-		t.Fatalf("PolicyLeases() = %+v, want the approved lease", leases)
+	if _, err := registry.admitLeaseByToken(resp.AccessToken, false); err != nil {
+		t.Fatalf("admitLeaseByToken() error = %v, want admitted once routable", err)
 	}
 }
 
-func TestLeaseRegistryCleanupExpiredForgetsIdentity(t *testing.T) {
+func TestAccessRevisionRejectsInFlightAllow(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	leaseIdentity := newTestLeaseIdentity(t, "revision")
+	_, lease, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, "203.0.113.20", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := leaseIdentity.Key()
+	registry.setIdentityRoutable(key, true, 1)
+	loaded := make(chan struct{})
+	resume := make(chan struct{})
+	applied := make(chan bool, 1)
+	go func() {
+		// An old registration has already read revision 1's allow but has
+		// not delivered it. Force it to arrive after the denial completes.
+		close(loaded)
+		<-resume
+		applied <- registry.setIdentityRoutable(key, true, 1)
+	}()
+	<-loaded
+	registry.setIdentityRoutable(key, false, 2)
+	close(resume)
+	if <-applied {
+		t.Fatal("stale allow was applied after the newer denial")
+	}
+	if _, err := registry.admitLeaseByToken(lease.AccessToken, false); !errors.Is(err, errLeaseRejected) {
+		t.Fatalf("delayed allow bypassed denial: %v", err)
+	}
+	registry.setIdentityRoutable(key, true, 3)
+	if _, err := registry.admitLeaseByToken(lease.AccessToken, false); err != nil {
+		t.Fatalf("newer allow failed to restore access: %v", err)
+	}
+}
+
+func TestAccessRevisionSurvivesIdleCleanupAndRegistration(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	const key = "revision:identity"
+	registry.setIdentityRoutable(key, false, 2)
+	registry.cleanupExpired(time.Now().Add(defaultRegisterChallengeTTL + time.Second))
+	if registry.setIdentityRoutable(key, true, 1) {
+		t.Fatal("idle cleanup forgot the revision fence")
+	}
+	registry.setIdentityRoutable(key, true, 3)
+	registry.suspendIdentity(key)
+	if registry.isRoutable(key) {
+		t.Fatal("registration was not fail-closed")
+	}
+	if registry.setIdentityRoutable(key, true, 2) {
+		t.Fatal("registration accepted an older revision")
+	}
+	if !registry.setIdentityRoutable(key, true, 3) || !registry.isRoutable(key) {
+		t.Fatal("current committed revision did not release registration")
+	}
+}
+
+func TestLeaseRegistryCleanupExpiredPreservesIdentityBPS(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
@@ -228,7 +282,7 @@ func TestLeaseRegistryCleanupExpiredForgetsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	registry.policy.BPSManager().SetIdentityBPS(record.Key(), 1024)
+	registry.bps.SetIdentityBPS(record.Key(), 1024)
 
 	registry.mu.Lock()
 	record.ExpiresAt = time.Now().Add(-time.Second)
@@ -238,8 +292,8 @@ func TestLeaseRegistryCleanupExpiredForgetsIdentity(t *testing.T) {
 	if _, ok := registry.Lookup("expired.example.com"); ok {
 		t.Fatal("Lookup() after cleanupExpired() = true, want false")
 	}
-	if bps := registry.policy.BPSManager().IdentityBPS(record.Key()); bps != 0 {
-		t.Fatalf("IdentityBPS() after cleanupExpired() = %d, want identity forgotten", bps)
+	if bps := registry.bps.IdentityBPS(record.Key()); bps != 1024 {
+		t.Fatalf("IdentityBPS() after cleanupExpired() = %d, want configured limit preserved", bps)
 	}
 }
 
@@ -293,7 +347,7 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
 	newRegistry := func() *leaseRegistry {
 		t.Helper()
-		registry, registryErr := newLeaseRegistry(false, false, 10000, 10100, relay.Name, 443, relayAuthority, "https://example.com", false, "")
+		registry, registryErr := newLeaseRegistry(10000, 10100, relay.Name, 443, relayAuthority, "https://example.com")
 		if registryErr != nil {
 			t.Fatalf("newLeaseRegistry() error = %v", registryErr)
 		}
