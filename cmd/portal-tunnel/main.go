@@ -226,10 +226,12 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 	if flags.udp {
 		spec.Transport.UDP = &tunnel.UDPConfig{Target: flags.udpAddr}
 	}
-	if strings.TrimSpace(flags.serve) != "" || len(routes) > 0 || flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders || flags.cache {
+	serve := strings.TrimSpace(flags.serve)
+	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders
+	if serve != "" || len(routes) > 0 || authEnabled || flags.cache {
 		spec.HTTP = &tunnel.HTTPConfig{
 			Routes: routes,
-			Serve:  strings.TrimSpace(flags.serve),
+			Serve:  serve,
 			Payment: gateway.X402Payment{
 				X402Config: gateway.X402Config{
 					Testnet: flags.x402Testnet, Network: flags.x402Network, Asset: flags.x402Asset,
@@ -242,7 +244,7 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 	if flags.cache {
 		spec.HTTP.Cache = &tunnel.CacheConfig{TTL: flags.cacheTTL}
 	}
-	if flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders {
+	if authEnabled {
 		spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
 			Provider:        flags.authProvider,
 			AllowedWallets:  append([]string(nil), flags.authAllowedWallets...),

@@ -370,7 +370,7 @@ func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
 				Methods: append([]string(nil), route.Methods...), Amount: route.Amount,
 			})
 		}
-		payment := gateway.X402Payment{X402Config: cfg.X402Config.Copy()}
+		payment := gateway.X402Payment{X402Config: cfg.Copy()}
 		payment.FacilitatorToken = cmp.Or(strings.TrimSpace(cfg.FacilitatorToken), strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
 		spec.HTTP = &tunnel.HTTPConfig{
 			Serve: cfg.Serve, Routes: routes,

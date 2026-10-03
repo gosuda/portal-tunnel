@@ -214,7 +214,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 	if req.MaxActiveRelays < 0 {
 		return errors.New("max_active_relays cannot be negative")
 	}
-	x402 := req.X402Config.Copy()
+	x402 := req.Copy()
 	x402.PayTo = strings.TrimSpace(x402.PayTo)
 	x402.Network = strings.ToLower(strings.TrimSpace(x402.Network))
 	x402.Asset = strings.TrimSpace(x402.Asset)
@@ -580,7 +580,7 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		discovery = *cfg.Discovery
 	}
 
-	x402 := cfg.X402Config.Copy()
+	x402 := cfg.Copy()
 	x402.PayTo = strings.TrimSpace(x402.PayTo)
 	status := AgentTunnelStatus{
 		ID:                  cfg.ID,
