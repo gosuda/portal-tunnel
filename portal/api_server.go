@@ -104,8 +104,7 @@ func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.S
 // apiHandler keeps the tenant data path ahead of the composed route table:
 // a tenant TLS connection is bound to its own Host, and cached tenant sites
 // never reach the relay control plane. Route dispatch itself is composed by
-// the relay (see the relay package); this layer only owns portal data-path
-// routing.
+// the relay's policy package; this layer only owns portal data-path routing.
 func (s *Server) apiHandler(base http.Handler) http.Handler {
 	// A nil *http.ServeMux reaches this handler as a typed-nil interface: it
 	// compares non-nil, then panics on the first ServeHTTP call. Normalize it

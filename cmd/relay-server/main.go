@@ -20,8 +20,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/relay"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -81,7 +81,7 @@ func resolveAppConfig(args []string) (appConfig, error) {
 }
 
 func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
-	preAuthDefaults := relay.DefaultPreAuthConfig()
+	preAuthDefaults := policy.DefaultPreAuthConfig()
 	utils.IntFlagEnv(fs, &cfg.PreAuth.SourcePerMinute, "preauth-source-per-minute", preAuthDefaults.SourcePerMinute, nil, "per-source pre-auth units refilled per minute", "PREAUTH_SOURCE_PER_MINUTE")
 	utils.IntFlagEnv(fs, &cfg.PreAuth.SourceBurst, "preauth-source-burst", preAuthDefaults.SourceBurst, nil, "per-source pre-auth burst units", "PREAUTH_SOURCE_BURST")
 	utils.IntFlagEnv(fs, &cfg.PreAuth.GlobalPerMinute, "preauth-global-per-minute", preAuthDefaults.GlobalPerMinute, nil, "global pre-auth units refilled per minute", "PREAUTH_GLOBAL_PER_MINUTE")
@@ -167,10 +167,10 @@ func runServeCommand(args []string) error {
 // ingress settings that live outside portal.ServerConfig, so the config
 // report and startup apply the same validation.
 func validateRelaySettings(cfg *appConfig) error {
-	if err := relay.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
+	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
 		return err
 	}
-	if _, err := relay.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs); err != nil {
+	if _, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs); err != nil {
 		return err
 	}
 	return nil
@@ -191,11 +191,11 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
-	ingress, err := relay.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	ingress, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
-	access := relay.NewAccess()
+	access := policy.NewAccess()
 	if x402Settings.Enabled {
 		// NewServer already validated the URL; keep metadata consistent with
 		// the normalized URL the relay advertises.
@@ -215,8 +215,8 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return err
 	}
-	handler := relay.Mux(server, base, ingress,
-		relay.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
+	handler := policy.Mux(server, base, ingress,
+		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 		access, cfg.PreAuth)
 	if !cfg.PprofEnabled {
 		return server.Serve(ctx, handler)

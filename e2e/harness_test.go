@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/relay"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
@@ -31,7 +31,7 @@ const marker = "portal-e2e-ok"
 // relay admission and ingress resolution. The zero dependencies here mean no
 // proxy trust, the default pre-auth budget, and automatic approval.
 func relayHandler(server *portal.Server, fallback http.Handler) http.Handler {
-	return relay.Mux(server, fallback, nil, nil, nil, relay.DefaultPreAuthConfig())
+	return policy.Mux(server, fallback, nil, nil, nil, policy.DefaultPreAuthConfig())
 }
 
 type harness struct {

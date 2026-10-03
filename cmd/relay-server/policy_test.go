@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/relay"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -33,7 +33,7 @@ func newPolicyAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, e
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, relay.NewAccess(), nil, path, "admin-test", frontend, false)
+	api, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, false)
 	return api, server, err
 }
 
@@ -51,7 +51,7 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, relay.NewAccess(), nil, path, "admin-test", frontend, false)
+	api, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if _, ok := fields["banned_ips"]; ok {
 		t.Fatal("legacy bans remain persisted")
 	}
-	if _, err := NewRelayAPI(server, relay.NewAccess(), nil, path, "admin-test", frontend, false); err != nil {
+	if _, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, false); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	for _, method := range []string{http.MethodGet, http.MethodPost} {

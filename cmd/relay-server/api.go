@@ -21,8 +21,8 @@ import (
 
 	portaltunnel "github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/relay"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -36,8 +36,8 @@ const (
 
 type RelayAPI struct {
 	server               *portal.Server
-	access               *relay.Access
-	ingress              *relay.Ingress
+	access               *policy.Access
+	ingress              *policy.Ingress
 	adminToken           string
 	policyStatePath      string
 	frontendFS           fs.FS
@@ -53,7 +53,7 @@ type RelayAPI struct {
 	landingPageEnabled bool
 }
 
-func NewRelayAPI(server *portal.Server, access *relay.Access, ingress *relay.Ingress, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
+func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.Ingress, policyStatePath, adminToken, frontendDir string, landingPageEnabled bool) (*RelayAPI, error) {
 	if server == nil {
 		return nil, errors.New("relay api requires portal server")
 	}
@@ -354,7 +354,7 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, req types.Policy
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
 		return false
 	}
-	if err := api.access.SetMode(relay.Mode(strings.TrimSpace(req.ApprovalMode))); err != nil {
+	if err := api.access.SetMode(policy.Mode(strings.TrimSpace(req.ApprovalMode))); err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "approval_mode must be 'auto' or 'manual'")
 		return false
 	}
@@ -523,7 +523,7 @@ func applyOptionalPolicy(enabled *bool, maxLeases *int, get func() (bool, int), 
 
 func (s persistedPolicyState) apply(api *RelayAPI) error {
 	if mode := strings.TrimSpace(s.ApprovalMode); mode != "" {
-		if err := api.access.SetMode(relay.Mode(mode)); err != nil {
+		if err := api.access.SetMode(policy.Mode(mode)); err != nil {
 			return err
 		}
 	}
