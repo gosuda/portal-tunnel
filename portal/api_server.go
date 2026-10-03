@@ -295,7 +295,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 	identityKey := challenge.Request.Identity.Key()
 	// A registering identity starts fail-closed. Mux replaces this projection
 	// with the relay's current access decision before publishing success.
-	s.registry.setIdentityRoutable(identityKey, false, 0)
+	s.registry.suspendIdentity(identityKey)
 
 	var self types.RelayDescriptor
 	var descriptors []types.RelayDescriptor
@@ -560,7 +560,14 @@ func (s *Server) HandleStaticCache(w http.ResponseWriter, req *http.Request) {
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	s.registry.cache.Handle(w, req, record.id)
+	// Capture before the access check: revocation either rejects admission
+	// here or invalidates this generation before cache publication.
+	generation := s.registry.cache.Generation(record.id)
+	if !s.registry.isRoutable(record.Key()) {
+		writeAPIErrorResponse(w, errLeaseRejected)
+		return
+	}
+	s.registry.cache.Handle(w, req, record.id, generation)
 }
 
 // HandleSign authenticates a transcript-signing request and binds the

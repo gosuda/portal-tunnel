@@ -96,9 +96,20 @@ relay resolves the client source once at its ingress and passes the result to
 protocol handlers and diagnostics as a value.
 
 Durable approval, denial, banning, and routing are keyed by verified Portal
-identity and owned by the relay. The relay pushes the resulting routability to
-the portal data path, which keeps only that result — including detaching cached
-content for identities the relay stops routing. Source IP remains diagnostic
+identity and owned by the relay. An admin access change edits a detached snapshot,
+persists the complete candidate, then commits it with a monotonically increasing
+revision. The relay publishes identity, routability, and revision values to
+Portal before acknowledging the update. Portal rejects revisions older than the
+newest complete snapshot it has observed, including after idle identity cleanup.
+Registration reloads the committed snapshot if its publication is rejected.
+Revisions are local to a running relay; both sides start fresh on restart.
+
+Revocation detaches cached content and advances the retained lease's cache
+generation. Cache requests capture that generation before the final access
+check, and must still match it at publication. This fences uploads that overlap
+a ban while allowing fresh uploads after an unban without re-registering.
+
+Source IP remains diagnostic
 metadata and an ephemeral pre-auth admission signal. Registration challenges,
 registration attempts, and discovery announces share weighted per-source and
 global budgets owned by the relay's admission limiter. The relay applies these

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -76,9 +77,9 @@ func TestPublicIngressPreservesRegistrationPeer(t *testing.T) {
 	}
 }
 
-// A routing-banned identity loses its reverse capability on the wire: the
-// public connect endpoint must answer Forbidden before any connection is
-// offered to the lease stream.
+// A relay ban must survive subsequent registration challenges: the public
+// connect endpoint must answer Forbidden before any connection is offered
+// to the lease stream.
 func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	sniPort := harnessPort(t)
 	server, err := portal.NewServer(portal.ServerConfig{
@@ -91,7 +92,8 @@ func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
+	access := policy.NewAccess()
+	if err := server.Start(ctx, policy.Mux(server, nil, nil, nil, access, policy.DefaultPreAuthConfig())); err != nil {
 		t.Fatalf("start portal server: %v", err)
 	}
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext, TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: "localhost"}}
@@ -132,7 +134,16 @@ func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	}
 	// The relay pushes its ban decision into the data path; the public
 	// connect endpoint must answer before any connection is offered.
-	server.SetIdentityRoutability(map[string]bool{leases[0].IdentityKey: false}, 1)
+	proposedAccess := access.Snapshot()
+	proposedAccess.Ban(leases[0].IdentityKey)
+	committed := access.Commit(proposedAccess)
+	server.SetIdentityRoutable(leases[0].IdentityKey, committed.Routable(leases[0].IdentityKey), committed.Revision())
+
+	// A new challenge pushes the current relay decision again. It must not
+	// restore access to the existing lease after the ban has been applied.
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
+		t.Fatalf("register challenge after ban: %v", err)
+	}
 
 	connect, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://127.0.0.1:"+strconv.Itoa(sniPort)+types.PathSDKConnect, nil)
 	if err != nil {

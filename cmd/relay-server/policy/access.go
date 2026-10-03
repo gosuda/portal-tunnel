@@ -3,7 +3,6 @@ package policy
 import (
 	"fmt"
 	"maps"
-	"slices"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -15,15 +14,15 @@ const (
 	ModeManual Mode = "manual"
 )
 
-// Access owns relay-local identity access decisions: the approval mode,
-// approved and denied identities, and identity bans. It produces immutable,
-// versioned routability values; portal code consumes those values and never
-// reads this state.
+// Access owns committed relay access decisions. A transaction edits a detached
+// Snapshot, persists it, then commits the complete state with a new revision.
 type Access struct {
-	state *utils.Snapshot[accessState]
+	state *utils.Snapshot[AccessState]
 }
 
-type accessState struct {
+// AccessState is a detached set of decisions. Editing it never changes the live
+// relay policy; Commit installs the whole state once persistence has succeeded.
+type AccessState struct {
 	revision uint64
 	mode     Mode
 	approved map[string]struct{}
@@ -31,49 +30,7 @@ type accessState struct {
 	banned   map[string]struct{}
 }
 
-func newAccessState() accessState {
-	return accessState{
-		revision: 1,
-		mode:     ModeAuto,
-		approved: make(map[string]struct{}),
-		denied:   make(map[string]struct{}),
-		banned:   make(map[string]struct{}),
-	}
-}
-
-// AccessDecision is the versioned value projected into Portal. Portal can
-// reject an older decision without importing relay policy state.
-type AccessDecision struct {
-	Revision uint64
-	Routable bool
-}
-
-// AccessConfig is a stable copy of the relay's canonical access settings.
-type AccessConfig struct {
-	Mode         Mode
-	ApprovedKeys []string
-	DeniedKeys   []string
-	BannedKeys   []string
-}
-
-func routable(state accessState, key string) bool {
-	if key == "" {
-		return true
-	}
-	if _, ok := state.banned[key]; ok {
-		return false
-	}
-	if _, ok := state.denied[key]; ok {
-		return false
-	}
-	if state.mode == ModeAuto {
-		return true
-	}
-	_, ok := state.approved[key]
-	return ok
-}
-
-func (s accessState) snapshot() accessState {
+func (s AccessState) snapshot() AccessState {
 	s.approved = maps.Clone(s.approved)
 	s.denied = maps.Clone(s.denied)
 	s.banned = maps.Clone(s.banned)
@@ -81,133 +38,154 @@ func (s accessState) snapshot() accessState {
 }
 
 func NewAccess() *Access {
-	return &Access{state: utils.NewSnapshot(newAccessState(), accessState.snapshot)}
+	return &Access{state: utils.NewSnapshot(AccessState{}, AccessState.snapshot)}
 }
 
-func (a *Access) current() accessState {
-	if a == nil || a.state == nil {
-		return newAccessState()
+// Snapshot returns an independent copy for readers or a proposed transaction.
+func (a *Access) Snapshot() AccessState {
+	if a == nil {
+		return AccessState{}
 	}
 	return a.state.Load()
 }
 
-// Routable reports whether the relay routes the identity: not banned, not
-// denied, and approved when the approval mode is manual. It is the only
-// decision the portal data path consumes, as a value pushed by the relay.
-func (a *Access) Routable(key string) bool {
-	return routable(a.current(), key)
+// Commit installs a durably saved candidate as one immutable revision. The
+// relay serializes transactions from Snapshot through persistence and Commit.
+// Revisions belong to this running relay; both Access and Portal start fresh
+// on restart, so policy.json needs no revision field or schema migration.
+func (a *Access) Commit(next AccessState) AccessState {
+	return a.state.Update(func(previous AccessState) AccessState {
+		next.revision = previous.revision + 1
+		return next
+	})
 }
 
-// Decision returns one identity's routability and the snapshot revision that
-// produced it.
-func (a *Access) Decision(key string) AccessDecision {
-	state := a.current()
-	return AccessDecision{Revision: state.revision, Routable: routable(state, key)}
+func (s AccessState) Revision() uint64 {
+	return s.revision
 }
 
-// Decisions returns one coherent revision for the supplied identities and
-// every identity named by access policy.
-func (a *Access) Decisions(keys []string) (uint64, map[string]bool) {
-	state := a.current()
-	decisions := make(map[string]bool, len(keys)+len(state.approved)+len(state.denied)+len(state.banned))
-	for _, key := range keys {
-		if key != "" {
-			decisions[key] = routable(state, key)
-		}
-	}
-	for key := range state.approved {
-		decisions[key] = routable(state, key)
-	}
-	for key := range state.denied {
-		decisions[key] = routable(state, key)
-	}
-	for key := range state.banned {
-		decisions[key] = routable(state, key)
-	}
-	return state.revision, decisions
-}
-
-// Config returns a coherent copy of the canonical access settings.
-func (a *Access) Config() AccessConfig {
-	state := a.current()
-	config := AccessConfig{Mode: state.mode}
-	for key := range state.approved {
-		config.ApprovedKeys = append(config.ApprovedKeys, key)
-	}
-	for key := range state.denied {
-		config.DeniedKeys = append(config.DeniedKeys, key)
-	}
-	for key := range state.banned {
-		config.BannedKeys = append(config.BannedKeys, key)
-	}
-	slices.Sort(config.ApprovedKeys)
-	slices.Sort(config.DeniedKeys)
-	slices.Sort(config.BannedKeys)
-	return config
-}
-
-// EffectiveApproval reports the approval that governs routing: automatic in
-// auto mode, explicit otherwise.
-func (a *Access) EffectiveApproval(key string) bool {
-	state := a.current()
-	if state.mode == ModeAuto {
+func (s AccessState) Routable(key string) bool {
+	if key == "" {
 		return true
 	}
-	_, ok := state.approved[key]
-	return ok
+	return !s.IsBanned(key) && !s.IsDenied(key) && s.EffectiveApproval(key)
 }
 
-func (a *Access) IsDenied(key string) bool {
-	_, ok := a.current().denied[key]
-	return ok
-}
-
-func (a *Access) IsBanned(key string) bool {
-	if key == "" {
-		return false
+func (s AccessState) Mode() Mode {
+	if s.mode == "" {
+		return ModeAuto
 	}
-	_, ok := a.current().banned[key]
-	return ok
+	return s.mode
 }
 
-// Replace commits a complete access configuration as one immutable snapshot.
-func (a *Access) Replace(mode Mode, approvedKeys, deniedKeys, bannedKeys []string) error {
+func (s *AccessState) SetMode(mode Mode) error {
 	if mode != ModeAuto && mode != ModeManual {
 		return fmt.Errorf("invalid approval mode: %q", mode)
 	}
-	if a == nil || a.state == nil {
-		return nil
+	s.mode = mode
+	return nil
+}
+
+func (s AccessState) EffectiveApproval(key string) bool {
+	if s.Mode() == ModeAuto {
+		return true
 	}
-	approved := make(map[string]struct{}, len(approvedKeys))
+	_, ok := s.approved[key]
+	return ok
+}
+
+func (s *AccessState) Approve(key string) {
+	if s.approved == nil {
+		s.approved = make(map[string]struct{})
+	}
+	s.approved[key] = struct{}{}
+	delete(s.denied, key)
+}
+
+func (s *AccessState) Revoke(key string) {
+	delete(s.approved, key)
+}
+
+func (s AccessState) ApprovedKeys() []string {
+	out := make([]string, 0, len(s.approved))
+	for key := range s.approved {
+		out = append(out, key)
+	}
+	return out
+}
+
+func (s AccessState) IsDenied(key string) bool {
+	_, ok := s.denied[key]
+	return ok
+}
+
+func (s *AccessState) Deny(key string) {
+	if s.denied == nil {
+		s.denied = make(map[string]struct{})
+	}
+	s.denied[key] = struct{}{}
+	delete(s.approved, key)
+}
+
+func (s *AccessState) Undeny(key string) {
+	delete(s.denied, key)
+}
+
+func (s AccessState) DeniedKeys() []string {
+	out := make([]string, 0, len(s.denied))
+	for key := range s.denied {
+		out = append(out, key)
+	}
+	return out
+}
+
+// SetDecisions keeps denied keys from also counting as approved.
+func (s *AccessState) SetDecisions(approvedKeys, deniedKeys []string) {
+	s.approved = make(map[string]struct{}, len(approvedKeys))
 	for _, key := range approvedKeys {
 		if key != "" {
-			approved[key] = struct{}{}
+			s.approved[key] = struct{}{}
 		}
 	}
-	denied := make(map[string]struct{}, len(deniedKeys))
+	s.denied = make(map[string]struct{}, len(deniedKeys))
 	for _, key := range deniedKeys {
 		if key != "" {
-			delete(approved, key)
-			denied[key] = struct{}{}
+			delete(s.approved, key)
+			s.denied[key] = struct{}{}
 		}
 	}
-	banned := make(map[string]struct{}, len(bannedKeys))
-	for _, key := range bannedKeys {
-		if key != "" {
-			banned[key] = struct{}{}
-		}
+}
+
+func (s AccessState) IsBanned(key string) bool {
+	_, ok := s.banned[key]
+	return ok
+}
+
+func (s *AccessState) Ban(key string) {
+	if key == "" {
+		return
 	}
-	a.state.Update(func(current accessState) accessState {
-		if current.mode == mode && maps.Equal(current.approved, approved) && maps.Equal(current.denied, denied) && maps.Equal(current.banned, banned) {
-			return current
-		}
-		return accessState{
-			revision: current.revision + 1,
-			mode:     mode,
-			approved: approved,
-			denied:   denied,
-			banned:   banned,
-		}
-	})
-	return nil
+	if s.banned == nil {
+		s.banned = make(map[string]struct{})
+	}
+	s.banned[key] = struct{}{}
+}
+
+func (s *AccessState) Unban(key string) {
+	delete(s.banned, key)
+}
+
+func (s AccessState) BannedKeys() []string {
+	out := make([]string, 0, len(s.banned))
+	for key := range s.banned {
+		out = append(out, key)
+	}
+	return out
+}
+
+func (s *AccessState) SetBannedKeys(keys []string) {
+	s.banned = make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		s.Ban(key)
+	}
 }
