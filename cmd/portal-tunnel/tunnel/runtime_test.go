@@ -80,6 +80,9 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 		{name: "strip Host", edit: func(spec *Spec) {
 			spec.HTTP.StripRequestHeaders = []string{"Host"}
 		}},
+		{name: "strip X-Forwarded-Proto", edit: func(spec *Spec) {
+			spec.HTTP.StripRequestHeaders = []string{"X-Forwarded-Proto"}
+		}},
 		{name: "strip X-Portal-User with auth identity headers", edit: func(spec *Spec) {
 			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe", IdentityHeaders: true}
 			spec.HTTP.StripRequestHeaders = []string{"X-Portal-User"}

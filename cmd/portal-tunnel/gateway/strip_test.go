@@ -48,9 +48,10 @@ func TestStripRequestHeaders(t *testing.T) {
 func TestStripRequestHeadersRejectsHost(t *testing.T) {
 	t.Parallel()
 	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
-	_, err := NewStripRequestHeaders(next, []string{"Host"})
-	if err == nil {
-		t.Fatal(`NewStripRequestHeaders("Host") error = nil, want rejection`)
+	for _, name := range []string{"Host", "X-Forwarded-Proto"} {
+		if _, err := NewStripRequestHeaders(next, []string{name}); err == nil {
+			t.Fatalf("NewStripRequestHeaders(%q) error = nil, want rejection", name)
+		}
 	}
 }
 

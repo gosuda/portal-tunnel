@@ -114,8 +114,11 @@ func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, er
 			return nil, fmt.Errorf("invalid strip request header name %q", name)
 		}
 		canonical := http.CanonicalHeaderKey(name)
-		if canonical == "Host" {
+		switch canonical {
+		case "Host":
 			return nil, errors.New(`"Host" cannot be stripped: Go stores it in Request.Host, not Header`)
+		case "X-Forwarded-Proto":
+			return nil, errors.New(`"X-Forwarded-Proto" cannot be stripped: RunHTTP always overwrites it with the trusted https value before this middleware runs`)
 		}
 		if _, ok := seen[canonical]; ok {
 			continue

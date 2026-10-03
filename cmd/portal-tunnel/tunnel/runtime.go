@@ -133,6 +133,9 @@ func (spec Spec) Validate() error {
 			if strings.EqualFold(strings.TrimSpace(h), "Host") {
 				return errors.New(`strip request header "Host" is not supported: Go stores it in Request.Host, not Header`)
 			}
+			if strings.EqualFold(strings.TrimSpace(h), "X-Forwarded-Proto") {
+				return errors.New(`strip request header "X-Forwarded-Proto" is not supported: RunHTTP always overwrites it with the trusted https value`)
+			}
 		}
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(httpConfig.Payment.Network)), "casper:") && strings.TrimSpace(httpConfig.Payment.Asset) == "" {
