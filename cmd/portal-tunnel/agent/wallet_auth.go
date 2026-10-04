@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -10,7 +11,13 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-const defaultWalletAuthSessionTTL = 24 * time.Hour
+// Wallet sessions and their transport cookie share one policy: the cookie
+// lifetime derives from walletSessionTTL so a browser cookie can never outlive
+// the server-side session it carries.
+const (
+	walletSessionTTL        = 24 * time.Hour
+	walletSessionCookieName = "portal_agent"
+)
 
 type walletAuthConfig struct {
 	AllowedAddresses []string
@@ -74,7 +81,7 @@ func (a *walletAuthenticator) login(req types.WalletAuthLoginRequest, domain str
 	a.mu.Lock()
 	a.sessions[token] = walletAuthSession{
 		Address:   address,
-		ExpiresAt: now.UTC().Add(defaultWalletAuthSessionTTL),
+		ExpiresAt: now.UTC().Add(walletSessionTTL),
 	}
 	a.cleanupExpiredLocked(now)
 	a.mu.Unlock()
@@ -119,5 +126,39 @@ func (a *walletAuthenticator) cleanupExpiredLocked(now time.Time) {
 		if now.After(session.ExpiresAt) {
 			delete(a.sessions, token)
 		}
+	}
+}
+
+// setSessionCookie issues the wallet session cookie.
+func (a *walletAuthenticator) setSessionCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, walletSessionCookie(token, int(walletSessionTTL/time.Second)))
+}
+
+// clearSessionCookie expires the wallet session cookie in the browser.
+func (a *walletAuthenticator) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, walletSessionCookie("", -1))
+}
+
+// sessionToken returns the wallet session token carried by the request cookie.
+func (a *walletAuthenticator) sessionToken(r *http.Request) string {
+	if a == nil {
+		return ""
+	}
+	cookie, err := r.Cookie(walletSessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
+func walletSessionCookie(value string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name:     walletSessionCookieName,
+		Value:    value,
+		Path:     types.PathAgentPrefix,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   maxAge,
 	}
 }

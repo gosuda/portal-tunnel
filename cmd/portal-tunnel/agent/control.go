@@ -19,7 +19,6 @@ import (
 const (
 	controlRequestBodyLimit = 8 << 10
 	endpointFilename        = "agent-endpoint.json"
-	agentCookieName         = "portal_agent"
 )
 
 var (
@@ -179,33 +178,17 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 			writeAgentWalletAuthError(w, err)
 			return true
 		}
-		http.SetCookie(w, &http.Cookie{
-			Name:     agentCookieName,
-			Value:    token,
-			Path:     types.PathAgentPrefix,
-			HttpOnly: true,
-			Secure:   true,
-			SameSite: http.SameSiteStrictMode,
-			MaxAge:   86400,
-		})
+		s.auth.setSessionCookie(w, token)
 		utils.WriteAPIData(w, http.StatusOK, types.WalletAuthLoginResponse{WalletAddress: walletAddress})
 		return true
 	case types.PathAgentAuthLogout:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return true
 		}
-		if cookie, err := r.Cookie(agentCookieName); err == nil && cookie.Value != "" {
-			s.auth.deleteSession(cookie.Value)
+		if token := s.auth.sessionToken(r); token != "" {
+			s.auth.deleteSession(token)
 		}
-		http.SetCookie(w, &http.Cookie{
-			Name:     agentCookieName,
-			Value:    "",
-			Path:     types.PathAgentPrefix,
-			HttpOnly: true,
-			Secure:   true,
-			SameSite: http.SameSiteStrictMode,
-			MaxAge:   -1,
-		})
+		s.auth.clearSessionCookie(w)
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		return true
 	case types.PathAgentAuthStatus:
@@ -227,11 +210,7 @@ func (s *controlHandler) authenticatedWallet(r *http.Request) (string, bool) {
 	if s == nil || s.auth == nil {
 		return "", false
 	}
-	cookie, err := r.Cookie(agentCookieName)
-	if err != nil {
-		return "", false
-	}
-	return s.auth.validateSession(cookie.Value)
+	return s.auth.validateSession(s.auth.sessionToken(r))
 }
 
 func agentAuthDomain(r *http.Request) string {
