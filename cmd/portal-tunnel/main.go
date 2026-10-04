@@ -96,7 +96,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
 	utils.BoolFlagEnv(fs, &flags.overlay, "overlay", false, "Prefer IVNP overlay transport when available", "OVERLAY_ENABLED")
 	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
-	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", identity.Filename, "identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &flags.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
 	utils.StringFlag(fs, &flags.name, "name", "", "Public hostname prefix (single DNS label); auto-generated when omitted")
 	utils.StringFlag(fs, &flags.desc, "description", "", "Service description metadata")
@@ -273,7 +273,7 @@ func runAuthCommand(args []string) error {
 	fs := utils.NewFlagSet("auth issue", printAuthUsage)
 	utils.StringFlag(fs, &subject, "subject", "", "Subject granted access")
 	fs.DurationVar(&expires, "expires", 30*24*time.Hour, "Credential lifetime")
-	utils.StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &identityPath, "identity-path", identity.Filename, "Existing tunnel identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
 	if err := utils.ParseFlagSet(fs, args[1:], printAuthUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -503,7 +503,7 @@ func printAuthUsage(w io.Writer) {
 	var expires time.Duration
 	utils.StringFlag(fs, &subject, "subject", "", "Subject granted access")
 	fs.DurationVar(&expires, "expires", 30*24*time.Hour, "Credential lifetime")
-	utils.StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &identityPath, "identity-path", identity.Filename, "Existing tunnel identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
 	utils.WriteFlagDefaults(w, fs)
 }

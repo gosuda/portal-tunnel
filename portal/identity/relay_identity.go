@@ -1,7 +1,6 @@
 package identity
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,16 +9,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
-
-type relayIdentityFile struct {
-	Name           string `json:"name,omitempty"`
-	Address        string `json:"address,omitempty"`
-	PublicKey      string `json:"public_key,omitempty"`
-	PrivateKey     string `json:"private_key,omitempty"`
-	Mnemonic       string `json:"mnemonic,omitempty"`
-	DerivationPath string `json:"derivation_path,omitempty"`
-	TokenSecret    string `json:"token_secret,omitempty"`
-}
 
 type RelayIdentity struct {
 	types.Identity
@@ -81,35 +70,15 @@ func loadRelayIdentityFile(path string) (RelayIdentity, error) {
 	if err != nil {
 		return RelayIdentity{}, err
 	}
-	var payload relayIdentityFile
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return RelayIdentity{}, fmt.Errorf("decode identity file: %w", err)
+	decoded, err := decode(data)
+	if err != nil {
+		return RelayIdentity{}, err
 	}
-	return RelayIdentity{Identity: types.Identity{
-		Name:           payload.Name,
-		Address:        payload.Address,
-		PublicKey:      payload.PublicKey,
-		PrivateKey:     payload.PrivateKey,
-		Mnemonic:       payload.Mnemonic,
-		DerivationPath: payload.DerivationPath,
-		TokenSecret:    payload.TokenSecret,
-	}}, nil
+	return RelayIdentity{Identity: decoded}, nil
 }
 
 func saveRelayIdentity(path string, relay RelayIdentity) error {
-	privateKey := relay.PrivateKey
-	if strings.TrimSpace(relay.Mnemonic) != "" {
-		privateKey = ""
-	}
-	data, err := json.MarshalIndent(relayIdentityFile{
-		Name:           relay.Name,
-		Address:        relay.Address,
-		PublicKey:      relay.PublicKey,
-		PrivateKey:     privateKey,
-		Mnemonic:       relay.Mnemonic,
-		DerivationPath: relay.DerivationPath,
-		TokenSecret:    relay.TokenSecret,
-	}, "", "  ")
+	data, err := Marshal(relay.Identity)
 	if err != nil {
 		return err
 	}

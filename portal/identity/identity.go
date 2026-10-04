@@ -13,6 +13,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// Filename is the default identity file name shared by relay state
+// directories and client identity paths. Callers join it onto their own
+// directory or pass a different file path explicitly.
+const Filename = "identity.json"
+
 // NormalizeIdentity returns the canonical comparison form of a wire identity:
 // the name as a DNS label and the address in EVM checksum form. It does not
 // derive or verify key material.
@@ -160,9 +165,18 @@ func resolveKeyMaterial(id types.Identity) (types.Identity, error) {
 	return resolved, nil
 }
 
-// storedIdentity is the canonical identity file format: the same fields as
-// types.Identity in the same order, so values convert directly. The JSON tags
-// control which fields are exposed in the at-rest format.
+// storedIdentity is the canonical identity file format shared by client and
+// relay identity persistence: the same fields as types.Identity in the same
+// order, so values convert directly. The JSON tags control which fields are
+// exposed in the at-rest format.
+//
+// Field roles: private_key and mnemonic are the key authority (a mnemonic
+// regenerates the key, so the derived private_key is omitted from the file);
+// address and public_key are derived from the key and verified against it
+// when a document passes through Parse, kept in the file only for
+// convenience; token_secret is authoritative secret material in its own right
+// — tokens derive from it and it is never rebuilt from the key, so losing it
+// invalidates previously issued credentials.
 type storedIdentity struct {
 	Name           string `json:"name,omitempty"`
 	Address        string `json:"address,omitempty"`

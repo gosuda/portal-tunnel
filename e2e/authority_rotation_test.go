@@ -65,16 +65,16 @@ func TestExposureReRegistersAfterAuthorityRotation(t *testing.T) {
 
 	// Rotate the lease signing authority by replacing the relay's identity.json
 	// file with a freshly generated one under the same StateDir.  The file lives
-	// at <StateDir>/identity.json (types.RelayIdentityFilename) and is loaded
+	// at <StateDir>/identity.json (identity.Filename) and is loaded
 	// by identity.LoadOrCreateRelayIdentity at server startup; the lease
 	// authority is derived from the identity's private key via
 	// identity.NewLocalAuthority in server.go.  The ACME TLS material
 	// (fullchain.pem, privkey.pem under StateDir) is untouched, so the
 	// restarted relay keeps its existing certificate and the exposure's pinned
 	// public URL continues to resolve to the same SNI listener.
-	identityPath := filepath.Join(h.stateDir, types.RelayIdentityFilename)
+	identityPath := filepath.Join(h.stateDir, identity.Filename)
 	rotatedIdentity, err := identity.LoadOrCreateRelayIdentity(
-		filepath.Join(t.TempDir(), types.RelayIdentityFilename),
+		filepath.Join(t.TempDir(), identity.Filename),
 		"rotated-"+h.sniAddr,
 	)
 	if err != nil {

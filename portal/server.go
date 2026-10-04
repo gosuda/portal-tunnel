@@ -225,7 +225,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		}
 	}
 
-	identityPath := filepath.Join(cfg.StateDir, types.RelayIdentityFilename)
+	identityPath := filepath.Join(cfg.StateDir, identity.Filename)
 	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(cfg.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)

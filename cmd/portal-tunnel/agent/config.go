@@ -17,6 +17,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -25,9 +26,8 @@ const (
 	DefaultControlAddr = "127.0.0.1:4018"
 	DefaultServiceName = "portal-agent"
 
-	defaultIdentityFilename = "identity.json"
-	defaultTargetAddr       = "127.0.0.1:3000"
-	agentPathInvalidChars   = `<>:"/\|?*`
+	defaultTargetAddr     = "127.0.0.1:3000"
+	agentPathInvalidChars = `<>:"/\|?*`
 )
 
 type Config struct {
@@ -289,9 +289,9 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		t.AuthAllowedWallets = normalizedWallets
 		if t.IdentityPath == "" {
 			if len(cfg.Tunnels) <= 1 {
-				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, defaultIdentityFilename)
+				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, identity.Filename)
 			} else {
-				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, t.ID, defaultIdentityFilename)
+				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, t.ID, identity.Filename)
 			}
 		} else if !filepath.IsAbs(t.IdentityPath) {
 			t.IdentityPath = filepath.Join(configDir, t.IdentityPath)

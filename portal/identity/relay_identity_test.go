@@ -5,13 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestLoadOrCreateRelayIdentityCreatesAndReloads(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, types.RelayIdentityFilename)
+	path := filepath.Join(dir, Filename)
 	created, err := LoadOrCreateRelayIdentity(path, "relay.example.com")
 	if err != nil {
 		t.Fatalf("create relay identity: %v", err)
@@ -33,7 +31,7 @@ func TestLoadOrCreateRelayIdentityCreatesAndReloads(t *testing.T) {
 // no longer exists in the file schema; it must be ignored, not rejected.
 func TestLoadOrCreateRelayIdentityToleratesStaleSeed(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, types.RelayIdentityFilename)
+	path := filepath.Join(dir, Filename)
 	created, err := LoadOrCreateRelayIdentity(path, "relay.example.com")
 	if err != nil {
 		t.Fatalf("create relay identity: %v", err)

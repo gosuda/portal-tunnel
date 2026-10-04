@@ -25,7 +25,7 @@ func signLeaseRequest(t *testing.T, token string) *http.Request {
 
 func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegistry {
 	t.Helper()
-	relay, err := identity.LoadOrCreateRelayIdentity(filepath.Join(t.TempDir(), types.RelayIdentityFilename), "example.com")
+	relay, err := identity.LoadOrCreateRelayIdentity(filepath.Join(t.TempDir(), identity.Filename), "example.com")
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
@@ -340,7 +340,7 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	t.Parallel()
 
-	relay, err := identity.LoadOrCreateRelayIdentity(filepath.Join(t.TempDir(), types.RelayIdentityFilename), "example.com")
+	relay, err := identity.LoadOrCreateRelayIdentity(filepath.Join(t.TempDir(), identity.Filename), "example.com")
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}

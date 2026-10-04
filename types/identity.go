@@ -7,10 +7,9 @@ import (
 )
 
 const (
-	IdentityKeySeparator  = ":"
-	RelayIdentityFilename = "identity.json"
-	RelayPolicyFilename   = "policy.json"
-	DNSSECKeyFileName     = "dnssec-csk.json"
+	IdentityKeySeparator = ":"
+	RelayPolicyFilename  = "policy.json"
+	DNSSECKeyFileName    = "dnssec-csk.json"
 )
 
 type Identity struct {
