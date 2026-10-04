@@ -9,7 +9,7 @@ The `portal-tunnel agent dashboard` TUI looks like it needs a running agent, but
 
 ## How the dashboard gets its data
 
-- `portal-tunnel agent dashboard --state-dir DIR` reads `DIR/agent-endpoint.json` (`cmd/portal-tunnel/agent/control.go`, `endpointFilename = "agent-endpoint.json"`).
+- `portal-tunnel agent dashboard --state-dir DIR` reads `DIR/agent-endpoint.json` (`cmd/portal-tunnel/agent/endpoint.go`, `endpointFilename = "agent-endpoint.json"`).
 - The file is `{"control_addr":"HOST:PORT","token":"TOKEN"}`.
 - Every poll tick it issues `GET http://<control_addr>/agent/status` with `Authorization: Bearer <token>` (`types.PathAgentStatus`).
 - Responses must use the repo's API envelope: `{"ok": true, "data": <AgentStatusResponse>}`. Returning the raw status object without the envelope yields "Agent unavailable: api response is not ok" in the TUI.

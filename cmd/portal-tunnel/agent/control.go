@@ -6,8 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,20 +14,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-const (
-	controlRequestBodyLimit = 8 << 10
-	endpointFilename        = "agent-endpoint.json"
-)
+const controlRequestBodyLimit = 8 << 10
 
 var (
 	ErrNotRunning     = errors.New("portal agent is not running")
 	controlHTTPClient = utils.NewHTTPClient(utils.WithHTTPTimeout(5 * time.Second))
 )
-
-type endpoint struct {
-	ControlAddr string `json:"control_addr"`
-	Token       string `json:"token"`
-}
 
 type controlHandler struct {
 	manager  *manager
@@ -283,21 +273,15 @@ func controlRequest(ctx context.Context, stateDir, method, path string, payload 
 	if stateDir == "" {
 		return errors.New("state dir is required")
 	}
-	var endpoint endpoint
-	if err := utils.ReadJSONFile(filepath.Join(stateDir, endpointFilename), &endpoint); err != nil {
-		if os.IsNotExist(err) {
-			return ErrNotRunning
-		}
-		return err
-	}
-	if strings.TrimSpace(endpoint.ControlAddr) == "" || strings.TrimSpace(endpoint.Token) == "" {
-		return errors.New("agent endpoint state is incomplete")
-	}
-	baseURL, err := url.Parse("http://" + endpoint.ControlAddr)
+	ep, err := readEndpoint(stateDir)
 	if err != nil {
 		return err
 	}
-	headers := http.Header{"Authorization": []string{"Bearer " + endpoint.Token}}
+	baseURL, err := url.Parse("http://" + ep.ControlAddr)
+	if err != nil {
+		return err
+	}
+	headers := http.Header{"Authorization": []string{"Bearer " + ep.Token}}
 	err = utils.HTTPDoAPIPath(ctx, controlHTTPClient, baseURL, method, path, payload, headers, out)
 	if controlDialError(err) {
 		return ErrNotRunning

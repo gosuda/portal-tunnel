@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -73,17 +72,15 @@ func Run(ctx context.Context, cfg Config) error {
 	listenAddr := listener.Addr().String()
 	manager.controlAddr = listenAddr
 
-	if err := utils.WriteJSONFile(filepath.Join(endpointStateDir, endpointFilename), endpoint{
+	if err := writeEndpoint(endpointStateDir, endpoint{
 		ControlAddr: listenAddr,
 		Token:       token,
-	}, 0o600); err != nil {
+	}); err != nil {
 		_ = listener.Close()
 		_ = control.Shutdown(context.Background())
 		return err
 	}
-	defer func() {
-		_ = os.Remove(filepath.Join(endpointStateDir, endpointFilename))
-	}()
+	defer removeEndpoint(endpointStateDir)
 
 	manager.Start(runtimeCtx)
 
