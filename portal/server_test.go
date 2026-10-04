@@ -62,17 +62,16 @@ func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		portalURL      string
-		localSNIPort   int
-		wantLocalPort  int
-		wantPublicPort int
+		name          string
+		portalURL     string
+		localSNIPort  int
+		wantLocalPort int
 	}{
-		{"default ports", "https://relay.example.com", 0, 443, 443},
-		{"local bind override", "https://relay.example.com", 8443, 8443, 443},
-		{"explicit public port", "https://relay.example.com:9443", 443, 443, 9443},
-		{"unoverridden listener follows public port", "https://relay.example.com:9443", 0, 9443, 9443},
-		{"explicit override keeps mapped listener", "https://localhost:8443", 443, 443, 8443},
+		{"default ports", "https://relay.example.com", 0, 443},
+		{"local bind override", "https://relay.example.com", 8443, 8443},
+		{"explicit public port", "https://relay.example.com:9443", 443, 443},
+		{"unoverridden listener follows public port", "https://relay.example.com:9443", 0, 9443},
+		{"explicit override keeps mapped listener", "https://localhost:8443", 443, 443},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -87,11 +86,6 @@ func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 			}
 			if got := cfg.SNIPort; got != tc.wantLocalPort {
 				t.Fatalf("ServerConfig.SNIPort = %d, want local port %d", got, tc.wantLocalPort)
-			}
-			// DefaultSNIPort is the shared derivation: the public port is the
-			// PORTAL_URL port, and an unoverridden local listener follows it.
-			if got := DefaultSNIPort(cfg.PortalURL); got != tc.wantPublicPort {
-				t.Fatalf("DefaultSNIPort(%q) = %d, want public port %d", cfg.PortalURL, got, tc.wantPublicPort)
 			}
 		})
 	}
@@ -108,9 +102,6 @@ func TestRegisterLeaseWithUDPAndRawTCP(t *testing.T) {
 	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("registry.Register() error = %v", err)
-	}
-	if resp.SNIPort != 443 {
-		t.Fatalf("RegisterResponse.SNIPort = %d, want registry public port 443", resp.SNIPort)
 	}
 	if !resp.UDPEnabled || !resp.TCPEnabled || resp.UDPAddr == "" || resp.TCPAddr == "" {
 		t.Fatalf("RegisterResponse transports = %+v, want UDP and raw TCP endpoints", resp)

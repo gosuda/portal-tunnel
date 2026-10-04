@@ -174,7 +174,7 @@ subdomains must continue to reach their tunnel targets through the same public
 ## Upgrading
 
 Clients and relays perform an exact protocol version match. This release ships
-tunnel protocol version 10 while discovery stays at version 9, so tunnel
+tunnel protocol version 11 while discovery stays at version 9, so tunnel
 handshake compatibility is decoupled from discovery compatibility: a relay and
 tunnel client must agree on the tunnel protocol version, and a mismatch is
 rejected (`relay sdk protocol version mismatch`). Upgrade relays and the tunnel

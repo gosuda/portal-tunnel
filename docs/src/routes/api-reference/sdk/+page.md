@@ -112,7 +112,6 @@ Cache opt-in is incompatible with raw TCP/UDP leases.
 | `expires_at` | `string` | lease expiry |
 | `access_token` | `string` | token for renew, unregister, signer access, and direct datagram backhaul |
 | `reverse_endpoint` | `ReverseEndpoint` | URL, opaque reverse-only capability, and expiry for `/sdk/connect` |
-| `sni_port` | `number` | deprecated canonical public port used by older SDKs and QUIC backhaul clients |
 | `udp_addr`, `tcp_addr` | `string` | omitted when transport is disabled |
 | `udp_enabled`, `tcp_enabled` | `boolean` | active transport flags |
 

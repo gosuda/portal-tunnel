@@ -33,7 +33,6 @@ const (
 type leaseRegistry struct {
 	records        []*leaseRecord
 	rootHostname   string
-	publicPort     int
 	tokenAuthority identity.Authority
 	tokenIssuer    string
 	reverseURL     string
@@ -59,7 +58,7 @@ type leaseRegistry struct {
 	mu sync.RWMutex
 }
 
-func newLeaseRegistry(minPort, maxPort int, rootHostname string, publicPort int, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
+func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
 	if tokenAuthority == nil {
 		return nil, errors.New("lease token authority is required")
 	}
@@ -75,7 +74,6 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, publicPort int,
 	return &leaseRegistry{
 		records:        make([]*leaseRecord, 0),
 		rootHostname:   utils.NormalizeHostname(rootHostname),
-		publicPort:     publicPort,
 		tokenAuthority: tokenAuthority,
 		tokenIssuer:    tokenIssuer,
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
@@ -461,7 +459,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		ExpiresAt:         record.ExpiresAt,
 		AccessToken:       accessToken,
 		ReverseEndpoint:   reverseEndpoint,
-		SNIPort:           r.publicPort,
 		UDPEnabled:        record.datagram != nil,
 		TCPEnabled:        record.tcpPort != nil,
 	}

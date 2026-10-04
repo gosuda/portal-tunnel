@@ -103,13 +103,10 @@ type RegisterResponse struct {
 	ExpiresAt         time.Time       `json:"expires_at"`
 	AccessToken       string          `json:"access_token"`
 	ReverseEndpoint   ReverseEndpoint `json:"reverse_endpoint"`
-	// SNIPort is the canonical public port retained for rolling compatibility.
-	// Deprecated: derive public URLs from the relay URL.
-	SNIPort    int    `json:"sni_port,omitempty"`
-	UDPAddr    string `json:"udp_addr,omitempty"`
-	UDPEnabled bool   `json:"udp_enabled,omitempty"`
-	TCPAddr    string `json:"tcp_addr,omitempty"`
-	TCPEnabled bool   `json:"tcp_enabled,omitempty"`
+	UDPAddr           string          `json:"udp_addr,omitempty"`
+	UDPEnabled        bool            `json:"udp_enabled,omitempty"`
+	TCPAddr           string          `json:"tcp_addr,omitempty"`
+	TCPEnabled        bool            `json:"tcp_enabled,omitempty"`
 }
 
 type DiscoveryResponse struct {

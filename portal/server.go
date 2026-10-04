@@ -184,7 +184,6 @@ type Server struct {
 	cancel       context.CancelFunc
 	group        *errgroup.Group
 	shutdownOnce sync.Once
-	publicPort   int
 
 	cfg         *utils.Snapshot[ServerConfig]
 	identity    identity.RelayIdentity
@@ -213,25 +212,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	portalURL, err := url.Parse(cfg.PortalURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse normalized portal url: %w", err)
-	}
-	publicPort := 443
-	if port := portalURL.Port(); port != "" {
-		publicPort, err = strconv.Atoi(port)
-		if err != nil || publicPort < 1 || publicPort > 65535 {
-			return nil, errors.New("PORTAL_URL port must be between 1 and 65535")
-		}
-	}
-
 	identityPath := filepath.Join(cfg.StateDir, types.RelayIdentityFilename)
 	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(cfg.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
-	registry, err := newLeaseRegistry(cfg.MinPort, cfg.MaxPort, relayIdentity.Name, publicPort, relayAuthority, cfg.PortalURL)
+	registry, err := newLeaseRegistry(cfg.MinPort, cfg.MaxPort, relayIdentity.Name, relayAuthority, cfg.PortalURL)
 	if err != nil {
 		return nil, err
 	}
@@ -246,12 +233,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	server := &Server{
-		cfg:        utils.NewSnapshot(cfg, ServerConfig.snapshot),
-		identity:   relayIdentity,
-		authority:  relayAuthority,
-		publicPort: publicPort,
-		registry:   registry,
-		relaySet:   relaySet,
+		cfg:       utils.NewSnapshot(cfg, ServerConfig.snapshot),
+		identity:  relayIdentity,
+		authority: relayAuthority,
+		registry:  registry,
+		relaySet:  relaySet,
 	}
 	if cfg.IVNPConfigPath != "" {
 		server.overlay, err = overlay.New(overlay.Config{
