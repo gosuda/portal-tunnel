@@ -67,13 +67,15 @@ myapp.portal.example
 myapp-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.portal.example
 ```
 
-The relay derives the second hostname from the address proven by SIWE. Its
-full lowercase 40-character address suffix makes the browser origin stable
-for that `(name, identity, relay)` without stored ownership state. It also
-makes services published by the same Ethereum address publicly correlatable,
-including across relay domains. Existing protocol-10 clients and identities
-with longer names must keep using a protocol-10 relay until they are upgraded
-and renamed; protocol 11 rejects names longer than 22 characters.
+The relay derives the second hostname from the address proven by SIWE. Portal
+defines the relay-independent service identity as `(normalized name, address)`;
+each relay domain supplies a distinct browser origin for that same identity.
+The full lowercase 40-character address suffix makes each relay-local origin
+stable without stored ownership state. It also makes services published by
+the same Ethereum address publicly correlatable across relay domains. Existing
+protocol-10 clients and identities with longer names must keep using a
+protocol-10 relay until they are upgraded and renamed; protocol 11 rejects
+names longer than 22 characters.
 
 ## Relay Admin Token Login
 

@@ -396,6 +396,19 @@ func TestIssueRegisterChallengeRejectsOverlongCanonicalName(t *testing.T) {
 	}
 }
 
+func TestIssueRegisterChallengeRejectsCanonicalLookingFriendlyName(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t, false, false)
+	canonicalLookingName := "herdr-" + strings.Repeat("a", 40)
+	_, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, canonicalLookingName),
+	}, "example.com", "https://example.com"+types.PathSDKRegister, "203.0.113.50")
+	if err == nil || !strings.Contains(err.Error(), "22 characters or fewer") {
+		t.Fatalf("issueRegisterChallenge(canonical-looking name) error = %v, want reserved namespace rejection", err)
+	}
+}
+
 func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	t.Parallel()
 

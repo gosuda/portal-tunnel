@@ -49,6 +49,30 @@ func TestValidateReverseEndpoint(t *testing.T) {
 	}
 }
 
+func TestAPIClientRejectsTunnelProtocolMismatch(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != types.PathSDKDomain {
+			http.NotFound(w, r)
+			return
+		}
+		utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{ProtocolVersion: types.SDKVersion + "-legacy"})
+	}))
+	server.EnableHTTP2 = false
+	server.StartTLS()
+	defer server.Close()
+
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &apiClient{relayURL: relayURL}
+	if err := client.initHTTPTransport(context.Background()); !errors.Is(err, errRelayIncompatible) {
+		t.Fatalf("initHTTPTransport() error = %v, want relay incompatibility", err)
+	}
+}
+
 func TestValidateReverseEndpointTransport(t *testing.T) {
 	t.Parallel()
 	relayURL, err := url.Parse("https://relay.example")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -31,12 +32,14 @@ type Manager struct {
 
 type cachedSite struct {
 	host, owner, leaseID string
+	aliases              []string
 	digest, dir, index   string
 	files                map[string]types.StaticCacheFile
 	bytes                int64
 	ttl                  time.Duration
 	expiresAt, usedAt    time.Time
 	readers              int
+	retired              bool
 }
 
 // New requires an explicit storage directory from the host application.
@@ -86,14 +89,35 @@ func New(cfg Config, dir string) (*Manager, error) {
 // retireLocked removes routing immediately, while readers and failed disk
 // cleanup keep their bytes charged until the directory is actually removed.
 func (c *Manager) retireLocked(site *cachedSite) {
-	delete(c.entries, site.host)
+	if site == nil || site.retired {
+		return
+	}
+	site.retired = true
+	for _, host := range site.hostnames() {
+		if c.entries[host] == site {
+			delete(c.entries, host)
+		}
+	}
 	c.retired = append(c.retired, site)
+}
+
+func (c *Manager) removeHostnameLocked(site *cachedSite, hostname string) {
+	if site == nil || site.retired || c.entries[hostname] != site {
+		return
+	}
+	if site.host == hostname {
+		c.retireLocked(site)
+		return
+	}
+	delete(c.entries, hostname)
+	site.aliases = slices.DeleteFunc(site.aliases, func(alias string) bool { return alias == hostname })
 }
 
 // Lease is an immutable observation supplied by the lease registry. Cache
 // policy and effective retention are owned only by Manager.
 type Lease struct {
 	ID, Owner, Hostname   string
+	Aliases               []string
 	ExpiresAt, LastSeenAt time.Time
 }
 
@@ -114,33 +138,49 @@ func (l leaseState) cacheExpiry() time.Time {
 	return until.Add(l.ttl)
 }
 
-func (l Lease) replaces(owner, host string) bool {
-	return l.Owner == owner || l.Hostname == host
+func (l Lease) hostnames() []string {
+	return append([]string{l.Hostname}, l.Aliases...)
+}
+
+func (s *cachedSite) hostnames() []string {
+	return append([]string{s.host}, s.aliases...)
 }
 
 func (c *Manager) Register(lease Lease, req types.RegisterChallengeRequest) {
 	if c == nil {
 		return
 	}
+	lease.Aliases = append([]string(nil), lease.Aliases...)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// A new lease revokes overlapping cached content, including offline sites
-	// and registrations that do not opt in or switch to hidden hostnames.
-	for _, site := range c.entries {
-		if lease.replaces(site.owner, site.host) {
-			c.retireLocked(site)
+	// A new lease revokes the same owner's previous snapshot. A relay-local
+	// alias reused by another owner moves independently while the previous
+	// owner's identity-bound hostname keeps its cached snapshot.
+	for _, hostname := range lease.hostnames() {
+		if site := c.entries[hostname]; site != nil {
+			if site.owner == lease.Owner {
+				c.retireLocked(site)
+			} else {
+				c.removeHostnameLocked(site, hostname)
+			}
 		}
 	}
 	for id, previous := range c.leases {
-		if lease.replaces(previous.Owner, previous.Hostname) {
+		overlaps := lease.Owner == previous.Owner
+		for _, hostname := range lease.hostnames() {
+			overlaps = overlaps || slices.Contains(previous.hostnames(), hostname)
+		}
+		if overlaps {
 			delete(c.leases, id)
 		}
 	}
 	if !req.Cache || req.UDPEnabled || req.TCPEnabled {
 		return
 	}
-	if strings.Contains(lease.Hostname, "*") {
-		return
+	for _, hostname := range lease.hostnames() {
+		if hostname == "" || strings.Contains(hostname, "*") {
+			return
+		}
 	}
 	ttl := c.cfg.MaxTTL
 	if req.CacheTTL > 0 && int64(req.CacheTTL) < int64(ttl/time.Second) {
@@ -156,6 +196,7 @@ func (c *Manager) Renew(lease Lease) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	lease.Aliases = append([]string(nil), lease.Aliases...)
 	state, ok := c.leases[lease.ID]
 	if !ok {
 		return

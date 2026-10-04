@@ -7,6 +7,7 @@ package policy
 // budget; the vote wire path and HTTP handling stay with the relay API.
 
 import (
+	"cmp"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -153,10 +154,7 @@ func (s *ReputationStore) Summaries(viewerHash string, leases []types.PolicyLeas
 	defer s.mu.Unlock()
 	rows := make([]ReputationSummary, 0, len(leases))
 	for _, lease := range leases {
-		hostname := lease.Hostname
-		if hostname == "" {
-			hostname = lease.CanonicalHostname
-		}
+		hostname := cmp.Or(lease.Hostname, lease.CanonicalHostname)
 		rows = append(rows, s.summarize(hostname, s.state.Identities[lease.IdentityKey], viewerHash))
 	}
 	return rows

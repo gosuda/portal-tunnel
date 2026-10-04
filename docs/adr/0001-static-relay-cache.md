@@ -67,6 +67,12 @@ snapshot, including when the new exposure does not opt in. Upload publication
 rechecks the lease instance to prevent late uploads restoring stale content.
 Identity approval, denial, and bans apply to cache serving too.
 
+One snapshot is routed under the lease's identity-bound canonical hostname and
+its friendly hostname when the relay granted that alias. Friendly-name reuse
+removes only that alias from the previous owner's snapshot; the previous
+owner's canonical cached origin remains isolated and available until its own
+cache lifetime ends.
+
 ## TLS boundary
 
 The SNI router forwards a hostname to the relay HTTP listener only while an
