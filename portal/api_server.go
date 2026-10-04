@@ -18,6 +18,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
@@ -165,11 +166,11 @@ func (s *Server) HandleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.WriteAPIData(w, http.StatusOK, types.DiscoveryResponse{
-		ProtocolVersion:      types.DiscoveryVersion,
+		ProtocolVersion:      manifest.DiscoveryProtocolVersion(),
 		GeneratedAt:          now,
 		Relays:               s.relaySet.Descriptors(self),
 		IncompatibleRelays:   s.relaySet.KnownIncompatibleRelays(),
-		ReleaseVersion:       types.ReleaseVersion,
+		ReleaseVersion:       manifest.ReleaseVersion(),
 		RelayReleaseVersions: s.relaySet.KnownRelayReleaseVersions(),
 	})
 }
@@ -184,9 +185,9 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	if req.ProtocolVersion != "" && req.ProtocolVersion != types.DiscoveryVersion {
+	if req.ProtocolVersion != "" && req.ProtocolVersion != manifest.DiscoveryProtocolVersion() {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
-			fmt.Sprintf("announce protocol mismatch: relay=%q client=%q", types.DiscoveryVersion, req.ProtocolVersion))
+			fmt.Sprintf("announce protocol mismatch: relay=%q client=%q", manifest.DiscoveryProtocolVersion(), req.ProtocolVersion))
 		return
 	}
 
@@ -234,7 +235,7 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		Msg("relay discovery announce accepted")
 
 	utils.WriteAPIData(w, http.StatusAccepted, types.DiscoveryAnnounceResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Accepted:        true,
 	})
 }
@@ -247,8 +248,8 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 func (s *Server) DomainReport() types.DomainResponse {
 	return types.DomainResponse{
 		Cache:           s.registry.cache.Limits(),
-		ProtocolVersion: types.SDKVersion,
-		ReleaseVersion:  types.ReleaseVersion,
+		ProtocolVersion: manifest.TunnelProtocolVersion(),
+		ReleaseVersion:  manifest.ReleaseVersion(),
 		ENS:             s.acmeManager.ENSStatus(),
 	}
 }

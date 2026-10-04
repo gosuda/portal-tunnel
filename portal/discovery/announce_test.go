@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -24,7 +25,7 @@ func mustUnsignedDescriptor(t *testing.T, signing types.Identity, relayURL strin
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	return types.RelayDescriptor{
 		Address:      signing.Address,
-		Version:      types.DiscoveryVersion,
+		Version:      manifest.DiscoveryProtocolVersion(),
 		IssuedAt:     now,
 		ExpiresAt:    now.Add(time.Hour),
 		APIHTTPSAddr: relayURL,
@@ -36,7 +37,7 @@ func mustSignedDescriptor(t *testing.T, signing types.Identity, relayURL string,
 	authority := identity.NewLocalAuthority(signing)
 	signed, err := SignRelayDescriptor(types.RelayDescriptor{
 		Address:      signing.Address,
-		Version:      types.DiscoveryVersion,
+		Version:      manifest.DiscoveryProtocolVersion(),
 		IssuedAt:     issuedAt,
 		ExpiresAt:    issuedAt.Add(DiscoveryDescriptorTTL),
 		APIHTTPSAddr: relayURL,
@@ -224,7 +225,7 @@ func TestInsertCandidateHiddenUntilDirectProbe(t *testing.T) {
 	// The real promotion path: the refresher polls the relay itself and
 	// ApplyRelayDiscoveryResponse verifies the target's own descriptor.
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		GeneratedAt:     now,
 		Relays:          []types.RelayDescriptor{descriptor},
 	}, now); err != nil {
@@ -272,7 +273,7 @@ func TestApplyRelayDiscoveryResponseAppliesIdentityCap(t *testing.T) {
 		relays = append(relays, mustSignedDescriptor(t, signing, url, now.Add(time.Duration(i)*time.Second)))
 	}
 	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		GeneratedAt:     now,
 		Relays:          relays,
 	}, now); err != nil {
@@ -307,7 +308,7 @@ func TestApplyRelayDiscoveryResponsePromotesOnlyTarget(t *testing.T) {
 		relays = append(relays, mustSignedDescriptor(t, identity, url, now.Add(time.Duration(i)*time.Second)))
 	}
 	if _, err := set.ApplyRelayDiscoveryResponse(sourceURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		GeneratedAt:     now,
 		Relays:          relays,
 	}, now); err != nil {
@@ -324,7 +325,7 @@ func TestApplyRelayDiscoveryResponsePromotesOnlyTarget(t *testing.T) {
 	launderedURL := "https://laundered-0.example"
 	launderedDescriptor := relays[1]
 	if _, err := set.ApplyRelayDiscoveryResponse(launderedURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		GeneratedAt:     now,
 		Relays:          []types.RelayDescriptor{launderedDescriptor},
 	}, now); err != nil {
@@ -344,7 +345,7 @@ func TestGossipRefreshKeepsVerifiedTrust(t *testing.T) {
 	descriptor := mustSignedDescriptor(t, signing, relayURL, now)
 
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		GeneratedAt:     now,
 		Relays:          []types.RelayDescriptor{descriptor},
 	}, now); err != nil {
@@ -352,7 +353,7 @@ func TestGossipRefreshKeepsVerifiedTrust(t *testing.T) {
 	}
 	refreshed := mustSignedDescriptor(t, signing, relayURL, now.Add(time.Second))
 	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		GeneratedAt:     now.Add(time.Second),
 		Relays:          []types.RelayDescriptor{refreshed},
 	}, now.Add(time.Second)); err != nil {
@@ -377,7 +378,7 @@ func TestGlobalCapEvictsCandidatesBeforeVerified(t *testing.T) {
 
 	verifiedDescriptor := mustSignedDescriptor(t, verified, "https://verified.example", now)
 	if _, err := set.ApplyRelayDiscoveryResponse("https://verified.example", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		GeneratedAt:     now,
 		Relays:          []types.RelayDescriptor{verifiedDescriptor},
 	}, now); err != nil {
@@ -421,7 +422,7 @@ func TestTrustDoesNotTransferAcrossIdentityTakeover(t *testing.T) {
 
 	firstDescriptor := mustSignedDescriptor(t, first, relayURL, now)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		GeneratedAt:     now,
 		Relays:          []types.RelayDescriptor{firstDescriptor},
 	}, now); err != nil {

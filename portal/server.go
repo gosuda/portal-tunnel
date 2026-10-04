@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
@@ -981,7 +982,7 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 	}
 	return discovery.SignRelayDescriptor(types.RelayDescriptor{
 		Address:           s.identity.Address,
-		Version:           types.DiscoveryVersion,
+		Version:           manifest.DiscoveryProtocolVersion(),
 		IssuedAt:          now,
 		ExpiresAt:         now.Add(discovery.DiscoveryDescriptorTTL),
 		APIHTTPSAddr:      cfg.PortalURL,

@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -154,7 +155,7 @@ func runServeCommand(args []string) error {
 	}
 
 	log.Info().
-		Str("release_version", types.ReleaseVersion).
+		Str("release_version", manifest.ReleaseVersion()).
 		Str("state_dir", cfg.Relay.StateDir).
 		Int("sni_port", utils.IntOrDefault(cfg.Relay.SNIPort, portal.DefaultSNIPort(cfg.Relay.PortalURL))).
 		Msg("starting relay server")

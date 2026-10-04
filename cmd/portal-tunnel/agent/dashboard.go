@@ -16,9 +16,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -1324,7 +1324,7 @@ func (m agentDashboardModel) renderSidebar(width, height int) agentDashboardView
 	var pane agentDashboardView
 	pane.addStyled(width, agentDashboardRuleStyle, strings.Repeat("/", width))
 	pane.addStyled(width, agentDashboardBrandStyle, "PORTAL")
-	pane.addStyled(width, agentDashboardMutedStyle, "Agent "+types.ReleaseVersion)
+	pane.addStyled(width, agentDashboardMutedStyle, "Agent "+manifest.ReleaseVersion())
 	pane.addStyled(width, agentDashboardRuleStyle, strings.Repeat("-", width))
 
 	configPath := strings.TrimSpace(m.status.ConfigPath)

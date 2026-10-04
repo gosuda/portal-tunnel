@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/mod/semver"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -186,13 +186,13 @@ func assetURLs(version string) (binURL, checksumURL string, ok bool) {
 		return "", "", false
 	}
 
-	baseURL := types.OfficialReleaseBaseURL + "/latest/download"
+	baseURL := manifest.ReleaseBaseURL() + "/latest/download"
 	version = strings.TrimSpace(version)
 	if version != "" {
 		if !strings.HasPrefix(version, "v") {
 			version = "v" + version
 		}
-		baseURL = types.OfficialReleaseBaseURL + "/download/" + version
+		baseURL = manifest.ReleaseBaseURL() + "/download/" + version
 	}
 
 	binURL = baseURL + "/" + filename

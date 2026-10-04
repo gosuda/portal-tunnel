@@ -16,6 +16,7 @@ import (
 	"gosuda.org/ivnp"
 	"gosuda.org/ivnp/foundation"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -51,7 +52,7 @@ func testDescriptor(t *testing.T, authority identity.Authority, rawURL, destinat
 	now := time.Now().UTC().Truncate(time.Second)
 	descriptor, err := discovery.SignRelayDescriptor(types.RelayDescriptor{
 		Address:           authority.Identity().Address,
-		Version:           types.DiscoveryVersion,
+		Version:           manifest.DiscoveryProtocolVersion(),
 		IssuedAt:          now,
 		ExpiresAt:         now.Add(5 * time.Minute),
 		APIHTTPSAddr:      rawURL,
@@ -111,7 +112,7 @@ func TestIssueEndpointRotatesGatewayWithoutChangingLease(t *testing.T) {
 	relays := discovery.NewRelaySet(nil)
 	for _, descriptor := range []types.RelayDescriptor{first, second} {
 		_, err := relays.ApplyRelayDiscoveryResponse(descriptor.APIHTTPSAddr, types.DiscoveryResponse{
-			ProtocolVersion: types.DiscoveryVersion,
+			ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 			Relays:          []types.RelayDescriptor{descriptor},
 		}, time.Now().UTC())
 		if err != nil {

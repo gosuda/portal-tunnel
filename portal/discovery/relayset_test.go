@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -46,7 +47,7 @@ func bootstrapRelayState(relayURL string) RelayState {
 func mustApplyAuthoritative(t *testing.T, set *RelaySet, desc types.RelayDescriptor) {
 	t.Helper()
 	if _, err := set.ApplyRelayDiscoveryResponse(desc.APIHTTPSAddr, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC()); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse(%q) error = %v", desc.APIHTTPSAddr, err)
@@ -95,7 +96,7 @@ func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
 	issuedAt := time.Now().UTC().Truncate(time.Microsecond).Add(-DiscoveryDescriptorTTL - time.Minute)
 	desc := mustSignedDescriptor(t, mustSigningIdentity(t), relayURL, issuedAt)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{desc},
 	}, issuedAt.Add(time.Second)); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
@@ -128,7 +129,7 @@ func TestBannedRelayStopsServingAndRouting(t *testing.T) {
 	}
 
 	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC())
 	if err != nil {
@@ -144,7 +145,7 @@ func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *tes
 
 	desc := mustRelayDescriptor(t, "https://relay-mismatch.example")
 	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion + "-other",
+		ProtocolVersion: manifest.DiscoveryProtocolVersion() + "-other",
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC())
 	if err != nil {
@@ -173,7 +174,7 @@ func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t
 	// produce is the missing-target one.
 	hinted := mustRelayDescriptor(t, "https://relay-hinted.example")
 	changed, err := set.ApplyRelayDiscoveryResponse("https://relay-source.example", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{hinted},
 	}, time.Now().UTC())
 	if err == nil {
@@ -225,7 +226,7 @@ func TestDiscoveryFailureLifecycle(t *testing.T) {
 	}
 
 	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{descA},
 	}, time.Now().UTC()); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse(hint) error = %v", err)
@@ -336,7 +337,7 @@ func TestProtocolMismatchKeepsOlderRelayVisibleWithoutRouting(t *testing.T) {
 	relayURL := "https://relay-old.example"
 	desc := mustRelayDescriptor(t, relayURL)
 	_, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion + "-older",
+		ProtocolVersion: manifest.DiscoveryProtocolVersion() + "-older",
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC())
 	if err == nil {
@@ -347,7 +348,7 @@ func TestProtocolMismatchKeepsOlderRelayVisibleWithoutRouting(t *testing.T) {
 	}
 
 	known := set.KnownIncompatibleRelays()
-	if len(known) != 1 || known[0].URL != relayURL || known[0].ProtocolVersion != types.DiscoveryVersion+"-older" {
+	if len(known) != 1 || known[0].URL != relayURL || known[0].ProtocolVersion != manifest.DiscoveryProtocolVersion()+"-older" {
 		t.Fatalf("KnownIncompatibleRelays() = %+v, want one entry for %q", known, relayURL)
 	}
 	if known[0].LastSeenAt.IsZero() {
@@ -374,7 +375,7 @@ func TestKnownIncompatibleRelaysExpireAfterRetention(t *testing.T) {
 	desc := mustRelayDescriptor(t, relayURL)
 	observedAt := time.Now().UTC().Truncate(time.Microsecond)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion + "-older",
+		ProtocolVersion: manifest.DiscoveryProtocolVersion() + "-older",
 		Relays:          []types.RelayDescriptor{desc},
 	}, observedAt); err == nil {
 		t.Fatal("expected protocol mismatch error")
@@ -393,7 +394,7 @@ func TestCompatibleAuthoritativeDiscoveryClearsIncompatibleRelay(t *testing.T) {
 	relayURL := "https://relay-upgraded.example"
 	desc := mustRelayDescriptor(t, relayURL)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion + "-older",
+		ProtocolVersion: manifest.DiscoveryProtocolVersion() + "-older",
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC()); err == nil {
 		t.Fatal("expected protocol mismatch error")
@@ -414,7 +415,7 @@ func TestKnownIncompatibleRelaysSuppressBannedRelay(t *testing.T) {
 	relayURL := "https://relay-old.example"
 	desc := mustRelayDescriptor(t, relayURL)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion + "-older",
+		ProtocolVersion: manifest.DiscoveryProtocolVersion() + "-older",
 		Relays:          []types.RelayDescriptor{desc},
 	}, time.Now().UTC()); err == nil {
 		t.Fatal("expected protocol mismatch error")
@@ -434,7 +435,7 @@ func TestProtocolMismatchOutranksMissingTarget(t *testing.T) {
 
 	relayURL := "https://relay-old.example"
 	_, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion + "-older",
+		ProtocolVersion: manifest.DiscoveryProtocolVersion() + "-older",
 		Relays:          nil,
 	}, time.Now().UTC())
 	if !errors.Is(err, ErrProtocolMismatch) {
@@ -451,7 +452,7 @@ func TestApplyRelayDiscoveryResponseRecordsTargetReleaseVersion(t *testing.T) {
 	relayURL := "https://relay-release.example"
 	desc := mustRelayDescriptor(t, relayURL)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{desc},
 		ReleaseVersion:  "v2.6.0",
 	}, time.Now().UTC()); err != nil {
@@ -484,7 +485,7 @@ func TestApplyRelayDiscoveryResponseIgnoresReleaseVersionFromGossip(t *testing.T
 	relayURL := "https://relay-gossip.example"
 	desc := mustRelayDescriptor(t, relayURL)
 	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{desc},
 		ReleaseVersion:  "v2.6.0",
 	}, time.Now().UTC()); err != nil {
@@ -501,7 +502,7 @@ func TestApplyRelayDiscoveryResponseRetainsReleaseAcrossProtocolMismatch(t *test
 
 	relayURL := "https://relay-mismatch-release.example"
 	_, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion + "-older",
+		ProtocolVersion: manifest.DiscoveryProtocolVersion() + "-older",
 		ReleaseVersion:  "v2.6.0",
 	}, time.Now().UTC())
 	if !errors.Is(err, ErrProtocolMismatch) {
@@ -523,7 +524,7 @@ func TestKnownRelayReleaseVersionsExpireWithoutFreshDirectPoll(t *testing.T) {
 	t0 := time.Now().UTC().Truncate(time.Microsecond)
 	desc := mustSignedDescriptor(t, signing, relayURL, t0)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{desc},
 		ReleaseVersion:  "v2.6.0",
 	}, t0); err != nil {
@@ -536,7 +537,7 @@ func TestKnownRelayReleaseVersionsExpireWithoutFreshDirectPoll(t *testing.T) {
 	gossipAt := t0.Add(2 * time.Hour)
 	gossipDesc := mustSignedDescriptor(t, signing, relayURL, gossipAt)
 	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{gossipDesc},
 	}, gossipAt); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() gossip error = %v", err)
@@ -558,7 +559,7 @@ func TestApplyRelayDiscoveryResponseDropsReleaseWhenPeerStopsReporting(t *testin
 	t0 := time.Now().UTC().Truncate(time.Microsecond)
 	desc := mustSignedDescriptor(t, signing, relayURL, t0)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{desc},
 		ReleaseVersion:  "v2.6.0",
 	}, t0); err != nil {
@@ -573,7 +574,7 @@ func TestApplyRelayDiscoveryResponseDropsReleaseWhenPeerStopsReporting(t *testin
 	t1 := t0.Add(time.Minute)
 	freshDesc := mustSignedDescriptor(t, signing, relayURL, t1)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{freshDesc},
 	}, t1); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
@@ -592,7 +593,7 @@ func TestBanRelayURLDropsReleaseObservation(t *testing.T) {
 	relayURL := "https://relay-banned-release.example"
 	desc := mustRelayDescriptor(t, relayURL)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{desc},
 		ReleaseVersion:  "v2.6.0",
 	}, time.Now().UTC()); err != nil {
@@ -626,7 +627,7 @@ func TestRecordReleaseObservationPrunesExpiredEntries(t *testing.T) {
 	t0 := time.Now().UTC().Truncate(time.Microsecond)
 	descA := mustSignedDescriptor(t, signing, relayA, t0)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayA, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{descA},
 		ReleaseVersion:  "v2.6.0",
 	}, t0); err != nil {
@@ -637,7 +638,7 @@ func TestRecordReleaseObservationPrunesExpiredEntries(t *testing.T) {
 	t1 := t0.Add(AnnounceMaxValidity).Add(time.Hour)
 	descB := mustSignedDescriptor(t, signing, relayB, t1)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayB, types.DiscoveryResponse{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Relays:          []types.RelayDescriptor{descB},
 		ReleaseVersion:  "v2.6.1",
 	}, t1); err != nil {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -62,7 +63,7 @@ func (r *Refresher) Refresh(ctx context.Context, self *types.RelayDescriptor) er
 
 func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDescriptor) error {
 	req := types.DiscoveryAnnounceRequest{
-		ProtocolVersion: types.DiscoveryVersion,
+		ProtocolVersion: manifest.DiscoveryProtocolVersion(),
 		Descriptor:      descriptor,
 	}
 

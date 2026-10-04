@@ -9,6 +9,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -106,7 +107,7 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	desc.Version = strings.TrimSpace(desc.Version)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
 	if desc.Version == "" {
-		desc.Version = types.DiscoveryVersion
+		desc.Version = manifest.DiscoveryProtocolVersion()
 	}
 	if !desc.IssuedAt.IsZero() {
 		desc.IssuedAt = desc.IssuedAt.UTC()
@@ -139,7 +140,7 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	switch {
 	case desc.Address == "":
 		return types.RelayDescriptor{}, errors.New("address is required")
-	case desc.Version != types.DiscoveryVersion:
+	case desc.Version != manifest.DiscoveryProtocolVersion():
 		return types.RelayDescriptor{}, fmt.Errorf("unsupported relay descriptor version %q", desc.Version)
 	case desc.APIHTTPSAddr == "":
 		return types.RelayDescriptor{}, errors.New("api_https_addr is required")

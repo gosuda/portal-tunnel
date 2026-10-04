@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -72,7 +73,7 @@ func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig
 	udpTarget := config.UDPTarget
 
 	log.Info().
-		Str("release_version", types.ReleaseVersion).
+		Str("release_version", manifest.ReleaseVersion()).
 		Str("tcp_target", tcpTarget).
 		Str("service_name", identity.Name).
 		Strs("relays", exposure.listenerRelayURLs()).

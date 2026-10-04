@@ -9,7 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -296,7 +296,7 @@ func (c *Controller) buildRouteState() routeState {
 
 // BootstrapRelayURLs returns the normalized built-in bootstrap relay URLs.
 func BootstrapRelayURLs() ([]string, error) {
-	return utils.NormalizeRelayURLs(types.BootstrapRelays...)
+	return utils.NormalizeRelayURLs(manifest.BootstrapRelays()...)
 }
 
 // ResolveRelayURLs resolves explicit relay URLs, optionally merged with

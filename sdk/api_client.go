@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -71,9 +72,9 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 		return fmt.Errorf("check relay compatibility: %w", err)
 	}
 	protocolVersion := strings.TrimSpace(domainResp.ProtocolVersion)
-	if protocolVersion != types.SDKVersion {
+	if protocolVersion != manifest.TunnelProtocolVersion() {
 		httpTransport.CloseIdleConnections()
-		return fmt.Errorf("%w: relay sdk protocol version mismatch: relay=%q client=%q", errRelayIncompatible, protocolVersion, types.SDKVersion)
+		return fmt.Errorf("%w: relay sdk protocol version mismatch: relay=%q client=%q", errRelayIncompatible, protocolVersion, manifest.TunnelProtocolVersion())
 	}
 
 	c.mu.Lock()

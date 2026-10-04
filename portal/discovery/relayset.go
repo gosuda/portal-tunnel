@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -530,7 +531,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	} else {
 		now = now.UTC()
 	}
-	protocolMismatch := resp.ProtocolVersion != types.DiscoveryVersion
+	protocolMismatch := resp.ProtocolVersion != manifest.DiscoveryProtocolVersion()
 	authoritative := targetURL != ""
 
 	s.mu.Lock()
@@ -604,7 +605,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	// (ErrProtocolMismatch) rather than a health failure even when the older
 	// relay omits its own descriptor from the response.
 	if protocolMismatch && authoritative {
-		return relaySetChanged, fmt.Errorf("%w: relay=%q client=%q", ErrProtocolMismatch, resp.ProtocolVersion, types.DiscoveryVersion)
+		return relaySetChanged, fmt.Errorf("%w: relay=%q client=%q", ErrProtocolMismatch, resp.ProtocolVersion, manifest.DiscoveryProtocolVersion())
 	}
 	if missingTarget {
 		return relaySetChanged, errors.New("target relay descriptor missing from relays")

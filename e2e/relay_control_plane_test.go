@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
@@ -292,11 +293,11 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 		if !domain.OK {
 			t.Fatalf("GET %s response ok=false", types.PathSDKDomain)
 		}
-		if domain.Data.ProtocolVersion != types.SDKVersion {
-			t.Fatalf("DomainResponse.ProtocolVersion = %q, want %q", domain.Data.ProtocolVersion, types.SDKVersion)
+		if domain.Data.ProtocolVersion != manifest.TunnelProtocolVersion() {
+			t.Fatalf("DomainResponse.ProtocolVersion = %q, want %q", domain.Data.ProtocolVersion, manifest.TunnelProtocolVersion())
 		}
-		if domain.Data.ReleaseVersion != types.ReleaseVersion {
-			t.Fatalf("DomainResponse.ReleaseVersion = %q, want %q", domain.Data.ReleaseVersion, types.ReleaseVersion)
+		if domain.Data.ReleaseVersion != manifest.ReleaseVersion() {
+			t.Fatalf("DomainResponse.ReleaseVersion = %q, want %q", domain.Data.ReleaseVersion, manifest.ReleaseVersion())
 		}
 		resp, err = client.Get(baseURL + types.PathDiscovery)
 		if err != nil {
@@ -312,9 +313,9 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 			t.Fatalf("decode %s response: %v", types.PathDiscovery, err)
 		}
 		resp.Body.Close()
-		if !discoveryEnvelope.OK || discoveryEnvelope.Data.ProtocolVersion != types.DiscoveryVersion {
+		if !discoveryEnvelope.OK || discoveryEnvelope.Data.ProtocolVersion != manifest.DiscoveryProtocolVersion() {
 			t.Fatalf("discovery envelope ok=%v ProtocolVersion=%q, want ok envelope with protocol %q",
-				discoveryEnvelope.OK, discoveryEnvelope.Data.ProtocolVersion, types.DiscoveryVersion)
+				discoveryEnvelope.OK, discoveryEnvelope.Data.ProtocolVersion, manifest.DiscoveryProtocolVersion())
 		}
 		if len(discoveryEnvelope.Data.Relays) != 1 {
 			t.Fatalf("discovery envelope contains %d relay descriptors, want exactly 1",
@@ -328,8 +329,8 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 		if _, err := discovery.VerifyRelayDescriptor(descriptor); err != nil {
 			t.Fatalf("discovery self descriptor failed signature verification: %v", err)
 		}
-		if discoveryEnvelope.Data.ReleaseVersion != types.ReleaseVersion {
-			t.Fatalf("discovery envelope ReleaseVersion = %q, want %q", discoveryEnvelope.Data.ReleaseVersion, types.ReleaseVersion)
+		if discoveryEnvelope.Data.ReleaseVersion != manifest.ReleaseVersion() {
+			t.Fatalf("discovery envelope ReleaseVersion = %q, want %q", discoveryEnvelope.Data.ReleaseVersion, manifest.ReleaseVersion())
 		}
 		if release, ok := discoveryEnvelope.Data.RelayReleaseVersions["https://localhost:4017"]; ok {
 			t.Fatalf("discovery envelope reports self release observation %q", release)

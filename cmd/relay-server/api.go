@@ -20,7 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
-	portaltunnel "github.com/gosuda/portal-tunnel/v2"
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
@@ -641,7 +641,7 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestedVersion := strings.TrimSpace(r.URL.Query().Get("version"))
-	if requestedVersion != "" && requestedVersion != types.ReleaseVersion {
+	if requestedVersion != "" && requestedVersion != manifest.ReleaseVersion() {
 		http.Error(w, "artifact version does not match this relay", http.StatusConflict)
 		return
 	}
@@ -649,9 +649,9 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		releasePath := "/latest/download/"
 		if requestedVersion != "" {
-			releasePath = "/download/" + url.PathEscape(types.ReleaseVersion) + "/"
+			releasePath = "/download/" + url.PathEscape(manifest.ReleaseVersion()) + "/"
 		}
-		redirectURL := types.OfficialReleaseBaseURL + releasePath + filename
+		redirectURL := manifest.ReleaseBaseURL() + releasePath + filename
 		if checksumRequest {
 			redirectURL += ".sha256"
 		}
@@ -679,7 +679,7 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 	if contentType == "application/octet-stream" {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	}
-	if requestedVersion == types.ReleaseVersion {
+	if requestedVersion == manifest.ReleaseVersion() {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
 		w.Header().Set("Cache-Control", "no-cache")
@@ -723,7 +723,7 @@ func serveLLMs(w http.ResponseWriter, r *http.Request, portalURL string) {
 		return
 	}
 
-	body := strings.ReplaceAll(string(portaltunnel.LLMsTXT), "%s", portalURL)
+	body := strings.ReplaceAll(manifest.LLMsText(), "%s", portalURL)
 	_, _ = w.Write([]byte(body))
 }
 

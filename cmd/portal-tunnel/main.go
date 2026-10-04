@@ -21,6 +21,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
@@ -40,7 +41,7 @@ func main() {
 		"list":   runListCommand,
 		"update": runUpdateCommand,
 		"version": func(args []string) error {
-			fmt.Fprintln(os.Stdout, types.ReleaseVersion)
+			fmt.Fprintln(os.Stdout, manifest.ReleaseVersion())
 			return nil
 		},
 		"help": utils.MakeHelpCommand(printRootUsage, []utils.HelpTopic{
@@ -126,7 +127,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 }
 
 func runExposeCommand(args []string) error {
-	installer.StartUpdateCheck(types.ReleaseVersion)
+	installer.StartUpdateCheck(manifest.ReleaseVersion())
 
 	flags := exposeFlags{}
 	fs := utils.NewFlagSet("expose", printExposeUsage)
@@ -374,7 +375,7 @@ type listFlags struct {
 }
 
 func runListCommand(args []string) error {
-	installer.StartUpdateCheck(types.ReleaseVersion)
+	installer.StartUpdateCheck(manifest.ReleaseVersion())
 
 	flags := listFlags{}
 	fs := utils.NewFlagSet("list", printListUsage)
