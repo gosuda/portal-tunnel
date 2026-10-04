@@ -272,7 +272,9 @@ Shared wire types, API envelope, error codes, path constants, and transport fram
 and admission, storage, expiry, and serving on the relay side. A lease must
 explicitly opt in before the relay accepts its files. Eligible snapshots route
 through the relay HTTP handler and terminate browser TLS there; ordinary
-uncached connections retain TLS passthrough. See [the cache trust boundary](/security-model#opt-in-static-cache)
+uncached connections retain TLS passthrough. Snapshots are routed only by the
+identity-bound canonical hostname; friendly aliases always use the live origin.
+See [the cache trust boundary](/security-model#opt-in-static-cache)
 and [cache limits and expiry](/configuration#static-relay-cache).
 
 ## Transport Model

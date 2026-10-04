@@ -55,11 +55,8 @@ func (c *Manager) discard(site *cachedSite) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// A failed reader of an older snapshot cannot invalidate its replacement.
-	for _, hostname := range site.hostnames() {
-		if c.entries[hostname] == site {
-			c.retireLocked(site)
-			break
-		}
+	if c.entries[site.host] == site {
+		c.retireLocked(site)
 	}
 }
 

@@ -314,7 +314,8 @@ portal expose --serve ./dist --cache --cache-ttl 1h \
 The selected relay must advertise cache support and admit the snapshot.
 Otherwise the live origin tunnel remains in use. A cached connection trusts
 the relay with the files and HTTP traffic, even if it falls back to the live
-origin. The requested TTL is an upper request subject to relay policy, not a
+origin. Only the identity-bound canonical hostname is cached; the friendly
+hostname continues to require a live origin. The requested TTL is an upper request subject to relay policy, not a
 hosting guarantee; cached files may be evicted or lost on relay restart.
 See [cache configuration](/configuration#static-relay-cache) and
 [the TLS boundary](/security-model#opt-in-static-cache).

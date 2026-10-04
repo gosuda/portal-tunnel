@@ -33,7 +33,7 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "cache lease unavailable")
 		return
 	}
-	site := &cachedSite{host: lease.Hostname, aliases: append([]string(nil), lease.Aliases...), owner: lease.Owner, leaseID: lease.ID, ttl: lease.ttl, expiresAt: lease.cacheExpiry(), usedAt: time.Now()}
+	site := &cachedSite{host: lease.Hostname, owner: lease.Owner, leaseID: lease.ID, ttl: lease.ttl, expiresAt: lease.cacheExpiry(), usedAt: time.Now()}
 	if req.Method == http.MethodDelete {
 		c.mu.Lock()
 		if existing := c.entries[site.host]; existing != nil && existing.leaseID == site.leaseID && c.eligibleLocked(site.leaseID) && c.leases[site.leaseID].generation == generation {
@@ -173,15 +173,11 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	var status types.StaticCacheStatus
 	if c.eligibleLocked(site.leaseID) && c.leases[site.leaseID].generation == generation {
 		active := c.leases[site.leaseID]
-		for _, hostname := range site.hostnames() {
-			if previous := c.entries[hostname]; previous != nil {
-				c.removeHostnameLocked(previous, hostname)
-			}
+		if previous := c.entries[site.host]; previous != nil {
+			c.retireLocked(previous)
 		}
 		site.expiresAt = active.cacheExpiry()
-		for _, hostname := range site.hostnames() {
-			c.entries[hostname] = site
-		}
+		c.entries[site.host] = site
 		published = true
 		status = types.StaticCacheStatus{Present: true, ExpiresAt: site.expiresAt}
 	}

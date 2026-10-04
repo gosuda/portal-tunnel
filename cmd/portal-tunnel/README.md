@@ -20,6 +20,9 @@ TLS termination. Cached responses are not end-to-end encrypted to your client.
 It requires `--serve` and cannot be combined with `--ban-mitm`.
 Without it, exposures remain uncached. With discovery enabled, every selected
 relay may receive the site; use the example above to restrict that trust.
+Only the identity-bound canonical hostname uses the relay cache. The friendly
+hostname remains a live-origin route and becomes unavailable when that origin
+disconnects.
 
 The exposure refreshes one shared site manifest every 30 seconds for all its
 relays; an unchanged snapshot needs no upload. Each relay applies its own upload

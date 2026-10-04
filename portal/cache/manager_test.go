@@ -252,53 +252,6 @@ func TestLeaseEventsBoundOfflineLifetime(t *testing.T) {
 	}
 }
 
-func TestCacheAliasesPreserveCanonicalContentAcrossFriendlyReuse(t *testing.T) {
-	c := testManager(t, 64)
-	first := Lease{
-		ID:         "alice-id",
-		Owner:      "service:alice",
-		Hostname:   "service-alice.localhost",
-		Aliases:    []string{"service.localhost"},
-		ExpiresAt:  time.Now().Add(24 * time.Hour),
-		LastSeenAt: time.Now(),
-	}
-	c.Register(first, types.RegisterChallengeRequest{Cache: true})
-	response := httptest.NewRecorder()
-	c.Handle(response, testRequest(t, http.MethodPut, "alice"), first.ID, c.Generation(first.ID))
-	if response.Code != http.StatusOK || !c.Has(first.Hostname) || !c.Has(first.Aliases[0]) || c.entries[first.Hostname] != c.entries[first.Aliases[0]] {
-		t.Fatalf("first snapshot did not publish under both hostnames: %d", response.Code)
-	}
-
-	second := Lease{
-		ID:         "bob-id",
-		Owner:      "service:bob",
-		Hostname:   "service-bob.localhost",
-		Aliases:    []string{"service.localhost"},
-		ExpiresAt:  time.Now().Add(24 * time.Hour),
-		LastSeenAt: time.Now(),
-	}
-	c.Register(second, types.RegisterChallengeRequest{Cache: true})
-	if !c.Has(first.Hostname) || c.Has(first.Aliases[0]) {
-		t.Fatal("friendly reuse removed the previous owner's canonical snapshot or retained its friendly alias")
-	}
-	response = httptest.NewRecorder()
-	c.Handle(response, testRequest(t, http.MethodPut, "bob"), second.ID, c.Generation(second.ID))
-	if response.Code != http.StatusOK || !c.Has(second.Hostname) || !c.Has(second.Aliases[0]) {
-		t.Fatalf("replacement snapshot did not publish under both hostnames: %d", response.Code)
-	}
-
-	for hostname, want := range map[string]string{
-		first.Hostname:    "alice",
-		second.Hostname:   "bob",
-		second.Aliases[0]: "bob",
-	} {
-		served := httptest.NewRecorder()
-		if !c.Serve(served, httptest.NewRequest(http.MethodGet, "https://"+hostname+"/", nil), hostname) || served.Body.String() != want {
-			t.Fatalf("Serve(%q) = %q, want %q", hostname, served.Body.String(), want)
-		}
-	}
-}
-
 func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 	for _, failure := range []string{"method", "missing", "truncated"} {
 		t.Run(failure, func(t *testing.T) {

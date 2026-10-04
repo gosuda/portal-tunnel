@@ -37,11 +37,7 @@ type leaseRecord struct {
 
 // cacheLease copies registry facts while the caller holds the registry lock.
 func (r *leaseRecord) cacheLease() cache.Lease {
-	lease := cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.CanonicalHostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
-	if r.Hostname != "" {
-		lease.Aliases = []string{r.Hostname}
-	}
-	return lease
+	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.CanonicalHostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
 func (r *leaseRecord) isPublicEntry() bool {

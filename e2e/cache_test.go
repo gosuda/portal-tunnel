@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -112,10 +113,32 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+	leases := relay.PublicLeases()
+	if len(leases) != 1 || leases[0].Hostname == "" {
+		t.Fatalf("friendly lease unavailable: %+v", leases)
+	}
+	friendlyURL, err := url.Parse(publicURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port := friendlyURL.Port(); port != "" {
+		friendlyURL.Host = net.JoinHostPort(leases[0].Hostname, port)
+	} else {
+		friendlyURL.Host = leases[0].Hostname
+	}
+	response, err := client.Get(friendlyURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if response.Header.Get("X-Origin") != "true" || response.Header.Get("ETag") != "" {
+		t.Fatalf("friendly hostname used relay cache: %v", response.Header)
+	}
 	before := originCalls.Load()
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, publicURL, nil)
 	request.Header.Set("Range", "bytes=0-5")
-	response, err := client.Do(request)
+	response, err = client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

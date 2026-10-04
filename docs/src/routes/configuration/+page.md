@@ -12,6 +12,8 @@ Complete reference for all Portal environment variables, CLI flags, and configur
 Capability is enabled by default in the relay binary. Exposures are eligible
 only with `portal expose --serve ./dist --cache`. Cached responses terminate
 TLS at the selected relay and lose browser-to-origin end-to-end encryption.
+Only identity-bound canonical hostnames use the cache; friendly aliases always
+use the live origin.
 
 | Environment | Flag | Default | Meaning |
 | --- | --- | --- | --- |

@@ -67,11 +67,11 @@ snapshot, including when the new exposure does not opt in. Upload publication
 rechecks the lease instance to prevent late uploads restoring stale content.
 Identity approval, denial, and bans apply to cache serving too.
 
-One snapshot is routed under the lease's identity-bound canonical hostname and
-its friendly hostname when the relay granted that alias. Friendly-name reuse
-removes only that alias from the previous owner's snapshot; the previous
-owner's canonical cached origin remains isolated and available until its own
-cache lifetime ends.
+One snapshot is routed only under the lease's identity-bound canonical
+hostname. Friendly hostnames are first-come aliases without persistent
+identity ownership, so they always use the live origin and never acquire the
+cache's offline lifetime. This keeps retained content bound to the identity
+that authenticated the upload.
 
 ## TLS boundary
 
