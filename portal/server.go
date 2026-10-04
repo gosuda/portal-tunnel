@@ -572,11 +572,11 @@ func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
 		offer.Close()
 		return
 	}
+	_ = offer.Connection().SetDeadline(time.Time{})
 	if err := reservation.Commit(); err != nil {
 		offer.Close()
 		return
 	}
-	_ = offer.Connection().SetDeadline(time.Time{})
 }
 
 func (s *Server) serveTCP(record *leaseRecord) {
