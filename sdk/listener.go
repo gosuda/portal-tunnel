@@ -3,6 +3,7 @@ package sdk
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -492,10 +493,7 @@ func (l *listener) publicURLForLease(lease listenerSnapshot) string {
 	if authority == "" {
 		return ""
 	}
-	scheme := baseURL.Scheme
-	if scheme == "" {
-		scheme = "https"
-	}
+	scheme := cmp.Or(baseURL.Scheme, "https")
 	return (&url.URL{
 		Scheme: scheme,
 		Host:   authority,
@@ -506,17 +504,11 @@ func relayAuthority(relayURL *url.URL, hostname string) string {
 	if relayURL == nil {
 		return ""
 	}
-	host := strings.TrimSpace(hostname)
-	if host == "" {
-		host = strings.TrimSpace(relayURL.Hostname())
-	}
+	host := cmp.Or(strings.TrimSpace(hostname), strings.TrimSpace(relayURL.Hostname()))
 	if host == "" {
 		return ""
 	}
-	port := relayURL.Port()
-	if port == "" {
-		port = "443"
-	}
+	port := cmp.Or(relayURL.Port(), "443")
 	return net.JoinHostPort(host, port)
 }
 
