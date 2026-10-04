@@ -75,6 +75,19 @@ func (s RelayStatus) Active() bool {
 		(s.State == RelayReady || s.PublicURL != "" || s.UDPAddr != "" || s.TCPAddr != "")
 }
 
+// relayRuntime is one relay's runtime record: the installed listener (nil
+// while none is attached), the recorded status snapshot (nil until the
+// first status lands), and the MITM block reason (nil while unblocked).
+// The facts evolve independently — a status can outlive its listener
+// (failure states) and a listener can be installed before its first status
+// — so they share one record keyed by relay URL instead of parallel maps.
+// A record exists while at least one fact is set.
+type relayRuntime struct {
+	listener *listener
+	status   *RelayStatus
+	blocked  error
+}
+
 // Exposure owns the lifecycle of one or more relay listeners and accepts
 // traffic from all of them through one net.Listener.
 type Exposure struct {
@@ -89,16 +102,16 @@ type Exposure struct {
 	accepted  chan net.Conn
 	datagrams chan types.DatagramFrame
 
-	mu             sync.RWMutex
-	reconcileMu    sync.Mutex
-	relayURLs      []string
-	relayListeners map[string]*listener
-	blockedRelays  map[string]error
-	statuses       map[string]RelayStatus
-	stateChanged   chan struct{}
-	updates        chan RelayStatus
-	updatesMu      sync.Mutex
-	acceptLoops    sync.WaitGroup
+	mu          sync.RWMutex
+	reconcileMu sync.Mutex
+	// relayURLs is the desired relay membership (policy); relays holds one
+	// runtime record per relay, keyed by the same relay URL.
+	relayURLs    []string
+	relays       map[string]*relayRuntime
+	stateChanged chan struct{}
+	updates      chan RelayStatus
+	updatesMu    sync.Mutex
+	acceptLoops  sync.WaitGroup
 
 	// discovery is the relay-selection collaborator. It is nil when
 	// discovery is disabled, meaning Exposure owns membership directly.
@@ -113,6 +126,28 @@ type Exposure struct {
 }
 
 var _ net.Listener = (*Exposure)(nil)
+
+// relayRecordLocked returns the relay's runtime record, creating it on
+// first use so every runtime fact lives in exactly one record.
+func (e *Exposure) relayRecordLocked(relayURL string) *relayRuntime {
+	rec := e.relays[relayURL]
+	if rec == nil {
+		rec = &relayRuntime{}
+		if e.relays == nil {
+			e.relays = make(map[string]*relayRuntime)
+		}
+		e.relays[relayURL] = rec
+	}
+	return rec
+}
+
+// dropRelayRecordLocked removes the relay's record once its last runtime
+// fact is cleared, so the map keys stay exactly the relays with live state.
+func (e *Exposure) dropRelayRecordLocked(relayURL string, rec *relayRuntime) {
+	if rec.listener == nil && rec.status == nil && rec.blocked == nil {
+		delete(e.relays, relayURL)
+	}
+}
 
 type options struct {
 	Cache      *cache.SourceConfig
@@ -266,20 +301,18 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 
 	exposureCtx, cancel := context.WithCancel(ctx)
 	exposure := &Exposure{
-		cancel:         cancel,
-		done:           exposureCtx.Done(),
-		identity:       identity.Copy(),
-		options:        cfg,
-		metadata:       cfg.Metadata.Copy(),
-		cache:          source,
-		accepted:       make(chan net.Conn, max(len(initialRelays)*defaultReadyTarget*2, 1)),
-		datagrams:      make(chan types.DatagramFrame, max(len(initialRelays)*32, 1)),
-		relayListeners: make(map[string]*listener, len(initialRelays)),
-		blockedRelays:  make(map[string]error),
-		statuses:       make(map[string]RelayStatus, len(initialRelays)),
-		stateChanged:   make(chan struct{}),
-		updates:        make(chan RelayStatus, 1),
-		discovery:      controller,
+		cancel:       cancel,
+		done:         exposureCtx.Done(),
+		identity:     identity.Copy(),
+		options:      cfg,
+		metadata:     cfg.Metadata.Copy(),
+		cache:        source,
+		accepted:     make(chan net.Conn, max(len(initialRelays)*defaultReadyTarget*2, 1)),
+		datagrams:    make(chan types.DatagramFrame, max(len(initialRelays)*32, 1)),
+		relays:       make(map[string]*relayRuntime, len(initialRelays)),
+		stateChanged: make(chan struct{}),
+		updates:      make(chan RelayStatus, 1),
+		discovery:    controller,
 	}
 
 	if exposure.cache != nil {
@@ -349,9 +382,13 @@ func (e *Exposure) setRelays(relayURLs []string, failOnError bool) error {
 	for _, relayURL := range relayURLs {
 		desired[relayURL] = struct{}{}
 	}
-	for relayURL := range e.blockedRelays {
+	for relayURL, rec := range e.relays {
+		if rec.blocked == nil {
+			continue
+		}
 		if _, retained := desired[relayURL]; !retained {
-			delete(e.blockedRelays, relayURL)
+			rec.blocked = nil
+			e.dropRelayRecordLocked(relayURL, rec)
 		}
 	}
 	e.relayURLs = append([]string(nil), relayURLs...)
@@ -412,7 +449,10 @@ func (e *Exposure) RemoveRelay(relayURL string) error {
 		}
 	}
 	e.relayURLs = nextRelays
-	delete(e.blockedRelays, relayURL)
+	if rec := e.relays[relayURL]; rec != nil {
+		rec.blocked = nil
+		e.dropRelayRecordLocked(relayURL, rec)
+	}
 	e.mu.Unlock()
 	return e.reconcileRelayListeners(false)
 }
@@ -441,9 +481,11 @@ func (e *Exposure) UpdateMetadata(metadata types.LeaseMetadata) error {
 	metadata = metadata.Copy()
 	e.metadata = metadata
 	e.mu.RLock()
-	listeners := make([]*listener, 0, len(e.relayListeners))
-	for _, listener := range e.relayListeners {
-		listeners = append(listeners, listener)
+	listeners := make([]*listener, 0, len(e.relays))
+	for _, rec := range e.relays {
+		if rec.listener != nil {
+			listeners = append(listeners, rec.listener)
+		}
 	}
 	e.mu.RUnlock()
 	for _, listener := range listeners {
@@ -455,9 +497,11 @@ func (e *Exposure) UpdateMetadata(metadata types.LeaseMetadata) error {
 func (e *Exposure) listenerRelayURLs() []string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	relayURLs := make([]string, 0, len(e.relayListeners))
-	for relayURL := range e.relayListeners {
-		relayURLs = append(relayURLs, relayURL)
+	relayURLs := make([]string, 0, len(e.relays))
+	for relayURL, rec := range e.relays {
+		if rec.listener != nil {
+			relayURLs = append(relayURLs, relayURL)
+		}
 	}
 	slices.Sort(relayURLs)
 	return relayURLs
@@ -497,9 +541,11 @@ func (e *Exposure) Relays() []RelayStatus {
 		return nil
 	}
 	e.mu.RLock()
-	relays := make([]RelayStatus, 0, len(e.statuses))
-	for _, status := range e.statuses {
-		relays = append(relays, status)
+	relays := make([]RelayStatus, 0, len(e.relays))
+	for _, rec := range e.relays {
+		if rec.status != nil {
+			relays = append(relays, *rec.status)
+		}
 	}
 	e.mu.RUnlock()
 	slices.SortFunc(relays, func(a, b RelayStatus) int {
@@ -532,9 +578,9 @@ func (e *Exposure) ActiveRelays() []string {
 		return nil
 	}
 	e.mu.RLock()
-	relayURLs := make([]string, 0, len(e.statuses))
-	for relayURL, status := range e.statuses {
-		if status.Active() {
+	relayURLs := make([]string, 0, len(e.relays))
+	for relayURL, rec := range e.relays {
+		if rec.status != nil && rec.status.Active() {
 			relayURLs = append(relayURLs, relayURL)
 		}
 	}
@@ -564,18 +610,16 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	}
 
 	e.mu.Lock()
+	rec := e.relays[relayURL]
 	if owner != nil {
-		if current, ok := e.relayListeners[relayURL]; !ok || current != owner {
+		if rec == nil || rec.listener != owner {
 			e.mu.Unlock()
 			return
 		}
 	}
-	if e.statuses == nil {
-		e.statuses = make(map[string]RelayStatus)
-	}
-	status, exists := e.statuses[relayURL]
-	if !exists {
-		status = RelayStatus{RelayURL: relayURL, State: RelayConnecting}
+	status := RelayStatus{RelayURL: relayURL, State: RelayConnecting}
+	if rec != nil && rec.status != nil {
+		status = *rec.status
 	}
 	previous := status
 	status.RelayURL = relayURL
@@ -593,10 +637,8 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	if update.err != nil {
 		status.Err = update.err
 		if errors.Is(update.err, errMITMDetected) {
-			if e.blockedRelays == nil {
-				e.blockedRelays = make(map[string]error)
-			}
-			e.blockedRelays[relayURL] = update.err
+			rec = e.relayRecordLocked(relayURL)
+			rec.blocked = update.err
 		}
 	} else if update.state != RelayFailed {
 		status.Err = nil
@@ -617,7 +659,8 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	}
 	advertised := previous.State != RelayReady && status.State == RelayReady && status.PublicURL != ""
 	if !relayStatusEqual(previous, status) {
-		e.statuses[relayURL] = status
+		rec = e.relayRecordLocked(relayURL)
+		rec.status = &status
 		e.notifyStateChangedLocked()
 	} else {
 		e.mu.Unlock()
@@ -732,12 +775,11 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
 	}
 
 	e.mu.Lock()
-	if e.statuses == nil {
-		e.statuses = make(map[string]RelayStatus)
-	}
 	changed := false
 	for relayURL, status := range desired {
-		if current, ok := e.statuses[relayURL]; ok {
+		rec := e.relayRecordLocked(relayURL)
+		if rec.status != nil {
+			current := *rec.status
 			status.PublicURL = current.PublicURL
 			status.UDPAddr = current.UDPAddr
 			status.TCPAddr = current.TCPAddr
@@ -749,15 +791,20 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
 				continue
 			}
 		}
-		e.statuses[relayURL] = status
+		rec.status = &status
 		changed = true
 	}
 	var deselected []RelayStatus
-	for relayURL, previous := range e.statuses {
+	for relayURL, rec := range e.relays {
 		if _, ok := desired[relayURL]; ok {
 			continue
 		}
-		delete(e.statuses, relayURL)
+		if rec.status == nil {
+			continue
+		}
+		previous := *rec.status
+		rec.status = nil
+		e.dropRelayRecordLocked(relayURL, rec)
 		changed = true
 		previous.Deselected = true
 		deselected = append(deselected, previous)
@@ -792,12 +839,12 @@ func (e *Exposure) reportDeselectedRelays(deselected []RelayStatus) {
 
 func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <-chan struct{}) {
 	e.mu.RLock()
-	ready := make([]RelayStatus, 0, len(e.statuses))
-	for _, status := range e.statuses {
-		if !matches(status) {
+	ready := make([]RelayStatus, 0, len(e.relays))
+	for _, rec := range e.relays {
+		if rec.status == nil || !matches(*rec.status) {
 			continue
 		}
-		ready = append(ready, status)
+		ready = append(ready, *rec.status)
 	}
 	changed := e.stateChanged
 	e.mu.RUnlock()
@@ -874,12 +921,15 @@ func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
 		return net.ErrClosed
 	}
 	e.mu.RLock()
-	listener := e.relayListeners[frame.RelayURL]
+	var ln *listener
+	if rec := e.relays[frame.RelayURL]; rec != nil {
+		ln = rec.listener
+	}
 	e.mu.RUnlock()
-	if listener == nil {
+	if ln == nil {
 		return net.ErrClosed
 	}
-	return listener.sendDatagram(frame)
+	return ln.sendDatagram(frame)
 }
 
 // WaitDatagramReady waits until at least one relay has an authenticated UDP
@@ -993,25 +1043,30 @@ func (e *Exposure) Close() error {
 		}
 
 		e.mu.Lock()
-		relayListeners := e.relayListeners
-		e.relayListeners = make(map[string]*listener)
+		listeners := make(map[string]*listener, len(e.relays))
+		for relayURL, rec := range e.relays {
+			if rec.listener == nil {
+				continue
+			}
+			listeners[relayURL] = rec.listener
+			rec.listener = nil
+			e.dropRelayRecordLocked(relayURL, rec)
+		}
 		e.mu.Unlock()
 
-		relayURLs := make([]string, 0, len(relayListeners))
-		for relayURL, listener := range relayListeners {
+		relayURLs := make([]string, 0, len(listeners))
+		for relayURL, listener := range listeners {
 			relayURLs = append(relayURLs, relayURL)
-			if listener != nil {
-				closeErr = errors.Join(closeErr, listener.Close())
-			}
+			closeErr = errors.Join(closeErr, listener.Close())
 		}
 
 		event := log.Debug().
-			Int("relay_count", len(relayListeners)).
+			Int("relay_count", len(listeners)).
 			Strs("relays", relayURLs)
 		if closeErr != nil {
 			event = log.Warn().
 				Err(closeErr).
-				Int("relay_count", len(relayListeners)).
+				Int("relay_count", len(listeners)).
 				Strs("relays", relayURLs)
 		}
 		event.Msg("exposure closed")
@@ -1050,9 +1105,9 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	desired := make(map[string]struct{}, len(relayURLs))
 	for _, relayURL := range relayURLs {
 		e.mu.RLock()
-		_, blocked := e.blockedRelays[relayURL]
+		rec := e.relays[relayURL]
 		e.mu.RUnlock()
-		if blocked {
+		if rec != nil && rec.blocked != nil {
 			continue
 		}
 		desired[relayURL] = struct{}{}
@@ -1066,13 +1121,16 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	e.mu.Lock()
 	staleListeners := make(map[string]*listener)
 	stateChanged := false
-	for relayURL, listener := range e.relayListeners {
-		_, wanted := desired[relayURL]
-		if wanted && listener != nil {
+	for relayURL, rec := range e.relays {
+		if rec.listener == nil {
 			continue
 		}
-		staleListeners[relayURL] = listener
-		delete(e.relayListeners, relayURL)
+		if _, wanted := desired[relayURL]; wanted {
+			continue
+		}
+		staleListeners[relayURL] = rec.listener
+		rec.listener = nil
+		e.dropRelayRecordLocked(relayURL, rec)
 		stateChanged = true
 	}
 	missingRelayURLs := make([]string, 0)
@@ -1080,7 +1138,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		if _, wanted := desired[relayURL]; !wanted {
 			continue
 		}
-		if _, exists := e.relayListeners[relayURL]; exists {
+		if rec := e.relays[relayURL]; rec != nil && rec.listener != nil {
 			continue
 		}
 		missingRelayURLs = append(missingRelayURLs, relayURL)
@@ -1093,9 +1151,6 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 
 	addedRelayURLs := make([]string, 0, len(missingRelayURLs))
 	for relayURL, listener := range staleListeners {
-		if listener == nil {
-			continue
-		}
 		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Warn().Err(err).Str("relay_url", relayURL).Msg("close stale relay listener")
 		}
@@ -1155,13 +1210,15 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 // installed.
 func (e *Exposure) publishCreatedListener(relayURL string, listener *listener) bool {
 	e.mu.Lock()
-	if blockErr, blocked := e.blockedRelays[relayURL]; blocked {
+	rec := e.relays[relayURL]
+	if rec != nil && rec.blocked != nil {
+		blockErr := rec.blocked
 		e.mu.Unlock()
 		_ = listener.Close()
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, failure: RelayFailureMITM, err: blockErr})
 		return false
 	}
-	if _, exists := e.relayListeners[relayURL]; exists {
+	if rec != nil && rec.listener != nil {
 		e.mu.Unlock()
 		_ = listener.Close()
 		return false
@@ -1173,7 +1230,7 @@ func (e *Exposure) publishCreatedListener(relayURL string, listener *listener) b
 		return false
 	default:
 	}
-	e.relayListeners[relayURL] = listener
+	e.relayRecordLocked(relayURL).listener = listener
 	e.acceptLoops.Add(1)
 	e.mu.Unlock()
 
@@ -1240,8 +1297,9 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 	}
 	defer func() {
 		e.mu.Lock()
-		if current, ok := e.relayListeners[relayURL]; ok && current == listener {
-			delete(e.relayListeners, relayURL)
+		if rec := e.relays[relayURL]; rec != nil && rec.listener == listener {
+			rec.listener = nil
+			e.dropRelayRecordLocked(relayURL, rec)
 		}
 		e.mu.Unlock()
 	}()

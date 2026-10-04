@@ -18,15 +18,14 @@ func newExposureStateTest(t *testing.T, relayURLs ...string) *Exposure {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	exposure := &Exposure{
-		cancel:         cancel,
-		done:           ctx.Done(),
-		relayURLs:      append([]string(nil), relayURLs...),
-		metadata:       types.LeaseMetadata{},
-		accepted:       make(chan net.Conn, 2),
-		relayListeners: make(map[string]*listener),
-		statuses:       make(map[string]RelayStatus),
-		stateChanged:   make(chan struct{}),
-		updates:        make(chan RelayStatus, 1),
+		cancel:       cancel,
+		done:         ctx.Done(),
+		relayURLs:    append([]string(nil), relayURLs...),
+		metadata:     types.LeaseMetadata{},
+		accepted:     make(chan net.Conn, 2),
+		relays:       make(map[string]*relayRuntime),
+		stateChanged: make(chan struct{}),
+		updates:      make(chan RelayStatus, 1),
 	}
 	t.Cleanup(func() { _ = exposure.Close() })
 	return exposure
@@ -235,10 +234,10 @@ func TestExposeRejectsNilOption(t *testing.T) {
 func TestProxyValidationDoesNotCloseExposure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	exposure := &Exposure{
-		cancel:         cancel,
-		done:           ctx.Done(),
-		accepted:       make(chan net.Conn, 1),
-		relayListeners: make(map[string]*listener),
+		cancel:   cancel,
+		done:     ctx.Done(),
+		accepted: make(chan net.Conn, 1),
+		relays:   make(map[string]*relayRuntime),
 	}
 	if err := ProxyWithConfig(ctx, exposure, ProxyConfig{}); err == nil {
 		t.Fatal("ProxyWithConfig() succeeded without a target")
@@ -310,8 +309,8 @@ func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
 		metadata: types.LeaseMetadata{Tags: []string{"initial"}},
 	}
 	exposure := &Exposure{
-		metadata:       types.LeaseMetadata{Tags: []string{"initial"}},
-		relayListeners: map[string]*listener{"https://relay.example": ln},
+		metadata: types.LeaseMetadata{Tags: []string{"initial"}},
+		relays:   map[string]*relayRuntime{"https://relay.example": {listener: ln}},
 	}
 	metadata := exposure.metadata.Copy()
 	metadata.Tags[0] = "mutated"
@@ -597,7 +596,7 @@ func TestStaleListenerStatusCannotRecreateDeselectedMembership(t *testing.T) {
 	})
 
 	// End state of reconcileRelayListeners for relay A: the listener was
-	// detached first (relayListeners no longer holds the slot), then the
+	// detached first (the relay record's listener slot is cleared), then the
 	// membership status was deleted with a tombstone collected.
 	deselected := exposure.syncRelayStatuses([]string{relayB})
 	if len(deselected) != 1 || deselected[0].RelayURL != relayA || !deselected[0].Deselected ||
@@ -620,7 +619,7 @@ func TestStaleListenerStatusCannotRecreateDeselectedMembership(t *testing.T) {
 	// to its own slot, and the old owner cannot overwrite them.
 	owner := &listener{}
 	exposure.mu.Lock()
-	exposure.relayListeners[relayB] = owner
+	exposure.relays[relayB].listener = owner
 	exposure.mu.Unlock()
 	exposure.setListenerRelayStatus(relayB, owner, listenerStatus{
 		state: RelayFailed,
@@ -656,7 +655,7 @@ func TestImmediateReadyCommitmentThenDeselectCarriesPublicURL(t *testing.T) {
 	// committed to the authoritative snapshot by the owning listener.
 	owner := &listener{}
 	exposure.mu.Lock()
-	exposure.relayListeners[relayA] = owner
+	exposure.relays[relayA].listener = owner
 	exposure.mu.Unlock()
 	exposure.setListenerRelayStatus(relayA, owner, listenerStatus{
 		state:     RelayReady,
@@ -670,7 +669,7 @@ func TestImmediateReadyCommitmentThenDeselectCarriesPublicURL(t *testing.T) {
 	// Deselect immediately after the advertisement precondition: the
 	// tombstone must carry the same URL, so the removal log fires.
 	exposure.mu.Lock()
-	delete(exposure.relayListeners, relayA)
+	exposure.relays[relayA].listener = nil
 	exposure.mu.Unlock()
 	deselected := exposure.syncRelayStatuses([]string{relayB})
 	if len(deselected) != 1 || deselected[0].RelayURL != relayA || !deselected[0].Deselected ||
@@ -687,7 +686,7 @@ func TestImmediateReadyCommitmentThenDeselectCarriesPublicURL(t *testing.T) {
 // itself contains no blocking I/O (relay startup runs in a background
 // goroutine), so the creation window cannot be held open by an external
 // dial target; the recheck contract is therefore exercised exactly where
-// it lives. Deleting the blockedRelays recheck inside publishCreatedListener
+// it lives. Deleting the block recheck inside publishCreatedListener
 // installs the listener and fails this test.
 func TestExposurePublishCreatedListenerClosesRelayBlockedDuringCreation(t *testing.T) {
 	const relayURL = "https://relay.example"
@@ -706,7 +705,7 @@ func TestExposurePublishCreatedListenerClosesRelayBlockedDuringCreation(t *testi
 
 	// The relay was eligible when reconcile snapshotted desired membership;
 	// MITM detection lands while the listener is being created.
-	exposure.blockedRelays = map[string]error{relayURL: errMITMDetected}
+	exposure.relays[relayURL] = &relayRuntime{blocked: errMITMDetected}
 
 	if exposure.publishCreatedListener(relayURL, created) {
 		t.Fatal("publishCreatedListener() = true, want false for relay blocked during creation")
