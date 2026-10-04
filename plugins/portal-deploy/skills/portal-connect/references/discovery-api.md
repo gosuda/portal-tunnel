@@ -99,7 +99,7 @@ So "not listed" means hidden, gone, elsewhere, or dormant. It never proves the h
 
 ## Hostname rule
 
-The publisher's `--name` is normalized to a DNS label of at most 22 characters. A lease reports both the friendly `<label>.<relay-host>` hostname (when available) and the canonical `<label>-<40-lowercase-address-hex>.<relay-host>` hostname. Prefer `canonical_hostname` for links and probes because it is permanently scoped to the SIWE-authenticated identity. The address suffix also makes services from the same identity publicly correlatable across relay domains.
+The publisher's `--name` is normalized to a DNS label whose ASCII form is at most 22 characters. A lease reports both the friendly `<label>.<relay-host>` hostname (when available) and the canonical `<label>-<40-lowercase-address-hex>.<relay-host>` hostname. Prefer `canonical_hostname` for links and probes because it is permanently scoped to the SIWE-authenticated identity. The address suffix also makes services from the same identity publicly correlatable across relay domains.
 
 Raw endpoints use the canonical hostname with the allocated port. The port is stable while the same `(name, identity)` keeps the lease.
 

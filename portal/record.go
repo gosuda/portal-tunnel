@@ -35,7 +35,8 @@ type leaseRecord struct {
 	stream   *transport.RelayStream
 }
 
-// cacheLease copies registry facts while the caller holds the registry lock.
+// cacheLease adapts registry facts to the cache's canonical hostname key while
+// the caller holds the registry lock.
 func (r *leaseRecord) cacheLease() cache.Lease {
 	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.CanonicalHostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }

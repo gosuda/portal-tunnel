@@ -37,7 +37,6 @@ type cachedSite struct {
 	ttl                  time.Duration
 	expiresAt, usedAt    time.Time
 	readers              int
-	retired              bool
 }
 
 // New requires an explicit storage directory from the host application.
@@ -87,13 +86,10 @@ func New(cfg Config, dir string) (*Manager, error) {
 // retireLocked removes routing immediately, while readers and failed disk
 // cleanup keep their bytes charged until the directory is actually removed.
 func (c *Manager) retireLocked(site *cachedSite) {
-	if site == nil || site.retired {
+	if site == nil || c.entries[site.host] != site {
 		return
 	}
-	site.retired = true
-	if c.entries[site.host] == site {
-		delete(c.entries, site.host)
-	}
+	delete(c.entries, site.host)
 	c.retired = append(c.retired, site)
 }
 
@@ -127,8 +123,6 @@ func (c *Manager) Register(lease Lease, req types.RegisterChallengeRequest) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// Cache routing is identity-bound. Friendly aliases remain live-origin
-	// routes and never acquire an offline lifetime.
 	if site := c.entries[lease.Hostname]; site != nil {
 		c.retireLocked(site)
 	}

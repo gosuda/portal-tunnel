@@ -58,9 +58,10 @@ portal expose 3000 \
   --identity-path ~/.config/portal/myapp.identity.json
 ```
 
-The public lease name is a single DNS label of at most 22 ASCII characters,
-such as `myapp`. It is not an ENS name such as `alice.eth`. Each registration
-can expose a friendly hostname and always exposes an identity-bound hostname:
+The public lease name is normalized to a single DNS label whose ASCII form is
+at most 22 characters, such as `myapp`. It is not an ENS name such as
+`alice.eth`. Each registration can expose a friendly hostname and always
+exposes an identity-bound hostname:
 
 ```text
 myapp.portal.example
@@ -75,7 +76,7 @@ stable without stored ownership state. It also makes services published by
 the same Ethereum address publicly correlatable across relay domains. Existing
 protocol-10 clients and identities with longer names must keep using a
 protocol-10 relay until they are upgraded and renamed; protocol 11 rejects
-names longer than 22 characters.
+names whose normalized ASCII label is longer than 22 characters.
 
 ## Relay Admin Token Login
 

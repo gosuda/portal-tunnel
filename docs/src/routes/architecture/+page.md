@@ -416,7 +416,7 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 - `POST /sdk/register/challenge` then `POST /sdk/register`.
 - Caller signs the returned SIWE message with the identity secp256k1 key (`personal_sign`).
-- `name` must be a valid single DNS label of at most 22 characters. The relay publishes the friendly `<name>.<root host>` route when available and always derives `<name>-<40 lowercase address hex>.<root host>` from the SIWE-authenticated identity.
+- `name` must normalize to a valid single DNS label of at most 22 ASCII characters. The relay publishes the friendly `<name>.<root host>` route when available and always derives `<name>-<40 lowercase address hex>.<root host>` from the SIWE-authenticated identity.
 - Registration publishes the identity-bound route immediately. A friendly-name conflict does not transfer or block the canonical origin; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`.
 - On success, the relay issues a lease-scoped ES256K JWT access token for lease operations and a separate reverse-only capability for the returned reverse endpoint.
 - UDP registration requires server `UDP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and admin enablement. Failures: `udp_disabled` (403), `udp_capacity_exceeded` (503), `udp_port_exhausted` (503).

@@ -3,6 +3,8 @@ package portal
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -26,12 +28,16 @@ func signLeaseRequest(t *testing.T, token string) *http.Request {
 
 func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegistry {
 	t.Helper()
+	minPort, maxPort := 0, 0
+	if udpEnabled || tcpPortEnabled {
+		minPort, maxPort = testPortRange(t, 2)
+	}
 	relay, err := identity.LoadOrCreateRelayIdentity(filepath.Join(t.TempDir(), types.RelayIdentityFilename), "example.com")
 	if err != nil {
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
-	registry, err := newLeaseRegistry(10000, 10100, relay.Name, 443, relayAuthority, "https://example.com")
+	registry, err := newLeaseRegistry(minPort, maxPort, relay.Name, 443, relayAuthority, "https://example.com")
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
@@ -41,6 +47,44 @@ func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegist
 	// repeated runs in one process free of port collisions.
 	t.Cleanup(func() { registry.CloseAll() })
 	return registry
+}
+
+func testPortRange(t *testing.T, size int) (int, int) {
+	t.Helper()
+	for range 100 {
+		first, err := net.ListenTCP("tcp", &net.TCPAddr{Port: 0})
+		if err != nil {
+			t.Fatalf("reserve ephemeral TCP port: %v", err)
+		}
+		minPort := first.Addr().(*net.TCPAddr).Port
+		maxPort := minPort + size - 1
+		listeners := []io.Closer{first}
+		available := maxPort <= 65535
+		for port := minPort; available && port <= maxPort; port++ {
+			if port != minPort {
+				listener, listenErr := net.ListenTCP("tcp", &net.TCPAddr{Port: port})
+				if listenErr != nil {
+					available = false
+					break
+				}
+				listeners = append(listeners, listener)
+			}
+			packet, listenErr := net.ListenUDP("udp", &net.UDPAddr{Port: port})
+			if listenErr != nil {
+				available = false
+				break
+			}
+			listeners = append(listeners, packet)
+		}
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
+		if available {
+			return minPort, maxPort
+		}
+	}
+	t.Fatal("could not find an ephemeral port range for raw transport test")
+	return 0, 0
 }
 
 func newTestLeaseIdentity(t *testing.T, name string) types.Identity {
@@ -384,7 +428,7 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 	}
 }
 
-func TestIssueRegisterChallengeRejectsOverlongCanonicalName(t *testing.T) {
+func TestIssueRegisterChallengeRejectsOverlongName(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
@@ -393,19 +437,6 @@ func TestIssueRegisterChallengeRejectsOverlongCanonicalName(t *testing.T) {
 	}, "example.com", "https://example.com"+types.PathSDKRegister, "203.0.113.50")
 	if err == nil || !strings.Contains(err.Error(), "22 characters or fewer") {
 		t.Fatalf("issueRegisterChallenge() error = %v, want clear 22-character limit", err)
-	}
-}
-
-func TestIssueRegisterChallengeRejectsCanonicalLookingFriendlyName(t *testing.T) {
-	t.Parallel()
-
-	registry := newTestRegistry(t, false, false)
-	canonicalLookingName := "herdr-" + strings.Repeat("a", 40)
-	_, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{
-		Identity: newTestLeaseIdentity(t, canonicalLookingName),
-	}, "example.com", "https://example.com"+types.PathSDKRegister, "203.0.113.50")
-	if err == nil || !strings.Contains(err.Error(), "22 characters or fewer") {
-		t.Fatalf("issueRegisterChallenge(canonical-looking name) error = %v, want reserved namespace rejection", err)
 	}
 }
 
@@ -419,7 +450,7 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
 	newRegistry := func() *leaseRegistry {
 		t.Helper()
-		registry, registryErr := newLeaseRegistry(10000, 10100, relay.Name, 443, relayAuthority, "https://example.com")
+		registry, registryErr := newLeaseRegistry(0, 0, relay.Name, 443, relayAuthority, "https://example.com")
 		if registryErr != nil {
 			t.Fatalf("newLeaseRegistry() error = %v", registryErr)
 		}
