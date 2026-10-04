@@ -36,13 +36,6 @@ func (i Identity) Copy() Identity {
 	}
 }
 
-// canonicalIdentityPart lowercases and trims one identity key part; it is the
-// single home of the canonicalization rule shared by the key constructor and
-// parser.
-func canonicalIdentityPart(part string) string {
-	return strings.TrimSpace(strings.ToLower(part))
-}
-
 // ServiceIdentityKey is the comparable in-process identity of a service.
 // String serialization belongs at API, persistence, token, and log boundaries.
 type ServiceIdentityKey struct {
@@ -52,8 +45,8 @@ type ServiceIdentityKey struct {
 
 func NewServiceIdentityKey(name, address string) ServiceIdentityKey {
 	return ServiceIdentityKey{
-		name:    canonicalIdentityPart(name),
-		address: canonicalIdentityPart(address),
+		name:    strings.TrimSpace(strings.ToLower(name)),
+		address: strings.TrimSpace(strings.ToLower(address)),
 	}
 }
 
