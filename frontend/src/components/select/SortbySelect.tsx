@@ -12,6 +12,7 @@ interface SortbySelectProps {
   sortBy: SortOption;
   onSortByChange: (value: SortOption) => void;
   hideFiltersOnMobile?: boolean;
+  allowRecommendationSort?: boolean;
   className?: string;
 }
 
@@ -19,6 +20,7 @@ export const SortbySelect = ({
   sortBy,
   onSortByChange,
   hideFiltersOnMobile,
+  allowRecommendationSort = false,
   className,
 }: SortbySelectProps) => (
   <Select
@@ -26,8 +28,10 @@ export const SortbySelect = ({
     onValueChange={(value) => onSortByChange(value as SortOption)}
   >
     <SelectTrigger
+      aria-label="Sort by"
       className={clsx(
-        "w-37.5 h-10 border-border!",
+        "h-10 border-border!",
+        allowRecommendationSort ? "w-48" : "w-37.5",
         hideFiltersOnMobile && "hidden sm:flex",
         className
       )}
@@ -36,6 +40,9 @@ export const SortbySelect = ({
     </SelectTrigger>
     <SelectContent>
       <SelectItem value="default">Default</SelectItem>
+      {allowRecommendationSort && (
+        <SelectItem value="recommended">Most recommended</SelectItem>
+      )}
       <SelectItem value="name-asc">Name (A-Z)</SelectItem>
       <SelectItem value="name-desc">Name (Z-A)</SelectItem>
       <SelectItem value="updated">Recently Updated</SelectItem>

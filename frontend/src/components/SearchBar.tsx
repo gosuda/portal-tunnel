@@ -18,6 +18,7 @@ interface SearchBarProps {
   onAddTag: (tag: string) => void;
   onRemoveTag: (tag: string) => void;
   hideFiltersOnMobile?: boolean;
+  allowRecommendationSort?: boolean;
   setShowFilterModal?: Dispatch<SetStateAction<boolean>>;
 }
 
@@ -33,6 +34,7 @@ export function SearchBar({
   onAddTag,
   onRemoveTag,
   hideFiltersOnMobile = false,
+  allowRecommendationSort = false,
   setShowFilterModal,
 }: SearchBarProps) {
   return (
@@ -67,6 +69,7 @@ export function SearchBar({
       />
 
       <SortbySelect
+        allowRecommendationSort={allowRecommendationSort}
         sortBy={sortBy}
         onSortByChange={onSortByChange}
         hideFiltersOnMobile={hideFiltersOnMobile}

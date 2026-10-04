@@ -194,6 +194,11 @@ export function useList<T extends BaseServer>({
 
     const sortByField = (sortValue: SortOption) => {
       switch (sortValue) {
+        case "recommended":
+          return (a: T, b: T) =>
+            (b.reputation?.up ?? 0) - (a.reputation?.up ?? 0) ||
+            a.name.localeCompare(b.name) ||
+            a.id.localeCompare(b.id);
         case "name-asc":
           return (a: T, b: T) => a.name.localeCompare(b.name);
         case "name-desc":
