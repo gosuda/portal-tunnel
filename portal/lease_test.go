@@ -244,22 +244,22 @@ func TestLeaseRegistryLegacyClientRejectsHostnameConflict(t *testing.T) {
 	}
 }
 
-func TestLeaseRegistryCanonicalHostnameCapabilityIsolatesSameName(t *testing.T) {
+func TestLeaseRegistryAllowsCanonicalFallbackForSameName(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
 	firstIdentity := newTestLeaseIdentity(t, "conflict")
 	_, first, err := registry.Register(types.RegisterChallengeRequest{
-		CanonicalHostname: true,
-		Identity:          firstIdentity,
+		AllowCanonicalFallback: true,
+		Identity:               firstIdentity,
 	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register(conflict first) error = %v", err)
 	}
 	secondIdentity := newTestLeaseIdentity(t, "conflict")
 	_, second, err := registry.Register(types.RegisterChallengeRequest{
-		CanonicalHostname: true,
-		Identity:          secondIdentity,
+		AllowCanonicalFallback: true,
+		Identity:               secondIdentity,
 	}, "203.0.113.11", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register(conflict second) error = %v", err)
@@ -283,14 +283,14 @@ func TestLeaseRegistryCanonicalHostnameCapabilityIsolatesSameName(t *testing.T) 
 	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: first.AccessToken}); err != nil {
 		t.Fatalf("Unregister(first) error = %v", err)
 	}
-	_, secondReconnect, err := registry.Register(types.RegisterChallengeRequest{CanonicalHostname: true, Identity: secondIdentity}, "203.0.113.11", "", types.RelayDescriptor{}, nil)
+	_, secondReconnect, err := registry.Register(types.RegisterChallengeRequest{AllowCanonicalFallback: true, Identity: secondIdentity}, "203.0.113.11", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register(second reconnect) error = %v", err)
 	}
 	if secondReconnect.Hostname != "conflict.example.com" || secondReconnect.CanonicalHostname != second.CanonicalHostname {
 		t.Fatalf("second reconnect hostnames = (%q, %q), want friendly reuse with stable canonical %q", secondReconnect.Hostname, secondReconnect.CanonicalHostname, second.CanonicalHostname)
 	}
-	_, firstReconnect, err := registry.Register(types.RegisterChallengeRequest{CanonicalHostname: true, Identity: firstIdentity}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
+	_, firstReconnect, err := registry.Register(types.RegisterChallengeRequest{AllowCanonicalFallback: true, Identity: firstIdentity}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register(first reconnect) error = %v", err)
 	}
@@ -549,7 +549,7 @@ func TestPortPoolReusesPortAfterReservationExpires(t *testing.T) {
 func TestLeasePortsStayWithServiceIdentityAcrossReconnect(t *testing.T) {
 	registry := newTestRegistry(t, true, true)
 	firstIdentity := newTestLeaseIdentity(t, "shared")
-	request := types.RegisterChallengeRequest{CanonicalHostname: true, Identity: firstIdentity, UDPEnabled: true, TCPEnabled: true}
+	request := types.RegisterChallengeRequest{AllowCanonicalFallback: true, Identity: firstIdentity, UDPEnabled: true, TCPEnabled: true}
 	firstRecord, first, err := registry.Register(request, "", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -373,7 +373,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 				return nil, types.RegisterResponse{}, errHostnameConflict
 			}
 			if existing.Hostname != "" && existing.Hostname == record.Hostname {
-				if !req.CanonicalHostname {
+				if !req.AllowCanonicalFallback {
 					r.mu.Unlock()
 					r.closeRecord(record)
 					return nil, types.RegisterResponse{}, errHostnameConflict

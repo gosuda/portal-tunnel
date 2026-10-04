@@ -74,9 +74,10 @@ each relay domain supplies a distinct browser origin for that same identity.
 The full lowercase 40-character address suffix makes each relay-local origin
 stable without stored ownership state. It also makes services published by
 the same Ethereum address publicly correlatable across relay domains. Protocol
-10 clients use the friendly hostname unless they opt in to canonical hostname
-semantics. All lease names are limited to normalized ASCII labels of at most 22
-characters so canonical labels stay within the DNS label limit.
+10 clients receive a hostname conflict when their friendly alias is unavailable
+unless they allow canonical fallback. All lease names are limited to normalized
+ASCII labels of at most 22 characters so canonical labels stay within the DNS
+label limit.
 
 ## Relay Admin Token Login
 

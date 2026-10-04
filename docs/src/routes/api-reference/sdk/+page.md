@@ -73,7 +73,7 @@ which are configured locally by the tunnel process.
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `identity` | `Identity` | yes | `name` and `address` |
-| `canonical_hostname` | `boolean` | no | opt in to identity-bound hostname semantics; defaults to `false` for protocol-10 compatibility |
+| `allow_canonical_fallback` | `boolean` | no | allow canonical-only registration when the friendly alias is unavailable; defaults to `false` for protocol-10 compatibility |
 | `metadata` | `LeaseMetadata` | no | public lease metadata |
 | `overlay` | `boolean` | no | prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to `false` |
 | `ttl` | `number` | no | requested TTL in seconds |
@@ -108,7 +108,7 @@ Cache opt-in is incompatible with raw TCP/UDP leases.
 | Field | Type | Notes |
 |-------|------|-------|
 | `identity` | `Identity` | normalized lease identity |
-| `hostname` | `string` | friendly hostname; empty for a canonical-capable client when another identity currently holds the friendly name |
+| `hostname` | `string` | friendly hostname; empty when a client that allows canonical fallback finds the friendly name owned by another identity |
 | `canonical_hostname` | `string` | relay-derived identity-bound hostname used by the SDK |
 | `expires_at` | `string` | lease expiry |
 | `access_token` | `string` | token for renew, unregister, signer access, and direct datagram backhaul |
@@ -119,10 +119,10 @@ Cache opt-in is incompatible with raw TCP/UDP leases.
 The SDK uses the returned `canonical_hostname`; it does not derive or accept a
 client-supplied address suffix. The canonical label contains the normalized
 name, a hyphen, and all 40 lowercase hexadecimal characters of the
-SIWE-authenticated Ethereum address. The current SDK advertises canonical
-hostname support. A protocol-10 client that omits the capability receives
-`hostname_conflict` instead of a canonical-only registration when its friendly
-hostname is already owned by another identity.
+SIWE-authenticated Ethereum address. The current SDK allows canonical fallback.
+A protocol-10 client that omits the capability receives `hostname_conflict`
+instead of a canonical-only registration when its friendly hostname is already
+owned by another identity.
 
 `ReverseEndpoint`:
 

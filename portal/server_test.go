@@ -114,10 +114,10 @@ func TestRawPortsAreAllocatedPerIdentity(t *testing.T) {
 	register := func(clientIP string) types.RegisterResponse {
 		t.Helper()
 		_, resp, err := registry.Register(types.RegisterChallengeRequest{
-			CanonicalHostname: true,
-			Identity:          newTestLeaseIdentity(t, "shared"),
-			UDPEnabled:        true,
-			TCPEnabled:        true,
+			AllowCanonicalFallback: true,
+			Identity:               newTestLeaseIdentity(t, "shared"),
+			UDPEnabled:             true,
+			TCPEnabled:             true,
 		}, clientIP, "", types.RelayDescriptor{}, nil)
 		if err != nil {
 			t.Fatalf("registry.Register() error = %v", err)
