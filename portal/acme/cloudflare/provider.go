@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/zonecache"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -23,7 +23,7 @@ const (
 type Provider struct {
 	token string
 
-	zones *utils.Snapshot[map[string]string]
+	zones *zonecache.Cache
 }
 
 type apiError struct {
@@ -75,7 +75,7 @@ type dnssecResult struct {
 func New(token string) *Provider {
 	return &Provider{
 		token: strings.TrimSpace(token),
-		zones: utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
+		zones: zonecache.New(),
 	}
 }
 
@@ -279,14 +279,10 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, 
 }
 
 func (p *Provider) findZoneID(ctx context.Context, domain string) (string, error) {
-	domain = utils.NormalizeHostname(domain)
-	candidates := utils.DomainCandidates(domain)
+	domain, candidates := zonecache.Candidates(domain)
 
-	zones := p.zones.Load()
-	for _, candidate := range candidates {
-		if zoneID := zones[candidate]; zoneID != "" {
-			return zoneID, nil
-		}
+	if zoneID, _, ok := p.zones.Lookup(candidates); ok {
+		return zoneID, nil
 	}
 
 	for _, candidate := range candidates {
@@ -300,13 +296,7 @@ func (p *Provider) findZoneID(ctx context.Context, domain string) (string, error
 				if zoneID == "" {
 					continue
 				}
-				zoneName := utils.NormalizeHostname(z.Name)
-				p.zones.UpdateCopy(func(zones *map[string]string) {
-					if *zones == nil {
-						*zones = make(map[string]string)
-					}
-					(*zones)[zoneName] = zoneID
-				})
+				p.zones.Set(z.Name, zoneID)
 				return zoneID, nil
 			}
 		}

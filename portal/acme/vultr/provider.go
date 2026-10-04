@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 
 	"github.com/go-acme/lego/v4/challenge"
@@ -14,6 +13,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/zonecache"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -22,13 +22,13 @@ const defaultRecordTTL = 60
 type Provider struct {
 	apiKey string
 
-	zones *utils.Snapshot[map[string]string]
+	zones *zonecache.Cache
 }
 
 func New(apiKey string) *Provider {
 	return &Provider{
 		apiKey: strings.TrimSpace(apiKey),
-		zones:  utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
+		zones:  zonecache.New(),
 	}
 }
 
@@ -234,14 +234,10 @@ func (p *Provider) findZone(ctx context.Context, client *govultr.Client, domain 
 	if client == nil {
 		return "", errors.New("vultr client is nil")
 	}
-	domain = utils.NormalizeHostname(domain)
-	candidates := utils.DomainCandidates(domain)
+	domain, candidates := zonecache.Candidates(domain)
 
-	zones := p.zones.Load()
-	for _, candidate := range candidates {
-		if zone := zones[candidate]; zone != "" {
-			return zone, nil
-		}
+	if zone, _, ok := p.zones.Lookup(candidates); ok {
+		return zone, nil
 	}
 
 	listOptions := &govultr.ListOptions{PerPage: 100}
@@ -256,12 +252,7 @@ func (p *Provider) findZone(ctx context.Context, client *govultr.Client, domain 
 				if zone != candidate {
 					continue
 				}
-				p.zones.UpdateCopy(func(zones *map[string]string) {
-					if *zones == nil {
-						*zones = make(map[string]string)
-					}
-					(*zones)[candidate] = zone
-				})
+				p.zones.Set(candidate, zone)
 				return zone, nil
 			}
 		}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/route53"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/zonecache"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -37,7 +37,7 @@ type Config struct {
 
 type Provider struct {
 	cfg   Config
-	zones *utils.Snapshot[map[string]string]
+	zones *zonecache.Cache
 }
 
 func New(cfg Config) *Provider {
@@ -50,7 +50,7 @@ func New(cfg Config) *Provider {
 			HostedZoneID:    normalizeZoneID(cfg.HostedZoneID),
 			KMSKeyARN:       strings.TrimSpace(cfg.KMSKeyARN),
 		},
-		zones: utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
+		zones: zonecache.New(),
 	}
 }
 
@@ -294,16 +294,13 @@ func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Clie
 		return "", errors.New("route53 client is nil")
 	}
 
-	candidates := utils.DomainCandidates(domain)
+	_, candidates := zonecache.Candidates(domain)
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("invalid base domain for hosted zone lookup: %q", domain)
 	}
 
-	zones := p.zones.Load()
-	for _, candidate := range candidates {
-		if zoneID := zones[candidate]; zoneID != "" {
-			return zoneID, nil
-		}
+	if zoneID, _, ok := p.zones.Lookup(candidates); ok {
+		return zoneID, nil
 	}
 
 	zonesByName := make(map[string]string)
@@ -326,14 +323,7 @@ func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Clie
 		}
 	}
 
-	if len(zonesByName) > 0 {
-		p.zones.UpdateCopy(func(zones *map[string]string) {
-			if *zones == nil {
-				*zones = make(map[string]string)
-			}
-			maps.Copy((*zones), zonesByName)
-		})
-	}
+	p.zones.Merge(zonesByName)
 
 	for _, candidate := range candidates {
 		if zoneID, ok := zonesByName[candidate]; ok {

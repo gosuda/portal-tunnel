@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	legonjalla "github.com/go-acme/lego/v4/providers/dns/njalla"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/zonecache"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -28,13 +28,13 @@ const (
 
 type Provider struct {
 	token string
-	zones *utils.Snapshot[map[string]string]
+	zones *zonecache.Cache
 }
 
 func New(token string) *Provider {
 	return &Provider{
 		token: strings.TrimSpace(token),
-		zones: utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
+		zones: zonecache.New(),
 	}
 }
 
@@ -202,14 +202,10 @@ func (p *Provider) findZone(ctx context.Context, client *apiClient, domain strin
 	if client == nil {
 		return "", errors.New("njalla client is nil")
 	}
-	domain = utils.NormalizeHostname(domain)
-	candidates := utils.DomainCandidates(domain)
+	domain, candidates := zonecache.Candidates(domain)
 
-	zones := p.zones.Load()
-	for _, candidate := range candidates {
-		if zone := zones[candidate]; zone != "" {
-			return zone, nil
-		}
+	if zone, _, ok := p.zones.Lookup(candidates); ok {
+		return zone, nil
 	}
 
 	var lastErr error
@@ -218,12 +214,7 @@ func (p *Provider) findZone(ctx context.Context, client *apiClient, domain strin
 			lastErr = err
 			continue
 		}
-		p.zones.UpdateCopy(func(zones *map[string]string) {
-			if *zones == nil {
-				*zones = make(map[string]string)
-			}
-			(*zones)[candidate] = candidate
-		})
+		p.zones.Set(candidate, candidate)
 		return candidate, nil
 	}
 	if lastErr != nil {

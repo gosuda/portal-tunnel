@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/zonecache"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -34,7 +34,7 @@ type Config struct {
 
 type Provider struct {
 	cfg   Config
-	zones *utils.Snapshot[map[string]string]
+	zones *zonecache.Cache
 }
 
 type runtimeConfig struct {
@@ -49,7 +49,7 @@ func New(cfg Config) *Provider {
 			ProjectID:   strings.TrimSpace(cfg.ProjectID),
 			ManagedZone: strings.TrimSpace(cfg.ManagedZone),
 		},
-		zones: utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
+		zones: zonecache.New(),
 	}
 }
 
@@ -360,14 +360,10 @@ func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, pr
 	if service == nil {
 		return nil, errors.New("gcloud dns service is nil")
 	}
-	domain = utils.NormalizeHostname(domain)
-	candidates := utils.DomainCandidates(domain)
+	domain, candidates := zonecache.Candidates(domain)
 
-	zones := p.zones.Load()
-	for _, candidate := range candidates {
-		if zoneName := zones[candidate]; zoneName != "" {
-			return &dns.ManagedZone{Name: zoneName, DnsName: fqdn(candidate)}, nil
-		}
+	if zoneName, candidate, ok := p.zones.Lookup(candidates); ok {
+		return &dns.ManagedZone{Name: zoneName, DnsName: fqdn(candidate)}, nil
 	}
 
 	if explicit = strings.TrimSpace(explicit); explicit != "" {
@@ -378,14 +374,7 @@ func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, pr
 		if err := validateManagedZone(zone, domain, explicit); err != nil {
 			return nil, err
 		}
-		if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain != "" && zone.Name != "" {
-			p.zones.UpdateCopy(func(zones *map[string]string) {
-				if *zones == nil {
-					*zones = make(map[string]string)
-				}
-				(*zones)[zoneDomain] = zone.Name
-			})
-		}
+		p.zones.Set(zone.DnsName, zone.Name)
 		return zone, nil
 	}
 
@@ -398,14 +387,7 @@ func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, pr
 			if !isPublicZone(zone) || utils.NormalizeHostname(zone.DnsName) != candidate {
 				continue
 			}
-			if zone.Name != "" {
-				p.zones.UpdateCopy(func(zones *map[string]string) {
-					if *zones == nil {
-						*zones = make(map[string]string)
-					}
-					(*zones)[candidate] = zone.Name
-				})
-			}
+			p.zones.Set(candidate, zone.Name)
 			return zone, nil
 		}
 	}

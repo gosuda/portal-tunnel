@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/hetznercloud/hcloud-go/v2/hcloud/exp/zoneutil"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/zonecache"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -24,13 +24,13 @@ const defaultRecordTTL = 60
 type Provider struct {
 	apiToken string
 
-	zones *utils.Snapshot[map[string]string]
+	zones *zonecache.Cache
 }
 
 func New(apiToken string) *Provider {
 	return &Provider{
 		apiToken: strings.TrimSpace(apiToken),
-		zones:    utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
+		zones:    zonecache.New(),
 	}
 }
 
@@ -198,14 +198,10 @@ func (p *Provider) findZone(ctx context.Context, client *hcloud.Client, domain s
 	if client == nil {
 		return nil, errors.New("hetzner client is nil")
 	}
-	domain = utils.NormalizeHostname(domain)
-	candidates := utils.DomainCandidates(domain)
+	domain, candidates := zonecache.Candidates(domain)
 
-	zones := p.zones.Load()
-	for _, candidate := range candidates {
-		if zoneName := zones[candidate]; zoneName != "" {
-			return &hcloud.Zone{Name: zoneName}, nil
-		}
+	if zoneName, _, ok := p.zones.Lookup(candidates); ok {
+		return &hcloud.Zone{Name: zoneName}, nil
 	}
 
 	for _, candidate := range candidates {
@@ -220,12 +216,7 @@ func (p *Provider) findZone(ctx context.Context, client *hcloud.Client, domain s
 		if zoneName == "" {
 			continue
 		}
-		p.zones.UpdateCopy(func(zones *map[string]string) {
-			if *zones == nil {
-				*zones = make(map[string]string)
-			}
-			(*zones)[candidate] = zoneName
-		})
+		p.zones.Set(candidate, zoneName)
 		return zone, nil
 	}
 
