@@ -12,8 +12,8 @@ rejected-design history.
 - Prefer a single stable contract with one real owner.
 - Prefer local simplicity over premature or speculative abstraction.
 - Add indirection only when it removes real coupling or protects a real boundary.
-- Do not introduce a new mechanism when the existing owner, control flow, data flow, or lifecycle can express the change directly. This includes new interfaces, wrappers, helpers, callbacks, hooks, locks, channels, goroutines, registries, caches, shadow state, generation counters, configuration knobs, feature flags, state machines, reconciliation loops, adapters, or extension points. Add one only when a concrete correctness or architectural requirement cannot be handled cleanly by the existing structure.
-- Do not generalize a one-off problem. Solve the concrete case first unless multiple real callers, implementations, or lifecycle paths already require the general form.
+- Before introducing a new mechanism or local subsystem, judge whether the problem is large, repeated, long-lived, or independent enough to justify one. Examples include interfaces, wrappers, helpers, callbacks, hooks, locks, channels, goroutines, registries, caches, shadow state, generation counters, configuration knobs, feature flags, state machines, reconciliation loops, adapters, and extension points. Prefer the existing owner, control flow, data flow, lifecycle, or serialization when they already express the requirement clearly; introduce a new mechanism when the problem itself warrants a durable new concept.
+- Do not generalize a one-off problem by default. Generalize when multiple real callers, implementations, lifecycle paths, or an enduring boundary make the broader form useful on its own.
 - Tests protect stable public behavior, protocol and security invariants, and real lifecycle E2E behavior.
 - Keep a regression test when the regression reveals a contract or invariant that remains important.
 - Do not test incidental implementation details such as call sequence, log output, retry count, or file metadata unless they are themselves part of a stable contract.
@@ -27,9 +27,9 @@ rejected-design history.
 - When caller and callee are both local and no real boundary exists, change both directly; do not preserve local call shapes.
 - If a field, method, wrapper, or abstraction has no clear, current use and does not protect a real boundary, remove it immediately.
 - No wrapper functions or helpers unless they remove real coupling, protect a real boundary, or represent independently meaningful behavior.
-- Prefer changing existing code directly over creating a new abstraction around it.
-- Prefer direct code over layers, facades, and indirection.
-- Prefer existing ownership and serialization over adding synchronization.
+- Prefer changing existing code directly when the change remains local; introduce a new abstraction when the responsibility is substantial enough to deserve an owner of its own.
+- Prefer direct code over layers, facades, and indirection when the extra structure would outgrow the problem it solves.
+- Prefer existing ownership and serialization over adding synchronization unless concurrency itself is part of the problem being modeled.
 - Prefer flattening and merging nearby responsibilities over splitting by default.
 - Remove dead fields, methods, config, and stale state while touching nearby code.
 - Do not duplicate normalization, validation, or defaulting logic; keep it in a single real owner.
