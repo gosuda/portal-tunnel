@@ -37,7 +37,6 @@ const (
 	// Relay-local wire paths. Deliberately not in types/paths.go: no Go
 	// package outside cmd/relay-server needs them.
 	pathReputationVote    = types.PathAPIPrefix + "/reputation/vote"
-	reputationFilename    = "reputation.json"
 	reputationVoterCookie = "portal_voter"
 )
 
@@ -77,7 +76,7 @@ func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.I
 	if err != nil {
 		return nil, err
 	}
-	reputationStore, err := policy.NewReputationStore(filepath.Join(filepath.Dir(policyStatePath), reputationFilename))
+	reputationStore, err := policy.NewReputationStore(filepath.Join(filepath.Dir(policyStatePath), policy.ReputationFilename))
 	if err != nil {
 		return nil, err
 	}

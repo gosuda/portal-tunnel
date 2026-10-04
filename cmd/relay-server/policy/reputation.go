@@ -40,6 +40,10 @@ const (
 	reputationMaxIdentities = 4096
 )
 
+// ReputationFilename is the vote ledger file name ReputationStore persists
+// beside the relay policy state.
+const ReputationFilename = "reputation.json"
+
 // persistedReputation is the reputation.json schema. All collections are
 // bounded by the reputationMax* constants.
 type persistedReputation struct {

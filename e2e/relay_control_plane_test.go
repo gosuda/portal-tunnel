@@ -27,7 +27,7 @@ func waitForRelayCertificateMaterial(t *testing.T, dir string) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		persisted := true
-		for _, name := range []string{"fullchain.pem", "privatekey.pem"} {
+		for _, name := range []string{acme.FullChainFileName, acme.PrivateKeyFileName} {
 			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 				persisted = false
 				break
@@ -48,7 +48,7 @@ func waitForRelayCertificateMaterial(t *testing.T, dir string) {
 // ingress router serves the control plane.
 func relayControlClient(t *testing.T, stateDir string) *http.Client {
 	t.Helper()
-	certPEM, err := os.ReadFile(filepath.Join(stateDir, "fullchain.pem"))
+	certPEM, err := os.ReadFile(filepath.Join(stateDir, acme.FullChainFileName))
 	if err != nil {
 		t.Fatalf("read relay certificate: %v", err)
 	}

@@ -27,7 +27,7 @@ import (
 
 	"github.com/miekg/dns"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/embedded"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -207,7 +207,7 @@ func TestManualEmbeddedCertificateServesDNSAndKeepsENSPending(t *testing.T) {
 					t.Fatalf("recovered EnsureTLSMaterial() returned unusable certificate: %v", err)
 				}
 				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
-				if _, err := os.Stat(filepath.Join(keyDir, types.DNSSECKeyFileName)); err != nil {
+				if _, err := os.Stat(filepath.Join(keyDir, embedded.KeyFileName)); err != nil {
 					t.Fatalf("persistent DNSSEC key: %v", err)
 				}
 			})
@@ -486,8 +486,8 @@ func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) error 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
-	if err := os.WriteFile(filepath.Join(keyDir, fullChainFileName), certPEM, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(keyDir, FullChainFileName), certPEM, 0o644); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(keyDir, keyFileName), keyPEM, 0o600)
+	return os.WriteFile(filepath.Join(keyDir, PrivateKeyFileName), keyPEM, 0o600)
 }

@@ -19,6 +19,11 @@ const signatureLifetime = 24 * time.Hour
 const signatureRefresh = 12 * time.Hour
 const signatureSkew = 5 * time.Minute
 
+// KeyFileName is the persistent DNSSEC signing key (CSK) file name under the
+// relay state directory. The key must survive restarts: replacing it changes
+// the DNSKEY and breaks validation against an existing parent DS.
+const KeyFileName = "dnssec-csk.json"
+
 // A single file binds the private key to its zone and DNSKEY. Never regenerate
 // an unreadable or malformed existing key: the parent DS may already trust it.
 func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {

@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	fullChainFileName      = "fullchain.pem"
-	keyFileName            = "privatekey.pem"
+	FullChainFileName      = "fullchain.pem"
+	PrivateKeyFileName     = "privatekey.pem"
 	accountKeyFileName     = "acme-account.key"
 	registrationFileName   = "acme-registration.json"
 	defaultACMEEmailPrefix = "acme@"
@@ -227,8 +227,8 @@ func (m *Manager) TLSFiles() (string, string, error) {
 	if m == nil {
 		return "", "", errors.New("acme manager is nil")
 	}
-	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
-	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
+	certFile := filepath.Join(m.cfg.KeyDir, FullChainFileName)
+	keyFile := filepath.Join(m.cfg.KeyDir, PrivateKeyFileName)
 	if !utils.FileExists(certFile) || !utils.FileExists(keyFile) {
 		return "", "", errors.New("relay certificate files do not exist")
 	}
@@ -239,8 +239,8 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return "", "", false, nil
 	}
-	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
-	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
+	certFile := filepath.Join(m.cfg.KeyDir, FullChainFileName)
+	keyFile := filepath.Join(m.cfg.KeyDir, PrivateKeyFileName)
 	if !utils.FileExists(certFile) || !utils.FileExists(keyFile) {
 		return "", "", false, nil
 	}
@@ -262,8 +262,8 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 }
 
 func (m *Manager) provision(ctx context.Context) error {
-	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
-	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
+	keyFile := filepath.Join(m.cfg.KeyDir, PrivateKeyFileName)
+	certFile := filepath.Join(m.cfg.KeyDir, FullChainFileName)
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
 	registrationFile := filepath.Join(m.cfg.KeyDir, registrationFileName)
 	domains := certificateDomains(m.cfg.BaseDomain)

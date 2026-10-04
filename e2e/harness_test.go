@@ -20,6 +20,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
@@ -104,7 +105,7 @@ func newHarness(t *testing.T, opts ...sdk.Option) *harness {
 		exposure:    exposure,
 		service:     service,
 		sniAddr:     "127.0.0.1:" + strconv.Itoa(sniPort),
-		certificate: filepath.Join(stateDir, "fullchain.pem"),
+		certificate: filepath.Join(stateDir, acme.FullChainFileName),
 		sniPort:     sniPort,
 		stateDir:    stateDir,
 		proxyDone:   make(chan error, 1),

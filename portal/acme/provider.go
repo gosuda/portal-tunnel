@@ -15,7 +15,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/njalla"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/route53"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/vultr"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -46,7 +45,7 @@ func newDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 		return embedded.New(embedded.Config{
 			BaseDomain: cfg.BaseDomain,
 			ListenAddr: fmt.Sprintf(":%d", cfg.EmbeddedDNSPort),
-			KeyPath:    filepath.Join(cfg.KeyDir, types.DNSSECKeyFileName),
+			KeyPath:    filepath.Join(cfg.KeyDir, embedded.KeyFileName),
 		})
 	case TypeCloudflare:
 		return cloudflare.New(cfg.CloudflareToken), nil

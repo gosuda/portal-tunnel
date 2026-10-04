@@ -14,6 +14,10 @@ const (
 	ModeManual Mode = "manual"
 )
 
+// Filename is the relay policy state file name. The relay API persists
+// PolicySettings under it in the relay state directory.
+const Filename = "policy.json"
+
 // Access owns committed relay access decisions. A transaction edits a detached
 // Snapshot, persists it, then commits the complete state with a new revision.
 type Access struct {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
@@ -137,7 +138,7 @@ func startMembershipRelay(t *testing.T, ctx context.Context) membershipRelay {
 		relayURL: relayURL,
 		sniAddr:  sniAddr,
 		sniPort:  sniPort,
-		certPath: filepath.Join(stateDir, "fullchain.pem"),
+		certPath: filepath.Join(stateDir, acme.FullChainFileName),
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
@@ -75,7 +76,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if err != nil || len(ready) != 1 {
 		t.Fatalf("ready: %v, %v", ready, err)
 	}
-	certPEM, err := os.ReadFile(filepath.Join(stateDir, "fullchain.pem"))
+	certPEM, err := os.ReadFile(filepath.Join(stateDir, acme.FullChainFileName))
 	if err != nil {
 		t.Fatal(err)
 	}

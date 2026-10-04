@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func dnssecExchange(t *testing.T, p *Provider, network, name string, typ uint16, size uint16) *dns.Msg {
@@ -232,7 +230,7 @@ func TestDNSSECCanonicalDenialIntervals(t *testing.T) {
 }
 
 func TestDNSSECKeyPersistence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), types.DNSSECKeyFileName)
+	path := filepath.Join(t.TempDir(), KeyFileName)
 	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: path}
 	first, err := New(cfg)
 	if err != nil {

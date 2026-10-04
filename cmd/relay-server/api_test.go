@@ -25,7 +25,7 @@ func newTestReputationAPI(t *testing.T) *RelayAPI {
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, policy.NewAccess(), nil, filepath.Join(dir, types.RelayPolicyFilename), "admin-test", frontend, types.PolicySettings{})
+	api, err := NewRelayAPI(server, policy.NewAccess(), nil, filepath.Join(dir, policy.Filename), "admin-test", frontend, types.PolicySettings{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func newPolicyAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, e
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
-	path := filepath.Join(dir, types.RelayPolicyFilename)
+	path := filepath.Join(dir, policy.Filename)
 	if policyJSON != "" {
 		if err := os.WriteFile(path, []byte(policyJSON), 0600); err != nil {
 			t.Fatal(err)
@@ -95,7 +95,7 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, types.RelayPolicyFilename)
+	path := filepath.Join(dir, policy.Filename)
 	if err := os.WriteFile(path, []byte(`{"approval_mode":"manual","banned_ips":["127.0.0.1"],"banned_identity_keys":["blocked:addr"],"approved_identity_keys":["allowed:addr"]}`), 0600); err != nil {
 		t.Fatal(err)
 	}

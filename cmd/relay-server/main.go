@@ -217,7 +217,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 		}
 	}
 
-	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
+	policyPath := filepath.Join(cfg.Relay.StateDir, policy.Filename)
 	initialPolicy := types.PolicySettings{
 		ApprovalMode:       string(policy.ModeAuto),
 		LandingPageEnabled: cfg.LandingPageEnabled,

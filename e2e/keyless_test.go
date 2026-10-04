@@ -16,10 +16,10 @@ func TestCertificateSignerMismatchRejectsStartup(t *testing.T) {
 	_, otherKeyPEM := localTLSMaterial(t, t.TempDir())
 
 	stateDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(stateDir, "fullchain.pem"), certPEM, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, acme.FullChainFileName), certPEM, 0o600); err != nil {
 		t.Fatalf("write certificate: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "privatekey.pem"), otherKeyPEM, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, acme.PrivateKeyFileName), otherKeyPEM, 0o600); err != nil {
 		t.Fatalf("write private key: %v", err)
 	}
 

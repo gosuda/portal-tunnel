@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 )
 
 const browserSmokePage = `<!doctype html>
@@ -168,7 +169,7 @@ func TestPackagedBrowserWASM(t *testing.T) {
 		t.Fatal("browser connector returned an empty public URL")
 	}
 
-	certificate := filepath.Join(stateDir, "fullchain.pem")
+	certificate := filepath.Join(stateDir, acme.FullChainFileName)
 	body, ok := tenantGet("127.0.0.1:"+strconv.Itoa(port), certificate, ready.publicURL)
 	if !ok || body != "portal-browser-smoke-ok" {
 		t.Fatalf("browser tunnel response = %q, ok=%v, want packaged handler response", body, ok)

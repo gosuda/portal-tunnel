@@ -9,15 +9,13 @@ import (
 
 	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/miekg/dns"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const testZone = "portal.example.com"
 
 func newTestProvider(t *testing.T, mutate func(*Config)) *Provider {
 	t.Helper()
-	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: filepath.Join(t.TempDir(), types.DNSSECKeyFileName)}
+	cfg := Config{BaseDomain: testZone, ListenAddr: "127.0.0.1:0", KeyPath: filepath.Join(t.TempDir(), KeyFileName)}
 	if mutate != nil {
 		mutate(&cfg)
 	}

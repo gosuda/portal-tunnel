@@ -6,11 +6,7 @@ import (
 	"time"
 )
 
-const (
-	IdentityKeySeparator = ":"
-	RelayPolicyFilename  = "policy.json"
-	DNSSECKeyFileName    = "dnssec-csk.json"
-)
+const IdentityKeySeparator = ":"
 
 type Identity struct {
 	Name           string `json:"name,omitempty"`

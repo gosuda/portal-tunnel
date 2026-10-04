@@ -33,7 +33,7 @@ type acmeUser struct {
 }
 
 func (m *Manager) shouldRenew() bool {
-	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
+	certFile := filepath.Join(m.cfg.KeyDir, FullChainFileName)
 	needsRenewal, err := certNeedsRenewal(certFile, certificateDomains(m.cfg.BaseDomain))
 	return err == nil && needsRenewal
 }
@@ -164,8 +164,8 @@ func loadOrCreateAccountKey(path string) (crypto.PrivateKey, error) {
 
 func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	domains := localDevelopmentDomains(baseHost)
-	keyFile := filepath.Join(keyDir, keyFileName)
-	certFile := filepath.Join(keyDir, fullChainFileName)
+	keyFile := filepath.Join(keyDir, PrivateKeyFileName)
+	certFile := filepath.Join(keyDir, FullChainFileName)
 
 	if utils.FileExists(keyFile) && utils.FileExists(certFile) {
 		covered, err := certCoversDomains(certFile, domains)

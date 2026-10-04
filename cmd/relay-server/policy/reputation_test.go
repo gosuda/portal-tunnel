@@ -9,7 +9,7 @@ import (
 
 func newTestReputationStore(t *testing.T) *ReputationStore {
 	t.Helper()
-	store, err := NewReputationStore(filepath.Join(t.TempDir(), "reputation.json"))
+	store, err := NewReputationStore(filepath.Join(t.TempDir(), ReputationFilename))
 	if err != nil {
 		t.Fatal(err)
 	}

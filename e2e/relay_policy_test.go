@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -81,7 +82,7 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	stateDir := t.TempDir()
-	policyPath := filepath.Join(stateDir, types.RelayPolicyFilename)
+	policyPath := filepath.Join(stateDir, policy.Filename)
 	initial, err := json.Marshal(map[string]any{
 		"approval_mode": "auto", "banned_identity_keys": []string{leaseIdentity.Key()},
 	})
