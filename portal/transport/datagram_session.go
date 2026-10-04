@@ -19,9 +19,8 @@ type DatagramSession struct {
 	dropIncoming bool
 	done         chan struct{}
 
-	mu     sync.Mutex
-	conn   *quic.Conn
-	closed bool
+	mu   sync.Mutex
+	conn *quic.Conn
 }
 
 func NewDatagramSession(bufferSize int, dropIncoming bool) *DatagramSession {
@@ -44,10 +43,12 @@ func (s *DatagramSession) Bind(conn *quic.Conn) (<-chan error, error) {
 	}
 
 	s.mu.Lock()
-	if s.closed {
+	select {
+	case <-s.done:
 		s.mu.Unlock()
 		_ = conn.CloseWithError(0, "session closed")
 		return nil, net.ErrClosed
+	default:
 	}
 	old := s.conn
 	s.conn = conn
@@ -81,17 +82,18 @@ func (s *DatagramSession) Accept(done <-chan struct{}) (types.DatagramFrame, err
 func (s *DatagramSession) Connected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.conn != nil && !s.closed
+	return s.conn != nil
 }
 
 func (s *DatagramSession) Send(flowID uint32, payload []byte) error {
 	s.mu.Lock()
 	conn := s.conn
-	closed := s.closed
 	s.mu.Unlock()
 
-	if closed {
+	select {
+	case <-s.done:
 		return net.ErrClosed
+	default:
 	}
 	if conn == nil {
 		return errNoConnection
@@ -114,11 +116,12 @@ func (s *DatagramSession) Clear(reason string) {
 // Close permanently closes the session and any active connection.
 func (s *DatagramSession) Close(reason string) {
 	s.mu.Lock()
-	if s.closed {
+	select {
+	case <-s.done:
 		s.mu.Unlock()
 		return
+	default:
 	}
-	s.closed = true
 	conn := s.conn
 	s.conn = nil
 	close(s.done)
@@ -140,7 +143,7 @@ func (s *DatagramSession) receiveLoop(conn *quic.Conn, recvDone chan<- error) {
 		data, err := conn.ReceiveDatagram(context.Background())
 		if err != nil {
 			s.mu.Lock()
-			if s.conn == conn && !s.closed {
+			if s.conn == conn {
 				s.conn = nil
 				recvErr = err
 			}

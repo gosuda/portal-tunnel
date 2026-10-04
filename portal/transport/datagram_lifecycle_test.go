@@ -3,6 +3,7 @@ package transport
 import (
 	"errors"
 	"net"
+	"sync"
 	"testing"
 )
 
@@ -41,7 +42,26 @@ func TestDatagramSessionCloseUnblocksAccept(t *testing.T) {
 	closed := make(chan error, 1)
 	go func() { _, err := session.Accept(nil); closed <- err }()
 	session.Close("test complete")
+	session.Close("already closed")
 	if err := <-closed; !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Accept after Close: %v", err)
+	}
+	if err := session.Send(1, []byte("closed")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Send after Close: %v", err)
+	}
+}
+
+func TestRelayDatagramConcurrentStartAndClose(t *testing.T) {
+	endpoint := NewRelayDatagram("lease", 0)
+	var workers sync.WaitGroup
+	workers.Go(func() {
+		if err := endpoint.Start(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Errorf("Start racing Close: %v", err)
+		}
+	})
+	workers.Go(endpoint.Close)
+	workers.Wait()
+	if err := endpoint.Start(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("closed endpoint restarted: %v", err)
 	}
 }

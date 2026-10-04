@@ -35,8 +35,7 @@ func TestLeaseOwnsReverseMuxReplacementAndClose(t *testing.T) {
 	first := <-accepted
 	record := &leaseRecord{reverse: transport.NewReversePool(time.Minute, 1)}
 	defer record.Close()
-	release, err := record.attachReverseMux(first)
-	if err != nil {
+	if err := record.attachReverseMux(first); err != nil {
 		t.Fatal(err)
 	}
 	secondPeer, err := transport.DialReverseMux(ctx, target, "capability")
@@ -45,7 +44,7 @@ func TestLeaseOwnsReverseMuxReplacementAndClose(t *testing.T) {
 	}
 	defer secondPeer.Close()
 	second := <-accepted
-	if _, err := record.attachReverseMux(second); err != nil {
+	if err := record.attachReverseMux(second); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -53,7 +52,7 @@ func TestLeaseOwnsReverseMuxReplacementAndClose(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("replaced carrier remained open")
 	}
-	release()
+	record.detachReverseMux(first)
 	select {
 	case <-secondPeer.Done():
 		t.Fatal("late release closed the replacement")
@@ -65,7 +64,7 @@ func TestLeaseOwnsReverseMuxReplacementAndClose(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("lease close left its active carrier open")
 	}
-	if _, err := record.attachReverseMux(second); !errors.Is(err, net.ErrClosed) {
+	if err := record.attachReverseMux(second); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("closed lease accepted a carrier: %v", err)
 	}
 }

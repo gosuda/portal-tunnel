@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,9 +21,8 @@ const (
 )
 
 type flowState struct {
-	key      string
+	addr     netip.AddrPort
 	lastSeen time.Time
-	reply    func([]byte) error
 }
 
 // RelayDatagram owns UDP ingress and QUIC backhaul binding for one lease.
@@ -31,14 +31,13 @@ type RelayDatagram struct {
 	port        int
 	session     *DatagramSession
 	flowTable   map[uint32]*flowState
-	addrIndex   map[string]uint32
+	addrIndex   map[netip.AddrPort]uint32
 	nextFlow    uint32
 	enabled     atomic.Bool
 
 	conn *net.UDPConn
 
 	started bool
-	closed  bool
 	mu      sync.Mutex
 }
 
@@ -48,7 +47,7 @@ func NewRelayDatagram(identityKey string, port int) *RelayDatagram {
 		port:        port,
 		session:     NewDatagramSession(256, true),
 		flowTable:   make(map[uint32]*flowState),
-		addrIndex:   make(map[string]uint32),
+		addrIndex:   make(map[netip.AddrPort]uint32),
 		nextFlow:    1,
 	}
 }
@@ -58,8 +57,10 @@ func NewRelayDatagram(identityKey string, port int) *RelayDatagram {
 func (d *RelayDatagram) Start() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.closed {
+	select {
+	case <-d.session.Done():
 		return net.ErrClosed
+	default:
 	}
 	if d.started {
 		return nil
@@ -91,14 +92,9 @@ func (d *RelayDatagram) Close() {
 	}
 
 	d.mu.Lock()
-	if d.closed {
-		d.mu.Unlock()
-		return
-	}
-	d.closed = true
+	d.session.Close("lease stopped")
 	conn := d.conn
 	d.mu.Unlock()
-	d.session.Close("lease stopped")
 	if conn != nil {
 		_ = conn.Close()
 	}
@@ -134,31 +130,27 @@ func (d *RelayDatagram) sendDatagram(flowID uint32, payload []byte) error {
 	return d.session.Send(flowID, payload)
 }
 
-func (d *RelayDatagram) touchFlow(key string, reply func([]byte) error) uint32 {
+func (d *RelayDatagram) touchFlow(addr netip.AddrPort) uint32 {
 	now := time.Now()
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if id, ok := d.addrIndex[key]; ok {
+	if id, ok := d.addrIndex[addr]; ok {
 		if flow, exists := d.flowTable[id]; exists && flow != nil {
 			flow.lastSeen = now
-			if reply != nil {
-				flow.reply = reply
-			}
 			return id
 		}
-		delete(d.addrIndex, key)
+		delete(d.addrIndex, addr)
 	}
 
 	id := d.nextFlow
 	d.nextFlow++
 	d.flowTable[id] = &flowState{
-		key:      key,
+		addr:     addr,
 		lastSeen: now,
-		reply:    reply,
 	}
-	d.addrIndex[key] = id
+	d.addrIndex[addr] = id
 	return id
 }
 
@@ -194,16 +186,20 @@ func (d *RelayDatagram) dispatch(frame types.DatagramFrame) {
 	}
 	d.mu.Lock()
 	flow, ok := d.flowTable[frame.FlowID]
-	if !ok || flow == nil || flow.reply == nil {
+	if !ok || flow == nil || d.conn == nil {
 		d.mu.Unlock()
 		return
 	}
 
 	flow.lastSeen = time.Now()
-	reply := flow.reply
+	addr := flow.addr
+	conn := d.conn
 	d.mu.Unlock()
 
-	if err := reply(frame.Payload); err != nil {
+	if !d.enabled.Load() {
+		return
+	}
+	if _, err := conn.WriteToUDPAddrPort(frame.Payload, addr); err != nil {
 		log.Warn().
 			Err(err).
 			Str("component", "udp-relay").
@@ -235,7 +231,7 @@ func (d *RelayDatagram) expireIdleFlows(now time.Time) {
 	for flowID, flow := range d.flowTable {
 		if flow == nil || now.Sub(flow.lastSeen) > types.DefaultUDPFlowIdleTimeout {
 			if flow != nil {
-				delete(d.addrIndex, flow.key)
+				delete(d.addrIndex, flow.addr)
 			}
 			delete(d.flowTable, flowID)
 		}
@@ -251,7 +247,7 @@ func (d *RelayDatagram) forgetFlow(flowID uint32) {
 		return
 	}
 	if flow != nil {
-		delete(d.addrIndex, flow.key)
+		delete(d.addrIndex, flow.addr)
 	}
 	delete(d.flowTable, flowID)
 }
@@ -259,7 +255,7 @@ func (d *RelayDatagram) forgetFlow(flowID uint32) {
 func (d *RelayDatagram) readLoop() {
 	buf := make([]byte, defaultMaxPacketSize)
 	for {
-		n, clientAddr, err := d.conn.ReadFromUDP(buf)
+		n, clientAddr, err := d.conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
@@ -275,13 +271,7 @@ func (d *RelayDatagram) readLoop() {
 			continue
 		}
 
-		flowID := d.touchFlow("udp:"+clientAddr.String(), func(payload []byte) error {
-			if !d.enabled.Load() {
-				return nil
-			}
-			_, err := d.conn.WriteToUDP(payload, clientAddr)
-			return err
-		})
+		flowID := d.touchFlow(clientAddr)
 		payload := make([]byte, n)
 		copy(payload, buf[:n])
 

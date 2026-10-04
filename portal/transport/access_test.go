@@ -1,36 +1,37 @@
 package transport
 
 import (
+	"net"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func TestRelayDatagramDropsTrafficWhileDisabled(t *testing.T) {
+func TestRelayDatagramRoutesRepliesOnlyWhileEnabled(t *testing.T) {
 	d := NewRelayDatagram("demo:0x1", 0)
 	t.Cleanup(d.Close)
-	replies := make(chan []byte, 1)
-	flowID := d.touchFlow("udp:client", func(payload []byte) error {
-		replies <- payload
-		return nil
-	})
-
-	d.dispatch(types.DatagramFrame{FlowID: flowID, Payload: []byte("blocked")})
-	select {
-	case <-replies:
-		t.Fatal("non-routable datagram was forwarded")
-	default:
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	d.SetEnabled(true)
-	d.dispatch(types.DatagramFrame{FlowID: flowID, Payload: []byte("allowed")})
-	select {
-	case payload := <-replies:
-		if string(payload) != "allowed" {
-			t.Fatalf("forwarded payload = %q", payload)
+	d.conn = conn
+	for _, payload := range []string{"first client", "second client"} {
+		client, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("routable datagram was not forwarded")
+		defer client.Close()
+		flowID := d.touchFlow(client.LocalAddr().(*net.UDPAddr).AddrPort())
+		d.SetEnabled(false)
+		d.dispatch(types.DatagramFrame{FlowID: flowID, Payload: []byte("blocked")})
+		d.SetEnabled(true)
+		d.dispatch(types.DatagramFrame{FlowID: flowID, Payload: []byte(payload)})
+		_ = client.SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 64)
+		n, _, err := client.ReadFromUDP(buf)
+		if err != nil || string(buf[:n]) != payload {
+			t.Fatalf("UDP reply = %q, %v; want %q", buf[:n], err, payload)
+		}
 	}
 }

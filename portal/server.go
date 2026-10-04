@@ -569,7 +569,11 @@ func (s *Server) serveTCP(record *leaseRecord) {
 	for {
 		inbound, err := record.tcpListener.Accept()
 		if err != nil {
-			return
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+			continue
 		}
 		go s.bridgeTCPConn(record, inbound)
 	}

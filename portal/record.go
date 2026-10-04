@@ -31,10 +31,8 @@ type leaseRecord struct {
 	registerChallenge *identity.RegisterChallenge
 
 	datagram    *transport.RelayDatagram
-	udpPorts    *portPool
 	tcpPort     int
 	tcpListener net.Listener
-	tcpPorts    *portPool
 	reverse     *transport.ReversePool
 
 	mu         sync.Mutex
@@ -92,16 +90,17 @@ func (r *leaseRecord) Close() {
 	if r == nil {
 		return
 	}
+	// Serialize the entire close so registry cleanup cannot release ports
+	// while another caller is still shutting down their sockets.
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.closed {
-		r.mu.Unlock()
 		return
 	}
 	r.closed = true
 	mux := r.reverseMux
 	r.reverseMux = nil
 	listener := r.tcpListener
-	r.mu.Unlock()
 	if listener != nil {
 		_ = listener.Close()
 	}
@@ -112,24 +111,17 @@ func (r *leaseRecord) Close() {
 		r.reverse.Close()
 	}
 	if r.datagram != nil {
-		port := r.datagram.UDPPort()
 		r.datagram.Close()
-		if port > 0 && r.udpPorts != nil {
-			r.udpPorts.release(port)
-		}
-	}
-	if r.tcpPort > 0 && r.tcpPorts != nil {
-		r.tcpPorts.release(r.tcpPort)
 	}
 }
 
 // attachReverseMux replaces the lease's carrier without letting a late release
 // from the old handler detach the replacement. A closed lease refuses ownership.
-func (r *leaseRecord) attachReverseMux(mux *transport.ReverseMux) (func(), error) {
+func (r *leaseRecord) attachReverseMux(mux *transport.ReverseMux) error {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
-		return nil, net.ErrClosed
+		return net.ErrClosed
 	}
 	previous := r.reverseMux
 	r.reverseMux = mux
@@ -137,14 +129,16 @@ func (r *leaseRecord) attachReverseMux(mux *transport.ReverseMux) (func(), error
 	if previous != nil && previous != mux {
 		_ = previous.Close()
 	}
-	return func() {
-		r.mu.Lock()
-		if r.reverseMux == mux {
-			r.reverseMux = nil
-		}
-		r.mu.Unlock()
-		_ = mux.Close()
-	}, nil
+	return nil
+}
+
+func (r *leaseRecord) detachReverseMux(mux *transport.ReverseMux) {
+	r.mu.Lock()
+	if r.reverseMux == mux {
+		r.reverseMux = nil
+	}
+	r.mu.Unlock()
+	_ = mux.Close()
 }
 
 func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manager) error {

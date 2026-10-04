@@ -320,7 +320,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 	if err != nil {
 		removed, _ := s.registry.Unregister(types.UnregisterRequest{AccessToken: resp.AccessToken})
 		if removed == nil {
-			record.Close()
+			s.registry.closeRecord(record)
 			removed = record
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
@@ -445,12 +445,11 @@ func (s *Server) HandleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
 // serveReverseMux offers each stream the connector opens on session to the lease like
 // any other reverse connection. The lease owns the session, so it ends with the lease.
 func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseMux, clientIP string) {
-	release, err := lease.attachReverseMux(session)
-	if err != nil {
+	if err := lease.attachReverseMux(session); err != nil {
 		_ = session.Close()
 		return
 	}
-	defer release()
+	defer lease.detachReverseMux(session)
 
 	log.Info().Str("address", lease.Address).Str("lease_name", lease.Name).Msg("sdk reverse session opened over websocket")
 	for {

@@ -553,6 +553,7 @@ func (l *listener) runLease(ctx context.Context) error {
 	}
 	// The lease owns its reverse transport and any state it keeps.
 	reverseTransport := newLeaseReverseTransport(l)
+	// Both exits cancel and join the workers before this owner closes its mux.
 	defer reverseTransport.Close()
 	for sessionSlot := range defaultReadyTarget {
 		sessionSlot++

@@ -337,13 +337,16 @@ raw TCP `net.Listener`, and UDP ingress. Replacing or closing a lease closes its
 carrier; a replaced carrier's late cleanup cannot detach the current one. Raw
 TCP accepts and reverse acquisition are composed by the server before bridging
 the two `net.Conn` values. The registry owns TCP/UDP port reservations and access
-policy; UDP ingress receives only an enabled/disabled gate.
+policy. Reservation bookkeeping uses the registry lock and canonical service
+identity key; socket shutdown happens outside that lock before ports are
+released. UDP ingress receives only an enabled/disabled gate.
 
 UDP endpoint construction starts no workers or sockets. `Start` acquires ingress
 and starts dispatch/cleanup; `Close` stops the endpoint and its QUIC backhaul.
 The relay and SDK share `DatagramSession` for a replaceable QUIC connection and
-decoded frames. Portal retains datagram routing metadata instead of encoding
-flow IDs or relay identity into artificial stream or address types.
+decoded frames. UDP flows store client addresses, and the endpoint writes replies
+through its own socket. Portal retains datagram routing metadata instead of
+encoding flow IDs or relay identity into artificial stream or address types.
 
 <div id="optional-relay-overlay"></div>
 <h3 id="ivnp-backed-overlay-networking">IVNP-backed overlay networking</h3>
@@ -518,5 +521,5 @@ For uncached HTTPS tunnels, the relay signs handshake transcripts via `/v1/sign`
 - SIWE identity proof for registration plus relay-issued ES256K JWT access tokens for the lease lifecycle
 - Lease-owned reverse pools, carriers, TCP listeners, and UDP endpoints
 - Optional QUIC/UDP datagram transport coexisting with TCP on the same lease
-- Per-lease UDP and TCP port allocation with sticky name-based reservation
+- Per-lease UDP and TCP port allocation with sticky service-identity reservations
 - QUIC tunnel authentication via control stream (`access_token`)

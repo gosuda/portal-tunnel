@@ -92,8 +92,6 @@ func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 }
 
 func TestRegisterLeaseWithUDPAndRawTCP(t *testing.T) {
-	t.Parallel()
-
 	registry := newTestRegistry(t, true, true)
 	_, resp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:   newTestLeaseIdentity(t, "demo"),
@@ -112,8 +110,6 @@ func TestRegisterLeaseWithUDPAndRawTCP(t *testing.T) {
 }
 
 func TestRawPortsAreAllocatedPerIdentity(t *testing.T) {
-	t.Parallel()
-
 	registry := newTestRegistry(t, true, true)
 	register := func(clientIP string) types.RegisterResponse {
 		t.Helper()

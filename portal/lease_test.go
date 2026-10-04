@@ -491,3 +491,99 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 		t.Fatalf("Renew() forged = %v, want unauthorized", err)
 	}
 }
+
+func TestPortPoolReservesReleasedPortForOwner(t *testing.T) {
+	first := &leaseRecord{Identity: types.Identity{Name: "demo", Address: "0x1"}}
+	other := &leaseRecord{Identity: types.Identity{Name: "demo", Address: "0x2"}}
+	pool := newPortPool(10000, 10000, time.Minute)
+	port, err := pool.allocate(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.release(port, first)
+	if _, err := pool.allocate(other); !errors.Is(err, errPortExhausted) {
+		t.Fatalf("another owner consumed reserved port: %v", err)
+	}
+	if reclaimed, err := pool.allocate(first); err != nil || reclaimed != port {
+		t.Fatalf("owner reclaim = %d, %v", reclaimed, err)
+	}
+}
+
+func TestPortPoolReusesPortAfterReservationExpires(t *testing.T) {
+	first := &leaseRecord{Identity: types.Identity{Name: "demo", Address: "0x1"}}
+	other := &leaseRecord{Identity: types.Identity{Name: "demo", Address: "0x2"}}
+	pool := newPortPool(10000, 10000, -time.Second)
+	port, err := pool.allocate(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.release(port, first)
+	if reused, err := pool.allocate(other); err != nil || reused != port {
+		t.Fatalf("expired reservation = %d, %v", reused, err)
+	}
+}
+
+func TestLeasePortsStayWithServiceIdentityAcrossReconnect(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	firstIdentity := newTestLeaseIdentity(t, "shared")
+	request := types.RegisterChallengeRequest{Identity: firstIdentity, UDPEnabled: true, TCPEnabled: true}
+	firstRecord, first, err := registry.Register(request, "", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: first.AccessToken}); err != nil {
+		t.Fatal(err)
+	}
+	request.Identity = newTestLeaseIdentity(t, "shared")
+	_, other, err := registry.Register(request, "", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, firstUDP, _ := net.SplitHostPort(first.UDPAddr)
+	_, firstTCP, _ := net.SplitHostPort(first.TCPAddr)
+	_, otherUDP, _ := net.SplitHostPort(other.UDPAddr)
+	_, otherTCP, _ := net.SplitHostPort(other.TCPAddr)
+	if firstUDP == otherUDP || firstTCP == otherTCP {
+		t.Fatalf("same-name identity inherited a sticky port: first=%s/%s, other=%s/%s", firstUDP, firstTCP, otherUDP, otherTCP)
+	}
+	request.Identity = firstIdentity
+	_, reconnected, err := registry.Register(request, "", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconnected.UDPAddr != first.UDPAddr || reconnected.TCPAddr != first.TCPAddr {
+		t.Fatalf("reconnect lost reserved addresses: got %s/%s, want %s/%s", reconnected.UDPAddr, reconnected.TCPAddr, first.UDPAddr, first.TCPAddr)
+	}
+	registry.closeRecord(firstRecord)
+	request.Identity = newTestLeaseIdentity(t, "third")
+	if _, _, err := registry.Register(request, "", "", types.RelayDescriptor{}, nil); !errors.Is(err, errUDPPortExhausted) {
+		t.Fatalf("stale cleanup released a live UDP port: %v", err)
+	}
+	request.UDPEnabled = false
+	if _, _, err := registry.Register(request, "", "", types.RelayDescriptor{}, nil); !errors.Is(err, errTCPPortExhausted) {
+		t.Fatalf("stale cleanup released a live TCP port: %v", err)
+	}
+}
+
+func TestLeaseRegistrationFailureReleasesPorts(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	request := types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "retry"), UDPEnabled: true, TCPEnabled: true}
+	port := registry.tcpPorts.available[0]
+	occupied, err := net.ListenTCP("tcp", &net.TCPAddr{Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	if _, _, err := registry.Register(request, "", "", types.RelayDescriptor{}, nil); err == nil {
+		t.Fatal("registration succeeded with an occupied TCP port")
+	}
+	_ = occupied.Close()
+	_, response, err := registry.Register(request, "", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("registration could not reclaim its resources after failure: %v", err)
+	}
+	_, actual, _ := net.SplitHostPort(response.TCPAddr)
+	if actual != fmt.Sprint(port) {
+		t.Fatalf("registration leaked its reserved TCP port: got %s, want %d", actual, port)
+	}
+}
