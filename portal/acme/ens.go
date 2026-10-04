@@ -20,6 +20,48 @@ const (
 	defaultENSGaslessResolver   = "0x238A8F792dFA6033814B18618aD4100654aeef01"
 )
 
+// ensOwnership is the authoritative set of child hostnames whose ENS1 TXT
+// and A records Portal owns under the relay domain. Its JSON file is the
+// persistence of that set across restarts, not a cache: startup
+// reconciliation withdraws or re-syncs the provider's records from it, so
+// DNS provider records are projections of this set. The file disappears when
+// the set empties.
+type ensOwnership struct {
+	path       string
+	baseDomain string
+}
+
+func newENSOwnership(keyDir, baseDomain string) ensOwnership {
+	return ensOwnership{path: filepath.Join(keyDir, ensGaslessHostnamesFileName), baseDomain: baseDomain}
+}
+
+// hostnames returns the owned child hostnames, normalized for the base domain.
+func (s ensOwnership) hostnames() ([]string, error) {
+	var hostnames []string
+	if _, err := utils.ReadJSONFileIfExists(s.path, &hostnames); err != nil {
+		return nil, err
+	}
+	return utils.NormalizeChildHostnames(hostnames, s.baseDomain), nil
+}
+
+// update applies update to the owned hostname set and persists the result.
+func (s ensOwnership) update(update func([]string) []string) error {
+	hostnames, err := s.hostnames()
+	if err != nil {
+		return err
+	}
+	if update != nil {
+		hostnames = utils.NormalizeChildHostnames(update(hostnames), s.baseDomain)
+	}
+	if len(hostnames) == 0 {
+		if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	return utils.WriteJSONFile(s.path, hostnames, 0o600)
+}
+
 type ensDNSCommand struct {
 	hostname string
 	address  string
@@ -172,7 +214,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		if err := m.dns.DeleteARecord(ctx, command.hostname); err != nil {
 			return err
 		}
-		return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
+		return m.ensOwnership.update(func(hostnames []string) []string {
 			return slices.DeleteFunc(hostnames, func(hostname string) bool { return hostname == command.hostname })
 		})
 	}
@@ -197,7 +239,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 	if err := m.dns.EnsureTXTRecord(ctx, command.hostname, value); err != nil {
 		return err
 	}
-	return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
+	return m.ensOwnership.update(func(hostnames []string) []string {
 		return append(hostnames, command.hostname)
 	})
 }
@@ -213,7 +255,7 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", m.cfg.BaseDomain, err))
 		}
 	}
-	if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
+	if err := m.ensOwnership.update(func(hostnames []string) []string {
 		remaining := hostnames[:0]
 		for _, hostname := range hostnames {
 			if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
@@ -234,7 +276,10 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 }
 
 func (m *Manager) syncTrackedENSGaslessHostARecords(ctx context.Context, publicIP string) error {
-	hostnames, err := m.trackedENSGaslessHostnames()
+	if m == nil {
+		return nil
+	}
+	hostnames, err := m.ensOwnership.hostnames()
 	if err != nil {
 		return err
 	}
@@ -245,39 +290,4 @@ func (m *Manager) syncTrackedENSGaslessHostARecords(ctx context.Context, publicI
 		}
 	}
 	return syncErr
-}
-
-func (m *Manager) trackedENSGaslessHostnames() ([]string, error) {
-	if m == nil {
-		return nil, nil
-	}
-
-	path := filepath.Join(m.cfg.KeyDir, ensGaslessHostnamesFileName)
-	var hostnames []string
-	if _, err := utils.ReadJSONFileIfExists(path, &hostnames); err != nil {
-		return nil, err
-	}
-	return utils.NormalizeChildHostnames(hostnames, m.cfg.BaseDomain), nil
-}
-
-func (m *Manager) updateTrackedENSGaslessHostnames(update func([]string) []string) error {
-	if m == nil {
-		return nil
-	}
-
-	path := filepath.Join(m.cfg.KeyDir, ensGaslessHostnamesFileName)
-	hostnames, err := m.trackedENSGaslessHostnames()
-	if err != nil {
-		return err
-	}
-	if update != nil {
-		hostnames = utils.NormalizeChildHostnames(update(hostnames), m.cfg.BaseDomain)
-	}
-	if len(hostnames) == 0 {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return nil
-	}
-	return utils.WriteJSONFile(path, hostnames, 0o600)
 }

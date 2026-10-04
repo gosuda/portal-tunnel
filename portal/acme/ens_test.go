@@ -101,11 +101,12 @@ func (z *fakeZone) EnsureDNSSEC(context.Context, string) (string, string, string
 func newTestENSManager(cfg Config, dns DNSProvider) *Manager {
 	cfg.BaseDomain = utils.NormalizeBaseDomain(cfg.BaseDomain)
 	return &Manager{
-		cfg:         cfg,
-		dns:         dns,
-		stopCh:      make(chan struct{}),
-		ensCommands: make(chan ensDNSCommand, 8),
-		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, dns)),
+		cfg:          cfg,
+		ensOwnership: newENSOwnership(cfg.KeyDir, cfg.BaseDomain),
+		dns:          dns,
+		stopCh:       make(chan struct{}),
+		ensCommands:  make(chan ensDNSCommand, 8),
+		ensStatus:    utils.NewSnapshot(newENSStatus(cfg, dns)),
 	}
 }
 

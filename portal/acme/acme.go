@@ -51,6 +51,9 @@ type Manager struct {
 	stopErr      error
 	workerCancel context.CancelFunc
 	cfg          Config
+	// ensOwnership is the authoritative ENS hostname set this manager keeps
+	// provider records in sync with; see its definition in ens.go.
+	ensOwnership ensOwnership
 	wg           sync.WaitGroup
 	commandMu    sync.RWMutex
 	dns          DNSProvider
@@ -102,17 +105,19 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 	if utils.IsLocalRelayHost(cfg.BaseDomain) {
 		return &Manager{
-			cfg:       cfg,
-			stopCh:    make(chan struct{}),
-			ensStatus: utils.NewSnapshot(newENSStatus(cfg, nil)),
+			cfg:          cfg,
+			ensOwnership: newENSOwnership(cfg.KeyDir, cfg.BaseDomain),
+			stopCh:       make(chan struct{}),
+			ensStatus:    utils.NewSnapshot(newENSStatus(cfg, nil)),
 		}, nil
 	}
 
 	manager := &Manager{
-		cfg:         cfg,
-		stopCh:      make(chan struct{}),
-		ensCommands: make(chan ensDNSCommand, 256),
-		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
+		cfg:          cfg,
+		ensOwnership: newENSOwnership(cfg.KeyDir, cfg.BaseDomain),
+		stopCh:       make(chan struct{}),
+		ensCommands:  make(chan ensDNSCommand, 256),
+		ensStatus:    utils.NewSnapshot(newENSStatus(cfg, nil)),
 	}
 
 	acmeDNS, err := newDNSProvider(cfg.DNSProvider, cfg)
