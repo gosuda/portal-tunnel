@@ -549,7 +549,7 @@ func TestPortPoolReusesPortAfterReservationExpires(t *testing.T) {
 func TestLeasePortsStayWithServiceIdentityAcrossReconnect(t *testing.T) {
 	registry := newTestRegistry(t, true, true)
 	firstIdentity := newTestLeaseIdentity(t, "shared")
-	request := types.RegisterChallengeRequest{Identity: firstIdentity, UDPEnabled: true, TCPEnabled: true}
+	request := types.RegisterChallengeRequest{CanonicalHostname: true, Identity: firstIdentity, UDPEnabled: true, TCPEnabled: true}
 	firstRecord, first, err := registry.Register(request, "", "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatal(err)
