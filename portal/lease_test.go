@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,8 +85,15 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if resp.ReverseEndpoint.URL != "https://example.com/sdk/connect" || resp.ReverseEndpoint.Capability == "" {
 		t.Fatalf("Register() reverse endpoint = %#v, want direct capability", resp.ReverseEndpoint)
 	}
-	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 || leases[0].Hostname != "demo.example.com" {
+	leases := registry.PublicLeases(time.Now())
+	if len(leases) != 1 || leases[0].Hostname != "demo.example.com" || leases[0].CanonicalHostname != resp.CanonicalHostname || leases[0].Address != resp.Identity.Address {
 		t.Fatalf("PublicLeases() = %+v, want the registered demo lease", leases)
+	}
+	if resp.Hostname != "demo.example.com" || resp.CanonicalHostname == "" {
+		t.Fatalf("RegisterResponse hostnames = (%q, %q), want friendly and canonical hostnames", resp.Hostname, resp.CanonicalHostname)
+	}
+	if _, ok := registry.Lookup(resp.CanonicalHostname); !ok {
+		t.Fatal("Lookup(canonical hostname) = false, want registered lease")
 	}
 
 	renewed, endpointInput, err := registry.Renew(types.RenewRequest{
@@ -133,6 +141,9 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Register() error = %v", err)
 	}
+	if firstResponse.CanonicalHostname != secondResponse.CanonicalHostname {
+		t.Fatalf("canonical hostname changed across reconnect: first=%q second=%q", firstResponse.CanonicalHostname, secondResponse.CanonicalHostname)
+	}
 	if _, err := registry.admitReverseCapability(firstResponse.ReverseEndpoint.Capability); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("old reverse capability error = %v, want unauthorized", err)
 	}
@@ -168,20 +179,56 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 	}
 }
 
-func TestLeaseRegistryHostnameConflict(t *testing.T) {
+func TestLeaseRegistrySameNameKeepsCanonicalOriginsIsolated(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
-		Identity: newTestLeaseIdentity(t, "conflict"),
-	}, "203.0.113.10", "", types.RelayDescriptor{}, nil); err != nil {
+	firstIdentity := newTestLeaseIdentity(t, "conflict")
+	_, first, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: firstIdentity,
+	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
+	if err != nil {
 		t.Fatalf("Register(conflict first) error = %v", err)
 	}
-	_, _, err := registry.Register(types.RegisterChallengeRequest{
-		Identity: newTestLeaseIdentity(t, "conflict"),
+	secondIdentity := newTestLeaseIdentity(t, "conflict")
+	_, second, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: secondIdentity,
 	}, "203.0.113.11", "", types.RelayDescriptor{}, nil)
-	if !errors.Is(err, errHostnameConflict) {
-		t.Fatalf("Register(conflict second) error = %v, want hostname conflict", err)
+	if err != nil {
+		t.Fatalf("Register(conflict second) error = %v", err)
+	}
+	if second.Hostname != "" {
+		t.Fatalf("second friendly hostname = %q, want unavailable", second.Hostname)
+	}
+	if first.CanonicalHostname == second.CanonicalHostname {
+		t.Fatalf("different owners received the same canonical hostname %q", first.CanonicalHostname)
+	}
+	for hostname, wantAddress := range map[string]string{
+		first.CanonicalHostname:  firstIdentity.Address,
+		second.CanonicalHostname: secondIdentity.Address,
+	} {
+		record, ok := registry.Lookup(hostname)
+		if !ok || record.Address != wantAddress {
+			t.Fatalf("Lookup(%q) = (%+v, %v), want address %q", hostname, record, ok, wantAddress)
+		}
+	}
+
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: first.AccessToken}); err != nil {
+		t.Fatalf("Unregister(first) error = %v", err)
+	}
+	_, secondReconnect, err := registry.Register(types.RegisterChallengeRequest{Identity: secondIdentity}, "203.0.113.11", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("Register(second reconnect) error = %v", err)
+	}
+	if secondReconnect.Hostname != "conflict.example.com" || secondReconnect.CanonicalHostname != second.CanonicalHostname {
+		t.Fatalf("second reconnect hostnames = (%q, %q), want friendly reuse with stable canonical %q", secondReconnect.Hostname, secondReconnect.CanonicalHostname, second.CanonicalHostname)
+	}
+	_, firstReconnect, err := registry.Register(types.RegisterChallengeRequest{Identity: firstIdentity}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("Register(first reconnect) error = %v", err)
+	}
+	if firstReconnect.Hostname != "" || firstReconnect.CanonicalHostname != first.CanonicalHostname {
+		t.Fatalf("first reconnect hostnames = (%q, %q), want unavailable friendly name and stable canonical %q", firstReconnect.Hostname, firstReconnect.CanonicalHostname, first.CanonicalHostname)
 	}
 }
 
@@ -334,6 +381,18 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 	}, "example.com", "https://example.com"+types.PathSDKRegister, clientIP)
 	if err != nil {
 		t.Fatalf("issueRegisterChallenge() after expired cleanup error = %v", err)
+	}
+}
+
+func TestIssueRegisterChallengeRejectsOverlongCanonicalName(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t, false, false)
+	_, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "twenty-three-charactersx"),
+	}, "example.com", "https://example.com"+types.PathSDKRegister, "203.0.113.50")
+	if err == nil || !strings.Contains(err.Error(), "22 characters or fewer") {
+		t.Fatalf("issueRegisterChallenge() error = %v, want clear 22-character limit", err)
 	}
 }
 

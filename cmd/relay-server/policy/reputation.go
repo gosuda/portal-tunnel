@@ -153,7 +153,11 @@ func (s *ReputationStore) Summaries(viewerHash string, leases []types.PolicyLeas
 	defer s.mu.Unlock()
 	rows := make([]ReputationSummary, 0, len(leases))
 	for _, lease := range leases {
-		rows = append(rows, s.summarize(lease.Hostname, s.state.Identities[lease.IdentityKey], viewerHash))
+		hostname := lease.Hostname
+		if hostname == "" {
+			hostname = lease.CanonicalHostname
+		}
+		rows = append(rows, s.summarize(hostname, s.state.Identities[lease.IdentityKey], viewerHash))
 	}
 	return rows
 }

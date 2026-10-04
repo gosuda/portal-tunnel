@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	IdentityKeySeparator  = ":"
-	RelayIdentityFilename = "identity.json"
-	RelayPolicyFilename   = "policy.json"
-	DNSSECKeyFileName     = "dnssec-csk.json"
+	IdentityKeySeparator        = ":"
+	CanonicalLeaseNameMaxLength = 22
+	RelayIdentityFilename       = "identity.json"
+	RelayPolicyFilename         = "policy.json"
+	DNSSECKeyFileName           = "dnssec-csk.json"
 )
 
 type Identity struct {
@@ -94,23 +95,24 @@ func (m LeaseMetadata) Copy() LeaseMetadata {
 }
 
 type Lease struct {
-	Name        string        `json:"name,omitempty"`
-	ExpiresAt   time.Time     `json:"expires_at"`
-	FirstSeenAt time.Time     `json:"first_seen_at"`
-	LastSeenAt  time.Time     `json:"last_seen_at"`
-	Hostname    string        `json:"hostname"`
-	UDPEnabled  bool          `json:"udp_enabled,omitempty"`
-	UDPAddr     string        `json:"udp_addr,omitempty"`
-	TCPEnabled  bool          `json:"tcp_enabled,omitempty"`
-	TCPAddr     string        `json:"tcp_addr,omitempty"`
-	Metadata    LeaseMetadata `json:"metadata"`
-	Ready       int           `json:"ready"`
+	Name              string        `json:"name,omitempty"`
+	Address           string        `json:"address"`
+	ExpiresAt         time.Time     `json:"expires_at"`
+	FirstSeenAt       time.Time     `json:"first_seen_at"`
+	LastSeenAt        time.Time     `json:"last_seen_at"`
+	Hostname          string        `json:"hostname"`
+	CanonicalHostname string        `json:"canonical_hostname"`
+	UDPEnabled        bool          `json:"udp_enabled,omitempty"`
+	UDPAddr           string        `json:"udp_addr,omitempty"`
+	TCPEnabled        bool          `json:"tcp_enabled,omitempty"`
+	TCPAddr           string        `json:"tcp_addr,omitempty"`
+	Metadata          LeaseMetadata `json:"metadata"`
+	Ready             int           `json:"ready"`
 }
 
 type PolicyLease struct {
 	Lease
 	IdentityKey string `json:"identity_key,omitempty"`
-	Address     string `json:"address,omitempty"`
 	BPS         int64  `json:"bps"`
 	ClientIP    string `json:"client_ip"`
 	ReportedIP  string `json:"reported_ip,omitempty"`

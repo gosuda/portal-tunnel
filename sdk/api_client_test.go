@@ -283,7 +283,7 @@ func registerThroughRateLimit(t *testing.T, status int, firstTTL time.Duration) 
 				t.Error(err)
 			}
 			expires := time.Now().Add(time.Minute)
-			utils.WriteAPIData(w, http.StatusCreated, types.RegisterResponse{Identity: leaseIdentity, AccessToken: "registered", ExpiresAt: expires, ReverseEndpoint: types.ReverseEndpoint{URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: expires}})
+			utils.WriteAPIData(w, http.StatusCreated, types.RegisterResponse{Identity: leaseIdentity, Hostname: "demo.relay.example", CanonicalHostname: "demo-0123456789012345678901234567890123456789.relay.example", AccessToken: "registered", ExpiresAt: expires, ReverseEndpoint: types.ReverseEndpoint{URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: expires}})
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

@@ -188,7 +188,7 @@ portal version
 Common `portal expose` flags:
 
 ```text
---name               Public hostname prefix; auto-generated when omitted
+--name               Public hostname prefix (maximum 22 characters); auto-generated when omitted
 --relays             Additional relay API URLs, comma-separated
 --discovery          Include registry relays and relay discovery expansion
 --max-active-relays  Maximum auto-selected relays; explicit relays are always included

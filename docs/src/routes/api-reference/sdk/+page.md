@@ -107,6 +107,8 @@ Cache opt-in is incompatible with raw TCP/UDP leases.
 | Field | Type | Notes |
 |-------|------|-------|
 | `identity` | `Identity` | normalized lease identity |
+| `hostname` | `string` | friendly hostname; empty when another identity currently holds the friendly name |
+| `canonical_hostname` | `string` | relay-derived identity-bound hostname used by the SDK |
 | `expires_at` | `string` | lease expiry |
 | `access_token` | `string` | token for renew, unregister, signer access, and direct datagram backhaul |
 | `reverse_endpoint` | `ReverseEndpoint` | URL, opaque reverse-only capability, and expiry for `/sdk/connect` |
@@ -114,8 +116,10 @@ Cache opt-in is incompatible with raw TCP/UDP leases.
 | `udp_addr`, `tcp_addr` | `string` | omitted when transport is disabled |
 | `udp_enabled`, `tcp_enabled` | `boolean` | active transport flags |
 
-The response does not include a separate `hostname` field. The public hostname
-is derived from the registered identity and relay root domain.
+The SDK uses the returned `canonical_hostname`; it does not derive or accept a
+client-supplied address suffix. The canonical label contains the normalized
+name, a hyphen, and all 40 lowercase hexadecimal characters of the
+SIWE-authenticated Ethereum address.
 
 `ReverseEndpoint`:
 

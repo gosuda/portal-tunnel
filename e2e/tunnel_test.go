@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"net"
 	"net/url"
 	"testing"
 )
@@ -19,7 +20,19 @@ func TestCanonicalTunnel(t *testing.T) {
 	if publicOrigin.Port() != portalOrigin.Port() {
 		t.Fatalf("public URL port = %q, want canonical PORTAL_URL port %q", publicOrigin.Port(), portalOrigin.Port())
 	}
+	leases := h.server.PublicLeases()
+	if len(leases) != 1 || publicOrigin.Hostname() != leases[0].CanonicalHostname {
+		t.Fatalf("public URL hostname = %q, leases = %+v; want returned canonical hostname", publicOrigin.Hostname(), leases)
+	}
 	if got := h.get(publicURL); got != marker {
-		t.Fatalf("tenant response = %q, want %q", got, marker)
+		t.Fatalf("canonical tenant response = %q, want %q", got, marker)
+	}
+	friendlyURL := *publicOrigin
+	friendlyURL.Host = leases[0].Hostname
+	if port := publicOrigin.Port(); port != "" {
+		friendlyURL.Host = net.JoinHostPort(leases[0].Hostname, port)
+	}
+	if got := h.get(friendlyURL.String()); got != marker {
+		t.Fatalf("friendly tenant response = %q, want %q", got, marker)
 	}
 }

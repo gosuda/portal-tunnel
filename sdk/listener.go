@@ -1039,11 +1039,6 @@ func (l *listener) ensureMITMProbeSupport(exporterCapable bool) error {
 }
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
-	rootHostname := utils.PortalRootHost(l.api.relayURL.String())
-	publicHostname, err := utils.LeaseHostname(l.identity.Name, rootHostname)
-	if err != nil {
-		return err
-	}
 	registerReq := types.RegisterChallengeRequest{
 		Identity:   l.identity,
 		Metadata:   l.metadataSnapshot(),
@@ -1057,6 +1052,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	publicHostname := resp.CanonicalHostname
 	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return err

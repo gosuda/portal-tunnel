@@ -120,6 +120,30 @@ func TestRegisterLeaseWithUDPAndRawTCP(t *testing.T) {
 	}
 }
 
+func TestRawPortsAreAllocatedPerIdentity(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t, true, true)
+	register := func(clientIP string) types.RegisterResponse {
+		t.Helper()
+		_, resp, err := registry.Register(types.RegisterChallengeRequest{
+			Identity:   newTestLeaseIdentity(t, "shared"),
+			UDPEnabled: true,
+			TCPEnabled: true,
+		}, clientIP, "", types.RelayDescriptor{}, nil)
+		if err != nil {
+			t.Fatalf("registry.Register() error = %v", err)
+		}
+		return resp
+	}
+
+	first := register("203.0.113.10")
+	second := register("203.0.113.11")
+	if first.UDPAddr == second.UDPAddr || first.TCPAddr == second.TCPAddr {
+		t.Fatalf("different identities shared raw endpoints: first=%+v second=%+v", first, second)
+	}
+}
+
 // A connector that cannot open a raw stream - a browser - reaches the reverse session
 // over a WebSocket, carrying the reverse capability as a subprotocol since the WebSocket
 // constructor cannot set headers.

@@ -94,7 +94,7 @@ not supported.
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
 | `--identity-json` | string | | In-memory identity JSON; takes precedence over `--identity-path` without reading or writing that file |
-| `--name` | string | auto | Public hostname prefix, one DNS label |
+| `--name` | string | auto | Public hostname prefix, one DNS label of at most 22 characters |
 | `--description` | string | | Service description metadata |
 | `--tags` | string | | Service tags metadata, comma-separated |
 | `--thumbnail` | string | | Service thumbnail URL metadata |

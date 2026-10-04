@@ -15,15 +15,16 @@ import (
 
 type leaseRecord struct {
 	types.Identity
-	id          string
-	ExpiresAt   time.Time
-	FirstSeenAt time.Time
-	LastSeenAt  time.Time
-	ClientIP    string
-	ReportedIP  string
-	Hostname    string
-	Metadata    types.LeaseMetadata
-	Overlay     bool
+	id                string
+	ExpiresAt         time.Time
+	FirstSeenAt       time.Time
+	LastSeenAt        time.Time
+	ClientIP          string
+	ReportedIP        string
+	Hostname          string
+	CanonicalHostname string
+	Metadata          types.LeaseMetadata
+	Overlay           bool
 
 	registerChallenge *identity.RegisterChallenge
 
@@ -36,28 +37,22 @@ type leaseRecord struct {
 
 // cacheLease copies registry facts while the caller holds the registry lock.
 func (r *leaseRecord) cacheLease() cache.Lease {
-	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.Hostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
+	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.CanonicalHostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
 func (r *leaseRecord) isPublicEntry() bool {
-	return r != nil && r.Hostname != ""
+	return r != nil && r.CanonicalHostname != ""
 }
 
-func (r *leaseRecord) ensGaslessDNSHostname() string {
+func (r *leaseRecord) hostnames() []string {
 	if !r.isPublicEntry() {
-		return ""
+		return nil
 	}
-	return r.Hostname
-}
-
-func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
-	if r == nil || other == nil {
-		return false
+	hostnames := []string{r.CanonicalHostname}
+	if r.Hostname != "" {
+		hostnames = append(hostnames, r.Hostname)
 	}
-	if r.Hostname != "" && other.Hostname != "" && r.Hostname == other.Hostname {
-		return true
-	}
-	return false
+	return hostnames
 }
 
 func (r *leaseRecord) isExpired(now time.Time) bool {
@@ -103,8 +98,8 @@ func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manag
 	if r == nil || manager == nil {
 		return nil
 	}
-	if ensHostname := r.ensGaslessDNSHostname(); ensHostname != "" {
-		if err := manager.SyncENSGaslessHostname(ctx, ensHostname, r.Address); err != nil {
+	for _, hostname := range r.hostnames() {
+		if err := manager.SyncENSGaslessHostname(ctx, hostname, r.Address); err != nil {
 			return err
 		}
 	}
@@ -115,12 +110,12 @@ func (r *leaseRecord) deleteDNS(ctx context.Context, manager *acme.Manager) {
 	if r == nil || manager == nil {
 		return
 	}
-	if ensHostname := r.ensGaslessDNSHostname(); ensHostname != "" {
-		err := manager.DeleteENSGaslessHostname(ctx, ensHostname)
+	for _, hostname := range r.hostnames() {
+		err := manager.DeleteENSGaslessHostname(ctx, hostname)
 		if err != nil {
 			log.Warn().
 				Err(err).
-				Str("hostname", ensHostname).
+				Str("hostname", hostname).
 				Str("address", r.Address).
 				Msg("delete ens gasless hostname")
 		}

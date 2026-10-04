@@ -73,7 +73,7 @@ func runTCPCommand(args []string) error {
 	fs := utils.NewFlagSet("demo-app", printTCPUsage)
 	registerConnectivityFlags(fs, &cfg, "https://gosunuts.xyz")
 	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
-	utils.StringFlag(fs, &cfg.name, "name", "demo-app", "public hostname prefix (single DNS label)")
+	utils.StringFlag(fs, &cfg.name, "name", "demo-app", "public hostname prefix (single DNS label, maximum 22 characters)")
 	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo connectivity app", "lease description")
 	utils.StringFlag(fs, &cfg.tags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
 	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", "https://picsum.photos/640/360", "lease thumbnail")
@@ -106,7 +106,7 @@ func runUDPCommand(args []string) error {
 	fs := utils.NewFlagSet("demo-app-udp", printUDPUsage)
 
 	registerConnectivityFlags(fs, &cfg, "https://localhost")
-	utils.StringFlag(fs, &cfg.name, "name", "demo-udp", "public hostname prefix (single DNS label)")
+	utils.StringFlag(fs, &cfg.name, "name", "demo-udp", "public hostname prefix (single DNS label, maximum 22 characters)")
 	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo UDP echo service", "lease description")
 	utils.StringFlag(fs, &cfg.tags, "tags", "demo,udp,echo", "comma-separated lease tags")
 	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", "", "lease thumbnail")

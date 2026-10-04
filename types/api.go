@@ -97,10 +97,12 @@ type ReverseEndpoint struct {
 }
 
 type RegisterResponse struct {
-	Identity        Identity        `json:"identity"`
-	ExpiresAt       time.Time       `json:"expires_at"`
-	AccessToken     string          `json:"access_token"`
-	ReverseEndpoint ReverseEndpoint `json:"reverse_endpoint"`
+	Identity          Identity        `json:"identity"`
+	Hostname          string          `json:"hostname"`
+	CanonicalHostname string          `json:"canonical_hostname"`
+	ExpiresAt         time.Time       `json:"expires_at"`
+	AccessToken       string          `json:"access_token"`
+	ReverseEndpoint   ReverseEndpoint `json:"reverse_endpoint"`
 	// SNIPort is the canonical public port retained for rolling compatibility.
 	// Deprecated: derive public URLs from the relay URL.
 	SNIPort    int    `json:"sni_port,omitempty"`
