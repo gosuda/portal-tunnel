@@ -251,34 +251,6 @@ func (r *leaseRegistry) recordByLease(key, leaseID string, now time.Time) *lease
 	return record
 }
 
-// containsLiveRecordLocked and ownsHostnameLocked read registry state while
-// the caller holds r.mu.
-func (r *leaseRegistry) containsLiveRecordLocked(want *leaseRecord, now time.Time) bool {
-	if want == nil || want.isExpired(now) {
-		return false
-	}
-	for _, record := range r.records {
-		if record == want {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *leaseRegistry) ownsHostnameLocked(hostname string, now time.Time) bool {
-	for _, record := range r.records {
-		if record == nil || record.isExpired(now) {
-			continue
-		}
-		for _, current := range record.hostnames() {
-			if current == hostname {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // recordForVerifiedLease distinguishes a missing lease from a stale credential.
 // The caller must already have verified the credential and must hold r.mu.
 func (r *leaseRegistry) recordForVerifiedLease(key, leaseID string, now time.Time) (*leaseRecord, error) {

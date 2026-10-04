@@ -118,7 +118,7 @@ func (s *Server) syncLeaseDNS(ctx context.Context, record *leaseRecord) error {
 	// Queue DNS sync while the lease is still the current live record. A
 	// concurrent unregister/expiry must either happen after this enqueue or
 	// make this stale sync a no-op.
-	if !registry.containsLiveRecordLocked(record, time.Now()) {
+	if registry.recordByLease(record.Key(), record.id, time.Now()) != record {
 		return nil
 	}
 	return record.syncENSGaslessDNS(ctx, s.acmeManager)
@@ -134,7 +134,22 @@ func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
 	now := time.Now()
 
 	for _, hostname := range record.hostnames() {
-		if registry.ownsHostnameLocked(hostname, now) {
+		owned := false
+		for _, current := range registry.records {
+			if current == nil || current.isExpired(now) {
+				continue
+			}
+			for _, currentHostname := range current.hostnames() {
+				if currentHostname == hostname {
+					owned = true
+					break
+				}
+			}
+			if owned {
+				break
+			}
+		}
+		if owned {
 			continue
 		}
 		// Delete is an enqueue-only operation. Keeping the registry read lock
