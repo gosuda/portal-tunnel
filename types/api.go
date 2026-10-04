@@ -71,14 +71,16 @@ type RegisterRequest struct {
 }
 
 type RegisterChallengeRequest struct {
-	Cache      bool          `json:"cache,omitempty"`
-	CacheTTL   int           `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
-	Identity   Identity      `json:"identity"`
-	Metadata   LeaseMetadata `json:"metadata"`
-	Overlay    bool          `json:"overlay,omitempty"`
-	TTL        int           `json:"ttl,omitempty"`
-	UDPEnabled bool          `json:"udp_enabled,omitempty"`
-	TCPEnabled bool          `json:"tcp_enabled,omitempty"`
+	Cache    bool `json:"cache,omitempty"`
+	CacheTTL int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
+	// CanonicalHostname permits registration to continue without the friendly alias.
+	CanonicalHostname bool          `json:"canonical_hostname,omitempty"`
+	Identity          Identity      `json:"identity"`
+	Metadata          LeaseMetadata `json:"metadata"`
+	Overlay           bool          `json:"overlay,omitempty"`
+	TTL               int           `json:"ttl,omitempty"`
+	UDPEnabled        bool          `json:"udp_enabled,omitempty"`
+	TCPEnabled        bool          `json:"tcp_enabled,omitempty"`
 }
 
 type RegisterChallengeResponse struct {
