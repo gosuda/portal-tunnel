@@ -21,9 +21,8 @@ import (
 type leaseReverseTransport struct {
 	listener *listener
 
-	mu     sync.Mutex
-	mux    *transport.ReverseMux
-	closed bool
+	mu  sync.Mutex
+	mux *transport.ReverseMux
 }
 
 func newLeaseReverseTransport(l *listener) *leaseReverseTransport {
@@ -43,7 +42,6 @@ func (t *leaseReverseTransport) Close() error {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.closed = true
 	if t.mux == nil {
 		return nil
 	}
@@ -104,9 +102,6 @@ func (t *leaseReverseTransport) openRaw(ctx context.Context) (net.Conn, error) {
 func (t *leaseReverseTransport) openMux(ctx context.Context) (net.Conn, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed {
-		return nil, net.ErrClosed
-	}
 	reverseURL, capability, err := t.listener.reverseTarget()
 	if err != nil {
 		return nil, err

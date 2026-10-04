@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -39,8 +40,8 @@ type leaseRegistry struct {
 	overlay        *overlay.Runtime
 	cache          *cache.Manager
 	bps            *BPSManager
-	udpPorts       *transport.PortAllocator
-	tcpPorts       *transport.PortAllocator
+	udpPorts       portPool
+	tcpPorts       portPool
 	bindings       *keyless.BindingRegistry
 
 	// blocked holds the relay-pushed access results for identities the relay
@@ -79,8 +80,8 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority 
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
 		bps:            NewBPSManager(),
 		blocked:        make(map[string]time.Time),
-		udpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
-		tcpPorts:       transport.NewPortAllocator(minPort, maxPort, defaultPortReservationGrace),
+		udpPorts:       newPortPool(minPort, maxPort, defaultPortReservationGrace),
+		tcpPorts:       newPortPool(minPort, maxPort, defaultPortReservationGrace),
 		bindings:       keyless.NewBindingRegistry(5 * time.Minute),
 	}, nil
 }
@@ -150,10 +151,7 @@ func (r *leaseRegistry) applyIdentityRoutableLocked(key string, routable bool) {
 			continue
 		}
 		if record.datagram != nil {
-			record.datagram.SetRoutable(routable)
-		}
-		if record.tcpPort != nil {
-			record.tcpPort.SetRoutable(routable)
+			record.datagram.SetEnabled(routable)
 		}
 	}
 	if !routable {
@@ -182,7 +180,7 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 	r.mu.Lock()
 	out := r.records
 	for _, record := range out {
-		if record != nil && record.stream != nil {
+		if record != nil && record.reverse != nil {
 			r.bps.ResetIdentityLimiter(record.Key())
 		}
 		if record != nil && r.overlay != nil {
@@ -193,7 +191,7 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 	r.mu.Unlock()
 
 	for _, record := range out {
-		record.Close()
+		r.closeRecord(record)
 	}
 	return out
 }
@@ -233,7 +231,7 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 
 func (r *leaseRegistry) recordByKey(key string, now time.Time) *leaseRecord {
 	for _, record := range r.records {
-		if record == nil || record.stream == nil || record.isExpired(now) {
+		if record == nil || record.reverse == nil || record.isExpired(now) {
 			continue
 		}
 		if record.Key() == key {
@@ -301,7 +299,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
 
-	stream := transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit)
 	record := &leaseRecord{
 		Identity:          leaseIdentity,
 		id:                leaseID,
@@ -314,43 +311,33 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		LastSeenAt:        issuedAt,
 		ClientIP:          clientIP,
 		ReportedIP:        utils.SanitizeReportedIP(reportedIP),
-		stream:            stream,
+		reverse:           transport.NewReversePool(defaultIdleKeepalive, defaultReadyQueueLimit),
 	}
 
+	r.mu.Lock()
 	if req.UDPEnabled {
-		if r.udpPorts == nil {
-			return nil, types.RegisterResponse{}, errors.New("udp port allocation not available")
-		}
-		port, err := r.udpPorts.Allocate(identityKey)
+		port, err := r.udpPorts.allocate(record)
 		if err != nil {
-			if errors.Is(err, transport.ErrPortExhausted) {
-				return nil, types.RegisterResponse{}, errUDPPortExhausted
-			}
-			return nil, types.RegisterResponse{}, err
+			r.mu.Unlock()
+			r.closeRecord(record)
+			return nil, types.RegisterResponse{}, errUDPPortExhausted
 		}
 		record.datagram = transport.NewRelayDatagram(identityKey, port)
-		record.udpPorts = r.udpPorts
 	}
 
 	if req.TCPEnabled {
-		if r.tcpPorts == nil {
-			record.Close()
-			return nil, types.RegisterResponse{}, errors.New("tcp port allocation not available")
-		}
-		port, err := r.tcpPorts.Allocate(identityKey)
+		port, err := r.tcpPorts.allocate(record)
 		if err != nil {
-			record.Close()
-			if errors.Is(err, transport.ErrPortExhausted) {
-				return nil, types.RegisterResponse{}, errTCPPortExhausted
-			}
-			return nil, types.RegisterResponse{}, err
+			r.mu.Unlock()
+			r.closeRecord(record)
+			return nil, types.RegisterResponse{}, errTCPPortExhausted
 		}
-		record.tcpPort = transport.NewRelayTCPPort(identityKey, port, stream)
-		record.tcpPorts = r.tcpPorts
+		record.tcpPort = port
 	}
+	r.mu.Unlock()
 
 	if err := record.Start(); err != nil {
-		record.Close()
+		r.closeRecord(record)
 		return nil, types.RegisterResponse{}, err
 	}
 	var replaced *leaseRecord
@@ -364,7 +351,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			continue
 		}
 		existingKey := existing.Key()
-		if replacedIndex < 0 && existing.stream != nil && existingKey == identityKey {
+		if replacedIndex < 0 && existing.reverse != nil && existingKey == identityKey {
 			replaced = existing
 			replacedIndex = i
 		}
@@ -375,14 +362,14 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			if existing.datagram != nil {
 				udpLeases++
 			}
-			if existing.tcpPort != nil {
+			if existing.tcpPort > 0 {
 				tcpLeases++
 			}
 		}
 		if existing.isPublicEntry() && existingKey != identityKey {
 			if existing.CanonicalHostname == record.CanonicalHostname {
 				r.mu.Unlock()
-				record.Close()
+				r.closeRecord(record)
 				return nil, types.RegisterResponse{}, errHostnameConflict
 			}
 			if existing.Hostname != "" && existing.Hostname == record.Hostname {
@@ -393,20 +380,20 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	if record.datagram != nil {
 		if max := r.udpMaxLeases; max > 0 && udpLeases >= max {
 			r.mu.Unlock()
-			record.Close()
+			r.closeRecord(record)
 			return nil, types.RegisterResponse{}, errUDPCapacityExceeded
 		}
 	}
-	if record.tcpPort != nil {
+	if record.tcpPort > 0 {
 		if max := r.tcpMaxLeases; max > 0 && tcpLeases >= max {
 			r.mu.Unlock()
-			record.Close()
+			r.closeRecord(record)
 			return nil, types.RegisterResponse{}, errTCPPortCapacityExceeded
 		}
 	}
 	for i := 0; i < len(r.records); i++ {
 		existing := r.records[i]
-		if existing == nil || existing.stream != nil || !existing.isPublicEntry() || existing.Key() != identityKey {
+		if existing == nil || existing.reverse != nil || !existing.isPublicEntry() || existing.Key() != identityKey {
 			continue
 		}
 		if existing.CanonicalHostname == record.CanonicalHostname {
@@ -427,7 +414,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		if r.overlay != nil {
 			r.overlay.ForgetLease(replaced.id)
 		}
-		replaced.Close()
+		r.closeRecord(replaced)
 	}
 	reverseEndpoint, err := r.issueReverseEndpoint(reverseEndpointInput{
 		leaseIdentity: leaseIdentity,
@@ -448,7 +435,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		if r.overlay != nil {
 			r.overlay.ForgetLease(leaseID)
 		}
-		record.Close()
+		r.closeRecord(record)
 		return nil, types.RegisterResponse{}, err
 	}
 
@@ -460,13 +447,13 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		AccessToken:       accessToken,
 		ReverseEndpoint:   reverseEndpoint,
 		UDPEnabled:        record.datagram != nil,
-		TCPEnabled:        record.tcpPort != nil,
+		TCPEnabled:        record.tcpPort > 0,
 	}
 	if record.datagram != nil {
 		resp.UDPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.datagram.UDPPort())
 	}
-	if record.tcpPort != nil {
-		resp.TCPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.tcpPort.TCPPort())
+	if record.tcpPort > 0 {
+		resp.TCPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.tcpPort)
 	}
 	return record, resp, nil
 }
@@ -505,7 +492,7 @@ func (r *leaseRegistry) admitLeaseIdentity(key, leaseID string, now time.Time, r
 	if !r.isRoutable(record.Key()) {
 		return nil, errLeaseRejected
 	}
-	if record.stream == nil || (requireDatagram && record.datagram == nil) {
+	if record.reverse == nil || (requireDatagram && record.datagram == nil) {
 		return nil, errTransportMismatch
 	}
 	return record, nil
@@ -667,7 +654,7 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 		r.deleteRecord(i)
 		r.bps.ResetIdentityLimiter(key)
 		r.mu.Unlock()
-		record.Close()
+		r.closeRecord(record)
 		return record, nil
 	}
 	r.mu.Unlock()
@@ -800,7 +787,7 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 		record := r.records[i]
 		if record != nil && record.isExpired(now) {
 			expired = append(expired, record)
-			if record.stream != nil {
+			if record.reverse != nil {
 				r.bps.ResetIdentityLimiter(record.Key())
 			}
 			r.deleteRecord(i)
@@ -823,7 +810,7 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 	r.mu.Unlock()
 
 	for _, record := range expired {
-		record.Close()
+		r.closeRecord(record)
 	}
 	return expired
 }
@@ -840,7 +827,7 @@ func (r *leaseRegistry) PublicLeases(now time.Time) []types.Lease {
 		if record.Metadata.Hide {
 			continue
 		}
-		if record.stream != nil {
+		if record.reverse != nil {
 			identityKey := record.Key()
 			if !r.isRoutableLocked(identityKey) {
 				continue
@@ -849,7 +836,7 @@ func (r *leaseRegistry) PublicLeases(now time.Time) []types.Lease {
 			if !record.LastSeenAt.IsZero() {
 				since = max(now.Sub(record.LastSeenAt), 0)
 			}
-			if record.stream.ReadyCount() == 0 && since >= 3*time.Minute {
+			if record.reverse.ReadyCount() == 0 && since >= 3*time.Minute {
 				continue
 			}
 		}
@@ -864,7 +851,7 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 
 	leases := make([]types.PolicyLease, 0, len(r.records))
 	for _, record := range r.records {
-		if record == nil || record.stream == nil || record.isExpired(now) {
+		if record == nil || record.reverse == nil || record.isExpired(now) {
 			continue
 		}
 		clientIP := record.ClientIP
@@ -903,17 +890,126 @@ func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 		Hostname:          record.Hostname,
 		CanonicalHostname: record.CanonicalHostname,
 		UDPEnabled:        record.datagram != nil,
-		TCPEnabled:        record.tcpPort != nil,
+		TCPEnabled:        record.tcpPort > 0,
 		Metadata:          record.Metadata.Copy(),
 	}
-	if record.tcpPort != nil {
-		lease.TCPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.tcpPort.TCPPort())
+	if record.tcpPort > 0 {
+		lease.TCPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.tcpPort)
 	}
 	if record.datagram != nil {
 		lease.UDPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.datagram.UDPPort())
 	}
-	if record.stream != nil {
-		lease.Ready = record.stream.ReadyCount()
+	if record.reverse != nil {
+		lease.Ready = record.reverse.ReadyCount()
 	}
 	return lease
+}
+
+// closeRecord releases sockets before making their ports available for reuse.
+// Resource shutdown never holds the registry lock. The reservation owner check
+// makes repeated cleanup harmless even after a port has been reassigned.
+func (r *leaseRegistry) closeRecord(record *leaseRecord) {
+	if record == nil {
+		return
+	}
+	record.Close()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if record.datagram != nil {
+		r.udpPorts.release(record.datagram.UDPPort(), record)
+	}
+	if record.tcpPort > 0 {
+		r.tcpPorts.release(record.tcpPort, record)
+	}
+}
+
+var errPortExhausted = errors.New("no ports available")
+
+type portReservation struct {
+	port      int
+	expiresAt time.Time
+}
+
+// portPool is registry-owned reservation metadata; all access holds leaseRegistry.mu.
+type portPool struct {
+	available []int
+	inUse     map[int]*leaseRecord
+	reserved  map[string]portReservation
+	grace     time.Duration
+}
+
+func newPortPool(min, max int, grace time.Duration) portPool {
+	if min <= 0 || max <= 0 || min > max {
+		return portPool{
+			inUse:    make(map[int]*leaseRecord),
+			reserved: make(map[string]portReservation),
+			grace:    grace,
+		}
+	}
+
+	available := make([]int, 0, max-min+1)
+	for port := min; port <= max; port++ {
+		available = append(available, port)
+	}
+	return portPool{
+		available: available,
+		inUse:     make(map[int]*leaseRecord),
+		reserved:  make(map[string]portReservation),
+		grace:     grace,
+	}
+}
+
+func (a *portPool) allocate(record *leaseRecord) (int, error) {
+	a.cleanupExpired(time.Now())
+
+	key := record.Key()
+	if res, ok := a.reserved[key]; ok {
+		delete(a.reserved, key)
+		a.inUse[res.port] = record
+		return res.port, nil
+	}
+
+	if len(a.available) == 0 {
+		return 0, errPortExhausted
+	}
+
+	port := a.available[0]
+	a.available = a.available[1:]
+	a.inUse[port] = record
+	return port, nil
+}
+
+func (a *portPool) release(port int, record *leaseRecord) {
+	owner, ok := a.inUse[port]
+	if !ok || owner != record {
+		return
+	}
+	delete(a.inUse, port)
+	key := record.Key()
+
+	if prev, exists := a.reserved[key]; exists {
+		a.sortedInsert(prev.port)
+	}
+
+	a.reserved[key] = portReservation{
+		port:      port,
+		expiresAt: time.Now().Add(a.grace),
+	}
+	a.cleanupExpired(time.Now())
+}
+
+func (a *portPool) cleanupExpired(now time.Time) {
+	for key, res := range a.reserved {
+		if now.After(res.expiresAt) {
+			delete(a.reserved, key)
+			a.sortedInsert(res.port)
+		}
+	}
+}
+
+func (a *portPool) sortedInsert(port int) {
+	i := sort.SearchInts(a.available, port)
+	a.available = append(a.available, 0)
+	copy(a.available[i+1:], a.available[i:])
+	a.available[i] = port
 }

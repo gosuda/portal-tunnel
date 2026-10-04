@@ -2,6 +2,8 @@ package portal
 
 import (
 	"context"
+	"net"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -28,11 +30,14 @@ type leaseRecord struct {
 
 	registerChallenge *identity.RegisterChallenge
 
-	datagram *transport.RelayDatagram
-	udpPorts *transport.PortAllocator
-	tcpPort  *transport.RelayTCPPort
-	tcpPorts *transport.PortAllocator
-	stream   *transport.RelayStream
+	datagram    *transport.RelayDatagram
+	tcpPort     int
+	tcpListener net.Listener
+	reverse     *transport.ReversePool
+
+	mu         sync.Mutex
+	closed     bool
+	reverseMux *transport.ReverseMux
 }
 
 // cacheLease adapts registry facts to the cache's canonical hostname key while
@@ -61,13 +66,22 @@ func (r *leaseRecord) isExpired(now time.Time) bool {
 }
 
 func (r *leaseRecord) Start() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return net.ErrClosed
+	}
 	if r.datagram != nil {
-		if err := r.datagram.Start(context.Background()); err != nil {
+		if err := r.datagram.Start(); err != nil {
 			return err
 		}
 	}
-	if r.tcpPort != nil {
-		return r.tcpPort.Start()
+	if r.tcpPort > 0 && r.tcpListener == nil {
+		listener, err := net.ListenTCP("tcp", &net.TCPAddr{Port: r.tcpPort})
+		if err != nil {
+			return err
+		}
+		r.tcpListener = listener
 	}
 	return nil
 }
@@ -76,23 +90,55 @@ func (r *leaseRecord) Close() {
 	if r == nil {
 		return
 	}
-	if r.stream != nil {
-		r.stream.Close()
+	// Serialize the entire close so registry cleanup cannot release ports
+	// while another caller is still shutting down their sockets.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	r.closed = true
+	mux := r.reverseMux
+	r.reverseMux = nil
+	listener := r.tcpListener
+	if listener != nil {
+		_ = listener.Close()
+	}
+	if mux != nil {
+		_ = mux.Close()
+	}
+	if r.reverse != nil {
+		r.reverse.Close()
 	}
 	if r.datagram != nil {
-		port := r.datagram.UDPPort()
 		r.datagram.Close()
-		if port > 0 && r.udpPorts != nil {
-			r.udpPorts.Release(port)
-		}
 	}
-	if r.tcpPort != nil {
-		port := r.tcpPort.TCPPort()
-		r.tcpPort.Close()
-		if port > 0 && r.tcpPorts != nil {
-			r.tcpPorts.Release(port)
-		}
+}
+
+// attachReverseMux replaces the lease's carrier without letting a late release
+// from the old handler detach the replacement. A closed lease refuses ownership.
+func (r *leaseRecord) attachReverseMux(mux *transport.ReverseMux) error {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return net.ErrClosed
 	}
+	previous := r.reverseMux
+	r.reverseMux = mux
+	r.mu.Unlock()
+	if previous != nil && previous != mux {
+		_ = previous.Close()
+	}
+	return nil
+}
+
+func (r *leaseRecord) detachReverseMux(mux *transport.ReverseMux) {
+	r.mu.Lock()
+	if r.reverseMux == mux {
+		r.reverseMux = nil
+	}
+	r.mu.Unlock()
+	_ = mux.Close()
 }
 
 func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manager) error {

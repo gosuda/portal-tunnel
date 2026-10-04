@@ -320,7 +320,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 	if err != nil {
 		removed, _ := s.registry.Unregister(types.UnregisterRequest{AccessToken: resp.AccessToken})
 		if removed == nil {
-			record.Close()
+			s.registry.closeRecord(record)
 			removed = record
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
@@ -329,8 +329,8 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 		writeAPIErrorResponse(w, err)
 		return identityKey, types.RegisterResponse{}, false
 	}
-	if record.tcpPort != nil {
-		go s.serveTCPPairs(record.tcpPort, record.Key())
+	if record.tcpPort > 0 {
+		go s.serveTCP(record)
 	}
 
 	return record.Key(), resp, true
@@ -445,12 +445,11 @@ func (s *Server) HandleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
 // serveReverseMux offers each stream the connector opens on session to the lease like
 // any other reverse connection. The lease owns the session, so it ends with the lease.
 func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseMux, clientIP string) {
-	release, err := lease.stream.AttachReverseSession(session)
-	if err != nil {
+	if err := lease.attachReverseMux(session); err != nil {
 		_ = session.Close()
 		return
 	}
-	defer release()
+	defer lease.detachReverseMux(session)
 
 	log.Info().Str("address", lease.Address).Str("lease_name", lease.Name).Msg("sdk reverse session opened over websocket")
 	for {
@@ -464,8 +463,8 @@ func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseM
 			_ = stream.Close()
 			continue
 		}
-		// OfferConn closes a stream it turns away, as when the ready queue is full.
-		if err := lease.stream.OfferConn(stream); err != nil {
+		// Offer closes a stream it turns away, as when the ready queue is full.
+		if err := lease.reverse.Offer(stream); err != nil {
 			continue
 		}
 		s.registry.Touch(lease.Key(), clientIP, time.Now())
@@ -537,7 +536,7 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, clientIP 
 	if conn.RemoteAddr() != nil {
 		remoteAddr = conn.RemoteAddr().String()
 	}
-	if err := lease.stream.OfferConn(conn); err != nil {
+	if err := lease.reverse.Offer(conn); err != nil {
 		log.Warn().
 			Err(err).
 			Str("address", lease.Address).
@@ -552,7 +551,7 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, clientIP 
 		Str("address", lease.Address).
 		Str("lease_name", lease.Name).
 		Str("remote_addr", remoteAddr).
-		Int("ready", lease.stream.ReadyCount()).
+		Int("ready", lease.reverse.ReadyCount()).
 		Msg("sdk reverse connected")
 }
 
@@ -607,7 +606,7 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Second)
 	defer cancel()
-	transport := &http.Transport{
+	httpTransport := &http.Transport{
 		DisableKeepAlives: true,
 		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			// The relay is the TLS client on this fallback: no routed
@@ -615,10 +614,18 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 			// pending and is pinned to the relay's own ClientHello on
 			// first write.
 			binding := s.registry.bindings.Issue(record.id, nil)
-			upstream, err := record.stream.Claim(ctx, binding)
-			if err != nil {
-				s.registry.bindings.Discard(binding)
-				return nil, err
+			var upstream net.Conn
+			for {
+				var err error
+				upstream, err = record.reverse.Acquire(ctx)
+				if err != nil {
+					s.registry.bindings.Discard(binding)
+					return nil, err
+				}
+				if err := transport.WriteTLSStart(upstream, binding); err == nil {
+					break
+				}
+				_ = upstream.Close()
 			}
 			roots := x509.NewCertPool()
 			for _, cert := range s.apiServer.TLSConfig.Certificates {
@@ -637,8 +644,8 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 			return conn, nil
 		},
 	}
-	defer transport.CloseIdleConnections()
+	defer httpTransport.CloseIdleConnections()
 	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "https", Host: host})
-	proxy.Transport = transport
+	proxy.Transport = httpTransport
 	proxy.ServeHTTP(w, req.WithContext(ctx))
 }

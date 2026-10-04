@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/yamux"
+
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -60,4 +62,23 @@ func TestReverseMuxAuthenticatesEveryStream(t *testing.T) {
 			t.Fatalf("authorized capability = %q, want %q", got, want)
 		}
 	}
+}
+
+func newReverseMuxPair(t *testing.T) (*ReverseMux, *ReverseMux) {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	server, err := yamux.Server(serverConn, reverseMuxConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := yamux.Client(clientConn, reverseMuxConfig())
+	if err != nil {
+		_ = server.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = client.Close()
+	})
+	return &ReverseMux{session: server}, &ReverseMux{session: client}
 }

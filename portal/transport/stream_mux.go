@@ -184,22 +184,6 @@ func ConfirmReverseStream(conn net.Conn, accepted bool) error {
 	return err
 }
 
-func writeReverseStreamFrame(w io.Writer, parts ...[]byte) error {
-	for _, part := range parts {
-		for len(part) != 0 {
-			n, err := w.Write(part)
-			if err != nil {
-				return err
-			}
-			if n == 0 {
-				return io.ErrUnexpectedEOF
-			}
-			part = part[n:]
-		}
-	}
-	return nil
-}
-
 // AcceptReverseMux completes the WebSocket handshake and starts the relay end of the
 // session. Only the marker is selected, so the response never echoes the capability.
 func AcceptReverseMux(w http.ResponseWriter, r *http.Request) (*ReverseMux, error) {
