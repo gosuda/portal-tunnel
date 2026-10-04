@@ -381,7 +381,6 @@ type listenerSnapshot struct {
 	accessToken string
 	reverse     types.ReverseEndpoint
 	expiresAt   time.Time
-	publicPort  int
 	tenantTLS   *keyless.Client
 }
 
@@ -485,26 +484,30 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 
 func (l *listener) publicURLForLease(lease listenerSnapshot) string {
 	baseURL := l.api.relayURL
-	if baseURL == nil {
+	if baseURL == nil || lease.hostname == "" {
 		return ""
 	}
-	if lease.hostname == "" {
+	authority := relayAuthority(baseURL, lease.hostname)
+	if authority == "" {
 		return ""
 	}
-
-	if baseURL.Scheme == "" {
-		return "https://" + lease.hostname
-	}
-
-	host := lease.hostname
-	if port := baseURL.Port(); port != "" {
-		host = net.JoinHostPort(lease.hostname, port)
-	}
-
+	scheme := cmp.Or(baseURL.Scheme, "https")
 	return (&url.URL{
-		Scheme: baseURL.Scheme,
-		Host:   host,
+		Scheme: scheme,
+		Host:   authority,
 	}).String()
+}
+
+func relayAuthority(relayURL *url.URL, hostname string) string {
+	if relayURL == nil {
+		return ""
+	}
+	host := cmp.Or(strings.TrimSpace(hostname), strings.TrimSpace(relayURL.Hostname()))
+	if host == "" {
+		return ""
+	}
+	port := cmp.Or(relayURL.Port(), "443")
+	return net.JoinHostPort(host, port)
 }
 
 // runStaticCache supplies current SDK transport and lease credentials; the
@@ -888,16 +891,14 @@ func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, err
 	if !ok || lease.accessToken == "" {
 		return nil, errors.New("access token is not available")
 	}
-	if lease.publicPort <= 0 {
-		return nil, errors.New("public port is not available")
-	}
 	tlsCfg := l.api.tlsConfigClone()
 	if tlsCfg == nil {
 		return nil, errors.New("relay tls config is unavailable")
 	}
-	host := strings.TrimSpace(l.api.relayURL.Hostname())
-	host = cmp.Or(host, strings.TrimSpace(l.api.relayURL.Host))
-	dialAddr := net.JoinHostPort(host, fmt.Sprintf("%d", lease.publicPort))
+	dialAddr := relayAuthority(l.api.relayURL, "")
+	if dialAddr == "" {
+		return nil, errors.New("relay authority is unavailable")
+	}
 	return transport.DialQUICBackhaul(ctx, dialAddr, tlsCfg, lease.accessToken)
 }
 
@@ -1031,11 +1032,6 @@ func (l *listener) ensureMITMProbeSupport(exporterCapable bool) error {
 }
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
-	rootHostname := utils.PortalRootHost(l.api.relayURL.String())
-	publicHostname, err := utils.LeaseHostname(l.identity.Name, rootHostname)
-	if err != nil {
-		return err
-	}
 	registerReq := types.RegisterChallengeRequest{
 		Identity:   l.identity,
 		Metadata:   l.metadataSnapshot(),
@@ -1049,6 +1045,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	publicHostname := resp.CanonicalHostname
 	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return err
@@ -1060,11 +1057,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 			Message: "relay did not enable required udp support",
 		}
 	}
-	if l.udpEnabled && resp.SNIPort <= 0 {
-		_ = l.api.unregister(context.Background(), resp.AccessToken)
-		return errors.New("relay did not return public port for udp transport")
-	}
-
 	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
 		RelayURL:    l.api.relayURL.String(),
 		Hostname:    publicHostname,
@@ -1094,7 +1086,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		accessToken: resp.AccessToken,
 		reverse:     resp.ReverseEndpoint,
 		expiresAt:   resp.ExpiresAt,
-		publicPort:  resp.SNIPort,
 		tenantTLS:   tenantTLS,
 	}
 	oldLease := l.lease.Swap(next)

@@ -183,6 +183,12 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 		_ = c.unregister(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, errors.New("relay returned mismatched lease identity")
 	}
+	resp.Hostname = utils.NormalizeHostname(resp.Hostname)
+	resp.CanonicalHostname = utils.NormalizeHostname(resp.CanonicalHostname)
+	if resp.CanonicalHostname == "" {
+		_ = c.unregister(context.Background(), resp.AccessToken)
+		return types.RegisterResponse{}, errors.New("relay did not return canonical hostname")
+	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
 	if err != nil {
 		_ = c.unregister(context.Background(), resp.AccessToken)

@@ -89,19 +89,21 @@ function toAdminServer(
   const metadata = parseLeaseMetadata(row.metadata);
   const payment = resolveLeasePayment(metadata);
   const hostname = row.hostname || "";
+  const canonicalHostname = row.canonical_hostname || "";
+  const routeHostname = canonicalHostname || hostname;
   const serviceName = row.name || "";
   const address = row.address.trim();
 
   return {
-    id: hostname,
-    name: serviceName || hostname || "(unnamed)",
+    id: routeHostname,
+    name: serviceName || routeHostname || "(unnamed)",
     description: metadata.description,
     tags: metadata.tags,
     thumbnail: resolveLeaseThumbnail(metadata),
     owner: metadata.owner,
     online: (row.ready || 0) > 0,
-    dns: hostname,
-    link: hostname ? `https://${hostname}/` : "",
+    dns: hostname || routeHostname,
+    link: routeHostname ? `https://${routeHostname}/` : "",
     lastUpdated: row.last_seen_at || undefined,
     firstSeen: row.first_seen_at || undefined,
     paymentEnabled: payment.enabled,

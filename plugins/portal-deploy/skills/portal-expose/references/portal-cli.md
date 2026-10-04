@@ -103,7 +103,7 @@ The flag is `--description`, not `--desc`. Environment variables in the third co
 | `--ban-mitm` | `false` | `BAN_MITM` | Ban a relay when the self-probe detects TLS termination |
 | `--identity-path` | `identity.json` | `IDENTITY_PATH` | Identity file, created when missing |
 | `--identity-json` | | `IDENTITY_JSON` | In-memory identity JSON; wins over the file |
-| `--name` | generated | | Public hostname prefix, one DNS label; applies only to a new identity |
+| `--name` | generated | | Public hostname prefix, normalized to one DNS label of at most 22 ASCII characters; applies only to a new identity |
 | `--description`, `--tags`, `--owner`, `--thumbnail` | | | Public listing metadata; `--tags` is comma-separated |
 | `--hide` | `false` | | Keep the service out of relay listings |
 | `--http-route` | | | `PATH=UPSTREAM [METHOD[,METHOD...]:AMOUNT]`, repeatable |

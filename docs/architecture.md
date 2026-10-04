@@ -3,8 +3,8 @@
 Public clients reach a Portal relay through its existing HTTPS/SNI ingress.
 Tunnel clients establish an outbound reverse backhaul to their selected public
 relay. Tenant TLS normally terminates at the tunnel client. Explicitly opted-in
-static caches terminate browser TLS at the selected relay; see
-[static cache ownership and limits](adr/0001-static-relay-cache.md).
+static caches terminate browser TLS at the selected relay and serve only the
+identity-bound canonical hostname; friendly aliases remain live-origin routes.
 
 `portal/cache` owns the static cache feature on both sides of the wire:
 `Manager` handles admission, storage, expiry, lease events, and serving;

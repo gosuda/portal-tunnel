@@ -761,7 +761,7 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	}
 	identity := ""
 	for _, lease := range publicIdentityLeases(api.server.PublicLeases(), api.server) {
-		if utils.NormalizeHostname(lease.Hostname) == hostname {
+		if utils.NormalizeHostname(lease.Hostname) == hostname || utils.NormalizeHostname(lease.CanonicalHostname) == hostname {
 			identity = lease.IdentityKey
 			break
 		}
@@ -800,11 +800,11 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 func publicIdentityLeases(public []types.Lease, server *portal.Server) []types.PolicyLease {
 	known := make(map[string]bool)
 	for _, lease := range public {
-		known[utils.NormalizeHostname(lease.Hostname)] = true
+		known[utils.NormalizeHostname(lease.CanonicalHostname)] = true
 	}
 	leases := make([]types.PolicyLease, 0)
 	for _, lease := range server.PolicyLeases() {
-		if known[utils.NormalizeHostname(lease.Hostname)] && lease.IdentityKey != "" {
+		if known[utils.NormalizeHostname(lease.CanonicalHostname)] && lease.IdentityKey != "" {
 			leases = append(leases, lease)
 		}
 	}

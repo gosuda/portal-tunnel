@@ -63,6 +63,7 @@ function buildLease(address: string, name: string = "relay-1"): PolicyLease {
     client_ip: "203.0.113.10",
     reported_ip: "",
     hostname: "relay.example.com",
+    canonical_hostname: `${name.toLowerCase()}-${address.slice(2).toLowerCase()}.example.com`,
     metadata: {
       description: "relay",
       tags: ["core"],

@@ -11,7 +11,9 @@ vi.mock("@/hooks/useList", () => ({
 }));
 
 const lease: Lease = {
+  address: "0x0123456789012345678901234567890123456789",
   hostname: "demo.relay.example",
+  canonical_hostname: "demo-0123456789012345678901234567890123456789.relay.example",
   expires_at: "",
   first_seen_at: "",
   last_seen_at: "",

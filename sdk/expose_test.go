@@ -67,7 +67,7 @@ func TestExposureWaitReadyUsesRelayStatus(t *testing.T) {
 	}
 }
 
-func TestPublicURLForLeaseUsesCanonicalRelayPort(t *testing.T) {
+func TestPublicURLForLeaseUsesRelayAuthority(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -75,7 +75,7 @@ func TestPublicURLForLeaseUsesCanonicalRelayPort(t *testing.T) {
 		relayURL string
 		want     string
 	}{
-		{"default HTTPS port", "https://relay.example.com", "https://demo.relay.example.com"},
+		{"default HTTPS port", "https://relay.example.com", "https://demo.relay.example.com:443"},
 		{"explicit default port", "https://relay.example.com:443", "https://demo.relay.example.com:443"},
 		{"explicit public port", "https://relay.example.com:9443", "https://demo.relay.example.com:9443"},
 	}
@@ -88,8 +88,7 @@ func TestPublicURLForLeaseUsesCanonicalRelayPort(t *testing.T) {
 			}
 			l := &listener{api: &apiClient{relayURL: relayURL}}
 			got := l.publicURLForLease(listenerSnapshot{
-				hostname:   "demo.relay.example.com",
-				publicPort: 8443,
+				hostname: "demo.relay.example.com",
 			})
 			if got != tc.want {
 				t.Fatalf("publicURLForLease() = %q, want %q", got, tc.want)

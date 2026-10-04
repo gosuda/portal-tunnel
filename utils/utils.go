@@ -15,6 +15,8 @@ import (
 	"unicode"
 
 	"golang.org/x/net/idna"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func SplitCSV(raw string) []string {
@@ -330,6 +332,27 @@ func LeaseHostname(name, rootHost string) (string, error) {
 		rootHost = "localhost"
 	}
 	return label + "." + rootHost, nil
+}
+
+// CanonicalLeaseHostname returns the identity-bound hostname for a lease.
+// The full 20-byte EVM address is encoded as lowercase hexadecimal so the
+// hostname cannot move between authenticated identities.
+func CanonicalLeaseHostname(name, address, rootHost string) (string, error) {
+	label, err := NormalizeDNSLabel(name)
+	if err != nil {
+		return "", err
+	}
+	address = strings.ToLower(TrimHexPrefix(strings.TrimSpace(address)))
+	if len(address) != 40 {
+		return "", errors.New("address must contain 40 hexadecimal characters")
+	}
+	if _, err := hex.DecodeString(address); err != nil {
+		return "", errors.New("address must contain 40 hexadecimal characters")
+	}
+	if len(label) > types.CanonicalLeaseNameMaxLength {
+		return "", fmt.Errorf("name must be %d characters or fewer for an identity-bound hostname", types.CanonicalLeaseNameMaxLength)
+	}
+	return LeaseHostname(label+"-"+address, rootHost)
 }
 
 func NormalizeTargetAddr(raw string) (string, error) {

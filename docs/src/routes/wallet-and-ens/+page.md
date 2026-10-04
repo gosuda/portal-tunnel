@@ -58,8 +58,25 @@ portal expose 3000 \
   --identity-path ~/.config/portal/myapp.identity.json
 ```
 
-The public lease name is a single DNS label such as `myapp`. It is not an ENS
-name such as `alice.eth`.
+The public lease name is normalized to a single DNS label whose ASCII form is
+at most 22 characters, such as `myapp`. It is not an ENS name such as
+`alice.eth`. Each registration can expose a friendly hostname and always
+exposes an identity-bound hostname:
+
+```text
+myapp.portal.example
+myapp-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.portal.example
+```
+
+The relay derives the second hostname from the address proven by SIWE. Portal
+defines the relay-independent service identity as `(normalized name, address)`;
+each relay domain supplies a distinct browser origin for that same identity.
+The full lowercase 40-character address suffix makes each relay-local origin
+stable without stored ownership state. It also makes services published by
+the same Ethereum address publicly correlatable across relay domains. Existing
+protocol-10 clients and identities with longer names must keep using a
+protocol-10 relay until they are upgraded and renamed; protocol 11 rejects
+names whose normalized ASCII label is longer than 22 characters.
 
 ## Relay Admin Token Login
 
@@ -119,9 +136,9 @@ When enabled, Portal uses the configured DNS provider to:
 
 - enable or inspect DNSSEC for the relay base domain
 - publish `ENS1 ...` TXT records for the base domain
-- publish `ENS1 ...` TXT records for lease hostnames
-- keep A records for lease hostnames in sync with the relay public IPv4
-- remove lease hostname records when leases unregister or expire
+- publish `ENS1 ...` TXT records for friendly and identity-bound lease hostnames
+- keep A records for both lease hostnames in sync with the relay public IPv4
+- remove both lease hostname records when leases unregister or expire
 
 Lease registration and removal enqueue DNS changes to a single worker. Successful
 TXT changes are not repeated by the periodic maintenance pass; only failed

@@ -34,7 +34,7 @@ Ask one concise question only when the target cannot be determined safely, for e
 
 ### 2. Confirm the Lease
 
-- `GET <relay>/api/state` returns `data.leases[]`. Match on `name` or `hostname`.
+- `GET <relay>/api/state` returns `data.leases[]`. Match on `name`, `hostname`, or `canonical_hostname`, and prefer the canonical hostname for links and probes.
 - `ready` is the number of live reverse connections the publisher currently holds open. `ready > 0` means the tunnel can serve right now. A lease with `ready` at zero is registered but cannot serve at this moment; the relay keeps listing it while the publisher renews and drops it once it has been out of contact for three minutes.
 - `tcp_addr` and `udp_addr` are the raw endpoints, present only when the publisher requested them and the relay allows them.
 - `metadata` (description, owner, tags, thumbnail) is typed in by the publisher and is not verified by anyone. Present it as the publisher's claim.

@@ -76,6 +76,54 @@ func TestLeaseHostname(t *testing.T) {
 	}
 }
 
+func TestCanonicalLeaseHostname(t *testing.T) {
+	t.Parallel()
+
+	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
+	want := "herdr-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.example.com"
+	got, err := CanonicalLeaseHostname("Herdr", address, "Example.COM.")
+	if err != nil {
+		t.Fatalf("CanonicalLeaseHostname() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("CanonicalLeaseHostname() = %q, want %q", got, want)
+	}
+
+	maxName := strings.Repeat("a", 22)
+	got, err = CanonicalLeaseHostname(maxName, address, "example.com")
+	if err != nil {
+		t.Fatalf("CanonicalLeaseHostname(maximum name) error = %v", err)
+	}
+	if label := strings.SplitN(got, ".", 2)[0]; len(label) != 63 {
+		t.Fatalf("canonical label length = %d, want 63", len(label))
+	}
+	if _, err := CanonicalLeaseHostname(maxName+"a", address, "example.com"); err == nil {
+		t.Fatal("CanonicalLeaseHostname(overlong name) error = nil")
+	}
+	if _, err := CanonicalLeaseHostname("herdr", "0x1234", "example.com"); err == nil {
+		t.Fatal("CanonicalLeaseHostname(short address) error = nil")
+	}
+}
+
+func TestCanonicalLeaseHostnameKeepsServiceIdentityAcrossRelays(t *testing.T) {
+	t.Parallel()
+
+	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
+	relayA, err := CanonicalLeaseHostname("herdr", address, "relay-a.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayB, err := CanonicalLeaseHostname("herdr", address, "relay-b.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	labelA, _, _ := strings.Cut(relayA, ".")
+	labelB, _, _ := strings.Cut(relayB, ".")
+	if labelA != labelB || relayA == relayB {
+		t.Fatalf("relay canonical hostnames = (%q, %q), want the same service label under different relay origins", relayA, relayB)
+	}
+}
+
 func TestEnsurePortHandlesBracketedIPv6(t *testing.T) {
 	for _, tc := range []struct {
 		name string

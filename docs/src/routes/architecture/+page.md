@@ -87,9 +87,9 @@ const udpQuicDiagram = `sequenceDiagram
 
     SDK->>Relay: POST /sdk/register (udp_enabled=true, signed SIWE)
     Note over Relay: Allocates UDP port from MIN_PORT-MAX_PORT
-    Relay->>SDK: udp_addr + access_token + public port (legacy sni_port field)
+    Relay->>SDK: udp_addr + access_token
 
-    SDK->>Relay: QUIC connect to public port (ALPN: portal-tunnel, DATAGRAM enabled)
+    SDK->>Relay: QUIC connect to relay URL authority (default HTTPS port 443; ALPN: portal-tunnel, DATAGRAM enabled)
     SDK->>Relay: Send access_token on first QUIC stream
     Note over Relay: Validates token, registers QUIC tunnel for lease
 
@@ -114,7 +114,7 @@ const registrationDiagram = `sequenceDiagram
     Note over Relay: Validates SIWE signature, checks name availability
     Note over Relay: Creates lease, publishes route at name.relay-host
     Note over Relay: Allocates TCP/UDP ports if requested
-    Relay->>SDK: access_token + reverse_endpoint + lease info (tcp_addr?, udp_addr?, legacy sni_port?)`
+    Relay->>SDK: access_token + reverse_endpoint + lease info (tcp_addr?, udp_addr?)`
 
 const overlayPathDiagram = `flowchart TD
     Client["Public client"] --> Ingress["Portal public ingress"]
@@ -253,7 +253,7 @@ Portal has three distinct network roles:
   - hijacked into a long-lived raw TCP session
   - starts idle in the per-lease stream ready queue, then becomes the tenant data path when claimed
 - **Internal datagram tunnel**
-  - QUIC to the relay URL host plus the canonical public port carried in the legacy `sni_port` field from `POST /sdk/register`, with ALPN `portal-tunnel`
+  - QUIC to the relay URL authority (default HTTPS port 443), with ALPN `portal-tunnel`
   - authenticated by a first-stream control message carrying `access_token`
   - carries relay-to-SDK/tunnel datagram traffic only
 
@@ -272,7 +272,9 @@ Shared wire types, API envelope, error codes, path constants, and transport fram
 and admission, storage, expiry, and serving on the relay side. A lease must
 explicitly opt in before the relay accepts its files. Eligible snapshots route
 through the relay HTTP handler and terminate browser TLS there; ordinary
-uncached connections retain TLS passthrough. See [the cache trust boundary](/security-model#opt-in-static-cache)
+uncached connections retain TLS passthrough. Snapshots are routed only by the
+identity-bound canonical hostname; friendly aliases always use the live origin.
+See [the cache trust boundary](/security-model#opt-in-static-cache)
 and [cache limits and expiry](/configuration#static-relay-cache).
 
 ## Transport Model
@@ -418,7 +420,7 @@ Result: the relay allocates a dedicated TCP port per lease and bridges raw TCP w
 
 1. SDK/tunnel requests a register challenge with `udp_enabled=true`, signs the returned SIWE message, and completes registration.
 2. Relay validates that the datagram plane is enabled, allocates a UDP port, and creates a per-lease datagram runtime.
-3. Registration response includes `udp_addr`, `access_token`, and the canonical public port in the legacy `sni_port` field. The SDK dials QUIC to that public port; the relay may bind a different local `SNI_PORT` behind NAT or a load balancer.
+3. Registration response includes `udp_addr` and `access_token`. The SDK dials QUIC to the relay URL authority, using port 443 when the URL has no explicit port; the relay may bind a different local `SNI_PORT` behind NAT or a load balancer.
 4. SDK opens a QUIC connection with ALPN `portal-tunnel` and DATAGRAM support enabled.
 5. Authentication: SDK sends `{access_token}` JSON on the first QUIC stream; relay validates before accepting the tunnel.
 6. External UDP client sends a packet to `udp_addr` -> relay assigns a flow ID -> QUIC DATAGRAM frame to SDK.
@@ -442,8 +444,8 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 - `POST /sdk/register/challenge` then `POST /sdk/register`.
 - Caller signs the returned SIWE message with the identity secp256k1 key (`personal_sign`).
-- `name` must be a valid single DNS label; the relay publishes the lease at `<name>.<root host>`.
-- Registration reserves the hostname and publishes the route immediately; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`.
+- `name` must normalize to a valid single DNS label of at most 22 ASCII characters. The relay publishes the friendly `<name>.<root host>` route when available and always derives `<name>-<40 lowercase address hex>.<root host>` from the SIWE-authenticated identity.
+- Registration publishes the identity-bound route immediately. A friendly-name conflict does not transfer or block the canonical origin; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`.
 - On success, the relay issues a lease-scoped ES256K JWT access token for lease operations and a separate reverse-only capability for the returned reverse endpoint.
 - UDP registration requires server `UDP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and admin enablement. Failures: `udp_disabled` (403), `udp_capacity_exceeded` (503), `udp_port_exhausted` (503).
 - TCP port registration has equivalent three-condition gating. Failures: `tcp_port_disabled` (403), `tcp_port_capacity_exceeded` (503), `tcp_port_exhausted` (503).
@@ -483,7 +485,7 @@ therefore preserves the ingress lease and public hostname.
 
 Route lookup order:
 
-1. Exact hostname match
+1. Exact friendly or identity-bound hostname match
 2. Single-label wildcard match (`*.example.com`)
 3. Root-host fallback to the admin/API handler
 
