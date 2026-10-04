@@ -73,7 +73,7 @@ curl -sS --connect-timeout 5 --max-time 15 https://portal.example.com/api/state
     ],
     "landing_page_enabled": true,
     "reputation": [
-      { "hostname": "my-app.portal.example.com", "up": 3, "down": 0, "total": 3, "viewer_vote": "" }
+      { "hostname": "my-app-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.portal.example.com", "up": 3, "down": 0, "total": 3, "viewer_vote": "" }
     ]
   }
 }
@@ -125,7 +125,7 @@ Probe the resulting hostname:
 
 ```sh
 curl -sS --connect-timeout 5 --max-time 15 -o /dev/null \
-  -w '%{http_code} %{content_type} exit=%{exitcode} %{errormsg}\n' https://my-app.portal.example.com/
+  -w '%{http_code} %{content_type} exit=%{exitcode} %{errormsg}\n' https://my-app-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.portal.example.com/
 ```
 
 `000` means no HTTP response arrived; the curl exit code then carries the diagnosis.

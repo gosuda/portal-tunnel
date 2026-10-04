@@ -672,7 +672,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 		records := s.registry.CloseAll()
 		for _, record := range records {
-			record.deleteDNS(ctx, s.acmeManager)
+			s.deleteLeaseDNS(ctx, record)
 		}
 
 		if s.quicBackhaul != nil {
@@ -852,7 +852,7 @@ func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration)
 			records := s.registry.cleanupExpired(now)
 			s.registry.bindings.SweepExpired(now)
 			for _, record := range records {
-				record.deleteDNS(ctx, s.acmeManager)
+				s.deleteLeaseDNS(ctx, record)
 			}
 		}
 	}

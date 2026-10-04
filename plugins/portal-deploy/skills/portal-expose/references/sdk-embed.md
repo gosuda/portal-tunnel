@@ -61,6 +61,11 @@ go 1.27.0
 require github.com/gosuda/portal-tunnel/v2 v2.5.0
 ```
 
+Protocol 11 requires the normalized DNS label to be at most 22 ASCII bytes.
+This example pins `v2.5.0`, which speaks protocol 10 and is incompatible with
+protocol-11 relays. Update the dependency after a protocol-11 release is
+published.
+
 `sdk.Exposure` is a `net.Listener`, so `http.Serve(exposure, handler)` also works; `sdk.RunHTTP` adds header and idle timeouts, an optional second local listener, and a five-second graceful shutdown.
 
 ## Identity

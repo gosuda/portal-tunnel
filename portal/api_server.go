@@ -315,7 +315,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 		return identityKey, types.RegisterResponse{}, false
 	}
 	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-	err = record.syncENSGaslessDNS(dnsCtx, s.acmeManager)
+	err = s.syncLeaseDNS(dnsCtx, record)
 	cancel()
 	if err != nil {
 		removed, _ := s.registry.Unregister(types.UnregisterRequest{AccessToken: resp.AccessToken})
@@ -324,7 +324,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 			removed = record
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-		removed.deleteDNS(cleanupCtx, s.acmeManager)
+		s.deleteLeaseDNS(cleanupCtx, removed)
 		cleanupCancel()
 		writeAPIErrorResponse(w, err)
 		return identityKey, types.RegisterResponse{}, false
@@ -415,7 +415,7 @@ func (s *Server) HandleUnregister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-	record.deleteDNS(dnsCtx, s.acmeManager)
+	s.deleteLeaseDNS(dnsCtx, record)
 	cancel()
 
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{})

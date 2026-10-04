@@ -107,17 +107,45 @@ func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manag
 	return nil
 }
 
-func (r *leaseRecord) deleteDNS(ctx context.Context, manager *acme.Manager) {
-	if r == nil || manager == nil {
+func (s *Server) syncLeaseDNS(ctx context.Context, record *leaseRecord) error {
+	if s == nil || record == nil || s.registry == nil {
+		return nil
+	}
+	registry := s.registry
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	// Queue DNS sync while the lease is still the current live record. A
+	// concurrent unregister/expiry must either happen after this enqueue or
+	// make this stale sync a no-op.
+	if !registry.containsLiveRecordLocked(record, time.Now()) {
+		return nil
+	}
+	return record.syncENSGaslessDNS(ctx, s.acmeManager)
+}
+
+func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
+	if s == nil || record == nil || s.acmeManager == nil || s.registry == nil {
 		return
 	}
-	for _, hostname := range r.hostnames() {
-		err := manager.DeleteENSGaslessHostname(ctx, hostname)
+	registry := s.registry
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	now := time.Now()
+
+	for _, hostname := range record.hostnames() {
+		if registry.ownsHostnameLocked(hostname, now) {
+			continue
+		}
+		// Delete is an enqueue-only operation. Keeping the registry read lock
+		// through the enqueue orders this command against lease registration's
+		// write lock and its later DNS sync enqueue.
+		err := s.acmeManager.DeleteENSGaslessHostname(ctx, hostname)
 		if err != nil {
 			log.Warn().
 				Err(err).
 				Str("hostname", hostname).
-				Str("address", r.Address).
+				Str("address", record.Address).
 				Msg("delete ens gasless hostname")
 		}
 	}
