@@ -41,12 +41,18 @@ const (
 )
 
 type RelayAPI struct {
-	server               *portal.Server
-	access               *policy.Access
-	ingress              *policy.Ingress
-	adminToken           string
-	policyStatePath      string
-	frontendFS           fs.FS
+	server          *portal.Server
+	access          *policy.Access
+	ingress         *policy.Ingress
+	adminToken      string
+	policyStatePath string
+	frontendFS      fs.FS
+	// frontendCache memoizes resolved frontend assets: the raw bytes plus the
+	// precomputed gzip form. It is valid for the lifetime of the process
+	// because the embedded frontend cannot change; nothing invalidates it at
+	// runtime and nothing needs to. With --frontend-dir the frontend is
+	// live-edited between requests, so the cache stays off (see
+	// NewRelayAPI) and every request re-reads the directory.
 	frontendCache        sync.Map
 	frontendCacheEnabled bool
 	// reputation is the relay-local vote ledger owned by the policy
@@ -82,12 +88,14 @@ func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.I
 	}
 
 	api := &RelayAPI{
-		server:               server,
-		access:               access,
-		ingress:              ingress,
-		adminToken:           strings.TrimSpace(adminToken),
-		policyStatePath:      policyStatePath,
-		frontendFS:           frontendFS,
+		server:          server,
+		access:          access,
+		ingress:         ingress,
+		adminToken:      strings.TrimSpace(adminToken),
+		policyStatePath: policyStatePath,
+		frontendFS:      frontendFS,
+		// Only the embedded frontend is immutable enough to cache; a
+		// --frontend-dir tree is edited while the relay runs.
 		frontendCacheEnabled: strings.TrimSpace(frontendDir) == "",
 		reputation:           reputationStore,
 		udpPolicy:            initialSettings.UDP,
