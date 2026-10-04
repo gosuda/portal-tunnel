@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -43,7 +42,6 @@ func newTestRelayListener(t *testing.T, relayURL string, closed chan struct{}) *
 	}
 	return &listener{
 		api:      &apiClient{relayURL: relayURLParsed},
-		stream:   transport.NewClientStream(time.Second),
 		accepted: make(chan net.Conn),
 		cancel:   func() { close(closed) },
 		doneCh:   closed,

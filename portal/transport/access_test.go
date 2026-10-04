@@ -1,14 +1,13 @@
 package transport
 
 import (
-	"net"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func TestRelayDatagramDropsTrafficWhileNotRoutable(t *testing.T) {
+func TestRelayDatagramDropsTrafficWhileDisabled(t *testing.T) {
 	d := NewRelayDatagram("demo:0x1", 0)
 	t.Cleanup(d.Close)
 	replies := make(chan []byte, 1)
@@ -24,7 +23,7 @@ func TestRelayDatagramDropsTrafficWhileNotRoutable(t *testing.T) {
 	default:
 	}
 
-	d.SetRoutable(true)
+	d.SetEnabled(true)
 	d.dispatch(types.DatagramFrame{FlowID: flowID, Payload: []byte("allowed")})
 	select {
 	case payload := <-replies:
@@ -34,15 +33,4 @@ func TestRelayDatagramDropsTrafficWhileNotRoutable(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("routable datagram was not forwarded")
 	}
-}
-
-func TestRelayTCPPortRejectsConnectionWhileNotRoutable(t *testing.T) {
-	port := &RelayTCPPort{}
-	client, inbound := net.Pipe()
-	port.claim(inbound)
-	_ = client.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err := client.Read(make([]byte, 1)); err == nil {
-		t.Fatal("non-routable TCP connection remained open")
-	}
-	_ = client.Close()
 }

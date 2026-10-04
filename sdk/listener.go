@@ -126,9 +126,8 @@ type listener struct {
 	banMITM           bool
 	cache             *cache.Source
 
-	stream        *transport.ClientStream
 	accepted      chan net.Conn
-	datagram      *transport.ClientDatagram
+	datagram      *transport.DatagramSession
 	mitmManager   *mitmManager
 	statusUpdates chan listenerStatus
 	readySessions atomic.Int32
@@ -172,10 +171,9 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l, cfg.BanMITM)
-	l.stream = transport.NewClientStream(defaultHandshakeTimeout)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
 	if l.udpEnabled {
-		l.datagram = transport.NewClientDatagram()
+		l.datagram = transport.NewDatagramSession(256, false)
 	}
 
 	go l.run(listenerCtx)
@@ -358,7 +356,7 @@ func (l *listener) Close() error {
 			}
 		}
 		if l.datagram != nil {
-			l.datagram.Close()
+			l.datagram.Close("listener closed")
 		}
 
 		if lease != nil && lease.hostname != "" && l.identity.Key() != "" && lease.accessToken != "" {
@@ -421,7 +419,7 @@ func (l *listener) leaseSnapshot() (listenerSnapshot, bool) {
 }
 
 func (l *listener) Accept() (net.Conn, error) {
-	if l.stream == nil {
+	if l.accepted == nil {
 		return nil, net.ErrClosed
 	}
 	for {
@@ -550,23 +548,21 @@ func (l *listener) runLease(ctx context.Context) error {
 			l.runStaticCache(leaseCtx)
 		}()
 	}
-	if l.stream != nil {
-		// The lease owns its reverse transport and any state it keeps.
-		reverseTransport := newLeaseReverseTransport(l)
-		defer reverseTransport.Close()
-		for sessionSlot := range defaultReadyTarget {
-			sessionSlot++
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
-				if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot, reverseTransport); err != nil {
-					select {
-					case errCh <- err:
-					case <-leaseCtx.Done():
-					}
+	// The lease owns its reverse transport and any state it keeps.
+	reverseTransport := newLeaseReverseTransport(l)
+	defer reverseTransport.Close()
+	for sessionSlot := range defaultReadyTarget {
+		sessionSlot++
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot, reverseTransport); err != nil {
+				select {
+				case errCh <- err:
+				case <-leaseCtx.Done():
 				}
-			}()
-		}
+			}
+		}()
 	}
 	if l.udpEnabled {
 		workers.Add(1)
@@ -604,10 +600,6 @@ func (l *listener) runLease(ctx context.Context) error {
 }
 
 func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int, reverseTransport *leaseReverseTransport) error {
-	if l.stream == nil {
-		return nil
-	}
-
 	var retries int
 	for {
 		lease, _ := l.leaseSnapshot()
@@ -641,16 +633,16 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless
 		l.reportStreamReady()
 		claimed, err := func() (bool, error) {
 			defer l.reportStreamClosed()
-			session, err := l.stream.RunSession(ctx, conn)
+			binding, err := transport.ReadStart(ctx, conn, defaultHandshakeTimeout)
 			if err != nil {
 				return false, err
 			}
 
-			acceptedConn := session.Conn
-			if len(session.Binding) != 0 {
+			acceptedConn := conn
+			if len(binding) != 0 {
 				handshakeCtx, cancel := context.WithTimeout(ctx, defaultHandshakeTimeout)
 				defer cancel()
-				acceptedConn, err = tenantTLS.TerminateConn(handshakeCtx, session.Conn, session.Binding)
+				acceptedConn, err = tenantTLS.TerminateConn(handshakeCtx, conn, binding)
 				if err != nil {
 					return true, err
 				}
@@ -757,7 +749,7 @@ func (l *listener) runDatagramLoop(ctx context.Context) error {
 			Str("remote_addr", conn.RemoteAddr().String()).
 			Msg("quic backhaul connected")
 
-		recvDone, err := l.datagram.BindBackhaul(conn)
+		recvDone, err := l.datagram.Bind(conn)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()

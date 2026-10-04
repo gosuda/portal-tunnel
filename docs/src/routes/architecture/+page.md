@@ -315,6 +315,34 @@ The WebSocket and yamux layers are therefore a browser-compatible carrier, not
 a separate lease or application protocol. Native runtimes continue to use the
 raw reverse path and do not pay the multiplexing cost.
 
+### Connection and resource ownership
+
+Native HTTP hijacks and authenticated WebSocket/yamux streams enter the same
+per-lease `ReversePool` as `net.Conn` values. The pool manages capacity,
+idle keepalives, acquisition, and closing queued connections. Acquiring a
+connection stops its idle writer and transfers ownership to the caller without
+writing a session-start frame. Overlay admission reserves capacity before
+acknowledging an offer and commits only after the acknowledgement succeeds;
+pool shutdown waits for that decision.
+
+Reverse framing has one owner in `portal/transport/reverse_framing.go`: the
+relay writes raw/TLS start markers, and the SDK reads the same contract directly
+from the original connection. The acquired connection's carrier does not affect
+tenant TLS, raw TCP forwarding, or static-cache fallback.
+
+The lease record owns the reverse pool, the active WebSocket/yamux carrier, the
+raw TCP `net.Listener`, and UDP ingress. Replacing or closing a lease closes its
+carrier; a replaced carrier's late cleanup cannot detach the current one. Raw
+TCP accepts and reverse acquisition are composed by the server before bridging
+the two `net.Conn` values. The registry owns TCP/UDP port reservations and access
+policy; UDP ingress receives only an enabled/disabled gate.
+
+UDP endpoint construction starts no workers or sockets. `Start` acquires ingress
+and starts dispatch/cleanup; `Close` stops the endpoint and its QUIC backhaul.
+The relay and SDK share `DatagramSession` for a replaceable QUIC connection and
+decoded frames. Portal retains datagram routing metadata instead of encoding
+flow IDs or relay identity into artificial stream or address types.
+
 <div id="optional-relay-overlay"></div>
 <h3 id="ivnp-backed-overlay-networking">IVNP-backed overlay networking</h3>
 
@@ -486,7 +514,7 @@ For uncached HTTPS tunnels, the relay signs handshake transcripts via `/v1/sign`
 - End-to-end tenant TLS with relay-backed keyless signing
 - Traffic-triggered MITM self-probing for probable relay-side TLS termination; the keyless tenant TLS exports keying material on both sides, and callers can opt into relay banning
 - SIWE identity proof for registration plus relay-issued ES256K JWT access tokens for the lease lifecycle
-- Lease-local stream and datagram ownership through per-lease transport runtimes
+- Lease-owned reverse pools, carriers, TCP listeners, and UDP endpoints
 - Optional QUIC/UDP datagram transport coexisting with TCP on the same lease
 - Per-lease UDP and TCP port allocation with sticky name-based reservation
 - QUIC tunnel authentication via control stream (`access_token`)

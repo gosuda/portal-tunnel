@@ -185,7 +185,7 @@ func TestConnectEndsWebSocketSessionWithTheLease(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = session.Close() })
 
-	lease.stream.Close()
+	lease.Close()
 	select {
 	case <-session.Done():
 	case <-time.After(5 * time.Second):

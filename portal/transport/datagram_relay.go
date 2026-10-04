@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -30,48 +29,52 @@ type flowState struct {
 type RelayDatagram struct {
 	identityKey string
 	port        int
-	session     *datagramSession
+	session     *DatagramSession
 	flowTable   map[uint32]*flowState
 	addrIndex   map[string]uint32
 	nextFlow    uint32
-	routable    atomic.Bool
+	enabled     atomic.Bool
 
 	conn *net.UDPConn
 
-	cancel    context.CancelFunc
-	closeOnce sync.Once
-	mu        sync.Mutex
+	started bool
+	closed  bool
+	mu      sync.Mutex
 }
 
 func NewRelayDatagram(identityKey string, port int) *RelayDatagram {
-	d := &RelayDatagram{
+	return &RelayDatagram{
 		identityKey: identityKey,
 		port:        port,
-		session:     newDatagramSession(256, true),
+		session:     NewDatagramSession(256, true),
 		flowTable:   make(map[uint32]*flowState),
 		addrIndex:   make(map[string]uint32),
 		nextFlow:    1,
 	}
-	go d.runDispatchLoop()
-	go d.runCleanupLoop()
-	return d
 }
 
-func (d *RelayDatagram) Start(ctx context.Context) error {
-	if d == nil || d.port <= 0 {
+// Start acquires UDP ingress and starts the owned workers once. Construction
+// and failed starts leave no goroutines running; a closed endpoint cannot restart.
+func (d *RelayDatagram) Start() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return net.ErrClosed
+	}
+	if d.started {
 		return nil
 	}
-
-	addr := &net.UDPAddr{Port: d.port}
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		return fmt.Errorf("listen udp :%d: %w", d.port, err)
+	if d.port > 0 {
+		conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: d.port})
+		if err != nil {
+			return fmt.Errorf("listen udp :%d: %w", d.port, err)
+		}
+		d.conn = conn
+		go d.readLoop()
 	}
-	d.conn = conn
-
-	relayCtx, cancel := context.WithCancel(ctx)
-	d.cancel = cancel
-	go d.readLoop(relayCtx)
+	d.started = true
+	go d.runDispatchLoop()
+	go d.runCleanupLoop()
 
 	log.Info().
 		Str("component", "udp-relay").
@@ -87,20 +90,18 @@ func (d *RelayDatagram) Close() {
 		return
 	}
 
-	d.closeOnce.Do(func() {
-		if d.cancel != nil {
-			d.cancel()
-		}
-		d.session.Stop("lease stopped")
-		if d.conn != nil {
-			_ = d.conn.Close()
-		}
-		log.Info().
-			Str("component", "udp-relay").
-			Str("identity_key", d.identityKey).
-			Int("port", d.port).
-			Msg("udp relay stopped")
-	})
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return
+	}
+	d.closed = true
+	conn := d.conn
+	d.mu.Unlock()
+	d.session.Close("lease stopped")
+	if conn != nil {
+		_ = conn.Close()
+	}
 }
 
 func (d *RelayDatagram) BindBackhaul(conn *quic.Conn) error {
@@ -168,14 +169,12 @@ func (d *RelayDatagram) UDPPort() int {
 	return d.port
 }
 
-// SetRoutable applies the relay's current access result to both directions of
-// this UDP endpoint. The endpoint stays bound so an allow can take effect
-// without replacing the live lease.
-func (d *RelayDatagram) SetRoutable(routable bool) {
+// SetEnabled gates traffic in both directions while keeping the socket bound.
+func (d *RelayDatagram) SetEnabled(enabled bool) {
 	if d == nil {
 		return
 	}
-	d.routable.Store(routable)
+	d.enabled.Store(enabled)
 }
 
 func (d *RelayDatagram) runDispatchLoop() {
@@ -190,7 +189,7 @@ func (d *RelayDatagram) runDispatchLoop() {
 }
 
 func (d *RelayDatagram) dispatch(frame types.DatagramFrame) {
-	if !d.routable.Load() {
+	if !d.enabled.Load() {
 		return
 	}
 	d.mu.Lock()
@@ -257,24 +256,13 @@ func (d *RelayDatagram) forgetFlow(flowID uint32) {
 	delete(d.flowTable, flowID)
 }
 
-func (d *RelayDatagram) readLoop(ctx context.Context) {
+func (d *RelayDatagram) readLoop() {
 	buf := make([]byte, defaultMaxPacketSize)
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		_ = d.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		n, clientAddr, err := d.conn.ReadFromUDP(buf)
 		if err != nil {
-			if ctx.Err() != nil {
+			if errors.Is(err, net.ErrClosed) {
 				return
-			}
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
 			}
 			log.Warn().
 				Str("component", "udp-relay").
@@ -283,12 +271,12 @@ func (d *RelayDatagram) readLoop(ctx context.Context) {
 				Msg("readLoop exiting: unexpected read error")
 			return
 		}
-		if !d.routable.Load() {
+		if !d.enabled.Load() {
 			continue
 		}
 
 		flowID := d.touchFlow("udp:"+clientAddr.String(), func(payload []byte) error {
-			if !d.routable.Load() {
+			if !d.enabled.Load() {
 				return nil
 			}
 			_, err := d.conn.WriteToUDP(payload, clientAddr)

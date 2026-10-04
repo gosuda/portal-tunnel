@@ -13,8 +13,8 @@ import (
 
 var errNoConnection = errors.New("no quic backhaul connection registered")
 
-// datagramSession owns one active QUIC DATAGRAM connection and exposes decoded frames.
-type datagramSession struct {
+// DatagramSession owns one active QUIC DATAGRAM connection and exposes decoded frames.
+type DatagramSession struct {
 	incoming     chan types.DatagramFrame
 	dropIncoming bool
 	done         chan struct{}
@@ -24,12 +24,12 @@ type datagramSession struct {
 	closed bool
 }
 
-func newDatagramSession(bufferSize int, dropIncoming bool) *datagramSession {
+func NewDatagramSession(bufferSize int, dropIncoming bool) *DatagramSession {
 	if bufferSize <= 0 {
 		bufferSize = 256
 	}
 
-	return &datagramSession{
+	return &DatagramSession{
 		incoming:     make(chan types.DatagramFrame, bufferSize),
 		dropIncoming: dropIncoming,
 		done:         make(chan struct{}),
@@ -38,7 +38,7 @@ func newDatagramSession(bufferSize int, dropIncoming bool) *datagramSession {
 
 // Bind installs a new active backhaul connection and starts the receive loop.
 // Any previously active connection is replaced and closed.
-func (s *datagramSession) Bind(conn *quic.Conn) (<-chan error, error) {
+func (s *DatagramSession) Bind(conn *quic.Conn) (<-chan error, error) {
 	if conn == nil {
 		return nil, errors.New("quic backhaul connection is required")
 	}
@@ -62,17 +62,29 @@ func (s *datagramSession) Bind(conn *quic.Conn) (<-chan error, error) {
 	return recvDone, nil
 }
 
-func (s *datagramSession) Done() <-chan struct{} {
+func (s *DatagramSession) Done() <-chan struct{} {
 	return s.done
 }
 
-func (s *datagramSession) hasConnection() bool {
+// Accept returns multiplexed frames until this session or its caller closes.
+func (s *DatagramSession) Accept(done <-chan struct{}) (types.DatagramFrame, error) {
+	select {
+	case <-done:
+		return types.DatagramFrame{}, net.ErrClosed
+	case <-s.done:
+		return types.DatagramFrame{}, net.ErrClosed
+	case frame := <-s.incoming:
+		return frame, nil
+	}
+}
+
+func (s *DatagramSession) Connected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.conn != nil && !s.closed
 }
 
-func (s *datagramSession) Send(flowID uint32, payload []byte) error {
+func (s *DatagramSession) Send(flowID uint32, payload []byte) error {
 	s.mu.Lock()
 	conn := s.conn
 	closed := s.closed
@@ -88,7 +100,7 @@ func (s *datagramSession) Send(flowID uint32, payload []byte) error {
 }
 
 // Clear closes the active connection but keeps the session reusable.
-func (s *datagramSession) Clear(reason string) {
+func (s *DatagramSession) Clear(reason string) {
 	s.mu.Lock()
 	conn := s.conn
 	s.conn = nil
@@ -99,8 +111,8 @@ func (s *datagramSession) Clear(reason string) {
 	}
 }
 
-// Stop permanently closes the session and any active connection.
-func (s *datagramSession) Stop(reason string) {
+// Close permanently closes the session and any active connection.
+func (s *DatagramSession) Close(reason string) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -117,7 +129,7 @@ func (s *datagramSession) Stop(reason string) {
 	}
 }
 
-func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan<- error) {
+func (s *DatagramSession) receiveLoop(conn *quic.Conn, recvDone chan<- error) {
 	var recvErr error
 	defer func() {
 		recvDone <- recvErr
@@ -154,6 +166,8 @@ func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan<- error) {
 		select {
 		case s.incoming <- frame:
 		case <-s.done:
+			return
+		case <-conn.Context().Done():
 			return
 		}
 	}

@@ -1,4 +1,4 @@
-package transport
+package portal
 
 import (
 	"errors"
@@ -7,15 +7,15 @@ import (
 	"time"
 )
 
-var ErrPortExhausted = errors.New("no ports available")
+var errPortExhausted = errors.New("no ports available")
 
 type portReservation struct {
 	port      int
 	expiresAt time.Time
 }
 
-// PortAllocator manages a pool of ports for dynamic per-lease allocation.
-type PortAllocator struct {
+// portPool manages a pool of ports for dynamic per-lease allocation.
+type portPool struct {
 	available []int
 	inUse     map[int]string
 	reserved  map[string]portReservation
@@ -23,9 +23,9 @@ type PortAllocator struct {
 	mu        sync.Mutex
 }
 
-func NewPortAllocator(min, max int, grace time.Duration) *PortAllocator {
+func newPortPool(min, max int, grace time.Duration) *portPool {
 	if min <= 0 || max <= 0 || min > max {
-		return &PortAllocator{
+		return &portPool{
 			inUse:    make(map[int]string),
 			reserved: make(map[string]portReservation),
 			grace:    grace,
@@ -36,7 +36,7 @@ func NewPortAllocator(min, max int, grace time.Duration) *PortAllocator {
 	for port := min; port <= max; port++ {
 		available = append(available, port)
 	}
-	return &PortAllocator{
+	return &portPool{
 		available: available,
 		inUse:     make(map[int]string),
 		reserved:  make(map[string]portReservation),
@@ -44,7 +44,7 @@ func NewPortAllocator(min, max int, grace time.Duration) *PortAllocator {
 	}
 }
 
-func (a *PortAllocator) Allocate(name string) (int, error) {
+func (a *portPool) allocate(name string) (int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -57,7 +57,7 @@ func (a *PortAllocator) Allocate(name string) (int, error) {
 	}
 
 	if len(a.available) == 0 {
-		return 0, ErrPortExhausted
+		return 0, errPortExhausted
 	}
 
 	port := a.available[0]
@@ -66,7 +66,7 @@ func (a *PortAllocator) Allocate(name string) (int, error) {
 	return port, nil
 }
 
-func (a *PortAllocator) Release(port int) {
+func (a *portPool) release(port int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -87,7 +87,7 @@ func (a *PortAllocator) Release(port int) {
 	a.cleanupExpiredLocked(time.Now())
 }
 
-func (a *PortAllocator) cleanupExpiredLocked(now time.Time) {
+func (a *portPool) cleanupExpiredLocked(now time.Time) {
 	for name, res := range a.reserved {
 		if now.After(res.expiresAt) {
 			delete(a.reserved, name)
@@ -96,7 +96,7 @@ func (a *PortAllocator) cleanupExpiredLocked(now time.Time) {
 	}
 }
 
-func (a *PortAllocator) sortedInsertLocked(port int) {
+func (a *portPool) sortedInsertLocked(port int) {
 	i := sort.SearchInts(a.available, port)
 	a.available = append(a.available, 0)
 	copy(a.available[i+1:], a.available[i:])

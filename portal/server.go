@@ -561,7 +561,7 @@ func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
 		return
 	}
 
-	reservation, err := lease.stream.ReserveOffer(offer.Connection())
+	reservation, err := lease.reverse.ReserveOffer(offer.Connection())
 	if err != nil {
 		offer.RejectCapacity()
 		offer.Close()
@@ -579,18 +579,41 @@ func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
 	_ = offer.Connection().SetDeadline(time.Time{})
 }
 
-func (s *Server) serveTCPPairs(port *transport.RelayTCPPort, identityKey string) {
+func (s *Server) serveTCP(record *leaseRecord) {
 	for {
-		inbound, session, err := port.Accept()
+		inbound, err := record.tcpListener.Accept()
 		if err != nil {
 			return
 		}
-		if !s.registry.isRoutable(identityKey) {
-			_ = inbound.Close()
-			_ = session.Close()
+		go s.bridgeTCPConn(record, inbound)
+	}
+}
+
+func (s *Server) bridgeTCPConn(record *leaseRecord, inbound net.Conn) {
+	defer inbound.Close()
+	if !s.registry.isRoutable(record.Key()) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
+	defer cancel()
+	for {
+		reverse, err := record.reverse.Acquire(ctx)
+		if err != nil {
+			return
+		}
+		if err := transport.WriteRawStart(reverse); err != nil {
+			_ = reverse.Close()
 			continue
 		}
-		go s.proxy.bridge(inbound, session, identityKey, s.registry.bps)
+		record.mu.Lock()
+		closed := record.closed
+		record.mu.Unlock()
+		if closed || !s.registry.isRoutable(record.Key()) {
+			_ = reverse.Close()
+			return
+		}
+		s.proxy.bridge(inbound, reverse, record.Key(), s.registry.bps)
+		return
 	}
 }
 
@@ -829,7 +852,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	if record.isExpired(time.Now()) {
 		return errLeaseNotFound
 	}
-	if record.stream == nil {
+	if record.reverse == nil {
 		return errors.New("lease stream is not ready")
 	}
 	if !s.registry.isRoutable(record.Key()) {
@@ -837,16 +860,20 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	}
 	claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
 	binding := s.registry.bindings.Issue(record.id, helloSpan)
-	session, err := record.stream.Claim(claimCtx, binding)
-	cancel()
-	if err != nil {
-		// The binding will never be presented after a failed claim; drop
-		// it instead of leaving a live entry until the TTL sweep.
-		s.registry.bindings.Discard(binding)
-		return fmt.Errorf("claim lease stream: %w", err)
+	defer cancel()
+	for {
+		session, err := record.reverse.Acquire(claimCtx)
+		if err != nil {
+			s.registry.bindings.Discard(binding)
+			return fmt.Errorf("acquire lease connection: %w", err)
+		}
+		if err := transport.WriteTLSStart(session, binding); err != nil {
+			_ = session.Close()
+			continue
+		}
+		s.proxy.bridge(conn, session, record.Key(), s.registry.bps)
+		return nil
 	}
-	s.proxy.bridge(conn, session, record.Key(), s.registry.bps)
-	return nil
 }
 
 func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration) error {
