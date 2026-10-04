@@ -13,10 +13,10 @@ import (
 
 const defaultSessionWriteLimit = 5 * time.Second
 
-// Reverse-session framing markers (protocol v10). The relay writes a single
-// marker byte to activate a claimed session; markerTLSStart is immediately
-// followed by tlsBindingSize bytes of per-connection binding that the tenant
-// must present on every transcript-signing request.
+// Reverse-session framing markers. The relay writes a single marker byte to
+// activate a claimed session; markerTLSStart is immediately followed by
+// tlsBindingSize bytes of per-connection binding that the tenant must present
+// on every transcript-signing request.
 const (
 	markerKeepalive = 0x00
 	markerRawStart  = 0x01

@@ -86,6 +86,9 @@ func New(cfg Config, dir string) (*Manager, error) {
 // retireLocked removes routing immediately, while readers and failed disk
 // cleanup keep their bytes charged until the directory is actually removed.
 func (c *Manager) retireLocked(site *cachedSite) {
+	if site == nil || c.entries[site.host] != site {
+		return
+	}
 	delete(c.entries, site.host)
 	c.retired = append(c.retired, site)
 }
@@ -114,32 +117,24 @@ func (l leaseState) cacheExpiry() time.Time {
 	return until.Add(l.ttl)
 }
 
-func (l Lease) replaces(owner, host string) bool {
-	return l.Owner == owner || l.Hostname == host
-}
-
 func (c *Manager) Register(lease Lease, req types.RegisterChallengeRequest) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// A new lease revokes overlapping cached content, including offline sites
-	// and registrations that do not opt in or switch to hidden hostnames.
-	for _, site := range c.entries {
-		if lease.replaces(site.owner, site.host) {
-			c.retireLocked(site)
-		}
+	if site := c.entries[lease.Hostname]; site != nil {
+		c.retireLocked(site)
 	}
 	for id, previous := range c.leases {
-		if lease.replaces(previous.Owner, previous.Hostname) {
+		if lease.Owner == previous.Owner || lease.Hostname == previous.Hostname {
 			delete(c.leases, id)
 		}
 	}
 	if !req.Cache || req.UDPEnabled || req.TCPEnabled {
 		return
 	}
-	if strings.Contains(lease.Hostname, "*") {
+	if lease.Hostname == "" || strings.Contains(lease.Hostname, "*") {
 		return
 	}
 	ttl := c.cfg.MaxTTL

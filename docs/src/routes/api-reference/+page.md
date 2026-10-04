@@ -181,8 +181,9 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | Field | Type |
 |-------|------|
 | `name` | `string` |
+| `address` | `string` |
 | `expires_at`, `first_seen_at`, `last_seen_at` | `string` |
-| `hostname` | `string` |
+| `hostname`, `canonical_hostname` | `string` |
 | `udp_enabled`, `tcp_enabled` | `boolean` |
 | `tcp_addr` | `string` |
 | `metadata` | `LeaseMetadata` |
@@ -192,7 +193,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 
 | Field | Type |
 |-------|------|
-| `identity_key`, `address` | `string` |
+| `identity_key` | `string` |
 | `bps` | `number` |
 | `client_ip`, `reported_ip` | `string` |
 | `is_approved`, `is_banned`, `is_denied` | `boolean` |
@@ -260,7 +261,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `unauthorized` | credential is missing, expired, or invalid |
 | `feature_unavailable` | feature is disabled or not configured |
 | `rate_limited` | request was throttled |
-| `hostname_conflict` | lease hostname is already registered |
+| `hostname_conflict` | canonical hostname is inconsistently bound; routing fails closed |
 | `lease_not_found` | lease token or identity has no active lease |
 | `lease_rejected` | lease is not currently allowed to route |
 | `invalid_address` | address path or body value is invalid |

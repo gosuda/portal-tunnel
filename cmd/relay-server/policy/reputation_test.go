@@ -79,3 +79,16 @@ func TestReputationDirectoryProjectsLiveHostsAndViewerVote(t *testing.T) {
 		}
 	}
 }
+
+func TestReputationDirectoryPrefersCanonicalHostname(t *testing.T) {
+	store := newTestReputationStore(t)
+	lease := types.PolicyLease{
+		Lease:       types.Lease{Hostname: "friendly.example.com", CanonicalHostname: "canonical.example.com"},
+		IdentityKey: "id:demo",
+	}
+
+	got := store.Summaries("", []types.PolicyLease{lease})
+	if len(got) != 1 || got[0].Hostname != lease.CanonicalHostname {
+		t.Fatalf("Summaries() = %+v, want canonical hostname %q", got, lease.CanonicalHostname)
+	}
+}

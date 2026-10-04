@@ -49,6 +49,30 @@ func TestValidateReverseEndpoint(t *testing.T) {
 	}
 }
 
+func TestAPIClientRejectsTunnelProtocolMismatch(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != types.PathSDKDomain {
+			http.NotFound(w, r)
+			return
+		}
+		utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{ProtocolVersion: types.SDKVersion + "-legacy"})
+	}))
+	server.EnableHTTP2 = false
+	server.StartTLS()
+	defer server.Close()
+
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &apiClient{relayURL: relayURL}
+	if err := client.initHTTPTransport(context.Background()); !errors.Is(err, errRelayIncompatible) {
+		t.Fatalf("initHTTPTransport() error = %v, want relay incompatibility", err)
+	}
+}
+
 func TestValidateReverseEndpointTransport(t *testing.T) {
 	t.Parallel()
 	relayURL, err := url.Parse("https://relay.example")
@@ -283,7 +307,7 @@ func registerThroughRateLimit(t *testing.T, status int, firstTTL time.Duration) 
 				t.Error(err)
 			}
 			expires := time.Now().Add(time.Minute)
-			utils.WriteAPIData(w, http.StatusCreated, types.RegisterResponse{Identity: leaseIdentity, AccessToken: "registered", ExpiresAt: expires, ReverseEndpoint: types.ReverseEndpoint{URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: expires}})
+			utils.WriteAPIData(w, http.StatusCreated, types.RegisterResponse{Identity: leaseIdentity, Hostname: "demo.relay.example", CanonicalHostname: "demo-0123456789012345678901234567890123456789.relay.example", AccessToken: "registered", ExpiresAt: expires, ReverseEndpoint: types.ReverseEndpoint{URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: expires}})
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

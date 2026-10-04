@@ -27,10 +27,12 @@ export interface LeaseMetadata {
 
 export interface Lease {
   name?: string;
+  address: string;
   expires_at: string;
   first_seen_at: string;
   last_seen_at: string;
   hostname: string;
+  canonical_hostname: string;
   udp_enabled?: boolean;
   udp_addr?: string;
   tcp_enabled?: boolean;
@@ -41,7 +43,6 @@ export interface Lease {
 
 export interface PolicyLease extends Lease {
   identity_key: string;
-  address: string;
   bps: number;
   client_ip: string;
   reported_ip?: string;

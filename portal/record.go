@@ -15,15 +15,16 @@ import (
 
 type leaseRecord struct {
 	types.Identity
-	id          string
-	ExpiresAt   time.Time
-	FirstSeenAt time.Time
-	LastSeenAt  time.Time
-	ClientIP    string
-	ReportedIP  string
-	Hostname    string
-	Metadata    types.LeaseMetadata
-	Overlay     bool
+	id                string
+	ExpiresAt         time.Time
+	FirstSeenAt       time.Time
+	LastSeenAt        time.Time
+	ClientIP          string
+	ReportedIP        string
+	Hostname          string
+	CanonicalHostname string
+	Metadata          types.LeaseMetadata
+	Overlay           bool
 
 	registerChallenge *identity.RegisterChallenge
 
@@ -34,30 +35,25 @@ type leaseRecord struct {
 	stream   *transport.RelayStream
 }
 
-// cacheLease copies registry facts while the caller holds the registry lock.
+// cacheLease adapts registry facts to the cache's canonical hostname key while
+// the caller holds the registry lock.
 func (r *leaseRecord) cacheLease() cache.Lease {
-	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.Hostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
+	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.CanonicalHostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
 func (r *leaseRecord) isPublicEntry() bool {
-	return r != nil && r.Hostname != ""
+	return r != nil && r.CanonicalHostname != ""
 }
 
-func (r *leaseRecord) ensGaslessDNSHostname() string {
+func (r *leaseRecord) hostnames() []string {
 	if !r.isPublicEntry() {
-		return ""
+		return nil
 	}
-	return r.Hostname
-}
-
-func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
-	if r == nil || other == nil {
-		return false
+	hostnames := []string{r.CanonicalHostname}
+	if r.Hostname != "" {
+		hostnames = append(hostnames, r.Hostname)
 	}
-	if r.Hostname != "" && other.Hostname != "" && r.Hostname == other.Hostname {
-		return true
-	}
-	return false
+	return hostnames
 }
 
 func (r *leaseRecord) isExpired(now time.Time) bool {
@@ -103,25 +99,68 @@ func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manag
 	if r == nil || manager == nil {
 		return nil
 	}
-	if ensHostname := r.ensGaslessDNSHostname(); ensHostname != "" {
-		if err := manager.SyncENSGaslessHostname(ctx, ensHostname, r.Address); err != nil {
+	for _, hostname := range r.hostnames() {
+		if err := manager.SyncENSGaslessHostname(ctx, hostname, r.Address); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *leaseRecord) deleteDNS(ctx context.Context, manager *acme.Manager) {
-	if r == nil || manager == nil {
+func (s *Server) syncLeaseDNS(ctx context.Context, record *leaseRecord) error {
+	if s == nil || record == nil || s.registry == nil {
+		return nil
+	}
+	registry := s.registry
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	// Queue DNS sync while the lease is still the current live record. A
+	// concurrent unregister/expiry must either happen after this enqueue or
+	// make this stale sync a no-op.
+	if registry.recordByLease(record.Key(), record.id, time.Now()) != record {
+		return nil
+	}
+	return record.syncENSGaslessDNS(ctx, s.acmeManager)
+}
+
+func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
+	if s == nil || record == nil || s.acmeManager == nil || s.registry == nil {
 		return
 	}
-	if ensHostname := r.ensGaslessDNSHostname(); ensHostname != "" {
-		err := manager.DeleteENSGaslessHostname(ctx, ensHostname)
+	registry := s.registry
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	now := time.Now()
+
+	for _, hostname := range record.hostnames() {
+		owned := false
+		for _, current := range registry.records {
+			if current == nil || current.isExpired(now) {
+				continue
+			}
+			for _, currentHostname := range current.hostnames() {
+				if currentHostname == hostname {
+					owned = true
+					break
+				}
+			}
+			if owned {
+				break
+			}
+		}
+		if owned {
+			continue
+		}
+		// Delete is an enqueue-only operation. Keeping the registry read lock
+		// through the enqueue orders this command against lease registration's
+		// write lock and its later DNS sync enqueue.
+		err := s.acmeManager.DeleteENSGaslessHostname(ctx, hostname)
 		if err != nil {
 			log.Warn().
 				Err(err).
-				Str("hostname", ensHostname).
-				Str("address", r.Address).
+				Str("hostname", hostname).
+				Str("address", record.Address).
 				Msg("delete ens gasless hostname")
 		}
 	}

@@ -16,6 +16,10 @@ expose HTTP headers and content to the serving relay. If that connection falls
 back to the live origin, it still trusts the relay; browser-to-origin end-to-end
 TLS is not restored on an already terminated connection.
 
+Only the identity-bound canonical hostname is cacheable. Friendly hostnames
+are reusable, first-come aliases, so they remain live-origin routes and do not
+serve retained content after the origin disconnects.
+
 Use explicit `--relays` with `--discovery=false` to choose exactly which relays
 receive the files. Cache mode cannot be combined with `--ban-mitm`.
 Ordinary uncached HTTPS tunnels retain the tenant TLS path described below.

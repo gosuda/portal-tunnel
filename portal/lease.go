@@ -33,7 +33,6 @@ const (
 type leaseRegistry struct {
 	records        []*leaseRecord
 	rootHostname   string
-	publicPort     int
 	tokenAuthority identity.Authority
 	tokenIssuer    string
 	reverseURL     string
@@ -59,7 +58,7 @@ type leaseRegistry struct {
 	mu sync.RWMutex
 }
 
-func newLeaseRegistry(minPort, maxPort int, rootHostname string, publicPort int, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
+func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
 	if tokenAuthority == nil {
 		return nil, errors.New("lease token authority is required")
 	}
@@ -75,7 +74,6 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, publicPort int,
 	return &leaseRegistry{
 		records:        make([]*leaseRecord, 0),
 		rootHostname:   utils.NormalizeHostname(rootHostname),
-		publicPort:     publicPort,
 		tokenAuthority: tokenAuthority,
 		tokenIssuer:    tokenIssuer,
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
@@ -214,16 +212,20 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
 			continue
 		}
-		if record.Hostname == host {
-			return record, true
+		for _, hostname := range record.hostnames() {
+			if hostname == host {
+				return record, true
+			}
 		}
 	}
 	for _, record := range r.records {
 		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
 			continue
 		}
-		if record.Hostname != host && utils.HostnameMatchesPattern(record.Hostname, host) {
-			return record, true
+		for _, hostname := range record.hostnames() {
+			if hostname != host && utils.HostnameMatchesPattern(hostname, host) {
+				return record, true
+			}
 		}
 	}
 	return nil, false
@@ -278,6 +280,10 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
 	}
+	canonicalHostname, err := utils.CanonicalLeaseHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
+	if err != nil {
+		return nil, types.RegisterResponse{}, err
+	}
 	udpEnabled, _ := r.udpPolicy()
 	tcpPortEnabled, _ := r.tcpPortPolicy()
 	if req.UDPEnabled && !udpEnabled {
@@ -297,24 +303,25 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 
 	stream := transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit)
 	record := &leaseRecord{
-		Identity:    leaseIdentity,
-		id:          leaseID,
-		Hostname:    publicHostname,
-		Metadata:    req.Metadata.Copy(),
-		Overlay:     req.Overlay,
-		ExpiresAt:   expiresAt,
-		FirstSeenAt: issuedAt,
-		LastSeenAt:  issuedAt,
-		ClientIP:    clientIP,
-		ReportedIP:  utils.SanitizeReportedIP(reportedIP),
-		stream:      stream,
+		Identity:          leaseIdentity,
+		id:                leaseID,
+		Hostname:          publicHostname,
+		CanonicalHostname: canonicalHostname,
+		Metadata:          req.Metadata.Copy(),
+		Overlay:           req.Overlay,
+		ExpiresAt:         expiresAt,
+		FirstSeenAt:       issuedAt,
+		LastSeenAt:        issuedAt,
+		ClientIP:          clientIP,
+		ReportedIP:        utils.SanitizeReportedIP(reportedIP),
+		stream:            stream,
 	}
 
 	if req.UDPEnabled {
 		if r.udpPorts == nil {
 			return nil, types.RegisterResponse{}, errors.New("udp port allocation not available")
 		}
-		port, err := r.udpPorts.Allocate(leaseIdentity.Name)
+		port, err := r.udpPorts.Allocate(identityKey)
 		if err != nil {
 			if errors.Is(err, transport.ErrPortExhausted) {
 				return nil, types.RegisterResponse{}, errUDPPortExhausted
@@ -330,7 +337,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			record.Close()
 			return nil, types.RegisterResponse{}, errors.New("tcp port allocation not available")
 		}
-		port, err := r.tcpPorts.Allocate(leaseIdentity.Name)
+		port, err := r.tcpPorts.Allocate(identityKey)
 		if err != nil {
 			record.Close()
 			if errors.Is(err, transport.ErrPortExhausted) {
@@ -372,10 +379,15 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 				tcpLeases++
 			}
 		}
-		if existing.isPublicEntry() && existingKey != identityKey && existing.routesOverlap(record) {
-			r.mu.Unlock()
-			record.Close()
-			return nil, types.RegisterResponse{}, errHostnameConflict
+		if existing.isPublicEntry() && existingKey != identityKey {
+			if existing.CanonicalHostname == record.CanonicalHostname {
+				r.mu.Unlock()
+				record.Close()
+				return nil, types.RegisterResponse{}, errHostnameConflict
+			}
+			if existing.Hostname != "" && existing.Hostname == record.Hostname {
+				record.Hostname = ""
+			}
 		}
 	}
 	if record.datagram != nil {
@@ -397,7 +409,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		if existing == nil || existing.stream != nil || !existing.isPublicEntry() || existing.Key() != identityKey {
 			continue
 		}
-		if existing.routesOverlap(record) {
+		if existing.CanonicalHostname == record.CanonicalHostname {
 			r.deleteRecord(i)
 			i--
 		}
@@ -441,19 +453,20 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 
 	resp := types.RegisterResponse{
-		Identity:        record.Identity,
-		ExpiresAt:       record.ExpiresAt,
-		AccessToken:     accessToken,
-		ReverseEndpoint: reverseEndpoint,
-		SNIPort:         r.publicPort,
-		UDPEnabled:      record.datagram != nil,
-		TCPEnabled:      record.tcpPort != nil,
+		Identity:          record.Identity,
+		Hostname:          record.Hostname,
+		CanonicalHostname: record.CanonicalHostname,
+		ExpiresAt:         record.ExpiresAt,
+		AccessToken:       accessToken,
+		ReverseEndpoint:   reverseEndpoint,
+		UDPEnabled:        record.datagram != nil,
+		TCPEnabled:        record.tcpPort != nil,
 	}
 	if record.datagram != nil {
-		resp.UDPAddr = fmt.Sprintf("%s:%d", r.rootHostname, record.datagram.UDPPort())
+		resp.UDPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.datagram.UDPPort())
 	}
 	if record.tcpPort != nil {
-		resp.TCPAddr = fmt.Sprintf("%s:%d", r.rootHostname, record.tcpPort.TCPPort())
+		resp.TCPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.tcpPort.TCPPort())
 	}
 	return record, resp, nil
 }
@@ -671,6 +684,9 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	if err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}
+	if _, err := utils.CanonicalLeaseHostname(challenge.Request.Identity.Name, challenge.Request.Identity.Address, r.rootHostname); err != nil {
+		return types.RegisterChallengeResponse{}, err
+	}
 	clientIP = strings.ToLower(strings.TrimSpace(clientIP))
 	clientIP = cmp.Or(clientIP, "<unknown>")
 
@@ -856,7 +872,6 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 		leases = append(leases, types.PolicyLease{
 			Lease:       r.publicLease(record),
 			IdentityKey: identityKey,
-			Address:     record.Address,
 			BPS:         r.bps.IdentityBPS(identityKey),
 			ClientIP:    clientIP,
 			ReportedIP:  record.ReportedIP,
@@ -879,23 +894,23 @@ func (r *leaseRegistry) deleteRecord(i int) {
 }
 
 func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
-	name := record.Name
-	hostname := record.Hostname
 	lease := types.Lease{
-		Name:        name,
-		ExpiresAt:   record.ExpiresAt,
-		FirstSeenAt: record.FirstSeenAt,
-		LastSeenAt:  record.LastSeenAt,
-		Hostname:    hostname,
-		UDPEnabled:  record.datagram != nil,
-		TCPEnabled:  record.tcpPort != nil,
-		Metadata:    record.Metadata.Copy(),
+		Name:              record.Name,
+		Address:           record.Address,
+		ExpiresAt:         record.ExpiresAt,
+		FirstSeenAt:       record.FirstSeenAt,
+		LastSeenAt:        record.LastSeenAt,
+		Hostname:          record.Hostname,
+		CanonicalHostname: record.CanonicalHostname,
+		UDPEnabled:        record.datagram != nil,
+		TCPEnabled:        record.tcpPort != nil,
+		Metadata:          record.Metadata.Copy(),
 	}
 	if record.tcpPort != nil {
-		lease.TCPAddr = fmt.Sprintf("%s:%d", record.Hostname, record.tcpPort.TCPPort())
+		lease.TCPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.tcpPort.TCPPort())
 	}
 	if record.datagram != nil {
-		lease.UDPAddr = fmt.Sprintf("%s:%d", record.Hostname, record.datagram.UDPPort())
+		lease.UDPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.datagram.UDPPort())
 	}
 	if record.stream != nil {
 		lease.Ready = record.stream.ReadyCount()
