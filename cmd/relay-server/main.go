@@ -340,9 +340,9 @@ func composeRelayHandler(settings x402FacilitatorSettings, server *portal.Server
 		// Portal payments settle only Sui USDC (docs/src/routes/self-hosting),
 		// so the facilitator allowlist is pinned to the network's USDC asset;
 		// upstream default options would allowlist every gasless stablecoin.
-		asset, ok := suischeme.GetGaslessStablecoinType(network, "USDC")
+		asset, ok := suischeme.GetGaslessStablecoinType(network, types.X402USDCSymbol)
 		if !ok {
-			return nil, fmt.Errorf("x402 USDC is not registered on %s", network)
+			return nil, fmt.Errorf("x402 %s is not registered on %s", types.X402USDCSymbol, network)
 		}
 		facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, "", "", suifacilitator.SuiFacilitatorOptions{
 			GaslessStablecoinTypes: []string{asset},

@@ -27,15 +27,6 @@ var staticFiles embed.FS
 
 const paidPhotoPath = "/paid/photo"
 
-// x402ClientPath and x402PreparePath are this app's shared payment
-// endpoints; the values match the agent gateway's contract.
-const (
-	x402ClientPath  = "/x402/client.js"
-	x402PreparePath = "/x402/prepare"
-)
-
-const usdcAssetSymbol = "USDC"
-
 // defaultMaxTimeoutSeconds mirrors the gate and preparer defaults so the
 // contract the page echoes matches the one clients receive.
 const defaultMaxTimeoutSeconds = 60
@@ -88,15 +79,15 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 		photoURL: strings.TrimSpace(cfg.PhotoURL),
 	}
 	network := suiNetwork(cfg.Testnet)
-	asset, ok := suischeme.GetGaslessStablecoinType(network, usdcAssetSymbol)
+	asset, ok := suischeme.GetGaslessStablecoinType(network, types.X402USDCSymbol)
 	if !ok {
-		return nil, fmt.Errorf("x402 %s is not registered on %s", usdcAssetSymbol, network)
+		return nil, fmt.Errorf("x402 %s is not registered on %s", types.X402USDCSymbol, network)
 	}
 	payTo := suischeme.NormalizeAddress(cfg.PayTo)
 	if payTo == "" {
 		return nil, errors.New("x402 USDC payment requires a valid Sui pay-to address")
 	}
-	amount, err := suischeme.StablecoinAmountToAtomic(network, usdcAssetSymbol, cfg.Amount)
+	amount, err := suischeme.StablecoinAmountToAtomic(network, types.X402USDCSymbol, cfg.Amount)
 	if err != nil {
 		return nil, fmt.Errorf("x402 USDC amount: %w", err)
 	}
@@ -116,10 +107,7 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 		Amount:            amount,
 		PayTo:             payTo,
 		MaxTimeoutSeconds: maxTimeoutSeconds,
-		Extra: map[string]any{
-			"asset":               usdcAssetSymbol,
-			"assetTransferMethod": "sui-gasless-stablecoin-address-balance",
-		},
+		Extra:             types.X402SuiGaslessExtra(),
 	}
 	// The facilitator allowlist is pinned to this contract's asset; its
 	// default would accept every gasless stablecoin on the network. The
@@ -164,8 +152,8 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/static/style.css", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
-	mux.Handle(x402ClientPath, suihttp.ClientHandler())
-	mux.Handle(x402PreparePath, prepareHandler)
+	mux.Handle(types.PathX402Client, suihttp.ClientHandler())
+	mux.Handle(types.PathX402Prepare, prepareHandler)
 	mux.HandleFunc("/", handler.handleIndex)
 	mux.Handle(paidPhotoPath, gate.Wrap(http.HandlerFunc(handler.renderPaidPhoto)))
 	return mux, nil
@@ -219,7 +207,7 @@ func (h *paymentHandler) newPaymentPageData(r *http.Request) paymentPageData {
 	// A formatting failure leaves the atomic string on the page rather than
 	// hiding the contract the payment is settled against.
 	amount := h.amount
-	if formatted, err := suischeme.FormatStablecoinAtomicAmount(h.network, usdcAssetSymbol, h.amount); err == nil {
+	if formatted, err := suischeme.FormatStablecoinAtomicAmount(h.network, types.X402USDCSymbol, h.amount); err == nil {
 		amount = formatted
 	}
 	config := map[string]any{
@@ -228,7 +216,7 @@ func (h *paymentHandler) newPaymentPageData(r *http.Request) paymentPageData {
 		"asset":         h.asset,
 		"amount":        h.amount,
 		"payTo":         h.payTo,
-		"preparePath":   x402PreparePath,
+		"preparePath":   types.PathX402Prepare,
 		"protectedPath": paidPhotoPath,
 	}
 	configJSON, err := json.Marshal(config)

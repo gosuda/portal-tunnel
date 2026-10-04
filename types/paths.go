@@ -38,6 +38,10 @@ const (
 
 	PathDiscovery         = "/discovery"
 	PathDiscoveryAnnounce = PathDiscovery + "/announce"
+
+	// Tunnel-origin x402 payment helper endpoints served by routed HTTP.
+	PathX402Client  = "/x402/client.js"
+	PathX402Prepare = "/x402/prepare"
 )
 
 // ReservedRootPrefixes are relay-owned root-host path trees never served by the SPA fallback.

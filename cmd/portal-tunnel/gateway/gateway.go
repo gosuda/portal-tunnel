@@ -60,12 +60,6 @@ type X402Payment struct {
 	ResourceMimeType    string
 }
 
-// X402PreparePath is the gateway-owned path for the /x402/prepare endpoint.
-const X402PreparePath = "/x402/prepare"
-
-// X402ClientPath is the gateway-owned path for the /x402/client.js endpoint.
-const X402ClientPath = "/x402/client.js"
-
 const x402RequestBodyLimit int64 = 64 << 10
 
 // x402PreparePaymentRequest is the gateway-owned prepare endpoint request body.
@@ -249,15 +243,15 @@ func composeSuiRoute(prefix, amount string, contract X402Payment) (*routePolicy,
 			network = suiMainnetNetwork
 		}
 	}
-	asset, ok := suischeme.GetGaslessStablecoinType(network, "USDC")
+	asset, ok := suischeme.GetGaslessStablecoinType(network, types.X402USDCSymbol)
 	if !ok {
-		return nil, fmt.Errorf("USDC is not gasless stablecoin allowlisted on %s", network)
+		return nil, fmt.Errorf("%s is not gasless stablecoin allowlisted on %s", types.X402USDCSymbol, network)
 	}
 	payTo := suischeme.NormalizeAddress(contract.PayTo)
 	if payTo == "" {
 		return nil, errors.New("x402 USDC payment requires a Sui pay-to address")
 	}
-	atomic, err := suischeme.StablecoinAmountToAtomic(network, "USDC", amount)
+	atomic, err := suischeme.StablecoinAmountToAtomic(network, types.X402USDCSymbol, amount)
 	if err != nil {
 		return nil, err
 	}
@@ -268,10 +262,7 @@ func composeSuiRoute(prefix, amount string, contract X402Payment) (*routePolicy,
 		Amount:            atomic,
 		PayTo:             payTo,
 		MaxTimeoutSeconds: orDefaultMaxTimeout(contract),
-		Extra: map[string]any{
-			"asset":               "USDC",
-			"assetTransferMethod": "sui-gasless-stablecoin-address-balance",
-		},
+		Extra:             types.X402SuiGaslessExtra(),
 	}
 	resourceDescription := strings.TrimSpace(contract.ResourceDescription)
 	resourceMimeType := cmp.Or(strings.TrimSpace(contract.ResourceMimeType), "text/html")
@@ -490,11 +481,11 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path = utils.NormalizeURLPath(path)
 
 	if g.servesX402 {
-		if path == X402ClientPath {
+		if path == types.PathX402Client {
 			g.clientJS.ServeHTTP(w, r)
 			return
 		}
-		if path == X402PreparePath {
+		if path == types.PathX402Prepare {
 			g.servePrepare(w, r)
 			return
 		}
