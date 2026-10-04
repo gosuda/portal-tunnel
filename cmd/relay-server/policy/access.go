@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -25,9 +26,9 @@ type Access struct {
 type AccessState struct {
 	revision uint64
 	mode     Mode
-	approved map[string]struct{}
-	denied   map[string]struct{}
-	banned   map[string]struct{}
+	approved map[types.ServiceIdentityKey]struct{}
+	denied   map[types.ServiceIdentityKey]struct{}
+	banned   map[types.ServiceIdentityKey]struct{}
 }
 
 func (s AccessState) snapshot() AccessState {
@@ -90,101 +91,131 @@ func (s AccessState) EffectiveApproval(key string) bool {
 	if s.Mode() == ModeAuto {
 		return true
 	}
-	_, ok := s.approved[key]
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err != nil {
+		return false
+	}
+	_, ok := s.approved[serviceKey]
 	return ok
 }
 
 func (s *AccessState) Approve(key string) {
-	if s.approved == nil {
-		s.approved = make(map[string]struct{})
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err != nil {
+		return
 	}
-	s.approved[key] = struct{}{}
-	delete(s.denied, key)
+	if s.approved == nil {
+		s.approved = make(map[types.ServiceIdentityKey]struct{})
+	}
+	s.approved[serviceKey] = struct{}{}
+	delete(s.denied, serviceKey)
 }
 
 func (s *AccessState) Revoke(key string) {
-	delete(s.approved, key)
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err == nil {
+		delete(s.approved, serviceKey)
+	}
 }
 
 func (s AccessState) ApprovedKeys() []string {
 	out := make([]string, 0, len(s.approved))
 	for key := range s.approved {
-		out = append(out, key)
+		out = append(out, key.String())
 	}
 	return out
 }
 
 func (s AccessState) IsDenied(key string) bool {
-	_, ok := s.denied[key]
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err != nil {
+		return false
+	}
+	_, ok := s.denied[serviceKey]
 	return ok
 }
 
 func (s *AccessState) Deny(key string) {
-	if s.denied == nil {
-		s.denied = make(map[string]struct{})
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err != nil {
+		return
 	}
-	s.denied[key] = struct{}{}
-	delete(s.approved, key)
+	if s.denied == nil {
+		s.denied = make(map[types.ServiceIdentityKey]struct{})
+	}
+	s.denied[serviceKey] = struct{}{}
+	delete(s.approved, serviceKey)
 }
 
 func (s *AccessState) Undeny(key string) {
-	delete(s.denied, key)
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err == nil {
+		delete(s.denied, serviceKey)
+	}
 }
 
 func (s AccessState) DeniedKeys() []string {
 	out := make([]string, 0, len(s.denied))
 	for key := range s.denied {
-		out = append(out, key)
+		out = append(out, key.String())
 	}
 	return out
 }
 
 // SetDecisions keeps denied keys from also counting as approved.
 func (s *AccessState) SetDecisions(approvedKeys, deniedKeys []string) {
-	s.approved = make(map[string]struct{}, len(approvedKeys))
+	s.approved = make(map[types.ServiceIdentityKey]struct{}, len(approvedKeys))
 	for _, key := range approvedKeys {
-		if key != "" {
-			s.approved[key] = struct{}{}
+		if serviceKey, err := types.ParseServiceIdentityKey(key); err == nil {
+			s.approved[serviceKey] = struct{}{}
 		}
 	}
-	s.denied = make(map[string]struct{}, len(deniedKeys))
+	s.denied = make(map[types.ServiceIdentityKey]struct{}, len(deniedKeys))
 	for _, key := range deniedKeys {
-		if key != "" {
-			delete(s.approved, key)
-			s.denied[key] = struct{}{}
+		if serviceKey, err := types.ParseServiceIdentityKey(key); err == nil {
+			delete(s.approved, serviceKey)
+			s.denied[serviceKey] = struct{}{}
 		}
 	}
 }
 
 func (s AccessState) IsBanned(key string) bool {
-	_, ok := s.banned[key]
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err != nil {
+		return false
+	}
+	_, ok := s.banned[serviceKey]
 	return ok
 }
 
 func (s *AccessState) Ban(key string) {
-	if key == "" {
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err != nil {
 		return
 	}
 	if s.banned == nil {
-		s.banned = make(map[string]struct{})
+		s.banned = make(map[types.ServiceIdentityKey]struct{})
 	}
-	s.banned[key] = struct{}{}
+	s.banned[serviceKey] = struct{}{}
 }
 
 func (s *AccessState) Unban(key string) {
-	delete(s.banned, key)
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err == nil {
+		delete(s.banned, serviceKey)
+	}
 }
 
 func (s AccessState) BannedKeys() []string {
 	out := make([]string, 0, len(s.banned))
 	for key := range s.banned {
-		out = append(out, key)
+		out = append(out, key.String())
 	}
 	return out
 }
 
 func (s *AccessState) SetBannedKeys(keys []string) {
-	s.banned = make(map[string]struct{}, len(keys))
+	s.banned = make(map[types.ServiceIdentityKey]struct{}, len(keys))
 	for _, key := range keys {
 		s.Ban(key)
 	}

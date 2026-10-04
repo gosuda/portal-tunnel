@@ -6,6 +6,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 // openBridge wires proxy.bridge across two in-memory pipe pairs and returns
@@ -20,7 +22,7 @@ func openBridge(t *testing.T) (send, recv net.Conn, bps *BPSManager, closeBridge
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		p.bridge(sendRelay, recvRelay, "demo:0x1", bps)
+		p.bridge(sendRelay, recvRelay, types.NewServiceIdentityKey("demo", "0x1"), bps)
 	}()
 	return send, recv, bps, func() {
 		c0 := time.Now()
@@ -67,7 +69,7 @@ func TestBridgeAppliesBPSLimitToOpenConnection(t *testing.T) {
 
 	// A limit set while the connection is already open must pace it: at
 	// 1KiB/s, 4KiB needs about four seconds and cannot arrive in 300ms.
-	bps.SetIdentityBPS("demo:0x1", 1024)
+	bps.SetIdentityBPS(types.NewServiceIdentityKey("demo", "0x1"), 1024)
 	phaseB := time.Now()
 	limited := bytes.Repeat([]byte{'y'}, 4<<10)
 	go func() { _, _ = send.Write(limited) }()
@@ -81,7 +83,7 @@ func TestBridgeClearsBPSLimitOnOpenConnection(t *testing.T) {
 	send, recv, bps, closeBridge := openBridge(t)
 	defer closeBridge()
 
-	bps.SetIdentityBPS("demo:0x1", 1024)
+	bps.SetIdentityBPS(types.NewServiceIdentityKey("demo", "0x1"), 1024)
 	payload := bytes.Repeat([]byte{'y'}, 4<<10)
 	go func() { _, _ = send.Write(payload) }()
 
@@ -92,7 +94,7 @@ func TestBridgeClearsBPSLimitOnOpenConnection(t *testing.T) {
 	}
 
 	// ...and removing the limit must release the same open connection.
-	bps.SetIdentityBPS("demo:0x1", 0)
+	bps.SetIdentityBPS(types.NewServiceIdentityKey("demo", "0x1"), 0)
 	if rest := readFor(recv, len(payload)-got, 2*time.Second); rest < len(payload)-got {
 		t.Fatalf("transfer stayed throttled after SetIdentityBPS(0) on an open connection (%d/%d remaining bytes)", rest, len(payload)-got)
 	}

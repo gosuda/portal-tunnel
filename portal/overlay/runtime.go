@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"slices"
@@ -73,9 +74,9 @@ type Config struct {
 // portal lease admission. Connection ownership transfers with the offer, and
 // its response methods preserve the overlay status-byte protocol.
 type ReverseOffer struct {
-	IdentityKey string
-	LeaseID     string
-	conn        net.Conn
+	ServiceIdentity types.ServiceIdentityKey
+	LeaseID         string
+	conn            net.Conn
 }
 
 // Connection returns the connection whose ownership transferred with the offer.
@@ -129,7 +130,7 @@ type Runtime struct {
 	sourceLimiter *sourceLimiter
 	admissionMu   sync.Mutex
 	outbound      int
-	activeSources map[string]int
+	activeSources map[netip.Addr]int
 
 	assignmentMu sync.Mutex
 	assignments  map[string]string
@@ -146,7 +147,7 @@ func New(config Config) (*Runtime, error) {
 		inbound:       make(chan struct{}, connectionLimit),
 		offers:        make(chan ReverseOffer),
 		sourceLimiter: newSourceLimiter(sourceRequestsPerMinute, sourceRequestBurst),
-		activeSources: make(map[string]int),
+		activeSources: make(map[netip.Addr]int),
 		assignments:   make(map[string]string),
 		failures:      make(map[string]map[string]time.Time),
 	}, nil
@@ -459,7 +460,8 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 	}
 	// The relay ingress resolves clientIP before this handler runs. Caller-chosen
 	// signing keys and lease IDs must not create fresh admission budgets.
-	if retry := r.sourceLimiter.Allow(clientIP, 1); retry > 0 {
+	source := utils.NormalizeSourceAddr(clientIP)
+	if retry := r.sourceLimiter.Allow(source, 1); retry > 0 {
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay request rate exceeded")
 		return nil, nil
 	}
@@ -469,7 +471,7 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		return nil, nil
 	}
 	r.admissionMu.Lock()
-	if r.activeSources[clientIP] >= sourceConnectionLimit {
+	if r.activeSources[source] >= sourceConnectionLimit {
 		r.admissionMu.Unlock()
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay source capacity exhausted")
 		return nil, nil
@@ -480,14 +482,14 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		return nil, nil
 	}
 	r.outbound++
-	r.activeSources[clientIP]++
+	r.activeSources[source]++
 	r.admissionMu.Unlock()
 	release := func() {
 		r.admissionMu.Lock()
 		r.outbound--
-		r.activeSources[clientIP]--
-		if r.activeSources[clientIP] == 0 {
-			delete(r.activeSources, clientIP)
+		r.activeSources[source]--
+		if r.activeSources[source] == 0 {
+			delete(r.activeSources, source)
 		}
 		r.admissionMu.Unlock()
 	}
@@ -594,7 +596,7 @@ func (r *Runtime) acceptReverse(conn net.Conn) {
 	// Portal chooses the lease-admission outcome through the offer's response
 	// methods; every byte after verification belongs to the offer protocol.
 	select {
-	case r.offers <- ReverseOffer{IdentityKey: claims.LeaseIdentity.Key(), LeaseID: claims.LeaseID, conn: conn}:
+	case r.offers <- ReverseOffer{ServiceIdentity: claims.LeaseIdentity.ServiceKey(), LeaseID: claims.LeaseID, conn: conn}:
 		handoff = true
 	case <-r.ctx.Done():
 	}

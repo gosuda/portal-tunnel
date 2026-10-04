@@ -55,6 +55,11 @@ const (
 	agentDashboardPaneCount
 )
 
+type relayAttemptKey struct {
+	tunnelID string
+	relayURL string
+}
+
 const (
 	agentDashboardAddFieldName = iota
 	agentDashboardAddFieldTarget
@@ -97,7 +102,7 @@ type agentDashboardModel struct {
 	selectedTunnelID string
 	selectedRelayURL string
 	activePane       agentDashboardPane
-	relayAttempts    map[string]bool
+	relayAttempts    map[relayAttemptKey]bool
 
 	addingTunnel     bool
 	addFocus         int
@@ -611,11 +616,11 @@ func (m agentDashboardModel) selectedTunnelRelay() (AgentTunnelStatus, AgentRela
 
 func (m *agentDashboardModel) trackRelayAttempt(tunnelID, relayURL string) {
 	key := agentDashboardRelayKey(tunnelID, relayURL)
-	if key == "" {
+	if key == (relayAttemptKey{}) {
 		return
 	}
 	if m.relayAttempts == nil {
-		m.relayAttempts = make(map[string]bool)
+		m.relayAttempts = make(map[relayAttemptKey]bool)
 	}
 	m.relayAttempts[key] = false
 }
@@ -632,11 +637,11 @@ func (m *agentDashboardModel) syncRelayAttempts() {
 	if len(m.relayAttempts) == 0 {
 		return
 	}
-	seen := make(map[string]struct{})
+	seen := make(map[relayAttemptKey]struct{})
 	for _, tunnel := range m.status.Tunnels {
 		for _, relay := range tunnel.Relays {
 			key := agentDashboardRelayKey(tunnel.ID, relay.RelayURL)
-			if key == "" {
+			if key == (relayAttemptKey{}) {
 				continue
 			}
 			seen[key] = struct{}{}
@@ -680,13 +685,13 @@ func (m agentDashboardModel) relayDashboardConnecting(tunnel AgentTunnelStatus, 
 	return ok && !failed
 }
 
-func agentDashboardRelayKey(tunnelID, relayURL string) string {
+func agentDashboardRelayKey(tunnelID, relayURL string) relayAttemptKey {
 	tunnelID = strings.TrimSpace(tunnelID)
 	relayURL = strings.TrimSpace(relayURL)
 	if tunnelID == "" || relayURL == "" {
-		return ""
+		return relayAttemptKey{}
 	}
-	return tunnelID + "\x00" + relayURL
+	return relayAttemptKey{tunnelID: tunnelID, relayURL: relayURL}
 }
 
 func (m *agentDashboardModel) focusAddTunnelField(field int) {

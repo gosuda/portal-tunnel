@@ -396,7 +396,7 @@ func TestLeaseRegistryCleanupExpiredPreservesIdentityBPS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	registry.bps.SetIdentityBPS(record.Key(), 1024)
+	registry.bps.SetIdentityBPS(record.ServiceKey(), 1024)
 
 	registry.mu.Lock()
 	record.ExpiresAt = time.Now().Add(-time.Second)
@@ -406,7 +406,7 @@ func TestLeaseRegistryCleanupExpiredPreservesIdentityBPS(t *testing.T) {
 	if _, ok := registry.Lookup("expired.example.com"); ok {
 		t.Fatal("Lookup() after cleanupExpired() = true, want false")
 	}
-	if bps := registry.bps.IdentityBPS(record.Key()); bps != 1024 {
+	if bps := registry.bps.IdentityBPS(record.ServiceKey()); bps != 1024 {
 		t.Fatalf("IdentityBPS() after cleanupExpired() = %d, want configured limit preserved", bps)
 	}
 }

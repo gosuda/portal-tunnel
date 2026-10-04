@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -78,6 +77,8 @@ type mitmProbePending struct {
 	resultCh chan string
 }
 
+type mitmProbeNonce [16]byte
+
 type mitmManager struct {
 	ctx context.Context
 	// responderCapable reports whether terminated tenant connections can
@@ -88,7 +89,7 @@ type mitmManager struct {
 	ban              bool
 
 	mu       sync.Mutex
-	pending  map[string]*mitmProbePending
+	pending  map[mitmProbeNonce]*mitmProbePending
 	inFlight bool
 	lastAt   time.Time
 }
@@ -98,7 +99,7 @@ func newMITMManager(ctx context.Context, listener *listener, ban bool) *mitmMana
 		ctx:      ctx,
 		ban:      ban,
 		listener: listener,
-		pending:  make(map[string]*mitmProbePending),
+		pending:  make(map[mitmProbeNonce]*mitmProbePending),
 	}
 }
 
@@ -149,11 +150,10 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	probeCtx, cancel := context.WithTimeout(ctx, defaultMITMProbeTimeout)
 	defer cancel()
 
-	nonceRaw := make([]byte, 16)
-	if _, err := io.ReadFull(rand.Reader, nonceRaw); err != nil {
+	var nonce mitmProbeNonce
+	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		return report, fmt.Errorf("generate probe nonce: %w", err)
 	}
-	nonceHex := hex.EncodeToString(nonceRaw)
 
 	dialAddr, err := m.probeDialAddress(publicURL)
 	if err != nil {
@@ -186,7 +186,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	// as its handshake completes, which can race ahead of the probe side
 	// exporting keying material. Reserving after the TCP connect keeps the
 	// probe-inspection window off address resolution and connection setup.
-	resultCh, cleanupProbe := m.reserveProbe(nonceHex)
+	resultCh, cleanupProbe := m.reserveProbe(nonce)
 	defer cleanupProbe()
 	if err := tlsConn.HandshakeContext(probeCtx); err != nil {
 		return report, fmt.Errorf("mitm probe tls handshake: %w", err)
@@ -197,7 +197,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	if err != nil {
 		return report, fmt.Errorf("export client probe keying material: %w", err)
 	}
-	m.attachExpected(nonceHex, expected)
+	m.attachExpected(nonce, expected)
 
 	paddingLen := mitmProbePaddingMin
 	if paddingRange := mitmProbePaddingMax - mitmProbePaddingMin; paddingRange > 0 {
@@ -208,11 +208,11 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		paddingLen += int(paddingSeed[0]) % (paddingRange + 1)
 	}
 
-	frame := make([]byte, len(nonceRaw)+paddingLen)
+	frame := make([]byte, len(nonce)+paddingLen)
 	if _, err := io.ReadFull(rand.Reader, frame); err != nil {
 		return report, fmt.Errorf("generate probe frame: %w", err)
 	}
-	copy(frame, nonceRaw)
+	copy(frame, nonce[:])
 	if _, err := tlsConn.Write(frame); err != nil {
 		return report, fmt.Errorf("write mitm probe: %w", err)
 	}
@@ -362,7 +362,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		return conn, false, nil
 	}
 
-	frameSize := 16
+	frameSize := len(mitmProbeNonce{})
 	reader := bufio.NewReaderSize(conn, frameSize)
 	_ = conn.SetReadDeadline(time.Now().Add(mitmProbePeekTimeout))
 	peeked, _ := reader.Peek(frameSize)
@@ -371,9 +371,10 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		return wrapBufferedConn(conn, reader), false, nil
 	}
 
-	nonceHex := hex.EncodeToString(peeked[:frameSize])
+	var nonce mitmProbeNonce
+	copy(nonce[:], peeked[:frameSize])
 	m.mu.Lock()
-	_, ok = m.pending[nonceHex]
+	_, ok = m.pending[nonce]
 	m.mu.Unlock()
 	if !ok {
 		return wrapBufferedConn(conn, reader), false, nil
@@ -391,7 +392,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		return nil, true, fmt.Errorf("export server probe keying material: %w", err)
 	}
 
-	m.completeProbe(nonceHex, actual)
+	m.completeProbe(nonce, actual)
 	return nil, true, nil
 }
 
@@ -400,7 +401,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 // handshake completes. attachExpected arms the reservation afterwards; until
 // then the entry holds no exporter value and a completion attempt reports a
 // mismatch.
-func (m *mitmManager) reserveProbe(nonce string) (<-chan string, func()) {
+func (m *mitmManager) reserveProbe(nonce mitmProbeNonce) (<-chan string, func()) {
 	state := &mitmProbePending{
 		resultCh: make(chan string, 1),
 	}
@@ -417,7 +418,7 @@ func (m *mitmManager) reserveProbe(nonce string) (<-chan string, func()) {
 
 // attachExpected arms a reserved probe with the exporter value the reverse
 // side must reproduce for the connection to count as untampered.
-func (m *mitmManager) attachExpected(nonce string, expected []byte) {
+func (m *mitmManager) attachExpected(nonce mitmProbeNonce, expected []byte) {
 	m.mu.Lock()
 	if state := m.pending[nonce]; state != nil {
 		state.expected = bytes.Clone(expected)
@@ -425,7 +426,7 @@ func (m *mitmManager) attachExpected(nonce string, expected []byte) {
 	m.mu.Unlock()
 }
 
-func (m *mitmManager) completeProbe(nonce string, actual []byte) {
+func (m *mitmManager) completeProbe(nonce mitmProbeNonce, actual []byte) {
 	m.mu.Lock()
 	state := m.pending[nonce]
 	if state == nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -15,7 +16,7 @@ import (
 // layers as a plain string; portal code never inspects proxy headers itself.
 type Ingress struct {
 	trustProxyHeaders bool
-	trustedProxyCIDRs []*net.IPNet
+	trustedProxyCIDRs []netip.Prefix
 }
 
 func NewIngress(trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*Ingress, error) {
@@ -57,30 +58,22 @@ func (i *Ingress) ClientIP(req *http.Request) string {
 	return strings.TrimSpace(host)
 }
 
-func isTrustedProxyRemoteAddr(remoteAddr string, trustedProxyCIDRs []*net.IPNet) bool {
+func isTrustedProxyRemoteAddr(remoteAddr string, trustedProxyCIDRs []netip.Prefix) bool {
 	remoteIP := parseRemoteAddrIP(remoteAddr)
-	if remoteIP == nil {
+	if !remoteIP.IsValid() {
 		return false
 	}
 
 	for _, network := range trustedProxyCIDRs {
-		if network != nil && network.Contains(remoteIP) {
+		if network.Contains(remoteIP) {
 			return true
 		}
 	}
 	return false
 }
 
-func parseRemoteAddrIP(remoteAddr string) net.IP {
-	remoteAddr = strings.TrimSpace(remoteAddr)
-	if remoteAddr == "" {
-		return nil
-	}
-	host := remoteAddr
-	if parsedHost, _, err := net.SplitHostPort(remoteAddr); err == nil {
-		host = parsedHost
-	}
-	return net.ParseIP(strings.TrimSpace(host))
+func parseRemoteAddrIP(remoteAddr string) netip.Addr {
+	return utils.NormalizeSourceAddr(remoteAddr)
 }
 
 func normalizeClientIPCandidate(raw string) string {
@@ -88,16 +81,8 @@ func normalizeClientIPCandidate(raw string) string {
 	if candidate == "" {
 		return ""
 	}
-	if ip := net.ParseIP(candidate); ip != nil {
-		return ip.String()
+	if addr := utils.NormalizeSourceAddr(candidate); addr.IsValid() {
+		return addr.String()
 	}
-	host, _, err := net.SplitHostPort(candidate)
-	if err != nil {
-		return ""
-	}
-	host = strings.TrimSpace(host)
-	if host == "" || net.ParseIP(host) == nil {
-		return ""
-	}
-	return net.ParseIP(host).String()
+	return ""
 }

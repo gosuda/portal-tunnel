@@ -540,7 +540,7 @@ func (s *Server) Wait() error {
 // admitReverseOffer composes overlay admission with the lease stream while a
 // reserved stream slot keeps the accepted status and queued session atomic.
 func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
-	lease, err := s.registry.admitLeaseIdentity(offer.IdentityKey, offer.LeaseID, time.Now().UTC(), false)
+	lease, err := s.registry.admitLeaseIdentity(offer.ServiceIdentity, offer.LeaseID, time.Now().UTC(), false)
 	if err != nil {
 		offer.RejectUnavailable()
 		offer.Close()
@@ -602,7 +602,7 @@ func (s *Server) bridgeTCPConn(record *leaseRecord, inbound net.Conn) {
 			_ = reverse.Close()
 			return
 		}
-		s.proxy.bridge(inbound, reverse, record.Key(), s.registry.bps)
+		s.proxy.bridge(inbound, reverse, record.ServiceKey(), s.registry.bps)
 		return
 	}
 }
@@ -670,7 +670,7 @@ func (s *Server) AccessProjectionKeys() []string {
 		keys[lease.IdentityKey] = struct{}{}
 	}
 	for _, owner := range s.registry.cache.Owners() {
-		keys[owner] = struct{}{}
+		keys[owner.String()] = struct{}{}
 	}
 	out := make([]string, 0, len(keys))
 	for key := range keys {
@@ -861,7 +861,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 			_ = session.Close()
 			continue
 		}
-		s.proxy.bridge(conn, session, record.Key(), s.registry.bps)
+		s.proxy.bridge(conn, session, record.ServiceKey(), s.registry.bps)
 		return nil
 	}
 }

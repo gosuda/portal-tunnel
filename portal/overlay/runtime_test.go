@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -263,7 +264,7 @@ func testGateway(t *testing.T) (*Runtime, string) {
 	}
 	runtime := &Runtime{
 		config:        Config{Authority: gatewayAuthority},
-		activeSources: make(map[string]int),
+		activeSources: make(map[netip.Addr]int),
 	}
 	runtime.ready.Store(true)
 	return runtime, capability

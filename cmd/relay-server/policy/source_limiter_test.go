@@ -75,6 +75,16 @@ func TestSourceLimiterBoundsStorageAndExpiresIdleSources(t *testing.T) {
 	}
 }
 
+func TestSourceLimiterUsesOneUnknownSourceIdentity(t *testing.T) {
+	limiter := NewSourceLimiter(1, 1, 0, 0)
+	if retry, _ := limiter.Allow("first-invalid-source", 1); retry != 0 {
+		t.Fatal("first unknown source rejected")
+	}
+	if retry, layer := limiter.Allow("second-invalid-source", 1); retry == 0 || layer != "source" {
+		t.Fatalf("second unknown source admission = %v, %q, want shared source rejection", retry, layer)
+	}
+}
+
 // Failed pre-auth attempts bill exactly the endpoint weight, and a rejected
 // attempt pays nothing, so premature retries never deepen the debt and the
 // returned retry window is exact.

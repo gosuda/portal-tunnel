@@ -390,19 +390,18 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, req types.Policy
 }
 
 // normalizePolicyIdentityKey canonicalizes an untrusted admin-supplied
-// identity key into the runtime key form (lowercase name:address, as built
-// by types.Identity.Key). It reuses the same types.ParseIdentityKey rule the
-// policy.json loader applies, so malformed keys are rejected with an HTTP 400
+// identity key into the typed runtime form. It reuses the same normalization
+// as the policy.json loader, so malformed keys are rejected with an HTTP 400
 // instead of being trusted as-is.
-func normalizePolicyIdentityKey(w http.ResponseWriter, raw string) (string, bool) {
-	key, err := types.ParseIdentityKey(raw)
+func normalizePolicyIdentityKey(w http.ResponseWriter, raw string) (types.ServiceIdentityKey, bool) {
+	key, err := types.ParseServiceIdentityKey(raw)
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid identity")
-		return "", false
+		return types.ServiceIdentityKey{}, false
 	}
 	return key, true
 }
-func (api *RelayAPI) applyLeasePolicyUpdate(w http.ResponseWriter, identityKey string, req types.LeasePolicyUpdate, access *policy.AccessState) bool {
+func (api *RelayAPI) applyLeasePolicyUpdate(w http.ResponseWriter, identityKey types.ServiceIdentityKey, req types.LeasePolicyUpdate, access *policy.AccessState) bool {
 	if req.IsBanned == nil && req.IsApproved == nil && req.IsDenied == nil && req.BPS == nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "lease policy update is empty")
 		return false
@@ -422,25 +421,26 @@ func (api *RelayAPI) applyLeasePolicyUpdate(w http.ResponseWriter, identityKey s
 			api.server.BPSManager().SetIdentityBPS(identityKey, *req.BPS)
 		}
 	}
+	serializedIdentityKey := identityKey.String()
 	if req.IsBanned != nil {
 		if *req.IsBanned {
-			access.Ban(identityKey)
+			access.Ban(serializedIdentityKey)
 		} else {
-			access.Unban(identityKey)
+			access.Unban(serializedIdentityKey)
 		}
 	}
 	if req.IsDenied != nil {
 		if *req.IsDenied {
-			access.Deny(identityKey)
+			access.Deny(serializedIdentityKey)
 		} else {
-			access.Undeny(identityKey)
+			access.Undeny(serializedIdentityKey)
 		}
 	}
 	if req.IsApproved != nil {
 		if *req.IsApproved {
-			access.Approve(identityKey)
+			access.Approve(serializedIdentityKey)
 		} else {
-			access.Revoke(identityKey)
+			access.Revoke(serializedIdentityKey)
 		}
 	}
 	return true

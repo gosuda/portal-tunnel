@@ -500,7 +500,7 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, clientIP 
 	if s.overlay != nil && s.overlay.Handles(capability) {
 		client, gateway := s.overlay.HandleConnect(w, r, capability, clientIP)
 		if client != nil {
-			s.proxy.bridge(client, gateway, "", s.registry.bps)
+			s.proxy.bridge(client, gateway, types.ServiceIdentityKey{}, s.registry.bps)
 		}
 		return
 	}

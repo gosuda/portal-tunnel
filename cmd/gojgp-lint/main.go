@@ -42,18 +42,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	seen := make(map[string]struct{})
+	seen := make(map[diagnostic]struct{})
 	var findings []diagnostic
 	for _, analyzers := range report {
 		for _, finding := range analyzers["gojgp"] {
 			if strings.HasPrefix(finding.Message, ignoredLawOfDemeter) {
 				continue
 			}
-			key := finding.Position + "\x00" + finding.Message
-			if _, ok := seen[key]; ok {
+			if _, ok := seen[finding]; ok {
 				continue
 			}
-			seen[key] = struct{}{}
+			seen[finding] = struct{}{}
 			findings = append(findings, finding)
 		}
 	}
