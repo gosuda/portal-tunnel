@@ -26,7 +26,10 @@ type manager struct {
 
 	configMu sync.Mutex
 
-	mu      sync.RWMutex
+	mu sync.RWMutex
+	// cfg is the normalized snapshot of the config document on disk, the
+	// configuration authority: every mutation reloads and commits that
+	// document before installing the new snapshot here.
 	cfg     Config
 	tunnels map[string]*managedTunnel
 	rootCtx context.Context
@@ -39,7 +42,7 @@ func newManager(cfg Config, controlAddr string) *manager {
 		tunnels:     make(map[string]*managedTunnel, len(cfg.Tunnels)),
 	}
 	for _, tunnelCfg := range cfg.Tunnels {
-		manager.tunnels[tunnelCfg.ID] = &managedTunnel{cfg: tunnelCfg}
+		manager.tunnels[tunnelCfg.ID] = newManagedTunnel(tunnelCfg)
 	}
 	return manager
 }
@@ -73,7 +76,7 @@ func (m *manager) Stop(ctx context.Context) error {
 			defer wg.Done()
 			if err := t.Stop(ctx); err != nil {
 				t.mu.RLock()
-				tunnelID := t.cfg.ID
+				tunnelID := t.spec.ID
 				t.mu.RUnlock()
 				log.Warn().Err(err).Str("tunnel_id", tunnelID).Msg("stop tunnel")
 			}
@@ -294,14 +297,8 @@ func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error
 	if reflect.DeepEqual(before, cfg.Tunnels[index]) {
 		return nil
 	}
-	cfg.sourcePath = path
-	if err := cfg.ApplyDefaults(path); err != nil {
-		return err
-	}
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	if err := writeConfigDocument(path, mode, cfg); err != nil {
+	cfg, err = commitConfig(path, mode, cfg)
+	if err != nil {
 		return err
 	}
 
@@ -309,9 +306,7 @@ func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error
 	m.mu.Lock()
 	m.cfg = cfg
 	if tunnel := m.tunnels[id]; tunnel != nil {
-		tunnel.mu.Lock()
-		tunnel.cfg = nextTunnelCfg
-		tunnel.mu.Unlock()
+		tunnel.assign(nextTunnelCfg)
 	}
 	m.mu.Unlock()
 	return nil
@@ -356,15 +351,26 @@ func (m *manager) loadConfigDocument() (Config, string, os.FileMode, error) {
 	return cfg, path, mode, nil
 }
 
-func (m *manager) writeConfigAndApply(path string, mode os.FileMode, cfg Config) error {
+// commitConfig normalizes cfg for path, validates it, and persists it as the
+// new configuration document. It is the single place that turns an edited
+// Config into the on-disk authority and the normalized runtime snapshot.
+func commitConfig(path string, mode os.FileMode, cfg Config) (Config, error) {
 	cfg.sourcePath = path
 	if err := cfg.ApplyDefaults(path); err != nil {
-		return err
+		return Config{}, err
 	}
 	if err := cfg.Validate(); err != nil {
-		return err
+		return Config{}, err
 	}
 	if err := writeConfigDocument(path, mode, cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func (m *manager) writeConfigAndApply(path string, mode os.FileMode, cfg Config) error {
+	cfg, err := commitConfig(path, mode, cfg)
+	if err != nil {
 		return err
 	}
 	return m.ApplyConfig(cfg)
@@ -388,17 +394,17 @@ func (m *manager) ApplyConfig(cfg Config) error {
 			delete(m.tunnels, id)
 			continue
 		}
-		tunnel.mu.Lock()
-		previous := tunnel.cfg
+		tunnel.mu.RLock()
+		previous := tunnel.spec
+		tunnel.mu.RUnlock()
 		if !reflect.DeepEqual(previous, tunnelCfg) {
-			tunnel.cfg = tunnelCfg
+			tunnel.assign(tunnelCfg)
 			toUpdate = append(toUpdate, tunnel)
 		}
-		tunnel.mu.Unlock()
 		delete(next, id)
 	}
 	for _, tunnelCfg := range next {
-		tunnel := &managedTunnel{cfg: tunnelCfg}
+		tunnel := newManagedTunnel(tunnelCfg)
 		m.tunnels[tunnelCfg.ID] = tunnel
 		toStart = append(toStart, tunnel)
 	}
@@ -441,8 +447,16 @@ func (m *manager) Snapshot() AgentStatusResponse {
 }
 
 type managedTunnel struct {
-	mu  sync.RWMutex
-	cfg TunnelConfig
+	mu sync.RWMutex
+	// spec is the normalized tunnel configuration assigned as a whole by the
+	// manager; the tunnel never edits it. The config document on disk is the
+	// authority, and every manager assign comes from a freshly loaded and
+	// normalized document.
+	spec TunnelConfig
+	// relayURLs is the runtime relay membership: the configured relays as
+	// changed by connect/disconnect actions. It resets to the configured
+	// relays whenever the manager assigns a new spec.
+	relayURLs []string
 
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -450,6 +464,21 @@ type managedTunnel struct {
 	lastError string
 	address   string
 	relays    []AgentRelayStatus
+}
+
+// assign installs the manager's normalized spec and resets runtime relay
+// membership to the configured relays.
+func (t *managedTunnel) assign(spec TunnelConfig) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.spec = spec
+	t.relayURLs = append([]string(nil), spec.RelayURLs...)
+}
+
+func newManagedTunnel(spec TunnelConfig) *managedTunnel {
+	tunnel := &managedTunnel{}
+	tunnel.assign(spec)
+	return tunnel
 }
 
 func (t *managedTunnel) Start(parent context.Context) {
@@ -498,8 +527,8 @@ func (t *managedTunnel) ConnectRelay(relayURL string) error {
 		return err
 	}
 	t.mu.Lock()
-	if !slices.Contains(t.cfg.RelayURLs, relayURL) {
-		t.cfg.RelayURLs = append(t.cfg.RelayURLs, relayURL)
+	if !slices.Contains(t.relayURLs, relayURL) {
+		t.relayURLs = append(t.relayURLs, relayURL)
 	}
 	exposure := t.exposure
 	t.mu.Unlock()
@@ -515,13 +544,13 @@ func (t *managedTunnel) DisconnectRelay(relayURL string) error {
 		return err
 	}
 	t.mu.Lock()
-	next := make([]string, 0, len(t.cfg.RelayURLs))
-	for _, existing := range t.cfg.RelayURLs {
+	next := make([]string, 0, len(t.relayURLs))
+	for _, existing := range t.relayURLs {
 		if existing != relayURL {
 			next = append(next, existing)
 		}
 	}
-	t.cfg.RelayURLs = next
+	t.relayURLs = next
 	exposure := t.exposure
 	t.mu.Unlock()
 	if exposure == nil {
@@ -533,7 +562,7 @@ func (t *managedTunnel) DisconnectRelay(relayURL string) error {
 func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays bool) error {
 	t.mu.RLock()
 	exposure := t.exposure
-	cfg := t.cfg
+	cfg := t.spec
 	t.mu.RUnlock()
 	if exposure == nil {
 		return nil
@@ -550,7 +579,7 @@ func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays boo
 
 func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	t.mu.RLock()
-	cfg := t.cfg
+	cfg := t.spec
 	lastError := t.lastError
 	exposure := t.exposure
 	done := t.done
@@ -665,7 +694,8 @@ func (t *managedTunnel) runLoop(ctx context.Context) {
 
 func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.mu.Lock()
-	cfg := t.cfg
+	cfg := t.spec
+	cfg.RelayURLs = t.relayURLs
 	t.lastError = ""
 	t.mu.Unlock()
 
