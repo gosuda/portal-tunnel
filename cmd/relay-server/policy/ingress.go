@@ -102,6 +102,9 @@ func parseTrustedProxyPrefixes(raw string) ([]netip.Prefix, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid cidr %q: %w", part, err)
 		}
+		if prefix.Addr().Is4In6() && prefix.Bits() >= 96 {
+			prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
+		}
 		prefix = prefix.Masked()
 		if _, ok := seen[prefix]; ok {
 			continue

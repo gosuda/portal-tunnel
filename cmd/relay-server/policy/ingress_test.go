@@ -9,7 +9,7 @@ import (
 )
 
 func TestParseTrustedProxyPrefixesDeduplicatesMaskedNetworks(t *testing.T) {
-	got, err := parseTrustedProxyPrefixes("192.0.2.7/24, 192.0.2.0/24, 2001:db8::1/32")
+	got, err := parseTrustedProxyPrefixes("192.0.2.7/24, 192.0.2.0/24, 2001:db8::1/32, ::ffff:192.0.2.0/120")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,5 +113,18 @@ func TestClientIPRevokesRemovedProxy(t *testing.T) {
 	}
 	if got := ingress.ClientIP(req); got != "172.31.240.2" {
 		t.Fatalf("client IP after removing proxy = %q, want socket peer", got)
+	}
+}
+
+func TestClientIPRecognizesIPv4MappedTrustedProxyCIDR(t *testing.T) {
+	ingress, err := NewIngress(true, "::ffff:192.0.2.0/120")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/api/connect", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.7")
+	if got := ingress.ClientIP(req); got != "198.51.100.7" {
+		t.Fatalf("client IP = %q, want 198.51.100.7", got)
 	}
 }

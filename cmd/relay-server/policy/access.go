@@ -150,12 +150,16 @@ func (s AccessState) DeniedKeys() []types.ServiceIdentityKey {
 func (s *AccessState) SetDecisions(approvedKeys, deniedKeys []types.ServiceIdentityKey) {
 	s.approved = make(map[types.ServiceIdentityKey]struct{}, len(approvedKeys))
 	for _, key := range approvedKeys {
-		s.approved[key] = struct{}{}
+		if key.Valid() {
+			s.approved[key] = struct{}{}
+		}
 	}
 	s.denied = make(map[types.ServiceIdentityKey]struct{}, len(deniedKeys))
 	for _, key := range deniedKeys {
-		delete(s.approved, key)
-		s.denied[key] = struct{}{}
+		if key.Valid() {
+			delete(s.approved, key)
+			s.denied[key] = struct{}{}
+		}
 	}
 }
 
