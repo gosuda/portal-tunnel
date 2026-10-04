@@ -555,15 +555,16 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr) (ty
 		return types.RenewResponse{}, reverseEndpointInput{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 
+	reverseInput := reverseEndpointInput{
+		leaseIdentity: recordIdentity,
+		leaseID:       leaseID,
+		expiresAt:     expiresAt,
+		useOverlay:    useOverlay,
+	}
 	return types.RenewResponse{
-			ExpiresAt:   expiresAt,
-			AccessToken: nextAccessToken,
-		}, reverseEndpointInput{
-			leaseIdentity: recordIdentity,
-			leaseID:       leaseID,
-			expiresAt:     expiresAt,
-			useOverlay:    useOverlay,
-		}, nil
+		ExpiresAt:   expiresAt,
+		AccessToken: nextAccessToken,
+	}, reverseInput, nil
 }
 
 func (r *leaseRegistry) issueReverseEndpoint(input reverseEndpointInput, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
