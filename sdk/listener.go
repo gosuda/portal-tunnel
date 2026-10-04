@@ -1034,12 +1034,13 @@ func (l *listener) ensureMITMProbeSupport(exporterCapable bool) error {
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	registerReq := types.RegisterChallengeRequest{
-		Identity:   l.identity,
-		Metadata:   l.metadataSnapshot(),
-		Overlay:    l.overlay,
-		TTL:        int(defaultLeaseTTL / time.Second),
-		UDPEnabled: l.udpEnabled,
-		TCPEnabled: l.tcpEnabled,
+		AllowCanonicalFallback: true,
+		Identity:               l.identity,
+		Metadata:               l.metadataSnapshot(),
+		Overlay:                l.overlay,
+		TTL:                    int(defaultLeaseTTL / time.Second),
+		UDPEnabled:             l.udpEnabled,
+		TCPEnabled:             l.tcpEnabled,
 	}
 	l.cache.ConfigureRegistration(&registerReq)
 	resp, err := l.api.register(ctx, registerReq, utils.ResolvePublicIP(ctx))

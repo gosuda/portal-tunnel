@@ -73,10 +73,11 @@ defines the relay-independent service identity as `(normalized name, address)`;
 each relay domain supplies a distinct browser origin for that same identity.
 The full lowercase 40-character address suffix makes each relay-local origin
 stable without stored ownership state. It also makes services published by
-the same Ethereum address publicly correlatable across relay domains. Existing
-protocol-10 clients and identities with longer names must keep using a
-protocol-10 relay until they are upgraded and renamed; protocol 11 rejects
-names whose normalized ASCII label is longer than 22 characters.
+the same Ethereum address publicly correlatable across relay domains. Protocol
+10 clients receive a hostname conflict when their friendly alias is unavailable
+unless they allow canonical fallback. All lease names are limited to normalized
+ASCII labels of at most 22 characters so canonical labels stay within the DNS
+label limit.
 
 ## Relay Admin Token Login
 
