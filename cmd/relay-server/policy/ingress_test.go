@@ -3,8 +3,24 @@ package policy
 import (
 	"net"
 	"net/http/httptest"
+	"net/netip"
+	"slices"
 	"testing"
 )
+
+func TestParseTrustedProxyPrefixesDeduplicatesMaskedNetworks(t *testing.T) {
+	got, err := parseTrustedProxyPrefixes("192.0.2.7/24, 192.0.2.0/24, 2001:db8::1/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []netip.Prefix{
+		netip.MustParsePrefix("192.0.2.0/24"),
+		netip.MustParsePrefix("2001:db8::/32"),
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("parseTrustedProxyPrefixes() = %v, want %v", got, want)
+	}
+}
 
 func TestClientIPDoesNotTrustImplicitProxies(t *testing.T) {
 	ingress, err := NewIngress(true, "")

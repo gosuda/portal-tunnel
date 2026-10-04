@@ -1,43 +1,9 @@
 package utils
 
 import (
-	"net/netip"
-	"slices"
 	"strings"
 	"testing"
 )
-
-func TestParseCIDRsDeduplicatesComparablePrefixes(t *testing.T) {
-	t.Parallel()
-
-	got, err := ParseCIDRs("192.0.2.7/24, 192.0.2.0/24, 2001:db8::1/32")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []netip.Prefix{
-		netip.MustParsePrefix("192.0.2.0/24"),
-		netip.MustParsePrefix("2001:db8::/32"),
-	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("ParseCIDRs() = %v, want %v", got, want)
-	}
-}
-
-func TestNormalizeSourceAddr(t *testing.T) {
-	t.Parallel()
-
-	for raw, want := range map[string]netip.Addr{
-		"192.0.2.1":               netip.MustParseAddr("192.0.2.1"),
-		"::ffff:192.0.2.1":        netip.MustParseAddr("192.0.2.1"),
-		"[2001:db8::1]:443":       netip.MustParseAddr("2001:db8::1"),
-		" 198.51.100.2:8443 ":     netip.MustParseAddr("198.51.100.2"),
-		"unknown-source-identity": {},
-	} {
-		if got := NormalizeSourceAddr(raw); got != want {
-			t.Errorf("NormalizeSourceAddr(%q) = %v, want %v", raw, got, want)
-		}
-	}
-}
 
 func TestHostnameMatchesPattern(t *testing.T) {
 	t.Parallel()

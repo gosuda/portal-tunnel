@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"net/url"
 	"path"
 	"strconv"
@@ -42,47 +41,6 @@ func TrimHexPrefix(raw string) string {
 		return raw[2:]
 	}
 	return raw
-}
-
-func ParseCIDRs(raw string) ([]netip.Prefix, error) {
-	parts := SplitCSV(raw)
-	if len(parts) == 0 {
-		return nil, nil
-	}
-
-	cidrs := make([]netip.Prefix, 0, len(parts))
-	seen := make(map[netip.Prefix]struct{}, len(parts))
-	for _, part := range parts {
-		network, err := netip.ParsePrefix(part)
-		if err != nil {
-			return nil, fmt.Errorf("invalid cidr %q: %w", part, err)
-		}
-		network = network.Masked()
-		if _, ok := seen[network]; ok {
-			continue
-		}
-		seen[network] = struct{}{}
-		cidrs = append(cidrs, network)
-	}
-	return cidrs, nil
-}
-
-// NormalizeSourceAddr returns the comparable source identity used by runtime
-// admission state. Its invalid zero value represents an unknown source.
-func NormalizeSourceAddr(raw string) netip.Addr {
-	raw = strings.TrimSpace(raw)
-	if addr, err := netip.ParseAddr(raw); err == nil {
-		return addr.Unmap()
-	}
-	host, _, err := net.SplitHostPort(raw)
-	if err != nil {
-		return netip.Addr{}
-	}
-	addr, err := netip.ParseAddr(strings.TrimSpace(host))
-	if err != nil {
-		return netip.Addr{}
-	}
-	return addr.Unmap()
 }
 
 func NormalizeDNSLabel(raw string) (string, error) {

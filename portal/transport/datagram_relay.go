@@ -27,7 +27,7 @@ type flowState struct {
 
 // RelayDatagram owns UDP ingress and QUIC backhaul binding for one lease.
 type RelayDatagram struct {
-	identityKey string
+	identityKey types.ServiceIdentityKey
 	port        int
 	session     *DatagramSession
 	flowTable   map[uint32]*flowState
@@ -41,7 +41,7 @@ type RelayDatagram struct {
 	mu      sync.Mutex
 }
 
-func NewRelayDatagram(identityKey string, port int) *RelayDatagram {
+func NewRelayDatagram(identityKey types.ServiceIdentityKey, port int) *RelayDatagram {
 	return &RelayDatagram{
 		identityKey: identityKey,
 		port:        port,
@@ -79,7 +79,7 @@ func (d *RelayDatagram) Start() error {
 
 	log.Info().
 		Str("component", "udp-relay").
-		Str("identity_key", d.identityKey).
+		Str("identity_key", d.identityKey.String()).
 		Int("port", d.port).
 		Msg("udp relay started")
 
@@ -110,14 +110,14 @@ func (d *RelayDatagram) BindBackhaul(conn *quic.Conn) error {
 			log.Warn().
 				Err(err).
 				Str("component", "quic-backhaul").
-				Str("identity_key", d.identityKey).
+				Str("identity_key", d.identityKey.String()).
 				Msg("quic backhaul receive loop ended")
 		}
 	}()
 
 	log.Info().
 		Str("component", "quic-backhaul").
-		Str("identity_key", d.identityKey).
+		Str("identity_key", d.identityKey.String()).
 		Str("remote_addr", conn.RemoteAddr().String()).
 		Msg("quic backhaul connection registered")
 	return nil
@@ -203,7 +203,7 @@ func (d *RelayDatagram) dispatch(frame types.DatagramFrame) {
 		log.Warn().
 			Err(err).
 			Str("component", "udp-relay").
-			Str("identity_key", d.identityKey).
+			Str("identity_key", d.identityKey.String()).
 			Uint32("flow_id", frame.FlowID).
 			Msg("flow writeback failed")
 		d.forgetFlow(frame.FlowID)
@@ -262,7 +262,7 @@ func (d *RelayDatagram) readLoop() {
 			}
 			log.Warn().
 				Str("component", "udp-relay").
-				Str("identity_key", d.identityKey).
+				Str("identity_key", d.identityKey.String()).
 				Err(err).
 				Msg("readLoop exiting: unexpected read error")
 			return
@@ -278,7 +278,7 @@ func (d *RelayDatagram) readLoop() {
 		if err := d.sendDatagram(flowID, payload); err != nil {
 			log.Warn().
 				Str("component", "udp-relay").
-				Str("identity_key", d.identityKey).
+				Str("identity_key", d.identityKey.String()).
 				Err(err).
 				Uint32("flow_id", flowID).
 				Int("bytes", n).

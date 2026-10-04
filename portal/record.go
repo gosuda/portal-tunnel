@@ -22,7 +22,6 @@ type leaseRecord struct {
 	ExpiresAt         time.Time
 	FirstSeenAt       time.Time
 	LastSeenAt        time.Time
-	ClientIP          string
 	sourceAddr        netip.Addr
 	ReportedIP        string
 	Hostname          string

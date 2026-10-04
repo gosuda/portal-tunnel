@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
@@ -97,7 +98,7 @@ func TestRegisterLeaseWithUDPAndRawTCP(t *testing.T) {
 		Identity:   newTestLeaseIdentity(t, "demo"),
 		UDPEnabled: true,
 		TCPEnabled: true,
-	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("registry.Register() error = %v", err)
 	}
@@ -118,7 +119,7 @@ func TestRawPortsAreAllocatedPerIdentity(t *testing.T) {
 			Identity:               newTestLeaseIdentity(t, "shared"),
 			UDPEnabled:             true,
 			TCPEnabled:             true,
-		}, clientIP, "", types.RelayDescriptor{}, nil)
+		}, netip.MustParseAddr(clientIP), "", types.RelayDescriptor{}, nil)
 		if err != nil {
 			t.Fatalf("registry.Register() error = %v", err)
 		}
@@ -211,13 +212,13 @@ func newConnectTestRelay(t *testing.T) (*Server, *url.URL, string) {
 	registry := newTestRegistry(t, false, false)
 	_, registered, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "browser"),
-	}, "203.0.113.10", "", types.RelayDescriptor{}, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	server := &Server{registry: registry}
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		server.HandleConnect(w, r, "203.0.113.10")
+		server.HandleConnect(w, r, netip.MustParseAddr("203.0.113.10"))
 	}))
 	t.Cleanup(relay.Close)
 

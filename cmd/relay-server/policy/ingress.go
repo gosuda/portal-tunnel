@@ -12,37 +12,36 @@ import (
 
 // Ingress resolves the client source for relay admission and diagnostics.
 // Forwarded headers are trusted only when the direct peer is inside an
-// explicitly configured trusted proxy CIDR. The resolved value flows to lower
-// layers as a plain string; portal code never inspects proxy headers itself.
+// explicitly configured trusted proxy CIDR.
 type Ingress struct {
 	trustProxyHeaders bool
 	trustedProxyCIDRs []netip.Prefix
 }
 
 func NewIngress(trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*Ingress, error) {
-	trustedProxyCIDRs, err := utils.ParseCIDRs(rawTrustedProxyCIDRs)
+	trustedProxyCIDRs, err := parseTrustedProxyPrefixes(rawTrustedProxyCIDRs)
 	if err != nil {
 		return nil, fmt.Errorf("parse trusted proxy cidrs: %w", err)
 	}
 	return &Ingress{trustProxyHeaders: trustProxyHeaders, trustedProxyCIDRs: trustedProxyCIDRs}, nil
 }
 
-func (i *Ingress) ClientIP(req *http.Request) string {
+func (i *Ingress) SourceAddr(req *http.Request) netip.Addr {
 	if req == nil {
-		return ""
+		return netip.Addr{}
 	}
 	if i != nil && i.trustProxyHeaders && isTrustedProxyRemoteAddr(req.RemoteAddr, i.trustedProxyCIDRs) {
 		if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
 			if before, _, ok := strings.Cut(xff, ","); ok {
-				if ip := normalizeClientIPCandidate(before); ip != "" {
+				if ip := parseSourceAddr(before); ip.IsValid() {
 					return ip
 				}
-			} else if ip := normalizeClientIPCandidate(xff); ip != "" {
+			} else if ip := parseSourceAddr(xff); ip.IsValid() {
 				return ip
 			}
 		}
 		if xri := req.Header.Get("X-Real-IP"); xri != "" {
-			if ip := normalizeClientIPCandidate(xri); ip != "" {
+			if ip := parseSourceAddr(xri); ip.IsValid() {
 				return ip
 			}
 		}
@@ -50,12 +49,18 @@ func (i *Ingress) ClientIP(req *http.Request) string {
 
 	host, _, err := net.SplitHostPort(req.RemoteAddr)
 	if err != nil {
-		return strings.TrimSpace(req.RemoteAddr)
+		return parseSourceAddr(req.RemoteAddr)
 	}
-	if normalized := normalizeClientIPCandidate(host); normalized != "" {
-		return normalized
+	return parseSourceAddr(host)
+}
+
+// ClientIP is the serialized compatibility form of SourceAddr.
+func (i *Ingress) ClientIP(req *http.Request) string {
+	addr := i.SourceAddr(req)
+	if !addr.IsValid() {
+		return ""
 	}
-	return strings.TrimSpace(host)
+	return addr.String()
 }
 
 func isTrustedProxyRemoteAddr(remoteAddr string, trustedProxyCIDRs []netip.Prefix) bool {
@@ -73,16 +78,36 @@ func isTrustedProxyRemoteAddr(remoteAddr string, trustedProxyCIDRs []netip.Prefi
 }
 
 func parseRemoteAddrIP(remoteAddr string) netip.Addr {
-	return utils.NormalizeSourceAddr(remoteAddr)
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err == nil {
+		return parseSourceAddr(host)
+	}
+	return parseSourceAddr(remoteAddr)
 }
 
-func normalizeClientIPCandidate(raw string) string {
-	candidate := strings.TrimSpace(raw)
-	if candidate == "" {
-		return ""
+func parseSourceAddr(raw string) netip.Addr {
+	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil {
+		return netip.Addr{}
 	}
-	if addr := utils.NormalizeSourceAddr(candidate); addr.IsValid() {
-		return addr.String()
+	return addr.Unmap()
+}
+
+func parseTrustedProxyPrefixes(raw string) ([]netip.Prefix, error) {
+	parts := utils.SplitCSV(raw)
+	prefixes := make([]netip.Prefix, 0, len(parts))
+	seen := make(map[netip.Prefix]struct{}, len(parts))
+	for _, part := range parts {
+		prefix, err := netip.ParsePrefix(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid cidr %q: %w", part, err)
+		}
+		prefix = prefix.Masked()
+		if _, ok := seen[prefix]; ok {
+			continue
+		}
+		seen[prefix] = struct{}{}
+		prefixes = append(prefixes, prefix)
 	}
-	return ""
+	return prefixes, nil
 }

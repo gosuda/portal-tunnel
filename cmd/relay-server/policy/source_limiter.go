@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
@@ -46,8 +45,7 @@ func NewSourceLimiter(ratePerMinute, burst, globalRate, globalBurst int) *Source
 
 // Allow deducts cost only if both budgets admit the request. Rejections return
 // retry guidance and a bounded layer label; no IP history is persisted.
-func (l *SourceLimiter) Allow(srcIP string, cost int) (time.Duration, string) {
-	key := utils.NormalizeSourceAddr(srcIP)
+func (l *SourceLimiter) Allow(source netip.Addr, cost int) (time.Duration, string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.clock()
@@ -65,13 +63,13 @@ func (l *SourceLimiter) Allow(srcIP string, cost int) (time.Duration, string) {
 			return retry, types.PreAuthLayerGlobal
 		}
 	}
-	bucket := l.buckets[key]
+	bucket := l.buckets[source]
 	if bucket == nil {
 		if len(l.buckets) >= l.maxBucketCount {
 			return sourceLimiterPruneInterval, types.PreAuthLayerSource
 		}
 		bucket = &sourceBucket{tokens: l.burst, updatedAt: now}
-		l.buckets[key] = bucket
+		l.buckets[source] = bucket
 	}
 	bucket.lastUsedAt = now
 	if retry := bucket.retry(now, l.ratePerMinute, l.burst, cost); retry > 0 {

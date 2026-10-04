@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -102,7 +103,7 @@ func NewReputationStore(path string) (*ReputationStore, error) {
 
 // AllowVote spends the per-source vote budget before the request body is
 // decoded and returns the retry guidance when the source is exhausted.
-func (s *ReputationStore) AllowVote(source string) time.Duration {
+func (s *ReputationStore) AllowVote(source netip.Addr) time.Duration {
 	retry, _ := s.limiter.Allow(source, 1)
 	return retry
 }
@@ -111,7 +112,7 @@ func (s *ReputationStore) AllowVote(source string) time.Duration {
 // applies the vote, and persists atomically under one lock. The returned
 // mint value is a fresh cookie value, set only when a new voter was minted.
 // The identity comes from the relay's current public leases.
-func (s *ReputationStore) CastVote(hostname, identity, vote, cookieID, source string) (ReputationSummary, string, error) {
+func (s *ReputationStore) CastVote(hostname, identity, vote, cookieID string, source netip.Addr) (ReputationSummary, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if identity == "" {
@@ -176,7 +177,7 @@ func (s *ReputationStore) ViewerHashFor(cookieID string) string {
 
 // resolveVoterLocked returns the digest for a verified cookie or mints a new
 // cookieless identity. Signed cookies need no persisted global voter registry.
-func (s *ReputationStore) resolveVoterLocked(cookieID, source string) (hash, minted string, err error) {
+func (s *ReputationStore) resolveVoterLocked(cookieID string, source netip.Addr) (hash, minted string, err error) {
 	if cookieID != "" {
 		if verified, ok := s.verifyVoter(cookieID); ok {
 			return verified, "", nil

@@ -453,14 +453,13 @@ func endpointOrigin(rawURL string) string {
 // handshake, and returns the hijacked client connection paired with the
 // gateway connection for the caller to bridge. It returns nil, nil after
 // writing an API error.
-func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, capability, clientIP string) (net.Conn, net.Conn) {
+func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, capability string, source netip.Addr) (net.Conn, net.Conn) {
 	if r == nil || !r.ready.Load() {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay is unavailable")
 		return nil, nil
 	}
-	// The relay ingress resolves clientIP before this handler runs. Caller-chosen
+	// The relay ingress resolves the source before this handler runs. Caller-chosen
 	// signing keys and lease IDs must not create fresh admission budgets.
-	source := utils.NormalizeSourceAddr(clientIP)
 	if retry := r.sourceLimiter.Allow(source, 1); retry > 0 {
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay request rate exceeded")
 		return nil, nil

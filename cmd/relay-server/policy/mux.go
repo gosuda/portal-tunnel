@@ -3,6 +3,7 @@ package policy
 import (
 	"math"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -34,16 +35,16 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	// paused. Retry a bounded number of times when Portal rejects the older
 	// revision; stale values are never applied, and no relay lock is held
 	// across the Portal call.
-	publishAccess := func(key string) bool {
-		if key == "" {
+	publishAccess := func(key types.ServiceIdentityKey) bool {
+		if !key.Valid() {
 			return true
 		}
 		if access == nil {
-			return s.SetIdentityRoutable(key, true, 1)
+			return s.SetServiceIdentityRoutable(key, true, 1)
 		}
 		for range accessPublishAttempts {
 			state := access.Snapshot()
-			if s.SetIdentityRoutable(key, state.Routable(key), state.Revision()) {
+			if s.SetServiceIdentityRoutable(key, state.Routable(key), state.Revision()) {
 				return true
 			}
 		}
@@ -53,15 +54,17 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	// admit spends the weighted pre-auth budget before any decoding or
 	// signature work, preserving the source -> global ordering established
 	// for anonymous protocol requests.
-	admit := func(cost int, next http.HandlerFunc) http.HandlerFunc {
+	type sourceHandler func(http.ResponseWriter, *http.Request, netip.Addr)
+	admit := func(cost int, next sourceHandler) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
+			source := ingress.SourceAddr(r)
 			if admission != nil {
-				if retry, _ := admission.Allow(ingress.ClientIP(r), cost); retry > 0 {
+				if retry, _ := admission.Allow(source, cost); retry > 0 {
 					WriteRetryAfter(w, retry, "pre-auth request budget exhausted")
 					return
 				}
 			}
-			next.ServeHTTP(w, r)
+			next(w, r, source)
 		}
 	}
 	requireMethod := func(method string, next http.HandlerFunc) http.HandlerFunc {
@@ -72,9 +75,9 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			next(w, r)
 		}
 	}
-	withClient := func(next func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
+	withSource := func(next sourceHandler) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			next(w, r, ingress.ClientIP(r))
+			next(w, r, ingress.SourceAddr(r))
 		}
 	}
 
@@ -90,8 +93,8 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 		s.HandleDomain(w, r)
 	})
 	mux.HandleFunc(types.PathSDKCertificateChain, s.HandleCertificateChain)
-	mux.HandleFunc(types.PathSDKRegisterChallenge, requireMethod(http.MethodPost, admit(preAuth.ChallengeCost, func(w http.ResponseWriter, r *http.Request) {
-		key, response, ok := s.HandleRegisterChallenge(w, r, ingress.ClientIP(r))
+	mux.HandleFunc(types.PathSDKRegisterChallenge, requireMethod(http.MethodPost, admit(preAuth.ChallengeCost, func(w http.ResponseWriter, r *http.Request, source netip.Addr) {
+		key, response, ok := s.HandleRegisterChallenge(w, r, source)
 		if !publishAccess(key) {
 			if ok {
 				utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
@@ -102,8 +105,8 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			utils.WriteAPIData(w, http.StatusCreated, response)
 		}
 	})))
-	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request) {
-		key, response, ok := s.HandleRegister(w, r, ingress.ClientIP(r))
+	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request, source netip.Addr) {
+		key, response, ok := s.HandleRegister(w, r, source)
 		if !publishAccess(key) {
 			if ok {
 				utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
@@ -114,10 +117,10 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			utils.WriteAPIData(w, http.StatusCreated, response)
 		}
 	})))
-	mux.HandleFunc(types.PathSDKRenew, withClient(s.HandleRenew))
+	mux.HandleFunc(types.PathSDKRenew, withSource(s.HandleRenew))
 	mux.HandleFunc(types.PathSDKReverse, s.HandleReverseEndpoint)
 	mux.HandleFunc(types.PathSDKUnregister, s.HandleUnregister)
-	mux.HandleFunc(types.PathSDKConnect, withClient(s.HandleConnect))
+	mux.HandleFunc(types.PathSDKConnect, withSource(s.HandleConnect))
 	mux.HandleFunc(types.PathSDKCache, s.HandleStaticCache)
 	mux.HandleFunc(types.PathV1Sign, s.HandleSign)
 	mux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +135,7 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			fallback.ServeHTTP(w, r)
 			return
 		}
-		admit(preAuth.AnnounceCost, withClient(s.HandleRelayDiscoveryAnnounce)).ServeHTTP(w, r)
+		admit(preAuth.AnnounceCost, s.HandleRelayDiscoveryAnnounce).ServeHTTP(w, r)
 	}))
 	mux.Handle("/", fallback)
 

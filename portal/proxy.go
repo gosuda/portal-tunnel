@@ -218,9 +218,21 @@ func (m *BPSManager) SetIdentityBPSLimits(limits map[string]int64) {
 		}
 		next[serviceKey] = bps
 	}
+	m.SetServiceIdentityBPSLimits(next)
+}
 
+func (m *BPSManager) SetServiceIdentityBPSLimits(next map[types.ServiceIdentityKey]int64) {
+	if m == nil {
+		return
+	}
+	limits := make(map[types.ServiceIdentityKey]int64, len(next))
+	for key, bps := range next {
+		if key.Valid() && bps > 0 {
+			limits[key] = bps
+		}
+	}
 	if m.identityBPS != nil {
-		m.identityBPS.Store(next)
+		m.identityBPS.Store(limits)
 	}
 	m.mu.Lock()
 	m.identityLimiters = make(map[types.ServiceIdentityKey]*bpsLimiter)

@@ -5,6 +5,8 @@ import (
 	"net"
 	"sync"
 	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestRelayDatagramStartFailureAndClose(t *testing.T) {
@@ -14,7 +16,7 @@ func TestRelayDatagramStartFailureAndClose(t *testing.T) {
 	}
 	defer occupied.Close()
 	addr := occupied.LocalAddr().(*net.UDPAddr)
-	endpoint := NewRelayDatagram("lease", addr.Port)
+	endpoint := NewRelayDatagram(types.NewServiceIdentityKey("lease", "test"), addr.Port)
 	defer endpoint.Close()
 	if err := endpoint.Start(); err == nil {
 		t.Fatal("Start bound an occupied port")
@@ -52,7 +54,7 @@ func TestDatagramSessionCloseUnblocksAccept(t *testing.T) {
 }
 
 func TestRelayDatagramConcurrentStartAndClose(t *testing.T) {
-	endpoint := NewRelayDatagram("lease", 0)
+	endpoint := NewRelayDatagram(types.NewServiceIdentityKey("lease", "test"), 0)
 	var workers sync.WaitGroup
 	workers.Go(func() {
 		if err := endpoint.Start(); err != nil && !errors.Is(err, net.ErrClosed) {

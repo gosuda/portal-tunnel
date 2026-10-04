@@ -9,7 +9,7 @@ import (
 )
 
 func TestRelayDatagramRoutesRepliesOnlyWhileEnabled(t *testing.T) {
-	d := NewRelayDatagram("demo:0x1", 0)
+	d := NewRelayDatagram(types.NewServiceIdentityKey("demo", "0x1"), 0)
 	t.Cleanup(d.Close)
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {

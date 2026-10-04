@@ -186,8 +186,8 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	// as its handshake completes, which can race ahead of the probe side
 	// exporting keying material. Reserving after the TCP connect keeps the
 	// probe-inspection window off address resolution and connection setup.
-	resultCh, cleanupProbe := m.reserveProbe(nonce)
-	defer cleanupProbe()
+	resultCh := m.reserveProbe(nonce)
+	defer m.releaseProbe(nonce)
 	if err := tlsConn.HandshakeContext(probeCtx); err != nil {
 		return report, fmt.Errorf("mitm probe tls handshake: %w", err)
 	}
@@ -401,7 +401,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 // handshake completes. attachExpected arms the reservation afterwards; until
 // then the entry holds no exporter value and a completion attempt reports a
 // mismatch.
-func (m *mitmManager) reserveProbe(nonce mitmProbeNonce) (<-chan string, func()) {
+func (m *mitmManager) reserveProbe(nonce mitmProbeNonce) <-chan string {
 	state := &mitmProbePending{
 		resultCh: make(chan string, 1),
 	}
@@ -409,11 +409,13 @@ func (m *mitmManager) reserveProbe(nonce mitmProbeNonce) (<-chan string, func())
 	m.pending[nonce] = state
 	m.mu.Unlock()
 
-	return state.resultCh, func() {
-		m.mu.Lock()
-		delete(m.pending, nonce)
-		m.mu.Unlock()
-	}
+	return state.resultCh
+}
+
+func (m *mitmManager) releaseProbe(nonce mitmProbeNonce) {
+	m.mu.Lock()
+	delete(m.pending, nonce)
+	m.mu.Unlock()
 }
 
 // attachExpected arms a reserved probe with the exporter value the reverse

@@ -36,8 +36,8 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 	// Matching exporter value: the probe passes with an empty reason.
 	expected := bytes.Repeat([]byte{0xAB}, 32)
 	matchNonce := mitmProbeNonce{1}
-	resultCh, cleanup := listener.mitmManager.reserveProbe(matchNonce)
-	defer cleanup()
+	resultCh := listener.mitmManager.reserveProbe(matchNonce)
+	defer listener.mitmManager.releaseProbe(matchNonce)
 	listener.mitmManager.attachExpected(matchNonce, expected)
 	listener.mitmManager.completeProbe(matchNonce, expected)
 	select {
@@ -51,8 +51,8 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 
 	// Differing exporter value: exporter mismatch.
 	mismatchNonce := mitmProbeNonce{2}
-	resultCh, cleanup = listener.mitmManager.reserveProbe(mismatchNonce)
-	defer cleanup()
+	resultCh = listener.mitmManager.reserveProbe(mismatchNonce)
+	defer listener.mitmManager.releaseProbe(mismatchNonce)
 	listener.mitmManager.attachExpected(mismatchNonce, bytes.Repeat([]byte{0xAB}, 32))
 	listener.mitmManager.completeProbe(mismatchNonce, bytes.Repeat([]byte{0xCD}, 32))
 	select {
@@ -67,8 +67,8 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 	// A reservation that was never armed holds no exporter value and must
 	// count as a mismatch, never as a pass.
 	unarmedNonce := mitmProbeNonce{3}
-	resultCh, cleanup = listener.mitmManager.reserveProbe(unarmedNonce)
-	defer cleanup()
+	resultCh = listener.mitmManager.reserveProbe(unarmedNonce)
+	defer listener.mitmManager.releaseProbe(unarmedNonce)
 	listener.mitmManager.completeProbe(unarmedNonce, bytes.Repeat([]byte{0xAB}, 32))
 	select {
 	case reason := <-resultCh:
@@ -83,8 +83,8 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 	// consume the result of a live reservation.
 	armed := bytes.Repeat([]byte{0xAB}, 32)
 	liveNonce := mitmProbeNonce{4}
-	resultCh, cleanup = listener.mitmManager.reserveProbe(liveNonce)
-	defer cleanup()
+	resultCh = listener.mitmManager.reserveProbe(liveNonce)
+	defer listener.mitmManager.releaseProbe(liveNonce)
 	listener.mitmManager.attachExpected(liveNonce, armed)
 	listener.mitmManager.completeProbe(mitmProbeNonce{5}, armed)
 	listener.mitmManager.completeProbe(liveNonce, armed)
@@ -159,8 +159,8 @@ func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
 		// once the TCP connection exists but before the TLS handshake, so
 		// the reservation is pending before the reverse handshake can
 		// complete.
-		resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonce)
-		defer cleanupProbe()
+		resultCh := listener.mitmManager.reserveProbe(nonce)
+		defer listener.mitmManager.releaseProbe(nonce)
 
 		clientConn, serverConn := newMITMProbeTLSPair(t)
 		defer closeMITMProbeTLSConn(clientConn)
@@ -312,8 +312,8 @@ func TestMITMProbePassthroughForNonExporterConn(t *testing.T) {
 	if _, err := rand.Read(nonce[:]); err != nil {
 		t.Fatalf("rand.Read() error = %v", err)
 	}
-	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonce)
-	defer cleanupProbe()
+	resultCh := listener.mitmManager.reserveProbe(nonce)
+	defer listener.mitmManager.releaseProbe(nonce)
 
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()

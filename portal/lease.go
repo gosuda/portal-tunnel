@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strings"
@@ -117,8 +118,8 @@ func (r *leaseRegistry) tcpPortPolicy() (bool, int) {
 // identity. A non-routable identity also loses its cached content
 // immediately: cached sites must never outlive the relay's decision to route
 // their owner.
-func (r *leaseRegistry) setIdentityRoutable(key string, routable bool, revision uint64) bool {
-	if r == nil || key == "" {
+func (r *leaseRegistry) setIdentityRoutable(key types.ServiceIdentityKey, routable bool, revision uint64) bool {
+	if r == nil || !key.Valid() {
 		return true
 	}
 	r.mu.Lock()
@@ -133,24 +134,20 @@ func (r *leaseRegistry) setIdentityRoutable(key string, routable bool, revision 
 
 // suspendIdentity keeps registration fail-closed without inventing a relay
 // revision. Only a publication at the current or a newer revision can reopen it.
-func (r *leaseRegistry) suspendIdentity(key string) {
+func (r *leaseRegistry) suspendIdentity(key types.ServiceIdentityKey) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.applyIdentityRoutableLocked(key, false)
 }
 
-func (r *leaseRegistry) applyIdentityRoutableLocked(key string, routable bool) {
-	serviceKey, err := types.ParseServiceIdentityKey(key)
-	if err != nil {
-		return
-	}
+func (r *leaseRegistry) applyIdentityRoutableLocked(key types.ServiceIdentityKey, routable bool) {
 	if routable {
-		delete(r.blocked, serviceKey)
+		delete(r.blocked, key)
 	} else {
-		r.blocked[serviceKey] = time.Now()
+		r.blocked[key] = time.Now()
 	}
 	for _, record := range r.records {
-		if record == nil || record.ServiceKey() != serviceKey {
+		if record == nil || record.ServiceKey() != key {
 			continue
 		}
 		if record.datagram != nil {
@@ -160,12 +157,12 @@ func (r *leaseRegistry) applyIdentityRoutableLocked(key string, routable bool) {
 	if !routable {
 		// DetachOwner only changes cache metadata. Keep revocation ordered
 		// with access publication so an older deny cannot detach newer content.
-		r.cache.DetachOwner(serviceKey)
+		r.cache.DetachOwner(key)
 	}
 }
 
-func (r *leaseRegistry) isRoutable(key string) bool {
-	if r == nil || key == "" {
+func (r *leaseRegistry) isRoutable(key types.ServiceIdentityKey) bool {
+	if r == nil || !key.Valid() {
 		return true
 	}
 	r.mu.RLock()
@@ -174,12 +171,8 @@ func (r *leaseRegistry) isRoutable(key string) bool {
 }
 
 // isRoutableLocked reads the pushed access result; the caller must hold r.mu.
-func (r *leaseRegistry) isRoutableLocked(key string) bool {
-	serviceKey, err := types.ParseServiceIdentityKey(key)
-	if err != nil {
-		return false
-	}
-	_, blocked := r.blocked[serviceKey]
+func (r *leaseRegistry) isRoutableLocked(key types.ServiceIdentityKey) bool {
+	_, blocked := r.blocked[key]
 	return !blocked
 }
 
@@ -269,7 +262,7 @@ func (r *leaseRegistry) recordForVerifiedLease(key types.ServiceIdentityKey, lea
 	return record, nil
 }
 
-func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (*leaseRecord, types.RegisterResponse, error) {
+func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (*leaseRecord, types.RegisterResponse, error) {
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
 	}
@@ -281,7 +274,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 	}
 
 	identityKey := leaseIdentity.ServiceKey()
-	serializedIdentityKey := identityKey.String()
 	publicHostname, err := utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 	if err != nil {
 		return nil, types.RegisterResponse{}, err
@@ -317,7 +309,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 		ExpiresAt:         expiresAt,
 		FirstSeenAt:       issuedAt,
 		LastSeenAt:        issuedAt,
-		ClientIP:          clientIP,
+		sourceAddr:        sourceAddr,
 		ReportedIP:        utils.SanitizeReportedIP(reportedIP),
 		reverse:           transport.NewReversePool(defaultIdleKeepalive, defaultReadyQueueLimit),
 	}
@@ -330,7 +322,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, clientIP, r
 			r.closeRecord(record)
 			return nil, types.RegisterResponse{}, errUDPPortExhausted
 		}
-		record.datagram = transport.NewRelayDatagram(serializedIdentityKey, port)
+		record.datagram = transport.NewRelayDatagram(identityKey, port)
 	}
 
 	if req.TCPEnabled {
@@ -502,7 +494,7 @@ func (r *leaseRegistry) admitLeaseIdentity(key types.ServiceIdentityKey, leaseID
 	if err != nil {
 		return nil, err
 	}
-	if !r.isRoutable(record.Key()) {
+	if !r.isRoutable(record.ServiceKey()) {
 		return nil, errLeaseRejected
 	}
 	if record.reverse == nil || (requireDatagram && record.datagram == nil) {
@@ -519,7 +511,7 @@ type reverseEndpointInput struct {
 	useOverlay    bool
 }
 
-func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.RenewResponse, reverseEndpointInput, error) {
+func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr) (types.RenewResponse, reverseEndpointInput, error) {
 	if r == nil {
 		return types.RenewResponse{}, reverseEndpointInput{}, errFeatureUnavailable
 	}
@@ -545,8 +537,8 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	expiresAt := now.Add(ttl).UTC().Truncate(time.Second)
 	record.ExpiresAt = expiresAt
 	record.LastSeenAt = now
-	if strings.TrimSpace(clientIP) != "" {
-		record.ClientIP = clientIP
+	if sourceAddr.IsValid() {
+		record.sourceAddr = sourceAddr
 	}
 	if strings.TrimSpace(reportedIP) != "" {
 		record.ReportedIP = reportedIP
@@ -564,14 +556,14 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, clientIP string) (types.Re
 	}
 
 	return types.RenewResponse{
-		ExpiresAt:   expiresAt,
-		AccessToken: nextAccessToken,
-	}, reverseEndpointInput{
-		leaseIdentity: recordIdentity,
-		leaseID:       leaseID,
-		expiresAt:     expiresAt,
-		useOverlay:    useOverlay,
-	}, nil
+			ExpiresAt:   expiresAt,
+			AccessToken: nextAccessToken,
+		}, reverseEndpointInput{
+			leaseIdentity: recordIdentity,
+			leaseID:       leaseID,
+			expiresAt:     expiresAt,
+			useOverlay:    useOverlay,
+		}, nil
 }
 
 func (r *leaseRegistry) issueReverseEndpoint(input reverseEndpointInput, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
@@ -674,7 +666,7 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 	return nil, errLeaseNotFound
 }
 
-func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeRequest, domain, uri, clientIP string) (types.RegisterChallengeResponse, error) {
+func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string, sourceAddr netip.Addr) (types.RegisterChallengeResponse, error) {
 	if r == nil {
 		return types.RegisterChallengeResponse{}, errFeatureUnavailable
 	}
@@ -687,12 +679,6 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	if _, err := utils.CanonicalLeaseHostname(challenge.Request.Identity.Name, challenge.Request.Identity.Address, r.rootHostname); err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}
-	sourceAddr := utils.NormalizeSourceAddr(clientIP)
-	clientIP = "<unknown>"
-	if sourceAddr.IsValid() {
-		clientIP = sourceAddr.String()
-	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -715,7 +701,6 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	}
 	r.records = append(r.records, &leaseRecord{
 		ExpiresAt:         challenge.ExpiresAt,
-		ClientIP:          clientIP,
 		sourceAddr:        sourceAddr,
 		registerChallenge: challenge,
 	})
@@ -776,27 +761,23 @@ func (r *leaseRegistry) verifySigningAccessTokenLease(req *http.Request) (string
 	if !record.isPublicEntry() {
 		return "", false
 	}
-	if !r.isRoutableLocked(record.Key()) {
+	if !r.isRoutableLocked(record.ServiceKey()) {
 		return "", false
 	}
 	return claims.LeaseID, true
 }
 
-func (r *leaseRegistry) Touch(key, clientIP string, now time.Time) {
-	serviceKey, err := types.ParseServiceIdentityKey(key)
-	if err != nil {
-		return
-	}
+func (r *leaseRegistry) Touch(key types.ServiceIdentityKey, sourceAddr netip.Addr, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record := r.recordByKey(serviceKey, now)
+	record := r.recordByKey(key, now)
 	if record == nil {
 		return
 	}
 	record.LastSeenAt = now
-	if strings.TrimSpace(clientIP) != "" {
-		record.ClientIP = clientIP
+	if sourceAddr.IsValid() {
+		record.sourceAddr = sourceAddr
 	}
 }
 
@@ -850,7 +831,7 @@ func (r *leaseRegistry) PublicLeases(now time.Time) []types.Lease {
 		}
 		if record.reverse != nil {
 			identityKey := record.ServiceKey()
-			if !r.isRoutableLocked(identityKey.String()) {
+			if !r.isRoutableLocked(identityKey) {
 				continue
 			}
 			since := time.Duration(0)
@@ -875,7 +856,10 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 		if record == nil || record.reverse == nil || record.isExpired(now) {
 			continue
 		}
-		clientIP := record.ClientIP
+		clientIP := "<unknown>"
+		if record.sourceAddr.IsValid() {
+			clientIP = record.sourceAddr.String()
+		}
 		identityKey := record.ServiceKey()
 		serializedIdentityKey := identityKey.String()
 		leases = append(leases, types.PolicyLease{

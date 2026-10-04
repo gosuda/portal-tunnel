@@ -1,11 +1,15 @@
 package policy
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
+)
 
 func TestAccessDecisionsAreMutuallyExclusive(t *testing.T) {
 	t.Parallel()
 
-	const key = "demo:0x1234"
+	key := types.NewServiceIdentityKey("demo", "0x1234")
 	access := NewAccess().Snapshot()
 	if err := access.SetMode(ModeManual); err != nil {
 		t.Fatal(err)
@@ -28,7 +32,7 @@ func TestAccessDecisionsAreMutuallyExclusive(t *testing.T) {
 }
 
 func TestAccessCommitsCompoundDecisionsAtomically(t *testing.T) {
-	const key = "demo:0x1234"
+	key := types.NewServiceIdentityKey("demo", "0x1234")
 	access := NewAccess()
 	initial := access.Snapshot()
 	initial.Ban(key)
