@@ -103,23 +103,30 @@ func TestRawTCPPortRelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split TCP address %q: %v", tcpAddr, err)
 	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", leasePort), 5*time.Second)
-	if err != nil {
-		t.Fatalf("dial relay TCP port: %v", err)
-	}
-	defer conn.Close()
-	for i := range 5 {
-		payload := []byte("rawtcp-" + strconv.Itoa(i))
-		if _, err := conn.Write(payload); err != nil {
-			t.Fatalf("write %q: %v", payload, err)
+	for round := range 2 {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", leasePort), 5*time.Second)
+		if err != nil {
+			t.Fatalf("round %d: dial relay TCP port: %v", round, err)
 		}
-		echo := make([]byte, len(payload))
-		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-		if _, err := io.ReadFull(conn, echo); err != nil {
-			t.Fatalf("read echo: %v", err)
+		for i := range 3 {
+			payload := []byte("rawtcp-" + strconv.Itoa(round) + "-" + strconv.Itoa(i))
+			if _, err := conn.Write(payload); err != nil {
+				_ = conn.Close()
+				t.Fatalf("round %d: write %q: %v", round, payload, err)
+			}
+			echo := make([]byte, len(payload))
+			_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			if _, err := io.ReadFull(conn, echo); err != nil {
+				_ = conn.Close()
+				t.Fatalf("round %d: read echo: %v", round, err)
+			}
+			if string(echo) != string(payload) {
+				_ = conn.Close()
+				t.Fatalf("round %d: echo = %q, want %q", round, echo, payload)
+			}
 		}
-		if string(echo) != string(payload) {
-			t.Fatalf("echo = %q, want %q", echo, payload)
+		if err := conn.Close(); err != nil {
+			t.Fatalf("round %d: close conn: %v", round, err)
 		}
 	}
 }

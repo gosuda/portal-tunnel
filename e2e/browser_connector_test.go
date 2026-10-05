@@ -175,10 +175,20 @@ func TestPackagedBrowserWASM(t *testing.T) {
 	t.Cleanup(func() { waitBrowserExit(t, browserDone, tree) })
 
 	var ready browserSmokeResult
-	select {
-	case ready = <-result:
-	case <-ctx.Done():
-		t.Fatalf("browser connector did not become ready: %v; browser log=%s", ctx.Err(), readBrowserLog(browserLog))
+waitReady:
+	for {
+		select {
+		case ready = <-result:
+			break waitReady
+		case err := <-browserDone:
+			if err != nil {
+				t.Fatalf("browser launcher exited with error before connector became ready: %v; browser log=%s", err, readBrowserLog(browserLog))
+			}
+			// Clean launcher exit is normal on platforms that hand off to helper processes.
+			browserDone = nil
+		case <-ctx.Done():
+			t.Fatalf("browser connector did not become ready: %v; browser log=%s", ctx.Err(), readBrowserLog(browserLog))
+		}
 	}
 	if ready.err != nil {
 		t.Fatal(ready.err)
