@@ -40,6 +40,25 @@ main().catch(async (error) => {
 });
 </script>`
 
+// waitBrowserExit tears down the browser tree and waits for the launcher to
+// be reaped, bounded so a surviving browser helper can never wedge the suite.
+func waitBrowserExit(t *testing.T, browserDone <-chan struct{}, tree *browserTree) {
+	t.Helper()
+	if err := tree.kill(); err != nil {
+		t.Logf("kill browser tree: %v", err)
+	}
+	select {
+	case <-browserDone:
+	case <-time.After(10 * time.Second):
+		t.Error("browser did not exit after its process tree was killed")
+	}
+}
+
+func readBrowserLog(path string) string {
+	data, _ := os.ReadFile(path)
+	return string(data)
+}
+
 type browserSmokeResult struct {
 	publicURL string
 	err       error
@@ -126,7 +145,16 @@ func TestPackagedBrowserWASM(t *testing.T) {
 		_ = relay.Wait()
 	})
 
-	var stderr bytes.Buffer
+	// The browser writes to files rather than pipes: browsers hand off to
+	// helper processes that outlive the launcher and inherit its descriptors,
+	// and an inherited pipe keeps cmd.Wait blocked long after the launcher
+	// exits.
+	browserLog := filepath.Join(t.TempDir(), "browser.log")
+	logFile, err := os.Create(browserLog)
+	if err != nil {
+		t.Fatalf("create browser log: %v", err)
+	}
+	t.Cleanup(func() { _ = logFile.Close() })
 	cmd := exec.CommandContext(ctx, browser,
 		"--headless",
 		"--disable-gpu",
@@ -135,31 +163,37 @@ func TestPackagedBrowserWASM(t *testing.T) {
 		"--user-data-dir="+filepath.Join(t.TempDir(), "chrome"),
 		relayURL+"/browser-smoke",
 	)
-	cmd.Stderr = &stderr
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = browserSysProcAttr()
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start browser: %v", err)
 	}
-	browserDone := make(chan error, 1)
-	go func() { browserDone <- cmd.Wait() }()
-	browserExited := false
-	t.Cleanup(func() {
-		if !browserExited && cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			<-browserDone
-		}
-	})
+	tree := newBrowserTree(cmd)
+	browserDone := make(chan struct{})
+	var browserErr error
+	go func() {
+		browserErr = cmd.Wait()
+		close(browserDone)
+	}()
+	t.Cleanup(func() { waitBrowserExit(t, browserDone, tree) })
 
 	var ready browserSmokeResult
-	select {
-	case ready = <-result:
-	case err := <-browserDone:
-		browserExited = true
-		t.Fatalf("browser exited before connector became ready: %v; stderr=%s", err, stderr.String())
-	case <-ctx.Done():
-		_ = cmd.Process.Kill()
-		<-browserDone
-		browserExited = true
-		t.Fatalf("browser connector did not become ready: %v; stderr=%s", ctx.Err(), stderr.String())
+	waitBrowser := browserDone
+waitReady:
+	for {
+		select {
+		case ready = <-result:
+			break waitReady
+		case <-waitBrowser:
+			if browserErr != nil {
+				t.Fatalf("browser launcher exited with error before connector became ready: %v; browser log=%s", browserErr, readBrowserLog(browserLog))
+			}
+			// Clean launcher exit is normal on platforms that hand off to helper processes.
+			waitBrowser = nil
+		case <-ctx.Done():
+			t.Fatalf("browser connector did not become ready: %v; browser log=%s", ctx.Err(), readBrowserLog(browserLog))
+		}
 	}
 	if ready.err != nil {
 		t.Fatal(ready.err)
