@@ -42,7 +42,7 @@ main().catch(async (error) => {
 
 // waitBrowserExit tears down the browser tree and waits for the launcher to
 // be reaped, bounded so a surviving browser helper can never wedge the suite.
-func waitBrowserExit(t *testing.T, browserDone <-chan error, tree *browserTree) {
+func waitBrowserExit(t *testing.T, browserDone <-chan struct{}, tree *browserTree) {
 	t.Helper()
 	if err := tree.kill(); err != nil {
 		t.Logf("kill browser tree: %v", err)
@@ -170,22 +170,27 @@ func TestPackagedBrowserWASM(t *testing.T) {
 		t.Fatalf("start browser: %v", err)
 	}
 	tree := newBrowserTree(cmd)
-	browserDone := make(chan error, 1)
-	go func() { browserDone <- cmd.Wait() }()
+	browserDone := make(chan struct{})
+	var browserErr error
+	go func() {
+		browserErr = cmd.Wait()
+		close(browserDone)
+	}()
 	t.Cleanup(func() { waitBrowserExit(t, browserDone, tree) })
 
 	var ready browserSmokeResult
+	waitBrowser := browserDone
 waitReady:
 	for {
 		select {
 		case ready = <-result:
 			break waitReady
-		case err := <-browserDone:
-			if err != nil {
-				t.Fatalf("browser launcher exited with error before connector became ready: %v; browser log=%s", err, readBrowserLog(browserLog))
+		case <-waitBrowser:
+			if browserErr != nil {
+				t.Fatalf("browser launcher exited with error before connector became ready: %v; browser log=%s", browserErr, readBrowserLog(browserLog))
 			}
 			// Clean launcher exit is normal on platforms that hand off to helper processes.
-			browserDone = nil
+			waitBrowser = nil
 		case <-ctx.Done():
 			t.Fatalf("browser connector did not become ready: %v; browser log=%s", ctx.Err(), readBrowserLog(browserLog))
 		}

@@ -31,7 +31,10 @@ func newBrowserTree(cmd *exec.Cmd) *browserTree {
 	}
 	info := jobExtendedLimitInformation{}
 	info.BasicLimitInformation.LimitFlags = uint32(jobObjectKillOnJobClose)
-	procSetInformationJobObject.Call(job, uintptr(jobObjectExtendedLimitInformation), uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info))
+	if ok, _, _ := procSetInformationJobObject.Call(job, uintptr(jobObjectExtendedLimitInformation), uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info)); ok == 0 {
+		procCloseHandle.Call(job)
+		return tree
+	}
 	handle, _, _ := procOpenProcess.Call(uintptr(processSetQuota|processTerminate), 0, uintptr(uint32(cmd.Process.Pid)))
 	if handle != 0 {
 		if ok, _, _ := procAssignProcessToJobObject.Call(job, handle); ok != 0 {
