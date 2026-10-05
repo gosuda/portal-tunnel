@@ -60,6 +60,8 @@ func TestClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
 		{name: "private sibling", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.3", xff: "198.51.100.1", xri: "198.51.100.2", want: "172.31.240.3"},
 		{name: "headers disabled", cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "198.51.100.1", xri: "198.51.100.2", want: "172.31.240.2"},
 		{name: "explicit IPv6 proxy", enabled: true, cidrs: "172.31.240.2/32,fd00::2/128", peer: "fd00::2", xff: "2001:db8::1", want: "2001:db8::1"},
+		{name: "forwarded IPv4 with port", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "198.51.100.7:54321", want: "198.51.100.7"},
+		{name: "forwarded IPv6 with port", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "[2001:db8::7]:54321", want: "2001:db8::7"},
 		{name: "IPv6 sibling", enabled: true, cidrs: "fd00::2/128", peer: "fd00::3", xff: "2001:db8::1", xri: "2001:db8::2", want: "fd00::3"},
 		{name: "real IP fallback", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "invalid", xri: "198.51.100.2", want: "198.51.100.2"},
 		{name: "invalid headers", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "invalid", xri: "invalid", want: "172.31.240.2"},

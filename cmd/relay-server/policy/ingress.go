@@ -86,11 +86,14 @@ func parseRemoteAddrIP(remoteAddr string) netip.Addr {
 }
 
 func parseSourceAddr(raw string) netip.Addr {
-	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
-	if err != nil {
-		return netip.Addr{}
+	raw = strings.TrimSpace(raw)
+	if addr, err := netip.ParseAddr(raw); err == nil {
+		return addr.Unmap()
 	}
-	return addr.Unmap()
+	if addrPort, err := netip.ParseAddrPort(raw); err == nil {
+		return addrPort.Addr().Unmap()
+	}
+	return netip.Addr{}
 }
 
 func parseTrustedProxyPrefixes(raw string) ([]netip.Prefix, error) {
