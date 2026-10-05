@@ -3,6 +3,7 @@ package policy
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -24,7 +25,7 @@ func TestMuxRejectsMethodBeforeAdmission(t *testing.T) {
 			if response.Code != http.StatusMethodNotAllowed {
 				t.Fatalf("GET status = %d, want %d", response.Code, http.StatusMethodNotAllowed)
 			}
-			if retry, _ := limiter.Allow("192.0.2.1", 1); retry != 0 {
+			if retry, _ := limiter.Allow(netip.MustParseAddr("192.0.2.1"), 1); retry != 0 {
 				t.Fatal("unsupported method consumed the pre-auth budget")
 			}
 		})

@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -22,7 +23,7 @@ type proxy struct {
 	tcpLoadBytes int64
 }
 
-func (p *proxy) bridge(left, right net.Conn, identityKey string, bpsManager *BPSManager) {
+func (p *proxy) bridge(left, right net.Conn, identityKey types.ServiceIdentityKey, bpsManager *BPSManager) {
 	p.activeConns.Add(1)
 	defer p.activeConns.Add(-1)
 
@@ -74,7 +75,7 @@ func (p *proxy) currentTCPBPS(now time.Time) float64 {
 // set mid-stream starts pacing from the next chunk, and removing it releases
 // the connection at full speed. ThrottleIdentityBPS returns the full length
 // without sleeping when no limit is set, so one loop serves both modes.
-func (p *proxy) copy(dst, src net.Conn, identityKey string, bpsManager *BPSManager) error {
+func (p *proxy) copy(dst, src net.Conn, identityKey types.ServiceIdentityKey, bpsManager *BPSManager) error {
 	buf := make([]byte, 32*1024)
 	for {
 		nr, readErr := src.Read(buf)
@@ -115,20 +116,20 @@ func closeWrite(conn net.Conn) {
 }
 
 type BPSManager struct {
-	identityBPS      *utils.Snapshot[map[string]int64]
-	identityLimiters map[string]*bpsLimiter
+	identityBPS      *utils.Snapshot[map[types.ServiceIdentityKey]int64]
+	identityLimiters map[types.ServiceIdentityKey]*bpsLimiter
 	mu               sync.RWMutex
 }
 
 func NewBPSManager() *BPSManager {
 	return &BPSManager{
-		identityBPS:      utils.NewSnapshot(map[string]int64{}, maps.Clone[map[string]int64]),
-		identityLimiters: make(map[string]*bpsLimiter),
+		identityBPS:      utils.NewSnapshot(map[types.ServiceIdentityKey]int64{}, maps.Clone[map[types.ServiceIdentityKey]int64]),
+		identityLimiters: make(map[types.ServiceIdentityKey]*bpsLimiter),
 	}
 }
 
-func (m *BPSManager) IdentityBPS(key string) int64 {
-	if m == nil || key == "" {
+func (m *BPSManager) IdentityBPS(key types.ServiceIdentityKey) int64 {
+	if m == nil || !key.Valid() {
 		return 0
 	}
 	if m.identityBPS == nil {
@@ -137,8 +138,8 @@ func (m *BPSManager) IdentityBPS(key string) int64 {
 	return m.identityBPS.Load()[key]
 }
 
-func (m *BPSManager) SetIdentityBPS(key string, bps int64) {
-	if m == nil || key == "" {
+func (m *BPSManager) SetIdentityBPS(key types.ServiceIdentityKey, bps int64) {
+	if m == nil || !key.Valid() {
 		return
 	}
 
@@ -146,7 +147,7 @@ func (m *BPSManager) SetIdentityBPS(key string, bps int64) {
 		return
 	}
 	if bps <= 0 {
-		m.identityBPS.UpdateCopy(func(limits *map[string]int64) {
+		m.identityBPS.UpdateCopy(func(limits *map[types.ServiceIdentityKey]int64) {
 			delete(*limits, key)
 		})
 		m.mu.Lock()
@@ -154,21 +155,21 @@ func (m *BPSManager) SetIdentityBPS(key string, bps int64) {
 		m.mu.Unlock()
 		return
 	}
-	m.identityBPS.UpdateCopy(func(limits *map[string]int64) {
+	m.identityBPS.UpdateCopy(func(limits *map[types.ServiceIdentityKey]int64) {
 		if *limits == nil {
-			*limits = make(map[string]int64)
+			*limits = make(map[types.ServiceIdentityKey]int64)
 		}
 		(*limits)[key] = bps
 	})
 }
 
-func (m *BPSManager) DeleteIdentityBPS(key string) {
-	if m == nil || key == "" {
+func (m *BPSManager) DeleteIdentityBPS(key types.ServiceIdentityKey) {
+	if m == nil || !key.Valid() {
 		return
 	}
 
 	if m.identityBPS != nil {
-		m.identityBPS.UpdateCopy(func(limits *map[string]int64) {
+		m.identityBPS.UpdateCopy(func(limits *map[types.ServiceIdentityKey]int64) {
 			delete(*limits, key)
 		})
 	}
@@ -179,8 +180,8 @@ func (m *BPSManager) DeleteIdentityBPS(key string) {
 
 // ResetIdentityLimiter forgets ephemeral token state while preserving the
 // operator-configured limit for the stable identity.
-func (m *BPSManager) ResetIdentityLimiter(key string) {
-	if m == nil || key == "" {
+func (m *BPSManager) ResetIdentityLimiter(key types.ServiceIdentityKey) {
+	if m == nil || !key.Valid() {
 		return
 	}
 	m.mu.Lock()
@@ -196,7 +197,12 @@ func (m *BPSManager) IdentityBPSLimits() map[string]int64 {
 	if m.identityBPS == nil {
 		return nil
 	}
-	return m.identityBPS.Load()
+	limits := m.identityBPS.Load()
+	out := make(map[string]int64, len(limits))
+	for key, bps := range limits {
+		out[key.String()] = bps
+	}
+	return out
 }
 
 func (m *BPSManager) SetIdentityBPSLimits(limits map[string]int64) {
@@ -204,24 +210,37 @@ func (m *BPSManager) SetIdentityBPSLimits(limits map[string]int64) {
 		return
 	}
 
-	next := make(map[string]int64, len(limits))
+	next := make(map[types.ServiceIdentityKey]int64, len(limits))
 	for key, bps := range limits {
-		if key == "" || bps <= 0 {
+		serviceKey, err := types.ParseServiceIdentityKey(key)
+		if err != nil || bps <= 0 {
 			continue
 		}
-		next[key] = bps
+		next[serviceKey] = bps
 	}
+	m.SetServiceIdentityBPSLimits(next)
+}
 
+func (m *BPSManager) SetServiceIdentityBPSLimits(next map[types.ServiceIdentityKey]int64) {
+	if m == nil {
+		return
+	}
+	limits := make(map[types.ServiceIdentityKey]int64, len(next))
+	for key, bps := range next {
+		if key.Valid() && bps > 0 {
+			limits[key] = bps
+		}
+	}
 	if m.identityBPS != nil {
-		m.identityBPS.Store(next)
+		m.identityBPS.Store(limits)
 	}
 	m.mu.Lock()
-	m.identityLimiters = make(map[string]*bpsLimiter)
+	m.identityLimiters = make(map[types.ServiceIdentityKey]*bpsLimiter)
 	m.mu.Unlock()
 }
 
-func (m *BPSManager) ThrottleIdentityBPS(key string, maxBytes int) int {
-	if m == nil || key == "" || maxBytes <= 0 {
+func (m *BPSManager) ThrottleIdentityBPS(key types.ServiceIdentityKey, maxBytes int) int {
+	if m == nil || !key.Valid() || maxBytes <= 0 {
 		return maxBytes
 	}
 
@@ -239,7 +258,7 @@ func (m *BPSManager) ThrottleIdentityBPS(key string, maxBytes int) int {
 	}
 }
 
-func (m *BPSManager) identityLimiter(key string) (int64, *bpsLimiter) {
+func (m *BPSManager) identityLimiter(key types.ServiceIdentityKey) (int64, *bpsLimiter) {
 	bps := m.IdentityBPS(key)
 	if bps <= 0 {
 		return 0, nil
@@ -260,7 +279,7 @@ func (m *BPSManager) identityLimiter(key string) (int64, *bpsLimiter) {
 		return 0, nil
 	}
 	if m.identityLimiters == nil {
-		m.identityLimiters = make(map[string]*bpsLimiter)
+		m.identityLimiters = make(map[types.ServiceIdentityKey]*bpsLimiter)
 	}
 	limiter = m.identityLimiters[key]
 	if limiter == nil {

@@ -1,10 +1,8 @@
 package overlay
 
 import (
-	"cmp"
 	"math"
-	"net"
-	"strings"
+	"net/netip"
 	"sync"
 	"time"
 )
@@ -20,7 +18,7 @@ const (
 // ingress, and no IP history is persisted or promoted to authorization policy.
 type sourceLimiter struct {
 	mu                   sync.Mutex
-	buckets              map[string]*sourceBucket
+	buckets              map[netip.Addr]*sourceBucket
 	ratePerMinute, burst float64
 	lastPrune            time.Time
 }
@@ -33,7 +31,7 @@ type sourceBucket struct {
 
 func newSourceLimiter(ratePerMinute, burst int) *sourceLimiter {
 	return &sourceLimiter{
-		buckets:       make(map[string]*sourceBucket),
+		buckets:       make(map[netip.Addr]*sourceBucket),
 		ratePerMinute: float64(ratePerMinute),
 		burst:         float64(burst),
 	}
@@ -41,12 +39,7 @@ func newSourceLimiter(ratePerMinute, burst int) *sourceLimiter {
 
 // Allow deducts cost only when the source budget admits the request and
 // returns the retry guidance otherwise.
-func (l *sourceLimiter) Allow(srcIP string, cost int) time.Duration {
-	key := strings.TrimSpace(srcIP)
-	if ip := net.ParseIP(key); ip != nil {
-		key = ip.String()
-	}
-	key = cmp.Or(key, "<unknown>")
+func (l *sourceLimiter) Allow(source netip.Addr, cost int) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
@@ -58,13 +51,13 @@ func (l *sourceLimiter) Allow(srcIP string, cost int) time.Duration {
 			}
 		}
 	}
-	bucket := l.buckets[key]
+	bucket := l.buckets[source]
 	if bucket == nil {
 		if len(l.buckets) >= maxSourceBuckets {
 			return sourceLimiterPruneInterval
 		}
 		bucket = &sourceBucket{tokens: l.burst, updatedAt: now}
-		l.buckets[key] = bucket
+		l.buckets[source] = bucket
 	}
 	bucket.lastUsedAt = now
 	if retry := bucket.retry(now, l.ratePerMinute, l.burst, cost); retry > 0 {

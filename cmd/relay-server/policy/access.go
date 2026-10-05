@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -25,9 +26,9 @@ type Access struct {
 type AccessState struct {
 	revision uint64
 	mode     Mode
-	approved map[string]struct{}
-	denied   map[string]struct{}
-	banned   map[string]struct{}
+	approved map[types.ServiceIdentityKey]struct{}
+	denied   map[types.ServiceIdentityKey]struct{}
+	banned   map[types.ServiceIdentityKey]struct{}
 }
 
 func (s AccessState) snapshot() AccessState {
@@ -64,8 +65,8 @@ func (s AccessState) Revision() uint64 {
 	return s.revision
 }
 
-func (s AccessState) Routable(key string) bool {
-	if key == "" {
+func (s AccessState) Routable(key types.ServiceIdentityKey) bool {
+	if !key.Valid() {
 		return true
 	}
 	return !s.IsBanned(key) && !s.IsDenied(key) && s.EffectiveApproval(key)
@@ -86,7 +87,7 @@ func (s *AccessState) SetMode(mode Mode) error {
 	return nil
 }
 
-func (s AccessState) EffectiveApproval(key string) bool {
+func (s AccessState) EffectiveApproval(key types.ServiceIdentityKey) bool {
 	if s.Mode() == ModeAuto {
 		return true
 	}
@@ -94,45 +95,51 @@ func (s AccessState) EffectiveApproval(key string) bool {
 	return ok
 }
 
-func (s *AccessState) Approve(key string) {
+func (s *AccessState) Approve(key types.ServiceIdentityKey) {
+	if !key.Valid() {
+		return
+	}
 	if s.approved == nil {
-		s.approved = make(map[string]struct{})
+		s.approved = make(map[types.ServiceIdentityKey]struct{})
 	}
 	s.approved[key] = struct{}{}
 	delete(s.denied, key)
 }
 
-func (s *AccessState) Revoke(key string) {
+func (s *AccessState) Revoke(key types.ServiceIdentityKey) {
 	delete(s.approved, key)
 }
 
-func (s AccessState) ApprovedKeys() []string {
-	out := make([]string, 0, len(s.approved))
+func (s AccessState) ApprovedKeys() []types.ServiceIdentityKey {
+	out := make([]types.ServiceIdentityKey, 0, len(s.approved))
 	for key := range s.approved {
 		out = append(out, key)
 	}
 	return out
 }
 
-func (s AccessState) IsDenied(key string) bool {
+func (s AccessState) IsDenied(key types.ServiceIdentityKey) bool {
 	_, ok := s.denied[key]
 	return ok
 }
 
-func (s *AccessState) Deny(key string) {
+func (s *AccessState) Deny(key types.ServiceIdentityKey) {
+	if !key.Valid() {
+		return
+	}
 	if s.denied == nil {
-		s.denied = make(map[string]struct{})
+		s.denied = make(map[types.ServiceIdentityKey]struct{})
 	}
 	s.denied[key] = struct{}{}
 	delete(s.approved, key)
 }
 
-func (s *AccessState) Undeny(key string) {
+func (s *AccessState) Undeny(key types.ServiceIdentityKey) {
 	delete(s.denied, key)
 }
 
-func (s AccessState) DeniedKeys() []string {
-	out := make([]string, 0, len(s.denied))
+func (s AccessState) DeniedKeys() []types.ServiceIdentityKey {
+	out := make([]types.ServiceIdentityKey, 0, len(s.denied))
 	for key := range s.denied {
 		out = append(out, key)
 	}
@@ -140,51 +147,51 @@ func (s AccessState) DeniedKeys() []string {
 }
 
 // SetDecisions keeps denied keys from also counting as approved.
-func (s *AccessState) SetDecisions(approvedKeys, deniedKeys []string) {
-	s.approved = make(map[string]struct{}, len(approvedKeys))
+func (s *AccessState) SetDecisions(approvedKeys, deniedKeys []types.ServiceIdentityKey) {
+	s.approved = make(map[types.ServiceIdentityKey]struct{}, len(approvedKeys))
 	for _, key := range approvedKeys {
-		if key != "" {
+		if key.Valid() {
 			s.approved[key] = struct{}{}
 		}
 	}
-	s.denied = make(map[string]struct{}, len(deniedKeys))
+	s.denied = make(map[types.ServiceIdentityKey]struct{}, len(deniedKeys))
 	for _, key := range deniedKeys {
-		if key != "" {
+		if key.Valid() {
 			delete(s.approved, key)
 			s.denied[key] = struct{}{}
 		}
 	}
 }
 
-func (s AccessState) IsBanned(key string) bool {
+func (s AccessState) IsBanned(key types.ServiceIdentityKey) bool {
 	_, ok := s.banned[key]
 	return ok
 }
 
-func (s *AccessState) Ban(key string) {
-	if key == "" {
+func (s *AccessState) Ban(key types.ServiceIdentityKey) {
+	if !key.Valid() {
 		return
 	}
 	if s.banned == nil {
-		s.banned = make(map[string]struct{})
+		s.banned = make(map[types.ServiceIdentityKey]struct{})
 	}
 	s.banned[key] = struct{}{}
 }
 
-func (s *AccessState) Unban(key string) {
+func (s *AccessState) Unban(key types.ServiceIdentityKey) {
 	delete(s.banned, key)
 }
 
-func (s AccessState) BannedKeys() []string {
-	out := make([]string, 0, len(s.banned))
+func (s AccessState) BannedKeys() []types.ServiceIdentityKey {
+	out := make([]types.ServiceIdentityKey, 0, len(s.banned))
 	for key := range s.banned {
 		out = append(out, key)
 	}
 	return out
 }
 
-func (s *AccessState) SetBannedKeys(keys []string) {
-	s.banned = make(map[string]struct{}, len(keys))
+func (s *AccessState) SetBannedKeys(keys []types.ServiceIdentityKey) {
+	s.banned = make(map[types.ServiceIdentityKey]struct{}, len(keys))
 	for _, key := range keys {
 		s.Ban(key)
 	}

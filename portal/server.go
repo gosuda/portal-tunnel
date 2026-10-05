@@ -540,7 +540,7 @@ func (s *Server) Wait() error {
 // admitReverseOffer composes overlay admission with the lease stream while a
 // reserved stream slot keeps the accepted status and queued session atomic.
 func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
-	lease, err := s.registry.admitLeaseIdentity(offer.IdentityKey, offer.LeaseID, time.Now().UTC(), false)
+	lease, err := s.registry.admitLeaseIdentity(offer.ServiceIdentity, offer.LeaseID, time.Now().UTC(), false)
 	if err != nil {
 		offer.RejectUnavailable()
 		offer.Close()
@@ -581,7 +581,7 @@ func (s *Server) serveTCP(record *leaseRecord) {
 
 func (s *Server) bridgeTCPConn(record *leaseRecord, inbound net.Conn) {
 	defer inbound.Close()
-	if !s.registry.isRoutable(record.Key()) {
+	if !s.registry.isRoutable(record.ServiceKey()) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
@@ -598,11 +598,11 @@ func (s *Server) bridgeTCPConn(record *leaseRecord, inbound net.Conn) {
 		record.mu.Lock()
 		closed := record.closed
 		record.mu.Unlock()
-		if closed || !s.registry.isRoutable(record.Key()) {
+		if closed || !s.registry.isRoutable(record.ServiceKey()) {
 			_ = reverse.Close()
 			return
 		}
-		s.proxy.bridge(inbound, reverse, record.Key(), s.registry.bps)
+		s.proxy.bridge(inbound, reverse, record.ServiceKey(), s.registry.bps)
 		return
 	}
 }
@@ -613,6 +613,19 @@ func (s *Server) bridgeTCPConn(record *leaseRecord, inbound net.Conn) {
 // False means a newer relay snapshot has already reached Portal: the caller
 // must reload the committed snapshot before retrying. Stale values never apply.
 func (s *Server) SetIdentityRoutable(key string, routable bool, revision uint64) bool {
+	if strings.TrimSpace(key) == "" {
+		return true
+	}
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err != nil {
+		return false
+	}
+	return s.SetServiceIdentityRoutable(serviceKey, routable, revision)
+}
+
+// SetServiceIdentityRoutable applies an access decision already parsed at the
+// relay boundary.
+func (s *Server) SetServiceIdentityRoutable(key types.ServiceIdentityKey, routable bool, revision uint64) bool {
 	if s == nil || s.registry == nil {
 		return true
 	}
@@ -661,22 +674,29 @@ func (s *Server) PolicyLeases() []types.PolicyLease {
 
 // AccessProjectionKeys returns identities whose live lease or retained cache
 // content needs the relay's current access decision.
-func (s *Server) AccessProjectionKeys() []string {
+func (s *Server) AccessProjectionKeys() []types.ServiceIdentityKey {
 	if s == nil || s.registry == nil {
 		return nil
 	}
-	keys := make(map[string]struct{})
-	for _, lease := range s.registry.PolicyLeases(time.Now()) {
-		keys[lease.IdentityKey] = struct{}{}
+	keys := make(map[types.ServiceIdentityKey]struct{})
+	now := time.Now()
+	s.registry.mu.RLock()
+	for _, record := range s.registry.records {
+		if record != nil && record.reverse != nil && !record.isExpired(now) {
+			keys[record.ServiceKey()] = struct{}{}
+		}
 	}
+	s.registry.mu.RUnlock()
 	for _, owner := range s.registry.cache.Owners() {
 		keys[owner] = struct{}{}
 	}
-	out := make([]string, 0, len(keys))
+	out := make([]types.ServiceIdentityKey, 0, len(keys))
 	for key := range keys {
 		out = append(out, key)
 	}
-	slices.Sort(out)
+	slices.SortFunc(out, func(a, b types.ServiceIdentityKey) int {
+		return strings.Compare(a.String(), b.String())
+	})
 	return out
 }
 
@@ -845,7 +865,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	if record.reverse == nil {
 		return errors.New("lease stream is not ready")
 	}
-	if !s.registry.isRoutable(record.Key()) {
+	if !s.registry.isRoutable(record.ServiceKey()) {
 		return errLeaseRejected
 	}
 	claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
@@ -861,7 +881,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 			_ = session.Close()
 			continue
 		}
-		s.proxy.bridge(conn, session, record.Key(), s.registry.bps)
+		s.proxy.bridge(conn, session, record.ServiceKey(), s.registry.bps)
 		return nil
 	}
 }
@@ -942,7 +962,13 @@ func (s *Server) handleQUICBackhaulConn(conn *quic.Conn) {
 	}
 
 	_ = control.Accept()
-	s.registry.Touch(lease.Key(), conn.RemoteAddr().String(), time.Now())
+	sourceAddr := netip.Addr{}
+	if remote := conn.RemoteAddr(); remote != nil {
+		if addrPort, err := netip.ParseAddrPort(remote.String()); err == nil {
+			sourceAddr = addrPort.Addr().Unmap()
+		}
+	}
+	s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
 	log.Info().
 		Str("component", "quic-backhaul-listener").
 		Str("address", lease.Address).

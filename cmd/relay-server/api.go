@@ -325,7 +325,10 @@ func (api *RelayAPI) policyLeases() []types.PolicyLease {
 	leases := api.server.PolicyLeases()
 	access := api.access.Snapshot()
 	for i := range leases {
-		key := leases[i].IdentityKey
+		key, err := types.ParseServiceIdentityKey(leases[i].IdentityKey)
+		if err != nil {
+			continue
+		}
 		leases[i].IsApproved = access.EffectiveApproval(key)
 		leases[i].IsBanned = access.IsBanned(key)
 		leases[i].IsDenied = access.IsDenied(key)
@@ -339,7 +342,7 @@ func (api *RelayAPI) policyLeases() []types.PolicyLease {
 func (api *RelayAPI) commitAccess(next policy.AccessState) {
 	previous := api.access.Snapshot()
 	committed := api.access.Commit(next)
-	keys := make(map[string]struct{})
+	keys := make(map[types.ServiceIdentityKey]struct{})
 	for _, state := range []policy.AccessState{previous, committed} {
 		for _, key := range state.ApprovedKeys() {
 			keys[key] = struct{}{}
@@ -355,7 +358,7 @@ func (api *RelayAPI) commitAccess(next policy.AccessState) {
 		keys[key] = struct{}{}
 	}
 	for key := range keys {
-		api.server.SetIdentityRoutable(key, committed.Routable(key), committed.Revision())
+		api.server.SetServiceIdentityRoutable(key, committed.Routable(key), committed.Revision())
 	}
 }
 
@@ -390,19 +393,18 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, req types.Policy
 }
 
 // normalizePolicyIdentityKey canonicalizes an untrusted admin-supplied
-// identity key into the runtime key form (lowercase name:address, as built
-// by types.Identity.Key). It reuses the same types.ParseIdentityKey rule the
-// policy.json loader applies, so malformed keys are rejected with an HTTP 400
+// identity key into the typed runtime form. It reuses the same normalization
+// as the policy.json loader, so malformed keys are rejected with an HTTP 400
 // instead of being trusted as-is.
-func normalizePolicyIdentityKey(w http.ResponseWriter, raw string) (string, bool) {
-	key, err := types.ParseIdentityKey(raw)
+func normalizePolicyIdentityKey(w http.ResponseWriter, raw string) (types.ServiceIdentityKey, bool) {
+	key, err := types.ParseServiceIdentityKey(raw)
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid identity")
-		return "", false
+		return types.ServiceIdentityKey{}, false
 	}
 	return key, true
 }
-func (api *RelayAPI) applyLeasePolicyUpdate(w http.ResponseWriter, identityKey string, req types.LeasePolicyUpdate, access *policy.AccessState) bool {
+func (api *RelayAPI) applyLeasePolicyUpdate(w http.ResponseWriter, identityKey types.ServiceIdentityKey, req types.LeasePolicyUpdate, access *policy.AccessState) bool {
 	if req.IsBanned == nil && req.IsApproved == nil && req.IsDenied == nil && req.BPS == nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "lease policy update is empty")
 		return false
@@ -503,11 +505,26 @@ func (api *RelayAPI) policyState(access policy.AccessState) persistedPolicyState
 	udpEnabled, udpMaxLeases := api.udpPolicy.Enabled, api.udpPolicy.MaxLeases
 	tcpPortEnabled, tcpPortMaxLeases := api.tcpPortPolicy.Enabled, api.tcpPortPolicy.MaxLeases
 	landingPageEnabled := api.landingPageEnabled
+	approved := access.ApprovedKeys()
+	approvedStrings := make([]string, len(approved))
+	for i, key := range approved {
+		approvedStrings[i] = key.String()
+	}
+	denied := access.DeniedKeys()
+	deniedStrings := make([]string, len(denied))
+	for i, key := range denied {
+		deniedStrings[i] = key.String()
+	}
+	banned := access.BannedKeys()
+	bannedStrings := make([]string, len(banned))
+	for i, key := range banned {
+		bannedStrings[i] = key.String()
+	}
 	return persistedPolicyState{
 		ApprovalMode:         string(access.Mode()),
-		ApprovedIdentityKeys: access.ApprovedKeys(),
-		DeniedIdentityKeys:   access.DeniedKeys(),
-		BannedIdentityKeys:   access.BannedKeys(),
+		ApprovedIdentityKeys: approvedStrings,
+		DeniedIdentityKeys:   deniedStrings,
+		BannedIdentityKeys:   bannedStrings,
 		IdentityBPS:          api.server.BPSManager().IdentityBPSLimits(),
 		UDPEnabled:           &udpEnabled,
 		UDPMaxLeases:         &udpMaxLeases,
@@ -553,16 +570,19 @@ func (s persistedPolicyState) apply(api *RelayAPI) error {
 		}
 		mode = parsed
 	}
-	if err := canonicalizeIdentityKeyList("approved_identity_keys", s.ApprovedIdentityKeys); err != nil {
+	approvedKeys, err := parseIdentityKeyList("approved_identity_keys", s.ApprovedIdentityKeys)
+	if err != nil {
 		return err
 	}
-	if err := canonicalizeIdentityKeyList("denied_identity_keys", s.DeniedIdentityKeys); err != nil {
+	deniedKeys, err := parseIdentityKeyList("denied_identity_keys", s.DeniedIdentityKeys)
+	if err != nil {
 		return err
 	}
-	if err := canonicalizeIdentityKeyList("banned_identity_keys", s.BannedIdentityKeys); err != nil {
+	bannedKeys, err := parseIdentityKeyList("banned_identity_keys", s.BannedIdentityKeys)
+	if err != nil {
 		return err
 	}
-	identityBPS, err := canonicalIdentityBPSKeys(s.IdentityBPS)
+	identityBPS, err := parseIdentityBPSLimits(s.IdentityBPS)
 	if err != nil {
 		return err
 	}
@@ -572,9 +592,9 @@ func (s persistedPolicyState) apply(api *RelayAPI) error {
 		return err
 	}
 	_ = access.SetMode(mode)
-	access.SetDecisions(s.ApprovedIdentityKeys, s.DeniedIdentityKeys)
-	access.SetBannedKeys(s.BannedIdentityKeys)
-	api.server.BPSManager().SetIdentityBPSLimits(identityBPS)
+	access.SetDecisions(approvedKeys, deniedKeys)
+	access.SetBannedKeys(bannedKeys)
+	api.server.BPSManager().SetServiceIdentityBPSLimits(identityBPS)
 	api.udpPolicy = udpPolicy
 	api.tcpPortPolicy = tcpPortPolicy
 	if s.LandingPageEnabled != nil {
@@ -584,43 +604,41 @@ func (s persistedPolicyState) apply(api *RelayAPI) error {
 	return nil
 }
 
-// canonicalizeIdentityKeyList validates every persisted identity key through
-// types.ParseIdentityKey, normalizing entries in place so the runtime only
-// ever receives canonical lowercase name:address keys. A malformed entry
-// aborts with the offending section, index, and value so a corrupt
-// policy.json fails startup with a clear message.
-func canonicalizeIdentityKeyList(section string, keys []string) error {
+// parseIdentityKeyList converts persisted identity strings at the policy
+// boundary so AccessState only receives typed runtime keys.
+func parseIdentityKeyList(section string, keys []string) ([]types.ServiceIdentityKey, error) {
+	parsed := make([]types.ServiceIdentityKey, len(keys))
 	for i, raw := range keys {
-		key, err := types.ParseIdentityKey(raw)
+		key, err := types.ParseServiceIdentityKey(raw)
 		if err != nil {
-			return fmt.Errorf("policy.json %s[%d]: %w", section, i, err)
+			return nil, fmt.Errorf("policy.json %s[%d]: %w", section, i, err)
 		}
-		keys[i] = key
+		parsed[i] = key
 	}
-	return nil
+	return parsed, nil
 }
 
-// canonicalIdentityBPSKeys rebuilds the identity_bps map with canonical keys
-// so per-identity limits set under unnormalized spellings still apply. Two
+// parseIdentityBPSLimits converts persisted identity_bps keys at the policy
+// boundary. Two
 // spellings sharing a canonical key must agree on the limit: conflicting
 // values abort load instead of letting map iteration order pick a winner,
 // while identical duplicates collapse silently.
-func canonicalIdentityBPSKeys(limits map[string]int64) (map[string]int64, error) {
+func parseIdentityBPSLimits(limits map[string]int64) (map[types.ServiceIdentityKey]int64, error) {
 	if limits == nil {
 		return nil, nil
 	}
-	canonical := make(map[string]int64, len(limits))
+	parsed := make(map[types.ServiceIdentityKey]int64, len(limits))
 	for raw, limit := range limits {
-		key, err := types.ParseIdentityKey(raw)
+		key, err := types.ParseServiceIdentityKey(raw)
 		if err != nil {
 			return nil, fmt.Errorf("policy.json identity_bps[%q]: %w", raw, err)
 		}
-		if existing, ok := canonical[key]; ok && existing != limit {
-			return nil, fmt.Errorf("policy.json identity_bps[%q]: canonical key %q already set to %d", raw, key, existing)
+		if existing, ok := parsed[key]; ok && existing != limit {
+			return nil, fmt.Errorf("policy.json identity_bps[%q]: canonical key %q already set to %d", raw, key.String(), existing)
 		}
-		canonical[key] = limit
+		parsed[key] = limit
 	}
-	return canonical, nil
+	return parsed, nil
 }
 
 func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
@@ -740,8 +758,8 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	clientIP := api.ingress.ClientIP(r)
-	if retry := api.reputation.AllowVote(clientIP); retry > 0 {
+	sourceAddr := api.ingress.SourceAddr(r)
+	if retry := api.reputation.AllowVote(sourceAddr); retry > 0 {
 		policy.WriteRetryAfter(w, retry, "vote request budget exhausted")
 		return
 	}
@@ -770,7 +788,7 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
 		voterCookieID = cookie.Value
 	}
-	summary, minted, err := api.reputation.CastVote(hostname, identity, vote, voterCookieID, clientIP)
+	summary, minted, err := api.reputation.CastVote(hostname, identity, vote, voterCookieID, sourceAddr)
 	if err != nil {
 		switch {
 		case errors.Is(err, policy.ErrReputationCapacity):

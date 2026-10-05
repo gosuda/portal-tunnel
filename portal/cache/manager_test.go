@@ -29,7 +29,7 @@ func testManager(t *testing.T, budget int) *Manager {
 }
 
 func testLease(c *Manager, name string) Lease {
-	l := Lease{ID: name + "-id", Owner: name, Hostname: name + ".localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
+	l := Lease{ID: name + "-id", Owner: types.NewServiceIdentityKey(name, "0x1"), Hostname: name + ".localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
 	c.Register(l, types.RegisterChallengeRequest{Cache: true, CacheTTL: 86400})
 	return l
 }
@@ -413,7 +413,7 @@ func TestReadFailureAfterHeadersInvalidatesSnapshot(t *testing.T) {
 
 func TestUploadRequiresOptedInLease(t *testing.T) {
 	c := testManager(t, 16)
-	l := Lease{ID: "plain-id", Owner: "plain", Hostname: "plain.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
+	l := Lease{ID: "plain-id", Owner: types.NewServiceIdentityKey("plain", "0x1"), Hostname: "plain.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
 	c.Register(l, types.RegisterChallengeRequest{Cache: false})
 	w := httptest.NewRecorder()
 	c.Handle(w, testRequest(t, http.MethodPut, "site"), l.ID, c.Generation(l.ID))
@@ -447,7 +447,7 @@ func TestObjectDigestMismatchRejectsUpload(t *testing.T) {
 
 func TestLeaseReplacementRejectsInFlightUpload(t *testing.T) {
 	c := testManager(t, 32)
-	first := Lease{ID: "first-id", Owner: "site", Hostname: "first.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
+	first := Lease{ID: "first-id", Owner: types.NewServiceIdentityKey("site", "0x1"), Hostname: "first.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
 	c.Register(first, types.RegisterChallengeRequest{Cache: true, CacheTTL: 86400})
 	started := make(chan struct{})
 	resume := make(chan struct{})
@@ -466,7 +466,7 @@ func TestLeaseReplacementRejectsInFlightUpload(t *testing.T) {
 	}
 	// Re-registering the same identity replaces the lease while the old
 	// upload is still streaming its body.
-	replacement := Lease{ID: "second-id", Owner: "site", Hostname: "second.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
+	replacement := Lease{ID: "second-id", Owner: types.NewServiceIdentityKey("site", "0x1"), Hostname: "second.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
 	c.Register(replacement, types.RegisterChallengeRequest{Cache: true, CacheTTL: 86400})
 	close(resume)
 	var code int

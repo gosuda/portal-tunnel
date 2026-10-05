@@ -1,11 +1,15 @@
 package policy
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
+)
 
 func TestAccessDecisionsAreMutuallyExclusive(t *testing.T) {
 	t.Parallel()
 
-	const key = "demo:0x1234"
+	key := types.NewServiceIdentityKey("demo", "0x1234")
 	access := NewAccess().Snapshot()
 	if err := access.SetMode(ModeManual); err != nil {
 		t.Fatal(err)
@@ -28,7 +32,7 @@ func TestAccessDecisionsAreMutuallyExclusive(t *testing.T) {
 }
 
 func TestAccessCommitsCompoundDecisionsAtomically(t *testing.T) {
-	const key = "demo:0x1234"
+	key := types.NewServiceIdentityKey("demo", "0x1234")
 	access := NewAccess()
 	initial := access.Snapshot()
 	initial.Ban(key)
@@ -55,5 +59,31 @@ func TestAccessCommitsCompoundDecisionsAtomically(t *testing.T) {
 	proposed.Undeny(key)
 	if access.Snapshot().Routable(key) {
 		t.Fatal("editing the proposal after commit changed live access")
+	}
+}
+
+func TestAccessSetDecisionsIgnoresInvalidZeroKeys(t *testing.T) {
+	t.Parallel()
+
+	validKey := types.NewServiceIdentityKey("demo", "0x1234")
+	zeroKey := types.ServiceIdentityKey{}
+
+	access := NewAccess().Snapshot()
+	if err := access.SetMode(ModeManual); err != nil {
+		t.Fatal(err)
+	}
+	access.SetDecisions([]types.ServiceIdentityKey{validKey, zeroKey}, []types.ServiceIdentityKey{zeroKey})
+
+	if !access.EffectiveApproval(validKey) {
+		t.Fatal("valid key not approved")
+	}
+	if access.EffectiveApproval(zeroKey) {
+		t.Fatal("zero key was approved")
+	}
+	if len(access.ApprovedKeys()) != 1 || access.ApprovedKeys()[0] != validKey {
+		t.Fatalf("approved keys = %v, want [%v]", access.ApprovedKeys(), validKey)
+	}
+	if len(access.DeniedKeys()) != 0 {
+		t.Fatalf("denied keys = %v, want empty", access.DeniedKeys())
 	}
 }

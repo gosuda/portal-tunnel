@@ -10,7 +10,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -36,10 +35,11 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 
 	// Matching exporter value: the probe passes with an empty reason.
 	expected := bytes.Repeat([]byte{0xAB}, 32)
-	resultCh, cleanup := listener.mitmManager.reserveProbe("probe-match")
-	defer cleanup()
-	listener.mitmManager.attachExpected("probe-match", expected)
-	listener.mitmManager.completeProbe("probe-match", expected)
+	matchNonce := mitmProbeNonce{1}
+	resultCh := listener.mitmManager.reserveProbe(matchNonce)
+	defer listener.mitmManager.releaseProbe(matchNonce)
+	listener.mitmManager.attachExpected(matchNonce, expected)
+	listener.mitmManager.completeProbe(matchNonce, expected)
 	select {
 	case reason := <-resultCh:
 		if reason != "" {
@@ -50,10 +50,11 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 	}
 
 	// Differing exporter value: exporter mismatch.
-	resultCh, cleanup = listener.mitmManager.reserveProbe("probe-mismatch")
-	defer cleanup()
-	listener.mitmManager.attachExpected("probe-mismatch", bytes.Repeat([]byte{0xAB}, 32))
-	listener.mitmManager.completeProbe("probe-mismatch", bytes.Repeat([]byte{0xCD}, 32))
+	mismatchNonce := mitmProbeNonce{2}
+	resultCh = listener.mitmManager.reserveProbe(mismatchNonce)
+	defer listener.mitmManager.releaseProbe(mismatchNonce)
+	listener.mitmManager.attachExpected(mismatchNonce, bytes.Repeat([]byte{0xAB}, 32))
+	listener.mitmManager.completeProbe(mismatchNonce, bytes.Repeat([]byte{0xCD}, 32))
 	select {
 	case reason := <-resultCh:
 		if reason != types.MITMProbeReasonExporterMismatch {
@@ -65,9 +66,10 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 
 	// A reservation that was never armed holds no exporter value and must
 	// count as a mismatch, never as a pass.
-	resultCh, cleanup = listener.mitmManager.reserveProbe("probe-unarmed")
-	defer cleanup()
-	listener.mitmManager.completeProbe("probe-unarmed", bytes.Repeat([]byte{0xAB}, 32))
+	unarmedNonce := mitmProbeNonce{3}
+	resultCh = listener.mitmManager.reserveProbe(unarmedNonce)
+	defer listener.mitmManager.releaseProbe(unarmedNonce)
+	listener.mitmManager.completeProbe(unarmedNonce, bytes.Repeat([]byte{0xAB}, 32))
 	select {
 	case reason := <-resultCh:
 		if reason != types.MITMProbeReasonExporterMismatch {
@@ -80,11 +82,12 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 	// An unknown nonce is dropped: completing it must neither block nor
 	// consume the result of a live reservation.
 	armed := bytes.Repeat([]byte{0xAB}, 32)
-	resultCh, cleanup = listener.mitmManager.reserveProbe("probe-live")
-	defer cleanup()
-	listener.mitmManager.attachExpected("probe-live", armed)
-	listener.mitmManager.completeProbe("nonce-unknown", armed)
-	listener.mitmManager.completeProbe("probe-live", armed)
+	liveNonce := mitmProbeNonce{4}
+	resultCh = listener.mitmManager.reserveProbe(liveNonce)
+	defer listener.mitmManager.releaseProbe(liveNonce)
+	listener.mitmManager.attachExpected(liveNonce, armed)
+	listener.mitmManager.completeProbe(mitmProbeNonce{5}, armed)
+	listener.mitmManager.completeProbe(liveNonce, armed)
 	select {
 	case reason := <-resultCh:
 		if reason != "" {
@@ -147,18 +150,17 @@ func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
 		listener := &listener{}
 		listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
-		nonce := make([]byte, 16)
-		if _, err := rand.Read(nonce); err != nil {
+		var nonce mitmProbeNonce
+		if _, err := rand.Read(nonce[:]); err != nil {
 			t.Fatalf("rand.Read() error = %v", err)
 		}
-		nonceHex := hex.EncodeToString(nonce)
 
 		// Production order from probeTLSPassthrough: the nonce is reserved
 		// once the TCP connection exists but before the TLS handshake, so
 		// the reservation is pending before the reverse handshake can
 		// complete.
-		resultCh, cleanupProbe := listener.mitmManager.reserveProbe(nonceHex)
-		defer cleanupProbe()
+		resultCh := listener.mitmManager.reserveProbe(nonce)
+		defer listener.mitmManager.releaseProbe(nonce)
 
 		clientConn, serverConn := newMITMProbeTLSPair(t)
 		defer closeMITMProbeTLSConn(clientConn)
@@ -172,7 +174,7 @@ func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
 		if err != nil {
 			t.Fatalf("client ExportKeyingMaterial() error = %v", err)
 		}
-		listener.mitmManager.attachExpected(nonceHex, expected)
+		listener.mitmManager.attachExpected(nonce, expected)
 
 		// Park the probe frame in the pipe rendezvous before the handler
 		// starts: net.Pipe is synchronous, so the writer goroutine blocks
@@ -181,7 +183,7 @@ func TestMITMProbeConnAtHandshakeCompletionIsHandled(t *testing.T) {
 		// the drain below). This keeps the 100ms peek deadline safe under
 		// any scheduler delay. The handler may still legally bail out as
 		// a passthrough, so the write must never block the test goroutine.
-		frame := bytes.Clone(nonce)
+		frame := bytes.Clone(nonce[:])
 		frame = append(frame, bytes.Repeat([]byte{0xAB}, 128)...)
 		writeErrCh := make(chan error, 1)
 		go func() {
@@ -306,12 +308,12 @@ func TestMITMProbePassthroughForNonExporterConn(t *testing.T) {
 	listener := &listener{}
 	listener.mitmManager = newMITMManager(context.Background(), listener, false)
 
-	nonce := make([]byte, 16)
-	if _, err := rand.Read(nonce); err != nil {
+	var nonce mitmProbeNonce
+	if _, err := rand.Read(nonce[:]); err != nil {
 		t.Fatalf("rand.Read() error = %v", err)
 	}
-	resultCh, cleanupProbe := listener.mitmManager.reserveProbe(hex.EncodeToString(nonce))
-	defer cleanupProbe()
+	resultCh := listener.mitmManager.reserveProbe(nonce)
+	defer listener.mitmManager.releaseProbe(nonce)
 
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
@@ -328,7 +330,7 @@ func TestMITMProbePassthroughForNonExporterConn(t *testing.T) {
 		handleResultCh <- handleResult{conn: nextConn, handled: handled, err: err}
 	}()
 
-	payload := append(bytes.Clone(nonce), bytes.Repeat([]byte{0xCD}, 32)...)
+	payload := append(bytes.Clone(nonce[:]), bytes.Repeat([]byte{0xCD}, 32)...)
 	writeErrCh := make(chan error, 1)
 	go func() {
 		_, err := clientConn.Write(payload)

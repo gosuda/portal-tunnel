@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -174,7 +175,7 @@ func (s *Server) HandleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Request, clientIP string) {
+func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) {
 	if s.relaySet == nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay discovery disabled")
 		return
@@ -227,10 +228,14 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
+	sourceIP := "<unknown>"
+	if sourceAddr.IsValid() {
+		sourceIP = sourceAddr.String()
+	}
 
 	log.Info().
 		Str("relay", desc.APIHTTPSAddr).
-		Str("source_ip", clientIP).
+		Str("source_ip", sourceIP).
 		Msg("relay discovery announce accepted")
 
 	utils.WriteAPIData(w, http.StatusAccepted, types.DiscoveryAnnounceResponse{
@@ -278,10 +283,10 @@ func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) 
 // success response. The relay first applies the returned identity's access
 // decision, then writes the response so the lease cannot become observable
 // before its routability is known.
-func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP string) (string, types.RegisterResponse, bool) {
+func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) (types.ServiceIdentityKey, types.RegisterResponse, bool) {
 	req, ok := utils.DecodeJSONRequest[types.RegisterRequest](w, r, defaultControlBodyLimit)
 	if !ok {
-		return "", types.RegisterResponse{}, false
+		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
 
 	challenge, err := s.registry.consumeVerifiedRegisterChallenge(req)
@@ -292,9 +297,9 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 		default:
 			utils.InvalidRequestError(err).Write(w)
 		}
-		return "", types.RegisterResponse{}, false
+		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
-	identityKey := challenge.Request.Identity.Key()
+	identityKey := challenge.Request.Identity.ServiceKey()
 	// A registering identity starts fail-closed. Mux replaces this projection
 	// with the relay's current access decision before publishing success.
 	s.registry.suspendIdentity(identityKey)
@@ -309,7 +314,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 			descriptors = nil
 		}
 	}
-	record, resp, err := s.registry.Register(challenge.Request, clientIP, req.ReportedIP, self, descriptors)
+	record, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return identityKey, types.RegisterResponse{}, false
@@ -333,15 +338,15 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, clientIP
 		go s.serveTCP(record)
 	}
 
-	return record.Key(), resp, true
+	return record.ServiceKey(), resp, true
 }
 
 // HandleRegisterChallenge issues a registration challenge without publishing
 // the success response, allowing the relay to apply access state first.
-func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request, clientIP string) (string, types.RegisterChallengeResponse, bool) {
+func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) (types.ServiceIdentityKey, types.RegisterChallengeResponse, bool) {
 	req, ok := utils.DecodeJSONRequest[types.RegisterChallengeRequest](w, r, defaultControlBodyLimit)
 	if !ok {
-		return "", types.RegisterChallengeResponse{}, false
+		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
 	}
 
 	scheme := "https"
@@ -359,24 +364,25 @@ func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request,
 	if req.UDPEnabled && !s.supportsUDP() {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled,
 			"UDP transport is disabled on this relay")
-		return "", types.RegisterChallengeResponse{}, false
+		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
 	}
 	if req.TCPEnabled && !s.supportsTCP() {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTCPPortDisabled,
 			"raw TCP transport is disabled on this relay")
-		return "", types.RegisterChallengeResponse{}, false
+		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
 	}
 
-	resp, err := s.registry.issueRegisterChallenge(req, domain, registerURI, clientIP)
+	identityKey := req.Identity.ServiceKey()
+	resp, err := s.registry.issueRegisterChallenge(req, domain, registerURI, sourceAddr)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
-		return req.Identity.Key(), types.RegisterChallengeResponse{}, false
+		return identityKey, types.RegisterChallengeResponse{}, false
 	}
 
-	return req.Identity.Key(), resp, true
+	return identityKey, resp, true
 }
 
-func (s *Server) HandleRenew(w http.ResponseWriter, r *http.Request, clientIP string) {
+func (s *Server) HandleRenew(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -386,7 +392,7 @@ func (s *Server) HandleRenew(w http.ResponseWriter, r *http.Request, clientIP st
 		return
 	}
 
-	resp, endpointInput, err := s.registry.Renew(req, clientIP)
+	resp, endpointInput, err := s.registry.Renew(req, sourceAddr)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return
@@ -444,7 +450,7 @@ func (s *Server) HandleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
 
 // serveReverseMux offers each stream the connector opens on session to the lease like
 // any other reverse connection. The lease owns the session, so it ends with the lease.
-func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseMux, clientIP string) {
+func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseMux, sourceAddr netip.Addr) {
 	if err := lease.attachReverseMux(session); err != nil {
 		_ = session.Close()
 		return
@@ -467,11 +473,11 @@ func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseM
 		if err := lease.reverse.Offer(stream); err != nil {
 			continue
 		}
-		s.registry.Touch(lease.Key(), clientIP, time.Now())
+		s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
 	}
 }
 
-func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, clientIP string) {
+func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -492,15 +498,15 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, clientIP 
 		if err != nil {
 			return
 		}
-		s.serveReverseMux(lease, session, clientIP)
+		s.serveReverseMux(lease, session, sourceAddr)
 		return
 	}
 
 	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
 	if s.overlay != nil && s.overlay.Handles(capability) {
-		client, gateway := s.overlay.HandleConnect(w, r, capability, clientIP)
+		client, gateway := s.overlay.HandleConnect(w, r, capability, sourceAddr)
 		if client != nil {
-			s.proxy.bridge(client, gateway, "", s.registry.bps)
+			s.proxy.bridge(client, gateway, types.ServiceIdentityKey{}, s.registry.bps)
 		}
 		return
 	}
@@ -546,7 +552,7 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, clientIP 
 		return
 	}
 
-	s.registry.Touch(lease.Key(), clientIP, time.Now())
+	s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
 	log.Info().
 		Str("address", lease.Address).
 		Str("lease_name", lease.Name).
@@ -564,7 +570,7 @@ func (s *Server) HandleStaticCache(w http.ResponseWriter, req *http.Request) {
 	// Capture before the access check: revocation either rejects admission
 	// here or invalidates this generation before cache publication.
 	generation := s.registry.cache.Generation(record.id)
-	if !s.registry.isRoutable(record.Key()) {
+	if !s.registry.isRoutable(record.ServiceKey()) {
 		writeAPIErrorResponse(w, errLeaseRejected)
 		return
 	}
@@ -600,7 +606,7 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	// Reuse the reverse stream for fallback, never dial a user-supplied URL.
 	// This already-terminated connection remains within the cache trust opt-in.
 	record, ok := s.registry.Lookup(host)
-	if !ok || !s.registry.isRoutable(record.Key()) || !s.registry.cache.Eligible(record.id) {
+	if !ok || !s.registry.isRoutable(record.ServiceKey()) || !s.registry.cache.Eligible(record.id) {
 		http.Error(w, "static origin unavailable", http.StatusServiceUnavailable)
 		return
 	}

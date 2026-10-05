@@ -43,29 +43,6 @@ func TrimHexPrefix(raw string) string {
 	return raw
 }
 
-func ParseCIDRs(raw string) ([]*net.IPNet, error) {
-	parts := SplitCSV(raw)
-	if len(parts) == 0 {
-		return nil, nil
-	}
-
-	cidrs := make([]*net.IPNet, 0, len(parts))
-	seen := make(map[string]struct{}, len(parts))
-	for _, part := range parts {
-		_, network, err := net.ParseCIDR(part)
-		if err != nil {
-			return nil, fmt.Errorf("invalid cidr %q: %w", part, err)
-		}
-		key := network.String()
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		cidrs = append(cidrs, network)
-	}
-	return cidrs, nil
-}
-
 func NormalizeDNSLabel(raw string) (string, error) {
 	label := sanitizeDNSLabelInput(raw)
 	if label == "" {

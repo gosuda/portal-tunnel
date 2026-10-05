@@ -1,10 +1,8 @@
 package policy
 
 import (
-	"cmp"
 	"math"
-	"net"
-	"strings"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -20,7 +18,7 @@ const (
 // bounded, expires on demand, and never becomes durable authorization policy.
 type SourceLimiter struct {
 	mu                      sync.Mutex
-	buckets                 map[string]*sourceBucket
+	buckets                 map[netip.Addr]*sourceBucket
 	ratePerMinute, burst    float64
 	globalRate, globalBurst float64
 	global                  sourceBucket
@@ -39,7 +37,7 @@ type sourceBucket struct {
 // the global bucket for callers that already have a separate capacity boundary.
 func NewSourceLimiter(ratePerMinute, burst, globalRate, globalBurst int) *SourceLimiter {
 	return &SourceLimiter{
-		buckets: make(map[string]*sourceBucket), ratePerMinute: float64(ratePerMinute), burst: float64(burst),
+		buckets: make(map[netip.Addr]*sourceBucket), ratePerMinute: float64(ratePerMinute), burst: float64(burst),
 		globalRate: float64(globalRate), globalBurst: float64(globalBurst),
 		global: sourceBucket{tokens: float64(globalBurst)}, clock: time.Now, maxBucketCount: 65536,
 	}
@@ -47,12 +45,7 @@ func NewSourceLimiter(ratePerMinute, burst, globalRate, globalBurst int) *Source
 
 // Allow deducts cost only if both budgets admit the request. Rejections return
 // retry guidance and a bounded layer label; no IP history is persisted.
-func (l *SourceLimiter) Allow(srcIP string, cost int) (time.Duration, string) {
-	key := strings.TrimSpace(srcIP)
-	if ip := net.ParseIP(key); ip != nil {
-		key = ip.String()
-	}
-	key = cmp.Or(key, "<unknown>")
+func (l *SourceLimiter) Allow(source netip.Addr, cost int) (time.Duration, string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.clock()
@@ -70,13 +63,13 @@ func (l *SourceLimiter) Allow(srcIP string, cost int) (time.Duration, string) {
 			return retry, types.PreAuthLayerGlobal
 		}
 	}
-	bucket := l.buckets[key]
+	bucket := l.buckets[source]
 	if bucket == nil {
 		if len(l.buckets) >= l.maxBucketCount {
 			return sourceLimiterPruneInterval, types.PreAuthLayerSource
 		}
 		bucket = &sourceBucket{tokens: l.burst, updatedAt: now}
-		l.buckets[key] = bucket
+		l.buckets[source] = bucket
 	}
 	bucket.lastUsedAt = now
 	if retry := bucket.retry(now, l.ratePerMinute, l.burst, cost); retry > 0 {

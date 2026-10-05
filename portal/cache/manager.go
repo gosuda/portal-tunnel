@@ -30,13 +30,14 @@ type Manager struct {
 }
 
 type cachedSite struct {
-	host, owner, leaseID string
-	digest, dir, index   string
-	files                map[string]types.StaticCacheFile
-	bytes                int64
-	ttl                  time.Duration
-	expiresAt, usedAt    time.Time
-	readers              int
+	host, leaseID      string
+	owner              types.ServiceIdentityKey
+	digest, dir, index string
+	files              map[string]types.StaticCacheFile
+	bytes              int64
+	ttl                time.Duration
+	expiresAt, usedAt  time.Time
+	readers            int
 }
 
 // New requires an explicit storage directory from the host application.
@@ -96,7 +97,8 @@ func (c *Manager) retireLocked(site *cachedSite) {
 // Lease is an immutable observation supplied by the lease registry. Cache
 // policy and effective retention are owned only by Manager.
 type Lease struct {
-	ID, Owner, Hostname   string
+	ID, Hostname          string
+	Owner                 types.ServiceIdentityKey
 	ExpiresAt, LastSeenAt time.Time
 }
 
@@ -211,17 +213,17 @@ func (c *Manager) Limits() *types.StaticCacheLimits {
 
 // Owners returns identities with a retained published snapshot. The relay uses
 // this observation to project access changes after the live lease is gone.
-func (c *Manager) Owners() []string {
+func (c *Manager) Owners() []types.ServiceIdentityKey {
 	if c == nil {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	owners := make(map[string]struct{})
+	owners := make(map[types.ServiceIdentityKey]struct{})
 	for _, site := range c.entries {
 		owners[site.owner] = struct{}{}
 	}
-	out := make([]string, 0, len(owners))
+	out := make([]types.ServiceIdentityKey, 0, len(owners))
 	for owner := range owners {
 		out = append(out, owner)
 	}
@@ -257,8 +259,8 @@ func (c *Manager) Generation(id string) uint64 {
 // DetachOwner immediately revokes cached content owned by one identity while
 // retaining its live cache lease. If the relay routes the identity again, the
 // same lease may publish fresh content without re-registering.
-func (c *Manager) DetachOwner(owner string) {
-	if c == nil || owner == "" {
+func (c *Manager) DetachOwner(owner types.ServiceIdentityKey) {
+	if c == nil || !owner.Valid() {
 		return
 	}
 	c.mu.Lock()

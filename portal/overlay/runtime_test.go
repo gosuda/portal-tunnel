@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -169,13 +170,13 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 	// — admission-before-dial is the resource invariant under rate pressure.
 	for range 2 {
 		response := httptest.NewRecorder()
-		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, "192.0.2.1")
+		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
 		if response.Code != http.StatusServiceUnavailable {
 			t.Fatalf("dial-failed request status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 		}
 	}
 	response := httptest.NewRecorder()
-	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, "192.0.2.1")
+	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
 	if response.Code != http.StatusTooManyRequests {
 		t.Fatalf("rate-limited request status = %d, want %d", response.Code, http.StatusTooManyRequests)
 	}
@@ -206,7 +207,7 @@ func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 	done := make(chan struct{}, sourceConnectionLimit+1)
 	connect := func(source string) {
 		request := httptest.NewRequest(http.MethodGet, "/sdk/connect", nil).WithContext(ctx)
-		gate.HandleConnect(httptest.NewRecorder(), request, capability, source)
+		gate.HandleConnect(httptest.NewRecorder(), request, capability, netip.MustParseAddr(source))
 		done <- struct{}{}
 	}
 	for range sourceConnectionLimit {
@@ -220,7 +221,7 @@ func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 		}
 	}
 	response := httptest.NewRecorder()
-	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, "192.0.2.1")
+	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
 	if response.Code != http.StatusTooManyRequests {
 		t.Fatalf("over-budget source status = %d, want %d", response.Code, http.StatusTooManyRequests)
 	}
@@ -237,7 +238,7 @@ func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 	}
 	for _, source := range []string{"192.0.2.1", "192.0.2.2"} {
 		response := httptest.NewRecorder()
-		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, source)
+		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr(source))
 		if response.Code != http.StatusServiceUnavailable {
 			t.Fatalf("released capacity for %s: status=%d", source, response.Code)
 		}
@@ -263,7 +264,7 @@ func testGateway(t *testing.T) (*Runtime, string) {
 	}
 	runtime := &Runtime{
 		config:        Config{Authority: gatewayAuthority},
-		activeSources: make(map[string]int),
+		activeSources: make(map[netip.Addr]int),
 	}
 	runtime.ready.Store(true)
 	return runtime, capability

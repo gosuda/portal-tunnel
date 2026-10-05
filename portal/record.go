@@ -3,6 +3,7 @@ package portal
 import (
 	"context"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -21,7 +22,7 @@ type leaseRecord struct {
 	ExpiresAt         time.Time
 	FirstSeenAt       time.Time
 	LastSeenAt        time.Time
-	ClientIP          string
+	sourceAddr        netip.Addr
 	ReportedIP        string
 	Hostname          string
 	CanonicalHostname string
@@ -43,7 +44,7 @@ type leaseRecord struct {
 // cacheLease adapts registry facts to the cache's canonical hostname key while
 // the caller holds the registry lock.
 func (r *leaseRecord) cacheLease() cache.Lease {
-	return cache.Lease{ID: r.id, Owner: r.Key(), Hostname: r.CanonicalHostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
+	return cache.Lease{ID: r.id, Owner: r.ServiceKey(), Hostname: r.CanonicalHostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
 func (r *leaseRecord) isPublicEntry() bool {
@@ -164,7 +165,7 @@ func (s *Server) syncLeaseDNS(ctx context.Context, record *leaseRecord) error {
 	// Queue DNS sync while the lease is still the current live record. A
 	// concurrent unregister/expiry must either happen after this enqueue or
 	// make this stale sync a no-op.
-	if registry.recordByLease(record.Key(), record.id, time.Now()) != record {
+	if registry.recordByLease(record.ServiceKey(), record.id, time.Now()) != record {
 		return nil
 	}
 	return record.syncENSGaslessDNS(ctx, s.acmeManager)

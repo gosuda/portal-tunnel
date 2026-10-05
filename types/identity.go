@@ -36,23 +36,48 @@ func (i Identity) Copy() Identity {
 	}
 }
 
-// canonicalIdentityPart lowercases and trims one identity key part; it is the
-// single home of the canonicalization rule shared by the key constructor and
-// parser.
-func canonicalIdentityPart(part string) string {
-	return strings.TrimSpace(strings.ToLower(part))
+// ServiceIdentityKey is the comparable in-process identity of a service.
+// String serialization belongs at API, persistence, token, and log boundaries.
+type ServiceIdentityKey struct {
+	name    string
+	address string
+}
+
+func NewServiceIdentityKey(name, address string) ServiceIdentityKey {
+	return ServiceIdentityKey{
+		name:    strings.TrimSpace(strings.ToLower(name)),
+		address: strings.TrimSpace(strings.ToLower(address)),
+	}
+}
+
+func ParseServiceIdentityKey(raw string) (ServiceIdentityKey, error) {
+	name, address, ok := strings.Cut(raw, IdentityKeySeparator)
+	if !ok || strings.Contains(address, IdentityKeySeparator) {
+		return ServiceIdentityKey{}, fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
+	}
+	key := NewServiceIdentityKey(name, address)
+	if !key.Valid() {
+		return ServiceIdentityKey{}, fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
+	}
+	return key, nil
+}
+
+func (k ServiceIdentityKey) Valid() bool {
+	return k.name != "" && k.address != ""
+}
+
+func (k ServiceIdentityKey) String() string {
+	if k.name == "" && k.address == "" {
+		return ""
+	}
+	return k.name + IdentityKeySeparator + k.address
 }
 
 // CanonicalIdentityKey returns the canonical identity key for the given name
 // and address: both parts are canonicalized, the result is "" when both parts
 // are empty, and "name:address" otherwise.
 func CanonicalIdentityKey(name, address string) string {
-	name = canonicalIdentityPart(name)
-	address = canonicalIdentityPart(address)
-	if name == "" && address == "" {
-		return ""
-	}
-	return name + IdentityKeySeparator + address
+	return NewServiceIdentityKey(name, address).String()
 }
 
 // ParseIdentityKey parses a raw identity key in "name:address" form and
@@ -60,20 +85,19 @@ func CanonicalIdentityKey(name, address string) string {
 // parts are canonicalized; parsing fails when the raw value does not contain
 // exactly one separator or either part is empty after canonicalization.
 func ParseIdentityKey(raw string) (string, error) {
-	name, address, ok := strings.Cut(raw, IdentityKeySeparator)
-	if !ok || strings.Contains(address, IdentityKeySeparator) {
-		return "", fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
+	key, err := ParseServiceIdentityKey(raw)
+	if err != nil {
+		return "", err
 	}
-	name = canonicalIdentityPart(name)
-	address = canonicalIdentityPart(address)
-	if name == "" || address == "" {
-		return "", fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
-	}
-	return CanonicalIdentityKey(name, address), nil
+	return key.String(), nil
+}
+
+func (i Identity) ServiceKey() ServiceIdentityKey {
+	return NewServiceIdentityKey(i.Name, i.Address)
 }
 
 func (i Identity) Key() string {
-	return CanonicalIdentityKey(i.Name, i.Address)
+	return i.ServiceKey().String()
 }
 
 type LeaseMetadata struct {

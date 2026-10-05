@@ -71,7 +71,7 @@ func TestLeaseOwnsReverseMuxReplacementAndClose(t *testing.T) {
 
 func TestRawTCPRejectsConnectionWhileNotRoutable(t *testing.T) {
 	record := &leaseRecord{Identity: types.Identity{Name: "demo", Address: "0x1"}}
-	server := &Server{registry: &leaseRegistry{blocked: map[string]time.Time{record.Key(): time.Now()}}}
+	server := &Server{registry: &leaseRegistry{blocked: map[types.ServiceIdentityKey]time.Time{record.ServiceKey(): time.Now()}}}
 	client, inbound := net.Pipe()
 	defer client.Close()
 	server.bridgeTCPConn(record, inbound)

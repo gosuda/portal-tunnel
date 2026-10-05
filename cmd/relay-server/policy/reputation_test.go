@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"net/netip"
 	"path/filepath"
 	"testing"
 
@@ -26,15 +27,15 @@ func testLeases(names ...string) []types.PolicyLease {
 
 func TestReputationVoteSwitchAndRestart(t *testing.T) {
 	store := newTestReputationStore(t)
-	first, cookie, err := store.CastVote("demo.example.com", "id:demo.example.com", VoteUp, "", "203.0.113.10")
+	first, cookie, err := store.CastVote("demo.example.com", "id:demo.example.com", VoteUp, "", netip.MustParseAddr("203.0.113.10"))
 	if err != nil || first.Up != 1 || cookie == "" {
 		t.Fatalf("first vote = %+v, cookie=%q, err=%v", first, cookie, err)
 	}
-	same, _, err := store.CastVote("demo.example.com", "id:demo.example.com", VoteUp, cookie, "203.0.113.10")
+	same, _, err := store.CastVote("demo.example.com", "id:demo.example.com", VoteUp, cookie, netip.MustParseAddr("203.0.113.10"))
 	if err != nil || same.Up != 1 {
 		t.Fatalf("same vote changed state: %+v, err=%v", same, err)
 	}
-	switched, _, err := store.CastVote("demo.example.com", "id:demo.example.com", VoteDown, cookie, "203.0.113.10")
+	switched, _, err := store.CastVote("demo.example.com", "id:demo.example.com", VoteDown, cookie, netip.MustParseAddr("203.0.113.10"))
 	if err != nil || switched.Up != 0 || switched.Down != 1 || switched.ViewerVote != VoteDown {
 		t.Fatalf("switched vote = %+v, err=%v", switched, err)
 	}
@@ -49,11 +50,11 @@ func TestReputationVoteSwitchAndRestart(t *testing.T) {
 
 func TestReputationDirectoryProjectsLiveHostsAndViewerVote(t *testing.T) {
 	store := newTestReputationStore(t)
-	_, cookie, err := store.CastVote("voted.example.com", "id:voted.example.com", VoteUp, "", "203.0.113.10")
+	_, cookie, err := store.CastVote("voted.example.com", "id:voted.example.com", VoteUp, "", netip.MustParseAddr("203.0.113.10"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CastVote("old.example.com", "id:old.example.com", VoteUp, cookie, "203.0.113.10"); err != nil {
+	if _, _, err := store.CastVote("old.example.com", "id:old.example.com", VoteUp, cookie, netip.MustParseAddr("203.0.113.10")); err != nil {
 		t.Fatal(err)
 	}
 	summaries := store.Summaries(store.ViewerHashFor(cookie), testLeases("voted.example.com", "old.example.com", "fresh.example.com"))
