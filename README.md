@@ -17,71 +17,18 @@
 
 ## Why Portal?
 
-Portal is a local tunnel runtime and relay network for publishing services to the agentic web.
-It publishes local apps, APIs, tools, and agents through self-hosted or public relays,
-keeps routing and x402 payment policy in the tunnel process, and avoids requiring a hosted vendor account.
+Portal is an open-source tunnel runtime and relay network for publishing services to the agentic web. It exposes local apps, APIs, tools, and agents through self-hosted or public relays, keeps routing and security policy in the local tunnel process, and eliminates the need for hosted vendor accounts or credit cards.
 
-- **Self-Hostable, Fully Open Source** - Run your own relay with a single
-  command. The relay is MIT-licensed with no enterprise tier, no feature gating,
-  and no call-home. Your relay, your rules.
+- **Self-Hostable & Open Source** - Run your own relay with a single command. MIT-licensed with zero telemetry, no enterprise tiers, and no call-home.
+- **Anonymous Relay Network** - Connect to public relays or combine self-hosted and community relays into resilient multi-relay failover pools.
+- **End-to-End Tenant TLS** - For uncached HTTPS stream exposures, TLS terminates in your local tunnel process; relays never see plaintext or session keys.
+- **IVNP-backed Overlay Networking** - Bridge reverse backhauls over an independent IVNP overlay network when enhanced routing privacy is desired.
+- **Built-in MITM Detection** - Active self-probe compares TLS keying material on both ends to detect relay-side TLS termination; `--ban-mitm` bans compromised relays automatically.
+- **No Accounts, No API Keys** - Authentication uses local secp256k1 cryptographic identities (`identity.json`) with SIWE challenge signing.
+- **Native x402 Payments** - Route-level micropayments using gasless Sui USDC or Casper wCSPR without external payment gateways.
 
-- **Anonymous Relay Network** - Connect to public relays without a hosted
-  account or central operator. Combine self-hosted relays with public relays in
-  a pool to split trust across independent operators you choose.
-
-- **End-to-End Tenant TLS** - For ordinary uncached exposures, Portal
-  terminates tenant TLS at the user's endpoint instead of the relay.
-
-- **IVNP-backed Overlay Networking** - Publish through a public ingress while
-  an independent IVNP overlay network connects it to a selected gateway.
-  Portal selects and authorizes endpoints; IVNP owns the path between them.
-
-- **Built-in MITM Detection** - Portal actively self-probes its own connection
-  after real traffic begins. It compares TLS keying material exported on both
-  sides and treats a mismatch as suspected relay-side TLS termination. The
-  keyless TLS tenant stack exports keying material, so the probe is active for
-  tenant TLS exposures. `--ban-mitm` makes a detected mismatch ban the relay.
-
-- **No Accounts, No API Keys** - Authentication uses SIWE-compatible signing
-  with a locally generated secp256k1 key pair. No email, no registration, no
-  vendor lock-in.
-
-- **Built-in x402 Payments** - Routed HTTP paths can require Sui gasless
-  USDC or Casper wCSPR x402 payment before proxying. Browser apps can import
-  `/x402/client.js`, and native clients can call `/x402/prepare` directly and
-  send `X-PAYMENT`.
-
-## IVNP-backed overlay networking
-
-Portal exposes services through a public ingress without requiring Portal itself
-to own the network path behind that ingress. With an IVNP overlay network,
-network routing can change independently of Portal's endpoint policy: identity,
-lease ownership, authorization, and the SDK's reverse-endpoint contract stay the
-same.
-
-Reverse connections are established outward from the tunnel:
-
-```text
-Direct (default):
-Tunnel / SDK ------------------------------------> Portal ingress
-
-Overlay (opt-in):
-Tunnel / SDK -> Overlay gateway -> IVNP network -> Portal ingress
-                                  (opaque path)
-```
-
-Public clients still connect to the Portal ingress, and the tunnel forwards
-their streams to the local service. IVNP may use multiple internal routers and
-hops; Portal neither chooses their order nor stores them in leases or discovery.
-This is IVNP-owned routing, not a Portal-managed relay chain.
-
-```bash
-portal expose 3000 --overlay
-```
-
-This prefers an available overlay gateway; direct reverse transport remains the
-default and fallback. See [the overlay networking concepts](docs/src/routes/concepts/+page.md#ivnp-backed-overlay-networking)
-and [the detailed architecture](docs/src/routes/architecture/+page.md#ivnp-backed-overlay-networking).
+> 📖 **Explore the Complete Product Capabilities**:
+> For the complete matrix of all 20+ supported capabilities across CLI, Agent, SDK, and Relay—including interface support and trust boundaries—see the **[Canonical Feature Inventory](https://gosuda.github.io/portal-tunnel/features)**.
 
 ## Comparison
 
@@ -92,18 +39,49 @@ and [the detailed architecture](docs/src/routes/architecture/+page.md#ivnp-backe
 | Open source | **MIT** | No | Client only | Apache 2.0 |
 | Custom domain | **Yes** | Paid plans | Yes | Yes |
 | End-to-end tenant TLS | **Yes (uncached exposures)** | No | No | No |
-| MITM self-probe | **Requires TLS keying material export** | No | No | No |
+| MITM self-probe | **Yes (TLS keying material export)** | No | No | No |
 | Multi-relay failover | **Yes** | Managed | Built-in | No |
 | Account required | **No** | Yes | Yes | No |
 | Native x402 payments | **Yes** | No | No | No |
 
 ## Quick Start
 
-### Use the local AI agent plugin
+### 1. Expose a local service
 
-The repository includes a `portal-deploy` plugin for Codex, Claude Code, and Cursor. The shared `portal-expose` skill inspects a local app, opens a Portal tunnel, configures explicitly requested x402 paid routes, verifies the public URL and payment challenge, and hands off the lifecycle. The `portal-connect` skill covers the other side: it finds a service on a relay, verifies that it is reachable, connects to raw TCP/UDP endpoints, and reports the terms of an x402 challenge without paying.
+**macOS / Linux:**
+```bash
+curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/install.sh | bash
+portal expose 3000
+```
 
-Install the skill with either CLI:
+**Windows (PowerShell):**
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
+portal expose 3000
+```
+
+Portal prints an HTTPS URL immediately. Additional common usages:
+
+```bash
+# Custom name and explicit relay
+portal expose 3000 --name myapp --relays https://portal.example.com --discovery=false
+
+# Mount multiple local services behind one domain
+portal expose --name myapp \
+  --http-route /api=http://127.0.0.1:3001 \
+  --http-route /=http://127.0.0.1:5173
+
+# Dedicated raw TCP port (Minecraft, SSH, databases)
+portal expose localhost:25565 --name minecraft --tcp
+
+# Prefer an IVNP overlay backhaul path
+portal expose 3000 --overlay
+```
+
+### 2. Use the local AI agent plugin
+
+The repository includes a `portal-deploy` plugin with shared skills (`portal-expose` and `portal-connect`) for Codex, Claude Code, and Cursor:
 
 ```bash
 # GitHub CLI
@@ -113,85 +91,22 @@ gh skill install gosuda/portal-tunnel portal-deploy/portal-expose
 npx skills add gosuda/portal-tunnel --skill portal-expose
 ```
 
-Then ask your agent:
+Ask your agent: *"Expose my app on port 3000 with Portal and verify the public URL."* See [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md) for full setup instructions.
 
-- Temporary preview: “Expose this app with Portal and verify the public URL.”
-- x402 paid route: “Expose this app with Portal, protect `GET /paid` with x402, and verify the payment challenge.”
-- Persistent tunnel: “Keep this app available with a persistent Portal agent tunnel and verify the public URL.”
-- Reach a published service: “Check whether `my-app.portal.example.com` is up and fetch its JSON API.”
+### 3. Manage persistent tunnels with Portal Agent
 
-Host-specific Codex, Claude Code, and Cursor marketplace setup is in [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md). Without installing anything, an agent with web access can be pointed at the canonical skill file in this repository and given the relay as input: `Follow https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md to expose my app on port 3000 through https://<relay>.` A relay's `/llms.txt` is discovery data about that relay, not the instruction source.
-
-### Expose a local service
-
-**macOS / Linux:**
-
-```bash
-curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/install.sh | bash
-portal expose 3000
-```
-
-**Windows (PowerShell):**
-
-```powershell
-$ProgressPreference = 'SilentlyContinue'
-irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
-portal expose 3000
-```
-
-Portal prints a public HTTPS URL for your local app instantly. More examples:
-
-```bash
-# Custom name and relay
-portal expose 3000 --name myapp --relays https://portal.example.com --discovery=false
-
-# Prefer the IVNP overlay path for reverse streams
-portal expose 3000 --overlay
-
-# Mount frontend and API behind one URL
-portal expose --name myapp \
-  --http-route /api=http://127.0.0.1:3001 \
-  --http-route /=http://127.0.0.1:5173
-
-# Require Sui USDC x402 payment before proxying a route
-portal expose --name paid-app \
-  --http-route "/paid=http://127.0.0.1:3001 GET:0.01" \
-  --http-route /=http://127.0.0.1:5173 \
-  --x402-pay-to 0x...
-
-# Raw TCP port (Minecraft, databases, SSH)
-portal expose localhost:25565 --name minecraft --tcp
-
-```
-
-Portal's connector can also run in WebAssembly. Browser runtimes use WebSocket
-and yamux instead of raw TCP while retaining the normal tenant TLS path. See the
-[Browser/WASM SDK runtime](docs/src/routes/api-reference/sdk/+page.md#browser-wasm-sdk-runtime)
-and [browser reverse transport](docs/src/routes/architecture/+page.md#browser-reverse-transport).
-
-See [CLI Reference](cmd/portal-tunnel/README.md) for the full route syntax and
-[API Reference](docs/src/routes/api-reference/+page.md#payments) for the x402
-helper endpoints.
-
-### Manage persistent tunnels manually
-
-Use Portal Agent directly when tunnels should keep running outside your terminal.
-It runs as a local OS service, keeps every tunnel in one TOML config alive, and
-provides a dashboard for public relay management.
+When tunnels should run continuously in the background or as a system service:
 
 ```bash
 portal agent run --config config.toml
 portal agent dashboard --config config.toml
-portal agent restart --config config.toml
-portal agent stop --config config.toml
-
-# Foreground mode skips OS service installation.
-portal agent run --config config.toml --foreground
 ```
 
-See [Portal Agent](docs/src/routes/portal-agent/+page.md) for the config format.
+See the [Portal Agent Guide](https://gosuda.github.io/portal-tunnel/portal-agent) for configuration syntax and OS service installation.
 
-### Run your own relay
+### 4. Run your own relay
+
+Deploy an open-source relay in seconds:
 
 ```bash
 git clone https://github.com/gosuda/portal-tunnel
@@ -199,52 +114,46 @@ cd portal-tunnel && cp .env.example .env
 docker compose up
 ```
 
-For public deployment with DNS automation (ACME), TCP/UDP port ranges, and relay
-policy, see [Deployment](docs/src/routes/deployment/+page.md).
+See [Deployment](https://gosuda.github.io/portal-tunnel/deployment) for DNS automation (ACME), TCP/UDP port ranges, and production policy configuration.
 
 ## How End-to-End Encryption Works
 
 ```text
 Browser
-  -> Relay SNI router  (reads only routing token, forwards raw bytes)
+  -> Relay SNI router  (reads only routing token, forwards raw ciphertext)
   -> Reverse session
-  -> Portal tunnel     (performs TLS handshake locally, derives session keys)
+  -> Portal tunnel     (completes TLS handshake locally, derives session keys)
   -> Local service
 ```
 
-1. The relay accepts the incoming connection and reads only the TLS ClientHello
-   for SNI-based routing.
-2. It forwards the raw encrypted stream over the reverse session without
-   terminating TLS.
-3. The Portal tunnel on your side completes the TLS handshake locally. Session
-   keys are derived on your machine.
-4. For relay-hosted domains, the tunnel obtains certificate signatures via
-   `/v1/sign`, using the relay only as a keyless signing oracle. The relay signs
-   handshake transcripts but never receives session keys.
-5. After the handshake, the relay continues forwarding ciphertext without access
-   to plaintext.
+1. **SNI Routing**: The relay accepts the incoming connection and reads only the TLS ClientHello for SNI-based lease routing.
+2. **Raw Forwarding**: It forwards the raw encrypted stream over the reverse session without terminating TLS.
+3. **Local Handshake**: The Portal tunnel completes the TLS handshake locally; session keys are derived on your machine.
+4. **Keyless Signing**: For relay-hosted domains, the tunnel signs transcripts via `/v1/sign`. The relay never receives session keys.
+5. **Ciphertext Security**: The relay continues forwarding ciphertext without access to tenant plaintext.
 
 ## Public Relay Registry
 
-Portal's official public relay registry is:
+Portal includes the official public relay registry by default:
 
 ```text
 https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json
 ```
 
-Tunnel clients include this registry by default. If you operate a public Portal
-relay, open a pull request to add your relay URL to `registry.json`.
+If you operate a public Portal relay, open a pull request to add your relay URL to `registry.json`.
 
 ## Documentation
 
-- [CLI Reference](cmd/portal-tunnel/README.md)
-- [Concepts](docs/src/routes/concepts/+page.md)
-- [Portal Agent](docs/src/routes/portal-agent/+page.md)
-- [Wallet and ENS](docs/src/routes/wallet-and-ens/+page.md)
-- [Security Model](docs/src/routes/security-model/+page.md)
-- [Architecture](docs/src/routes/architecture/+page.md)
-- [Deployment](docs/src/routes/deployment/+page.md)
-- [Configuration Reference](docs/src/routes/configuration/+page.md)
+- **[Feature Inventory](https://gosuda.github.io/portal-tunnel/features)** - Canonical inventory of all product capabilities and interfaces.
+- **[Getting Started](https://gosuda.github.io/portal-tunnel/getting-started)** - Step-by-step setup and first exposure.
+- **[Concepts](https://gosuda.github.io/portal-tunnel/concepts)** - Relay and tunnel ownership, transport modes, and overlay networking.
+- **[Security Model](https://gosuda.github.io/portal-tunnel/security-model)** - Tenant TLS, keyless signing, and the static cache trust boundary.
+- **[CLI Reference](https://gosuda.github.io/portal-tunnel/cli-reference)** - Complete command-line syntax and flag guide.
+- **[Portal Agent](https://gosuda.github.io/portal-tunnel/portal-agent)** - Multi-tunnel daemon and interactive dashboard.
+- **[Self-Hosting](https://gosuda.github.io/portal-tunnel/self-hosting)** - Running and securing your own relay instances.
+- **[Configuration](https://gosuda.github.io/portal-tunnel/configuration)** - Environment variables and configuration options.
+- **[API Reference](https://gosuda.github.io/portal-tunnel/api-reference)** - Relay wire protocol and client APIs.
+- **[Maintainer Architecture](docs/maintainer/architecture.md)** - Internal Go package ownership and data flows.
 
 ## Contributing
 

@@ -144,6 +144,22 @@ export function Header({
             >
               Public relays
             </a>
+            <a
+              href="https://gosuda.github.io/portal-tunnel/features"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="whitespace-nowrap transition-colors hover:text-foreground"
+            >
+              Features
+            </a>
+            <a
+              href="https://gosuda.github.io/portal-tunnel"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="whitespace-nowrap transition-colors hover:text-foreground"
+            >
+              Docs
+            </a>
           </nav>
         )}
       </div>

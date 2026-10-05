@@ -96,5 +96,16 @@
 				</article>
 			{/each}
 		</div>
+		<div class="border-t p-6 text-center sm:p-8" style="border-color: var(--border);">
+			<p class="text-sm text-text-muted sm:text-base">
+				Looking for the complete capability breakdown across CLI, Agent, SDK, and Relay?
+				<a
+					href="{base}/features"
+					class="ml-1 inline-flex items-center font-semibold text-primary underline underline-offset-4 hover:text-primary-light"
+				>
+					View the Canonical Feature Inventory &rarr;
+				</a>
+			</p>
+		</div>
 	</div>
 </div>

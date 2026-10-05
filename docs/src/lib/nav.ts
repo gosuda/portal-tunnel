@@ -40,6 +40,7 @@ export const guidesNavigation: NavSection[] = [
 		defaultOpen: true,
 		items: [
 			{ title: 'What is Portal?', href: '/what-is-portal' },
+			{ title: 'Feature Inventory', href: '/features' },
 			{ title: 'Prerequisites', href: '/prerequisites' },
 			{ title: 'Getting Started', href: '/getting-started' }
 		]

@@ -1,42 +1,27 @@
 import type { Lease } from "@/types/api";
 import { TunnelCommandForm } from "@/components/TunnelCommandForm";
 
-const coreFeatures = [
+const relayDocsLinks = [
   {
-    eyebrow: "Ingress",
-    title: "Public HTTPS for localhost",
+    eyebrow: "Documentation",
+    title: "Feature Inventory",
     description:
-      "Publish local services through public relays without opening inbound ports.",
+      "Explore the canonical matrix of supported capabilities across CLI, Agent, SDK, and Relay.",
+    href: "https://gosuda.github.io/portal-tunnel/features",
   },
   {
-    eyebrow: "TLS",
-    title: "Keyless end-to-end tenant TLS",
+    eyebrow: "Operations",
+    title: "Self-Hosting Relays",
     description:
-      "Relays sign handshakes without session keys; self-probes flag suspected MITM.",
+      "Run your own MIT-licensed relay server with single-command Docker Compose and zero telemetry.",
+    href: "https://gosuda.github.io/portal-tunnel/self-hosting",
   },
   {
-    eyebrow: "Relays",
-    title: "Self-hosted anonymous relays",
+    eyebrow: "Architecture",
+    title: "Security & Transport",
     description:
-      "Use discovered public relays or run your own without a central account or operator.",
-  },
-  {
-    eyebrow: "Failover",
-    title: "Resilient relay pools",
-    description:
-      "Keep connections to discovered or explicit relays so services survive relay failures.",
-  },
-  {
-    eyebrow: "Payments",
-    title: "x402 for the agentic web",
-    description:
-      "Agents and browsers pay with Sui USDC in-flow; the tunnel enforces access to protected routes.",
-  },
-  {
-    eyebrow: "Transport",
-    title: "Web traffic and raw protocols",
-    description:
-      "Carry HTTPS, raw TCP, and UDP workloads without SSH or WebSocket overlays.",
+      "Understand client-side tenant TLS, keyless signing, MITM self-probe, and relay ownership.",
+    href: "https://gosuda.github.io/portal-tunnel/security-model",
   },
 ] as const;
 
@@ -119,27 +104,33 @@ export function LandingHero({ leases }: { leases: Lease[] | null }) {
 
       <div className="relative mt-10 -mx-4 w-auto sm:-mx-6 md:-mx-8">
         <div className="overflow-hidden border-y border-border/80 bg-border/80">
-          <div className="grid gap-px sm:grid-cols-2 lg:grid-cols-3">
-            {coreFeatures.map(({ eyebrow, title, description }) => (
-              <article
+          <div className="grid gap-px sm:grid-cols-3">
+            {relayDocsLinks.map(({ eyebrow, title, description, href }) => (
+              <a
                 key={title}
-                className="flex min-h-48 bg-background p-6 text-left transition-colors duration-200 hover:bg-secondary/35 sm:min-h-52 sm:p-7"
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group flex min-h-44 bg-background p-6 text-left transition-colors duration-200 hover:bg-secondary/35 sm:min-h-48 sm:p-7"
               >
                 <div className="flex h-full flex-col space-y-3">
                   <p className="text-[11px] font-semibold uppercase tracking-normal text-primary/80">
                     {eyebrow}
                   </p>
-                  <h3 className="text-[1.2rem] font-semibold tracking-normal text-foreground sm:text-[1.32rem] sm:leading-tight">
-                    {title}
+                  <h3 className="flex items-center justify-between text-[1.15rem] font-semibold tracking-normal text-foreground group-hover:text-primary sm:text-[1.25rem] sm:leading-tight">
+                    <span>{title}</span>
+                    <span className="text-xs text-text-muted transition-transform group-hover:translate-x-0.5">
+                      &rarr;
+                    </span>
                   </h3>
-                  <p className="max-w-[30ch] text-[0.95rem] leading-6 text-text-muted">
+                  <p className="max-w-[32ch] text-[0.92rem] leading-6 text-text-muted">
                     {description}
                   </p>
                   <div className="mt-auto pt-4">
-                    <div className="h-px w-10 bg-primary/45" />
+                    <div className="h-px w-10 bg-primary/45 transition-all group-hover:w-16 group-hover:bg-primary" />
                   </div>
                 </div>
-              </article>
+              </a>
             ))}
           </div>
         </div>

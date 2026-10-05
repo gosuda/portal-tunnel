@@ -17,136 +17,96 @@
 
 ## 为什么选择 Portal？
 
-Portal 是一个本地隧道运行时和中继网络。它通过自托管或公共中继发布本地服务，把路由策略保留在隧道进程中，并避免依赖托管式厂商账户。
+Portal 是一个本地隧道运行时和中继网络，用于将服务发布到 Agent 互联网。它通过自托管或公共中继发布本地应用、API、工具和 Agent，把路由和安全策略保留在本地隧道进程中，彻底避免了托管厂商账户或绑卡需求。
 
-- **自托管，完全开源** - 用一条命令运行你自己的中继。中继采用 MIT 许可证，没有企业版层级，没有功能门槛，也不会回传遥测。你的中继，你的规则。
+- **自托管，完全开源** - 用一条命令运行你自己的中继。MIT 许可证，无任何遥测回传，无企业版门槛。
+- **匿名中继网络** - 连接公共中继，或把自托管中继与社区中继组合成具备高可用故障转移的中继池。
+- **端到端租户 TLS** - 对于未启用缓存的 HTTPS 流暴露，TLS 在本地隧道进程中终止；中继无法查看明文或会话密钥。
+- **基于 IVNP 的覆盖网络** - 需要增强路由隐私时，反向回程流可通过独立的 IVNP 覆盖网络进行传输。
+- **内置 MITM 检测** - 主动自探测机制对比两端导出的 TLS 密钥材料，及时发现中继侧 TLS 拦截；`--ban-mitm` 会自动封禁异常中继。
+- **无需账户，无需 API Key** - 身份认证采用本地 secp256k1 密钥对（`identity.json`）与 SIWE 挑战签名。
+- **原生 x402 支付** - 支持免 gas 的 Sui USDC 或 Casper wCSPR 路由级小额支付，无需外部支付网关。
 
-- **匿名中继网络** - 无需托管账户或中心化运营方即可连接公共中继。你可以把自托管中继和公共中继组合到一个池中，把信任拆分给你选择的多个独立运营方。
-
-- **端到端租户 TLS** - 对于未启用缓存的普通暴露，Portal 会在用户端点而不是中继处终止租户 TLS。
-
-- **基于 IVNP 的覆盖网络** - 通过公共入口发布服务，由独立的 IVNP 覆盖网络连接入口与选定的网关。Portal 选择并授权端点；IVNP 负责端点之间的网络路径。
-
-- **内置 MITM 检测** - Portal 会在真实流量开始后主动自探测自己的连接。它会比较两端导出的 TLS 密钥材料，并把不匹配视为疑似中继侧 TLS 终止。当前的 keyless TLS 租户栈支持密钥材料导出，因此租户 TLS 暴露会启用该探测；`--ban-mitm` 会在检测到不匹配时封禁中继。
-
-- **无账户，无 API Key** - 身份认证使用本地生成的 secp256k1 密钥对进行 SIWE 兼容签名。无需邮箱，无需注册，也没有厂商锁定。
-
-- **原生 x402 支付** - Routed HTTP 路径可以在代理前要求 Sui gasless USDC x402 支付。浏览器应用可以导入 `/x402/client.js`，原生客户端可以直接调用 `/x402/prepare` 并发送 `X-PAYMENT`。
-
-## 基于 IVNP 的覆盖网络
-
-Portal 通过公共入口发布服务，而无需自己管理入口后方的网络路径。借助 IVNP 覆盖网络，网络路由可以独立于 Portal 的端点策略变化；身份、租约归属、授权以及 SDK 的反向端点契约保持不变。
-
-反向连接由隧道端向外建立：
-
-```text
-直接连接（默认）：
-隧道 / SDK ------------------------------------> Portal 公共入口
-
-覆盖网络（显式启用）：
-隧道 / SDK -> 覆盖网络网关 -> IVNP 网络 -> Portal 公共入口
-                            （内部路径不透明）
-```
-
-公共客户端仍然连接 Portal 公共入口，隧道负责把流转发到本地服务。IVNP 可以使用多个内部路由器和跳点；Portal 不选择其顺序，也不将其存入租约或发现状态。这些路由由 IVNP 管理，并非 Portal 管理的中继链。
-
-```bash
-portal expose 3000 --overlay
-```
-
-该选项优先使用可用的覆盖网络网关；直接反向传输仍然是默认和回退方式。参阅[覆盖网络概念](docs/src/routes/concepts/+page.md#ivnp-backed-overlay-networking)和[详细架构](docs/src/routes/architecture/+page.md#ivnp-backed-overlay-networking)。
+> 📖 **查看完整功能清单**：
+> 如需查看 Portal 在 CLI、Agent、SDK 和 Relay 各端支持的全部 20+ 项功能、接口支持情况及信任边界，请参阅**[权威功能清单 (Feature Inventory)](https://gosuda.github.io/portal-tunnel/features)**。
 
 ## 对比
 
 | | Portal | ngrok | Cloudflare Tunnel | frp |
 |---|---|---|---|---|
-| 公共 localhost URL | **是** | 是 | 是 | 是 |
-| 可自托管 | **是** | 仅企业版 | 否 | 是 |
-| 开源 | **MIT** | 否 | 仅客户端 | Apache 2.0 |
-| 自定义域名 | **是** | 付费套餐 | 是 | 是 |
-| 端到端租户 TLS | **是** | 否 | 否 | 否 |
-| MITM 自探测 | **依赖 TLS 密钥材料导出** | 否 | 否 | 否 |
-| 多中继故障切换 | **是** | 托管 | 内置 | 否 |
-| 需要账户 | **否** | 是 | 是 | 否 |
-| 原生 x402 支付 | **是** | 否 | 否 | 否 |
+| 公共 localhost URL | **支持** | 支持 | 支持 | 支持 |
+| 自托管 | **支持** | 仅企业版 | 不支持 | 支持 |
+| 开源协议 | **MIT** | 否 | 仅客户端 | Apache 2.0 |
+| 自定义域名 | **支持** | 付费方案 | 支持 | 支持 |
+| 端到端租户 TLS | **支持（未缓存流）** | 否 | 否 | 否 |
+| MITM 自探测 | **支持（导出 TLS 密钥材料）** | 否 | 否 | 否 |
+| 多中继故障转移 | **支持** | 托管式 | 内置 | 否 |
+| 需要账户 | **不需要** | 需要 | 需要 | 不需要 |
+| 原生 x402 支付 | **支持** | 否 | 否 | 否 |
 
-## 快速开始
+## 快速上手
 
-### 公开本地服务
+### 1. 公开本地服务
 
 **macOS / Linux:**
-
 ```bash
 curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/install.sh | bash
 portal expose 3000
 ```
 
 **Windows (PowerShell):**
-
 ```powershell
 $ProgressPreference = 'SilentlyContinue'
 irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
 portal expose 3000
 ```
 
-Portal 会立即为你的本地应用打印一个公共 HTTPS URL。更多示例：
+Portal 会立即打印公共 HTTPS 网址。更多常用示例：
 
 ```bash
-# 自定义名称和中继
+# 自定义名称与显式指定中继
 portal expose 3000 --name myapp --relays https://portal.example.com --discovery=false
 
-# 优先通过 IVNP 覆盖网络承载反向流（当可用时）
-portal expose 3000 --overlay
-
-# 把前端和 API 挂到同一个 URL 后面
+# 在单个域名下挂载多个本地服务
 portal expose --name myapp \
   --http-route /api=http://127.0.0.1:3001 \
   --http-route /=http://127.0.0.1:5173
 
-# 在代理某个路由前要求 Sui USDC x402 支付
-portal expose --name paid-app \
-  --http-route "/paid=http://127.0.0.1:3001 GET:0.01" \
-  --http-route /=http://127.0.0.1:5173 \
-  --x402-pay-to 0x...
-
-# 原始 TCP 端口（Minecraft、数据库、SSH）
+# 专用原生 TCP 端口（Minecraft、SSH、数据库）
 portal expose localhost:25565 --name minecraft --tcp
 
+# 优先使用 IVNP 覆盖网络回程路径
+portal expose 3000 --overlay
 ```
 
-对于付费路由，支付策略运行在隧道进程内，而不是中继上。默认使用 Sui mainnet；加上 `--x402-testnet` 可切换到 Sui testnet，这个选择与中继自身的支付设置无关。隧道会在同一个公共 origin 上提供 `/x402/client.js` 和 `/x402/prepare`。浏览器前端可以导入 `/x402/client.js` 并调用 `x402Fetch()`；原生客户端可以直接调用 `/x402/prepare`，用自己的 Sui 运行时签名返回的交易，并发送签名后的 `X-PAYMENT`。
+### 2. 使用本地 AI Agent 插件
 
-完整路由语法请参阅 [CLI Reference](cmd/portal-tunnel/README.md)，x402 helper endpoint 请参阅 [API Reference](docs/src/routes/api-reference/+page.md#payments)。
-
-### 使用本地 AI agent 插件
-
-仓库提供面向 Codex、Claude Code 和 Cursor 的 `portal-deploy` 插件。共用的 `portal-expose` skill 会检查本地应用、打开 Portal 隧道、验证公网 URL，并交接生命周期。
-
-只安装该 skill：
+本仓库为 Codex、Claude Code 和 Cursor 提供了内置 `portal-deploy` 插件（包含 `portal-expose` 和 `portal-connect` 技能）：
 
 ```bash
+# GitHub CLI
+gh skill install gosuda/portal-tunnel portal-deploy/portal-expose
+
+# skills CLI
 npx skills add gosuda/portal-tunnel --skill portal-expose
 ```
 
-加上 `-g` 可安装到所有项目。然后让 agent 用 Portal 部署、预览或分享本地应用。Codex、Claude Code 和 Cursor 的宿主 marketplace 安装步骤见 [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md)。
+对你的 Agent 说：*“用 Portal 把 3000 端口上的应用公开并验证公共网址。”* 详见 [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md)。
 
-### 使用 Portal Agent 持续运行隧道
+### 3. 使用 Portal Agent 管理常驻隧道
 
-当隧道需要在终端之外持续运行时，使用 `portal agent run`。它会作为本地 OS 服务运行，在一个 TOML 配置中保持所有隧道在线，并提供用于公共中继管理的 dashboard。
+需要隧道在后台或作为系统服务持久运行时：
 
 ```bash
 portal agent run --config config.toml
 portal agent dashboard --config config.toml
-portal agent restart --config config.toml
-portal agent stop --config config.toml
-
-# 前台模式会跳过 OS 服务安装。
-portal agent run --config config.toml --foreground
 ```
 
-配置格式请参阅 [Portal Agent](docs/src/routes/portal-agent/+page.md)。
+配置语法与服务安装说明请参阅 [Portal Agent 指南](https://gosuda.github.io/portal-tunnel/portal-agent)。
 
-### 运行你自己的中继
+### 4. 运行你自己的中继
+
+数秒内启动自托管开源中继：
 
 ```bash
 git clone https://github.com/gosuda/portal-tunnel
@@ -154,49 +114,51 @@ cd portal-tunnel && cp .env.example .env
 docker compose up
 ```
 
-关于带 DNS 自动化（ACME）、TCP/UDP 端口范围和中继策略的公网部署，请参阅 [Deployment](docs/src/routes/deployment/+page.md)。
+生产环境配置（ACME 自动化证书、TCP/UDP 端口范围及策略）请参阅 [Deployment 指南](https://gosuda.github.io/portal-tunnel/deployment)。
 
-## 端到端加密如何工作
+## 端到端加密工作原理
 
 ```text
-Browser
-  -> Relay SNI router  (只读取路由 token，转发原始字节)
-  -> Reverse session
-  -> Portal tunnel     (在本地执行 TLS 握手，派生 session key)
-  -> Local service
+浏览器
+  -> 中继 SNI 路由器  (仅读取路由标识，转发加密密文)
+  -> 反向会话
+  -> Portal 隧道       (在本地完成 TLS 握手，派生会话密钥)
+  -> 本地服务
 ```
 
-1. 中继接受传入连接，并只读取 TLS ClientHello 中用于 SNI 路由的信息。
-2. 中继通过反向 session 转发原始加密流，而不终止 TLS。
-3. 你这边的 Portal 隧道在本地完成 TLS 握手。Session key 在你的机器上派生。
-4. 对于中继托管域名，隧道会通过 `/v1/sign` 获取证书签名，把中继仅用作 keyless signing oracle。中继签署握手 transcript，但永远不会接收 session key。
-5. 握手完成后，中继继续转发密文，无法访问明文。
+1. **SNI 路由**：中继接收连接，仅读取 TLS ClientHello 中的 SNI 主机名以匹配租约。
+2. **密文转发**：中继在不终止 TLS 的情况下，将原始加密字节流直接转入反向会话。
+3. **本地握手**：Portal 隧道在本地机器上完成 TLS 握手；会话密钥完全在本地派生。
+4. **无私钥签名**：针对中继托管域名，隧道通过中继的 `/v1/sign` 接口对握手转录本进行远程签名，中继始终无法获取会话密钥。
+5. **密文保护**：握手完成后，中继继续双向转发密文，无法接触任何明文应用数据。
 
-## 公共中继 Registry
+## 公共中继注册表
 
-Portal 官方公共中继 registry 是：
+Portal 默认包含官方公共中继注册表：
 
 ```text
 https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json
 ```
 
-隧道客户端默认包含这个 registry。如果你运营公共 Portal 中继，可以提交 pull request，把你的中继 URL 添加到 `registry.json`。
+如果你运营公共 Portal 中继，欢迎提交 Pull Request 将中继 URL 添加到 `registry.json`。
 
-## 文档
+## 文档导航
 
-- [CLI Reference](cmd/portal-tunnel/README.md)
-- [Concepts](docs/src/routes/concepts/+page.md)
-- [Portal Agent](docs/src/routes/portal-agent/+page.md)
-- [Wallet and ENS](docs/src/routes/wallet-and-ens/+page.md)
-- [Security Model](docs/src/routes/security-model/+page.md)
-- [Architecture](docs/src/routes/architecture/+page.md)
-- [Deployment](docs/src/routes/deployment/+page.md)
-- [Configuration Reference](docs/src/routes/configuration/+page.md)
+- **[功能清单 (Feature Inventory)](https://gosuda.github.io/portal-tunnel/features)** - 所有产品功能、支持接口与边界的权威清单。
+- **[快速入门 (Getting Started)](https://gosuda.github.io/portal-tunnel/getting-started)** - 安装与首次公开教程。
+- **[核心概念 (Concepts)](https://gosuda.github.io/portal-tunnel/concepts)** - 中继与隧道所有权模型、传输模式与覆盖网络。
+- **[安全模型 (Security Model)](https://gosuda.github.io/portal-tunnel/security-model)** - 租户 TLS、无私钥签名与静态缓存信任边界。
+- **[CLI 参考 (CLI Reference)](https://gosuda.github.io/portal-tunnel/cli-reference)** - 完整命令行参数与使用说明。
+- **[Portal Agent](https://gosuda.github.io/portal-tunnel/portal-agent)** - 多隧道持久化管理与交互式仪表盘。
+- **[自托管指南 (Self-Hosting)](https://gosuda.github.io/portal-tunnel/self-hosting)** - 部署与管理自有中继。
+- **[配置参考 (Configuration)](https://gosuda.github.io/portal-tunnel/configuration)** - 环境变量与配置选项说明。
+- **[API 参考 (API Reference)](https://gosuda.github.io/portal-tunnel/api-reference)** - 中继网络协议与客户端 API。
+- **[维护者架构 (Maintainer Architecture)](docs/maintainer/architecture.md)** - 内部 Go 包结构与数据流说明。
 
 ## 贡献
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证
 
-MIT License - see [LICENSE](LICENSE).
+MIT License - 详见 [LICENSE](LICENSE)。
