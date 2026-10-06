@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Header } from "@/components/Header";
 import { LandingHero } from "@/components/LandingHero";
 import { SearchBar } from "@/components/SearchBar";
@@ -30,6 +31,22 @@ const REVEAL_KEYFRAMES: Keyframe[] = [
   { opacity: 0, translate: "0 14px" },
   { opacity: 1, translate: "0 0" },
 ];
+// Every named card becomes its own snapshot during a reorder, so long lists
+// reorder instantly.
+const REORDER_ANIMATION_MAX_CARDS = 60;
+
+// maxCards bounds how many cards can be on screen before or after the update.
+function animateReorder(update: () => void, maxCards: number): void {
+  if (
+    typeof document.startViewTransition !== "function" ||
+    maxCards > REORDER_ANIMATION_MAX_CARDS ||
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  ) {
+    update();
+    return;
+  }
+  document.startViewTransition(() => flushSync(update));
+}
 
 function normalizeRelayURL(relayURL: string | undefined): string {
   return typeof relayURL === "string" ? relayURL.trim() : "";
@@ -148,12 +165,17 @@ function LiveAppCard({
   onToggleFavorite,
   onVote,
 }: LiveAppCardProps) {
-  // Fixed for the life of the mount, so polling re-renders never restart the
-  // card's entrance.
+  // Both are fixed for the life of the mount: reorders keep the card's
+  // transition identity, and polling re-renders never restart its entrance.
+  const viewTransitionName = useId();
   const [revealOnView] = useState(() => !revealedServerIds.has(server.id));
 
   return (
-    <div data-reveal={revealOnView ? server.id : undefined}>
+    <div
+      data-reveal={revealOnView ? server.id : undefined}
+      className="[view-transition-class:live-app]"
+      style={{ viewTransitionName }}
+    >
       <ServerCard
         server={server}
         isFavorite={isFavorite}
@@ -316,6 +338,18 @@ export function ServerListView({
     return () => observer.disconnect();
   }, [renderedServerIds]);
 
+  // Search keystrokes and polling update in place; these discrete choices move
+  // cards to their new spot. Status and tag changes can grow the list, so they
+  // are bounded by every lease rather than the cards shown now.
+  const handleToggleFavorite = (serverId: string) =>
+    animateReorder(() => onToggleFavorite(serverId), filteredServers.length);
+  const handleSortByChange = (value: SortOption) =>
+    animateReorder(() => onSortByChange(value), filteredServers.length);
+  const handleStatusChange = (value: StatusFilter) =>
+    animateReorder(() => onStatusChange(value), leases?.length ?? Infinity);
+  const handleTagToggle = (tag: string) =>
+    animateReorder(() => onTagToggle(tag), leases?.length ?? Infinity);
+
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
   const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
   const hasActiveFilters =
@@ -330,7 +364,7 @@ export function ServerListView({
           key={server.id}
           server={server}
           isFavorite={favoriteIds.has(server.id)}
-          onToggleFavorite={onToggleFavorite}
+          onToggleFavorite={handleToggleFavorite}
           onVote={onVote}
         />
       ))}
@@ -343,13 +377,13 @@ export function ServerListView({
       searchQuery={searchQuery}
       onSearchChange={onSearchChange}
       status={status}
-      onStatusChange={onStatusChange}
+      onStatusChange={handleStatusChange}
       sortBy={sortBy}
-      onSortByChange={onSortByChange}
+      onSortByChange={handleSortByChange}
       availableTags={availableTags}
       selectedTags={selectedTags}
-      onAddTag={onTagToggle}
-      onRemoveTag={onTagToggle}
+      onAddTag={handleTagToggle}
+      onRemoveTag={handleTagToggle}
     />
   );
   const publicFooter = (

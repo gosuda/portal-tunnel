@@ -168,4 +168,9 @@
   [data-reveal]:not([data-revealed]) {
     opacity: 0;
   }
+
+  ::view-transition-group(*.live-app) {
+    animation-duration: 280ms;
+    animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
 }
