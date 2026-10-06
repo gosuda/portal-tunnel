@@ -25,7 +25,7 @@ Portal is an open-source tunnel runtime and relay network for publishing service
 - **IVNP-backed Overlay Networking** - Bridge reverse backhauls over an independent IVNP overlay network when enhanced routing privacy is desired.
 - **Built-in MITM Detection** - Active self-probe compares TLS keying material on both ends to detect relay-side TLS termination; `--ban-mitm` bans compromised relays automatically.
 - **No Accounts, No API Keys** - Authentication uses local secp256k1 cryptographic identities (`identity.json`) with SIWE challenge signing.
-- **Native x402 Payments** - Route-level micropayments using gasless Sui USDC or Casper wCSPR without external payment gateways.
+- **Native x402 Payments** - Route-level micropayments using gasless Sui USDC or Casper wCSPR without traditional payment processors.
 
 > 📖 **Explore the Complete Product Capabilities**:
 > For the complete matrix of all 20+ supported capabilities across CLI, Agent, SDK, and Relay—including interface support and trust boundaries—see the **[Canonical Feature Inventory](https://gosuda.github.io/portal-tunnel/features)**.
@@ -129,7 +129,7 @@ Browser
 1. **SNI Routing**: The relay accepts the incoming connection and reads only the TLS ClientHello for SNI-based lease routing.
 2. **Raw Forwarding**: It forwards the raw encrypted stream over the reverse session without terminating TLS.
 3. **Local Handshake**: The Portal tunnel completes the TLS handshake locally; session keys are derived on your machine.
-4. **Keyless Signing**: For relay-hosted domains, the tunnel signs transcripts via `/v1/sign`. The relay never receives session keys.
+4. **Keyless Signing**: For relay-hosted domains, the relay signs handshake transcripts via `/v1/sign`. The relay never receives session keys.
 5. **Ciphertext Security**: The relay continues forwarding ciphertext without access to tenant plaintext.
 
 ## Public Relay Registry

@@ -52,7 +52,7 @@ Browser
 1. **ClientHello**: A browser connects to the relay and sends a TLS ClientHello.
 2. **SNI Routing**: The relay reads the SNI hostname, identifies the matching lease, and claims a waiting reverse session from the tunnel process.
 3. **Local Handshake**: The tunnel process completes the tenant TLS handshake locally.
-4. **Keyless Signing**: For relay-hosted wildcard domains, the tunnel signs handshake transcripts through the relay's `/v1/sign` endpoint. The relay never receives session keys.
+4. **Keyless Signing**: For relay-hosted wildcard domains, the tunnel obtains transcript signatures from the relay via `/v1/sign`. The relay never receives session keys.
 5. **Ciphertext Forwarding**: After the handshake completes, the relay forwards raw encrypted bytes bidirectionally without access to plaintext.
 
 ---
@@ -170,7 +170,7 @@ plus any explicit relay URLs, then expands through peer discovery gossip.
 
 - Explicit relays are always prioritized and connected.
 - Auto-discovered relays form an active pool bounded by `--max-active-relays`.
-- If an active relay fails, connections seamlessly switch over to surviving relays.
+- The exposure remains reachable through surviving relays when one relay fails.
 
 ---
 
