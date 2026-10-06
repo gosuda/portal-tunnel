@@ -229,6 +229,8 @@ export function ServerListView({
 
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
   const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
+  const hasActiveFilters =
+    searchQuery.trim() !== "" || status !== "all" || selectedTags.length > 0;
   const serverGrid = filteredServers.length > 0 ? (
     <div className="grid grid-cols-1 gap-6 py-4 min-[500px]:py-6 min-[500px]:grid-cols-2 md:grid-cols-3">
       {filteredServers.map((server) => (
@@ -242,9 +244,6 @@ export function ServerListView({
       ))}
     </div>
   ) : null;
-  const noMatchingServersMessage = (
-    <p className="text-lg text-text-muted">No servers match these filters</p>
-  );
 
   const searchBar = (
     <SearchBar
@@ -348,12 +347,20 @@ export function ServerListView({
               ) : (
                 <div className="mt-6 flex min-h-88 flex-col">
                   {searchBar}
+                  {/* leases is null until the relay answers, so an empty list
+                      is not yet a fact about this relay. */}
                   <div className="px-1 pt-3 text-sm text-text-muted">
-                    0 services visible
+                    {leases === null ? "Connecting to relay…" : "0 services visible"}
                   </div>
-                  <div className="flex flex-1 items-center justify-center py-12 text-center">
-                    {noMatchingServersMessage}
-                  </div>
+                  {leases !== null && (
+                    <div className="flex flex-1 items-center justify-center py-12 text-center">
+                      <p className="text-lg text-text-muted">
+                        {hasActiveFilters
+                          ? "No servers match these filters"
+                          : "No apps are live on this relay yet"}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
