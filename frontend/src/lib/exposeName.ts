@@ -1,5 +1,7 @@
 const DEFAULT_TARGET_PORT = "3000";
 const DEFAULT_TARGET_HOST = "127.0.0.1";
+// Mirrors Go's types.CanonicalLeaseNameMaxLength; relays reject longer names.
+const LEASE_NAME_MAX_LENGTH = 22;
 
 const exposeNameOpeners = [
   "arcade", "bouncy", "bravo", "bubble", "candy", "cosmic", "dapper", "electric",
@@ -50,11 +52,14 @@ export function buildDefaultExposeName(
   const seed = normalizeSeed(clientSeed);
   const normalizedTarget = normalizeExposeTarget(target);
   const [first, second, third] = pickNameIndexes(`${seed}|${normalizedTarget}`);
-  const label = [
-    exposeNameOpeners[first],
-    exposeNameCenters[second],
-    exposeNameClosers[third],
-  ].join("-");
+  const opener = exposeNameOpeners[first];
+  const center = exposeNameCenters[second];
+  const closer = exposeNameClosers[third];
+
+  let label = `${opener}-${center}-${closer}`;
+  if (label.length > LEASE_NAME_MAX_LENGTH) {
+    label = `${opener}-${center}`;
+  }
 
   return normalizeExposeName(label);
 }
@@ -66,11 +71,11 @@ export function normalizeExposeName(value: string): string {
   }
 
   if (/^[a-z0-9-]+$/.test(cleaned)) {
-    return cleaned.slice(0, 63);
+    return cleaned.slice(0, LEASE_NAME_MAX_LENGTH).replace(/-+$/, "");
   }
 
   const ascii = toASCIILabel(cleaned);
-  if (ascii === "" || ascii.length > 63) {
+  if (ascii === "" || ascii.length > LEASE_NAME_MAX_LENGTH) {
     return "";
   }
   return ascii;
