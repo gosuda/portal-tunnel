@@ -100,7 +100,8 @@ function buildTunnelCommandParts({
 
   const curlFlags = isLocalRelayOrigin(currentOrigin) ? "-ksSL" : "-sSL";
   return {
-    installLine: `curl ${curlFlags} ${formatToken(installScriptURL, os)} | bash`,
+    // bash runs the installer in a subshell, so add its default install dir to this shell's PATH.
+    installLine: `curl ${curlFlags} ${formatToken(installScriptURL, os)} | bash && export PATH="$HOME/.local/bin:$PATH"`,
     exposeHead: "portal expose",
     exposeOptions: [...leadingArgs, ...exposeArgs],
   };

@@ -22,6 +22,6 @@ export function buildTunnelCommand(
 	const release = 'https://github.com/gosuda/portal-tunnel/releases/latest/download';
 	const install = os === 'windows'
 		? `$ProgressPreference = 'SilentlyContinue'\nirm ${release}/install.ps1 | iex`
-		: `curl -fsSL ${release}/install.sh | bash`;
+		: `curl -fsSL ${release}/install.sh | bash && export PATH="$HOME/.local/bin:$PATH"`;
 	return { install, run };
 }
