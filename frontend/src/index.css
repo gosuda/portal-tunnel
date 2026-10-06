@@ -161,3 +161,11 @@
     color: inherit;
   }
 }
+
+/* Live app cards stay hidden until ServerListView sets data-revealed and fades
+   them up in reading order as they come into view. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-reveal]:not([data-revealed]) {
+    opacity: 0;
+  }
+}
