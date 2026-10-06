@@ -163,7 +163,7 @@ QUIC tunnel backhaul to the local UDP target specified by `--udp-addr`.
 
 ---
 
-## Multi-Relay Selection & Failover
+<h2 id="multi-relay-selection">Multi-Relay Selection & Failover</h2>
 
 When discovery is enabled, Portal bootstraps from the official public registry
 plus any explicit relay URLs, then expands through peer discovery gossip.

@@ -106,7 +106,7 @@ The CLI enforces the following contractual invariants at startup:
 
 1. **Target Exclusivity**:
    - A positional `<target>` argument cannot be combined with `--http-route` or `--serve`.
-   - `--serve` cannot be combined with `--http-route`, `--tcp`, or `--udp`.
+   - `--serve` cannot be combined with `--http-route`, `--tcp`, or `--udp`. The entry file must exist. Path traversal (`..`) is refused, but symlinks inside the served folder pointing outside it are followed (serve trusted folders only).
 2. **Static Offload**:
    - `--cache` and `--cache-ttl` require `--serve`.
    - `--cache` cannot be combined with `--ban-mitm` (caching intentionally trusts the relay with browser TLS).
