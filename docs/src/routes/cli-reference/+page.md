@@ -300,9 +300,10 @@ portal expose --serve ./site/index.html
 ```
 
 Unknown paths fall back to the entry HTML file. Keep private files outside the
-served directory. Static serving is available in both `expose` and agent TOML;
-the agent format supports `serve` but not relay cache options (`cache` or
-`cache_ttl`).
+served directory. Path traversal (`..`) is refused, but symlinks inside the folder
+that point outside it are followed, so only serve folders you trust. Static serving
+is available in both `expose` and agent TOML; the agent format supports `serve` but
+not relay cache options (`cache` or `cache_ttl`).
 
 To opt in to storage and TLS termination at one selected relay:
 
