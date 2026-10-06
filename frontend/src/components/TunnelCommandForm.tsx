@@ -78,6 +78,7 @@ function HeroTunnelCommandForm({
     nameSeed,
     target,
     setTarget,
+    name,
     copied,
     os,
     generatedName,
@@ -240,6 +241,7 @@ function HeroTunnelCommandForm({
             <span className={heroControlLabelClass}>Name</span>
             <Input
               type="text"
+              value={name}
               onChange={handleNameChange}
               placeholder={generatedName}
               aria-label="Public name"

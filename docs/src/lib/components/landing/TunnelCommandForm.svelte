@@ -37,10 +37,6 @@
 		nameSeed = crypto.randomUUID();
 		name = '';
 	}
-
-	function handleNameChange(event: Event) {
-		name = (event.target as HTMLInputElement).value;
-	}
 </script>
 
 <div id="quick-start" class="relative mt-8 scroll-mt-24 sm:mt-10">
@@ -172,7 +168,7 @@
 							</span>
 							<input
 								type="text"
-								oninput={handleNameChange}
+								bind:value={name}
 								placeholder={generatedName}
 								aria-label="Public name"
 								class="min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-[13px] text-slate-200 shadow-none outline-none placeholder:text-slate-600"
