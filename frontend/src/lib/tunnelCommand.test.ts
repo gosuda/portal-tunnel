@@ -22,7 +22,7 @@ describe("tunnelCommand", () => {
 
     expect(command).toBe(
       [
-        `curl -ksSL https://localhost/api/install.sh | bash && export PATH="$HOME/.local/bin:$PATH"`,
+        `curl -ksSL https://localhost/api/install.sh | bash && export PATH="$HOME/.local/bin:$HOME/bin:$PATH"`,
         "portal expose 3000 --name my-app --relays https://localhost",
       ].join("\n")
     );
@@ -67,7 +67,7 @@ describe("tunnelCommand", () => {
 
     expect(buildTunnelCommand(options)).toBe(
       [
-        `curl -ksSL https://localhost/api/install.sh | bash && export PATH="$HOME/.local/bin:$PATH"`,
+        `curl -ksSL https://localhost/api/install.sh | bash && export PATH="$HOME/.local/bin:$HOME/bin:$PATH"`,
         "portal expose --serve /Users/me/site/main.html --name my-app --relays https://localhost",
       ].join("\n")
     );
