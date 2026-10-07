@@ -19,6 +19,14 @@ describe("buildDefaultExposeName", () => {
       expect(buildDefaultExposeName(target, seed)).toBe(expected);
     },
   );
+
+  it("always fits the lease name limit as a valid DNS label", () => {
+    for (let i = 0; i < 2000; i += 1) {
+      const name = buildDefaultExposeName("3000", `seed-${i}`);
+      expect(name.length).toBeLessThanOrEqual(22);
+      expect(name).toMatch(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
+    }
+  });
 });
 
 describe("normalizeExposeName", () => {

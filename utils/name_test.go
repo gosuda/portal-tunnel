@@ -1,6 +1,25 @@
 package utils
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
+
+func TestDefaultExposeNameFitsCanonicalHostname(t *testing.T) {
+	t.Parallel()
+
+	const address = "0x0000000000000000000000000000000000000001"
+	for i := range 2000 {
+		seed := fmt.Sprintf("seed-%d", i)
+		name, err := DefaultExposeName("3000", seed)
+		if err != nil {
+			t.Fatalf("DefaultExposeName(%q) error = %v", seed, err)
+		}
+		if _, err := CanonicalLeaseHostname(name, address, "example.com"); err != nil {
+			t.Fatalf("DefaultExposeName(%q) = %q, rejected by CanonicalLeaseHostname: %v", seed, name, err)
+		}
+	}
+}
 
 func TestDefaultExposeName(t *testing.T) {
 	t.Parallel()
