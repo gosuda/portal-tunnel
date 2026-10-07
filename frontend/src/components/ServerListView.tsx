@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Header } from "@/components/Header";
 import { LandingHero } from "@/components/LandingHero";
@@ -31,11 +31,10 @@ const REVEAL_KEYFRAMES: Keyframe[] = [
   { opacity: 0, translate: "0 14px" },
   { opacity: 1, translate: "0 0" },
 ];
-// Every named card becomes its own snapshot during a reorder, so long lists
-// reorder instantly.
+// Every named card becomes its own snapshot during a reorder, so an update that
+// could render more cards than this happens instantly.
 const REORDER_ANIMATION_MAX_CARDS = 60;
 
-// maxCards bounds how many cards can be on screen before or after the update.
 function animateReorder(update: () => void, maxCards: number): void {
   if (
     typeof document.startViewTransition !== "function" ||
@@ -153,35 +152,22 @@ export function relayReleaseLabel(
 }
 
 interface LiveAppCardProps {
-  server: BaseServer;
-  isFavorite: boolean;
-  onToggleFavorite: (serverId: string) => void;
-  onVote?: (hostname: string, vote: ReputationVote) => void | Promise<void>;
+  serverId: string;
+  children: ReactNode;
 }
 
-function LiveAppCard({
-  server,
-  isFavorite,
-  onToggleFavorite,
-  onVote,
-}: LiveAppCardProps) {
-  // Both are fixed for the life of the mount: reorders keep the card's
-  // transition identity, and polling re-renders never restart its entrance.
+function LiveAppCard({ serverId, children }: LiveAppCardProps) {
   const viewTransitionName = useId();
-  const [revealOnView] = useState(() => !revealedServerIds.has(server.id));
+  // The set changes outside React, so the card reads it once when it mounts.
+  const [revealOnView] = useState(() => !revealedServerIds.has(serverId));
 
   return (
     <div
-      data-reveal={revealOnView ? server.id : undefined}
+      data-reveal={revealOnView ? serverId : undefined}
       className="[view-transition-class:live-app]"
       style={{ viewTransitionName }}
     >
-      <ServerCard
-        server={server}
-        isFavorite={isFavorite}
-        onToggleFavorite={onToggleFavorite}
-        onVote={onVote}
-      />
+      {children}
     </div>
   );
 }
@@ -338,9 +324,8 @@ export function ServerListView({
     return () => observer.disconnect();
   }, [renderedServerIds]);
 
-  // Search keystrokes and polling update in place; these discrete choices move
-  // cards to their new spot. Status and tag changes can grow the list, so they
-  // are bounded by every lease rather than the cards shown now.
+  // Discrete choices animate; search keystrokes and polling update in place.
+  // Status and tag changes can grow the list, so every lease bounds them.
   const handleToggleFavorite = (serverId: string) =>
     animateReorder(() => onToggleFavorite(serverId), filteredServers.length);
   const handleSortByChange = (value: SortOption) =>
@@ -363,13 +348,14 @@ export function ServerListView({
       className="grid grid-cols-1 gap-6 py-4 min-[500px]:py-6 min-[500px]:grid-cols-2 md:grid-cols-3"
     >
       {filteredServers.map((server) => (
-        <LiveAppCard
-          key={server.id}
-          server={server}
-          isFavorite={favoriteIds.has(server.id)}
-          onToggleFavorite={handleToggleFavorite}
-          onVote={onVote}
-        />
+        <LiveAppCard key={server.id} serverId={server.id}>
+          <ServerCard
+            server={server}
+            isFavorite={favoriteIds.has(server.id)}
+            onToggleFavorite={handleToggleFavorite}
+            onVote={onVote}
+          />
+        </LiveAppCard>
       ))}
     </div>
   ) : null;
