@@ -2,6 +2,7 @@ const DEFAULT_TARGET_PORT = '3000';
 const DEFAULT_TARGET_HOST = '127.0.0.1';
 // Mirrors Go's types.CanonicalLeaseNameMaxLength; relays reject longer names.
 const LEASE_NAME_MAX_LENGTH = 22;
+const DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 const exposeNameOpeners = [
 	'arcade', 'bouncy', 'bravo', 'bubble', 'candy', 'cosmic', 'dapper', 'electric',
@@ -54,9 +55,14 @@ export function buildDefaultExposeName(target: string, clientSeed: string): stri
 export function normalizeExposeName(value: string): string {
 	const cleaned = sanitizeExposeNameInput(value);
 	if (cleaned === '') return '';
-	if (/^[a-z0-9-]+$/.test(cleaned)) return cleaned.slice(0, LEASE_NAME_MAX_LENGTH).replace(/-+$/, '');
+	if (/^[a-z0-9-]+$/.test(cleaned)) {
+		// Cutting punycode would corrupt it.
+		if (cleaned.startsWith('xn--') && cleaned.length > LEASE_NAME_MAX_LENGTH) return '';
+		return cleaned.slice(0, LEASE_NAME_MAX_LENGTH).replace(/-+$/, '');
+	}
+	// The URL parser maps some characters to ASCII punctuation, e.g. "⑴" to "(1)".
 	const ascii = toASCIILabel(cleaned);
-	if (ascii === '' || ascii.length > LEASE_NAME_MAX_LENGTH) return '';
+	if (ascii.length > LEASE_NAME_MAX_LENGTH || !DNS_LABEL_PATTERN.test(ascii)) return '';
 	return ascii;
 }
 
