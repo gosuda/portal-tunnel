@@ -162,10 +162,11 @@
   }
 }
 
-/* Live app cards stay hidden until ServerListView sets data-revealed and fades
-   them up in reading order as they come into view. */
-@media (prefers-reduced-motion: no-preference) {
-  [data-reveal]:not([data-revealed]) {
+/* Live app motion, owned by ServerListView: cards stay hidden until it sets
+   data-revealed as they scroll into view (screen only, so printing shows every
+   card), and reorder transitions use this timing. */
+@media screen and (prefers-reduced-motion: no-preference) {
+  #live-servers [data-reveal]:not([data-revealed]) {
     opacity: 0;
   }
 
