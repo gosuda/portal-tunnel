@@ -78,6 +78,7 @@ function HeroTunnelCommandForm({
     nameSeed,
     target,
     setTarget,
+    name,
     copied,
     os,
     generatedName,
@@ -110,9 +111,9 @@ function HeroTunnelCommandForm({
     : lease.ready > 0 ? "alive" : "registered";
 
   const serviceStatusTone = {
-    alive: isTerminal ? "bg-green-400" : "bg-green-600",
-    registered: isTerminal ? "bg-sky-400" : "bg-sky-600",
-    waiting: isTerminal ? "bg-slate-500" : "bg-slate-400",
+    alive: "bg-green-status",
+    registered: "bg-primary",
+    waiting: "bg-text-muted",
   }[serviceStatus];
   const serviceStatusHeadline = {
     alive: "This URL is live now",
@@ -240,6 +241,7 @@ function HeroTunnelCommandForm({
             <span className={heroControlLabelClass}>Name</span>
             <Input
               type="text"
+              value={name}
               onChange={handleNameChange}
               placeholder={generatedName}
               aria-label="Public name"

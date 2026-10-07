@@ -127,7 +127,7 @@ export function LandingHero({ leases }: { leases: Lease[] | null }) {
                     {description}
                   </p>
                   <div className="mt-auto pt-4">
-                    <div className="h-px w-10 bg-primary/45 transition-all group-hover:w-16 group-hover:bg-primary" />
+                    <div className="h-px w-10 bg-primary/45 transition-[width,background-color] group-hover:w-16 group-hover:bg-primary" />
                   </div>
                 </div>
               </a>

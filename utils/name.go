@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var exposeNameOpeners = []string{
@@ -43,8 +45,9 @@ const (
 )
 
 // DefaultExposeName generates a deterministic 3-word DNS label from a target
-// address and seed using FNV-1a hashing. The algorithm matches the frontend
-// implementation in frontend/src/lib/exposeName.ts:buildDefaultExposeName.
+// address and seed using FNV-1a hashing, dropping the third word when the label
+// would exceed types.CanonicalLeaseNameMaxLength. The algorithm matches the
+// frontend implementation in frontend/src/lib/exposeName.ts:buildDefaultExposeName.
 func DefaultExposeName(target, rawSeed string) (string, error) {
 	seed := strings.TrimSpace(rawSeed)
 	if cut, ok := strings.CutPrefix(seed, "cli_"); ok {
@@ -57,11 +60,14 @@ func DefaultExposeName(target, rawSeed string) (string, error) {
 	second := fnv1a32(input, 0x9e3779b9)
 	third := fnv1a32(input, 0x85ebca6b)
 
-	label := strings.Join([]string{
-		exposeNameOpeners[int(first&0xff)%len(exposeNameOpeners)],
-		exposeNameCenters[int(second&0xff)%len(exposeNameCenters)],
-		exposeNameClosers[int(third&0xff)%len(exposeNameClosers)],
-	}, "-")
+	opener := exposeNameOpeners[int(first&0xff)%len(exposeNameOpeners)]
+	center := exposeNameCenters[int(second&0xff)%len(exposeNameCenters)]
+	closer := exposeNameClosers[int(third&0xff)%len(exposeNameClosers)]
+
+	label := opener + "-" + center + "-" + closer
+	if len(label) > types.CanonicalLeaseNameMaxLength {
+		label = opener + "-" + center
+	}
 
 	return NormalizeDNSLabel(label)
 }

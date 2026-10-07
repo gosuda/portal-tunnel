@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { Header } from "@/components/Header";
 import { LandingHero } from "@/components/LandingHero";
 import { SearchBar } from "@/components/SearchBar";
@@ -20,6 +21,31 @@ export interface KnownRelay {
 const OFFICIAL_REGISTRY_SOURCE_URL =
   "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
 const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
+
+// A card fades up the first time it comes into view on this page load; cards
+// that return through filters or a remount appear in place.
+const revealedServerIds = new Set<string>();
+const REVEAL_STAGGER_MS = 70;
+const REVEAL_STAGGER_MAX_STEPS = 7;
+const REVEAL_KEYFRAMES: Keyframe[] = [
+  { opacity: 0, translate: "0 14px" },
+  { opacity: 1, translate: "0 0" },
+];
+// Every named card becomes its own snapshot during a reorder, so an update that
+// could render more cards than this happens instantly.
+const REORDER_ANIMATION_MAX_CARDS = 60;
+
+function animateReorder(update: () => void, maxCards: number): void {
+  if (
+    typeof document.startViewTransition !== "function" ||
+    maxCards > REORDER_ANIMATION_MAX_CARDS ||
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  ) {
+    update();
+    return;
+  }
+  document.startViewTransition(() => flushSync(update));
+}
 
 function normalizeRelayURL(relayURL: string | undefined): string {
   return typeof relayURL === "string" ? relayURL.trim() : "";
@@ -125,6 +151,27 @@ export function relayReleaseLabel(
   return null;
 }
 
+interface LiveAppCardProps {
+  serverId: string;
+  children: ReactNode;
+}
+
+function LiveAppCard({ serverId, children }: LiveAppCardProps) {
+  const viewTransitionName = useId();
+  // The set changes outside React, so the card reads it once when it mounts.
+  const [revealOnView] = useState(() => !revealedServerIds.has(serverId));
+
+  return (
+    <div
+      data-reveal={revealOnView ? serverId : undefined}
+      className="[view-transition-class:live-app]"
+      style={{ viewTransitionName }}
+    >
+      {children}
+    </div>
+  );
+}
+
 interface ServerListViewProps {
   title?: string;
   searchQuery: string;
@@ -227,24 +274,91 @@ export function ServerListView({
     };
   }, [currentRelayURL]);
 
+  const gridRef = useRef<HTMLDivElement>(null);
+  const renderedServerIds = filteredServers.map((server) => server.id).join("\n");
+
+  useEffect(() => {
+    const pending = gridRef.current?.querySelectorAll<HTMLElement>(
+      "[data-reveal]:not([data-revealed])"
+    );
+    if (!pending?.length) {
+      return;
+    }
+
+    const animateEntrance = window.matchMedia(
+      "(prefers-reduced-motion: no-preference)"
+    ).matches;
+
+    // Cards entering together reveal in reading order: row by row, left to right.
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries
+          .filter((entry) => entry.isIntersecting)
+          .sort(
+            (a, b) =>
+              a.boundingClientRect.top - b.boundingClientRect.top ||
+              a.boundingClientRect.left - b.boundingClientRect.left
+          )
+          .forEach((entry, order) => {
+            const card = entry.target as HTMLElement;
+            observer.unobserve(card);
+            card.setAttribute("data-revealed", "");
+            if (card.dataset.reveal) {
+              revealedServerIds.add(card.dataset.reveal);
+            }
+            if (animateEntrance) {
+              // A script animation keeps running when React moves the card; a
+              // CSS animation would restart on every re-insertion.
+              card.animate(REVEAL_KEYFRAMES, {
+                duration: 460,
+                delay: Math.min(order, REVEAL_STAGGER_MAX_STEPS) * REVEAL_STAGGER_MS,
+                easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+                fill: "backwards",
+              });
+            }
+          });
+      },
+      { threshold: 0.15 }
+    );
+    pending.forEach((card) => observer.observe(card));
+    return () => observer.disconnect();
+  }, [renderedServerIds]);
+
+  // Discrete choices animate; search keystrokes and polling update in place.
+  // Status and tag changes can grow the list, so every lease bounds them.
+  const handleToggleFavorite = (serverId: string) =>
+    animateReorder(() => onToggleFavorite(serverId), filteredServers.length);
+  const handleSortByChange = (value: SortOption) =>
+    animateReorder(() => onSortByChange(value), filteredServers.length);
+  const handleStatusChange = (value: StatusFilter) =>
+    animateReorder(() => onStatusChange(value), leases?.length ?? Infinity);
+  const handleTagToggle = (tag: string) =>
+    animateReorder(() => onTagToggle(tag), leases?.length ?? Infinity);
+
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
   const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
+  const hasActiveFilters =
+    searchQuery.trim() !== "" || status !== "all" || selectedTags.length > 0;
+  // leases is null before the relay first answers and after a failed poll; an
+  // active filter explains an empty list either way.
+  const showConnecting = leases === null && !hasActiveFilters;
   const serverGrid = filteredServers.length > 0 ? (
-    <div className="grid grid-cols-1 gap-6 py-4 min-[500px]:py-6 min-[500px]:grid-cols-2 md:grid-cols-3">
+    <div
+      ref={gridRef}
+      className="grid grid-cols-1 gap-6 py-4 min-[500px]:py-6 min-[500px]:grid-cols-2 md:grid-cols-3"
+    >
       {filteredServers.map((server) => (
-        <ServerCard
-          key={server.id}
-          server={server}
-          isFavorite={favoriteIds.has(server.id)}
-          onToggleFavorite={onToggleFavorite}
-          onVote={onVote}
-        />
+        <LiveAppCard key={server.id} serverId={server.id}>
+          <ServerCard
+            server={server}
+            isFavorite={favoriteIds.has(server.id)}
+            onToggleFavorite={handleToggleFavorite}
+            onVote={onVote}
+          />
+        </LiveAppCard>
       ))}
     </div>
   ) : null;
-  const noMatchingServersMessage = (
-    <p className="text-lg text-text-muted">No servers match these filters</p>
-  );
 
   const searchBar = (
     <SearchBar
@@ -252,13 +366,13 @@ export function ServerListView({
       searchQuery={searchQuery}
       onSearchChange={onSearchChange}
       status={status}
-      onStatusChange={onStatusChange}
+      onStatusChange={handleStatusChange}
       sortBy={sortBy}
-      onSortByChange={onSortByChange}
+      onSortByChange={handleSortByChange}
       availableTags={availableTags}
       selectedTags={selectedTags}
-      onAddTag={onTagToggle}
-      onRemoveTag={onTagToggle}
+      onAddTag={handleTagToggle}
+      onRemoveTag={handleTagToggle}
     />
   );
   const publicFooter = (
@@ -349,11 +463,17 @@ export function ServerListView({
                 <div className="mt-6 flex min-h-88 flex-col">
                   {searchBar}
                   <div className="px-1 pt-3 text-sm text-text-muted">
-                    0 services visible
+                    {showConnecting ? "Connecting to relay…" : "0 services visible"}
                   </div>
-                  <div className="flex flex-1 items-center justify-center py-12 text-center">
-                    {noMatchingServersMessage}
-                  </div>
+                  {!showConnecting && (
+                    <div className="flex flex-1 items-center justify-center py-12 text-center">
+                      <p className="text-lg text-text-muted">
+                        {hasActiveFilters
+                          ? "No servers match these filters"
+                          : "No apps are live on this relay yet"}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
