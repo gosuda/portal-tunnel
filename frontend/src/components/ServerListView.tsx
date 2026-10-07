@@ -354,6 +354,9 @@ export function ServerListView({
   const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
   const hasActiveFilters =
     searchQuery.trim() !== "" || status !== "all" || selectedTags.length > 0;
+  // leases is null before the relay first answers and after a failed poll; an
+  // active filter explains an empty list either way.
+  const showConnecting = leases === null && !hasActiveFilters;
   const serverGrid = filteredServers.length > 0 ? (
     <div
       ref={gridRef}
@@ -473,12 +476,10 @@ export function ServerListView({
               ) : (
                 <div className="mt-6 flex min-h-88 flex-col">
                   {searchBar}
-                  {/* leases is null until the relay answers, so an empty list
-                      is not yet a fact about this relay. */}
                   <div className="px-1 pt-3 text-sm text-text-muted">
-                    {leases === null ? "Connecting to relay…" : "0 services visible"}
+                    {showConnecting ? "Connecting to relay…" : "0 services visible"}
                   </div>
-                  {leases !== null && (
+                  {!showConnecting && (
                     <div className="flex flex-1 items-center justify-center py-12 text-center">
                       <p className="text-lg text-text-muted">
                         {hasActiveFilters
