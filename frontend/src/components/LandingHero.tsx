@@ -18,16 +18,14 @@ const capabilities = [
     title: "Public HTTPS for localhost",
     description:
       "Publish local services through public relays without opening inbound ports.",
-    linkLabel: "Learn more",
-    href: "https://gosuda.github.io/portal-tunnel/features",
+    href: "https://gosuda.github.io/portal-tunnel/getting-started",
   },
   {
     label: "TLS",
     icon: LockKeyhole,
     title: "Keyless end-to-end tenant TLS",
     description:
-      "Relays sign handshakes without session keys; self-probes flag suspected MITM.",
-    linkLabel: "Read the security model",
+      "Relays sign handshakes without session keys, so uncached HTTPS stays end to end. Opt-in static caching trusts the selected relays.",
     href: "https://gosuda.github.io/portal-tunnel/security-model",
   },
   {
@@ -36,7 +34,6 @@ const capabilities = [
     title: "Self-hosted anonymous relays",
     description:
       "Use discovered public relays or run your own without a central account or operator.",
-    linkLabel: "Self-hosting guide",
     href: "https://gosuda.github.io/portal-tunnel/self-hosting",
   },
   {
@@ -45,8 +42,7 @@ const capabilities = [
     title: "Resilient relay pools",
     description:
       "Keep connections to discovered or explicit relays so services survive relay failures.",
-    linkLabel: "Learn more",
-    href: "https://gosuda.github.io/portal-tunnel/features",
+    href: "https://gosuda.github.io/portal-tunnel/concepts#multi-relay-selection",
   },
   {
     label: "Payments",
@@ -54,7 +50,6 @@ const capabilities = [
     title: "x402 for the agentic web",
     description:
       "Agents and browsers pay with Sui USDC in-flow; the tunnel enforces access to protected routes.",
-    linkLabel: "Learn more",
     href: "https://gosuda.github.io/portal-tunnel/features",
   },
   {
@@ -63,8 +58,7 @@ const capabilities = [
     title: "Web traffic and raw protocols",
     description:
       "Carry HTTPS, raw TCP, and UDP workloads without SSH or WebSocket overlays.",
-    linkLabel: "Learn more",
-    href: "https://gosuda.github.io/portal-tunnel/features",
+    href: "https://gosuda.github.io/portal-tunnel/tcp-udp-tunneling",
   },
 ] as const;
 
@@ -173,40 +167,45 @@ export function LandingHero({ leases }: { leases: Lease[] | null }) {
         </div>
 
         <div
-          role="group"
+          role="radiogroup"
           aria-label="Capabilities"
-          className="mt-16 flex gap-2 overflow-x-auto py-1 [scrollbar-width:none] sm:mt-20 [&::-webkit-scrollbar]:hidden"
+          className="mt-16 grid grid-cols-3 gap-y-6 sm:mt-20 sm:grid-cols-6"
         >
           {capabilities.map((capability) => (
-            <button
+            <label
               key={capability.label}
-              type="button"
-              aria-pressed={capability === active}
-              aria-controls="capability-detail"
-              onClick={() => setActive(capability)}
-              className="group flex min-w-26 flex-1 flex-col items-center gap-3.5 rounded-xl px-1 py-2 text-sm font-semibold text-text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-pressed:text-foreground"
+              className="group flex cursor-pointer flex-col items-center gap-3.5 rounded-xl py-2 text-sm font-semibold text-text-muted transition-colors hover:text-foreground has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-ring"
             >
+              <input
+                type="radio"
+                name="capability"
+                checked={capability === active}
+                onChange={() => setActive(capability)}
+                className="sr-only"
+              />
               <capability.icon
                 aria-hidden="true"
                 strokeWidth={1.25}
-                className="size-11 transition-[color,translate] duration-300 group-hover:-translate-y-0.5 group-aria-pressed:text-primary motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
+                className="size-11 transition-[color,translate] duration-300 group-hover:-translate-y-0.5 group-has-checked:text-primary motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
               />
               {capability.label}
               <span
                 aria-hidden="true"
-                className="size-1 rounded-full bg-primary opacity-0 transition-opacity group-aria-pressed:opacity-100"
+                className="size-1 rounded-full bg-primary opacity-0 transition-opacity group-has-checked:opacity-100"
               />
-            </button>
+            </label>
           ))}
         </div>
 
         <div
-          id="capability-detail"
           aria-live="polite"
           className="mx-auto mt-12 min-h-56 max-w-2xl text-center"
         >
-          {/* Keyed so each selection remounts and replays the entrance. */}
-          <div key={active.label} className="motion-safe:animate-capability-in">
+          {/* Keyed so each pick mounts fresh and fades in from its starting style. */}
+          <div
+            key={active.label}
+            className="duration-500 starting:translate-y-2 starting:opacity-0 motion-safe:transition-[opacity,translate]"
+          >
             <h3 className="text-2xl font-bold tracking-normal text-foreground sm:text-3xl">
               {active.title}
             </h3>
@@ -219,7 +218,7 @@ export function LandingHero({ leases }: { leases: Lease[] | null }) {
               rel="noopener noreferrer"
               className="mt-2 inline-flex min-h-11 items-center gap-1 text-primary underline-offset-4 hover:underline"
             >
-              {active.linkLabel}
+              Learn more
               <ChevronRight aria-hidden="true" className="size-4" />
             </a>
           </div>
