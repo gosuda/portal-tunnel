@@ -11,6 +11,8 @@ import {
 import type { Lease } from "@/types/api";
 import { TunnelCommandForm } from "@/components/TunnelCommandForm";
 
+// Selected highlights for the landing page; /features is the canonical
+// inventory.
 const capabilities = [
   {
     label: "Ingress",
@@ -25,13 +27,13 @@ const capabilities = [
     icon: LockKeyhole,
     title: "Keyless end-to-end tenant TLS",
     description:
-      "Relays sign handshakes without session keys, so uncached HTTPS stays end to end. Opt-in static caching trusts the selected relays.",
+      "Relays sign handshakes without session keys, so uncached HTTPS stays end to end. Opt-in static caching lets selected relays terminate browser TLS and read HTTP content.",
     href: "https://gosuda.github.io/portal-tunnel/security-model",
   },
   {
     label: "Relays",
     icon: Network,
-    title: "Self-hosted anonymous relays",
+    title: "Public & self-hosted relays",
     description:
       "Use discovered public relays or run your own without a central account or operator.",
     href: "https://gosuda.github.io/portal-tunnel/self-hosting",
@@ -149,11 +151,11 @@ export function LandingHero({ leases }: { leases: Lease[] | null }) {
             className="max-w-2xl text-3xl font-bold tracking-normal text-foreground sm:text-4xl lg:text-5xl"
             style={{ lineHeight: 1.08 }}
           >
-            Everything a tunnel needs.{" "}
+            Highlights.{" "}
             <span className="text-text-muted">Nothing to sign up for.</span>
           </h2>
           <p className="flex flex-col text-sm leading-6 text-text-muted">
-            Want the full matrix?
+            Everything else is in the
             <a
               href="https://gosuda.github.io/portal-tunnel/features"
               target="_blank"
