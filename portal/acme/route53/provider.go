@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -49,7 +50,7 @@ func New(cfg Config) *Provider {
 			HostedZoneID:    normalizeZoneID(cfg.HostedZoneID),
 			KMSKeyARN:       strings.TrimSpace(cfg.KMSKeyARN),
 		},
-		zones: utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
+		zones: utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
 	}
 }
 
@@ -83,11 +84,8 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
-	baseDomain = utils.NormalizeBaseDomain(baseDomain)
-	if baseDomain == "" {
-		return errors.New("base domain is required")
-	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	baseDomain, err := dnsrecord.ARecordsInputs(baseDomain, publicIPv4)
+	if err != nil {
 		return err
 	}
 
@@ -101,7 +99,7 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 		return err
 	}
 
-	for _, recordName := range []string{baseDomain, "*." + baseDomain} {
+	for _, recordName := range dnsrecord.ApexWildcard(baseDomain) {
 		if err := upsertARecord(ctx, client, hostedZoneID, recordName, publicIPv4); err != nil {
 			return fmt.Errorf("upsert route53 A record %s: %w", recordName, err)
 		}
@@ -113,11 +111,8 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	name, err := dnsrecord.ARecordInputs(name, publicIPv4)
+	if err != nil {
 		return err
 	}
 
@@ -140,9 +135,9 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
+	name, err := dnsrecord.RecordName(name)
+	if err != nil {
+		return err
 	}
 
 	client, err := newClient(ctx, p.cfg)
@@ -171,13 +166,9 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return errors.New("txt record value is required")
+	name, value, err := dnsrecord.TXTInputs(name, value)
+	if err != nil {
+		return err
 	}
 
 	client, err := newClient(ctx, p.cfg)
@@ -199,13 +190,9 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	matchPrefix = strings.TrimSpace(matchPrefix)
-	if matchPrefix == "" {
-		return errors.New("txt record match prefix is required")
+	name, matchPrefix, err := dnsrecord.TXTPrefixInputs(name, matchPrefix)
+	if err != nil {
+		return err
 	}
 
 	client, err := newClient(ctx, p.cfg)
@@ -223,72 +210,13 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	return nil
 }
 
-func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, record dnsrecord.HTTPSRecord) error {
-	if p == nil {
-		return errors.New("route53 provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	content, err := record.Content()
-	if err != nil {
-		return err
-	}
-
-	client, err := newClient(ctx, p.cfg)
-	if err != nil {
-		return err
-	}
-
-	hostedZoneID, err := p.findHostedZoneID(ctx, client, name)
-	if err != nil {
-		return err
-	}
-	if err := upsertRecord(ctx, client, hostedZoneID, name, route53types.RRTypeHttps, []string{content}, "Managed by Portal ECH"); err != nil {
-		return fmt.Errorf("upsert route53 HTTPS record %s: %w", name, err)
-	}
-	return nil
-}
-
-func (p *Provider) DeleteHTTPSRecord(ctx context.Context, name string) error {
-	if p == nil {
-		return errors.New("route53 provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-
-	client, err := newClient(ctx, p.cfg)
-	if err != nil {
-		return err
-	}
-
-	hostedZoneID, err := p.findHostedZoneID(ctx, client, name)
-	if err != nil {
-		return err
-	}
-	recordSet, err := getRecordSet(ctx, client, hostedZoneID, name, route53types.RRTypeHttps)
-	if err != nil {
-		return err
-	}
-	if recordSet == nil {
-		return nil
-	}
-	if err := deleteRecordSet(ctx, client, hostedZoneID, recordSet, "Managed by Portal ECH cleanup"); err != nil {
-		return fmt.Errorf("delete route53 HTTPS record %s: %w", name, err)
-	}
-	return nil
-}
-
 func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
 		return "", "", "", errors.New("route53 provider is nil")
 	}
-	baseDomain = utils.NormalizeBaseDomain(baseDomain)
-	if baseDomain == "" {
-		return "", "", "", errors.New("base domain is required")
+	baseDomain, err = dnsrecord.BaseDomain(baseDomain)
+	if err != nil {
+		return "", "", "", err
 	}
 
 	client, err := newClient(ctx, p.cfg)
@@ -403,9 +331,7 @@ func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Clie
 			if *zones == nil {
 				*zones = make(map[string]string)
 			}
-			for zoneName, zoneID := range zonesByName {
-				(*zones)[zoneName] = zoneID
-			}
+			maps.Copy((*zones), zonesByName)
 		})
 	}
 
@@ -650,8 +576,7 @@ func ensureActiveKeySigningKey(ctx context.Context, client *awsroute53.Client, h
 		Status:                  aws.String("ACTIVE"),
 	})
 	if err != nil {
-		var alreadyExists *route53types.KeySigningKeyAlreadyExists
-		if errors.As(err, &alreadyExists) {
+		if _, ok := errors.AsType[*route53types.KeySigningKeyAlreadyExists](err); ok {
 			return nil
 		}
 		return fmt.Errorf("create route53 key-signing key %q: %w", kskName, err)

@@ -1,17 +1,15 @@
 package utils
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -19,22 +17,112 @@ type CommandFunc func([]string) error
 type IntEnvParser func(string, int) int
 type boolFlagValue interface{ IsBoolFlag() bool }
 
+// EnvVar records one environment variable that backs a flag, together with the
+// flag's own documentation. Flag definitions already carry the name, default,
+// and usage text, so registering them here lets `relay-server config`, the
+// startup feature report, and the generated .env.example all read from the flag
+// definitions instead of a second hand-maintained list.
+type EnvVar struct {
+	Name    string
+	Aliases []string
+	Flag    string
+	Usage   string
+	Default string
+	// Value is what the flag actually resolved to. Reporting the raw text of an
+	// env file instead would show a value that a higher-priority name overrode,
+	// or an alias that was never consulted, as though it were in effect.
+	Value string
+	// SetBy is the environment variable that supplied the value, or empty when
+	// the default was used. It answers "I set that, why did nothing change?".
+	SetBy string
+}
+
+// EnvIssue is a value that was present but unusable. Without recording these,
+// the resolve helpers below silently fall back and a typo is indistinguishable
+// from an intentional default.
+type EnvIssue struct {
+	Name    string
+	Value   string
+	Problem string
+}
+
+// The process environment is process-global, so the registry is too. Flag
+// registration happens once per process before any concurrent work starts.
+var (
+	envVars     []EnvVar
+	envVarIndex = map[string]int{}
+	envIssues   []EnvIssue
+)
+
+// EnvVars returns every environment variable backing a registered flag, in
+// registration order.
+func EnvVars() []EnvVar {
+	return slices.Clone(envVars)
+}
+
+// EnvIssues returns values that were set but could not be used.
+func EnvIssues() []EnvIssue {
+	return slices.Clone(envIssues)
+}
+
+// ResetEnvRegistry clears both the registry and the recorded issues so a
+// resolution pass reports only its own environment. Registering a flag twice
+// already replaces its entry, but issues would otherwise accumulate across
+// passes and a stale one could fail a configuration that no longer has it.
+func ResetEnvRegistry() {
+	envVars = nil
+	envVarIndex = map[string]int{}
+	envIssues = nil
+}
+
+func registerEnvVar(flagName, usage, defaultValue, value, setBy string, envNames []string) {
+	names := make([]string, 0, len(envNames))
+	for _, envName := range envNames {
+		if envName = strings.TrimSpace(envName); envName != "" {
+			names = append(names, envName)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+
+	entry := EnvVar{
+		Name:    names[0],
+		Aliases: names[1:],
+		Flag:    flagName,
+		Usage:   usage,
+		Default: defaultValue,
+		Value:   value,
+		SetBy:   setBy,
+	}
+	// Registering the same flag twice (a re-parsed command, a test) replaces the
+	// entry rather than duplicating it.
+	if i, ok := envVarIndex[entry.Name]; ok {
+		envVars[i] = entry
+		return
+	}
+	envVarIndex[entry.Name] = len(envVars)
+	envVars = append(envVars, entry)
+}
+
+func recordEnvIssue(name, value, problem string) {
+	envIssues = append(envIssues, EnvIssue{Name: name, Value: value, Problem: problem})
+}
+
 func trimmedEnv(name string) string {
 	return strings.TrimSpace(os.Getenv(name))
 }
 
-func resolveStringEnv(fallback string, envNames ...string) string {
-	value := fallback
+func resolveStringEnv(fallback string, envNames ...string) (string, string) {
 	for _, envName := range envNames {
 		if envValue := trimmedEnv(envName); envValue != "" {
-			value = envValue
-			break
+			return envValue, envName
 		}
 	}
-	return value
+	return fallback, ""
 }
 
-func resolveBoolEnv(fallback bool, envNames ...string) bool {
+func resolveBoolEnv(fallback bool, envNames ...string) (bool, string) {
 	for _, envName := range envNames {
 		raw := trimmedEnv(envName)
 		if raw == "" {
@@ -42,14 +130,15 @@ func resolveBoolEnv(fallback bool, envNames ...string) bool {
 		}
 		parsed, err := strconv.ParseBool(raw)
 		if err != nil {
-			return fallback
+			recordEnvIssue(envName, raw, "not a boolean; use true or false")
+			return fallback, ""
 		}
-		return parsed
+		return parsed, envName
 	}
-	return fallback
+	return fallback, ""
 }
 
-func resolveIntEnv(fallback int, parse IntEnvParser, envNames ...string) int {
+func resolveIntEnv(fallback int, parse IntEnvParser, envNames ...string) (int, string) {
 	if parse == nil {
 		parse = func(raw string, fallback int) int {
 			v, err := strconv.Atoi(strings.TrimSpace(raw))
@@ -64,9 +153,21 @@ func resolveIntEnv(fallback int, parse IntEnvParser, envNames ...string) int {
 		if raw == "" {
 			continue
 		}
-		return parse(raw, fallback)
+		// Parse first so a non-numeric value is reported as such instead of
+		// being flattened into the parser's fallback.
+		number, err := strconv.Atoi(raw)
+		if err != nil {
+			recordEnvIssue(envName, raw, "not an integer")
+			return fallback, ""
+		}
+		value := parse(raw, fallback)
+		if value != number && value == fallback {
+			recordEnvIssue(envName, raw, "out of the accepted range")
+			return fallback, ""
+		}
+		return value, envName
 	}
-	return fallback
+	return fallback, ""
 }
 
 func ParsePortNumber(raw string, fallback int) int {
@@ -92,13 +193,6 @@ func ParseOptionalPortNumber(raw string, fallback int) int {
 	return ParsePortNumber(raw, fallback)
 }
 
-func DurationOrDefault(v, fallback time.Duration) time.Duration {
-	if v > 0 {
-		return v
-	}
-	return fallback
-}
-
 func IntOrDefault(v, fallback int) int {
 	if v > 0 {
 		return v
@@ -118,7 +212,29 @@ func StringFlag(fs *flag.FlagSet, target *string, name, fallback, usage string) 
 }
 
 func StringFlagEnv(fs *flag.FlagSet, target *string, name, fallback, usage string, envNames ...string) {
-	ensureFlagSet(fs).StringVar(target, name, resolveStringEnv(fallback, envNames...), flagUsage(usage, envNames...))
+	value, setBy := resolveStringEnv(fallback, envNames...)
+	registerEnvVar(name, usage, fallback, value, setBy, envNames)
+	flagSet := ensureFlagSet(fs)
+	flagSet.StringVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = fallback
+}
+
+// CSVFlagEnv resolves a comma-separated environment/flag value directly into
+// the slice owned by the application configuration.
+func CSVFlagEnv(fs *flag.FlagSet, target *[]string, name, fallback, usage string, envNames ...string) {
+	value, setBy := resolveStringEnv(fallback, envNames...)
+	registerEnvVar(name, usage, fallback, value, setBy, envNames)
+	if target != nil {
+		*target = SplitCSV(value)
+	}
+	flagSet := ensureFlagSet(fs)
+	flagSet.Func(name, flagUsage(usage, envNames...), func(value string) error {
+		if target != nil {
+			*target = SplitCSV(value)
+		}
+		return nil
+	})
+	flagSet.Lookup(name).DefValue = fallback
 }
 
 func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string) {
@@ -126,11 +242,32 @@ func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage 
 }
 
 func BoolFlagEnv(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string, envNames ...string) {
-	ensureFlagSet(fs).BoolVar(target, name, resolveBoolEnv(fallback, envNames...), flagUsage(usage, envNames...))
+	value, setBy := resolveBoolEnv(fallback, envNames...)
+	registerEnvVar(name, usage, strconv.FormatBool(fallback), strconv.FormatBool(value), setBy, envNames)
+	flagSet := ensureFlagSet(fs)
+	flagSet.BoolVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = strconv.FormatBool(fallback)
 }
 
 func IntFlagEnv(fs *flag.FlagSet, target *int, name string, fallback int, parse IntEnvParser, usage string, envNames ...string) {
-	ensureFlagSet(fs).IntVar(target, name, resolveIntEnv(fallback, parse, envNames...), flagUsage(usage, envNames...))
+	value, setBy := resolveIntEnv(fallback, parse, envNames...)
+	registerEnvVar(name, usage, strconv.Itoa(fallback), strconv.Itoa(value), setBy, envNames)
+	flagSet := ensureFlagSet(fs)
+	flagSet.IntVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = strconv.Itoa(fallback)
+}
+
+func DurationFlagEnv(fs *flag.FlagSet, target *time.Duration, name string, fallback time.Duration, usage string, envNames ...string) {
+	raw, setBy := resolveStringEnv(fallback.String(), envNames...)
+	value, err := time.ParseDuration(raw)
+	if err != nil {
+		recordEnvIssue(setBy, raw, "not a duration; use values such as 30m or 24h")
+		value, setBy = fallback, ""
+	}
+	registerEnvVar(name, usage, fallback.String(), value.String(), setBy, envNames)
+	flagSet := ensureFlagSet(fs)
+	flagSet.DurationVar(target, name, value, flagUsage(usage, envNames...))
+	flagSet.Lookup(name).DefValue = fallback.String()
 }
 
 func RepeatedStringFlag(fs *flag.FlagSet, target *[]string, name, usage string) {
@@ -174,10 +311,6 @@ func flagUsage(usage string, envNames ...string) string {
 		return "(env: " + envUsage + ")"
 	}
 	return usage + " (env: " + envUsage + ")"
-}
-
-func SignalContext() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 }
 
 func RunCommands(
@@ -242,7 +375,8 @@ func NewFlagSet(name string, usage func(io.Writer)) *flag.FlagSet {
 
 func ParseFlagSet(fs *flag.FlagSet, args []string, usage func(io.Writer)) error {
 	args = normalizeFlagArgs(fs, args)
-	if len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+	helpRequested := len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help")
+	if helpRequested {
 		if usage != nil {
 			usage(os.Stdout)
 		}
@@ -409,6 +543,30 @@ func WriteCommandUsage(w io.Writer, usage []string, examples []string) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Examples:")
 	for _, line := range examples {
+		fmt.Fprintln(w, "  "+strings.TrimSpace(line))
+	}
+}
+
+// WriteFlagDefaults prints the registered flags. Custom Usage printers replace
+// FlagSet defaults, so --help would otherwise list examples and omit the flags
+// agents need (identity-path, relays).
+func WriteFlagDefaults(w io.Writer, fs *flag.FlagSet) {
+	if w == nil || fs == nil {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Flags:")
+	fs.SetOutput(w)
+	fs.PrintDefaults()
+}
+
+func WriteHelpSection(w io.Writer, heading string, lines []string) {
+	if w == nil || strings.TrimSpace(heading) == "" || len(lines) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, strings.TrimSpace(heading)+":")
+	for _, line := range lines {
 		fmt.Fprintln(w, "  "+strings.TrimSpace(line))
 	}
 }

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildTunnelCommand,
-  buildTunnelDisplayCommand,
   buildTunnelPreviewURL,
 } from "@/lib/tunnelCommand";
 
@@ -23,7 +22,7 @@ describe("tunnelCommand", () => {
 
     expect(command).toBe(
       [
-        "curl -ksSL https://localhost/api/install.sh | bash",
+        `curl -ksSL https://localhost/api/install.sh | bash && export PATH="$HOME/.local/bin:$HOME/bin:$PATH"`,
         "portal expose 3000 --name my-app --relays https://localhost",
       ].join("\n")
     );
@@ -31,7 +30,7 @@ describe("tunnelCommand", () => {
     expect(command).not.toContain("\n  --name");
   });
 
-  it("keeps display and copied commands flat", () => {
+  it("keeps Windows commands flat with their install prelude", () => {
     const options = {
       currentOrigin: "https://relay.example.com",
       target: "localhost:3000",
@@ -44,13 +43,6 @@ describe("tunnelCommand", () => {
     };
 
     expect(buildTunnelCommand(options)).toBe(
-      [
-        `$ProgressPreference = 'SilentlyContinue'`,
-        `irm https://relay.example.com/api/install.ps1 | iex`,
-        `portal expose localhost:3000 --name my-app --relays https://relay.example.com --discovery=false --thumbnail https://example.com/thumb.png`,
-      ].join("\n")
-    );
-    expect(buildTunnelDisplayCommand(options)).toBe(
       [
         `$ProgressPreference = 'SilentlyContinue'`,
         `irm https://relay.example.com/api/install.ps1 | iex`,
@@ -75,7 +67,7 @@ describe("tunnelCommand", () => {
 
     expect(buildTunnelCommand(options)).toBe(
       [
-        "curl -ksSL https://localhost/api/install.sh | bash",
+        `curl -ksSL https://localhost/api/install.sh | bash && export PATH="$HOME/.local/bin:$HOME/bin:$PATH"`,
         "portal expose --serve /Users/me/site/main.html --name my-app --relays https://localhost",
       ].join("\n")
     );

@@ -1,8 +1,8 @@
 package sdk
 
 import (
+	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -12,14 +12,25 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/x402"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+const (
+	defaultHTTPReadHeaderTimeout = 30 * time.Second
+	defaultHTTPShutdownTimeout   = 5 * time.Second
+	defaultHTTPIdleTimeout       = 90 * time.Second
+)
+
+// RunHTTP serves handler on the relay listener and, when localAddr is set, on
+// that local address too. Requests from the relay listener reach handler with
+// X-Forwarded-Proto set to https, replacing any client-sent value: the tunnel
+// ends TLS for the public hostname. Do not use it on an exposure that enables
+// WithTCP: raw TCP sessions arrive on the same listener unencrypted and would be
+// labeled https too.
 func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
 	if relayListener == nil && localAddr == "" {
 		return errors.New("relay listener or local address is required")
@@ -32,8 +43,14 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	var relaySrv *http.Server
 	if relayListener != nil {
 		relaySrv = &http.Server{
-			Handler:           handler,
-			ReadHeaderTimeout: defaultRequestTimeout,
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// The tunnel ended TLS, and every public Portal URL is https, so a
+				// client-sent X-Forwarded-Proto cannot say otherwise.
+				r.Header.Set("X-Forwarded-Proto", "https")
+				handler.ServeHTTP(w, r)
+			}),
+			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
+			IdleTimeout:       defaultHTTPIdleTimeout,
 		}
 	}
 
@@ -42,7 +59,8 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 		localSrv = &http.Server{
 			Addr:              localAddr,
 			Handler:           handler,
-			ReadHeaderTimeout: defaultRequestTimeout,
+			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
+			IdleTimeout:       defaultHTTPIdleTimeout,
 		}
 	}
 
@@ -123,12 +141,13 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	return errors.Join(serveErr, shutdownErr)
 }
 
-// HTTPRouteConfig maps one public path prefix to one local HTTP upstream and optional x402 payment.
+// HTTPRouteConfig maps one public path prefix to one local HTTP upstream.
 type HTTPRouteConfig struct {
 	// Prefix is the public request path prefix, such as "/api" or "/".
 	Prefix string
-	// Upstream is the target HTTP URL, or a loopback host:port shorthand.
-	// Leave empty when StaticRoot is set.
+	// Upstream is the target HTTP URL, or a loopback host:port shorthand. It
+	// says where to connect; the upstream still receives the request's public
+	// Host. Leave empty when StaticRoot is set.
 	Upstream string
 	// StaticRoot, when set, serves files from this local directory as a static
 	// SPA instead of proxying to an Upstream. Unknown paths fall back to
@@ -137,30 +156,23 @@ type HTTPRouteConfig struct {
 	// StaticIndex is the SPA entry file served for the root and any unknown
 	// path under a static route. Defaults to "index.html" when empty.
 	StaticIndex string
-	// Methods limits payment to these HTTP methods. Empty means every method.
-	Methods []string
-	// Amount enables Sui USDC x402 payment for this public path prefix.
-	// It is a human USDC amount such as "0.01"; x402 converts it to atomic units.
-	Amount string
 }
 
-// HTTPRoutes serves HTTPRouteConfig upstreams and the shared x402 prepare endpoint.
+// HTTPRoutes serves HTTPRouteConfig upstreams over one shared handler.
 type HTTPRoutes struct {
 	routes []*httpRoute
 }
 
-// NewHTTPRoutes creates routed HTTP handling with an explicit x402
-// payment contract shared by every paid route.
-func NewHTTPRoutes(routeConfigs []HTTPRouteConfig, x402Payment types.X402Payment) (*HTTPRoutes, error) {
+// NewHTTPRoutes creates routed HTTP handling for the given route configs.
+func NewHTTPRoutes(routeConfigs []HTTPRouteConfig) (*HTTPRoutes, error) {
 	if len(routeConfigs) == 0 {
 		return nil, errors.New("at least one http route is required")
 	}
 
-	x402Payment.PayTo = strings.TrimSpace(x402Payment.PayTo)
 	routes := make([]*httpRoute, 0, len(routeConfigs))
 	seen := make(map[string]struct{}, len(routeConfigs))
 	for _, routeConfig := range routeConfigs {
-		route, err := newHTTPRoute(routeConfig, x402Payment)
+		route, err := newHTTPRoute(routeConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -168,7 +180,7 @@ func NewHTTPRoutes(routeConfigs []HTTPRouteConfig, x402Payment types.X402Payment
 			return nil, fmt.Errorf("duplicate http route prefix %q", route.prefix)
 		}
 		seen[route.prefix] = struct{}{}
-		route.handler = route.newHandler()
+		route.handler = route.baseHandler()
 		routes = append(routes, route)
 	}
 
@@ -188,49 +200,10 @@ func (h *HTTPRoutes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		path = r.URL.Path
 	}
 	path = utils.NormalizeURLPath(path)
-	if path == types.X402ClientPath {
-		x402.ServeClientJS(w, r)
-		return
-	}
-	prepare := path == types.X402PreparePath
-	var paymentSender string
-	paymentMethod := http.MethodGet
-	if prepare {
-		if !utils.RequireMethod(w, r, http.MethodPost) {
-			return
-		}
-		var req types.X402PreparePaymentRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid payment prepare request", http.StatusBadRequest)
-			return
-		}
-		if strings.TrimSpace(req.Path) == "" {
-			http.Error(w, "path is required", http.StatusBadRequest)
-			return
-		}
-		path = utils.NormalizeURLPath(req.Path)
-		paymentSender = req.Sender
-		if method := strings.ToUpper(strings.TrimSpace(req.Method)); method != "" {
-			paymentMethod = method
-		}
-	}
 
 	for _, route := range h.routes {
 		if route.prefix != "/" && path != route.prefix && !strings.HasPrefix(path, route.prefix+"/") {
 			continue
-		}
-
-		if prepare {
-			paid := route.payment != nil
-			if paid && len(route.paymentMethods) > 0 {
-				_, paid = route.paymentMethods[paymentMethod]
-			}
-			if !paid {
-				http.Error(w, "x402 payment is not enabled for path", http.StatusNotFound)
-				return
-			}
-			route.payment.WritePrepare(w, r, paymentSender, path)
-			return
 		}
 
 		route.handler.ServeHTTP(w, r)
@@ -246,12 +219,10 @@ type httpRoute struct {
 	upstreamDomain string
 	staticRoot     string
 	staticIndex    string
-	payment        *x402.Payment
-	paymentMethods map[string]struct{}
 	handler        http.Handler
 }
 
-func newHTTPRoute(routeConfig HTTPRouteConfig, x402Payment types.X402Payment) (*httpRoute, error) {
+func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	prefix := strings.TrimSpace(routeConfig.Prefix)
 	if prefix == "" {
 		return nil, errors.New("http route prefix is required")
@@ -261,99 +232,47 @@ func newHTTPRoute(routeConfig HTTPRouteConfig, x402Payment types.X402Payment) (*
 	}
 	prefix = utils.NormalizeURLPath(prefix)
 
-	var route *httpRoute
 	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
 		staticIndex := strings.TrimSpace(routeConfig.StaticIndex)
-		if staticIndex == "" {
-			staticIndex = utils.DefaultStaticIndex
-		}
-		route = &httpRoute{
+		staticIndex = cmp.Or(staticIndex, utils.DefaultStaticIndex)
+		return &httpRoute{
 			prefix:      prefix,
 			staticRoot:  staticRoot,
 			staticIndex: staticIndex,
-		}
-	} else {
-		upstreamInput := strings.TrimSpace(routeConfig.Upstream)
-		if upstreamInput == "" {
-			return nil, fmt.Errorf("http route %q upstream is required", prefix)
-		}
-		if !strings.Contains(upstreamInput, "://") {
-			target, err := utils.NormalizeLoopbackTarget(upstreamInput)
-			if err != nil {
-				return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
-			}
-			upstreamInput = "http://" + target
-		}
+		}, nil
+	}
 
-		upstream, err := url.Parse(upstreamInput)
+	upstreamInput := strings.TrimSpace(routeConfig.Upstream)
+	if upstreamInput == "" {
+		return nil, fmt.Errorf("http route %q upstream is required", prefix)
+	}
+	if !strings.Contains(upstreamInput, "://") {
+		target, err := utils.NormalizeLoopbackTarget(upstreamInput)
 		if err != nil {
 			return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
 		}
-		if upstream.Host == "" {
-			return nil, fmt.Errorf("http route %q upstream host is required", prefix)
-		}
-		if upstream.Scheme != "http" && upstream.Scheme != "https" {
-			return nil, fmt.Errorf("http route %q upstream scheme must be http or https", prefix)
-		}
-		upstream.Fragment = ""
-		upstream.Path = utils.NormalizeURLPath(upstream.Path)
+		upstreamInput = "http://" + target
+	}
 
-		route = &httpRoute{
-			prefix:         prefix,
-			upstream:       upstream,
-			upstreamPath:   upstream.Path,
-			upstreamDomain: utils.NormalizeHostname(upstream.Hostname()),
-		}
+	upstream, err := url.Parse(upstreamInput)
+	if err != nil {
+		return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
 	}
-	amount := strings.TrimSpace(routeConfig.Amount)
-	if amount == "" && len(routeConfig.Methods) > 0 {
-		return nil, fmt.Errorf("http route %q payment methods require amount", route.prefix)
+	if upstream.Host == "" {
+		return nil, fmt.Errorf("http route %q upstream host is required", prefix)
 	}
-	if amount != "" {
-		if x402Payment.PayTo == "" {
-			return nil, fmt.Errorf("http route %q amount requires x402 pay-to", route.prefix)
-		}
-		methods := make(map[string]struct{}, len(routeConfig.Methods))
-		for _, rawMethod := range routeConfig.Methods {
-			method := strings.ToUpper(strings.TrimSpace(rawMethod))
-			if method == "" {
-				return nil, fmt.Errorf("http route %q payment method is required", route.prefix)
-			}
-			methods[method] = struct{}{}
-		}
-		paymentConfig := x402Payment
-		paymentConfig.Amount = amount
-		paymentConfig.ResourcePath = route.prefix
-		payment, err := x402.NewPayment(paymentConfig)
-		if err != nil {
-			return nil, fmt.Errorf("http route %q x402 payment: %w", route.prefix, err)
-		}
-		route.payment = payment
-		route.paymentMethods = methods
+	if upstream.Scheme != "http" && upstream.Scheme != "https" {
+		return nil, fmt.Errorf("http route %q upstream scheme must be http or https", prefix)
 	}
-	return route, nil
-}
+	upstream.Fragment = ""
+	upstream.Path = utils.NormalizeURLPath(upstream.Path)
 
-func (r *httpRoute) newHandler() http.Handler {
-	base := r.baseHandler()
-	if r.payment == nil {
-		return base
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if len(r.paymentMethods) > 0 {
-			if _, ok := r.paymentMethods[strings.ToUpper(req.Method)]; !ok {
-				base.ServeHTTP(w, req)
-				return
-			}
-		}
-
-		settled, ok := r.payment.Settle(req.Context(), w, req)
-		if !ok {
-			return
-		}
-		utils.SetPaymentResponseHeaders(w.Header(), settled)
-		base.ServeHTTP(w, req)
-	})
+	return &httpRoute{
+		prefix:         prefix,
+		upstream:       upstream,
+		upstreamPath:   upstream.Path,
+		upstreamDomain: utils.NormalizeHostname(upstream.Hostname()),
+	}, nil
 }
 
 func (r *httpRoute) baseHandler() http.Handler {
@@ -373,6 +292,9 @@ func (r *httpRoute) baseHandler() http.Handler {
 	}
 }
 
+// rewriteProxyRequest connects to the upstream but keeps the request authority
+// the browser used: the upstream URL says where to dial, not which Host the app
+// sees.
 func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	path := utils.NormalizeURLPath(pr.In.URL.Path)
 	rawPath := pr.In.URL.RawPath
@@ -382,9 +304,7 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 			path = "/"
 		default:
 			path = strings.TrimPrefix(path, r.prefix)
-			if path == "" {
-				path = "/"
-			}
+			path = cmp.Or(path, "/")
 		}
 
 		if rawPath != "" {
@@ -400,17 +320,13 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	pr.Out.URL.RawPath = rawPath
 	pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 	pr.SetURL(r.upstream)
+	// SetURL clears Host; routed HTTP keeps the browser-visible authority.
+	pr.Out.Host = pr.In.Host
 	pr.SetXForwarded()
-	paid := r.payment != nil
-	if paid && len(r.paymentMethods) > 0 {
-		_, paid = r.paymentMethods[strings.ToUpper(pr.In.Method)]
-	}
-	if paid {
-		utils.StripPaymentHeaders(pr.Out.Header)
-	}
 
-	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy
-	// the inbound X-Forwarded-Proto carries the real client scheme.
+	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy (here
+	// the tunnel itself, see RunHTTP) the inbound X-Forwarded-Proto carries the
+	// real client scheme.
 	if pr.In.TLS == nil {
 		proto, _, _ := strings.Cut(pr.In.Header.Get("X-Forwarded-Proto"), ",")
 		if proto = strings.ToLower(strings.TrimSpace(proto)); proto != "" {
@@ -418,9 +334,20 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 		}
 	}
 
+	// X-Forwarded-Prefix is only meaningful for non-root routes. Always
+	// remove any client-supplied value first, then set the trusted one
+	// only when the route carries a non-root prefix. Root routes leave
+	// the header absent so upstream applications do not see a spoofed
+	// value.
+	pr.Out.Header.Del("X-Forwarded-Prefix")
 	if r.prefix != "/" {
 		pr.Out.Header.Set("X-Forwarded-Prefix", r.prefix)
 	}
+}
+
+func isSafeAbsoluteURLPath(value string) bool {
+	return strings.HasPrefix(value, "/") &&
+		(len(value) == 1 || (value[1] != '/' && value[1] != '\\'))
 }
 
 func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
@@ -429,13 +356,6 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 	}
 
 	header := resp.Header
-	paid := r.payment != nil
-	if paid && len(r.paymentMethods) > 0 {
-		_, paid = r.paymentMethods[strings.ToUpper(resp.Request.Method)]
-	}
-	if paid {
-		utils.StripPaymentHeaders(header)
-	}
 	publicHost := resp.Request.Header.Get("X-Forwarded-Host")
 	publicScheme := resp.Request.Header.Get("X-Forwarded-Proto")
 	publicPath := func(raw string) string {
@@ -469,20 +389,22 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 		if err == nil {
 			switch {
 			case parsed.IsAbs():
-				if strings.EqualFold(parsed.Scheme, r.upstream.Scheme) && strings.EqualFold(parsed.Host, r.upstream.Host) {
+				// The upstream's own authority, or the public one it received as Host.
+				if (strings.EqualFold(parsed.Scheme, r.upstream.Scheme) && strings.EqualFold(parsed.Host, r.upstream.Host)) ||
+					strings.EqualFold(parsed.Host, publicHost) {
 					parsed.Scheme = publicScheme
 					parsed.Host = publicHost
 				} else {
 					parsed = nil
 				}
-			case strings.HasPrefix(location, "/") && parsed.Host == "" && (len(location) == 1 || (location[1] != '\\' && location[1] != '/')):
+			case parsed.Host == "" && isSafeAbsoluteURLPath(location):
 			default:
 				parsed = nil
 			}
 
 			if parsed != nil {
 				mapped := publicPath(parsed.Path)
-				if strings.HasPrefix(mapped, "/") && (len(mapped) == 1 || (mapped[1] != '/' && mapped[1] != '\\')) {
+				if isSafeAbsoluteURLPath(mapped) {
 					parsed.Path = mapped
 					parsed.RawPath = ""
 					header.Set("Location", parsed.String())
@@ -519,8 +441,9 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 		}
 
 		domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
-		if domain != "" && domain != publicDomain &&
-			(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain)) {
+		rewriteDomain := domain != "" && domain != publicDomain &&
+			(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain))
+		if rewriteDomain {
 			cookie.Domain = ""
 			changed = true
 		}

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -35,7 +35,7 @@ type endpoint struct {
 type controlHandler struct {
 	manager  *manager
 	token    string
-	auth     *auth.WalletAuthenticator
+	auth     *walletAuthenticator
 	shutdown func()
 }
 
@@ -75,7 +75,7 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		req, ok := utils.DecodeJSONRequest[types.AgentTunnelRequest](w, r, controlRequestBodyLimit)
+		req, ok := utils.DecodeJSONRequest[AgentTunnelRequest](w, r, controlRequestBodyLimit)
 		if !ok {
 			return
 		}
@@ -100,7 +100,7 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			case http.MethodPatch:
-				req, ok := utils.DecodeJSONRequest[types.AgentTunnelUpdateRequest](w, r, controlRequestBodyLimit)
+				req, ok := utils.DecodeJSONRequest[AgentTunnelUpdateRequest](w, r, controlRequestBodyLimit)
 				if !ok {
 					return
 				}
@@ -126,7 +126,7 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			req, ok := utils.DecodeJSONRequest[types.AgentRelayRequest](w, r, controlRequestBodyLimit)
+			req, ok := utils.DecodeJSONRequest[AgentRelayRequest](w, r, controlRequestBodyLimit)
 			if !ok {
 				return
 			}
@@ -138,27 +138,6 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if err != nil {
 				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-				return
-			}
-			utils.WriteAPIData(w, http.StatusAccepted, map[string]bool{"accepted": true})
-		case "multi-hop":
-			switch r.Method {
-			case http.MethodPost:
-				req, ok := utils.DecodeJSONRequest[types.AgentMultiHopRequest](w, r, controlRequestBodyLimit)
-				if !ok {
-					return
-				}
-				if err := s.manager.SetMultiHop(tunnelID, req.Relays); err != nil {
-					utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-					return
-				}
-			case http.MethodDelete:
-				if err := s.manager.SetMultiHop(tunnelID, nil); err != nil {
-					utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-					return
-				}
-			default:
-				utils.MethodNotAllowedError().Write(w)
 				return
 			}
 			utils.WriteAPIData(w, http.StatusAccepted, map[string]bool{"accepted": true})
@@ -180,7 +159,7 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 		if !ok {
 			return true
 		}
-		resp, err := s.auth.IssueChallenge(req, agentAuthDomain(r), agentAuthURI(r, types.PathAgentAuthLogin), time.Now().UTC())
+		resp, err := s.auth.issueChallenge(req, agentAuthDomain(r), agentAuthURI(r, types.PathAgentAuthLogin), time.Now().UTC())
 		if err != nil {
 			writeAgentWalletAuthError(w, err)
 			return true
@@ -195,7 +174,7 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 		if !ok {
 			return true
 		}
-		token, walletAddress, err := s.auth.Login(req, time.Now().UTC())
+		token, walletAddress, err := s.auth.login(req, agentAuthDomain(r), time.Now().UTC())
 		if err != nil {
 			writeAgentWalletAuthError(w, err)
 			return true
@@ -216,7 +195,7 @@ func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request)
 			return true
 		}
 		if cookie, err := r.Cookie(agentCookieName); err == nil && cookie.Value != "" {
-			s.auth.DeleteSession(cookie.Value)
+			s.auth.deleteSession(cookie.Value)
 		}
 		http.SetCookie(w, &http.Cookie{
 			Name:     agentCookieName,
@@ -252,7 +231,7 @@ func (s *controlHandler) authenticatedWallet(r *http.Request) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return s.auth.ValidateSession(cookie.Value)
+	return s.auth.validateSession(cookie.Value)
 }
 
 func agentAuthDomain(r *http.Request) string {
@@ -277,17 +256,17 @@ func agentAuthURI(r *http.Request, endpointPath string) string {
 
 func writeAgentWalletAuthError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, auth.ErrWalletAuthUnauthorized):
+	case errors.Is(err, siweauth.ErrUnauthorized):
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
-	case errors.Is(err, auth.ErrWalletAuthChallengeNotFound), errors.Is(err, auth.ErrWalletAuthChallengeExpired), errors.Is(err, auth.ErrWalletAuthInvalidSignature):
+	case errors.Is(err, siweauth.ErrChallengeNotFound), errors.Is(err, siweauth.ErrChallengeExpired), errors.Is(err, siweauth.ErrChallengeInvalid), errors.Is(err, siweauth.ErrInvalidSignature):
 		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, err.Error())
 	default:
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 	}
 }
 
-func Status(ctx context.Context, stateDir string) (types.AgentStatusResponse, error) {
-	var status types.AgentStatusResponse
+func Status(ctx context.Context, stateDir string) (AgentStatusResponse, error) {
+	var status AgentStatusResponse
 	err := controlRequest(ctx, stateDir, http.MethodGet, types.PathAgentStatus, nil, &status)
 	return status, err
 }
@@ -296,7 +275,7 @@ func Shutdown(ctx context.Context, stateDir string) error {
 	return controlRequest(ctx, stateDir, http.MethodPost, types.PathAgentShutdown, nil, nil)
 }
 
-func AddTunnel(ctx context.Context, stateDir string, req types.AgentTunnelRequest) error {
+func AddTunnel(ctx context.Context, stateDir string, req AgentTunnelRequest) error {
 	return controlRequest(ctx, stateDir, http.MethodPost, types.PathAgentTunnels, req, nil)
 }
 
@@ -307,23 +286,15 @@ func DeleteTunnel(ctx context.Context, stateDir, tunnelID string) error {
 
 func ConnectRelay(ctx context.Context, stateDir, tunnelID, relayURL string) error {
 	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/relays"
-	return controlRequest(ctx, stateDir, http.MethodPost, path, types.AgentRelayRequest{RelayURL: relayURL}, nil)
+	return controlRequest(ctx, stateDir, http.MethodPost, path, AgentRelayRequest{RelayURL: relayURL}, nil)
 }
 
 func DisconnectRelay(ctx context.Context, stateDir, tunnelID, relayURL string) error {
 	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/relays"
-	return controlRequest(ctx, stateDir, http.MethodDelete, path, types.AgentRelayRequest{RelayURL: relayURL}, nil)
+	return controlRequest(ctx, stateDir, http.MethodDelete, path, AgentRelayRequest{RelayURL: relayURL}, nil)
 }
 
-func SetMultiHop(ctx context.Context, stateDir, tunnelID string, relayURLs []string) error {
-	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID) + "/multi-hop"
-	if relayURLs == nil {
-		return controlRequest(ctx, stateDir, http.MethodDelete, path, nil, nil)
-	}
-	return controlRequest(ctx, stateDir, http.MethodPost, path, types.AgentMultiHopRequest{Relays: relayURLs}, nil)
-}
-
-func UpdateTunnel(ctx context.Context, stateDir, tunnelID string, req types.AgentTunnelUpdateRequest) error {
+func UpdateTunnel(ctx context.Context, stateDir, tunnelID string, req AgentTunnelUpdateRequest) error {
 	path := types.PathAgentTunnelsPrefix + url.PathEscape(tunnelID)
 	return controlRequest(ctx, stateDir, http.MethodPatch, path, req, nil)
 }

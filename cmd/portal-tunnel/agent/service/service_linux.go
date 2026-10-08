@@ -109,7 +109,11 @@ RestartSec=5
 
 [Install]
 WantedBy=default.target
-`, def.Description, shellQuote(def.WorkingDir), strings.Join(parts, " "))
+`, def.Description, systemdPath(def.WorkingDir), strings.Join(parts, " "))
+}
+
+func systemdPath(value string) string {
+	return strings.ReplaceAll(value, "%", "%%")
 }
 
 func shellQuote(value string) string {

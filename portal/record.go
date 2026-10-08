@@ -2,95 +2,64 @@ package portal
 
 import (
 	"context"
+	"net"
+	"net/netip"
+	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
-	"github.com/rs/zerolog/log"
 )
 
 type leaseRecord struct {
 	types.Identity
-	ExpiresAt      time.Time
-	FirstSeenAt    time.Time
-	LastSeenAt     time.Time
-	ClientIP       string
-	ReportedIP     string
-	Hostname       string
-	HostnameHash   string
-	ECHConfigList  []byte
-	ECHDNSHostname string
-	Metadata       types.LeaseMetadata
+	id                string
+	ExpiresAt         time.Time
+	FirstSeenAt       time.Time
+	LastSeenAt        time.Time
+	sourceAddr        netip.Addr
+	ReportedIP        string
+	Hostname          string
+	CanonicalHostname string
+	Metadata          types.LeaseMetadata
+	Overlay           bool
 
-	hopToken           string
-	hopNextOverlayIPv4 string
-	hopNextToken       string
-	registerChallenge  *auth.RegisterChallenge
+	registerChallenge *identity.RegisterChallenge
 
-	datagram *transport.RelayDatagram
-	udpPorts *transport.PortAllocator
-	tcpPort  *transport.RelayTCPPort
-	tcpPorts *transport.PortAllocator
-	stream   *transport.RelayStream
+	datagram    *transport.RelayDatagram
+	tcpPort     int
+	tcpListener net.Listener
+	reverse     *transport.ReversePool
+
+	mu         sync.Mutex
+	closed     bool
+	reverseMux *transport.ReverseMux
+}
+
+// cacheLease adapts registry facts to the cache's canonical hostname key while
+// the caller holds the registry lock.
+func (r *leaseRecord) cacheLease() cache.Lease {
+	return cache.Lease{ID: r.id, Owner: r.ServiceKey(), Hostname: r.CanonicalHostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
 func (r *leaseRecord) isPublicEntry() bool {
-	return r != nil && r.hopToken == "" && r.Hostname != ""
+	return r != nil && r.CanonicalHostname != ""
 }
 
-func (r *leaseRecord) ensGaslessDNSHostname() string {
+func (r *leaseRecord) hostnames() []string {
 	if !r.isPublicEntry() {
-		return ""
+		return nil
 	}
-	if len(r.ECHConfigList) > 0 && r.ECHDNSHostname != "" {
-		return r.ECHDNSHostname
+	hostnames := []string{r.CanonicalHostname}
+	if r.Hostname != "" {
+		hostnames = append(hostnames, r.Hostname)
 	}
-	if r.HostnameHash == "" {
-		return r.Hostname
-	}
-	return ""
-}
-
-func (r *leaseRecord) hasECHDNSRecord() bool {
-	return r.isPublicEntry() && len(r.ECHConfigList) > 0 && r.ECHDNSHostname != ""
-}
-
-func (r *leaseRecord) isHopMiddle() bool {
-	_, _, hasNextHop := r.nextHop()
-	return r != nil && r.Hostname == "" && r.hopToken != "" && hasNextHop
-}
-
-func (r *leaseRecord) isHopExit() bool {
-	_, _, hasNextHop := r.nextHop()
-	return r != nil && r.hopToken != "" && !hasNextHop
-}
-
-func (r *leaseRecord) routesOverlap(other *leaseRecord) bool {
-	if r == nil || other == nil {
-		return false
-	}
-	if r.Hostname != "" && other.Hostname != "" && r.Hostname == other.Hostname {
-		return true
-	}
-	if r.HostnameHash != "" && other.HostnameHash != "" && r.HostnameHash == other.HostnameHash {
-		return true
-	}
-	if r.Hostname != "" && other.HostnameHash != "" && utils.HostnameHash(r.Hostname) == other.HostnameHash {
-		return true
-	}
-	return other.Hostname != "" && r.HostnameHash != "" && utils.HostnameHash(other.Hostname) == r.HostnameHash
-}
-
-func (r *leaseRecord) nextHop() (string, string, bool) {
-	if r == nil {
-		return "", "", false
-	}
-	overlayIPv4 := r.hopNextOverlayIPv4
-	forwardToken := r.hopNextToken
-	return overlayIPv4, forwardToken, overlayIPv4 != "" || forwardToken != ""
+	return hostnames
 }
 
 func (r *leaseRecord) isExpired(now time.Time) bool {
@@ -98,13 +67,22 @@ func (r *leaseRecord) isExpired(now time.Time) bool {
 }
 
 func (r *leaseRecord) Start() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return net.ErrClosed
+	}
 	if r.datagram != nil {
-		if err := r.datagram.Start(context.Background()); err != nil {
+		if err := r.datagram.Start(); err != nil {
 			return err
 		}
 	}
-	if r.tcpPort != nil {
-		return r.tcpPort.Start(context.Background())
+	if r.tcpPort > 0 && r.tcpListener == nil {
+		listener, err := net.ListenTCP("tcp", &net.TCPAddr{Port: r.tcpPort})
+		if err != nil {
+			return err
+		}
+		r.tcpListener = listener
 	}
 	return nil
 }
@@ -113,74 +91,124 @@ func (r *leaseRecord) Close() {
 	if r == nil {
 		return
 	}
-	if r.stream != nil {
-		r.stream.Close()
+	// Serialize the entire close so registry cleanup cannot release ports
+	// while another caller is still shutting down their sockets.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	r.closed = true
+	mux := r.reverseMux
+	r.reverseMux = nil
+	listener := r.tcpListener
+	if listener != nil {
+		_ = listener.Close()
+	}
+	if mux != nil {
+		_ = mux.Close()
+	}
+	if r.reverse != nil {
+		r.reverse.Close()
 	}
 	if r.datagram != nil {
-		port := r.datagram.UDPPort()
 		r.datagram.Close()
-		if port > 0 && r.udpPorts != nil {
-			r.udpPorts.Release(port)
-		}
 	}
-	if r.tcpPort != nil {
-		port := r.tcpPort.TCPPort()
-		r.tcpPort.Close()
-		if port > 0 && r.tcpPorts != nil {
-			r.tcpPorts.Release(port)
-		}
+}
+
+// attachReverseMux replaces the lease's carrier without letting a late release
+// from the old handler detach the replacement. A closed lease refuses ownership.
+func (r *leaseRecord) attachReverseMux(mux *transport.ReverseMux) error {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return net.ErrClosed
 	}
+	previous := r.reverseMux
+	r.reverseMux = mux
+	r.mu.Unlock()
+	if previous != nil && previous != mux {
+		_ = previous.Close()
+	}
+	return nil
+}
+
+func (r *leaseRecord) detachReverseMux(mux *transport.ReverseMux) {
+	r.mu.Lock()
+	if r.reverseMux == mux {
+		r.reverseMux = nil
+	}
+	r.mu.Unlock()
+	_ = mux.Close()
 }
 
 func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manager) error {
 	if r == nil || manager == nil {
 		return nil
 	}
-	if ensHostname := r.ensGaslessDNSHostname(); ensHostname != "" {
-		if err := manager.SyncENSGaslessHostname(ctx, ensHostname, r.Address); err != nil {
+	for _, hostname := range r.hostnames() {
+		if err := manager.SyncENSGaslessHostname(ctx, hostname, r.Address); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *leaseRecord) syncECHDNS(ctx context.Context, manager *acme.Manager, sniPort int) error {
-	if r == nil || manager == nil || !r.hasECHDNSRecord() {
+func (s *Server) syncLeaseDNS(ctx context.Context, record *leaseRecord) error {
+	if s == nil || record == nil || s.registry == nil {
 		return nil
 	}
-	return manager.SyncECHConfig(ctx, r.ECHDNSHostname, r.ECHConfigList, sniPort)
+	registry := s.registry
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	// Queue DNS sync while the lease is still the current live record. A
+	// concurrent unregister/expiry must either happen after this enqueue or
+	// make this stale sync a no-op.
+	if registry.recordByLease(record.ServiceKey(), record.id, time.Now()) != record {
+		return nil
+	}
+	return record.syncENSGaslessDNS(ctx, s.acmeManager)
 }
 
-func (r *leaseRecord) deleteECHDNS(ctx context.Context, manager *acme.Manager) {
-	if r == nil || manager == nil || !r.hasECHDNSRecord() {
+func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
+	if s == nil || record == nil || s.acmeManager == nil || s.registry == nil {
 		return
 	}
-	err := manager.DeleteECHConfig(ctx, r.ECHDNSHostname)
-	if err != nil {
-		log.Warn().
-			Err(err).
-			Str("hostname", r.ECHDNSHostname).
-			Str("route_hostname", r.Hostname).
-			Str("address", r.Address).
-			Msg("delete ech dns record")
-	}
-}
+	registry := s.registry
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	now := time.Now()
 
-func (r *leaseRecord) deleteDNS(ctx context.Context, manager *acme.Manager, includeECH bool) {
-	if r == nil || manager == nil {
-		return
-	}
-	if ensHostname := r.ensGaslessDNSHostname(); ensHostname != "" {
-		err := manager.DeleteENSGaslessHostname(ctx, ensHostname)
+	for _, hostname := range record.hostnames() {
+		owned := false
+		for _, current := range registry.records {
+			if current == nil || current.isExpired(now) {
+				continue
+			}
+			for _, currentHostname := range current.hostnames() {
+				if currentHostname == hostname {
+					owned = true
+					break
+				}
+			}
+			if owned {
+				break
+			}
+		}
+		if owned {
+			continue
+		}
+		// Delete is an enqueue-only operation. Keeping the registry read lock
+		// through the enqueue orders this command against lease registration's
+		// write lock and its later DNS sync enqueue.
+		err := s.acmeManager.DeleteENSGaslessHostname(ctx, hostname)
 		if err != nil {
 			log.Warn().
 				Err(err).
-				Str("hostname", ensHostname).
-				Str("address", r.Address).
+				Str("hostname", hostname).
+				Str("address", record.Address).
 				Msg("delete ens gasless hostname")
 		}
-	}
-	if includeECH {
-		r.deleteECHDNS(ctx, manager)
 	}
 }

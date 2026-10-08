@@ -1,0 +1,117 @@
+package agent
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+)
+
+func TestStaticServeConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	for _, input := range []string{"./dist", "./dist/main.html", filepath.Join(dir, "absolute-site")} {
+		t.Run(input, func(t *testing.T) {
+			path := filepath.Join(dir, "config.toml")
+			data := fmt.Sprintf("[[tunnels]]\nid = \"site\"\nserve = %q\n", " "+input+" ")
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadExistingConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := input
+			if !filepath.IsAbs(want) {
+				want = filepath.Join(dir, want)
+			}
+			if got := cfg.Tunnels[0].Serve; got != want {
+				t.Fatalf("serve = %q, want %q", got, want)
+			}
+			// Saving unrelated settings must preserve the static site source.
+			cfg.Tunnels[0].Description = "updated metadata"
+			if err := writeConfigDocument(path, 0o600, cfg); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := LoadExistingConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := reloaded.Tunnels[0].Serve; got != want {
+				t.Fatalf("saved serve = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestStaticServeConfigModes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cfg   TunnelConfig
+		valid bool
+	}{
+		{name: "static", cfg: TunnelConfig{Serve: "./dist"}, valid: true},
+		{name: "missing source", cfg: TunnelConfig{}},
+		{name: "target", cfg: TunnelConfig{Serve: "./dist", TargetAddr: "localhost:3000"}},
+		{name: "routes", cfg: TunnelConfig{Serve: "./dist", HTTPRoutes: []tunnel.HTTPRoute{{Prefix: "/", Upstream: "http://localhost:3000"}}}},
+		{name: "tcp", cfg: TunnelConfig{Serve: "./dist", TCPEnabled: true}},
+		{name: "udp", cfg: TunnelConfig{Serve: "./dist", UDPEnabled: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.ID = "site"
+			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
+				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
+			}
+		})
+	}
+}
+
+func TestHTTPRoutesConfigModes(t *testing.T) {
+	routes := []tunnel.HTTPRoute{{Prefix: "/", Upstream: "http://localhost:3000"}}
+	for _, tc := range []struct {
+		name  string
+		cfg   TunnelConfig
+		valid bool
+	}{
+		{name: "routes", cfg: TunnelConfig{HTTPRoutes: routes}, valid: true},
+		{name: "tcp", cfg: TunnelConfig{HTTPRoutes: routes, TCPEnabled: true}},
+		{name: "udp", cfg: TunnelConfig{HTTPRoutes: routes, UDPEnabled: true}},
+		{name: "strip request headers", cfg: TunnelConfig{HTTPRoutes: routes, StripRequestHeaders: []string{"X-Tenant-User"}}, valid: true},
+		{name: "strip request headers on static", cfg: TunnelConfig{Serve: "./dist", StripRequestHeaders: []string{"X-Tenant-User"}}},
+		{name: "strip request header without upstream", cfg: TunnelConfig{Auth: "siwe", TargetAddr: "", StripRequestHeaders: []string{"X-Tenant-User"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.ID = "routed"
+			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
+				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
+			}
+		})
+	}
+}
+
+func TestApplicationAuthConfig(t *testing.T) {
+	validWallet := "0x0000000000000000000000000000000000000001"
+	for _, tc := range []struct {
+		name  string
+		cfg   TunnelConfig
+		valid bool
+	}{
+		{name: "target", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe"}, valid: true},
+		{name: "credential", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "credential"}, valid: true},
+		{name: "unknown provider", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "unknown"}},
+		{name: "credential allowlist", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "credential", AuthAllowedWallets: []string{validWallet}}},
+		{name: "static", cfg: TunnelConfig{Serve: "./dist", Auth: "siwe", AuthAllowedWallets: []string{validWallet}}, valid: true},
+		{name: "allowlist without auth", cfg: TunnelConfig{TargetAddr: "localhost:3000", AuthAllowedWallets: []string{validWallet}}},
+		{name: "headers without auth", cfg: TunnelConfig{TargetAddr: "localhost:3000", AuthIdentityHeaders: true}},
+		{name: "tcp", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe", TCPEnabled: true}},
+		{name: "udp", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe", UDPEnabled: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.ID = "authenticated"
+			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
+				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
+			}
+		})
+	}
+}

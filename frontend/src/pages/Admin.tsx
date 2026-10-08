@@ -2,7 +2,7 @@ import { SsgoiTransition } from "@ssgoi/react";
 import { Header } from "@/components/Header";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useAuth } from "@/hooks/useAuth";
-import { ServerListView } from "@/components/ServerListView";
+import { AdminServerList } from "@/components/AdminServerList";
 
 export function Admin() {
   const {
@@ -24,7 +24,7 @@ export function Admin() {
     landingPageEnabled,
     udpSettings,
     tcpPortSettings,
-    favorites,
+    policySaving,
     loading,
     error,
     handleSearchChange,
@@ -32,7 +32,6 @@ export function Admin() {
     handleSortByChange,
     handleTagToggle,
     handleBanFilterChange,
-    handleToggleFavorite,
     handleBanStatus,
     handleBPSChange,
     handleApprovalModeChange,
@@ -41,7 +40,6 @@ export function Admin() {
     handleTCPPortSettingsChange,
     handleApproveStatus,
     handleDenyStatus,
-    handleIPBanStatus,
     handleBulkApprove,
     handleBulkDeny,
     handleBulkBan,
@@ -63,7 +61,7 @@ export function Admin() {
             <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
               <Header
                 title="PORTAL ADMIN"
-                isAdmin={true}
+                isAdmin
                 onAuthChange={handleAuthChange}
               />
             </div>
@@ -87,7 +85,7 @@ export function Admin() {
 
   return (
     <SsgoiTransition id="admin">
-      <ServerListView
+      <AdminServerList
         title="PORTAL ADMIN"
         searchQuery={searchQuery}
         status={status}
@@ -95,19 +93,16 @@ export function Admin() {
         selectedTags={selectedTags}
         availableTags={availableTags}
         filteredServers={filteredServers}
-        favorites={favorites}
         onSearchChange={handleSearchChange}
         onStatusChange={handleStatusChange}
         onSortByChange={handleSortByChange}
         onTagToggle={handleTagToggle}
-        onToggleFavorite={handleToggleFavorite}
-        // Admin-specific props
-        isAdmin={true}
         banFilter={banFilter}
         approvalMode={approvalMode}
         landingPageEnabled={landingPageEnabled}
         udpSettings={udpSettings}
         tcpPortSettings={tcpPortSettings}
+        policySaving={policySaving}
         onBanFilterChange={handleBanFilterChange}
         onBanStatusChange={handleBanStatus}
         onBPSChange={handleBPSChange}
@@ -117,7 +112,6 @@ export function Admin() {
         onTCPPortSettingsChange={handleTCPPortSettingsChange}
         onApproveStatusChange={handleApproveStatus}
         onDenyStatusChange={handleDenyStatus}
-        onIPBanStatusChange={handleIPBanStatus}
         onBulkApprove={handleBulkApprove}
         onBulkDeny={handleBulkDeny}
         onBulkBan={handleBulkBan}

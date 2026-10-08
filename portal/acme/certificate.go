@@ -15,7 +15,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/go-acme/lego/v4/certcrypto"
@@ -75,12 +74,6 @@ func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
 		return false
 	}
 	for _, domain := range domains {
-		if wildcardDomain, ok := strings.CutPrefix(domain, "*."); ok {
-			if cert.VerifyHostname("probe."+wildcardDomain) != nil {
-				return false
-			}
-			continue
-		}
 		if cert.VerifyHostname(domain) != nil {
 			return false
 		}
@@ -96,9 +89,11 @@ func newClient(ctx context.Context, email, accountKeyFile, registrationFile stri
 
 	var accountReg registration.Resource
 	accountRegPtr := (*registration.Resource)(nil)
-	if ok, err := utils.ReadJSONFileIfExists(registrationFile, &accountReg); err != nil {
+	ok, err := utils.ReadJSONFileIfExists(registrationFile, &accountReg)
+	if err != nil {
 		return nil, fmt.Errorf("load acme registration: %w", err)
-	} else if ok {
+	}
+	if ok {
 		accountRegPtr = &accountReg
 	}
 
@@ -180,9 +175,6 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	}
 
 	if err := utils.EnsureParentDir(keyFile); err != nil {
-		return err
-	}
-	if err := utils.EnsureParentDir(certFile); err != nil {
 		return err
 	}
 

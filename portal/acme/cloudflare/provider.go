@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -36,17 +37,10 @@ type zone struct {
 }
 
 type dnsRecord struct {
-	ID      string         `json:"id"`
-	Type    string         `json:"type"`
-	Name    string         `json:"name"`
-	Content string         `json:"content"`
-	Data    *dnsRecordData `json:"data,omitempty"`
-}
-
-type dnsRecordData struct {
-	Priority int    `json:"priority,omitempty"`
-	Target   string `json:"target,omitempty"`
-	Value    string `json:"value,omitempty"`
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
 }
 
 type zonesResult struct {
@@ -81,7 +75,7 @@ type dnssecResult struct {
 func New(token string) *Provider {
 	return &Provider{
 		token: strings.TrimSpace(token),
-		zones: utils.NewSnapshot(map[string]string{}, utils.CloneMap[string, string]),
+		zones: utils.NewSnapshot(map[string]string{}, maps.Clone[map[string]string]),
 	}
 }
 
@@ -111,14 +105,11 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
-	baseDomain = utils.NormalizeBaseDomain(baseDomain)
-	if baseDomain == "" {
-		return errors.New("base domain is required")
-	}
 	if p.token == "" {
 		return errors.New("cloudflare token is required")
 	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	baseDomain, err := dnsrecord.ARecordsInputs(baseDomain, publicIPv4)
+	if err != nil {
 		return err
 	}
 	publicIPv4 = strings.TrimSpace(publicIPv4)
@@ -128,7 +119,7 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 		return fmt.Errorf("find cloudflare zone: %w", err)
 	}
 
-	for _, name := range []string{baseDomain, "*." + baseDomain} {
+	for _, name := range dnsrecord.ApexWildcard(baseDomain) {
 		if err := ensureDNSRecord(ctx, p.token, zoneID, name, "A", publicIPv4); err != nil {
 			return fmt.Errorf("ensure A record for %s: %w", name, err)
 		}
@@ -140,14 +131,11 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
 	if p.token == "" {
 		return errors.New("cloudflare token is required")
 	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	name, err := dnsrecord.ARecordInputs(name, publicIPv4)
+	if err != nil {
 		return err
 	}
 	publicIPv4 = strings.TrimSpace(publicIPv4)
@@ -166,12 +154,12 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
 	if p.token == "" {
 		return errors.New("cloudflare token is required")
+	}
+	name, err := dnsrecord.RecordName(name)
+	if err != nil {
+		return err
 	}
 
 	zoneID, err := p.findZoneID(ctx, name)
@@ -198,16 +186,12 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
 	if p.token == "" {
 		return errors.New("cloudflare token is required")
 	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return errors.New("txt record value is required")
+	name, value, err := dnsrecord.TXTInputs(name, value)
+	if err != nil {
+		return err
 	}
 
 	zoneID, err := p.findZoneID(ctx, name)
@@ -224,16 +208,12 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
 	if p.token == "" {
 		return errors.New("cloudflare token is required")
 	}
-	matchPrefix = strings.TrimSpace(matchPrefix)
-	if matchPrefix == "" {
-		return errors.New("txt record match prefix is required")
+	name, matchPrefix, err := dnsrecord.TXTPrefixInputs(name, matchPrefix)
+	if err != nil {
+		return err
 	}
 
 	zoneID, err := p.findZoneID(ctx, name)
@@ -256,74 +236,16 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	return nil
 }
 
-func (p *Provider) EnsureHTTPSRecord(ctx context.Context, name string, record dnsrecord.HTTPSRecord) error {
-	if p == nil {
-		return errors.New("cloudflare provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	if p.token == "" {
-		return errors.New("cloudflare token is required")
-	}
-	record, err := record.Normalized()
-	if err != nil {
-		return err
-	}
-
-	zoneID, err := p.findZoneID(ctx, name)
-	if err != nil {
-		return fmt.Errorf("find cloudflare zone: %w", err)
-	}
-	if err := ensureHTTPSRecord(ctx, p.token, zoneID, name, record); err != nil {
-		return fmt.Errorf("ensure HTTPS record for %s: %w", name, err)
-	}
-	return nil
-}
-
-func (p *Provider) DeleteHTTPSRecord(ctx context.Context, name string) error {
-	if p == nil {
-		return errors.New("cloudflare provider is nil")
-	}
-	name = utils.NormalizeHostname(name)
-	if name == "" {
-		return errors.New("record name is required")
-	}
-	if p.token == "" {
-		return errors.New("cloudflare token is required")
-	}
-
-	zoneID, err := p.findZoneID(ctx, name)
-	if err != nil {
-		return fmt.Errorf("find cloudflare zone: %w", err)
-	}
-
-	records, err := listDNSRecords(ctx, p.token, zoneID, name, "HTTPS")
-	if err != nil {
-		return err
-	}
-	for _, record := range records {
-		if !strings.EqualFold(record.Name, name) {
-			continue
-		}
-		if err := deleteDNSRecord(ctx, p.token, zoneID, record.ID); err != nil {
-			return fmt.Errorf("delete HTTPS record %s: %w", name, err)
-		}
-	}
-	return nil
-}
-
 func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
 		return "", "", "", errors.New("cloudflare provider is nil")
 	}
-	baseDomain = utils.NormalizeBaseDomain(baseDomain)
-	if baseDomain == "" {
-		return "", "", "", errors.New("base domain is required")
-	}
 	if p.token == "" {
 		return "", "", "", errors.New("cloudflare token is required")
+	}
+	baseDomain, err = dnsrecord.BaseDomain(baseDomain)
+	if err != nil {
+		return "", "", "", err
 	}
 
 	zoneID, err := p.findZoneID(ctx, baseDomain)
@@ -427,39 +349,6 @@ func ensureTXTRecord(ctx context.Context, token, zoneID, name, value string) err
 	return createDNSRecord(ctx, token, zoneID, "TXT", name, value)
 }
 
-func ensureHTTPSRecord(ctx context.Context, token, zoneID, name string, record dnsrecord.HTTPSRecord) error {
-	records, err := listDNSRecords(ctx, token, zoneID, name, "HTTPS")
-	if err != nil {
-		return err
-	}
-
-	for _, existing := range records {
-		if !strings.EqualFold(existing.Name, name) {
-			continue
-		}
-		if sameHTTPSRecord(existing, record) {
-			return nil
-		}
-		return updateHTTPSRecord(ctx, token, zoneID, existing.ID, name, record)
-	}
-
-	return createHTTPSRecord(ctx, token, zoneID, name, record)
-}
-
-func sameHTTPSRecord(existing dnsRecord, record dnsrecord.HTTPSRecord) bool {
-	if existing.Data != nil {
-		existingTarget := strings.TrimSpace(existing.Data.Target)
-		if existingTarget == "" {
-			existingTarget = "."
-		}
-		return existing.Data.Priority == int(record.Priority) &&
-			existingTarget == record.Target &&
-			strings.TrimSpace(existing.Data.Value) == record.SvcParams
-	}
-	content, _ := record.Content()
-	return strings.TrimSpace(existing.Content) == content
-}
-
 func listZones(ctx context.Context, token, name string) ([]zone, error) {
 	u, _ := url.Parse(apiBase + "/zones")
 	q := u.Query()
@@ -544,20 +433,6 @@ func createDNSRecord(ctx context.Context, token, zoneID, recordType, name, conte
 	return nil
 }
 
-func createHTTPSRecord(ctx context.Context, token, zoneID, name string, record dnsrecord.HTTPSRecord) error {
-	endpoint := fmt.Sprintf("%s/zones/%s/dns_records", apiBase, zoneID)
-	body := httpsRecordBody(name, record)
-
-	var out recordResult
-	if err := utils.HTTPDoJSON(ctx, nil, http.MethodPost, endpoint, body, cloudflareHeaders(token), &out); err != nil {
-		return err
-	}
-	if !out.Success {
-		return wrapErrors(out.Errors)
-	}
-	return nil
-}
-
 func updateDNSRecord(ctx context.Context, token, zoneID, recordID, recordType, name, content string) error {
 	endpoint := fmt.Sprintf("%s/zones/%s/dns_records/%s", apiBase, zoneID, recordID)
 	body := map[string]any{
@@ -578,35 +453,6 @@ func updateDNSRecord(ctx context.Context, token, zoneID, recordID, recordType, n
 		return wrapErrors(out.Errors)
 	}
 	return nil
-}
-
-func updateHTTPSRecord(ctx context.Context, token, zoneID, recordID, name string, record dnsrecord.HTTPSRecord) error {
-	endpoint := fmt.Sprintf("%s/zones/%s/dns_records/%s", apiBase, zoneID, recordID)
-	body := httpsRecordBody(name, record)
-
-	var out recordResult
-	if err := utils.HTTPDoJSON(ctx, nil, http.MethodPut, endpoint, body, cloudflareHeaders(token), &out); err != nil {
-		return err
-	}
-	if !out.Success {
-		return wrapErrors(out.Errors)
-	}
-	return nil
-}
-
-func httpsRecordBody(name string, record dnsrecord.HTTPSRecord) map[string]any {
-	content, _ := record.Content()
-	return map[string]any{
-		"type":    "HTTPS",
-		"name":    name,
-		"content": content,
-		"data": map[string]any{
-			"priority": int(record.Priority),
-			"target":   record.Target,
-			"value":    record.SvcParams,
-		},
-		"ttl": 1,
-	}
 }
 
 func deleteDNSRecord(ctx context.Context, token, zoneID, recordID string) error {

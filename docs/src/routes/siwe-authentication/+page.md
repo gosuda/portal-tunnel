@@ -1,13 +1,15 @@
 ---
-title: SIWE Authentication
-description: How Portal uses SIWE for tunnel registration and local agent wallet status access.
+title: Application Access Authentication
+description: Protect a tunnel with Portal credentials or SIWE wallet login.
 ---
 
-# SIWE Authentication
+# Application Access Authentication
 
-Portal uses Sign-In with Ethereum (SIWE) in two places:
+Portal supports two application access providers: Portal-native credentials and
+Sign-In with Ethereum (SIWE). SIWE is also used separately for:
 
 - tunnel registration, signed automatically by the local tunnel identity
+- optional tunnel-side access control for exposed HTTP applications
 - optional browser wallet login for local agent status access
 
 For the full operational guide, see [Wallet and ENS](/wallet-and-ens).
@@ -29,8 +31,62 @@ This flow is automatic. It does not require a browser wallet.
 portal expose 3000 --name myapp
 ```
 
-There is no `--auth siwe` flag. SIWE is part of the normal registration
-protocol.
+## Portal Credentials
+
+Use the `credential` provider when visitors should not need an Ethereum wallet or
+EIP-1193 browser extension:
+
+```bash
+portal expose 3000 --auth credential
+portal auth issue myapp.example.com --subject alice --expires 720h
+```
+
+The issue command loads the same existing `identity.json` used by the tunnel;
+it never creates a new identity. It prints both the signed credential and an
+HTTPS redeem URL. Send the URL to the intended user. The credential is carried
+in the URL fragment, so it is not sent to the relay or web server as part of
+the request URL. The tunnel-local login page submits it to the same-origin
+redeem endpoint and stores the resulting `Secure`, `HttpOnly`, `SameSite=Lax`
+session cookie.
+
+Credentials contain a subject, tunnel identity, host, and expiry and are signed
+with a key derived locally from the tunnel identity. A session never outlives
+the credential it redeemed. The credential remains redeemable until expiry, so
+operators should use a suitably short lifetime and deliver it as a bearer
+secret.
+
+API clients can present the same credential on each request:
+
+```bash
+curl -H "X-Portal-Access-Credential: $PORTAL_CREDENTIAL" https://myapp.example.com/api
+```
+
+Portal validates and removes this header before forwarding the request.
+
+## SIWE Application Access
+
+Use `--auth siwe` to require a browser wallet login before Portal forwards an
+HTTP request:
+
+```bash
+portal expose 3000 --auth siwe --auth-allow 0x1234...
+```
+
+With no `--auth-allow`, any wallet that proves control of its address can sign
+in. Repeat `--auth-allow` to restrict access to specific Ethereum addresses.
+Portal keeps the two-minute, single-use challenge and the 24-hour signed
+session local to the tunnel endpoint. The cookie is `Secure`, `HttpOnly`, and
+`SameSite=Lax`. Portal removes that session cookie before forwarding the
+request, while preserving application-owned cookies; relay-issued lease tokens
+are not used for application access.
+
+Inbound `X-Portal-User` and `X-Portal-Auth` headers are always removed. Add
+`--auth-identity-headers` to inject the verified subject and provider (`siwe`
+or `credential`) after login. Upstreams must only trust these headers when they cannot be
+reached except through this local Portal proxy.
+
+Application auth covers proxied HTTP routes, static sites, and x402 endpoints.
+It cannot be combined with raw TCP/UDP or relay static caching.
 
 ## Agent Wallet Status Access
 

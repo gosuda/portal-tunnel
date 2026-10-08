@@ -9,7 +9,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.26.4 AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.27.0 AS go-builder
 WORKDIR /src
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -38,7 +38,6 @@ ENV IDENTITY_PATH=/portal-certs
 ENV TZ=UTC
 
 EXPOSE 443/tcp
-EXPOSE 51820/udp
 # Embedded authoritative DNS (ACME_DNS_PROVIDER=embedded). The runtime is
 # nonroot, so binding 53 requires CAP_NET_BIND_SERVICE:
 #   docker run --cap-add NET_BIND_SERVICE -p 53:53/tcp -p 53:53/udp ...

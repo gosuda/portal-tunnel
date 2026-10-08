@@ -53,10 +53,14 @@ HTTP 404 outside the envelope.
 |------|---------|----------------|
 | None | public and challenge endpoints | no credential |
 | Admin bearer | admin API | `Authorization: Bearer <access_token>` |
-| Lease token header | tunnel stream and keyless signer | `X-Portal-Access-Token: <access_token>` |
-| Lease token body | lease renew/unregister | JSON field `access_token` |
+| Lease token header | keyless signer and static cache | `X-Portal-Access-Token: <access_token>` |
+| Reverse capability header | reverse stream | `X-Portal-Reverse-Capability: <capability>` |
+| Lease token body | lease renew/reverse/unregister | JSON field `access_token` |
 | Signed descriptor | relay discovery announce | signed `RelayDescriptor` body |
-| Signed hop route | relay overlay route | signed `HopRoute` body |
+
+The QUIC datagram backhaul carries the lease access token in a JSON message
+on its first stream, rather than an HTTP header. Cache endpoints can return
+plain-text HTTP errors for unsupported methods or exhausted request slots.
 
 Admin auth and SDK lease auth issue different tokens and are not
 interchangeable. SDK lease registration uses SIWE; relay admin access uses the
@@ -75,6 +79,9 @@ configured admin token.
 | `GET`/`HEAD` | `/api/install.sh`, `/api/install.ps1` | None | install script |
 | `GET`/`HEAD` | `/api/install/bin/{slug}` | None | install binary or redirect |
 
+Detailed contracts: [SDK API](/api-reference/sdk) and
+[Admin and Policy API](/api-reference/admin).
+
 ### SDK
 
 | Method | Path | Auth | Body | Response |
@@ -83,11 +90,12 @@ configured admin token.
 | `POST` | `/sdk/register/challenge` | None | `RegisterChallengeRequest` | `RegisterChallengeResponse` |
 | `POST` | `/sdk/register` | SIWE signature body | `RegisterRequest` | `RegisterResponse` |
 | `POST` | `/sdk/renew` | lease token body | `RenewRequest` | `RenewResponse` |
+| `POST` | `/sdk/reverse` | lease token body | `ReverseEndpointRequest` | `ReverseEndpoint` |
 | `POST` | `/sdk/unregister` | lease token body | `UnregisterRequest` | `{}` |
-| `GET` | `/sdk/connect` | lease token header | none | hijacked stream |
-
-`/sdk/hop` is a relay-to-relay overlay route endpoint. It is not used by normal
-SDK clients.
+| `GET` | `/sdk/connect` | reverse capability header | none | hijacked stream |
+| `POST` | `/sdk/cache` | lease token header | `StaticCacheManifest` JSON | `StaticCacheStatus` |
+| `PUT` | `/sdk/cache` | lease token header | manifest and file bytes as multipart | `StaticCacheStatus` |
+| `DELETE` | `/sdk/cache` | lease token header | none | `StaticCacheStatus` |
 
 ### Admin
 
@@ -138,7 +146,6 @@ Casper facilitator.
 | `POST` | `/api/policy` | Admin bearer | `PolicySettings` | `PolicySettings` |
 | `GET` | `/api/policy/state` | Admin bearer | none | `PolicyStateResponse` |
 | `POST` | `/api/policy/leases` | Admin bearer | `LeasePolicyUpdate` | `{}` |
-| `POST` | `/api/policy/ips` | Admin bearer | `IPPolicyUpdate` | `{}` |
 
 ### Relay
 
@@ -174,8 +181,9 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | Field | Type |
 |-------|------|
 | `name` | `string` |
+| `address` | `string` |
 | `expires_at`, `first_seen_at`, `last_seen_at` | `string` |
-| `hostname` | `string` |
+| `hostname`, `canonical_hostname` | `string` |
 | `udp_enabled`, `tcp_enabled` | `boolean` |
 | `tcp_addr` | `string` |
 | `metadata` | `LeaseMetadata` |
@@ -185,10 +193,10 @@ Timestamps are JSON-encoded Go `time.Time` values.
 
 | Field | Type |
 |-------|------|
-| `identity_key`, `address` | `string` |
+| `identity_key` | `string` |
 | `bps` | `number` |
 | `client_ip`, `reported_ip` | `string` |
-| `is_approved`, `is_banned`, `is_denied`, `is_ip_banned` | `boolean` |
+| `is_approved`, `is_banned`, `is_denied` | `boolean` |
 
 `PublicStateResponse`:
 
@@ -230,12 +238,18 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `is_denied` | `boolean` | optional; `true` also revokes approval |
 | `bps` | `number` | optional; `0` removes the limit |
 
-`IPPolicyUpdate`:
+`DiscoveryResponse`:
 
-| Field | Type |
-|-------|------|
-| `ip` | `string` |
-| `is_banned` | `boolean` |
+| Field | Type | Notes |
+|-------|------|-------|
+| `protocol_version` | `string` | discovery protocol version of the serving relay |
+| `generated_at` | `string` | when the response was generated |
+| `relays` | `RelayDescriptor[]` | signed, routable relay descriptors |
+| `incompatible_relays` | `IncompatibleRelayEntry[]` | optional; relays contacted directly whose discovery protocol version differs |
+| `release_version` | `string` | optional; release of the serving relay itself |
+| `relay_release_versions` | `map` (peer URL → release) | optional; releases directly observed from each peer's own `/discovery` |
+
+`release_version` and `relay_release_versions` are optional, unsigned observation metadata: they never affect routing, trust, signature verification, or compatibility, and older relays omit them. Signed relay identity stays in `RelayDescriptor`.
 
 ## Common Errors
 
@@ -247,12 +261,10 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `unauthorized` | credential is missing, expired, or invalid |
 | `feature_unavailable` | feature is disabled or not configured |
 | `rate_limited` | request was throttled |
-| `hostname_conflict` | lease hostname is already registered |
+| `hostname_conflict` | canonical hostname is inconsistently bound; routing fails closed |
 | `lease_not_found` | lease token or identity has no active lease |
 | `lease_rejected` | lease is not currently allowed to route |
-| `ip_banned` | source or reported IP is banned |
 | `invalid_address` | address path or body value is invalid |
-| `invalid_ip` | IP path value is invalid |
 | `invalid_mode` | approval mode is not `auto` or `manual` |
 | `http11_only` | endpoint requires HTTP/1.1 |
 | `hijack_unsupported`, `hijack_failed` | reverse stream setup failed |

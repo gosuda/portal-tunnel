@@ -1,11 +1,12 @@
 package transport
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -20,66 +21,65 @@ const (
 )
 
 type flowState struct {
-	key      string
+	addr     netip.AddrPort
 	lastSeen time.Time
-	reply    func([]byte) error
 }
 
 // RelayDatagram owns UDP ingress and QUIC backhaul binding for one lease.
 type RelayDatagram struct {
-	identityKey string
+	identityKey types.ServiceIdentityKey
 	port        int
-	session     *datagramSession
+	session     *DatagramSession
 	flowTable   map[uint32]*flowState
-	addrIndex   map[string]uint32
+	addrIndex   map[netip.AddrPort]uint32
 	nextFlow    uint32
+	enabled     atomic.Bool
 
 	conn *net.UDPConn
 
-	cancel    context.CancelFunc
-	closeOnce sync.Once
-	mu        sync.Mutex
+	started bool
+	mu      sync.Mutex
 }
 
-func NewRelayDatagram(identityKey string, port int) *RelayDatagram {
-	d := &RelayDatagram{
+func NewRelayDatagram(identityKey types.ServiceIdentityKey, port int) *RelayDatagram {
+	return &RelayDatagram{
 		identityKey: identityKey,
 		port:        port,
-		session: newDatagramSession(256, true, func(err error) {
-			log.Warn().
-				Err(err).
-				Str("component", "quic-backhaul").
-				Str("identity_key", identityKey).
-				Msg("quic backhaul receive loop ended")
-		}),
-		flowTable: make(map[uint32]*flowState),
-		addrIndex: make(map[string]uint32),
-		nextFlow:  1,
+		session:     NewDatagramSession(256, true),
+		flowTable:   make(map[uint32]*flowState),
+		addrIndex:   make(map[netip.AddrPort]uint32),
+		nextFlow:    1,
 	}
-	go d.runDispatchLoop()
-	go d.runCleanupLoop()
-	return d
 }
 
-func (d *RelayDatagram) Start(ctx context.Context) error {
-	if d == nil || d.port <= 0 {
+// Start acquires UDP ingress and starts the owned workers once. Construction
+// and failed starts leave no goroutines running; a closed endpoint cannot restart.
+func (d *RelayDatagram) Start() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	select {
+	case <-d.session.Done():
+		return net.ErrClosed
+	default:
+	}
+	if d.started {
 		return nil
 	}
-
-	addr := &net.UDPAddr{Port: d.port}
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		return fmt.Errorf("listen udp :%d: %w", d.port, err)
+	if d.port > 0 {
+		conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: d.port})
+		if err != nil {
+			return fmt.Errorf("listen udp :%d: %w", d.port, err)
+		}
+		d.conn = conn
+		go d.readLoop()
 	}
-	d.conn = conn
-
-	relayCtx, cancel := context.WithCancel(ctx)
-	d.cancel = cancel
-	go d.readLoop(relayCtx)
+	d.started = true
+	go d.runDispatchLoop()
+	go d.runCleanupLoop()
 
 	log.Info().
 		Str("component", "udp-relay").
-		Str("identity_key", d.identityKey).
+		Str("identity_key", d.identityKey.String()).
 		Int("port", d.port).
 		Msg("udp relay started")
 
@@ -91,30 +91,33 @@ func (d *RelayDatagram) Close() {
 		return
 	}
 
-	d.closeOnce.Do(func() {
-		if d.cancel != nil {
-			d.cancel()
-		}
-		d.session.Stop("lease stopped")
-		if d.conn != nil {
-			_ = d.conn.Close()
-		}
-		log.Info().
-			Str("component", "udp-relay").
-			Str("identity_key", d.identityKey).
-			Int("port", d.port).
-			Msg("udp relay stopped")
-	})
+	d.mu.Lock()
+	d.session.Close("lease stopped")
+	conn := d.conn
+	d.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
 }
 
 func (d *RelayDatagram) BindBackhaul(conn *quic.Conn) error {
-	if _, err := d.session.Bind(conn); err != nil {
+	recvDone, err := d.session.Bind(conn)
+	if err != nil {
 		return err
 	}
+	go func() {
+		if err := <-recvDone; err != nil {
+			log.Warn().
+				Err(err).
+				Str("component", "quic-backhaul").
+				Str("identity_key", d.identityKey.String()).
+				Msg("quic backhaul receive loop ended")
+		}
+	}()
 
 	log.Info().
 		Str("component", "quic-backhaul").
-		Str("identity_key", d.identityKey).
+		Str("identity_key", d.identityKey.String()).
 		Str("remote_addr", conn.RemoteAddr().String()).
 		Msg("quic backhaul connection registered")
 	return nil
@@ -127,31 +130,27 @@ func (d *RelayDatagram) sendDatagram(flowID uint32, payload []byte) error {
 	return d.session.Send(flowID, payload)
 }
 
-func (d *RelayDatagram) touchFlow(key string, reply func([]byte) error) uint32 {
+func (d *RelayDatagram) touchFlow(addr netip.AddrPort) uint32 {
 	now := time.Now()
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if id, ok := d.addrIndex[key]; ok {
+	if id, ok := d.addrIndex[addr]; ok {
 		if flow, exists := d.flowTable[id]; exists && flow != nil {
 			flow.lastSeen = now
-			if reply != nil {
-				flow.reply = reply
-			}
 			return id
 		}
-		delete(d.addrIndex, key)
+		delete(d.addrIndex, addr)
 	}
 
 	id := d.nextFlow
 	d.nextFlow++
 	d.flowTable[id] = &flowState{
-		key:      key,
+		addr:     addr,
 		lastSeen: now,
-		reply:    reply,
 	}
-	d.addrIndex[key] = id
+	d.addrIndex[addr] = id
 	return id
 }
 
@@ -160,6 +159,14 @@ func (d *RelayDatagram) UDPPort() int {
 		return 0
 	}
 	return d.port
+}
+
+// SetEnabled gates traffic in both directions while keeping the socket bound.
+func (d *RelayDatagram) SetEnabled(enabled bool) {
+	if d == nil {
+		return
+	}
+	d.enabled.Store(enabled)
 }
 
 func (d *RelayDatagram) runDispatchLoop() {
@@ -174,22 +181,29 @@ func (d *RelayDatagram) runDispatchLoop() {
 }
 
 func (d *RelayDatagram) dispatch(frame types.DatagramFrame) {
+	if !d.enabled.Load() {
+		return
+	}
 	d.mu.Lock()
 	flow, ok := d.flowTable[frame.FlowID]
-	if !ok || flow == nil || flow.reply == nil {
+	if !ok || flow == nil || d.conn == nil {
 		d.mu.Unlock()
 		return
 	}
 
 	flow.lastSeen = time.Now()
-	reply := flow.reply
+	addr := flow.addr
+	conn := d.conn
 	d.mu.Unlock()
 
-	if err := reply(frame.Payload); err != nil {
+	if !d.enabled.Load() {
+		return
+	}
+	if _, err := conn.WriteToUDPAddrPort(frame.Payload, addr); err != nil {
 		log.Warn().
 			Err(err).
 			Str("component", "udp-relay").
-			Str("identity_key", d.identityKey).
+			Str("identity_key", d.identityKey.String()).
 			Uint32("flow_id", frame.FlowID).
 			Msg("flow writeback failed")
 		d.forgetFlow(frame.FlowID)
@@ -217,7 +231,7 @@ func (d *RelayDatagram) expireIdleFlows(now time.Time) {
 	for flowID, flow := range d.flowTable {
 		if flow == nil || now.Sub(flow.lastSeen) > types.DefaultUDPFlowIdleTimeout {
 			if flow != nil {
-				delete(d.addrIndex, flow.key)
+				delete(d.addrIndex, flow.addr)
 			}
 			delete(d.flowTable, flowID)
 		}
@@ -233,49 +247,38 @@ func (d *RelayDatagram) forgetFlow(flowID uint32) {
 		return
 	}
 	if flow != nil {
-		delete(d.addrIndex, flow.key)
+		delete(d.addrIndex, flow.addr)
 	}
 	delete(d.flowTable, flowID)
 }
 
-func (d *RelayDatagram) readLoop(ctx context.Context) {
+func (d *RelayDatagram) readLoop() {
 	buf := make([]byte, defaultMaxPacketSize)
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		_ = d.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		n, clientAddr, err := d.conn.ReadFromUDP(buf)
+		n, clientAddr, err := d.conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
-			if ctx.Err() != nil {
+			if errors.Is(err, net.ErrClosed) {
 				return
-			}
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
 			}
 			log.Warn().
 				Str("component", "udp-relay").
-				Str("identity_key", d.identityKey).
+				Str("identity_key", d.identityKey.String()).
 				Err(err).
 				Msg("readLoop exiting: unexpected read error")
 			return
 		}
+		if !d.enabled.Load() {
+			continue
+		}
 
-		flowID := d.touchFlow("udp:"+clientAddr.String(), func(payload []byte) error {
-			_, err := d.conn.WriteToUDP(payload, clientAddr)
-			return err
-		})
+		flowID := d.touchFlow(clientAddr)
 		payload := make([]byte, n)
 		copy(payload, buf[:n])
 
 		if err := d.sendDatagram(flowID, payload); err != nil {
 			log.Warn().
 				Str("component", "udp-relay").
-				Str("identity_key", d.identityKey).
+				Str("identity_key", d.identityKey.String()).
 				Err(err).
 				Uint32("flow_id", flowID).
 				Int("bytes", n).

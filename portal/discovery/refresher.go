@@ -3,11 +3,11 @@ package discovery
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -17,29 +17,22 @@ import (
 )
 
 const (
-	defaultRequestTimeout    = 15 * time.Second
-	DiscoveryPollInterval    = 30 * time.Second
-	defaultRecoveryFailures  = 5
-	maxConcurrentRefresh     = 8
-	maxConcurrentAnnounce    = 8
-	maxConcurrentOverlayDial = 8
+	defaultRequestTimeout   = 15 * time.Second
+	DiscoveryPollInterval   = 30 * time.Second
+	defaultRecoveryFailures = 5
+	maxConcurrentRefresh    = 8
+	maxConcurrentAnnounce   = 8
 )
-
-type OverlayRuntime interface {
-	DiscoverRelay(context.Context, types.RelayDescriptor) (types.DiscoveryResponse, error)
-	Sync([]types.RelayDescriptor) error
-}
 
 type Refresher struct {
 	relaySet               *RelaySet
 	httpClient             *http.Client
-	overlay                OverlayRuntime
 	directRecoveryFailures int
 	lastAnnounceSuccess    map[string]bool
 	lastAnnounceMu         sync.Mutex
 }
 
-func NewRefresher(relaySet *RelaySet, overlay OverlayRuntime) *Refresher {
+func NewRefresher(relaySet *RelaySet) *Refresher {
 	return &Refresher{
 		relaySet: relaySet,
 		httpClient: utils.NewHTTPClient(
@@ -50,23 +43,12 @@ func NewRefresher(relaySet *RelaySet, overlay OverlayRuntime) *Refresher {
 			utils.WithoutHTTP2(),
 			utils.WithHTTPTimeout(defaultRequestTimeout),
 		),
-		overlay:                overlay,
 		directRecoveryFailures: defaultRecoveryFailures,
 		lastAnnounceSuccess:    make(map[string]bool),
 	}
 }
 
 func (r *Refresher) Refresh(ctx context.Context, self *types.RelayDescriptor) error {
-	if r.overlay != nil {
-		if err := r.refreshOverlay(ctx); err != nil && ctx.Err() == nil {
-			log.Warn().
-				Err(err).
-				Msg("overlay discovery failed")
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-	}
 	if err := r.refreshHTTPS(ctx); err != nil {
 		return err
 	}
@@ -128,18 +110,12 @@ func (r *Refresher) shouldLogAnnounce(relayURL string, success bool) bool {
 }
 
 // sortRefreshCandidates orders relays so that the most important sources are
-// refreshed first under concurrency limits: bootstrap, then confirmed, then
-// discovered healthy relays, and finally recovery/backoff candidates.
+// refreshed first under concurrency limits: bootstrap, then discovered
+// healthy relays, and finally recovery/backoff candidates.
 func sortRefreshCandidates(states []RelayState) []RelayState {
 	slices.SortFunc(states, func(a, b RelayState) int {
 		if a.Bootstrap != b.Bootstrap {
 			if a.Bootstrap {
-				return -1
-			}
-			return 1
-		}
-		if a.Confirmed != b.Confirmed {
-			if a.Confirmed {
 				return -1
 			}
 			return 1
@@ -193,7 +169,6 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 		return nil
 	}
 	client := r.httpClient
-	var closeClient func()
 	if utils.IsLocalRelayHost(baseURL.Hostname()) {
 		_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)
 		if err != nil {
@@ -203,15 +178,12 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 			return nil
 		}
 		client = localClient
-		closeClient = transport.CloseIdleConnections
+		defer transport.CloseIdleConnections()
 	}
 
 	startedAt := time.Now()
 	var resp types.DiscoveryResponse
 	if err := utils.HTTPDoAPIPath(ctx, client, baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
-		if closeClient != nil {
-			closeClient()
-		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -220,58 +192,22 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 		}
 		return nil
 	}
-	if closeClient != nil {
-		closeClient()
-	}
 	measuredAt := time.Now().UTC()
 
 	if _, err := r.relaySet.ApplyRelayDiscoveryResponse(relayURL, resp, measuredAt); err != nil {
+		if errors.Is(err, ErrProtocolMismatch) {
+			// The relay answered; protocol incompatibility is visibility
+			// metadata, not a health failure. Keep polling it without
+			// accumulating discovery failures or pool bans.
+			log.Debug().Err(err).Str("relay", relayURL).Msg("discovery protocol mismatch; relay kept visible as incompatible")
+			return nil
+		}
 		if recoveryFailures > 0 {
 			r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
 		}
 		return nil
 	}
 	r.relaySet.RecordDiscoveryRTT(relayURL, time.Since(startedAt), measuredAt)
-	return nil
-}
-
-func (r *Refresher) refreshOverlay(ctx context.Context) error {
-	now := time.Now().UTC()
-	states := r.relaySet.overlayPeerRelayStates(now)
-	if len(states) == 0 {
-		return nil
-	}
-	descriptors := make([]types.RelayDescriptor, 0, len(states))
-	for _, state := range states {
-		descriptors = append(descriptors, state.Descriptor)
-	}
-	if err := r.overlay.Sync(descriptors); err != nil {
-		return err
-	}
-
-	candidates := r.relaySet.overlayRefreshCandidates(now)
-	if len(candidates) == 0 {
-		return nil
-	}
-	candidates = sortRefreshCandidates(candidates)
-
-	var relaySetChanged atomic.Bool
-	if err := parallel(candidates, maxConcurrentOverlayDial, func(state RelayState) error {
-		changed, err := r.refreshOneOverlay(ctx, state)
-		if changed {
-			relaySetChanged.Store(true)
-		}
-		return err
-	}); err != nil {
-		return err
-	}
-
-	if !relaySetChanged.Load() {
-		return nil
-	}
-	if err := r.overlay.Sync(r.relaySet.OverlayPeerDescriptor()); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -300,36 +236,6 @@ func parallel[T any](items []T, limit int, fn func(T) error) error {
 	default:
 		return nil
 	}
-}
-
-func (r *Refresher) refreshOneOverlay(ctx context.Context, state RelayState) (bool, error) {
-	relay := state.Descriptor
-	recoveryFailures := r.directRecoveryFailures
-	if state.Bootstrap {
-		recoveryFailures = 0
-	}
-	startedAt := time.Now()
-	resp, err := r.overlay.DiscoverRelay(ctx, relay)
-	if err != nil {
-		if ctx.Err() != nil {
-			return false, ctx.Err()
-		}
-		if recoveryFailures > 0 {
-			r.logDiscoveryFailure(relay.APIHTTPSAddr, relay.APIHTTPSAddr, recoveryFailures, err)
-		}
-		return false, nil
-	}
-
-	measuredAt := time.Now().UTC()
-	changed, err := r.relaySet.ApplyRelayDiscoveryResponse(relay.APIHTTPSAddr, resp, measuredAt)
-	if err != nil {
-		if recoveryFailures > 0 {
-			r.logDiscoveryFailure(relay.APIHTTPSAddr, relay.APIHTTPSAddr, recoveryFailures, err)
-		}
-		return false, nil
-	}
-	r.relaySet.RecordDiscoveryRTT(relay.APIHTTPSAddr, time.Since(startedAt), measuredAt)
-	return changed, nil
 }
 
 func (r *Refresher) logDiscoveryFailure(targetRelayURL, sourceURL string, recoveryFailures int, err error) {

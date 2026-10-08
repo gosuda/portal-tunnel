@@ -1,217 +1,143 @@
 package utils
 
 import (
-	"context"
-	"reflect"
+	"strings"
 	"testing"
-	"time"
 )
 
-func TestNormalizeRelayURLs(t *testing.T) {
+func TestHostnameMatchesPattern(t *testing.T) {
 	t.Parallel()
 
-	got, err := NormalizeRelayURLs(
-		" localhost:4017 , https://relay.example.com/base/relay?x=1#frag ",
-		"https://relay.example.com/base",
-	)
-	if err != nil {
-		t.Fatalf("NormalizeRelayURLs() error = %v", err)
-	}
-
-	want := []string{
-		"https://localhost:4017",
-		"https://relay.example.com/base",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("NormalizeRelayURLs() = %v, want %v", got, want)
-	}
-}
-
-func TestNormalizeURLPath(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		input string
-		want  string
+	tests := []struct {
+		name    string
+		pattern string
+		host    string
+		want    bool
 	}{
-		{input: "", want: "/"},
-		{input: " ", want: "/"},
-		{input: "api", want: "/api"},
-		{input: "/api/", want: "/api"},
-		{input: "/api/../v1//", want: "/v1"},
-		{input: "/", want: "/"},
+		{name: "exact match", pattern: "foo.example.com", host: "foo.example.com", want: true},
+		{name: "wildcard matches one level", pattern: "*.example.com", host: "foo.example.com", want: true},
+		{name: "wildcard rejects multi-level", pattern: "*.example.com", host: "a.b.example.com", want: false},
+		{name: "wildcard rejects apex", pattern: "*.example.com", host: "example.com", want: false},
+		{name: "wildcard requires dotted suffix", pattern: "*.com", host: "foo.com", want: false},
+		{name: "bare star matches nothing", pattern: "*", host: "foo.example.com", want: false},
+		{name: "mismatch", pattern: "bar.example.com", host: "foo.example.com", want: false},
+		{name: "empty pattern", pattern: "", host: "foo.example.com", want: false},
+		{name: "empty hostname", pattern: "*.example.com", host: "", want: false},
+		{name: "normalizes case and trailing dot", pattern: "*.Example.COM.", host: "FOO.example.com", want: true},
 	}
 
-	for _, tc := range cases {
-		if got := NormalizeURLPath(tc.input); got != tc.want {
-			t.Fatalf("NormalizeURLPath(%q) = %q, want %q", tc.input, got, tc.want)
-		}
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-func TestFilterRelayURLs(t *testing.T) {
-	t.Parallel()
-
-	got := FilterRelayURLs(
-		[]string{"https://relay-a.example", "https://relay-b.example"},
-		[]string{"https://relay-b.example"},
-	)
-
-	want := []string{"https://relay-a.example"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("FilterRelayURLs() = %v, want %v", got, want)
-	}
-}
-
-func TestRemoveRelayURL(t *testing.T) {
-	t.Parallel()
-
-	got := RemoveRelayURL(
-		[]string{"https://relay-a.example", "https://relay-b.example"},
-		"https://relay-a.example",
-	)
-
-	want := []string{"https://relay-b.example"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("RemoveRelayURL() = %v, want %v", got, want)
-	}
-}
-
-func TestExcludeLocalRelayURLs(t *testing.T) {
-	t.Parallel()
-
-	got, err := ExcludeLocalRelayURLs(
-		"https://localhost:4017",
-		"https://127.0.0.1:4017",
-		"https://relay.example.com/base",
-		"https://demo.localhost",
-	)
-	if err != nil {
-		t.Fatalf("ExcludeLocalRelayURLs() error = %v", err)
-	}
-
-	want := []string{"https://relay.example.com/base"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("ExcludeLocalRelayURLs() = %v, want %v", got, want)
-	}
-}
-
-func TestParseCIDRs(t *testing.T) {
-	t.Parallel()
-
-	got, err := ParseCIDRs("10.0.0.0/8, 10.0.0.0/8, 192.168.0.0/16")
-	if err != nil {
-		t.Fatalf("ParseCIDRs() error = %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("ParseCIDRs() len = %d, want %d", len(got), 2)
-	}
-}
-
-func TestParseCIDRsRejectsInvalidValue(t *testing.T) {
-	t.Parallel()
-
-	if _, err := ParseCIDRs("not-a-cidr"); err == nil {
-		t.Fatal("ParseCIDRs() error = nil, want invalid cidr error")
-	}
-}
-
-func TestDomainCandidates(t *testing.T) {
-	t.Parallel()
-
-	got := DomainCandidates("portal.example.com")
-	want := []string{"portal.example.com", "example.com"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("DomainCandidates() = %v, want %v", got, want)
-	}
-}
-
-func TestNormalizeTargetAddr(t *testing.T) {
-	t.Parallel()
-
-	got, err := NormalizeTargetAddr("http://127.0.0.1")
-	if err != nil {
-		t.Fatalf("NormalizeTargetAddr() error = %v", err)
-	}
-	if got != "127.0.0.1:80" {
-		t.Fatalf("NormalizeTargetAddr() = %q, want %q", got, "127.0.0.1:80")
-	}
-}
-
-func TestValidateIPv4(t *testing.T) {
-	t.Parallel()
-
-	if err := ValidateIPv4("203.0.113.10"); err != nil {
-		t.Fatalf("ValidateIPv4() error = %v", err)
-	}
-	if err := ValidateIPv4("not-an-ip"); err == nil {
-		t.Fatal("ValidateIPv4() error = nil, want invalid ip error")
-	}
-}
-
-func TestNormalizeDNSLabel(t *testing.T) {
-	t.Parallel()
-
-	got, err := NormalizeDNSLabel("Demo-App")
-	if err != nil {
-		t.Fatalf("NormalizeDNSLabel() error = %v", err)
-	}
-	if got != "demo-app" {
-		t.Fatalf("NormalizeDNSLabel() = %q, want %q", got, "demo-app")
+			if got := HostnameMatchesPattern(tt.pattern, tt.host); got != tt.want {
+				t.Fatalf("HostnameMatchesPattern(%q, %q) = %v, want %v", tt.pattern, tt.host, got, tt.want)
+			}
+		})
 	}
 }
 
 func TestLeaseHostname(t *testing.T) {
 	t.Parallel()
 
-	got, err := LeaseHostname("Demo-App", "portal.example.com")
-	if err != nil {
-		t.Fatalf("LeaseHostname() error = %v", err)
-	}
-	if got != "demo-app.portal.example.com" {
-		t.Fatalf("LeaseHostname() = %q, want %q", got, "demo-app.portal.example.com")
-	}
-}
-
-func TestDecodeBase64URLString(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		encoded string
+	tests := []struct {
+		name    string
+		raw     string
+		root    string
 		want    string
+		wantErr bool
 	}{
-		{encoded: "bGVhc2UtMTIz", want: "lease-123"},
-		{encoded: "bGVhc2UtMTIzZA==", want: "lease-123d"},
-		{encoded: "bGVhc2UtMTIzZA", want: "lease-123d"},
+		{name: "composes child hostname", raw: "demo", root: "example.com", want: "demo.example.com"},
+		{name: "normalizes name and root", raw: "My App", root: "Example.COM.", want: "my-app.example.com"},
+		{name: "rejects empty name", raw: "", root: "example.com", wantErr: true},
+		{name: "rejects punctuation-only name", raw: "!!!", root: "example.com", wantErr: true},
+		{name: "rejects over-long name", raw: strings.Repeat("a", 64), root: "example.com", wantErr: true},
+		{name: "rejects empty root host", raw: "demo", root: "", wantErr: true},
 	}
 
-	for _, tc := range cases {
-		encoded, want := tc.encoded, tc.want
-		got, err := DecodeBase64URLString(encoded)
-		if err != nil {
-			t.Fatalf("DecodeBase64URLString(%q) error = %v", encoded, err)
-		}
-		if got != want {
-			t.Fatalf("DecodeBase64URLString(%q) = %q, want %q", encoded, got, want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := LeaseHostname(tt.raw, tt.root)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("LeaseHostname(%q, %q) error = nil, want invalid label error", tt.raw, tt.root)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LeaseHostname(%q, %q) error = %v", tt.raw, tt.root, err)
+			}
+			if got != tt.want {
+				t.Fatalf("LeaseHostname(%q, %q) = %q, want %q", tt.raw, tt.root, got, tt.want)
+			}
+		})
 	}
 }
 
-func TestDecodeBase64URLStringRejectsInvalidValue(t *testing.T) {
+func TestCanonicalLeaseHostname(t *testing.T) {
 	t.Parallel()
 
-	if _, err := DecodeBase64URLString("%%%"); err == nil {
-		t.Fatal("DecodeBase64URLString() error = nil, want invalid base64 error")
+	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
+	want := "herdr-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.example.com"
+	got, err := CanonicalLeaseHostname("Herdr", address, "Example.COM.")
+	if err != nil {
+		t.Fatalf("CanonicalLeaseHostname() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("CanonicalLeaseHostname() = %q, want %q", got, want)
+	}
+
+	maxName := strings.Repeat("a", 22)
+	got, err = CanonicalLeaseHostname(maxName, address, "example.com")
+	if err != nil {
+		t.Fatalf("CanonicalLeaseHostname(maximum name) error = %v", err)
+	}
+	if label := strings.SplitN(got, ".", 2)[0]; len(label) != 63 {
+		t.Fatalf("canonical label length = %d, want 63", len(label))
+	}
+	if _, err := CanonicalLeaseHostname(maxName+"a", address, "example.com"); err == nil {
+		t.Fatal("CanonicalLeaseHostname(overlong name) error = nil")
+	}
+	if _, err := CanonicalLeaseHostname("herdr", "0x1234", "example.com"); err == nil {
+		t.Fatal("CanonicalLeaseHostname(short address) error = nil")
 	}
 }
 
-func TestSleepOrDoneCanceled(t *testing.T) {
+func TestCanonicalLeaseHostnameKeepsServiceIdentityAcrossRelays(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
+	relayA, err := CanonicalLeaseHostname("herdr", address, "relay-a.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayB, err := CanonicalLeaseHostname("herdr", address, "relay-b.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	labelA, _, _ := strings.Cut(relayA, ".")
+	labelB, _, _ := strings.Cut(relayB, ".")
+	if labelA != labelB || relayA == relayB {
+		t.Fatalf("relay canonical hostnames = (%q, %q), want the same service label under different relay origins", relayA, relayB)
+	}
+}
 
-	if SleepOrDone(ctx, time.Second) {
-		t.Fatal("SleepOrDone() = true, want false for canceled context")
+func TestEnsurePortHandlesBracketedIPv6(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host string
+		want string
+	}{
+		{name: "loopback", host: "[::1]", want: "[::1]:443"},
+		{name: "zone id", host: "[fe80::1%eth0]", want: "[fe80::1%eth0]:443"},
+		{name: "existing port", host: "[::1]:8443", want: "[::1]:8443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := EnsurePort(tc.host); got != tc.want {
+				t.Fatalf("EnsurePort(%q) = %q, want %q", tc.host, got, tc.want)
+			}
+		})
 	}
 }

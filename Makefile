@@ -1,21 +1,26 @@
-.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean load-test
+.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean check-env-example env-reference
 
 .DEFAULT_GOAL := help
 
-GO_PACKAGES := ./cmd/... ./portal/... ./sdk/... ./types/... ./utils/...
+GO_PACKAGES := . ./cmd/... ./e2e/... ./portal/... ./sdk/... ./types/... ./utils/...
 GO_BUILD_FLAGS := -trimpath -ldflags "-s -w"
 GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
-GOIMPORTS_VERSION := v0.41.0
-GOLANGCI_LINT_VERSION := v2.11.1
+GOIMPORTS_VERSION := v0.49.0
+GOLANGCI_LINT_VERSION := v2.13.1
+GOJGP_VERSION := v1.1.1
+GOIMPORTS_LOCAL := github.com/gosuda/portal-tunnel/v2
 
 export GOTOOLCHAIN := $(GO_TOOLCHAIN_VERSION)
 
 help:
 	@echo "Available targets:"
 	@echo "  make install           - Install Go developer tools used by this repo"
+	@echo "  make lint              - Run golangci-lint and gojgp"
 	@echo "  make fmt               - Apply gofmt/goimports"
 	@echo "  make lint-auto         - Run autofix lint/format pipeline"
 	@echo "  make test              - Run Go and frontend tests"
+	@echo "  make check-env-example - Fail if .env.example is missing a configuration key"
+	@echo "  make env-reference     - Print every configuration key, generated from the flags"
 	@echo "  make build             - Build Go tunnel and relay server artifacts"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-docs        - Build documentation site (SvelteKit)"
@@ -27,21 +32,24 @@ help:
 install:
 	go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	go install github.com/gosuda/JustGoodPractices/cmd/gojgp@$(GOJGP_VERSION)
 
 fmt:
 	gofmt -w .
-	goimports -w .
+	goimports -local $(GOIMPORTS_LOCAL) -w .
 
 vet:
 	go vet $(GO_PACKAGES)
 
 lint:
 	golangci-lint run $(GO_PACKAGES)
+	go run ./cmd/gojgp-lint $(GO_PACKAGES)
 
 lint-auto:
 	gofmt -w .
-	goimports -w .
+	goimports -local $(GOIMPORTS_LOCAL) -w .
 	golangci-lint run --fix $(GO_PACKAGES)
+	go run ./cmd/gojgp-lint $(GO_PACKAGES)
 
 test:
 	go test -v -coverprofile=coverage.out $(GO_PACKAGES)
@@ -51,6 +59,42 @@ tidy:
 	go get -u ./...
 	go mod tidy
 	go mod verify
+
+# Relay keys are owned by the flag definitions in cmd/relay-server/main.go.
+# This deployment check excludes listener values fixed directly by the bundled
+# Compose topology; that topology, not the relay binary, owns the exception.
+CONFIG_DOC := docs/src/routes/configuration/+page.md
+COMPOSE_PINNED_ENV_PATTERN := ^(SNI_PORT)$$
+
+check-env-example:
+	@go run ./cmd/relay-server config --format names | grep -Ev '$(COMPOSE_PINNED_ENV_PATTERN)' > /tmp/portal-env-names.txt
+	@status=0; \
+	missing=""; \
+	while read -r name; do \
+		grep -qE "^#? *$$name=" .env.example || missing="$$missing $$name"; \
+	done < /tmp/portal-env-names.txt; \
+	if [ -n "$$missing" ]; then \
+		echo "[env] .env.example does not document:"; \
+		for name in $$missing; do echo "  - $$name"; done; \
+		status=1; \
+	fi; \
+	missing=""; \
+	while read -r name; do \
+		grep -qF "\`$$name\`" $(CONFIG_DOC) || missing="$$missing $$name"; \
+	done < /tmp/portal-env-names.txt; \
+	if [ -n "$$missing" ]; then \
+		echo "[env] $(CONFIG_DOC) does not document:"; \
+		for name in $$missing; do echo "  - $$name"; done; \
+		status=1; \
+	fi; \
+	if [ "$$status" -ne 0 ]; then \
+		echo "[env] run 'make env-reference' to see each key with its usage text"; \
+		exit 1; \
+	fi; \
+	echo "[env] .env.example and $(CONFIG_DOC) document every configuration key"
+
+env-reference:
+	@go run ./cmd/relay-server config --format env
 
 all: fmt vet lint test build
 
@@ -88,9 +132,13 @@ build-tunnel:
 			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build $(GO_BUILD_FLAGS) -o "$${OUT}" ./cmd/portal-tunnel; \
 		done; \
 	done
+	@echo " - cmd/relay-server/dist/tunnel/portal-js-wasm.wasm"
+	@test "$$(go env GOVERSION)" = "$(GO_TOOLCHAIN_VERSION)"
+	@CGO_ENABLED=0 GOOS=js GOARCH=wasm go build $(GO_BUILD_FLAGS) -o cmd/relay-server/dist/tunnel/portal-js-wasm.wasm ./cmd/portal-tunnel/wasm
+	@cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/relay-server/dist/tunnel/wasm_exec.js
 
 # Build Go relay server
-build-server: build-frontend build-server-bin
+build-server: build-tunnel build-frontend build-server-bin
 
 # Binary only; assumes frontend assets already exist in cmd/relay-server/dist/app.
 build-server-bin:
@@ -102,13 +150,3 @@ clean:
 	rm -rf cmd/relay-server/dist/tunnel
 	rm -rf cmd/relay-server/dist/app
 	rm -rf frontend/dist
-
-# Run the uniformity probe. Extra flags are passed through after the target name:
-#   make load-test -- -clients 1000 -relays 5
-# GNU make consumes '--' and forwards remaining goals; the catch-all '%:' rule
-# below silently absorbs them so make does not error with "no rule to make target."
-load-test:
-	go run ./cmd/portal-loadtest $(filter-out $@,$(MAKECMDGOALS))
-
-%:
-	@:

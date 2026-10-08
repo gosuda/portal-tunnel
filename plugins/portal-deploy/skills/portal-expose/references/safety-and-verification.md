@@ -10,7 +10,7 @@ Before creating a tunnel, identify the exact target and confirm that it belongs 
 - Services without authentication that can read files, execute code, change configuration, or mutate production data.
 - Local development servers that expose source trees, environment-derived data, directory listings, or unrestricted filesystem paths.
 
-End-to-end transport encryption does not make an unauthenticated service private. The public hostname can still be reached by anyone who learns it. Unless `--hide` / `hide = true` is set, Portal also publishes the lease on participating relay listing screens, so `portal list` can enumerate it.
+End-to-end transport encryption does not make an unauthenticated service private. The public hostname can still be reached by anyone who learns it. Unless `--hide` / `hide = true` is set, every participating relay lists the lease in `GET /api/state`, so anyone can enumerate it. The relay's landing-page directory shows that same list only when the operator opts in (`LANDING_PAGE_ENABLED`, default `false`, changeable later from the admin dashboard). Listed services can also receive public up/down reputation votes (`POST /api/reputation/vote`) on relays running the current release.
 
 ## Secret handling
 
@@ -19,6 +19,7 @@ End-to-end transport encryption does not make an unauthenticated service private
 - Keep persistent identity and agent state outside the repository. If the user intentionally keeps state under the project, verify that its directory is ignored before creating files.
 - Pass secrets through the environment or an existing secret manager. Do not place them directly in commands, logs, skill output, or TOML unless the upstream workflow has no secret reference mechanism and the user explicitly accepts the storage risk.
 - Avoid environment dumps, `ps eww`, or other diagnostics that reveal process environments.
+- `IDENTITY_PATH`, `TCP_ENABLED`, and `UDP_ENABLED` are read by both `portal expose` and `relay-server` with different meanings (an identity file versus a state directory; a per-tunnel port request versus relay-wide transport); on a host that runs both, an environment variable set for the relay silently reconfigures `portal expose`. Prefer explicit flags.
 
 ## Verification matrix
 
@@ -43,6 +44,7 @@ The final response must distinguish:
 - Whether `portal agent stop`/`restart` would also take down other tunnels on that service.
 - Verified public URLs or raw endpoints versus values merely printed in logs.
 - Listed versus `--hide` visibility, and detect-only MITM versus `--ban-mitm`.
+- Whether `--cache` was used: cached responses are served by the relay with relay-terminated browser TLS and can remain available on the relay after the tunnel stops, bounded by `--cache-ttl` and the relay's `CACHE_MAX_TTL` (default `24h`).
 - Stop command for the tunnel and whether stopping the tunnel also stops the app.
 
-Do not promise availability after the local machine sleeps, disconnects from the network, shuts down, or stops the application. Do not run `portal agent dashboard` yourself; it is an interactive TUI.
+Do not promise availability after the local machine sleeps, disconnects from the network, shuts down, or stops the application; with `--cache`, say instead that the relay may keep serving the cached static files until its bounded deadline and that cache misses still need the local server. Do not run `portal agent dashboard` yourself; it is an interactive TUI.

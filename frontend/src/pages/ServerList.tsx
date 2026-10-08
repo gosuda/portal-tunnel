@@ -16,13 +16,16 @@ export function ServerList() {
     handleSortByChange,
     handleTagToggle,
     handleToggleFavorite,
+    onVote,
     landingPageEnabled,
+    leases,
   } = useServerList();
 
   return (
     <SsgoiTransition id="/">
       <ServerListView
         landingPageEnabled={landingPageEnabled}
+        leases={leases}
         searchQuery={searchQuery}
         status={status}
         sortBy={sortBy}
@@ -35,6 +38,7 @@ export function ServerList() {
         onSortByChange={handleSortByChange}
         onTagToggle={handleTagToggle}
         onToggleFavorite={handleToggleFavorite}
+        onVote={onVote}
       />
     </SsgoiTransition>
   );

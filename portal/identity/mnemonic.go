@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"cmp"
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/binary"
@@ -37,9 +38,7 @@ func deriveSecp256k1PrivateKeyFromMnemonic(rawMnemonic, rawDerivationPath string
 	}
 
 	derivationPath := strings.TrimSpace(rawDerivationPath)
-	if derivationPath == "" {
-		derivationPath = DefaultEVMIdentityDerivationPath
-	}
+	derivationPath = cmp.Or(derivationPath, DefaultEVMIdentityDerivationPath)
 	path, err := parseDerivationPath(derivationPath)
 	if err != nil {
 		return "", "", fmt.Errorf("parse identity derivation path: %w", err)

@@ -40,6 +40,7 @@ not create a config file.
 | Command | Purpose |
 |---------|---------|
 | `portal expose` | Expose one local service or one routed HTTP bundle |
+| `portal auth issue` | Issue a Portal-native application access credential |
 | `portal list` | Print relay URLs resolved for this invocation |
 | `portal agent` | Run a durable local multi-tunnel agent |
 | `portal update` | Replace the CLI with the latest release |
@@ -77,6 +78,7 @@ not supported.
 | Mode | Example | Notes |
 |------|---------|-------|
 | Default HTTPS stream | `portal expose 3000` | Relay routes by SNI; tunnel process terminates tenant TLS |
+| Static site | `portal expose --serve ./dist` | Serves a directory or an HTML file with SPA fallback |
 | Routed HTTP | `portal expose --http-route /api=3001 --http-route /=5173` | Tunnel process runs the HTTP reverse proxy |
 | Dedicated raw TCP | `portal expose localhost:25565 --tcp` | Relay allocates a public TCP port |
 | UDP relay | `portal expose 8080 --udp --udp-addr 19132` | Relay allocates a public UDP port |
@@ -87,20 +89,21 @@ not supported.
 |------|------|---------|-------------|
 | `--relays` | string | registry | Additional relay API URLs, comma-separated |
 | `--discovery` | bool | `true` | Include registry relays and relay discovery expansion |
-| `--max-active-relays` | int | `3` | Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry; explicit relays are always included |
-| `--multi-hop` | string | | Ordered multi-hop relay API URLs, comma-separated |
-| `--multi-hop-depth` | int | `0` | Automatically create this-depth multi-hop routes for every eligible entry relay; `0` or `1` disables multi-hop |
+| `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
+| `--overlay` | bool | `false` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; retains direct fallback |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
-| `--ech` | bool | `false` | Enable ECH hostname privacy for TLS stream tunnels; plaintext-SNI routing remains available as fallback |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
-| `--identity-json` | string | | Identity JSON payload; overrides `--identity-path` contents and is persisted there when both are set |
-| `--name` | string | auto | Public hostname prefix, one DNS label |
+| `--identity-json` | string | | In-memory identity JSON; takes precedence over `--identity-path` without reading or writing that file |
+| `--name` | string | auto | Public hostname prefix, normalized to one DNS label of at most 22 ASCII characters |
 | `--description` | string | | Service description metadata |
 | `--tags` | string | | Service tags metadata, comma-separated |
 | `--thumbnail` | string | | Service thumbnail URL metadata, as an absolute `http://` or `https://` URL |
 | `--thumbnail-from-target` | bool | `false` | When `--thumbnail` is empty, use the first **absolute** image URL the target advertises: `og:image`, then `twitter:image`, then an icon link. Relative references are skipped, since Open Graph calls for an absolute URL and `metadata.thumbnail` is one by contract. Only `/` on the tunnel's own target is read, redirects are not followed, and the chosen URL is logged at startup |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
+| `--auth` | string | | Protect HTTP application access with `siwe` or `credential`; cannot be combined with `--cache` |
+| `--auth-allow` | string | | Ethereum wallet allowed to sign in; repeat for multiple wallets (empty allows any wallet); requires `--auth siwe` |
+| `--auth-identity-headers` | bool | `false` | Send authenticated `X-Portal-User` and `X-Portal-Auth` headers to HTTP upstreams; requires `--auth` |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
 | `--x402-network` | string | | Optional Sui or Casper CAIP-2 network |
@@ -108,17 +111,45 @@ not supported.
 | `--x402-endpoint` | string | | Optional Sui RPC or Casper facilitator endpoint; repeatable |
 | `--x402-facilitator-token` | string | `CSPR_CLOUD_API_KEY` | Casper facilitator authorization token; prefer the environment variable so the secret is not exposed in the process arguments |
 | `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]` form; repeatable; route amounts require `--x402-pay-to` |
+| `--strip-request-header` | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (`Host`, `X-Forwarded-*`) are always rewritten after stripping; requires `--http-route` or `--auth` |
+| `--serve` | string | | Serve a local directory or HTML file; unknown paths fall back to the entry HTML |
+| `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
+| `--cache-ttl` | duration | `0` | Requested offline cache lifetime; `0` uses relay policy; requires `--cache` |
 | `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
+### IVNP-backed overlay networking
+
+```bash
+portal expose 3000 --overlay
+```
+
+This asks the relay to prefer an available overlay gateway for reverse streams.
+Portal selects and authorizes the endpoints; IVNP owns the gateway-to-ingress
+path. Direct reverse transport remains the default and fallback. See
+[the overlay networking concepts](/concepts#ivnp-backed-overlay-networking) for
+why endpoint policy and network routing are separate, and
+[the architecture](/architecture#ivnp-backed-overlay-networking) for the protocol.
+
+### Identity Names
+
+An existing identity file or `--identity-json` supplies the saved name as well
+as the key. `--name` applies only when creating a new identity; it does not
+rename an existing one. Use a separate `--identity-path` for a new identity.
+
 ### Constraints
 
-- `<target>` cannot be combined with `--http-route`.
-- `--http-route` cannot be combined with `--udp`.
-- Explicit `--multi-hop` cannot be combined with automatic `--multi-hop-depth`.
-- Multi-hop currently supports only the default SNI TLS stream transport.
+- Choose one of `<target>`, `--serve`, or `--http-route`.
+- `--serve` cannot be combined with `--tcp` or `--udp`.
+- `--cache` requires `--serve` and cannot be combined with `--ban-mitm`.
+- `--cache-ttl` requires `--cache`; a nonzero value must be between `1s` and
+  `8760h` and is clamped by the relay.
+- `--http-route` cannot be combined with `--tcp` or `--udp`.
+- `--strip-request-header` requires `--http-route` or `--auth`; it applies to
+  every routed HTTP upstream, including WebSocket upgrades, and Portal-owned
+  headers (`Host`, `X-Forwarded-*`) cannot be removed by it.
 - `--tcp` and `--udp` require matching transport support on the relay.
 - Route payment amounts are part of `--http-route` and require a tunnel-owned
   `--x402-pay-to`.
@@ -134,6 +165,26 @@ Expose a local web app:
 ```bash
 portal expose 3000
 ```
+
+Protect the app with tunnel-local SIWE login:
+
+```bash
+portal expose 3000 --auth siwe
+# Restrict login and pass the verified identity to the upstream.
+portal expose 3000 --auth siwe --auth-allow 0x1234... --auth-identity-headers
+```
+
+Protect it without requiring a browser wallet, then issue a host-scoped
+credential from the tunnel identity:
+
+```bash
+portal expose 3000 --auth credential
+portal auth issue myapp.example.com --subject alice --expires 720h
+```
+
+Portal protects the complete HTTP gateway, including routed, static, and x402
+paths. It always strips inbound Portal identity headers. The auth gate cannot be
+combined with relay cache mode or raw TCP/UDP exposure.
 
 Use a custom name and relay:
 
@@ -167,18 +218,6 @@ Enable UDP alongside the default stream target:
 
 ```bash
 portal expose localhost:8080 --udp --udp-addr localhost:19132 --name game
-```
-
-Use an explicit multi-hop route:
-
-```bash
-portal expose 3000 --multi-hop https://entry.example.com,https://exit.example.com
-```
-
-Ask Portal to create three-hop routes for every eligible entry relay:
-
-```bash
-portal expose 3000 --multi-hop-depth 3
 ```
 
 Ban relays on MITM probe detection:
@@ -253,6 +292,57 @@ const header = base64(JSON.stringify(payload));
 The frontend integration is optional. Requests without a valid `X-PAYMENT`
 header still receive x402 payment-required responses from the tunnel.
 
+### Serve A Static Site
+
+```bash
+portal expose --serve ./dist
+# An HTML file serves its containing folder with that file as the SPA entry.
+portal expose --serve ./site/index.html
+```
+
+Unknown paths fall back to the entry HTML file. Keep private files outside the
+served directory. Path traversal (`..`) is refused, but symlinks inside the folder
+that point outside it are followed, so only serve folders you trust. Static serving
+is available in both `expose` and agent TOML; the agent format supports `serve` but
+not relay cache options (`cache` or `cache_ttl`).
+
+To opt in to storage and TLS termination at one selected relay:
+
+```bash
+portal expose --serve ./dist --cache --cache-ttl 1h \
+  --relays https://gosunuts.xyz --discovery=false
+```
+
+The selected relay must advertise cache support and admit the snapshot.
+Otherwise the live origin tunnel remains in use. A cached connection trusts
+the relay with the files and HTTP traffic, even if it falls back to the live
+origin. Only the identity-bound canonical hostname is cached; the friendly
+hostname continues to require a live origin. The requested TTL is an upper request subject to relay policy, not a
+hosting guarantee; cached files may be evicted or lost on relay restart.
+See [cache configuration](/configuration#static-relay-cache) and
+[the TLS boundary](/security-model#opt-in-static-cache).
+
+## `portal auth issue`
+
+Issue a host-scoped credential using an existing tunnel identity:
+
+```bash
+portal auth issue [flags] <host>
+portal auth issue myapp.example.com --subject alice --expires 720h
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--subject` | string | required | Subject placed in the credential and optional upstream identity header |
+| `--expires` | duration | `720h` | Credential lifetime |
+| `--identity-path` | string | `identity.json` | Existing tunnel identity; no identity is created by this command |
+| `--identity-json` | string | | In-memory existing tunnel identity; `IDENTITY_JSON` environment variable; takes precedence over the path |
+
+The command prints a bearer credential and an HTTPS redeem URL. Use it with a
+tunnel started via `portal expose ... --auth credential`. API clients can send
+the credential in `X-Portal-Access-Credential`; Portal validates and removes
+that header before forwarding the request upstream.
+
 ## `portal list`
 
 Print relay URLs resolved for the current invocation:
@@ -284,7 +374,7 @@ portal agent restart
 |---------|-------------|
 | `portal agent run` | Install or update and start the managed agent service |
 | `portal agent run --config config.toml --foreground` | Run the agent in the current terminal |
-| `portal agent dashboard` | Open the local TUI for tunnels, relays, multi-hop routes, and settings |
+| `portal agent dashboard` | Open the local TUI for tunnels, relays, and settings |
 | `portal agent stop` | Gracefully stop the agent and disable or stop the OS service |
 | `portal agent restart` | Stop the current agent if present, install or update the service, and start it again |
 
@@ -337,14 +427,18 @@ Prints the installed version string and exits.
   healthy relays from serving.
 - With discovery enabled, the tunnel consumes relay `/discovery` results and
   reconciles its relay pool.
-- MITM enforcement is enabled by default for the default stream path.
+- MITM self-probing logs suspected termination by default; relay banning requires `--ban-mitm`.
 - When the local stream target is unreachable, the tunnel returns an HTTP 503
   page to browser-style clients.
 - Routed HTTP mode is HTTP-only and runs inside the tunnel process.
+- Routed HTTP mode keeps the browser's `Host` for every upstream and sends
+  `X-Forwarded-Proto: https`; a local dev server that checks `Host` (such as
+  Vite's `server.allowedHosts`) must allow the public hostname.
 - `--tcp` requires relay TCP port transport, a valid `MIN_PORT`/`MAX_PORT`
   range, and TCP port transport enabled in the admin panel.
 - `--udp` requires relay UDP transport, a valid `MIN_PORT`/`MAX_PORT` range, UDP
-  enabled in the admin panel, and `SNI_PORT/udp` reachable for the QUIC backhaul.
+  enabled in the admin panel, and the public `PORTAL_URL` port reachable over
+  UDP for the QUIC backhaul.
 - Bare `portal [flags]` is not accepted; use `portal expose` explicitly.
 - Runtime `APP_*`, `RELAYS`, and `DEFAULT_RELAYS` environment variable fallbacks
   are not used.

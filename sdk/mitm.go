@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,10 +16,43 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
+
+var errMITMDetected = errors.New("tls termination suspected by self-probe")
+
+// keyingMaterialExporter is the direct TLS 1.3 keying material exporter the
+// MITM responder side needs from an accepted TLS connection, so both sides
+// can compare exporter values. The keyless_tls t13server conn satisfies it
+// through its own RFC 8446 Section 7.5 exporter.
+// Stock crypto/tls conns cannot satisfy this interface: Go's tls.Conn does
+// not expose the method, and its tls.ConnectionState exporter callback is
+// unexported, so external TLS implementations cannot populate it. Those
+// conns are served through the ConnectionState snapshot instead (see
+// probeExporter); tls.ConnectionState is deliberately never called on
+// t13server conns, whose snapshot carries no working callback.
+type keyingMaterialExporter interface {
+	ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error)
+}
+
+// probeExporter resolves how the responder side exports keying material from
+// an accepted conn. Conns with a native exporter export directly; stock
+// crypto/tls conns export through the ConnectionState snapshot, which
+// carries Go's own exporter closure. Conns with neither capability report
+// false so the caller can skip them before the probe-inspection peek.
+func probeExporter(conn net.Conn) (func(label string, context []byte, length int) ([]byte, error), bool) {
+	if direct, ok := conn.(keyingMaterialExporter); ok {
+		return direct.ExportKeyingMaterial, true
+	}
+	if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+		return func(label string, context []byte, length int) ([]byte, error) {
+			state := stateful.ConnectionState()
+			return (&state).ExportKeyingMaterial(label, context, length)
+		}, true
+	}
+	return nil, false
+}
 
 const (
 	mitmProbeExporterLabel = "Portal-MITM-Probe-v1"
@@ -32,13 +64,12 @@ const (
 	defaultMITMProbeTimeout  = 30 * time.Second
 )
 
-type MITMProbeReport struct {
-	RelayURL    string
-	PublicURL   string
-	Address     string
-	ECHAccepted bool
-	Detected    bool
-	Reason      string
+type mitmProbeReport struct {
+	RelayURL  string
+	PublicURL string
+	Address   string
+	Detected  bool
+	Reason    string
 }
 
 type mitmProbePending struct {
@@ -46,13 +77,19 @@ type mitmProbePending struct {
 	resultCh chan string
 }
 
+type mitmProbeNonce [16]byte
+
 type mitmManager struct {
-	ctx      context.Context
-	listener *listener
-	ban      bool
+	ctx context.Context
+	// responderCapable reports whether terminated tenant connections can
+	// export keying material. Only then can the listener answer initiator
+	// probes; the manager stays dormant otherwise.
+	responderCapable bool
+	listener         *listener
+	ban              bool
 
 	mu       sync.Mutex
-	pending  map[string]*mitmProbePending
+	pending  map[mitmProbeNonce]*mitmProbePending
 	inFlight bool
 	lastAt   time.Time
 }
@@ -62,7 +99,7 @@ func newMITMManager(ctx context.Context, listener *listener, ban bool) *mitmMana
 		ctx:      ctx,
 		ban:      ban,
 		listener: listener,
-		pending:  make(map[string]*mitmProbePending),
+		pending:  make(map[mitmProbeNonce]*mitmProbePending),
 	}
 }
 
@@ -74,27 +111,38 @@ func (m *mitmManager) reset() {
 	m.mu.Unlock()
 }
 
-func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport, error) {
+// setResponderCapable arms the responder side once the tenant TLS client is
+// known to support keying material export.
+func (m *mitmManager) setResponderCapable(capable bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.responderCapable = capable
+	m.mu.Unlock()
+}
+
+func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport, error) {
 	l := m.listener
-	if l == nil || l.relayURL == nil {
-		return MITMProbeReport{}, errors.New("listener is not ready")
+	if l == nil || l.api == nil || l.api.relayURL == nil {
+		return mitmProbeReport{}, errors.New("listener is not ready")
 	}
 
 	lease, ok := l.leaseSnapshot()
 	if !ok {
-		return MITMProbeReport{}, errors.New("listener is not registered")
+		return mitmProbeReport{}, errors.New("listener is not registered")
 	}
 	if lease.hostname == "" {
-		return MITMProbeReport{}, errors.New("listener hostname is unavailable")
+		return mitmProbeReport{}, errors.New("listener hostname is unavailable")
 	}
 
 	publicURL := l.publicURLForLease(lease)
 	if publicURL == "" {
-		return MITMProbeReport{}, errors.New("listener is not registered")
+		return mitmProbeReport{}, errors.New("listener is not registered")
 	}
 
-	report := MITMProbeReport{
-		RelayURL:  l.route.ListenerRelayURL(),
+	report := mitmProbeReport{
+		RelayURL:  l.api.relayURL.String(),
 		PublicURL: publicURL,
 		Address:   l.identity.Address,
 	}
@@ -102,47 +150,54 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 	probeCtx, cancel := context.WithTimeout(ctx, defaultMITMProbeTimeout)
 	defer cancel()
 
-	nonceRaw := make([]byte, 16)
-	if _, err := io.ReadFull(rand.Reader, nonceRaw); err != nil {
+	var nonce mitmProbeNonce
+	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		return report, fmt.Errorf("generate probe nonce: %w", err)
 	}
-	nonceHex := hex.EncodeToString(nonceRaw)
 
 	dialAddr, err := m.probeDialAddress(publicURL)
 	if err != nil {
 		return report, err
 	}
 
-	probeTLSConf := &tls.Config{
-		ServerName:                     lease.hostname,
-		InsecureSkipVerify:             true,
-		MinVersion:                     keyless.MinTLSVersion(len(lease.echConfigList) > 0),
-		EncryptedClientHelloConfigList: bytes.Clone(lease.echConfigList),
+	if lease.tenantTLS == nil {
+		return report, errors.New("listener relay materials are unavailable")
+	}
+	relayPool := lease.tenantTLS.RelayCertPool()
+	if relayPool == nil {
+		return report, errors.New("listener relay certificate pool is unavailable")
 	}
 
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: l.dialTimeout},
-		Config:    probeTLSConf,
+	probeTLSConf := &tls.Config{
+		ServerName: lease.hostname,
+		RootCAs:    relayPool,
+		MinVersion: tls.VersionTLS13,
 	}
-	conn, err := dialer.DialContext(probeCtx, "tcp", dialAddr)
+
+	rawConn, err := (&net.Dialer{Timeout: defaultDialTimeout}).DialContext(probeCtx, "tcp", dialAddr)
 	if err != nil {
 		return report, fmt.Errorf("dial mitm probe: %w", err)
 	}
-	defer conn.Close()
+	tlsConn := tls.Client(rawConn, probeTLSConf)
+	defer tlsConn.Close()
 
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
-		return report, errors.New("mitm probe connection is not tls")
+	// Reserve the nonce once the TCP connection exists but before the TLS
+	// handshake: the reverse side can hand the connection to Accept as soon
+	// as its handshake completes, which can race ahead of the probe side
+	// exporting keying material. Reserving after the TCP connect keeps the
+	// probe-inspection window off address resolution and connection setup.
+	resultCh := m.reserveProbe(nonce)
+	defer m.releaseProbe(nonce)
+	if err := tlsConn.HandshakeContext(probeCtx); err != nil {
+		return report, fmt.Errorf("mitm probe tls handshake: %w", err)
 	}
 
 	clientState := tlsConn.ConnectionState()
-	report.ECHAccepted = clientState.ECHAccepted
 	expected, err := (&clientState).ExportKeyingMaterial(mitmProbeExporterLabel, nil, 32)
 	if err != nil {
 		return report, fmt.Errorf("export client probe keying material: %w", err)
 	}
-	resultCh, cleanupProbe := m.startProbe(nonceHex, expected)
-	defer cleanupProbe()
+	m.attachExpected(nonce, expected)
 
 	paddingLen := mitmProbePaddingMin
 	if paddingRange := mitmProbePaddingMax - mitmProbePaddingMin; paddingRange > 0 {
@@ -153,12 +208,12 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 		paddingLen += int(paddingSeed[0]) % (paddingRange + 1)
 	}
 
-	frame := make([]byte, len(nonceRaw)+paddingLen)
+	frame := make([]byte, len(nonce)+paddingLen)
 	if _, err := io.ReadFull(rand.Reader, frame); err != nil {
 		return report, fmt.Errorf("generate probe frame: %w", err)
 	}
-	copy(frame, nonceRaw)
-	if _, err := conn.Write(frame); err != nil {
+	copy(frame, nonce[:])
+	if _, err := tlsConn.Write(frame); err != nil {
 		return report, fmt.Errorf("write mitm probe: %w", err)
 	}
 
@@ -177,7 +232,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 
 func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	l := m.listener
-	if l == nil || l.relayURL == nil {
+	if l == nil || l.api == nil || l.api.relayURL == nil {
 		return "", errors.New("listener is not ready")
 	}
 	parsedURL, err := url.Parse(publicURL)
@@ -186,7 +241,7 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	}
 
 	dialHost := parsedURL.Host
-	entryRelayURL, err := url.Parse(l.route.ListenerRelayURL())
+	entryRelayURL, err := url.Parse(l.api.relayURL.String())
 	if err != nil {
 		return "", fmt.Errorf("parse ingress relay url: %w", err)
 	}
@@ -197,7 +252,16 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 }
 
 func (m *mitmManager) maybeStart() {
+	m.mu.Lock()
+	capable := m.responderCapable
+	m.mu.Unlock()
+	if !capable {
+		return
+	}
 	l := m.listener
+	if l.cache != nil {
+		return // This exposure explicitly permits relay TLS termination.
+	}
 	select {
 	case <-l.doneCh:
 		return
@@ -225,7 +289,7 @@ func (m *mitmManager) maybeStart() {
 	}()
 }
 
-func (m *mitmManager) logResult(report MITMProbeReport, err error) {
+func (m *mitmManager) logResult(report mitmProbeReport, err error) {
 	l := m.listener
 	if l == nil {
 		return
@@ -237,8 +301,8 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 	default:
 	}
 	relayURL := ""
-	if l.relayURL != nil {
-		relayURL = l.relayURL.String()
+	if l.api != nil && l.api.relayURL != nil {
+		relayURL = l.api.relayURL.String()
 	}
 	switch {
 	case closed:
@@ -249,13 +313,11 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 		}
 		log.Warn().
 			Err(err).
-			Bool("ech_accepted", report.ECHAccepted).
 			Str("relay_url", relayURL).
 			Str("address", l.identity.Address).
 			Msg("tls passthrough self-probe failed")
 	case report.Reason == types.MITMProbeReasonProbeTimeout:
 		log.Warn().
-			Bool("ech_accepted", report.ECHAccepted).
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
 			Str("address", report.Address).
@@ -263,24 +325,19 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 	case report.Detected:
 		event := log.Warn().
 			Bool("ban_mitm", m.ban).
-			Bool("ech_accepted", report.ECHAccepted).
 			Str("reason", report.Reason).
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
 			Str("address", report.Address)
 		if m.ban {
-			event.Msg("tls termination suspected by self-probe; banning relay")
-			if l.relaySet != nil && report.RelayURL != "" {
-				l.relaySet.UnconfirmRelayURL(report.RelayURL)
-				l.relaySet.BanRelayURL(report.RelayURL)
-			}
+			event.Msg("tls termination suspected by self-probe; closing listener")
+			l.report(listenerStatus{state: RelayFailed, failure: RelayFailureMITM, err: errMITMDetected})
 			_ = l.Close()
 			return
 		}
 		event.Msg("tls termination suspected by self-probe")
 	default:
 		log.Debug().
-			Bool("ech_accepted", report.ECHAccepted).
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
 			Str("address", report.Address).
@@ -300,23 +357,24 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		return conn, false, nil
 	}
 
-	tlsConn, ok := conn.(*tls.Conn)
+	exportFn, ok := probeExporter(conn)
 	if !ok {
 		return conn, false, nil
 	}
 
-	frameSize := 16
+	frameSize := len(mitmProbeNonce{})
 	reader := bufio.NewReaderSize(conn, frameSize)
 	_ = conn.SetReadDeadline(time.Now().Add(mitmProbePeekTimeout))
-	peeked, err := reader.Peek(frameSize)
+	peeked, _ := reader.Peek(frameSize)
 	defer conn.SetReadDeadline(time.Time{})
-	if err != nil {
+	if len(peeked) != frameSize {
 		return wrapBufferedConn(conn, reader), false, nil
 	}
 
-	nonceHex := hex.EncodeToString(peeked[:frameSize])
+	var nonce mitmProbeNonce
+	copy(nonce[:], peeked[:frameSize])
 	m.mu.Lock()
-	_, ok = m.pending[nonceHex]
+	_, ok = m.pending[nonce]
 	m.mu.Unlock()
 	if !ok {
 		return wrapBufferedConn(conn, reader), false, nil
@@ -329,47 +387,63 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		return nil, true, fmt.Errorf("read mitm probe frame: %w", err)
 	}
 
-	serverState := tlsConn.ConnectionState()
-	actual, err := (&serverState).ExportKeyingMaterial(mitmProbeExporterLabel, nil, 32)
+	actual, err := exportFn(mitmProbeExporterLabel, nil, 32)
 	if err != nil {
 		return nil, true, fmt.Errorf("export server probe keying material: %w", err)
 	}
 
-	m.completeProbe(nonceHex, actual)
+	m.completeProbe(nonce, actual)
 	return nil, true, nil
 }
 
-func (m *mitmManager) startProbe(nonce string, expected []byte) (<-chan string, func()) {
-	m.mu.Lock()
+// reserveProbe registers the probe nonce before the TLS dial so the reverse
+// side recognizes the connection even if Accept runs the moment the reverse
+// handshake completes. attachExpected arms the reservation afterwards; until
+// then the entry holds no exporter value and a completion attempt reports a
+// mismatch.
+func (m *mitmManager) reserveProbe(nonce mitmProbeNonce) <-chan string {
 	state := &mitmProbePending{
-		expected: bytes.Clone(expected),
 		resultCh: make(chan string, 1),
 	}
+	m.mu.Lock()
 	m.pending[nonce] = state
 	m.mu.Unlock()
 
-	return state.resultCh, func() {
-		m.mu.Lock()
-		delete(m.pending, nonce)
-		m.mu.Unlock()
-	}
+	return state.resultCh
 }
 
-func (m *mitmManager) completeProbe(nonce string, actual []byte) {
+func (m *mitmManager) releaseProbe(nonce mitmProbeNonce) {
+	m.mu.Lock()
+	delete(m.pending, nonce)
+	m.mu.Unlock()
+}
+
+// attachExpected arms a reserved probe with the exporter value the reverse
+// side must reproduce for the connection to count as untampered.
+func (m *mitmManager) attachExpected(nonce mitmProbeNonce, expected []byte) {
+	m.mu.Lock()
+	if state := m.pending[nonce]; state != nil {
+		state.expected = bytes.Clone(expected)
+	}
+	m.mu.Unlock()
+}
+
+func (m *mitmManager) completeProbe(nonce mitmProbeNonce, actual []byte) {
 	m.mu.Lock()
 	state := m.pending[nonce]
-	m.mu.Unlock()
 	if state == nil {
+		m.mu.Unlock()
 		return
 	}
-
 	reason := ""
 	if !bytes.Equal(state.expected, actual) {
 		reason = types.MITMProbeReasonExporterMismatch
 	}
+	resultCh := state.resultCh
+	m.mu.Unlock()
 
 	select {
-	case state.resultCh <- reason:
+	case resultCh <- reason:
 	default:
 	}
 }

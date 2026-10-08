@@ -1,0 +1,389 @@
+package overlay
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"gosuda.org/ivnp"
+	"gosuda.org/ivnp/foundation"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/types"
+)
+
+type endpointStub struct {
+	destination string
+	dial        func(context.Context, string, string) (net.Conn, error)
+}
+
+func (e endpointStub) B32() string { return e.destination }
+
+func (e endpointStub) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return e.dial(ctx, network, address)
+}
+
+func testAuthority(t *testing.T, name string) identity.Authority {
+	t.Helper()
+	generated, err := identity.Generate("relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated.Name = name
+	return identity.NewLocalAuthority(generated)
+}
+
+func testDestination(seed string) string {
+	return foundation.B32(sha256.Sum256([]byte(seed)))
+}
+
+func testDescriptor(t *testing.T, authority identity.Authority, rawURL, destination string, connections int64) types.RelayDescriptor {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Second)
+	descriptor, err := discovery.SignRelayDescriptor(types.RelayDescriptor{
+		Address:           authority.Identity().Address,
+		Version:           types.DiscoveryVersion,
+		IssuedAt:          now,
+		ExpiresAt:         now.Add(5 * time.Minute),
+		APIHTTPSAddr:      rawURL,
+		IVNPDestination:   destination,
+		ActiveConnections: connections,
+	}, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return descriptor
+}
+
+func TestCapabilityBindsIngressGatewayAndLease(t *testing.T) {
+	t.Parallel()
+	ingressAuthority := testAuthority(t, "ingress")
+	gatewayAuthority := testAuthority(t, "gateway")
+	ingress := testDescriptor(t, ingressAuthority, "https://ingress.example", testDestination("ingress"), 0)
+	claims := capabilityClaims{
+		Version:            1,
+		LeaseIdentity:      types.Identity{Name: "lease", Address: ingressAuthority.Identity().Address},
+		LeaseID:            "lease_1",
+		ExpiresAt:          time.Now().UTC().Add(time.Minute).Truncate(time.Second),
+		Ingress:            ingress,
+		GatewayAddress:     gatewayAuthority.Identity().Address,
+		GatewayDestination: testDestination("gateway"),
+	}
+	capability, err := signCapability(ingressAuthority, claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := verifyCapability(capability, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.LeaseID != claims.LeaseID || verified.GatewayDestination != claims.GatewayDestination || verified.Ingress.IVNPDestination != claims.Ingress.IVNPDestination {
+		t.Fatalf("verified capability = %#v", verified)
+	}
+
+	wrongSigner, err := signCapability(gatewayAuthority, claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyCapability(wrongSigner, time.Now().UTC()); err == nil {
+		t.Fatal("capability signed by gateway was accepted as ingress capability")
+	}
+}
+
+func TestIssueEndpointRotatesGatewayWithoutChangingLease(t *testing.T) {
+	t.Parallel()
+	ingressAuthority := testAuthority(t, "ingress")
+	firstAuthority := testAuthority(t, "first")
+	secondAuthority := testAuthority(t, "second")
+	ingressDestination := testDestination("ingress")
+	ingress := testDescriptor(t, ingressAuthority, "https://ingress.example", ingressDestination, 0)
+	first := testDescriptor(t, firstAuthority, "https://first.example", testDestination("first"), 1)
+	second := testDescriptor(t, secondAuthority, "https://second.example", testDestination("second"), 2)
+	relays := discovery.NewRelaySet(nil)
+	for _, descriptor := range []types.RelayDescriptor{first, second} {
+		_, err := relays.ApplyRelayDiscoveryResponse(descriptor.APIHTTPSAddr, types.DiscoveryResponse{
+			ProtocolVersion: types.DiscoveryVersion,
+			Relays:          []types.RelayDescriptor{descriptor},
+		}, time.Now().UTC())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime := &Runtime{
+		config:      Config{Authority: ingressAuthority},
+		endpoint:    endpointStub{destination: ingressDestination},
+		assignments: make(map[string]string),
+		failures:    make(map[string]map[string]time.Time),
+	}
+	runtime.ready.Store(true)
+	leaseIdentity := types.Identity{Name: "lease", Address: ingressAuthority.Identity().Address}
+	expiresAt := time.Now().UTC().Add(time.Minute)
+
+	input := IssueInput{
+		LeaseIdentity: leaseIdentity,
+		LeaseID:       "lease_1",
+		ExpiresAt:     expiresAt,
+		Self:          ingress,
+		Descriptors:   relays.Descriptors(types.RelayDescriptor{}),
+	}
+	initial, ok, err := runtime.IssueEndpoint(input)
+	if err != nil || !ok || initial.URL != "https://first.example/sdk/connect" {
+		t.Fatalf("initial endpoint = %#v, %v, %v", initial, ok, err)
+	}
+	input.FailedURL = initial.URL
+	replacement, ok, err := runtime.IssueEndpoint(input)
+	if err != nil || !ok || replacement.URL != "https://second.example/sdk/connect" {
+		t.Fatalf("replacement endpoint = %#v, %v, %v", replacement, ok, err)
+	}
+	input.FailedURL = replacement.URL
+	if endpoint, ok, err := runtime.IssueEndpoint(input); err != nil || ok || endpoint.URL != "" {
+		t.Fatalf("exhausted gateways did not fall back to direct transport: %#v, %v, %v", endpoint, ok, err)
+	}
+}
+
+func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
+	t.Parallel()
+	gate, capability := testGateway(t)
+	dials := 0
+	gate.endpoint = endpointStub{
+		destination: testDestination("gateway"),
+		dial: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("dial failed")
+		},
+	}
+	// A fresh ingress signer is enough to pass signature checks. Source
+	// admission must still bound these requests without any discovery catalog.
+	gate.sourceLimiter = newSourceLimiter(1, 2)
+	// Within the per-source budget the request reaches the dial and reports
+	// the dial failure; past the budget it is rejected before any dial occurs
+	// — admission-before-dial is the resource invariant under rate pressure.
+	for range 2 {
+		response := httptest.NewRecorder()
+		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("dial-failed request status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+		}
+	}
+	response := httptest.NewRecorder()
+	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate-limited request status = %d, want %d", response.Code, http.StatusTooManyRequests)
+	}
+	if dials != 2 {
+		t.Fatalf("dial invocations = %d, want 2: the over-budget request must not reach the dial", dials)
+	}
+}
+
+func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
+	t.Parallel()
+	gate, capability := testGateway(t)
+	gate.sourceLimiter = newSourceLimiter(1000, 1000)
+	entered := make(chan struct{}, sourceConnectionLimit+1)
+	release := make(chan struct{})
+	gate.endpoint = endpointStub{
+		destination: testDestination("gateway"),
+		dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return nil, errors.New("dial failed")
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{}, sourceConnectionLimit+1)
+	connect := func(source string) {
+		request := httptest.NewRequest(http.MethodGet, "/sdk/connect", nil).WithContext(ctx)
+		gate.HandleConnect(httptest.NewRecorder(), request, capability, netip.MustParseAddr(source))
+		done <- struct{}{}
+	}
+	for range sourceConnectionLimit {
+		go connect("192.0.2.1")
+	}
+	for range sourceConnectionLimit {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("source connections did not enter the dial")
+		}
+	}
+	response := httptest.NewRecorder()
+	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("over-budget source status = %d, want %d", response.Code, http.StatusTooManyRequests)
+	}
+	go connect("192.0.2.2")
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("one source's full budget blocked a different source")
+	}
+	// Release pending calls, then prove their reservations are reusable.
+	close(release)
+	for range sourceConnectionLimit + 1 {
+		<-done
+	}
+	for _, source := range []string{"192.0.2.1", "192.0.2.2"} {
+		response := httptest.NewRecorder()
+		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr(source))
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("released capacity for %s: status=%d", source, response.Code)
+		}
+	}
+}
+
+func testGateway(t *testing.T) (*Runtime, string) {
+	t.Helper()
+	ingressAuthority := testAuthority(t, "ingress")
+	gatewayAuthority := testAuthority(t, "gateway")
+	ingress := testDescriptor(t, ingressAuthority, "https://ingress.example", testDestination("ingress"), 0)
+	capability, err := signCapability(ingressAuthority, capabilityClaims{
+		Version:            1,
+		LeaseIdentity:      types.Identity{Name: "lease", Address: ingressAuthority.Identity().Address},
+		LeaseID:            "lease_1",
+		ExpiresAt:          time.Now().UTC().Add(time.Minute),
+		Ingress:            ingress,
+		GatewayAddress:     gatewayAuthority.Identity().Address,
+		GatewayDestination: testDestination("gateway"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{
+		config:        Config{Authority: gatewayAuthority},
+		activeSources: make(map[netip.Addr]int),
+	}
+	runtime.ready.Store(true)
+	return runtime, capability
+}
+
+type peerConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c peerConn) RemoteAddr() net.Addr { return c.remote }
+
+func TestDialRequiresAuthenticatedIVNPPeer(t *testing.T) {
+	hash := sha256.Sum256([]byte("ingress"))
+	destination := foundation.B32(hash)
+	for _, tc := range []struct {
+		name   string
+		remote net.Addr
+		accept bool
+	}{
+		{name: "authenticated destination", remote: ivnp.Addr{Hash: hash, Port: 4017}, accept: true},
+		{name: "wrong destination", remote: ivnp.Addr{Hash: sha256.Sum256([]byte("other")), Port: 4017}},
+		{name: "missing identity", remote: ivnp.Addr{Port: 4017}},
+		{name: "unbound peer", remote: ivnp.Addr{Hash: hash}},
+		{name: "untrusted address text", remote: &net.UnixAddr{Net: "i2p", Name: destination + ":4017"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			local, remote := net.Pipe()
+			defer local.Close()
+			defer remote.Close()
+			if err := remote.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &Runtime{endpoint: endpointStub{
+				destination: testDestination("gateway"),
+				dial: func(_ context.Context, network, address string) (net.Conn, error) {
+					if network != "i2p" || address != net.JoinHostPort(destination, streamPort) {
+						t.Fatalf("dial = %q %q, want destination-owned I2P stream", network, address)
+					}
+					return peerConn{Conn: local, remote: tc.remote}, nil
+				},
+			}}
+			conn, err := runtime.dial(t.Context(), destination)
+			if tc.accept {
+				if err != nil || conn == nil {
+					t.Fatalf("authenticated dial = %v, %v", conn, err)
+				}
+				return
+			}
+			if err == nil || conn != nil {
+				t.Fatalf("untrusted dial = %v, %v", conn, err)
+			}
+			if _, err := remote.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+				t.Fatalf("rejected peer connection was not closed: %v", err)
+			}
+		})
+	}
+}
+
+func TestStartRejectsInvalidRouterConfiguration(t *testing.T) {
+	for _, content := range []string{
+		"", "null", "[router]\n", `{"Unknown":true}`, `{} {}`,
+		`{"NetworkID":256}`, `{"Logger":{}}`,
+	} {
+		t.Run(content, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "ivnp.json")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &Runtime{config: Config{ConfigPath: path}}
+			defer runtime.Close()
+			if err := runtime.Start(t.Context()); err == nil {
+				t.Fatal("invalid IVNP configuration was accepted")
+			}
+			if runtime.router != nil {
+				t.Fatal("invalid configuration started a router")
+			}
+		})
+	}
+}
+
+func TestUnavailableOverlayStartsAndShutsDownWithoutPeers(t *testing.T) {
+	for _, mode := range []string{"cancel run", "close runtime"} {
+		t.Run(mode, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "ivnp.json")
+			config := `{"Bootstrap":{"ReseedURLs":[]},"NTCP2":{"Bind":"127.0.0.1:0"},"SSU2":{"Bind":"127.0.0.1:0"}}`
+			if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &Runtime{config: Config{ConfigPath: path}}
+			defer runtime.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			if err := runtime.Start(ctx); err != nil {
+				t.Fatalf("local startup without peers: %v", err)
+			}
+			if endpoint, useOverlay, err := runtime.IssueEndpoint(IssueInput{}); err != nil || useOverlay || endpoint.URL != "" {
+				t.Fatalf("unavailable overlay must retain direct fallback: %v, %v, %v", endpoint, useOverlay, err)
+			}
+			runCtx, cancelRun := context.WithCancel(ctx)
+			defer cancelRun()
+			done := make(chan error, 1)
+			go func() { done <- runtime.Run(runCtx) }()
+			if mode == "cancel run" {
+				cancelRun()
+			} else {
+				runtime.Close()
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("overlay shutdown: %v", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("shutdown did not cancel destination warmup")
+			}
+			if runtime.Destination() != "" {
+				t.Fatal("shutdown left the overlay available")
+			}
+		})
+	}
+}

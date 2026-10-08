@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/thumbnail"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -39,7 +41,7 @@ func newManager(cfg Config, controlAddr string) *manager {
 		tunnels:     make(map[string]*managedTunnel, len(cfg.Tunnels)),
 	}
 	for _, tunnelCfg := range cfg.Tunnels {
-		manager.tunnels[tunnelCfg.ID] = newTunnel(tunnelCfg)
+		manager.tunnels[tunnelCfg.ID] = &managedTunnel{cfg: tunnelCfg}
 	}
 	return manager
 }
@@ -47,14 +49,11 @@ func newManager(cfg Config, controlAddr string) *manager {
 func (m *manager) Start(ctx context.Context) {
 	m.mu.Lock()
 	m.rootCtx = ctx
-	m.mu.Unlock()
-
-	m.mu.RLock()
 	tunnels := make([]*managedTunnel, 0, len(m.tunnels))
 	for _, tunnel := range m.tunnels {
 		tunnels = append(tunnels, tunnel)
 	}
-	m.mu.RUnlock()
+	m.mu.Unlock()
 
 	for _, tunnel := range tunnels {
 		tunnel.Start(ctx)
@@ -127,36 +126,7 @@ func (m *manager) DisconnectRelay(id, relayURL string) error {
 	return tunnel.DisconnectRelay(relayURL)
 }
 
-func (m *manager) SetMultiHop(id string, relayURLs []string) error {
-	id = strings.TrimSpace(id)
-	multiHop, err := utils.NormalizeRelayURLs(relayURLs...)
-	if err != nil {
-		return fmt.Errorf("normalize multi-hop relay url: %w", err)
-	}
-	if len(multiHop) != len(relayURLs) {
-		return errors.New("multi-hop relay url repeated")
-	}
-	if len(multiHop) == 1 {
-		return errors.New("multi-hop requires at least entry and exit relay urls")
-	}
-	if err := m.updateTunnelConfig(id, func(tunnel *TunnelConfig) error {
-		tunnel.MultiHop = append([]string(nil), multiHop...)
-		tunnel.MultiHopDepth = 0
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	m.mu.RLock()
-	tunnel := m.tunnels[id]
-	m.mu.RUnlock()
-	if tunnel == nil {
-		return fmt.Errorf("tunnel %q not found", id)
-	}
-	return tunnel.SetMultiHop(multiHop)
-}
-
-func (m *manager) UpdateTunnel(id string, req types.AgentTunnelUpdateRequest) error {
+func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 	if req.Empty() {
 		return errors.New("tunnel update requires at least one field")
 	}
@@ -201,7 +171,7 @@ func (m *manager) UpdateTunnel(id string, req types.AgentTunnelUpdateRequest) er
 	return tunnel.UpdateSettings(updateMetadata, updateMaxActiveRelays)
 }
 
-func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
+func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -211,9 +181,7 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 	}
 	id := strings.TrimSpace(req.ID)
 	name := strings.TrimSpace(req.Name)
-	if id == "" {
-		id = agentTunnelID(name)
-	}
+	id = cmp.Or(id, agentTunnelID(name))
 	if id == "" {
 		return errors.New("tunnel name is required")
 	}
@@ -221,9 +189,9 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 		return err
 	}
 	target := strings.TrimSpace(req.TargetAddr)
-	httpRoutes := make([]HTTPRouteConfig, 0, len(req.HTTPRoutes))
+	httpRoutes := make([]tunnel.HTTPRoute, 0, len(req.HTTPRoutes))
 	for _, route := range req.HTTPRoutes {
-		httpRoutes = append(httpRoutes, HTTPRouteConfig{
+		httpRoutes = append(httpRoutes, tunnel.HTTPRoute{
 			Prefix:   strings.TrimSpace(route.Prefix),
 			Upstream: strings.TrimSpace(route.Upstream),
 			Methods:  normalizeAgentHTTPRouteMethods(route.Methods),
@@ -236,9 +204,7 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 	if target == "" && len(httpRoutes) == 0 {
 		target = defaultTargetAddr
 	}
-	if name == "" {
-		name = id
-	}
+	name = cmp.Or(name, id)
 	relayURLs, err := utils.NormalizeRelayURLs(req.RelayURLs...)
 	if err != nil {
 		return err
@@ -250,20 +216,25 @@ func (m *manager) AddTunnel(req types.AgentTunnelRequest) error {
 	if req.MaxActiveRelays < 0 {
 		return errors.New("max_active_relays cannot be negative")
 	}
+	x402 := req.Copy()
+	x402.PayTo = strings.TrimSpace(x402.PayTo)
+	x402.Network = strings.ToLower(strings.TrimSpace(x402.Network))
+	x402.Asset = strings.TrimSpace(x402.Asset)
+	x402.Endpoints = compactStrings(x402.Endpoints)
 	tunnelCfg := TunnelConfig{
-		ID:              id,
-		Name:            name,
-		TargetAddr:      target,
-		HTTPRoutes:      httpRoutes,
-		RelayURLs:       relayURLs,
-		Discovery:       &discovery,
-		MaxActiveRelays: req.MaxActiveRelays,
-		ECH:             req.ECH,
-		X402PayTo:       strings.TrimSpace(req.X402PayTo),
-		X402Testnet:     req.X402Testnet,
-		X402Network:     strings.ToLower(strings.TrimSpace(req.X402Network)),
-		X402Asset:       strings.TrimSpace(req.X402Asset),
-		X402Endpoints:   compactStrings(append([]string(nil), req.X402Endpoints...)),
+		ID:                  id,
+		Name:                name,
+		TargetAddr:          target,
+		HTTPRoutes:          httpRoutes,
+		StripRequestHeaders: append([]string(nil), req.StripRequestHeaders...),
+		RelayURLs:           relayURLs,
+		Discovery:           &discovery,
+		Overlay:             req.Overlay,
+		MaxActiveRelays:     req.MaxActiveRelays,
+		Auth:                strings.ToLower(strings.TrimSpace(req.Auth)),
+		AuthAllowedWallets:  append([]string(nil), req.AuthAllowedWallets...),
+		AuthIdentityHeaders: req.AuthIdentityHeaders,
+		X402Config:          x402,
 	}
 	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
 		return fmt.Errorf("tunnel %q already exists", tunnelCfg.ID)
@@ -429,7 +400,7 @@ func (m *manager) ApplyConfig(cfg Config) error {
 		delete(next, id)
 	}
 	for _, tunnelCfg := range next {
-		tunnel := newTunnel(tunnelCfg)
+		tunnel := &managedTunnel{cfg: tunnelCfg}
 		m.tunnels[tunnelCfg.ID] = tunnel
 		toStart = append(toStart, tunnel)
 	}
@@ -447,7 +418,7 @@ func (m *manager) ApplyConfig(cfg Config) error {
 	return nil
 }
 
-func (m *manager) Snapshot() types.AgentStatusResponse {
+func (m *manager) Snapshot() AgentStatusResponse {
 	m.mu.RLock()
 	configPath := m.cfg.sourcePath
 	tunnels := make([]*managedTunnel, 0, len(m.tunnels))
@@ -456,15 +427,15 @@ func (m *manager) Snapshot() types.AgentStatusResponse {
 	}
 	m.mu.RUnlock()
 
-	statuses := make([]types.AgentTunnelStatus, 0, len(tunnels))
+	statuses := make([]AgentTunnelStatus, 0, len(tunnels))
 	for _, tunnel := range tunnels {
 		statuses = append(statuses, tunnel.Snapshot())
 	}
-	slices.SortFunc(statuses, func(a, b types.AgentTunnelStatus) int {
+	slices.SortFunc(statuses, func(a, b AgentTunnelStatus) int {
 		return strings.Compare(a.ID, b.ID)
 	})
 
-	return types.AgentStatusResponse{
+	return AgentStatusResponse{
 		ConfigPath:  configPath,
 		ControlAddr: m.controlAddr,
 		Tunnels:     statuses,
@@ -479,19 +450,14 @@ type managedTunnel struct {
 	done      chan struct{}
 	exposure  *sdk.Exposure
 	lastError string
-	runtime   types.AgentTunnelStatus
+	address   string
+	relays    []AgentRelayStatus
 
 	// discoveredThumbnail is what --thumbnail-from-target found at startup.
 	// cfg.Thumbnail stays as configured, so without keeping this the next
 	// metadata update would rebuild metadata from cfg and erase the value, and
 	// Snapshot would report the tunnel as having no thumbnail at all.
 	discoveredThumbnail string
-}
-
-func newTunnel(cfg TunnelConfig) *managedTunnel {
-	return &managedTunnel{
-		cfg: cfg,
-	}
 }
 
 func (t *managedTunnel) Start(parent context.Context) {
@@ -535,9 +501,16 @@ func (t *managedTunnel) Stop(ctx context.Context) error {
 }
 
 func (t *managedTunnel) ConnectRelay(relayURL string) error {
-	t.mu.RLock()
+	relayURL, err := utils.NormalizeRelayURL(relayURL)
+	if err != nil {
+		return err
+	}
+	t.mu.Lock()
+	if !slices.Contains(t.cfg.RelayURLs, relayURL) {
+		t.cfg.RelayURLs = append(t.cfg.RelayURLs, relayURL)
+	}
 	exposure := t.exposure
-	t.mu.RUnlock()
+	t.mu.Unlock()
 	if exposure == nil {
 		return nil
 	}
@@ -545,23 +518,24 @@ func (t *managedTunnel) ConnectRelay(relayURL string) error {
 }
 
 func (t *managedTunnel) DisconnectRelay(relayURL string) error {
-	t.mu.RLock()
+	relayURL, err := utils.NormalizeRelayURL(relayURL)
+	if err != nil {
+		return err
+	}
+	t.mu.Lock()
+	next := make([]string, 0, len(t.cfg.RelayURLs))
+	for _, existing := range t.cfg.RelayURLs {
+		if existing != relayURL {
+			next = append(next, existing)
+		}
+	}
+	t.cfg.RelayURLs = next
 	exposure := t.exposure
-	t.mu.RUnlock()
+	t.mu.Unlock()
 	if exposure == nil {
 		return nil
 	}
 	return exposure.RemoveRelay(relayURL)
-}
-
-func (t *managedTunnel) SetMultiHop(relayURLs []string) error {
-	t.mu.RLock()
-	exposure := t.exposure
-	t.mu.RUnlock()
-	if exposure == nil {
-		return nil
-	}
-	return exposure.SetMultiHop(relayURLs)
 }
 
 func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays bool) error {
@@ -577,18 +551,19 @@ func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays boo
 		err = errors.Join(err, exposure.UpdateMetadata(t.metadata(cfg)))
 	}
 	if updateMaxActiveRelays {
-		err = errors.Join(err, exposure.UpdateMaxActiveRelays(cfg.MaxActiveRelays))
+		err = errors.Join(err, exposure.SetMaxActiveRelays(cfg.MaxActiveRelays))
 	}
 	return err
 }
 
-func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
+func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	t.mu.RLock()
 	cfg := t.cfg
 	lastError := t.lastError
 	exposure := t.exposure
 	done := t.done
-	runtime := t.runtime
+	address := t.address
+	relays := append([]AgentRelayStatus(nil), t.relays...)
 	t.mu.RUnlock()
 
 	running := false
@@ -614,27 +589,27 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 		discovery = *cfg.Discovery
 	}
 
-	status := types.AgentTunnelStatus{
-		ID:              cfg.ID,
-		Name:            cfg.Name,
-		State:           state,
-		TargetAddr:      cfg.TargetAddr,
-		LastError:       lastError,
-		Discovery:       discovery,
-		MaxActiveRelays: cfg.MaxActiveRelays,
-		ECH:             cfg.ECH,
-		Metadata:        t.metadata(cfg),
-		MultiHop:        append([]string(nil), cfg.MultiHop...),
-		X402PayTo:       strings.TrimSpace(cfg.X402PayTo),
-		X402Testnet:     cfg.X402Testnet,
-		X402Network:     cfg.X402Network,
-		X402Asset:       cfg.X402Asset,
-		X402Endpoints:   append([]string(nil), cfg.X402Endpoints...),
+	x402 := cfg.Copy()
+	x402.PayTo = strings.TrimSpace(x402.PayTo)
+	status := AgentTunnelStatus{
+		ID:                  cfg.ID,
+		Name:                cfg.Name,
+		State:               state,
+		TargetAddr:          cfg.TargetAddr,
+		LastError:           lastError,
+		Serve:               cfg.Serve,
+		Discovery:           discovery,
+		Overlay:             cfg.Overlay,
+		MaxActiveRelays:     cfg.MaxActiveRelays,
+		Metadata:            t.metadata(cfg),
+		Auth:                cfg.Auth,
+		AuthIdentityHeaders: cfg.AuthIdentityHeaders,
+		X402Config:          x402,
 	}
 	if len(cfg.HTTPRoutes) > 0 {
-		status.HTTPRoutes = make([]types.AgentHTTPRoute, 0, len(cfg.HTTPRoutes))
+		status.HTTPRoutes = make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
 		for _, route := range cfg.HTTPRoutes {
-			status.HTTPRoutes = append(status.HTTPRoutes, types.AgentHTTPRoute{
+			status.HTTPRoutes = append(status.HTTPRoutes, tunnel.HTTPRoute{
 				Prefix:   route.Prefix,
 				Upstream: route.Upstream,
 				Methods:  append([]string(nil), route.Methods...),
@@ -643,42 +618,40 @@ func (t *managedTunnel) Snapshot() types.AgentTunnelStatus {
 		}
 	}
 	if exposure == nil {
-		if strings.TrimSpace(runtime.Address) != "" {
-			status.Address = runtime.Address
-		}
-		if strings.TrimSpace(runtime.TargetAddr) != "" {
-			status.TargetAddr = runtime.TargetAddr
-		}
-		if cfg.MultiHopDepth > 1 && len(runtime.MultiHop) > 0 {
-			status.MultiHop = append([]string(nil), runtime.MultiHop...)
-		}
-		status.Relays = append([]types.AgentRelayStatus(nil), runtime.Relays...)
+		status.Address = address
+		status.Relays = relays
 		return status
 	}
-	snapshot := exposure.Snapshot()
+	relays = agentRelayStatuses(exposure.Relays())
 	t.mu.Lock()
 	if t.exposure == exposure {
-		t.runtime = types.AgentTunnelStatus{
-			Address:         snapshot.Address,
-			TargetAddr:      snapshot.TargetAddr,
-			MaxActiveRelays: snapshot.MaxActiveRelays,
-			MultiHop:        append([]string(nil), snapshot.MultiHop...),
-			Relays:          append([]types.AgentRelayStatus(nil), snapshot.Relays...),
-		}
+		t.relays = append([]AgentRelayStatus(nil), relays...)
 	}
+	address = t.address
 	t.mu.Unlock()
 
-	status.Address = snapshot.Address
-	status.TargetAddr = snapshot.TargetAddr
-	status.MultiHop = append([]string(nil), snapshot.MultiHop...)
-	status.Relays = append([]types.AgentRelayStatus(nil), snapshot.Relays...)
+	status.Address = address
+	status.Relays = relays
 	return status
+}
+
+func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
+	statuses := make([]AgentRelayStatus, 0, len(relays))
+	for _, relay := range relays {
+		statuses = append(statuses, AgentRelayStatus{
+			RelayURL:   relay.RelayURL,
+			PublicURL:  relay.PublicURL,
+			TCPAddr:    relay.TCPAddr,
+			Version:    relay.Version,
+			Connecting: relay.State == sdk.RelayConnecting,
+		})
+	}
+	return statuses
 }
 
 func (t *managedTunnel) runLoop(ctx context.Context) {
 	for {
 		err := t.runOnce(ctx)
-
 		t.mu.Lock()
 		t.exposure = nil
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) || err == nil {
@@ -704,82 +677,27 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.lastError = ""
 	t.mu.Unlock()
 
-	discovery := true
-	if cfg.Discovery != nil {
-		discovery = *cfg.Discovery
-	}
-	banMITM := false
-	if cfg.BanMITM != nil {
-		banMITM = *cfg.BanMITM
-	}
-	x402FacilitatorToken := strings.TrimSpace(cfg.X402FacilitatorToken)
-	if x402FacilitatorToken == "" {
-		x402FacilitatorToken = strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY"))
-	}
+	spec := tunnelSpecFromConfig(cfg)
 	// Only when the tunnel starts. The metadata update and snapshot paths reuse
 	// metadataFromTunnelConfig and must not re-read the target every time.
-	exposeMetadata := metadataFromTunnelConfig(cfg)
-	exposeMetadata.Thumbnail = thumbnail.Resolve(
-		ctx, exposeMetadata.Thumbnail, cfg.TargetAddr, cfg.ThumbnailFromTarget)
-	t.mu.Lock()
-	t.discoveredThumbnail = exposeMetadata.Thumbnail
-	t.mu.Unlock()
+	spec.Metadata.Thumbnail = thumbnail.Resolve(
+		ctx, spec.Metadata.Thumbnail, cfg.TargetAddr, cfg.ThumbnailFromTarget)
+	t.recordDiscoveredThumbnail(cfg, spec.Metadata.Thumbnail)
 
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:            append([]string(nil), cfg.RelayURLs...),
-		Discovery:            discovery,
-		Identity:             types.Identity{Name: cfg.Name},
-		IdentityPath:         cfg.IdentityPath,
-		IdentityJSON:         cfg.IdentityJSON,
-		TargetAddr:           cfg.TargetAddr,
-		UDPAddr:              cfg.UDPAddr,
-		UDPEnabled:           cfg.UDPEnabled,
-		TCPEnabled:           cfg.TCPEnabled,
-		ECH:                  cfg.ECH,
-		MultiHop:             append([]string(nil), cfg.MultiHop...),
-		MultiHopDepth:        cfg.MultiHopDepth,
-		BanMITM:              banMITM,
-		MaxActiveRelays:      cfg.MaxActiveRelays,
-		Metadata:             exposeMetadata,
-		X402PayTo:            cfg.X402PayTo,
-		X402Testnet:          cfg.X402Testnet,
-		X402Network:          cfg.X402Network,
-		X402Asset:            cfg.X402Asset,
-		X402Endpoints:        append([]string(nil), cfg.X402Endpoints...),
-		X402FacilitatorToken: x402FacilitatorToken,
-	})
+	runtime, err := tunnel.Start(ctx, spec)
 	if err != nil {
 		return err
 	}
-	snapshot := exposure.Snapshot()
+	exposure := runtime.Exposure
 	t.mu.Lock()
 	t.exposure = exposure
-	t.runtime = types.AgentTunnelStatus{
-		Address:         snapshot.Address,
-		TargetAddr:      snapshot.TargetAddr,
-		MaxActiveRelays: snapshot.MaxActiveRelays,
-		MultiHop:        append([]string(nil), snapshot.MultiHop...),
-		Relays:          append([]types.AgentRelayStatus(nil), snapshot.Relays...),
-	}
+	t.address = runtime.Identity.Address
+	t.relays = agentRelayStatuses(exposure.Relays())
 	t.lastError = ""
 	t.mu.Unlock()
 
-	defer exposure.Close()
-
-	if len(cfg.HTTPRoutes) > 0 {
-		routes := make([]sdk.HTTPRouteConfig, 0, len(cfg.HTTPRoutes))
-		for _, route := range cfg.HTTPRoutes {
-			routes = append(routes, sdk.HTTPRouteConfig{
-				Prefix:   route.Prefix,
-				Upstream: route.Upstream,
-				Methods:  route.Methods,
-				Amount:   route.Amount,
-			})
-		}
-		err = exposure.RunHTTPRoutes(ctx, routes, "")
-	} else {
-		err = sdk.ProxyExposure(ctx, exposure)
-	}
+	defer runtime.Close()
+	err = runtime.Run(ctx)
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return ctx.Err()
 	}
@@ -788,10 +706,11 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 
 // metadata is metadataFromTunnelConfig plus whatever discovery supplied, so a
 // value the operator never typed survives an update that rebuilds from cfg.
-// An explicit thumbnail always wins, exactly as it does at startup.
+// An explicit thumbnail always wins, exactly as it does at startup, and the
+// discovered value only applies while --thumbnail-from-target stays enabled.
 func (t *managedTunnel) metadata(cfg TunnelConfig) types.LeaseMetadata {
 	meta := metadataFromTunnelConfig(cfg)
-	if strings.TrimSpace(meta.Thumbnail) != "" {
+	if strings.TrimSpace(meta.Thumbnail) != "" || !cfg.ThumbnailFromTarget {
 		return meta
 	}
 	t.mu.RLock()
@@ -800,28 +719,16 @@ func (t *managedTunnel) metadata(cfg TunnelConfig) types.LeaseMetadata {
 	return meta
 }
 
-func metadataFromTunnelConfig(cfg TunnelConfig) types.LeaseMetadata {
-	return types.LeaseMetadata{
-		Description: strings.TrimSpace(cfg.Description),
-		Tags:        normalizeAgentMetadataTags(cfg.Tags),
-		Owner:       strings.TrimSpace(cfg.Owner),
-		Thumbnail:   strings.TrimSpace(cfg.Thumbnail),
-		Hide:        cfg.Hide,
+// recordDiscoveredThumbnail keeps only what --thumbnail-from-target actually
+// found at startup. An explicit value — or a run where discovery never
+// applied — must not be remembered as discovered: a later update that clears
+// cfg.Thumbnail would resurrect it through metadata's fallback.
+func (t *managedTunnel) recordDiscoveredThumbnail(cfg TunnelConfig, resolved string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if cfg.ThumbnailFromTarget && strings.TrimSpace(cfg.Thumbnail) == "" {
+		t.discoveredThumbnail = resolved
+		return
 	}
-}
-
-func normalizeAgentMetadataTags(tags []string) []string {
-	if len(tags) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		if tag = strings.TrimSpace(tag); tag != "" {
-			out = append(out, tag)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	t.discoveredThumbnail = ""
 }

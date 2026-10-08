@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useList, type BaseServer } from "@/hooks/useList";
 import type { BanFilter } from "@/types/filters";
-import { BROWSER_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
 import {
   parseLeaseMetadata,
@@ -10,10 +10,8 @@ import {
 } from "@/lib/metadata";
 import type {
   ApprovalMode,
-  IPPolicyUpdate,
   LeasePolicyUpdate,
   PolicyLease,
-  PolicyPortSettings,
   PolicySettings,
   PolicyStateResponse,
 } from "@/types/api";
@@ -31,7 +29,6 @@ export interface AdminServer extends BaseServer {
   isDenied: boolean;
   ip: string;
   displayIP: string;
-  isIPBanned: boolean;
 }
 
 export interface UDPSettings {
@@ -56,7 +53,6 @@ const ADMIN_ERROR_MESSAGE_BY_CODE: Record<string, string> = {
   invalid_address: "Selected address is invalid. Refresh and try again.",
   invalid_request: "Selected lease is invalid. Refresh and try again.",
   lease_rejected: "Request was rejected by policy. Review conflicts and retry.",
-  ip_banned: "Request denied because the source IP is banned.",
   unauthorized: "Admin authorization failed. Sign in again and retry.",
   method_not_allowed: "This action is not supported by the current server version.",
 };
@@ -93,19 +89,21 @@ function toAdminServer(
   const metadata = parseLeaseMetadata(row.metadata);
   const payment = resolveLeasePayment(metadata);
   const hostname = row.hostname || "";
+  const canonicalHostname = row.canonical_hostname || "";
+  const routeHostname = canonicalHostname || hostname;
   const serviceName = row.name || "";
   const address = row.address.trim();
 
   return {
-    id: hostname,
-    name: serviceName || hostname || "(unnamed)",
+    id: routeHostname,
+    name: serviceName || routeHostname || "(unnamed)",
     description: metadata.description,
     tags: metadata.tags,
     thumbnail: resolveLeaseThumbnail(metadata),
     owner: metadata.owner,
     online: (row.ready || 0) > 0,
-    dns: hostname,
-    link: hostname ? `https://${hostname}/` : "",
+    dns: hostname || routeHostname,
+    link: routeHostname ? `https://${routeHostname}/` : "",
     lastUpdated: row.last_seen_at || undefined,
     firstSeen: row.first_seen_at || undefined,
     paymentEnabled: payment.enabled,
@@ -118,7 +116,6 @@ function toAdminServer(
     isDenied: row.is_denied,
     ip: row.client_ip,
     displayIP: row.reported_ip || row.client_ip,
-    isIPBanned: row.is_ip_banned,
   };
 }
 
@@ -148,7 +145,7 @@ interface PolicyViewState {
 }
 
 async function loadPolicyState(): Promise<PolicyViewState> {
-  const state = await apiClient.get<PolicyStateResponse>(BROWSER_API_PATHS.policy.state);
+  const state = await apiClient.get<PolicyStateResponse>(RELAY_API_PATHS.policy.state);
   const normalizedLeases = Array.isArray(state?.leases) ? state.leases : [];
 
   return {
@@ -160,6 +157,8 @@ async function loadPolicyState(): Promise<PolicyViewState> {
 export function useAdmin(enabled = true) {
   const [serverData, setServerData] = useState<PolicyLease[]>([]);
   const [policySettings, setPolicySettings] = useState<PolicySettings>(DEFAULT_POLICY_SETTINGS);
+  const policyUpdatePending = useRef(false);
+  const [policySaving, setPolicySaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -174,7 +173,8 @@ export function useAdmin(enabled = true) {
     setError("");
 
     try {
-      applyPolicyState(await loadPolicyState());
+      const state = await loadPolicyState();
+      applyPolicyState(state);
     } catch (err: unknown) {
       setError(toAdminErrorMessage(err, "Failed to load admin data"));
     }
@@ -251,15 +251,23 @@ export function useAdmin(enabled = true) {
     }
   };
 
-  const postPolicySettings = async (settings: PolicySettings) => {
-    const response = await apiClient.post<PolicySettings>(BROWSER_API_PATHS.policy.root, settings);
-    setPolicySettings(normalizePolicySettings(response));
+  const updatePolicySettings = async (overrides: Partial<PolicySettings>) => {
+    if (policyUpdatePending.current) return;
+    policyUpdatePending.current = true;
+    setPolicySaving(true);
+    try {
+      await runAdminAction(async () => {
+        const response = await apiClient.post<PolicySettings>(RELAY_API_PATHS.policy.root, {
+          ...policySettings,
+          ...overrides,
+        });
+        setPolicySettings(normalizePolicySettings(response));
+      });
+    } finally {
+      policyUpdatePending.current = false;
+      setPolicySaving(false);
+    }
   };
-
-  const currentPolicySettings = (overrides: Partial<PolicySettings> = {}): PolicySettings => ({
-    ...policySettings,
-    ...overrides,
-  });
 
   const updateLeasePolicy = async (
     identityKey: string,
@@ -268,7 +276,7 @@ export function useAdmin(enabled = true) {
     if (!identityKey) {
       throw new Error("Missing lease identity");
     }
-    await apiClient.post<unknown>(BROWSER_API_PATHS.policy.leases, {
+    await apiClient.post<unknown>(RELAY_API_PATHS.policy.leases, {
       identity_key: identityKey,
       ...policy,
     } satisfies LeasePolicyUpdate);
@@ -318,32 +326,17 @@ export function useAdmin(enabled = true) {
     }
   };
 
-  const handleApprovalModeChange = async (mode: ApprovalMode) => {
-    await runAdminAction(async () => {
-      await postPolicySettings(currentPolicySettings({ approval_mode: mode }));
-    });
-  };
+  const handleApprovalModeChange = (mode: ApprovalMode) =>
+    updatePolicySettings({ approval_mode: mode });
 
-  const handleLandingPageEnabledChange = async (enabled: boolean) => {
-    await runAdminAction(async () => {
-      await postPolicySettings(currentPolicySettings({ landing_page_enabled: enabled }));
-    });
-  };
+  const handleLandingPageEnabledChange = (enabled: boolean) =>
+    updatePolicySettings({ landing_page_enabled: enabled });
 
   const handleSettingsChange = (key: "udp" | "tcp_port") =>
-    async (settings: { enabled: boolean; maxLeases: number }) => {
-      await runAdminAction(async () => {
-        const nextPortSettings: PolicyPortSettings = {
-          enabled: settings.enabled,
-          max_leases: settings.maxLeases,
-        };
-        const nextSettings =
-          key === "udp"
-            ? currentPolicySettings({ udp: nextPortSettings })
-            : currentPolicySettings({ tcp_port: nextPortSettings });
-        await postPolicySettings(nextSettings);
+    (settings: { enabled: boolean; maxLeases: number }) =>
+      updatePolicySettings({
+        [key]: { enabled: settings.enabled, max_leases: settings.maxLeases },
       });
-    };
 
   const handleUDPSettingsChange = handleSettingsChange("udp");
   const handleTCPPortSettingsChange = handleSettingsChange("tcp_port");
@@ -353,18 +346,6 @@ export function useAdmin(enabled = true) {
 
   const handleDenyStatus = (identityKey: string, deny: boolean) =>
     runAdminAction(() => updateLeasePolicy(identityKey, { is_denied: deny }));
-
-  const handleIPBanStatus = (ip: string, isBan: boolean) =>
-    runAdminAction(async () => {
-      const normalizedIP = ip.trim();
-      if (!normalizedIP) {
-        throw new Error("Missing IP address");
-      }
-      await apiClient.post<unknown>(BROWSER_API_PATHS.policy.ips, {
-        ip: normalizedIP,
-        is_banned: isBan,
-      } satisfies IPPolicyUpdate);
-    });
 
   const runBulkLeaseAction = async (identityKeys: string[], action: LeaseAction) => {
     const normalizedIdentityKeys = [...new Set(
@@ -382,7 +363,7 @@ export function useAdmin(enabled = true) {
             : action === "deny"
               ? { identity_key: identityKey, is_denied: true }
               : { identity_key: identityKey, is_banned: true };
-        return apiClient.post<unknown>(BROWSER_API_PATHS.policy.leases, policy);
+        return apiClient.post<unknown>(RELAY_API_PATHS.policy.leases, policy);
       })
     );
 
@@ -427,6 +408,7 @@ export function useAdmin(enabled = true) {
     landingPageEnabled,
     udpSettings,
     tcpPortSettings,
+    policySaving,
     loading,
     error,
     handleBanFilterChange,
@@ -438,7 +420,6 @@ export function useAdmin(enabled = true) {
     handleTCPPortSettingsChange,
     handleApproveStatus,
     handleDenyStatus,
-    handleIPBanStatus,
     handleBulkApprove,
     handleBulkDeny,
     handleBulkBan,

@@ -57,8 +57,10 @@ type Manager struct {
 	startOnce    sync.Once
 	stopOnce     sync.Once
 	ensStatus    *utils.Snapshot[types.ENSStatus]
-	echCommands  chan echDNSCommand
 	ensCommands  chan ensDNSCommand
+
+	// pendingDNSAddress is guarded by commandMu and cleared only after A-record synchronization.
+	pendingDNSAddress bool
 }
 
 func NewManager(cfg Config) (*Manager, error) {
@@ -109,16 +111,11 @@ func NewManager(cfg Config) (*Manager, error) {
 	manager := &Manager{
 		cfg:         cfg,
 		stopCh:      make(chan struct{}),
-		echCommands: make(chan echDNSCommand, 256),
 		ensCommands: make(chan ensDNSCommand, 256),
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
 	}
 
-	if cfg.ENSGaslessEnabled && cfg.DNSProvider == TypeEmbedded {
-		return nil, errors.New("ens gasless automation is not supported by the embedded dns provider yet")
-	}
-
-	acmeDNS, err := NewDNSProvider(cfg.DNSProvider, cfg)
+	acmeDNS, err := newDNSProvider(cfg.DNSProvider, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create acme dns provider: %w", err)
 	}
@@ -148,12 +145,11 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if err != nil {
 		return "", "", err
 	}
+	if _, err := m.syncDNS(ctx); err != nil {
+		return "", "", fmt.Errorf("ensure dns records: %w", err)
+	}
 	if manual {
 		return certFile, keyFile, nil
-	}
-
-	if err := m.syncDNS(ctx); err != nil {
-		return "", "", fmt.Errorf("ensure dns records: %w", err)
 	}
 
 	certFile, keyFile, err = m.TLSFiles()
@@ -248,7 +244,6 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 	if !utils.FileExists(certFile) || !utils.FileExists(keyFile) {
 		return "", "", false, nil
 	}
-	var err error
 	covered, err := certCoversDomains(certFile, certificateDomains(m.cfg.BaseDomain))
 	if err != nil {
 		return "", "", false, fmt.Errorf("validate relay certificate: %w", err)

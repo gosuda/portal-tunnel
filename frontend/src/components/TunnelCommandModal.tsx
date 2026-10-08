@@ -25,11 +25,10 @@ export function TunnelCommandModal() {
         <DialogHeader className="px-6 pt-6 pb-4 text-left">
           <DialogTitle className="flex items-center gap-2 text-[1.05rem] font-semibold tracking-normal text-foreground dark:text-zinc-100">
             <Terminal className="h-4 w-4" />
-            Tunnel Setup Command
+            Start a Tunnel
           </DialogTitle>
           <DialogDescription className="max-w-[34ch] pt-1 text-sm leading-6 text-muted-foreground dark:text-zinc-400">
-            Configure your tunnel settings and copy the command to start
-            exposing your local server.
+            Choose a target, then run the generated command.
           </DialogDescription>
         </DialogHeader>
 

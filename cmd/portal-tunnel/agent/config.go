@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,10 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -39,48 +44,37 @@ type AgentConfig struct {
 }
 
 type TunnelConfig struct {
-	ID                   string            `koanf:"id"`
-	Name                 string            `koanf:"name"`
-	TargetAddr           string            `koanf:"target"`
-	HTTPRoutes           []HTTPRouteConfig `koanf:"http_routes"`
-	RelayURLs            []string          `koanf:"relays"`
-	Discovery            *bool             `koanf:"discovery"`
-	IdentityPath         string            `koanf:"identity_path"`
-	IdentityJSON         string            `koanf:"identity_json"`
-	UDPEnabled           bool              `koanf:"udp"`
-	UDPAddr              string            `koanf:"udp_addr"`
-	TCPEnabled           bool              `koanf:"tcp"`
-	ECH                  bool              `koanf:"ech"`
-	MultiHop             []string          `koanf:"multi_hop"`
-	MultiHopDepth        int               `koanf:"multi_hop_depth"`
-	BanMITM              *bool             `koanf:"ban_mitm"`
-	MaxActiveRelays      int               `koanf:"max_active_relays"`
-	Description          string            `koanf:"description"`
-	Tags                 []string          `koanf:"tags"`
-	Owner                string            `koanf:"owner"`
-	Thumbnail            string            `koanf:"thumbnail"`
-	ThumbnailFromTarget  bool              `koanf:"thumbnail_from_target"`
-	Hide                 bool              `koanf:"hide"`
-	X402PayTo            string            `koanf:"x402_pay_to"`
-	X402Testnet          bool              `koanf:"x402_testnet"`
-	X402Network          string            `koanf:"x402_network"`
-	X402Asset            string            `koanf:"x402_asset"`
-	X402Endpoints        []string          `koanf:"x402_endpoints"`
-	X402FacilitatorToken string            `koanf:"x402_facilitator_token"`
-}
-
-type HTTPRouteConfig struct {
-	Prefix   string   `koanf:"prefix"`
-	Upstream string   `koanf:"upstream"`
-	Methods  []string `koanf:"methods"`
-	Amount   string   `koanf:"amount"`
+	ID                  string             `koanf:"id"`
+	Name                string             `koanf:"name"`
+	TargetAddr          string             `koanf:"target"`
+	Serve               string             `koanf:"serve"`
+	StripRequestHeaders []string           `koanf:"strip_request_headers"`
+	HTTPRoutes          []tunnel.HTTPRoute `koanf:"http_routes"`
+	RelayURLs           []string           `koanf:"relays"`
+	Discovery           *bool              `koanf:"discovery"`
+	Overlay             bool               `koanf:"overlay"`
+	IdentityPath        string             `koanf:"identity_path"`
+	IdentityJSON        string             `koanf:"identity_json"`
+	UDPEnabled          bool               `koanf:"udp"`
+	UDPAddr             string             `koanf:"udp_addr"`
+	TCPEnabled          bool               `koanf:"tcp"`
+	BanMITM             *bool              `koanf:"ban_mitm"`
+	MaxActiveRelays     int                `koanf:"max_active_relays"`
+	Description         string             `koanf:"description"`
+	Tags                []string           `koanf:"tags"`
+	Owner               string             `koanf:"owner"`
+	Thumbnail           string             `koanf:"thumbnail"`
+	ThumbnailFromTarget bool               `koanf:"thumbnail_from_target"`
+	Hide                bool               `koanf:"hide"`
+	Auth                string             `koanf:"auth"`
+	AuthAllowedWallets  []string           `koanf:"auth_allowed_wallets"`
+	AuthIdentityHeaders bool               `koanf:"auth_identity_headers"`
+	gateway.X402Config  `koanf:",squash"`
 }
 
 func LoadExistingConfig(path string) (Config, error) {
 	path = strings.TrimSpace(path)
-	if path == "" {
-		path = service.DefaultConfigPath()
-	}
+	path = cmp.Or(path, service.DefaultConfigPath())
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return Config{}, err
@@ -100,9 +94,7 @@ func LoadExistingConfig(path string) (Config, error) {
 
 func loadConfigDocument(path string) (Config, string, os.FileMode, error) {
 	path = strings.TrimSpace(path)
-	if path == "" {
-		path = service.DefaultConfigPath()
-	}
+	path = cmp.Or(path, service.DefaultConfigPath())
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return Config{}, "", 0, err
@@ -149,9 +141,7 @@ func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	if mode == 0 {
-		mode = 0o644
-	}
+	mode = cmp.Or(mode, 0o644)
 	return os.WriteFile(path, data, mode)
 }
 
@@ -181,6 +171,7 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	addStringDocumentField(out, "id", cfg.ID)
 	addStringDocumentField(out, "name", cfg.Name)
 	addStringDocumentField(out, "target", cfg.TargetAddr)
+	addStringDocumentField(out, "serve", cfg.Serve)
 	if len(cfg.HTTPRoutes) > 0 {
 		routes := make([]map[string]any, 0, len(cfg.HTTPRoutes))
 		for _, route := range cfg.HTTPRoutes {
@@ -193,9 +184,13 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 		}
 		out["http_routes"] = routes
 	}
+	addStringSliceDocumentField(out, "strip_request_headers", cfg.StripRequestHeaders)
 	addStringSliceDocumentField(out, "relays", cfg.RelayURLs)
 	if cfg.Discovery != nil {
 		out["discovery"] = *cfg.Discovery
+	}
+	if cfg.Overlay {
+		out["overlay"] = cfg.Overlay
 	}
 	addStringDocumentField(out, "identity_path", cfg.IdentityPath)
 	addStringDocumentField(out, "identity_json", cfg.IdentityJSON)
@@ -205,19 +200,6 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	addStringDocumentField(out, "udp_addr", cfg.UDPAddr)
 	if cfg.TCPEnabled {
 		out["tcp"] = cfg.TCPEnabled
-	}
-	if cfg.ECH {
-		out["ech"] = cfg.ECH
-	}
-	addStringSliceDocumentField(out, "multi_hop", cfg.MultiHop)
-	if cfg.MultiHopDepth != 0 {
-		out["multi_hop_depth"] = cfg.MultiHopDepth
-	}
-	if cfg.BanMITM != nil {
-		out["ban_mitm"] = *cfg.BanMITM
-	}
-	if cfg.MaxActiveRelays != 0 {
-		out["max_active_relays"] = cfg.MaxActiveRelays
 	}
 	addStringDocumentField(out, "description", cfg.Description)
 	addStringSliceDocumentField(out, "tags", cfg.Tags)
@@ -229,14 +211,19 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	if cfg.Hide {
 		out["hide"] = cfg.Hide
 	}
-	addStringDocumentField(out, "x402_pay_to", cfg.X402PayTo)
-	if cfg.X402Testnet {
-		out["x402_testnet"] = cfg.X402Testnet
+	addStringDocumentField(out, "auth", cfg.Auth)
+	addStringSliceDocumentField(out, "auth_allowed_wallets", cfg.AuthAllowedWallets)
+	if cfg.AuthIdentityHeaders {
+		out["auth_identity_headers"] = cfg.AuthIdentityHeaders
 	}
-	addStringDocumentField(out, "x402_network", cfg.X402Network)
-	addStringDocumentField(out, "x402_asset", cfg.X402Asset)
-	addStringSliceDocumentField(out, "x402_endpoints", cfg.X402Endpoints)
-	addStringDocumentField(out, "x402_facilitator_token", cfg.X402FacilitatorToken)
+	addStringDocumentField(out, "x402_pay_to", cfg.PayTo)
+	if cfg.Testnet {
+		out["x402_testnet"] = cfg.Testnet
+	}
+	addStringDocumentField(out, "x402_network", cfg.Network)
+	addStringDocumentField(out, "x402_asset", cfg.Asset)
+	addStringSliceDocumentField(out, "x402_endpoints", cfg.Endpoints)
+	addStringDocumentField(out, "x402_facilitator_token", cfg.FacilitatorToken)
 	return out
 }
 
@@ -284,16 +271,26 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		t := &cfg.Tunnels[i]
 		t.ID = strings.TrimSpace(t.ID)
 		t.Name = strings.TrimSpace(t.Name)
-		t.X402Network = strings.ToLower(strings.TrimSpace(t.X402Network))
-		t.X402Asset = strings.TrimSpace(t.X402Asset)
-		t.X402Endpoints = compactStrings(t.X402Endpoints)
-		t.X402FacilitatorToken = strings.TrimSpace(t.X402FacilitatorToken)
+		t.Serve = strings.TrimSpace(t.Serve)
+		if t.Serve != "" && !filepath.IsAbs(t.Serve) {
+			t.Serve = filepath.Join(configDir, t.Serve)
+		}
+		t.Network = strings.ToLower(strings.TrimSpace(t.Network))
+		t.Auth = strings.ToLower(strings.TrimSpace(t.Auth))
+		t.Asset = strings.TrimSpace(t.Asset)
+		t.Endpoints = compactStrings(t.Endpoints)
+		t.FacilitatorToken = strings.TrimSpace(t.FacilitatorToken)
 		if t.ID == "" {
 			t.ID = t.Name
 		}
 		if t.ID == "" {
 			t.ID = fmt.Sprintf("tunnel-%d", i+1)
 		}
+		normalizedWallets, err := siweauth.NormalizeAddresses(t.AuthAllowedWallets)
+		if err != nil {
+			return fmt.Errorf("tunnel %q auth_allowed_wallets: %w", t.ID, err)
+		}
+		t.AuthAllowedWallets = normalizedWallets
 		if t.IdentityPath == "" {
 			if len(cfg.Tunnels) <= 1 {
 				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, defaultIdentityFilename)
@@ -312,13 +309,6 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 				return fmt.Errorf("tunnel %q relays: %w", t.ID, err)
 			}
 			t.RelayURLs = relays
-		}
-		for idx, relayURL := range t.MultiHop {
-			normalized, err := utils.NormalizeRelayURL(relayURL)
-			if err != nil {
-				return fmt.Errorf("tunnel %q multi_hop: %w", t.ID, err)
-			}
-			t.MultiHop[idx] = normalized
 		}
 	}
 	return nil
@@ -351,51 +341,84 @@ func (cfg TunnelConfig) Validate() error {
 	if err := validateAgentPathComponent("tunnel id", cfg.ID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(cfg.TargetAddr) == "" && len(cfg.HTTPRoutes) == 0 {
-		return fmt.Errorf("tunnel %q requires target or http_routes", cfg.ID)
-	}
-	if strings.TrimSpace(cfg.TargetAddr) != "" && len(cfg.HTTPRoutes) > 0 {
-		return fmt.Errorf("tunnel %q cannot combine target and http_routes", cfg.ID)
-	}
-	if len(cfg.HTTPRoutes) > 0 && cfg.UDPEnabled {
-		return fmt.Errorf("tunnel %q cannot combine udp and http_routes", cfg.ID)
-	}
-	if cfg.MultiHopDepth < 0 {
-		return fmt.Errorf("tunnel %q multi_hop_depth cannot be negative", cfg.ID)
-	}
-	if len(cfg.MultiHop) == 1 {
-		return fmt.Errorf("tunnel %q multi_hop requires at least entry and exit relays", cfg.ID)
-	}
-	if len(cfg.MultiHop) > 0 && cfg.MultiHopDepth > 1 {
-		return fmt.Errorf("tunnel %q cannot combine multi_hop and multi_hop_depth", cfg.ID)
-	}
-	if (len(cfg.MultiHop) > 0 || cfg.MultiHopDepth > 1) && (cfg.UDPEnabled || cfg.TCPEnabled) {
-		return fmt.Errorf("tunnel %q multi-hop supports only the default stream transport", cfg.ID)
-	}
-	if len(cfg.MultiHop) > 0 {
-		uniqueMultiHop, err := utils.NormalizeRelayURLs(cfg.MultiHop...)
-		if err != nil {
-			return fmt.Errorf("tunnel %q multi_hop: %w", cfg.ID, err)
-		}
-		if len(uniqueMultiHop) != len(cfg.MultiHop) {
-			return fmt.Errorf("tunnel %q multi_hop relay repeated", cfg.ID)
-		}
-	}
-	for _, route := range cfg.HTTPRoutes {
-		if strings.TrimSpace(route.Prefix) == "" || strings.TrimSpace(route.Upstream) == "" {
-			return fmt.Errorf("tunnel %q http_routes require prefix and upstream", cfg.ID)
-		}
-		if strings.TrimSpace(route.Amount) != "" && strings.TrimSpace(cfg.X402PayTo) == "" {
-			return fmt.Errorf("tunnel %q http route %q amount requires x402_pay_to", cfg.ID, strings.TrimSpace(route.Prefix))
-		}
-		if strings.TrimSpace(route.Amount) == "" && len(route.Methods) > 0 {
-			return fmt.Errorf("tunnel %q http route %q methods require amount", cfg.ID, strings.TrimSpace(route.Prefix))
-		}
-	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.X402Network)), "casper:") && strings.TrimSpace(cfg.X402Asset) == "" {
-		return fmt.Errorf("tunnel %q Casper payments require x402_asset", cfg.ID)
+	if err := tunnelSpecFromConfig(cfg).Validate(); err != nil {
+		return fmt.Errorf("tunnel %q: %w", cfg.ID, err)
 	}
 	return nil
+}
+
+func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
+	discovery := true
+	if cfg.Discovery != nil {
+		discovery = *cfg.Discovery
+	}
+	banMITM := false
+	if cfg.BanMITM != nil {
+		banMITM = *cfg.BanMITM
+	}
+	spec := tunnel.Spec{
+		Identity: tunnel.IdentitySpec{Name: cfg.Name, Path: cfg.IdentityPath, JSON: cfg.IdentityJSON},
+		Relays: tunnel.RelaySpec{
+			URLs: append([]string(nil), cfg.RelayURLs...), Discovery: discovery,
+			MaxActive: cfg.MaxActiveRelays, Overlay: cfg.Overlay, BanMITM: banMITM,
+		},
+		Metadata:  metadataFromTunnelConfig(cfg),
+		Transport: tunnel.TransportSpec{Target: cfg.TargetAddr, TCP: cfg.TCPEnabled},
+	}
+	if cfg.UDPEnabled {
+		spec.Transport.UDP = &tunnel.UDPConfig{Target: cfg.UDPAddr}
+	}
+	hasAuth := cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders
+	hasHTTPSource := cfg.Serve != "" || len(cfg.HTTPRoutes) > 0 || hasAuth || len(cfg.StripRequestHeaders) > 0
+	if hasHTTPSource {
+		routes := make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
+		for _, route := range cfg.HTTPRoutes {
+			routes = append(routes, tunnel.HTTPRoute{
+				Prefix: route.Prefix, Upstream: route.Upstream,
+				Methods: append([]string(nil), route.Methods...), Amount: route.Amount,
+			})
+		}
+		payment := gateway.X402Payment{X402Config: cfg.Copy()}
+		payment.FacilitatorToken = cmp.Or(strings.TrimSpace(cfg.FacilitatorToken), strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
+		spec.HTTP = &tunnel.HTTPConfig{
+			Serve: cfg.Serve, Routes: routes,
+			StripRequestHeaders: append([]string(nil), cfg.StripRequestHeaders...),
+			Payment:             payment,
+		}
+		if cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+				Provider: cfg.Auth, AllowedWallets: append([]string(nil), cfg.AuthAllowedWallets...),
+				IdentityHeaders: cfg.AuthIdentityHeaders,
+			}
+		}
+	}
+	return spec
+}
+
+func metadataFromTunnelConfig(cfg TunnelConfig) types.LeaseMetadata {
+	return types.LeaseMetadata{
+		Description: strings.TrimSpace(cfg.Description),
+		Tags:        normalizeAgentMetadataTags(cfg.Tags),
+		Owner:       strings.TrimSpace(cfg.Owner),
+		Thumbnail:   strings.TrimSpace(cfg.Thumbnail),
+		Hide:        cfg.Hide,
+	}
+}
+
+func normalizeAgentMetadataTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if tag = strings.TrimSpace(tag); tag != "" {
+			out = append(out, tag)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func compactStrings(values []string) []string {

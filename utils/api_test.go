@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -73,27 +73,40 @@ func TestDecodeJSONRequestWritesInvalidJSONError(t *testing.T) {
 	}
 }
 
-func TestDecodeJSONRequestAsWritesCustomInvalidError(t *testing.T) {
+func TestDecodeJSONRequestRejectsOversizedBody(t *testing.T) {
 	t.Parallel()
 
-	req := httptest.NewRequest(http.MethodPost, "/api", bytes.NewBufferString("{"))
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(`{"value":"too large"}`))
 	rec := httptest.NewRecorder()
-	invalid := APIErrorResponse{
-		Status:  http.StatusTeapot,
-		Code:    "custom_invalid",
-		Message: "custom invalid request",
-	}
 
-	if _, ok := DecodeJSONRequestAs[map[string]string](rec, req, 1024, invalid); ok {
-		t.Fatal("DecodeJSONRequestAs() ok = true, want false")
+	if _, ok := DecodeJSONRequest[map[string]string](rec, req, 8); ok {
+		t.Fatal("DecodeJSONRequest() ok = true, want false")
 	}
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("DecodeJSONRequest() status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}
 
-	var envelope types.APIEnvelope[json.RawMessage]
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	if rec.Code != http.StatusTeapot || envelope.OK || envelope.Error == nil ||
-		envelope.Error.Code != "custom_invalid" || envelope.Error.Message != "custom invalid request" {
-		t.Fatalf("DecodeJSONRequestAs() status/envelope = %d/%+v, want custom invalid error", rec.Code, envelope)
+func TestDecodeAPIRequestErrorRetryAfter(t *testing.T) {
+	for _, header := range []string{"7", time.Now().Add(7 * time.Second).UTC().Format(http.TimeFormat), "", "bad", "-1", "99999999999999999999999999"} {
+		response := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Retry-After": {header}}, Body: io.NopCloser(strings.NewReader("busy"))}
+		apiErr, ok := errors.AsType[*types.APIRequestError](DecodeAPIRequestError(response))
+		if !ok {
+			t.Fatal("expected APIRequestError")
+		}
+		if !apiErr.IsRateLimited() {
+			t.Fatal("non-JSON HTTP 429 lost its retryable status")
+		}
+		if header == "7" {
+			if apiErr.RetryAfter != 7*time.Second {
+				t.Fatalf("delta-seconds = %v", apiErr.RetryAfter)
+			}
+		} else if strings.Contains(header, "GMT") {
+			if apiErr.RetryAfter <= 5*time.Second || apiErr.RetryAfter > 7*time.Second {
+				t.Fatalf("HTTP-date = %v", apiErr.RetryAfter)
+			}
+		} else if apiErr.RetryAfter != 0 {
+			t.Fatalf("invalid header %q = %v", header, apiErr.RetryAfter)
+		}
 	}
 }

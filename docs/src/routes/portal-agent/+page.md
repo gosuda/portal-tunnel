@@ -56,7 +56,34 @@ relays = ["https://portal.example.com"]
 discovery = false
 description = "Managed web tunnel"
 tags = ["web"]
+auth = "siwe"
+auth_allowed_wallets = ["0x1234..."]
+auth_identity_headers = true
 ```
+
+Static site config:
+
+```toml
+[[tunnels]]
+id = "site"
+name = "my-site"
+serve = "./dist"
+```
+
+`serve` accepts a directory containing `index.html` or an HTML file such as
+`./dist/main.html`. Relative paths resolve from the directory containing
+`config.toml`. The file's parent directory is served when a file is selected;
+unknown request paths fall back to the entry file, as with `portal expose --serve`.
+The entry file must exist when the tunnel starts. Edit `serve` in TOML and
+restart the tunnel or agent to change the site path.
+
+Set `auth = "credential"` on a target, routed HTTP, or static tunnel for
+Portal-native credentials, or use `auth = "siwe"`. With SIWE,
+`auth_allowed_wallets` optionally restricts login to listed Ethereum addresses.
+`auth_identity_headers = true` injects the verified wallet address and `siwe`
+for SIWE, or the credential subject and `credential` for credential auth, as
+`X-Portal-User` and `X-Portal-Auth`; Portal always strips client-supplied copies
+first.
 
 Routed HTTP config:
 
@@ -158,7 +185,6 @@ Dashboard panes:
 | Tunnels | Add, select, and delete tunnels |
 | Settings | Edit max active relays and public metadata |
 | Relays | Connect or disconnect relays for the selected tunnel |
-| Multi-hop | Build and apply an ordered multi-hop route |
 
 Keyboard controls:
 
@@ -171,8 +197,6 @@ Keyboard controls:
 | `c` | Connect the selected relay in the Relays pane |
 | `d` | Disconnect the selected relay in the Relays pane |
 | `o` | Open the selected public tunnel URL |
-| `a` | Add the selected relay as a multi-hop hop |
-| `p` | Apply a drafted multi-hop route |
 | `esc` | Cancel input or return to the Tunnels pane |
 | `ctrl+c` | Exit the dashboard |
 
@@ -187,7 +211,7 @@ Each entry is `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]`. Fill `X402 Pa
 To` when any route has an amount. Sui uses `X402 Testnet`; Casper additionally
 uses `X402 Network`, `X402 Asset`, and optionally its facilitator in `X402 Endpoints`.
 The form also accepts explicit `Relays`,
-`Discovery`, and `Max Relays`; max relays caps auto-selected single-hop discovery relays
+`Discovery`, and `Max Relays`; max relays caps auto-selected discovery relays
 while explicit relays are still included.
 
 After creation, routed HTTP paths, x402 payment amounts, payment network, and
@@ -195,8 +219,8 @@ discovery mode are read-only in the Settings pane. To change routes, payment
 amounts, payment network, or discovery mode, edit `http_routes`,
 `x402_pay_to`, `x402_testnet`, `x402_network`, `x402_asset`, `x402_endpoints`,
 and `discovery` in `config.toml`, then restart
-the agent or tunnel. Other advanced options such as UDP, TCP, custom
-identity JSON, or explicit multi-hop defaults are also configured in
+the agent or tunnel. Other advanced options such as UDP, TCP, or custom
+identity JSON are also configured in
 `config.toml`.
 
 ## Tunnel Config Fields
@@ -208,36 +232,40 @@ Common fields:
 | `id` | Stable local tunnel ID used by the dashboard and control API |
 | `name` | Public lease name, used as the subdomain label |
 | `target` | Local TCP target, equivalent to `portal expose <target>` |
-| `http_routes` | Routed HTTP mappings; cannot be combined with `target` or `udp` |
+| `http_routes` | Routed HTTP mappings; cannot be combined with `target`, `serve`, `tcp`, or `udp` |
+| `serve` | Static site directory or HTML file; relative to the config file's directory |
 | `relays` | Explicit relay API URLs |
 | `discovery` | Include registry and relay discovery expansion |
-| `max_active_relays` | Maximum auto-selected single-hop relays kept connected; multi-hop uses every eligible relay as an entry |
+| `max_active_relays` | Maximum auto-selected relays kept connected; explicit relays are always included |
+| `overlay` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to direct and retains direct fallback |
 | `identity_path` | Tunnel identity JSON path |
-| `identity_json` | Identity JSON payload; persisted to `identity_path` when both are set |
+| `identity_json` | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr` | UDP transport settings |
 | `tcp` | Dedicated raw TCP port setting |
-| `multi_hop` | Explicit ordered multi-hop relay URLs |
-| `multi_hop_depth` | Automatically choose one multi-hop route with this depth |
-| `ech` | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
 | `thumbnail_from_target` | Fill an empty `thumbnail` with the first absolute image URL the target advertises: `og:image`, then `twitter:image`, then an icon link |
+| `auth` | Application login provider: `siwe` or `credential` |
+| `auth_allowed_wallets` | Optional allowed Ethereum wallet array; empty allows any valid wallet |
+| `auth_identity_headers` | Inject verified Portal identity headers into upstream requests |
 | `x402_pay_to` | Payment recipient for paid HTTP routes |
 | `x402_testnet` | Use Sui testnet when `x402_network` is omitted |
 | `x402_network` | Optional Sui or Casper CAIP-2 network |
 | `x402_asset` | wCSPR CEP-18 contract hash required by Casper |
 | `x402_endpoints` | Optional Sui RPC endpoints or Casper facilitator URL |
+| `x402_facilitator_token` | Casper facilitator token; falls back to `CSPR_CLOUD_API_KEY` |
 | `http_routes[].amount` | Optional human payment amount, such as `0.01`, for one HTTP route prefix |
 | `http_routes[].methods` | Optional HTTP methods that require payment on that route; empty means every method |
 
-Constraints match `portal expose`:
+The agent supports target, routed HTTP, and static site modes. The CLI relay
+cache options `cache` and `cache_ttl` are not supported in agent TOML.
+
+Constraints:
 
 - `target` cannot be combined with `http_routes`.
-- `http_routes` cannot be combined with `udp`.
-- `multi_hop` requires at least two relay URLs.
-- `multi_hop` cannot be combined with `multi_hop_depth`.
-- Multi-hop currently supports only the default stream transport, not UDP or raw
-  TCP port mode.
+- `serve` cannot be combined with `target`, `http_routes`, `tcp`, or `udp`.
+- `http_routes` cannot be combined with `tcp` or `udp`.
+- Application auth cannot be combined with `tcp` or `udp`; wallet allowlists require the SIWE provider and identity headers require application auth.
 - `http_routes[].amount` requires `x402_pay_to`.
 - `http_routes[].methods` requires `http_routes[].amount`.
 
@@ -247,6 +275,9 @@ If `identity_path` is omitted:
 
 - a single tunnel uses `<state_dir>/identity.json`
 - multiple tunnels use `<state_dir>/<tunnel-id>/identity.json`
+
+An existing identity file or `identity_json` supplies its saved name and key;
+`tunnels.name` is used only when creating a new identity.
 
 Reusing an identity keeps the same tunnel address and lease identity across
 restarts. Use separate identity paths when two tunnels should have separate
@@ -278,8 +309,6 @@ Control endpoints:
 | `DELETE` | `/agent/tunnels/{id}` | Bearer token | Delete a tunnel |
 | `POST` | `/agent/tunnels/{id}/relays` | Bearer token | Connect a relay |
 | `DELETE` | `/agent/tunnels/{id}/relays` | Bearer token | Disconnect a relay |
-| `POST` | `/agent/tunnels/{id}/multi-hop` | Bearer token | Apply a multi-hop route |
-| `DELETE` | `/agent/tunnels/{id}/multi-hop` | Bearer token | Clear multi-hop routing |
 
 Wallet auth endpoints also exist under `/agent/auth/*`. Wallet-authenticated
 requests are read-only and can only call `/agent/status`; mutating operations
@@ -313,8 +342,8 @@ portal agent run --config config.toml --foreground
 ```
 
 If a tunnel is stuck in `error`, check the selected tunnel row in the dashboard.
-Common causes are an invalid local target, a relay URL that cannot be reached, a
-transport disabled on the relay, or an invalid multi-hop route.
+Common causes are an invalid local target, a relay URL that cannot be reached,
+or a transport disabled on the relay.
 
 ## Next Steps
 

@@ -1,0 +1,269 @@
+package gateway
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/types"
+)
+
+func TestApplicationAuthRequiresLogin(t *testing.T) {
+	handler := newApplicationAuthTestHandler(t, nil, false, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("unauthenticated request reached upstream")
+	}))
+	req := httptest.NewRequest(http.MethodGet, "https://app.example/private?q=1", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d; want %d", rec.Code, http.StatusSeeOther)
+	}
+	if location := rec.Header().Get("Location"); location != applicationAuthLoginPath+"?next=%2Fprivate%3Fq%3D1" {
+		t.Fatalf("Location = %q", location)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "https://app.example/private", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("POST status = %d; want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
+	wallet := applicationAuthTestWallet(t, "1")
+	var upstreamUser, upstreamAuth string
+	handler := newApplicationAuthTestHandler(t, []string{wallet.Identity().Address}, true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamUser = r.Header.Get("X-Portal-User")
+		upstreamAuth = r.Header.Get("X-Portal-Auth")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	challengeBody, _ := json.Marshal(applicationAuthChallengeRequest{Address: wallet.Identity().Address})
+	challengeReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthChallengePath, bytes.NewReader(challengeBody))
+	challengeReq.Header.Set("Origin", "https://app.example")
+	challengeRec := httptest.NewRecorder()
+	handler.ServeHTTP(challengeRec, challengeReq)
+	if challengeRec.Code != http.StatusOK {
+		t.Fatalf("challenge status = %d, body = %s", challengeRec.Code, challengeRec.Body.String())
+	}
+	var challenge applicationAuthChallengeResponse
+	if err := json.NewDecoder(challengeRec.Body).Decode(&challenge); err != nil {
+		t.Fatal(err)
+	}
+	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyBody, _ := json.Marshal(applicationAuthVerifyRequest{ChallengeID: challenge.ChallengeID, Message: challenge.Message, Signature: signature})
+	verifyReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthVerifyPath, bytes.NewReader(verifyBody))
+	verifyReq.Header.Set("Origin", "https://app.example")
+	verifyRec := httptest.NewRecorder()
+	handler.ServeHTTP(verifyRec, verifyReq)
+	if verifyRec.Code != http.StatusOK {
+		t.Fatalf("verify status = %d, body = %s", verifyRec.Code, verifyRec.Body.String())
+	}
+	response := verifyRec.Result()
+	cookies := response.Cookies()
+	if len(cookies) != 1 || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
+		t.Fatalf("session cookie = %#v", cookies)
+	}
+
+	protectedReq := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
+	protectedReq.AddCookie(cookies[0])
+	protectedReq.Header.Set("X-Portal-User", "attacker")
+	protectedReq.Header.Set("X-Portal-Auth", "attacker")
+	protectedRec := httptest.NewRecorder()
+	handler.ServeHTTP(protectedRec, protectedReq)
+	if protectedRec.Code != http.StatusNoContent {
+		t.Fatalf("protected status = %d", protectedRec.Code)
+	}
+	if upstreamUser != wallet.Identity().Address || upstreamAuth != "siwe" {
+		t.Fatalf("identity headers = %q, %q", upstreamUser, upstreamAuth)
+	}
+
+	// A verified challenge is a short-lived proof: replaying it
+	// re-authenticates the same wallet and issues a fresh session
+	// (siweauth keeps no replay state, issue #530).
+	replayReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthVerifyPath, bytes.NewReader(verifyBody))
+	replayReq.Header.Set("Origin", "https://app.example")
+	replayRec := httptest.NewRecorder()
+	handler.ServeHTTP(replayRec, replayReq)
+	if replayRec.Code != http.StatusOK {
+		t.Fatalf("challenge replay status = %d; want %d", replayRec.Code, http.StatusOK)
+	}
+	if len(replayRec.Result().Cookies()) != 1 {
+		t.Fatalf("challenge replay session cookie missing")
+	}
+}
+
+func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
+	var user, auth, cookies string
+	requests := 0
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		user, auth = r.Header.Get("X-Portal-User"), r.Header.Get("X-Portal-Auth")
+		cookies = r.Header.Get("Cookie")
+	})
+	handler := newApplicationAuthTestHandler(t, nil, false, next)
+	gate := handler.(*applicationAuth)
+	token, err := gate.issueSession(applicationAuthTestWallet(t, "2").Identity().Address, ApplicationAuthProviderSIWE, "app.example", applicationAuthTestTime().Add(applicationAuthSessionTTL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerlessToken, err := encodeSignedApplicationAuthJSON(gate.signingKey, applicationAuthClaims{Subject: applicationAuthTestWallet(t, "2").Identity().Address, Host: "app.example", ExpiresAt: applicationAuthTestTime().Add(applicationAuthSessionTTL).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://app.example/", nil)
+	req.AddCookie(&http.Cookie{Name: "app_session", Value: "abc"})
+	req.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: token})
+	req.Header.Set("X-Portal-User", "attacker")
+	req.Header.Set("X-Portal-Auth", "attacker")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if user != "" || auth != "" {
+		t.Fatalf("untrusted identity headers reached upstream: %q, %q", user, auth)
+	}
+	if cookies != "app_session=abc" {
+		t.Fatalf("upstream Cookie = %q; want only application cookie", cookies)
+	}
+	for name, requestToken := range map[string]string{
+		"other host":       token,
+		"tampered":         "x" + token[1:],
+		"missing provider": providerlessToken,
+	} {
+		t.Run(name, func(t *testing.T) {
+			host := "app.example"
+			if name == "other host" {
+				host = "other.example"
+			}
+			req := httptest.NewRequest(http.MethodGet, "https://"+host+"/", nil)
+			req.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: requestToken})
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusSeeOther {
+				t.Fatalf("status = %d; want %d", rec.Code, http.StatusSeeOther)
+			}
+		})
+	}
+	if requests != 1 {
+		t.Fatalf("upstream requests = %d; want 1", requests)
+	}
+}
+
+func TestApplicationAuthCredential(t *testing.T) {
+	tunnelIdentity := applicationAuthTestIdentity()
+	var upstreamUser, upstreamAuth, upstreamCredential string
+	upstreamRequests := 0
+	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests++
+		upstreamUser, upstreamAuth = r.Header.Get("X-Portal-User"), r.Header.Get("X-Portal-Auth")
+		upstreamCredential = r.Header.Get(types.HeaderAccessCredential)
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
+	req := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthRedeemPath, bytes.NewReader(body))
+	req.Header.Set("Origin", "https://app.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("redeem status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies = %#v", cookies)
+	}
+	protected := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
+	protected.AddCookie(cookies[0])
+	protectedRec := httptest.NewRecorder()
+	handler.ServeHTTP(protectedRec, protected)
+	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ApplicationAuthProviderCredential {
+		t.Fatalf("protected status = %d, identity = %q/%q", protectedRec.Code, upstreamUser, upstreamAuth)
+	}
+	direct := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	direct.Header.Set(types.HeaderAccessCredential, credential)
+	directRec := httptest.NewRecorder()
+	handler.ServeHTTP(directRec, direct)
+	if directRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ApplicationAuthProviderCredential || upstreamCredential != "" {
+		t.Fatalf("credential header status = %d, identity = %q/%q, upstream credential = %q", directRec.Code, upstreamUser, upstreamAuth, upstreamCredential)
+	}
+	bobCredential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "bob", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialAndCookie := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	credentialAndCookie.AddCookie(cookies[0])
+	credentialAndCookie.Header.Set(types.HeaderAccessCredential, bobCredential)
+	credentialAndCookieRec := httptest.NewRecorder()
+	handler.ServeHTTP(credentialAndCookieRec, credentialAndCookie)
+	if credentialAndCookieRec.Code != http.StatusNoContent || upstreamUser != "bob" {
+		t.Fatalf("credential with cookie status = %d, user = %q; want bob", credentialAndCookieRec.Code, upstreamUser)
+	}
+	invalidCredential := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	invalidCredential.AddCookie(cookies[0])
+	invalidCredential.Header.Set(types.HeaderAccessCredential, "invalid")
+	invalidCredentialRec := httptest.NewRecorder()
+	handler.ServeHTTP(invalidCredentialRec, invalidCredential)
+	if invalidCredentialRec.Code == http.StatusNoContent || upstreamRequests != 3 {
+		t.Fatalf("invalid credential with cookie status = %d, upstream requests = %d; want rejection", invalidCredentialRec.Code, upstreamRequests)
+	}
+}
+
+func TestApplicationCredentialRejectsOtherHostAndExpiry(t *testing.T) {
+	tunnelIdentity := applicationAuthTestIdentity()
+	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyApplicationCredential([]byte(key), tunnelIdentity, "other.example", credential, time.Now().UTC()); err == nil {
+		t.Fatal("other host accepted")
+	}
+	if _, err := verifyApplicationCredential([]byte(key), tunnelIdentity, "app.example", credential, time.Now().UTC().Add(2*time.Hour)); err == nil {
+		t.Fatal("expired credential accepted")
+	}
+}
+
+func newApplicationAuthTestHandler(t *testing.T, allowed []string, identityHeaders bool, next http.Handler) http.Handler {
+	t.Helper()
+	tunnelIdentity := applicationAuthTestIdentity()
+	handler, err := NewApplicationAuth(next, tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, AllowedWallets: allowed, IdentityHeaders: identityHeaders})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
+}
+
+func applicationAuthTestIdentity() types.Identity {
+	return types.Identity{Name: "application-auth-test", Address: "0x0000000000000000000000000000000000000001", TokenSecret: strings.Repeat("k", 32)}
+}
+
+func applicationAuthTestWallet(t *testing.T, digit string) identity.LocalAuthority {
+	t.Helper()
+	resolved, err := identity.ResolveSecp256k1Identity(strings.Repeat("0", 63) + digit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved.Name = "application-auth-test"
+	return identity.NewLocalAuthority(resolved)
+}
+
+func applicationAuthTestTime() time.Time {
+	return time.Now().UTC()
+}

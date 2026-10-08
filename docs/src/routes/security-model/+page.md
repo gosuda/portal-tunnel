@@ -5,7 +5,55 @@ description: How Portal keeps tenant traffic opaque to relay operators.
 
 # Security Model
 
-Portal is designed so relay operators do not receive tenant traffic plaintext.
+Ordinary uncached HTTPS tunnels keep tenant traffic opaque to relay operators.
+Raw port transports and opt-in static caching have different trust boundaries.
+
+## Opt-in Static Cache
+
+`portal expose --serve ./dist --cache` explicitly permits selected relays to
+store the site's files and terminate browser TLS. Cached connections therefore
+expose HTTP headers and content to the serving relay. If that connection falls
+back to the live origin, it still trusts the relay; browser-to-origin end-to-end
+TLS is not restored on an already terminated connection.
+
+Only the identity-bound canonical hostname is cacheable. Friendly hostnames
+are reusable, first-come aliases, so they remain live-origin routes and do not
+serve retained content after the origin disconnects.
+
+Use explicit `--relays` with `--discovery=false` to choose exactly which relays
+receive the files. Cache mode cannot be combined with `--ban-mitm`.
+Ordinary uncached HTTPS tunnels retain the tenant TLS path described below.
+See [cache configuration](/configuration#static-relay-cache) for expiry and limits.
+
+## Application Access Authentication
+
+`portal expose 3000 --auth siwe` places a SIWE login gate at the local tunnel
+HTTP endpoint. `--auth credential` uses Portal-native credentials instead. Those
+credentials are signed by a distinct
+key derived from the tunnel identity and bind the subject, tunnel identity,
+host, and expiry. Redeem URLs place the credential in the URL fragment, then
+exchange it at the tunnel endpoint for the same tunnel-local session cookie.
+The session cannot outlive the credential.
+
+Credential signing keys, SIWE challenges, session signing keys, cookies,
+subjects, and application plaintext remain outside the relay control plane.
+SIWE challenges expire after two minutes; signed sessions expire after at most
+24 hours.
+
+The auth gate wraps the complete HTTP router, including static files and x402
+routes. Portal removes client-supplied `X-Portal-User` and `X-Portal-Auth`
+headers before routing and only restores verified values when
+`--auth-identity-headers` is enabled. It also consumes the Portal session cookie
+at the gate, so upstream applications receive their own cookies but never the
+`__Host-portal_access` credential. Application auth cannot be combined with
+relay caching or raw TCP/UDP exposure.
+
+API clients may submit the signed credential in
+`X-Portal-Access-Credential`. The tunnel validates it on every request and
+removes the header before routing, so the upstream never receives the bearer
+credential. When a request also carries a Portal session cookie, the explicit
+credential header is authoritative; an invalid credential is rejected instead
+of falling back to the session.
 
 ## Tenant TLS
 
@@ -21,31 +69,35 @@ Client browser
 
 Tenant TLS terminates on the SDK side. The local service receives the decrypted stream from the tunnel process, while the relay only handles routing metadata and ciphertext.
 
+<div id="browser-wasm-transport"></div>
+
+### Browser/WASM transport
+
+For an ordinary uncached exposure, running the SDK in WebAssembly changes the
+reverse carrier, not the tenant TLS boundary. The browser connector reaches the
+relay through WebSocket and carries reverse connections as yamux streams, but
+the encrypted tenant stream still terminates in the SDK runtime. The relay
+terminates the outer WebSocket TLS and observes multiplexing metadata, while
+tenant HTTP headers, bodies, and session keys remain protected by the normal
+tenant TLS path.
+
+Each logical yamux stream is authorized with the current short-lived reverse
+capability before the relay can offer it to the lease. Keeping a WebSocket open
+does not extend an expired capability's authority to open new streams.
+
+Browser runtimes support HTTPS handler exposure only. Raw TCP, UDP, overlay,
+and the native MITM self-probe require socket capabilities that the browser
+runtime does not provide.
+
 ## Keyless Signing
 
-For relay-hosted names, the SDK builds a tenant-facing TLS server config backed by the relay's `/v1/sign` endpoint. The relay signs handshake digests with its certificate key, but it does not receive the negotiated tenant TLS session keys.
+For relay-hosted names, the SDK terminates tenant TLS with a `keyless_tls` t13server backed by the relay's `/v1/sign` endpoint. The relay signs handshake transcripts with its certificate key, but it does not receive the negotiated tenant TLS session keys.
 
 Relay API TLS is separate from tenant TLS:
 
 - Relay API HTTPS protects `/sdk/*`, `/discovery`, `/api/admin`, installers, and `/v1/sign`.
 - Tenant TLS protects end-user traffic for lease hostnames.
-- The internal QUIC datagram backhaul uses `SNI_PORT/udp` with ALPN `portal-tunnel`.
-
-## Tunnel ECH
-
-Tunnel ECH is optional and disabled by default. A normal stream tunnel uses its public hostname as the TLS `ServerName`; the relay routes the encrypted TLS stream by plaintext SNI without terminating tenant TLS. ECH adds hostname privacy, not the end-to-end TLS protection itself.
-
-Enable ECH for a CLI tunnel with `portal expose ... --ech` or set `ech = true` in a portal-agent tunnel. For ECH-enabled stream leases, the SDK derives an opaque route hostname and tenant ECH material from the tunnel identity. The relay receives the route hostname, a validated hash of the public fallback hostname, and the ECHConfigList. ECH-capable clients use the opaque route hostname as the outer SNI while the real tenant SNI remains inside the ECH-protected ClientHello handled by the SDK.
-
-ECH-enabled tunnels retain plaintext-SNI fallback routing. This lets clients that do not obtain or use the ECHConfigList connect through the public hostname without weakening tenant TLS passthrough. For multi-hop routes, the entry relay owns ECH and plaintext-SNI selection; later hops continue with hop tokens and passthrough forwarding.
-
-When `ACME_DNS_PROVIDER` is configured, Portal publishes the relay root HTTPS/ECH record. For each ECH-enabled stream lease it also creates or updates the public hostname A record and HTTPS record containing the `ech` parameter. Portal does not create tenant ECH DNS records for the default `ECH=false` mode. It removes tenant A and HTTPS/ECH records when the owning ECH lease is removed and no active replacement requires the hostname. Successful ECH HTTPS operations are not periodically rewritten; failed create, update, and delete operations remain pending for retry. Active ECH hostname A records are updated when Portal observes that the relay public IPv4 has changed.
-
-Without a DNS provider, operators must distribute the ECHConfigList through DNS HTTPS/SVCB or another ECH-capable bootstrap. Until clients obtain that configuration, they continue through the public hostname and plaintext-SNI fallback.
-
-Enabling UDP or a dedicated raw TCP port does not disable tunnel ECH on the
-default TLS hostname. The additional raw TCP and UDP endpoints do not themselves
-use ECH or add tenant TLS.
+- The QUIC datagram backhaul uses the public `PORTAL_URL` port with ALPN `portal-tunnel`; `SNI_PORT` controls the relay's corresponding local UDP listener.
 
 ## MITM Self-Probe
 
@@ -53,13 +105,16 @@ use ECH or add tenant TLS.
 
 Matching exporter values mean the sampled connection preserved passthrough. A mismatch is treated as suspected relay-side TLS termination and logged by default; use `--ban-mitm` when suspected TLS termination should ban the relay.
 
+The probe needs a tenant TLS stack that exports TLS keying material on both sides. The keyless TLS tenant terminator exports TLS 1.3 keying material, so the probe runs against tenant TLS exposures. Exposures started with `--ban-mitm` (or `BAN_MITM`) fail at start with an explicit error if the selected tenant TLS stack cannot export keying material, instead of running without the requested protection.
+
 ## Relay Visibility
+
+For ordinary uncached tunnels:
 
 | Relays can see | Relays cannot see |
 |---|---|
 | Source IP and timing metadata | HTTP headers or body |
-| Lease identity/public hostname, including SNI on the plaintext-SNI fallback path | Tenant TLS session keys |
-| Opaque route hostnames on the ECH path | ECH-protected inner SNI when clients use the distributed ECHConfigList |
+| Lease identity/public hostname, including SNI | Tenant TLS session keys |
 | Traffic volume and connection duration | Application payload on the stream path |
 | Requested TCP/UDP transport metadata | Local service plaintext on the tenant TLS stream path |
 | Raw TCP/UDP payloads when the application protocol is unencrypted | Application-level encrypted raw TCP/UDP payloads |
@@ -68,11 +123,11 @@ Raw TCP and UDP port transports do not add tenant TLS. Use application-level enc
 
 ## Identity
 
-Registration uses a SIWE challenge signed by the SDK's secp256k1 identity key. The key is loaded from `identity.json` either as a raw secp256k1 `private_key` or derived from a BIP-39 `mnemonic` and `derivation_path`. The relay then issues a lease-scoped ES256K access token used by renew, unregister, reverse connect, and QUIC datagram authentication.
+Registration uses a SIWE challenge signed by the SDK's secp256k1 identity key. The key is loaded from `identity.json` either as a raw secp256k1 `private_key` or derived from a BIP-39 `mnemonic` and `derivation_path`. The relay then issues a lease-scoped ES256K access token used by renew, unregister, keyless signing, and QUIC datagram authentication, plus a separate reverse-only capability for reverse streams.
 
-Relay admin token login and optional local agent wallet login are separate from
-lease registration. They do not replace the local tunnel identity used for
-registration.
+Application access login, relay admin token login, and optional local agent
+wallet login are separate from lease registration. They do not replace the
+local tunnel identity used for registration.
 
 ## Next Steps
 

@@ -2,620 +2,233 @@ package portal
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/json"
-	"encoding/pem"
-	"io"
-	"math/big"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strconv"
+	"net/netip"
+	"net/url"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/coder/websocket"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-var (
-	testLeasePortsMu sync.Mutex
-	testLeasePorts   = make(map[int]struct{})
-)
-
-func tempIdentityPath(t *testing.T) string {
-	t.Helper()
-	return t.TempDir()
-}
-
-func tempLeasePort(t *testing.T) int {
-	t.Helper()
-
-	for attempt := 0; attempt < 100; attempt++ {
-		probe, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("allocate probe port: %v", err)
-		}
-		_, portText, err := net.SplitHostPort(probe.Addr().String())
-		if closeErr := probe.Close(); closeErr != nil {
-			t.Fatalf("close probe port: %v", closeErr)
-		}
-		if err != nil {
-			t.Fatalf("parse probe port: %v", err)
-		}
-		start, err := strconv.Atoi(portText)
-		if err != nil {
-			t.Fatalf("parse probe port %q: %v", portText, err)
-		}
-		if start <= 0 || start > 65535 {
-			continue
-		}
-		if !reserveTestLeasePort(start) {
-			continue
-		}
-		if tempLeasePortAvailable(start) {
-			return start
-		}
-		releaseTestLeasePort(start)
-	}
-	t.Fatalf("could not find a free lease port")
-	return 0
-}
-
-func reserveTestLeasePort(port int) bool {
-	testLeasePortsMu.Lock()
-	defer testLeasePortsMu.Unlock()
-
-	if _, exists := testLeasePorts[port]; exists {
-		return false
-	}
-	testLeasePorts[port] = struct{}{}
-	return true
-}
-
-func releaseTestLeasePort(port int) {
-	testLeasePortsMu.Lock()
-	defer testLeasePortsMu.Unlock()
-
-	delete(testLeasePorts, port)
-}
-
-func tempLeasePortAvailable(port int) bool {
-	addr := ":" + strconv.Itoa(port)
-	tcpListener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return false
-	}
-	defer tcpListener.Close()
-
-	udpListener, err := net.ListenPacket("udp", addr)
-	if err != nil {
-		return false
-	}
-	defer udpListener.Close()
-
-	return true
-}
-
-func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *http.Client {
-	t.Helper()
-	client := utils.NewHTTPClient(
-		utils.WithHTTPTLSConfig(&tls.Config{InsecureSkipVerify: true}),
-	)
-	t.Cleanup(func() {
-		client.CloseIdleConnections()
-		cancel()
-		if err := server.Wait(); err != nil {
-			t.Fatalf("Wait() error = %v", err)
-		}
+func TestNewServerRejectsPortalURLCredentialsWithoutEchoingThem(t *testing.T) {
+	_, err := NewServer(ServerConfig{
+		PortalURL: "https://user:secret@localhost",
+		StateDir:  t.TempDir(),
 	})
-	return client
-}
-
-func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) {
-	t.Helper()
-
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
-	}
-
-	now := time.Now().UTC()
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(now.UnixNano()),
-		Subject: pkix.Name{
-			CommonName: baseDomain,
-		},
-		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(90 * 24 * time.Hour),
-		DNSNames:              []string{baseDomain, "*." + baseDomain},
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, template, template, privateKey.Public(), privateKey)
-	if err != nil {
-		t.Fatalf("CreateCertificate() error = %v", err)
-	}
-	keyDER, err := x509.MarshalECPrivateKey(privateKey)
-	if err != nil {
-		t.Fatalf("MarshalECPrivateKey() error = %v", err)
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-
-	if err := os.WriteFile(filepath.Join(keyDir, "fullchain.pem"), certPEM, 0o644); err != nil {
-		t.Fatalf("WriteFile(cert) error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(keyDir, "privatekey.pem"), keyPEM, 0o600); err != nil {
-		t.Fatalf("WriteFile(key) error = %v", err)
-	}
-}
-
-func TestRelayDiscoveryEnabledServesDiscoveryEnvelope(t *testing.T) {
-	t.Parallel()
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:        "https://portal.example.com",
-		IdentityPath:     tempIdentityPath(t),
-		DiscoveryEnabled: true,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, types.PathDiscovery, nil)
-	rec := httptest.NewRecorder()
-	server.handleRelayDiscovery(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET relay discovery status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	var envelope types.APIEnvelope[types.DiscoveryResponse]
-	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
-		t.Fatalf("json.Decode() error = %v", err)
-	}
-	if !envelope.OK || envelope.Data.ProtocolVersion != types.DiscoveryVersion {
-		t.Fatalf("discovery envelope = %+v, want ok discovery response", envelope)
-	}
-}
-
-func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
-	t.Parallel()
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:     "https://localhost:4017",
-		IdentityPath:  tempIdentityPath(t),
-		ACME:          acme.Config{KeyDir: t.TempDir()},
-		APIListenAddr: "127.0.0.1:0",
-		SNIListenAddr: "127.0.0.1:0",
-		MinPort:       40000,
-		MaxPort:       40000,
-		UDPEnabled:    true,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := server.Start(ctx, nil); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	client := newTestClient(t, cancel, server)
-
-	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
-	if err != nil {
-		t.Fatalf("GET /api/healthz error = %v", err)
-	}
-	defer healthResp.Body.Close()
-
-	if healthResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /api/healthz status = %d, want %d", healthResp.StatusCode, http.StatusOK)
-	}
-
-	var healthEnvelope types.APIEnvelope[map[string]string]
-	if err := json.NewDecoder(healthResp.Body).Decode(&healthEnvelope); err != nil {
-		t.Fatalf("decode /api/healthz response: %v", err)
-	}
-	if !healthEnvelope.OK || healthEnvelope.Data["status"] != "ok" {
-		t.Fatalf("GET /api/healthz response = %+v, want ok status", healthEnvelope)
-	}
-
-	signResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathV1Sign)
-	if err != nil {
-		t.Fatalf("GET /v1/sign error = %v", err)
-	}
-	defer signResp.Body.Close()
-
-	if signResp.StatusCode != http.StatusForbidden {
-		t.Fatalf("GET /v1/sign status = %d, want %d", signResp.StatusCode, http.StatusForbidden)
-	}
-}
-
-func TestServerStartEnablesPProfOnSeparateHTTPListener(t *testing.T) {
-	t.Parallel()
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:       "https://localhost:4017",
-		IdentityPath:    tempIdentityPath(t),
-		ACME:            acme.Config{KeyDir: t.TempDir()},
-		APIListenAddr:   "127.0.0.1:0",
-		SNIListenAddr:   "127.0.0.1:0",
-		PProfEnabled:    true,
-		PProfListenAddr: "127.0.0.1:0",
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := server.Start(ctx, nil); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	client := newTestClient(t, cancel, server)
-	if server.pprofListener == nil {
-		t.Fatal("pprofListener = nil, want listener")
-	}
-
-	resp, err := client.Get("http://" + utils.HostPortOrLoopback(server.pprofListener.Addr().String()) + "/debug/pprof/")
-	if err != nil {
-		t.Fatalf("GET /debug/pprof/ error = %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /debug/pprof/ status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-}
-
-func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
-	t.Parallel()
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:     "https://localhost:4017",
-		IdentityPath:  tempIdentityPath(t),
-		ACME:          acme.Config{KeyDir: t.TempDir()},
-		SNIPort:       4443,
-		APIListenAddr: "127.0.0.1:0",
-		SNIListenAddr: "127.0.0.1:0",
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := server.Start(ctx, nil); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	client := newTestClient(t, cancel, server)
-
-	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathSDKDomain)
-	if err != nil {
-		t.Fatalf("GET /sdk/domain error = %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /sdk/domain status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read /sdk/domain response: %v", err)
-	}
-
-	var envelope types.APIEnvelope[types.DomainResponse]
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		t.Fatalf("decode /sdk/domain response: %v", err)
-	}
-	if !envelope.OK {
-		t.Fatalf("GET /sdk/domain response = %+v, want ok=true", envelope)
-	}
-	if envelope.Data.ProtocolVersion != types.SDKVersion {
-		t.Fatalf("DomainResponse.ProtocolVersion = %q, want %q", envelope.Data.ProtocolVersion, types.SDKVersion)
-	}
-	if envelope.Data.ReleaseVersion != types.ReleaseVersion {
-		t.Fatalf("DomainResponse.ReleaseVersion = %q, want %q", envelope.Data.ReleaseVersion, types.ReleaseVersion)
-	}
-	if envelope.Data.X402.Enabled {
-		t.Fatalf("DomainResponse.X402.Enabled = true, want false")
-	}
-}
-
-func TestRegisterLeaseIncludesSNIPortForPublicIngress(t *testing.T) {
-	t.Parallel()
-
-	port := tempLeasePort(t)
-	server, err := NewServer(ServerConfig{
-		PortalURL:    "https://portal.example.com:4017",
-		IdentityPath: tempIdentityPath(t),
-		SNIPort:      4443,
-		MinPort:      port,
-		MaxPort:      port,
-		TCPEnabled:   true,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	record, resp, err := server.registry.Register(types.RegisterChallengeRequest{
-		Identity: types.Identity{
-			Name:    "demo-tcp",
-			Address: server.identity.Address,
-		},
-		TCPEnabled: true,
-	}, "203.0.113.10", "")
-	if err != nil {
-		t.Fatalf("registry.Register() error = %v", err)
-	}
-	t.Cleanup(func() {
-		record.Close()
-	})
-
-	if resp.SNIPort != server.config().SNIPort {
-		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, server.config().SNIPort)
-	}
-}
-
-func TestServerStartUsesManualCertificateWithoutACMEProvider(t *testing.T) {
-	t.Parallel()
-
-	keyDir := t.TempDir()
-	writeManualRelayCertificate(t, keyDir, "portal.example.com")
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:     "https://portal.example.com",
-		IdentityPath:  tempIdentityPath(t),
-		ACME:          acme.Config{KeyDir: keyDir},
-		APIListenAddr: "127.0.0.1:0",
-		SNIListenAddr: "127.0.0.1:0",
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := server.Start(ctx, nil); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	client := newTestClient(t, cancel, server)
-
-	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
-	if err != nil {
-		t.Fatalf("GET /api/healthz error = %v", err)
-	}
-	defer healthResp.Body.Close()
-
-	if healthResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /api/healthz status = %d, want %d", healthResp.StatusCode, http.StatusOK)
-	}
-}
-
-func TestServerStartRejectsMismatchedACMEBaseDomain(t *testing.T) {
-	t.Parallel()
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:     "https://portal.example.com",
-		IdentityPath:  tempIdentityPath(t),
-		ACME:          acme.Config{BaseDomain: "other.example.com", KeyDir: t.TempDir()},
-		APIListenAddr: "127.0.0.1:0",
-		SNIListenAddr: "127.0.0.1:0",
-		MinPort:       40000,
-		MaxPort:       40000,
-		UDPEnabled:    true,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	err = server.Start(context.Background(), nil)
 	if err == nil {
-		t.Fatal("Start() error = nil, want mismatch error")
+		t.Fatal("NewServer() error = nil, want credential rejection")
 	}
-	if !strings.Contains(err.Error(), "does not match portal root host") {
-		t.Fatalf("Start() error = %v, want base domain mismatch", err)
-	}
-}
-
-func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
-	t.Parallel()
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:    "https://portal.example.com",
-		IdentityPath: tempIdentityPath(t),
-		MinPort:      40000,
-		MaxPort:      40000,
-		UDPEnabled:   true,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	record, _, err := server.registry.Register(types.RegisterChallengeRequest{
-		Identity: types.Identity{
-			Name:    "Demo-App",
-			Address: server.identity.Address,
-		},
-	}, "203.0.113.10", "")
-	if err != nil {
-		t.Fatalf("registry.Register() error = %v", err)
-	}
-
-	wantHostname := "demo-app.portal.example.com"
-	if record.Hostname != wantHostname {
-		t.Fatalf("registry.Register() route hostname = %q, want %q", record.Hostname, wantHostname)
-	}
-
-	lease := server.registry.publicLease(record)
-	if lease.Name != "demo-app" {
-		t.Fatalf("publicLease().Name = %q, want %q", lease.Name, "demo-app")
-	}
-	if lease.Hostname != wantHostname {
-		t.Fatalf("publicLease().Hostname = %q, want %q", lease.Hostname, wantHostname)
+	if strings.Contains(err.Error(), "user") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("NewServer() error exposes PORTAL_URL credentials: %q", err)
 	}
 }
 
-func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
+func TestHTTPRedirectTargetValidation(t *testing.T) {
+	for _, target := range []string{"http://localhost:4017", "http://relay.example", "//relay.example", "https://user:pass@relay.example", "https://relay.example:0", "https://relay.example:65536", "https://relay.example:bad", "https://relay.example:", "https:///missing-host", "https://./"} {
+		t.Run(target, func(t *testing.T) {
+			if _, err := NormalizeHTTPRedirectConfig(types.HTTPRedirectConfig{Enabled: true}, target); err == nil {
+				t.Fatal("NormalizeHTTPRedirectConfig() error = nil, want invalid redirect target rejection")
+			}
+		})
+	}
+
+	// net/url accepts HTTPS schemes regardless of their spelling.
+	for _, hsts := range []bool{false, true} {
+		scheme := "HTTPS"
+		if hsts {
+			scheme = "hTtPs"
+		}
+		t.Run(scheme, func(t *testing.T) {
+			cfg, err := NormalizeHTTPRedirectConfig(types.HTTPRedirectConfig{
+				Enabled: true,
+				HSTS:    hsts,
+			}, scheme+"://localhost:4017/base/?configured=discarded#fragment")
+			if err != nil {
+				t.Fatalf("NormalizeHTTPRedirectConfig() error = %v, want %q scheme accepted", err, scheme)
+			}
+			if !cfg.Enabled || cfg.Addr != types.DefaultHTTPRedirectAddr || cfg.HSTS != hsts {
+				t.Fatalf("NormalizeHTTPRedirectConfig() cfg = %+v, want enabled config with default redirect address and hsts=%v", cfg, hsts)
+			}
+		})
+	}
+}
+
+func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 	t.Parallel()
 
-	port := tempLeasePort(t)
-	server, err := NewServer(ServerConfig{
-		PortalURL:    "https://portal.example.com",
-		IdentityPath: tempIdentityPath(t),
-		MinPort:      port,
-		MaxPort:      port,
-		UDPEnabled:   true,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
+	tests := []struct {
+		name          string
+		portalURL     string
+		localSNIPort  int
+		wantLocalPort int
+	}{
+		{"default ports", "https://relay.example.com", 0, 443},
+		{"local bind override", "https://relay.example.com", 8443, 8443},
+		{"explicit public port", "https://relay.example.com:9443", 443, 443},
+		{"unoverridden listener follows public port", "https://relay.example.com:9443", 0, 9443},
+		{"explicit override keeps mapped listener", "https://localhost:8443", 443, 443},
 	}
-	server.SetUDPPolicy(true, 0)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := ValidateServerConfig(ServerConfig{
+				PortalURL: tc.portalURL,
+				StateDir:  t.TempDir(),
+				SNIPort:   tc.localSNIPort,
+			})
+			if err != nil {
+				t.Fatalf("ValidateServerConfig() error = %v", err)
+			}
+			if got := cfg.SNIPort; got != tc.wantLocalPort {
+				t.Fatalf("ServerConfig.SNIPort = %d, want local port %d", got, tc.wantLocalPort)
+			}
+		})
+	}
+}
 
-	record, resp, err := server.registry.Register(types.RegisterChallengeRequest{
-		Identity: types.Identity{
-			Name:    "demo-udp",
-			Address: server.identity.Address,
-		},
+func TestRegisterLeaseWithUDPAndRawTCP(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	_, resp, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:   newTestLeaseIdentity(t, "demo"),
 		UDPEnabled: true,
-	}, "203.0.113.10", "")
+		TCPEnabled: true,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil)
 	if err != nil {
 		t.Fatalf("registry.Register() error = %v", err)
-	}
-	t.Cleanup(func() {
-		record.Close()
-	})
-
-	if record.stream == nil {
-		t.Fatal("stream = nil, want stream runtime")
-	}
-	if record.datagram == nil {
-		t.Fatal("datagram = nil, want datagram runtime")
-	}
-	if got := record.datagram.UDPPort(); got != port {
-		t.Fatalf("UDPPort() = %d, want %d", got, port)
-	}
-	if resp.SNIPort != server.config().SNIPort {
-		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, server.config().SNIPort)
-	}
-	if resp.UDPAddr == "" {
-		t.Fatal("RegisterResponse.UDPAddr = empty, want public udp address")
-	}
-}
-
-func TestRegisterLeaseCombinesECHWithUDPAndRawTCP(t *testing.T) {
-	t.Parallel()
-
-	port := tempLeasePort(t)
-	server, err := NewServer(ServerConfig{
-		PortalURL:    "https://portal.example.com",
-		IdentityPath: tempIdentityPath(t),
-		MinPort:      port,
-		MaxPort:      port,
-		UDPEnabled:   true,
-		TCPEnabled:   true,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-	server.SetUDPPolicy(true, 0)
-
-	publicHostname := "demo-ech.portal.example.com"
-	routeHostname := "ech-demo-ech.portal.example.com"
-	_, echConfigList, err := keyless.EncryptedClientHelloMaterials("test-seed", routeHostname)
-	if err != nil {
-		t.Fatalf("EncryptedClientHelloMaterials() error = %v", err)
-	}
-	record, resp, err := server.registry.Register(types.RegisterChallengeRequest{
-		Identity: types.Identity{
-			Name:    "demo-ech",
-			Address: server.identity.Address,
-		},
-		RouteHostname: routeHostname,
-		HostnameHash:  utils.HostnameHash(publicHostname),
-		ECHConfigList: echConfigList,
-		UDPEnabled:    true,
-		TCPEnabled:    true,
-	}, "203.0.113.10", "")
-	if err != nil {
-		t.Fatalf("registry.Register() error = %v", err)
-	}
-	t.Cleanup(record.Close)
-
-	if !record.hasECHDNSRecord() {
-		t.Fatal("hasECHDNSRecord() = false, want ECH on the default TLS route")
-	}
-	if record.datagram == nil || record.tcpPort == nil {
-		t.Fatalf("transport runtimes = datagram %v, tcp %v; want both", record.datagram != nil, record.tcpPort != nil)
 	}
 	if !resp.UDPEnabled || !resp.TCPEnabled || resp.UDPAddr == "" || resp.TCPAddr == "" {
 		t.Fatalf("RegisterResponse transports = %+v, want UDP and raw TCP endpoints", resp)
 	}
-	if lookedUp, ok := server.registry.Lookup(publicHostname); !ok || lookedUp != record {
-		t.Fatalf("Lookup(public hostname) = %v, %v, want ECH fallback lease", lookedUp, ok)
-	}
-	if lookedUp, ok := server.registry.Lookup(routeHostname); !ok || lookedUp != record {
-		t.Fatalf("Lookup(route hostname) = %v, %v, want ECH route lease", lookedUp, ok)
+	if _, ok := registry.Lookup("demo.example.com"); !ok {
+		t.Fatal("Lookup(derived public hostname) = false, want registered lease")
 	}
 }
 
-func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
+func TestRawPortsAreAllocatedPerIdentity(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	register := func(clientIP string) types.RegisterResponse {
+		t.Helper()
+		_, resp, err := registry.Register(types.RegisterChallengeRequest{
+			AllowCanonicalFallback: true,
+			Identity:               newTestLeaseIdentity(t, "shared"),
+			UDPEnabled:             true,
+			TCPEnabled:             true,
+		}, netip.MustParseAddr(clientIP), "", types.RelayDescriptor{}, nil)
+		if err != nil {
+			t.Fatalf("registry.Register() error = %v", err)
+		}
+		return resp
+	}
+
+	first := register("203.0.113.10")
+	second := register("203.0.113.11")
+	if first.UDPAddr == second.UDPAddr || first.TCPAddr == second.TCPAddr {
+		t.Fatalf("different identities shared raw endpoints: first=%+v second=%+v", first, second)
+	}
+}
+
+// A connector that cannot open a raw stream - a browser - reaches the reverse session
+// over a WebSocket, carrying the reverse capability as a subprotocol since the WebSocket
+// constructor cannot set headers.
+func TestConnectAcceptsWebSocketReverseSession(t *testing.T) {
 	t.Parallel()
 
-	server, err := NewServer(ServerConfig{
-		PortalURL:     "https://localhost:4017",
-		IdentityPath:  tempIdentityPath(t),
-		ACME:          acme.Config{KeyDir: t.TempDir()},
-		APIListenAddr: "127.0.0.1:0",
-		SNIListenAddr: "127.0.0.1:0",
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
+	_, relayURL, capability := newConnectTestRelay(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := server.Start(ctx, nil); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	client := newTestClient(t, cancel, server)
-
-	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathDiscovery)
+	socket, _, err := websocket.Dial(ctx, wsURL(relayURL), &websocket.DialOptions{
+		Subprotocols: []string{types.ReverseSubprotocol, capability},
+	})
 	if err != nil {
-		t.Fatalf("GET relay discovery error = %v", err)
+		t.Fatalf("Dial() error = %v, want an accepted reverse session", err)
 	}
-	defer resp.Body.Close()
+	t.Cleanup(func() { _ = socket.CloseNow() })
 
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET relay discovery status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	// Only the marker comes back, so the handshake response does not echo the credential.
+	if got := socket.Subprotocol(); got != types.ReverseSubprotocol {
+		t.Fatalf("Subprotocol() = %q, want %q", got, types.ReverseSubprotocol)
 	}
-	if server.config().DiscoveryEnabled {
-		t.Fatal("cfg.DiscoveryEnabled = true, want false without configured discovery service")
+}
+
+// The WebSocket carrier takes its capability only from the subprotocols, beside the
+// marker; the raw carrier's header does not admit it.
+func TestConnectRejectsWebSocketWithoutCapability(t *testing.T) {
+	t.Parallel()
+
+	_, relayURL, capability := newConnectTestRelay(t)
+	for name, opts := range map[string]*websocket.DialOptions{
+		"no capability": {Subprotocols: []string{types.ReverseSubprotocol}},
+		"no marker":     {Subprotocols: []string{capability}},
+		"header only": {
+			Subprotocols: []string{types.ReverseSubprotocol},
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		socket, _, err := websocket.Dial(ctx, wsURL(relayURL), opts)
+		cancel()
+		if err == nil {
+			_ = socket.CloseNow()
+			t.Errorf("%s: Dial() error = nil, want the session refused", name)
+		}
 	}
+}
+
+// The session is admitted for one lease and ends with it.
+func TestConnectEndsWebSocketSessionWithTheLease(t *testing.T) {
+	t.Parallel()
+
+	server, relayURL, capability := newConnectTestRelay(t)
+	lease, err := server.registry.admitReverseCapability(capability)
+	if err != nil {
+		t.Fatalf("admitReverseCapability() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	session, err := transport.DialReverseMux(ctx, relayURL, capability)
+	if err != nil {
+		t.Fatalf("DialReverseMux() error = %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	lease.Close()
+	select {
+	case <-session.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("reverse session still open after its lease closed")
+	}
+}
+
+func newConnectTestRelay(t *testing.T) (*Server, *url.URL, string) {
+	t.Helper()
+
+	registry := newTestRegistry(t, false, false)
+	_, registered, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "browser"),
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	server := &Server{registry: registry}
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server.HandleConnect(w, r, netip.MustParseAddr("203.0.113.10"))
+	}))
+	t.Cleanup(relay.Close)
+
+	relayURL, err := url.Parse(relay.URL + types.PathSDKConnect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server, relayURL, registered.ReverseEndpoint.Capability
+}
+
+func wsURL(relayURL *url.URL) string {
+	return strings.Replace(relayURL.String(), "http://", "ws://", 1)
 }

@@ -1,0 +1,436 @@
+package gateway
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/types"
+)
+
+const (
+	applicationAuthLoginPath     = "/_portal/auth/login"
+	applicationAuthChallengePath = "/_portal/auth/challenge"
+	applicationAuthVerifyPath    = "/_portal/auth/verify"
+	applicationAuthRedeemPath    = "/_portal/auth/redeem"
+	applicationAuthLogoutPath    = "/_portal/auth/logout"
+	applicationAuthCookieName    = "__Host-portal_access"
+	applicationAuthSessionTTL    = 24 * time.Hour
+	applicationAuthBodyLimit     = 64 << 10
+)
+
+const applicationAuthSIWELoginPage = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in to Portal</title><style>
+:root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#eef2ff;font:16px/1.5 system-ui,sans-serif}.card{width:min(30rem,calc(100% - 3rem));padding:2rem;border:1px solid #334155;border-radius:1rem;background:#111827;box-shadow:0 1.5rem 4rem #0008}h1{margin:0 0 .5rem;font-size:1.6rem}p{color:#cbd5e1}button{width:100%;padding:.8rem 1rem;border:0;border-radius:.6rem;background:#6366f1;color:white;font:inherit;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}#status{min-height:1.5rem;color:#fca5a5;font-size:.9rem}
+</style></head><body><main class="card"><h1>Sign in to continue</h1><p>This application is protected by Portal. Connect an Ethereum wallet and sign the one-time message.</p><button id="signin">Connect wallet</button><p id="status" role="alert"></p></main>
+<script>
+const button=document.querySelector('#signin'),status=document.querySelector('#status');
+const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')?value:'/'};
+button.addEventListener('click',async()=>{button.disabled=true;status.textContent='';try{
+if(!window.ethereum)throw new Error('No Ethereum wallet was found in this browser.');
+const accounts=await window.ethereum.request({method:'eth_requestAccounts'});const address=accounts&&accounts[0];if(!address)throw new Error('The wallet did not provide an account.');
+const challengeResponse=await fetch('/_portal/auth/challenge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address})});const challenge=await challengeResponse.json();if(!challengeResponse.ok)throw new Error(challenge.error||'Could not create a sign-in challenge.');
+const signature=await window.ethereum.request({method:'personal_sign',params:[challenge.message,address]});
+const verifyResponse=await fetch('/_portal/auth/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challenge_id:challenge.challenge_id,message:challenge.message,signature})});const result=await verifyResponse.json();if(!verifyResponse.ok)throw new Error(result.error||'The signature could not be verified.');location.assign(next());
+}catch(error){status.textContent=error&&error.message?error.message:String(error);button.disabled=false;}});
+</script></body></html>`
+
+const applicationAuthCredentialLoginPage = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in to Portal</title><style>
+:root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#eef2ff;font:16px/1.5 system-ui,sans-serif}.card{width:min(30rem,calc(100% - 3rem));padding:2rem;border:1px solid #334155;border-radius:1rem;background:#111827;box-shadow:0 1.5rem 4rem #0008}h1{margin:0 0 .5rem;font-size:1.6rem}p{color:#cbd5e1}textarea,button{box-sizing:border-box;width:100%;padding:.8rem 1rem;border-radius:.6rem;font:inherit}textarea{min-height:7rem;background:#0b1020;color:#eef2ff;border:1px solid #475569;resize:vertical}button{margin-top:.75rem;border:0;background:#6366f1;color:white;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}#status{min-height:1.5rem;color:#fca5a5;font-size:.9rem}
+</style></head><body><main class="card"><h1>Sign in to continue</h1><p>This application is protected by Portal. Paste the access credential provided by its owner.</p><textarea id="credential" aria-label="Access credential" placeholder="pcred_..."></textarea><button id="signin">Sign in</button><p id="status" role="alert"></p></main>
+<script>
+const button=document.querySelector('#signin'),input=document.querySelector('#credential'),status=document.querySelector('#status');
+const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')?value:'/'};
+const redeem=async()=>{button.disabled=true;status.textContent='';try{const credential=input.value.trim();if(!credential)throw new Error('An access credential is required.');const response=await fetch('/_portal/auth/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential})});const result=await response.json();if(!response.ok)throw new Error(result.error||'The credential could not be verified.');location.assign(next());}catch(error){status.textContent=error&&error.message?error.message:String(error);button.disabled=false;}};
+button.addEventListener('click',redeem);const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('credential')){input.value=fragment.get('credential');history.replaceState(null,'',location.pathname+location.search);redeem();}
+</script></body></html>`
+
+// ApplicationAuthConfig configures the tunnel-local application access gate.
+type ApplicationAuthConfig struct {
+	Provider        string
+	AllowedWallets  []string
+	IdentityHeaders bool
+}
+
+type applicationAuth struct {
+	next            http.Handler
+	provider        string
+	tunnelIdentity  types.Identity
+	signingKey      []byte
+	credentialKey   []byte
+	siwe            *siweauth.Authenticator
+	identityHeaders bool
+}
+
+type applicationAuthClaims struct {
+	Subject   string `json:"sub"`
+	Provider  string `json:"auth,omitempty"`
+	Host      string `json:"host"`
+	ExpiresAt int64  `json:"exp"`
+}
+
+type applicationAuthChallengeRequest struct {
+	Address string `json:"address"`
+}
+
+type applicationAuthChallengeResponse struct {
+	ChallengeID string    `json:"challenge_id"`
+	Message     string    `json:"message"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+type applicationAuthVerifyRequest struct {
+	ChallengeID string `json:"challenge_id"`
+	Message     string `json:"message"`
+	Signature   string `json:"signature"`
+}
+
+type applicationAuthRedeemRequest struct {
+	Credential string `json:"credential"`
+}
+
+// NewApplicationAuth protects the complete HTTP gateway with tunnel-local
+// authentication. Its reserved login endpoints are the only bypass paths.
+func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg ApplicationAuthConfig) (http.Handler, error) {
+	if next == nil {
+		return nil, errors.New("application auth handler is required")
+	}
+	signingKey, err := identity.DeriveToken(tunnelIdentity, "application-access-auth")
+	if err != nil {
+		return nil, fmt.Errorf("derive application auth signing key: %w", err)
+	}
+	provider, err := NormalizeApplicationAuthProvider(cfg.Provider)
+	if err != nil {
+		return nil, err
+	}
+	var siwe *siweauth.Authenticator
+	if provider == ApplicationAuthProviderSIWE {
+		siwe, err = siweauth.New(siweauth.Config{AllowedAddresses: cfg.AllowedWallets, AllowAnyAddress: len(cfg.AllowedWallets) == 0, Statement: "Sign in to this Portal application", ChallengePrefix: "pac_"})
+		if err != nil {
+			return nil, err
+		}
+	} else if len(cfg.AllowedWallets) != 0 {
+		return nil, errors.New("allowed wallets require the siwe application auth provider")
+	}
+	credentialKey, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
+	if err != nil {
+		return nil, fmt.Errorf("derive application credential key: %w", err)
+	}
+	return &applicationAuth{
+		next:            next,
+		provider:        provider,
+		tunnelIdentity:  tunnelIdentity,
+		signingKey:      []byte(signingKey),
+		credentialKey:   []byte(credentialKey),
+		siwe:            siwe,
+		identityHeaders: cfg.IdentityHeaders,
+	}, nil
+}
+
+func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	credential := strings.TrimSpace(r.Header.Get(types.HeaderAccessCredential))
+	r.Header.Del(types.HeaderAccessCredential)
+	r.Header.Del("X-Portal-User")
+	r.Header.Del("X-Portal-Auth")
+
+	switch r.URL.Path {
+	case applicationAuthLoginPath:
+		a.serveLogin(w, r)
+	case applicationAuthChallengePath:
+		a.serveChallenge(w, r)
+	case applicationAuthVerifyPath:
+		a.serveVerify(w, r)
+	case applicationAuthRedeemPath:
+		a.serveRedeem(w, r)
+	case applicationAuthLogoutPath:
+		a.serveLogout(w, r)
+	default:
+		subject, provider, ok := a.authenticate(r, credential)
+		if !ok {
+			a.requireLogin(w, r)
+			return
+		}
+		stripApplicationAuthCookie(r)
+		if a.identityHeaders {
+			r.Header.Set("X-Portal-User", subject)
+			r.Header.Set("X-Portal-Auth", provider)
+		}
+		a.next.ServeHTTP(w, r)
+	}
+}
+
+func stripApplicationAuthCookie(r *http.Request) {
+	cookies := r.Cookies()
+	r.Header.Del("Cookie")
+	for _, cookie := range cookies {
+		if cookie.Name != applicationAuthCookieName {
+			r.AddCookie(cookie)
+		}
+	}
+}
+
+func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.Method == http.MethodHead {
+		return
+	}
+	page := applicationAuthSIWELoginPage
+	if a.provider == ApplicationAuthProviderCredential {
+		page = applicationAuthCredentialLoginPage
+	}
+	_, _ = io.WriteString(w, page)
+}
+
+func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request) {
+	if a.provider != ApplicationAuthProviderSIWE {
+		a.writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !sameOrigin(r) {
+		a.writeJSONError(w, http.StatusForbidden, "request origin is not allowed")
+		return
+	}
+	var req applicationAuthChallengeRequest
+	if err := decodeApplicationAuthJSON(w, r, &req); err != nil {
+		a.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	host := strings.TrimSpace(r.Host)
+	now := time.Now().UTC()
+	// Stateless issuance only fails per-request (address normalization or
+	// policy), so every failure is an unauthorized challenge request.
+	challenge, err := a.siwe.Issue(req.Address, host, "https://"+host, now)
+	if err != nil {
+		a.writeJSONError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	a.writeJSON(w, http.StatusOK, applicationAuthChallengeResponse{ChallengeID: challenge.ID, Message: challenge.Message, ExpiresAt: challenge.ExpiresAt})
+}
+
+func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
+	if a.provider != ApplicationAuthProviderSIWE {
+		a.writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !sameOrigin(r) {
+		a.writeJSONError(w, http.StatusForbidden, "request origin is not allowed")
+		return
+	}
+	var req applicationAuthVerifyRequest
+	if err := decodeApplicationAuthJSON(w, r, &req); err != nil {
+		a.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	address, err := a.siwe.Verify(req.ChallengeID, req.Message, req.Signature, r.Host, now)
+	if err != nil {
+		a.writeJSONError(w, http.StatusUnauthorized, "wallet signature is invalid")
+		return
+	}
+	if err := a.setSession(w, address, ApplicationAuthProviderSIWE, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
+		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]string{"address": address})
+}
+
+func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
+	if a.provider != ApplicationAuthProviderCredential {
+		a.writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !sameOrigin(r) {
+		a.writeJSONError(w, http.StatusForbidden, "request origin is not allowed")
+		return
+	}
+	var req applicationAuthRedeemRequest
+	if err := decodeApplicationAuthJSON(w, r, &req); err != nil {
+		a.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, req.Credential, now)
+	if err != nil {
+		a.writeJSONError(w, http.StatusUnauthorized, "application credential is invalid or expired")
+		return
+	}
+	expiresAt := time.Unix(claims.ExpiresAt, 0)
+	if sessionExpiry := now.Add(applicationAuthSessionTTL); sessionExpiry.Before(expiresAt) {
+		expiresAt = sessionExpiry
+	}
+	if err := a.setSession(w, claims.Subject, ApplicationAuthProviderCredential, strings.TrimSpace(r.Host), now, expiresAt); err != nil {
+		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]string{"subject": claims.Subject})
+}
+
+func (a *applicationAuth) serveLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || !sameOrigin(r) {
+		a.writeJSONError(w, http.StatusForbidden, "logout requires a same-origin POST")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: applicationAuthCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *applicationAuth) authenticate(r *http.Request, credential string) (string, string, bool) {
+	if credential != "" {
+		if a.provider != ApplicationAuthProviderCredential {
+			return "", "", false
+		}
+		claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
+		if err == nil {
+			return claims.Subject, ApplicationAuthProviderCredential, true
+		}
+		return "", "", false
+	}
+	return a.authenticateSession(r)
+}
+
+func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, bool) {
+	cookie, err := r.Cookie(applicationAuthCookieName)
+	if err != nil {
+		return "", "", false
+	}
+	var claims applicationAuthClaims
+	if err := decodeSignedApplicationAuthJSON(a.signingKey, cookie.Value, &claims); err != nil || !strings.EqualFold(claims.Host, strings.TrimSpace(r.Host)) || time.Now().UTC().Unix() >= claims.ExpiresAt {
+		return "", "", false
+	}
+	provider := claims.Provider
+	if provider != a.provider {
+		return "", "", false
+	}
+	if provider == ApplicationAuthProviderSIWE {
+		address, err := identity.NormalizeEVMAddress(claims.Subject)
+		if err != nil || a.siwe == nil || !a.siwe.AddressAllowed(address) {
+			return "", "", false
+		}
+		return address, provider, true
+	}
+	subject, err := normalizeApplicationAuthSubject(claims.Subject)
+	if err != nil {
+		return "", "", false
+	}
+	return subject, provider, true
+}
+
+func (a *applicationAuth) issueSession(subject, provider, host string, expiresAt time.Time) (string, error) {
+	return encodeSignedApplicationAuthJSON(a.signingKey, applicationAuthClaims{Subject: subject, Provider: provider, Host: host, ExpiresAt: expiresAt.Unix()})
+}
+
+func (a *applicationAuth) setSession(w http.ResponseWriter, subject, provider, host string, now, expiresAt time.Time) error {
+	token, err := a.issueSession(subject, provider, host, expiresAt)
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, &http.Cookie{Name: applicationAuthCookieName, Value: token, Path: "/", MaxAge: max(1, int(expiresAt.Sub(now).Seconds())), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	return nil
+}
+
+func encodeSignedApplicationAuthJSON(key []byte, value any) (string, error) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signApplicationAuthPayload(key, payload)), nil
+}
+
+func decodeSignedApplicationAuthJSON(key []byte, token string, dst any) error {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return errors.New("invalid signed value")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return errors.New("invalid signed value")
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || !hmac.Equal(signature, signApplicationAuthPayload(key, payload)) {
+		return errors.New("invalid signed value")
+	}
+	return json.Unmarshal(payload, dst)
+}
+
+func signApplicationAuthPayload(key, payload []byte) []byte {
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(payload)
+	return mac.Sum(nil)
+}
+
+func (a *applicationAuth) requireLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		next := r.URL.RequestURI()
+		if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+			next = "/"
+		}
+		http.Redirect(w, r, applicationAuthLoginPath+"?next="+url.QueryEscape(next), http.StatusSeeOther)
+		return
+	}
+	a.writeJSONError(w, http.StatusUnauthorized, "authentication required")
+}
+
+func sameOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	return strings.EqualFold(origin, "https://"+strings.TrimSpace(r.Host))
+}
+
+func decodeApplicationAuthJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, applicationAuthBodyLimit)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return errors.New("invalid JSON request")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("request must contain one JSON value")
+	}
+	return nil
+}
+
+func (a *applicationAuth) writeJSONError(w http.ResponseWriter, status int, message string) {
+	a.writeJSON(w, status, map[string]string{"error": message})
+}
+
+func (a *applicationAuth) writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}

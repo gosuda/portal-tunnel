@@ -1,9 +1,12 @@
 package utils
 
 import (
+	"cmp"
 	"net"
 	"net/url"
 	"strings"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var exposeNameOpeners = []string{
@@ -42,27 +45,29 @@ const (
 )
 
 // DefaultExposeName generates a deterministic 3-word DNS label from a target
-// address and seed using FNV-1a hashing. The algorithm matches the frontend
-// implementation in frontend/src/lib/exposeName.ts:buildDefaultExposeName.
+// address and seed using FNV-1a hashing, dropping the third word when the label
+// would exceed types.CanonicalLeaseNameMaxLength. The algorithm matches the
+// frontend implementation in frontend/src/lib/exposeName.ts:buildDefaultExposeName.
 func DefaultExposeName(target, rawSeed string) (string, error) {
 	seed := strings.TrimSpace(rawSeed)
 	if cut, ok := strings.CutPrefix(seed, "cli_"); ok {
 		seed = cut
 	}
-	if seed == "" {
-		seed = "portal"
-	}
+	seed = cmp.Or(seed, "portal")
 
 	input := []byte(seed + "|" + normalizeExposeTarget(target))
 	first := fnv1a32(input, 0x811c9dc5)
 	second := fnv1a32(input, 0x9e3779b9)
 	third := fnv1a32(input, 0x85ebca6b)
 
-	label := strings.Join([]string{
-		exposeNameOpeners[int(first&0xff)%len(exposeNameOpeners)],
-		exposeNameCenters[int(second&0xff)%len(exposeNameCenters)],
-		exposeNameClosers[int(third&0xff)%len(exposeNameClosers)],
-	}, "-")
+	opener := exposeNameOpeners[int(first&0xff)%len(exposeNameOpeners)]
+	center := exposeNameCenters[int(second&0xff)%len(exposeNameCenters)]
+	closer := exposeNameClosers[int(third&0xff)%len(exposeNameClosers)]
+
+	label := opener + "-" + center + "-" + closer
+	if len(label) > types.CanonicalLeaseNameMaxLength {
+		label = opener + "-" + center
+	}
 
 	return NormalizeDNSLabel(label)
 }
@@ -72,9 +77,7 @@ func DefaultExposeName(target, rawSeed string) (string, error) {
 func normalizeExposeTarget(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	candidate := trimmed
-	if candidate == "" {
-		candidate = defaultExposeTargetPort
-	}
+	candidate = cmp.Or(candidate, defaultExposeTargetPort)
 
 	if isAllDigits(candidate) {
 		return defaultExposeTargetHost + ":" + candidate
@@ -85,11 +88,10 @@ func normalizeExposeTarget(raw string) string {
 		if err != nil {
 			return candidate
 		}
-		if (u.Scheme == "http" || u.Scheme == "https") &&
-			u.Host != "" &&
-			(u.Path == "" || u.Path == "/") &&
-			u.RawQuery == "" &&
-			u.Fragment == "" {
+		isHTTPURL := u.Scheme == "http" || u.Scheme == "https"
+		hasRootPath := u.Path == "" || u.Path == "/"
+		hasNoSuffix := u.RawQuery == "" && u.Fragment == ""
+		if isHTTPURL && u.Host != "" && hasRootPath && hasNoSuffix {
 			return u.Host
 		}
 		return candidate
@@ -100,9 +102,7 @@ func normalizeExposeTarget(raw string) string {
 		return candidate
 	}
 	port := u.Port()
-	if port == "" {
-		port = "80"
-	}
+	port = cmp.Or(port, "80")
 	return net.JoinHostPort(u.Hostname(), port)
 }
 

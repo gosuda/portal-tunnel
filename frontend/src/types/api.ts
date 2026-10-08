@@ -27,10 +27,12 @@ export interface LeaseMetadata {
 
 export interface Lease {
   name?: string;
+  address: string;
   expires_at: string;
   first_seen_at: string;
   last_seen_at: string;
   hostname: string;
+  canonical_hostname: string;
   udp_enabled?: boolean;
   udp_addr?: string;
   tcp_enabled?: boolean;
@@ -41,19 +43,18 @@ export interface Lease {
 
 export interface PolicyLease extends Lease {
   identity_key: string;
-  address: string;
   bps: number;
   client_ip: string;
   reported_ip?: string;
   is_approved: boolean;
   is_banned: boolean;
   is_denied: boolean;
-  is_ip_banned: boolean;
 }
 
 export interface PublicStateResponse {
   leases?: Lease[];
   landing_page_enabled: boolean;
+  reputation?: ReputationSummary[];
 }
 
 export interface PolicyPortSettings {
@@ -116,9 +117,40 @@ export interface RelayDescriptor {
   api_https_addr?: string;
 }
 
+export interface IncompatibleRelayEntry {
+  url: string;
+  protocol_version?: string;
+  last_seen_at?: string;
+}
+
 export interface DiscoveryResponse {
   relays?: RelayDescriptor[];
+  incompatible_relays?: IncompatibleRelayEntry[];
+  protocol_version?: string;
+  release_version?: string;
+  relay_release_versions?: Record<string, string>;
 }
+
+export type ReputationVote = "up" | "down";
+
+// Every reputation response carries viewer_vote; anonymous viewers carry "".
+export type ViewerVote = ReputationVote | "";
+
+export interface ReputationSummary {
+  hostname: string;
+  up: number;
+  down: number;
+  total: number;
+  viewer_vote?: ViewerVote;
+}
+
+export interface ReputationVoteRequest {
+  hostname: string;
+  vote: ReputationVote;
+}
+
+// The vote response is the same aggregate as a directory row, hostname included.
+export type ReputationVoteResponse = ReputationSummary;
 
 export interface LeasePolicyUpdate {
   identity_key: string;
@@ -126,9 +158,4 @@ export interface LeasePolicyUpdate {
   is_approved?: boolean;
   is_banned?: boolean;
   is_denied?: boolean;
-}
-
-export interface IPPolicyUpdate {
-  ip: string;
-  is_banned: boolean;
 }

@@ -1,14 +1,17 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -16,7 +19,6 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -59,7 +61,7 @@ func runAgentRunCommand(args []string) error {
 		return err
 	}
 	if serviceMode {
-		ctx, stop := utils.SignalContext()
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 		defer stop()
 		return service.Run(ctx, cfg.Agent.ServiceName, func(ctx context.Context) error {
 			return agent.Run(ctx, cfg)
@@ -125,18 +127,18 @@ func runAgentRestartCommand(args []string) error {
 	return nil
 }
 
-func startAgentService(ctx context.Context, configPath string, cfg agent.Config) (types.AgentStatusResponse, error) {
+func startAgentService(ctx context.Context, configPath string, cfg agent.Config) (agent.AgentStatusResponse, error) {
 	configPath, err := filepath.Abs(strings.TrimSpace(configPath))
 	if err != nil {
-		return types.AgentStatusResponse{}, err
+		return agent.AgentStatusResponse{}, err
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return types.AgentStatusResponse{}, err
+		return agent.AgentStatusResponse{}, err
 	}
 	executable, err = filepath.Abs(executable)
 	if err != nil {
-		return types.AgentStatusResponse{}, err
+		return agent.AgentStatusResponse{}, err
 	}
 	def := service.Definition{
 		Name:        strings.TrimSpace(cfg.Agent.ServiceName),
@@ -147,16 +149,16 @@ func startAgentService(ctx context.Context, configPath string, cfg agent.Config)
 		WorkingDir:  filepath.Dir(configPath),
 	}
 	if err := service.Install(ctx, def); err != nil {
-		return types.AgentStatusResponse{}, fmt.Errorf("install portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
+		return agent.AgentStatusResponse{}, fmt.Errorf("install portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
 	}
 	if err := service.Start(ctx, cfg.Agent.ServiceName); err != nil {
-		return types.AgentStatusResponse{}, fmt.Errorf("start portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
+		return agent.AgentStatusResponse{}, fmt.Errorf("start portal agent service: %w; use --foreground when the OS service manager is unavailable", err)
 	}
 	return waitAgentStatus(ctx, cfg.Agent.StateDir)
 }
 
 func runAgentForeground(configPath string, cfg agent.Config) error {
-	ctx, stop := utils.SignalContext()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	if !agentCLIInteractive() {
@@ -230,9 +232,7 @@ func runAgentStopCommand(args []string) error {
 	stateDir = strings.TrimSpace(stateDir)
 	cfg := agent.Config{Agent: agent.AgentConfig{ServiceName: agent.DefaultServiceName}}
 	if configPath != "" || stateDir == "" {
-		if configPath == "" {
-			configPath = service.DefaultConfigPath()
-		}
+		configPath = cmp.Or(configPath, service.DefaultConfigPath())
 		var err error
 		cfg, err = agent.LoadExistingConfig(configPath)
 		if err != nil {
@@ -286,9 +286,7 @@ func runAgentDashboardCommand(args []string) error {
 
 	configPath = strings.TrimSpace(configPath)
 	stateDir = strings.TrimSpace(stateDir)
-	if configPath == "" {
-		configPath = service.DefaultConfigPath()
-	}
+	configPath = cmp.Or(configPath, service.DefaultConfigPath())
 	if stateDir == "" {
 		if _, err := os.Stat(configPath); err == nil {
 			cfg, err := agent.LoadExistingConfig(configPath)
@@ -305,7 +303,7 @@ func runAgentDashboardCommand(args []string) error {
 	return agent.RunDashboard(configPath, stateDir)
 }
 
-func waitAgentStatus(ctx context.Context, stateDir string) (types.AgentStatusResponse, error) {
+func waitAgentStatus(ctx context.Context, stateDir string) (agent.AgentStatusResponse, error) {
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
 	var lastErr error
@@ -317,7 +315,7 @@ func waitAgentStatus(ctx context.Context, stateDir string) (types.AgentStatusRes
 		lastErr = err
 		select {
 		case <-ctx.Done():
-			return types.AgentStatusResponse{}, fmt.Errorf("wait for portal agent status: %w", lastErr)
+			return agent.AgentStatusResponse{}, fmt.Errorf("wait for portal agent status: %w", lastErr)
 		case <-ticker.C:
 		}
 	}
@@ -329,7 +327,10 @@ func waitAgentStopped(ctx context.Context, stateDir string) error {
 	for {
 		_, err := agent.Status(ctx, stateDir)
 		if err != nil {
-			return nil
+			if errors.Is(err, agent.ErrNotRunning) {
+				return nil
+			}
+			return fmt.Errorf("check portal agent status while waiting for shutdown: %w", err)
 		}
 		select {
 		case <-ctx.Done():

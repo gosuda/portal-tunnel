@@ -11,14 +11,13 @@ import (
 type HTTPClientOption func(*http.Client)
 
 var (
-	// clone the default transport to avoid mutating it when applying options
-	// never modify or use baseTransport directly!!
+	// Each client clones this baseline before applying options.
 	baseTransport     = http.DefaultTransport.(*http.Transport).Clone()
 	DefaultHTTPClient = NewHTTPClient()
 )
 
 func NewHTTPClient(options ...HTTPClientOption) *http.Client {
-	client := &http.Client{Transport: defaultTransport()}
+	client := &http.Client{Transport: baseTransport.Clone()}
 	for _, option := range options {
 		if option != nil {
 			option(client)
@@ -62,50 +61,8 @@ func WithoutHTTP2() HTTPClientOption {
 	}
 }
 
-func WithHTTPResponseHeaderTimeout(timeout time.Duration) HTTPClientOption {
-	return func(c *http.Client) {
-		mustTransportOf(c).ResponseHeaderTimeout = timeout
-	}
-}
-
-func WithHTTPIdleConnTimeout(timeout time.Duration) HTTPClientOption {
-	return func(c *http.Client) {
-		mustTransportOf(c).IdleConnTimeout = timeout
-	}
-}
-
-func WithHTTPMaxIdleConns(maxIdleConns int) HTTPClientOption {
-	return func(c *http.Client) {
-		mustTransportOf(c).MaxIdleConns = maxIdleConns
-	}
-}
-
-func WithHTTPMaxIdleConnsPerHost(maxIdleConnsPerHost int) HTTPClientOption {
-	return func(c *http.Client) {
-		mustTransportOf(c).MaxIdleConnsPerHost = maxIdleConnsPerHost
-	}
-}
-
-func WithHTTPTLSHandshakeTimeout(timeout time.Duration) HTTPClientOption {
-	return func(c *http.Client) {
-		mustTransportOf(c).TLSHandshakeTimeout = timeout
-	}
-}
-
-func WithHTTPExpectContinueTimeout(timeout time.Duration) HTTPClientOption {
-	return func(c *http.Client) {
-		mustTransportOf(c).ExpectContinueTimeout = timeout
-	}
-}
-
 func WithHTTPCheckRedirect(checkRedirect func(req *http.Request, via []*http.Request) error) HTTPClientOption {
 	return func(c *http.Client) {
 		c.CheckRedirect = checkRedirect
 	}
-}
-
-func defaultTransport() *http.Transport {
-	transport := baseTransport.Clone()
-	// apply global config here if needed in the future
-	return transport
 }

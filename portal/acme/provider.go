@@ -3,18 +3,19 @@ package acme
 import (
 	"context"
 	"fmt"
-	"strings"
+	"path/filepath"
 
 	"github.com/go-acme/lego/v4/challenge"
+	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/cloudflare"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/embedded"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/gcloud"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/hetzner"
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/njalla"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/route53"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/vultr"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -36,17 +37,16 @@ type DNSProvider interface {
 	DeleteARecord(ctx context.Context, name string) error
 	EnsureTXTRecord(ctx context.Context, name, value string) error
 	DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error
-	EnsureHTTPSRecord(ctx context.Context, name string, record dnsrecord.HTTPSRecord) error
-	DeleteHTTPSRecord(ctx context.Context, name string) error
 	EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error)
 }
 
-func NewDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
-	switch strings.ToLower(strings.TrimSpace(providerType)) {
+func newDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
+	switch providerType {
 	case TypeEmbedded:
 		return embedded.New(embedded.Config{
 			BaseDomain: cfg.BaseDomain,
 			ListenAddr: fmt.Sprintf(":%d", cfg.EmbeddedDNSPort),
+			KeyPath:    filepath.Join(cfg.KeyDir, types.DNSSECKeyFileName),
 		})
 	case TypeCloudflare:
 		return cloudflare.New(cfg.CloudflareToken), nil
@@ -75,20 +75,39 @@ func NewDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 	}
 }
 
-func (m *Manager) syncDNS(ctx context.Context) error {
+// syncDNS returns the discovered address even if base-record updates fail, so
+// tracked-record maintenance can reuse it without repeating discovery.
+func (m *Manager) syncDNS(ctx context.Context) (string, error) {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
-		return nil
-	}
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
-	if err != nil {
-		return fmt.Errorf("detect public ip: %w", err)
+		return "", nil
 	}
 	_, _, manual, err := m.manualCertificateOverride()
 	if err != nil {
-		return err
+		return "", err
 	}
-	if manual {
-		return nil
+	// Manual certificates bypass external A-record management, but the embedded
+	// authoritative zone still needs its address before it can serve the relay.
+	if manual && m.dns.Name() != TypeEmbedded {
+		return "", nil
 	}
-	return m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP)
+	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	if err != nil {
+		if manual && m.dns.Name() == TypeEmbedded && ctx.Err() == nil {
+			// The embedded zone can serve without A records. Keep the usable
+			// certificate and let the existing short retry ticker initialize it.
+			m.commandMu.Lock()
+			m.pendingDNSAddress = true
+			m.commandMu.Unlock()
+			log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("defer embedded DNS address initialization until the next DNS retry; using manual certificate")
+			return "", nil
+		}
+		return "", fmt.Errorf("detect public ip: %w", err)
+	}
+	if err := m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP); err != nil {
+		return publicIP, err
+	}
+	m.commandMu.Lock()
+	m.pendingDNSAddress = false
+	m.commandMu.Unlock()
+	return publicIP, nil
 }

@@ -1,80 +1,72 @@
 package sdk
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/base32"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
-	defaultDialTimeout         = 15 * time.Second
-	defaultRequestTimeout      = 30 * time.Second
-	defaultHandshakeTimeout    = 30 * time.Second
-	defaultLeaseTTL            = 2 * time.Minute
-	defaultRenewBefore         = 30 * time.Second
-	defaultReadyTarget         = 2
-	defaultRetryWait           = 3 * time.Second
-	defaultHTTPShutdownTimeout = 5 * time.Second
+	defaultAPIBootstrapTimeout = 45 * time.Second
+	defaultAPIRequestTimeout   = 30 * time.Second
 )
 
 var errRelayIncompatible = errors.New("relay is incompatible")
 
-// relayRegistrationError records the exact relay that rejected a registration
-// operation. In multi-hop routes that can be a hop relay or the exit relay
-// that owns lease control; it is not necessarily the ingress listener key.
-type relayRegistrationError struct {
-	relayURL string
-	err      error
-}
+type apiClient struct {
+	relayURL *url.URL
 
-func (err *relayRegistrationError) Error() string {
-	return fmt.Sprintf("register relay at %s: %v", err.relayURL, err.err)
-}
-
-func (err *relayRegistrationError) Unwrap() error {
-	return err.err
+	mu             sync.RWMutex
+	http           *http.Client
+	transport      *http.Transport
+	tls            *tls.Config
+	releaseVersion string
+	cache          *types.StaticCacheLimits
 }
 
 // resetTransport tears down the cached HTTP client and TLS config so the next
 // API call creates fresh TCP connections. Call this after detecting a system
 // sleep/wake cycle where pooled connections are almost certainly dead.
-func (l *listener) resetTransport() {
-	if l.httpTransport != nil {
-		l.httpTransport.CloseIdleConnections()
+func (c *apiClient) resetTransport() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.transport != nil {
+		c.transport.CloseIdleConnections()
 	}
-	l.httpClient = nil
-	l.httpTransport = nil
-	l.tlsConfig = nil
+	c.http = nil
+	c.transport = nil
+	c.tls = nil
+	c.cache = nil
 }
 
-func (l *listener) initHTTPTransport(ctx context.Context) error {
-	if l.httpClient != nil {
+func (c *apiClient) initHTTPTransport(ctx context.Context) error {
+	c.mu.RLock()
+	if c.http != nil {
+		c.mu.RUnlock()
 		return nil
 	}
+	c.mu.RUnlock()
 
-	bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
+	bootstrapCtx, cancel := context.WithTimeout(ctx, defaultAPIBootstrapTimeout)
 	defer cancel()
 
-	tlsConfig, httpClient, httpTransport, err := utils.NewHTTPTLSClient(bootstrapCtx, l.relayURL, l.requestTimeout)
+	tlsConfig, httpClient, httpTransport, err := utils.NewHTTPTLSClient(bootstrapCtx, c.relayURL, defaultAPIRequestTimeout)
 	if err != nil {
 		return err
 	}
 
 	var domainResp types.DomainResponse
-	if err := utils.HTTPDoAPIPath(ctx, httpClient, l.relayURL, http.MethodGet, types.PathSDKDomain, nil, nil, &domainResp); err != nil {
+	if err := utils.HTTPDoAPIPath(ctx, httpClient, c.relayURL, http.MethodGet, types.PathSDKDomain, nil, nil, &domainResp); err != nil {
 		httpTransport.CloseIdleConnections()
 		return fmt.Errorf("check relay compatibility: %w", err)
 	}
@@ -84,286 +76,181 @@ func (l *listener) initHTTPTransport(ctx context.Context) error {
 		return fmt.Errorf("%w: relay sdk protocol version mismatch: relay=%q client=%q", errRelayIncompatible, protocolVersion, types.SDKVersion)
 	}
 
-	l.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
-
-	l.httpClient = httpClient
-	l.httpTransport = httpTransport
-	l.tlsConfig = tlsConfig
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.http != nil {
+		httpTransport.CloseIdleConnections()
+		return nil
+	}
+	c.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
+	c.cache = domainResp.Cache
+	c.http = httpClient
+	c.transport = httpTransport
+	c.tls = tlsConfig
 	return nil
 }
 
-func (l *listener) buildHopRoutes(hopPath []types.RelayDescriptor, publicHostname, routeHostname string, echConfigList []byte) ([]types.HopRoute, string, error) {
-	if len(hopPath) < 2 {
-		return nil, "", errors.New("multi-hop requires at least entry and exit relay urls")
-	}
-	hopRoutes := make([]types.HopRoute, 0, len(hopPath)-1)
-	var previousHopToken string
-	for i := 0; i < len(hopPath)-1; i++ {
-		token, err := identity.DeriveToken(
-			l.identity,
-			"hop-token",
-			publicHostname,
-			strconv.Itoa(i),
-			hopPath[i].APIHTTPSAddr,
-			hopPath[i+1].APIHTTPSAddr,
-		)
-		if err != nil {
-			return nil, "", err
-		}
-		forwardToken := "hpt_" + token
-		route := types.HopRoute{
-			RelayURL:     hopPath[i].APIHTTPSAddr,
-			ForwardRelay: hopPath[i+1],
-			ForwardToken: forwardToken,
-		}
-		if i == 0 {
-			if routeHostname == "" {
-				route.RouteHostname = publicHostname
-			} else {
-				route.PublicHostname = publicHostname
-				route.RouteHostname = routeHostname
-				route.HostnameHash = utils.HostnameHash(publicHostname)
-				route.ECHConfigList = bytes.Clone(echConfigList)
-			}
-			route.Metadata = l.metadataSnapshot()
-		} else {
-			route.MatchToken = previousHopToken
-		}
-		hopRoutes = append(hopRoutes, route)
-		previousHopToken = forwardToken
-	}
-	return hopRoutes, previousHopToken, nil
+// httpClient returns the cached HTTP client under the transport lock.
+// Callers must not mutate the returned client.
+func (c *apiClient) httpClient() *http.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.http
 }
 
-func (l *listener) registerLease(ctx context.Context, ttl time.Duration, udpEnabled, tcpEnabled bool) (types.RegisterResponse, []types.HopRoute, string, string, error) {
-	var exitHopToken string
-	var publicHostname string
-	var routeHostname string
-	var rootHostname string
-	var hopRoutes []types.HopRoute
-	multiHop := l.route.MultiHop()
-	var hopPath []types.RelayDescriptor
-	hasPortTransport := udpEnabled || tcpEnabled
-	registerIdentity := l.identity
-	if len(multiHop) > 0 {
-		if hasPortTransport {
-			return types.RegisterResponse{}, nil, "", "", errors.New("multi-hop does not support UDP or raw TCP")
-		}
-		if len(multiHop) < 2 {
-			return types.RegisterResponse{}, nil, "", "", errors.New("multi-hop requires at least entry and exit relay urls")
-		}
-		if l.relaySet == nil {
-			return types.RegisterResponse{}, nil, "", "", errors.New("multi-hop relay set is unavailable")
-		}
+// tlsConfigClone returns a cloned copy of the relay TLS config under
+// the transport lock, or nil if the transport has not been initialized.
+func (c *apiClient) tlsConfigClone() *tls.Config {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tls == nil {
+		return nil
+	}
+	return c.tls.Clone()
+}
 
-		now := time.Now().UTC()
-		hopPath = make([]types.RelayDescriptor, 0, len(multiHop))
-		for i, relayURL := range multiHop {
-			desc, ok := l.relaySet.OverlayRelayDescriptor(relayURL, now)
-			if !ok {
-				return types.RegisterResponse{}, nil, "", "", fmt.Errorf("multi-hop relay %d descriptor is unavailable", i)
-			}
-			hopPath = append(hopPath, desc)
-		}
+func (c *apiClient) relayReleaseVersion() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.releaseVersion
+}
 
-		rootHostname = utils.PortalRootHost(hopPath[0].APIHTTPSAddr)
-	} else {
-		rootHostname = utils.PortalRootHost(l.relayURL.String())
+func (c *apiClient) cacheLimits() (types.StaticCacheLimits, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.cache == nil {
+		return types.StaticCacheLimits{}, false
 	}
+	return *c.cache, true
+}
 
-	var err error
-	publicHostname, err = utils.LeaseHostname(l.identity.Name, rootHostname)
-	if err != nil {
-		return types.RegisterResponse{}, nil, "", "", err
-	}
-	if l.echEnabled {
-		routeToken, err := identity.DeriveToken(l.identity, "ech-route", publicHostname, rootHostname)
-		if err != nil {
-			return types.RegisterResponse{}, nil, "", "", err
-		}
-		routeSum := sha256.Sum256([]byte(routeToken))
-		routeLabel := "ech-" + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(routeSum[:20]))
-		routeHostname, err = utils.LeaseHostname(routeLabel, rootHostname)
-		if err != nil {
-			return types.RegisterResponse{}, nil, "", "", err
-		}
-	}
-	var echConfigList []byte
-	if l.echEnabled {
-		_, echConfigList, err = l.tenantECHMaterials(publicHostname, routeHostname)
-		if err != nil {
-			return types.RegisterResponse{}, nil, "", "", err
-		}
-	}
-
-	if len(multiHop) > 0 {
-		var err error
-		hopRoutes, exitHopToken, err = l.buildHopRoutes(hopPath, publicHostname, routeHostname, echConfigList)
-		if err != nil {
-			return types.RegisterResponse{}, nil, "", "", err
-		}
-	}
-
-	registerReq := types.RegisterChallengeRequest{
-		Identity:   registerIdentity,
-		Metadata:   l.metadataSnapshot(),
-		TTL:        int(ttl / time.Second),
-		UDPEnabled: udpEnabled,
-		TCPEnabled: tcpEnabled,
-		HopToken:   exitHopToken,
-	}
-	if l.echEnabled && len(multiHop) == 0 {
-		registerReq.RouteHostname = routeHostname
-		registerReq.HostnameHash = utils.HostnameHash(publicHostname)
-		registerReq.ECHConfigList = bytes.Clone(echConfigList)
+// register only performs the challenge and registration wire exchange.
+// The caller prepares lease metadata and capability flags beforehand.
+func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterResponse, error) {
+	if err := c.initHTTPTransport(ctx); err != nil {
+		return types.RegisterResponse{}, err
 	}
 
 	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge); err != nil {
-		return types.RegisterResponse{}, nil, "", "", err
-	}
-
-	authority, err := identity.NewLocalAuthority(l.identity)
-	if err != nil {
-		return types.RegisterResponse{}, nil, "", "", err
-	}
-	signature, err := authority.SignEthereumPersonalMessage(challenge.SIWEMessage)
-	if err != nil {
-		return types.RegisterResponse{}, nil, "", "", err
-	}
-
+	var request types.RegisterRequest
 	var resp types.RegisterResponse
-	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
-		ChallengeID:   challenge.ChallengeID,
-		SIWEMessage:   challenge.SIWEMessage,
-		SIWESignature: signature,
-		ReportedIP:    utils.ResolvePublicIP(ctx),
-	}, nil, &resp); err != nil {
-		return types.RegisterResponse{}, nil, "", "", err
+	for {
+		var err error
+		if request.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
+			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge)
+			if err == nil {
+				if challenge.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
+					return types.RegisterResponse{}, errors.New("relay returned an invalid or expired registration challenge")
+				}
+				signature, err := identity.NewLocalAuthority(registerReq.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
+				if err != nil {
+					return types.RegisterResponse{}, err
+				}
+				request = types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature, ReportedIP: reportedIP}
+				// Challenge issuance succeeded; keep this signed request until admission
+				// succeeds or the challenge expires. A 429 must not buy another challenge.
+				continue
+			}
+		} else {
+			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegister, request, nil, &resp)
+			if err == nil {
+				break
+			}
+		}
+		apiErr, ok := errors.AsType[*types.APIRequestError](err)
+		if !ok || !apiErr.IsRateLimited() {
+			return types.RegisterResponse{}, err
+		}
+		delay := apiErr.RetryAfter
+		if delay <= 0 {
+			delay = defaultRetryWait
+		}
+		if !utils.SleepOrDone(ctx, delay) {
+			return types.RegisterResponse{}, ctx.Err()
+		}
 	}
-	registeredIdentity, err := identity.NormalizeIdentity(resp.Identity)
+	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
+	if resp.AccessToken == "" {
+		return types.RegisterResponse{}, errors.New("relay did not return access token")
+	}
+	if resp.Identity.Key() != registerReq.Identity.Key() {
+		_ = c.unregister(context.Background(), resp.AccessToken)
+		return types.RegisterResponse{}, errors.New("relay returned mismatched lease identity")
+	}
+	resp.Hostname = utils.NormalizeHostname(resp.Hostname)
+	resp.CanonicalHostname = utils.NormalizeHostname(resp.CanonicalHostname)
+	if resp.CanonicalHostname == "" {
+		_ = c.unregister(context.Background(), resp.AccessToken)
+		return types.RegisterResponse{}, errors.New("relay did not return canonical hostname")
+	}
+	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
 	if err != nil {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken, hopRoutes)
-		return types.RegisterResponse{}, nil, "", "", err
+		_ = c.unregister(context.Background(), resp.AccessToken)
+		return types.RegisterResponse{}, err
 	}
-	if registeredIdentity.Key() != registerIdentity.Key() {
-		_ = l.unregisterLease(context.Background(), resp.AccessToken, hopRoutes)
-		return types.RegisterResponse{}, nil, "", "", errors.New("relay returned mismatched lease identity")
-	}
-	return resp, hopRoutes, publicHostname, routeHostname, nil
-}
-
-func (l *listener) renewRegisteredLease(ctx context.Context, ttl time.Duration, accessToken string) (types.RenewResponse, error) {
-	var resp types.RenewResponse
-	req := newRenewRequest(ttl, accessToken, utils.ResolvePublicIP(ctx), l.metadataSnapshot())
-	if err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKRenew, req, nil, &resp); err != nil {
-		return types.RenewResponse{}, err
-	}
+	resp.ReverseEndpoint = reverseEndpoint
 	return resp, nil
 }
 
-func newRenewRequest(ttl time.Duration, accessToken, reportedIP string, metadata types.LeaseMetadata) types.RenewRequest {
-	return types.RenewRequest{
-		AccessToken: accessToken,
-		TTL:         int(ttl / time.Second),
-		ReportedIP:  reportedIP,
-		Metadata:    metadata.Copy(),
+func (c *apiClient) renew(ctx context.Context, req types.RenewRequest) (types.RenewResponse, error) {
+	var resp types.RenewResponse
+	if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRenew, req, nil, &resp); err != nil {
+		return types.RenewResponse{}, err
 	}
+	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
+	if resp.AccessToken == "" {
+		return types.RenewResponse{}, errors.New("relay did not return renewed access token")
+	}
+	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
+	if err != nil {
+		return types.RenewResponse{}, err
+	}
+	resp.ReverseEndpoint = reverseEndpoint
+	return resp, nil
 }
 
-func (l *listener) unregisterLease(ctx context.Context, accessToken string, hopRoutes []types.HopRoute) error {
-	hopErr := l.unregisterHopRoutes(ctx, hopRoutes)
-	err := utils.HTTPDoAPIPath(ctx, l.httpClient, l.relayURL, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
+func (c *apiClient) requestReverseEndpoint(ctx context.Context, accessToken, failedURL string, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {
+	var endpoint types.ReverseEndpoint
+	req := types.ReverseEndpointRequest{AccessToken: accessToken, FailedURL: failedURL}
+	if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKReverse, req, nil, &endpoint); err != nil {
+		return types.ReverseEndpoint{}, err
+	}
+	endpoint, err := validateReverseEndpoint(endpoint, leaseExpiresAt)
+	if err != nil {
+		return types.ReverseEndpoint{}, err
+	}
+	return endpoint, nil
+}
+
+func validateReverseEndpoint(endpoint types.ReverseEndpoint, leaseExpiresAt time.Time) (types.ReverseEndpoint, error) {
+	endpoint.URL = strings.TrimSpace(endpoint.URL)
+	endpoint.Capability = strings.TrimSpace(endpoint.Capability)
+	if endpoint.URL == "" || endpoint.Capability == "" {
+		return types.ReverseEndpoint{}, errors.New("relay returned incomplete reverse endpoint")
+	}
+	parsed, err := url.Parse(endpoint.URL)
+	if err != nil || parsed.Host == "" || !strings.EqualFold(parsed.Scheme, "https") {
+		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.EscapedPath() != types.PathSDKConnect {
+		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint target")
+	}
+	if !endpoint.ExpiresAt.After(time.Now().UTC()) || endpoint.ExpiresAt.After(leaseExpiresAt) {
+		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint expiry")
+	}
+	endpoint.URL = parsed.String()
+	return endpoint, nil
+}
+
+func (c *apiClient) unregister(ctx context.Context, accessToken string) error {
+	err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
 		AccessToken: accessToken,
 	}, nil, nil)
-	return errors.Join(hopErr, err)
-}
-
-func (l *listener) registerHopRoutes(ctx context.Context, expiresAt time.Time, routes []types.HopRoute) (string, int, error) {
-	if l.relaySet == nil {
-		return "", 0, errors.New("multi-hop relay set is unavailable")
-	}
-	authority, err := identity.NewLocalAuthority(l.identity)
-	if err != nil {
-		return "", 0, err
-	}
-
-	now := time.Now().UTC()
-	for i := len(routes) - 1; i >= 0; i-- {
-		route := routes[i]
-		desc, ok := l.relaySet.OverlayRelayDescriptor(route.ForwardRelay.APIHTTPSAddr, now)
-		if !ok {
-			return "", 0, fmt.Errorf("multi-hop forward relay %d descriptor is unavailable", i)
-		}
-		route.ForwardRelay = desc
-		route.FirstSeenAt = expiresAt.Add(-30 * time.Second)
-		if i == 0 {
-			route.Metadata = l.metadataSnapshot()
-		}
-		route, err := auth.SignHopRoute(http.MethodPost, route, authority, expiresAt)
-		if err != nil {
-			return "", 0, err
-		}
-		relayURL, err := url.Parse(route.RelayURL)
-		if err != nil {
-			return "", 0, fmt.Errorf("parse hop route relay url: %w", err)
-		}
-		bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
-		_, client, transport, err := utils.NewHTTPTLSClient(bootstrapCtx, relayURL, l.requestTimeout)
-		cancel()
-		if err != nil {
-			return "", 0, &relayRegistrationError{relayURL: route.RelayURL, err: err}
-		}
-		var hopResp types.HopRouteResponse
-		if err := utils.HTTPDoAPIPath(ctx, client, relayURL, http.MethodPost, types.PathSDKHop, route, nil, &hopResp); err != nil {
-			transport.CloseIdleConnections()
-			return "", 0, &relayRegistrationError{relayURL: route.RelayURL, err: err}
-		}
-		transport.CloseIdleConnections()
-		if route.MatchToken != "" || route.RouteHostname == "" {
-			continue
-		}
-		if hopResp.AccessToken == "" {
-			return "", 0, errors.New("entry relay did not return access token")
-		}
-		if hopResp.SNIPort <= 0 {
-			return "", 0, errors.New("entry relay did not return sni port")
-		}
-		return hopResp.AccessToken, hopResp.SNIPort, nil
-	}
-	return "", 0, errors.New("entry hop route did not return access token")
-}
-
-func (l *listener) unregisterHopRoutes(ctx context.Context, routes []types.HopRoute) error {
-	var unregisterErr error
-	authority, err := identity.NewLocalAuthority(l.identity)
-	if err != nil {
-		return err
-	}
-	for _, route := range routes {
-		route, err := auth.SignHopRoute(http.MethodDelete, route, authority, time.Time{})
-		if err != nil {
-			unregisterErr = errors.Join(unregisterErr, err)
-			continue
-		}
-		relayURL, err := url.Parse(route.RelayURL)
-		if err != nil {
-			unregisterErr = errors.Join(unregisterErr, fmt.Errorf("parse hop route relay url: %w", err))
-			continue
-		}
-
-		bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
-		_, client, transport, err := utils.NewHTTPTLSClient(bootstrapCtx, relayURL, l.requestTimeout)
-		cancel()
-		if err != nil {
-			unregisterErr = errors.Join(unregisterErr, err)
-			continue
-		}
-		err = utils.HTTPDoAPIPath(ctx, client, relayURL, http.MethodDelete, types.PathSDKHop, route, nil, nil)
-		transport.CloseIdleConnections()
-		if err != nil {
-			unregisterErr = errors.Join(unregisterErr, err)
-		}
-	}
-	return unregisterErr
+	return err
 }

@@ -1,24 +1,12 @@
 package njalla
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 )
 
-func TestChallengeProviderRequiresToken(t *testing.T) {
-	t.Parallel()
-
-	provider := New("")
-	challengeProvider, err := provider.ChallengeProvider(context.Background())
-	if challengeProvider != nil {
-		t.Fatalf("ChallengeProvider() provider = %T, want nil", challengeProvider)
-	}
-	if err == nil || err.Error() != "njalla token is required" {
-		t.Fatalf("ChallengeProvider() error = %v, want local token error", err)
-	}
-}
-
+// The njalla API returns record ids as either a JSON string or a JSON number;
+// both forms must keep decoding.
 func TestRecordIDUnmarshal(t *testing.T) {
 	t.Parallel()
 

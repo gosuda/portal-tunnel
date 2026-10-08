@@ -9,14 +9,10 @@ import {
 let tunnelTerminal: vscode.Terminal | undefined;
 const defaultTunnelHost = "localhost:3000";
 
-interface RelaySelection {
-  relayUrls: string[];
-}
-
-export function activate(context: vscode.ExtensionContext) {
+export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand("portal.startTunnel", startTunnel),
-    vscode.commands.registerCommand("portal.startTunnelAdvanced", startTunnelAdvanced),
+    vscode.commands.registerCommand("portal.startTunnel", () => startTunnel(false)),
+    vscode.commands.registerCommand("portal.startTunnelAdvanced", () => startTunnel(true)),
     vscode.commands.registerCommand("portal.stopTunnel", stopTunnel),
     vscode.window.onDidCloseTerminal((t) => {
       if (t === tunnelTerminal) {
@@ -26,42 +22,27 @@ export function activate(context: vscode.ExtensionContext) {
   );
 }
 
-export function deactivate() {
+export function deactivate(): void {
   tunnelTerminal?.dispose();
 }
 
-async function startTunnel() {
+async function startTunnel(advanced: boolean): Promise<void> {
   const host = await promptHost();
   if (!host) { return; }
 
-  const relaySelection = await resolveRelaySelection(false);
-  if (!relaySelection) { return; }
-
-  runTunnelCommand({
-    host,
-    name: "",
-    relaySelection,
-    thumbnail: "",
-  });
-}
-
-async function startTunnelAdvanced() {
-  const host = await promptHost();
-  if (!host) { return; }
-
-  const name = await promptName();
+  const name = advanced ? await promptName() : "";
   if (name === undefined) { return; }
 
-  const relaySelection = await resolveRelaySelection(true);
-  if (!relaySelection) { return; }
+  const relayUrls = await resolveRelaySelection(advanced);
+  if (!relayUrls) { return; }
 
-  const thumbnail = await promptThumbnail();
+  const thumbnail = advanced ? await promptThumbnail() : "";
   if (thumbnail === undefined) { return; }
 
   runTunnelCommand({
     host,
     name,
-    relaySelection,
+    relayUrls,
     thumbnail,
   });
 }
@@ -69,15 +50,15 @@ async function startTunnelAdvanced() {
 function runTunnelCommand(args: {
   host: string;
   name: string;
-  relaySelection: RelaySelection;
+  relayUrls: string[];
   thumbnail: string;
-}) {
+}): void {
   let command: string;
   try {
     command = buildCommand({
       host: args.host,
       name: args.name,
-      relayList: args.relaySelection.relayUrls.join(","),
+      relayList: args.relayUrls.join(","),
       thumbnail: args.thumbnail,
     });
   } catch (error) {
@@ -94,7 +75,7 @@ function runTunnelCommand(args: {
   tunnelTerminal.sendText(command);
 }
 
-function stopTunnel() {
+function stopTunnel(): void {
   if (tunnelTerminal) {
     tunnelTerminal.dispose();
     tunnelTerminal = undefined;
@@ -125,21 +106,19 @@ async function promptName(): Promise<string | undefined> {
   });
 }
 
-async function resolveRelaySelection(interactive: boolean): Promise<RelaySelection | undefined> {
+async function resolveRelaySelection(interactive: boolean): Promise<string[] | undefined> {
   const config = vscode.workspace.getConfiguration("portal");
   const saved = config.get<string[]>("relayUrls") ?? [];
   if (saved.length > 0) {
-    const invalid = saved.find((url) => validateRelayUrl(url) !== undefined);
-    if (invalid) {
+    if (saved.some((url) => validateRelayUrl(url) !== undefined)) {
       vscode.window.showErrorMessage("portal.relayUrls must contain only valid https:// relay URLs.");
       return undefined;
     }
-    const relayUrls = saved.map((url) => url.trim());
-    return { relayUrls };
+    return saved.map((url) => url.trim());
   }
 
   if (!interactive) {
-    return { relayUrls: [] };
+    return [];
   }
 
   const choice = await vscode.window.showQuickPick([
@@ -160,7 +139,7 @@ async function resolveRelaySelection(interactive: boolean): Promise<RelaySelecti
   }
   if (choice.label === "Use default public registry") {
     vscode.window.showInformationMessage(`Portal will use the default public registry: ${defaultRelayRegistryURL}`);
-    return { relayUrls: [] };
+    return [];
   }
 
   const input = await vscode.window.showInputBox({
@@ -171,12 +150,11 @@ async function resolveRelaySelection(interactive: boolean): Promise<RelaySelecti
   if (!input) {
     return undefined;
   }
-  const relayUrl = input.trim();
-  return { relayUrls: [relayUrl] };
+  return [input.trim()];
 }
 
 async function promptThumbnail(): Promise<string | undefined> {
-  const result = await vscode.window.showInputBox({
+  return vscode.window.showInputBox({
     title: "Portal: Thumbnail URL (optional)",
     prompt: "Image URL to display as thumbnail. Leave empty to skip.",
     placeHolder: "https://example.com/image.png",
@@ -185,7 +163,6 @@ async function promptThumbnail(): Promise<string | undefined> {
       try { new URL(v.trim()); return undefined; } catch { return "Enter a valid URL or leave empty"; }
     },
   });
-  return result;
 }
 
 function createTunnelTerminal(): vscode.Terminal {

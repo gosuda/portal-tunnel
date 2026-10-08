@@ -2,18 +2,19 @@ package utils
 
 import (
 	"bytes"
+	"cmp"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
-	facilitatortypes "github.com/gosuda/x402-facilitator/types"
 )
 
 type APIErrorResponse struct {
@@ -39,35 +40,6 @@ func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 		OK:    false,
 		Error: &types.APIError{Code: code, Message: message},
 	})
-}
-
-func WritePaymentJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-
-func SetPaymentResponseHeaders(header http.Header, settled *facilitatortypes.PaymentSettleResponse) {
-	if header == nil || settled == nil {
-		return
-	}
-	raw, err := json.Marshal(settled)
-	if err != nil {
-		return
-	}
-	encoded := base64.StdEncoding.EncodeToString(raw)
-	header.Set(types.HeaderPaymentResponse, encoded)
-	header.Set(types.HeaderXPaymentResponse, encoded)
-}
-
-func StripPaymentHeaders(header http.Header) {
-	header.Del(types.HeaderXPayment)
-	header.Del(types.HeaderPaymentSignature)
-	header.Del(types.HeaderPaymentRequired)
-	header.Del(types.HeaderXPaymentRequired)
-	header.Del(types.HeaderPaymentResponse)
-	header.Del(types.HeaderXPaymentResponse)
 }
 
 func HandleAPICORS(w http.ResponseWriter, r *http.Request) bool {
@@ -123,9 +95,7 @@ func PublicURLForPath(r *http.Request, path string) string {
 	}
 	host, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Host"), ",")
 	host = strings.TrimSpace(host)
-	if host == "" {
-		host = strings.TrimSpace(r.Host)
-	}
+	host = cmp.Or(host, strings.TrimSpace(r.Host))
 	if host == "" {
 		return path
 	}
@@ -230,30 +200,31 @@ func DecodeAPIData(body []byte, out any) error {
 
 func DecodeAPIRequestError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	apiErr := &types.APIRequestError{StatusCode: resp.StatusCode, Message: strings.TrimSpace(string(body))}
+	retryAfter := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if seconds, err := strconv.ParseUint(retryAfter, 10, 31); err == nil {
+		apiErr.RetryAfter = time.Duration(seconds) * time.Second
+	} else if at, err := http.ParseTime(retryAfter); err == nil {
+		apiErr.RetryAfter = max(0, time.Until(at))
+	}
 	var envelope types.APIEnvelope[json.RawMessage]
 	if err := json.Unmarshal(body, &envelope); err == nil && !envelope.OK {
 		if envelope.Error == nil {
-			return &types.APIRequestError{
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("api request failed with status %d", resp.StatusCode),
-			}
-		}
-		return &types.APIRequestError{
-			StatusCode: resp.StatusCode,
-			Code:       envelope.Error.Code,
-			Message:    envelope.Error.Message,
+			apiErr.Message = fmt.Sprintf("api request failed with status %d", resp.StatusCode)
+		} else {
+			apiErr.Code = envelope.Error.Code
+			apiErr.Message = envelope.Error.Message
 		}
 	}
-
-	return &types.APIRequestError{
-		StatusCode: resp.StatusCode,
-		Message:    strings.TrimSpace(string(body)),
-	}
+	return apiErr
 }
 
 func DecodeJSONRequest[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (T, bool) {
 	dst, err := decodeJSONRequestBody[T](w, r, maxBytes)
 	if err != nil {
+		if writeRequestBodyTooLarge(w, err) {
+			return dst, false
+		}
 		WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return dst, false
 	}
@@ -263,6 +234,9 @@ func DecodeJSONRequest[T any](w http.ResponseWriter, r *http.Request, maxBytes i
 func DecodeJSONRequestAs[T any](w http.ResponseWriter, r *http.Request, maxBytes int64, invalid APIErrorResponse) (T, bool) {
 	dst, err := decodeJSONRequestBody[T](w, r, maxBytes)
 	if err != nil {
+		if writeRequestBodyTooLarge(w, err) {
+			return dst, false
+		}
 		invalid.Write(w)
 		return dst, false
 	}
@@ -273,10 +247,26 @@ func decodeJSONRequestBody[T any](w http.ResponseWriter, r *http.Request, maxByt
 	var dst T
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(&dst); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&dst); err != nil {
+		return dst, err
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return dst, errors.New("request body must contain a single JSON value")
+		}
 		return dst, err
 	}
 	return dst, nil
+}
+
+func writeRequestBodyTooLarge(w http.ResponseWriter, err error) bool {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); !ok {
+		return false
+	}
+	WriteAPIError(w, http.StatusRequestEntityTooLarge, types.APIErrorCodeInvalidRequest, "request body too large")
+	return true
 }
 
 func httpJSONRequest(payload any, headers http.Header) (io.Reader, http.Header, error) {

@@ -9,7 +9,7 @@ import "testing"
 func TestTunnelMetadataKeepsTheDiscoveredThumbnail(t *testing.T) {
 	tunnel := &managedTunnel{discoveredThumbnail: "https://cdn.example.com/card.png"}
 
-	got := tunnel.metadata(TunnelConfig{Name: "app"}).Thumbnail
+	got := tunnel.metadata(TunnelConfig{Name: "app", ThumbnailFromTarget: true}).Thumbnail
 	if got != "https://cdn.example.com/card.png" {
 		t.Fatalf("thumbnail = %q, want the discovered value to survive", got)
 	}
@@ -19,7 +19,7 @@ func TestTunnelMetadataKeepsTheDiscoveredThumbnail(t *testing.T) {
 // operator answered the question already.
 func TestTunnelMetadataPrefersTheConfiguredThumbnail(t *testing.T) {
 	tunnel := &managedTunnel{discoveredThumbnail: "https://cdn.example.com/discovered.png"}
-	cfg := TunnelConfig{Name: "app", Thumbnail: "https://example.com/explicit.png"}
+	cfg := TunnelConfig{Name: "app", Thumbnail: "https://example.com/explicit.png", ThumbnailFromTarget: true}
 
 	if got := tunnel.metadata(cfg).Thumbnail; got != "https://example.com/explicit.png" {
 		t.Fatalf("thumbnail = %q, want the configured value", got)
@@ -31,5 +31,49 @@ func TestTunnelMetadataLeavesThumbnailEmptyWithoutDiscovery(t *testing.T) {
 
 	if got := tunnel.metadata(TunnelConfig{Name: "app"}).Thumbnail; got != "" {
 		t.Fatalf("thumbnail = %q, want empty", got)
+	}
+}
+
+// Turning the opt-in off in a later update retires the discovered value with
+// it: the flag no longer applies, so neither does what it once found.
+func TestTunnelMetadataDropsDiscoveredThumbnailWhenOptInRemoved(t *testing.T) {
+	tunnel := &managedTunnel{discoveredThumbnail: "https://cdn.example.com/card.png"}
+
+	if got := tunnel.metadata(TunnelConfig{Name: "app"}).Thumbnail; got != "" {
+		t.Fatalf("thumbnail = %q, want empty once thumbnail_from_target is off", got)
+	}
+}
+
+// An explicit thumbnail must never sit in the discovered slot: a later update
+// that clears thumbnail would resurrect it from there. The store is gated on
+// discovery having actually applied.
+func TestRecordDiscoveredThumbnailIgnoresExplicitValue(t *testing.T) {
+	tunnel := &managedTunnel{}
+	tunnel.recordDiscoveredThumbnail(
+		TunnelConfig{Name: "app", Thumbnail: "https://example.com/explicit.png", ThumbnailFromTarget: true},
+		"https://example.com/explicit.png")
+
+	if got := tunnel.metadata(TunnelConfig{Name: "app", ThumbnailFromTarget: true}).Thumbnail; got != "" {
+		t.Fatalf("thumbnail = %q, want empty — the cleared explicit value must not come back", got)
+	}
+}
+
+func TestRecordDiscoveredThumbnailClearsWithoutOptIn(t *testing.T) {
+	tunnel := &managedTunnel{discoveredThumbnail: "https://cdn.example.com/old.png"}
+	tunnel.recordDiscoveredThumbnail(TunnelConfig{Name: "app"}, "")
+
+	if tunnel.discoveredThumbnail != "" {
+		t.Fatalf("discoveredThumbnail = %q, want cleared", tunnel.discoveredThumbnail)
+	}
+}
+
+func TestRecordDiscoveredThumbnailKeepsDiscoveryResult(t *testing.T) {
+	tunnel := &managedTunnel{}
+	tunnel.recordDiscoveredThumbnail(
+		TunnelConfig{Name: "app", ThumbnailFromTarget: true},
+		"https://cdn.example.com/card.png")
+
+	if got := tunnel.metadata(TunnelConfig{Name: "app", ThumbnailFromTarget: true}).Thumbnail; got != "https://cdn.example.com/card.png" {
+		t.Fatalf("thumbnail = %q, want the discovered value", got)
 	}
 }

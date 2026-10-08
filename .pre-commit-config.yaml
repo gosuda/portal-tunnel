@@ -19,7 +19,7 @@ repos:
       - id: fix-byte-order-marker
 
   - repo: https://github.com/golangci/golangci-lint
-    rev: v2.10.1
+    rev: v2.13.1
     hooks:
       - id: golangci-lint-config-verify
         name: golangci-lint-config-verify

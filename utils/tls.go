@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"cmp"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -10,11 +11,15 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Duration) (*tls.Config, *http.Client, *http.Transport, error) {
@@ -53,6 +58,9 @@ func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Durat
 	return rawTLSConfig, httpClient, mustTransportOf(httpClient), nil
 }
 
+// FetchEndpointCertificateChain returns the certificate chain presented by endpoint.
+// Browsers ask the relay for the public chain because their TLS stack does not expose
+// peer certificates; native runtimes read it directly from the TLS handshake.
 func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
 	raw := strings.TrimSpace(endpoint)
 	if raw == "" {
@@ -69,18 +77,34 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 	if !strings.EqualFold(u.Scheme, "https") {
 		return nil, errors.New("relay endpoint must use https")
 	}
+	if runtime.GOOS == "js" {
+		u.Path = types.PathSDKCertificateChain
+		u.RawPath = ""
+		u.RawQuery = ""
+		u.ForceQuery = false
+		u.Fragment = ""
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("fetch certificate chain: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("fetch certificate chain: unexpected status %d", resp.StatusCode)
+		}
+		return io.ReadAll(resp.Body)
+	}
 
 	host := u.Hostname()
 	if host == "" {
 		return nil, errors.New("endpoint hostname is empty")
 	}
 	port := u.Port()
-	if port == "" {
-		port = "443"
-	}
-	if serverName == "" {
-		serverName = host
-	}
+	port = cmp.Or(port, "443")
+	serverName = cmp.Or(serverName, host)
 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	rawConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))

@@ -6,7 +6,6 @@ import {
 import { classifyShareInput } from "@/lib/shareLink";
 import {
   buildTunnelCommand,
-  buildTunnelDisplayCommand,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 
@@ -63,6 +62,7 @@ interface TunnelCommandExtras {
   thumbnailURL?: string;
   enableUDP?: boolean;
   udpPort?: string;
+  os?: TunnelCommandOS;
 }
 
 export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
@@ -75,7 +75,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
   const [name, setName] = useState("");
   const [nameShuffleKey, setNameShuffleKey] = useState("default");
   const [copied, setCopied] = useState(false);
-  const [os, setOs] = useState<TunnelCommandOS>("unix");
+  const os = extras.os ?? "unix";
 
   const resolvedNameSeed = `${nameSeed}:${nameShuffleKey}`;
   const share = useMemo(() => classifyShareInput(target), [target]);
@@ -115,17 +115,13 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
       share.target,
     ]
   );
-  const copyCommand = useMemo(
+  const command = useMemo(
     () => buildTunnelCommand(commandOptions),
-    [commandOptions]
-  );
-  const displayCommand = useMemo(
-    () => buildTunnelDisplayCommand(commandOptions),
     [commandOptions]
   );
   const { installBlock, runBlock } = useMemo(
     () => {
-      const lines = displayCommand.split("\n");
+      const lines = command.split("\n");
       const installLineCount = os === "windows" ? 2 : 1;
 
       return {
@@ -133,7 +129,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
         runBlock: lines.slice(installLineCount).join("\n"),
       };
     },
-    [displayCommand, os]
+    [command, os]
   );
 
   useEffect(() => {
@@ -152,7 +148,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(copyCommand);
+      await navigator.clipboard.writeText(command);
       setCopied(true);
     } catch (error) {
       console.error("Failed to copy tunnel command", error);
@@ -176,7 +172,6 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
     name,
     copied,
     os,
-    setOs,
     generatedName,
     effectiveName,
     shareKind: share.kind,

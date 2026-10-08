@@ -94,7 +94,10 @@
 
 			<!-- Nav links (hidden on mobile, visible xl) -->
 			<nav class="hidden items-center gap-6 text-base font-semibold text-gray-500 xl:flex dark:text-gray-400">
-				<a href="{base}/what-is-portal" class="transition-colors {!isLandingPage && !isReference ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">
+				<a href="{base}/features" class="transition-colors {$page.url.pathname.includes('/features') ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">
+					Features
+				</a>
+				<a href="{base}/what-is-portal" class="transition-colors {!isLandingPage && !isReference && !$page.url.pathname.includes('/features') ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">
 					Guides
 				</a>
 				<a href="{base}/cli-reference" class="transition-colors {isReference ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">

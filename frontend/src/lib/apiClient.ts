@@ -1,5 +1,5 @@
 import { readAdminAuthToken } from "@/lib/adminAuthToken";
-import { BROWSER_API_PATHS, RELAY_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import type { APIEnvelope } from "@/types/api";
 
 export class APIClientError extends Error {
@@ -115,12 +115,11 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
     };
     const pathname = new URL(path, window.location.origin).pathname;
     const requiresAdminAuth =
-      isPathOrChild(pathname, BROWSER_API_PATHS.policy.root) ||
       isPathOrChild(pathname, RELAY_API_PATHS.policy.root) ||
       isPathOrChild(pathname, RELAY_API_PATHS.admin.root);
     if (
       requiresAdminAuth &&
-      pathname !== BROWSER_API_PATHS.admin.authLogin
+      pathname !== RELAY_API_PATHS.admin.authLogin
     ) {
       const token = readAdminAuthToken();
       if (token) {

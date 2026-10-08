@@ -1,15 +1,17 @@
 package types
 
 import (
-	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
 
 const (
-	IdentityKeySeparator  = ":"
-	RelayIdentityFilename = "identity.json"
-	RelayPolicyFilename   = "policy.json"
+	IdentityKeySeparator        = ":"
+	CanonicalLeaseNameMaxLength = 22
+	RelayIdentityFilename       = "identity.json"
+	RelayPolicyFilename         = "policy.json"
+	DNSSECKeyFileName           = "dnssec-csk.json"
 )
 
 type Identity struct {
@@ -34,29 +36,68 @@ func (i Identity) Copy() Identity {
 	}
 }
 
-type RelayIdentity struct {
-	Identity
-	WireGuardPublicKey       string `json:"-"`
-	WireGuardPrivateKey      string `json:"-"`
-	EncryptedClientHelloSeed string `json:"-"`
+// ServiceIdentityKey is the comparable in-process identity of a service.
+// String serialization belongs at API, persistence, token, and log boundaries.
+type ServiceIdentityKey struct {
+	name    string
+	address string
 }
 
-func (i RelayIdentity) Copy() RelayIdentity {
-	return RelayIdentity{
-		Identity:                 i.Identity.Copy(),
-		WireGuardPublicKey:       i.WireGuardPublicKey,
-		WireGuardPrivateKey:      i.WireGuardPrivateKey,
-		EncryptedClientHelloSeed: i.EncryptedClientHelloSeed,
+func NewServiceIdentityKey(name, address string) ServiceIdentityKey {
+	return ServiceIdentityKey{
+		name:    strings.TrimSpace(strings.ToLower(name)),
+		address: strings.TrimSpace(strings.ToLower(address)),
 	}
+}
+
+func ParseServiceIdentityKey(raw string) (ServiceIdentityKey, error) {
+	name, address, ok := strings.Cut(raw, IdentityKeySeparator)
+	if !ok || strings.Contains(address, IdentityKeySeparator) {
+		return ServiceIdentityKey{}, fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
+	}
+	key := NewServiceIdentityKey(name, address)
+	if !key.Valid() {
+		return ServiceIdentityKey{}, fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
+	}
+	return key, nil
+}
+
+func (k ServiceIdentityKey) Valid() bool {
+	return k.name != "" && k.address != ""
+}
+
+func (k ServiceIdentityKey) String() string {
+	if k.name == "" && k.address == "" {
+		return ""
+	}
+	return k.name + IdentityKeySeparator + k.address
+}
+
+// CanonicalIdentityKey returns the canonical identity key for the given name
+// and address: both parts are canonicalized, the result is "" when both parts
+// are empty, and "name:address" otherwise.
+func CanonicalIdentityKey(name, address string) string {
+	return NewServiceIdentityKey(name, address).String()
+}
+
+// ParseIdentityKey parses a raw identity key in "name:address" form and
+// returns its canonical form. The key is split on the first separator and both
+// parts are canonicalized; parsing fails when the raw value does not contain
+// exactly one separator or either part is empty after canonicalization.
+func ParseIdentityKey(raw string) (string, error) {
+	key, err := ParseServiceIdentityKey(raw)
+	if err != nil {
+		return "", err
+	}
+	return key.String(), nil
+}
+
+func (i Identity) ServiceKey() ServiceIdentityKey {
+	return NewServiceIdentityKey(i.Name, i.Address)
 }
 
 func (i Identity) Key() string {
-	name := strings.TrimSpace(strings.ToLower(i.Name))
-	address := strings.TrimSpace(strings.ToLower(i.Address))
-	if name == "" && address == "" {
-		return ""
-	}
-	return name + IdentityKeySeparator + address
+	return i.ServiceKey().String()
 }
 
 type LeaseMetadata struct {
@@ -78,87 +119,42 @@ func (m LeaseMetadata) Copy() LeaseMetadata {
 }
 
 type Lease struct {
-	Name        string        `json:"name,omitempty"`
-	ExpiresAt   time.Time     `json:"expires_at"`
-	FirstSeenAt time.Time     `json:"first_seen_at"`
-	LastSeenAt  time.Time     `json:"last_seen_at"`
-	Hostname    string        `json:"hostname"`
-	UDPEnabled  bool          `json:"udp_enabled,omitempty"`
-	UDPAddr     string        `json:"udp_addr,omitempty"`
-	TCPEnabled  bool          `json:"tcp_enabled,omitempty"`
-	TCPAddr     string        `json:"tcp_addr,omitempty"`
-	Metadata    LeaseMetadata `json:"metadata"`
-	Ready       int           `json:"ready"`
+	Name              string        `json:"name,omitempty"`
+	Address           string        `json:"address"`
+	ExpiresAt         time.Time     `json:"expires_at"`
+	FirstSeenAt       time.Time     `json:"first_seen_at"`
+	LastSeenAt        time.Time     `json:"last_seen_at"`
+	Hostname          string        `json:"hostname"`
+	CanonicalHostname string        `json:"canonical_hostname"`
+	UDPEnabled        bool          `json:"udp_enabled,omitempty"`
+	UDPAddr           string        `json:"udp_addr,omitempty"`
+	TCPEnabled        bool          `json:"tcp_enabled,omitempty"`
+	TCPAddr           string        `json:"tcp_addr,omitempty"`
+	Metadata          LeaseMetadata `json:"metadata"`
+	Ready             int           `json:"ready"`
 }
 
 type PolicyLease struct {
 	Lease
 	IdentityKey string `json:"identity_key,omitempty"`
-	Address     string `json:"address,omitempty"`
 	BPS         int64  `json:"bps"`
 	ClientIP    string `json:"client_ip"`
 	ReportedIP  string `json:"reported_ip,omitempty"`
 	IsApproved  bool   `json:"is_approved"`
 	IsBanned    bool   `json:"is_banned"`
 	IsDenied    bool   `json:"is_denied"`
-	IsIPBanned  bool   `json:"is_ip_banned"`
 }
 
 type RelayDescriptor struct {
-	Address            string    `json:"address"`
-	Version            string    `json:"version"`
-	IssuedAt           time.Time `json:"issued_at"`
-	ExpiresAt          time.Time `json:"expires_at"`
-	APIHTTPSAddr       string    `json:"api_https_addr"`
-	WireGuardPublicKey string    `json:"wireguard_public_key,omitempty"`
-	WireGuardPort      int       `json:"wireguard_port,omitempty"`
-	SupportsOverlay    bool      `json:"supports_overlay,omitempty"`
-	SupportsUDP        bool      `json:"supports_udp,omitempty"`
-	SupportsTCP        bool      `json:"supports_tcp,omitempty"`
-	ActiveConnections  int64     `json:"active_connections,omitempty"`
-	TCPBPS             float64   `json:"tcp_bps,omitempty"`
-	Signature          string    `json:"signature,omitempty"`
-}
-
-func (desc RelayDescriptor) HasOverlayPeer() bool {
-	return desc.SupportsOverlay &&
-		strings.TrimSpace(desc.WireGuardPublicKey) != "" &&
-		desc.WireGuardPort > 0 &&
-		desc.WireGuardPort <= 65535
-}
-
-// CanonicalBytes returns the deterministic byte representation of a relay
-// descriptor used for signing and signature verification.
-//
-// The encoding is JSON over a fixed struct schema (no maps, no omitempty),
-// which guarantees field order and presence regardless of input variation.
-func CanonicalBytes(desc RelayDescriptor) ([]byte, error) {
-	canonical := struct {
-		Address            string  `json:"address"`
-		Version            string  `json:"version"`
-		IssuedAtUnixNano   int64   `json:"issued_at_unix_nano"`
-		ExpiresAtUnixNano  int64   `json:"expires_at_unix_nano"`
-		APIHTTPSAddr       string  `json:"api_https_addr"`
-		WireGuardPublicKey string  `json:"wireguard_public_key"`
-		WireGuardPort      int     `json:"wireguard_port"`
-		SupportsOverlay    bool    `json:"supports_overlay"`
-		SupportsUDP        bool    `json:"supports_udp"`
-		SupportsTCP        bool    `json:"supports_tcp"`
-		ActiveConnections  int64   `json:"active_connections"`
-		TCPBPS             float64 `json:"tcp_bps"`
-	}{
-		Address:            desc.Address,
-		Version:            desc.Version,
-		IssuedAtUnixNano:   desc.IssuedAt.UTC().UnixNano(),
-		ExpiresAtUnixNano:  desc.ExpiresAt.UTC().UnixNano(),
-		APIHTTPSAddr:       desc.APIHTTPSAddr,
-		WireGuardPublicKey: desc.WireGuardPublicKey,
-		WireGuardPort:      desc.WireGuardPort,
-		SupportsOverlay:    desc.SupportsOverlay,
-		SupportsUDP:        desc.SupportsUDP,
-		SupportsTCP:        desc.SupportsTCP,
-		ActiveConnections:  desc.ActiveConnections,
-		TCPBPS:             desc.TCPBPS,
-	}
-	return json.Marshal(canonical)
+	Address           string    `json:"address"`
+	Version           string    `json:"version"`
+	IssuedAt          time.Time `json:"issued_at"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	APIHTTPSAddr      string    `json:"api_https_addr"`
+	IVNPDestination   string    `json:"ivnp_destination,omitempty"`
+	SupportsUDP       bool      `json:"supports_udp,omitempty"`
+	SupportsTCP       bool      `json:"supports_tcp,omitempty"`
+	ActiveConnections int64     `json:"active_connections,omitempty"`
+	TCPBPS            float64   `json:"tcp_bps,omitempty"`
+	Signature         string    `json:"signature,omitempty"`
 }

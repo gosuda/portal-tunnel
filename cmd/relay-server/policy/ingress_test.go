@@ -1,0 +1,132 @@
+package policy
+
+import (
+	"net"
+	"net/http/httptest"
+	"net/netip"
+	"slices"
+	"testing"
+)
+
+func TestParseTrustedProxyPrefixesDeduplicatesMaskedNetworks(t *testing.T) {
+	got, err := parseTrustedProxyPrefixes("192.0.2.7/24, 192.0.2.0/24, 2001:db8::1/32, ::ffff:192.0.2.0/120")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []netip.Prefix{
+		netip.MustParsePrefix("192.0.2.0/24"),
+		netip.MustParsePrefix("2001:db8::/32"),
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("parseTrustedProxyPrefixes() = %v, want %v", got, want)
+	}
+}
+
+func TestClientIPDoesNotTrustImplicitProxies(t *testing.T) {
+	ingress, err := NewIngress(true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, peer := range []string{
+		"127.0.0.1", "10.0.0.9", "172.16.0.9", "192.168.0.9",
+		"169.254.0.9", "100.64.0.9", "::1", "fd00::9", "fe80::9",
+		"203.0.113.9",
+	} {
+		t.Run(peer, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/connect", nil)
+			req.RemoteAddr = net.JoinHostPort(peer, "12345")
+			for _, claimed := range []string{"198.51.100.1", "198.51.100.2"} {
+				req.Header.Set("X-Forwarded-For", claimed)
+				req.Header.Set("X-Real-IP", claimed)
+				if got := ingress.ClientIP(req); got != peer {
+					t.Fatalf("claimed IP %q changed source key to %q, want socket peer %q", claimed, got, peer)
+				}
+			}
+		})
+	}
+}
+
+func TestClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		cidrs   string
+		peer    string
+		xff     string
+		xri     string
+		want    string
+	}{
+		{name: "explicit IPv4 proxy", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "198.51.100.1", want: "198.51.100.1"},
+		{name: "private sibling", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.3", xff: "198.51.100.1", xri: "198.51.100.2", want: "172.31.240.3"},
+		{name: "headers disabled", cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "198.51.100.1", xri: "198.51.100.2", want: "172.31.240.2"},
+		{name: "explicit IPv6 proxy", enabled: true, cidrs: "172.31.240.2/32,fd00::2/128", peer: "fd00::2", xff: "2001:db8::1", want: "2001:db8::1"},
+		{name: "forwarded IPv4 with port", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "198.51.100.7:54321", want: "198.51.100.7"},
+		{name: "forwarded IPv6 with port", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "[2001:db8::7]:54321", want: "2001:db8::7"},
+		{name: "IPv6 sibling", enabled: true, cidrs: "fd00::2/128", peer: "fd00::3", xff: "2001:db8::1", xri: "2001:db8::2", want: "fd00::3"},
+		{name: "real IP fallback", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "invalid", xri: "198.51.100.2", want: "198.51.100.2"},
+		{name: "invalid headers", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "invalid", xri: "invalid", want: "172.31.240.2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ingress, err := NewIngress(tc.enabled, tc.cidrs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest("GET", "/api/connect", nil)
+			req.RemoteAddr = net.JoinHostPort(tc.peer, "12345")
+			req.Header.Set("X-Forwarded-For", tc.xff)
+			req.Header.Set("X-Real-IP", tc.xri)
+			if got := ingress.ClientIP(req); got != tc.want {
+				t.Fatalf("client IP = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The relay's ingress rejects an unparseable proxy CIDR allowlist with the
+// same parse the config report reports, so a deployment cannot call a list
+// valid that startup rejects.
+func TestNewIngressRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
+	if _, err := NewIngress(false, "192.0.2.0/24,not-a-cidr"); err == nil {
+		t.Fatal("NewIngress() error = nil, want error for invalid trusted proxy CIDR")
+	}
+	if _, err := NewIngress(false, "192.0.2.0/24,2001:db8::/32"); err != nil {
+		t.Fatalf("NewIngress() error = %v, want nil for valid CIDR list", err)
+	}
+	if _, err := NewIngress(false, ""); err != nil {
+		t.Fatalf("NewIngress() error = %v, want nil for empty CIDR list", err)
+	}
+}
+
+func TestClientIPRevokesRemovedProxy(t *testing.T) {
+	ingress, err := NewIngress(true, "172.31.240.2/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/api/connect", nil)
+	req.RemoteAddr = "172.31.240.2:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.1")
+	if got := ingress.ClientIP(req); got != "198.51.100.1" {
+		t.Fatalf("client IP before removing proxy = %q, want forwarded address", got)
+	}
+	// Reconfiguring the relay without that proxy revokes its trust.
+	ingress, err = NewIngress(true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ingress.ClientIP(req); got != "172.31.240.2" {
+		t.Fatalf("client IP after removing proxy = %q, want socket peer", got)
+	}
+}
+
+func TestClientIPRecognizesIPv4MappedTrustedProxyCIDR(t *testing.T) {
+	ingress, err := NewIngress(true, "::ffff:192.0.2.0/120")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/api/connect", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.7")
+	if got := ingress.ClientIP(req); got != "198.51.100.7" {
+		t.Fatalf("client IP = %q, want 198.51.100.7", got)
+	}
+}

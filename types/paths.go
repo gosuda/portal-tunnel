@@ -17,16 +17,10 @@ const (
 	PathPolicyPrefix = PathPolicy + "/"
 	PathPolicyState  = PathPolicy + "/state"
 	PathPolicyLeases = PathPolicy + "/leases"
-	PathPolicyIPs    = PathPolicy + "/ips"
 
 	PathInstallShell      = PathAPIPrefix + "/install.sh"
 	PathInstallPowerShell = PathAPIPrefix + "/install.ps1"
 	PathInstallBinPrefix  = PathAPIPrefix + "/install/bin/"
-
-	PathX402Facilitator = PathAPIPrefix + "/x402"
-	X402SupportedPath   = PathX402Facilitator + "/supported"
-	X402VerifyPath      = PathX402Facilitator + "/verify"
-	X402SettlePath      = PathX402Facilitator + "/settle"
 
 	PathV1Prefix = "/v1"
 	PathV1Sign   = PathV1Prefix + "/sign"
@@ -36,9 +30,11 @@ const (
 	PathSDKRegisterChallenge = PathSDKPrefix + "/register/challenge"
 	PathSDKRegister          = PathSDKPrefix + "/register"
 	PathSDKRenew             = PathSDKPrefix + "/renew"
+	PathSDKReverse           = PathSDKPrefix + "/reverse"
 	PathSDKUnregister        = PathSDKPrefix + "/unregister"
-	PathSDKHop               = PathSDKPrefix + "/hop"
 	PathSDKConnect           = PathSDKPrefix + "/connect"
+	PathSDKCertificateChain  = PathSDKPrefix + "/certificate-chain"
+	PathSDKCache             = PathSDKPrefix + "/cache"
 
 	PathDiscovery         = "/discovery"
 	PathDiscoveryAnnounce = PathDiscovery + "/announce"
@@ -48,9 +44,6 @@ const (
 var ReservedRootPrefixes = []string{PathAPIPrefix, PathSDKPrefix, PathDiscovery, PathV1Prefix}
 
 const (
-	X402PreparePath = "/x402/prepare"
-	X402ClientPath  = "/x402/client.js"
-
 	PathAgentPrefix        = "/agent"
 	PathAgentStatus        = PathAgentPrefix + "/status"
 	PathAgentShutdown      = PathAgentPrefix + "/shutdown"

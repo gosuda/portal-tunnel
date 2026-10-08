@@ -6,75 +6,50 @@ description: An introduction to Portal, a permissionless localhost tunnel and pu
 # What is Portal?
 
 Portal is an open-source tunnel system for publishing local services through
-public relay servers. It is built around one boundary: **relays provide
-transport, while your tunnel process owns the endpoint behavior**.
+public relay servers. It is built around one clear architectural boundary:
+**relays provide transport and routing, while your local tunnel process owns the endpoint behavior and security**.
 
-That means the normal HTTPS stream path does not work like a hosted reverse
-proxy. The relay routes by SNI and forwards the connection. Tenant TLS
-terminates in the tunnel process on your machine, so the relay does not receive
-tenant plaintext or session keys.
+Unlike traditional hosted reverse proxies:
+- The relay routes incoming connections by SNI and forwards raw streams.
+- Tenant TLS terminates inside the tunnel process on your local machine.
+- The relay operator never receives tenant plaintext, session keys, or application credentials.
 
-## Core Properties
+---
 
-- **Permissionless**: no SaaS account or API key is required.
-- **Trustless stream path**: tenant TLS terminates locally, not at the relay.
-- **Mode-per-service transport**: use HTTPS stream, routed HTTP, raw TCP, or UDP
-  depending on the service.
-- **Self-hostable relays**: use the public registry, explicit relay URLs, or your
-  own relay.
-- **Relay pools and multi-hop**: keep multiple relays connected or route through
-  an ordered relay chain.
-- **Local identity**: lease ownership is proven with a locally stored secp256k1
-  identity and challenge signing.
+## Core Principles
 
-## The Mental Model
+- **Permissionless**: No cloud SaaS account, billing setup, or API keys required.
+- **Trustless by default**: Tenant TLS terminates locally on your machine for default HTTPS stream exposures.
+- **Local cryptographic identity**: Leases and reservations are signed by a local secp256k1 key pair (`identity.json`).
+- **Flexible transport**: Expose web apps via HTTPS, mount multi-service microservices via routed HTTP, or allocate raw TCP and UDP ports.
+- **Self-hostable & open source**: Run your own MIT-licensed relay server with zero telemetry, or attach to the public relay registry.
+- **Overlay networking**: Bridge reverse backhauls over an independent IVNP overlay network when enhanced routing privacy is desired.
+- **Native agentic payments**: Monetize endpoints directly using Sui or Casper x402 payment requirements.
 
-```text
-Public client
-  -> Relay transport and routing
-  -> Tunnel process on your machine
-  -> Local service
-```
+---
 
-The relay decides where traffic should go. The tunnel process decides what the
-traffic means.
-
-For the default stream path, the tunnel process accepts the connection as a TLS
-server and then proxies bytes to your local target. For routed HTTP mode, the
-tunnel process runs an HTTP reverse proxy and can apply HTTP-specific behavior.
-For raw TCP and UDP, the relay allocates public transport endpoints and forwards
-traffic to the tunnel process.
-
-## Transport Modes
-
-| Mode | Example | Best for |
-|------|---------|----------|
-| Default HTTPS stream | `portal expose 3000` | Web apps, APIs, WebSockets, gRPC over HTTP |
-| Routed HTTP | `portal expose --http-route /api=3001 --http-route /=5173` | Multiple local HTTP services behind one URL |
-| Dedicated raw TCP | `portal expose localhost:25565 --tcp` | Minecraft, game servers, custom TCP protocols |
-| UDP relay | `portal expose 8080 --udp --udp-addr 19132` | UDP game servers and datagram protocols |
-
-## When to Use Portal
+## Common Use Cases
 
 | Use case | Example |
-|----------|---------|
-| Share a dev server | Show a local branch to a teammate |
-| Webhook development | Receive Stripe, GitHub, or Discord webhooks locally |
-| Client demos | Publish a temporary public URL for a staging app |
-| Multi-service app demos | Mount frontend and API services under one public URL |
-| Home servers | Expose a Minecraft server through a relay TCP port |
-| Edge devices | Reach a device behind NAT without opening inbound ports |
+| :--- | :--- |
+| **Local dev & sharing** | Expose a Vite or Next.js dev server to show work to a teammate or client |
+| **Webhook integration** | Receive live webhook deliveries from Stripe, GitHub, or Discord on localhost |
+| **Multi-service backends** | Mount frontend (`/`) and API (`/api`) under a single public domain |
+| **Game servers & custom protocols** | Forward raw TCP or UDP ports for Minecraft or custom protocols |
+| **AI agent publishing** | Allow autonomous agents to publish interactive web services and paid APIs |
+| **Edge & NAT traversal** | Securely reach edge devices and home lab servers behind strict NAT |
 
-## What Portal Does Not Promise
+---
 
-Portal's default stream mode intentionally prevents the relay from controlling
-user HTTP responses. That is good for the trust model, but it means a public
-multi-tenant relay should not put arbitrary user tunnels under a brand domain
-that also carries first-party SEO value. Use a separate tunnel domain for shared
-wildcard leases.
+## Product Capabilities
+
+For a complete breakdown of all 20+ supported capabilities across the CLI, Agent, SDK, and Relay—including interface support, trust boundaries, and canonical reference guides—see the **[Feature Inventory](/features)**.
+
+---
 
 ## Next Steps
 
-- [Getting Started](/getting-started): install the CLI and expose your first app
-- [Concepts](/concepts): understand the trustless relay and transport model
-- [CLI Reference](/cli-reference): commands, flags, and examples
+- **[Getting Started](/getting-started)**: Install the CLI and expose your first local app in seconds.
+- **[Feature Inventory](/features)**: Explore the complete capability matrix across all surfaces.
+- **[Concepts](/concepts)**: Understand Portal's transport model, relay responsibilities, and encryption flows.
+- **[CLI Reference](/cli-reference)**: Comprehensive command and flag documentation.

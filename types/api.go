@@ -1,9 +1,8 @@
 package types
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -20,9 +19,16 @@ type APIError struct {
 }
 
 type APIRequestError struct {
-	StatusCode int    `json:"-"`
-	Code       string `json:"code,omitempty"`
-	Message    string `json:"message,omitempty"`
+	RetryAfter time.Duration `json:"-"`
+	StatusCode int           `json:"-"`
+	Code       string        `json:"code,omitempty"`
+	Message    string        `json:"message,omitempty"`
+}
+
+// IsRateLimited identifies temporary admission failures, including a gateway
+// HTTP 429 without Portal's JSON envelope.
+func (e *APIRequestError) IsRateLimited() bool {
+	return e != nil && (e.StatusCode == http.StatusTooManyRequests || e.Code == APIErrorCodeRateLimited)
 }
 
 func (e *APIRequestError) Error() string {
@@ -65,15 +71,16 @@ type RegisterRequest struct {
 }
 
 type RegisterChallengeRequest struct {
-	Identity      Identity      `json:"identity"`
-	Metadata      LeaseMetadata `json:"metadata"`
-	TTL           int           `json:"ttl,omitempty"`
-	UDPEnabled    bool          `json:"udp_enabled,omitempty"`
-	TCPEnabled    bool          `json:"tcp_enabled,omitempty"`
-	HopToken      string        `json:"hop_token,omitempty"`
-	RouteHostname string        `json:"route_hostname,omitempty"`
-	HostnameHash  string        `json:"hostname_hash,omitempty"`
-	ECHConfigList []byte        `json:"ech_config_list,omitempty"`
+	Cache    bool `json:"cache,omitempty"`
+	CacheTTL int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
+	// AllowCanonicalFallback permits registration to continue without the friendly alias.
+	AllowCanonicalFallback bool          `json:"allow_canonical_fallback,omitempty"`
+	Identity               Identity      `json:"identity"`
+	Metadata               LeaseMetadata `json:"metadata"`
+	Overlay                bool          `json:"overlay,omitempty"`
+	TTL                    int           `json:"ttl,omitempty"`
+	UDPEnabled             bool          `json:"udp_enabled,omitempty"`
+	TCPEnabled             bool          `json:"tcp_enabled,omitempty"`
 }
 
 type RegisterChallengeResponse struct {
@@ -82,21 +89,49 @@ type RegisterChallengeResponse struct {
 	SIWEMessage string    `json:"siwe_message"`
 }
 
+// ReverseEndpoint authorizes one class of operation: opening reverse streams.
+// Capability is opaque to SDK callers and cannot mutate the owning lease.
+type ReverseEndpoint struct {
+	URL        string    `json:"url"`
+	Capability string    `json:"capability"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Overlay    bool      `json:"overlay,omitempty"`
+}
+
 type RegisterResponse struct {
-	Identity    Identity  `json:"identity"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	AccessToken string    `json:"access_token"`
-	SNIPort     int       `json:"sni_port,omitempty"`
-	UDPAddr     string    `json:"udp_addr,omitempty"`
-	UDPEnabled  bool      `json:"udp_enabled,omitempty"`
-	TCPAddr     string    `json:"tcp_addr,omitempty"`
-	TCPEnabled  bool      `json:"tcp_enabled,omitempty"`
+	Identity          Identity        `json:"identity"`
+	Hostname          string          `json:"hostname"`
+	CanonicalHostname string          `json:"canonical_hostname"`
+	ExpiresAt         time.Time       `json:"expires_at"`
+	AccessToken       string          `json:"access_token"`
+	ReverseEndpoint   ReverseEndpoint `json:"reverse_endpoint"`
+	UDPAddr           string          `json:"udp_addr,omitempty"`
+	UDPEnabled        bool            `json:"udp_enabled,omitempty"`
+	TCPAddr           string          `json:"tcp_addr,omitempty"`
+	TCPEnabled        bool            `json:"tcp_enabled,omitempty"`
 }
 
 type DiscoveryResponse struct {
-	ProtocolVersion string            `json:"protocol_version"`
-	GeneratedAt     time.Time         `json:"generated_at"`
-	Relays          []RelayDescriptor `json:"relays"`
+	ProtocolVersion    string                   `json:"protocol_version"`
+	GeneratedAt        time.Time                `json:"generated_at"`
+	Relays             []RelayDescriptor        `json:"relays"`
+	IncompatibleRelays []IncompatibleRelayEntry `json:"incompatible_relays,omitempty"`
+	ReleaseVersion     string                   `json:"release_version,omitempty"`
+	// RelayReleaseVersions maps peer relay URLs to the release versions this
+	// relay directly observed from those peers' own /discovery responses.
+	// Optional, unsigned observation metadata; never participates in routing,
+	// trust, signature verification, or compatibility decisions.
+	RelayReleaseVersions map[string]string `json:"relay_release_versions,omitempty"`
+}
+
+// IncompatibleRelayEntry describes a relay the serving relay contacted
+// directly whose discovery protocol version is incompatible with its own.
+// Such relays stay visible during rolling upgrades but never become
+// routable descriptors.
+type IncompatibleRelayEntry struct {
+	URL             string    `json:"url"`
+	ProtocolVersion string    `json:"protocol_version"`
+	LastSeenAt      time.Time `json:"last_seen_at"`
 }
 
 type DiscoveryAnnounceRequest struct {
@@ -113,81 +148,29 @@ type RenewRequest struct {
 	AccessToken string        `json:"access_token"`
 	TTL         int           `json:"ttl,omitempty"`
 	ReportedIP  string        `json:"reported_ip,omitempty"`
-	Metadata    LeaseMetadata `json:"metadata,omitempty"`
+	Metadata    LeaseMetadata `json:"metadata"`
 }
 
 type RenewResponse struct {
-	ExpiresAt   time.Time `json:"expires_at"`
-	AccessToken string    `json:"access_token"`
+	ExpiresAt       time.Time       `json:"expires_at"`
+	AccessToken     string          `json:"access_token"`
+	ReverseEndpoint ReverseEndpoint `json:"reverse_endpoint"`
+}
+
+type ReverseEndpointRequest struct {
+	AccessToken string `json:"access_token"`
+	FailedURL   string `json:"failed_url,omitempty"`
 }
 
 type UnregisterRequest struct {
 	AccessToken string `json:"access_token"`
 }
 
-type HopRoute struct {
-	OwnerPublicKey string          `json:"owner_public_key,omitempty"`
-	RelayURL       string          `json:"relay_url"`
-	PublicHostname string          `json:"public_hostname,omitempty"`
-	RouteHostname  string          `json:"route_hostname,omitempty"`
-	HostnameHash   string          `json:"hostname_hash,omitempty"`
-	ECHConfigList  []byte          `json:"ech_config_list,omitempty"`
-	MatchToken     string          `json:"match_token,omitempty"`
-	Metadata       LeaseMetadata   `json:"metadata,omitempty"`
-	ForwardRelay   RelayDescriptor `json:"forward_relay"`
-	ForwardToken   string          `json:"forward_token"`
-	FirstSeenAt    time.Time       `json:"first_seen_at,omitempty"`
-	ExpiresAt      time.Time       `json:"expires_at,omitempty"`
-	Signature      string          `json:"signature,omitempty"`
-}
-
-type HopRouteResponse struct {
-	AccessToken string `json:"access_token,omitempty"`
-	SNIPort     int    `json:"sni_port,omitempty"`
-}
-
-func HopRouteBytes(method string, route HopRoute) ([]byte, error) {
-	forwardRelay, err := CanonicalBytes(route.ForwardRelay)
-	if err != nil {
-		return nil, err
-	}
-	payload := struct {
-		Purpose             string          `json:"purpose"`
-		Method              string          `json:"method"`
-		OwnerPublicKey      string          `json:"owner_public_key"`
-		RelayURL            string          `json:"relay_url"`
-		PublicHostname      string          `json:"public_hostname"`
-		RouteHostname       string          `json:"route_hostname"`
-		HostnameHash        string          `json:"hostname_hash"`
-		ECHConfigList       string          `json:"ech_config_list"`
-		MatchToken          string          `json:"match_token"`
-		ForwardRelay        json.RawMessage `json:"forward_relay"`
-		ForwardToken        string          `json:"forward_token"`
-		FirstSeenAtUnixNano int64           `json:"first_seen_at_unix_nano"`
-		ExpiresAtUnixNano   int64           `json:"expires_at_unix_nano"`
-	}{
-		Purpose:             "portal hop route v1",
-		Method:              strings.ToUpper(strings.TrimSpace(method)),
-		OwnerPublicKey:      strings.TrimSpace(route.OwnerPublicKey),
-		RelayURL:            strings.TrimSpace(route.RelayURL),
-		PublicHostname:      strings.TrimSpace(route.PublicHostname),
-		RouteHostname:       strings.TrimSpace(route.RouteHostname),
-		HostnameHash:        strings.TrimSpace(route.HostnameHash),
-		ECHConfigList:       base64.StdEncoding.EncodeToString(route.ECHConfigList),
-		MatchToken:          strings.TrimSpace(route.MatchToken),
-		ForwardRelay:        json.RawMessage(forwardRelay),
-		ForwardToken:        strings.TrimSpace(route.ForwardToken),
-		FirstSeenAtUnixNano: route.FirstSeenAt.UTC().UnixNano(),
-		ExpiresAtUnixNano:   route.ExpiresAt.UTC().UnixNano(),
-	}
-	return json.Marshal(payload)
-}
-
 type DomainResponse struct {
-	ProtocolVersion string              `json:"protocol_version"`
-	ReleaseVersion  string              `json:"release_version"`
-	ENS             ENSStatus           `json:"ens"`
-	X402            X402FacilitatorInfo `json:"x402"`
+	Cache           *StaticCacheLimits `json:"cache,omitempty"`
+	ProtocolVersion string             `json:"protocol_version"`
+	ReleaseVersion  string             `json:"release_version"`
+	ENS             ENSStatus          `json:"ens"`
 }
 
 type ENSStatus struct {
@@ -267,9 +250,4 @@ type LeasePolicyUpdate struct {
 type PolicyPortSettings struct {
 	Enabled   bool `json:"enabled"`
 	MaxLeases int  `json:"max_leases"`
-}
-
-type IPPolicyUpdate struct {
-	IP       string `json:"ip"`
-	IsBanned bool   `json:"is_banned"`
 }

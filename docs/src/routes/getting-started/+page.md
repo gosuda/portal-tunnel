@@ -96,6 +96,17 @@ https://your-name.relay.example.com
 Open the URL in a browser. The relay routes the connection, but tenant TLS
 terminates in the tunnel process running on your machine.
 
+## Share A Static Site
+
+No local web server is needed for a directory or HTML file:
+
+```bash
+portal expose --serve ./dist
+```
+
+See [static serving and optional relay caching](/cli-reference#serve-a-static-site)
+for SPA fallback, offline TTL, and the cache TLS trust boundary.
+
 ## What Happened
 
 When you ran `portal expose`:
@@ -158,6 +169,10 @@ portal expose 3000 \
   --name myapp \
   --identity-path ~/.config/portal/myapp.identity.json
 ```
+
+An existing identity file or `--identity-json` supplies the saved name as well
+as the key. `--name` applies only when creating a new identity; it does not
+rename an existing one. Use a separate `--identity-path` for a new identity.
 
 ## Update The CLI
 

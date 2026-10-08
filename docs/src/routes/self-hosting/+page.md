@@ -25,8 +25,14 @@ Run the relay with a single Docker command:
 
 ```bash
 mkdir -p ./relay-data
-# Optional: place fullchain.pem/privatekey.pem in ./relay-data to use a manual
-# certificate instead of ACME.
+# For a new bind-mount directory on Linux, allow the nonroot container to write.
+# Preserve the ownership policy of existing deployments.
+sudo chown 65532:65532 ./relay-data
+# Optional: place valid fullchain.pem/privatekey.pem in ./relay-data to use a
+# manual certificate, only if neither acme-account.key nor acme-registration.json
+# is present. Embedded DNS management still runs.
+ADMIN_TOKEN=$(openssl rand -hex 32)
+# Save ADMIN_TOKEN in your password manager before starting the container.
 docker run -d \
   --name portal-relay \
   --restart unless-stopped \
@@ -36,13 +42,21 @@ docker run -d \
   -p 53:53/udp \
   -e PORTAL_URL=https://relay.example.com \
   -e IDENTITY_PATH=/portal-certs \
-  -e ADMIN_TOKEN="$(openssl rand -hex 32)" \
+  -e ADMIN_TOKEN="$ADMIN_TOKEN" \
   -v $(pwd)/relay-data:/portal-certs \
   ghcr.io/gosuda/portal:2
 ```
 
 Replace `relay.example.com` with your domain. Keep the generated
 `ADMIN_TOKEN`; it is required for relay admin and policy access.
+
+With a manual certificate and embedded DNS, a temporary public-IPv4 discovery
+failure does not block startup. Before the first successful discovery, A records
+remain uninitialized; the existing ten-minute DNS retry loop retries pending
+address initialization. After a successful A-record sync, normal refreshes use
+the three-hour DNS synchronization loop rather than every retry tick. Later
+discovery failures retain the last known addresses and resume pending retries.
+Errors applying A-record updates still propagate; only discovery failure is deferred.
 
 ## Docker Compose Setup
 
@@ -63,7 +77,6 @@ services:
       - "53:53/udp"
     environment:
       PORTAL_URL: https://relay.example.com
-      API_PORT: "4017"
       SNI_PORT: "443"
       IDENTITY_PATH: /portal-certs
       ADMIN_TOKEN: ${ADMIN_TOKEN}
@@ -71,9 +84,14 @@ services:
       - ./relay-data:/portal-certs
 ```
 
-Start it:
+Prepare a new bind-mount directory and provide the saved admin token through
+`.env` or an exported `ADMIN_TOKEN`. On Linux, the nonroot container needs write
+access to the directory:
 
 ```bash
+mkdir -p ./relay-data
+# For a new directory; preserve existing deployments' ownership policy.
+sudo chown 65532:65532 ./relay-data
 docker compose up -d
 ```
 
@@ -81,9 +99,8 @@ docker compose up -d
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORTAL_URL` | `https://localhost` | Public HTTPS origin of the relay and embedded dashboard. |
-| `API_PORT` | `4017` | Internal Admin/API server port. |
-| `SNI_PORT` | `443` | TCP SNI router port for tunnel traffic. |
+| `PORTAL_URL` | `https://localhost` | Canonical public HTTPS origin, including its externally reachable port. |
+| `SNI_PORT` | `PORTAL_URL` port, else `443` | Local TCP SNI router listen port; public metadata uses the port from `PORTAL_URL`. |
 | `IDENTITY_PATH` | `./.portal-certs` | Relay state directory containing `identity.json`, `policy.json`, and TLS materials. |
 | `ADMIN_TOKEN` | | Bearer token source for relay admin and policy APIs. |
 | `EMBEDDED_DNS_PORT` | `53` | Embedded authoritative DNS listen port; requires `53/tcp` + `53/udp` and `CAP_NET_BIND_SERVICE` in containers. |
@@ -115,7 +132,7 @@ resources.
 
 ## Connecting Your Tunnel
 
-Point `portal-tunnel` at your relay with the `--relays` flag:
+Point the `portal` CLI at your relay with the `--relays` flag:
 
 ```bash
 portal expose --relays https://relay.example.com --discovery=false localhost:3000
@@ -145,14 +162,13 @@ management UI:
 | `A` | `ns.relay.example.com` | `<your server IP>` (glue) |
 No wildcard record is needed: the relay synthesizes answers for every tunnel
 hostname. The nameserver name is fixed to `ns.<your relay domain>`; publish the
-matching glue `A` record at the parent zone as shown above.
+matching glue `A` record at the parent zone as shown above. After verifying the delegation, publish the DS exported in the startup log at the parent zone to establish DNSSEC trust. Preserve `IDENTITY_PATH/dnssec-csk.json` in the persistent identity volume; see the [DNSSEC configuration reference](/configuration#embedded-dns) for key permissions, parent setup, and recovery requirements.
 
 ## TLS with ACME
 
 Certificates are issued automatically via ACME DNS-01 against the embedded
 authoritative DNS server — no DNS provider credentials are required once the
-delegation above is in place. To use an external DNS provider instead, set
-`ACME_DNS_PROVIDER`:
+delegation above is in place. External managed backends are supported first-class alternatives to embedded DNS. Operators may retain any vendor for the parent zone and delegate only the relay namespace. For an existing external-backend deployment, the retained settings are:
 
 ```yaml
 environment:
@@ -173,9 +189,13 @@ environment:
   MIN_PORT: "10000"
   MAX_PORT: "10100"
 ports:
+  - "443:443/udp" # QUIC backhaul; match the public PORTAL_URL port
   - "10000-10100:10000-10100/tcp"
   - "10000-10100:10000-10100/udp"
 ```
+
+Allow both the public QUIC backhaul UDP port and the allocated UDP range
+through the firewall. The TCP dashboard/SNI mapping remains required.
 
 See [TCP/UDP Tunneling](/tcp-udp-tunneling) for usage details.
 
@@ -190,7 +210,9 @@ sudo ss -tlnp | grep ':443'
 ```
 
 Stop or reconfigure the conflicting service. The bundled public deployment
-requires TCP `443` because Portal publishes standard HTTPS tunnel URLs.
+uses TCP `443` by default. A different public port must be included in
+`PORTAL_URL`, published by Docker, and reachable by clients; configure
+`SNI_PORT` separately only when the local bind port differs.
 
 **DNS not resolving**
 

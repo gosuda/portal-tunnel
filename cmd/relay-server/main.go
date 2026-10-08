@@ -6,17 +6,22 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
+	facilitatorapi "github.com/gosuda/x402-facilitator/api"
+	suischeme "github.com/gosuda/x402-facilitator/scheme/sui"
+	suifacilitator "github.com/gosuda/x402-facilitator/scheme/sui/facilitator"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
-	portalx402 "github.com/gosuda/portal-tunnel/v2/portal/x402"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -24,211 +29,350 @@ import (
 func main() {
 	log.Logger = log.Output(zerolog.NewConsoleWriter())
 	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
-		"":      runServeCommand,
-		"serve": runServeCommand,
-		"help":  runHelpCommand,
+		"":       runServeCommand,
+		"serve":  runServeCommand,
+		"config": runConfigCommand,
+		"help":   runHelpCommand,
 	}); err != nil {
 		log.Error().Err(err).Msg("execute root command")
 		os.Exit(1)
 	}
 }
 
-type relayServerConfig struct {
-	PortalURL          string
-	FrontendDir        string
-	IdentityPath       string
-	Bootstraps         string
-	DiscoveryEnabled   bool
-	WireGuardPort      int
-	APIPort            int
-	SNIPort            int
-	TrustProxyHeaders  bool
-	TrustedProxyCIDRs  string
+type appConfig struct {
+	Relay              portal.ServerConfig
 	UDPEnabled         bool
 	TCPEnabled         bool
+	PreAuth            types.PreAuthConfig
+	TrustProxyHeaders  bool
+	TrustedProxyCIDRs  string
+	FrontendDir        string
 	LandingPageEnabled bool
-	MinPort            int
-	MaxPort            int
 	AdminToken         string
-	PProfEnabled       bool
-	PProfAddr          string
-	X402Enabled        bool
-	X402Testnet        bool
-	X402PayTo          string
-
-	ACMEDNSProvider    string
-	ENSGaslessEnabled  bool
-	EmbeddedDNSPort    int
-	CloudflareToken    string
-	GCPProjectID       string
-	GCPManagedZone     string
-	HetznerAPIToken    string
-	AWSAccessKeyID     string
-	AWSSecretAccessKey string
-	AWSSessionToken    string
-	AWSRegion          string
-	AWSHostedZoneID    string
-	AWSDNSSECKMSKeyARN string
-	VultrAPIKey        string
-	NjallaToken        string
+	PprofEnabled       bool
+	PprofListenAddr    string
+	// Relay-owned x402 facilitator surface: portal.Server is x402-blind, so
+	// this application resolves the flags and mounts the payment endpoints.
+	X402Enabled bool
+	X402Testnet bool
+	X402PayTo   string
 }
 
-func runServeCommand(args []string) error {
-	cfg := relayServerConfig{}
+// resolveAppConfig registers every flag and resolves it against the
+// process environment. The config subcommand reuses it so that inspecting a
+// deployment and running it read the same definitions.
+func resolveAppConfig(args []string) (appConfig, error) {
+	// Registration records into a process-global registry, so start from empty:
+	// the config subcommand loads an env file and resolves again, and issues
+	// from an earlier pass must not fail the current one.
+	utils.ResetEnvRegistry()
+
+	cfg := appConfig{}
 	fs := utils.NewFlagSet("relay-server", printRootUsage)
+	registerAppFlags(fs, &cfg)
 
-	utils.StringFlagEnv(fs, &cfg.PortalURL, "portal-url", "https://localhost", "portal base URL", "PORTAL_URL")
+	if err := utils.ParseFlagSet(fs, args, printRootUsage); err != nil {
+		return appConfig{}, err
+	}
+	if err := utils.RequireNoArgs(fs.Args(), "relay-server"); err != nil {
+		printRootUsage(os.Stderr)
+		return appConfig{}, err
+	}
+	cfg.Relay.StateDir = strings.TrimSpace(cfg.Relay.StateDir)
+	return cfg, nil
+}
+
+func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
+	preAuthDefaults := policy.DefaultPreAuthConfig()
+	utils.IntFlagEnv(fs, &cfg.PreAuth.SourcePerMinute, "preauth-source-per-minute", preAuthDefaults.SourcePerMinute, nil, "per-source pre-auth units refilled per minute", "PREAUTH_SOURCE_PER_MINUTE")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.SourceBurst, "preauth-source-burst", preAuthDefaults.SourceBurst, nil, "per-source pre-auth burst units", "PREAUTH_SOURCE_BURST")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.GlobalPerMinute, "preauth-global-per-minute", preAuthDefaults.GlobalPerMinute, nil, "global pre-auth units refilled per minute", "PREAUTH_GLOBAL_PER_MINUTE")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.GlobalBurst, "preauth-global-burst", preAuthDefaults.GlobalBurst, nil, "global pre-auth burst units", "PREAUTH_GLOBAL_BURST")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.ChallengeCost, "preauth-challenge-cost", preAuthDefaults.ChallengeCost, nil, "pre-auth units per registration challenge", "PREAUTH_CHALLENGE_COST")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.AnnounceCost, "preauth-announce-cost", preAuthDefaults.AnnounceCost, nil, "pre-auth units per discovery announce", "PREAUTH_ANNOUNCE_COST")
+	utils.IntFlagEnv(fs, &cfg.PreAuth.RegisterCost, "preauth-register-cost", preAuthDefaults.RegisterCost, nil, "pre-auth units per registration attempt", "PREAUTH_REGISTER_COST")
+
+	utils.BoolFlagEnv(fs, &cfg.Relay.Cache.Enabled, "cache-enabled", true, "allow explicitly opted-in static exposures to use the relay disk cache", "CACHE_ENABLED")
+	utils.IntFlagEnv(fs, &cfg.Relay.Cache.MaxBytes, "cache-max-bytes", 1<<30, nil, "maximum relay cached and staging payload bytes", "CACHE_MAX_BYTES")
+	utils.DurationFlagEnv(fs, &cfg.Relay.Cache.MaxTTL, "cache-max-ttl", 24*time.Hour, "maximum offline cache lifetime after unregister or lease expiry", "CACHE_MAX_TTL")
+	utils.StringFlagEnv(fs, &cfg.Relay.PortalURL, "portal-url", "https://localhost", "portal base URL", "PORTAL_URL")
 	utils.StringFlagEnv(fs, &cfg.FrontendDir, "frontend-dir", "", "custom SPA directory containing index.html; embedded frontend is used when empty", "PORTAL_FRONTEND_DIR")
-	utils.StringFlagEnv(fs, &cfg.IdentityPath, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "bootstrap relay API URLs; merged with bootstrap relays when discovery is enabled", "BOOTSTRAPS")
-	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
-	utils.IntFlagEnv(fs, &cfg.WireGuardPort, "wireguard-port", overlay.DefaultListenPort, utils.ParsePortNumber, "public and listen UDP port for relay overlay", "WIREGUARD_PORT")
+	utils.StringFlagEnv(fs, &cfg.Relay.StateDir, "identity-path", "./.portal-certs", "directory path for relay identity, policy state, and keyless materials", "IDENTITY_PATH")
+	utils.CSVFlagEnv(fs, &cfg.Relay.Bootstraps, "bootstraps", "", "bootstrap relay API URLs; merged with bootstrap relays when discovery is enabled", "BOOTSTRAPS")
+	utils.BoolFlagEnv(fs, &cfg.Relay.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
+	utils.StringFlagEnv(fs, &cfg.Relay.IVNPConfigPath, "ivnp-config", "", "optional IVNP RouterConfig JSON file; {} uses in-memory defaults; requires discovery", "IVNP_CONFIG")
 
-	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
-	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 443, utils.ParsePortNumber, "TCP SNI router port number", "SNI_PORT")
+	utils.BoolFlagEnv(fs, &cfg.Relay.HTTPRedirect.Enabled, "http-redirect-enabled", false, "enable HTTP redirects to the canonical HTTPS portal URL (not tenant hosts)", types.HTTPRedirectEnabledEnv)
+	utils.StringFlagEnv(fs, &cfg.Relay.HTTPRedirect.Addr, "http-redirect-addr", types.DefaultHTTPRedirectAddr, "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
+	utils.BoolFlagEnv(fs, &cfg.Relay.HTTPRedirect.HSTS, "http-redirect-hsts", false, "include HSTS max-age=31536000 on redirects; browsers ignore HSTS received over HTTP", "HTTP_REDIRECT_HSTS")
+	utils.IntFlagEnv(fs, &cfg.Relay.SNIPort, "sni-port", 0, utils.ParsePortNumber, "local TCP SNI router listen port (0 follows the PORTAL_URL port when it names one, else 443)", "SNI_PORT")
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
-	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "trusted proxy CIDR allowlist for forwarded headers, comma-separated; defaults to private/loopback proxy ranges when trust-proxy-headers is enabled", "TRUSTED_PROXY_CIDRS")
+	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "explicit trusted proxy CIDR allowlist for forwarded headers, comma-separated; empty trusts no proxies", "TRUSTED_PROXY_CIDRS")
 
 	utils.BoolFlagEnv(fs, &cfg.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "show the dashboard landing page", "LANDING_PAGE_ENABLED")
-	utils.IntFlagEnv(fs, &cfg.MinPort, "min-port", 0, utils.ParseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
-	utils.IntFlagEnv(fs, &cfg.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
+	utils.IntFlagEnv(fs, &cfg.Relay.MinPort, "min-port", 0, utils.ParseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
+	utils.IntFlagEnv(fs, &cfg.Relay.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
 
 	utils.StringFlagEnv(fs, &cfg.AdminToken, "admin-token", "", "admin bearer token for relay admin and policy APIs", "ADMIN_TOKEN")
-	utils.BoolFlagEnv(fs, &cfg.PProfEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
-	utils.StringFlagEnv(fs, &cfg.PProfAddr, "pprof-addr", portal.DefaultPProfListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
+	utils.BoolFlagEnv(fs, &cfg.PprofEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
+	utils.StringFlagEnv(fs, &cfg.PprofListenAddr, "pprof-addr", DefaultPprofListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
 	utils.BoolFlagEnv(fs, &cfg.X402Enabled, "x402-enabled", false, "enable relay-owned Sui x402 facilitator endpoints under /api/x402 for future control-plane payments", "X402_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
 	utils.StringFlagEnv(fs, &cfg.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
 
-	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01/A-record sync, ECH HTTPS records, and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded when unset", "ACME_DNS_PROVIDER")
-	utils.BoolFlagEnv(fs, &cfg.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
-	utils.IntFlagEnv(fs, &cfg.EmbeddedDNSPort, "embedded-dns-port", 53, utils.ParsePortNumber, "listen port for the embedded authoritative DNS server (the default DNS provider); requires a one-time NS delegation of the base domain and open 53/tcp+udp", "EMBEDDED_DNS_PORT")
-	utils.StringFlagEnv(fs, &cfg.GCPProjectID, "gcp-project-id", "", "Google Cloud project id for Cloud DNS automation; auto-detected from ADC or GCE metadata when omitted", "GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCE_PROJECT")
-	utils.StringFlagEnv(fs, &cfg.GCPManagedZone, "gcp-managed-zone", "", "explicit Google Cloud DNS managed zone name or numeric ID override", "GCP_MANAGED_ZONE", "GCP_ZONE", "GCE_ZONE_ID")
-	utils.StringFlagEnv(fs, &cfg.HetznerAPIToken, "hetzner-api-token", "", "Hetzner Cloud API token for DNS automation (required when acme-dns-provider=hetzner)", "HETZNER_API_TOKEN", "HCLOUD_TOKEN")
-	utils.StringFlagEnv(fs, &cfg.AWSAccessKeyID, "aws-access-key-id", "", "AWS access key ID for Route53 static credentials; uses the default AWS credential chain when omitted", "AWS_ACCESS_KEY_ID")
-	utils.StringFlagEnv(fs, &cfg.AWSSecretAccessKey, "aws-secret-access-key", "", "AWS secret access key for Route53 static credentials", "AWS_SECRET_ACCESS_KEY")
-	utils.StringFlagEnv(fs, &cfg.AWSSessionToken, "aws-session-token", "", "AWS session token for Route53 temporary credentials", "AWS_SESSION_TOKEN")
-	utils.StringFlagEnv(fs, &cfg.AWSRegion, "aws-region", "", "AWS region for Route53 and Route53-backed DNS-01; defaults to us-east-1 when unset", "AWS_REGION", "AWS_DEFAULT_REGION")
-	utils.StringFlagEnv(fs, &cfg.AWSHostedZoneID, "aws-hosted-zone-id", "", "explicit Route53 hosted zone ID override", "AWS_HOSTED_ZONE_ID")
-	utils.StringFlagEnv(fs, &cfg.AWSDNSSECKMSKeyARN, "aws-dnssec-kms-key-arn", "", "AWS KMS key ARN used to create a Route53 DNSSEC key-signing key when needed", "AWS_DNSSEC_KMS_KEY_ARN")
-	utils.StringFlagEnv(fs, &cfg.VultrAPIKey, "vultr-api-key", "", "Vultr API key for DNS automation (required when acme-dns-provider=vultr)", "VULTR_API_KEY")
-	utils.StringFlagEnv(fs, &cfg.NjallaToken, "njalla-token", "", "Njalla API token for DNS automation (required when acme-dns-provider=njalla)", "NJALLA_TOKEN")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.DNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01 and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded without API credentials", "ACME_DNS_PROVIDER")
+	utils.BoolFlagEnv(fs, &cfg.Relay.ACME.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
+	utils.IntFlagEnv(fs, &cfg.Relay.ACME.EmbeddedDNSPort, "embedded-dns-port", 53, utils.ParsePortNumber, "listen port for the embedded authoritative DNS server (the default DNS provider); requires a one-time NS delegation of the base domain and open 53/tcp+udp", "EMBEDDED_DNS_PORT")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.CloudflareToken, "cloudflare-token", "", "Cloudflare DNS API token for DNS automation (required when acme-dns-provider=cloudflare)", "CLOUDFLARE_TOKEN")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.GCPProjectID, "gcp-project-id", "", "Google Cloud project id for Cloud DNS automation; auto-detected from ADC or GCE metadata when omitted", "GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCE_PROJECT")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.GCPManagedZone, "gcp-managed-zone", "", "explicit Google Cloud DNS managed zone name or numeric ID override", "GCP_MANAGED_ZONE", "GCP_ZONE", "GCE_ZONE_ID")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.HetznerAPIToken, "hetzner-api-token", "", "Hetzner Cloud API token for DNS automation (required when acme-dns-provider=hetzner)", "HETZNER_API_TOKEN", "HCLOUD_TOKEN")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.AWSAccessKeyID, "aws-access-key-id", "", "AWS access key ID for Route53 static credentials; uses the default AWS credential chain when omitted", "AWS_ACCESS_KEY_ID")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.AWSSecretAccessKey, "aws-secret-access-key", "", "AWS secret access key for Route53 static credentials", "AWS_SECRET_ACCESS_KEY")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.AWSSessionToken, "aws-session-token", "", "AWS session token for Route53 temporary credentials", "AWS_SESSION_TOKEN")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.AWSRegion, "aws-region", "", "AWS region for Route53 and Route53-backed DNS-01; defaults to us-east-1 when unset", "AWS_REGION", "AWS_DEFAULT_REGION")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.AWSHostedZoneID, "aws-hosted-zone-id", "", "explicit Route53 hosted zone ID override", "AWS_HOSTED_ZONE_ID")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.AWSKMSKeyARN, "aws-dnssec-kms-key-arn", "", "AWS KMS key ARN used to create a Route53 DNSSEC key-signing key when needed", "AWS_DNSSEC_KMS_KEY_ARN")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.VultrAPIKey, "vultr-api-key", "", "Vultr API key for DNS automation (required when acme-dns-provider=vultr)", "VULTR_API_KEY")
+	utils.StringFlagEnv(fs, &cfg.Relay.ACME.NjallaToken, "njalla-token", "", "Njalla API token for DNS automation (required when acme-dns-provider=njalla)", "NJALLA_TOKEN")
+}
 
-	if err := utils.ParseFlagSet(fs, args, printRootUsage); err != nil {
+func runServeCommand(args []string) error {
+	cfg, err := resolveAppConfig(args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "relay-server"); err != nil {
-		printRootUsage(os.Stderr)
+	// A value that could not be parsed is always a mistake. Starting anyway is
+	// how a deployment ends up running with a setting nobody reads.
+	if err := envIssueError(); err != nil {
 		return err
 	}
-	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
 
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
-		Str("portal_url", cfg.PortalURL).
-		Str("frontend_dir", cfg.FrontendDir).
-		Str("identity_path", cfg.IdentityPath).
-		Str("bootstraps", cfg.Bootstraps).
-		Bool("discovery_enabled", cfg.DiscoveryEnabled).
-		Int("wireguard_port", cfg.WireGuardPort).
-		Int("api_port", cfg.APIPort).
-		Int("sni_port", cfg.SNIPort).
-		Bool("trust_proxy_headers", cfg.TrustProxyHeaders).
-		Str("trusted_proxy_cidrs", cfg.TrustedProxyCIDRs).
-		Bool("udp_enabled", cfg.UDPEnabled).
-		Bool("tcp_enabled", cfg.TCPEnabled).
-		Bool("landing_page_enabled", cfg.LandingPageEnabled).
-		Int("min_port", cfg.MinPort).
-		Int("max_port", cfg.MaxPort).
-		Bool("admin_token_configured", strings.TrimSpace(cfg.AdminToken) != "").
-		Bool("pprof_enabled", cfg.PProfEnabled).
-		Str("pprof_addr", cfg.PProfAddr).
-		Bool("x402_facilitator_enabled", cfg.X402Enabled).
-		Bool("x402_testnet", cfg.X402Testnet).
-		Bool("x402_pay_to_configured", strings.TrimSpace(cfg.X402PayTo) != "").
-		Str("acme_dns_provider", cfg.ACMEDNSProvider).
-		Int("embedded_dns_port", cfg.EmbeddedDNSPort).
-		Bool("ens_gasless_enabled", cfg.ENSGaslessEnabled).
-		Msg("configured relay server")
+		Str("state_dir", cfg.Relay.StateDir).
+		Int("sni_port", utils.IntOrDefault(cfg.Relay.SNIPort, portal.DefaultSNIPort(cfg.Relay.PortalURL))).
+		Msg("starting relay server")
 
-	ctx, stop := utils.SignalContext()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	return runServer(ctx, cfg)
 }
 
-func runServer(ctx context.Context, cfg relayServerConfig) error {
-	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:         cfg.PortalURL,
-		IdentityPath:      cfg.IdentityPath,
-		Bootstraps:        utils.SplitCSV(cfg.Bootstraps),
-		DiscoveryEnabled:  cfg.DiscoveryEnabled,
-		WireGuardPort:     cfg.WireGuardPort,
-		APIPort:           cfg.APIPort,
-		SNIPort:           cfg.SNIPort,
-		TrustProxyHeaders: cfg.TrustProxyHeaders,
-		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
-		UDPEnabled:        cfg.UDPEnabled,
-		TCPEnabled:        cfg.TCPEnabled,
-		MinPort:           cfg.MinPort,
-		MaxPort:           cfg.MaxPort,
-		PProfEnabled:      cfg.PProfEnabled,
-		PProfListenAddr:   cfg.PProfAddr,
-		X402Enabled:       cfg.X402Enabled,
-		X402Testnet:       cfg.X402Testnet,
-		X402PayTo:         cfg.X402PayTo,
-		ACME: acme.Config{
-			KeyDir:             cfg.IdentityPath,
-			DNSProvider:        cfg.ACMEDNSProvider,
-			ENSGaslessEnabled:  cfg.ENSGaslessEnabled,
-			EmbeddedDNSPort:    cfg.EmbeddedDNSPort,
-			GCPProjectID:       cfg.GCPProjectID,
-			GCPManagedZone:     cfg.GCPManagedZone,
-			HetznerAPIToken:    cfg.HetznerAPIToken,
-			AWSAccessKeyID:     cfg.AWSAccessKeyID,
-			AWSSecretAccessKey: cfg.AWSSecretAccessKey,
-			AWSSessionToken:    cfg.AWSSessionToken,
-			AWSRegion:          cfg.AWSRegion,
-			AWSHostedZoneID:    cfg.AWSHostedZoneID,
-			AWSKMSKeyARN:       cfg.AWSDNSSECKMSKeyARN,
-			VultrAPIKey:        cfg.VultrAPIKey,
-			NjallaToken:        cfg.NjallaToken,
-		},
-	})
+// validateRelaySettings normalizes and checks the relay-owned admission and
+// ingress settings that live outside portal.ServerConfig, so the config
+// report and startup apply the same validation.
+func validateRelaySettings(cfg *appConfig) error {
+	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
+		return err
+	}
+	if _, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs); err != nil {
+		return err
+	}
+	if cfg.UDPEnabled || cfg.TCPEnabled {
+		switch {
+		case cfg.Relay.MinPort <= 0 || cfg.Relay.MaxPort <= 0:
+			return errors.New("udp and tcp relay transport require a valid min port and max port range")
+		case cfg.Relay.MinPort > 65535 || cfg.Relay.MaxPort > 65535:
+			return errors.New("min port and max port must be between 1 and 65535")
+		case cfg.Relay.MinPort > cfg.Relay.MaxPort:
+			return errors.New("min port must be less than or equal to max port")
+		}
+	}
+	return nil
+}
+
+func runServer(ctx context.Context, cfg appConfig) error {
+	x402Settings, err := resolveX402Facilitator(cfg)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
+	if err := validateRelaySettings(&cfg); err != nil {
+		return fmt.Errorf("create relay server: %w", err)
+	}
+	// This application always serves /sdk/domain by composing facilitator metadata
+	// onto server.DomainReport(), whether payments are enabled or not.
+	cfg.Relay.ApplicationOwnsDomainReport = true
+	server, err := portal.NewServer(cfg.Relay)
+	if err != nil {
+		return fmt.Errorf("create relay server: %w", err)
+	}
+	ingress, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return fmt.Errorf("create relay server: %w", err)
+	}
+	access := policy.NewAccess()
+	if x402Settings.Enabled {
+		// NewServer already validated the URL; keep metadata consistent with
+		// the normalized URL the relay advertises.
+		x402Settings.PortalURL, err = utils.NormalizeRelayURL(cfg.Relay.PortalURL)
+		if err != nil {
+			return fmt.Errorf("normalize portal url: %w", err)
+		}
+	}
 
-	relayAPI, err := NewRelayAPI(server, cfg.IdentityPath, cfg.AdminToken, cfg.FrontendDir, cfg.LandingPageEnabled)
+	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
+	initialPolicy := types.PolicySettings{
+		ApprovalMode:       string(policy.ModeAuto),
+		LandingPageEnabled: cfg.LandingPageEnabled,
+		UDP:                types.PolicyPortSettings{Enabled: cfg.UDPEnabled},
+		TCPPort:            types.PolicyPortSettings{Enabled: cfg.TCPEnabled},
+	}
+	relayAPI, err := NewRelayAPI(server, access, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}
 
-	apiMux := relayAPI.Handler()
-	if cfg.X402Enabled {
-		x402Network := portalx402.Network(cfg.X402Testnet)
-		if err := portalx402.MountFacilitator(apiMux, portalx402.FacilitatorConfig{
-			Testnet: cfg.X402Testnet,
-		}); err != nil {
-			return fmt.Errorf("mount x402 facilitator: %w", err)
+	base, err := composeRelayHandler(x402Settings, server, relayAPI.Handler())
+	if err != nil {
+		return err
+	}
+	handler := policy.Mux(server, base, ingress,
+		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
+		access, cfg.PreAuth)
+	if !cfg.PprofEnabled {
+		return server.Serve(ctx, handler)
+	}
+
+	bound, stopPprof, pprofErrs, err := startPprofServer(ctx, normalizePprofAddr(cfg.PprofListenAddr))
+	if err != nil {
+		return err
+	}
+	log.Info().Str("pprof_addr", utils.HostPortOrLoopback(bound.String())).Msg("starting pprof server")
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(runCtx, handler) }()
+
+	var serveErr error
+	select {
+	case err := <-serveDone:
+		serveErr = err
+	case err := <-pprofErrs:
+		serveErr = fmt.Errorf("serve pprof: %w", err)
+		cancel()
+		<-serveDone
+	}
+	cancel()
+
+	shutdownCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	if err := stopPprof(shutdownCtx); err != nil {
+		log.Warn().Err(err).Msg("shutdown pprof server")
+	}
+	stop()
+	return serveErr
+}
+
+// x402FacilitatorSettings is the resolved relay-owned x402 facilitator
+// configuration. portal.Server knows nothing about payments: this application
+// validates the flags and mounts the facilitator itself.
+type x402FacilitatorSettings struct {
+	Enabled   bool
+	Testnet   bool
+	PayTo     string
+	PortalURL string
+}
+
+// resolveX402Facilitator resolves the relay-owned x402 flags. An enabled
+// facilitator without a payment recipient would advertise payments nothing
+// can settle, so it fails resolution instead of booting unusable. The
+// recipient must normalize to a valid Sui address: it is published verbatim
+// in the /sdk/domain facilitator metadata.
+func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
+	if !cfg.X402Enabled {
+		return x402FacilitatorSettings{}, nil
+	}
+	payTo := suischeme.NormalizeAddress(cfg.X402PayTo)
+	if payTo == "" {
+		return x402FacilitatorSettings{}, errors.New("x402 facilitator requires a valid Sui pay-to address")
+	}
+	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet, PayTo: payTo, PortalURL: cfg.Relay.PortalURL}, nil
+}
+
+// Relay-owned x402 control-plane mount point and its supported listing path.
+const (
+	pathX402Facilitator = "/api/x402"
+	x402SupportedPath   = pathX402Facilitator + "/supported"
+)
+
+// x402FacilitatorInfo is the application-local facilitator metadata composed
+// onto the domain report.
+type x402FacilitatorInfo struct {
+	Enabled      bool   `json:"enabled"`
+	URL          string `json:"url,omitempty"`
+	Network      string `json:"network,omitempty"`
+	NetworkName  string `json:"network_name,omitempty"`
+	SupportedURL string `json:"supported_url,omitempty"`
+	PayTo        string `json:"pay_to,omitempty"`
+}
+
+// domainResponse is the relay's /sdk/domain payload: the x402-blind core report
+// extended with application-local facilitator metadata. The x402 key stays on
+// the wire (zero value marshals as {"enabled":false}) so disabled deployments
+// keep today's shape.
+type domainResponse struct {
+	types.DomainResponse
+	X402 x402FacilitatorInfo `json:"x402"`
+}
+
+// composeRelayHandler mounts the relay-owned x402 facilitator in front of the
+// relay API handler when payments are enabled; the facilitator is served at
+// /api/x402. The application always serves /sdk/domain (the relay hands the
+// path over via ServerConfig.ApplicationOwnsDomainReport) by composing the
+// facilitator metadata onto server.DomainReport().
+func composeRelayHandler(settings x402FacilitatorSettings, server *portal.Server, base http.Handler) (http.Handler, error) {
+	mux := http.NewServeMux()
+
+	network := "sui:mainnet"
+	if settings.Testnet {
+		network = "sui:testnet"
+	}
+
+	if settings.Enabled {
+		// Portal payments settle only Sui USDC (docs/src/routes/self-hosting),
+		// so the facilitator allowlist is pinned to the network's USDC asset;
+		// upstream default options would allowlist every gasless stablecoin.
+		asset, ok := suischeme.GetGaslessStablecoinType(network, "USDC")
+		if !ok {
+			return nil, fmt.Errorf("x402 USDC is not registered on %s", network)
 		}
-		log.Info().
-			Str("path", types.PathX402Facilitator).
-			Str("network", x402Network).
-			Msg("relay-owned x402 facilitator enabled")
+		facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, "", "", suifacilitator.SuiFacilitatorOptions{
+			GaslessStablecoinTypes: []string{asset},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("mount x402 facilitator: %w", err)
+		}
+		mux.Handle(pathX402Facilitator+"/", http.StripPrefix(pathX402Facilitator, facilitatorapi.NewServer(facilitator)))
+		log.Info().Str("path", pathX402Facilitator).Str("network", network).Msg("relay-owned x402 facilitator enabled")
 	}
 
-	if err := server.Start(ctx, apiMux); err != nil {
-		return fmt.Errorf("start relay server: %w", err)
-	}
-
-	return server.Wait()
+	mux.HandleFunc(types.PathSDKDomain, func(w http.ResponseWriter, r *http.Request) {
+		if !utils.RequireMethod(w, r, http.MethodGet) {
+			return
+		}
+		report := domainResponse{DomainResponse: server.DomainReport()}
+		if settings.Enabled {
+			baseURL := strings.TrimRight(settings.PortalURL, "/")
+			report.X402 = x402FacilitatorInfo{
+				Enabled:      true,
+				URL:          baseURL + pathX402Facilitator,
+				Network:      network,
+				NetworkName:  suischeme.GetNetworkName(network),
+				SupportedURL: baseURL + x402SupportedPath,
+				PayTo:        settings.PayTo,
+			}
+		}
+		utils.WriteAPIData(w, http.StatusOK, report)
+	})
+	mux.Handle("/", base)
+	return mux, nil
 }
 
 func runHelpCommand(args []string) error {
@@ -267,4 +411,14 @@ func printRootUsage(w io.Writer) {
 			"relay-server help",
 		},
 	)
+	fs := utils.NewFlagSet("relay-server", nil)
+	registerAppFlags(fs, &appConfig{})
+	utils.WriteFlagDefaults(w, fs)
+	utils.WriteHelpSection(w, "Loopback", []string{
+		"relay-server --portal-url https://127.0.0.1:8443",
+		"portal expose 127.0.0.1:8080 --relays https://127.0.0.1:8443 --discovery=false",
+	})
+	utils.WriteHelpSection(w, "Ready", []string{
+		"After portal expose succeeds, it logs a line starting with: service ready at",
+	})
 }

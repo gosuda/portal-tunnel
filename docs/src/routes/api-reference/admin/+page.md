@@ -32,7 +32,6 @@ Admin bearer tokens are separate from SDK lease tokens.
 | `POST` | `/api/policy` | Bearer | `PolicySettings` | `PolicySettings` |
 | `GET` | `/api/policy/state` | Bearer | none | `PolicyStateResponse` |
 | `POST` | `/api/policy/leases` | Bearer | `LeasePolicyUpdate` | `{}` |
-| `POST` | `/api/policy/ips` | Bearer | `IPPolicyUpdate` | `{}` |
 
 ## Auth Payloads
 
@@ -76,7 +75,6 @@ and adds:
 | `is_approved` | `boolean` | effective approval result |
 | `is_banned` | `boolean` | identity is banned |
 | `is_denied` | `boolean` | identity is denied |
-| `is_ip_banned` | `boolean` | observed client IP is banned |
 
 ## Policy
 
@@ -114,19 +112,9 @@ Supported modes:
 | Field | Type | Effect |
 |-------|------|--------|
 | `identity_key` | `string` | normalized `name:address` key |
-| `is_banned` | `boolean` | ban or unban identity registration and renewal |
+| `is_banned` | `boolean` | block or unblock routing for the identity |
 | `is_approved` | `boolean` | approve or revoke explicit approval |
 | `is_denied` | `boolean` | deny or remove denial; `true` also revokes approval |
 | `bps` | `number` | set bytes-per-second limit; `0` removes the limit |
 
 Lease policy updates persist to `policy.json` and return `{}` on success.
-
-## IP Policy
-
-`POST /api/policy/ips` accepts:
-
-```json
-{ "ip": "203.0.113.10", "is_banned": true }
-```
-
-The IP must parse as a valid IPv4 or IPv6 address.

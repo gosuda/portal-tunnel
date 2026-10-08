@@ -7,20 +7,146 @@ description: Complete reference for all Portal environment variables, CLI flags,
 
 Complete reference for all Portal environment variables, CLI flags, and configuration files.
 
+## Static relay cache
+
+Capability is enabled by default in the relay binary. Exposures are eligible
+only with `portal expose --serve ./dist --cache`. Cached responses terminate
+TLS at the selected relay and lose browser-to-origin end-to-end encryption.
+Only identity-bound canonical hostnames use the cache; friendly aliases always
+use the live origin.
+
+| Environment | Flag | Default | Meaning |
+| --- | --- | --- | --- |
+| `CACHE_ENABLED` | `--cache-enabled` | `true` | Enable origin-opted-in cache admission |
+| `CACHE_MAX_BYTES` | `--cache-max-bytes` | `1073741824` | Relay payload bytes, including staging and pinned evictions |
+| `CACHE_MAX_TTL` | `--cache-max-ttl` | `24h` | Maximum offline TTL added to the bounded lease-liveness deadline |
+
+The total byte budget must be positive; TTL must be between `1s` and `8760h`.
+The cache manager internally limits each exposure to one quarter of the total
+budget, capped at 64 MiB and rounded down with a one-byte minimum. Each object
+is limited to 10 MiB or the exposure limit, whichever is smaller.
+`--cache-ttl` on the origin is only a request, clamped by the
+relay. Cache expiry is `min(ExpiresAt, LastSeenAt + 2m) + effective TTL`.
+Unregister may shorten expiry to the unregister time plus that TTL, but cannot
+extend it. Uploads have a two-minute body-read deadline; manifest checks have
+an independent admission pool, a 1 MiB body limit, and a ten-second read deadline.
+The manager allows at most two concurrent uploads and two concurrent checks;
+these internal limits keep slow checks from consuming upload slots.
+The cache holds at most 128 snapshots with at most 2,048 files each.
+Expired snapshots are removed first, then least recently used snapshots.
+Storage-full, unsupported capability, or upload rejection falls back to the
+origin tunnel. Storage lives under `IDENTITY_PATH/static-cache`, which must be
+exclusive to one relay process. Restart may discard all cached content. Allow additional disk
+space for filesystem metadata and block allocation beyond the payload limit.
+
+## Checking Relay Configuration
+
+This page describes what each variable means. To see the effective relay values
+inside the bundled container, ask the binary rather than reading a table:
+
+```bash
+docker compose run --rm -T portal config
+```
+
+It prints every environment key the relay consumes, its effective value and
+source, and any side-effect-free validation error the server would reject.
+Compose-only variables, container settings, and external SDK configuration are
+outside this report.
+
+Run it **inside the container, without `--env-file`**. Compose has already
+combined `.env` with the defaults declared in `docker-compose.yml`, so the
+report then describes the environment `docker compose up` will actually
+provide. `--env-file` reads a file on its own, against the relay binary's
+defaults — `MIN_PORT` is `0` there and `40000` under Compose. Use it to inspect
+a file in isolation, not to predict the surrounding deployment:
+
+```bash
+relay-server config                    # this process environment
+relay-server config --env-file .env    # one file, against relay defaults
+```
+
+`relay-server config --format env` regenerates the relay-owned list from the
+flag definitions, and `make check-env-example` fails when this page or
+`.env.example` stops mentioning a key.
+
 ## Relay Server Environment Variables
 
 The relay server (`relay-server`) reads configuration from environment variables. Each variable corresponds to a CLI flag of the same shape (e.g. `PORTAL_URL` → `--portal-url`). CLI flags take precedence over environment variables when both are set.
+
+A value that cannot be parsed is a startup error rather than a silent fallback:
+`DISCOVERY=yes` fails immediately instead of resolving to `false`.
 
 ### Core
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `PORTAL_URL` | `https://localhost` | string | Public HTTPS origin of this relay server and embedded dashboard |
+| `PORTAL_URL` | `https://localhost` | string | Canonical public HTTPS origin, including the externally reachable port |
 | `PORTAL_FRONTEND_DIR` | `""` | string | Custom SPA directory containing `index.html`; empty uses the frontend embedded in the Portal binary |
 | `IDENTITY_PATH` | `./.portal-certs` | string | Directory path for relay identity, policy state, and TLS materials |
-| `API_PORT` | `4017` | int | Admin/API server listen port |
-| `SNI_PORT` | `443` | int | TCP SNI router listen port; non-standard values are intended for local testing, while the bundled public deployment requires `443` |
-| `WIREGUARD_PORT` | `51820` | int | Public and listen UDP port for relay discovery overlay |
+| `SNI_PORT` | `PORTAL_URL` port, else `443` | int | Local TCP SNI router listen port; an unset value follows the explicit `PORTAL_URL` port when it names one, and it never changes the public port advertised from `PORTAL_URL` |
+
+`PORTAL_URL` owns public semantics and `SNI_PORT` owns local bind semantics.
+Portal derives tenant URLs, reverse endpoints, and QUIC connection metadata
+from `PORTAL_URL`. An unset `SNI_PORT` follows the
+explicit `PORTAL_URL` port when it names one, so a direct listener on a
+non-default port needs a single setting:
+
+```text
+PORTAL_URL=https://localhost:8443
+```
+
+When a load balancer maps public port 443 to a local listener on 8443, use:
+
+```text
+PORTAL_URL=https://relay.example.com
+SNI_PORT=8443
+```
+
+Portal does not compare these ports because it cannot infer external NAT or
+load-balancer topology.
+
+### Optional HTTP redirect listener
+
+| Variable | Default | Type | Description |
+|----------|---------|------|-------------|
+| `HTTP_REDIRECT_ENABLED` | `false` | bool | Enable the redirect-only listener (`--http-redirect-enabled`) |
+| `HTTP_REDIRECT_ADDR` | `:80` | string | TCP listen address (`--http-redirect-addr`); use `127.0.0.1:18080` for local testing |
+| `HTTP_REDIRECT_HSTS` | `false` | bool | Include `Strict-Transport-Security: max-age=31536000` on redirects (`--http-redirect-hsts`) |
+
+Every request receives **301 Moved Permanently** to the normalized configured
+`PORTAL_URL`, never to a request Host or forwarded-header destination. Request
+paths and queries are discarded; this does not implement per-tenant redirects.
+Existing URL normalization retains a configured base path, removes trailing
+slashes and the legacy `/relay` suffix, and drops configured queries/fragments.
+Enabling redirects requires an explicit absolute HTTPS `PORTAL_URL` without
+credentials and with a valid port; HTTPS scheme spelling is case-insensitive.
+The listen address must use `host:port` syntax (bracket IPv6 addresses) with a
+numeric port from 0 to 65535; port 0 requests an automatically assigned port.
+`relay-server config` reports validation failures as `INVALID <error>` and
+successful validation as `OK relay configuration is valid`. Validation only
+checks configuration: it does not resolve listen hosts or bind sockets, so `OK`
+is not a readiness check. Bind failures, including occupied ports or
+unavailable hosts, still fail startup. Keys in an env file that the relay does
+not read are reported as `UNKNOWN` with a closest-match suggestion instead of
+being silently dropped.
+Disabled mode preserves existing loopback HTTP-to-HTTPS URL normalization.
+Shutdown releases the listener. The listener uses bounded read, write, and idle
+timeouts.
+
+**Browsers ignore HSTS received over HTTP.** This optional insecure-response
+header does not protect clients or establish HSTS. Effective HSTS must be served
+over HTTPS by the destination. This option does not change HTTPS or tenant
+policy and does not add `includeSubDomains` or `preload`.
+
+```bash
+relay-server --portal-url https://localhost:14443 --sni-port 14443 --http-redirect-enabled --http-redirect-addr 127.0.0.1:18080
+curl -i -H "Host: untrusted.example" "http://127.0.0.1:18080/ignored?secret=value"
+```
+
+For bundled Compose, set `HTTP_REDIRECT_ENABLED=true`, retain
+`HTTP_REDIRECT_ADDR=:80`, and add `"80:80"` to the portal service's `ports`.
+Changing the container listen port also requires changing this mapping. Open
+TCP 80 in the firewall; binding privileged ports may require OS permissions.
 
 ### Transport
 
@@ -37,7 +163,53 @@ The relay server (`relay-server`) reads configuration from environment variables
 |----------|---------|------|-------------|
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
+| `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the IVNP overlay and requires `DISCOVERY=true`; empty disables the overlay |
 | `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
+
+### IVNP overlay
+
+`IVNP_CONFIG` now points to a JSON object using the fields of IVNP's
+[`RouterConfig`](https://github.com/gosuda/IVNP/blob/4178bfefc2a07cdf2bb29931243269ee89d3ce17/config.go#L17),
+defined in the pinned revision's `config.go`; newer IVNP revisions dropped the
+`API.md` document that used to describe it.
+Portal applies the file to `ivnp.DefaultRouterConfig()` and lets IVNP validate
+the resulting configuration. An existing file containing `{}` enables the
+overlay with IVNP's defaults: in-memory router state and a transient service
+destination. Unknown fields, invalid values, and legacy `ivnp.conf` syntax fail
+startup; replace the old file explicitly when upgrading. Runtime `Logger` and
+`Resolver` collaborators cannot be configured through this file.
+
+This file configures IVNP's router; Portal applies it, while IVNP owns
+destination reachability and path topology. See
+[IVNP-backed overlay networking](/concepts#ivnp-backed-overlay-networking) for
+the ownership boundary and [the architecture](/architecture#ivnp-backed-overlay-networking)
+for the protocol flow.
+
+For explicit router persistence, mount a private writable directory and use:
+
+```json
+{
+  "Persistence": { "Directory": "/var/lib/portal/ivnp-router" }
+}
+```
+
+Relative persistence paths resolve from the relay process working directory.
+Use a dedicated embedded-router directory; an old daemon state directory with
+named application destinations is incompatible and must not be reused.
+Persistence preserves router state only. Portal creates a transient destination
+on each start and republishes its new address through relay discovery.
+
+Other JSON fields use the upstream Go types: addresses such as `NTCP2.Bind`
+are `"0.0.0.0:0"` strings, and durations are integer nanoseconds. Nested fields
+not supplied keep IVNP defaults; disabling a transport requires zeroing all its
+fields as required by IVNP validation. Portal uses
+`ivnp.DefaultDestinationConfig()` for its service; tunnel construction and
+internal routing remain IVNP-owned.
+
+Local router configuration and socket setup happen during startup. Destination
+creation waits for tunnels and confirmed publication in the background, while
+public ingress and direct reverse transport remain available. Shutdown explicitly
+closes the router and its destination resources, including pending connections.
 
 ### Payments
 
@@ -45,27 +217,45 @@ The relay server (`relay-server`) reads configuration from environment variables
 |----------|---------|------|-------------|
 | `X402_ENABLED` | `false` | bool | Enable relay-owned Sui x402 facilitator endpoints under `/api/x402` for future control-plane payments |
 | `X402_TESTNET` | `false` | bool | Use Sui testnet for relay-owned x402 facilitator payments; `false` uses Sui mainnet |
-| `X402_PAY_TO` | `""` | string | Sui payment recipient address for relay-owned control-plane x402 resources |
+| `X402_PAY_TO` | `""` | string | Sui payment recipient address for relay-owned control-plane x402 resources; required (non-empty) when `X402_ENABLED=true` |
 
 ### Proxy
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
 | `TRUST_PROXY_HEADERS` | `false` | bool | Trust `X-Forwarded-*` and `X-Real-IP` headers from trusted proxies |
-| `TRUSTED_PROXY_CIDRS` | `""` | string | Trusted proxy CIDR allowlist for forwarded headers (comma-separated); defaults to private/loopback ranges when `TRUST_PROXY_HEADERS` is enabled |
+| `TRUSTED_PROXY_CIDRS` | `""` | string | Explicit trusted proxy CIDR allowlist for forwarded headers (comma-separated); empty trusts no proxies and uses socket addresses even with `TRUST_PROXY_HEADERS=true` |
+
+When upgrading a deployment that used `TRUST_PROXY_HEADERS=true` with an empty
+`TRUSTED_PROXY_CIDRS`, set the proxy's fixed address explicitly (`/32` for IPv4,
+`/128` for IPv6). Private and loopback addresses are no longer trusted implicitly.
+Without an allowlist, source limits apply to the socket peer, which
+is the proxy when one sits in front. The trusted proxy must overwrite
+`X-Forwarded-For` and `X-Real-IP` with the client address; see the
+[reverse-proxy trust boundary](/deployment#client-addresses-and-the-trust-boundary).
 
 ### TLS
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync, the relay ECH record, opt-in tunnel ECH records, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` is used when present |
-| `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames; not supported with `ACME_DNS_PROVIDER=embedded` yet |
+| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
+| `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for a public relay domain and lease hostnames through the selected DNS provider. With `embedded`, local records are signed and the operator publishes the DS at the parent zone; Cloudflare, Google Cloud DNS, Route53, and Vultr use their provider APIs. Hetzner and Njalla do not support ENS DNSSEC automation |
 
 ### Embedded DNS
 
 > This section is the canonical reference for embedded DNS configuration. The deployment and self-hosting guides link here rather than restating the details.
 
-Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` pointing at the relay public IP) and open `53/tcp` + `53/udp`. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A answers for the apex and every covered name are synthesized from the relay public IPv4; ACME DNS-01 TXT and tunnel ECH HTTPS records are served directly. ENS gasless automation (zone DNSSEC) is not supported yet.
+Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` pointing at the relay public IP) and open `53/tcp` + `53/udp`. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A answers for the apex and every covered name are synthesized from the relay public IPv4; ACME DNS-01 TXT records are served directly. DNSSEC signing is always enabled; ENS TXT automation remains opt-in with `ENS_GASLESS_ENABLED=true`.
+
+The relay automatically generates a single ECDSA P-256 CSK (DNSSEC algorithm 13) in `IDENTITY_PATH/dnssec-csk.json`. Preserve and back up this file with the identity volume across restarts, container replacement, and migration: deleting or replacing it changes the DNSKEY and breaks validation against an existing parent DS. Portal uses Go's standard filesystem operations; on Unix a new key is created with mode `0600` and directories created by Portal use mode `0700`. Existing operator-provided directories and key files are loaded without ownership, mode, or ACL policy checks and are not modified. Securing the identity volume, including its Windows ACLs, is the operator's responsibility. Malformed keys and keys for another zone still fail startup rather than triggering automatic replacement.
+
+The signing store must permit the required create, read, write, sync, and rename operations. Filesystem failures fail startup with the underlying operation error without replacing an existing key.
+
+After NS/glue delegation is reachable, copy the `ds_record` from the relay startup log into a **DS record at the parent zone** for the delegated domain. `EnsureDNSSEC()` exports the same full DS record (SHA-256 digest, digest type 2); with ENS enabled it is also exposed in ENS status. Configure the key tag, algorithm, digest type, and digest exactly as exported. Parent DS publication is manual. The embedded provider reports `pending` even while signing locally: Portal does not authenticate the parent chain, so `ens.verified` remains false even after you publish the DS. The parent must itself have a valid DNSSEC chain to a trust anchor for public validation. Verify delegation and signatures before publishing the DS, and never publish the CSK private file. Losing the key requires coordinated parent DS replacement; automatic rollover is not implemented.
+
+Authoritative RRsets, including apex DNSKEY and denial-of-existence NSEC records, are signed. Signatures last 24 hours, tolerate five minutes of clock skew, and refresh before answering after 12 hours; keep the host clock synchronized. A finite wildcard zone preserves synthesized addresses even below explicit TXT/HTTPS owners and their ancestors. When no public IPv4 is configured yet, genuinely absent names return authenticated NXDOMAIN; existing owners without the requested type return NODATA. DNSSEC records accompany responses only when requested with EDNS DO (or queried directly), and large UDP responses require TCP retry.
+
+External managed providers (`cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, `vultr`) are supported first-class backends; `embedded` remains the canonical default. Keep any vendor as the **parent** DNS provider and delegate only the relay subdomain to embedded DNS. Manual/external certificate ownership remains supported via `fullchain.pem` and `privatekey.pem` when neither ACME state file is present. Certificate loading itself needs no vendor API credentials, and the embedded provider needs none for DNS management. Selecting an external provider still uses its APIs for DNS publication and, when `ENS_GASLESS_ENABLED=true`, for ENS/DNSSEC synchronization before certificate loading; a manual certificate does not bypass those credentials.
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
@@ -77,6 +267,7 @@ Serves the relay base domain from an authoritative DNS server embedded in the re
 |----------|---------|------|-------------|
 | `PPROF_ENABLED` | `false` | bool | Enable the relay pprof diagnostics HTTP server |
 | `PPROF_ADDR` | `127.0.0.1:6060` | string | pprof listen address when enabled; keep it on loopback unless the port is protected |
+| `PPROF_PORT` | `6060` | int | Host port published for the pprof listener, read by Docker Compose rather than the relay. Only takes effect when the matching port mapping in `docker-compose.yml` is uncommented, which exposes it to the host |
 
 ### Admin
 
@@ -139,9 +330,8 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 |------|---------|------|---------|-------------|
 | `--relays` | | string | _(registry)_ | Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https) |
 | `--discovery` | | bool | `true` | Include public registry relays and discover additional relay bootstraps |
-| `--multi-hop` | `MULTI_HOP` | string | | Ordered multi-hop relay API URLs, comma-separated |
-| `--multi-hop-depth` | `MULTI_HOP_DEPTH` | int | `0` | Automatically create this-depth multi-hop routes for every eligible entry relay; 0 or 1 disables multi-hop |
-| `--max-active-relays` | `MAX_ACTIVE_RELAYS` | int | `3` | Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry; explicit relays are always included |
+| `--max-active-relays` | `MAX_ACTIVE_RELAYS` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
+| `--overlay` | `OVERLAY_ENABLED` | bool | `false` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; retains direct fallback |
 | `--ban-mitm` | `BAN_MITM` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 
 ### Identity
@@ -149,18 +339,22 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
 | `--identity-path` | `IDENTITY_PATH` | string | `identity.json` | Identity JSON file path |
-| `--identity-json` | `IDENTITY_JSON` | string | | Identity JSON payload; overrides `--identity-path` contents and is persisted there when both are set |
+| `--identity-json` | `IDENTITY_JSON` | string | | In-memory identity JSON; takes precedence over `--identity-path` without reading or writing that file |
 
 ### Lease
 
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
-| `--name` | | string | _(auto)_ | Public hostname prefix (single DNS label); auto-generated when omitted |
+| `--name` | | string | _(auto)_ | Public hostname prefix (normalized single DNS label, maximum 22 ASCII characters); auto-generated when omitted |
 | `--description` | | string | | Service description metadata |
 | `--tags` | | string | | Service tags metadata (comma-separated) |
 | `--owner` | | string | | Service owner metadata |
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
+| `--auth` | | string | | Protect the complete HTTP application with `siwe` or `credential`; excludes cache, TCP, and UDP |
+| `--auth-allow` | | string | | Allowed Ethereum wallet; repeatable; empty allows any valid wallet and requires `--auth siwe` |
+| `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
+| `--strip-request-header` | | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; `Host` and `X-Forwarded-Proto` cannot be stripped (always regenerated before this middleware runs); `X-Forwarded-Prefix` and `X-Portal-User`/`Auth` are allowed; requires `--http-route`, `--target`, or `--auth` |
 | `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
 | `--x402-network` | | string | | Optional Sui or Casper CAIP-2 network |
@@ -173,6 +367,23 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
 | `--http-route` | | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]` form; repeat to aggregate multiple local HTTP services behind one public URL; route amounts require `--x402-pay-to` |
+
+### Static Sites
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--serve` | string | | Serve a directory or HTML file with SPA fallback; excludes positional target, `--http-route`, `--tcp`, and `--udp` |
+| `--cache` | bool | `false` | Allow selected relays to store `--serve` content and terminate browser TLS; excludes `--ban-mitm` |
+| `--cache-ttl` | duration | `0` | Offline TTL request; requires `--cache`; `0` uses relay policy, otherwise `1s` to `8760h`, clamped by the relay |
+
+These options have no environment-variable fallback and are not agent TOML
+fields. See [static serving](/cli-reference#serve-a-static-site).
+
+### Diagnostics
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--metrics-addr` | string | empty | Optional `host:port` serving Prometheus `/metrics`; no environment fallback |
 
 ### Transport
 
@@ -218,8 +429,12 @@ name = "myapp"
 target = "127.0.0.1:3000"
 relays = ["https://portal.example.com"]
 discovery = false
+overlay = true
 description = "Managed web tunnel"
 tags = ["web"]
+auth = "siwe"
+auth_allowed_wallets = ["0x1234..."]
+auth_identity_headers = true
 
 [[tunnels]]
 id = "api"
@@ -238,6 +453,18 @@ prefix = "/"
 upstream = "http://127.0.0.1:5173"
 ```
 
+Portal-native credential authentication is an alternative to SIWE and does not
+use `auth_allowed_wallets`:
+
+```toml
+[[tunnels]]
+id = "credential-web"
+name = "credential-app"
+target = "127.0.0.1:3000"
+auth = "credential"
+auth_identity_headers = true
+```
+
 Agent fields:
 
 | Field | Default | Description |
@@ -251,22 +478,29 @@ The local agent dashboard and mutating control API calls use the bearer token in
 the agent state directory. Wallet-authenticated agent requests are read-only and
 can only read `/agent/status`.
 
-Tunnel fields mirror `portal expose` flags:
+Supported tunnel fields follow the corresponding `portal expose` options.
+The agent supports `serve` for static sites. It does not support `cache` or `cache_ttl`:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Stable tunnel ID used by the agent dashboard |
+| `name` | string | Name used when creating a new identity; an existing identity keeps its saved name |
+| `max_active_relays` | int | Auto-selected relay limit; defaults to `3`; explicit relays remain included |
+| `ban_mitm` | bool | Ban on suspected TLS termination; defaults to warning-only |
 | `target` | string | Local TCP target, equivalent to the `portal expose <target>` argument |
-| `http_routes` | table array | HTTP route mappings; cannot be combined with `target` or `udp` |
+| `http_routes` | table array | HTTP route mappings; cannot be combined with `target`, `serve`, `tcp`, or `udp` |
+| `serve` | string | Static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`. Directories use `index.html`; unknown paths fall back to the entry file, which must exist when the tunnel starts |
 | `relays` | string array | Explicit relay API URLs |
 | `discovery` | bool | Include registry and relay discovery expansion |
-| `multi_hop` | string array | Ordered multi-hop relay path |
-| `multi_hop_depth` | int | Automatically create this-depth multi-hop routes for every eligible entry relay |
-| `ech` | bool | Enable ECH hostname privacy for TLS stream tunnels; defaults to `false` |
+| `overlay` | bool | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to direct and retains direct fallback |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
-| `identity_json` | string | Identity JSON payload; overrides `identity_path` contents and is persisted there when both are set |
+| `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
+| `auth` | string | Application login provider: `siwe` or `credential`; cannot be combined with TCP or UDP |
+| `auth_allowed_wallets` | string array | Wallets allowed to sign in; empty allows any valid wallet and requires the `siwe` provider when set |
+| `auth_identity_headers` | bool | Inject verified Portal identity headers upstream; requires `auth` |
+| `strip_request_headers` | string array | Client request headers removed before routed HTTP forwards them upstream; case-insensitive; `Host` and `X-Forwarded-Proto` cannot be listed (always regenerated); `X-Portal-User`/`Auth` conflict with `auth_identity_headers`; requires `http_routes` or a `target` |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |
 | `x402_testnet` | bool | Use Sui testnet when `x402_network` is omitted; omitted or `false` uses Sui mainnet |
 | `x402_network` | string | Optional CAIP-2 network: `sui:mainnet`, `sui:testnet`, `casper:casper`, or `casper:casper-test` |
@@ -320,9 +554,10 @@ Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors
 | `private_key` | string | secp256k1 private key hex; keep secret |
 | `mnemonic` | string | BIP-39 mnemonic used to derive the secp256k1 identity key; keep secret |
 | `derivation_path` | string | EVM derivation path for `mnemonic`; defaults to `m/44'/60'/0'/0/0` |
-| `wireguard_public_key` | string | Relay-only WireGuard overlay public key when discovery is enabled |
-| `wireguard_private_key` | string | Relay-only WireGuard overlay private key when discovery is enabled |
-| `encrypted_client_hello_seed` | string | Relay-only HKDF salt for deriving the ECH HPKE private key; generated automatically when missing; keep secret |
+
+An existing identity file or `--identity-json` supplies the saved name as well
+as the key. `--name` applies only when creating a new identity; it does not
+rename an existing one. Use a separate `--identity-path` for a new identity.
 
 When `mnemonic` is present, Portal derives the private key at `derivation_path`
 and preserves the mnemonic form when rewriting `identity.json`. The same
@@ -339,9 +574,9 @@ Relay policy settings are stored at `IDENTITY_PATH/policy.json`.
 
 ## ACME DNS Provider Configuration
 
-Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, the relay root HTTPS/ECH record, tenant A and HTTPS/ECH records for tunnels with `ech = true`, and optional ENS gasless DNS records. The default `ech = false` tunnel mode does not create tenant ECH DNS records.
+Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, and optional ENS gasless DNS records.
 
-When this variable is empty the relay server falls back to manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH`.
+An empty value selects `embedded`, the canonical managed backend; see [Embedded DNS](#embedded-dns) for NS/glue delegation, DS setup, and persistent signing-key requirements. The external providers below are supported first-class backends. Valid manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH` take precedence over managed certificate issuance only when neither `acme-account.key` nor `acme-registration.json` exists, regardless of provider selection. If either ACME state file remains, Portal treats the PEM files as managed certificate material. Manual overrides do not disable embedded A-record serving or opt-in ENS automation through the selected provider.
 
 For ENS gasless behavior and wallet authentication details, see [Wallet and ENS](/wallet-and-ens).
 
@@ -376,7 +611,7 @@ For ENS gasless behavior and wallet authentication details, see [Wallet and ENS]
 |----------|----------|-------------|
 | `HETZNER_API_TOKEN` | Yes | Hetzner Cloud API token with DNS zone and RRSet write access |
 
-Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PROVIDER=hetzner` supports ACME, A records, and HTTPS/ECH records, but not ENS gasless DNSSEC automation.
+Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PROVIDER=hetzner` supports ACME and A records, but not ENS gasless DNSSEC automation.
 
 ### Njalla DNS (`njalla`)
 
@@ -384,10 +619,82 @@ Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PR
 |----------|----------|-------------|
 | `NJALLA_TOKEN` | Yes | Njalla API token with DNS record write access |
 
-Note: Njalla supports managed ACME, A records, TXT records, and HTTPS/ECH records. Portal does not automate Njalla DNSSEC signing, so `ACME_DNS_PROVIDER=njalla` does not support ENS gasless DNSSEC automation.
+Note: Njalla supports managed ACME, A records, and TXT records. Portal does not automate Njalla DNSSEC signing, so `ACME_DNS_PROVIDER=njalla` does not support ENS gasless DNSSEC automation.
 
 ### Vultr DNS (`vultr`)
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `VULTR_API_KEY` | Yes | Vultr API key with DNS domain, record, and DNSSEC write access |
+
+## Pre-auth admission
+
+Registration challenges, registration attempts, and discovery announces share
+one weighted source-IP budget and one relay-wide budget. These limits run before
+signature verification; verified lease operations use identity policy instead.
+IP addresses are never durable moderation identities.
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `PREAUTH_SOURCE_PER_MINUTE` | `10` | Source-IP units refilled per minute |
+| `PREAUTH_SOURCE_BURST` | `20` | Source-IP burst capacity |
+| `PREAUTH_GLOBAL_PER_MINUTE` | `600` | Relay-wide units refilled per minute |
+| `PREAUTH_GLOBAL_BURST` | `200` | Relay-wide burst capacity |
+| `PREAUTH_CHALLENGE_COST` | `1` | Units per registration challenge |
+| `PREAUTH_ANNOUNCE_COST` | `2` | Units per discovery announce |
+| `PREAUTH_REGISTER_COST` | `5` | Units per registration attempt |
+
+Positive values are required; zero selects the default. Both burst capacities
+must cover the largest endpoint cost. The global default allows approximately
+100 complete challenge-plus-registration flows per minute, with a burst of 33.
+This is an initial operational budget, not a measured capacity guarantee: tune
+it to relay resources and observed rejection rates.
+
+Rejected requests return HTTP 429 and `Retry-After`. Update tunnels/SDKs to
+v2.4.3 alongside the relay: the SDK treats admission limits as temporary, honors
+retry guidance, and retains a valid signed registration challenge across retries.
+Source buckets expire after 30 minutes idle, are collected
+on subsequent traffic, and have a hard ceiling of 65,536 entries. Invalid
+signatures incur no additional penalty. IPv6 buckets use individual addresses.
+
+Since v2.4.3, startup explicitly removes legacy `banned_ips` from `policy.json`.
+Identity approvals, denials, bans, and bandwidth settings are preserved.
+Operators requiring network IP blocks should configure their firewall or
+trusted ingress proxy.
+
+### Upstream request-header trust contract
+
+Portal's HTTP tunnel forwards client request headers to upstream applications
+almost unchanged. It always regenerates `X-Forwarded-For`, `X-Forwarded-Host`,
+and `X-Forwarded-Proto` from the observed request, so client-supplied copies
+are replaced. `X-Forwarded-Prefix` is deleted on every request and only
+re-added for non-root routes; root-route upstreams never see a
+client-supplied value. `X-Portal-User` and `X-Portal-Auth` are only rewritten
+when application auth with identity headers is enabled (`--auth-identity-headers`);
+otherwise they pass through like any other header.
+
+Any other header an Internet client sends arrives at the upstream verbatim.
+
+Upstream applications **must not** trust arbitrary request headers as proof of
+identity. If the upstream runs behind another reverse proxy or VPN that sets
+identity headers (for example `Tailscale-User-Login`, `X-Remote-User`, or
+`X-Real-IP`), a Portal visitor can trivially forge them. Use
+`--strip-request-header` (repeatable, case-insensitive) to remove such headers
+before they reach the upstream:
+
+```
+portal expose 127.0.0.1:3000 \
+  --strip-request-header Tailscale-User-Login \
+  --strip-request-header X-Remote-User
+```
+
+`--strip-request-header` works with `--http-route`, `--target`, or `--auth`.
+It cannot be combined with `--serve` because static sites do not proxy request
+headers. `Host` and `X-Forwarded-Proto` are always regenerated before this
+middleware runs and cannot be suppressed through this option.
+`X-Forwarded-For` and `X-Forwarded-Host` are regenerated downstream by the
+reverse proxy, so stripping them here is safe and has no lasting effect.
+
+The same policy applies automatically to WebSocket upgrade requests routed
+through `--http-route`. Portal-owned forwarding headers are set after stripping,
+so they remain correct and trusted.

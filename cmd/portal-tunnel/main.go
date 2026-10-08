@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -8,8 +9,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -17,9 +21,12 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/thumbnail"
-	"github.com/gosuda/portal-tunnel/v2/sdk"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -30,6 +37,7 @@ func main() {
 	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
 		"expose": runExposeCommand,
 		"agent":  runAgentCommand,
+		"auth":   runAuthCommand,
 		"list":   runListCommand,
 		"update": runUpdateCommand,
 		"version": func(args []string) error {
@@ -39,6 +47,7 @@ func main() {
 		"help": utils.MakeHelpCommand(printRootUsage, []utils.HelpTopic{
 			{Name: "expose", Usage: printExposeUsage},
 			{Name: "agent", Usage: printAgentUsage},
+			{Name: "auth", Usage: printAuthUsage},
 			{Name: "list", Usage: printListUsage},
 			{Name: "update", Usage: printUpdateUsage},
 		}),
@@ -50,8 +59,8 @@ func main() {
 
 type exposeFlags struct {
 	relayCSV             string
-	multiHopCSV          string
 	discovery            bool
+	overlay              bool
 	banMITM              bool
 	identityPath         string
 	identityJSON         string
@@ -62,6 +71,9 @@ type exposeFlags struct {
 	thumbnail            string
 	thumbnailFromTarget  bool
 	hide                 bool
+	authProvider         string
+	authAllowedWallets   []string
+	authIdentityHeaders  bool
 	x402PayTo            string
 	x402Testnet          bool
 	x402Network          string
@@ -70,35 +82,34 @@ type exposeFlags struct {
 	x402FacilitatorToken string
 	targetAddr           string
 	httpRoutes           []string
+	stripRequestHeaders  []string
 	serve                string
+	cache                bool
+	cacheTTL             time.Duration
 	udp                  bool
 	udpAddr              string
 	tcp                  bool
-	ech                  bool
 	maxActiveRelays      int
-	multiHopDepth        int
 	metricsAddr          string
 }
 
-func runExposeCommand(args []string) error {
-	installer.StartUpdateCheck(types.ReleaseVersion)
-
-	flags := exposeFlags{}
-	fs := utils.NewFlagSet("expose", printExposeUsage)
-
+func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
-	utils.StringFlagEnv(fs, &flags.multiHopCSV, "multi-hop", "", "Ordered multi-hop relay API URLs, comma-separated", "MULTI_HOP")
 	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
+	utils.BoolFlagEnv(fs, &flags.overlay, "overlay", false, "Prefer IVNP overlay transport when available", "OVERLAY_ENABLED")
 	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &flags.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
-	utils.StringFlag(fs, &flags.name, "name", "", "Public hostname prefix (single DNS label); auto-generated when omitted")
+	utils.StringFlagEnv(fs, &flags.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
+	utils.StringFlag(fs, &flags.name, "name", "", "Public hostname prefix (normalized single DNS label, maximum 22 ASCII characters); auto-generated when omitted")
 	utils.StringFlag(fs, &flags.desc, "description", "", "Service description metadata")
 	utils.StringFlag(fs, &flags.tags, "tags", "", "Service tags metadata (comma-separated)")
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.thumbnailFromTarget, "thumbnail-from-target", false, "when --thumbnail is empty, use the first absolute image URL the target advertises (og:image, then twitter:image, then an icon link)")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
+	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe or credential authentication")
+	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Ethereum wallet allowed to sign in; repeat to allow multiple wallets (empty allows any wallet)")
+	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
 	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
 	utils.StringFlag(fs, &flags.x402Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, and casper:casper-test")
@@ -106,109 +117,42 @@ func runExposeCommand(args []string) error {
 	utils.RepeatedStringFlag(fs, &flags.x402Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint")
 	utils.StringFlagEnv(fs, &flags.x402FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
 	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
+	utils.RepeatedStringFlag(fs, &flags.stripRequestHeaders, "strip-request-header", "Client request header removed before routed HTTP forwards it upstream; repeat for multiple headers; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (Host, X-Forwarded-*) are always rewritten by the tunnel; requires --http-route or --auth")
 	utils.StringFlag(fs, &flags.serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
+	utils.BoolFlag(fs, &flags.cache, "cache", false, "Allow selected relays to store --serve content and terminate browser TLS; cached responses lose end-to-end TLS to this client")
+	fs.DurationVar(&flags.cacheTTL, "cache-ttl", 0, "Requested offline cache lifetime, clamped by the relay; 0 uses relay policy (requires --cache)")
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
-	utils.BoolFlagEnv(fs, &flags.ech, "ech", false, "Enable ECH hostname privacy for the default TLS stream transport", "ECH_ENABLED")
-	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected single-hop relays to keep connected; multi-hop uses every eligible relay as an entry", "MAX_ACTIVE_RELAYS")
-	utils.IntFlagEnv(fs, &flags.multiHopDepth, "multi-hop-depth", 0, nil, "Automatically create multi-hop routes at this hop count for every eligible entry relay; 0 or 1 disables multi-hop", "MULTI_HOP_DEPTH")
+	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
+}
 
+func runExposeCommand(args []string) error {
+	installer.StartUpdateCheck(types.ReleaseVersion)
+
+	flags := exposeFlags{}
+	fs := utils.NewFlagSet("expose", printExposeUsage)
+	registerExposeFlags(fs, &flags)
 	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-
 	var err error
 	flags.targetAddr, err = utils.OptionalSingleArg(fs.Args(), "target")
 	if err != nil {
 		printExposeUsage(os.Stderr)
 		return err
 	}
-	httpRouteInputs := append([]string(nil), flags.httpRoutes...)
-	serve := strings.TrimSpace(flags.serve)
-	switch {
-	case serve != "" && flags.targetAddr != "":
+	spec, err := tunnelSpecFromExposeFlags(flags)
+	if err != nil {
 		printExposeUsage(os.Stderr)
-		return errors.New("target cannot be combined with --serve")
-	case serve != "" && len(httpRouteInputs) > 0:
-		printExposeUsage(os.Stderr)
-		return errors.New("--serve cannot be combined with --http-route")
-	case serve != "" && flags.udp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--serve cannot be combined with --udp")
-	case serve != "" && flags.tcp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--serve cannot be combined with --tcp")
-	case serve == "" && flags.targetAddr == "" && len(httpRouteInputs) == 0:
-		printExposeUsage(os.Stderr)
-		return errors.New("target, --serve, or at least one --http-route is required")
-	case flags.targetAddr != "" && len(flags.httpRoutes) > 0:
-		printExposeUsage(os.Stderr)
-		return errors.New("target cannot be combined with --http-route")
-	case len(httpRouteInputs) > 0 && flags.udp:
-		printExposeUsage(os.Stderr)
-		return errors.New("--udp cannot be combined with --http-route")
+		return err
 	}
 
-	httpRoutes := make([]sdk.HTTPRouteConfig, 0, len(httpRouteInputs)+1)
-	if serve != "" {
-		root, index, err := utils.ResolveStaticSite(serve)
-		if err != nil {
-			printExposeUsage(os.Stderr)
-			return fmt.Errorf("--serve %q: %w", serve, err)
-		}
-		httpRoutes = append(httpRoutes, sdk.HTTPRouteConfig{
-			Prefix:      "/",
-			StaticRoot:  root,
-			StaticIndex: index,
-		})
-	}
-	for _, raw := range httpRouteInputs {
-		fields := strings.Fields(raw)
-		if len(fields) == 0 || len(fields) > 2 {
-			return fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
-		}
-		prefix, upstream, ok := strings.Cut(fields[0], "=")
-		if !ok {
-			return fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
-		}
-		prefix = strings.TrimSpace(prefix)
-		if prefix == "" {
-			return fmt.Errorf("--http-route %q: path is required", raw)
-		}
-		if !strings.HasPrefix(prefix, "/") {
-			return fmt.Errorf("--http-route %q: path must start with /", raw)
-		}
-		upstream = strings.TrimSpace(upstream)
-		if upstream == "" {
-			return fmt.Errorf("--http-route %q: upstream is required", raw)
-		}
-		route := sdk.HTTPRouteConfig{
-			Prefix:   prefix,
-			Upstream: upstream,
-		}
-		if len(fields) == 2 {
-			methods, amount, err := parseHTTPRoutePayment(fields[1])
-			if err != nil {
-				return fmt.Errorf("--http-route %q: %w", raw, err)
-			}
-			if strings.TrimSpace(flags.x402PayTo) == "" {
-				return fmt.Errorf("--http-route %q: payment amount requires --x402-pay-to", raw)
-			}
-			route.Methods = methods
-			route.Amount = amount
-		}
-		httpRoutes = append(httpRoutes, route)
-	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(flags.x402Network)), "casper:") && strings.TrimSpace(flags.x402Asset) == "" {
-		return errors.New("--x402-asset is required for Casper wCSPR payments")
-	}
-
-	ctx, stop := utils.SignalContext()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	if flags.metricsAddr != "" {
@@ -227,46 +171,152 @@ func runExposeCommand(args []string) error {
 		}()
 	}
 
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:       utils.SplitCSV(flags.relayCSV),
-		Discovery:       flags.discovery,
-		Identity:        types.Identity{Name: flags.name},
-		IdentityPath:    flags.identityPath,
-		IdentityJSON:    flags.identityJSON,
-		TargetAddr:      flags.targetAddr,
-		UDPAddr:         flags.udpAddr,
-		UDPEnabled:      flags.udp,
-		TCPEnabled:      flags.tcp,
-		ECH:             flags.ech,
-		MultiHop:        utils.SplitCSV(flags.multiHopCSV),
-		MultiHopDepth:   flags.multiHopDepth,
-		BanMITM:         flags.banMITM,
-		MaxActiveRelays: flags.maxActiveRelays,
-		Metadata: types.LeaseMetadata{
-			Description: flags.desc,
-			Tags:        utils.SplitCSV(flags.tags),
-			Owner:       flags.owner,
-			// Resolved here rather than by the SDK: how metadata.thumbnail was
-			// chosen is not part of the tunnelling contract, and sdk.Expose
-			// should receive a finished value.
-			Thumbnail: thumbnail.Resolve(ctx, flags.thumbnail, flags.targetAddr, flags.thumbnailFromTarget),
-			Hide:      flags.hide,
-		},
-		X402PayTo:            flags.x402PayTo,
-		X402Testnet:          flags.x402Testnet,
-		X402Network:          flags.x402Network,
-		X402Asset:            flags.x402Asset,
-		X402Endpoints:        flags.x402Endpoints,
-		X402FacilitatorToken: flags.x402FacilitatorToken,
-	})
+	// Resolved here rather than inside the spec: how metadata.thumbnail was
+	// chosen is not part of the tunnelling contract, and tunnel.Start should
+	// receive a finished value.
+	spec.Metadata.Thumbnail = thumbnail.Resolve(
+		ctx, spec.Metadata.Thumbnail, flags.targetAddr, flags.thumbnailFromTarget)
+	runtime, err := tunnel.Start(ctx, spec)
 	if err != nil {
-		return fmt.Errorf("failed to start relays: %w", err)
+		return err
 	}
-	if len(httpRoutes) > 0 {
-		defer exposure.Close()
-		return exposure.RunHTTPRoutes(ctx, httpRoutes, "")
+	defer runtime.Close()
+	return runtime.Run(ctx)
+}
+
+func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
+	if !flags.cache && flags.cacheTTL != 0 {
+		return tunnel.Spec{}, errors.New("--cache-ttl requires --cache")
 	}
-	return sdk.ProxyExposure(ctx, exposure)
+	routes := make([]tunnel.HTTPRoute, 0, len(flags.httpRoutes))
+	for _, raw := range flags.httpRoutes {
+		fields := strings.Fields(raw)
+		if len(fields) == 0 || len(fields) > 2 {
+			return tunnel.Spec{}, fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
+		}
+		prefix, upstream, ok := strings.Cut(fields[0], "=")
+		if !ok {
+			return tunnel.Spec{}, fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
+		}
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			return tunnel.Spec{}, fmt.Errorf("--http-route %q: path is required", raw)
+		}
+		upstream = strings.TrimSpace(upstream)
+		if upstream == "" {
+			return tunnel.Spec{}, fmt.Errorf("--http-route %q: upstream is required", raw)
+		}
+		route := tunnel.HTTPRoute{
+			Prefix:   prefix,
+			Upstream: upstream,
+		}
+		if len(fields) == 2 {
+			methods, amount, err := parseHTTPRoutePayment(fields[1])
+			if err != nil {
+				return tunnel.Spec{}, fmt.Errorf("--http-route %q: %w", raw, err)
+			}
+			route.Methods = methods
+			route.Amount = amount
+		}
+		routes = append(routes, route)
+	}
+
+	spec := tunnel.Spec{
+		Identity: tunnel.IdentitySpec{Name: flags.name, Path: flags.identityPath, JSON: flags.identityJSON},
+		Relays: tunnel.RelaySpec{
+			URLs: utils.SplitCSV(flags.relayCSV), Discovery: flags.discovery,
+			MaxActive: flags.maxActiveRelays, Overlay: flags.overlay, BanMITM: flags.banMITM,
+		},
+		Metadata: types.LeaseMetadata{
+			Description: flags.desc, Tags: utils.SplitCSV(flags.tags), Owner: flags.owner,
+			Thumbnail: flags.thumbnail, Hide: flags.hide,
+		},
+		Transport: tunnel.TransportSpec{Target: flags.targetAddr, TCP: flags.tcp},
+	}
+	if flags.udp {
+		spec.Transport.UDP = &tunnel.UDPConfig{Target: flags.udpAddr}
+	}
+	serve := strings.TrimSpace(flags.serve)
+	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders
+	hasStripPolicy := len(flags.stripRequestHeaders) > 0
+	hasHTTPUpstream := len(routes) > 0 || strings.TrimSpace(flags.targetAddr) != ""
+	if hasStripPolicy && serve == "" && !hasHTTPUpstream && !authEnabled && !flags.cache {
+		return tunnel.Spec{}, errors.New("--strip-request-header requires --http-route, --target, or --auth")
+	}
+	useHTTP := serve != "" || len(routes) > 0 || authEnabled || flags.cache || hasStripPolicy
+	if useHTTP {
+		spec.HTTP = &tunnel.HTTPConfig{
+			Routes:              routes,
+			Serve:               serve,
+			StripRequestHeaders: append([]string(nil), flags.stripRequestHeaders...),
+			Payment: gateway.X402Payment{
+				X402Config: gateway.X402Config{
+					Testnet: flags.x402Testnet, Network: flags.x402Network, Asset: flags.x402Asset,
+					PayTo: flags.x402PayTo, Endpoints: append([]string(nil), flags.x402Endpoints...),
+					FacilitatorToken: flags.x402FacilitatorToken,
+				},
+			},
+		}
+	}
+	if flags.cache {
+		spec.HTTP.Cache = &tunnel.CacheConfig{TTL: flags.cacheTTL}
+	}
+	if authEnabled {
+		spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+			Provider:        flags.authProvider,
+			AllowedWallets:  append([]string(nil), flags.authAllowedWallets...),
+			IdentityHeaders: flags.authIdentityHeaders,
+		}
+	}
+	return spec, spec.Validate()
+}
+
+func runAuthCommand(args []string) error {
+	if len(args) == 0 || args[0] != "issue" {
+		printAuthUsage(os.Stderr)
+		return errors.New("auth subcommand must be issue")
+	}
+	var subject, identityPath, identityJSON string
+	var expires time.Duration
+	fs := utils.NewFlagSet("auth issue", printAuthUsage)
+	utils.StringFlag(fs, &subject, "subject", "", "Subject granted access")
+	fs.DurationVar(&expires, "expires", 30*24*time.Hour, "Credential lifetime")
+	utils.StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
+	if err := utils.ParseFlagSet(fs, args[1:], printAuthUsage); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	host, err := utils.OptionalSingleArg(fs.Args(), "tunnel")
+	if err != nil || host == "" {
+		printAuthUsage(os.Stderr)
+		if err != nil {
+			return err
+		}
+		return errors.New("tunnel is required")
+	}
+	if strings.TrimSpace(subject) == "" {
+		return errors.New("--subject is required")
+	}
+	if expires <= 0 {
+		return errors.New("--expires must be positive")
+	}
+	tunnelIdentity, err := identity.LoadExisting(identityPath, identityJSON)
+	if err != nil {
+		return fmt.Errorf("load tunnel identity: %w", err)
+	}
+	credential, err := gateway.IssueApplicationCredential(tunnelIdentity, host, subject, time.Now().UTC().Add(expires))
+	if err != nil {
+		return err
+	}
+	redeemURL, err := gateway.ApplicationCredentialRedeemURL(host, credential)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "Credential: %s\nRedeem URL: %s\n", credential, redeemURL)
+	return nil
 }
 
 func parseHTTPRoutePayment(value string) ([]string, string, error) {
@@ -285,18 +335,12 @@ func parseHTTPRoutePayment(value string) ([]string, string, error) {
 	}
 	methods := []string(nil)
 	if hasMethods {
-		for _, rawMethod := range strings.Split(methodPart, ",") {
+		for rawMethod := range strings.SplitSeq(methodPart, ",") {
 			method := strings.ToUpper(strings.TrimSpace(rawMethod))
 			if method == "" {
 				return nil, "", errors.New("payment method is required")
 			}
-			exists := false
-			for _, existing := range methods {
-				if existing == method {
-					exists = true
-					break
-				}
-			}
+			exists := slices.Contains(methods, method)
 			if !exists {
 				methods = append(methods, method)
 			}
@@ -362,7 +406,7 @@ func runListCommand(args []string) error {
 
 	relayInputs := utils.SplitCSV(flags.relayCSV)
 
-	relayURLs, err := utils.ResolvePortalRelayURLs(relayInputs, flags.defaultRelays)
+	relayURLs, err := discovery.ResolveRelayURLs(relayInputs, flags.defaultRelays)
 	if err != nil {
 		return fmt.Errorf("resolve relay urls: %w", err)
 	}
@@ -385,9 +429,7 @@ func runListCommand(args []string) error {
 	fmt.Fprintln(table, "RELAY\tVERSION")
 	for i, relayURL := range relayURLs {
 		ver := versions[i]
-		if ver == "" {
-			ver = "unknown"
-		}
+		ver = cmp.Or(ver, "unknown")
 		fmt.Fprintf(table, "%s\t%s\n", relayURL, ver)
 	}
 	return table.Flush()
@@ -399,6 +441,7 @@ func printRootUsage(w io.Writer) {
 			"portal expose [flags] <target>",
 			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]\" [...]",
 			"portal agent run [flags]",
+			"portal auth issue [flags] <host>",
 			"portal agent dashboard [flags]",
 			"portal agent stop [flags]",
 			"portal agent restart [flags]",
@@ -408,6 +451,9 @@ func printRootUsage(w io.Writer) {
 		},
 		[]string{
 			"portal expose 3000",
+			"portal expose 3000 --auth siwe",
+			"portal expose 3000 --auth credential",
+			"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
 			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --http-route /=http://127.0.0.1:5173 --x402-pay-to 0x...",
@@ -434,6 +480,7 @@ func printExposeUsage(w io.Writer) {
 		},
 		[]string{
 			"portal expose 3000",
+			"portal expose 3000 --auth siwe --auth-allow 0x1234...",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --serve ./site --name my-app",
 			"portal expose --serve ./site/main.html --name my-app",
@@ -443,10 +490,30 @@ func printExposeUsage(w io.Writer) {
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal expose 3000 --ban-mitm",
 			"portal expose 3000 --relays https://portal.example.com --discovery=false",
-			"portal expose 3000 --multi-hop https://entry.example.com,https://transit.example.com,https://exit.example.com",
-			"portal expose 3000 --multi-hop-depth 3",
 		},
 	)
+	fs := utils.NewFlagSet("expose", nil)
+	registerExposeFlags(fs, &exposeFlags{})
+	utils.WriteFlagDefaults(w, fs)
+	utils.WriteHelpSection(w, "Loopback", []string{
+		"portal expose 127.0.0.1:8080 --identity-path /absolute/path/outside/repo/identity.json --relays https://127.0.0.1:8443 --discovery=false",
+		"the local relay must advertise the same origin clients dial: PORTAL_URL=https://127.0.0.1:8443",
+	})
+	utils.WriteHelpSection(w, "Ready", []string{
+		"On success the process logs a line starting with: service ready at",
+	})
+}
+
+func printAuthUsage(w io.Writer) {
+	utils.WriteCommandUsage(w, []string{"portal auth issue [flags] <host>"}, []string{"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h"})
+	fs := utils.NewFlagSet("auth issue", nil)
+	var subject, identityPath, identityJSON string
+	var expires time.Duration
+	utils.StringFlag(fs, &subject, "subject", "", "Subject granted access")
+	fs.DurationVar(&expires, "expires", 30*24*time.Hour, "Credential lifetime")
+	utils.StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
+	utils.WriteFlagDefaults(w, fs)
 }
 
 func printListUsage(w io.Writer) {

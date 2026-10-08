@@ -39,33 +39,43 @@ func StartUpdateCheck(currentVersion string) {
 
 	go func() {
 		for {
-			req, err := http.NewRequestWithContext(context.Background(), http.MethodHead, binURL, nil)
-			if err == nil {
-				resp, err := updateCheckClient.Do(req)
-				if err == nil {
-					location := resp.Header.Get("Location")
-					_ = resp.Body.Close()
-
-					if parsed, err := url.Parse(location); err == nil {
-						segments := strings.Split(strings.TrimPrefix(parsed.Path, "/"), "/")
-						if len(segments) >= 5 {
-							version := segments[4]
-							current := strings.TrimSpace(currentVersion)
-							if current != "" && !strings.HasPrefix(current, "v") {
-								current = "v" + current
-							}
-							latestValid := strings.HasPrefix(version, "v") && semver.IsValid(version)
-							if latestValid && semver.IsValid(current) && semver.Compare(version, current) > 0 {
-								fmt.Fprintf(os.Stderr, "\nA new version is available: %s. Run 'portal update' to upgrade.\n", version)
-							}
-						}
-					}
-				}
-			}
-
+			checkForAvailableUpdate(currentVersion, binURL)
 			time.Sleep(updateCheckInterval)
 		}
 	}()
+}
+
+func checkForAvailableUpdate(currentVersion, binURL string) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodHead, binURL, nil)
+	if err != nil {
+		return
+	}
+	resp, err := updateCheckClient.Do(req)
+	if err != nil {
+		return
+	}
+	location := resp.Header.Get("Location")
+	_ = resp.Body.Close()
+
+	parsed, err := url.Parse(location)
+	if err != nil {
+		return
+	}
+	segments := strings.Split(strings.TrimPrefix(parsed.Path, "/"), "/")
+	if len(segments) < 5 {
+		return
+	}
+
+	version := segments[4]
+	current := strings.TrimSpace(currentVersion)
+	if current != "" && !strings.HasPrefix(current, "v") {
+		current = "v" + current
+	}
+	latestValid := strings.HasPrefix(version, "v") && semver.IsValid(version)
+	if !latestValid || !semver.IsValid(current) || semver.Compare(version, current) <= 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "\nA new version is available: %s. Run 'portal update' to upgrade.\n", version)
 }
 
 func UpdateCurrentBinary(version string) error {

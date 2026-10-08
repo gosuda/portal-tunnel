@@ -8,7 +8,11 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/pprof"
+	"net/netip"
+	"net/url"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,55 +23,106 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	"github.com/gosuda/portal-tunnel/v2/portal/auth"
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
-	"github.com/gosuda/portal-tunnel/v2/portal/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
-	defaultClaimTimeout     = 10 * time.Second
-	defaultClientHelloWait  = 2 * time.Second
-	defaultControlBodyLimit = 4 << 20
-	defaultHopOpenRetryWait = 250 * time.Millisecond
-	DefaultPProfListenAddr  = "127.0.0.1:6060"
+	defaultClaimTimeout          = 10 * time.Second
+	defaultClientHelloWait       = 2 * time.Second
+	defaultControlBodyLimit      = 4 << 20
+	reverseOfferAdmissionWorkers = 16
 )
 
 type ServerConfig struct {
-	PortalURL         string
-	IdentityPath      string
-	Bootstraps        []string
-	DiscoveryEnabled  bool
-	WireGuardPort     int
-	APIPort           int
-	SNIPort           int
-	APIListenAddr     string
-	SNIListenAddr     string
-	TrustProxyHeaders bool
-	TrustedProxyCIDRs string
-	UDPEnabled        bool
-	TCPEnabled        bool
-	MinPort           int
-	MaxPort           int
-	PProfEnabled      bool
-	PProfListenAddr   string
-	X402Enabled       bool
-	X402Testnet       bool
-	X402PayTo         string
-	ACME              acme.Config
+	Cache            cache.Config
+	IVNPConfigPath   string
+	PortalURL        string
+	StateDir         string
+	Bootstraps       []string
+	DiscoveryEnabled bool
+	SNIPort          int
+	HTTPRedirect     types.HTTPRedirectConfig
+	SNIListenAddr    string
+	MinPort          int
+	MaxPort          int
+	ACME             acme.Config
+
+	// ApplicationOwnsDomainReport delegates types.PathSDKDomain to the
+	// application handler, which can compose Server.DomainReport() itself.
+	ApplicationOwnsDomainReport bool
 }
 
-func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
-	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
-	cfg.IdentityPath = identity.ResolveRelayStateDir(cfg.IdentityPath)
-	if cfg.IdentityPath == "" {
-		return ServerConfig{}, errors.New("identity path is required")
+// NormalizeHTTPRedirectConfig validates redirect settings without resolving names
+// or binding sockets. Listener availability is checked only when the server starts.
+func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string) (types.HTTPRedirectConfig, error) {
+	if !cfg.Enabled {
+		return cfg, nil
 	}
+	target, err := url.Parse(strings.TrimSpace(portalURL))
+	if err != nil {
+		return types.HTTPRedirectConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
+	}
+	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
+	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
+		return types.HTTPRedirectConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
+	}
+	if port := target.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return types.HTTPRedirectConfig{}, errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
+		}
+	}
+	cfg.Addr = utils.StringOrDefault(strings.TrimSpace(cfg.Addr), types.DefaultHTTPRedirectAddr)
+	host, port, err := net.SplitHostPort(cfg.Addr)
+	if err != nil {
+		return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR must be a host:port address: %w", err)
+	}
+	if strings.ContainsAny(host, " \t\r\n/#?@\\") {
+		return types.HTTPRedirectConfig{}, errors.New("http redirect HTTP_REDIRECT_ADDR has an invalid host")
+	}
+	if strings.Contains(host, ":") {
+		if _, err := netip.ParseAddr(host); err != nil {
+			return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR has an invalid IP address: %w", err)
+		}
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 0 || n > 65535 {
+		return types.HTTPRedirectConfig{}, errors.New("http redirect HTTP_REDIRECT_ADDR port must be between 0 and 65535")
+	}
+	return cfg, nil
+}
+
+// ValidateServerConfig normalizes server configuration and checks the
+// side-effect-free invariants required before runtime resources are created.
+func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
+	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
+	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
+		return ServerConfig{}, errors.New("relay overlay requires discovery")
+	}
+	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
+	cfg.StateDir = strings.TrimSpace(cfg.StateDir)
+	if cfg.StateDir == "" {
+		return ServerConfig{}, errors.New("state directory is required")
+	}
+	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
+		cfg.ACME.KeyDir = cfg.StateDir
+	}
+	if err := cfg.Cache.Validate(); err != nil {
+		return ServerConfig{}, err
+	}
+
+	redirect, err := NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
+	if err != nil {
+		return ServerConfig{}, err
+	}
+	cfg.HTTPRedirect = redirect
 
 	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
 	if err != nil {
@@ -85,34 +140,39 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.Bootstraps = bootstraps
 	cfg.Bootstraps = utils.RemoveRelayURL(cfg.Bootstraps, selfRelayURL)
 
-	cfg.APIPort = utils.IntOrDefault(cfg.APIPort, 4017)
+	if cfg.SNIPort == 0 {
+		// SNI_PORT owns only the local bind. When PORTAL_URL names an explicit
+		// port, an unoverridden listener follows it so a single-setting
+		// deployment serves the port it advertises; mapping a different public
+		// port onto the local listener still sets SNI_PORT explicitly.
+		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
+	}
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
-	cfg.WireGuardPort = utils.IntOrDefault(cfg.WireGuardPort, overlay.DefaultListenPort)
-	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
-	if cfg.PProfEnabled {
-		cfg.PProfListenAddr = utils.StringOrDefault(strings.TrimSpace(cfg.PProfListenAddr), DefaultPProfListenAddr)
-	}
-	cfg.X402PayTo = strings.TrimSpace(cfg.X402PayTo)
-	hasPortRange := cfg.MinPort > 0 && cfg.MaxPort > 0
-	if cfg.UDPEnabled || cfg.TCPEnabled {
-		switch {
-		case !hasPortRange:
-			return ServerConfig{}, errors.New("udp and tcp relay transport require a valid min port and max port range")
-		case cfg.MinPort > 65535 || cfg.MaxPort > 65535:
-			return ServerConfig{}, errors.New("min port and max port must be between 1 and 65535")
-		case cfg.MinPort > cfg.MaxPort:
-			return ServerConfig{}, errors.New("min port must be less than or equal to max port")
-		}
-	}
-
-	cfg.UDPEnabled = cfg.UDPEnabled && cfg.hasLeasePortRange()
-	cfg.TCPEnabled = cfg.TCPEnabled && cfg.hasLeasePortRange()
 	return cfg, nil
 }
 
+// DefaultSNIPort returns the local SNI listener port for a deployment that
+// leaves SNI_PORT unset: the explicit PORTAL_URL port when the canonical
+// origin names one, otherwise 443.
+func DefaultSNIPort(portalURL string) int {
+	normalized, err := utils.NormalizeRelayURL(portalURL)
+	if err != nil {
+		return 443
+	}
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed.Port() == "" {
+		return 443
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return 443
+	}
+	return port
+}
+
 func (cfg ServerConfig) snapshot() ServerConfig {
-	cfg.Bootstraps = utils.CloneSlice(cfg.Bootstraps)
+	cfg.Bootstraps = slices.Clone(cfg.Bootstraps)
 	return cfg
 }
 
@@ -126,46 +186,45 @@ type Server struct {
 	shutdownOnce sync.Once
 
 	cfg         *utils.Snapshot[ServerConfig]
-	identity    types.RelayIdentity
+	identity    identity.RelayIdentity
 	authority   identity.Authority
 	acmeManager *acme.Manager
 	proxy       proxy
+	apiKeyPEM   []byte
+	apiCertPEM  []byte
+	signer      *keyless.Signer
 
-	apiListener   net.Listener
-	sniListener   net.Listener
-	apiServer     *http.Server
-	apiTLSClose   io.Closer
-	pprofListener net.Listener
-	pprofServer   *http.Server
-	quicBackhaul  *quic.Listener
+	apiHandoff       *handoffListener
+	sniListener      net.Listener
+	apiServer        *http.Server
+	apiTLSClose      io.Closer
+	redirectListener net.Listener
+	redirectServer   *http.Server
+	quicBackhaul     *quic.Listener
 
-	overlay         *overlay.Overlay
-	relaySet        *discovery.RelaySet
-	announceLimiter *discovery.AnnounceLimiter
-	registry        *leaseRegistry
+	relaySet *discovery.RelaySet
+	registry *leaseRegistry
+	overlay  *overlay.Runtime
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
-	cfg, err := normalizeServerConfig(cfg)
+	cfg, err := ValidateServerConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
-
-	relayIdentity, err := identity.LoadOrCreateRelayIdentity(cfg.IdentityPath, utils.PortalRootHost(cfg.PortalURL), cfg.DiscoveryEnabled)
+	identityPath := filepath.Join(cfg.StateDir, types.RelayIdentityFilename)
+	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(cfg.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
-	relayAuthority, err := identity.NewLocalAuthority(relayIdentity.Identity)
-	if err != nil {
-		return nil, fmt.Errorf("load relay authority: %w", err)
-	}
-	registry, err := newLeaseRegistry(cfg.UDPEnabled, cfg.TCPEnabled, cfg.MinPort, cfg.MaxPort, relayIdentity.Name, cfg.SNIPort, relayAuthority, cfg.PortalURL, cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
+	registry, err := newLeaseRegistry(cfg.MinPort, cfg.MaxPort, relayIdentity.Name, relayAuthority, cfg.PortalURL)
 	if err != nil {
 		return nil, err
 	}
 	var relaySet *discovery.RelaySet
 	if cfg.DiscoveryEnabled {
-		cfg.Bootstraps, err = utils.ResolvePortalRelayURLs(cfg.Bootstraps, true)
+		cfg.Bootstraps, err = discovery.ResolveRelayURLs(cfg.Bootstraps, true)
 		if err != nil {
 			return nil, fmt.Errorf("resolve discovery bootstraps: %w", err)
 		}
@@ -174,14 +233,22 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	server := &Server{
-		cfg:             utils.NewSnapshot(cfg, ServerConfig.snapshot),
-		identity:        relayIdentity,
-		authority:       relayAuthority,
-		registry:        registry,
-		relaySet:        relaySet,
-		announceLimiter: discovery.NewAnnounceLimiter(0, 0),
+		cfg:       utils.NewSnapshot(cfg, ServerConfig.snapshot),
+		identity:  relayIdentity,
+		authority: relayAuthority,
+		registry:  registry,
+		relaySet:  relaySet,
 	}
-	server.registry.proxy = &server.proxy
+	if cfg.IVNPConfigPath != "" {
+		server.overlay, err = overlay.New(overlay.Config{
+			ConfigPath: cfg.IVNPConfigPath,
+			Authority:  relayAuthority,
+		})
+		if err != nil {
+			return nil, err
+		}
+		registry.overlay = server.overlay
+	}
 	return server, nil
 }
 
@@ -189,48 +256,99 @@ func (s *Server) config() ServerConfig {
 	return s.cfg.Load()
 }
 
-func (s *Server) SetUDPPolicy(enabled bool, maxLeases int) {
-	if enabled && !s.config().hasLeasePortRange() {
-		enabled = false
+func (s *Server) overlayIssueDescriptors(now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
+	if s.overlay == nil || s.relaySet == nil {
+		return types.RelayDescriptor{}, nil, nil
 	}
-	if runtime := s.PolicyRuntime(); runtime != nil {
-		runtime.SetUDPPolicy(enabled, maxLeases)
+	self, err := s.newSelfDescriptor(now)
+	if err != nil {
+		return types.RelayDescriptor{}, nil, fmt.Errorf("build self overlay descriptor: %w", err)
 	}
-	s.cfg.UpdateCopy(func(cfg *ServerConfig) {
-		cfg.UDPEnabled = enabled
-	})
+	return self, s.relaySet.Descriptors(types.RelayDescriptor{}), nil
 }
 
-func (s *Server) SetTCPPortPolicy(enabled bool, maxLeases int) {
-	if enabled && !s.config().hasLeasePortRange() {
-		enabled = false
+func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.ReverseEndpoint, error) {
+	var self types.RelayDescriptor
+	var descriptors []types.RelayDescriptor
+	if input.useOverlay {
+		var err error
+		self, descriptors, err = s.overlayIssueDescriptors(time.Now().UTC())
+		if err != nil {
+			log.Warn().Err(err).Str("lease", input.leaseIdentity.Key()).Msg("relay overlay descriptors unavailable; using direct reverse transport")
+			input.useOverlay = false
+		}
 	}
-	if runtime := s.PolicyRuntime(); runtime != nil {
-		runtime.SetTCPPortPolicy(enabled, maxLeases)
+	endpoint, err := s.registry.issueReverseEndpoint(input, self, descriptors)
+	if err != nil {
+		if errors.Is(err, errUnauthorized) || errors.Is(err, errLeaseNotFound) {
+			return types.ReverseEndpoint{}, err
+		}
+		return types.ReverseEndpoint{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
-	s.cfg.UpdateCopy(func(cfg *ServerConfig) {
-		cfg.TCPEnabled = enabled
-	})
+	return endpoint, nil
+}
+
+// SetTransportPolicy applies relay-owned transport enablement and capacity
+// values to lease enforcement. Disabling UDP takes effect immediately: the
+// QUIC backhaul listener keeps serving live transports, but the registry
+// stops admitting new UDP leases. Enabling UDP at runtime is refused when no
+// backhaul listener exists, since a listener cannot be created post-start.
+func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
+	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
+		return errors.New("transport max leases must be non-negative")
+	}
+	cfg := s.config()
+	if (udpEnabled || tcpEnabled) && !cfg.hasLeasePortRange() {
+		return errors.New("transport enablement requires a lease port range")
+	}
+	if s.group != nil && udpEnabled && s.quicBackhaul == nil {
+		return errors.New("enabling udp requires a relay restart")
+	}
+	s.registry.setUDPPolicy(udpEnabled, udpMaxLeases)
+	s.registry.setTCPPortPolicy(tcpEnabled, tcpMaxLeases)
+	return nil
 }
 
 func (s *Server) supportsUDP() bool {
-	runtime := s.PolicyRuntime()
-	if runtime == nil || !runtime.IsUDPEnabled() {
+	enabled, _ := s.registry.udpPolicy()
+	if !enabled {
 		return false
 	}
 	return s.group == nil || s.quicBackhaul != nil
 }
 
 func (s *Server) supportsTCP() bool {
-	runtime := s.PolicyRuntime()
-	return runtime != nil && runtime.IsTCPPortEnabled()
+	enabled, _ := s.registry.tcpPortPolicy()
+	return enabled
 }
 
-func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
+// Serve runs the complete relay lifecycle around the composed handler: the
+// relay's route table (see the relay package), admin API, and application
+// routes all arrive as one handler.
+func (s *Server) Serve(ctx context.Context, handler http.Handler) error {
+	if err := s.start(ctx, handler); err != nil {
+		return fmt.Errorf("start relay server: %w", err)
+	}
+	return s.Wait()
+}
+
+// Start starts the relay and returns after its listeners are ready. Serve is
+// the normal lifecycle entry point; Start and Wait remain available to callers
+// that need explicit lifecycle control.
+func (s *Server) Start(ctx context.Context, handler http.Handler) error {
+	return s.start(ctx, handler)
+}
+
+func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	if s.group != nil {
 		return errors.New("server already started")
 	}
 	cfg := s.config()
+	cacheManager, cacheErr := cache.New(cfg.Cache, filepath.Join(cfg.StateDir, "static-cache"))
+	if cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("relay cache unavailable; using origin tunnels")
+	}
+	s.registry.cache = cacheManager
 	apiTLS, acmeManager, err := s.prepareAPITLS(ctx)
 	if err != nil {
 		return err
@@ -238,30 +356,32 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 
 	serverCtx, cancel := context.WithCancel(ctx)
 	started := false
-	var apiListener net.Listener
 	var sniListener net.Listener
 	var apiServer *http.Server
 	var apiCloser io.Closer
-	var pprofListener net.Listener
-	var pprofServer *http.Server
-	var ov *overlay.Overlay
+	var redirectListener net.Listener
+	var redirectServer *http.Server
 	var quicBackhaul *quic.Listener
 	defer func() {
 		if started {
 			return
 		}
-		_ = acmeManager.Stop(ctx)
-		if ov != nil {
-			_ = ov.Shutdown(context.Background())
+		cancel()
+		if s.overlay != nil {
+			s.overlay.Close()
 		}
+		_ = acmeManager.Stop(ctx)
 		if apiServer != nil {
 			_ = apiServer.Close()
 		}
-		if pprofServer != nil {
-			_ = pprofServer.Close()
+		if redirectServer != nil {
+			_ = redirectServer.Close()
 		}
-		if pprofListener != nil {
-			_ = pprofListener.Close()
+		if redirectListener != nil {
+			_ = redirectListener.Close()
+		}
+		if quicBackhaul != nil {
+			_ = quicBackhaul.Close()
 		}
 		if apiCloser != nil {
 			_ = apiCloser.Close()
@@ -269,85 +389,114 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		if sniListener != nil {
 			_ = sniListener.Close()
 		}
-		if apiListener != nil {
-			_ = apiListener.Close()
-		}
-		cancel()
 	}()
 	var listenConfig net.ListenConfig
 
-	apiListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.APIListenAddr)
-	if err != nil {
-		return fmt.Errorf("listen api: %w", err)
-	}
 	sniListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.SNIListenAddr)
 	if err != nil {
 		return fmt.Errorf("listen sni: %w", err)
 	}
 
 	group, groupCtx := errgroup.WithContext(serverCtx)
-	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiMux, apiTLS)
+	apiServer, apiCloser, err = s.newAPIServer(apiHandler, apiTLS)
 	if err != nil {
 		return err
 	}
-	if cfg.PProfEnabled {
-		pprofListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.PProfListenAddr)
+	if cfg.HTTPRedirect.Enabled {
+		redirectListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.HTTPRedirect.Addr)
 		if err != nil {
-			return fmt.Errorf("listen pprof: %w", err)
+			return fmt.Errorf("listen http redirect: %w", err)
 		}
-		pprofMux := http.NewServeMux()
-		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
-		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-		pprofServer = &http.Server{
-			Handler:           pprofMux,
+		redirectServer = &http.Server{
+			DisableGeneralOptionsHandler: true,
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if cfg.HTTPRedirect.HSTS {
+					w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+				}
+				// Canonical portal only: never forward request hosts, paths, or queries.
+				http.Redirect(w, r, cfg.PortalURL, http.StatusMovedPermanently)
+			}),
 			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       30 * time.Second,
 		}
 	}
 
-	if s.relaySet != nil && strings.TrimSpace(s.identity.WireGuardPrivateKey) != "" {
-		ov, err = s.startOverlay()
-		if err != nil {
-			return err
-		}
-	}
-	if cfg.UDPEnabled {
+	if udpEnabled, _ := s.registry.udpPolicy(); udpEnabled {
 		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
 		if err != nil {
-			log.Warn().Err(err).Msg("quic backhaul listener disabled")
-			quicBackhaul = nil
+			return fmt.Errorf("listen quic backhaul: %w", err)
+		}
+	}
+	if s.overlay != nil {
+		if err := s.overlay.Start(serverCtx); err != nil {
+			return fmt.Errorf("start relay overlay: %w", err)
 		}
 	}
 
-	s.apiListener = wrappedAPIListener
+	s.apiHandoff = &handoffListener{addr: sniListener.Addr(), conns: make(chan net.Conn), done: make(chan struct{})}
 	s.sniListener = sniListener
 	s.apiServer = apiServer
 	s.apiTLSClose = apiCloser
-	s.pprofListener = pprofListener
-	s.pprofServer = pprofServer
+	s.redirectListener = redirectListener
+	s.redirectServer = redirectServer
 	s.acmeManager = acmeManager
 	s.cancel = cancel
 	s.group = group
-	s.overlay = ov
 	s.quicBackhaul = quicBackhaul
 	started = true
 
-	group.Go(s.runAPIServer)
-	if s.pprofServer != nil {
-		group.Go(s.runPProfServer)
+	group.Go(func() error {
+		err := s.apiServer.Serve(tls.NewListener(s.apiHandoff, s.apiServer.TLSConfig))
+		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+			return nil
+		}
+		return err
+	})
+	if s.redirectServer != nil {
+		group.Go(func() error {
+			err := s.redirectServer.Serve(s.redirectListener)
+			if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		})
 	}
 	group.Go(func() error { return s.runPublicIngress(groupCtx) })
-	if s.overlay != nil {
-		group.Go(func() error { return s.overlay.Serve(groupCtx) })
-	}
 	if s.quicBackhaul != nil {
 		group.Go(s.runQUICBackhaulListener)
 	}
 	group.Go(func() error { return s.runRegistryJanitor(groupCtx, 5*time.Second) })
+	if cacheManager != nil {
+		group.Go(func() error { return cacheManager.Run(groupCtx) })
+	}
 	if cfg.DiscoveryEnabled {
 		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
+	}
+	if s.overlay != nil {
+		group.Go(func() error {
+			if err := s.overlay.Run(groupCtx); err != nil && groupCtx.Err() == nil {
+				log.Error().Err(err).Msg("relay overlay stopped; direct reverse transport remains available")
+				s.overlay.Close()
+			}
+			return nil
+		})
+		// A status-byte write may wait for the reverse connection deadline. A
+		// fixed pool prevents one slow peer from blocking all lease admissions
+		// without creating unbounded admission goroutines.
+		for range reverseOfferAdmissionWorkers {
+			group.Go(func() error {
+				for {
+					select {
+					case <-groupCtx.Done():
+						return nil
+					case offer := <-s.overlay.ReverseOffers():
+						s.admitReverseOffer(offer)
+					}
+				}
+			})
+		}
 	}
 	s.acmeManager.Start(serverCtx)
 	group.Go(func() error {
@@ -358,21 +507,16 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	})
 
 	logEvent := log.Info().
-		Str("api_addr", utils.HostPortOrLoopback(s.apiListener.Addr().String())).
 		Str("sni_addr", s.sniListener.Addr().String()).
 		Str("root_host", s.identity.Name).
 		Str("acme_dns_provider", cfg.ACME.DNSProvider).
 		Int("min_port", cfg.MinPort).
 		Int("max_port", cfg.MaxPort).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
-		Bool("wireguard_enabled", s.overlay != nil).
-		Bool("multihop_enabled", s.overlay != nil).
 		Bool("udp_enabled", s.quicBackhaul != nil).
-		Bool("tcp_enabled", s.supportsTCP()).
-		Bool("api_ech_enabled", len(apiTLS.EncryptedClientHelloKeys) > 0).
-		Bool("pprof_enabled", s.pprofServer != nil)
-	if s.pprofListener != nil {
-		logEvent = logEvent.Str("pprof_addr", utils.HostPortOrLoopback(s.pprofListener.Addr().String()))
+		Bool("tcp_enabled", s.supportsTCP())
+	if s.redirectListener != nil {
+		logEvent = logEvent.Str("http_redirect_addr", s.redirectListener.Addr().String())
 	}
 	if s.quicBackhaul != nil {
 		logEvent = logEvent.Str("internal_quic_backhaul_addr", s.quicBackhaul.Addr().String())
@@ -393,11 +537,118 @@ func (s *Server) Wait() error {
 	return err
 }
 
-func (s *Server) PolicyRuntime() *policy.Runtime {
+// admitReverseOffer composes overlay admission with the lease stream while a
+// reserved stream slot keeps the accepted status and queued session atomic.
+func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
+	lease, err := s.registry.admitLeaseIdentity(offer.ServiceIdentity, offer.LeaseID, time.Now().UTC(), false)
+	if err != nil {
+		offer.RejectUnavailable()
+		offer.Close()
+		return
+	}
+
+	reservation, err := lease.reverse.ReserveOffer(offer.Connection())
+	if err != nil {
+		offer.RejectCapacity()
+		offer.Close()
+		return
+	}
+	defer reservation.Cancel()
+	if err := offer.Accept(); err != nil {
+		offer.Close()
+		return
+	}
+	_ = offer.Connection().SetDeadline(time.Time{})
+	if err := reservation.Commit(); err != nil {
+		offer.Close()
+		return
+	}
+}
+
+func (s *Server) serveTCP(record *leaseRecord) {
+	for {
+		inbound, err := record.tcpListener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		go s.bridgeTCPConn(record, inbound)
+	}
+}
+
+func (s *Server) bridgeTCPConn(record *leaseRecord, inbound net.Conn) {
+	defer inbound.Close()
+	if !s.registry.isRoutable(record.ServiceKey()) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
+	defer cancel()
+	for {
+		reverse, err := record.reverse.Acquire(ctx)
+		if err != nil {
+			return
+		}
+		if err := transport.WriteRawStart(reverse); err != nil {
+			_ = reverse.Close()
+			continue
+		}
+		record.mu.Lock()
+		closed := record.closed
+		record.mu.Unlock()
+		if closed || !s.registry.isRoutable(record.ServiceKey()) {
+			_ = reverse.Close()
+			return
+		}
+		s.proxy.bridge(inbound, reverse, record.ServiceKey(), s.registry.bps)
+		return
+	}
+}
+
+// SetIdentityRoutable applies the relay's current access decision for one
+// identity to the portal data path. The relay owns the decision; this only
+// carries the result across the boundary, including revoking cached content.
+// False means a newer relay snapshot has already reached Portal: the caller
+// must reload the committed snapshot before retrying. Stale values never apply.
+func (s *Server) SetIdentityRoutable(key string, routable bool, revision uint64) bool {
+	if strings.TrimSpace(key) == "" {
+		return true
+	}
+	serviceKey, err := types.ParseServiceIdentityKey(key)
+	if err != nil {
+		return false
+	}
+	return s.SetServiceIdentityRoutable(serviceKey, routable, revision)
+}
+
+// SetServiceIdentityRoutable applies an access decision already parsed at the
+// relay boundary.
+func (s *Server) SetServiceIdentityRoutable(key types.ServiceIdentityKey, routable bool, revision uint64) bool {
+	if s == nil || s.registry == nil {
+		return true
+	}
+	return s.registry.setIdentityRoutable(key, routable, revision)
+}
+
+// DiscoveryEnabled and ApplicationOwnsDomainReport report the routing flags
+// the relay's composed route table dispatches on.
+func (s *Server) DiscoveryEnabled() bool {
+	return s.config().DiscoveryEnabled
+}
+
+func (s *Server) ApplicationOwnsDomainReport() bool {
+	return s.config().ApplicationOwnsDomainReport
+}
+
+// BPSManager is the portal-owned per-identity traffic shaper configured by
+// the relay's operator surface.
+func (s *Server) BPSManager() *BPSManager {
 	if s == nil || s.registry == nil {
 		return nil
 	}
-	return s.registry.policy
+	return s.registry.bps
 }
 
 func (s *Server) PortalURL() string {
@@ -421,9 +672,37 @@ func (s *Server) PolicyLeases() []types.PolicyLease {
 	return s.registry.PolicyLeases(time.Now())
 }
 
-func (s *Server) RelayIdentity() types.RelayIdentity {
+// AccessProjectionKeys returns identities whose live lease or retained cache
+// content needs the relay's current access decision.
+func (s *Server) AccessProjectionKeys() []types.ServiceIdentityKey {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	keys := make(map[types.ServiceIdentityKey]struct{})
+	now := time.Now()
+	s.registry.mu.RLock()
+	for _, record := range s.registry.records {
+		if record != nil && record.reverse != nil && !record.isExpired(now) {
+			keys[record.ServiceKey()] = struct{}{}
+		}
+	}
+	s.registry.mu.RUnlock()
+	for _, owner := range s.registry.cache.Owners() {
+		keys[owner] = struct{}{}
+	}
+	out := make([]types.ServiceIdentityKey, 0, len(keys))
+	for key := range keys {
+		out = append(out, key)
+	}
+	slices.SortFunc(out, func(a, b types.ServiceIdentityKey) int {
+		return strings.Compare(a.String(), b.String())
+	})
+	return out
+}
+
+func (s *Server) RelayIdentity() identity.RelayIdentity {
 	if s == nil {
-		return types.RelayIdentity{}
+		return identity.RelayIdentity{}
 	}
 	return s.identity.Copy()
 }
@@ -434,14 +713,20 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if s.cancel != nil {
 			s.cancel()
 		}
+		if s.overlay != nil {
+			s.overlay.Close()
+		}
 
 		records := s.registry.CloseAll()
 		for _, record := range records {
-			record.deleteDNS(ctx, s.acmeManager, true)
+			s.deleteLeaseDNS(ctx, record)
 		}
 
 		if s.quicBackhaul != nil {
 			_ = s.quicBackhaul.Close()
+		}
+		if s.apiHandoff != nil {
+			_ = s.apiHandoff.Close()
 		}
 		if s.sniListener != nil {
 			if err := s.sniListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -453,15 +738,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 				shutdownErr = err
 			}
 		}
-		if s.pprofServer != nil {
-			if err := s.pprofServer.Shutdown(ctx); err != nil && shutdownErr == nil {
-				shutdownErr = err
+		if s.redirectServer != nil {
+			if err := s.redirectServer.Shutdown(ctx); err != nil {
+				_ = s.redirectServer.Close()
+				if shutdownErr == nil {
+					shutdownErr = err
+				}
 			}
-		}
-		if s.overlay != nil {
-			if err := s.overlay.Shutdown(ctx); err != nil && shutdownErr == nil {
-				shutdownErr = err
-			}
+			// Shutdown can precede the Serve goroutine registering its listener.
+			_ = s.redirectListener.Close()
 		}
 		if s.apiTLSClose != nil {
 			_ = s.apiTLSClose.Close()
@@ -475,11 +760,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return shutdownErr
 }
 
-func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, *acme.Manager, error) {
+func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, *acme.Manager, error) {
 	cfg := s.config()
 	acmeCfg := cfg.ACME
 	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
+		return nil, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name
 	if strings.TrimSpace(acmeCfg.ENSGaslessAddress) == "" {
@@ -488,61 +773,30 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 
 	manager, err := acme.NewManager(acmeCfg)
 	if err != nil {
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("create acme manager: %w", err)
+		return nil, nil, fmt.Errorf("create acme manager: %w", err)
 	}
 
 	certPEM, keyPEM, err := manager.EnsureTLSMaterial(ctx)
 	if err != nil {
 		_ = manager.Stop(ctx)
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("ensure relay certificate: %w", err)
+		return nil, nil, fmt.Errorf("ensure relay certificate: %w", err)
 	}
-
-	apiTLS := keyless.TLSMaterialConfig{
-		CertPEM: certPEM,
-		KeyPEM:  keyPEM,
-	}
-	echSeed, err := identity.DeriveToken(
-		s.identity.Identity,
-		"relay-ech",
-		s.identity.EncryptedClientHelloSeed,
-		s.identity.Name,
-	)
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		_ = manager.Stop(ctx)
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("derive relay ech seed: %w", err)
+		return nil, nil, fmt.Errorf("parse relay api keypair: %w", err)
 	}
-	echKeys, echConfigList, err := keyless.EncryptedClientHelloMaterials(echSeed, s.identity.Name)
-	if err != nil {
-		_ = manager.Stop(ctx)
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("prepare ech materials: %w", err)
-	}
-	if len(echKeys) > 0 {
-		apiTLS.EncryptedClientHelloKeys = echKeys
-		if err := manager.SyncECHConfig(ctx, s.identity.Name, echConfigList, cfg.SNIPort); err != nil {
-			log.Warn().
-				Err(err).
-				Str("hostname", s.identity.Name).
-				Msg("publish relay ech dns record")
-		}
-	}
+	// The /v1/sign transcript signer shares the API listener key; newAPIServer
+	// reads the PEM to build its handler.
+	s.apiKeyPEM = keyPEM
+	s.apiCertPEM = certPEM
 
+	apiTLS := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+		NextProtos:   []string{"http/1.1"},
+	}
 	return apiTLS, manager, nil
-}
-
-func (s *Server) runAPIServer() error {
-	err := s.apiServer.Serve(s.apiListener)
-	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
-		return nil
-	}
-	return err
-}
-
-func (s *Server) runPProfServer() error {
-	err := s.pprofServer.Serve(s.pprofListener)
-	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
-		return nil
-	}
-	return err
 }
 
 func (s *Server) runPublicIngress(ctx context.Context) error {
@@ -560,34 +814,34 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 					}
 					return
 				}
+				helloSpan := clientHello.HandshakeMessage
 
 				serverName := utils.NormalizeHostname(clientHello.ServerName)
-				if serverName == "" {
-					_ = wrappedConn.Close()
-					return
-				}
-
-				if serverName == s.identity.Name {
-					if s.apiListener == nil {
+				// Go omits the SNI extension for IP-literal hosts and tenant
+				// hostnames are always DNS names, so a connection without a server
+				// name targets the canonical root origin; route it there instead
+				// of failing the handshake for IP-literal PORTAL_URL deployments.
+				if serverName == "" || serverName == s.identity.Name || s.registry.cache.Has(serverName) {
+					select {
+					case s.apiHandoff.conns <- wrappedConn:
+					case <-s.apiHandoff.done:
 						_ = wrappedConn.Close()
-						return
-					}
-					dialer := &net.Dialer{Timeout: 5 * time.Second}
-					upstream, err := dialer.DialContext(ctx, "tcp", utils.HostPortOrLoopback(s.apiListener.Addr().String()))
-					if err != nil {
+					case <-ctx.Done():
 						_ = wrappedConn.Close()
-						return
 					}
-					s.proxy.bridge(wrappedConn, upstream, "", nil)
 					return
 				}
 
 				record, ok := s.registry.Lookup(serverName)
 				if !ok {
+					log.Warn().
+						Str("server_name", serverName).
+						Str("remote_addr", wrappedConn.RemoteAddr().String()).
+						Msg("unknown public ingress hostname")
 					_ = wrappedConn.Close()
 					return
 				}
-				if err := s.bridgeLeaseConn(ctx, wrappedConn, record); err != nil {
+				if err := s.bridgeLeaseConn(ctx, wrappedConn, record, helloSpan); err != nil {
 					log.Warn().Err(err).Msg("bridge public ingress")
 					_ = wrappedConn.Close()
 					return
@@ -604,55 +858,32 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 	}
 }
 
-func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord) error {
+func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord, helloSpan []byte) error {
 	if record.isExpired(time.Now()) {
 		return errLeaseNotFound
 	}
-	if overlayIPv4, forwardToken, hasNextHop := record.nextHop(); hasNextHop {
-		switch {
-		case s.overlay == nil:
-			return errors.New("relay overlay is unavailable")
-		case overlayIPv4 == "":
-			return errors.New("next hop overlay ipv4 is required")
-		case forwardToken == "":
-			return errors.New("next hop token is required")
-		}
-
-		openCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-		defer cancel()
-		var next net.Conn
-		var lastErr error
-		for {
-			var err error
-			next, err = s.overlay.OpenHopStream(openCtx, overlayIPv4, forwardToken)
-			if err == nil {
-				break
-			}
-			lastErr = err
-			if errors.Is(err, net.ErrClosed) {
-				return fmt.Errorf("open next hop stream: %w", err)
-			}
-			if !utils.SleepOrDone(openCtx, defaultHopOpenRetryWait) {
-				return fmt.Errorf("open next hop stream within %s: %w", defaultClaimTimeout, errors.Join(lastErr, openCtx.Err()))
-			}
-		}
-		s.proxy.bridge(conn, next, "", nil)
-		return nil
-	}
-	if record.stream == nil {
+	if record.reverse == nil {
 		return errors.New("lease stream is not ready")
 	}
-	if !s.registry.policy.IsIdentityRoutable(record.Key()) {
+	if !s.registry.isRoutable(record.ServiceKey()) {
 		return errLeaseRejected
 	}
 	claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-	session, err := record.stream.Claim(claimCtx)
-	cancel()
-	if err != nil {
-		return fmt.Errorf("claim lease stream: %w", err)
+	binding := s.registry.bindings.Issue(record.id, helloSpan)
+	defer cancel()
+	for {
+		session, err := record.reverse.Acquire(claimCtx)
+		if err != nil {
+			s.registry.bindings.Discard(binding)
+			return fmt.Errorf("acquire lease connection: %w", err)
+		}
+		if err := transport.WriteTLSStart(session, binding); err != nil {
+			_ = session.Close()
+			continue
+		}
+		s.proxy.bridge(conn, session, record.ServiceKey(), s.registry.bps)
+		return nil
 	}
-	s.proxy.bridge(conn, session, record.Key(), s.registry.policy.BPSManager())
-	return nil
 }
 
 func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration) error {
@@ -668,23 +899,21 @@ func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration)
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			records := s.registry.cleanupExpired(time.Now())
+			now := time.Now()
+			records := s.registry.cleanupExpired(now)
+			s.registry.bindings.SweepExpired(now)
 			for _, record := range records {
-				record.deleteDNS(ctx, s.acmeManager, true)
+				s.deleteLeaseDNS(ctx, record)
 			}
 		}
 	}
 }
 
-func (s *Server) newQUICBackhaulListener(apiTLS keyless.TLSMaterialConfig) (*quic.Listener, error) {
-	if len(apiTLS.KeyPEM) == 0 {
-		return nil, fmt.Errorf("quic backhaul requires api tls key")
+func (s *Server) newQUICBackhaulListener(apiTLS *tls.Config) (*quic.Listener, error) {
+	if len(apiTLS.Certificates) == 0 {
+		return nil, fmt.Errorf("quic backhaul requires api tls certificate")
 	}
-	tlsCert, err := tls.X509KeyPair(apiTLS.CertPEM, apiTLS.KeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("parse quic backhaul tls keypair: %w", err)
-	}
-	return transport.ListenQUICBackhaul(s.config().SNIListenAddr, tlsCert)
+	return transport.ListenQUICBackhaul(s.config().SNIListenAddr, apiTLS.Certificates[0])
 }
 
 func (s *Server) runQUICBackhaulListener() error {
@@ -733,7 +962,13 @@ func (s *Server) handleQUICBackhaulConn(conn *quic.Conn) {
 	}
 
 	_ = control.Accept()
-	s.registry.Touch(lease.Key(), conn.RemoteAddr().String(), time.Now())
+	sourceAddr := netip.Addr{}
+	if remote := conn.RemoteAddr(); remote != nil {
+		if addrPort, err := netip.ParseAddrPort(remote.String()); err == nil {
+			sourceAddr = addrPort.Addr().Unmap()
+		}
+	}
+	s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
 	log.Info().
 		Str("component", "quic-backhaul-listener").
 		Str("address", lease.Address).
@@ -742,59 +977,12 @@ func (s *Server) handleQUICBackhaulConn(conn *quic.Conn) {
 		Msg("quic backhaul connected")
 }
 
-func (s *Server) startOverlay() (*overlay.Overlay, error) {
-	cfg := s.config()
-	peerMux := http.NewServeMux()
-	peerMux.HandleFunc(types.PathRoot, s.handleRoot)
-	peerMux.HandleFunc(types.PathHealthz, s.handleHealthz)
-	if cfg.DiscoveryEnabled {
-		peerMux.HandleFunc(types.PathDiscovery, s.handleRelayDiscovery)
-	}
-
-	ov, err := overlay.NewOverlay(overlay.Config{
-		PrivateKey: s.identity.WireGuardPrivateKey,
-		PublicKey:  s.identity.WireGuardPublicKey,
-		ListenPort: cfg.WireGuardPort,
-	}, peerMux, nil)
-	if err != nil {
-		return nil, fmt.Errorf("start wireguard overlay: %w", err)
-	}
-
-	ov.SetStreamHandler(func(ctx context.Context, stream overlay.HopStream) {
-		s.registry.mu.RLock()
-		record := s.registry.recordByHopToken(stream.Token, time.Now())
-		s.registry.mu.RUnlock()
-		if record == nil {
-			log.Warn().Str("remote_addr", stream.RemoteAddr).Msg("hop stream rejected")
-			_ = stream.Conn.Close()
-			return
-		}
-		hopRole := "exit"
-		if record.isHopMiddle() {
-			hopRole = "middle"
-		}
-		log.Info().Str("remote_addr", stream.RemoteAddr).Str("hop_role", hopRole).Msg("hop stream received")
-
-		if err := s.bridgeLeaseConn(ctx, stream.Conn, record); err != nil {
-			log.Warn().Err(err).Str("remote_addr", stream.RemoteAddr).Msg("hop stream bridge failed")
-			_ = stream.Conn.Close()
-		}
-	})
-
-	if err := ov.Sync(s.relaySet.OverlayPeerDescriptor()); err != nil {
-		_ = ov.Shutdown(context.Background())
-		return nil, fmt.Errorf("sync wireguard peers: %w", err)
-	}
-
-	return ov, nil
-}
-
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	if s.relaySet == nil {
 		<-ctx.Done()
 		return nil
 	}
-	refresher := discovery.NewRefresher(s.relaySet, s.overlay)
+	refresher := discovery.NewRefresher(s.relaySet)
 	ticker := time.NewTicker(discovery.DiscoveryPollInterval)
 	defer ticker.Stop()
 
@@ -830,28 +1018,20 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 	}
 	cfg := s.config()
 
-	var wireGuardPublicKey string
-	var wireGuardPort int
-	supportsOverlay := false
+	ivnpDestination := ""
 	if s.overlay != nil {
-		cfg := s.overlay.Config()
-		wireGuardPublicKey = cfg.PublicKey
-		wireGuardPort = cfg.ListenPort
-		supportsOverlay = true
+		ivnpDestination = s.overlay.Destination()
 	}
-
-	return auth.SignRelayDescriptor(types.RelayDescriptor{
-		Address:            s.identity.Address,
-		Version:            types.DiscoveryVersion,
-		IssuedAt:           now,
-		ExpiresAt:          now.Add(discovery.DiscoveryDescriptorTTL),
-		APIHTTPSAddr:       cfg.PortalURL,
-		WireGuardPublicKey: wireGuardPublicKey,
-		WireGuardPort:      wireGuardPort,
-		SupportsOverlay:    supportsOverlay,
-		SupportsUDP:        s.supportsUDP(),
-		SupportsTCP:        s.supportsTCP(),
-		ActiveConnections:  s.proxy.activeConnectionCount(),
-		TCPBPS:             s.proxy.currentTCPBPS(now),
+	return discovery.SignRelayDescriptor(types.RelayDescriptor{
+		Address:           s.identity.Address,
+		Version:           types.DiscoveryVersion,
+		IssuedAt:          now,
+		ExpiresAt:         now.Add(discovery.DiscoveryDescriptorTTL),
+		APIHTTPSAddr:      cfg.PortalURL,
+		IVNPDestination:   ivnpDestination,
+		SupportsUDP:       s.supportsUDP(),
+		SupportsTCP:       s.supportsTCP(),
+		ActiveConnections: s.proxy.activeConnectionCount(),
+		TCPBPS:            s.proxy.currentTCPBPS(now),
 	}, s.authority)
 }

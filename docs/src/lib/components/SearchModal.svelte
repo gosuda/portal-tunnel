@@ -34,7 +34,7 @@
 	async function initPagefind() {
 		if (pagefind) return;
 		try {
-			const path = '/pagefind/pagefind.js';
+			const path = `${base}/pagefind/pagefind.js`;
 			pagefind = await import(/* @vite-ignore */ path);
 		} catch {
 			searchUnavailable = true;

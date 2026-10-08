@@ -1,10 +1,6 @@
 package utils
 
-import (
-	"maps"
-	"slices"
-	"sync/atomic"
-)
+import "sync/atomic"
 
 // Snapshot stores an immutable value snapshot for lock-free reads.
 // Use a snapshot function when T contains mutable maps, slices, or pointers.
@@ -69,23 +65,10 @@ func (s *Snapshot[T]) snapshotValue(value T) T {
 // The update function may be called more than once under contention, so it
 // must not perform side effects.
 func (s *Snapshot[T]) Update(update func(T) T) T {
-	if s == nil {
-		var zero T
-		return zero
-	}
-	for {
-		currentPtr := s.value.Load()
-		var current T
-		if currentPtr != nil {
-			current = s.snapshotValue(*currentPtr)
-		}
-
-		next := update(current)
-		next = s.snapshotValue(next)
-		if s.value.CompareAndSwap(currentPtr, &next) {
-			return s.snapshotValue(next)
-		}
-	}
+	next, _ := s.UpdateIf(func(current T) (T, bool) {
+		return update(current), true
+	})
+	return next
 }
 
 // UpdateIf stores the returned snapshot only when update returns true.
@@ -125,20 +108,4 @@ func (s *Snapshot[T]) UpdateCopy(update func(*T)) T {
 		}
 		return next
 	})
-}
-
-func CloneSlice[T any](values []T) []T {
-	return slices.Clone(values)
-}
-
-func CloneMap[K comparable, V any](values map[K]V) map[K]V {
-	return maps.Clone(values)
-}
-
-func ClonePtr[T any](value *T) *T {
-	if value == nil {
-		return nil
-	}
-	next := *value
-	return &next
 }

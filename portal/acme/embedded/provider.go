@@ -5,7 +5,11 @@
 package embedded
 
 import (
+	"cmp"
 	"context"
+	"crypto"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -20,7 +24,6 @@ import (
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -31,6 +34,7 @@ const (
 	soaRefresh         uint32 = 7200
 	soaRetry           uint32 = 3600
 	soaExpire          uint32 = 1209600
+	selfCheckTimeout          = 10 * time.Second
 )
 
 // Config configures the embedded authoritative DNS server.
@@ -40,6 +44,9 @@ type Config struct {
 	BaseDomain string
 	// ListenAddr is the UDP/TCP listen address. Defaults to :53.
 	ListenAddr string
+	// KeyPath is the persistent CSK file. It is required; losing this file
+	// requires replacing the DS at the parent before validation can resume.
+	KeyPath string
 }
 
 // Provider is an authoritative-only DNS server for the relay zone plus the
@@ -47,7 +54,7 @@ type Config struct {
 //
 // A answers for the apex and every covered name are synthesized from the
 // relay public IPv4, so they can never go stale. TXT records (ACME DNS-01
-// and ENS gasless) and HTTPS records (ECH) are stored explicitly.
+// and ENS gasless) are stored explicitly.
 type Provider struct {
 	baseDomain string
 	zone       string
@@ -57,19 +64,22 @@ type Provider struct {
 	mu     sync.RWMutex
 	ipv4   net.IP
 	txt    map[string][]string
-	https  map[string]httpsRecordValue
 	serial uint32
+	key    *dns.DNSKEY
+	signer crypto.Signer
+	signed *signedZone
 
 	udpServer *dns.Server
 	tcpServer *dns.Server
 	ready     chan struct{}
 	stopOnce  sync.Once
 	stopErr   error
-}
 
-type httpsRecordValue struct {
-	priority uint16
-	value    []dns.SVCBKeyValue
+	// started marks a provider created through New, the only caller allowed
+	// to arm the delegated-path self-check: direct constructions (unit tests)
+	// must not launch external resolver lookups as a side effect.
+	started   bool
+	selfCheck sync.Once
 }
 
 // New binds the UDP and TCP listeners and starts serving the zone. Binding
@@ -80,21 +90,31 @@ func New(cfg Config) (*Provider, error) {
 	if baseDomain == "" {
 		return nil, errors.New("embedded dns base domain is required")
 	}
+	if _, valid := dns.IsDomainName(dns.Fqdn(baseDomain)); !valid {
+		return nil, fmt.Errorf("invalid embedded dns zone %q", baseDomain)
+	}
 	if net.ParseIP(baseDomain) != nil {
 		return nil, fmt.Errorf("embedded dns base domain %q must be a hostname", baseDomain)
 	}
 	listenAddr := strings.TrimSpace(cfg.ListenAddr)
-	if listenAddr == "" {
-		listenAddr = defaultListenAddr
-	}
+	listenAddr = cmp.Or(listenAddr, defaultListenAddr)
 
 	p := &Provider{
 		baseDomain: baseDomain,
 		zone:       dns.Fqdn(baseDomain),
 		nsName:     dns.Fqdn("ns." + baseDomain),
 		txt:        make(map[string][]string),
-		https:      make(map[string]httpsRecordValue),
 		ready:      make(chan struct{}),
+	}
+
+	var err error
+	p.key, p.signer, err = loadSigningKey(cfg.KeyPath, p.zone)
+	if err != nil {
+		return nil, fmt.Errorf("initialize embedded dnssec: %w", err)
+	}
+	p.bumpSerialLocked()
+	if _, err := p.signedZone(time.Now()); err != nil {
+		return nil, fmt.Errorf("sign embedded dns zone: %w", err)
 	}
 
 	packetConn, listener, err := listenDNS(listenAddr)
@@ -124,7 +144,10 @@ func New(cfg Config) (*Provider, error) {
 		_ = p.Stop()
 		return nil, fmt.Errorf("embedded dns listeners on %s did not start within %s", p.listenAddr, listenStartTimeout)
 	}
+	p.started = true
 
+	_, ds, message, _ := p.EnsureDNSSEC(context.Background(), p.baseDomain)
+	log.Info().Str("ds_record", ds).Str("key_path", cfg.KeyPath).Msg(message)
 	log.Info().
 		Str("listen_addr", p.listenAddr).
 		Str("zone", p.zone).
@@ -217,7 +240,50 @@ func (p *Provider) EnsureARecords(_ context.Context, baseDomain, publicIPv4 stri
 		p.ipv4 = ip
 		p.bumpSerialLocked()
 	}
+	if p.started {
+		// One attempt per provider instance: the check needs a full recursive
+		// resolver round trip, so repeat EnsureARecords calls must not repeat it.
+		p.selfCheck.Do(func() {
+			go p.verifyDelegatedPath(ip)
+		})
+	}
 	return nil
+}
+
+// verifyDelegatedPath performs the one-shot delegated-path self-check: it
+// resolves a fresh random label through the system resolver and compares the
+// answer with the synthesized address, proving the parent delegation actually
+// reaches this server. It is log-only and never blocks the caller.
+func (p *Provider) verifyDelegatedPath(ip net.IP) {
+	label := make([]byte, 8)
+	if _, err := rand.Read(label); err != nil {
+		log.Warn().Err(err).Msg("dns self-check random label")
+		return
+	}
+	name := hex.EncodeToString(label) + "." + p.zone
+	ctx, cancel := context.WithTimeout(context.Background(), selfCheckTimeout)
+	defer cancel()
+	started := time.Now()
+	addrs, err := net.DefaultResolver.LookupIP(ctx, "ip4", name)
+	elapsed := time.Since(started)
+	if err != nil {
+		log.Warn().Err(err).Str("name", name).Dur("elapsed", elapsed).Msg("dns self-check failed")
+		return
+	}
+	if slices.ContainsFunc(addrs, func(addr net.IP) bool { return addr.Equal(ip) }) {
+		log.Info().Str("name", name).Str("resolved", ip.String()).Dur("elapsed", elapsed).Msg("dns self-check passed")
+		return
+	}
+	resolved := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		resolved = append(resolved, addr.String())
+	}
+	log.Warn().
+		Str("name", name).
+		Str("resolved", strings.Join(resolved, ",")).
+		Str("expected", ip.String()).
+		Dur("elapsed", elapsed).
+		Msg("dns self-check resolved a different address")
 }
 
 // EnsureARecord is a no-op: A answers are synthesized zone-wide from the
@@ -295,60 +361,27 @@ func (p *Provider) DeleteTXTRecords(_ context.Context, name, matchPrefix string)
 	return nil
 }
 
-func (p *Provider) EnsureHTTPSRecord(_ context.Context, name string, record dnsrecord.HTTPSRecord) error {
-	if p == nil {
-		return errors.New("embedded dns provider is nil")
-	}
-	fqdn, err := p.zoneHostname(name)
-	if err != nil {
-		return err
-	}
-	record, err = record.Normalized()
-	if err != nil {
-		return err
-	}
-	value, err := parseSvcParams(record.SvcParams)
-	if err != nil {
-		return err
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.https[fqdn] = httpsRecordValue{priority: record.Priority, value: value}
-	p.bumpSerialLocked()
-	return nil
-}
-
-func (p *Provider) DeleteHTTPSRecord(_ context.Context, name string) error {
-	if p == nil {
-		return errors.New("embedded dns provider is nil")
-	}
-	fqdn, err := p.zoneHostname(name)
-	if err != nil {
-		return err
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if _, ok := p.https[fqdn]; ok {
-		delete(p.https, fqdn)
-		p.bumpSerialLocked()
-	}
-	return nil
-}
-
-// EnsureDNSSEC is not supported by the embedded provider yet.
-func (p *Provider) EnsureDNSSEC(context.Context, string) (state, dsRecord, message string, err error) {
+// EnsureDNSSEC exports the SHA-256 DS for the parent zone. Signing is active
+// locally, but the state remains pending because parent-chain validation is
+// not performed here. Local signing alone must not mark ENS as verified.
+func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
 		return "", "", "", errors.New("embedded dns provider is nil")
 	}
-	return "", "", "", errors.New("embedded dns provider does not support dnssec yet")
+	if utils.NormalizeBaseDomain(baseDomain) != p.baseDomain {
+		return "", "", "", fmt.Errorf("domain %q is not embedded dns zone %q", baseDomain, p.baseDomain)
+	}
+	return "pending", p.key.ToDS(dns.SHA256).String(),
+		"Publish this DS at the parent zone after NS/glue delegation is reachable; signing is active locally but Portal does not verify the parent DNSSEC chain, so ENS status remains unverified. Preserve the DNSSEC key file across restarts and migrations.", nil
 }
 
 func (p *Provider) zoneHostname(name string) (string, error) {
 	name = utils.NormalizeHostname(name)
 	if name == "" {
 		return "", errors.New("record name is required")
+	}
+	if _, valid := dns.IsDomainName(dns.Fqdn(name)); !valid {
+		return "", fmt.Errorf("invalid dns record name %q", name)
 	}
 	if !utils.HostnameMatchesBaseDomain(name, p.baseDomain) {
 		return "", fmt.Errorf("hostname %q is outside embedded dns zone %q", name, p.baseDomain)

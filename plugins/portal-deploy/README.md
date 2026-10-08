@@ -1,96 +1,114 @@
 # Portal Deploy plugin
 
-`portal-deploy` is a skills-only plugin for Codex, Claude Code, and Cursor. It teaches an agent to inspect a local app, choose the appropriate Portal tunnel mode, configure explicitly requested x402 paid routes, verify the public endpoint and payment challenge, and hand off the tunnel lifecycle safely.
-
-Portal exposes a service that remains on the local machine. This plugin does not turn Portal into a cloud build or hosting platform.
+`portal-deploy` is a portable, skills-only Agent Plugin for exposing and verifying local apps through Portal, and for reaching services that others published through it. Portal keeps the service on the local machine; this plugin does not turn Portal into a cloud build or hosting platform.
 
 ## Layout
 
-One shared skill, three host manifests. Do not copy `SKILL.md` per host.
+The root `plugin.json` is the single portable identity and metadata contract. Every host discovers the same `skills/` directory.
 
 ```text
 plugins/portal-deploy/
-├── .codex-plugin/plugin.json      # Codex plugin manifest
-├── .claude-plugin/plugin.json     # Claude Code plugin manifest
-├── .cursor-plugin/plugin.json     # Cursor plugin manifest
-├── skills/portal-expose/
-│   ├── SKILL.md                   # Shared Open Agent Skill
-│   ├── agents/openai.yaml         # Codex skill UI metadata
-│   └── references/
-│       ├── portal-cli.md
-│       ├── game-hosting.md
-│       ├── safety-and-verification.md
-│       └── x402.md
-├── skills/portal-relay/
-│   └── SKILL.md                   # Run a public Portal relay
-└── README.md
+|-- plugin.json                         # Agent Plugins v1 manifest
+|-- .codex-plugin/plugin.json           # Codex UI adapter
+|-- assets/logo.svg
+|-- skills/portal-expose/
+|   |-- SKILL.md
+|   |-- agents/openai.yaml              # OpenAI-specific skill UI metadata
+|   `-- references/
+|-- skills/portal-relay/SKILL.md
+|-- skills/portal-connect/
+|   |-- SKILL.md
+|   |-- agents/openai.yaml
+|   `-- references/
+`-- README.md
 ```
 
-Repository-root catalogs, each pointing at this same plugin directory:
+Cursor consumes the portable root manifest directly. Claude Code discovers `skills/` from the plugin root, so neither host needs a second per-plugin manifest.
 
-| Host | Catalog | Marketplace name |
-| --- | --- | --- |
-| Codex | `.agents/plugins/marketplace.json` | `portal-tunnel` |
-| Claude Code | `.claude-plugin/marketplace.json` | `portal-tunnel` |
-| Cursor | `.cursor-plugin/marketplace.json` | `portal-tunnel` |
+Three repository catalogs remain because each host requires a different locator when the repository root, rather than `plugins/portal-deploy`, is used as the installation source:
 
-Install unit is the plugin `portal-deploy`. Agent invocation units are the skills `portal-expose` and `portal-relay`.
+- `.agents/plugins/marketplace.json` for Codex
+- `.claude-plugin/marketplace.json` for Claude Code
+- `.cursor-plugin/marketplace.json` for Cursor
 
-## Local Codex setup
+The Claude and Cursor catalogs contain only the required locator fields. Common metadata stays in the portable manifest instead of being copied into catalogs.
 
-From the `portal-tunnel` repository root:
+`AGENTS.md` remains repository development guidance. `llms.txt` remains the generic discovery entry point served by a Portal relay; neither belongs to the plugin package contract.
+
+## Codex
+
+From the repository root:
 
 ```sh
 codex plugin marketplace add .
 codex plugin add portal-deploy@portal-tunnel
 ```
 
-Start a new Codex task and invoke `$portal-expose`, or ask Codex to deploy or share a local app with Portal.
-
-After the repository is on GitHub:
+For the GitHub repository:
 
 ```sh
 codex plugin marketplace add gosuda/portal-tunnel
 codex plugin add portal-deploy@portal-tunnel
 ```
 
-## Local Claude Code setup
+Start a new task and invoke `$portal-expose`, `$portal-relay`, or `$portal-connect`.
 
-Validate and load directly during development:
+## Claude Code
+
+Load the plugin directory directly during development:
 
 ```sh
 claude plugin validate ./plugins/portal-deploy --strict
 claude --plugin-dir ./plugins/portal-deploy
 ```
 
-Or install through the repository marketplace:
-
-```sh
-claude plugin marketplace add .
-claude plugin install portal-deploy@portal-tunnel
-```
-
-Run `/reload-plugins` when Claude Code asks for it. Invoke the skill as `/portal-deploy:portal-expose`.
-
-After the repository is on GitHub:
+For persistent repository installation:
 
 ```sh
 claude plugin marketplace add gosuda/portal-tunnel
 claude plugin install portal-deploy@portal-tunnel
 ```
 
-## Local Cursor setup
+Invoke `/portal-deploy:portal-expose`, `/portal-deploy:portal-relay`, or `/portal-deploy:portal-connect`.
 
-Symlink the plugin for development, then reload the window:
+## Cursor
+
+Cursor supports the root Agent Plugins manifest without a per-plugin `.cursor-plugin/plugin.json` adapter. Symlink the plugin directory for local development, then reload the window:
 
 ```sh
 mkdir -p ~/.cursor/plugins/local
 ln -s "$(pwd)/plugins/portal-deploy" ~/.cursor/plugins/local/portal-deploy
 ```
 
-Restart Cursor or run **Developer: Reload Window**. The skill appears as `/portal-expose`.
+The skills appear as `/portal-expose`, `/portal-relay`, and `/portal-connect`.
 
-Public listing is a Git repository submitted at [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish). Team marketplaces import the same `.cursor-plugin/marketplace.json`.
+When importing the whole `portal-tunnel` repository, `.cursor-plugin/marketplace.json` locates the nested `plugins/portal-deploy` plugin root.
+
+## Guide any AI with one sentence
+
+The instruction source is always the canonical skill file in this repository, never a relay page: a self-hosted relay is controlled by its operator, so anything a relay returns is input data, not workflow instructions. The shortest instruction that works in any assistant with web access therefore names the skill by its GitHub URL and passes the relay as data:
+
+```text
+Follow https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md to expose my app on port 3000 as my-app through https://portal.example.com.
+```
+
+Every relay also serves `/llms.txt`; use it to discover that relay's URL and install lines, not as the workflow. The host-specific installs above only make the skills persist between sessions.
+
+## Keep the app's Portal settings in the repository
+
+Add a short block to the app repository's `AGENTS.md` or `CLAUDE.md` so nobody has to repeat the relay, port, or name:
+
+```markdown
+## Portal
+
+- Publish this app by following https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md
+- Relay: https://portal.example.com, passed as --relays with --discovery=false
+- Share: 3000 (a port, an http URL, or a static directory)
+- Public name: my-app
+- Identity file: ~/.config/portal-tunnel/identities/my-app.json, never committed
+```
+
+An agent working in that repository then has every value the relay's quick-start form would ask for. Projects that prefer a config file can express the same settings as a `portal agent` TOML and point the block at it.
 
 ## Example prompts
 
@@ -98,9 +116,11 @@ Public listing is a Git repository submitted at [cursor.com/marketplace/publish]
 - `Expose this app with Portal, protect GET /paid with x402, and verify the payment challenge.`
 - `Create a temporary Portal preview for the frontend on port 5173.`
 - `Keep this service available through a persistent Portal agent tunnel.`
-- `Serve this trusted static site through Portal.`
-
-The skill should not trigger for deploying a Portal relay, normal cloud hosting, or publishing the plugin itself.
+- `Connect this app to the relay at https://portal.example.com the way its website suggests, and open the public URL.`
+- `Run a public Portal relay and verify its health endpoint.`
+- `Is my-app.portal.example.com reachable? Fetch /api/health and tell me what it returns.`
+- `List the services currently live on https://portal.example.com.`
+- `Connect to the Minecraft server that was exposed through Portal as "survival" and check that it answers.`
 
 ## Marketplace review cases
 
@@ -112,12 +132,17 @@ Positive:
 - Run this app as a persistent Portal tunnel.
 - Serve this trusted static site through Portal.
 - Create a temporary Portal preview for the frontend on port 5173.
+- Connect this app to https://portal.example.com using the command from the relay's page and verify the URL.
+- Check whether the Portal service at paid-app.portal.example.com is up and what its /paid route costs.
+- List what is live on the relay at https://portal.example.com and fetch the docs service.
 
 Negative:
 
-- Deploy a Portal relay with this plugin.
+- Deploy a Portal relay with the app-exposure skill.
 - Publish this plugin to a marketplace.
 - Host this app on generic cloud hosting.
+- Debug a 500 from an API that is not behind Portal.
+- Scan a relay's port range to find open game servers.
 
 ## Development validation
 
@@ -126,21 +151,14 @@ From the repository root:
 ```sh
 python3 /path/to/skill-creator/scripts/quick_validate.py \
   plugins/portal-deploy/skills/portal-expose
+python3 /path/to/skill-creator/scripts/quick_validate.py \
+  plugins/portal-deploy/skills/portal-relay
+python3 /path/to/skill-creator/scripts/quick_validate.py \
+  plugins/portal-deploy/skills/portal-connect
 python3 /path/to/plugin-creator/scripts/validate_plugin.py \
   plugins/portal-deploy
 claude plugin validate ./plugins/portal-deploy --strict
 claude plugin validate . --strict
-python3 -c 'import json,pathlib; [
-  json.loads(pathlib.Path(p).read_text())
-  for p in [
-    "plugins/portal-deploy/.codex-plugin/plugin.json",
-    "plugins/portal-deploy/.claude-plugin/plugin.json",
-    "plugins/portal-deploy/.cursor-plugin/plugin.json",
-    ".agents/plugins/marketplace.json",
-    ".claude-plugin/marketplace.json",
-    ".cursor-plugin/marketplace.json",
-  ]
-]'
 ```
 
-No MCP server, hook, background monitor, or credential is bundled. The active Codex, Claude Code, or Cursor host remains responsible for command approvals, sandboxing, and network access.
+No MCP server, hook, background monitor, or credential is bundled. The active host remains responsible for command approvals, sandboxing, and network access.

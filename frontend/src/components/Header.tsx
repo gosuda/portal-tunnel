@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { useAuth } from "@/hooks/useAuth";
 import { apiClient } from "@/lib/apiClient";
-import { BROWSER_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import type { DomainResponse } from "@/types/api";
 import {
   Tooltip,
@@ -62,7 +62,7 @@ export function Header({
     void (async () => {
       try {
         const status = await apiClient.get<DomainResponse>(
-          BROWSER_API_PATHS.sdk.domain
+          RELAY_API_PATHS.sdk.domain
         );
         if (!cancelled) {
           setReleaseVersion(
@@ -143,6 +143,22 @@ export function Header({
               className="whitespace-nowrap transition-colors hover:text-foreground"
             >
               Public relays
+            </a>
+            <a
+              href="https://gosuda.github.io/portal-tunnel/features"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="whitespace-nowrap transition-colors hover:text-foreground"
+            >
+              Features
+            </a>
+            <a
+              href="https://gosuda.github.io/portal-tunnel"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="whitespace-nowrap transition-colors hover:text-foreground"
+            >
+              Docs
             </a>
           </nav>
         )}

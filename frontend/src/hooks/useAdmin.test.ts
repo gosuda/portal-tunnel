@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PolicyLease, PolicySettings } from "@/types/api";
 import { useAdmin } from "@/hooks/useAdmin";
-import { BROWSER_API_PATHS } from "@/lib/apiPaths";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
 
 type DeferredPolicyState = {
@@ -63,6 +63,7 @@ function buildLease(address: string, name: string = "relay-1"): PolicyLease {
     client_ip: "203.0.113.10",
     reported_ip: "",
     hostname: "relay.example.com",
+    canonical_hostname: `${name.toLowerCase()}-${address.slice(2).toLowerCase()}.example.com`,
     metadata: {
       description: "relay",
       tags: ["core"],
@@ -73,7 +74,6 @@ function buildLease(address: string, name: string = "relay-1"): PolicyLease {
     is_approved: true,
     is_banned: address === "0x00000000000000000000000000000000000000A1",
     is_denied: false,
-    is_ip_banned: false,
   };
 }
 
@@ -91,7 +91,7 @@ describe("useAdmin", () => {
     vi.clearAllMocks();
 
     mockGet.mockImplementation(async (path: string) => {
-      if (path === BROWSER_API_PATHS.policy.state) {
+      if (path === RELAY_API_PATHS.policy.state) {
         return {
           leases: [buildLease("0x00000000000000000000000000000000000000A1")],
           policy: { ...buildSettings(), approval_mode: "not-a-mode" },
@@ -100,8 +100,8 @@ describe("useAdmin", () => {
       throw new Error(`Unexpected GET path: ${path}`);
     });
 
-    mockPost.mockImplementation(async <T,>(path: string, body?: unknown): Promise<T> => {
-      if (path === BROWSER_API_PATHS.policy.root) {
+    mockPost.mockImplementation(async <T>(path: string, body?: unknown): Promise<T> => {
+      if (path === RELAY_API_PATHS.policy.root) {
         return body as T;
       }
       return {} as T;
@@ -122,7 +122,7 @@ describe("useAdmin", () => {
 
   it("surfaces fetchData API errors", async () => {
     mockGet.mockImplementation(async (path: string) => {
-      if (path === BROWSER_API_PATHS.policy.state) {
+      if (path === RELAY_API_PATHS.policy.state) {
         throw new APIClientError("failed to load leases", 500, "server_error");
       }
       throw new Error(`Unexpected GET path: ${path}`);
@@ -156,20 +156,6 @@ describe("useAdmin", () => {
     });
   });
 
-  it("validates missing IP in handleIPBanStatus", async () => {
-    const { result } = renderHook(() => useAdmin());
-    await waitForLoaded(result);
-
-    await act(async () => {
-      await expect(result.current.handleIPBanStatus("   ", true)).rejects.toThrow(
-        "Missing IP address",
-      );
-    });
-    await waitFor(() => {
-      expect(result.current.error).toContain("Missing IP address");
-    });
-  });
-
   it("posts identity keys in lease policy bodies", async () => {
     const { result } = renderHook(() => useAdmin());
     await waitForLoaded(result);
@@ -180,8 +166,8 @@ describe("useAdmin", () => {
     });
 
     const calledPaths = mockPost.mock.calls.map(([path]) => path as string);
-    expect(calledPaths).toContain(BROWSER_API_PATHS.policy.leases);
-    expect(mockPost).toHaveBeenCalledWith(BROWSER_API_PATHS.policy.leases, {
+    expect(calledPaths).toContain(RELAY_API_PATHS.policy.leases);
+    expect(mockPost).toHaveBeenCalledWith(RELAY_API_PATHS.policy.leases, {
       identity_key: identityKey,
       is_approved: true,
     });
@@ -199,7 +185,7 @@ describe("useAdmin", () => {
     });
 
     expect(mockPost).toHaveBeenCalledWith(
-      BROWSER_API_PATHS.policy.leases,
+      RELAY_API_PATHS.policy.leases,
       {
         identity_key: "relay-1:0x00000000000000000000000000000000000000a1",
         bps: 4096,
@@ -214,19 +200,19 @@ describe("useAdmin", () => {
       | undefined;
 
     mockGet.mockImplementation((path: string) => {
-      if (path !== BROWSER_API_PATHS.policy.state) {
-        throw new Error(`Unexpected GET path: ${path}`);
+      if (path === RELAY_API_PATHS.policy.state) {
+        getCalls++;
+        if (getCalls === 1) {
+          return Promise.resolve({
+            leases: [buildLease("0x00000000000000000000000000000000000000A1")],
+            policy: buildSettings(),
+          } as never);
+        }
+        return new Promise<DeferredPolicyState>((resolve) => {
+          resolveRefresh = resolve;
+        }) as never;
       }
-      getCalls++;
-      if (getCalls === 1) {
-        return Promise.resolve({
-          leases: [buildLease("0x00000000000000000000000000000000000000A1")],
-          policy: buildSettings(),
-        } as never);
-      }
-      return new Promise<DeferredPolicyState>((resolve) => {
-        resolveRefresh = resolve;
-      }) as never;
+      throw new Error(`Unexpected GET path: ${path}`);
     });
 
     const { result } = renderHook(() => useAdmin());
@@ -258,7 +244,7 @@ describe("useAdmin", () => {
 
   it("bulk deny posts deduped identity keys in lease policy bodies", async () => {
     mockGet.mockImplementation(async (path: string) => {
-      if (path === BROWSER_API_PATHS.policy.state) {
+      if (path === RELAY_API_PATHS.policy.state) {
         return {
           leases: [
             buildLease("0x00000000000000000000000000000000000000A1", "relay-1"),
@@ -289,9 +275,10 @@ describe("useAdmin", () => {
     expect(denyCalls).toHaveLength(2);
     expect(denyCalls).toEqual(
       expect.arrayContaining([
-        [BROWSER_API_PATHS.policy.leases, { identity_key: identityKeyA, is_denied: true }],
-        [BROWSER_API_PATHS.policy.leases, { identity_key: identityKeyB, is_denied: true }],
+        [RELAY_API_PATHS.policy.leases, { identity_key: identityKeyA, is_denied: true }],
+        [RELAY_API_PATHS.policy.leases, { identity_key: identityKeyB, is_denied: true }],
       ]),
     );
   });
+
 });

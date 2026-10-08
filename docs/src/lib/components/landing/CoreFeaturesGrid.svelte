@@ -1,16 +1,18 @@
 <script lang="ts">
+	import { base } from '$app/paths';
+
 	const features = [
 		{
-			eyebrow: 'Relay',
-			title: 'Trustless relay transport',
+			eyebrow: 'IVNP',
+			title: 'IVNP-backed overlay networking',
 			description:
-				'Relays own routing and transport, while the tunnel process owns endpoint behavior.'
+				'Portal selects and authorizes the ingress and gateway. IVNP owns the network path between them, including internal routers and hops.'
 		},
 		{
 			eyebrow: 'TLS',
 			title: 'Client-side tenant TLS',
 			description:
-				'Tenant TLS terminates locally with MITM detection, so relays cannot read plaintext.'
+				'Uncached HTTPS tunnels terminate TLS locally. Optional static caching explicitly trusts the selected relays.'
 		},
 		{
 			eyebrow: 'HTTP',
@@ -26,9 +28,9 @@
 		},
 		{
 			eyebrow: 'Mesh',
-			title: 'Relay pools and multi-hop',
+			title: 'Relay pools and failover',
 			description:
-				'Use discovered relays for failover or chain relays to split path visibility.'
+				'Use discovered and explicit relays for resilient public connectivity.'
 		},
 		{
 			eyebrow: 'Ops',
@@ -54,6 +56,12 @@
 			>
 				Built for real localhost publishing
 			</h2>
+			<p class="max-w-3xl text-base leading-7 text-text-muted">
+				Publish through a public ingress while an independent overlay network owns the path
+				behind it. Try <code>portal expose 3000 --overlay</code>; direct reverse transport
+				remains the default and fallback.
+				<a href="{base}/concepts#ivnp-backed-overlay-networking" class="text-primary underline underline-offset-4">Explore IVNP-backed overlay networking</a>.
+			</p>
 		</div>
 	</div>
 	<div class="overflow-hidden border-t" style="border-color: var(--border); background: color-mix(in oklch, var(--border) 70%, transparent);">
@@ -87,6 +95,17 @@
 					</div>
 				</article>
 			{/each}
+		</div>
+		<div class="border-t p-6 text-center sm:p-8" style="border-color: var(--border);">
+			<p class="text-sm text-text-muted sm:text-base">
+				Looking for the complete capability breakdown across CLI, Agent, SDK, and Relay?
+				<a
+					href="{base}/features"
+					class="ml-1 inline-flex items-center font-semibold text-primary underline underline-offset-4 hover:text-primary-light"
+				>
+					View the Canonical Feature Inventory &rarr;
+				</a>
+			</p>
 		</div>
 	</div>
 </div>

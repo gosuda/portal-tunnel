@@ -187,6 +187,13 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		}
 	}
 	value := gaslessENSTXTPrefix + defaultENSGaslessResolver + " " + strings.TrimSpace(command.address)
+	// EnsureTXTRecord appends whenever the value differs, which DNS-01 needs and
+	// ENS does not: a hostname carries exactly one ENS1 record. Drop the previous
+	// one so an address change replaces it instead of stacking on top of it. The
+	// prefix keeps ACME challenge records out of scope.
+	if err := m.dns.DeleteTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix); err != nil {
+		return err
+	}
 	if err := m.dns.EnsureTXTRecord(ctx, command.hostname, value); err != nil {
 		return err
 	}
@@ -196,11 +203,16 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 }
 
 func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error {
-	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
 	var cleanupErr error
+	if !m.cfg.ENSGaslessEnabled && strings.TrimSpace(m.cfg.ENSGaslessAddress) != "" {
+		if err := m.dns.DeleteTXTRecords(ctx, m.cfg.BaseDomain, gaslessENSTXTPrefix); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", m.cfg.BaseDomain, err))
+		}
+	}
 	if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
 		remaining := hostnames[:0]
 		for _, hostname := range hostnames {

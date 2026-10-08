@@ -182,56 +182,78 @@ func parseDeclaredImageRefs(r io.Reader) []string {
 
 	tokenizer := html.NewTokenizer(r)
 	for {
-		switch tokenizer.Next() {
-		case html.ErrorToken:
+		tokenType := tokenizer.Next()
+		if tokenType == html.ErrorToken {
 			return append(append(og, twitter...), icons...)
-		case html.StartTagToken, html.SelfClosingTagToken:
-			token := tokenizer.Token()
-			switch token.Data {
-			case "meta":
-				var property, name, content string
-				for _, attr := range token.Attr {
-					switch strings.ToLower(attr.Key) {
-					case "property":
-						property = strings.ToLower(attr.Val)
-					case "name":
-						name = strings.ToLower(attr.Val)
-					case "content":
-						content = attr.Val
-					}
-				}
-				if content == "" {
-					continue
-				}
-				switch {
-				case property == "og:image", property == "og:image:secure_url":
-					og = append(og, content)
-				case name == "twitter:image", name == "twitter:image:src":
-					twitter = append(twitter, content)
-				}
-			case "link":
-				var rel, href string
-				for _, attr := range token.Attr {
-					switch strings.ToLower(attr.Key) {
-					case "rel":
-						rel = strings.ToLower(attr.Val)
-					case "href":
-						href = attr.Val
-					}
-				}
-				if href == "" {
-					continue
-				}
-				for _, value := range strings.Fields(rel) {
-					if value == "apple-touch-icon" || value == "apple-touch-icon-precomposed" || value == "icon" {
-						icons = append(icons, href)
-						break
-					}
-				}
-			case "body":
-				// Everything worth reading lives in the head.
-				return append(append(og, twitter...), icons...)
+		}
+		if tokenType != html.StartTagToken && tokenType != html.SelfClosingTagToken {
+			continue
+		}
+		token := tokenizer.Token()
+		switch token.Data {
+		case "meta":
+			ogImage, twitterImage := metaImageRef(token)
+			if ogImage != "" {
+				og = append(og, ogImage)
 			}
+			if twitterImage != "" {
+				twitter = append(twitter, twitterImage)
+			}
+		case "link":
+			if href := iconLinkHref(token); href != "" {
+				icons = append(icons, href)
+			}
+		case "body":
+			// Everything worth reading lives in the head.
+			return append(append(og, twitter...), icons...)
 		}
 	}
+}
+
+// metaImageRef returns the content of a <meta> tag that declares an og:image
+// or twitter:image. One of the two returns is always empty.
+func metaImageRef(token html.Token) (og, twitter string) {
+	var property, name, content string
+	for _, attr := range token.Attr {
+		switch strings.ToLower(attr.Key) {
+		case "property":
+			property = strings.ToLower(attr.Val)
+		case "name":
+			name = strings.ToLower(attr.Val)
+		case "content":
+			content = attr.Val
+		}
+	}
+	if content == "" {
+		return "", ""
+	}
+	switch {
+	case property == "og:image", property == "og:image:secure_url":
+		return content, ""
+	case name == "twitter:image", name == "twitter:image:src":
+		return "", content
+	}
+	return "", ""
+}
+
+// iconLinkHref returns the href of a <link> tag that declares a page icon.
+func iconLinkHref(token html.Token) string {
+	var rel, href string
+	for _, attr := range token.Attr {
+		switch strings.ToLower(attr.Key) {
+		case "rel":
+			rel = strings.ToLower(attr.Val)
+		case "href":
+			href = attr.Val
+		}
+	}
+	if href == "" {
+		return ""
+	}
+	for _, value := range strings.Fields(rel) {
+		if value == "apple-touch-icon" || value == "apple-touch-icon-precomposed" || value == "icon" {
+			return href
+		}
+	}
+	return ""
 }

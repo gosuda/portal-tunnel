@@ -3,14 +3,13 @@ package utils
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -37,33 +36,11 @@ func SplitCSV(raw string) []string {
 }
 
 func TrimHexPrefix(raw string) string {
-	if len(raw) >= 2 && raw[0] == '0' && (raw[1] == 'x' || raw[1] == 'X') {
+	hasHexPrefix := len(raw) >= 2 && raw[0] == '0'
+	if hasHexPrefix && (raw[1] == 'x' || raw[1] == 'X') {
 		return raw[2:]
 	}
 	return raw
-}
-
-func ParseCIDRs(raw string) ([]*net.IPNet, error) {
-	parts := SplitCSV(raw)
-	if len(parts) == 0 {
-		return nil, nil
-	}
-
-	cidrs := make([]*net.IPNet, 0, len(parts))
-	seen := make(map[string]struct{}, len(parts))
-	for _, part := range parts {
-		_, network, err := net.ParseCIDR(part)
-		if err != nil {
-			return nil, fmt.Errorf("invalid cidr %q: %w", part, err)
-		}
-		key := network.String()
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		cidrs = append(cidrs, network)
-	}
-	return cidrs, nil
 }
 
 func NormalizeDNSLabel(raw string) (string, error) {
@@ -89,7 +66,8 @@ func NormalizeDNSLabel(raw string) (string, error) {
 		return "", errors.New("name must not start or end with hyphen")
 	}
 	for _, r := range label {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+		validRune := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-'
+		if validRune {
 			continue
 		}
 		return "", errors.New("name must contain only letters, numbers, or hyphen")
@@ -125,7 +103,8 @@ func sanitizeDNSLabelInput(raw string) string {
 
 func isPlainDNSLabel(label string) bool {
 	for _, r := range label {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+		validRune := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-'
+		if validRune {
 			continue
 		}
 		return false
@@ -144,19 +123,34 @@ func NormalizeRelayURL(raw string) (string, error) {
 
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return "", fmt.Errorf("parse relay url %q: %w", raw, err)
+		return "", errors.New("relay url is invalid")
 	}
 	if parsed.Host == "" && parsed.Path != "" && !strings.Contains(parsed.Path, "/") {
 		parsed, err = url.Parse("https://" + strings.TrimSpace(parsed.Path))
 		if err != nil {
-			return "", fmt.Errorf("parse relay url %q: %w", raw, err)
+			return "", errors.New("relay url is invalid")
 		}
 	}
 	if parsed.Host == "" {
-		return "", fmt.Errorf("relay url host is empty: %q", raw)
+		return "", errors.New("relay url host is empty")
+	}
+	if parsed.User != nil {
+		return "", errors.New("relay url must not include credentials")
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return "", errors.New("relay url has an invalid port")
+	}
+	if port := parsed.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", errors.New("relay url port must be between 1 and 65535")
+		}
+	}
+	if strings.EqualFold(parsed.Scheme, "http") && IsLocalRelayHost(parsed.Hostname()) {
+		parsed.Scheme = "https"
 	}
 	if !strings.EqualFold(parsed.Scheme, "https") {
-		return "", fmt.Errorf("relay url must use https: %q", raw)
+		return "", errors.New("relay url must use https")
 	}
 
 	parsed.RawQuery = ""
@@ -229,15 +223,6 @@ func HostnameMatchesPattern(pattern, hostname string) bool {
 	return ok && rest == suffix
 }
 
-func HostnameHash(hostname string) string {
-	hostname = NormalizeHostname(hostname)
-	if hostname == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte("portal hostname hash v1\x00" + hostname))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
-}
-
 func NormalizeChildHostnames(inputs []string, baseDomain string) []string {
 	if len(inputs) == 0 {
 		return nil
@@ -287,40 +272,6 @@ func NormalizeRelayURLs(inputs ...string) ([]string, error) {
 	return normalizeUniqueStrings(out, strings.TrimSpace), nil
 }
 
-func FilterRelayURLs(inputs, excluded []string) []string {
-	if len(inputs) == 0 {
-		return nil
-	}
-	if len(excluded) == 0 {
-		return append([]string(nil), inputs...)
-	}
-
-	skip := make(map[string]struct{}, len(excluded))
-	for _, input := range excluded {
-		input = strings.TrimSpace(input)
-		if input == "" {
-			continue
-		}
-		skip[input] = struct{}{}
-	}
-
-	filtered := make([]string, 0, len(inputs))
-	for _, input := range inputs {
-		input = strings.TrimSpace(input)
-		if input == "" {
-			continue
-		}
-		if _, ok := skip[input]; ok {
-			continue
-		}
-		filtered = append(filtered, input)
-	}
-	if len(filtered) == 0 {
-		return nil
-	}
-	return filtered
-}
-
 func RemoveRelayURL(inputs []string, target string) []string {
 	if len(inputs) == 0 {
 		return nil
@@ -345,68 +296,6 @@ func RemoveRelayURL(inputs []string, target string) []string {
 	return filtered
 }
 
-func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
-	merged, err := NormalizeRelayURLs(append(append([]string(nil), current...), inputs...)...)
-	if err != nil {
-		return nil, err
-	}
-	if len(excluded) == 0 {
-		return merged, nil
-	}
-
-	excluded, err = NormalizeRelayURLs(excluded...)
-	if err != nil {
-		return nil, err
-	}
-
-	return FilterRelayURLs(merged, excluded), nil
-}
-
-func ResolvePortalRelayURLs(explicit []string, includeBootstrap bool) ([]string, error) {
-	explicit, err := NormalizeRelayURLs(explicit...)
-	if err != nil {
-		return nil, err
-	}
-	if !includeBootstrap {
-		return explicit, nil
-	}
-
-	defaults, err := NormalizeRelayURLs(types.BootstrapRelays...)
-	if err != nil {
-		return nil, err
-	}
-	if len(defaults) == 0 {
-		return explicit, nil
-	}
-	return MergeRelayURLs(defaults, nil, explicit)
-}
-
-func ExcludeLocalRelayURLs(inputs ...string) ([]string, error) {
-	normalized, err := NormalizeRelayURLs(inputs...)
-	if err != nil {
-		return nil, err
-	}
-	if len(normalized) == 0 {
-		return nil, nil
-	}
-
-	filtered := normalized[:0]
-	for _, input := range normalized {
-		parsed, err := url.Parse(input)
-		if err != nil {
-			return nil, fmt.Errorf("parse relay url %q: %w", input, err)
-		}
-		if IsLocalRelayHost(parsed.Hostname()) {
-			continue
-		}
-		filtered = append(filtered, input)
-	}
-	if len(filtered) == 0 {
-		return nil, nil
-	}
-	return filtered, nil
-}
-
 func LeaseHostname(name, rootHost string) (string, error) {
 	label, err := NormalizeDNSLabel(name)
 	if err != nil {
@@ -416,20 +305,31 @@ func LeaseHostname(name, rootHost string) (string, error) {
 	if rootHost == "" {
 		return "", errors.New("root host is required")
 	}
+	if ip := net.ParseIP(rootHost); ip != nil && ip.IsLoopback() {
+		rootHost = "localhost"
+	}
 	return label + "." + rootHost, nil
 }
 
-func DecodeBase64URLString(encoded string) (string, error) {
-	decoded, err := base64.URLEncoding.DecodeString(encoded)
-	if err == nil {
-		return string(decoded), nil
-	}
-
-	decoded, err = base64.RawURLEncoding.DecodeString(encoded)
+// CanonicalLeaseHostname returns the identity-bound hostname for a lease.
+// The full 20-byte EVM address is encoded as lowercase hexadecimal so the
+// hostname cannot move between authenticated identities.
+func CanonicalLeaseHostname(name, address, rootHost string) (string, error) {
+	label, err := NormalizeDNSLabel(name)
 	if err != nil {
 		return "", err
 	}
-	return string(decoded), nil
+	address = strings.ToLower(TrimHexPrefix(strings.TrimSpace(address)))
+	if len(address) != 40 {
+		return "", errors.New("address must contain 40 hexadecimal characters")
+	}
+	if _, err := hex.DecodeString(address); err != nil {
+		return "", errors.New("address must contain 40 hexadecimal characters")
+	}
+	if len(label) > types.CanonicalLeaseNameMaxLength {
+		return "", fmt.Errorf("name must be %d characters or fewer for an identity-bound hostname", types.CanonicalLeaseNameMaxLength)
+	}
+	return LeaseHostname(label+"-"+address, rootHost)
 }
 
 func NormalizeTargetAddr(raw string) (string, error) {
@@ -487,6 +387,9 @@ func HostPortOrLoopback(addr string) string {
 func EnsurePort(host string) string {
 	if _, _, err := net.SplitHostPort(host); err == nil {
 		return host
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
 	}
 	return net.JoinHostPort(host, "443")
 }

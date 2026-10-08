@@ -1,6 +1,7 @@
 export const RELAY_API_PATHS = {
   public: {
     state: "/api/state",
+    reputationVote: "/api/reputation/vote",
   },
   admin: {
     root: "/api/admin",
@@ -12,7 +13,6 @@ export const RELAY_API_PATHS = {
     root: "/api/policy",
     state: "/api/policy/state",
     leases: "/api/policy/leases",
-    ips: "/api/policy/ips",
   },
   x402: {
     root: "/api/x402",
@@ -22,6 +22,7 @@ export const RELAY_API_PATHS = {
   },
   sdk: {
     domain: "/sdk/domain",
+    certificateChain: "/sdk/certificate-chain",
   },
   discovery: "/discovery",
   install: {
@@ -29,8 +30,6 @@ export const RELAY_API_PATHS = {
     powershell: "/api/install.ps1",
   },
 } as const;
-
-export const BROWSER_API_PATHS = RELAY_API_PATHS;
 
 export const ROUTE_PATHS = {
   home: "/",

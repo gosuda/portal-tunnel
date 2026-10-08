@@ -6,13 +6,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -63,10 +67,10 @@ func run(args []string) error {
 	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", false, "include bootstrap relays and enable discovery", "DISCOVERY")
 	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
+	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
 	utils.IntFlagEnv(fs, &cfg.maxActiveRelays, "max-active-relays", 3, nil, "maximum number of auto-selected relays to keep connected; explicit --relays are always included", "MAX_ACTIVE_RELAYS")
 	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8093", "local payment app HTTP listen address (host:port or URL)")
-	utils.StringFlag(fs, &cfg.name, "name", "payment-app", "public hostname prefix (single DNS label)")
+	utils.StringFlag(fs, &cfg.name, "name", "payment-app", "public hostname prefix (normalized single DNS label, maximum 22 ASCII characters)")
 	utils.StringFlag(fs, &cfg.desc, "description", "Portal Sui wallet x402 payment app", "lease description")
 	utils.StringFlag(fs, &cfg.tags, "tags", "payment,x402,sui,usdc,image,photo", "comma-separated lease tags")
 	utils.StringFlag(fs, &cfg.owner, "owner", "PortalApp Developer", "lease owner")
@@ -99,7 +103,7 @@ func run(args []string) error {
 		return err
 	}
 
-	ctx, stop := utils.SignalContext()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	return runPaymentApp(ctx, cfg)
@@ -150,22 +154,28 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 		return err
 	}
 
-	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:       utils.SplitCSV(cfg.relayURLs),
-		Discovery:       cfg.discovery,
-		Identity:        types.Identity{Name: cfg.name},
-		IdentityPath:    cfg.identityPath,
-		IdentityJSON:    cfg.identityJSON,
-		BanMITM:         cfg.banMITM,
-		MaxActiveRelays: cfg.maxActiveRelays,
-		Metadata:        metadata,
-	})
+	listenerIdentity, err := resolvePaymentIdentity(cfg)
+	if err != nil {
+		return fmt.Errorf("resolve identity: %w", err)
+	}
+	explicitRelayURLs, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.relayURLs)...)
+	if err != nil {
+		return err
+	}
+	opts := []sdk.Option{
+		sdk.WithMITMProtection(cfg.banMITM),
+		sdk.WithMetadata(metadata),
+	}
+	if cfg.discovery {
+		opts = append(opts, sdk.WithDiscovery(cfg.maxActiveRelays))
+	}
+	exposure, err := sdk.Expose(ctx, listenerIdentity, explicitRelayURLs, opts...)
 	if err != nil {
 		return fmt.Errorf("exposure listen error: %w", err)
 	}
 	defer exposure.Close()
 
-	err = exposure.RunHTTP(ctx, handler, addr)
+	err = sdk.RunHTTP(ctx, exposure, handler, addr)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			err = nil
@@ -191,4 +201,51 @@ func printUsage(w io.Writer) {
 			"payment-app --x402-testnet=false --x402-pay-to 0x... --x402-amount 0.01",
 		},
 	)
+}
+
+// resolvePaymentIdentity parses an inline identity or existing file. It
+// generates and persists an identity only when neither source exists.
+func resolvePaymentIdentity(cfg paymentConfig) (types.Identity, error) {
+	if raw := strings.TrimSpace(cfg.identityJSON); raw != "" {
+		return identity.Parse([]byte(raw))
+	}
+	path := strings.TrimSpace(cfg.identityPath)
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return identity.Parse(data)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
+		}
+	}
+	name, err := paymentName(cfg.name, cfg.addr)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	generated, err := identity.Generate(name)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	if path == "" {
+		return generated, nil
+	}
+	data, err := identity.Marshal(generated)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	if err := utils.EnsureParentDir(path); err != nil {
+		return types.Identity{}, err
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return types.Identity{}, fmt.Errorf("write identity file: %w", err)
+	}
+	return generated, nil
+}
+
+func paymentName(name, target string) (string, error) {
+	if name = strings.TrimSpace(name); name != "" {
+		return name, nil
+	}
+	return utils.DefaultExposeName(target, utils.RandomID("payment_"))
 }
