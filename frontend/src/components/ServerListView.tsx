@@ -1,4 +1,13 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { flushSync } from "react-dom";
 import { Header } from "@/components/Header";
 import { LandingHero } from "@/components/LandingHero";
@@ -172,6 +181,120 @@ function LiveAppCard({ serverId, children }: LiveAppCardProps) {
   );
 }
 
+// Rows kept rendered past each edge of the viewport, so cards are in place
+// before they scroll in.
+const GRID_OVERSCAN_ROWS = 3;
+
+interface GridWindow {
+  columns: number;
+  firstRow: number;
+  lastRow: number;
+  rowPitch: number;
+  capacity: number;
+}
+
+// Live app cards share one fixed height, so the grid renders only the rows
+// near the viewport and pads the rest at their exact height. Printing renders
+// every card.
+function useGridWindow(
+  gridRef: RefObject<HTMLDivElement | null>,
+  itemCount: number
+) {
+  const [view, setView] = useState<GridWindow>({
+    columns: 1,
+    firstRow: 0,
+    lastRow: 6,
+    rowPitch: 0,
+    capacity: Infinity,
+  });
+  const [printing, setPrinting] = useState(false);
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const grid = gridRef.current;
+      const card = grid?.firstElementChild;
+      if (!grid || !card) {
+        return;
+      }
+
+      const style = getComputedStyle(grid);
+      const columns = style.gridTemplateColumns.split(" ").length;
+      const rowPitch =
+        card.getBoundingClientRect().height + parseFloat(style.rowGap);
+      const top = grid.getBoundingClientRect().top;
+      const totalRows = Math.ceil(itemCount / columns);
+      // At least one row stays rendered so the next measure has a card.
+      const firstRow = Math.min(
+        Math.max(Math.floor(-top / rowPitch) - GRID_OVERSCAN_ROWS, 0),
+        totalRows - 1
+      );
+      const lastRow = Math.min(
+        Math.max(
+          Math.ceil((window.innerHeight - top) / rowPitch) + GRID_OVERSCAN_ROWS,
+          firstRow + 1
+        ),
+        totalRows
+      );
+      const capacity =
+        (Math.ceil(window.innerHeight / rowPitch) + 1 + 2 * GRID_OVERSCAN_ROWS) *
+        columns;
+
+      setView((prev) =>
+        prev.columns === columns &&
+        prev.firstRow === firstRow &&
+        prev.lastRow === lastRow &&
+        prev.rowPitch === rowPitch &&
+        prev.capacity === capacity
+          ? prev
+          : { columns, firstRow, lastRow, rowPitch, capacity }
+      );
+    };
+
+    measure();
+    window.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
+    };
+  }, [gridRef, itemCount]);
+
+  useEffect(() => {
+    // The print layout is taken right after beforeprint, so the full grid has
+    // to be committed synchronously.
+    const showAll = () => flushSync(() => setPrinting(true));
+    const restore = () => setPrinting(false);
+    window.addEventListener("beforeprint", showAll);
+    window.addEventListener("afterprint", restore);
+    return () => {
+      window.removeEventListener("beforeprint", showAll);
+      window.removeEventListener("afterprint", restore);
+    };
+  }, []);
+
+  if (printing) {
+    return {
+      start: 0,
+      end: itemCount,
+      paddingTop: 0,
+      paddingBottom: 0,
+      capacity: view.capacity,
+    };
+  }
+
+  // The list can shrink before the next measure, so clamp to what exists.
+  const totalRows = Math.ceil(itemCount / view.columns);
+  const lastRow = Math.min(view.lastRow, totalRows);
+  const firstRow = Math.min(view.firstRow, Math.max(lastRow - 1, 0));
+  return {
+    start: firstRow * view.columns,
+    end: lastRow * view.columns,
+    paddingTop: firstRow * view.rowPitch,
+    paddingBottom: (totalRows - lastRow) * view.rowPitch,
+    capacity: view.capacity,
+  };
+}
+
 interface ServerListViewProps {
   title?: string;
   searchQuery: string;
@@ -275,7 +398,9 @@ export function ServerListView({
   }, [currentRelayURL]);
 
   const gridRef = useRef<HTMLDivElement>(null);
-  const renderedServerIds = filteredServers.map((server) => server.id).join("\n");
+  const gridWindow = useGridWindow(gridRef, filteredServers.length);
+  const renderedServers = filteredServers.slice(gridWindow.start, gridWindow.end);
+  const renderedServerIds = renderedServers.map((server) => server.id).join("\n");
 
   useEffect(() => {
     const pending = gridRef.current?.querySelectorAll<HTMLElement>(
@@ -325,15 +450,15 @@ export function ServerListView({
   }, [renderedServerIds]);
 
   // Discrete choices animate; search keystrokes and polling update in place.
-  // Status and tag changes can grow the list, so every lease bounds them.
+  // The grid renders at most one window of cards, which bounds every update.
   const handleToggleFavorite = (serverId: string) =>
-    animateReorder(() => onToggleFavorite(serverId), filteredServers.length);
+    animateReorder(() => onToggleFavorite(serverId), gridWindow.capacity);
   const handleSortByChange = (value: SortOption) =>
-    animateReorder(() => onSortByChange(value), filteredServers.length);
+    animateReorder(() => onSortByChange(value), gridWindow.capacity);
   const handleStatusChange = (value: StatusFilter) =>
-    animateReorder(() => onStatusChange(value), leases?.length ?? Infinity);
+    animateReorder(() => onStatusChange(value), gridWindow.capacity);
   const handleTagToggle = (tag: string) =>
-    animateReorder(() => onTagToggle(tag), leases?.length ?? Infinity);
+    animateReorder(() => onTagToggle(tag), gridWindow.capacity);
 
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
   const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
@@ -343,20 +468,26 @@ export function ServerListView({
   // active filter explains an empty list either way.
   const showConnecting = leases === null && !hasActiveFilters;
   const serverGrid = filteredServers.length > 0 ? (
-    <div
-      ref={gridRef}
-      className="grid grid-cols-1 gap-6 py-4 min-[500px]:py-6 min-[500px]:grid-cols-2 md:grid-cols-3"
-    >
-      {filteredServers.map((server) => (
-        <LiveAppCard key={server.id} serverId={server.id}>
-          <ServerCard
-            server={server}
-            isFavorite={favoriteIds.has(server.id)}
-            onToggleFavorite={handleToggleFavorite}
-            onVote={onVote}
-          />
-        </LiveAppCard>
-      ))}
+    <div className="py-4 min-[500px]:py-6">
+      <div
+        ref={gridRef}
+        className="grid grid-cols-1 gap-6 min-[500px]:grid-cols-2 md:grid-cols-3"
+        style={{
+          paddingTop: gridWindow.paddingTop,
+          paddingBottom: gridWindow.paddingBottom,
+        }}
+      >
+        {renderedServers.map((server) => (
+          <LiveAppCard key={server.id} serverId={server.id}>
+            <ServerCard
+              server={server}
+              isFavorite={favoriteIds.has(server.id)}
+              onToggleFavorite={handleToggleFavorite}
+              onVote={onVote}
+            />
+          </LiveAppCard>
+        ))}
+      </div>
     </div>
   ) : null;
 
