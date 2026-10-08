@@ -11,6 +11,15 @@
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
 
+  --animate-capability-in: capability-in 0.45s cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  @keyframes capability-in {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem);
+    }
+  }
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

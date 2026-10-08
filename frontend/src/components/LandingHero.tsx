@@ -1,31 +1,78 @@
+import { useState } from "react";
+import {
+  ArrowLeftRight,
+  ChevronRight,
+  CircleDollarSign,
+  Globe,
+  LockKeyhole,
+  Network,
+  RotateCw,
+} from "lucide-react";
 import type { Lease } from "@/types/api";
 import { TunnelCommandForm } from "@/components/TunnelCommandForm";
 
-const relayDocsLinks = [
+const capabilities = [
   {
-    eyebrow: "Documentation",
-    title: "Feature Inventory",
+    label: "Ingress",
+    icon: Globe,
+    title: "Public HTTPS for localhost",
     description:
-      "Explore the canonical matrix of supported capabilities across CLI, Agent, SDK, and Relay.",
+      "Publish local services through public relays without opening inbound ports.",
+    linkLabel: "Learn more",
     href: "https://gosuda.github.io/portal-tunnel/features",
   },
   {
-    eyebrow: "Operations",
-    title: "Self-Hosting Relays",
+    label: "TLS",
+    icon: LockKeyhole,
+    title: "Keyless end-to-end tenant TLS",
     description:
-      "Run your own MIT-licensed relay server with single-command Docker Compose and zero telemetry.",
+      "Relays sign handshakes without session keys; self-probes flag suspected MITM.",
+    linkLabel: "Read the security model",
+    href: "https://gosuda.github.io/portal-tunnel/security-model",
+  },
+  {
+    label: "Relays",
+    icon: Network,
+    title: "Self-hosted anonymous relays",
+    description:
+      "Use discovered public relays or run your own without a central account or operator.",
+    linkLabel: "Self-hosting guide",
     href: "https://gosuda.github.io/portal-tunnel/self-hosting",
   },
   {
-    eyebrow: "Architecture",
-    title: "Security & Transport",
+    label: "Failover",
+    icon: RotateCw,
+    title: "Resilient relay pools",
     description:
-      "Understand client-side tenant TLS, keyless signing, MITM self-probe, and relay ownership.",
-    href: "https://gosuda.github.io/portal-tunnel/security-model",
+      "Keep connections to discovered or explicit relays so services survive relay failures.",
+    linkLabel: "Learn more",
+    href: "https://gosuda.github.io/portal-tunnel/features",
+  },
+  {
+    label: "Payments",
+    icon: CircleDollarSign,
+    title: "x402 for the agentic web",
+    description:
+      "Agents and browsers pay with Sui USDC in-flow; the tunnel enforces access to protected routes.",
+    linkLabel: "Learn more",
+    href: "https://gosuda.github.io/portal-tunnel/features",
+  },
+  {
+    label: "Transport",
+    icon: ArrowLeftRight,
+    title: "Web traffic and raw protocols",
+    description:
+      "Carry HTTPS, raw TCP, and UDP workloads without SSH or WebSocket overlays.",
+    linkLabel: "Learn more",
+    href: "https://gosuda.github.io/portal-tunnel/features",
   },
 ] as const;
 
 export function LandingHero({ leases }: { leases: Lease[] | null }) {
+  const [active, setActive] = useState<(typeof capabilities)[number]>(
+    capabilities[0],
+  );
+
   return (
     <section
       aria-labelledby="landing-title"
@@ -102,36 +149,79 @@ export function LandingHero({ leases }: { leases: Lease[] | null }) {
         </div>
       </div>
 
-      <div className="relative mt-10 -mx-4 w-auto sm:-mx-6 md:-mx-8">
-        <div className="overflow-hidden border-y border-border/80 bg-border/80">
-          <div className="grid gap-px sm:grid-cols-3">
-            {relayDocsLinks.map(({ eyebrow, title, description, href }) => (
-              <a
-                key={title}
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="group flex min-h-44 bg-background p-6 text-left transition-colors duration-200 hover:bg-secondary/35 sm:min-h-48 sm:p-7"
-              >
-                <div className="flex h-full flex-col space-y-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-normal text-primary/80">
-                    {eyebrow}
-                  </p>
-                  <h3 className="flex items-center justify-between text-[1.15rem] font-semibold tracking-normal text-foreground group-hover:text-primary sm:text-[1.25rem] sm:leading-tight">
-                    <span>{title}</span>
-                    <span className="text-xs text-text-muted transition-transform group-hover:translate-x-0.5">
-                      &rarr;
-                    </span>
-                  </h3>
-                  <p className="max-w-[32ch] text-[0.92rem] leading-6 text-text-muted">
-                    {description}
-                  </p>
-                  <div className="mt-auto pt-4">
-                    <div className="h-px w-10 bg-primary/45 transition-[width,background-color] group-hover:w-16 group-hover:bg-primary" />
-                  </div>
-                </div>
-              </a>
-            ))}
+      <div className="relative mx-auto mt-20 max-w-5xl sm:mt-24">
+        <div className="flex flex-wrap items-end justify-between gap-x-12 gap-y-6">
+          <h2
+            className="max-w-2xl text-3xl font-bold tracking-normal text-foreground sm:text-4xl lg:text-5xl"
+            style={{ lineHeight: 1.08 }}
+          >
+            Everything a tunnel needs.{" "}
+            <span className="text-text-muted">Nothing to sign up for.</span>
+          </h2>
+          <p className="flex flex-col text-sm leading-6 text-text-muted">
+            Want the full matrix?
+            <a
+              href="https://gosuda.github.io/portal-tunnel/features"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-11 items-center gap-1 font-semibold text-primary underline-offset-4 hover:underline"
+            >
+              Feature inventory
+              <ChevronRight aria-hidden="true" className="size-4" />
+            </a>
+          </p>
+        </div>
+
+        <div
+          role="group"
+          aria-label="Capabilities"
+          className="mt-16 flex gap-2 overflow-x-auto py-1 [scrollbar-width:none] sm:mt-20 [&::-webkit-scrollbar]:hidden"
+        >
+          {capabilities.map((capability) => (
+            <button
+              key={capability.label}
+              type="button"
+              aria-pressed={capability === active}
+              aria-controls="capability-detail"
+              onClick={() => setActive(capability)}
+              className="group flex min-w-26 flex-1 flex-col items-center gap-3.5 rounded-xl px-1 py-2 text-sm font-semibold text-text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-pressed:text-foreground"
+            >
+              <capability.icon
+                aria-hidden="true"
+                strokeWidth={1.25}
+                className="size-11 transition-[color,translate] duration-300 group-hover:-translate-y-0.5 group-aria-pressed:text-primary motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
+              />
+              {capability.label}
+              <span
+                aria-hidden="true"
+                className="size-1 rounded-full bg-primary opacity-0 transition-opacity group-aria-pressed:opacity-100"
+              />
+            </button>
+          ))}
+        </div>
+
+        <div
+          id="capability-detail"
+          aria-live="polite"
+          className="mx-auto mt-12 min-h-56 max-w-2xl text-center"
+        >
+          {/* Keyed so each selection remounts and replays the entrance. */}
+          <div key={active.label} className="motion-safe:animate-capability-in">
+            <h3 className="text-2xl font-bold tracking-normal text-foreground sm:text-3xl">
+              {active.title}
+            </h3>
+            <p className="mx-auto mt-3.5 max-w-[46ch] text-base leading-7 text-text-muted sm:text-lg">
+              {active.description}
+            </p>
+            <a
+              href={active.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-flex min-h-11 items-center gap-1 text-primary underline-offset-4 hover:underline"
+            >
+              {active.linkLabel}
+              <ChevronRight aria-hidden="true" className="size-4" />
+            </a>
           </div>
         </div>
       </div>
