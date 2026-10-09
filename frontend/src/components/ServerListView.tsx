@@ -161,10 +161,12 @@ function LiveAppCard({ serverId, children }: LiveAppCardProps) {
   // The set changes outside React, so the card reads it once when it mounts.
   const [revealOnView] = useState(() => !revealedServerIds.has(serverId));
 
+  // Off-screen cards skip layout and paint but stay mounted; 174.5px is the
+  // card's height until the browser remembers its rendered size.
   return (
     <div
       data-reveal={revealOnView ? serverId : undefined}
-      className="[view-transition-class:live-app]"
+      className="[view-transition-class:live-app] [content-visibility:auto] [contain-intrinsic-size:auto_174.5px] print:[content-visibility:visible]"
       style={{ viewTransitionName }}
     >
       {children}
