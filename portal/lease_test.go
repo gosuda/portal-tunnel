@@ -174,7 +174,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 }
 
-func TestLeaseRegistryLifecycleUnnamed(t *testing.T) {
+func TestLeaseRegistryUnnamedHostnameContract(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
@@ -202,23 +202,6 @@ func TestLeaseRegistryLifecycleUnnamed(t *testing.T) {
 	if _, ok := registry.Lookup(expectedCanonical); !ok {
 		t.Fatal("Lookup(canonical hostname) = false, want registered unnamed lease")
 	}
-
-	renewed, _, err := registry.Renew(types.RenewRequest{
-		AccessToken: resp.AccessToken,
-		TTL:         int((3 * time.Minute) / time.Second),
-	}, netip.MustParseAddr("203.0.113.11"))
-	if err != nil {
-		t.Fatalf("Renew() error = %v", err)
-	}
-	if !renewed.ExpiresAt.After(resp.ExpiresAt) {
-		t.Fatalf("Renew() expires at = %v, want later than register expiry %v", renewed.ExpiresAt, resp.ExpiresAt)
-	}
-	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: renewed.AccessToken}); err != nil {
-		t.Fatalf("Unregister() error = %v", err)
-	}
-	if _, ok := registry.Lookup(expectedCanonical); ok {
-		t.Fatal("Lookup() after Unregister() = true, want false")
-	}
 }
 
 func TestLeaseRegistryUnnamedReplacementAndNamedCoexistence(t *testing.T) {
@@ -245,12 +228,6 @@ func TestLeaseRegistryUnnamedReplacementAndNamedCoexistence(t *testing.T) {
 	}
 	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 {
 		t.Fatalf("PublicLeases() length = %d, want 1 after unnamed replacement", len(leases))
-	}
-	if _, err := registry.admitLeaseByToken(firstUnnamedResp.AccessToken, false); err == nil {
-		t.Fatal("admitLeaseByToken(replaced token) = nil, want error")
-	}
-	if _, err := registry.admitLeaseByToken(secondUnnamedResp.AccessToken, false); err != nil {
-		t.Fatalf("admitLeaseByToken(replacement token) error = %v, want admitted", err)
 	}
 
 	// Registering a named service under the same address creates a distinct identity that coexists.

@@ -75,15 +75,15 @@ func (k ServiceIdentityKey) String() string {
 
 // CanonicalIdentityKey returns the canonical identity key for the given name
 // and address: both parts are canonicalized, the result is "" when both parts
-// are empty, and "name:address" otherwise.
+// are empty, and "name:address" (or ":address" when name is empty) otherwise.
 func CanonicalIdentityKey(name, address string) string {
 	return NewServiceIdentityKey(name, address).String()
 }
 
-// ParseIdentityKey parses a raw identity key in "name:address" form and
-// returns its canonical form. The key is split on the first separator and both
-// parts are canonicalized; parsing fails when the raw value does not contain
-// exactly one separator or either part is empty after canonicalization.
+// ParseIdentityKey parses a raw identity key in "name:address" or ":address"
+// form and returns its canonical form. The key is split on the first separator
+// and both parts are canonicalized; parsing fails when the raw value does not
+// contain exactly one separator or the address is empty after canonicalization.
 func ParseIdentityKey(raw string) (string, error) {
 	key, err := ParseServiceIdentityKey(raw)
 	if err != nil {

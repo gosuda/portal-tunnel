@@ -186,30 +186,19 @@ func TestExposeRejectsIncompleteIdentity(t *testing.T) {
 	}
 }
 
-func TestExposeAllowsEmptyIdentityName(t *testing.T) {
-	identity := types.Identity{
-		Name:       "",
-		Address:    "address",
-		PublicKey:  "public",
-		PrivateKey: "private",
-	}
-	_, err := Expose(context.Background(), identity, nil)
-	if err == nil || !strings.Contains(err.Error(), "at least one initial relay") {
-		t.Fatalf("Expose(unnamed) error = %v, want initial relay error", err)
-	}
-}
-
 func TestExposeRejectsEmptyInitialRelays(t *testing.T) {
-	identity := types.Identity{
-		Name:       "svc",
-		Address:    "address",
-		PublicKey:  "public",
-		PrivateKey: "private",
-	}
-	for _, relays := range [][]string{nil, {}} {
-		_, err := Expose(context.Background(), identity, relays)
-		if err == nil || !strings.Contains(err.Error(), "at least one initial relay") {
-			t.Fatalf("Expose(%v) error = %v, want initial relay error", relays, err)
+	for _, name := range []string{"svc", ""} {
+		identity := types.Identity{
+			Name:       name,
+			Address:    "address",
+			PublicKey:  "public",
+			PrivateKey: "private",
+		}
+		for _, relays := range [][]string{nil, {}} {
+			_, err := Expose(context.Background(), identity, relays)
+			if err == nil || !strings.Contains(err.Error(), "at least one initial relay") {
+				t.Fatalf("Expose(name=%q, %v) error = %v, want initial relay error", name, relays, err)
+			}
 		}
 	}
 }
