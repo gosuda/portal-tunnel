@@ -39,9 +39,9 @@ func (c *browserConnector) start(_ js.Value, args []js.Value) any {
 			return nil, errors.New("browser tunnel options are required")
 		}
 		options := args[0]
-		name := strings.TrimSpace(options.Get("name").String())
-		relayURL := strings.TrimSpace(options.Get("relayURL").String())
-		body := options.Get("body").String()
+		name := strings.TrimSpace(jsString(options.Get("name")))
+		relayURL := strings.TrimSpace(jsString(options.Get("relayURL")))
+		body := jsString(options.Get("body"))
 		if relayURL == "" {
 			return nil, errors.New("relay URL is required")
 		}
@@ -140,4 +140,11 @@ func promise(run func() (any, error)) js.Value {
 	p := js.Global().Get("Promise").New(executor)
 	executor.Release()
 	return p
+}
+
+func jsString(v js.Value) string {
+	if v.Type() == js.TypeString {
+		return v.String()
+	}
+	return ""
 }
