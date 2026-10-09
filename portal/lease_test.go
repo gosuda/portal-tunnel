@@ -14,6 +14,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // signLeaseRequest builds the /v1/sign-shaped request the token gate reads.
@@ -170,6 +171,89 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 	if _, ok := registry.Lookup("demo.example.com"); ok {
 		t.Fatal("Lookup() after Unregister() = true, want false")
+	}
+}
+
+func TestLeaseRegistryUnnamedHostnameContract(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t, false, false)
+	identity := newTestLeaseIdentity(t, "")
+	_, resp, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: identity,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	expectedCanonical, err := utils.CanonicalLeaseHostname("", identity.Address, "example.com")
+	if err != nil {
+		t.Fatalf("CanonicalLeaseHostname error = %v", err)
+	}
+	if resp.Hostname != "" {
+		t.Fatalf("RegisterResponse hostname = %q, want empty friendly hostname for unnamed service", resp.Hostname)
+	}
+	if resp.CanonicalHostname != expectedCanonical {
+		t.Fatalf("RegisterResponse canonical hostname = %q, want %q", resp.CanonicalHostname, expectedCanonical)
+	}
+	leases := registry.PublicLeases(time.Now())
+	if len(leases) != 1 || leases[0].Hostname != "" || leases[0].CanonicalHostname != expectedCanonical || leases[0].Address != identity.Address {
+		t.Fatalf("PublicLeases() = %+v, want the registered unnamed lease", leases)
+	}
+	if _, ok := registry.Lookup(expectedCanonical); !ok {
+		t.Fatal("Lookup(canonical hostname) = false, want registered unnamed lease")
+	}
+}
+
+func TestLeaseRegistryUnnamedReplacementAndNamedCoexistence(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t, false, false)
+	unnamedIdentity := newTestLeaseIdentity(t, "")
+	_, firstUnnamedResp, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: unnamedIdentity,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("first unnamed Register() error = %v", err)
+	}
+
+	// Re-registering the same unnamed identity replaces the previous one.
+	secondUnnamedRecord, secondUnnamedResp, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: unnamedIdentity,
+	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("second unnamed Register() error = %v", err)
+	}
+	if firstUnnamedResp.CanonicalHostname != secondUnnamedResp.CanonicalHostname {
+		t.Fatalf("canonical hostname changed across replacement: first=%q second=%q", firstUnnamedResp.CanonicalHostname, secondUnnamedResp.CanonicalHostname)
+	}
+	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 {
+		t.Fatalf("PublicLeases() length = %d, want 1 after unnamed replacement", len(leases))
+	}
+
+	// Registering a named service under the same address creates a distinct identity that coexists.
+	namedIdentity := unnamedIdentity
+	namedIdentity.Name = "myapp"
+	_, namedResp, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: namedIdentity,
+	}, netip.MustParseAddr("203.0.113.12"), "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("named Register() error = %v", err)
+	}
+	if namedResp.CanonicalHostname == secondUnnamedResp.CanonicalHostname {
+		t.Fatalf("named and unnamed services got the same canonical hostname %q", namedResp.CanonicalHostname)
+	}
+
+	leases := registry.PublicLeases(time.Now())
+	if len(leases) != 2 {
+		t.Fatalf("PublicLeases() length = %d, want 2 for distinct named and unnamed services", len(leases))
+	}
+	unnamedLookup, ok := registry.Lookup(secondUnnamedResp.CanonicalHostname)
+	if !ok || unnamedLookup != secondUnnamedRecord {
+		t.Fatalf("Lookup(unnamed) = (%+v, %v), want secondUnnamedRecord", unnamedLookup, ok)
+	}
+	namedLookup, ok := registry.Lookup(namedResp.CanonicalHostname)
+	if !ok || namedLookup.Name != "myapp" {
+		t.Fatalf("Lookup(named) = (%+v, %v), want myapp lease", namedLookup, ok)
 	}
 }
 

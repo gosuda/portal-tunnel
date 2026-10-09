@@ -11,7 +11,6 @@ describe("tunnelCommand", () => {
       currentOrigin: "https://localhost",
       target: "3000",
       name: "My App",
-      nameSeed: "web_portal",
       relayUrls: ["https://localhost"],
       discovery: true,
       thumbnailURL: "",
@@ -35,7 +34,6 @@ describe("tunnelCommand", () => {
       currentOrigin: "https://relay.example.com",
       target: "localhost:3000",
       name: "my-app",
-      nameSeed: "web_portal",
       relayUrls: ["https://relay.example.com"],
       discovery: false,
       thumbnailURL: "https://example.com/thumb.png",
@@ -56,7 +54,6 @@ describe("tunnelCommand", () => {
       currentOrigin: "https://localhost",
       target: "",
       name: "my-app",
-      nameSeed: "web_portal",
       relayUrls: ["https://localhost"],
       discovery: true,
       thumbnailURL: "",
@@ -78,7 +75,6 @@ describe("tunnelCommand", () => {
       currentOrigin: "https://relay.example.com",
       target: "",
       name: "my-app",
-      nameSeed: "web_portal",
       relayUrls: ["https://relay.example.com"],
       discovery: true,
       thumbnailURL: "",
@@ -106,19 +102,39 @@ describe("tunnelCommand", () => {
     expect(
       buildTunnelPreviewURL(
         "https://localhost",
-        "my-app",
-        "3000",
-        "web_portal"
+        "my-app"
       )
     ).toBe("https://my-app.localhost");
 
     expect(
       buildTunnelPreviewURL(
         "https://portal.example.com",
-        "my-app",
-        "3000",
-        "web_portal"
+        "my-app"
       )
     ).toBe("https://my-app.portal.example.com");
+  });
+
+  it("omits --name and returns empty preview URL when name is blank", () => {
+    const options = {
+      currentOrigin: "https://localhost",
+      target: "3000",
+      name: "",
+      relayUrls: ["https://localhost"],
+      discovery: true,
+      thumbnailURL: "",
+      os: "unix" as const,
+    };
+
+    const command = buildTunnelCommand(options);
+    expect(command).toBe(
+      [
+        `curl -ksSL https://localhost/api/install.sh | bash && export PATH="$HOME/.local/bin:$HOME/bin:$PATH"`,
+        "portal expose 3000 --relays https://localhost",
+      ].join("\n")
+    );
+    expect(command).not.toContain("--name");
+
+    expect(buildTunnelPreviewURL("https://localhost", "")).toBe("");
+    expect(buildTunnelPreviewURL("https://portal.example.com", "   ")).toBe("");
   });
 });

@@ -345,7 +345,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
-| `--name` | | string | _(auto)_ | Public hostname prefix (normalized single DNS label, maximum 22 ASCII characters); auto-generated when omitted |
+| `--name` | | string | | Public hostname prefix (normalized single DNS label, maximum 22 ASCII characters); when omitted, an address-only canonical hostname (<address>.<relay-domain>) is used |
 | `--description` | | string | | Service description metadata |
 | `--tags` | | string | | Service tags metadata (comma-separated) |
 | `--owner` | | string | | Service owner metadata |
@@ -555,6 +555,10 @@ Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors
 | `mnemonic` | string | BIP-39 mnemonic used to derive the secp256k1 identity key; keep secret |
 | `derivation_path` | string | EVM derivation path for `mnemonic`; defaults to `m/44'/60'/0'/0/0` |
 
+When `--name` is omitted, the service does not claim a friendly public name and
+publishes an address-only canonical hostname (`<address>.<relay-domain>`).
+When `--name` is provided, Portal publishes both the named canonical hostname
+(`<name>-<address>.<relay-domain>`) and the friendly alias (`<name>.<relay-domain>`).
 An existing identity file or `--identity-json` supplies the saved name as well
 as the key. `--name` applies only when creating a new identity; it does not
 rename an existing one. Use a separate `--identity-path` for a new identity.

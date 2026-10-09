@@ -58,26 +58,32 @@ portal expose 3000 \
   --identity-path ~/.config/portal/myapp.identity.json
 ```
 
-The public lease name is normalized to a single DNS label whose ASCII form is
-at most 22 characters, such as `myapp`. It is not an ENS name such as
-`alice.eth`. Each registration can expose a friendly hostname and always
-exposes an identity-bound hostname:
+When `--name` is omitted, the service publishes an address-only canonical
+hostname (`<40-lowercase-address-hex>.<relay-host>`) and claims no friendly alias:
+
+```text
+7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.portal.example
+```
+
+When `--name` is provided, it is normalized to a single DNS label whose ASCII
+form is at most 22 characters, such as `myapp`. Named registrations expose both
+a friendly alias and an identity-bound canonical hostname:
 
 ```text
 myapp.portal.example
 myapp-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.portal.example
 ```
 
-The relay derives the second hostname from the address proven by SIWE. Portal
-defines the relay-independent service identity as `(normalized name, address)`;
-each relay domain supplies a distinct browser origin for that same identity.
-The full lowercase 40-character address suffix makes each relay-local origin
-stable without stored ownership state. It also makes services published by
-the same Ethereum address publicly correlatable across relay domains. Protocol
-10 clients receive a hostname conflict when their friendly alias is unavailable
-unless they allow canonical fallback. All lease names are limited to normalized
-ASCII labels of at most 22 characters so canonical labels stay within the DNS
-label limit.
+The relay derives the canonical hostname from the address proven by SIWE. Portal
+defines the relay-independent service identity as `(normalized name, address)`
+(or `("", address)` when unnamed); each relay domain supplies a distinct browser
+origin for that same identity. The full lowercase 40-character address suffix
+makes each relay-local origin stable without stored ownership state. It also
+makes services published by the same Ethereum address publicly correlatable
+across relay domains. Protocol 10 clients receive a hostname conflict when
+their friendly alias is unavailable unless they allow canonical fallback.
+All lease names are limited to normalized ASCII labels of at most 22 characters
+so canonical labels stay within the DNS label limit.
 
 ## Relay Admin Token Login
 

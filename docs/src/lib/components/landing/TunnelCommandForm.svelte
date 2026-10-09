@@ -1,7 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { buildTunnelCommand, type TunnelCommandOS } from '$lib/tunnel-command';
-	import { buildDefaultExposeName } from '$lib/expose-name';
 	import { classifyShareInput, type ShareKind } from '$lib/share-link';
 
 	const SHARE_KIND_LABEL: Record<ShareKind, string> = { url: 'URL', file: 'File', port: 'Port' };
@@ -12,16 +10,10 @@
 	let target = $state('');
 	let os: TunnelCommandOS = $state('unix');
 	let name = $state('');
-	let nameSeed = $state('');
 	let copied = $state(false);
 
-	onMount(() => {
-		nameSeed = crypto.randomUUID();
-	});
-
 	const share = $derived(classifyShareInput(target));
-	const generatedName = $derived(buildDefaultExposeName(share.seedTarget, nameSeed));
-	const command = $derived(buildTunnelCommand(share, name, nameSeed, os));
+	const command = $derived(buildTunnelCommand(share, name, os));
 
 	function handleCopy() {
 		const fullCommand = command.install + '\n' + command.run;
@@ -31,11 +23,6 @@
 				copied = false;
 			}, 2000);
 		});
-	}
-
-	function handleShuffleName() {
-		nameSeed = crypto.randomUUID();
-		name = '';
 	}
 </script>
 
@@ -169,32 +156,10 @@
 							<input
 								type="text"
 								bind:value={name}
-								placeholder={generatedName}
-								aria-label="Public name"
+								placeholder="optional"
+								aria-label="Public name (optional)"
 								class="min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-[13px] text-slate-200 shadow-none outline-none placeholder:text-slate-600"
 							/>
-							<button
-								type="button"
-								onclick={handleShuffleName}
-								class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-200"
-								aria-label="Shuffle public name"
-								title="Shuffle public name"
-							>
-								<svg
-									class="h-4 w-4"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke="currentColor"
-									stroke-width="2"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-								>
-									<polyline points="23 4 23 10 17 10" />
-									<polyline points="1 20 1 14 7 14" />
-									<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
-									<path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
-								</svg>
-							</button>
 						</div>
 					</div>
 
@@ -253,6 +218,7 @@
 					>
 						<p class="text-sm leading-6 text-slate-300">
 							Portal discovers public relays and prints the available URLs in your terminal.
+							When <code>--name</code> is omitted, an address-based canonical URL is used.
 							The name above applies when creating a new identity; an existing
 							<code>identity.json</code> keeps its saved name.
 						</p>

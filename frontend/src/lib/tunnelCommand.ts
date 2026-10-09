@@ -1,5 +1,5 @@
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
-import { resolveExposeName } from "@/lib/exposeName";
+import { normalizeExposeName } from "@/lib/exposeName";
 import type { ShareKind } from "@/lib/shareLink";
 
 export type TunnelCommandOS = "unix" | "windows";
@@ -8,7 +8,6 @@ export interface TunnelCommandOptions {
   currentOrigin: string;
   target: string;
   name: string;
-  nameSeed: string;
   relayUrls: string[];
   discovery: boolean;
   thumbnailURL: string;
@@ -34,7 +33,6 @@ function buildTunnelCommandParts({
   discovery,
   enableUDP = false,
   name,
-  nameSeed,
   os,
   relayUrls,
   target,
@@ -49,8 +47,7 @@ function buildTunnelCommandParts({
 } {
   const isFile = shareKind === "file";
   const targetValue = target.trim() === "" ? "3000" : target.trim();
-  const nameSeedTarget = isFile ? servePath : targetValue;
-  const nameValue = resolveExposeName(name, nameSeedTarget, nameSeed);
+  const normalizedName = normalizeExposeName(name);
   const relayURLValue =
     relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
   const leadingArgs = isFile
@@ -67,7 +64,9 @@ function buildTunnelCommandParts({
 
   const exposeArgs: string[] = [];
 
-  exposeArgs.push(`--name ${formatToken(nameValue, os)}`);
+  if (normalizedName !== "") {
+    exposeArgs.push(`--name ${formatToken(normalizedName, os)}`);
+  }
   if (relayUrls.length > 0) {
     exposeArgs.push(`--relays ${formatToken(relayURLValue, os)}`);
   }
@@ -109,27 +108,32 @@ function buildTunnelCommandParts({
 
 export function buildTunnelPreviewURL(
   origin: string,
-  name: string,
-  target: string,
-  nameSeed: string
+  name: string
 ): string {
+  const normalized = normalizeExposeName(name);
+  if (normalized === "") {
+    return "";
+  }
   const baseHost = getRelayOriginHost(origin);
-  const subdomain = resolveExposeName(name, target, nameSeed);
-  return `https://${subdomain}.${baseHost}`;
+  if (baseHost === "") {
+    return "";
+  }
+  return `https://${normalized}.${baseHost}`;
 }
 
 export function buildServiceStatusHostname(
   origin: string,
-  name: string,
-  target: string,
-  nameSeed: string
+  name: string
 ): string {
   const relayHost = getRelayOriginHost(origin);
   if (relayHost === "") {
     return "";
   }
-  const subdomain = resolveExposeName(name, target, nameSeed);
-  return `${subdomain}.${relayHost}`;
+  const normalized = normalizeExposeName(name);
+  if (normalized === "") {
+    return "";
+  }
+  return `${normalized}.${relayHost}`;
 }
 
 export function normalizeAbsoluteHTTPURL(raw: string): string {

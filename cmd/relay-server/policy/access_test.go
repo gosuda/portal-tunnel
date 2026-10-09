@@ -87,3 +87,29 @@ func TestAccessSetDecisionsIgnoresInvalidZeroKeys(t *testing.T) {
 		t.Fatalf("denied keys = %v, want empty", access.DeniedKeys())
 	}
 }
+
+func TestAccessUnnamedIdentityKeyDecisions(t *testing.T) {
+	t.Parallel()
+
+	unnamedKey := types.NewServiceIdentityKey("", "0x1234")
+	namedKey := types.NewServiceIdentityKey("demo", "0x1234")
+
+	access := NewAccess().Snapshot()
+	if err := access.SetMode(ModeManual); err != nil {
+		t.Fatal(err)
+	}
+
+	access.Approve(unnamedKey)
+	if !access.EffectiveApproval(unnamedKey) || !access.Routable(unnamedKey) {
+		t.Fatal("unnamed key not approved")
+	}
+	// Named key under the same address is distinct and not automatically approved.
+	if access.EffectiveApproval(namedKey) || access.Routable(namedKey) {
+		t.Fatal("named key should be distinct from unnamed key")
+	}
+
+	access.Ban(unnamedKey)
+	if !access.IsBanned(unnamedKey) || access.Routable(unnamedKey) {
+		t.Fatal("unnamed key not banned")
+	}
+}

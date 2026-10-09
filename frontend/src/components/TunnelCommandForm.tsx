@@ -4,7 +4,7 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
-import { Check, Copy, RefreshCw, X } from "lucide-react";
+import { Check, Copy, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { Lease } from "@/types/api";
 import { cn } from "@/lib/utils";
@@ -75,32 +75,28 @@ function HeroTunnelCommandForm({
   const [tunnelTarget, setTunnelTarget] = useState<TunnelCommandOS>("unix");
   const {
     currentOrigin,
-    nameSeed,
     target,
     setTarget,
     name,
     copied,
     os,
-    generatedName,
     effectiveName,
     shareKind,
     installBlock,
     runBlock,
     handleCopy,
     handleNameChange,
-    handleShuffleName,
   } = useTunnelCommand({
     os: tunnelTarget,
   });
 
   const previewURL = useMemo(
-    () => buildTunnelPreviewURL(currentOrigin, effectiveName, target, nameSeed),
-    [currentOrigin, effectiveName, nameSeed, target]
+    () => buildTunnelPreviewURL(currentOrigin, effectiveName),
+    [currentOrigin, effectiveName]
   );
   const statusHostname = useMemo(
-    () =>
-      buildServiceStatusHostname(currentOrigin, effectiveName, target, nameSeed),
-    [currentOrigin, effectiveName, nameSeed, target]
+    () => buildServiceStatusHostname(currentOrigin, effectiveName),
+    [currentOrigin, effectiveName]
   );
 
   const lease = statusHostname === "" ? undefined : leases?.find(
@@ -159,12 +155,6 @@ function HeroTunnelCommandForm({
     isTerminal
       ? "text-slate-200 placeholder:text-slate-600"
       : "text-foreground/85 placeholder:text-muted-foreground"
-  );
-  const heroShuffleButtonClass = cn(
-    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm transition-colors",
-    isTerminal
-      ? "text-slate-500 hover:bg-white/[0.06] hover:text-slate-200"
-      : "text-text-muted hover:bg-foreground/5 hover:text-foreground"
   );
   return (
     <div className={cn("space-y-5", className)}>
@@ -243,19 +233,10 @@ function HeroTunnelCommandForm({
               type="text"
               value={name}
               onChange={handleNameChange}
-              placeholder={generatedName}
-              aria-label="Public name"
+              placeholder="optional"
+              aria-label="Public name (optional)"
               className={cn(heroControlInputClass, "min-w-0 flex-1")}
             />
-            <button
-              type="button"
-              onClick={handleShuffleName}
-              className={heroShuffleButtonClass}
-              aria-label="Shuffle public name"
-              title="Shuffle public name"
-            >
-              <RefreshCw className="h-4 w-4" aria-hidden="true" />
-            </button>
           </div>
         </div>
         <div
@@ -292,7 +273,9 @@ function HeroTunnelCommandForm({
       </div>
 
       <div className="space-y-2 pt-1">
-        <p className={heroSectionLabelClass}>3. Open this public URL</p>
+        <p className={heroSectionLabelClass}>
+          {effectiveName !== "" ? "3. Open this public URL" : "3. Open the URL printed by Portal"}
+        </p>
         <div
           className={cn(
             "space-y-3 rounded-lg border px-3.5 py-3",
@@ -301,34 +284,57 @@ function HeroTunnelCommandForm({
               : "border-border bg-white"
           )}
         >
-          <div
-            className={cn(
-              "flex items-center gap-2 text-[13px] font-semibold",
-              isTerminal ? "text-slate-300" : "text-foreground"
-            )}
-          >
-            <span
-              className={cn("h-2 w-2 rounded-full", serviceStatusTone)}
-              aria-hidden="true"
-            />
-            <span>{serviceStatusHeadline}</span>
-          </div>
-          {isPreviewURLDisabled ? (
-            <span
-              aria-disabled="true"
-              className={cn(heroURLClass, "cursor-not-allowed opacity-70")}
-            >
-              {previewURL}
-            </span>
+          {effectiveName !== "" ? (
+            <>
+              <div
+                className={cn(
+                  "flex items-center gap-2 text-[13px] font-semibold",
+                  isTerminal ? "text-slate-300" : "text-foreground"
+                )}
+              >
+                <span
+                  className={cn("h-2 w-2 rounded-full", serviceStatusTone)}
+                  aria-hidden="true"
+                />
+                <span>{serviceStatusHeadline}</span>
+              </div>
+              {isPreviewURLDisabled ? (
+                <span
+                  aria-disabled="true"
+                  className={cn(heroURLClass, "cursor-not-allowed opacity-70")}
+                >
+                  {previewURL}
+                </span>
+              ) : (
+                <a
+                  href={previewURL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(heroURLClass, "underline-offset-4 hover:underline")}
+                >
+                  {previewURL}
+                </a>
+              )}
+            </>
           ) : (
-            <a
-              href={previewURL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={cn(heroURLClass, "underline-offset-4 hover:underline")}
-            >
-              {previewURL}
-            </a>
+            <div className="space-y-1">
+              <p
+                className={cn(
+                  "text-[13px] font-medium leading-relaxed sm:text-sm",
+                  isTerminal ? "text-slate-200" : "text-foreground"
+                )}
+              >
+                Use the canonical URL printed by the CLI
+              </p>
+              <p
+                className={cn(
+                  "text-xs leading-relaxed sm:text-[13px]",
+                  isTerminal ? "text-slate-400" : "text-muted-foreground"
+                )}
+              >
+                Portal derives an address-based canonical URL and prints it in your terminal when the tunnel connects.
+              </p>
+            </div>
           )}
         </div>
       </div>
@@ -374,7 +380,6 @@ function FullTunnelCommandForm({
     name,
     copied,
     os,
-    generatedName,
     shareKind,
     installBlock,
     runBlock,
@@ -545,11 +550,11 @@ function FullTunnelCommandForm({
             type="text"
             value={name}
             onChange={handleNameChange}
-            placeholder={generatedName}
+            placeholder="optional"
             className={inlineInputClass}
           />
         </div>
-        <p className={helpTextClass}>A unique identifier for your tunnel</p>
+        <p className={helpTextClass}>A unique identifier for your tunnel (optional)</p>
       </div>
 
       <div className="space-y-2">

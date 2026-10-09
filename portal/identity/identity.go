@@ -13,13 +13,23 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// normalizeOptionalName normalizes an optional service name: returns an empty
+// string when the trimmed name is empty, or validates and returns a DNS label.
+func normalizeOptionalName(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	return utils.NormalizeDNSLabel(trimmed)
+}
+
 // NormalizeIdentity returns the canonical comparison form of a wire identity:
-// the name as a DNS label and the address in EVM checksum form. It does not
-// derive or verify key material.
+// the name as a DNS label (or empty for the unnamed service) and the address
+// in EVM checksum form. It does not derive or verify key material.
 func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 	normalized := identity.Copy()
 
-	name, err := utils.NormalizeDNSLabel(identity.Name)
+	name, err := normalizeOptionalName(identity.Name)
 	if err != nil {
 		return types.Identity{}, err
 	}
@@ -37,17 +47,18 @@ func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 // derives the private key from a mnemonic when provided, requires key
 // material, derives the public key and address from the private key exactly
 // once, verifies explicitly supplied address and public key against the
-// derived values exactly once, normalizes the name as a DNS label, and fills
-// the token secret when missing. It never generates key material; use
-// Generate for that. Valid identities leave the package only through Parse
-// and Generate; callers trust them from there on.
+// derived values exactly once, normalizes the name as a DNS label (allowing
+// empty for the unnamed service), and fills the token secret when missing.
+// It never generates key material; use Generate for that. Valid identities
+// leave the package only through Parse and Generate; callers trust them from
+// there on.
 func resolve(id types.Identity) (types.Identity, error) {
 	resolved, err := resolveKeyMaterial(id)
 	if err != nil {
 		return types.Identity{}, err
 	}
 
-	name, err := utils.NormalizeDNSLabel(resolved.Name)
+	name, err := normalizeOptionalName(resolved.Name)
 	if err != nil {
 		return types.Identity{}, err
 	}

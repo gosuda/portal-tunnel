@@ -187,7 +187,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 		}
 	}
 
-	listenerIdentity, err := identity.LoadOrCreate(spec.Identity.Name, spec.Transport.Target, spec.Identity.Path, spec.Identity.JSON)
+	listenerIdentity, err := identity.LoadOrCreate(spec.Identity.Name, spec.Identity.Path, spec.Identity.JSON)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
 	}

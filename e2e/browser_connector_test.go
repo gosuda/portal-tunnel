@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +30,6 @@ async function main() {
   }
   if (!window.portalTunnel) throw new Error("portalTunnel was not installed by the WASM artifact");
   const ready = await window.portalTunnel.start({
-    name: "browser-smoke",
     relayURL: window.location.origin,
     body: "portal-browser-smoke-ok",
   });
@@ -200,6 +200,20 @@ waitReady:
 	}
 	if ready.publicURL == "" {
 		t.Fatal("browser connector returned an empty public URL")
+	}
+	if strings.Contains(ready.publicURL, "undefined") {
+		t.Fatalf("browser connector public URL = %q contains 'undefined'", ready.publicURL)
+	}
+
+	leases := relay.PublicLeases()
+	if len(leases) != 1 {
+		t.Fatalf("relay public leases = %d, want 1", len(leases))
+	}
+	if leases[0].Hostname != "" {
+		t.Fatalf("lease hostname = %q, want empty for unnamed browser lease", leases[0].Hostname)
+	}
+	if !strings.Contains(ready.publicURL, leases[0].CanonicalHostname) {
+		t.Fatalf("browser connector public URL = %q, want canonical hostname %q", ready.publicURL, leases[0].CanonicalHostname)
 	}
 
 	certificate := filepath.Join(stateDir, "fullchain.pem")
