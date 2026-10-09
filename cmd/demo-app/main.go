@@ -244,11 +244,7 @@ func resolveDemoIdentity(cfg demoConfig) (types.Identity, error) {
 			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
 		}
 	}
-	name, err := demoName(cfg.name, cfg.addr)
-	if err != nil {
-		return types.Identity{}, err
-	}
-	generated, err := identity.Generate(name)
+	generated, err := identity.Generate(strings.TrimSpace(cfg.name))
 	if err != nil {
 		return types.Identity{}, err
 	}
@@ -266,13 +262,6 @@ func resolveDemoIdentity(cfg demoConfig) (types.Identity, error) {
 		return types.Identity{}, fmt.Errorf("write identity file: %w", err)
 	}
 	return generated, nil
-}
-
-func demoName(name, target string) (string, error) {
-	if name = strings.TrimSpace(name); name != "" {
-		return name, nil
-	}
-	return utils.DefaultExposeName(target, utils.RandomID("demo_"))
 }
 
 func runUDPEchoLoop(ctx context.Context, exposure *sdk.Exposure) {
