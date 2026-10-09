@@ -48,7 +48,16 @@ not create a config file.
 
 ## `portal expose`
 
-Expose a local service:
+Common workflows:
+
+```bash
+portal expose 3000
+portal expose 3000 --auth siwe
+portal expose --serve ./dist
+portal expose localhost:25565 --tcp
+```
+
+Expose a local service with optional flags:
 
 ```bash
 portal expose [flags] <target>
@@ -85,37 +94,48 @@ not supported.
 
 ### Flags
 
+`portal expose --help` (or `portal help expose`) lists common flags first, then
+advanced flags for metadata, provider settings, and operations. Both groups are
+accepted in the same command; advanced flags do not require a configuration file.
+
+#### Common Flags
+
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--name` | string | | Public hostname prefix, normalized to one DNS label of at most 22 ASCII characters; when omitted, an address-only canonical hostname (<address>.<relay-domain>) is used |
 | `--relays` | string | registry | Additional relay API URLs, comma-separated |
 | `--discovery` | bool | `true` | Include registry relays and relay discovery expansion |
-| `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
 | `--overlay` | bool | `false` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; retains direct fallback |
+| `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]` form; repeatable; route amounts require `--x402-pay-to` |
+| `--serve` | string | | Serve a local directory or HTML file; unknown paths fall back to the entry HTML |
+| `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
+| `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
+| `--auth` | string | | Protect HTTP application access with `siwe` or `credential`; cannot be combined with `--cache` |
+| `--auth-allow` | string | | Ethereum wallet allowed to sign in; repeat for multiple wallets (empty allows any wallet); requires `--auth siwe` |
+| `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
+
+#### Advanced Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
 | `--identity-json` | string | | In-memory identity JSON; takes precedence over `--identity-path` without reading or writing that file |
-| `--name` | string | | Public hostname prefix, normalized to one DNS label of at most 22 ASCII characters; when omitted, an address-only canonical hostname (<address>.<relay-domain>) is used |
 | `--description` | string | | Service description metadata |
 | `--tags` | string | | Service tags metadata, comma-separated |
 | `--thumbnail` | string | | Service thumbnail URL metadata |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
-| `--auth` | string | | Protect HTTP application access with `siwe` or `credential`; cannot be combined with `--cache` |
-| `--auth-allow` | string | | Ethereum wallet allowed to sign in; repeat for multiple wallets (empty allows any wallet); requires `--auth siwe` |
 | `--auth-identity-headers` | bool | `false` | Send authenticated `X-Portal-User` and `X-Portal-Auth` headers to HTTP upstreams; requires `--auth` |
-| `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
 | `--x402-network` | string | | Optional Sui or Casper CAIP-2 network |
 | `--x402-asset` | string | | wCSPR CEP-18 contract hash required by Casper |
 | `--x402-endpoint` | string | | Optional Sui RPC or Casper facilitator endpoint; repeatable |
 | `--x402-facilitator-token` | string | `CSPR_CLOUD_API_KEY` | Casper facilitator authorization token; prefer the environment variable so the secret is not exposed in the process arguments |
-| `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]` form; repeatable; route amounts require `--x402-pay-to` |
 | `--strip-request-header` | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (`Host`, `X-Forwarded-*`) are always rewritten after stripping; requires `--http-route` or `--auth` |
-| `--serve` | string | | Serve a local directory or HTML file; unknown paths fall back to the entry HTML |
 | `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
 | `--cache-ttl` | duration | `0` | Requested offline cache lifetime; `0` uses relay policy; requires `--cache` |
-| `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
-| `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
@@ -195,9 +215,7 @@ Use a custom name and relay:
 portal expose localhost:8080 \
   --name myapp \
   --relays https://portal.example.com \
-  --discovery=false \
-  --description "My web application" \
-  --tags webapp,demo
+  --discovery=false
 ```
 
 Run routed HTTP mode:

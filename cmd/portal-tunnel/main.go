@@ -464,6 +464,9 @@ func printRootUsage(w io.Writer) {
 }
 
 func printExposeUsage(w io.Writer) {
+	if w == nil {
+		return
+	}
 	utils.WriteCommandUsage(w,
 		[]string{
 			"portal expose [flags] <target>",
@@ -472,21 +475,34 @@ func printExposeUsage(w io.Writer) {
 		},
 		[]string{
 			"portal expose 3000",
-			"portal expose 3000 --auth siwe --auth-allow 0x1234...",
+			"portal expose 3000 --auth siwe",
 			"portal expose localhost:8080 --name my-app",
-			"portal expose --serve ./site --name my-app",
-			"portal expose --serve ./site/main.html --name my-app",
-			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
-			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --http-route /=http://127.0.0.1:5173 --x402-pay-to 0x...",
-			"portal expose --http-route \"/paid=http://127.0.0.1:3001 GET:0.01\" --x402-network casper:casper-test --x402-asset hash-... --x402-pay-to account-hash-...",
-			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
-			"portal expose 3000 --ban-mitm",
-			"portal expose 3000 --relays https://portal.example.com --discovery=false",
+			"portal expose --serve ./dist",
+			"portal expose --http-route /api=3001 --http-route /=5173",
+			"portal expose localhost:25565 --tcp",
+			"portal expose 3000 --overlay",
 		},
 	)
 	fs := utils.NewFlagSet("expose", nil)
 	registerExposeFlags(fs, &exposeFlags{})
-	utils.WriteFlagDefaults(w, fs)
+	common := flag.NewFlagSet("Common flags", flag.ContinueOnError)
+	advanced := flag.NewFlagSet("Advanced flags", flag.ContinueOnError)
+	fs.VisitAll(func(f *flag.Flag) {
+		group := advanced
+		switch f.Name {
+		case "name", "relays", "discovery", "overlay", "http-route", "serve", "tcp", "udp",
+			"auth", "auth-allow", "x402-pay-to", "ban-mitm", "identity-path":
+			group = common
+		}
+		group.Var(f.Value, f.Name, f.Usage)
+		// Keep declared defaults instead of resolved environment values.
+		group.Lookup(f.Name).DefValue = f.DefValue
+	})
+	for _, group := range []*flag.FlagSet{common, advanced} {
+		fmt.Fprintf(w, "\n%s:\n", group.Name())
+		group.SetOutput(w)
+		group.PrintDefaults()
+	}
 	utils.WriteHelpSection(w, "Loopback", []string{
 		"portal expose 127.0.0.1:8080 --identity-path /absolute/path/outside/repo/identity.json --relays https://127.0.0.1:8443 --discovery=false",
 		"the local relay must advertise the same origin clients dial: PORTAL_URL=https://127.0.0.1:8443",
