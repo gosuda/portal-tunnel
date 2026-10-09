@@ -8,7 +8,6 @@ export interface TunnelCommandOptions {
   currentOrigin: string;
   target: string;
   name: string;
-  nameSeed?: string;
   relayUrls: string[];
   discovery: boolean;
   thumbnailURL: string;
