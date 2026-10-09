@@ -13,19 +13,25 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// normalizeOptionalName normalizes an optional service name: returns an empty
+// string when the trimmed name is empty, or validates and returns a DNS label.
+func normalizeOptionalName(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	return utils.NormalizeDNSLabel(trimmed)
+}
+
 // NormalizeIdentity returns the canonical comparison form of a wire identity:
 // the name as a DNS label (or empty for the unnamed service) and the address
 // in EVM checksum form. It does not derive or verify key material.
 func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 	normalized := identity.Copy()
 
-	var name string
-	if trimmed := strings.TrimSpace(identity.Name); trimmed != "" {
-		var err error
-		name, err = utils.NormalizeDNSLabel(trimmed)
-		if err != nil {
-			return types.Identity{}, err
-		}
+	name, err := normalizeOptionalName(identity.Name)
+	if err != nil {
+		return types.Identity{}, err
 	}
 	address, err := NormalizeEVMAddress(identity.Address)
 	if err != nil {
@@ -52,13 +58,9 @@ func resolve(id types.Identity) (types.Identity, error) {
 		return types.Identity{}, err
 	}
 
-	var name string
-	if trimmed := strings.TrimSpace(resolved.Name); trimmed != "" {
-		var err error
-		name, err = utils.NormalizeDNSLabel(trimmed)
-		if err != nil {
-			return types.Identity{}, err
-		}
+	name, err := normalizeOptionalName(resolved.Name)
+	if err != nil {
+		return types.Identity{}, err
 	}
 	resolved.Name = name
 

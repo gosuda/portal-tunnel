@@ -273,7 +273,9 @@ function HeroTunnelCommandForm({
       </div>
 
       <div className="space-y-2 pt-1">
-        <p className={heroSectionLabelClass}>3. Open this public URL</p>
+        <p className={heroSectionLabelClass}>
+          {effectiveName !== "" ? "3. Open this public URL" : "3. Open the URL printed by Portal"}
+        </p>
         <div
           className={cn(
             "space-y-3 rounded-lg border px-3.5 py-3",
@@ -282,41 +284,57 @@ function HeroTunnelCommandForm({
               : "border-border bg-white"
           )}
         >
-          <div
-            className={cn(
-              "flex items-center gap-2 text-[13px] font-semibold",
-              isTerminal ? "text-slate-300" : "text-foreground"
-            )}
-          >
-            <span
-              className={cn("h-2 w-2 rounded-full", serviceStatusTone)}
-              aria-hidden="true"
-            />
-            <span>{serviceStatusHeadline}</span>
-          </div>
-          {previewURL === "" ? (
-            <span
-              aria-disabled="true"
-              className={cn(heroURLClass, "cursor-not-allowed opacity-70")}
-            >
-              Waiting for connection…
-            </span>
-          ) : isPreviewURLDisabled ? (
-            <span
-              aria-disabled="true"
-              className={cn(heroURLClass, "cursor-not-allowed opacity-70")}
-            >
-              {previewURL}
-            </span>
+          {effectiveName !== "" ? (
+            <>
+              <div
+                className={cn(
+                  "flex items-center gap-2 text-[13px] font-semibold",
+                  isTerminal ? "text-slate-300" : "text-foreground"
+                )}
+              >
+                <span
+                  className={cn("h-2 w-2 rounded-full", serviceStatusTone)}
+                  aria-hidden="true"
+                />
+                <span>{serviceStatusHeadline}</span>
+              </div>
+              {isPreviewURLDisabled ? (
+                <span
+                  aria-disabled="true"
+                  className={cn(heroURLClass, "cursor-not-allowed opacity-70")}
+                >
+                  {previewURL}
+                </span>
+              ) : (
+                <a
+                  href={previewURL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(heroURLClass, "underline-offset-4 hover:underline")}
+                >
+                  {previewURL}
+                </a>
+              )}
+            </>
           ) : (
-            <a
-              href={previewURL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={cn(heroURLClass, "underline-offset-4 hover:underline")}
-            >
-              {previewURL}
-            </a>
+            <div className="space-y-1">
+              <p
+                className={cn(
+                  "text-[13px] font-medium leading-relaxed sm:text-sm",
+                  isTerminal ? "text-slate-200" : "text-foreground"
+                )}
+              >
+                Use the canonical URL printed by the CLI
+              </p>
+              <p
+                className={cn(
+                  "text-xs leading-relaxed sm:text-[13px]",
+                  isTerminal ? "text-slate-400" : "text-muted-foreground"
+                )}
+              >
+                Portal derives an address-based canonical URL and prints it in your terminal when the tunnel connects.
+              </p>
+            </div>
           )}
         </div>
       </div>
