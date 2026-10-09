@@ -74,13 +74,31 @@ func TestParseRejectsInvalidStorageInput(t *testing.T) {
 			func() []byte { return withJSONField(t, valid, "address", "0x0000000000000000000000000000000000000001") },
 			"does not match private key",
 		},
-		{"empty name", func() []byte { return withJSONField(t, valid, "name", "") }, "name"},
+		{"invalid name label", func() []byte { return withJSONField(t, valid, "name", "!!!") }, "name"},
 		{"derivation without mnemonic", func() []byte { return withJSONField(t, valid, "derivation_path", "m/44'/60'/0'/0/0") }, "derivation_path requires mnemonic"},
 	}
 	for _, tc := range cases {
 		if _, err := Parse(tc.raw()); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 			t.Fatalf("%s: got %v, want error containing %q", tc.name, err, tc.wantErr)
 		}
+	}
+}
+
+func TestGenerateAndParseUnnamedIdentity(t *testing.T) {
+	unnamed := mustGenerate(t, "")
+	if unnamed.Name != "" ||
+		unnamed.Address == "" || unnamed.PublicKey == "" ||
+		unnamed.PrivateKey == "" || unnamed.TokenSecret == "" {
+		t.Fatalf("unnamed generated identity incomplete: %+v", unnamed)
+	}
+
+	data := mustMarshal(t, unnamed)
+	parsed, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse(Marshal(Generate(\"\"))): %v", err)
+	}
+	if parsed != unnamed {
+		t.Fatalf("round trip mismatch:\n parsed   %+v\ngenerated %+v", parsed, unnamed)
 	}
 }
 
@@ -126,5 +144,15 @@ func TestNewRegisterChallengeNormalizesWireIdentity(t *testing.T) {
 	}
 	if name := challenge.Request.Identity.Name; name != "demo-app" {
 		t.Fatalf("challenge identity name = %q, want %q", name, "demo-app")
+	}
+
+	unnamedChallenge, err := NewRegisterChallenge(types.RegisterChallengeRequest{
+		Identity: types.Identity{Name: "", Address: generated.Address},
+	}, "portal.example.com", "https://portal.example.com", time.Now(), time.Minute)
+	if err != nil {
+		t.Fatalf("NewRegisterChallenge(unnamed): %v", err)
+	}
+	if name := unnamedChallenge.Request.Identity.Name; name != "" {
+		t.Fatalf("challenge unnamed identity name = %q, want empty", name)
 	}
 }

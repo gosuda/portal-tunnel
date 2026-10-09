@@ -34,18 +34,6 @@ const exposeNameClosers = [
   "whirl", "wink", "zap", "zenith", "zip", "zoom", "zest", "zone",
 ] as const;
 
-export function resolveExposeName(
-  inputName: string,
-  target: string,
-  clientSeed: string
-): string {
-  const normalized = normalizeExposeName(inputName);
-  if (normalized !== "") {
-    return normalized;
-  }
-  return buildDefaultExposeName(target, clientSeed);
-}
-
 export function buildDefaultExposeName(
   target: string,
   clientSeed: string

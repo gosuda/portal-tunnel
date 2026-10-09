@@ -224,9 +224,6 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(identity.Name) == "" {
-		return nil, errors.New("portal sdk: identity name is required")
-	}
 	if strings.TrimSpace(identity.Address) == "" ||
 		strings.TrimSpace(identity.PublicKey) == "" ||
 		strings.TrimSpace(identity.PrivateKey) == "" {

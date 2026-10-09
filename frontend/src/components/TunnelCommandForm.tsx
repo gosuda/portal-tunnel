@@ -4,7 +4,7 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
-import { Check, Copy, RefreshCw, X } from "lucide-react";
+import { Check, Copy, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { Lease } from "@/types/api";
 import { cn } from "@/lib/utils";
@@ -75,32 +75,28 @@ function HeroTunnelCommandForm({
   const [tunnelTarget, setTunnelTarget] = useState<TunnelCommandOS>("unix");
   const {
     currentOrigin,
-    nameSeed,
     target,
     setTarget,
     name,
     copied,
     os,
-    generatedName,
     effectiveName,
     shareKind,
     installBlock,
     runBlock,
     handleCopy,
     handleNameChange,
-    handleShuffleName,
   } = useTunnelCommand({
     os: tunnelTarget,
   });
 
   const previewURL = useMemo(
-    () => buildTunnelPreviewURL(currentOrigin, effectiveName, target, nameSeed),
-    [currentOrigin, effectiveName, nameSeed, target]
+    () => buildTunnelPreviewURL(currentOrigin, effectiveName),
+    [currentOrigin, effectiveName]
   );
   const statusHostname = useMemo(
-    () =>
-      buildServiceStatusHostname(currentOrigin, effectiveName, target, nameSeed),
-    [currentOrigin, effectiveName, nameSeed, target]
+    () => buildServiceStatusHostname(currentOrigin, effectiveName),
+    [currentOrigin, effectiveName]
   );
 
   const lease = statusHostname === "" ? undefined : leases?.find(
@@ -159,12 +155,6 @@ function HeroTunnelCommandForm({
     isTerminal
       ? "text-slate-200 placeholder:text-slate-600"
       : "text-foreground/85 placeholder:text-muted-foreground"
-  );
-  const heroShuffleButtonClass = cn(
-    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm transition-colors",
-    isTerminal
-      ? "text-slate-500 hover:bg-white/[0.06] hover:text-slate-200"
-      : "text-text-muted hover:bg-foreground/5 hover:text-foreground"
   );
   return (
     <div className={cn("space-y-5", className)}>
@@ -243,19 +233,10 @@ function HeroTunnelCommandForm({
               type="text"
               value={name}
               onChange={handleNameChange}
-              placeholder={generatedName}
-              aria-label="Public name"
+              placeholder="optional"
+              aria-label="Public name (optional)"
               className={cn(heroControlInputClass, "min-w-0 flex-1")}
             />
-            <button
-              type="button"
-              onClick={handleShuffleName}
-              className={heroShuffleButtonClass}
-              aria-label="Shuffle public name"
-              title="Shuffle public name"
-            >
-              <RefreshCw className="h-4 w-4" aria-hidden="true" />
-            </button>
           </div>
         </div>
         <div
@@ -313,7 +294,14 @@ function HeroTunnelCommandForm({
             />
             <span>{serviceStatusHeadline}</span>
           </div>
-          {isPreviewURLDisabled ? (
+          {previewURL === "" ? (
+            <span
+              aria-disabled="true"
+              className={cn(heroURLClass, "cursor-not-allowed opacity-70")}
+            >
+              Waiting for connection…
+            </span>
+          ) : isPreviewURLDisabled ? (
             <span
               aria-disabled="true"
               className={cn(heroURLClass, "cursor-not-allowed opacity-70")}
@@ -374,7 +362,6 @@ function FullTunnelCommandForm({
     name,
     copied,
     os,
-    generatedName,
     shareKind,
     installBlock,
     runBlock,
@@ -545,11 +532,11 @@ function FullTunnelCommandForm({
             type="text"
             value={name}
             onChange={handleNameChange}
-            placeholder={generatedName}
+            placeholder="optional"
             className={inlineInputClass}
           />
         </div>
-        <p className={helpTextClass}>A unique identifier for your tunnel</p>
+        <p className={helpTextClass}>A unique identifier for your tunnel (optional)</p>
       </div>
 
       <div className="space-y-2">

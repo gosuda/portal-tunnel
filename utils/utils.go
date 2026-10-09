@@ -313,18 +313,23 @@ func LeaseHostname(name, rootHost string) (string, error) {
 
 // CanonicalLeaseHostname returns the identity-bound hostname for a lease.
 // The full 20-byte EVM address is encoded as lowercase hexadecimal so the
-// hostname cannot move between authenticated identities.
+// hostname cannot move between authenticated identities. When name is empty,
+// it returns an address-only canonical hostname.
 func CanonicalLeaseHostname(name, address, rootHost string) (string, error) {
-	label, err := NormalizeDNSLabel(name)
-	if err != nil {
-		return "", err
-	}
+	name = strings.TrimSpace(name)
 	address = strings.ToLower(TrimHexPrefix(strings.TrimSpace(address)))
 	if len(address) != 40 {
 		return "", errors.New("address must contain 40 hexadecimal characters")
 	}
 	if _, err := hex.DecodeString(address); err != nil {
 		return "", errors.New("address must contain 40 hexadecimal characters")
+	}
+	if name == "" {
+		return LeaseHostname(address, rootHost)
+	}
+	label, err := NormalizeDNSLabel(name)
+	if err != nil {
+		return "", err
 	}
 	if len(label) > types.CanonicalLeaseNameMaxLength {
 		return "", fmt.Errorf("name must be %d characters or fewer for an identity-bound hostname", types.CanonicalLeaseNameMaxLength)

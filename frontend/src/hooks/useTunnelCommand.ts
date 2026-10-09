@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
-import {
-  buildDefaultExposeName,
-  normalizeExposeName,
-} from "@/lib/exposeName";
+import { normalizeExposeName } from "@/lib/exposeName";
 import { classifyShareInput } from "@/lib/shareLink";
 import {
   buildTunnelCommand,
@@ -12,7 +9,6 @@ import {
 export const DEFAULT_HOST = "3000";
 
 const FALLBACK_ORIGIN = "https://localhost";
-const TUNNEL_NAME_SEED_STORAGE_KEY = "portal:tunnel-name-seed";
 
 export function readCurrentOrigin(): string {
   if (typeof window !== "undefined") {
@@ -20,40 +16,6 @@ export function readCurrentOrigin(): string {
   }
 
   return FALLBACK_ORIGIN;
-}
-
-function readTunnelNameSeed(): string {
-  if (typeof window === "undefined") {
-    return "web_portal";
-  }
-
-  try {
-    const existing = window.localStorage.getItem(TUNNEL_NAME_SEED_STORAGE_KEY);
-    if (existing && existing.trim() !== "") {
-      return existing;
-    }
-
-    const next =
-      typeof window.crypto?.randomUUID === "function"
-        ? `web_${window.crypto.randomUUID()}`
-        : `web_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-
-    window.localStorage.setItem(TUNNEL_NAME_SEED_STORAGE_KEY, next);
-    return next;
-  } catch {
-    return "web_portal";
-  }
-}
-
-function nextTunnelNameShuffleKey(): string {
-  if (
-    typeof window !== "undefined" &&
-    typeof window.crypto?.randomUUID === "function"
-  ) {
-    return window.crypto.randomUUID();
-  }
-
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
 }
 
 interface TunnelCommandExtras {
@@ -67,30 +29,21 @@ interface TunnelCommandExtras {
 
 export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
   const currentOrigin = useMemo(() => readCurrentOrigin(), []);
-  const [nameSeed] = useState(readTunnelNameSeed);
 
   // Empty by default so the field reads as "paste a link here" instead of
   // pre-committing the user to a local port.
   const [target, setTarget] = useState("");
   const [name, setName] = useState("");
-  const [nameShuffleKey, setNameShuffleKey] = useState("default");
   const [copied, setCopied] = useState(false);
   const os = extras.os ?? "unix";
 
-  const resolvedNameSeed = `${nameSeed}:${nameShuffleKey}`;
   const share = useMemo(() => classifyShareInput(target), [target]);
-  const generatedName = buildDefaultExposeName(
-    share.seedTarget,
-    resolvedNameSeed
-  );
-  const normalizedName = normalizeExposeName(name);
-  const effectiveName = normalizedName === "" ? generatedName : normalizedName;
+  const effectiveName = normalizeExposeName(name);
   const commandOptions = useMemo(
     () => ({
       currentOrigin,
       target: share.target,
       name: effectiveName,
-      nameSeed,
       relayUrls: extras.relayUrls ?? [currentOrigin],
       discovery: extras.discovery ?? true,
       thumbnailURL: extras.thumbnailURL ?? "",
@@ -108,7 +61,6 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
       extras.relayUrls,
       extras.thumbnailURL,
       extras.udpPort,
-      nameSeed,
       os,
       share.kind,
       share.path,
@@ -159,26 +111,18 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
     setName(event.target.value);
   };
 
-  const handleShuffleName = () => {
-    setName("");
-    setNameShuffleKey(nextTunnelNameShuffleKey());
-  };
-
   return {
     currentOrigin,
-    nameSeed,
     target,
     setTarget,
     name,
     copied,
     os,
-    generatedName,
     effectiveName,
     shareKind: share.kind,
     installBlock,
     runBlock,
     handleCopy,
     handleNameChange,
-    handleShuffleName,
   };
 }

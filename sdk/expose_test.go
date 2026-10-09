@@ -186,6 +186,19 @@ func TestExposeRejectsIncompleteIdentity(t *testing.T) {
 	}
 }
 
+func TestExposeAllowsEmptyIdentityName(t *testing.T) {
+	identity := types.Identity{
+		Name:       "",
+		Address:    "address",
+		PublicKey:  "public",
+		PrivateKey: "private",
+	}
+	_, err := Expose(context.Background(), identity, nil)
+	if err == nil || !strings.Contains(err.Error(), "at least one initial relay") {
+		t.Fatalf("Expose(unnamed) error = %v, want initial relay error", err)
+	}
+}
+
 func TestExposeRejectsEmptyInitialRelays(t *testing.T) {
 	identity := types.Identity{
 		Name:       "svc",

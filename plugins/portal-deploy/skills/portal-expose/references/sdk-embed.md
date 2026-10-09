@@ -25,7 +25,7 @@ func main() {
 	defer stop()
 
 	// name applies only when the identity file does not exist yet.
-	id, err := identity.LoadOrCreate("my-app", "", os.Getenv("PORTAL_IDENTITY_PATH"), os.Getenv("IDENTITY_JSON"))
+	id, err := identity.LoadOrCreate("my-app", os.Getenv("PORTAL_IDENTITY_PATH"), os.Getenv("IDENTITY_JSON"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -70,10 +70,10 @@ published.
 
 ## Identity
 
-- `identity.LoadOrCreate(name, target, path, rawJSON)`: an in-memory JSON payload wins, then an existing file at `path` is parsed as-is, and only when neither exists is a new identity generated with `name` and written to `path` with mode `0600`. An existing file supplies the public name; `name` never renames it. One identity file per public name.
+- `identity.LoadOrCreate(name, path, rawJSON)`: an in-memory JSON payload wins, then an existing file at `path` is parsed as-is, and only when neither exists is a new identity generated with `name` (which may be empty for an unnamed service) and written to `path` with mode `0600`. An existing file supplies the public name; `name` never renames it. One identity file per public name.
 - The file holds private key material (`private_key` or `mnemonic` plus `derivation_path`). Keep it outside the repository and out of images and logs. Empty `path` keeps the identity in memory only, which means a new hostname on every start.
 - `sdk.Expose` requires a fully resolved identity with name, address, and keys. Always go through `identity.LoadOrCreate`, `identity.Parse`, or `identity.Generate`; a hand-built struct is rejected.
-- Names are normalized to a DNS label whose ASCII form is limited to 22 characters. Protocol 11 relays return both the friendly hostname and the full-address canonical hostname; SDK readiness URLs use the returned canonical hostname as the stable browser origin.
+- Names are normalized to a DNS label whose ASCII form is limited to 22 characters, or empty for an unnamed service. Relays return the address-only canonical hostname (`<address>.<relay-host>`) when name is empty, or both the friendly hostname and the full-address canonical hostname when named; SDK readiness URLs use the returned canonical hostname as the stable browser origin.
 
 ## Relays and readiness
 

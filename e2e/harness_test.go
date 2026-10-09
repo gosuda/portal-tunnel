@@ -49,6 +49,11 @@ type harness struct {
 
 func newHarness(t *testing.T, opts ...sdk.Option) *harness {
 	t.Helper()
+	return newHarnessWithName(t, "e2e", opts...)
+}
+
+func newHarnessWithName(t *testing.T, name string, opts ...sdk.Option) *harness {
+	t.Helper()
 
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, marker)
@@ -80,7 +85,7 @@ func newHarness(t *testing.T, opts ...sdk.Option) *harness {
 		t.Fatalf("start relay: %v", err)
 	}
 
-	clientIdentity, err := identity.Generate("e2e")
+	clientIdentity, err := identity.Generate(name)
 	if err != nil {
 		cancel()
 		_ = relay.Shutdown(context.Background())

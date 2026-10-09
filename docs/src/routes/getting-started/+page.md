@@ -170,6 +170,10 @@ portal expose 3000 \
   --identity-path ~/.config/portal/myapp.identity.json
 ```
 
+When `--name` is omitted, the service does not claim a friendly public name and
+publishes an address-only canonical hostname (`<address>.<relay-domain>`).
+When `--name` is provided, Portal publishes both the named canonical hostname
+(`<name>-<address>.<relay-domain>`) and the friendly alias (`<name>.<relay-domain>`).
 An existing identity file or `--identity-json` supplies the saved name as well
 as the key. `--name` applies only when creating a new identity; it does not
 rename an existing one. Use a separate `--identity-path` for a new identity.

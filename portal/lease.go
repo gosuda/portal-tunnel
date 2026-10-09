@@ -274,9 +274,13 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 
 	identityKey := leaseIdentity.ServiceKey()
-	publicHostname, err := utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
-	if err != nil {
-		return nil, types.RegisterResponse{}, err
+	var publicHostname string
+	if leaseIdentity.Name != "" {
+		var err error
+		publicHostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
+		if err != nil {
+			return nil, types.RegisterResponse{}, err
+		}
 	}
 	canonicalHostname, err := utils.CanonicalLeaseHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
 	if err != nil {

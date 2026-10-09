@@ -1,4 +1,4 @@
-import { resolveExposeName } from './expose-name';
+import { normalizeExposeName } from './expose-name';
 import type { ShareInput } from './share-link';
 
 export type TunnelCommandOS = 'unix' | 'windows';
@@ -6,13 +6,14 @@ export type TunnelCommandOS = 'unix' | 'windows';
 export function buildTunnelCommand(
 	share: ShareInput,
 	name: string,
-	nameSeed: string,
 	os: TunnelCommandOS
 ) {
 	const target = share.kind === 'file' ? share.path : share.target || '3000';
-	const nameValue = resolveExposeName(name, share.seedTarget, nameSeed);
+	const normalizedName = normalizeExposeName(name);
 	const args = share.kind === 'file' ? ['--serve', target] : [target];
-	args.push('--name', nameValue);
+	if (normalizedName !== '') {
+		args.push('--name', normalizedName);
+	}
 	const run = 'portal expose ' + args.map((value) => {
 		if (/^[A-Za-z0-9:/.=_-]+$/.test(value)) return value;
 		return os === 'windows'

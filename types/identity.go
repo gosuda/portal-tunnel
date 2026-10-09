@@ -53,17 +53,17 @@ func NewServiceIdentityKey(name, address string) ServiceIdentityKey {
 func ParseServiceIdentityKey(raw string) (ServiceIdentityKey, error) {
 	name, address, ok := strings.Cut(raw, IdentityKeySeparator)
 	if !ok || strings.Contains(address, IdentityKeySeparator) {
-		return ServiceIdentityKey{}, fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
+		return ServiceIdentityKey{}, fmt.Errorf("invalid identity key %q: expected \"name%saddress\" or \"%saddress\" with non-empty lowercase address", raw, IdentityKeySeparator, IdentityKeySeparator)
 	}
 	key := NewServiceIdentityKey(name, address)
 	if !key.Valid() {
-		return ServiceIdentityKey{}, fmt.Errorf("invalid identity key %q: expected \"name%saddress\" with non-empty lowercase name and address", raw, IdentityKeySeparator)
+		return ServiceIdentityKey{}, fmt.Errorf("invalid identity key %q: expected \"name%saddress\" or \"%saddress\" with non-empty lowercase address", raw, IdentityKeySeparator, IdentityKeySeparator)
 	}
 	return key, nil
 }
 
 func (k ServiceIdentityKey) Valid() bool {
-	return k.name != "" && k.address != ""
+	return k.address != ""
 }
 
 func (k ServiceIdentityKey) String() string {

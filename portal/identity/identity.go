@@ -14,14 +14,18 @@ import (
 )
 
 // NormalizeIdentity returns the canonical comparison form of a wire identity:
-// the name as a DNS label and the address in EVM checksum form. It does not
-// derive or verify key material.
+// the name as a DNS label (or empty for the unnamed service) and the address
+// in EVM checksum form. It does not derive or verify key material.
 func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 	normalized := identity.Copy()
 
-	name, err := utils.NormalizeDNSLabel(identity.Name)
-	if err != nil {
-		return types.Identity{}, err
+	var name string
+	if trimmed := strings.TrimSpace(identity.Name); trimmed != "" {
+		var err error
+		name, err = utils.NormalizeDNSLabel(trimmed)
+		if err != nil {
+			return types.Identity{}, err
+		}
 	}
 	address, err := NormalizeEVMAddress(identity.Address)
 	if err != nil {
@@ -37,19 +41,24 @@ func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 // derives the private key from a mnemonic when provided, requires key
 // material, derives the public key and address from the private key exactly
 // once, verifies explicitly supplied address and public key against the
-// derived values exactly once, normalizes the name as a DNS label, and fills
-// the token secret when missing. It never generates key material; use
-// Generate for that. Valid identities leave the package only through Parse
-// and Generate; callers trust them from there on.
+// derived values exactly once, normalizes the name as a DNS label (allowing
+// empty for the unnamed service), and fills the token secret when missing.
+// It never generates key material; use Generate for that. Valid identities
+// leave the package only through Parse and Generate; callers trust them from
+// there on.
 func resolve(id types.Identity) (types.Identity, error) {
 	resolved, err := resolveKeyMaterial(id)
 	if err != nil {
 		return types.Identity{}, err
 	}
 
-	name, err := utils.NormalizeDNSLabel(resolved.Name)
-	if err != nil {
-		return types.Identity{}, err
+	var name string
+	if trimmed := strings.TrimSpace(resolved.Name); trimmed != "" {
+		var err error
+		name, err = utils.NormalizeDNSLabel(trimmed)
+		if err != nil {
+			return types.Identity{}, err
+		}
 	}
 	resolved.Name = name
 

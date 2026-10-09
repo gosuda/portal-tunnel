@@ -42,9 +42,6 @@ func (c *browserConnector) start(_ js.Value, args []js.Value) any {
 		name := strings.TrimSpace(options.Get("name").String())
 		relayURL := strings.TrimSpace(options.Get("relayURL").String())
 		body := options.Get("body").String()
-		if name == "" {
-			return nil, errors.New("tunnel name is required")
-		}
 		if relayURL == "" {
 			return nil, errors.New("relay URL is required")
 		}

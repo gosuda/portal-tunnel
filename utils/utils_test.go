@@ -97,6 +97,16 @@ func TestCanonicalLeaseHostname(t *testing.T) {
 	if label := strings.SplitN(got, ".", 2)[0]; len(label) != 63 {
 		t.Fatalf("canonical label length = %d, want 63", len(label))
 	}
+
+	unnamedWant := "7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.example.com"
+	got, err = CanonicalLeaseHostname("", address, "Example.COM.")
+	if err != nil {
+		t.Fatalf("CanonicalLeaseHostname(empty name) error = %v", err)
+	}
+	if got != unnamedWant {
+		t.Fatalf("CanonicalLeaseHostname(empty name) = %q, want %q", got, unnamedWant)
+	}
+
 	if _, err := CanonicalLeaseHostname(maxName+"a", address, "example.com"); err == nil {
 		t.Fatal("CanonicalLeaseHostname(overlong name) error = nil")
 	}
