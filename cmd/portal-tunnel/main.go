@@ -23,6 +23,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/thumbnail"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
@@ -68,6 +69,7 @@ type exposeFlags struct {
 	tags                 string
 	owner                string
 	thumbnail            string
+	thumbnailFromTarget  bool
 	hide                 bool
 	authProvider         string
 	authAllowedWallets   []string
@@ -103,6 +105,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.tags, "tags", "", "Service tags metadata (comma-separated)")
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
+	utils.BoolFlag(fs, &flags.thumbnailFromTarget, "thumbnail-from-target", false, "when --thumbnail is empty, use the first absolute image URL the target advertises (og:image, then twitter:image, then an icon link)")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
 	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe or credential authentication")
 	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Ethereum wallet allowed to sign in; repeat to allow multiple wallets (empty allows any wallet)")
@@ -168,6 +171,11 @@ func runExposeCommand(args []string) error {
 		}()
 	}
 
+	// Resolved here rather than inside the spec: how metadata.thumbnail was
+	// chosen is not part of the tunnelling contract, and tunnel.Start should
+	// receive a finished value.
+	spec.Metadata.Thumbnail = thumbnail.Resolve(
+		ctx, spec.Metadata.Thumbnail, flags.targetAddr, flags.thumbnailFromTarget)
 	runtime, err := tunnel.Start(ctx, spec)
 	if err != nil {
 		return err

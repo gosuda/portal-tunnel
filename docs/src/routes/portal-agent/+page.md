@@ -244,6 +244,7 @@ Common fields:
 | `tcp` | Dedicated raw TCP port setting |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
+| `thumbnail_from_target` | Fill an empty `thumbnail` with the first absolute image URL the target advertises: `og:image`, then `twitter:image`, then an icon link |
 | `auth` | Application login provider: `siwe` or `credential` |
 | `auth_allowed_wallets` | Optional allowed Ethereum wallet array; empty allows any valid wallet |
 | `auth_identity_headers` | Inject verified Portal identity headers into upstream requests |

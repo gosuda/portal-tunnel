@@ -97,7 +97,8 @@ not supported.
 | `--name` | string | | Public hostname prefix, normalized to one DNS label of at most 22 ASCII characters; when omitted, an address-only canonical hostname (<address>.<relay-domain>) is used |
 | `--description` | string | | Service description metadata |
 | `--tags` | string | | Service tags metadata, comma-separated |
-| `--thumbnail` | string | | Service thumbnail URL metadata |
+| `--thumbnail` | string | | Service thumbnail URL metadata, as an absolute `http://` or `https://` URL |
+| `--thumbnail-from-target` | bool | `false` | When `--thumbnail` is empty, use the first **absolute** image URL the target advertises: `og:image`, then `twitter:image`, then an icon link. Relative references are skipped, since Open Graph calls for an absolute URL and `metadata.thumbnail` is one by contract. Only `/` on the tunnel's own target is read, redirects are not followed, and the chosen URL is logged at startup |
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
 | `--auth` | string | | Protect HTTP application access with `siwe` or `credential`; cannot be combined with `--cache` |
