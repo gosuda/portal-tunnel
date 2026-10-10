@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"path"
 	"strconv"
@@ -369,11 +370,15 @@ func NormalizeTargetAddr(raw string) (string, error) {
 	if _, _, err := net.SplitHostPort(raw); err == nil {
 		return raw, nil
 	}
-	if strings.Count(raw, ":") == 0 {
+	if strings.Count(raw, ":") == 0 && !strings.ContainsAny(raw, "[]") {
 		return net.JoinHostPort(raw, "80"), nil
 	}
-	if ip := net.ParseIP(raw); ip != nil {
-		return net.JoinHostPort(raw, "80"), nil
+	host := raw
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return net.JoinHostPort(host, "80"), nil
 	}
 	return "", fmt.Errorf("invalid target address %q", raw)
 }
@@ -409,14 +414,6 @@ func IsLocalRelayHost(host string) bool {
 		return ip.IsLoopback()
 	}
 	return strings.HasSuffix(host, ".localhost")
-}
-
-func ValidateIPv4(raw string) error {
-	ip := net.ParseIP(strings.TrimSpace(raw))
-	if ip == nil || ip.To4() == nil {
-		return fmt.Errorf("invalid ipv4 address: %q", raw)
-	}
-	return nil
 }
 
 func SleepOrDone(ctx context.Context, d time.Duration) bool {

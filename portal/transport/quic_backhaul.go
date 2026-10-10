@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"time"
 
@@ -51,7 +52,7 @@ func DialQUICBackhaul(ctx context.Context, addr string, tlsConfig *tls.Config, a
 		return nil, errors.New("quic backhaul access token is required")
 	}
 
-	conn, err := quic.DialAddr(ctx, addr, quicBackhaulClientTLSConfig(tlsConfig), quicBackhaulConfig())
+	conn, err := dialQUICBackhaulConnection(ctx, addr, quicBackhaulClientTLSConfig(tlsConfig))
 	if err != nil {
 		return nil, fmt.Errorf("dial quic backhaul: %w", err)
 	}
@@ -86,6 +87,110 @@ func DialQUICBackhaul(ctx context.Context, addr string, tlsConfig *tls.Config, a
 		return nil, fmt.Errorf("quic backhaul rejected: %s", errText)
 	}
 	return conn, nil
+}
+
+// dialQUICBackhaulConnection preserves resolver address ordering and races the
+// other address family after the same 300 ms head start as Go's TCP dialer.
+// quic.DialAddr otherwise resolves only one address and prefers IPv4.
+func dialQUICBackhaulConnection(ctx context.Context, addr string, tlsConfig *tls.Config) (*quic.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addresses) == 0 {
+		return nil, &net.DNSError{Err: "no addresses found", Name: host, IsNotFound: true}
+	}
+	if tlsConfig.ServerName == "" {
+		// Numeric dial targets must still authenticate the requested hostname.
+		tlsConfig.ServerName = host
+	}
+
+	var primary, fallback []net.IPAddr
+	primaryIPv4 := addresses[0].IP.To4() != nil
+	for _, address := range addresses {
+		if (address.IP.To4() != nil) == primaryIPv4 {
+			primary = append(primary, address)
+		} else {
+			fallback = append(fallback, address)
+		}
+	}
+	dial := func(ctx context.Context, addresses []net.IPAddr) (*quic.Conn, error) {
+		var firstErr error
+		for i, address := range addresses {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			attemptCtx := ctx
+			cancel := func() {}
+			if deadline, ok := ctx.Deadline(); ok {
+				// Leave later addresses a share of the caller's remaining budget.
+				attemptCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(addresses)-i))
+			}
+			conn, err := quic.DialAddr(attemptCtx, net.JoinHostPort(address.String(), port), tlsConfig, quicBackhaulConfig())
+			cancel()
+			if err == nil {
+				return conn, nil
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		return nil, firstErr
+	}
+	if len(fallback) == 0 {
+		return dial(ctx, primary)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	returned := make(chan struct{})
+	defer close(returned)
+	type result struct {
+		conn *quic.Conn
+		err  error
+	}
+	results := make(chan result)
+	race := func(addresses []net.IPAddr) {
+		conn, err := dial(ctx, addresses)
+		select {
+		case results <- result{conn: conn, err: err}:
+		case <-returned:
+			if conn != nil {
+				_ = conn.CloseWithError(0, "another relay address connected")
+			}
+		}
+	}
+	go race(primary)
+	timer := time.NewTimer(300 * time.Millisecond)
+	defer timer.Stop()
+	fallbackStarted := false
+	var firstErr error
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			fallbackStarted = true
+			go race(fallback)
+		case result := <-results:
+			if result.err == nil {
+				return result.conn, nil
+			}
+			if firstErr != nil {
+				return nil, errors.Join(firstErr, result.err)
+			}
+			firstErr = result.err
+			if !fallbackStarted {
+				timer.Stop()
+				fallbackStarted = true
+				go race(fallback)
+			}
+		}
+	}
 }
 
 // backhaulRejectionCode maps a backhaul control rejection reason back to

@@ -56,11 +56,11 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 	return provider, nil
 }
 
-func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
 	if p == nil {
 		return errors.New("hetzner provider is nil")
 	}
-	baseDomain, err := dnsrecord.ARecordsInputs(baseDomain, publicIPv4)
+	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
 		return err
 	}
@@ -71,18 +71,18 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	}
 
 	for _, recordName := range dnsrecord.ApexWildcard(baseDomain) {
-		if err := ensureRecord(ctx, client, zone, recordName, hcloud.ZoneRRSetTypeA, strings.TrimSpace(publicIPv4)); err != nil {
-			return fmt.Errorf("upsert hetzner A record %s: %w", recordName, err)
+		if err := ensureRecord(ctx, client, zone, recordName, hcloud.ZoneRRSetType(recordType), publicIP); err != nil {
+			return fmt.Errorf("upsert hetzner %s record %s: %w", recordType, recordName, err)
 		}
 	}
 	return nil
 }
 
-func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP string) error {
 	if p == nil {
 		return errors.New("hetzner provider is nil")
 	}
-	name, err := dnsrecord.ARecordInputs(name, publicIPv4)
+	name, recordType, publicIP, err := dnsrecord.AddressRecordInputs(name, publicIP)
 	if err != nil {
 		return err
 	}
@@ -91,13 +91,13 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 	if err != nil {
 		return err
 	}
-	if err := ensureRecord(ctx, client, zone, name, hcloud.ZoneRRSetTypeA, strings.TrimSpace(publicIPv4)); err != nil {
-		return fmt.Errorf("upsert hetzner A record %s: %w", name, err)
+	if err := ensureRecord(ctx, client, zone, name, hcloud.ZoneRRSetType(recordType), publicIP); err != nil {
+		return fmt.Errorf("upsert hetzner %s record %s: %w", recordType, name, err)
 	}
 	return nil
 }
 
-func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
+func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error {
 	if p == nil {
 		return errors.New("hetzner provider is nil")
 	}
@@ -110,10 +110,13 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := deleteRRSet(ctx, client, zone, name, hcloud.ZoneRRSetTypeA); err != nil {
-		return fmt.Errorf("delete hetzner A record %s: %w", name, err)
+	var deleteErr error
+	for _, recordType := range []hcloud.ZoneRRSetType{hcloud.ZoneRRSetTypeA, hcloud.ZoneRRSetTypeAAAA} {
+		if err := deleteRRSet(ctx, client, zone, name, recordType); err != nil {
+			deleteErr = errors.Join(deleteErr, fmt.Errorf("delete hetzner %s record %s: %w", recordType, name, err))
+		}
 	}
-	return nil
+	return deleteErr
 }
 
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {

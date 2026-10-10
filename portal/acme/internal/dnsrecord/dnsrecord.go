@@ -28,30 +28,44 @@ func BaseDomain(raw string) (string, error) {
 	return name, nil
 }
 
-// ARecordInputs validates an A-record upsert's record name and public IPv4
-// address, returning the normalized record name.
-func ARecordInputs(name, publicIPv4 string) (string, error) {
+// AddressRecordInputs validates an address-record upsert and returns the
+// normalized record name, A or AAAA record type, and canonical IP address.
+func AddressRecordInputs(name, publicIP string) (string, string, string, error) {
 	name, err := RecordName(name)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
-		return "", err
+	recordType, publicIP, err := address(publicIP)
+	if err != nil {
+		return "", "", "", err
 	}
-	return name, nil
+	return name, recordType, publicIP, nil
 }
 
-// ARecordsInputs validates an apex and wildcard A-record upsert's base domain
-// and public IPv4 address, returning the normalized base domain.
-func ARecordsInputs(baseDomain, publicIPv4 string) (string, error) {
+// AddressRecordsInputs validates an apex and wildcard address-record upsert
+// and returns the normalized base domain, record type, and canonical IP address.
+func AddressRecordsInputs(baseDomain, publicIP string) (string, string, string, error) {
 	baseDomain, err := BaseDomain(baseDomain)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
-		return "", err
+	recordType, publicIP, err := address(publicIP)
+	if err != nil {
+		return "", "", "", err
 	}
-	return baseDomain, nil
+	return baseDomain, recordType, publicIP, nil
+}
+
+func address(raw string) (recordType, canonicalIP string, err error) {
+	canonicalIP = utils.SanitizeReportedIP(raw)
+	if canonicalIP == "" {
+		return "", "", fmt.Errorf("invalid ip address: %q", raw)
+	}
+	recordType = "A"
+	if strings.Contains(canonicalIP, ":") {
+		recordType = "AAAA"
+	}
+	return recordType, canonicalIP, nil
 }
 
 // TXTInputs validates a TXT upsert's record name and value, returning both

@@ -238,14 +238,43 @@ is the proxy when one sits in front. The trusted proxy must overwrite
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
+| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01 challenges, A/AAAA sync, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for a public relay domain and lease hostnames through the selected DNS provider. With `embedded`, local records are signed and the operator publishes the DS at the parent zone; Cloudflare, Google Cloud DNS, Route53, and Vultr use their provider APIs. Hetzner and Njalla do not support ENS DNSSEC automation |
+
+### IPv4 and IPv6
+
+Managed DNS discovers public IPv4 and IPv6 independently and publishes A and
+AAAA records for the families it finds. One available family is sufficient for
+address initialization. Apex, wildcard, and tracked ENS hostname updates affect
+only the supplied family; a transient discovery failure leaves the other
+family's existing records intact. Permanently retiring a family requires
+removing its external DNS records and parent glue; a failed probe is not a
+request to withdraw them. Explicit ENS hostname cleanup removes both A
+and AAAA records on external providers. Embedded DNS continues its zone-wide
+address synthesis and removes the hostname's ENS TXT association.
+
+IPv6-only and dual-stack relays require reachable published addresses. Public
+address discovery observes outbound connections; it does not prove that clients
+can reach the relay through host, container, or network firewalls. Allow the
+relay's public TCP port, the public UDP port when QUIC is enabled, and configured
+raw TCP/UDP ranges for every family you publish. Embedded DNS also needs
+`53/tcp` and `53/udp` on those families. Clients must share a reachable address
+family with the relay; Portal does not add address translation or multi-hop
+routing between disconnected IPv4 and IPv6 networks.
+
+With a manual certificate and embedded DNS, startup continues when neither
+public address family can be discovered. Address initialization is deferred
+and retries are scheduled.
+Existing addresses remain available during later discovery failures. Errors
+applying DNS updates still propagate. Manual certificates with an external
+provider bypass automatic apex/wildcard address management; manage those
+records separately. Opt-in ENS automation still uses the selected provider.
 
 ### Embedded DNS
 
 > This section is the canonical reference for embedded DNS configuration. The deployment and self-hosting guides link here rather than restating the details.
 
-Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` pointing at the relay public IP) and open `53/tcp` + `53/udp`. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A answers for the apex and every covered name are synthesized from the relay public IPv4; ACME DNS-01 TXT records are served directly. DNSSEC signing is always enabled; ENS TXT automation remains opt-in with `ENS_GASLESS_ENABLED=true`.
+Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` and/or `AAAA` pointing at reachable relay addresses) and open `53/tcp` + `53/udp` for each published family. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A and AAAA answers for the apex and every covered name are synthesized from the independently discovered relay addresses; ACME DNS-01 TXT records are served directly. DNSSEC signing is always enabled; ENS TXT automation remains opt-in with `ENS_GASLESS_ENABLED=true`.
 
 The relay automatically generates a single ECDSA P-256 CSK (DNSSEC algorithm 13) in `IDENTITY_PATH/dnssec-csk.json`. Preserve and back up this file with the identity volume across restarts, container replacement, and migration: deleting or replacing it changes the DNSKEY and breaks validation against an existing parent DS. Portal uses Go's standard filesystem operations; on Unix a new key is created with mode `0600` and directories created by Portal use mode `0700`. Existing operator-provided directories and key files are loaded without ownership, mode, or ACL policy checks and are not modified. Securing the identity volume, including its Windows ACLs, is the operator's responsibility. Malformed keys and keys for another zone still fail startup rather than triggering automatic replacement.
 
@@ -253,9 +282,9 @@ The signing store must permit the required create, read, write, sync, and rename
 
 After NS/glue delegation is reachable, copy the `ds_record` from the relay startup log into a **DS record at the parent zone** for the delegated domain. `EnsureDNSSEC()` exports the same full DS record (SHA-256 digest, digest type 2); with ENS enabled it is also exposed in ENS status. Configure the key tag, algorithm, digest type, and digest exactly as exported. Parent DS publication is manual. The embedded provider reports `pending` even while signing locally: Portal does not authenticate the parent chain, so `ens.verified` remains false even after you publish the DS. The parent must itself have a valid DNSSEC chain to a trust anchor for public validation. Verify delegation and signatures before publishing the DS, and never publish the CSK private file. Losing the key requires coordinated parent DS replacement; automatic rollover is not implemented.
 
-Authoritative RRsets, including apex DNSKEY and denial-of-existence NSEC records, are signed. Signatures last 24 hours, tolerate five minutes of clock skew, and refresh before answering after 12 hours; keep the host clock synchronized. A finite wildcard zone preserves synthesized addresses even below explicit TXT/HTTPS owners and their ancestors. When no public IPv4 is configured yet, genuinely absent names return authenticated NXDOMAIN; existing owners without the requested type return NODATA. DNSSEC records accompany responses only when requested with EDNS DO (or queried directly), and large UDP responses require TCP retry.
+Authoritative RRsets, including apex DNSKEY and denial-of-existence NSEC records, are signed. Signatures last 24 hours, tolerate five minutes of clock skew, and refresh before answering after 12 hours; keep the host clock synchronized. A finite wildcard zone preserves synthesized addresses even below explicit TXT owners and their ancestors. Before either public address is initialized, missing names return REFUSED without an SOA so resolvers do not negatively cache pending tunnel names. After address initialization, genuinely absent names return authenticated NXDOMAIN. Existing owners without the requested type return NODATA, including AAAA queries on an IPv4-only zone and A queries on an IPv6-only zone. DNSSEC records accompany responses only when requested with EDNS DO (or queried directly), and large UDP responses require TCP retry.
 
-External managed providers (`cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, `vultr`) are supported first-class backends; `embedded` remains the canonical default. Keep any vendor as the **parent** DNS provider and delegate only the relay subdomain to embedded DNS. Manual/external certificate ownership remains supported via `fullchain.pem` and `privatekey.pem` when neither ACME state file is present. Certificate loading itself needs no vendor API credentials, and the embedded provider needs none for DNS management. Selecting an external provider still uses its APIs for DNS publication and, when `ENS_GASLESS_ENABLED=true`, for ENS/DNSSEC synchronization before certificate loading; a manual certificate does not bypass those credentials.
+External managed providers (`cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, `vultr`) are supported first-class backends; `embedded` remains the canonical default. Keep any vendor as the **parent** DNS provider and delegate only the relay subdomain to embedded DNS. Manual/external certificate ownership remains supported via `fullchain.pem` and `privatekey.pem` when neither ACME state file is present. Certificate loading itself needs no vendor API credentials, and the embedded provider needs none for DNS management. Managed certificates use the selected external provider for DNS publication. With `ENS_GASLESS_ENABLED=true`, ENS/DNSSEC synchronization also uses that provider before certificate loading; a manual certificate does not bypass ENS provider credentials.
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
@@ -578,9 +607,9 @@ Relay policy settings are stored at `IDENTITY_PATH/policy.json`.
 
 ## ACME DNS Provider Configuration
 
-Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A records, and optional ENS gasless DNS records.
+Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A/AAAA records, and optional ENS gasless DNS records.
 
-An empty value selects `embedded`, the canonical managed backend; see [Embedded DNS](#embedded-dns) for NS/glue delegation, DS setup, and persistent signing-key requirements. The external providers below are supported first-class backends. Valid manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH` take precedence over managed certificate issuance only when neither `acme-account.key` nor `acme-registration.json` exists, regardless of provider selection. If either ACME state file remains, Portal treats the PEM files as managed certificate material. Manual overrides do not disable embedded A-record serving or opt-in ENS automation through the selected provider.
+An empty value selects `embedded`, the canonical managed backend; see [Embedded DNS](#embedded-dns) for NS/glue delegation, DS setup, and persistent signing-key requirements. The external providers below are supported first-class backends. Valid manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH` take precedence over managed certificate issuance only when neither `acme-account.key` nor `acme-registration.json` exists, regardless of provider selection. If either ACME state file remains, Portal treats the PEM files as managed certificate material. Manual overrides do not disable embedded A/AAAA serving or opt-in ENS automation through the selected provider.
 
 For ENS gasless behavior and wallet authentication details, see [Wallet and ENS](/wallet-and-ens).
 
@@ -615,7 +644,7 @@ For ENS gasless behavior and wallet authentication details, see [Wallet and ENS]
 |----------|----------|-------------|
 | `HETZNER_API_TOKEN` | Yes | Hetzner Cloud API token with DNS zone and RRSet write access |
 
-Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PROVIDER=hetzner` supports ACME and A records, but not ENS gasless DNSSEC automation.
+Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PROVIDER=hetzner` supports ACME and A/AAAA records, but not ENS gasless DNSSEC automation.
 
 ### Njalla DNS (`njalla`)
 
@@ -623,7 +652,7 @@ Note: Hetzner DNS does not support provider-side DNSSEC signing, so `ACME_DNS_PR
 |----------|----------|-------------|
 | `NJALLA_TOKEN` | Yes | Njalla API token with DNS record write access |
 
-Note: Njalla supports managed ACME, A records, and TXT records. Portal does not automate Njalla DNSSEC signing, so `ACME_DNS_PROVIDER=njalla` does not support ENS gasless DNSSEC automation.
+Note: Njalla supports managed ACME, A/AAAA records, and TXT records. Portal does not automate Njalla DNSSEC signing, so `ACME_DNS_PROVIDER=njalla` does not support ENS gasless DNSSEC automation.
 
 ### Vultr DNS (`vultr`)
 

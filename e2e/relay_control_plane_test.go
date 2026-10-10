@@ -106,7 +106,7 @@ func awaitServeExit(t *testing.T, serveResult <-chan error) {
 // the serve loop within the shutdown budget.
 func TestRelayServeRoutesAndCancellation(t *testing.T) {
 	t.Run("application handler coexists with relay routes", func(t *testing.T) {
-		sniPort := harnessPort(t)
+		sniPort := harnessPort(t, "127.0.0.1")
 		stateDir := t.TempDir()
 		// x402 composition is owned by cmd/relay-server (#490), not by the
 		// relay core, so this e2e pins only the routing coexistence.
@@ -159,7 +159,7 @@ func TestRelayServeRoutesAndCancellation(t *testing.T) {
 	})
 
 	t.Run("nil handler keeps the relay root", func(t *testing.T) {
-		sniPort := harnessPort(t)
+		sniPort := harnessPort(t, "127.0.0.1")
 		stateDir := t.TempDir()
 		server, err := portal.NewServer(portal.ServerConfig{
 			PortalURL:     "https://localhost:4017",
@@ -207,7 +207,7 @@ func TestRelayServeRoutesAndCancellation(t *testing.T) {
 // serves the public healthz route, and gates the keyless signing path:
 // an unauthenticated sign request must be rejected.
 func TestRelayStartInitializesLocalACMEAndGatesSignPath(t *testing.T) {
-	sniPort := harnessPort(t)
+	sniPort := harnessPort(t, "127.0.0.1")
 	stateDir := t.TempDir()
 	server, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     "https://localhost:4017",
@@ -250,7 +250,7 @@ func TestRelayStartInitializesLocalACMEAndGatesSignPath(t *testing.T) {
 // envelope is served only when discovery is enabled.
 func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 	t.Run("domain reports compatibility info with discovery enabled", func(t *testing.T) {
-		sniPort := harnessPort(t)
+		sniPort := harnessPort(t, "127.0.0.1")
 		keyDir := t.TempDir()
 		server, err := portal.NewServer(portal.ServerConfig{
 			PortalURL:        "https://localhost:4017",
@@ -337,7 +337,7 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 	})
 
 	t.Run("discovery disabled answers not found", func(t *testing.T) {
-		sniPort := harnessPort(t)
+		sniPort := harnessPort(t, "127.0.0.1")
 		stateDir := t.TempDir()
 		server, err := portal.NewServer(portal.ServerConfig{
 			PortalURL:     "https://localhost:4017",

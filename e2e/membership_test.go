@@ -113,7 +113,7 @@ type membershipRelay struct {
 // and registers its shutdown with t.Cleanup.
 func startMembershipRelay(t *testing.T, ctx context.Context) membershipRelay {
 	t.Helper()
-	sniPort := harnessPort(t)
+	sniPort := harnessPort(t, "127.0.0.1")
 	sniAddr := "127.0.0.1:" + strconv.Itoa(sniPort)
 	relayURL := "https://" + sniAddr
 	stateDir := t.TempDir()

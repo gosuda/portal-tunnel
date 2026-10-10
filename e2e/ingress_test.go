@@ -22,7 +22,7 @@ import (
 // TCP source as the lease client IP; forwarded headers stay untrusted by
 // default, so a spoofed X-Forwarded-For cannot buy a fresh NAT budget.
 func TestPublicIngressPreservesRegistrationPeer(t *testing.T) {
-	sniPort := harnessPort(t)
+	sniPort := harnessPort(t, "127.0.0.1")
 	server, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     "https://localhost",
 		StateDir:      t.TempDir(),
@@ -81,7 +81,7 @@ func TestPublicIngressPreservesRegistrationPeer(t *testing.T) {
 // connect endpoint must answer Forbidden before any connection is offered
 // to the lease stream.
 func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
-	sniPort := harnessPort(t)
+	sniPort := harnessPort(t, "127.0.0.1")
 	server, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     "https://localhost",
 		StateDir:      t.TempDir(),

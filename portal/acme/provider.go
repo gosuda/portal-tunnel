@@ -2,6 +2,7 @@ package acme
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -32,9 +33,9 @@ const (
 type DNSProvider interface {
 	Name() string
 	ChallengeProvider(ctx context.Context) (challenge.Provider, error)
-	EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error
-	EnsureARecord(ctx context.Context, name, publicIPv4 string) error
-	DeleteARecord(ctx context.Context, name string) error
+	EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error
+	EnsureAddressRecord(ctx context.Context, name, publicIP string) error
+	DeleteAddressRecords(ctx context.Context, name string) error
 	EnsureTXTRecord(ctx context.Context, name, value string) error
 	DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error
 	EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error)
@@ -75,39 +76,45 @@ func newDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 	}
 }
 
-// syncDNS returns the discovered address even if base-record updates fail, so
+// syncDNS returns discovered addresses even if base-record updates fail, so
 // tracked-record maintenance can reuse it without repeating discovery.
-func (m *Manager) syncDNS(ctx context.Context) (string, error) {
+func (m *Manager) syncDNS(ctx context.Context) ([]string, error) {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
-		return "", nil
+		return nil, nil
 	}
 	_, _, manual, err := m.manualCertificateOverride()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	// Manual certificates bypass external A-record management, but the embedded
+	// Manual certificates bypass external address-record management, but the embedded
 	// authoritative zone still needs its address before it can serve the relay.
 	if manual && m.dns.Name() != TypeEmbedded {
-		return "", nil
+		return nil, nil
 	}
-	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	publicIPs, err := utils.ResolvePublicIPs(ctx)
 	if err != nil {
 		if manual && m.dns.Name() == TypeEmbedded && ctx.Err() == nil {
-			// The embedded zone can serve without A records. Keep the usable
+			// The embedded zone can serve without address records. Keep the usable
 			// certificate and let the existing short retry ticker initialize it.
 			m.commandMu.Lock()
 			m.pendingDNSAddress = true
 			m.commandMu.Unlock()
 			log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("defer embedded DNS address initialization until the next DNS retry; using manual certificate")
-			return "", nil
+			return nil, nil
 		}
-		return "", fmt.Errorf("detect public ip: %w", err)
+		return nil, fmt.Errorf("detect public ip: %w", err)
 	}
-	if err := m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP); err != nil {
-		return publicIP, err
+	var syncErr error
+	for _, publicIP := range publicIPs {
+		if err := m.dns.EnsureAddressRecords(ctx, m.cfg.BaseDomain, publicIP); err != nil {
+			syncErr = errors.Join(syncErr, err)
+		}
+	}
+	if syncErr != nil {
+		return publicIPs, syncErr
 	}
 	m.commandMu.Lock()
 	m.pendingDNSAddress = false
 	m.commandMu.Unlock()
-	return publicIP, nil
+	return publicIPs, nil
 }

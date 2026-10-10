@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -43,22 +44,25 @@ func nextSyncDelay(consecutiveFailures int) time.Duration {
 func (m *Manager) maintenanceLoop(ctx context.Context) {
 	defer m.wg.Done()
 	pendingENS := make(map[string]ensDNSCommand)
-	lastPublicIP := ""
-	syncChangedARecords := func(ctx context.Context, publicIP string) error {
-		if publicIP == "" || publicIP == lastPublicIP {
-			return nil
-		}
-
+	// Keep the last successfully synchronized address for each family. A failed
+	// probe for one family must not discard the other family's last success.
+	lastPublicIPs := make(map[bool]string)
+	syncChangedAddressRecords := func(ctx context.Context, publicIPs []string) error {
 		var syncErr error
-		if m.cfg.ENSGaslessEnabled {
-			syncErr = errors.Join(syncErr, m.syncTrackedENSGaslessHostARecords(ctx, publicIP))
+		for _, publicIP := range publicIPs {
+			ipv4 := net.ParseIP(publicIP).To4() != nil
+			if publicIP == lastPublicIPs[ipv4] {
+				continue
+			}
+			if m.cfg.ENSGaslessEnabled {
+				if err := m.syncTrackedENSGaslessHostAddressRecords(ctx, publicIP); err != nil {
+					syncErr = errors.Join(syncErr, err)
+					continue
+				}
+			}
+			lastPublicIPs[ipv4] = publicIP
 		}
-		if syncErr != nil {
-			return syncErr
-		}
-
-		lastPublicIP = publicIP
-		return nil
+		return syncErr
 	}
 	flushCommands := func(ctx context.Context) error {
 	drainENS:
@@ -77,6 +81,9 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 				err = errors.Join(err, commandErr)
 			} else {
 				delete(pendingENS, hostname)
+				if !command.remove {
+					clear(lastPublicIPs)
+				}
 			}
 		}
 		return err
@@ -118,8 +125,8 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 	// pending episode discovered by the ticker engages the fast schedule
 	// immediately instead of waiting out the currently armed interval, and the
 	// operator sees one signal per pending transition rather than per query.
-	syncDNSAttempt := func(ctx context.Context) (string, error) {
-		publicIP, err := m.syncDNS(ctx)
+	syncDNSAttempt := func(ctx context.Context) ([]string, error) {
+		publicIPs, err := m.syncDNS(ctx)
 		m.commandMu.RLock()
 		pendingDNSAddress := m.pendingDNSAddress
 		m.commandMu.RUnlock()
@@ -135,7 +142,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			consecutiveDNSFailures = 0
 		}
 		rearmRetryTimer()
-		return publicIP, err
+		return publicIPs, err
 	}
 
 	for {
@@ -157,10 +164,15 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 				log.Warn().Err(err).Str("hostname", command.hostname).Msg("apply ENS dns command")
 			} else {
 				delete(pendingENS, command.hostname)
+				if !command.remove {
+					// A new hostname may still need a family that discovery missed.
+					clear(lastPublicIPs)
+				}
 			}
 		case <-dnsTicker.C:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			_, err := syncDNSAttempt(syncCtx)
+			publicIPs, err := syncDNSAttempt(syncCtx)
+			err = errors.Join(err, syncChangedAddressRecords(syncCtx, publicIPs))
 			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync managed dns records")
@@ -170,10 +182,10 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			m.commandMu.RLock()
 			pendingDNSAddress := m.pendingDNSAddress
 			m.commandMu.RUnlock()
-			var publicIP string
+			var publicIPs []string
 			var err error
 			if pendingDNSAddress {
-				publicIP, err = syncDNSAttempt(syncCtx)
+				publicIPs, err = syncDNSAttempt(syncCtx)
 				m.commandMu.RLock()
 				pendingDNSAddress = m.pendingDNSAddress
 				m.commandMu.RUnlock()
@@ -181,13 +193,13 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 				consecutiveDNSFailures = 0
 				rearmRetryTimer()
 				if m.cfg.ENSGaslessEnabled {
-					publicIP, err = utils.ResolvePublicIPv4(syncCtx)
+					publicIPs, err = utils.ResolvePublicIPs(syncCtx)
 				}
 			}
 			if !pendingDNSAddress && err != nil {
 				err = fmt.Errorf("detect public ip: %w", err)
 			}
-			err = errors.Join(err, syncChangedARecords(syncCtx, publicIP))
+			err = errors.Join(err, syncChangedAddressRecords(syncCtx, publicIPs))
 			// Embedded signing remains pending: it does not authenticate the
 			// parent chain and must not suppress DNSSEC synchronization.
 			if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {

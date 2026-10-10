@@ -169,7 +169,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		if err := m.dns.DeleteTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix); err != nil {
 			return err
 		}
-		if err := m.dns.DeleteARecord(ctx, command.hostname); err != nil {
+		if err := m.dns.DeleteAddressRecords(ctx, command.hostname); err != nil {
 			return err
 		}
 		return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
@@ -178,12 +178,18 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 	}
 
 	if command.hostname != m.cfg.BaseDomain {
-		publicIP, err := utils.ResolvePublicIPv4(ctx)
+		publicIPs, err := utils.ResolvePublicIPs(ctx)
 		if err != nil {
 			return fmt.Errorf("detect public ip: %w", err)
 		}
-		if err := m.dns.EnsureARecord(ctx, command.hostname, publicIP); err != nil {
-			return fmt.Errorf("ensure ens gasless A record for %s: %w", command.hostname, err)
+		var addressErr error
+		for _, publicIP := range publicIPs {
+			if err := m.dns.EnsureAddressRecord(ctx, command.hostname, publicIP); err != nil {
+				addressErr = errors.Join(addressErr, err)
+			}
+		}
+		if addressErr != nil {
+			return fmt.Errorf("ensure ens gasless address records for %s: %w", command.hostname, addressErr)
 		}
 	}
 	value := gaslessENSTXTPrefix + defaultENSGaslessResolver + " " + strings.TrimSpace(command.address)
@@ -221,9 +227,9 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err))
 				continue
 			}
-			if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
+			if err := m.dns.DeleteAddressRecords(ctx, hostname); err != nil {
 				remaining = append(remaining, hostname)
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless A record for %s: %w", hostname, err))
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless address record for %s: %w", hostname, err))
 			}
 		}
 		return remaining
@@ -233,15 +239,15 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 	return cleanupErr
 }
 
-func (m *Manager) syncTrackedENSGaslessHostARecords(ctx context.Context, publicIP string) error {
+func (m *Manager) syncTrackedENSGaslessHostAddressRecords(ctx context.Context, publicIP string) error {
 	hostnames, err := m.trackedENSGaslessHostnames()
 	if err != nil {
 		return err
 	}
 	var syncErr error
 	for _, hostname := range hostnames {
-		if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
-			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ens gasless A record for %s: %w", hostname, err))
+		if err := m.dns.EnsureAddressRecord(ctx, hostname, publicIP); err != nil {
+			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ens gasless address record for %s: %w", hostname, err))
 		}
 	}
 	return syncErr

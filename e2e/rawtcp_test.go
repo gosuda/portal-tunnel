@@ -19,22 +19,32 @@ import (
 // allocation on the relay, byte round trips in both directions, and a fresh
 // connection after the first one closes.
 func TestRawTCPPortRelay(t *testing.T) {
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		t.Run(host, func(t *testing.T) {
+			testRawTCPPortRelay(t, host)
+		})
+	}
+}
+
+func testRawTCPPortRelay(t *testing.T, host string) {
+	t.Helper()
 	// One dedicated raw port outside the ephemeral range: the lease binds it
 	// for the whole test, and the system's dynamic port range would collide
 	// with ephemeral client sockets.
-	rawPort := harnessPort(t)
-	target, stopEcho := startTCPEcho(t)
+	target, stopEcho := startTCPEcho(t, host)
 	defer stopEcho()
+	rawPort := harnessPort(t, host)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	stateDir := t.TempDir()
-	port := harnessPort(t)
-	relayURL := "https://127.0.0.1:" + strconv.Itoa(port)
+	port := harnessPort(t, host)
+	sniAddr := net.JoinHostPort(host, strconv.Itoa(port))
+	relayURL := "https://" + sniAddr
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     relayURL,
 		StateDir:      stateDir,
-		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(port),
+		SNIListenAddr: sniAddr,
 		SNIPort:       port,
 		MinPort:       rawPort,
 		MaxPort:       rawPort,
@@ -104,7 +114,7 @@ func TestRawTCPPortRelay(t *testing.T) {
 		t.Fatalf("split TCP address %q: %v", tcpAddr, err)
 	}
 	for round := range 2 {
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", leasePort), 5*time.Second)
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, leasePort), 5*time.Second)
 		if err != nil {
 			t.Fatalf("round %d: dial relay TCP port: %v", round, err)
 		}
@@ -132,10 +142,13 @@ func TestRawTCPPortRelay(t *testing.T) {
 }
 
 // startTCPEcho runs a byte echo listener on loopback and returns its address.
-func startTCPEcho(t *testing.T) (string, func()) {
+func startTCPEcho(t *testing.T, host string) (string, func()) {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
+		if host == "::1" {
+			t.Skipf("IPv6 loopback is unavailable: %v", err)
+		}
 		t.Fatalf("listen echo target: %v", err)
 	}
 	go func() {

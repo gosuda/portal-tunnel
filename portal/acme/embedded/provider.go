@@ -24,6 +24,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -52,9 +53,9 @@ type Config struct {
 // Provider is an authoritative-only DNS server for the relay zone plus the
 // DNSProvider implementation used by the ACME manager.
 //
-// A answers for the apex and every covered name are synthesized from the
-// relay public IPv4, so they can never go stale. TXT records (ACME DNS-01
-// and ENS gasless) are stored explicitly.
+// A and AAAA answers for the apex and every covered name share the relay's
+// last discovered address for each family. TXT records (ACME DNS-01 and ENS
+// gasless) are stored explicitly.
 type Provider struct {
 	baseDomain string
 	zone       string
@@ -63,6 +64,7 @@ type Provider struct {
 
 	mu     sync.RWMutex
 	ipv4   net.IP
+	ipv6   net.IP
 	txt    map[string][]string
 	serial uint32
 	key    *dns.DNSKEY
@@ -78,8 +80,9 @@ type Provider struct {
 	// started marks a provider created through New, the only caller allowed
 	// to arm the delegated-path self-check: direct constructions (unit tests)
 	// must not launch external resolver lookups as a side effect.
-	started   bool
-	selfCheck sync.Once
+	started       bool
+	selfCheckIPv4 sync.Once
+	selfCheckIPv6 sync.Once
 }
 
 // New binds the UDP and TCP listeners and starts serving the zone. Binding
@@ -220,30 +223,38 @@ func (p *Provider) CleanUp(domain, _, keyAuth string) error {
 	return nil
 }
 
-// EnsureARecords records the relay public IPv4 used to synthesize A answers
-// for the zone apex and every name it covers.
-func (p *Provider) EnsureARecords(_ context.Context, baseDomain, publicIPv4 string) error {
+// EnsureAddressRecords updates the supplied address family for the zone apex
+// and every covered name. The other family's address remains unchanged.
+func (p *Provider) EnsureAddressRecords(_ context.Context, baseDomain, publicIP string) error {
 	if p == nil {
 		return errors.New("embedded dns provider is nil")
 	}
-	if utils.NormalizeBaseDomain(baseDomain) != p.baseDomain {
-		return fmt.Errorf("hostname %q is outside embedded dns zone %q", baseDomain, p.baseDomain)
-	}
-	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
+	if err != nil {
 		return err
 	}
-	ip := net.ParseIP(strings.TrimSpace(publicIPv4)).To4()
+	if baseDomain != p.baseDomain {
+		return fmt.Errorf("hostname %q is outside embedded dns zone %q", baseDomain, p.baseDomain)
+	}
+	ip := net.ParseIP(publicIP)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !p.ipv4.Equal(ip) {
-		p.ipv4 = ip
+	address := &p.ipv4
+	selfCheck := &p.selfCheckIPv4
+	if recordType == "AAAA" {
+		address = &p.ipv6
+		selfCheck = &p.selfCheckIPv6
+	} else {
+		ip = ip.To4()
+	}
+	if !(*address).Equal(ip) {
+		*address = ip
 		p.bumpSerialLocked()
 	}
 	if p.started {
-		// One attempt per provider instance: the check needs a full recursive
-		// resolver round trip, so repeat EnsureARecords calls must not repeat it.
-		p.selfCheck.Do(func() {
+		// One recursive resolver round trip per address family and provider.
+		selfCheck.Do(func() {
 			go p.verifyDelegatedPath(ip)
 		})
 	}
@@ -264,7 +275,11 @@ func (p *Provider) verifyDelegatedPath(ip net.IP) {
 	ctx, cancel := context.WithTimeout(context.Background(), selfCheckTimeout)
 	defer cancel()
 	started := time.Now()
-	addrs, err := net.DefaultResolver.LookupIP(ctx, "ip4", name)
+	network := "ip4"
+	if ip.To4() == nil {
+		network = "ip6"
+	}
+	addrs, err := net.DefaultResolver.LookupIP(ctx, network, name)
 	elapsed := time.Since(started)
 	if err != nil {
 		log.Warn().Err(err).Str("name", name).Dur("elapsed", elapsed).Msg("dns self-check failed")
@@ -286,20 +301,21 @@ func (p *Provider) verifyDelegatedPath(ip net.IP) {
 		Msg("dns self-check resolved a different address")
 }
 
-// EnsureARecord is a no-op: A answers are synthesized zone-wide from the
-// relay public IPv4, so explicit records cannot go stale.
-func (p *Provider) EnsureARecord(_ context.Context, name, publicIPv4 string) error {
+// EnsureAddressRecord is a no-op: address answers are synthesized zone-wide
+// from the relay's last discovered addresses rather than stored per hostname.
+func (p *Provider) EnsureAddressRecord(_ context.Context, name, publicIP string) error {
 	if p == nil {
 		return errors.New("embedded dns provider is nil")
 	}
 	if _, err := p.zoneHostname(name); err != nil {
 		return err
 	}
-	return utils.ValidateIPv4(publicIPv4)
+	_, _, _, err := dnsrecord.AddressRecordInputs(name, publicIP)
+	return err
 }
 
-// DeleteARecord is a no-op because A answers are synthesized, not stored.
-func (p *Provider) DeleteARecord(context.Context, string) error {
+// DeleteAddressRecords is a no-op because address answers are synthesized, not stored.
+func (p *Provider) DeleteAddressRecords(context.Context, string) error {
 	if p == nil {
 		return errors.New("embedded dns provider is nil")
 	}

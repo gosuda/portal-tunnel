@@ -138,7 +138,7 @@ func (p *Provider) signedZone(now time.Time) (*signedZone, error) {
 			z.records[h.Name] = make(map[uint16]signedRRSet)
 		}
 		set := z.records[h.Name][h.Rrtype]
-		if h.Rrtype == dns.TypeA && len(set.records) != 0 {
+		if (h.Rrtype == dns.TypeA || h.Rrtype == dns.TypeAAAA) && len(set.records) != 0 {
 			return
 		}
 		set.records = append(set.records, rr)
@@ -152,11 +152,14 @@ func (p *Provider) signedZone(now time.Time) (*signedZone, error) {
 			add(p.txtRR(name, value))
 		}
 	}
-	// Include empty non-terminals. When the relay has an address, materialize A
-	// and wildcard A at every closest encloser so explicit TXT records do
-	// not shadow zone-wide address synthesis (RFC 4592).
+	// Include empty non-terminals. Materialize each address family and its
+	// wildcard at every closest encloser so explicit TXT records do not
+	// shadow zone-wide address synthesis (RFC 4592).
 	if p.ipv4 != nil {
 		add(p.aRR(p.nsName, p.ipv4))
+	}
+	if p.ipv6 != nil {
+		add(p.aaaaRR(p.nsName, p.ipv6))
 	}
 	for name := range z.records {
 		z.names = append(z.names, name)
@@ -171,17 +174,27 @@ func (p *Provider) signedZone(now time.Time) (*signedZone, error) {
 			}
 		}
 	}
-	if p.ipv4 != nil {
+	if p.ipv4 != nil || p.ipv6 != nil {
 		nodes := make([]string, 0, len(z.records))
 		for name := range z.records {
 			nodes = append(nodes, name)
 		}
 		for _, name := range nodes {
-			add(p.aRR(name, p.ipv4))
+			if p.ipv4 != nil {
+				add(p.aRR(name, p.ipv4))
+			}
+			if p.ipv6 != nil {
+				add(p.aaaaRR(name, p.ipv6))
+			}
 			// An explicit wildcard already represents synthesis at its parent, not a
 			// separate closest encloser requiring another wildcard beneath it.
 			if _, valid := dns.IsDomainName("*." + name); valid && !strings.HasPrefix(name, "*.") {
-				add(p.aRR("*."+name, p.ipv4))
+				if p.ipv4 != nil {
+					add(p.aRR("*."+name, p.ipv4))
+				}
+				if p.ipv6 != nil {
+					add(p.aaaaRR("*."+name, p.ipv6))
+				}
 			}
 		}
 	}

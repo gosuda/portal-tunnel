@@ -49,18 +49,18 @@ func (z *fakeZone) ChallengeProvider(context.Context) (challenge.Provider, error
 	return nil, nil
 }
 
-func (z *fakeZone) EnsureARecords(_ context.Context, baseDomain, publicIPv4 string) error {
-	return z.EnsureARecord(context.Background(), baseDomain, publicIPv4)
+func (z *fakeZone) EnsureAddressRecords(_ context.Context, baseDomain, publicIP string) error {
+	return z.EnsureAddressRecord(context.Background(), baseDomain, publicIP)
 }
 
-func (z *fakeZone) EnsureARecord(_ context.Context, name, publicIPv4 string) error {
+func (z *fakeZone) EnsureAddressRecord(_ context.Context, name, publicIP string) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
-	z.a[name] = publicIPv4
+	z.a[name] = publicIP
 	return nil
 }
 
-func (z *fakeZone) DeleteARecord(_ context.Context, name string) error {
+func (z *fakeZone) DeleteAddressRecords(_ context.Context, name string) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
 	delete(z.a, name)
@@ -172,7 +172,7 @@ func TestENSGaslessLeaseRemovalDoesNotRunWhenDisabled(t *testing.T) {
 	}, zone)
 
 	ctx := context.Background()
-	if err := zone.EnsureARecord(ctx, host, "203.0.113.10"); err != nil {
+	if err := zone.EnsureAddressRecord(ctx, host, "203.0.113.10"); err != nil {
 		t.Fatalf("seed A record: %v", err)
 	}
 
@@ -206,7 +206,7 @@ func TestENSGaslessReconcileRunsWhenDisabled(t *testing.T) {
 	if err := zone.EnsureTXTRecord(ctx, host, gaslessENSTXTPrefix+"resolver 0x4444"); err != nil {
 		t.Fatalf("seed ENS record: %v", err)
 	}
-	if err := zone.EnsureARecord(ctx, host, "203.0.113.11"); err != nil {
+	if err := zone.EnsureAddressRecord(ctx, host, "203.0.113.11"); err != nil {
 		t.Fatalf("seed A record: %v", err)
 	}
 

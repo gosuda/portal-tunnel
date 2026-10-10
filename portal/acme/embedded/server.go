@@ -104,7 +104,7 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 		} else {
 			m.Answer = appendRRSet(m.Answer, sets[qtype], name, do)
 		}
-	} else if _, addressed := z.records["*."+p.zone][dns.TypeA]; addressed {
+	} else if len(z.records["*."+p.zone][dns.TypeA].records) != 0 || len(z.records["*."+p.zone][dns.TypeAAAA].records) != 0 {
 		m.Rcode = dns.RcodeNameError
 	} else {
 		// The snapshot carries no synthesized addresses, so every missing name
@@ -139,6 +139,7 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 	}
 	if qtype == dns.TypeNS && name == p.zone {
 		m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeA], "", do)
+		m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeAAAA], "", do)
 	}
 	return exists && source != name
 }
@@ -175,6 +176,13 @@ func (p *Provider) aRR(name string, ip net.IP) *dns.A {
 	return &dns.A{
 		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: recordTTL},
 		A:   append(net.IP(nil), ip...),
+	}
+}
+
+func (p *Provider) aaaaRR(name string, ip net.IP) *dns.AAAA {
+	return &dns.AAAA{
+		Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: recordTTL},
+		AAAA: append(net.IP(nil), ip...),
 	}
 }
 
