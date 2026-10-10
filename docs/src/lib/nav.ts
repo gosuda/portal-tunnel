@@ -50,7 +50,8 @@ export const guidesNavigation: NavSection[] = [
 		items: [
 			{ title: 'Overview', href: '/concepts' },
 			{ title: 'Architecture', href: '/architecture' },
-			{ title: 'Security Model', href: '/security-model' }
+			{ title: 'Security Model', href: '/security-model' },
+			{ title: 'Keyless TLS Explained', href: '/keyless-tls' }
 		]
 	},
 	{

@@ -1,12 +1,23 @@
 ---
 title: Security Model
-description: How Portal keeps tenant traffic opaque to relay operators.
+description: Tenant TLS guarantees, relay signing authority, and the limits of MITM detection.
 ---
 
 # Security Model
 
-Ordinary uncached HTTPS tunnels keep tenant traffic opaque to relay operators.
-Raw port transports and opt-in static caching have different trust boundaries.
+Portal minimizes relay trust; it does not yet eliminate it.
+
+In the normal uncached HTTPS path, tenant TLS terminates in the local tunnel
+process. A relay that forwards this traffic cannot read application plaintext or
+derive the tenant session keys from its certificate signing key. A malicious
+relay holding that key can still authenticate as a tenant endpoint and actively
+terminate TLS. The self-probe adds detection on sampled connections, not a proof
+that all connections are safe.
+
+This page defines the supported trust boundaries. For the design rationale,
+handshake flow, and browser-delegation context, read
+[Building End-to-End TLS Tunnels Without Delegated Credentials](/keyless-tls).
+Raw port transports and opt-in static caching have different boundaries below.
 
 ## Opt-in Static Cache
 
@@ -35,8 +46,9 @@ host, and expiry. Redeem URLs place the credential in the URL fragment, then
 exchange it at the tunnel endpoint for the same tunnel-local session cookie.
 The session cannot outlive the credential.
 
-Credential signing keys, SIWE challenges, session signing keys, cookies,
-subjects, and application plaintext remain outside the relay control plane.
+In normal passthrough operation, credential signing keys, SIWE challenges,
+session signing keys, cookies, subjects, and application plaintext remain
+outside the relay control plane.
 SIWE challenges expire after two minutes; signed sessions expire after at most
 24 hours.
 
@@ -91,7 +103,25 @@ runtime does not provide.
 
 ## Keyless Signing
 
-For relay-hosted names, the SDK terminates tenant TLS with a `keyless_tls` t13server backed by the relay's `/v1/sign` endpoint. The relay signs handshake transcripts with its certificate key, but it does not receive the negotiated tenant TLS session keys.
+For relay-hosted names, the SDK terminates tenant TLS 1.3 with a `keyless_tls`
+t13server backed by the relay's `/v1/sign` endpoint. The SDK generates the
+ephemeral key material and derives the session keys; the relay supplies
+certificate signatures without receiving those traffic secrets.
+
+The signing API requires an authenticated, current public lease. Each request
+also carries a short-lived connection binding associated with that lease and
+the ClientHello captured on the routed connection. Portal checks the binding's
+lease, expiry, and ClientHello hash and consumes it before signing. The signer
+constructs a TLS 1.3 `CertificateVerify` signature from the submitted handshake
+fields; it does not expose an arbitrary-digest signing endpoint. Portal's
+ingress comparison covers the ClientHello, not an independent observation of
+every submitted server-side transcript field.
+
+These checks constrain clients of an honest signer. The relay owns both the
+certificate private key and the binding registry, so they cannot prevent that
+relay from bypassing its own policy. See the
+[binding implementation](https://github.com/gosuda/portal-tunnel/blob/main/portal/keyless/bindings.go)
+and [signing endpoint](https://github.com/gosuda/portal-tunnel/blob/main/portal/keyless/signer.go).
 
 Relay API TLS is separate from tenant TLS:
 
@@ -99,19 +129,73 @@ Relay API TLS is separate from tenant TLS:
 - Tenant TLS protects end-user traffic for lease hostnames.
 - The QUIC datagram backhaul uses the public `PORTAL_URL` port with ALPN `portal-tunnel`; `SNI_PORT` controls the relay's corresponding local UDP listener.
 
+<h3 id="local-development-trust">Local development trust</h3>
+
+Public relay endpoints use normal certificate-chain and hostname verification.
+For loopback addresses, `localhost`, and `.localhost` names, the SDK instead
+bootstraps trust from the chain presented by the contacted endpoint. That
+initial fetch skips certificate verification; subsequent connections use the
+collected chain. This development convenience is not independent verification
+of the relay operator. See the [relay TLS bootstrap](https://github.com/gosuda/portal-tunnel/blob/main/utils/tls.go).
+
+<h2 id="relay-trust-reduction">Relay Trust Reduction</h2>
+
+The following guarantees apply to ordinary uncached tenant TLS with an
+uncompromised client and tunnel endpoint.
+
+| Threat or operating condition | Current behavior | Remaining boundary |
+|---|---|---|
+| Relay follows the forwarding protocol | Tenant TLS terminates at the SDK; the relay forwards ciphertext | The relay still controls routing and availability |
+| Relay passively observes a forwarded session | Certificate signatures do not disclose tenant traffic secrets | IPs, SNI, timing, volume, and connection metadata remain visible |
+| Tunnel client tries to reuse signing authority for another connection | The signer requires a current lease and a matching, unexpired, single-use ClientHello binding | This is policy enforced by the relay, not protection from a malicious relay operator |
+| Relay splits a recognized probe into two TLS sessions | Different exporter values produce a suspected-termination verdict | Only that sampled connection is checked |
+| Fully malicious relay controls the certificate key | It can authenticate as a tenant endpoint; Portal does not cryptographically prevent impersonation | It may selectively forward, distinguish, or drop probes |
+| Future Delegated Credentials support | Could avoid contacting the signer on each compatible handshake | Not implemented; retaining the parent certificate key still retains its authentication authority |
+
+The relay's certificate signing authority is distinct from the tenant TLS
+session secrets. Reducing online signing or distributing the signer does not
+by itself transfer hostname authentication to the tunnel. The article's
+[future directions](/keyless-tls#what-would-change-the-trust-boundary) distinguish
+those changes.
+
 ## MITM Self-Probe
 
-`portal expose` runs an asynchronous TLS passthrough self-probe after real tenant traffic starts. The SDK connects to its own public hostname, exports TLS keying material from the client side, recognizes the returning probe after SDK-side TLS termination, and compares exporter values.
+After real application traffic starts, the native SDK asynchronously opens a
+separate TLS connection to its public tenant hostname. A random nonce identifies
+the returning probe after SDK-side TLS termination. Both TLS endpoints export
+keying material with the same label and context, and the SDK compares the values.
 
-Matching exporter values mean the sampled connection preserved passthrough. A mismatch is treated as suspected relay-side TLS termination and logged by default; use `--ban-mitm` when suspected TLS termination should ban the relay.
+- Matching values support passthrough for that sampled connection.
+- An exporter mismatch is logged as suspected relay-side TLS termination.
+- `--ban-mitm` (or `BAN_MITM`) closes and blocks the detected relay within the
+  current exposure. This is not a persistent or network-wide ban.
+- Timeouts, connection failures, and other probe errors are warnings, not
+  exporter-mismatch verdicts; they do not trigger that block.
 
-The probe needs a tenant TLS stack that exports TLS keying material on both sides. The keyless TLS tenant terminator exports TLS 1.3 keying material, so the probe runs against tenant TLS exposures. Exposures started with `--ban-mitm` (or `BAN_MITM`) fail at start with an explicit error if the selected tenant TLS stack cannot export keying material, instead of running without the requested protection.
+Serving traffic does not wait for the probe to pass. The probe is triggered by
+traffic, limited to one in flight, and rate-limited after a completed result.
+It cannot establish that other clients or connections were forwarded honestly.
+In particular, selective MITM and probe distinguishability remain limitations;
+random padding does not establish that probes are indistinguishable from normal
+application traffic.
+
+Both sides must support TLS keying material export. An explicit `--ban-mitm`
+request fails at startup when the selected tenant TLS stack lacks that
+capability. Browser/WASM exposures cannot use the native socket-based
+self-probe or request this option. Static cache mode explicitly allows relay TLS termination,
+disables probing, and cannot be combined with `--ban-mitm`.
+
+The [probe implementation](https://github.com/gosuda/portal-tunnel/blob/main/sdk/mitm.go)
+defines these verdicts and their lifecycle. A successful probe is evidence about
+one connection, not an authorization to trust every future connection.
 
 ## Relay Visibility
 
-For ordinary uncached tunnels:
+For a relay following the ordinary uncached forwarding path, visibility is as
+follows. The malicious certificate-owner case above is outside this passive
+confidentiality guarantee.
 
-| Relays can see | Relays cannot see |
+| Relays can see | Protected on that forwarding path |
 |---|---|
 | Source IP and timing metadata | HTTP headers or body |
 | Lease identity/public hostname, including SNI | Tenant TLS session keys |
@@ -131,6 +215,7 @@ local tunnel identity used for registration.
 
 ## Next Steps
 
+- [Keyless TLS Explained](/keyless-tls) - handshake, signer policy, and self-probe rationale
 - [Architecture](/architecture) - deep dive into Portal's internal design
 - [Wallet and ENS](/wallet-and-ens) - admin tokens, wallet auth, and ENS gasless DNS import
 - [Self-Hosting](/self-hosting) - run your own relay server

@@ -21,9 +21,9 @@ Portal is an open-source tunnel runtime and relay network for publishing service
 
 - **Self-Hostable & Open Source** - Run your own relay with a single command. MIT-licensed with zero telemetry, no enterprise tiers, and no call-home.
 - **Anonymous Relay Network** - Connect to public relays or combine self-hosted and community relays into resilient multi-relay failover pools.
-- **End-to-End Tenant TLS** - For uncached HTTPS stream exposures, TLS terminates in your local tunnel process; relays never see plaintext or session keys.
+- **End-to-End Tenant TLS** - For uncached HTTPS stream exposures, TLS terminates in your local tunnel process. Forwarding relays handle ciphertext; relay-held certificate keys remain part of the [trust boundary](https://gosuda.github.io/portal-tunnel/security-model#relay-trust-reduction).
 - **IVNP-backed Overlay Networking** - Bridge reverse backhauls over an independent IVNP overlay network when enhanced routing privacy is desired.
-- **Built-in MITM Detection** - Active self-probe compares TLS keying material on both ends to detect relay-side TLS termination; `--ban-mitm` bans compromised relays automatically.
+- **Built-in MITM Detection** - The native self-probe compares TLS keying material on a sampled connection; `--ban-mitm` blocks a relay for that exposure when exporter values differ.
 - **No Accounts, No API Keys** - Authentication uses local secp256k1 cryptographic identities (`identity.json`) with SIWE challenge signing.
 - **Native x402 Payments** - Route-level micropayments using gasless Sui USDC or Casper wCSPR without traditional payment processors.
 
@@ -118,9 +118,11 @@ See [Deployment](https://gosuda.github.io/portal-tunnel/deployment) for DNS auto
 
 ## How End-to-End Encryption Works
 
+The ordinary uncached forwarding path works as follows:
+
 ```text
 Browser
-  -> Relay SNI router  (reads only routing token, forwards raw ciphertext)
+  -> Relay SNI router  (reads ClientHello/SNI, forwards tenant ciphertext)
   -> Reverse session
   -> Portal tunnel     (completes TLS handshake locally, derives session keys)
   -> Local service
@@ -131,6 +133,14 @@ Browser
 3. **Local Handshake**: The Portal tunnel completes the TLS handshake locally; session keys are derived on your machine.
 4. **Keyless Signing**: For relay-hosted domains, the relay signs handshake transcripts via `/v1/sign`. The relay never receives session keys.
 5. **Ciphertext Security**: The relay continues forwarding ciphertext without access to tenant plaintext.
+
+Portal minimizes relay trust; it does not yet eliminate it. A malicious relay
+with the certificate private key can still impersonate an endpoint, and the
+self-probe checks only sampled connections. See the
+[Security Model](https://gosuda.github.io/portal-tunnel/security-model#relay-trust-reduction)
+for guarantees and exceptions, or
+[Keyless TLS Explained](https://gosuda.github.io/portal-tunnel/keyless-tls)
+for the design rationale.
 
 ## Public Relay Registry
 
@@ -147,7 +157,8 @@ If you operate a public Portal relay, open a pull request to add your relay URL 
 - **[Feature Inventory](https://gosuda.github.io/portal-tunnel/features)** - Canonical inventory of all product capabilities and interfaces.
 - **[Getting Started](https://gosuda.github.io/portal-tunnel/getting-started)** - Step-by-step setup and first exposure.
 - **[Concepts](https://gosuda.github.io/portal-tunnel/concepts)** - Relay and tunnel ownership, transport modes, and overlay networking.
-- **[Security Model](https://gosuda.github.io/portal-tunnel/security-model)** - Tenant TLS, keyless signing, and the static cache trust boundary.
+- **[Security Model](https://gosuda.github.io/portal-tunnel/security-model)** - Tenant TLS guarantees, relay signing authority, and cache exceptions.
+- **[Keyless TLS Explained](https://gosuda.github.io/portal-tunnel/keyless-tls)** - Technical article on transcript signing, MITM self-probes, and delegation.
 - **[CLI Reference](https://gosuda.github.io/portal-tunnel/cli-reference)** - Complete command-line syntax and flag guide.
 - **[Portal Agent](https://gosuda.github.io/portal-tunnel/portal-agent)** - Multi-tunnel daemon and interactive dashboard.
 - **[Self-Hosting](https://gosuda.github.io/portal-tunnel/self-hosting)** - Running and securing your own relay instances.
