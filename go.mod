@@ -36,7 +36,7 @@ require (
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
 	google.golang.org/api v0.275.0
-	gosuda.org/ivnp v0.0.0-20261003033831-4178bfefc2a0
+	gosuda.org/ivnp v0.1.1
 )
 
 require (
