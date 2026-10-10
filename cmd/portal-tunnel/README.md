@@ -61,42 +61,32 @@ portal version
 portal update
 ```
 
+### Common Workflows
+
+```bash
+portal expose 3000
+portal expose 3000 --auth siwe
+portal expose --serve ./dist
+portal expose localhost:25565 --tcp
+```
+
+`portal expose --help` and `portal help expose` show common flags first, followed by advanced flags. Both groups work in the same command.
+
 ### Common Flags
 
-#### Core & Discovery
-- `--name`: Public hostname prefix (normalized DNS label, maximum 22 ASCII characters); auto-generated when omitted.
-- `--relays`: Comma-separated list of explicit relay server URLs.
-- `--discovery`: Enable public registry lookups and peer discovery gossip (default `true`).
-- `--max-active-relays`: Maximum number of auto-selected relays to maintain in active pool (default `3`).
-- `--identity-path`: Path to `identity.json` (auto-created if missing; defaults to user config directory).
-- `--identity-json`: Inline JSON identity payload in memory (takes precedence over `--identity-path`).
+- `--name`: Optional hostname prefix (normalized DNS label, maximum 22 ASCII characters). A new identity without a name uses an address-only canonical hostname.
+- `--relays`, `--discovery`, `--overlay`: Select relays and prefer an available overlay path.
+- `--http-route`, `--serve`, `--tcp`, `--udp`: Choose routed HTTP, a static site, raw TCP, or UDP exposure.
+- `--auth siwe` or `--auth credential`: Protect HTTP application access. `--auth-allow` restricts SIWE login to the supplied wallets (repeatable).
+- `--x402-pay-to`: Payment recipient for paid HTTP routes.
+- `--ban-mitm`: Ban relays when the MITM self-probe detects relay-side TLS termination.
+- `--identity-path`: Identity file path; defaults to `identity.json` in the working directory and is created when missing.
 
-#### Web & Routing Modes
-- `--http-route`: Multi-upstream routing definition (`PATH=UPSTREAM [METHOD:PRICE]`). Repeatable.
-- `--serve`: Serve a local static folder (`index.html`) or single-page app file without an external server.
-- `--cache`: Allow selected relays to cache static assets and terminate browser TLS. Requires `--serve`.
-- `--cache-ttl`: Requested offline cache lifetime (clamped by relay policy).
-- `--strip-request-header`: Header removed before forwarding upstream. Repeatable; requires `--http-route` or `--auth`.
+### Advanced Flags
 
-#### Transport & Overlay
-- `--overlay`: Prefer an IVNP overlay network gateway path; direct reverse transport remains default and fallback.
-- `--tcp`: Request a dedicated public raw TCP port on the relay.
-- `--udp`: Enable public UDP relay.
-- `--udp-addr`: Local target address for incoming UDP datagrams.
+The advanced section retains metadata (`--description`, `--tags`, `--owner`, `--thumbnail`, `--hide`), inline identity (`--identity-json`), upstream headers (`--auth-identity-headers`, `--strip-request-header`), x402 provider settings, static caching, `--udp-addr`, `--max-active-relays`, and `--metrics-addr`.
 
-#### Security & Access Control
-- `--ban-mitm`: Automatically ban relays if the MITM self-probe detects relay-side TLS termination.
-- `--auth`: Application-level authentication (`siwe` or `credential`).
-- `--auth-allow`: Whitelisted Ethereum wallet address for SIWE (repeatable).
-- `--auth-identity-headers`: Inject verified `X-Portal-User` and `X-Portal-Auth` headers upstream.
-
-#### x402 Micropayments
-- `--x402-pay-to`: Payment recipient address for monetized routes.
-- `--x402-testnet`: Use Sui testnet instead of mainnet.
-- `--x402-network`: Optional CAIP-2 network identifier for Sui or Casper.
-- `--x402-asset`: CEP-18 wCSPR contract hash required for Casper routes.
-- `--x402-endpoint`: Custom RPC endpoint or facilitator URL (repeatable).
-- `--x402-facilitator-token`: Casper facilitator authorization token (defaults to `CSPR_CLOUD_API_KEY`).
+These flags remain available directly on `portal expose`; no configuration file is required. See the [CLI Reference](https://gosuda.github.io/portal-tunnel/cli-reference#flags) for the full flag reference, defaults, and detailed examples.
 
 ---
 
