@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -15,16 +17,20 @@ import (
 
 var (
 	publicIPEndpoints = []string{
-		"https://api.ipify.org",
+		"https://api64.ipify.org",
 		"https://ifconfig.me/ip",
 		"https://icanhazip.com",
-		"https://checkip.amazonaws.com",
 	}
 	publicIPv4Endpoints = []string{
 		"https://api4.ipify.org",
 		"https://ipv4.icanhazip.com",
-		"https://v4.ident.me",
+		"https://4.ident.me",
 		"https://checkip.amazonaws.com",
+	}
+	publicIPv6Endpoints = []string{
+		"https://api6.ipify.org",
+		"https://ipv6.icanhazip.com",
+		"https://6.ident.me",
 	}
 )
 
@@ -32,20 +38,48 @@ var (
 // using well-known external services. Returns empty string on failure.
 // Best-effort with a short timeout to avoid blocking registration.
 func ResolvePublicIP(ctx context.Context) string {
-	endpoints := append(append([]string{}, publicIPEndpoints...), publicIPv4Endpoints...)
-	ip, err := resolvePublicIP(ctx, 5*time.Second, 1500*time.Millisecond, false, endpoints...)
+	endpoints := append(append([]string{}, publicIPEndpoints...), publicIPv6Endpoints...)
+	endpoints = append(endpoints, publicIPv4Endpoints...)
+	ip, err := resolvePublicIP(ctx, 5*time.Second, 1500*time.Millisecond, 0, endpoints...)
 	if err != nil {
 		return ""
 	}
 	return ip
 }
 
-func ResolvePublicIPv4(ctx context.Context) (string, error) {
-	endpoints := append(append([]string{}, publicIPv4Endpoints...), publicIPEndpoints...)
-	return resolvePublicIP(ctx, 15*time.Second, 3*time.Second, true, endpoints...)
+// ResolvePublicIPs discovers IPv4 and IPv6 independently, returning available
+// addresses in that order. A failure in one family does not hide the other.
+func ResolvePublicIPs(ctx context.Context) ([]string, error) {
+	var addresses [2]string
+	var errs [2]error
+	var workers sync.WaitGroup
+	for i, endpoints := range [][]string{publicIPv4Endpoints, publicIPv6Endpoints} {
+		workers.Go(func() {
+			family := 4 + 2*i
+			addresses[i], errs[i] = resolvePublicIP(ctx, 15*time.Second, 3*time.Second, family, endpoints...)
+			if errs[i] != nil {
+				errs[i] = fmt.Errorf("resolve public ipv%d: %w", family, errs[i])
+			}
+		})
+	}
+	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var ips []string
+	for _, address := range addresses {
+		if address != "" {
+			ips = append(ips, address)
+		}
+	}
+	if len(ips) == 0 {
+		return nil, errors.Join(errs[:]...)
+	}
+	return ips, nil
 }
 
-func resolvePublicIP(ctx context.Context, totalTimeout, attemptTimeout time.Duration, requireIPv4 bool, endpoints ...string) (string, error) {
+func resolvePublicIP(ctx context.Context, totalTimeout, attemptTimeout time.Duration, family int, endpoints ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
 	defer cancel()
 
@@ -59,28 +93,17 @@ func resolvePublicIP(ctx context.Context, totalTimeout, attemptTimeout time.Dura
 			break
 		}
 
-		requestTimeout := attemptTimeout
-		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				lastErr = context.DeadlineExceeded
-				break
-			}
-			if requestTimeout <= 0 || requestTimeout > remaining {
-				requestTimeout = remaining
-			}
-		}
-
-		requestCtx, cancelRequest := context.WithTimeout(ctx, requestTimeout)
+		requestCtx, cancelRequest := context.WithTimeout(ctx, attemptTimeout)
 		resp, err := httpDo(requestCtx, client, http.MethodGet, endpoint, nil, headers)
-		cancelRequest()
 		if err != nil {
+			cancelRequest()
 			lastErr = err
 			continue
 		}
 
 		limitedBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
 		_ = resp.Body.Close()
+		cancelRequest()
 		if resp.StatusCode != http.StatusOK {
 			lastErr = errors.New(resp.Status)
 			continue
@@ -95,12 +118,16 @@ func resolvePublicIP(ctx context.Context, totalTimeout, attemptTimeout time.Dura
 			lastErr = errors.New("invalid public ip response")
 			continue
 		}
-		if requireIPv4 {
-			parsed := net.ParseIP(candidate)
-			if parsed == nil || parsed.To4() == nil {
-				lastErr = errors.New("public ip is not ipv4")
-				continue
-			}
+		addressFamily := 4
+		if strings.Contains(candidate, ":") {
+			addressFamily = 6
+		}
+		if family != 0 && family != addressFamily {
+			lastErr = fmt.Errorf("public ip is not ipv%d", family)
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
 		return candidate, nil
 	}
@@ -112,14 +139,11 @@ func resolvePublicIP(ctx context.Context, totalTimeout, attemptTimeout time.Dura
 }
 
 func SanitizeReportedIP(raw string) string {
-	candidate := strings.TrimSpace(raw)
-	if candidate == "" {
+	ip, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil || ip.Zone() != "" {
 		return ""
 	}
-	if net.ParseIP(candidate) == nil {
-		return ""
-	}
-	return candidate
+	return ip.Unmap().String()
 }
 
 // FetchRelayVersion calls GET /sdk/domain on a relay and returns its release version.

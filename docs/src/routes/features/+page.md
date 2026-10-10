@@ -21,6 +21,7 @@ Each capability lists its supported interfaces (**CLI**, **Agent**, **SDK**, **R
 | **Cache** | Opt-in relay static cache | CLI, SDK, Relay | Explicitly trusts selected relays with files and browser TLS; uncached on origin | [Security Model: Static Cache](/security-model#opt-in-static-cache) |
 | **Transport** | Dedicated raw TCP | CLI, Agent, SDK, Relay | Requires relay port allocation; no TLS added by Portal | [TCP/UDP Tunneling](/tcp-udp-tunneling#dedicated-raw-tcp) |
 | **Transport** | UDP relay | CLI, Agent, SDK, Relay | Carried over QUIC DATAGRAM backhaul; requires relay UDP support | [TCP/UDP Tunneling](/tcp-udp-tunneling#udp-relay) |
+| **Transport** | IPv6-only and dual-stack connectivity | CLI, Agent, SDK, Relay | Managed A/AAAA publication and connection fallback; clients need a reachable relay family and matching firewall/container routing | [IPv4 and IPv6](/configuration#ipv4-and-ipv6) |
 | **Relays** | Public relay discovery | CLI, Agent, SDK, Relay | Expands via registry & peer announcements; bounded by active limits | [Concepts: Relay Selection](/concepts#multi-relay-selection) |
 | **Relays** | Explicit and self-hosted relays | CLI, Agent, SDK, Relay | Always maintained independently of discovery pool; no call-home | [Self-Hosting](/self-hosting) |
 | **Reliability** | Multi-relay failover | CLI, Agent, SDK | Simultaneous reverse backhauls survive single-relay failure | [Concepts: Relay Selection](/concepts#multi-relay-selection) |

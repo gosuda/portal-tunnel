@@ -92,7 +92,7 @@ func TestPackagedBrowserWASM(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	port := harnessPort(t)
+	port := harnessPort(t, "127.0.0.1")
 	stateDir := t.TempDir()
 	relayURL := "https://127.0.0.1:" + strconv.Itoa(port)
 	result := make(chan browserSmokeResult, 1)

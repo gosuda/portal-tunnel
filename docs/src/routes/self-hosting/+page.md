@@ -14,7 +14,7 @@ You should have a relay running and accepting tunnel connections in about 10 min
 ## Prerequisites
 
 - Docker installed on your server
-- A Linux server with a static public IP
+- A Linux server with a reachable public IPv4 address, IPv6 address, or both
 - A domain name you control (e.g. `relay.example.com`)
 - Inbound `443/tcp` open for the dashboard, relay APIs, and SNI tunnel traffic
 - Inbound `53/tcp` + `53/udp` open for the embedded authoritative DNS
@@ -50,13 +50,13 @@ docker run -d \
 Replace `relay.example.com` with your domain. Keep the generated
 `ADMIN_TOKEN`; it is required for relay admin and policy access.
 
-With a manual certificate and embedded DNS, a temporary public-IPv4 discovery
-failure does not block startup. Before the first successful discovery, A records
-remain uninitialized; the existing ten-minute DNS retry loop retries pending
-address initialization. After a successful A-record sync, normal refreshes use
-the three-hour DNS synchronization loop rather than every retry tick. Later
-discovery failures retain the last known addresses and resume pending retries.
-Errors applying A-record updates still propagate; only discovery failure is deferred.
+With a manual certificate and embedded DNS, startup continues when neither
+public address family can be discovered. Missing tunnel names return REFUSED
+until an address is initialized, and pending discovery retries use an early
+backoff before the regular retry interval. After initialization, normal
+apex/wildcard refreshes run every three hours. IPv4 and IPv6 are discovered independently; a successful
+family updates its records while a failed probe leaves existing records intact.
+Errors applying A/AAAA updates still propagate; only discovery failure is deferred.
 
 ## Docker Compose Setup
 
@@ -159,10 +159,19 @@ management UI:
 | Type | Name | Value |
 |---|---|---|
 | `NS` | `relay.example.com` | `ns.relay.example.com` |
-| `A` | `ns.relay.example.com` | `<your server IP>` (glue) |
+| `A` | `ns.relay.example.com` | `<your server IPv4>` (glue, when IPv4 is reachable) |
+| `AAAA` | `ns.relay.example.com` | `<your server IPv6>` (glue, when IPv6 is reachable) |
+
 No wildcard record is needed: the relay synthesizes answers for every tunnel
 hostname. The nameserver name is fixed to `ns.<your relay domain>`; publish the
-matching glue `A` record at the parent zone as shown above. After verifying the delegation, publish the DS exported in the startup log at the parent zone to establish DNSSEC trust. Preserve `IDENTITY_PATH/dnssec-csk.json` in the persistent identity volume; see the [DNSSEC configuration reference](/configuration#embedded-dns) for key permissions, parent setup, and recovery requirements.
+matching glue for each reachable family at the parent zone as shown above. After verifying the delegation, publish the DS exported in the startup log at the parent zone to establish DNSSEC trust. Preserve `IDENTITY_PATH/dnssec-csk.json` in the persistent identity volume; see the [DNSSEC configuration reference](/configuration#embedded-dns) for key permissions, parent setup, and recovery requirements.
+
+IPv6-only deployments publish AAAA glue; dual-stack deployments publish both.
+Allow TCP and UDP port 53, the public relay ports, and enabled raw TCP/UDP ranges
+through the host, container network, and upstream firewall for every published
+family. Discovering a public address does not verify inbound reachability.
+A client needs a reachable relay address in a family it can use; see
+[IPv4 and IPv6 configuration](/configuration#ipv4-and-ipv6).
 
 ## TLS with ACME
 
@@ -220,13 +229,17 @@ Query the relay's authoritative server directly first, then through a public
 resolver:
 
 ```bash
-dig +short @<your server IP> test.relay.example.com
-dig +short test.relay.example.com
+dig +short @<your server IP> test.relay.example.com A
+dig +short @<your server IP> test.relay.example.com AAAA
+dig +short test.relay.example.com A
+dig +short test.relay.example.com AAAA
 ```
 
 If the direct query works but the public one does not, the NS delegation at
 the parent zone is missing or not yet propagated. If both fail, confirm the
-relay is running and `53/tcp` + `53/udp` are open.
+relay is running and `53/tcp` + `53/udp` are open for the queried address family.
+An empty AAAA answer is expected for an IPv4-only relay, and an empty A answer
+is expected for an IPv6-only relay.
 
 **Firewall blocking connections**
 

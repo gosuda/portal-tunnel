@@ -80,11 +80,11 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 	return provider, nil
 }
 
-func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
-	baseDomain, err := dnsrecord.ARecordsInputs(baseDomain, publicIPv4)
+	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
 		return err
 	}
@@ -100,18 +100,18 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	}
 
 	for _, recordName := range dnsrecord.ApexWildcard(baseDomain) {
-		if err := upsertARecord(ctx, client, hostedZoneID, recordName, publicIPv4); err != nil {
-			return fmt.Errorf("upsert route53 A record %s: %w", recordName, err)
+		if err := upsertRecord(ctx, client, hostedZoneID, recordName, route53types.RRType(recordType), []string{publicIP}, "Managed by Portal ACME"); err != nil {
+			return fmt.Errorf("upsert route53 %s record %s: %w", recordType, recordName, err)
 		}
 	}
 	return nil
 }
 
-func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP string) error {
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
-	name, err := dnsrecord.ARecordInputs(name, publicIPv4)
+	name, recordType, publicIP, err := dnsrecord.AddressRecordInputs(name, publicIP)
 	if err != nil {
 		return err
 	}
@@ -125,13 +125,13 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 	if err != nil {
 		return err
 	}
-	if err := upsertARecord(ctx, client, hostedZoneID, name, publicIPv4); err != nil {
-		return fmt.Errorf("upsert route53 A record %s: %w", name, err)
+	if err := upsertRecord(ctx, client, hostedZoneID, name, route53types.RRType(recordType), []string{publicIP}, "Managed by Portal ACME"); err != nil {
+		return fmt.Errorf("upsert route53 %s record %s: %w", recordType, name, err)
 	}
 	return nil
 }
 
-func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
+func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error {
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
@@ -149,17 +149,21 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	recordSet, err := getRecordSet(ctx, client, hostedZoneID, name, route53types.RRTypeA)
-	if err != nil {
-		return err
+	var errs []error
+	for _, recordType := range []route53types.RRType{route53types.RRTypeA, route53types.RRTypeAaaa} {
+		recordSet, err := getRecordSet(ctx, client, hostedZoneID, name, recordType)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("get route53 %s record %s: %w", recordType, name, err))
+			continue
+		}
+		if recordSet == nil {
+			continue
+		}
+		if err := deleteRecordSet(ctx, client, hostedZoneID, recordSet, "Managed by Portal ENS cleanup"); err != nil {
+			errs = append(errs, fmt.Errorf("delete route53 %s record %s: %w", recordType, name, err))
+		}
 	}
-	if recordSet == nil {
-		return nil
-	}
-	if err := deleteRecordSet(ctx, client, hostedZoneID, recordSet, "Managed by Portal ENS cleanup"); err != nil {
-		return fmt.Errorf("delete route53 A record %s: %w", name, err)
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
@@ -342,10 +346,6 @@ func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Clie
 	}
 
 	return "", fmt.Errorf("no route53 public hosted zone found for %s", domain)
-}
-
-func upsertARecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, name, ip string) error {
-	return upsertRecord(ctx, client, hostedZoneID, name, route53types.RRTypeA, []string{strings.TrimSpace(ip)}, "Managed by Portal ACME")
 }
 
 func upsertTXTRecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, name, value string) error {

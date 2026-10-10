@@ -79,11 +79,11 @@ func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, e
 	return provider, nil
 }
 
-func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
 	if p == nil {
 		return errors.New("gcloud provider is nil")
 	}
-	baseDomain, err := dnsrecord.ARecordsInputs(baseDomain, publicIPv4)
+	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
 		return err
 	}
@@ -96,21 +96,21 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	for _, recordName := range dnsrecord.ApexWildcard(baseDomain) {
 		if err := ensureRecordSet(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.ResourceRecordSet{
 			Name:    fqdn(recordName),
-			Type:    "A",
+			Type:    recordType,
 			Ttl:     defaultRecordTTL,
-			Rrdatas: []string{strings.TrimSpace(publicIPv4)},
+			Rrdatas: []string{publicIP},
 		}); err != nil {
-			return fmt.Errorf("upsert gcloud A record %s: %w", recordName, err)
+			return fmt.Errorf("upsert gcloud %s record %s: %w", recordType, recordName, err)
 		}
 	}
 	return nil
 }
 
-func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP string) error {
 	if p == nil {
 		return errors.New("gcloud provider is nil")
 	}
-	name, err := dnsrecord.ARecordInputs(name, publicIPv4)
+	name, recordType, publicIP, err := dnsrecord.AddressRecordInputs(name, publicIP)
 	if err != nil {
 		return err
 	}
@@ -122,16 +122,16 @@ func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) e
 
 	if err := ensureRecordSet(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.ResourceRecordSet{
 		Name:    fqdn(name),
-		Type:    "A",
+		Type:    recordType,
 		Ttl:     defaultRecordTTL,
-		Rrdatas: []string{strings.TrimSpace(publicIPv4)},
+		Rrdatas: []string{publicIP},
 	}); err != nil {
-		return fmt.Errorf("upsert gcloud A record %s: %w", name, err)
+		return fmt.Errorf("upsert gcloud %s record %s: %w", recordType, name, err)
 	}
 	return nil
 }
 
-func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
+func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error {
 	if p == nil {
 		return errors.New("gcloud provider is nil")
 	}
@@ -145,19 +145,24 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 		return err
 	}
 
-	existing, err := listRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, name, "A")
-	if err != nil {
-		return fmt.Errorf("list gcloud A records %s: %w", name, err)
+	var existing []*dns.ResourceRecordSet
+	var errs []error
+	for _, recordType := range []string{"A", "AAAA"} {
+		records, err := listRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, name, recordType)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("list gcloud %s records %s: %w", recordType, name, err))
+			continue
+		}
+		existing = append(existing, records...)
 	}
-	if len(existing) == 0 {
-		return nil
+	if len(existing) > 0 {
+		if err := applyChange(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.Change{
+			Deletions: existing,
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("delete gcloud address records %s: %w", name, err))
+		}
 	}
-	if err := applyChange(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.Change{
-		Deletions: existing,
-	}); err != nil {
-		return fmt.Errorf("delete gcloud A record %s: %w", name, err)
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {

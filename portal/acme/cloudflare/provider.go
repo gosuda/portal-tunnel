@@ -41,6 +41,7 @@ type dnsRecord struct {
 	Type    string `json:"type"`
 	Name    string `json:"name"`
 	Content string `json:"content"`
+	Proxied bool   `json:"proxied"`
 }
 
 type zonesResult struct {
@@ -101,18 +102,17 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 	return provider, nil
 }
 
-func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
 	if p.token == "" {
 		return errors.New("cloudflare token is required")
 	}
-	baseDomain, err := dnsrecord.ARecordsInputs(baseDomain, publicIPv4)
+	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
 		return err
 	}
-	publicIPv4 = strings.TrimSpace(publicIPv4)
 
 	zoneID, err := p.findZoneID(ctx, baseDomain)
 	if err != nil {
@@ -120,37 +120,36 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	}
 
 	for _, name := range dnsrecord.ApexWildcard(baseDomain) {
-		if err := ensureDNSRecord(ctx, p.token, zoneID, name, "A", publicIPv4); err != nil {
-			return fmt.Errorf("ensure A record for %s: %w", name, err)
+		if err := ensureDNSRecord(ctx, p.token, zoneID, name, recordType, publicIP); err != nil {
+			return fmt.Errorf("ensure %s record for %s: %w", recordType, name, err)
 		}
 	}
 	return nil
 }
 
-func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) error {
+func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP string) error {
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
 	if p.token == "" {
 		return errors.New("cloudflare token is required")
 	}
-	name, err := dnsrecord.ARecordInputs(name, publicIPv4)
+	name, recordType, publicIP, err := dnsrecord.AddressRecordInputs(name, publicIP)
 	if err != nil {
 		return err
 	}
-	publicIPv4 = strings.TrimSpace(publicIPv4)
 
 	zoneID, err := p.findZoneID(ctx, name)
 	if err != nil {
 		return fmt.Errorf("find cloudflare zone: %w", err)
 	}
-	if err := ensureDNSRecord(ctx, p.token, zoneID, name, "A", publicIPv4); err != nil {
-		return fmt.Errorf("ensure A record for %s: %w", name, err)
+	if err := ensureDNSRecord(ctx, p.token, zoneID, name, recordType, publicIP); err != nil {
+		return fmt.Errorf("ensure %s record for %s: %w", recordType, name, err)
 	}
 	return nil
 }
 
-func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
+func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error {
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
@@ -167,19 +166,23 @@ func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
 		return fmt.Errorf("find cloudflare zone: %w", err)
 	}
 
-	records, err := listDNSRecords(ctx, p.token, zoneID, name, "A")
-	if err != nil {
-		return err
-	}
-	for _, record := range records {
-		if !strings.EqualFold(record.Name, name) {
+	var errs []error
+	for _, recordType := range []string{"A", "AAAA"} {
+		records, err := listDNSRecords(ctx, p.token, zoneID, name, recordType)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("list %s records %s: %w", recordType, name, err))
 			continue
 		}
-		if err := deleteDNSRecord(ctx, p.token, zoneID, record.ID); err != nil {
-			return fmt.Errorf("delete A record %s: %w", name, err)
+		for _, record := range records {
+			if !strings.EqualFold(record.Name, name) || !strings.EqualFold(record.Type, recordType) {
+				continue
+			}
+			if err := deleteDNSRecord(ctx, p.token, zoneID, record.ID); err != nil {
+				errs = append(errs, fmt.Errorf("delete %s record %s: %w", recordType, name, err))
+			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
@@ -321,10 +324,10 @@ func ensureDNSRecord(ctx context.Context, token, zoneID, name, recordType, conte
 	}
 
 	for _, record := range records {
-		if !strings.EqualFold(record.Name, name) {
+		if !strings.EqualFold(record.Name, name) || !strings.EqualFold(record.Type, recordType) {
 			continue
 		}
-		if record.Content == content {
+		if record.Content == content && !record.Proxied {
 			return nil
 		}
 		return updateDNSRecord(ctx, token, zoneID, record.ID, recordType, name, content)
@@ -419,7 +422,7 @@ func createDNSRecord(ctx context.Context, token, zoneID, recordType, name, conte
 		"content": content,
 		"ttl":     1,
 	}
-	if strings.EqualFold(recordType, "A") {
+	if strings.EqualFold(recordType, "A") || strings.EqualFold(recordType, "AAAA") {
 		body["proxied"] = false
 	}
 
@@ -441,7 +444,7 @@ func updateDNSRecord(ctx context.Context, token, zoneID, recordID, recordType, n
 		"content": content,
 		"ttl":     1,
 	}
-	if strings.EqualFold(recordType, "A") {
+	if strings.EqualFold(recordType, "A") || strings.EqualFold(recordType, "AAAA") {
 		body["proxied"] = false
 	}
 

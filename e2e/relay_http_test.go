@@ -33,8 +33,8 @@ func TestRelayHTTPRedirect(t *testing.T) {
 	t.Run("enabled answers only with the canonical origin", func(t *testing.T) {
 		for _, hsts := range []bool{false, true} {
 			t.Run("hsts="+strconv.FormatBool(hsts), func(t *testing.T) {
-				redirectAddr := "127.0.0.1:" + strconv.Itoa(harnessPort(t))
-				sniPort := harnessPort(t)
+				redirectAddr := "127.0.0.1:" + strconv.Itoa(harnessPort(t, "127.0.0.1"))
+				sniPort := harnessPort(t, "127.0.0.1")
 				// net/url accepts HTTPS schemes regardless of their spelling;
 				// the redirect target must still come out canonical.
 				scheme := "HTTPS"
@@ -106,8 +106,8 @@ func TestRelayHTTPRedirect(t *testing.T) {
 	})
 
 	t.Run("disabled leaves the configured address unbound", func(t *testing.T) {
-		redirectAddr := "127.0.0.1:" + strconv.Itoa(harnessPort(t))
-		sniPort := harnessPort(t)
+		redirectAddr := "127.0.0.1:" + strconv.Itoa(harnessPort(t, "127.0.0.1"))
+		sniPort := harnessPort(t, "127.0.0.1")
 		stateDir := t.TempDir()
 		server, err := portal.NewServer(portal.ServerConfig{
 			PortalURL:     "https://localhost:4017",
@@ -146,8 +146,8 @@ func TestRelayHTTPRedirect(t *testing.T) {
 	})
 
 	t.Run("bind failure cleans up and retries", func(t *testing.T) {
-		redirectAddr := "127.0.0.1:" + strconv.Itoa(harnessPort(t))
-		sniPort := harnessPort(t)
+		redirectAddr := "127.0.0.1:" + strconv.Itoa(harnessPort(t, "127.0.0.1"))
+		sniPort := harnessPort(t, "127.0.0.1")
 		cfg := portal.ServerConfig{
 			PortalURL:     "https://localhost:4017",
 			StateDir:      t.TempDir(),

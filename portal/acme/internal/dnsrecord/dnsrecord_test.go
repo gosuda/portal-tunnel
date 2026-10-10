@@ -145,73 +145,85 @@ func TestBaseDomain(t *testing.T) {
 	}
 }
 
-func TestARecordInputs(t *testing.T) {
+func TestAddressRecordInputs(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
 		name       string
 		recordName string
-		publicIPv4 string
-		want       string
+		publicIP   string
+		wantName   string
+		wantType   string
+		wantIP     string
 		wantErr    string
 	}{
-		{name: "valid", recordName: "example.com", publicIPv4: "203.0.113.10", want: "example.com"},
-		{name: "empty name", recordName: "", publicIPv4: "203.0.113.10", wantErr: "record name is required"},
-		{name: "invalid ip", recordName: "example.com", publicIPv4: "not-an-ip", wantErr: `invalid ipv4 address: "not-an-ip"`},
+		{name: "ipv4", recordName: "Portal.Example.COM.", publicIP: "203.0.113.10", wantName: "portal.example.com", wantType: "A", wantIP: "203.0.113.10"},
+		{name: "ipv6", recordName: "Portal.Example.COM.", publicIP: " 2001:0DB8:0000:0000:0000:0000:0000:0010 ", wantName: "portal.example.com", wantType: "AAAA", wantIP: "2001:db8::10"},
+		{name: "mapped ipv4", recordName: "portal.example.com", publicIP: "::ffff:203.0.113.10", wantName: "portal.example.com", wantType: "A", wantIP: "203.0.113.10"},
+		{name: "trimmed ipv4", recordName: "portal.example.com", publicIP: " 203.0.113.10 ", wantName: "portal.example.com", wantType: "A", wantIP: "203.0.113.10"},
+		{name: "empty name", recordName: "", publicIP: "2001:db8::10", wantErr: "record name is required"},
+		{name: "invalid ip", recordName: "portal.example.com", publicIP: "not-an-ip", wantErr: `invalid ip address: "not-an-ip"`},
+		{name: "ip with port", recordName: "portal.example.com", publicIP: "[2001:db8::10]:443", wantErr: `invalid ip address: "[2001:db8::10]:443"`},
+		{name: "scoped ip", recordName: "portal.example.com", publicIP: "fe80::1%eth0", wantErr: `invalid ip address: "fe80::1%eth0"`},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := ARecordInputs(tc.recordName, tc.publicIPv4)
+			name, recordType, ip, err := AddressRecordInputs(tc.recordName, tc.publicIP)
 			if tc.wantErr != "" {
 				if err == nil || err.Error() != tc.wantErr {
-					t.Fatalf("ARecordInputs() error = %v, want %q", err, tc.wantErr)
+					t.Fatalf("AddressRecordInputs() error = %v, want %q", err, tc.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ARecordInputs() error = %v", err)
+				t.Fatalf("AddressRecordInputs() error = %v", err)
 			}
-			if got != tc.want {
-				t.Fatalf("ARecordInputs() = %q, want %q", got, tc.want)
+			if name != tc.wantName || recordType != tc.wantType || ip != tc.wantIP {
+				t.Fatalf("AddressRecordInputs() = (%q, %q, %q), want (%q, %q, %q)", name, recordType, ip, tc.wantName, tc.wantType, tc.wantIP)
 			}
 		})
 	}
 }
 
-func TestARecordsInputs(t *testing.T) {
+func TestAddressRecordsInputs(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
 		name       string
 		baseDomain string
-		publicIPv4 string
-		want       string
+		publicIP   string
+		wantDomain string
+		wantType   string
+		wantIP     string
 		wantErr    string
 	}{
-		{name: "valid", baseDomain: "example.com", publicIPv4: "203.0.113.10", want: "example.com"},
-		{name: "empty domain", baseDomain: "", publicIPv4: "203.0.113.10", wantErr: "base domain is required"},
-		{name: "invalid ip", baseDomain: "example.com", publicIPv4: "not-an-ip", wantErr: `invalid ipv4 address: "not-an-ip"`},
+		{name: "ipv4", baseDomain: "*.Example.COM.", publicIP: "203.0.113.10", wantDomain: "example.com", wantType: "A", wantIP: "203.0.113.10"},
+		{name: "ipv6", baseDomain: "Example.COM.", publicIP: " 2001:0DB8::0010 ", wantDomain: "example.com", wantType: "AAAA", wantIP: "2001:db8::10"},
+		{name: "mapped ipv4", baseDomain: "example.com", publicIP: "::ffff:203.0.113.10", wantDomain: "example.com", wantType: "A", wantIP: "203.0.113.10"},
+		{name: "empty domain", baseDomain: "", publicIP: "2001:db8::10", wantErr: "base domain is required"},
+		{name: "invalid ip", baseDomain: "example.com", publicIP: "not-an-ip", wantErr: `invalid ip address: "not-an-ip"`},
+		{name: "scoped ip", baseDomain: "example.com", publicIP: "fe80::1%eth0", wantErr: `invalid ip address: "fe80::1%eth0"`},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := ARecordsInputs(tc.baseDomain, tc.publicIPv4)
+			domain, recordType, ip, err := AddressRecordsInputs(tc.baseDomain, tc.publicIP)
 			if tc.wantErr != "" {
 				if err == nil || err.Error() != tc.wantErr {
-					t.Fatalf("ARecordsInputs() error = %v, want %q", err, tc.wantErr)
+					t.Fatalf("AddressRecordsInputs() error = %v, want %q", err, tc.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ARecordsInputs() error = %v", err)
+				t.Fatalf("AddressRecordsInputs() error = %v", err)
 			}
-			if got != tc.want {
-				t.Fatalf("ARecordsInputs() = %q, want %q", got, tc.want)
+			if domain != tc.wantDomain || recordType != tc.wantType || ip != tc.wantIP {
+				t.Fatalf("AddressRecordsInputs() = (%q, %q, %q), want (%q, %q, %q)", domain, recordType, ip, tc.wantDomain, tc.wantType, tc.wantIP)
 			}
 		})
 	}

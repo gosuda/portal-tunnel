@@ -232,7 +232,7 @@ UDP client
 - The canonical/default managed DNS provider is `embedded`: NS-delegated authoritative DNS with persistent CSK signing and parent DS export, without DNS API secrets. External `cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, and `vultr` backends are supported first-class alternatives.
 - ENS gasless automation reuses `ACME_DNS_PROVIDER` for DNSSEC and ENS TXT sync when the selected provider supports DNSSEC.
 - Relay stores its state under `IDENTITY_PATH`, including `identity.json`, `policy.json`, and certificate material. Tunnel and demo-app identities still use `IDENTITY_PATH` / `--identity-path` as a direct JSON file path.
-- Managed non-localhost ACME keeps both root and wildcard DNS A records in sync.
+- Managed non-localhost ACME discovers IPv4 and IPv6 independently and keeps root and wildcard A/AAAA records in sync. An update changes only its address family; probe failure preserves existing records. ENS hostname cleanup removes both address record types on external providers; embedded DNS retains zone-wide synthesis.
 - Relay certificate material lives under `IDENTITY_PATH` as `fullchain.pem` and `privatekey.pem`.
 - Localhost uses the development certificate path instead of public managed/manual certificate setup.
 
@@ -258,6 +258,15 @@ Portal has three distinct network roles:
   - carries relay-to-SDK/tunnel datagram traffic only
 
 That distinction matters because `/sdk/connect` stops being ordinary HTTP once hijacked, while the UDP backhaul is a separate internal QUIC carrier.
+
+Direct connections require a relay address family reachable by the client.
+TCP connections use Go's dual-stack dialing. QUIC preserves resolver ordering,
+tries addresses within each family, and starts the other family after a short
+head start or when the first family fails. This supports IPv6-only and
+dual-stack relay endpoints without introducing address translation or multi-hop
+routing between disconnected families. DNS publication does not establish
+inbound reachability; deployment routing and firewalls must match the published
+A/AAAA records. See [IPv4 and IPv6 configuration](/configuration#ipv4-and-ipv6).
 
 ## Package Layout
 

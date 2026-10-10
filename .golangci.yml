@@ -31,6 +31,10 @@ linters:
       - ^frontend/node_modules/
       - ^cmd/relay-server/dist/
     rules:
+      # govultr DoWithContext consumes the HTTP body and returns an in-memory copy.
+      - path: '^portal/acme/vultr/provider\.go$'
+        linters: [bodyclose]
+        source: 'client\.(Domain|DomainRecord)\.(Get|GetDNSSec|List|Create)\('
       - linters: [errcheck]
         source: "^\\s*defer\\s+"
       - path: "_test\\.go"

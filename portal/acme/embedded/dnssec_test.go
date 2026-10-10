@@ -84,7 +84,7 @@ func requireNSEC(t *testing.T, m *dns.Msg, owner, next string) {
 func TestDNSSECSigningAndWildcardDenial(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
-	if err := p.EnsureARecords(ctx, testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(ctx, testZone, "203.0.113.10"); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.EnsureTXTRecord(ctx, "leaf.branch."+testZone, "ENS1 example"); err != nil {
@@ -149,6 +149,94 @@ func TestDNSSECSigningAndWildcardDenial(t *testing.T) {
 	}
 }
 
+func TestDNSSECAddressFamilies(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		addresses []string
+		dualStack bool
+	}{
+		{name: "ipv6-only", addresses: []string{"2001:db8::10"}},
+		{name: "dual-stack", addresses: []string{"2001:db8::10", "203.0.113.10"}, dualStack: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestProvider(t, nil)
+			ctx := context.Background()
+			for _, address := range tc.addresses {
+				if err := p.EnsureAddressRecords(ctx, testZone, address); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := p.EnsureTXTRecord(ctx, "leaf.branch."+testZone, "ENS1 example"); err != nil {
+				t.Fatal(err)
+			}
+			keys := dnssecExchange(t, p, "tcp", testZone, dns.TypeDNSKEY, 1232)
+			key := keys.Answer[0].(*dns.DNSKEY)
+			for _, network := range []string{"tcp", "udp"} {
+				for _, hostname := range []string{testZone, "leaf.branch." + testZone, "deep.child.branch." + testZone} {
+					for _, typ := range []uint16{dns.TypeA, dns.TypeAAAA} {
+						requireDNSSECAddressAnswer(t, p, key, network, hostname, typ, typ == dns.TypeAAAA || tc.dualStack)
+					}
+				}
+				requireDNSSECAddressGlue(t, p, key, network, tc.dualStack)
+				missing := dnssecExchange(t, p, network, "absent.*."+testZone, dns.TypeAAAA, 1232)
+				requireRcode(t, missing, dns.RcodeNameError)
+				verifySection(t, key, missing.Ns)
+			}
+		})
+	}
+}
+
+func requireDNSSECAddressAnswer(t *testing.T, p *Provider, key *dns.DNSKEY, network, hostname string, typ uint16, present bool) {
+	t.Helper()
+	response := dnssecExchange(t, p, network, hostname, typ, 1232)
+	requireRcode(t, response, dns.RcodeSuccess)
+	verifySection(t, key, response.Answer)
+	verifySection(t, key, response.Ns)
+	if present {
+		if len(response.Answer) != 2 || response.Answer[0].Header().Rrtype != typ {
+			t.Fatalf("expected %s and RRSIG: %v", dns.TypeToString[typ], response.Answer)
+		}
+		return
+	}
+	if len(response.Answer) != 0 {
+		t.Fatalf("IPv6-only zone returned A records: %v", response.Answer)
+	}
+	owner := dns.Fqdn(hostname)
+	if strings.HasPrefix(hostname, "deep.") {
+		owner = "*.branch." + dns.Fqdn(testZone)
+	}
+	for _, nsec := range denialRecords(response) {
+		if nsec.Hdr.Name != owner {
+			continue
+		}
+		if slices.Contains(nsec.TypeBitMap, dns.TypeA) || !slices.Contains(nsec.TypeBitMap, dns.TypeAAAA) {
+			t.Fatalf("incorrect IPv6-only type bitmap: %v", nsec)
+		}
+		return
+	}
+	t.Fatalf("missing A NODATA proof for %s", hostname)
+}
+
+func requireDNSSECAddressGlue(t *testing.T, p *Provider, key *dns.DNSKEY, network string, dualStack bool) {
+	t.Helper()
+	glue := dnssecExchange(t, p, network, testZone, dns.TypeNS, 1232)
+	requireRcode(t, glue, dns.RcodeSuccess)
+	verifySection(t, key, glue.Answer)
+	verifySection(t, key, glue.Extra)
+	var gotA, gotAAAA bool
+	for _, rr := range glue.Extra {
+		switch record := rr.(type) {
+		case *dns.A:
+			gotA = record.Hdr.Name == dns.Fqdn("ns."+testZone) && record.A.Equal(net.ParseIP("203.0.113.10"))
+		case *dns.AAAA:
+			gotAAAA = record.Hdr.Name == dns.Fqdn("ns."+testZone) && record.AAAA.Equal(net.ParseIP("2001:db8::10"))
+		}
+	}
+	if gotA != dualStack || !gotAAAA {
+		t.Fatalf("incorrect address glue: %v", glue.Extra)
+	}
+}
+
 func TestDNSSECNameErrorAndEmptyNonterminal(t *testing.T) {
 	p := newTestProvider(t, nil)
 	if err := p.EnsureTXTRecord(context.Background(), "leaf.branch."+testZone, "value"); err != nil {
@@ -172,7 +260,7 @@ func TestDNSSECNameErrorAndEmptyNonterminal(t *testing.T) {
 
 	// With an address the wildcard synthesizes the previously missing names,
 	// and only names a wildcard cannot cover return a proven name error.
-	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(context.Background(), testZone, "203.0.113.10"); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"absent." + testZone, "deep.absent.branch." + testZone} {
@@ -187,7 +275,7 @@ func TestDNSSECNameErrorAndEmptyNonterminal(t *testing.T) {
 
 func TestDNSSECCanonicalDenialIntervals(t *testing.T) {
 	p := newTestProvider(t, nil)
-	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(context.Background(), testZone, "203.0.113.10"); err != nil {
 		t.Fatal(err)
 	}
 	for _, owner := range []string{"a.", "z.a.", "aa.", "b."} {
@@ -311,7 +399,7 @@ func TestDNSSECRefreshAndMutation(t *testing.T) {
 	// Real listener goroutines stay outside the fake-time bubble so they do
 	// not prevent its clock from advancing while the handler is idle.
 	p := newTestProvider(t, nil)
-	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(context.Background(), testZone, "203.0.113.10"); err != nil {
 		t.Fatal(err)
 	}
 	keys := dnssecExchange(t, p, "tcp", testZone, dns.TypeDNSKEY, 1232)

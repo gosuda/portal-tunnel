@@ -59,7 +59,7 @@ type Manager struct {
 	ensStatus    *utils.Snapshot[types.ENSStatus]
 	ensCommands  chan ensDNSCommand
 
-	// pendingDNSAddress is guarded by commandMu and cleared only after A-record synchronization.
+	// pendingDNSAddress is guarded by commandMu and cleared only after address-record synchronization.
 	pendingDNSAddress bool
 }
 

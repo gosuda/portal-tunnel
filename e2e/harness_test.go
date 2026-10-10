@@ -49,15 +49,26 @@ type harness struct {
 
 func newHarness(t *testing.T, opts ...sdk.Option) *harness {
 	t.Helper()
-	return newHarnessWithName(t, "e2e", opts...)
+	return newHarnessWithName(t, "e2e", "127.0.0.1", opts...)
 }
 
-func newHarnessWithName(t *testing.T, name string, opts ...sdk.Option) *harness {
+func newHarnessWithName(t *testing.T, name, host string, opts ...sdk.Option) *harness {
 	t.Helper()
 
-	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, marker)
-	}))
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		if host == "::1" {
+			t.Skipf("IPv6 loopback is unavailable: %v", err)
+		}
+		t.Fatalf("listen HTTP origin: %v", err)
+	}
+	service := &httptest.Server{
+		Listener: listener,
+		Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, marker)
+		})},
+	}
+	service.Start()
 	target, err := url.Parse(service.URL)
 	if err != nil {
 		service.Close()
@@ -65,13 +76,14 @@ func newHarnessWithName(t *testing.T, name string, opts ...sdk.Option) *harness 
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sniPort := harnessPort(t)
+	sniPort := harnessPort(t, host)
 	stateDir := t.TempDir()
-	relayURL := "https://127.0.0.1:" + strconv.Itoa(sniPort)
+	sniAddr := net.JoinHostPort(host, strconv.Itoa(sniPort))
+	relayURL := "https://" + sniAddr
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     relayURL,
 		StateDir:      stateDir,
-		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(sniPort),
+		SNIListenAddr: sniAddr,
 		SNIPort:       sniPort,
 	})
 	if err != nil {
@@ -108,7 +120,7 @@ func newHarnessWithName(t *testing.T, name string, opts ...sdk.Option) *harness 
 		server:      relay,
 		exposure:    exposure,
 		service:     service,
-		sniAddr:     "127.0.0.1:" + strconv.Itoa(sniPort),
+		sniAddr:     sniAddr,
 		certificate: filepath.Join(stateDir, "fullchain.pem"),
 		sniPort:     sniPort,
 		stateDir:    stateDir,
@@ -223,7 +235,7 @@ var (
 // binaries. Only an explicit bind can take a port outside the ephemeral range,
 // and nothing else binds there, so the released probe address stays free until
 // the relay binds it.
-func harnessPort(t *testing.T) int {
+func harnessPort(t *testing.T, host string) int {
 	t.Helper()
 	harnessPortsMu.Lock()
 	defer harnessPortsMu.Unlock()
@@ -236,7 +248,7 @@ func harnessPort(t *testing.T) int {
 		if _, used := harnessPorts[port]; used {
 			continue
 		}
-		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 		if err != nil {
 			continue
 		}

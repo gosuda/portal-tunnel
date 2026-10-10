@@ -33,7 +33,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(siteDir, "index.html"), []byte("cached site"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sniPort := harnessPort(t)
+	sniPort := harnessPort(t, "127.0.0.1")
 	sniAddr := "127.0.0.1:" + strconv.Itoa(sniPort)
 	relayURL := "https://" + sniAddr
 	relay, err := portal.NewServer(portal.ServerConfig{

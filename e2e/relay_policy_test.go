@@ -34,7 +34,7 @@ func startPolicyRelay(t *testing.T, stateDir string, args ...string) (context.Co
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	port := strconv.Itoa(harnessPort(t))
+	port := strconv.Itoa(harnessPort(t, "127.0.0.1"))
 	base, err := url.Parse("https://127.0.0.1:" + port)
 	if err != nil {
 		t.Fatal(err)

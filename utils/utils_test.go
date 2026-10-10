@@ -151,3 +151,36 @@ func TestEnsurePortHandlesBracketedIPv6(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeTargetAddrIPv6(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "::1", want: "[::1]:80"},
+		{input: "[::1]", want: "[::1]:80"},
+		{input: "[::1]:8080", want: "[::1]:8080"},
+		{input: "http://[::1]", want: "[::1]:80"},
+		{input: "http://[::1]:8080", want: "[::1]:8080"},
+		{input: "fe80::1%eth0", want: "[fe80::1%eth0]:80"},
+		{input: "[fe80::1%eth0]", want: "[fe80::1%eth0]:80"},
+		{input: "http://[fe80::1%25eth0]", want: "[fe80::1%eth0]:80"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := NormalizeTargetAddr(tc.input)
+			if err != nil {
+				t.Fatalf("NormalizeTargetAddr(%q): %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("NormalizeTargetAddr(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+	for _, input := range []string{"[::1", "::1]", "[not-an-ip]", "http://[not-an-ip]"} {
+		t.Run(input, func(t *testing.T) {
+			if got, err := NormalizeTargetAddr(input); err == nil {
+				t.Fatalf("NormalizeTargetAddr(%q) = %q, want invalid address", input, got)
+			}
+		})
+	}
+}

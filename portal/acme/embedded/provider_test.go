@@ -59,7 +59,7 @@ func TestASynthesisFollowsCurrentPublicIP(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
 
-	if err := p.EnsureARecords(ctx, testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(ctx, testZone, "203.0.113.10"); err != nil {
 		t.Fatalf("ensure a records: %v", err)
 	}
 	for _, name := range []string{testZone, "tunnel." + testZone, "deep.a.b." + testZone} {
@@ -88,10 +88,10 @@ func TestASynthesisFollowsCurrentPublicIP(t *testing.T) {
 
 	// Explicit per-hostname A records must never override synthesis, so a
 	// public IP change propagates to every hostname immediately.
-	if err := p.EnsureARecord(ctx, "tunnel."+testZone, "198.51.100.7"); err != nil {
+	if err := p.EnsureAddressRecord(ctx, "tunnel."+testZone, "198.51.100.7"); err != nil {
 		t.Fatalf("ensure a record: %v", err)
 	}
-	if err := p.EnsureARecords(ctx, testZone, "198.51.100.99"); err != nil {
+	if err := p.EnsureAddressRecords(ctx, testZone, "198.51.100.99"); err != nil {
 		t.Fatalf("ensure a records: %v", err)
 	}
 	resp := exchange(t, p, "tcp", dns.TypeA, "tunnel."+testZone)
@@ -99,12 +99,70 @@ func TestASynthesisFollowsCurrentPublicIP(t *testing.T) {
 	if !a.A.Equal(net.ParseIP("198.51.100.99")) {
 		t.Fatalf("stale explicit answer %s after ip change, want 198.51.100.99", a.A)
 	}
-	if err := p.DeleteARecord(ctx, "tunnel."+testZone); err != nil {
+	if err := p.DeleteAddressRecords(ctx, "tunnel."+testZone); err != nil {
 		t.Fatalf("delete a record: %v", err)
 	}
 	resp = exchange(t, p, "tcp", dns.TypeA, "tunnel."+testZone)
 	if len(resp.Answer) != 1 {
 		t.Fatalf("delete removed synthesized answer")
+	}
+}
+
+func TestAddressSynthesisPreservesOtherFamily(t *testing.T) {
+	p := newTestProvider(t, nil)
+	ctx := context.Background()
+	var ipv4, ipv6 string
+	for _, publicIP := range []string{"2001:db8::10", "203.0.113.10", "2001:db8::20", "203.0.113.20"} {
+		if err := p.EnsureAddressRecords(ctx, testZone, publicIP); err != nil {
+			t.Fatal(err)
+		}
+		if net.ParseIP(publicIP).To4() != nil {
+			ipv4 = publicIP
+		} else {
+			ipv6 = publicIP
+		}
+		for _, tc := range []struct {
+			typ uint16
+			ip  string
+		}{{dns.TypeA, ipv4}, {dns.TypeAAAA, ipv6}} {
+			for _, name := range []string{testZone, "tunnel." + testZone, "deep.child." + testZone} {
+				response := exchange(t, p, "tcp", tc.typ, name)
+				requireRcode(t, response, dns.RcodeSuccess)
+				if tc.ip == "" {
+					if len(response.Answer) != 0 {
+						t.Fatalf("%s %s before publication returned %v", name, dns.TypeToString[tc.typ], response.Answer)
+					}
+					continue
+				}
+				if len(response.Answer) != 1 {
+					t.Fatalf("%s %s after updating %s: %v", name, dns.TypeToString[tc.typ], publicIP, response.Answer)
+				}
+				var got net.IP
+				switch record := response.Answer[0].(type) {
+				case *dns.A:
+					got = record.A
+				case *dns.AAAA:
+					got = record.AAAA
+				}
+				if response.Answer[0].Header().Rrtype != tc.typ || !got.Equal(net.ParseIP(tc.ip)) {
+					t.Fatalf("%s %s after updating %s = %v, want %s", name, dns.TypeToString[tc.typ], publicIP, response.Answer, tc.ip)
+				}
+			}
+		}
+	}
+	// Explicit hostname changes cannot override the zone-wide address.
+	if err := p.EnsureAddressRecord(ctx, "tunnel."+testZone, "2001:db8::99"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.DeleteAddressRecords(ctx, "tunnel."+testZone); err != nil {
+		t.Fatal(err)
+	}
+	response := exchange(t, p, "tcp", dns.TypeAAAA, "tunnel."+testZone)
+	if len(response.Answer) != 1 {
+		t.Fatalf("explicit mutation removed synthesized AAAA: %v", response.Answer)
+	}
+	if record, ok := response.Answer[0].(*dns.AAAA); !ok || !record.AAAA.Equal(net.ParseIP(ipv6)) {
+		t.Fatalf("explicit mutation changed synthesized AAAA: %v", response.Answer)
 	}
 }
 
@@ -140,7 +198,7 @@ func TestAWithoutPublicIPRefusesMissingNames(t *testing.T) {
 	}
 
 	// Once the address is synced the same names resolve.
-	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(context.Background(), testZone, "203.0.113.10"); err != nil {
 		t.Fatalf("ensure a records: %v", err)
 	}
 	resp := exchange(t, p, "tcp", dns.TypeA, "tunnel."+testZone)
@@ -226,7 +284,7 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 func TestApexMetadata(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
-	if err := p.EnsureARecords(ctx, testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(ctx, testZone, "203.0.113.10"); err != nil {
 		t.Fatalf("ensure a records: %v", err)
 	}
 
@@ -272,7 +330,7 @@ func TestApexMetadata(t *testing.T) {
 func TestQueryBoundaries(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
-	if err := p.EnsureARecords(ctx, testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(ctx, testZone, "203.0.113.10"); err != nil {
 		t.Fatalf("ensure a records: %v", err)
 	}
 
@@ -300,7 +358,7 @@ func TestQueryBoundaries(t *testing.T) {
 
 func TestUnsupportedEDNSVersionContainsOnlyOPT(t *testing.T) {
 	p := newTestProvider(t, nil)
-	if err := p.EnsureARecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(context.Background(), testZone, "203.0.113.10"); err != nil {
 		t.Fatal(err)
 	}
 	for _, network := range []string{"tcp", "udp"} {
@@ -328,7 +386,7 @@ func TestUnsupportedEDNSVersionContainsOnlyOPT(t *testing.T) {
 func TestUDPExchangeWithEDNS(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()
-	if err := p.EnsureARecords(ctx, testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(ctx, testZone, "203.0.113.10"); err != nil {
 		t.Fatalf("ensure a records: %v", err)
 	}
 	resp := exchange(t, p, "udp", dns.TypeA, "tunnel."+testZone)
@@ -349,7 +407,7 @@ func TestMutationsOutsideZoneRejected(t *testing.T) {
 	if err := p.EnsureTXTRecord(ctx, "other.example.com", "value"); err == nil {
 		t.Fatalf("outside-zone txt accepted")
 	}
-	if err := p.EnsureARecords(ctx, "other.example.com", "203.0.113.10"); err == nil {
+	if err := p.EnsureAddressRecords(ctx, "other.example.com", "203.0.113.10"); err == nil {
 		t.Fatalf("outside-zone base domain accepted")
 	}
 }

@@ -143,12 +143,12 @@ func TestNewManagerRejectsEmptyKeyDirectory(t *testing.T) {
 
 // Public-IP discovery is the only external dependency in this manual-certificate
 // scenario. DNS answers below still travel through the real embedded listeners.
-type publicIPv4Transport struct {
+type publicIPTransport struct {
 	err error
 	ip  string
 }
 
-func (transport publicIPv4Transport) RoundTrip(*http.Request) (*http.Response, error) {
+func (transport publicIPTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	if transport.err != nil {
 		return nil, transport.err
 	}
@@ -164,53 +164,55 @@ func TestManualEmbeddedCertificateServesDNSAndKeepsENSPending(t *testing.T) {
 	originalClient := utils.DefaultHTTPClient
 	t.Cleanup(func() { utils.DefaultHTTPClient = originalClient })
 
-	for _, ensEnabled := range []bool{false, true} {
-		for _, discoveryOutage := range []bool{false, true} {
-			t.Run(fmt.Sprintf("ens=%t/discovery_outage=%t", ensEnabled, discoveryOutage), func(t *testing.T) {
-				transport := publicIPv4Transport{}
-				if discoveryOutage {
-					transport.err = errors.New("public IPv4 discovery is unavailable")
-				}
-				utils.DefaultHTTPClient = &http.Client{Transport: transport}
+	for _, familyIP := range []string{"203.0.113.10", "2001:db8::10"} {
+		for _, ensEnabled := range []bool{false, true} {
+			for _, discoveryOutage := range []bool{false, true} {
+				t.Run(fmt.Sprintf("ip=%s/ens=%t/discovery_outage=%t", familyIP, ensEnabled, discoveryOutage), func(t *testing.T) {
+					transport := publicIPTransport{ip: familyIP}
+					if discoveryOutage {
+						transport.err = errors.New("public IP discovery is unavailable")
+					}
+					utils.DefaultHTTPClient = &http.Client{Transport: transport}
 
-				const baseDomain = "portal.example.com"
-				keyDir := t.TempDir()
-				if err := writeManualRelayCertificate(t, keyDir, baseDomain); err != nil {
-					t.Fatal(err)
-				}
-				manager, cfg := newEmbeddedDNSManager(t, Config{
-					BaseDomain:        baseDomain,
-					KeyDir:            keyDir,
-					ENSGaslessEnabled: ensEnabled,
-					ENSGaslessAddress: "0x1234567890123456789012345678901234567890",
+					const baseDomain = "portal.example.com"
+					keyDir := t.TempDir()
+					if err := writeManualRelayCertificate(t, keyDir, baseDomain); err != nil {
+						t.Fatal(err)
+					}
+					manager, cfg := newEmbeddedDNSManager(t, Config{
+						BaseDomain:        baseDomain,
+						KeyDir:            keyDir,
+						ENSGaslessEnabled: ensEnabled,
+						ENSGaslessAddress: "0x1234567890123456789012345678901234567890",
+					})
+					certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
+					if err != nil {
+						t.Fatalf("EnsureTLSMaterial(): %v", err)
+					}
+					if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+						t.Fatalf("EnsureTLSMaterial() returned unusable certificate: %v", err)
+					}
+
+					publicIP := familyIP
+					if discoveryOutage {
+						publicIP = ""
+					}
+					assertManualEmbeddedDNS(t, manager, cfg, publicIP)
+
+					utils.DefaultHTTPClient = &http.Client{Transport: publicIPTransport{ip: familyIP}}
+					certPEM, keyPEM, err = manager.EnsureTLSMaterial(context.Background())
+					if err != nil {
+						t.Fatalf("reload manual certificate after discovery recovers: %v", err)
+					}
+					if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+						t.Fatalf("recovered EnsureTLSMaterial() returned unusable certificate: %v", err)
+					}
+					assertManualEmbeddedDNS(t, manager, cfg, familyIP)
+					if _, err := os.Stat(filepath.Join(keyDir, types.DNSSECKeyFileName)); err != nil {
+						t.Fatalf("persistent DNSSEC key: %v", err)
+					}
 				})
-				certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
-				if err != nil {
-					t.Fatalf("EnsureTLSMaterial(): %v", err)
-				}
-				if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
-					t.Fatalf("EnsureTLSMaterial() returned unusable certificate: %v", err)
-				}
-
-				publicIP := "203.0.113.10"
-				if discoveryOutage {
-					publicIP = ""
-				}
-				assertManualEmbeddedDNS(t, manager, cfg, publicIP)
-
-				utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{}}
-				certPEM, keyPEM, err = manager.EnsureTLSMaterial(context.Background())
-				if err != nil {
-					t.Fatalf("reload manual certificate after discovery recovers: %v", err)
-				}
-				if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
-					t.Fatalf("recovered EnsureTLSMaterial() returned unusable certificate: %v", err)
-				}
-				assertManualEmbeddedDNS(t, manager, cfg, "203.0.113.10")
-				if _, err := os.Stat(filepath.Join(keyDir, types.DNSSECKeyFileName)); err != nil {
-					t.Fatalf("persistent DNSSEC key: %v", err)
-				}
-			})
+			}
 		}
 	}
 }
@@ -262,35 +264,45 @@ func assertEmbeddedDNSAddress(t *testing.T, client *dns.Client, addr, name, publ
 	t.Helper()
 
 	query := new(dns.Msg)
-	query.SetQuestion(dns.Fqdn(name), dns.TypeA)
+	recordType := uint16(dns.TypeA)
+	if strings.Contains(publicIP, ":") {
+		recordType = dns.TypeAAAA
+	}
+	query.SetQuestion(dns.Fqdn(name), recordType)
 	answer, _, err := client.Exchange(query, addr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !answer.Authoritative {
-		t.Fatalf("%s A %s = %v, want authoritative answer", client.Net, name, answer)
+		t.Fatalf("%s address %s = %v, want authoritative answer", client.Net, name, answer)
 	}
 	if publicIP == "" {
 		// Missing names are refused (issue #516) while the address is pending;
 		// names with explicit records answer NODATA.
 		if len(answer.Answer) != 0 || (answer.Rcode != dns.RcodeSuccess && answer.Rcode != dns.RcodeRefused) {
-			t.Fatalf("%s A %s = %v, want no address during discovery outage", client.Net, name, answer)
+			t.Fatalf("%s address %s = %v, want no address during discovery outage", client.Net, name, answer)
 		}
 		return
 	}
 	if answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 {
-		t.Fatalf("%s A %s = %v, want initialized manual-certificate address", client.Net, name, answer)
+		t.Fatalf("%s address %s = %v, want initialized manual-certificate address", client.Net, name, answer)
 	}
-	a, ok := answer.Answer[0].(*dns.A)
-	if !ok || a.A.String() != publicIP {
-		t.Fatalf("%s A %s = %v, want relay public IP %s", client.Net, name, answer.Answer, publicIP)
+	var gotIP net.IP
+	switch record := answer.Answer[0].(type) {
+	case *dns.A:
+		gotIP = record.A
+	case *dns.AAAA:
+		gotIP = record.AAAA
+	}
+	if !gotIP.Equal(net.ParseIP(publicIP)) {
+		t.Fatalf("%s address %s = %v, want relay public IP %s", client.Net, name, answer.Answer, publicIP)
 	}
 }
 
-func TestManagedCertificateRequiresPublicIPv4(t *testing.T) {
-	outage := errors.New("public IPv4 discovery is unavailable")
+func TestManagedCertificateRequiresPublicAddress(t *testing.T) {
+	outage := errors.New("public IP discovery is unavailable")
 	originalClient := utils.DefaultHTTPClient
-	utils.DefaultHTTPClient = &http.Client{Transport: publicIPv4Transport{err: outage}}
+	utils.DefaultHTTPClient = &http.Client{Transport: publicIPTransport{err: outage}}
 	t.Cleanup(func() { utils.DefaultHTTPClient = originalClient })
 
 	for _, provider := range []string{TypeEmbedded, TypeCloudflare} {
