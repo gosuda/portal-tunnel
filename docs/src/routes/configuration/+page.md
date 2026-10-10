@@ -169,7 +169,7 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 ### IVNP overlay
 
 `IVNP_CONFIG` now points to a JSON object using the fields of IVNP's
-[`RouterConfig`](https://github.com/gosuda/IVNP/blob/4178bfefc2a07cdf2bb29931243269ee89d3ce17/config.go#L17),
+[`RouterConfig`](https://github.com/gosuda/IVNP/blob/v0.1.1/config.go#L17),
 defined in the pinned revision's `config.go`; newer IVNP revisions dropped the
 `API.md` document that used to describe it.
 Portal applies the file to `ivnp.DefaultRouterConfig()` and lets IVNP validate
