@@ -1188,7 +1188,6 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 
 	relayURL := listener.api.relayURL.String()
 	var workers sync.WaitGroup
-	defer workers.Wait()
 	statusUpdates := listener.statusUpdates
 	if statusUpdates != nil {
 		workers.Add(1)
@@ -1230,12 +1229,18 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 				select {
 				case <-e.done:
 					return
+				case <-listener.doneCh:
+					return
 				case e.datagrams <- frame:
 				}
 			}
 		}()
 	}
 	defer func() {
+		// A status send hands the update to the worker but does not wait for
+		// it to apply. Keep ownership until the worker has committed the
+		// listener's final failure, or the ownership guard would discard it.
+		workers.Wait()
 		e.mu.Lock()
 		if current, ok := e.relayListeners[relayURL]; ok && current == listener {
 			delete(e.relayListeners, relayURL)

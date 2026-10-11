@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -475,6 +476,138 @@ func TestExposureReconcileRetiresBlockedRelayUntilRemoved(t *testing.T) {
 	if len(relays) != 1 || relays[0].RelayURL != relayURL || relays[0].State != RelayConnecting || relays[0].Failure != RelayFailureNone {
 		t.Fatalf("Relays() = %+v, want %q re-admitted with a fresh connecting status", relays, relayURL)
 	}
+}
+
+func TestExposureListenerFinalFailureSurvivesAcceptExit(t *testing.T) {
+	for _, failure := range []RelayFailure{RelayFailureTerminal, RelayFailureRuntime} {
+		t.Run(string(failure), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const relayURL = "https://relay.example"
+				exposure := newExposureStateTest(t, relayURL)
+				exposure.syncRelayStatuses([]string{relayURL})
+				owner := newTestRelayListener(t, relayURL, make(chan struct{}))
+				owner.statusUpdates = make(chan listenerStatus)
+				// Stop only the accept side, leaving the status worker live.
+				// This models an accept exit overtaking final status application
+				// without relying on which goroutine wins the close race.
+				owner.accepted = nil
+				if !exposure.publishCreatedListener(relayURL, owner) {
+					t.Fatal("listener was not installed")
+				}
+				synctest.Wait()
+
+				cause := errors.New("relay stopped")
+				owner.report(listenerStatus{state: RelayFailed, failure: failure, err: cause})
+				if err := owner.Close(); err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+
+				relays := exposure.Relays()
+				if len(relays) != 1 || relays[0].State != RelayFailed || relays[0].Failure != failure || !errors.Is(relays[0].Err, cause) {
+					t.Fatalf("Relays() = %+v, want final %s failure with its cause", relays, failure)
+				}
+				select {
+				case status := <-exposure.Updates():
+					if status.RelayURL != relayURL || status.State != RelayFailed || status.Failure != failure || !errors.Is(status.Err, cause) {
+						t.Fatalf("Updates() = %+v, want final %s failure with its cause", status, failure)
+					}
+				default:
+					t.Fatal("final failure was not published")
+				}
+				if got := exposure.listenerRelayURLs(); len(got) != 0 {
+					t.Fatalf("listenerRelayURLs() = %v, want the stopped listener detached", got)
+				}
+			})
+		})
+	}
+}
+
+func TestExposureListenerFinalFailureCannotOverwriteNewOwnership(t *testing.T) {
+	for _, replacement := range []bool{false, true} {
+		name := "deselected"
+		if replacement {
+			name = "replaced"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const relayURL = "https://relay.example"
+				exposure := newExposureStateTest(t, relayURL)
+				exposure.syncRelayStatuses([]string{relayURL})
+				owner := newTestRelayListener(t, relayURL, make(chan struct{}))
+				owner.statusUpdates = make(chan listenerStatus)
+				owner.accepted = nil
+				if !exposure.publishCreatedListener(relayURL, owner) {
+					t.Fatal("listener was not installed")
+				}
+				synctest.Wait()
+
+				// Discovery may remove or replace ownership while the old
+				// status worker is still finishing. Its final update stays stale.
+				exposure.mu.Lock()
+				delete(exposure.relayListeners, relayURL)
+				exposure.mu.Unlock()
+				var next *listener
+				if replacement {
+					next = newTestRelayListener(t, relayURL, make(chan struct{}))
+					if !exposure.publishCreatedListener(relayURL, next) {
+						t.Fatal("replacement listener was not installed")
+					}
+					exposure.setListenerRelayStatus(relayURL, next, listenerStatus{state: RelayReady, publicURL: "https://service.relay.example"})
+					<-exposure.Updates()
+				} else {
+					exposure.syncRelayStatuses(nil)
+				}
+				owner.report(listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: errors.New("old failure")})
+				if err := owner.Close(); err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+
+				relays := exposure.Relays()
+				if replacement {
+					if len(relays) != 1 || relays[0].State != RelayReady {
+						t.Fatalf("Relays() = %+v, want replacement readiness preserved", relays)
+					}
+					exposure.mu.RLock()
+					current := exposure.relayListeners[relayURL]
+					exposure.mu.RUnlock()
+					if current != next {
+						t.Fatal("old listener cleanup detached its replacement")
+					}
+				} else if len(relays) != 0 {
+					t.Fatalf("Relays() = %+v, want deselected membership to stay absent", relays)
+				}
+				select {
+				case status := <-exposure.Updates():
+					t.Fatalf("stale failure published: %+v", status)
+				default:
+				}
+			})
+		})
+	}
+}
+
+func TestExposureCloseJoinsListenerAfterAcceptExit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const relayURL = "https://relay.example"
+		exposure := newExposureStateTest(t, relayURL)
+		owner := newTestRelayListener(t, relayURL, make(chan struct{}))
+		owner.statusUpdates = make(chan listenerStatus)
+		owner.accepted = nil
+		if !exposure.publishCreatedListener(relayURL, owner) {
+			t.Fatal("listener was not installed")
+		}
+		synctest.Wait()
+		if err := exposure.Close(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-owner.doneCh:
+		default:
+			t.Fatal("exposure shutdown did not stop the status worker's listener")
+		}
+	})
 }
 
 // TestExposureListenerSelfExitKeepsExplicitRelayConfigured proves that a
