@@ -132,11 +132,17 @@ Relay API TLS is separate from tenant TLS:
 <h3 id="local-development-trust">Local development trust</h3>
 
 Public relay endpoints use normal certificate-chain and hostname verification.
-For loopback addresses, `localhost`, and `.localhost` names, the SDK instead
-bootstraps trust from the chain presented by the contacted endpoint. That
-initial fetch skips certificate verification; subsequent connections use the
-collected chain. This development convenience is not independent verification
-of the relay operator. See the [relay TLS bootstrap](https://github.com/gosuda/portal-tunnel/blob/main/utils/tls.go).
+For loopback addresses, `localhost`, and `.localhost` names, the native SDK
+instead bootstraps trust from the chain presented by the contacted endpoint.
+That initial fetch skips certificate verification; subsequent connections use
+the collected chain. This development convenience is not independent
+verification of the relay operator.
+
+The bootstrap is native-only. Browser/WASM clients fetch the chain through
+`http.DefaultClient` under ordinary browser certificate validation, so they
+cannot bootstrap from an untrusted local TLS endpoint: a localhost setup that
+relies on this path still fails in the browser. See the
+[relay TLS bootstrap](https://github.com/gosuda/portal-tunnel/blob/main/utils/tls.go).
 
 <h2 id="relay-trust-reduction">Relay Trust Reduction</h2>
 
@@ -167,8 +173,12 @@ keying material with the same label and context, and the SDK compares the values
 
 - Matching values support passthrough for that sampled connection.
 - An exporter mismatch is logged as suspected relay-side TLS termination.
-- `--ban-mitm` (or `BAN_MITM`) closes and blocks the detected relay within the
-  current exposure. This is not a persistent or network-wide ban.
+- `--ban-mitm` (or `BAN_MITM`) acts at two levels. Within the current exposure
+  it closes and blocks the detected relay's listener. The SDK also reports an
+  MITM failure to the discovery controller, which bans the relay URL for the
+  rest of the client's run: that discovery-level ban has no automatic expiry
+  and survives refresh and rediscovery until `AddRelay()` clears it. Neither
+  level is durable across client restarts, and neither is network-wide.
 - Timeouts, connection failures, and other probe errors are warnings, not
   exporter-mismatch verdicts; they do not trigger that block.
 

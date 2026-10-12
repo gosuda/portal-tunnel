@@ -135,8 +135,11 @@ TLS exporters are specified in
 The SDK's [probe code](https://github.com/gosuda/portal-tunnel/blob/main/sdk/mitm.go)
 compares the values locally. By default a mismatch produces a warning. With
 `--ban-mitm`, it closes that relay listener and blocks the relay within the
-current exposure. Timeouts and connection or handshake failures are warnings,
-not mismatch verdicts, and do not trigger the block.
+current exposure, and the reported MITM failure also bans the relay URL at the
+discovery layer. That ban has no automatic expiry within the client's
+discovery state — `AddRelay()` can clear it — but it is not durable across
+client restarts and not network-wide. Timeouts and connection or handshake
+failures are warnings, not mismatch verdicts, and do not trigger the block.
 
 Traffic is already flowing when this asynchronous check runs. A matching
 result therefore establishes passthrough only for the sampled connection; it
