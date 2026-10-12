@@ -189,7 +189,7 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 		_ = c.unregister(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, errors.New("relay did not return canonical hostname")
 	}
-	if !friendlyHostnameMatches(resp.Hostname, registerReq.Identity.Name, resp.CanonicalHostname) {
+	if !aliasHostnameMatches(resp.Hostname, registerReq.Identity.Name, resp.CanonicalHostname) {
 		resp.Hostname = ""
 	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
@@ -201,10 +201,10 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	return resp, nil
 }
 
-// friendlyHostnameMatches reports whether hostname is the <name>.<root> alias
+// aliasHostnameMatches reports whether hostname is the <name>.<root> alias
 // for name under canonicalHostname's root. An empty hostname (no alias) also
-// matches. Anything else is dropped so FriendlyURL never names another host.
-func friendlyHostnameMatches(hostname, name, canonicalHostname string) bool {
+// matches. Anything else is dropped so AliasURL never names another host.
+func aliasHostnameMatches(hostname, name, canonicalHostname string) bool {
 	if hostname == "" {
 		return true
 	}

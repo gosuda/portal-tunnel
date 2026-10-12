@@ -50,7 +50,7 @@ type listenerStatus struct {
 	failure      RelayFailure
 	err          error
 	canonicalURL string
-	friendlyURL  string
+	aliasURL     string
 	udpAddr      string
 	tcpAddr      string
 	version      string
@@ -243,7 +243,7 @@ func (l *listener) reportAvailable() {
 	l.report(listenerStatus{
 		state:        state,
 		canonicalURL: l.canonicalURLForLease(lease),
-		friendlyURL:  l.friendlyURLForLease(lease),
+		aliasURL:     l.aliasURLForLease(lease),
 		udpAddr:      udpAddr,
 		tcpAddr:      lease.tcpAddr,
 		version:      l.api.relayReleaseVersion(),
@@ -380,15 +380,15 @@ type listenerSnapshot struct {
 	// hostname is the identity-bound canonical hostname used for TLS, the
 	// keyless signer, MITM probes and CanonicalURL.
 	hostname string
-	// friendlyHostname is the <name>.<root> alias when the relay granted it
+	// aliasHostname is the <name>.<root> alias when the relay granted it
 	// to this lease, else empty. The relay keeps it for the lease lifetime.
-	friendlyHostname string
-	udpAddr          string
-	tcpAddr          string
-	accessToken      string
-	reverse          types.ReverseEndpoint
-	expiresAt        time.Time
-	tenantTLS        *keyless.Client
+	aliasHostname string
+	udpAddr       string
+	tcpAddr       string
+	accessToken   string
+	reverse       types.ReverseEndpoint
+	expiresAt     time.Time
+	tenantTLS     *keyless.Client
 }
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
@@ -495,10 +495,10 @@ func (l *listener) canonicalURLForLease(lease listenerSnapshot) string {
 	return l.leaseURL(lease.hostname)
 }
 
-// friendlyURLForLease is the <name>.<root> URL when the relay granted that
+// aliasURLForLease is the <name>.<root> URL when the relay granted that
 // alias to this lease, else empty.
-func (l *listener) friendlyURLForLease(lease listenerSnapshot) string {
-	return l.leaseURL(lease.friendlyHostname)
+func (l *listener) aliasURLForLease(lease listenerSnapshot) string {
+	return l.leaseURL(lease.aliasHostname)
 }
 
 // leaseURL builds the relay URL for hostname.
@@ -1102,14 +1102,14 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return ctx.Err()
 	}
 	next := listenerSnapshot{
-		hostname:         canonicalHostname,
-		friendlyHostname: resp.Hostname,
-		udpAddr:          resp.UDPAddr,
-		tcpAddr:          resp.TCPAddr,
-		accessToken:      resp.AccessToken,
-		reverse:          resp.ReverseEndpoint,
-		expiresAt:        resp.ExpiresAt,
-		tenantTLS:        tenantTLS,
+		hostname:      canonicalHostname,
+		aliasHostname: resp.Hostname,
+		udpAddr:       resp.UDPAddr,
+		tcpAddr:       resp.TCPAddr,
+		accessToken:   resp.AccessToken,
+		reverse:       resp.ReverseEndpoint,
+		expiresAt:     resp.ExpiresAt,
+		tenantTLS:     tenantTLS,
 	}
 	oldLease := l.lease.Swap(next)
 	if oldLease.tenantTLS != nil {

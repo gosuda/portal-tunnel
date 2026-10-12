@@ -37,8 +37,8 @@ func TestCanonicalTunnel(t *testing.T) {
 			if got := h.get(friendlyURL.String()); got != marker {
 				t.Fatalf("friendly tenant response = %q, want %q", got, marker)
 			}
-			if relays := h.exposure.Relays(); len(relays) != 1 || relays[0].FriendlyURL != friendlyURL.String() {
-				t.Fatalf("relay status = %+v, want FriendlyURL %q", relays, friendlyURL.String())
+			if relays := h.exposure.Relays(); len(relays) != 1 || relays[0].AliasURL != friendlyURL.String() {
+				t.Fatalf("relay status = %+v, want AliasURL %q", relays, friendlyURL.String())
 			}
 		})
 	}
@@ -67,8 +67,8 @@ func TestUnnamedCanonicalTunnel(t *testing.T) {
 			if leases[0].Hostname != "" {
 				t.Fatalf("unnamed lease hostname = %q, want empty", leases[0].Hostname)
 			}
-			if relays := h.exposure.Relays(); len(relays) != 1 || relays[0].FriendlyURL != "" {
-				t.Fatalf("relay status = %+v, want no FriendlyURL", relays)
+			if relays := h.exposure.Relays(); len(relays) != 1 || relays[0].AliasURL != "" {
+				t.Fatalf("relay status = %+v, want no AliasURL", relays)
 			}
 			if got := h.get(publicURL); got != marker {
 				t.Fatalf("canonical tenant response = %q, want %q", got, marker)

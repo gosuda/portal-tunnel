@@ -11,12 +11,12 @@ import (
 
 // A second identity registering a taken name falls back to its canonical
 // hostname and must not report the other identity's friendly alias.
-func TestFriendlyURLOnlyForAliasOwner(t *testing.T) {
+func TestAliasURLOnlyForAliasOwner(t *testing.T) {
 	h := newHarnessWithName(t, "e2e", "127.0.0.1")
 	h.waitForPublicURL()
 	owner := h.exposure.Relays()
-	if len(owner) != 1 || owner[0].FriendlyURL == "" {
-		t.Fatalf("alias owner status = %+v, want FriendlyURL", owner)
+	if len(owner) != 1 || owner[0].AliasURL == "" {
+		t.Fatalf("alias owner status = %+v, want AliasURL", owner)
 	}
 
 	other, err := identity.Generate("e2e")
@@ -37,10 +37,10 @@ func TestFriendlyURLOnlyForAliasOwner(t *testing.T) {
 	if len(ready) != 1 || ready[0].CanonicalURL == "" || ready[0].CanonicalURL == owner[0].CanonicalURL {
 		t.Fatalf("second identity status = %+v, want its own CanonicalURL", ready)
 	}
-	if ready[0].FriendlyURL != "" {
-		t.Fatalf("second identity FriendlyURL = %q, want empty after canonical fallback", ready[0].FriendlyURL)
+	if ready[0].AliasURL != "" {
+		t.Fatalf("second identity AliasURL = %q, want empty after canonical fallback", ready[0].AliasURL)
 	}
-	if got := h.exposure.Relays(); len(got) != 1 || got[0].FriendlyURL != owner[0].FriendlyURL {
-		t.Fatalf("alias owner status after fallback = %+v, want FriendlyURL %q", got, owner[0].FriendlyURL)
+	if got := h.exposure.Relays(); len(got) != 1 || got[0].AliasURL != owner[0].AliasURL {
+		t.Fatalf("alias owner status after fallback = %+v, want AliasURL %q", got, owner[0].AliasURL)
 	}
 }

@@ -373,7 +373,7 @@ func TestRateLimitsNeverPermanentlyDisqualifyRelay(t *testing.T) {
 	}
 }
 
-func TestFriendlyHostnameMatches(t *testing.T) {
+func TestAliasHostnameMatches(t *testing.T) {
 	t.Parallel()
 
 	const canonical = "demo-0123456789abcdef0123456789abcdef01234567.relay.example"
@@ -391,8 +391,8 @@ func TestFriendlyHostnameMatches(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := friendlyHostnameMatches(tc.hostname, tc.service, canonical); got != tc.want {
-				t.Fatalf("friendlyHostnameMatches(%q, %q) = %v, want %v", tc.hostname, tc.service, got, tc.want)
+			if got := aliasHostnameMatches(tc.hostname, tc.service, canonical); got != tc.want {
+				t.Fatalf("aliasHostnameMatches(%q, %q) = %v, want %v", tc.hostname, tc.service, got, tc.want)
 			}
 		})
 	}
