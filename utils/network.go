@@ -38,8 +38,8 @@ var (
 // using well-known external services. Returns empty string on failure.
 // Best-effort with a short timeout to avoid blocking registration.
 func ResolvePublicIP(ctx context.Context) string {
-	endpoints := append(append([]string{}, publicIPEndpoints...), publicIPv6Endpoints...)
-	endpoints = append(endpoints, publicIPv4Endpoints...)
+	endpoints := append(append([]string{}, publicIPEndpoints...), publicIPv4Endpoints...)
+	endpoints = append(endpoints, publicIPv6Endpoints...)
 	ip, err := resolvePublicIP(ctx, 5*time.Second, 1500*time.Millisecond, 0, endpoints...)
 	if err != nil {
 		return ""
