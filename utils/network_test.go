@@ -182,7 +182,7 @@ func TestResolvePublicIPFallbackDoesNotWaitForUnavailableFamily(t *testing.T) {
 						return nil, errors.New("service unavailable")
 					}
 					if slices.Contains(tc.endpoints, req.URL.String()) {
-						time.Sleep(100 * time.Millisecond)
+						synctest.Sleep(100 * time.Millisecond)
 						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tc.want))}, nil
 					}
 					pending.Add(1)
@@ -260,7 +260,7 @@ func TestResolvePublicIPsKeepsDelayedWorkingFamily(t *testing.T) {
 				original := DefaultHTTPClient
 				DefaultHTTPClient = &http.Client{Transport: publicIPTransport(func(req *http.Request) (*http.Response, error) {
 					if slices.Contains(tc.endpoints, req.URL.String()) {
-						time.Sleep(2 * time.Second)
+						synctest.Sleep(2 * time.Second)
 					}
 					body := "203.0.113.10"
 					if slices.Contains(publicIPv6Endpoints, req.URL.String()) {
