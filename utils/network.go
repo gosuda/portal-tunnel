@@ -38,31 +38,79 @@ var (
 // using well-known external services. Returns empty string on failure.
 // Best-effort with a short timeout to avoid blocking registration.
 func ResolvePublicIP(ctx context.Context) string {
-	endpoints := append(append([]string{}, publicIPEndpoints...), publicIPv4Endpoints...)
-	endpoints = append(endpoints, publicIPv6Endpoints...)
-	ip, err := resolvePublicIP(ctx, 5*time.Second, 1500*time.Millisecond, 0, endpoints...)
-	if err != nil {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if ip, err := resolvePublicIP(ctx, 1500*time.Millisecond, 0, publicIPEndpoints...); err == nil {
+		return ip
+	}
+	// Neither address family should spend the other's remaining fallback budget.
+	ips, _ := resolvePublicIPFamilies(ctx, 1500*time.Millisecond, 0)
+	if len(ips) == 0 {
 		return ""
 	}
-	return ip
+	return ips[0]
 }
 
 // ResolvePublicIPs discovers IPv4 and IPv6 independently, returning available
-// addresses in that order. A failure in one family does not hide the other.
+// addresses in that order. After one succeeds, it waits at most one more request
+// window for the other family, rather than all of that family's fallbacks.
 func ResolvePublicIPs(ctx context.Context) ([]string, error) {
-	var addresses [2]string
-	var errs [2]error
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return resolvePublicIPFamilies(ctx, 3*time.Second, 3*time.Second)
+}
+
+// resolvePublicIPFamilies shares concurrent discovery and cancellation between
+// first-address registration and best-effort dual-stack DNS discovery.
+func resolvePublicIPFamilies(ctx context.Context, attemptTimeout, familyWait time.Duration) ([]string, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	type result struct {
+		index   int
+		address string
+		err     error
+	}
+	results := make(chan result, 2)
 	var workers sync.WaitGroup
 	for i, endpoints := range [][]string{publicIPv4Endpoints, publicIPv6Endpoints} {
 		workers.Go(func() {
 			family := 4 + 2*i
-			addresses[i], errs[i] = resolvePublicIP(ctx, 15*time.Second, 3*time.Second, family, endpoints...)
-			if errs[i] != nil {
-				errs[i] = fmt.Errorf("resolve public ipv%d: %w", family, errs[i])
+			address, err := resolvePublicIP(ctx, attemptTimeout, family, endpoints...)
+			if err != nil {
+				err = fmt.Errorf("resolve public ipv%d: %w", family, err)
 			}
+			results <- result{index: i, address: address, err: err}
 		})
 	}
-	workers.Wait()
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
+
+	var addresses [2]string
+	var errs [2]error
+	var remainingFamily <-chan time.Time
+collect:
+	for range 2 {
+		select {
+		case result := <-results:
+			addresses[result.index], errs[result.index] = result.address, result.err
+			if result.address != "" {
+				if familyWait == 0 {
+					break collect
+				}
+				if remainingFamily == nil {
+					timer := time.NewTimer(familyWait)
+					defer timer.Stop()
+					remainingFamily = timer.C
+				}
+			}
+		case <-remainingFamily:
+			break collect
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -79,10 +127,7 @@ func ResolvePublicIPs(ctx context.Context) ([]string, error) {
 	return ips, nil
 }
 
-func resolvePublicIP(ctx context.Context, totalTimeout, attemptTimeout time.Duration, family int, endpoints ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
-	defer cancel()
-
+func resolvePublicIP(ctx context.Context, attemptTimeout time.Duration, family int, endpoints ...string) (string, error) {
 	client := DefaultHTTPClient
 	headers := http.Header{"User-Agent": []string{"portal-tunnel"}}
 	var lastErr error
