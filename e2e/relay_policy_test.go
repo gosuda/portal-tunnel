@@ -200,7 +200,7 @@ func TestManualModeRevokesOfflineCache(t *testing.T) {
 	}
 	defer tenantTransport.CloseIdleConnections()
 	tenantClient := &http.Client{Transport: tenantTransport, Timeout: 5 * time.Second}
-	publicURL := ready[0].CanonicalURL
+	publicURL := ready[0].PublicURL
 	for {
 		response, err := tenantClient.Get(publicURL)
 		if err != nil {

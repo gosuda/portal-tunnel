@@ -41,7 +41,7 @@ func main() {
 
 	go func() {
 		if relays, err := exposure.WaitReady(ctx); err == nil {
-			log.Printf("public url: %s", relays[0].CanonicalURL)
+			log.Printf("public url: %s", relays[0].PublicURL)
 		}
 	}()
 
@@ -58,7 +58,7 @@ module example.com/myapp
 
 go 1.27.0
 
-require github.com/gosuda/portal-tunnel/v2 v2.6.3
+require github.com/gosuda/portal-tunnel/v2 v2.5.0
 ```
 
 Protocol 11 relays released before long-name support accept normalized DNS
@@ -81,8 +81,8 @@ published.
 - Explicit relays are always kept. `sdk.WithDiscovery(n)` adds the bootstrap set from `registry.json` and keeps at most `n` auto-selected relays connected (default 3 when `n <= 0`). Without the option at least one explicit relay is required, and nothing else is ever contacted, which keeps tests hermetic.
 - `sdk.WithOverlay()` is the `--overlay` equivalent.
 - Read the public URL from `exposure.WaitReady(ctx)`, from `exposure.Relays()` (sorted snapshot), or from `exposure.Updates()` (buffered channel of size one; slow readers miss intermediate states and should re-read `Relays()`). The SDK also logs `service ready at <url>` with field `public_url`, exactly like the CLI.
-- `RelayStatus` carries `RelayURL`, `CanonicalURL`, `AliasURL`, `TCPAddr`, `UDPAddr`, `Version`, `State` (`connecting`, `ready`, `failed`), and `Failure` (`runtime`, `terminal`, `mitm`). One failed relay does not stop an exposure that has healthy ones.
-- `CanonicalURL` is the identity-bound URL; it always routes to this exposure. `AliasURL` is `<name>.<root host>` when the relay granted that alias to the lease, and empty when another identity owns the name or the exposure is unnamed. Both URLs stay set while the lease is held, including `connecting` while reverse sessions reconnect; a failed relay clears `AliasURL`. Show it to users only while `State` is `ready`. The friendly alias always reaches the live origin; the opt-in relay cache serves only the canonical hostname.
+- `RelayStatus` carries `RelayURL`, `PublicURL`, `AliasURL`, `TCPAddr`, `UDPAddr`, `Version`, `State` (`connecting`, `ready`, `failed`), and `Failure` (`runtime`, `terminal`, `mitm`). One failed relay does not stop an exposure that has healthy ones.
+- `PublicURL` is the identity-bound canonical URL; it always routes to this exposure. `AliasURL` is `<name>.<root host>` when the relay granted that alias to the lease, and empty when another identity owns the name or the exposure is unnamed. Both URLs stay set while the lease is held, including `connecting` while reverse sessions reconnect; a failed relay clears `AliasURL`. Show it to users only while `State` is `ready`. The friendly alias always reaches the live origin; the opt-in relay cache serves only the canonical hostname.
 - Lease renewal, re-registration after a relay restart, and reverse-session pooling are handled inside the SDK. The app does nothing for them.
 
 ## What the handler sees

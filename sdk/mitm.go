@@ -136,7 +136,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		return mitmProbeReport{}, errors.New("listener hostname is unavailable")
 	}
 
-	publicURL := l.canonicalURLForLease(lease)
+	publicURL := l.publicURLForLease(lease)
 	if publicURL == "" {
 		return mitmProbeReport{}, errors.New("listener is not registered")
 	}

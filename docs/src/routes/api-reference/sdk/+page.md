@@ -123,7 +123,7 @@ name of at most 22 characters precedes it with one hyphen
 (`<name>-<address>`); a longer name is replaced by a 21-character hash of the
 name followed by two hyphens (`<name-hash>--<address>`, derivation in the
 architecture page). The current SDK allows canonical fallback.
-`RelayStatus.CanonicalURL` reports the canonical hostname. `RelayStatus.AliasURL`
+`RelayStatus.PublicURL` reports the canonical hostname. `RelayStatus.AliasURL`
 reports the returned `hostname` when the relay granted the friendly alias, and
 is empty after canonical fallback or for an unnamed service. Both stay set while
 the lease is held, including while reverse sessions reconnect; a failed relay

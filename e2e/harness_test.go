@@ -163,10 +163,10 @@ func (h *harness) waitForPublicURL() string {
 	if err != nil {
 		h.t.Fatalf("tunnel did not become ready: %v", err)
 	}
-	if len(relays) == 0 || relays[0].CanonicalURL == "" {
+	if len(relays) == 0 || relays[0].PublicURL == "" {
 		h.t.Fatal("ready relay did not report a public URL")
 	}
-	return relays[0].CanonicalURL
+	return relays[0].PublicURL
 }
 
 func (h *harness) get(publicURL string) string {

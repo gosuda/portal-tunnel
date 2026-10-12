@@ -47,9 +47,9 @@ const (
 // RelayStatus is an immutable snapshot of one relay's externally visible state.
 type RelayStatus struct {
 	RelayURL string
-	// CanonicalURL is the identity-bound canonical URL. It always routes to
+	// PublicURL is the identity-bound canonical URL. It always routes to
 	// this exposure, and the opt-in relay cache serves only this hostname.
-	CanonicalURL string
+	PublicURL string
 	// AliasURL is the <name>.<root host> URL when the relay granted that
 	// alias to this lease, else empty: another identity may own the name
 	// (canonical fallback). The relay holds the alias only while the lease
@@ -81,7 +81,7 @@ func (s RelayStatus) Active() bool {
 		return false
 	}
 	return s.State != RelayFailed &&
-		(s.State == RelayReady || s.CanonicalURL != "" || s.UDPAddr != "" || s.TCPAddr != "")
+		(s.State == RelayReady || s.PublicURL != "" || s.UDPAddr != "" || s.TCPAddr != "")
 }
 
 // Exposure owns the lifecycle of one or more relay listeners and accepts
@@ -613,13 +613,13 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 		status.AliasURL = ""
 	}
 	if update.state == RelayConnecting {
-		status.CanonicalURL = ""
+		status.PublicURL = ""
 		status.AliasURL = ""
 		status.UDPAddr = ""
 		status.TCPAddr = ""
 	}
-	if update.canonicalURL != "" || update.state == RelayReady {
-		status.CanonicalURL = update.canonicalURL
+	if update.publicURL != "" || update.state == RelayReady {
+		status.PublicURL = update.publicURL
 		status.AliasURL = update.aliasURL
 	}
 	if update.udpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
@@ -628,7 +628,7 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	if update.tcpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
 		status.TCPAddr = update.tcpAddr
 	}
-	advertised := previous.State != RelayReady && status.State == RelayReady && status.CanonicalURL != ""
+	advertised := previous.State != RelayReady && status.State == RelayReady && status.PublicURL != ""
 	if !relayStatusEqual(previous, status) {
 		e.statuses[relayURL] = status
 		e.notifyStateChangedLocked()
@@ -639,15 +639,15 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	e.mu.Unlock()
 
 	// Advertise readiness from the authoritative snapshot only: the same
-	// committed CanonicalURL that later feeds the deselection tombstone, so
+	// committed PublicURL that later feeds the deselection tombstone, so
 	// every "service ready at" line is guaranteed retractable by a
 	// matching "relay no longer active for" line (issue #463).
 	if advertised {
 		log.Info().
 			Str("address", e.identity.Address).
-			Str("public_url", status.CanonicalURL).
+			Str("public_url", status.PublicURL).
 			Str("relay_url", status.RelayURL).
-			Msg("service ready at " + status.CanonicalURL)
+			Msg("service ready at " + status.PublicURL)
 	}
 
 	e.publishRelayStatus(status)
@@ -713,7 +713,7 @@ func relayStatusEqual(a, b RelayStatus) bool {
 		errorsEqual = a.Err.Error() == b.Err.Error()
 	}
 	return a.RelayURL == b.RelayURL &&
-		a.CanonicalURL == b.CanonicalURL &&
+		a.PublicURL == b.PublicURL &&
 		a.AliasURL == b.AliasURL &&
 		a.UDPAddr == b.UDPAddr &&
 		a.TCPAddr == b.TCPAddr &&
@@ -752,7 +752,7 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
 	changed := false
 	for relayURL, status := range desired {
 		if current, ok := e.statuses[relayURL]; ok {
-			status.CanonicalURL = current.CanonicalURL
+			status.PublicURL = current.PublicURL
 			status.AliasURL = current.AliasURL
 			status.UDPAddr = current.UDPAddr
 			status.TCPAddr = current.TCPAddr
@@ -794,12 +794,12 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
 // Relays() remains the authoritative snapshot.
 func (e *Exposure) reportDeselectedRelays(deselected []RelayStatus) {
 	for _, status := range deselected {
-		if status.CanonicalURL != "" {
+		if status.PublicURL != "" {
 			log.Info().
 				Str("relay_url", status.RelayURL).
-				Str("public_url", status.CanonicalURL).
+				Str("public_url", status.PublicURL).
 				Str("reason", "deselected").
-				Msg("relay no longer active for " + status.CanonicalURL)
+				Msg("relay no longer active for " + status.PublicURL)
 		}
 		e.publishRelayStatus(status)
 	}

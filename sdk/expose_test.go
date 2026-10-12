@@ -53,8 +53,8 @@ func TestExposureWaitReadyUsesRelayStatus(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := newExposureStateTest(t, relayURL)
 	exposure.setRelayStatus(relayURL, listenerStatus{
-		state:        RelayReady,
-		canonicalURL: "https://service.relay.example",
+		state:     RelayReady,
+		publicURL: "https://service.relay.example",
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -84,9 +84,9 @@ func TestRelayStatusReportsGrantedAliasURL(t *testing.T) {
 		return relays[0]
 	}
 
-	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayReady, canonicalURL: canonicalURL, aliasURL: aliasURL})
-	if got := status(); got.CanonicalURL != canonicalURL || got.AliasURL != aliasURL {
-		t.Fatalf("granted alias: CanonicalURL=%q AliasURL=%q", got.CanonicalURL, got.AliasURL)
+	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: canonicalURL, aliasURL: aliasURL})
+	if got := status(); got.PublicURL != canonicalURL || got.AliasURL != aliasURL {
+		t.Fatalf("granted alias: PublicURL=%q AliasURL=%q", got.PublicURL, got.AliasURL)
 	}
 
 	// A membership re-sync keeps the reported alias.
@@ -98,20 +98,20 @@ func TestRelayStatusReportsGrantedAliasURL(t *testing.T) {
 	// A failure keeps the canonical URL but drops the alias, which the
 	// relay may have handed to another identity.
 	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: errors.New("lease lost")})
-	if got := status(); got.CanonicalURL != canonicalURL || got.AliasURL != "" {
-		t.Fatalf("failed: CanonicalURL=%q AliasURL=%q", got.CanonicalURL, got.AliasURL)
+	if got := status(); got.PublicURL != canonicalURL || got.AliasURL != "" {
+		t.Fatalf("failed: PublicURL=%q AliasURL=%q", got.PublicURL, got.AliasURL)
 	}
 
 	// Re-registration clears both URLs until the relay answers again.
 	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
-	if got := status(); got.CanonicalURL != "" || got.AliasURL != "" {
-		t.Fatalf("connecting: CanonicalURL=%q AliasURL=%q, want both empty", got.CanonicalURL, got.AliasURL)
+	if got := status(); got.PublicURL != "" || got.AliasURL != "" {
+		t.Fatalf("connecting: PublicURL=%q AliasURL=%q, want both empty", got.PublicURL, got.AliasURL)
 	}
 
 	// Canonical fallback: another identity owns the friendly name.
-	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayReady, canonicalURL: canonicalURL})
-	if got := status(); got.CanonicalURL != canonicalURL || got.AliasURL != "" {
-		t.Fatalf("canonical fallback: CanonicalURL=%q AliasURL=%q", got.CanonicalURL, got.AliasURL)
+	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: canonicalURL})
+	if got := status(); got.PublicURL != canonicalURL || got.AliasURL != "" {
+		t.Fatalf("canonical fallback: PublicURL=%q AliasURL=%q", got.PublicURL, got.AliasURL)
 	}
 }
 
@@ -129,15 +129,15 @@ func TestAliasURLForLeaseRequiresGrantedAlias(t *testing.T) {
 	if got, want := l.aliasURLForLease(granted), "https://demo.relay.example.com:443"; got != want {
 		t.Fatalf("aliasURLForLease(granted) = %q, want %q", got, want)
 	}
-	if got, want := l.canonicalURLForLease(granted), "https://"+canonical+":443"; got != want {
-		t.Fatalf("canonicalURLForLease(granted) = %q, want %q", got, want)
+	if got, want := l.publicURLForLease(granted), "https://"+canonical+":443"; got != want {
+		t.Fatalf("publicURLForLease(granted) = %q, want canonical %q", got, want)
 	}
 	if got := l.aliasURLForLease(listenerSnapshot{hostname: canonical}); got != "" {
 		t.Fatalf("aliasURLForLease(fallback) = %q, want empty", got)
 	}
 }
 
-func TestCanonicalURLForLeaseUsesRelayAuthority(t *testing.T) {
+func TestPublicURLForLeaseUsesRelayAuthority(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -157,11 +157,11 @@ func TestCanonicalURLForLeaseUsesRelayAuthority(t *testing.T) {
 				t.Fatal(err)
 			}
 			l := &listener{api: &apiClient{relayURL: relayURL}}
-			got := l.canonicalURLForLease(listenerSnapshot{
+			got := l.publicURLForLease(listenerSnapshot{
 				hostname: "demo.relay.example.com",
 			})
 			if got != tc.want {
-				t.Fatalf("canonicalURLForLease() = %q, want %q", got, tc.want)
+				t.Fatalf("publicURLForLease() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -416,8 +416,8 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	// The stale relay was serving: its last known status must survive into
 	// the deselection tombstone so consumers can retract the URL.
 	exposure.setRelayStatus(relayA, listenerStatus{
-		state:        RelayReady,
-		canonicalURL: "https://service.relay-a.example",
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
 	})
 	select {
 	case status := <-exposure.Updates():
@@ -444,7 +444,7 @@ func TestExposureReconcileRemovesStaleListener(t *testing.T) {
 	}
 	select {
 	case status := <-exposure.Updates():
-		if !status.Deselected || status.RelayURL != relayA || status.CanonicalURL != "https://service.relay-a.example" {
+		if !status.Deselected || status.RelayURL != relayA || status.PublicURL != "https://service.relay-a.example" {
 			t.Fatalf("Updates() = %+v, want a deselection tombstone for %q carrying its last known URL", status, relayA)
 		}
 	default:
@@ -622,7 +622,7 @@ func TestExposureListenerFinalFailureCannotOverwriteNewOwnership(t *testing.T) {
 					if !exposure.publishCreatedListener(relayURL, next) {
 						t.Fatal("replacement listener was not installed")
 					}
-					exposure.setListenerRelayStatus(relayURL, next, listenerStatus{state: RelayReady, canonicalURL: "https://service.relay.example"})
+					exposure.setListenerRelayStatus(relayURL, next, listenerStatus{state: RelayReady, publicURL: "https://service.relay.example"})
 					<-exposure.Updates()
 				} else {
 					exposure.syncRelayStatuses(nil)
@@ -748,8 +748,8 @@ func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 	exposure := newExposureStateTest(t, relayA)
 	exposure.syncRelayStatuses(exposure.relayURLs)
 	exposure.setRelayStatus(relayA, listenerStatus{
-		state:        RelayReady,
-		canonicalURL: "https://service.relay-a.example",
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
 	})
 
 	if err := exposure.applyRelays([]string{relayB}); err != nil {
@@ -772,7 +772,7 @@ func TestExposureApplyRelaysReplacesStatusMembership(t *testing.T) {
 		if status.Active() {
 			t.Fatalf("deselection notification %+v reports Active(), want the tombstone to be inactive", status)
 		}
-		if status.RelayURL != relayA || status.CanonicalURL != "https://service.relay-a.example" {
+		if status.RelayURL != relayA || status.PublicURL != "https://service.relay-a.example" {
 			t.Fatalf("deselection notification = %+v, want relay A with its last known public URL", status)
 		}
 	case <-time.After(5 * time.Second):
@@ -793,8 +793,8 @@ func TestStaleListenerStatusCannotRecreateDeselectedMembership(t *testing.T) {
 	exposure := newExposureStateTest(t, relayA)
 	exposure.syncRelayStatuses(exposure.relayURLs)
 	exposure.setRelayStatus(relayA, listenerStatus{
-		state:        RelayReady,
-		canonicalURL: "https://service.relay-a.example",
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
 	})
 
 	// End state of reconcileRelayListeners for relay A: the listener was
@@ -802,7 +802,7 @@ func TestStaleListenerStatusCannotRecreateDeselectedMembership(t *testing.T) {
 	// membership status was deleted with a tombstone collected.
 	deselected := exposure.syncRelayStatuses([]string{relayB})
 	if len(deselected) != 1 || deselected[0].RelayURL != relayA || !deselected[0].Deselected ||
-		deselected[0].CanonicalURL != "https://service.relay-a.example" {
+		deselected[0].PublicURL != "https://service.relay-a.example" {
 		t.Fatalf("syncRelayStatuses() = %+v, want relay A tombstone with its last known URL", deselected)
 	}
 
@@ -810,8 +810,8 @@ func TestStaleListenerStatusCannotRecreateDeselectedMembership(t *testing.T) {
 	// after the membership delete (the review's race).
 	staleListener := &listener{}
 	exposure.setListenerRelayStatus(relayA, staleListener, listenerStatus{
-		state:        RelayReady,
-		canonicalURL: "https://service.relay-a.example",
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
 	})
 	if relays := exposure.Relays(); len(relays) != 1 || relays[0].RelayURL != relayB {
 		t.Fatalf("Relays() = %+v, want the stale update to not recreate relay A membership", relays)
@@ -832,20 +832,20 @@ func TestStaleListenerStatusCannotRecreateDeselectedMembership(t *testing.T) {
 		t.Fatalf("Relays() = %+v, want the current owner's update applied", relays)
 	}
 	exposure.setListenerRelayStatus(relayB, staleListener, listenerStatus{
-		state:        RelayReady,
-		canonicalURL: "https://ghost.relay-a.example",
+		state:     RelayReady,
+		publicURL: "https://ghost.relay-a.example",
 	})
 	if relays := exposure.Relays(); len(relays) != 1 || relays[0].State != RelayFailed {
 		t.Fatalf("Relays() = %+v, want a non-owner update ignored", relays)
 	}
 }
 
-// TestImmediateReadyCommitmentThenDeselectCarriesCanonicalURL pins the
+// TestImmediateReadyCommitmentThenDeselectCarriesPublicURL pins the
 // publication invariant from the #463 review: the ready advertisement
 // derives from the same authoritative status commit that the deselection
 // tombstone is built from, so an immediate ready-then-deselect sequence
-// must emit a removal carrying the exact CanonicalURL that was advertised.
-func TestImmediateReadyCommitmentThenDeselectCarriesCanonicalURL(t *testing.T) {
+// must emit a removal carrying the exact PublicURL that was advertised.
+func TestImmediateReadyCommitmentThenDeselectCarriesPublicURL(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
 		relayB = "https://relay-b.example"
@@ -860,11 +860,11 @@ func TestImmediateReadyCommitmentThenDeselectCarriesCanonicalURL(t *testing.T) {
 	exposure.relayListeners[relayA] = owner
 	exposure.mu.Unlock()
 	exposure.setListenerRelayStatus(relayA, owner, listenerStatus{
-		state:        RelayReady,
-		canonicalURL: "https://service.relay-a.example",
+		state:     RelayReady,
+		publicURL: "https://service.relay-a.example",
 	})
 	if relays := exposure.Relays(); len(relays) != 1 ||
-		relays[0].CanonicalURL != "https://service.relay-a.example" {
+		relays[0].PublicURL != "https://service.relay-a.example" {
 		t.Fatalf("Relays() = %+v, want the ready commit carrying the public URL", relays)
 	}
 
@@ -875,7 +875,7 @@ func TestImmediateReadyCommitmentThenDeselectCarriesCanonicalURL(t *testing.T) {
 	exposure.mu.Unlock()
 	deselected := exposure.syncRelayStatuses([]string{relayB})
 	if len(deselected) != 1 || deselected[0].RelayURL != relayA || !deselected[0].Deselected ||
-		deselected[0].CanonicalURL != "https://service.relay-a.example" {
+		deselected[0].PublicURL != "https://service.relay-a.example" {
 		t.Fatalf("syncRelayStatuses() = %+v, want relay A tombstone carrying the ready public URL", deselected)
 	}
 }

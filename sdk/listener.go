@@ -46,14 +46,14 @@ type listenerConfig struct {
 }
 
 type listenerStatus struct {
-	state        RelayState
-	failure      RelayFailure
-	err          error
-	canonicalURL string
-	aliasURL     string
-	udpAddr      string
-	tcpAddr      string
-	version      string
+	state     RelayState
+	failure   RelayFailure
+	err       error
+	publicURL string
+	aliasURL  string
+	udpAddr   string
+	tcpAddr   string
+	version   string
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -241,12 +241,12 @@ func (l *listener) reportAvailable() {
 		udpAddr = lease.udpAddr
 	}
 	l.report(listenerStatus{
-		state:        state,
-		canonicalURL: l.canonicalURLForLease(lease),
-		aliasURL:     l.aliasURLForLease(lease),
-		udpAddr:      udpAddr,
-		tcpAddr:      lease.tcpAddr,
-		version:      l.api.relayReleaseVersion(),
+		state:     state,
+		publicURL: l.publicURLForLease(lease),
+		aliasURL:  l.aliasURLForLease(lease),
+		udpAddr:   udpAddr,
+		tcpAddr:   lease.tcpAddr,
+		version:   l.api.relayReleaseVersion(),
 	})
 }
 
@@ -276,11 +276,11 @@ func (l *listener) run(ctx context.Context) {
 		}
 
 		retries = 0
-		canonicalURL := ""
+		publicURL := ""
 		udpAddr := ""
 		tcpAddr := ""
 		if lease, ok := l.leaseSnapshot(); ok {
-			canonicalURL = l.canonicalURLForLease(lease)
+			publicURL = l.publicURLForLease(lease)
 			udpAddr = lease.udpAddr
 			tcpAddr = lease.tcpAddr
 		}
@@ -293,7 +293,7 @@ func (l *listener) run(ctx context.Context) {
 		}
 		if udpAddr != "" || tcpAddr != "" {
 			event.Msg("raw transport endpoints allocated")
-		} else if canonicalURL == "" {
+		} else if publicURL == "" {
 			event.Msg("relay listener registered")
 		}
 		// The ready advertisement ("service ready at") is logged by
@@ -378,7 +378,7 @@ func (l *listener) Close() error {
 
 type listenerSnapshot struct {
 	// hostname is the identity-bound canonical hostname used for TLS, the
-	// keyless signer, MITM probes and CanonicalURL.
+	// keyless signer, MITM probes and PublicURL.
 	hostname string
 	// aliasHostname is the <name>.<root> alias when the relay granted it
 	// to this lease, else empty. The relay keeps it for the lease lifetime.
@@ -489,9 +489,9 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 	return l.datagram.Send(frame.FlowID, frame.Payload)
 }
 
-// canonicalURLForLease is the identity-bound canonical URL, which always routes
+// publicURLForLease is the identity-bound canonical URL, which always routes
 // to this lease.
-func (l *listener) canonicalURLForLease(lease listenerSnapshot) string {
+func (l *listener) publicURLForLease(lease listenerSnapshot) string {
 	return l.leaseURL(lease.hostname)
 }
 

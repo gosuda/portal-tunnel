@@ -93,7 +93,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
-	publicURL := ready[0].CanonicalURL
+	publicURL := ready[0].PublicURL
 	for {
 		response, err := client.Get(publicURL + "/app/route")
 		if err != nil {
