@@ -173,12 +173,12 @@ keying material with the same label and context, and the SDK compares the values
 
 - Matching values support passthrough for that sampled connection.
 - An exporter mismatch is logged as suspected relay-side TLS termination.
-- `--ban-mitm` (or `BAN_MITM`) acts at two levels. Within the current exposure
-  it closes and blocks the detected relay's listener. The SDK also reports an
-  MITM failure to the discovery controller, which bans the relay URL for the
-  rest of the client's run: that discovery-level ban has no automatic expiry
-  and survives refresh and rediscovery until `AddRelay()` clears it. Neither
-  level is durable across client restarts, and neither is network-wide.
+- `--ban-mitm` (or `BAN_MITM`) closes and blocks the detected relay's listener
+  within the current exposure. When discovery is enabled, the SDK also reports
+  an MITM failure to that exposure's discovery controller, which bans the relay
+  URL in its in-memory state. That ban has no automatic expiry and survives
+  refresh and rediscovery until `AddRelay()` clears it. Both bans end when the
+  exposure is replaced; neither is durable across client restarts or network-wide.
 - Timeouts, connection failures, and other probe errors are warnings, not
   exporter-mismatch verdicts; they do not trigger that block.
 
