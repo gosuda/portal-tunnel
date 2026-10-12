@@ -1,7 +1,15 @@
 const LEASE_NAME_MAX_LENGTH = 63;
 const DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+// The relay rejects names shaped like a canonical label: a 40-character hex
+// address, alone or after a hyphen (utils.NormalizeServiceName).
+const CANONICAL_SHAPE_PATTERN = /(^|-)[0-9a-f]{40}$/;
 
 export function normalizeExposeName(value: string): string {
+  const name = normalizeLabel(value);
+  return CANONICAL_SHAPE_PATTERN.test(name) ? "" : name;
+}
+
+function normalizeLabel(value: string): string {
   const cleaned = sanitizeExposeNameInput(value);
   if (cleaned === "") {
     return "";

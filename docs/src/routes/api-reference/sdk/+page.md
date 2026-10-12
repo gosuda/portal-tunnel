@@ -117,9 +117,12 @@ Cache opt-in is incompatible with raw TCP/UDP leases.
 | `udp_enabled`, `tcp_enabled` | `boolean` | active transport flags |
 
 The SDK uses the returned `canonical_hostname`; it does not derive or accept a
-client-supplied address suffix. The canonical label contains the normalized
-name, a hyphen, and all 40 lowercase hexadecimal characters of the
-SIWE-authenticated Ethereum address. The current SDK allows canonical fallback.
+client-supplied address suffix. The canonical label ends with all 40 lowercase
+hexadecimal characters of the SIWE-authenticated Ethereum address. A normalized
+name of at most 22 characters precedes it with one hyphen
+(`<name>-<address>`); a longer name is replaced by a 21-character hash of the
+name followed by two hyphens (`<name-hash>--<address>`, derivation in the
+architecture page). The current SDK allows canonical fallback.
 A protocol-10 client that omits the capability receives `hostname_conflict`
 instead of a canonical-only registration when its friendly hostname is already
 owned by another identity.

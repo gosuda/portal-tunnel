@@ -168,6 +168,32 @@ func TestServiceNamesCannotTakeCanonicalLabels(t *testing.T) {
 	}
 }
 
+// Shape and length rules apply to the normalized ASCII label, after case
+// folding and IDNA conversion.
+func TestCanonicalLeaseHostnameNormalizesFirst(t *testing.T) {
+	t.Parallel()
+
+	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
+	fullwidth := strings.Map(func(r rune) rune { return r + 0xFEE0 }, "7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d")
+	if _, err := NormalizeServiceName(fullwidth); err == nil {
+		t.Fatalf("NormalizeServiceName(fullwidth address) error = nil")
+	}
+
+	// "bücher-abcdefghij" is 17 code points but 24 octets in ASCII form, so
+	// it takes the hashed form, the same as its punycode spelling.
+	unicode, err := CanonicalLeaseHostname("bücher-abcdefghij", address, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ascii, err := CanonicalLeaseHostname("xn--bcher-abcdefghij-jzb", address, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unicode != ascii || !strings.HasSuffix(unicode, "--7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.example.com") {
+		t.Fatalf("canonical hostnames = (%q, %q), want the same hashed form", unicode, ascii)
+	}
+}
+
 func TestCanonicalLeaseHostnameKeepsServiceIdentityAcrossRelays(t *testing.T) {
 	t.Parallel()
 

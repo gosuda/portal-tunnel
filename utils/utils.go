@@ -328,22 +328,21 @@ func NormalizeServiceName(raw string) (string, error) {
 }
 
 // hasCanonicalShape reports whether label is shaped like a canonical label:
-// a 40-character lowercase hex address, alone or after a hyphen.
+// a 40-character hex address, alone or after a hyphen.
 func hasCanonicalShape(label string) bool {
-	if isLowerHex(label) && len(label) == 40 {
+	if isHexAddress(label) {
 		return true
 	}
-	n := len(label)
-	return n > 41 && label[n-41] == '-' && isLowerHex(label[n-40:])
+	prefix, address, ok := strings.Cut(label[max(len(label)-41, 0):], "-")
+	return ok && prefix == "" && isHexAddress(address)
 }
 
-func isLowerHex(s string) bool {
-	for _, r := range s {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
-		}
+func isHexAddress(s string) bool {
+	if len(s) != 40 {
+		return false
 	}
-	return s != ""
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 // canonicalNameHash returns the name part of a long name's canonical label.

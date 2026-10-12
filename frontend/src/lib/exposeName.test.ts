@@ -19,6 +19,15 @@ describe("normalizeExposeName", () => {
     expect(normalizeExposeName("a⑴b")).toBe("");
   });
 
+  it("drops names shaped like a canonical label", () => {
+    const address = "7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
+    expect(normalizeExposeName(address)).toBe("");
+    expect(normalizeExposeName(`myapp-${address.toUpperCase()}`)).toBe("");
+    expect(normalizeExposeName(`my-app-${address.slice(1)}`)).toBe(
+      `my-app-${address.slice(1)}`,
+    );
+  });
+
   it("drops punycode names over the limit instead of cutting them", () => {
     expect(normalizeExposeName(`xn--${"a".repeat(60)}`)).toBe("");
   });
