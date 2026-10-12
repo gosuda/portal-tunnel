@@ -46,13 +46,14 @@ type listenerConfig struct {
 }
 
 type listenerStatus struct {
-	state     RelayState
-	failure   RelayFailure
-	err       error
-	publicURL string
-	udpAddr   string
-	tcpAddr   string
-	version   string
+	state       RelayState
+	failure     RelayFailure
+	err         error
+	publicURL   string
+	friendlyURL string
+	udpAddr     string
+	tcpAddr     string
+	version     string
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -240,11 +241,12 @@ func (l *listener) reportAvailable() {
 		udpAddr = lease.udpAddr
 	}
 	l.report(listenerStatus{
-		state:     state,
-		publicURL: l.publicURLForLease(lease),
-		udpAddr:   udpAddr,
-		tcpAddr:   lease.tcpAddr,
-		version:   l.api.relayReleaseVersion(),
+		state:       state,
+		publicURL:   l.publicURLForLease(lease),
+		friendlyURL: l.friendlyURLForLease(lease),
+		udpAddr:     udpAddr,
+		tcpAddr:     lease.tcpAddr,
+		version:     l.api.relayReleaseVersion(),
 	})
 }
 
@@ -375,13 +377,18 @@ func (l *listener) Close() error {
 }
 
 type listenerSnapshot struct {
-	hostname    string
-	udpAddr     string
-	tcpAddr     string
-	accessToken string
-	reverse     types.ReverseEndpoint
-	expiresAt   time.Time
-	tenantTLS   *keyless.Client
+	// hostname is the identity-bound canonical hostname used for TLS, the
+	// keyless signer, MITM probes and PublicURL.
+	hostname string
+	// friendlyHostname is the <name>.<root> alias when the relay granted it
+	// to this lease, else empty. The relay keeps it for the lease lifetime.
+	friendlyHostname string
+	udpAddr          string
+	tcpAddr          string
+	accessToken      string
+	reverse          types.ReverseEndpoint
+	expiresAt        time.Time
+	tenantTLS        *keyless.Client
 }
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
@@ -482,12 +489,25 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 	return l.datagram.Send(frame.FlowID, frame.Payload)
 }
 
+// publicURLForLease is the identity-bound canonical URL, which always routes
+// to this lease.
 func (l *listener) publicURLForLease(lease listenerSnapshot) string {
+	return l.leaseURL(lease.hostname)
+}
+
+// friendlyURLForLease is the <name>.<root> URL when the relay granted that
+// alias to this lease, else empty.
+func (l *listener) friendlyURLForLease(lease listenerSnapshot) string {
+	return l.leaseURL(lease.friendlyHostname)
+}
+
+// leaseURL builds the relay URL for hostname.
+func (l *listener) leaseURL(hostname string) string {
 	baseURL := l.api.relayURL
-	if baseURL == nil || lease.hostname == "" {
+	if baseURL == nil || strings.TrimSpace(hostname) == "" {
 		return ""
 	}
-	authority := relayAuthority(baseURL, lease.hostname)
+	authority := relayAuthority(baseURL, hostname)
 	if authority == "" {
 		return ""
 	}
@@ -1047,7 +1067,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	publicHostname := resp.CanonicalHostname
+	canonicalHostname := resp.CanonicalHostname
 	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return err
@@ -1061,7 +1081,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	}
 	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
 		RelayURL:    l.api.relayURL.String(),
-		Hostname:    publicHostname,
+		Hostname:    canonicalHostname,
 		AccessToken: resp.AccessToken,
 	})
 	if err != nil {
@@ -1082,13 +1102,14 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return ctx.Err()
 	}
 	next := listenerSnapshot{
-		hostname:    publicHostname,
-		udpAddr:     resp.UDPAddr,
-		tcpAddr:     resp.TCPAddr,
-		accessToken: resp.AccessToken,
-		reverse:     resp.ReverseEndpoint,
-		expiresAt:   resp.ExpiresAt,
-		tenantTLS:   tenantTLS,
+		hostname:         canonicalHostname,
+		friendlyHostname: resp.Hostname,
+		udpAddr:          resp.UDPAddr,
+		tcpAddr:          resp.TCPAddr,
+		accessToken:      resp.AccessToken,
+		reverse:          resp.ReverseEndpoint,
+		expiresAt:        resp.ExpiresAt,
+		tenantTLS:        tenantTLS,
 	}
 	oldLease := l.lease.Swap(next)
 	if oldLease.tenantTLS != nil {

@@ -81,7 +81,8 @@ published.
 - Explicit relays are always kept. `sdk.WithDiscovery(n)` adds the bootstrap set from `registry.json` and keeps at most `n` auto-selected relays connected (default 3 when `n <= 0`). Without the option at least one explicit relay is required, and nothing else is ever contacted, which keeps tests hermetic.
 - `sdk.WithOverlay()` is the `--overlay` equivalent.
 - Read the public URL from `exposure.WaitReady(ctx)`, from `exposure.Relays()` (sorted snapshot), or from `exposure.Updates()` (buffered channel of size one; slow readers miss intermediate states and should re-read `Relays()`). The SDK also logs `service ready at <url>` with field `public_url`, exactly like the CLI.
-- `RelayStatus` carries `RelayURL`, `PublicURL`, `TCPAddr`, `UDPAddr`, `Version`, `State` (`connecting`, `ready`, `failed`), and `Failure` (`runtime`, `terminal`, `mitm`). One failed relay does not stop an exposure that has healthy ones.
+- `RelayStatus` carries `RelayURL`, `PublicURL`, `FriendlyURL`, `TCPAddr`, `UDPAddr`, `Version`, `State` (`connecting`, `ready`, `failed`), and `Failure` (`runtime`, `terminal`, `mitm`). One failed relay does not stop an exposure that has healthy ones.
+- `PublicURL` is the identity-bound canonical URL. `FriendlyURL` is `<name>.<root host>` when the relay granted that alias to the lease, and empty when another identity owns the name or the exposure is unnamed. Use it only while `State` is `ready`; a failed relay clears it. The friendly alias always reaches the live origin; the opt-in relay cache serves only the canonical hostname.
 - Lease renewal, re-registration after a relay restart, and reverse-session pooling are handled inside the SDK. The app does nothing for them.
 
 ## What the handler sees

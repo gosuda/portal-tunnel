@@ -123,6 +123,10 @@ name of at most 22 characters precedes it with one hyphen
 (`<name>-<address>`); a longer name is replaced by a 21-character hash of the
 name followed by two hyphens (`<name-hash>--<address>`, derivation in the
 architecture page). The current SDK allows canonical fallback.
+`RelayStatus.PublicURL` reports the canonical hostname. `RelayStatus.FriendlyURL`
+reports the returned `hostname` when the relay granted the friendly alias, and
+is empty after canonical fallback or for an unnamed service. It is meaningful
+only while the relay is ready; a failed relay clears it.
 A protocol-10 client that omits the capability receives `hostname_conflict`
 instead of a canonical-only registration when its friendly hostname is already
 owned by another identity.
