@@ -66,7 +66,7 @@ hostname (`<40-lowercase-address-hex>.<relay-host>`) and claims no friendly alia
 ```
 
 When `--name` is provided, it is normalized to a single DNS label whose ASCII
-form is at most 22 characters, such as `myapp`. Named registrations expose both
+form is at most 63 characters, such as `myapp`. Named registrations expose both
 a friendly alias and an identity-bound canonical hostname:
 
 ```text
@@ -82,8 +82,17 @@ makes each relay-local origin stable without stored ownership state. It also
 makes services published by the same Ethereum address publicly correlatable
 across relay domains. Protocol 10 clients receive a hostname conflict when
 their friendly alias is unavailable unless they allow canonical fallback.
-All lease names are limited to normalized ASCII labels of at most 22 characters
-so canonical labels stay within the DNS label limit.
+A name longer than 22 characters does not fit beside the address in one DNS
+label, so its canonical label uses a 21-character hash of the name and a double
+hyphen, keeping the full address:
+
+```text
+internal-metrics-dashboard-production.portal.example
+okm4rhbie4a4gidozw5r5--7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.portal.example
+```
+
+Names shaped like a canonical label (40 hexadecimal characters, alone or after
+a hyphen) are rejected so a friendly alias never takes a canonical origin.
 
 ## Relay Admin Token Login
 

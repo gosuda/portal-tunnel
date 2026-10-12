@@ -345,7 +345,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
-| `--name` | | string | | Public hostname prefix (normalized single DNS label, maximum 22 ASCII characters); when omitted, an address-only canonical hostname (<address>.<relay-domain>) is used |
+| `--name` | | string | | Public hostname prefix (normalized single DNS label, maximum 63 ASCII characters); when omitted, an address-only canonical hostname (<address>.<relay-domain>) is used |
 | `--description` | | string | | Service description metadata |
 | `--tags` | | string | | Service tags metadata (comma-separated) |
 | `--owner` | | string | | Service owner metadata |

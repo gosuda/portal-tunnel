@@ -7,11 +7,23 @@ import (
 )
 
 const (
-	IdentityKeySeparator        = ":"
-	CanonicalLeaseNameMaxLength = 22
-	RelayIdentityFilename       = "identity.json"
-	RelayPolicyFilename         = "policy.json"
-	DNSSECKeyFileName           = "dnssec-csk.json"
+	IdentityKeySeparator  = ":"
+	RelayIdentityFilename = "identity.json"
+	RelayPolicyFilename   = "policy.json"
+	DNSSECKeyFileName     = "dnssec-csk.json"
+)
+
+// Canonical lease labels keep the full 40-character address as their suffix
+// within the 63-octet DNS label limit. A service name of up to
+// CanonicalLeaseNameMaxLength octets is embedded as is ("<name>-<address>");
+// a longer one is replaced by the first CanonicalLeaseNameHashLength
+// characters of a domain-separated SHA-256 of the name
+// ("<hash>--<address>"). A normalized name never ends with a hyphen, so the
+// two forms cannot produce the same label.
+const (
+	CanonicalLeaseNameMaxLength  = 22
+	CanonicalLeaseNameHashLength = 21
+	CanonicalLeaseNameHashDomain = "portal-canonical-name-v1"
 )
 
 type Identity struct {

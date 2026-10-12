@@ -1,4 +1,4 @@
-const LEASE_NAME_MAX_LENGTH = 22;
+const LEASE_NAME_MAX_LENGTH = 63;
 const DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 export function normalizeExposeName(value: string): string {

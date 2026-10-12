@@ -74,7 +74,7 @@ portal expose localhost:25565 --tcp
 
 ### Common Flags
 
-- `--name`: Optional hostname prefix (normalized DNS label, maximum 22 ASCII characters). A new identity without a name uses an address-only canonical hostname.
+- `--name`: Optional hostname prefix (normalized DNS label, maximum 63 ASCII characters). A new identity without a name uses an address-only canonical hostname.
 - `--relays`, `--discovery`, `--overlay`: Select relays and prefer an available overlay path.
 - `--http-route`, `--serve`, `--tcp`, `--udp`: Choose routed HTTP, a static site, raw TCP, or UDP exposure.
 - `--auth siwe` or `--auth credential`: Protect HTTP application access. `--auth-allow` restricts SIWE login to the supplied wallets (repeatable).

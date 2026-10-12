@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/netip"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -536,15 +535,14 @@ func TestIssueRegisterChallengeBoundsPendingPerIP(t *testing.T) {
 	}
 }
 
-func TestIssueRegisterChallengeRejectsOverlongName(t *testing.T) {
+func TestIssueRegisterChallengeAcceptsLongName(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
-	_, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{
+	if _, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "twenty-three-charactersx"),
-	}, "example.com", "https://example.com"+types.PathSDKRegister, netip.MustParseAddr("203.0.113.50"))
-	if err == nil || !strings.Contains(err.Error(), "22 characters or fewer") {
-		t.Fatalf("issueRegisterChallenge() error = %v, want clear 22-character limit", err)
+	}, "example.com", "https://example.com"+types.PathSDKRegister, netip.MustParseAddr("203.0.113.50")); err != nil {
+		t.Fatalf("issueRegisterChallenge(long name) error = %v", err)
 	}
 }
 

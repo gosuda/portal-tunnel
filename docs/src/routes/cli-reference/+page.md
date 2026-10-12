@@ -102,7 +102,7 @@ accepted in the same command; advanced flags do not require a configuration file
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--name` | string | | Public hostname prefix, normalized to one DNS label of at most 22 ASCII characters; when omitted for a new identity, an address-only canonical hostname (<address>.<relay-domain>) is used |
+| `--name` | string | | Public hostname prefix, normalized to one DNS label of at most 63 ASCII characters; when omitted for a new identity, an address-only canonical hostname (<address>.<relay-domain>) is used |
 | `--relays` | string | registry | Additional relay API URLs, comma-separated |
 | `--discovery` | bool | `true` | Include registry relays and relay discovery expansion |
 | `--overlay` | bool | `false` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; retains direct fallback |
@@ -160,6 +160,10 @@ friendly public name and publishes an address-only canonical hostname
 instead.
 When `--name` is provided, Portal publishes both the named canonical hostname
 (`<name>-<address>.<relay-domain>`) and the friendly alias (`<name>.<relay-domain>`).
+A name longer than 22 characters does not fit beside the address in one DNS
+label, so its canonical hostname uses a 21-character hash of the name instead:
+`<name-hash>--<address>.<relay-domain>`. Names shaped like a canonical label
+(40 hexadecimal characters, alone or after a hyphen) are rejected.
 An existing identity file or `--identity-json` supplies the saved name as well
 as the key. `--name` applies only when creating a new identity; it does not
 rename an existing one. Use a separate `--identity-path` for a new identity.

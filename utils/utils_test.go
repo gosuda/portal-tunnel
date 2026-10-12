@@ -107,11 +107,64 @@ func TestCanonicalLeaseHostname(t *testing.T) {
 		t.Fatalf("CanonicalLeaseHostname(empty name) = %q, want %q", got, unnamedWant)
 	}
 
-	if _, err := CanonicalLeaseHostname(maxName+"a", address, "example.com"); err == nil {
-		t.Fatal("CanonicalLeaseHostname(overlong name) error = nil")
+	// Names over 22 characters keep the full address and replace the name
+	// with a 21-character hash (golden values computed independently).
+	const addr = "7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
+	for name, label := range map[string]string{
+		strings.Repeat("a", 23):                 "5e2twslnrzki2h4l7bzvq--" + addr,
+		"internal-metrics-dashboard-production": "okm4rhbie4a4gidozw5r5--" + addr,
+		strings.Repeat("a", 63):                 "c7pboclanhxavtsfp7efc--" + addr,
+	} {
+		got, err := CanonicalLeaseHostname(name, address, "example.com")
+		if err != nil {
+			t.Fatalf("CanonicalLeaseHostname(%d-character name) error = %v", len(name), err)
+		}
+		if got != label+".example.com" {
+			t.Fatalf("CanonicalLeaseHostname(%q) = %q, want %q", name, got, label+".example.com")
+		}
+	}
+
+	for _, name := range []string{
+		strings.Repeat("a", 64),          // over the DNS label limit
+		addr,                             // an address-only canonical label
+		"myapp-" + addr,                  // a short-name canonical label
+		"5e2twslnrzki2h4l7bzvq--" + addr, // a long-name canonical label
+	} {
+		if _, err := CanonicalLeaseHostname(name, address, "example.com"); err == nil {
+			t.Fatalf("CanonicalLeaseHostname(%q) error = nil", name)
+		}
 	}
 	if _, err := CanonicalLeaseHostname("herdr", "0x1234", "example.com"); err == nil {
 		t.Fatal("CanonicalLeaseHostname(short address) error = nil")
+	}
+}
+
+// A normalized name never ends with a hyphen, so no short name produces the
+// canonical label of a long one, and no service name is shaped like either.
+func TestServiceNamesCannotTakeCanonicalLabels(t *testing.T) {
+	t.Parallel()
+
+	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
+	long, err := CanonicalLeaseHostname("internal-metrics-dashboard-production", address, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, _, _ := strings.Cut(long, "--")
+	for _, short := range []string{hash, hash + "-", hash + "-k"} {
+		got, err := CanonicalLeaseHostname(short, address, "example.com")
+		if err == nil && got == long {
+			t.Fatalf("short name %q took the long name's canonical hostname %q", short, long)
+		}
+	}
+	for _, name := range []string{"7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d", "x-7A3B2C4D5E6F708192A3B4C5D6E7F8091A2B3C4D"} {
+		if _, err := NormalizeServiceName(name); err == nil {
+			t.Fatalf("NormalizeServiceName(%q) error = nil", name)
+		}
+	}
+	for _, name := range []string{"myapp", "deadbeef", "my-app-" + strings.Repeat("f", 39), strings.Repeat("f", 41)} {
+		if _, err := NormalizeServiceName(name); err != nil {
+			t.Fatalf("NormalizeServiceName(%q) error = %v", name, err)
+		}
 	}
 }
 

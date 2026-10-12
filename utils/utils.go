@@ -3,6 +3,8 @@ package utils
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base32"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -311,10 +313,54 @@ func LeaseHostname(name, rootHost string) (string, error) {
 	return label + "." + rootHost, nil
 }
 
+// NormalizeServiceName normalizes a service name to a DNS label that cannot
+// be mistaken for a canonical label, so a friendly hostname never collides
+// with an identity-bound one.
+func NormalizeServiceName(raw string) (string, error) {
+	label, err := NormalizeDNSLabel(raw)
+	if err != nil {
+		return "", err
+	}
+	if hasCanonicalShape(label) {
+		return "", errors.New("name must not look like a canonical hostname (40 hexadecimal characters, alone or after a hyphen)")
+	}
+	return label, nil
+}
+
+// hasCanonicalShape reports whether label is shaped like a canonical label:
+// a 40-character lowercase hex address, alone or after a hyphen.
+func hasCanonicalShape(label string) bool {
+	if isLowerHex(label) && len(label) == 40 {
+		return true
+	}
+	n := len(label)
+	return n > 41 && label[n-41] == '-' && isLowerHex(label[n-40:])
+}
+
+func isLowerHex(s string) bool {
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// canonicalNameHash returns the name part of a long name's canonical label.
+func canonicalNameHash(label string) string {
+	h := sha256.New()
+	h.Write([]byte(types.CanonicalLeaseNameHashDomain))
+	h.Write([]byte{0, byte(len(label))})
+	h.Write([]byte(label))
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(h.Sum(nil))
+	return strings.ToLower(encoded[:types.CanonicalLeaseNameHashLength])
+}
+
 // CanonicalLeaseHostname returns the identity-bound hostname for a lease.
 // The full 20-byte EVM address is encoded as lowercase hexadecimal so the
 // hostname cannot move between authenticated identities. When name is empty,
-// it returns an address-only canonical hostname.
+// it returns an address-only canonical hostname. See
+// types.CanonicalLeaseNameMaxLength for how a name enters the label.
 func CanonicalLeaseHostname(name, address, rootHost string) (string, error) {
 	name = strings.TrimSpace(name)
 	address = strings.ToLower(TrimHexPrefix(strings.TrimSpace(address)))
@@ -327,14 +373,14 @@ func CanonicalLeaseHostname(name, address, rootHost string) (string, error) {
 	if name == "" {
 		return LeaseHostname(address, rootHost)
 	}
-	label, err := NormalizeDNSLabel(name)
+	label, err := NormalizeServiceName(name)
 	if err != nil {
 		return "", err
 	}
-	if len(label) > types.CanonicalLeaseNameMaxLength {
-		return "", fmt.Errorf("name must be %d characters or fewer for an identity-bound hostname", types.CanonicalLeaseNameMaxLength)
+	if len(label) <= types.CanonicalLeaseNameMaxLength {
+		return LeaseHostname(label+"-"+address, rootHost)
 	}
-	return LeaseHostname(label+"-"+address, rootHost)
+	return LeaseHostname(canonicalNameHash(label)+"--"+address, rootHost)
 }
 
 func NormalizeTargetAddr(raw string) (string, error) {

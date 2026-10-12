@@ -156,3 +156,24 @@ func TestNewRegisterChallengeNormalizesWireIdentity(t *testing.T) {
 		t.Fatalf("challenge unnamed identity name = %q, want empty", name)
 	}
 }
+
+// Names up to the DNS label limit are valid service names, but a name shaped
+// like a canonical label would let a friendly alias take a canonical origin.
+func TestGenerateServiceNameRules(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("a", 63)
+	id, err := Generate(long)
+	if err != nil || id.Name != long {
+		t.Fatalf("Generate(63-character name) = %q, %v", id.Name, err)
+	}
+	for _, name := range []string{
+		strings.Repeat("a", 64),
+		"7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+		"myapp-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+	} {
+		if _, err := Generate(name); err == nil {
+			t.Fatalf("Generate(%q) error = nil", name)
+		}
+	}
+}

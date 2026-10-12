@@ -14,13 +14,14 @@ import (
 )
 
 // normalizeOptionalName normalizes an optional service name: returns an empty
-// string when the trimmed name is empty, or validates and returns a DNS label.
+// string when the trimmed name is empty, or validates and returns a service
+// name label.
 func normalizeOptionalName(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return "", nil
 	}
-	return utils.NormalizeDNSLabel(trimmed)
+	return utils.NormalizeServiceName(trimmed)
 }
 
 // NormalizeIdentity returns the canonical comparison form of a wire identity:
