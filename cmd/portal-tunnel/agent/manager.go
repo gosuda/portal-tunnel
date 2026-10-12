@@ -632,7 +632,7 @@ func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
 	for _, relay := range relays {
 		statuses = append(statuses, AgentRelayStatus{
 			RelayURL:   relay.RelayURL,
-			PublicURL:  relay.PublicURL,
+			PublicURL:  relay.CanonicalURL,
 			TCPAddr:    relay.TCPAddr,
 			Version:    relay.Version,
 			Connecting: relay.State == sdk.RelayConnecting,

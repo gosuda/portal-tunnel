@@ -159,8 +159,8 @@ func relayStatusOnPort(relays []sdk.RelayStatus, sniPort int) (sdk.RelayStatus, 
 func waitPublicURLOnPort(t *testing.T, exposure *sdk.Exposure, sniPort int, deadline time.Time) string {
 	t.Helper()
 	for {
-		if status, ok := relayStatusOnPort(exposure.Relays(), sniPort); ok && status.PublicURL != "" {
-			return status.PublicURL
+		if status, ok := relayStatusOnPort(exposure.Relays(), sniPort); ok && status.CanonicalURL != "" {
+			return status.CanonicalURL
 		}
 		if !time.Now().Before(deadline) {
 			t.Fatalf("relay on port %d never reported a public URL; relays = %+v", sniPort, exposure.Relays())

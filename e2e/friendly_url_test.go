@@ -34,8 +34,8 @@ func TestFriendlyURLOnlyForAliasOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second identity did not become ready: %v", err)
 	}
-	if len(ready) != 1 || ready[0].PublicURL == "" || ready[0].PublicURL == owner[0].PublicURL {
-		t.Fatalf("second identity status = %+v, want its own canonical PublicURL", ready)
+	if len(ready) != 1 || ready[0].CanonicalURL == "" || ready[0].CanonicalURL == owner[0].CanonicalURL {
+		t.Fatalf("second identity status = %+v, want its own CanonicalURL", ready)
 	}
 	if ready[0].FriendlyURL != "" {
 		t.Fatalf("second identity FriendlyURL = %q, want empty after canonical fallback", ready[0].FriendlyURL)
