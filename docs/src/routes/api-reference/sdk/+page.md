@@ -125,8 +125,9 @@ name followed by two hyphens (`<name-hash>--<address>`, derivation in the
 architecture page). The current SDK allows canonical fallback.
 `RelayStatus.CanonicalURL` reports the canonical hostname. `RelayStatus.FriendlyURL`
 reports the returned `hostname` when the relay granted the friendly alias, and
-is empty after canonical fallback or for an unnamed service. It is meaningful
-only while the relay is ready; a failed relay clears it.
+is empty after canonical fallback or for an unnamed service. Both stay set while
+the lease is held, including while reverse sessions reconnect; a failed relay
+clears `FriendlyURL`. Show it to users only while the relay is ready.
 A protocol-10 client that omits the capability receives `hostname_conflict`
 instead of a canonical-only registration when its friendly hostname is already
 owned by another identity.

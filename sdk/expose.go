@@ -53,8 +53,9 @@ type RelayStatus struct {
 	// FriendlyURL is the <name>.<root host> URL when the relay granted that
 	// alias to this lease, else empty: another identity may own the name
 	// (canonical fallback). The relay holds the alias only while the lease
-	// lives, so rely on it only while State is RelayReady. It always reaches
-	// the live origin.
+	// lives: it stays set while the lease is held (also RelayConnecting while
+	// reverse sessions reconnect) and is cleared on RelayFailed. Show it only
+	// while State is RelayReady. It always reaches the live origin.
 	FriendlyURL string
 	UDPAddr     string
 	TCPAddr     string
