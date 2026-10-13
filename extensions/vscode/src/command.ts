@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 type ShellTarget = "unix" | "windows";
 
 export const defaultRelayRegistryURL = "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
@@ -13,6 +15,54 @@ export interface TunnelCommandOptions {
 export interface TunnelCommandRuntime {
   readonly platform: NodeJS.Platform;
   readonly arch: string;
+}
+
+const invalidHostMessage = "Enter a port, host[:port], IP address, or HTTP(S) URL";
+
+export function validateHost(value: string): string | undefined {
+  const target = value.trim();
+  if (!target) { return "Required"; }
+  if (target.startsWith("-") || /[\s\\]/.test(target)) {
+    return invalidHostMessage;
+  }
+  if (/^\d+$/.test(target)) {
+    const port = Number(target);
+    return Number.isInteger(port) && port >= 1 && port <= 65535
+      ? undefined
+      : invalidHostMessage;
+  }
+  if (isIP(target) === 6) { return undefined; }
+
+  const hasScheme = target.includes("://");
+  let parsed: URL;
+  try {
+    parsed = new URL(hasScheme ? target : "http://" + target);
+  } catch {
+    return invalidHostMessage;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return invalidHostMessage;
+  }
+  if (!parsed.hostname || parsed.username || parsed.password ||
+      parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    return invalidHostMessage;
+  }
+
+  const authority = hasScheme
+    ? target.slice(target.indexOf("://") + 3).replace(/\/$/, "")
+    : target;
+  if (!authority || authority.startsWith("-") ||
+      /[\/?#@%]/.test(authority) || authority.endsWith(":")) {
+    return invalidHostMessage;
+  }
+  if (parsed.hostname.split(".").some((label) => label.startsWith("-") || label.endsWith("-"))) {
+    return invalidHostMessage;
+  }
+  const portText = authority.match(/:(\d+)$/)?.[1];
+  if (portText && (Number(portText) < 1 || Number(portText) > 65535)) {
+    return invalidHostMessage;
+  }
+  return undefined;
 }
 
 export function validateRelayUrl(value: string): string | undefined {
@@ -53,6 +103,10 @@ export function buildCommand(
   runtime: TunnelCommandRuntime = process
 ): string {
   const { host, name, relayList, thumbnail } = opts;
+  const hostError = validateHost(host);
+  if (hostError !== undefined) {
+    throw new Error("Invalid tunnel host: " + hostError);
+  }
   const target: ShellTarget = runtime.platform === "win32" ? "windows" : "unix";
   const tunnelInstallerURL = resolveTunnelInstallerURL(runtime.platform, runtime.arch);
   if (!tunnelInstallerURL) {
@@ -73,7 +127,7 @@ export function buildCommand(
     exposeArgs.push(`--thumbnail ${formatToken(thumbnail.trim(), target)}`);
   }
 
-  const exposeCommand = `expose ${[formatToken(host, target), ...exposeArgs].join(" ")}`;
+  const exposeCommand = `expose ${[...exposeArgs, "--", formatToken(host.trim(), target)].join(" ")}`;
 
   if (target === "windows") {
     return [
