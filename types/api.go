@@ -1,6 +1,8 @@
 package types
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -111,6 +113,9 @@ type RegisterResponse struct {
 	TCPEnabled        bool            `json:"tcp_enabled,omitempty"`
 }
 
+// MaxDiscoveryEntries bounds each collection in an untrusted discovery response.
+const MaxDiscoveryEntries = 1024
+
 type DiscoveryResponse struct {
 	ProtocolVersion    string                   `json:"protocol_version"`
 	GeneratedAt        time.Time                `json:"generated_at"`
@@ -122,6 +127,62 @@ type DiscoveryResponse struct {
 	// Optional, unsigned observation metadata; never participates in routing,
 	// trust, signature verification, or compatibility decisions.
 	RelayReleaseVersions map[string]string `json:"relay_release_versions,omitempty"`
+}
+
+// UnmarshalJSON checks collection sizes before allocating typed relay slices.
+func (resp *DiscoveryResponse) UnmarshalJSON(data []byte) error {
+	var collections struct {
+		Relays                json.RawMessage `json:"relays"`
+		IncompatibleRelays    json.RawMessage `json:"incompatible_relays"`
+		RelayReleaseVersions json.RawMessage `json:"relay_release_versions"`
+	}
+	if err := json.Unmarshal(data, &collections); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		name string
+		data json.RawMessage
+		open json.Delim
+	}{
+		{"relays", collections.Relays, '['},
+		{"incompatible_relays", collections.IncompatibleRelays, '['},
+		{"relay_release_versions", collections.RelayReleaseVersions, '{'},
+	} {
+		if err := checkDiscoveryCollectionLimit(field.name, field.data, field.open); err != nil {
+			return err
+		}
+	}
+	type plain DiscoveryResponse
+	return json.Unmarshal(data, (*plain)(resp))
+}
+
+func checkDiscoveryCollectionLimit(name string, data json.RawMessage, open json.Delim) error {
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		return nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("decode %s: %w", name, err)
+	}
+	if token != open {
+		return fmt.Errorf("decode %s: expected %q", name, open)
+	}
+	for count := 0; decoder.More(); count++ {
+		if count == MaxDiscoveryEntries {
+			return fmt.Errorf("discovery %s exceeds %d entries", name, MaxDiscoveryEntries)
+		}
+		if open == '{' {
+			if _, err := decoder.Token(); err != nil {
+				return fmt.Errorf("decode %s key: %w", name, err)
+			}
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return fmt.Errorf("decode %s entry: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // IncompatibleRelayEntry describes a relay the serving relay contacted
