@@ -200,6 +200,9 @@ func writeDiscoveryResponse(w http.ResponseWriter, response types.DiscoveryRespo
 	}
 
 	for _, descriptor := range response.Relays {
+		if len(bounded.Relays) == types.MaxDiscoveryEntries+1 {
+			break
+		}
 		encoded, err := json.Marshal(descriptor)
 		if err != nil {
 			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
@@ -217,6 +220,9 @@ func writeDiscoveryResponse(w http.ResponseWriter, response types.DiscoveryRespo
 	}
 
 	for _, entry := range response.IncompatibleRelays {
+		if len(bounded.IncompatibleRelays) == types.MaxDiscoveryEntries {
+			break
+		}
 		encoded, err := json.Marshal(entry)
 		if err != nil {
 			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
@@ -235,6 +241,9 @@ func writeDiscoveryResponse(w http.ResponseWriter, response types.DiscoveryRespo
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
+		if len(bounded.RelayReleaseVersions) == types.MaxDiscoveryEntries {
+			break
+		}
 		encodedKey, err := json.Marshal(key)
 		if err != nil {
 			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
