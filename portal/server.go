@@ -39,6 +39,8 @@ const (
 	defaultControlBodyLimit      = 4 << 20
 	reverseOfferAdmissionWorkers = 16
 	quicBackhaulPendingLimit     = 64
+	publicIngressLimit           = 1024
+	publicInspectionLimit        = 128
 )
 
 type ServerConfig struct {
@@ -185,6 +187,14 @@ type Server struct {
 	cancel       context.CancelFunc
 	group        *errgroup.Group
 	shutdownOnce sync.Once
+
+	ingressCtx        context.Context
+	ingressMu         sync.Mutex
+	ingressClosed     bool
+	ingressConns      map[net.Conn]struct{}
+	ingressInspecting int
+	ingressTenants    int
+	ingressWorkers    sync.WaitGroup
 
 	cfg         *utils.Snapshot[ServerConfig]
 	identity    identity.RelayIdentity
@@ -444,6 +454,7 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	s.redirectListener = redirectListener
 	s.redirectServer = redirectServer
 	s.acmeManager = acmeManager
+	s.ingressCtx = serverCtx
 	s.cancel = cancel
 	s.group = group
 	s.quicBackhaul = quicBackhaul
@@ -581,34 +592,41 @@ func (s *Server) serveTCP(record *leaseRecord) {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		go s.bridgeTCPConn(record, inbound)
+		if !s.admitIngress(inbound, false) {
+			_ = inbound.Close()
+			continue
+		}
+		bridge, err := s.registry.admitBridge(s.ingressCtx, record, inbound)
+		if err != nil {
+			_ = inbound.Close()
+			s.releaseIngress(inbound, false)
+			continue
+		}
+		go func() {
+			defer s.releaseIngress(inbound, false)
+			defer record.releaseBridge(bridge)
+			s.bridgeTCPConn(record, bridge, inbound)
+		}()
 	}
 }
 
-func (s *Server) bridgeTCPConn(record *leaseRecord, inbound net.Conn) {
-	defer inbound.Close()
-	if !s.registry.isRoutable(record.ServiceKey()) {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
+func (s *Server) bridgeTCPConn(record *leaseRecord, bridge *leaseBridge, inbound net.Conn) {
+	ctx, cancel := context.WithTimeout(bridge.ctx, defaultClaimTimeout)
 	defer cancel()
 	for {
 		reverse, err := record.reverse.Acquire(ctx)
 		if err != nil {
 			return
 		}
+		if err := s.registry.activateBridge(record, bridge, reverse); err != nil {
+			_ = reverse.Close()
+			return
+		}
 		if err := transport.WriteRawStart(reverse); err != nil {
 			_ = reverse.Close()
 			continue
 		}
-		record.mu.Lock()
-		closed := record.closed
-		record.mu.Unlock()
-		if closed || !s.registry.isRoutable(record.ServiceKey()) {
-			_ = reverse.Close()
-			return
-		}
-		s.proxy.bridge(inbound, reverse, record.ServiceKey(), s.registry.bps)
+		s.proxy.bridge(bridge.ctx, inbound, reverse, record.ServiceKey(), s.registry.bps)
 		return
 	}
 }
@@ -719,6 +737,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if s.cancel != nil {
 			s.cancel()
 		}
+		s.closeIngress()
 		if s.overlay != nil {
 			s.overlay.Close()
 		}
@@ -731,6 +750,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 
 		records := s.registry.CloseAll()
+		s.ingressWorkers.Wait()
 		for _, record := range records {
 			s.deleteLeaseDNS(ctx, record)
 		}
@@ -809,12 +829,87 @@ func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, *acme.Manager,
 	return apiTLS, manager, nil
 }
 
+// admitIngress reserves capacity before starting a public socket worker.
+// Root HTTP connections leave this owner after transfer to the HTTP server.
+func (s *Server) admitIngress(conn net.Conn, inspecting bool) bool {
+	s.ingressMu.Lock()
+	defer s.ingressMu.Unlock()
+	if s.ingressClosed {
+		return false
+	}
+	if inspecting {
+		if s.ingressInspecting >= publicInspectionLimit {
+			return false
+		}
+	} else if s.ingressTenants >= publicIngressLimit {
+		return false
+	}
+	if s.ingressConns == nil {
+		s.ingressConns = make(map[net.Conn]struct{})
+	}
+	s.ingressConns[conn] = struct{}{}
+	if inspecting {
+		s.ingressInspecting++
+	} else {
+		s.ingressTenants++
+	}
+	s.ingressWorkers.Add(1)
+	return true
+}
+
+// promoteIngress transfers an inspected tenant socket to the bridge budget.
+// Root/control-plane handoff never uses this budget, even at tenant capacity.
+func (s *Server) promoteIngress() bool {
+	s.ingressMu.Lock()
+	defer s.ingressMu.Unlock()
+	if s.ingressClosed || s.ingressTenants >= publicIngressLimit {
+		return false
+	}
+	s.ingressInspecting--
+	s.ingressTenants++
+	return true
+}
+
+func (s *Server) releaseIngress(conn net.Conn, inspecting bool) {
+	s.ingressMu.Lock()
+	delete(s.ingressConns, conn)
+	if inspecting {
+		s.ingressInspecting--
+	} else {
+		s.ingressTenants--
+	}
+	s.ingressMu.Unlock()
+	s.ingressWorkers.Done()
+}
+
+func (s *Server) closeIngress() {
+	s.ingressMu.Lock()
+	s.ingressClosed = true
+	conns := make([]net.Conn, 0, len(s.ingressConns))
+	for conn := range s.ingressConns {
+		conns = append(conns, conn)
+	}
+	s.ingressMu.Unlock()
+	if s.sniListener != nil {
+		_ = s.sniListener.Close()
+	}
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+}
+
 func (s *Server) runPublicIngress(ctx context.Context) error {
 	for {
 		conn, err := s.sniListener.Accept()
 		switch {
 		case err == nil:
+			if !s.admitIngress(conn, true) {
+				_ = conn.Close()
+				continue
+			}
 			go func(conn net.Conn) {
+				inspecting := true
+				defer func() { s.releaseIngress(conn, inspecting) }()
 				clientHello, wrappedConn, err := l4.InspectClientHello(conn, defaultClientHelloWait)
 				if err != nil {
 					if wrappedConn != nil {
@@ -842,6 +937,11 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 					return
 				}
 
+				if !s.promoteIngress() {
+					_ = wrappedConn.Close()
+					return
+				}
+				inspecting = false
 				record, ok := s.registry.Lookup(serverName)
 				if !ok {
 					log.Warn().
@@ -869,29 +969,29 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 }
 
 func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord, helloSpan []byte) error {
-	if record.isExpired(time.Now()) {
-		return errLeaseNotFound
+	bridge, err := s.registry.admitBridge(ctx, record, conn)
+	if err != nil {
+		return err
 	}
-	if record.reverse == nil {
-		return errors.New("lease stream is not ready")
-	}
-	if !s.registry.isRoutable(record.ServiceKey()) {
-		return errLeaseRejected
-	}
-	claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-	binding := s.registry.bindings.Issue(record.id, helloSpan)
+	defer record.releaseBridge(bridge)
+	claimCtx, cancel := context.WithTimeout(bridge.ctx, defaultClaimTimeout)
 	defer cancel()
+	binding := s.registry.bindings.Issue(record.id, helloSpan)
+	defer s.registry.bindings.Discard(binding)
 	for {
 		session, err := record.reverse.Acquire(claimCtx)
 		if err != nil {
-			s.registry.bindings.Discard(binding)
 			return fmt.Errorf("acquire lease connection: %w", err)
+		}
+		if err := s.registry.activateBridge(record, bridge, session); err != nil {
+			_ = session.Close()
+			return err
 		}
 		if err := transport.WriteTLSStart(session, binding); err != nil {
 			_ = session.Close()
 			continue
 		}
-		s.proxy.bridge(conn, session, record.ServiceKey(), s.registry.bps)
+		s.proxy.bridge(bridge.ctx, conn, session, record.ServiceKey(), s.registry.bps)
 		return nil
 	}
 }

@@ -2,6 +2,7 @@ package portal
 
 import (
 	"bytes"
+	"context"
 	"net"
 	"testing"
 	"testing/synctest"
@@ -22,7 +23,7 @@ func openBridge(t *testing.T) (send, recv net.Conn, bps *BPSManager, closeBridge
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		p.bridge(sendRelay, recvRelay, types.NewServiceIdentityKey("demo", "0x1"), bps)
+		p.bridge(t.Context(), sendRelay, recvRelay, types.NewServiceIdentityKey("demo", "0x1"), bps)
 	}()
 	return send, recv, bps, func() {
 		c0 := time.Now()
@@ -113,6 +114,30 @@ func TestBPSWaitRetainsAccruedCredit(t *testing.T) {
 		synctest.Sleep(40 * time.Millisecond)
 		if wait := limiter.reserve(10, 100); wait != 0 {
 			t.Fatalf("10 bytes still throttled after 100ms at 100 B/s: %v", wait)
+		}
+	})
+}
+
+func TestBridgeCancellationInterruptsThrottle(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		left, client := net.Pipe()
+		right, peer := net.Pipe()
+		defer client.Close()
+		defer peer.Close()
+		bps := NewBPSManager()
+		key := types.NewServiceIdentityKey("lease", "0x1")
+		bps.SetIdentityBPS(key, 1)
+		done := make(chan struct{})
+		go func() { defer close(done); var p proxy; p.bridge(ctx, left, right, key, bps) }()
+		go func() { _, _ = client.Write([]byte("throttled")) }()
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("bridge retained workers while throttle canceled")
 		}
 	})
 }

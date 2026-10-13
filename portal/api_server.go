@@ -506,7 +506,13 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, sourceAdd
 	if s.overlay != nil && s.overlay.Handles(capability) {
 		client, gateway := s.overlay.HandleConnect(w, r, capability, sourceAddr)
 		if client != nil {
-			s.proxy.bridge(client, gateway, types.ServiceIdentityKey{}, s.registry.bps)
+			if !s.admitIngress(client, false) {
+				_ = client.Close()
+				_ = gateway.Close()
+				return
+			}
+			defer s.releaseIngress(client, false)
+			s.proxy.bridge(s.ingressCtx, client, gateway, types.ServiceIdentityKey{}, s.registry.bps)
 		}
 		return
 	}

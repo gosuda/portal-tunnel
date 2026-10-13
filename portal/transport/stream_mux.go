@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -59,6 +60,58 @@ type ReverseMux struct {
 	session *yamux.Session
 }
 
+// reverseMuxConn maps yamux's Close (a send-side FIN) onto net.Conn's
+// separate half-close and full-close semantics. Full closure permanently
+// interrupts readers; a later deadline reset cannot reopen a revoked stream.
+type reverseMuxConn struct {
+	*yamux.Stream
+	mu     sync.Mutex
+	closed bool
+}
+
+func (c *reverseMuxConn) CloseWrite() error {
+	return c.Stream.Close()
+}
+
+func (c *reverseMuxConn) Close() error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	_ = c.Stream.SetDeadline(time.Now())
+	c.mu.Unlock()
+	return c.Stream.Close()
+}
+
+func (c *reverseMuxConn) SetDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return net.ErrClosed
+	}
+	return c.Stream.SetDeadline(deadline)
+}
+
+func (c *reverseMuxConn) SetReadDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return net.ErrClosed
+	}
+	return c.Stream.SetReadDeadline(deadline)
+}
+
+func (c *reverseMuxConn) SetWriteDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return net.ErrClosed
+	}
+	return c.Stream.SetWriteDeadline(deadline)
+}
+
 // Open starts a reverse connection from the connector end and authenticates it
 // with the capability current at the time the logical stream is opened.
 func (m *ReverseMux) Open(ctx context.Context, capability string) (net.Conn, error) {
@@ -66,11 +119,12 @@ func (m *ReverseMux) Open(ctx context.Context, capability string) (net.Conn, err
 	if err != nil {
 		return nil, err
 	}
-	if err := authenticateReverseStream(ctx, stream, capability); err != nil {
-		_ = stream.Close()
+	conn := &reverseMuxConn{Stream: stream}
+	if err := authenticateReverseStream(ctx, conn, capability); err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
-	return stream, nil
+	return conn, nil
 }
 
 // Accept waits for the connector's next reverse connection and returns the
@@ -81,12 +135,13 @@ func (m *ReverseMux) Accept() (net.Conn, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		capability, err := readReverseStreamCapability(stream)
+		conn := &reverseMuxConn{Stream: stream}
+		capability, err := readReverseStreamCapability(conn)
 		if err != nil {
-			_ = stream.Close()
+			_ = conn.Close()
 			continue
 		}
-		return stream, capability, nil
+		return conn, capability, nil
 	}
 }
 

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -84,12 +83,10 @@ func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig
 			Msg("udp relay enabled")
 	}
 
-	var connWG sync.WaitGroup
-	var connCount atomic.Int64
 	proxyCtx, cancel := context.WithCancel(ctx)
 	results := make(chan error, workerCount)
 	if tcpTarget != "" {
-		go func() { results <- proxyRelayConnections(proxyCtx, exposure, tcpTarget, &connWG, &connCount) }()
+		go func() { results <- proxyRelayConnections(proxyCtx, exposure, tcpTarget) }()
 	}
 	if udpTarget != "" {
 		go func() { results <- runUDPProxy(proxyCtx, exposure, udpTarget) }()
@@ -119,18 +116,6 @@ func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig
 		log.Info().Msg("tunnel shutting down")
 	}
 
-	done := make(chan struct{})
-	go func() {
-		connWG.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		log.Warn().Msg("tunnel shutdown timeout; connections still active")
-	}
-
 	log.Info().Msg("tunnel shutdown complete")
 	if ctx.Err() != nil {
 		primary = nil
@@ -139,7 +124,12 @@ func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig
 	return errors.Join(primary, closeErr)
 }
 
-func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {
+func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	defer func() { cancel(); workers.Wait() }()
+	slots := make(chan struct{}, types.DefaultSDKMaxTCPConnections)
+	var connCount int64
 	for {
 		relayConn, err := exposure.Accept()
 		if err != nil {
@@ -158,15 +148,23 @@ func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr st
 			}
 		}
 
-		connID := connCount.Add(1)
+		select {
+		case slots <- struct{}{}:
+		default:
+			_ = relayConn.Close()
+			continue
+		}
+		connCount++
+		connID := connCount
 		log.Debug().
 			Int64("conn_id", connID).
 			Str("remote_addr", relayConn.RemoteAddr().String()).
 			Msg("accepted relay connection")
 
-		connWG.Add(1)
+		workers.Add(1)
 		go func(connID int64, relayConn net.Conn) {
-			defer connWG.Done()
+			defer workers.Done()
+			defer func() { <-slots }()
 			if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
 				log.Debug().Err(err).Int64("conn_id", connID).Msg("proxy connection closed with an I/O error")
 			}
@@ -184,31 +182,51 @@ var bufferPool = sync.Pool{
 
 func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
 	defer relayConn.Close()
+	relayClosed := make(chan struct{})
+	stopRelay := context.AfterFunc(ctx, func() {
+		_ = relayConn.SetDeadline(time.Now())
+		_ = relayConn.Close()
+		close(relayClosed)
+	})
+	defer func() {
+		if !stopRelay() {
+			<-relayClosed
+		}
+	}()
 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		_ = relayConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		return writeEmptyHTTPResponse(relayConn)
 	}
 	defer localConn.Close()
-
-	errCh := make(chan error, 2)
-	stopCh := make(chan struct{})
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = relayConn.Close()
-			_ = localConn.Close()
-		case <-stopCh:
+	localClosed := make(chan struct{})
+	stopLocal := context.AfterFunc(ctx, func() {
+		_ = localConn.Close()
+		close(localClosed)
+	})
+	defer func() {
+		if !stopLocal() {
+			<-localClosed
 		}
 	}()
+
+	errCh := make(chan error, 2)
 
 	go func() {
 		bufPtr := bufferPool.Get().(*[]byte)
 		defer bufferPool.Put(bufPtr)
 		_, err := io.CopyBuffer(localConn, relayConn, *bufPtr)
-		if tcpConn, ok := localConn.(*net.TCPConn); ok {
+		if err != nil {
+			_ = relayConn.SetDeadline(time.Now())
+			_ = relayConn.Close()
+			_ = localConn.Close()
+		} else if tcpConn, ok := localConn.(*net.TCPConn); ok {
+			// EOF is a request half-close: origins may wait for it before replying.
 			_ = tcpConn.CloseWrite()
 		}
 		errCh <- err
@@ -218,6 +236,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 		bufPtr := bufferPool.Get().(*[]byte)
 		defer bufferPool.Put(bufPtr)
 		_, err := io.CopyBuffer(relayConn, localConn, *bufPtr)
+		_ = relayConn.SetDeadline(time.Now())
 		_ = relayConn.Close()
 		errCh <- err
 	}()
@@ -229,7 +248,6 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 		}
 	}
 
-	close(stopCh)
 	if errors.Is(firstErr, io.EOF) || errors.Is(firstErr, net.ErrClosed) {
 		return nil
 	}

@@ -38,7 +38,9 @@ type leaseRecord struct {
 
 	mu         sync.Mutex
 	closed     bool
+	closeDone  chan struct{}
 	reverseMux *transport.ReverseMux
+	bridges    map[*leaseBridge]struct{}
 }
 
 // cacheLease adapts registry facts to the cache's canonical hostname key while
@@ -91,17 +93,28 @@ func (r *leaseRecord) Close() {
 	if r == nil {
 		return
 	}
-	// Serialize the entire close so registry cleanup cannot release ports
-	// while another caller is still shutting down their sockets.
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.closed {
+		done := r.closeDone
+		r.mu.Unlock()
+		if done != nil {
+			<-done
+		}
 		return
 	}
 	r.closed = true
+	r.closeDone = make(chan struct{})
+	r.revokeBridgesLocked()
+	bridges := make([]*leaseBridge, 0, len(r.bridges))
+	for bridge := range r.bridges {
+		bridges = append(bridges, bridge)
+	}
 	mux := r.reverseMux
 	r.reverseMux = nil
 	listener := r.tcpListener
+	r.mu.Unlock()
+	// Socket shutdown must not hold the registry or record mutex. Concurrent
+	// Close callers wait for completion before the registry reuses the ports.
 	if listener != nil {
 		_ = listener.Close()
 	}
@@ -113,6 +126,50 @@ func (r *leaseRecord) Close() {
 	}
 	if r.datagram != nil {
 		r.datagram.Close()
+	}
+	for _, bridge := range bridges {
+		r.releaseBridge(bridge)
+	}
+	close(r.closeDone)
+}
+
+// leaseBridge owns a public connection from reverse acquisition through the
+// active bridge. The record mutex protects its endpoints and membership.
+type leaseBridge struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	inbound net.Conn
+	reverse net.Conn
+}
+
+func (r *leaseRecord) releaseBridge(bridge *leaseBridge) {
+	r.mu.Lock()
+	bridge.cancel()
+	inbound, reverse := bridge.inbound, bridge.reverse
+	r.mu.Unlock()
+	_ = inbound.SetDeadline(time.Now())
+	_ = inbound.Close()
+	if reverse != nil {
+		_ = reverse.SetDeadline(time.Now())
+		_ = reverse.Close()
+	}
+	r.mu.Lock()
+	delete(r.bridges, bridge)
+	r.mu.Unlock()
+}
+
+// Keep revoked workers counted until they finish; allowing the identity again
+// admits only new reservations, never revives a canceled bridge. Deadlines
+// interrupt current I/O, but a subsequent framing write can replace its write
+// deadline with the helper's five-second limit. Workers close endpoints outside
+// these locks and cannot copy application data with the canceled context.
+func (r *leaseRecord) revokeBridgesLocked() {
+	for bridge := range r.bridges {
+		bridge.cancel()
+		_ = bridge.inbound.SetDeadline(time.Now())
+		if bridge.reverse != nil {
+			_ = bridge.reverse.SetDeadline(time.Now())
+		}
 	}
 }
 

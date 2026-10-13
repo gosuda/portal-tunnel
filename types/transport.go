@@ -7,6 +7,10 @@ import (
 )
 
 const (
+	// DefaultSDKMaxTCPConnections bounds local TCP proxy sockets and workers
+	// independently of relay admission limits.
+	DefaultSDKMaxTCPConnections = 128
+
 	DefaultUDPFlowIdleTimeout   = 5 * time.Minute
 	DefaultUDPMaxFlows          = 1024
 	DefaultUDPNewFlowsPerSecond = 64

@@ -1,8 +1,10 @@
 package portal
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -29,6 +31,7 @@ const (
 	defaultPortReservationGrace              = 5 * time.Minute
 	defaultIdleKeepalive                     = 15 * time.Second
 	defaultReadyQueueLimit                   = 8
+	defaultLeaseBridgeLimit                  = 128
 )
 
 type leaseRegistry struct {
@@ -153,6 +156,11 @@ func (r *leaseRegistry) applyIdentityRoutableLocked(key types.ServiceIdentityKey
 		if record.datagram != nil {
 			record.datagram.SetEnabled(routable)
 		}
+		if !routable {
+			record.mu.Lock()
+			record.revokeBridgesLocked()
+			record.mu.Unlock()
+		}
 	}
 	if !routable {
 		// DetachOwner only changes cache metadata. Keep revocation ordered
@@ -174,6 +182,58 @@ func (r *leaseRegistry) isRoutable(key types.ServiceIdentityKey) bool {
 func (r *leaseRegistry) isRoutableLocked(key types.ServiceIdentityKey) bool {
 	_, blocked := r.blocked[key]
 	return !blocked
+}
+
+// admitBridge counts pending acquisition and active traffic together. Mutable
+// lease facts stay under the registry lock; lock order is registry then record.
+func (r *leaseRegistry) admitBridge(ctx context.Context, record *leaseRecord, inbound net.Conn) (*leaseBridge, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if record == nil || r.recordByLease(record.ServiceKey(), record.id, time.Now()) != record {
+		return nil, errLeaseNotFound
+	}
+	if !r.isRoutableLocked(record.ServiceKey()) {
+		return nil, errLeaseRejected
+	}
+	record.mu.Lock()
+	defer record.mu.Unlock()
+	if record.closed || ctx.Err() != nil {
+		return nil, net.ErrClosed
+	}
+	if len(record.bridges) >= defaultLeaseBridgeLimit {
+		return nil, errLeaseRejected
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	bridge := &leaseBridge{ctx: ctx, cancel: cancel, inbound: inbound}
+	if record.bridges == nil {
+		record.bridges = make(map[*leaseBridge]struct{})
+	}
+	record.bridges[bridge] = struct{}{}
+	return bridge, nil
+}
+
+// activateBridge repeats admission after waiting and takes ownership before
+// any activation bytes are written. Lease closure interrupts framing by closing
+// the endpoints. A routing deny cancels this reservation; the framing helper
+// may still use its own five-second write limit before the worker exits. The
+// canceled context prevents application data from being copied afterward.
+func (r *leaseRegistry) activateBridge(record *leaseRecord, bridge *leaseBridge, reverse net.Conn) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.recordByLease(record.ServiceKey(), record.id, time.Now()) != record {
+		return errLeaseNotFound
+	}
+	if !r.isRoutableLocked(record.ServiceKey()) {
+		return errLeaseRejected
+	}
+	record.mu.Lock()
+	defer record.mu.Unlock()
+	if _, exists := record.bridges[bridge]; !exists || record.closed || bridge.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	// A retrying caller has already closed the previous failed framing stream.
+	bridge.reverse = reverse
+	return nil
 }
 
 func (r *leaseRegistry) CloseAll() []*leaseRecord {

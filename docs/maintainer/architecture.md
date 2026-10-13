@@ -129,3 +129,42 @@ frame's `LeaseDone` metadata. It is not part of the wire encoding.
 The SDK `udpFlowManager` independently bounds local sockets and readers, keys
 flows by lease ownership, and closes sockets before joining its workers on
 shutdown. An old reader cannot remove or send through a replacement entry.
+
+### TCP bridge ownership
+
+ClientHello inspection and tenant bridges have separate server-wide budgets:
+at most 128 sockets may await inspection, and at most 1024 tenant connections
+may be pending or active. Root API and reverse-connect handoff does not consume
+the tenant budget, so tenant saturation does not prevent a fresh root connection.
+The inspection budget is shared across source addresses and the root API; a
+single source can occupy all 128 slots until their two-second deadlines expire.
+It bounds memory and workers but does not guarantee source fairness or root
+availability during a sustained ClientHello flood.
+
+A lease independently admits at most 128 pending reverse acquisitions and active
+bridges; the SDK also limits its local TCP proxy workers to 128. Idle established
+connections count toward these limits. Capacity is held until the owning worker
+finishes, including cancellation and socket cleanup.
+
+The lease registry owns expiry and routing decisions. Admission and final
+activation after a reverse wait both read these under the registry lock, then
+attach endpoints under the record lock. Activation takes endpoint ownership
+before writing the native or WebSocket start frame. The reverse pool still
+transfers acquired connections to its caller and only owns idle offers.
+
+Ordinary renewal preserves existing streams. Unregister, expiry, and server
+shutdown cancel pending and active lease bridges and close both endpoints.
+Routing denial cancels those bridges too; a start-frame write that replaces the
+revocation deadline can take up to the framing helper's five-second limit to
+finish. Its canceled context prevents application bytes from being copied.
+Allowing an identity again admits fresh activity only; canceled reservations
+cannot activate. Cancellation also interrupts bandwidth waits.
+
+Copy loops preserve request half-close so an origin can respond after EOF.
+Native replies have no new duration limit. On the WebSocket carrier, yamux's
+send-side close starts its default five-minute stream-close timer: a response
+still streaming five minutes after request EOF can be reset. This is a carrier
+limitation, not an unlimited TCP half-close guarantee. Relay-side revocation may
+reach the SDK as a clean EOF; the SDK preserves response-after-EOF semantics and
+can retain its local origin socket until the origin closes. Explicit SDK
+cancellation or exposure closure closes and joins those local connections.
