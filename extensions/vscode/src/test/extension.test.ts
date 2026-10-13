@@ -42,6 +42,8 @@ describe("Portal commands", () => {
       "localhost:0",
       "0",
       "https://%2d%2dserve=.",
+      "foo;bar:3000",
+      "bad..host:3000",
     ]) {
       assert.notStrictEqual(validateHost(host), undefined, host);
     }
