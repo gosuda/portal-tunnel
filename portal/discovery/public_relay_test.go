@@ -3,7 +3,6 @@ package discovery
 import (
 	"context"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -132,11 +131,13 @@ func TestPublicRelayDialRejectsResolvedLoopback(t *testing.T) {
 // The first response simulates a reachable public HTTPS relay. Redirects to
 // the real internal HTTP server must be rejected before its first request.
 type redirectFromPublicRelay struct {
-	target string
+	target         string
+	publicRequests *atomic.Int32
 }
 
 func (r redirectFromPublicRelay) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Hostname() == "relay-public.example" {
+		r.publicRequests.Add(1)
 		return &http.Response{
 			StatusCode: http.StatusFound,
 			Header:     http.Header{"Location": []string{r.target}},
@@ -164,10 +165,17 @@ func TestUntrustedDiscoveryRejectsRedirectToInternalService(t *testing.T) {
 	refresher := NewRefresher(set)
 	defer refresher.httpClient.CloseIdleConnections()
 	defer refresher.publicHTTPClient.CloseIdleConnections()
-	refresher.publicHTTPClient.Transport = redirectFromPublicRelay{target: internal.URL}
+	var publicRequests atomic.Int32
+	refresher.publicHTTPClient.Transport = redirectFromPublicRelay{
+		target:         internal.URL,
+		publicRequests: &publicRequests,
+	}
 
 	if err := refresher.refreshOneHTTPS(context.Background(), relayStates(set)[0]); err != nil {
 		t.Fatalf("refreshOneHTTPS() error = %v", err)
+	}
+	if got := publicRequests.Load(); got != 1 {
+		t.Fatalf("public relay received %d requests, want one", got)
 	}
 	if got := internalRequests.Load(); got != 0 {
 		t.Fatalf("internal service received %d redirected requests, want zero", got)
@@ -181,7 +189,9 @@ func TestLocalBootstrapDiscoveryRejectsRedirect(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer internal.Close()
+	var bootstrapRequests atomic.Int32
 	bootstrap := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		bootstrapRequests.Add(1)
 		http.Redirect(w, req, internal.URL, http.StatusFound)
 	}))
 	defer bootstrap.Close()
@@ -193,11 +203,10 @@ func TestLocalBootstrapDiscoveryRejectsRedirect(t *testing.T) {
 	if err := refresher.refreshOneHTTPS(context.Background(), bootstrapRelayState(bootstrap.URL)); err != nil {
 		t.Fatalf("refreshOneHTTPS() error = %v", err)
 	}
+	if got := bootstrapRequests.Load(); got != 1 {
+		t.Fatalf("bootstrap received %d requests, want one", got)
+	}
 	if got := internalRequests.Load(); got != 0 {
 		t.Fatalf("internal service received %d redirected bootstrap requests, want zero", got)
 	}
 }
-
-// Compile-time assertion that the secure discovery dialer works with HTTP's
-// DialContext signature without replacing TLS's original server name.
-var _ func(context.Context, string, string) (net.Conn, error) = dialPublicRelay
