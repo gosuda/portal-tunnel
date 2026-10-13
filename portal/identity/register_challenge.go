@@ -24,6 +24,9 @@ type RegisterChallenge struct {
 }
 
 func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string, now time.Time, ttl time.Duration) (*RegisterChallenge, error) {
+	if err := req.Metadata.Validate(); err != nil {
+		return nil, err
+	}
 	normalizedIdentity, err := NormalizeIdentity(req.Identity)
 	if err != nil {
 		return nil, err
