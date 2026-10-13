@@ -7,8 +7,6 @@ import (
 	"net"
 	"testing"
 	"time"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestTCPProxyCapacityAndJoinedShutdown(t *testing.T) {
@@ -28,9 +26,9 @@ func TestTCPProxyCapacityAndJoinedShutdown(t *testing.T) {
 	defer exposure.Close()
 	done := make(chan error, 1)
 	go func() { done <- proxyRelayConnections(ctx, exposure, target.Addr().String()) }()
-	clients := make([]*net.TCPConn, 0, types.DefaultSDKMaxTCPConnections)
-	origins := make([]*net.TCPConn, 0, types.DefaultSDKMaxTCPConnections)
-	for range types.DefaultSDKMaxTCPConnections {
+	clients := make([]*net.TCPConn, 0, maxTCPConnections)
+	origins := make([]*net.TCPConn, 0, maxTCPConnections)
+	for range maxTCPConnections {
 		client, err := net.DialTCP("tcp", nil, ingress.Addr().(*net.TCPAddr))
 		if err != nil {
 			t.Fatal(err)

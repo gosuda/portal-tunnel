@@ -16,6 +16,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+// maxTCPConnections bounds local TCP proxy sockets and workers independently
+// of relay admission limits.
+const maxTCPConnections = 128
+
 // ProxyConfig selects local TCP and UDP targets.
 type ProxyConfig struct {
 	TCPTarget string
@@ -128,7 +132,7 @@ func proxyRelayConnections(ctx context.Context, exposure *Exposure, localAddr st
 	ctx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
-	slots := make(chan struct{}, types.DefaultSDKMaxTCPConnections)
+	slots := make(chan struct{}, maxTCPConnections)
 	var connCount int64
 	for {
 		relayConn, err := exposure.Accept()
