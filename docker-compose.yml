@@ -10,14 +10,33 @@ services:
     cap_add:
       - NET_BIND_SERVICE
     ports:
-      - "443:443"
+      # Publish the TLS listener on both address families and protocols.
+      - target: 443
+        published: "443"
+        host_ip: 0.0.0.0
+        protocol: tcp
+      - target: 443
+        published: "443"
+        host_ip: "::"
+        protocol: tcp
+      - target: 443
+        published: "443"
+        host_ip: 0.0.0.0
+        protocol: udp
+      - target: 443
+        published: "443"
+        host_ip: "::"
+        protocol: udp
       # Embedded authoritative DNS (the default DNS provider).
       - "${EMBEDDED_DNS_PORT:-53}:${EMBEDDED_DNS_PORT:-53}/tcp"
       - "${EMBEDDED_DNS_PORT:-53}:${EMBEDDED_DNS_PORT:-53}/udp"
       # Uncomment for UDP backhaul, public UDP lease ports, and raw TCP lease ports as needed.
-      # - "443:443/udp"
-      # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
-      # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}"
+      # IPv4 TCP/UDP.
+      # - "0.0.0.0:${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/tcp"
+      # - "0.0.0.0:${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
+      # IPv6 TCP/UDP.
+      # - "[::]:${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/tcp"
+      # - "[::]:${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
       # Uncomment with PPROF_ENABLED=true and PPROF_ADDR=:6060 to inspect pprof from the host.
       # - "${PPROF_PORT:-6060}:${PPROF_PORT:-6060}"
     environment:
@@ -82,3 +101,13 @@ services:
       # Uncomment when using a Google Cloud service account file for gcloud automation.
       # - ./gcp-dns.json:/run/secrets/gcp-dns.json:ro
     restart: unless-stopped
+
+networks:
+  default:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 10.30.0.0/16
+          ip_range: 10.30.0.0/24
+          gateway: 10.30.0.1
+        - subnet: ${IPV6_SUBNET:-fd30:30::/64}
