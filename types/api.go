@@ -3,6 +3,7 @@ package types
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -113,9 +114,16 @@ type RegisterResponse struct {
 	TCPEnabled        bool            `json:"tcp_enabled,omitempty"`
 }
 
-// MaxDiscoveryEntries bounds the relay pool and discovery metadata collections.
+// MaxDiscoveryResponseBytes is the decoded-byte budget for both discovery
+// readers and producers.
+const MaxDiscoveryResponseBytes int64 = 1 << 20
+
+// MaxDiscoveryEntries bounds retained relay peers and each metadata collection.
 // The relays wire field permits one additional descriptor for the serving relay.
 const MaxDiscoveryEntries = 1024
+
+// MaxDiscoveryVersionBytes bounds untrusted protocol and release labels.
+const MaxDiscoveryVersionBytes = 128
 
 type DiscoveryResponse struct {
 	ProtocolVersion    string                   `json:"protocol_version"`
@@ -130,32 +138,64 @@ type DiscoveryResponse struct {
 	RelayReleaseVersions map[string]string `json:"relay_release_versions,omitempty"`
 }
 
-// UnmarshalJSON checks collection sizes before allocating typed relay slices.
+// UnmarshalJSON bounds and rejects duplicate discovery collections before
+// allocating typed descriptors or the release-version map.
 func (resp *DiscoveryResponse) UnmarshalJSON(data []byte) error {
-	var collections struct {
-		Relays               json.RawMessage `json:"relays"`
-		IncompatibleRelays   json.RawMessage `json:"incompatible_relays"`
-		RelayReleaseVersions json.RawMessage `json:"relay_release_versions"`
-	}
-	if err := json.Unmarshal(data, &collections); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	start, err := decoder.Token()
+	if err != nil {
 		return err
 	}
-	for _, field := range []struct {
-		name  string
-		data  json.RawMessage
-		open  json.Delim
-		limit int
-	}{
-		{"relays", collections.Relays, '[', MaxDiscoveryEntries + 1},
-		{"incompatible_relays", collections.IncompatibleRelays, '[', MaxDiscoveryEntries},
-		{"relay_release_versions", collections.RelayReleaseVersions, '{', MaxDiscoveryEntries},
-	} {
-		if err := checkDiscoveryCollectionLimit(field.name, field.data, field.open, field.limit); err != nil {
+	if start != json.Delim('{') {
+		return errors.New("discovery response must be an object")
+	}
+
+	var seen [3]bool
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return errors.New("invalid discovery field name")
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+		var index, limit int
+		var open json.Delim
+		switch {
+		case strings.EqualFold(key, "relays"):
+			index, limit, open = 0, MaxDiscoveryEntries+1, '['
+		case strings.EqualFold(key, "incompatible_relays"):
+			index, limit, open = 1, MaxDiscoveryEntries, '['
+		case strings.EqualFold(key, "relay_release_versions"):
+			index, limit, open = 2, MaxDiscoveryEntries, '{'
+		default:
+			continue
+		}
+		if seen[index] {
+			return fmt.Errorf("duplicate discovery collection %q", key)
+		}
+		seen[index] = true
+		if err := checkDiscoveryCollectionLimit(key, value, open, limit); err != nil {
 			return err
 		}
 	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+
 	type plain DiscoveryResponse
-	return json.Unmarshal(data, (*plain)(resp))
+	if err := json.Unmarshal(data, (*plain)(resp)); err != nil {
+		return err
+	}
+	if len(resp.ProtocolVersion) > MaxDiscoveryVersionBytes || len(resp.ReleaseVersion) > MaxDiscoveryVersionBytes {
+		return fmt.Errorf("discovery version label exceeds %d bytes", MaxDiscoveryVersionBytes)
+	}
+	return nil
 }
 
 func checkDiscoveryCollectionLimit(name string, data json.RawMessage, open json.Delim, limit int) error {
