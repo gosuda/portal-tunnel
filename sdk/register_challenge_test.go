@@ -41,6 +41,10 @@ func TestValidateRegisterSIWEChallenge(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "honest relay"},
+		{name: "subsecond challenge", change: func(m *identity.SIWEMessage, c *types.RegisterChallengeResponse) {
+			m.ExpiresAt = m.IssuedAt.Add(100 * time.Millisecond)
+			c.ExpiresAt = m.ExpiresAt
+		}},
 		{name: "other relying party", change: func(m *identity.SIWEMessage, _ *types.RegisterChallengeResponse) {
 			m.Domain = "login.example"
 			m.URI = "https://login.example/sign-in"

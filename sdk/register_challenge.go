@@ -51,7 +51,7 @@ func validateRegisterSIWEChallenge(challenge types.RegisterChallengeResponse, re
 	}
 	expiresAt := challenge.ExpiresAt.Truncate(time.Second)
 	if issuedAt.After(now.Add(maxRegisterSIWETimeSkew)) ||
-		!expiresAt.After(issuedAt) ||
+		expiresAt.Before(issuedAt) ||
 		expiresAt.Sub(issuedAt) > maxRegisterSIWELifetime ||
 		expiresAt.After(now.Add(maxRegisterSIWELifetime)) {
 		return errInvalidRegisterSIWEChallenge
