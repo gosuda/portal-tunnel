@@ -44,6 +44,8 @@ Example `settings.json`:
 
 Use `Portal: Start Tunnel (Advanced)` when you need a different host, custom relay selection, or a thumbnail URL.
 
+The extension requires a trusted VS Code workspace and validates the requested local target before launching. Host inputs may be a port, host and port, IP address, or HTTP(S) URL. The CLI treats the target as a positional argument, never as an option.
+
 The extension runs the platform-appropriate installer script from the latest GitHub release assets and then runs `portal expose ...` with the selected relay settings.
 
 To stop, run `Portal: Stop Tunnel` or close the `Portal Tunnel` terminal.
