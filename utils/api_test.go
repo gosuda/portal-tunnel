@@ -1,11 +1,15 @@
 package utils
 
 import (
+	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -108,5 +112,84 @@ func TestDecodeAPIRequestErrorRetryAfter(t *testing.T) {
 		} else if apiErr.RetryAfter != 0 {
 			t.Fatalf("invalid header %q = %v", header, apiErr.RetryAfter)
 		}
+	}
+}
+
+func TestHTTPDoAPIPathRejectsOversizedContentLength(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.FormatInt(maxDiscoveryResponseBytes+1, 10))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	base, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := HTTPDoAPIPath(context.Background(), server.Client(), base, http.MethodGet, types.PathDiscovery, nil, nil, nil); !errors.Is(err, ErrAPIResponseTooLarge) {
+		t.Fatalf("HTTPDoAPIPath() error = %v, want ErrAPIResponseTooLarge", err)
+	}
+}
+
+func TestHTTPDoAPIPathRejectsOversizedChunkedBody(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		_, _ = io.WriteString(w, strings.Repeat("x", int(maxDiscoveryResponseBytes+1)))
+	}))
+	defer server.Close()
+	base, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := HTTPDoAPIPath(context.Background(), server.Client(), base, http.MethodGet, types.PathDiscovery, nil, nil, nil); !errors.Is(err, ErrAPIResponseTooLarge) {
+		t.Fatalf("HTTPDoAPIPath() error = %v, want ErrAPIResponseTooLarge", err)
+	}
+}
+
+func TestHTTPDoAPIPathRejectsOversizedDecompressedGzip(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		writer := gzip.NewWriter(w)
+		_, _ = io.WriteString(writer, strings.Repeat("x", int(maxDiscoveryResponseBytes+1)))
+		_ = writer.Close()
+	}))
+	defer server.Close()
+	base, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := HTTPDoAPIPath(context.Background(), server.Client(), base, http.MethodGet, types.PathDiscovery, nil, nil, nil); !errors.Is(err, ErrAPIResponseTooLarge) {
+		t.Fatalf("HTTPDoAPIPath() error = %v, want ErrAPIResponseTooLarge", err)
+	}
+}
+
+func TestHTTPDoAPIPathAcceptsDiscoveryAtLimit(t *testing.T) {
+	t.Parallel()
+
+	const prefix = "{\"ok\":true,\"data\":{\"value\":\""
+	const suffix = "\"}}"
+	padding := int(maxDiscoveryResponseBytes) - len(prefix) - len(suffix)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, prefix+strings.Repeat("x", padding)+suffix)
+	}))
+	defer server.Close()
+	base, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data struct {
+		Value string `json:"value"`
+	}
+	if err := HTTPDoAPIPath(context.Background(), server.Client(), base, http.MethodGet, types.PathDiscovery, nil, nil, &data); err != nil {
+		t.Fatalf("HTTPDoAPIPath() error = %v, want success", err)
+	}
+	if len(data.Value) != padding {
+		t.Fatalf("value size = %d, want %d", len(data.Value), padding)
 	}
 }
