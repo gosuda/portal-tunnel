@@ -317,23 +317,34 @@ func relayLifecycleRecordFrom(status sdk.RelayStatus) relayLifecycleRecord {
 // StartRelayLifecycleWriter projects relay lifecycle changes onto w as
 // JSONL when spec.Output is jsonl: one relay_status record per update,
 // sourced from the SDK's authoritative Updates channel with a Relays()
-// snapshot for already-known state at start. The channel is a bounded,
-// coalescing notification, not a lossless event log; consumers reconcile
-// against the snapshot by re-deriving it on restart. Text mode (default)
-// starts nothing.
-func (runtime *Runtime) StartRelayLifecycleWriter(ctx context.Context, w io.Writer) {
+// startup snapshot. Returned records ordered by the snapshot: a queued
+// update is reconciled against a fresh Relays() before it is emitted, so
+// a stale ready never follows a snapshot-reported failure. The channel is
+// a bounded, coalescing notification, not a lossless event log; consumers
+// reconcile by re-deriving the snapshot on restart. The writer stops on
+// the first write failure or ctx cancellation and returns that error;
+// Done reports it. Text mode (default) returns an already-closed Done.
+func (runtime *Runtime) StartRelayLifecycleWriter(ctx context.Context, w io.Writer) <-chan error {
+	done := make(chan error, 1)
+	done <- nil
 	if runtime == nil || runtime.Exposure == nil || runtime.output != "jsonl" || w == nil {
-		return
+		return done
 	}
 	go func() {
+		defer func() { done <- nil }()
 		encoder := json.NewEncoder(w)
-		writeStatus := func(status sdk.RelayStatus) {
+		writeStatus := func(status sdk.RelayStatus) bool {
 			if err := encoder.Encode(relayLifecycleRecordFrom(status)); err != nil {
 				log.Error().Err(err).Msg("relay lifecycle record write failed")
+				done <- err
+				return false
 			}
+			return true
 		}
 		for _, status := range runtime.Exposure.Relays() {
-			writeStatus(status)
+			if !writeStatus(status) {
+				return
+			}
 		}
 		updates := runtime.Exposure.Updates()
 		for {
@@ -344,8 +355,21 @@ func (runtime *Runtime) StartRelayLifecycleWriter(ctx context.Context, w io.Writ
 				if !ok {
 					return
 				}
-				writeStatus(status)
+				// The queue can hold updates published before the
+				// snapshot above was read. A fresh snapshot is
+				// authoritative: reconcile the queued status against it
+				// so an older ready never contradicts a newer failure.
+				for _, current := range runtime.Exposure.Relays() {
+					if current.RelayURL == status.RelayURL {
+						status = current
+						break
+					}
+				}
+				if !writeStatus(status) {
+					return
+				}
 			}
 		}
 	}()
+	return done
 }

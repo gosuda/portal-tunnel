@@ -191,8 +191,15 @@ func runExposeCommand(args []string) error {
 		return err
 	}
 	defer runtime.Close()
-	runtime.StartRelayLifecycleWriter(ctx, os.Stdout)
-	return runtime.Run(ctx)
+	writerDone := runtime.StartRelayLifecycleWriter(ctx, os.Stdout)
+	runErr := runtime.Run(ctx)
+	// Wait for the writer so the startup snapshot and any pending record
+	// land on stdout before the process exits.
+	writerErr := <-writerDone
+	if runErr != nil {
+		return runErr
+	}
+	return writerErr
 }
 
 func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
