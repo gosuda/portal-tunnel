@@ -323,7 +323,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		port, err := r.udpPorts.allocate(record)
 		if err != nil {
 			r.mu.Unlock()
-			r.closeRecord(record)
+			r.rollbackRecord(record)
 			return nil, types.RegisterResponse{}, errUDPPortExhausted
 		}
 		record.datagram = transport.NewRelayDatagram(identityKey, port)
@@ -333,7 +333,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		port, err := r.tcpPorts.allocate(record)
 		if err != nil {
 			r.mu.Unlock()
-			r.closeRecord(record)
+			r.rollbackRecord(record)
 			return nil, types.RegisterResponse{}, errTCPPortExhausted
 		}
 		record.tcpPort = port
@@ -341,7 +341,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	r.mu.Unlock()
 
 	if err := record.Start(); err != nil {
-		r.closeRecord(record)
+		r.rollbackRecord(record)
 		return nil, types.RegisterResponse{}, err
 	}
 	var replaced *leaseRecord
@@ -373,13 +373,13 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		if existing.isPublicEntry() && existingKey != identityKey {
 			if existing.CanonicalHostname == record.CanonicalHostname {
 				r.mu.Unlock()
-				r.closeRecord(record)
+				r.rollbackRecord(record)
 				return nil, types.RegisterResponse{}, errHostnameConflict
 			}
 			if existing.Hostname != "" && existing.Hostname == record.Hostname {
 				if !req.AllowCanonicalFallback {
 					r.mu.Unlock()
-					r.closeRecord(record)
+					r.rollbackRecord(record)
 					return nil, types.RegisterResponse{}, errHostnameConflict
 				}
 				record.Hostname = ""
@@ -389,14 +389,14 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	if record.datagram != nil {
 		if max := r.udpMaxLeases; max > 0 && udpLeases >= max {
 			r.mu.Unlock()
-			r.closeRecord(record)
+			r.rollbackRecord(record)
 			return nil, types.RegisterResponse{}, errUDPCapacityExceeded
 		}
 	}
 	if record.tcpPort > 0 {
 		if max := r.tcpMaxLeases; max > 0 && tcpLeases >= max {
 			r.mu.Unlock()
-			r.closeRecord(record)
+			r.rollbackRecord(record)
 			return nil, types.RegisterResponse{}, errTCPPortCapacityExceeded
 		}
 	}
@@ -444,7 +444,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		if r.overlay != nil {
 			r.overlay.ForgetLease(leaseID)
 		}
-		r.closeRecord(record)
+		r.rollbackRecord(record)
 		return nil, types.RegisterResponse{}, err
 	}
 
@@ -934,6 +934,24 @@ func (r *leaseRegistry) closeRecord(record *leaseRecord) {
 	}
 }
 
+
+// rollbackRecord closes a registration that was never accepted and returns its
+// ports immediately. Unlike closeRecord, it must not create sticky reservations.
+func (r *leaseRegistry) rollbackRecord(record *leaseRecord) {
+	if record == nil {
+		return
+	}
+	record.Close()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if record.datagram != nil {
+		r.udpPorts.rollback(record.datagram.UDPPort(), record)
+	}
+	if record.tcpPort > 0 {
+		r.tcpPorts.rollback(record.tcpPort, record)
+	}
+}
+
 var errPortExhausted = errors.New("no ports available")
 
 type portReservation struct {
@@ -988,6 +1006,16 @@ func (a *portPool) allocate(record *leaseRecord) (int, error) {
 	a.available = a.available[1:]
 	a.inUse[port] = record
 	return port, nil
+}
+
+// rollback frees an unpublished allocation without a reconnect reservation.
+// Match the current owner so late cleanup cannot free a reassigned port.
+func (a *portPool) rollback(port int, record *leaseRecord) {
+	if a.inUse[port] != record {
+		return
+	}
+	delete(a.inUse, port)
+	a.sortedInsert(port)
 }
 
 func (a *portPool) release(port int, record *leaseRecord) {
