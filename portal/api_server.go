@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -165,7 +167,7 @@ func (s *Server) HandleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.WriteAPIData(w, http.StatusOK, types.DiscoveryResponse{
+	writeDiscoveryResponse(w, types.DiscoveryResponse{
 		ProtocolVersion:      types.DiscoveryVersion,
 		GeneratedAt:          now,
 		Relays:               s.relaySet.Descriptors(self),
@@ -173,6 +175,99 @@ func (s *Server) HandleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		ReleaseVersion:       types.ReleaseVersion,
 		RelayReleaseVersions: s.relaySet.KnownRelayReleaseVersions(),
 	})
+}
+
+// writeDiscoveryResponse enforces the same decoded-byte budget on the relay
+// producer as on its clients. Keep the self descriptor and as many peers as
+// fit before adding optional observation metadata.
+func writeDiscoveryResponse(w http.ResponseWriter, response types.DiscoveryResponse) {
+	bounded := response
+	bounded.Relays = nil
+	bounded.IncompatibleRelays = nil
+	bounded.RelayReleaseVersions = nil
+
+	// The base document must fit before we add collections. Reserve space
+	// for array brackets and optional field names when selecting entries.
+	baseline, err := json.Marshal(types.APIEnvelope[types.DiscoveryResponse]{OK: true, Data: bounded})
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+		return
+	}
+	budget := int(types.MaxDiscoveryResponseBytes) - len(baseline) - 128
+	if budget < 0 {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "discovery response exceeds size limit")
+		return
+	}
+
+	for _, descriptor := range response.Relays {
+		encoded, err := json.Marshal(descriptor)
+		if err != nil {
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+			return
+		}
+		if len(encoded)+1 > budget {
+			break
+		}
+		bounded.Relays = append(bounded.Relays, descriptor)
+		budget -= len(encoded) + 1
+	}
+	if len(response.Relays) > 0 && len(bounded.Relays) == 0 {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "self descriptor exceeds discovery response limit")
+		return
+	}
+
+	for _, entry := range response.IncompatibleRelays {
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+			return
+		}
+		if len(encoded)+1 > budget {
+			break
+		}
+		bounded.IncompatibleRelays = append(bounded.IncompatibleRelays, entry)
+		budget -= len(encoded) + 1
+	}
+
+	keys := make([]string, 0, len(response.RelayReleaseVersions))
+	for key := range response.RelayReleaseVersions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		encodedKey, err := json.Marshal(key)
+		if err != nil {
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+			return
+		}
+		encodedValue, err := json.Marshal(response.RelayReleaseVersions[key])
+		if err != nil {
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+			return
+		}
+		cost := len(encodedKey) + len(encodedValue) + 2 // colon and comma
+		if cost > budget {
+			break
+		}
+		if bounded.RelayReleaseVersions == nil {
+			bounded.RelayReleaseVersions = make(map[string]string)
+		}
+		bounded.RelayReleaseVersions[key] = response.RelayReleaseVersions[key]
+		budget -= cost
+	}
+
+	encoded, err := json.Marshal(types.APIEnvelope[types.DiscoveryResponse]{OK: true, Data: bounded})
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+		return
+	}
+	if int64(len(encoded)) > types.MaxDiscoveryResponseBytes {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "discovery response exceeds size limit")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(encoded)
 }
 
 func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) {
