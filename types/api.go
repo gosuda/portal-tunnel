@@ -92,8 +92,8 @@ type RegisterChallengeResponse struct {
 // ReverseEndpoint authorizes one class of operation: opening reverse streams.
 // Capability is opaque to SDK callers and cannot mutate the owning lease.
 type ReverseEndpoint struct {
-	URL        string    `json:"url"`
-	Capability string    `json:"capability"`
+	URL        string           `json:"url"`
+	Capability string           `json:"capability"`
 	ExpiresAt  time.Time        `json:"expires_at"`
 	Overlay    bool             `json:"overlay,omitempty"`
 	Gateway    *RelayDescriptor `json:"gateway,omitempty"`
