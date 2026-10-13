@@ -25,24 +25,25 @@ const (
 )
 
 type Config struct {
-	BaseDomain         string
-	KeyDir             string
-	DNSProvider        string
-	ENSGaslessEnabled  bool
-	ENSGaslessAddress  string
-	EmbeddedDNSPort    int
-	CloudflareToken    string
-	GCPProjectID       string
-	GCPManagedZone     string
-	HetznerAPIToken    string
-	AWSAccessKeyID     string
-	AWSSecretAccessKey string
-	AWSSessionToken    string
-	AWSRegion          string
-	AWSHostedZoneID    string
-	AWSKMSKeyARN       string
-	VultrAPIKey        string
-	NjallaToken        string
+	BaseDomain                 string
+	KeyDir                     string
+	DNSProvider                string
+	ENSGaslessEnabled          bool
+	ENSGaslessAddress          string
+	ENSGaslessReduceDNSRecords bool
+	EmbeddedDNSPort            int
+	CloudflareToken            string
+	GCPProjectID               string
+	GCPManagedZone             string
+	HetznerAPIToken            string
+	AWSAccessKeyID             string
+	AWSSecretAccessKey         string
+	AWSSessionToken            string
+	AWSRegion                  string
+	AWSHostedZoneID            string
+	AWSKMSKeyARN               string
+	VultrAPIKey                string
+	NjallaToken                string
 }
 
 type Manager struct {
