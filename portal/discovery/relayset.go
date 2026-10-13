@@ -526,7 +526,7 @@ func (s *RelaySet) discoveryRelayStateLocked(
 
 func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.DiscoveryResponse, now time.Time) (relaySetChanged bool, err error) {
 	if len(resp.Relays) > MaxAnnouncedRelays+1 || len(resp.IncompatibleRelays) > MaxAnnouncedRelays || len(resp.RelayReleaseVersions) > MaxAnnouncedRelays {
-		return false, fmt.Errorf("discovery response exceeds %d entries per collection", MaxAnnouncedRelays)
+		return false, fmt.Errorf("discovery response exceeds collection limits (relays: %d, metadata: %d)", MaxAnnouncedRelays+1, MaxAnnouncedRelays)
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
