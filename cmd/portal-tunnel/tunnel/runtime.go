@@ -305,7 +305,7 @@ func relayLifecycleRecordFrom(status sdk.RelayStatus) relayLifecycleRecord {
 		Version:    status.Version,
 		Deselected: status.Deselected,
 	}
-	if status.State == sdk.RelayReady {
+	if status.State == sdk.RelayReady && !status.Deselected {
 		record.AliasURL = status.AliasURL
 	}
 	if status.Err != nil {

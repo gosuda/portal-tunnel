@@ -51,7 +51,8 @@ func main() {
 			{Name: "update", Usage: printUpdateUsage},
 		}),
 	}); err != nil {
-		log.Error().Err(err).Msg("portal tunnel exited with error")
+		logger := log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+		logger.Error().Err(err).Msg("portal tunnel exited with error")
 		os.Exit(1)
 	}
 }

@@ -87,6 +87,9 @@ func TestRelayLifecycleRecordAliasOnlyWhenReady(t *testing.T) {
 	if deselected.Deselected != true {
 		t.Fatalf("deselected record = %+v, want Deselected true", deselected)
 	}
+	if deselected.AliasURL != "" {
+		t.Fatalf("deselected record alias = %q, want retracted alias for a left relay", deselected.AliasURL)
+	}
 
 	connecting := encodeRecord(t, sdk.RelayStatus{RelayURL: "https://relay.example.com"})
 	if connecting.State != "connecting" {
