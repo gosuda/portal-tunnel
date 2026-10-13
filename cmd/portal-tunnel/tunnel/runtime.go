@@ -322,21 +322,24 @@ func relayLifecycleRecordFrom(status sdk.RelayStatus) relayLifecycleRecord {
 // a stale ready never follows a snapshot-reported failure. The channel is
 // a bounded, coalescing notification, not a lossless event log; consumers
 // reconcile by re-deriving the snapshot on restart. The writer stops on
-// the first write failure or ctx cancellation and returns that error;
-// Done reports it. Text mode (default) returns an already-closed Done.
+// the first write failure or ctx cancellation; the returned channel
+// delivers exactly one send when the writer stops: the write error if
+// any, else nil. A caller waiting on it blocks until the writer has
+// flushed its output. Text mode (default) delivers an immediate nil.
 func (runtime *Runtime) StartRelayLifecycleWriter(ctx context.Context, w io.Writer) <-chan error {
 	done := make(chan error, 1)
-	done <- nil
 	if runtime == nil || runtime.Exposure == nil || runtime.output != "jsonl" || w == nil {
+		close(done)
 		return done
 	}
 	go func() {
-		defer func() { done <- nil }()
+		var writeErr error
+		defer func() { done <- writeErr }()
 		encoder := json.NewEncoder(w)
 		writeStatus := func(status sdk.RelayStatus) bool {
 			if err := encoder.Encode(relayLifecycleRecordFrom(status)); err != nil {
 				log.Error().Err(err).Msg("relay lifecycle record write failed")
-				done <- err
+				writeErr = err
 				return false
 			}
 			return true
