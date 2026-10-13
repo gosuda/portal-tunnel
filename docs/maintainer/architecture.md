@@ -116,3 +116,16 @@ per-source and global budgets owned by the relay's admission limiter. The relay 
 these before decoding and signature work, returns 429 with retry guidance, and records
 bounded rejection metrics. Authenticated lease operations do not spend the source
 budget.
+
+### UDP resource ownership
+
+`RelayDatagram` owns bounded per-lease sender flows and admission of new senders.
+`DatagramSession` owns the current QUIC connection and a local lease token carried
+as `DatagramFrame.LeaseDone`. Reconnecting the same lease preserves that token;
+lease replacement invalidates it, so buffered frames and delayed replies cannot
+cross lease instances. Manual SDK datagram replies must preserve the accepted
+frame's `LeaseDone` metadata. It is not part of the wire encoding.
+
+The SDK `udpFlowManager` independently bounds local sockets and readers, keys
+flows by lease ownership, and closes sockets before joining its workers on
+shutdown. An old reader cannot remove or send through a replacement entry.

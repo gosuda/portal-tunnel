@@ -209,17 +209,30 @@ func backhaulRejectionCode(errText string) string {
 }
 
 func AcceptQUICBackhaulControl(ctx context.Context, conn *quic.Conn) (*QUICBackhaulControl, error) {
+	ctx, cancel := context.WithTimeout(ctx, quicBackhaulControlTimeout)
+	defer cancel()
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("accept quic backhaul control stream: %w", err)
 	}
 
-	_ = stream.SetReadDeadline(time.Now().Add(quicBackhaulControlTimeout))
+	deadline, _ := ctx.Deadline()
+	_ = stream.SetDeadline(deadline)
+	// A context cancellation must also interrupt a peer stalled mid-JSON.
+	canceled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		stream.CancelRead(1)
+		close(canceled)
+	})
+	defer func() {
+		if !stop() {
+			<-canceled
+		}
+	}()
 	var msg quicBackhaulControlMessage
 	if err := json.NewDecoder(io.LimitReader(stream, quicBackhaulControlBodyLimit)).Decode(&msg); err != nil {
 		return nil, fmt.Errorf("read quic backhaul control message: %w", err)
 	}
-	_ = stream.SetReadDeadline(time.Time{})
 
 	accessToken := strings.TrimSpace(msg.AccessToken)
 	if accessToken == "" {
@@ -287,6 +300,7 @@ func quicBackhaulClientTLSConfig(base *tls.Config) *tls.Config {
 func quicBackhaulConfig() *quic.Config {
 	return &quic.Config{
 		EnableDatagrams:    true,
+		InitialPacketSize:  types.QUICInitialPacketSize,
 		KeepAlivePeriod:    15 * time.Second,
 		MaxIdleTimeout:     60 * time.Second,
 		MaxIncomingStreams: 16,

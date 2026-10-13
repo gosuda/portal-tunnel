@@ -22,7 +22,10 @@ func TestRelayDatagramRoutesRepliesOnlyWhileEnabled(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer client.Close()
-		flowID := d.touchFlow(client.LocalAddr().(*net.UDPAddr).AddrPort())
+		flowID, _, admitted := d.touchFlow(client.LocalAddr().(*net.UDPAddr).AddrPort(), time.Now())
+		if !admitted {
+			t.Fatal("flow admission failed")
+		}
 		d.SetEnabled(false)
 		d.dispatch(types.DatagramFrame{FlowID: flowID, Payload: []byte("blocked")})
 		d.SetEnabled(true)

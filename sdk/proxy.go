@@ -291,7 +291,9 @@ func proxyExposureDatagrams(ctx context.Context, exposure *Exposure, localAddr s
 	}
 
 	mgr := newUDPFlowManager(resolvedAddr, exposure)
-	go mgr.runCleanup(ctx)
+	mgr.workers.Add(1)
+	go func() { defer mgr.workers.Done(); mgr.runCleanup(ctx) }()
+	defer mgr.Close()
 
 	log.Info().Str("target", localAddr).Msg("udp proxy loop started, waiting for datagrams")
 	for {
@@ -317,12 +319,6 @@ func proxyExposureDatagrams(ctx context.Context, exposure *Exposure, localAddr s
 
 		localConn, err := mgr.getOrCreate(ctx, frame)
 		if err != nil {
-			log.Warn().
-				Err(err).
-				Uint32("flow_id", frame.FlowID).
-				Str("address", frame.Address).
-				Str("relay_url", frame.RelayURL).
-				Msg("dial local udp failed")
 			continue
 		}
 
@@ -340,9 +336,10 @@ func proxyExposureDatagrams(ctx context.Context, exposure *Exposure, localAddr s
 }
 
 type udpFlowKey struct {
-	flowID   uint32
-	address  string
-	relayURL string
+	flowID    uint32
+	address   string
+	relayURL  string
+	leaseDone <-chan struct{}
 }
 
 type udpFlowEntry struct {
@@ -356,6 +353,9 @@ type udpFlowManager struct {
 	exposure *Exposure
 	mu       sync.Mutex
 	flows    map[udpFlowKey]*udpFlowEntry
+	done     chan struct{}
+	workers  sync.WaitGroup
+	readers  int
 }
 
 func newUDPFlowManager(target *net.UDPAddr, exposure *Exposure) *udpFlowManager {
@@ -363,6 +363,7 @@ func newUDPFlowManager(target *net.UDPAddr, exposure *Exposure) *udpFlowManager 
 		target:   target,
 		exposure: exposure,
 		flows:    make(map[udpFlowKey]*udpFlowEntry),
+		done:     make(chan struct{}),
 	}
 }
 
@@ -372,6 +373,9 @@ func (m *udpFlowManager) runCleanup(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			m.closeSockets()
+			return
+		case <-m.done:
 			return
 		case <-ticker.C:
 			m.mu.Lock()
@@ -387,96 +391,122 @@ func (m *udpFlowManager) runCleanup(ctx context.Context) {
 	}
 }
 
-func (m *udpFlowManager) getOrCreate(ctx context.Context, frame types.DatagramFrame) (*net.UDPConn, error) {
-	key := udpFlowKey{
-		flowID:   frame.FlowID,
-		address:  frame.Address,
-		relayURL: frame.RelayURL,
-	}
+// Close releases sockets first to wake their readers, then joins every worker.
+func (m *udpFlowManager) Close() {
+	m.closeSockets()
+	m.workers.Wait()
+}
 
+func (m *udpFlowManager) closeSockets() {
 	m.mu.Lock()
-	if f, ok := m.flows[key]; ok {
+	defer m.mu.Unlock()
+	select {
+	case <-m.done:
+		return
+	default:
+		close(m.done)
+	}
+	for key, entry := range m.flows {
+		_ = entry.conn.Close()
+		delete(m.flows, key)
+	}
+}
+
+func (m *udpFlowManager) getOrCreate(ctx context.Context, frame types.DatagramFrame) (*net.UDPConn, error) {
+	key := udpFlowKey{flowID: frame.FlowID, address: frame.Address, relayURL: frame.RelayURL, leaseDone: frame.LeaseDone}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	select {
+	case <-m.done:
+		return nil, net.ErrClosed
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-frame.LeaseDone:
+		return nil, net.ErrClosed
+	default:
+	}
+	if f := m.flows[key]; f != nil {
 		f.lastSeen = time.Now()
-		m.mu.Unlock()
 		return f.conn, nil
 	}
-	m.mu.Unlock()
-
+	if m.readers >= types.DefaultUDPMaxFlows {
+		return nil, errors.New("UDP flow capacity reached")
+	}
 	localConn, err := net.DialUDP("udp", nil, m.target)
 	if err != nil {
 		return nil, err
 	}
-
-	m.mu.Lock()
-	if f, ok := m.flows[key]; ok {
-		m.mu.Unlock()
-		_ = localConn.Close()
-		f.lastSeen = time.Now()
-		return f.conn, nil
-	}
-	m.flows[key] = &udpFlowEntry{
-		conn:     localConn,
-		lastSeen: time.Now(),
-		frame: types.DatagramFrame{
-			FlowID:   frame.FlowID,
-			Address:  frame.Address,
-			RelayURL: frame.RelayURL,
-			UDPAddr:  frame.UDPAddr,
-		},
-	}
-	m.mu.Unlock()
-
-	go m.readLoop(ctx, key, localConn)
+	frame.Payload = nil
+	entry := &udpFlowEntry{conn: localConn, lastSeen: time.Now(), frame: frame}
+	m.flows[key] = entry
+	m.workers.Add(1)
+	m.readers++
+	go func() {
+		defer m.workers.Done()
+		defer func() { m.mu.Lock(); m.readers--; m.mu.Unlock() }()
+		m.readLoop(ctx, key, entry)
+	}()
 	return localConn, nil
 }
 
-func (m *udpFlowManager) removeFlow(key udpFlowKey) {
+func (m *udpFlowManager) removeFlow(key udpFlowKey, entry *udpFlowEntry) {
 	m.mu.Lock()
-	if f, ok := m.flows[key]; ok {
-		_ = f.conn.Close()
+	defer m.mu.Unlock()
+	if m.flows[key] == entry {
+		_ = entry.conn.Close()
 		delete(m.flows, key)
 	}
-	m.mu.Unlock()
 }
 
-func (m *udpFlowManager) readLoop(ctx context.Context, key udpFlowKey, conn *net.UDPConn) {
-	buf := make([]byte, 65535)
-	for {
-		n, err := conn.Read(buf)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			log.Debug().
-				Err(err).
-				Uint32("flow_id", key.flowID).
-				Str("address", key.address).
-				Str("relay_url", key.relayURL).
-				Msg("local read ended")
-			m.removeFlow(key)
+func (m *udpFlowManager) readLoop(ctx context.Context, key udpFlowKey, entry *udpFlowEntry) {
+	defer m.removeFlow(key, entry)
+	// A lease can end while Read is blocked. Keep this watcher within the
+	// reader's lifetime and join it before returning.
+	readerDone := make(chan struct{})
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-ctx.Done():
+		case <-key.leaseDone:
+		case <-m.done:
+		case <-readerDone:
 			return
 		}
-
+		_ = entry.conn.Close()
+	}()
+	defer func() { close(readerDone); <-watcherDone }()
+	buf := make([]byte, 65535)
+	for {
+		n, err := entry.conn.Read(buf)
+		if err != nil {
+			return
+		}
+		if n > types.MaxUDPPayloadSize {
+			continue
+		}
 		m.mu.Lock()
-		entry := m.flows[key]
-		if entry == nil {
+		if m.flows[key] != entry {
 			m.mu.Unlock()
 			return
 		}
 		entry.lastSeen = time.Now()
 		replyFrame := entry.frame
 		replyFrame.Payload = bytes.Clone(buf[:n])
+		// Snapshot only this reader's entry. Removal may follow, but a
+		// successor never supplies ownership or routing metadata for this reply.
 		m.mu.Unlock()
-
-		if sendErr := m.exposure.SendDatagram(replyFrame); sendErr != nil {
-			log.Debug().
-				Err(sendErr).
-				Uint32("flow_id", key.flowID).
-				Str("address", key.address).
-				Str("relay_url", key.relayURL).
-				Msg("send datagram to relay failed")
-			m.removeFlow(key)
-			return
+		sendErr := m.exposure.SendDatagram(replyFrame)
+		if sendErr != nil {
+			// A temporary same-lease disconnection drops the reply, but must
+			// preserve the local socket and its conversation for reconnect.
+			select {
+			case <-key.leaseDone:
+				return
+			case <-m.done:
+				return
+			default:
+			}
 		}
 	}
 }

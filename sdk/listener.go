@@ -486,7 +486,7 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 	if frameAddress := strings.TrimSpace(frame.Address); frameAddress != "" && frameAddress != l.identity.Address {
 		return errors.New("datagram frame targets stale address")
 	}
-	return l.datagram.Send(frame.FlowID, frame.Payload)
+	return l.datagram.SendFrame(frame)
 }
 
 // publicURLForLease is the identity-bound canonical URL, which always routes

@@ -6,7 +6,17 @@ import (
 	"time"
 )
 
-const DefaultUDPFlowIdleTimeout = 5 * time.Minute
+const (
+	DefaultUDPFlowIdleTimeout   = 5 * time.Minute
+	DefaultUDPMaxFlows          = 1024
+	DefaultUDPNewFlowsPerSecond = 64
+	DefaultUDPNewFlowBurst      = 128
+	// QUICInitialPacketSize is the backhaul packet size and its lower limit.
+	QUICInitialPacketSize = 1280
+	// quic-go v0.59.0 reserves 37 bytes from the packet size for DATAGRAM
+	// overhead. Reserve the largest flow-ID varint as well (1238-byte payload).
+	MaxUDPPayloadSize = QUICInitialPacketSize - 37 - binary.MaxVarintLen32
+)
 
 var (
 	errDatagramTooSmall       = errors.New("datagram too small to decode")
@@ -22,6 +32,9 @@ type DatagramFrame struct {
 	Address  string
 	RelayURL string
 	UDPAddr  string
+	// LeaseDone identifies local lease ownership; it is never encoded on wire.
+	// Preserve it when replying to an accepted frame.
+	LeaseDone <-chan struct{} `json:"-"`
 }
 
 // EncodeDatagram serialises a flow-framed datagram for transmission.

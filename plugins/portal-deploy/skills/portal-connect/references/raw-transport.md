@@ -50,7 +50,7 @@ When no protocol probe is available, say that only the TCP-level connection was 
 
 Limits that shape the probe:
 
-- UDP datagrams above 1350 bytes are dropped.
+- UDP datagrams above 1238 bytes are dropped.
 - UDP flows idle for 5 minutes are forgotten by the relay; long-lived protocols need keepalives.
 - Relays cap concurrent TCP and UDP leases by their configured port range, so a publisher may lose an allocation to capacity rather than to an error.
 

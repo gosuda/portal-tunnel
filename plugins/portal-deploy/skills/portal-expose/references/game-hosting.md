@@ -9,7 +9,7 @@ Read this when the user asks to host, publish, or share a game server (Minecraft
 | Game | Transport | Ports | Status | Notes |
 |---|---|---|---|---|
 | Minecraft Java | TCP | 25565 | Tested | Single TCP port. |
-| Minecraft Bedrock | UDP | 19132 | Untested | Portal caps UDP datagrams at 1350 bytes and Bedrock's default MTU is larger; do not promise Bedrock support. |
+| Minecraft Bedrock | UDP | 19132 | Untested | Portal caps UDP datagrams at 1238 bytes and Bedrock's default MTU is larger; do not promise Bedrock support. |
 | Terraria | TCP | 7777 | Compatible | Single TCP port. |
 | Palworld | UDP | 8211 | Experimental | Verify real gameplay before sharing. |
 | Valheim | UDP pair | 2456–2457 | Not supported yet | Requires a base port and the next; Portal allocates one UDP port per lease. |
@@ -29,7 +29,7 @@ If no participating relay has raw transport enabled, tell the user they need a r
 
 ## Transport limits
 
-- UDP datagrams above 1350 bytes are dropped by the relay; check the game's packet size or MTU settings before promising UDP support.
+- UDP datagrams above 1238 bytes are dropped by the relay; check the game's packet size or MTU settings before promising UDP support.
 - UDP flows idle for 5 minutes are forgotten by the relay; protocols that can go quiet need keepalives.
 - One lease may carry both `--tcp` and `--udp` (`portal expose --tcp --udp --udp-addr localhost:19132 localhost:25565`); both ports come from the same `MIN_PORT`–`MAX_PORT` range.
 - A relay serves at most `MAX_PORT - MIN_PORT + 1` concurrent leases per protocol; size the range for the expected number of simultaneous tunnels.

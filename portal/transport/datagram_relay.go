@@ -11,12 +11,12 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/time/rate"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const (
-	defaultMaxPacketSize       = 1350
 	defaultFlowCleanupInterval = 30 * time.Second
 )
 
@@ -34,6 +34,8 @@ type RelayDatagram struct {
 	addrIndex   map[netip.AddrPort]uint32
 	nextFlow    uint32
 	enabled     atomic.Bool
+	newFlows    *rate.Limiter
+	dropLogs    *rate.Limiter
 
 	conn *net.UDPConn
 
@@ -49,6 +51,8 @@ func NewRelayDatagram(identityKey types.ServiceIdentityKey, port int) *RelayData
 		flowTable:   make(map[uint32]*flowState),
 		addrIndex:   make(map[netip.AddrPort]uint32),
 		nextFlow:    1,
+		newFlows:    rate.NewLimiter(types.DefaultUDPNewFlowsPerSecond, types.DefaultUDPNewFlowBurst),
+		dropLogs:    rate.NewLimiter(rate.Every(time.Second), 1),
 	}
 }
 
@@ -94,6 +98,8 @@ func (d *RelayDatagram) Close() {
 	d.mu.Lock()
 	d.session.Close("lease stopped")
 	conn := d.conn
+	clear(d.flowTable)
+	clear(d.addrIndex)
 	d.mu.Unlock()
 	if conn != nil {
 		_ = conn.Close()
@@ -123,35 +129,43 @@ func (d *RelayDatagram) BindBackhaul(conn *quic.Conn) error {
 	return nil
 }
 
-func (d *RelayDatagram) sendDatagram(flowID uint32, payload []byte) error {
-	if d == nil {
-		return net.ErrClosed
-	}
-	return d.session.Send(flowID, payload)
-}
-
-func (d *RelayDatagram) touchFlow(addr netip.AddrPort) uint32 {
-	now := time.Now()
-
+func (d *RelayDatagram) touchFlow(addr netip.AddrPort, now time.Time) (id uint32, fresh, admitted bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	select {
+	case <-d.session.Done():
+		return 0, false, false
+	default:
+	}
 
 	if id, ok := d.addrIndex[addr]; ok {
 		if flow, exists := d.flowTable[id]; exists && flow != nil {
 			flow.lastSeen = now
-			return id
+			return id, false, true
 		}
 		delete(d.addrIndex, addr)
 	}
 
-	id := d.nextFlow
-	d.nextFlow++
+	if len(d.flowTable) >= types.DefaultUDPMaxFlows || !d.newFlows.AllowN(now, 1) {
+		return 0, false, false
+	}
+
+	// The bounded table always leaves a free uint32 ID. Skip live IDs when
+	// the counter wraps; zero is also a valid wire ID.
+	for {
+		id = d.nextFlow
+		d.nextFlow++
+		if _, exists := d.flowTable[id]; !exists {
+			break
+		}
+	}
 	d.flowTable[id] = &flowState{
 		addr:     addr,
 		lastSeen: now,
 	}
 	d.addrIndex[addr] = id
-	return id
+	return id, true, true
 }
 
 func (d *RelayDatagram) UDPPort() int {
@@ -181,7 +195,7 @@ func (d *RelayDatagram) runDispatchLoop() {
 }
 
 func (d *RelayDatagram) dispatch(frame types.DatagramFrame) {
-	if !d.enabled.Load() {
+	if !d.enabled.Load() || len(frame.Payload) > types.MaxUDPPayloadSize {
 		return
 	}
 	d.mu.Lock()
@@ -200,12 +214,11 @@ func (d *RelayDatagram) dispatch(frame types.DatagramFrame) {
 		return
 	}
 	if _, err := conn.WriteToUDPAddrPort(frame.Payload, addr); err != nil {
-		log.Warn().
-			Err(err).
-			Str("component", "udp-relay").
-			Str("identity_key", d.identityKey.String()).
-			Uint32("flow_id", frame.FlowID).
-			Msg("flow writeback failed")
+		if d.dropLogs.Allow() {
+			log.Warn().Err(err).Str("component", "udp-relay").
+				Str("identity_key", d.identityKey.String()).
+				Msg("flow writeback failed; further packet drops may be suppressed")
+		}
 		d.forgetFlow(frame.FlowID)
 	}
 }
@@ -253,7 +266,9 @@ func (d *RelayDatagram) forgetFlow(flowID uint32) {
 }
 
 func (d *RelayDatagram) readLoop() {
-	buf := make([]byte, defaultMaxPacketSize)
+	// A full UDP receive buffer avoids Unix prefix forwarding and Windows
+	// WSAEMSGSIZE errors. Unsupported payloads are dropped whole below.
+	buf := make([]byte, 65535)
 	for {
 		n, clientAddr, err := d.conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
@@ -267,23 +282,34 @@ func (d *RelayDatagram) readLoop() {
 				Msg("readLoop exiting: unexpected read error")
 			return
 		}
-		if !d.enabled.Load() {
-			continue
+		d.forwardDatagram(clientAddr, buf[:n])
+	}
+}
+
+// forwardDatagram admits state only for usable backhauls. A failed first send
+// rolls the new entry back; its admission token remains spent to bound churn.
+func (d *RelayDatagram) forwardDatagram(addr netip.AddrPort, payload []byte) {
+	if !d.enabled.Load() || len(payload) > types.MaxUDPPayloadSize || !d.session.Connected() {
+		return
+	}
+	flowID, fresh, admitted := d.touchFlow(addr, time.Now())
+	if !admitted {
+		return
+	}
+	if !d.enabled.Load() {
+		if fresh {
+			d.forgetFlow(flowID)
 		}
-
-		flowID := d.touchFlow(clientAddr)
-		payload := make([]byte, n)
-		copy(payload, buf[:n])
-
-		if err := d.sendDatagram(flowID, payload); err != nil {
-			log.Warn().
-				Str("component", "udp-relay").
+		return
+	}
+	if err := d.session.Send(flowID, payload); err != nil {
+		if fresh {
+			d.forgetFlow(flowID)
+		}
+		if d.dropLogs.Allow() {
+			log.Warn().Err(err).Str("component", "udp-relay").
 				Str("identity_key", d.identityKey.String()).
-				Err(err).
-				Uint32("flow_id", flowID).
-				Int("bytes", n).
-				Msg("send datagram to quic backhaul failed, dropping packet")
-			continue
+				Msg("send to quic backhaul failed; further packet drops may be suppressed")
 		}
 	}
 }

@@ -38,6 +38,7 @@ const (
 	defaultClientHelloWait       = 2 * time.Second
 	defaultControlBodyLimit      = 4 << 20
 	reverseOfferAdmissionWorkers = 16
+	quicBackhaulPendingLimit     = 64
 )
 
 type ServerConfig struct {
@@ -201,6 +202,7 @@ type Server struct {
 	redirectListener net.Listener
 	redirectServer   *http.Server
 	quicBackhaul     *quic.Listener
+	quicBackhaulDone chan struct{}
 
 	relaySet *discovery.RelaySet
 	registry *leaseRegistry
@@ -465,7 +467,11 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	}
 	group.Go(func() error { return s.runPublicIngress(groupCtx) })
 	if s.quicBackhaul != nil {
-		group.Go(s.runQUICBackhaulListener)
+		s.quicBackhaulDone = make(chan struct{})
+		group.Go(func() error {
+			defer close(s.quicBackhaulDone)
+			return s.runQUICBackhaulListener(groupCtx)
+		})
 	}
 	group.Go(func() error { return s.runRegistryJanitor(groupCtx, 5*time.Second) })
 	if cacheManager != nil {
@@ -717,14 +723,18 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			s.overlay.Close()
 		}
 
+		if s.quicBackhaul != nil {
+			_ = s.quicBackhaul.Close()
+		}
+		if s.quicBackhaulDone != nil {
+			<-s.quicBackhaulDone
+		}
+
 		records := s.registry.CloseAll()
 		for _, record := range records {
 			s.deleteLeaseDNS(ctx, record)
 		}
 
-		if s.quicBackhaul != nil {
-			_ = s.quicBackhaul.Close()
-		}
 		if s.apiHandoff != nil {
 			_ = s.apiHandoff.Close()
 		}
@@ -916,24 +926,52 @@ func (s *Server) newQUICBackhaulListener(apiTLS *tls.Config) (*quic.Listener, er
 	return transport.ListenQUICBackhaul(s.config().SNIListenAddr, apiTLS.Certificates[0])
 }
 
-func (s *Server) runQUICBackhaulListener() error {
+func (s *Server) runQUICBackhaulListener(ctx context.Context) error {
 	if s.quicBackhaul == nil {
 		return nil
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	var handlers sync.WaitGroup
+	defer func() {
+		cancel()
+		handlers.Wait()
+	}()
+	pending := make(chan struct{}, quicBackhaulPendingLimit)
 	for {
-		conn, err := s.quicBackhaul.Accept(context.Background())
+		conn, err := s.quicBackhaul.Accept(ctx)
 		if err != nil {
-			if errors.Is(err, quic.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+			if ctx.Err() != nil || errors.Is(err, quic.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
 			return err
 		}
-		go s.handleQUICBackhaulConn(conn)
+		select {
+		case pending <- struct{}{}:
+			authCtx, authCancel := context.WithTimeout(ctx, defaultClaimTimeout)
+			handlers.Go(func() {
+				defer authCancel()
+				defer func() { <-pending }()
+				s.handleQUICBackhaulConn(authCtx, conn)
+			})
+		default:
+			_ = conn.CloseWithError(1, "backhaul authentication busy")
+		}
 	}
 }
 
-func (s *Server) handleQUICBackhaulConn(conn *quic.Conn) {
-	control, err := transport.AcceptQUICBackhaulControl(context.Background(), conn)
+func (s *Server) handleQUICBackhaulConn(ctx context.Context, conn *quic.Conn) {
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.CloseWithError(1, "backhaul authentication canceled")
+		close(closed)
+	})
+	authenticated := false
+	defer func() {
+		if !authenticated && !stop() {
+			<-closed
+		}
+	}()
+	control, err := transport.AcceptQUICBackhaulControl(ctx, conn)
 	if err != nil {
 		_ = conn.CloseWithError(1, "control read failed")
 		return
@@ -961,7 +999,17 @@ func (s *Server) handleQUICBackhaulConn(conn *quic.Conn) {
 		return
 	}
 
-	_ = control.Accept()
+	if err := control.Accept(); err != nil {
+		_ = conn.CloseWithError(1, "control response failed")
+		return
+	}
+	// The response is part of authentication. Keep its deadline through the
+	// write, then settle cancellation before publishing success.
+	if !stop() {
+		<-closed
+		return
+	}
+	authenticated = true
 	sourceAddr := netip.Addr{}
 	if remote := conn.RemoteAddr(); remote != nil {
 		if addrPort, err := netip.ParseAddrPort(remote.String()); err == nil {

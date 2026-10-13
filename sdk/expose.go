@@ -871,19 +871,23 @@ func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
 	if !e.options.UDPEnabled {
 		return types.DatagramFrame{}, net.ErrClosed
 	}
-	select {
-	case frame := <-e.datagrams:
-		return frame, nil
-	default:
-	}
-	select {
-	case <-e.done:
-		return types.DatagramFrame{}, net.ErrClosed
-	case frame := <-e.datagrams:
-		return frame, nil
+	for {
+		select {
+		case <-e.done:
+			return types.DatagramFrame{}, net.ErrClosed
+		case frame := <-e.datagrams:
+			select {
+			case <-frame.LeaseDone:
+				continue
+			default:
+			}
+			return frame, nil
+		}
 	}
 }
 
+// SendDatagram replies on the lease that delivered frame. Preserve the accepted
+// frame's LeaseDone metadata when constructing a reply.
 func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
 	if !e.options.UDPEnabled {
 		return net.ErrClosed

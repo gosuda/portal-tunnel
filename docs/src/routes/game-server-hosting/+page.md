@@ -125,7 +125,7 @@ For a community server, configure Palworld's advertised `publicip` and
 Those values describe the public relay endpoint; the local Palworld listener
 can remain on `8211`. See the [Palworld server arguments](https://docs.palworldgame.com/settings-and-operation/arguments/).
 
-Portal UDP datagrams are currently limited to 1350 bytes and inactive flows are
+Portal UDP datagrams are currently limited to 1238 bytes and inactive flows are
 removed after 5 minutes. Direct joins and sustained gameplay must both be
 tested before treating a Palworld server as production-ready.
 

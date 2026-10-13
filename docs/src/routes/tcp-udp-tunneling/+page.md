@@ -182,8 +182,15 @@ Both ports are drawn from the same `MIN_PORT` to `MAX_PORT` range on the relay.
   leases. Plan the range accordingly.
 - **No TLS on raw TCP**: raw TCP mode does not add TLS. Use application-level
   encryption when the service requires confidentiality.
-- **UDP max packet size**: datagrams are capped at 1350 bytes. Larger packets
-  are dropped.
+- **UDP max packet size**: payloads are capped at 1238 bytes in either
+  direction, leaving room for a five-byte flow ID and QUIC overhead at the
+  configured 1280-byte minimum packet size. Larger packets are dropped whole;
+  subsequent valid packets continue.
+- **UDP flow capacity**: each relay lease supports at most 1024 active flows.
+  New flows are limited to 64 per second with a burst of 128. The SDK separately
+  limits its local UDP sockets to 1024 per exposure. Existing flows continue
+  at capacity; excess new flows are dropped. Packets received without a usable
+  backhaul do not retain new relay flows.
 - **Flow idle timeout**: UDP flows with no traffic for 5 minutes are cleaned up
   on the relay. Long-lived protocols should send keepalive packets if they may
   be idle.

@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 
@@ -19,8 +20,9 @@ type DatagramSession struct {
 	dropIncoming bool
 	done         chan struct{}
 
-	mu   sync.Mutex
-	conn *quic.Conn
+	mu        sync.Mutex
+	conn      *quic.Conn
+	leaseDone chan struct{}
 }
 
 func NewDatagramSession(bufferSize int, dropIncoming bool) *DatagramSession {
@@ -32,6 +34,7 @@ func NewDatagramSession(bufferSize int, dropIncoming bool) *DatagramSession {
 		incoming:     make(chan types.DatagramFrame, bufferSize),
 		dropIncoming: dropIncoming,
 		done:         make(chan struct{}),
+		leaseDone:    make(chan struct{}),
 	}
 }
 
@@ -40,6 +43,11 @@ func NewDatagramSession(bufferSize int, dropIncoming bool) *DatagramSession {
 func (s *DatagramSession) Bind(conn *quic.Conn) (<-chan error, error) {
 	if conn == nil {
 		return nil, errors.New("quic backhaul connection is required")
+	}
+
+	if !conn.ConnectionState().SupportsDatagrams.Remote {
+		_ = conn.CloseWithError(0, "QUIC DATAGRAM support required")
+		return nil, errors.New("QUIC DATAGRAM support required")
 	}
 
 	s.mu.Lock()
@@ -52,6 +60,7 @@ func (s *DatagramSession) Bind(conn *quic.Conn) (<-chan error, error) {
 	}
 	old := s.conn
 	s.conn = conn
+	leaseDone := s.leaseDone
 	s.mu.Unlock()
 
 	if old != nil {
@@ -59,7 +68,7 @@ func (s *DatagramSession) Bind(conn *quic.Conn) (<-chan error, error) {
 	}
 
 	recvDone := make(chan error, 1)
-	go s.receiveLoop(conn, recvDone)
+	go s.receiveLoop(conn, leaseDone, recvDone)
 	return recvDone, nil
 }
 
@@ -69,43 +78,85 @@ func (s *DatagramSession) Done() <-chan struct{} {
 
 // Accept returns multiplexed frames until this session or its caller closes.
 func (s *DatagramSession) Accept(done <-chan struct{}) (types.DatagramFrame, error) {
-	select {
-	case <-done:
-		return types.DatagramFrame{}, net.ErrClosed
-	case <-s.done:
-		return types.DatagramFrame{}, net.ErrClosed
-	case frame := <-s.incoming:
-		return frame, nil
+	for {
+		select {
+		case <-done:
+			return types.DatagramFrame{}, net.ErrClosed
+		case <-s.done:
+			return types.DatagramFrame{}, net.ErrClosed
+		case frame := <-s.incoming:
+			select {
+			case <-frame.LeaseDone:
+				continue
+			default:
+			}
+			return frame, nil
+		}
 	}
 }
 
 func (s *DatagramSession) Connected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.conn != nil
+	return s.conn != nil && s.conn.Context().Err() == nil
 }
 
 func (s *DatagramSession) Send(flowID uint32, payload []byte) error {
 	s.mu.Lock()
-	conn := s.conn
+	conn, err := s.datagramConnectionLocked(payload)
 	s.mu.Unlock()
-
-	select {
-	case <-s.done:
-		return net.ErrClosed
-	default:
-	}
-	if conn == nil {
-		return errNoConnection
+	if err != nil {
+		return err
 	}
 	return conn.SendDatagram(types.EncodeDatagram(flowID, payload))
+}
+
+// SendFrame rejects replies belonging to a previous lease, including frames
+// retained by an SDK caller while the listener re-registers.
+func (s *DatagramSession) SendFrame(frame types.DatagramFrame) error {
+	s.mu.Lock()
+	if frame.LeaseDone != s.leaseDone {
+		s.mu.Unlock()
+		return fmt.Errorf("datagram lease ended: %w", net.ErrClosed)
+	}
+	conn, err := s.datagramConnectionLocked(frame.Payload)
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	// SendDatagram may block under backpressure. Keep the connection selected
+	// with the lease check, but let Clear/Close close it to interrupt the send.
+	return conn.SendDatagram(types.EncodeDatagram(frame.FlowID, frame.Payload))
+}
+
+func (s *DatagramSession) datagramConnectionLocked(payload []byte) (*quic.Conn, error) {
+	select {
+	case <-s.done:
+		return nil, net.ErrClosed
+	default:
+	}
+	if len(payload) > types.MaxUDPPayloadSize {
+		return nil, errors.New("UDP payload exceeds limit")
+	}
+	if s.conn == nil {
+		return nil, errNoConnection
+	}
+	return s.conn, nil
 }
 
 // Clear closes the active connection but keeps the session reusable.
 func (s *DatagramSession) Clear(reason string) {
 	s.mu.Lock()
+	select {
+	case <-s.done:
+		s.mu.Unlock()
+		return
+	default:
+	}
 	conn := s.conn
 	s.conn = nil
+	close(s.leaseDone)
+	s.leaseDone = make(chan struct{})
 	s.mu.Unlock()
 
 	if conn != nil {
@@ -125,6 +176,7 @@ func (s *DatagramSession) Close(reason string) {
 	conn := s.conn
 	s.conn = nil
 	close(s.done)
+	close(s.leaseDone)
 	s.mu.Unlock()
 
 	if conn != nil {
@@ -132,7 +184,7 @@ func (s *DatagramSession) Close(reason string) {
 	}
 }
 
-func (s *DatagramSession) receiveLoop(conn *quic.Conn, recvDone chan<- error) {
+func (s *DatagramSession) receiveLoop(conn *quic.Conn, leaseDone <-chan struct{}, recvDone chan<- error) {
 	var recvErr error
 	defer func() {
 		recvDone <- recvErr
@@ -157,6 +209,11 @@ func (s *DatagramSession) receiveLoop(conn *quic.Conn, recvDone chan<- error) {
 		if err != nil {
 			continue
 		}
+
+		if len(frame.Payload) > types.MaxUDPPayloadSize {
+			continue
+		}
+		frame.LeaseDone = leaseDone
 
 		if s.dropIncoming {
 			select {

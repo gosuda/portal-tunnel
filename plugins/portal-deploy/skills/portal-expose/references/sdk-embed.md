@@ -96,7 +96,7 @@ published.
 ## Raw TCP and UDP
 
 - `sdk.WithTCP()` requests a public TCP port; `exposure.WaitTCPReady(ctx)` returns snapshots with `TCPAddr`. Raw connections arrive on `exposure.Accept()` untouched, with no TLS, so do not serve such an exposure with `sdk.RunHTTP`: it labels every request it receives `https`, raw ones included.
-- `sdk.WithUDP()` enables datagrams; `exposure.WaitDatagramReady(ctx)` returns `UDPAddr`. The app receives `types.DatagramFrame` values from `exposure.AcceptDatagram()` and must echo the same frame's `FlowID`, `RelayURL`, and `Address` into `exposure.SendDatagram` for replies. `sdk.ProxyUDP` does this against a local UDP target. Flows idle for five minutes are dropped; datagrams above 1350 bytes are dropped.
+- `sdk.WithUDP()` enables datagrams; `exposure.WaitDatagramReady(ctx)` returns `UDPAddr`. The app receives `types.DatagramFrame` values from `exposure.AcceptDatagram()` and must reuse the accepted frame, replace only its `Payload`, and pass it to `exposure.SendDatagram` for replies; this preserves its local `LeaseDone` ownership token. `sdk.ProxyUDP` does this against a local UDP target. Flows idle for five minutes are dropped; datagrams above 1238 bytes are dropped.
 - Both wait functions error when the matching option was not set.
 
 ## Options and their limits
@@ -117,3 +117,24 @@ The SDK is payment-agnostic. The x402 gateway lives in `cmd/portal-tunnel/agent`
 ## Verify like the CLI
 
 Whatever the app logs, verify from outside exactly as `SKILL.md` step 6 says: one bounded request to the `public_url`, `401` or `403` counted as reachable, and the lease visible in `GET <relay>/api/state` with `ready > 0`.
+
+### SDK UDP reply compatibility (unreleased)
+
+UDP replies now require the accepted frame's local `LeaseDone` token. This is a
+breaking change for applications constructing a fresh `types.DatagramFrame`
+with only the flow ID and address fields. Reuse the accepted frame instead:
+
+```go
+frame.Payload = reply
+if err := exposure.SendDatagram(frame); err != nil {
+    if errors.Is(err, net.ErrClosed) {
+        // The originating lease ended; drop this reply and keep receiving.
+        continue
+    }
+    return err
+}
+```
+
+This metadata is not part of the QUIC wire format. Replies from an ended lease
+are rejected with an error wrapping `net.ErrClosed`, even if a new lease has
+already reconnected.
