@@ -934,7 +934,6 @@ func (r *leaseRegistry) closeRecord(record *leaseRecord) {
 	}
 }
 
-
 // rollbackRecord closes a registration that was never accepted and returns its
 // ports immediately. Unlike closeRecord, it must not create sticky reservations.
 func (r *leaseRegistry) rollbackRecord(record *leaseRecord) {
