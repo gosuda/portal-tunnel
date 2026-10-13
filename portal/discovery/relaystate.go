@@ -17,7 +17,7 @@ const (
 	// the local set will retain. When exceeded, eviction prefers the oldest
 	// unverified entries by LastSeenAt, then verified entries. Bootstrap and
 	// banned entries are pinned.
-	MaxAnnouncedRelays = 1024
+	MaxAnnouncedRelays = types.MaxDiscoveryEntries
 
 	// MaxAnnouncedRelaysPerIdentity bounds how many unverified announced
 	// entries one signing identity may hold. Overflow recycles that
