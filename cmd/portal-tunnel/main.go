@@ -89,6 +89,7 @@ type exposeFlags struct {
 	tcp                  bool
 	maxActiveRelays      int
 	metricsAddr          string
+	output               string
 }
 
 func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
@@ -123,6 +124,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
 	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
+	utils.StringFlag(fs, &flags.output, "output", "text", "Lifecycle output format: text (default human-readable logs) or jsonl (one machine-readable relay_status JSON record per line on stdout; warnings and errors stay on stderr)")
 }
 
 func runExposeCommand(args []string) error {
@@ -148,9 +150,19 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return err
 	}
+	spec.Output = flags.output
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
+
+	if flags.output == "jsonl" {
+		// Machine mode keeps stdout parseable: one relay_status record per
+		// line only. Human-facing logs, warnings, and update notices move
+		// to stderr for the lifetime of the command.
+		previousLogger := log.Logger
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+		defer func() { log.Logger = previousLogger }()
+	}
 
 	if flags.metricsAddr != "" {
 		mux := http.NewServeMux()
@@ -173,6 +185,7 @@ func runExposeCommand(args []string) error {
 		return err
 	}
 	defer runtime.Close()
+	runtime.StartRelayLifecycleWriter(ctx, os.Stdout)
 	return runtime.Run(ctx)
 }
 
@@ -509,6 +522,7 @@ func printExposeUsage(w io.Writer) {
 	})
 	utils.WriteHelpSection(w, "Ready", []string{
 		"On success the process logs a line starting with: service ready at",
+		"Integrations: --output jsonl emits one machine-readable relay_status record per lifecycle change on stdout",
 	})
 }
 
