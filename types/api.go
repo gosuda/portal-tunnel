@@ -132,8 +132,8 @@ type DiscoveryResponse struct {
 // UnmarshalJSON checks collection sizes before allocating typed relay slices.
 func (resp *DiscoveryResponse) UnmarshalJSON(data []byte) error {
 	var collections struct {
-		Relays                json.RawMessage `json:"relays"`
-		IncompatibleRelays    json.RawMessage `json:"incompatible_relays"`
+		Relays               json.RawMessage `json:"relays"`
+		IncompatibleRelays   json.RawMessage `json:"incompatible_relays"`
 		RelayReleaseVersions json.RawMessage `json:"relay_release_versions"`
 	}
 	if err := json.Unmarshal(data, &collections); err != nil {
