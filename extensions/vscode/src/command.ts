@@ -55,7 +55,12 @@ export function validateHost(value: string): string | undefined {
       /[\/?#@%]/.test(authority) || authority.endsWith(":")) {
     return invalidHostMessage;
   }
-  if (parsed.hostname.split(".").some((label) => label.startsWith("-") || label.endsWith("-"))) {
+  const hostname = parsed.hostname.startsWith("[")
+    ? parsed.hostname.slice(1, -1)
+    : parsed.hostname;
+  if (isIP(hostname) === 0 &&
+      hostname.replace(/\.$/, "").split(".").some((label) =>
+        !/^[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?$/.test(label))) {
     return invalidHostMessage;
   }
   const portText = authority.match(/:(\d+)$/)?.[1];
