@@ -504,19 +504,24 @@ func (s *RelaySet) EnsureRelayURL(relayURL string) {
 	s.relays[relayURL] = newRelayState(relayURL)
 }
 
-// discoveryRelayStateLocked is the cryptographic gate for every gossiped
-// descriptor. The caller must hold s.mu for reading the URL ban state.
+// discoveryRelayStateLocked enforces signature and public-address policy for
+// discovery responses. The caller must hold s.mu for bootstrap and ban state.
 func (s *RelaySet) discoveryRelayStateLocked(
 	descriptor types.RelayDescriptor,
 	now time.Time,
+	targetURL string,
 ) (RelayState, string, bool) {
 	verified, err := verifyFreshRelayDescriptor(descriptor, now)
 	if err != nil {
 		return RelayState{}, "", false
 	}
 	relayURL := verified.APIHTTPSAddr
-	if relayURL == "" {
-		return RelayState{}, "", false
+	if err := requirePublicRelayURL(relayURL); err != nil {
+		// Only a direct response from an explicitly configured bootstrap
+		// relay may advertise its own local/private URL.
+		if relayURL != targetURL || !s.relays[relayURL].Bootstrap {
+			return RelayState{}, "", false
+		}
 	}
 	if existing, ok := s.relays[relayURL]; ok && existing.Banned {
 		return RelayState{}, "", false
@@ -541,7 +546,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	discoveredOrder := make([]string, 0, len(resp.Relays)+1)
 	targetFound := false
 	for _, descriptor := range resp.Relays {
-		relayState, relayURL, ok := s.discoveryRelayStateLocked(descriptor, now)
+		relayState, relayURL, ok := s.discoveryRelayStateLocked(descriptor, now, targetURL)
 		if !ok {
 			continue
 		}
@@ -776,6 +781,9 @@ func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) er
 
 	normalized, err := verifyFreshRelayDescriptor(desc, now)
 	if err != nil {
+		return err
+	}
+	if err := requirePublicRelayURL(normalized.APIHTTPSAddr); err != nil {
 		return err
 	}
 
