@@ -38,3 +38,26 @@ func TestDiscoveryResponseAcceptsMaximumRelays(t *testing.T) {
 		t.Fatalf("relay count = %d, want %d", len(resp.Relays), MaxDiscoveryEntries)
 	}
 }
+
+func TestDiscoveryResponseAllowsSelfAndCappedPool(t *testing.T) {
+	t.Parallel()
+
+	body := "{\"relays\":[" + strings.Repeat("{},", MaxDiscoveryEntries) + "{}]}"
+	var resp DiscoveryResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v, want success", err)
+	}
+	if len(resp.Relays) != MaxDiscoveryEntries+1 {
+		t.Fatalf("relay count = %d, want %d", len(resp.Relays), MaxDiscoveryEntries+1)
+	}
+}
+
+func TestDiscoveryResponseRejectsMoreThanSelfAndCappedPool(t *testing.T) {
+	t.Parallel()
+
+	body := "{\"relays\":[" + strings.Repeat("{},", MaxDiscoveryEntries+1) + "{}]}"
+	var resp DiscoveryResponse
+	if err := json.Unmarshal([]byte(body), &resp); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("json.Unmarshal() error = %v, want relay collection limit", err)
+	}
+}
