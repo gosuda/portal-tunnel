@@ -266,6 +266,9 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
 	}
+	if err := req.Metadata.Validate(); err != nil {
+		return nil, types.RegisterResponse{}, err
+	}
 	leaseIdentity := req.Identity
 
 	ttl := defaultLeaseTTL
