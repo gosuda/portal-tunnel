@@ -651,3 +651,18 @@ func TestRecordReleaseObservationPrunesExpiredEntries(t *testing.T) {
 		t.Fatalf("set.releaseVersions[%q] = (%+v, %v), want only the fresh observation", relayB, observation, ok)
 	}
 }
+
+func TestApplyRelayDiscoveryResponseRejectsOversizedCollection(t *testing.T) {
+	t.Parallel()
+
+	set := NewRelaySet(nil)
+	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+		Relays: make([]types.RelayDescriptor, MaxAnnouncedRelays+1),
+	}, time.Now())
+	if err == nil || changed {
+		t.Fatalf("ApplyRelayDiscoveryResponse() = (%t, %v), want false and an error", changed, err)
+	}
+	if states := set.currentRelayStates(time.Now()); len(states) != 0 {
+		t.Fatalf("relay count = %d, want 0 after rejected response", len(states))
+	}
+}
