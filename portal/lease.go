@@ -688,6 +688,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	defer r.mu.Unlock()
 
 	pending := 0
+	globalPending := 0
 	for i := 0; i < len(r.records); {
 		record := r.records[i]
 		if record != nil && record.registerChallenge != nil {
@@ -695,13 +696,14 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 				r.deleteRecord(i)
 				continue
 			}
+			globalPending++
 			if record.sourceAddr == sourceAddr {
 				pending++
 			}
 		}
 		i++
 	}
-	if pending >= defaultRegisterChallengeOutstandingPerIP {
+	if pending >= defaultRegisterChallengeOutstandingPerIP || globalPending >= 256 {
 		return types.RegisterChallengeResponse{}, errRegisterChallengePending
 	}
 	r.records = append(r.records, &leaseRecord{
