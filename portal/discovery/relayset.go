@@ -627,10 +627,23 @@ func (s *RelaySet) recordIncompatibleRelayLocked(relayURL, protocolVersion strin
 		return
 	}
 	s.pruneIncompatibleLocked(now)
+	if len(protocolVersion) > types.MaxDiscoveryVersionBytes {
+		protocolVersion = ""
+	}
 	s.incompatible[relayURL] = types.IncompatibleRelayEntry{
 		URL:             relayURL,
 		ProtocolVersion: protocolVersion,
 		LastSeenAt:      now,
+	}
+	if len(s.incompatible) > MaxAnnouncedRelays {
+		var oldestURL string
+		var oldestAt time.Time
+		for url, observation := range s.incompatible {
+			if oldestURL == "" || observation.LastSeenAt.Before(oldestAt) || (observation.LastSeenAt.Equal(oldestAt) && url < oldestURL) {
+				oldestURL, oldestAt = url, observation.LastSeenAt
+			}
+		}
+		delete(s.incompatible, oldestURL)
 	}
 }
 
@@ -670,13 +683,23 @@ func (s *RelaySet) recordReleaseObservationLocked(relayURL, releaseVersion strin
 	}
 	s.pruneReleaseVersionsLocked(now)
 	releaseVersion = strings.TrimSpace(releaseVersion)
-	if releaseVersion == "" {
+	if releaseVersion == "" || len(releaseVersion) > types.MaxDiscoveryVersionBytes {
 		delete(s.releaseVersions, relayURL)
 		return
 	}
 	s.releaseVersions[relayURL] = relayReleaseObservation{
 		releaseVersion: releaseVersion,
 		observedAt:     now,
+	}
+	if len(s.releaseVersions) > MaxAnnouncedRelays {
+		var oldestURL string
+		var oldestAt time.Time
+		for url, observation := range s.releaseVersions {
+			if oldestURL == "" || observation.observedAt.Before(oldestAt) || (observation.observedAt.Equal(oldestAt) && url < oldestURL) {
+				oldestURL, oldestAt = url, observation.observedAt
+			}
+		}
+		delete(s.releaseVersions, oldestURL)
 	}
 }
 
