@@ -113,7 +113,8 @@ type RegisterResponse struct {
 	TCPEnabled        bool            `json:"tcp_enabled,omitempty"`
 }
 
-// MaxDiscoveryEntries bounds each collection in an untrusted discovery response.
+// MaxDiscoveryEntries bounds the relay pool and discovery metadata collections.
+// The relays wire field permits one additional descriptor for the serving relay.
 const MaxDiscoveryEntries = 1024
 
 type DiscoveryResponse struct {
@@ -140,15 +141,16 @@ func (resp *DiscoveryResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	for _, field := range []struct {
-		name string
-		data json.RawMessage
-		open json.Delim
+		name  string
+		data  json.RawMessage
+		open  json.Delim
+		limit int
 	}{
-		{"relays", collections.Relays, '['},
-		{"incompatible_relays", collections.IncompatibleRelays, '['},
-		{"relay_release_versions", collections.RelayReleaseVersions, '{'},
+		{"relays", collections.Relays, '[', MaxDiscoveryEntries + 1},
+		{"incompatible_relays", collections.IncompatibleRelays, '[', MaxDiscoveryEntries},
+		{"relay_release_versions", collections.RelayReleaseVersions, '{', MaxDiscoveryEntries},
 	} {
-		if err := checkDiscoveryCollectionLimit(field.name, field.data, field.open); err != nil {
+		if err := checkDiscoveryCollectionLimit(field.name, field.data, field.open, field.limit); err != nil {
 			return err
 		}
 	}
@@ -156,7 +158,7 @@ func (resp *DiscoveryResponse) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*plain)(resp))
 }
 
-func checkDiscoveryCollectionLimit(name string, data json.RawMessage, open json.Delim) error {
+func checkDiscoveryCollectionLimit(name string, data json.RawMessage, open json.Delim, limit int) error {
 	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
 		return nil
 	}
@@ -169,8 +171,8 @@ func checkDiscoveryCollectionLimit(name string, data json.RawMessage, open json.
 		return fmt.Errorf("decode %s: expected %q", name, open)
 	}
 	for count := 0; decoder.More(); count++ {
-		if count == MaxDiscoveryEntries {
-			return fmt.Errorf("discovery %s exceeds %d entries", name, MaxDiscoveryEntries)
+		if count == limit {
+			return fmt.Errorf("discovery %s exceeds %d entries", name, limit)
 		}
 		if open == '{' {
 			if _, err := decoder.Token(); err != nil {
