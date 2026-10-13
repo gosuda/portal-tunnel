@@ -10,7 +10,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-const defaultWalletAuthSessionTTL = 24 * time.Hour
+const (
+	defaultWalletAuthSessionTTL = 24 * time.Hour
+	maxWalletAuthSessions       = 128
+)
 
 type walletAuthConfig struct {
 	AllowedAddresses []string
@@ -21,8 +24,11 @@ type walletAuthConfig struct {
 type walletAuthenticator struct {
 	siwe *siweauth.Authenticator
 
-	mu       sync.Mutex
-	sessions map[string]walletAuthSession
+	mu             sync.Mutex
+	sessions       map[string]walletAuthSession
+	walletSessions map[string]string
+	recentTokens   [maxWalletAuthSessions]string
+	nextTokenIndex int
 }
 
 type walletAuthSession struct {
@@ -41,8 +47,9 @@ func newWalletAuthenticator(cfg walletAuthConfig) (*walletAuthenticator, error) 
 		return nil, err
 	}
 	return &walletAuthenticator{
-		siwe:     siwe,
-		sessions: make(map[string]walletAuthSession),
+		siwe:           siwe,
+		sessions:       make(map[string]walletAuthSession),
+		walletSessions: make(map[string]string),
 	}, nil
 }
 
@@ -70,16 +77,34 @@ func (a *walletAuthenticator) login(req types.WalletAuthLoginRequest, domain str
 		return "", "", err
 	}
 
-	token := utils.RandomID("was_")
+	return a.sessionForVerifiedWallet(address, now), address, nil
+}
+
+// sessionForVerifiedWallet accepts only a SIWE-verified address. Replays reuse
+// its existing session; new wallets evict the oldest issued session in O(1).
+// Both indexes remain bounded without scanning them on every login.
+func (a *walletAuthenticator) sessionForVerifiedWallet(address string, now time.Time) string {
+	now = now.UTC()
 	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if token := a.walletSessions[address]; token != "" {
+		if session, ok := a.sessions[token]; ok && now.Before(session.ExpiresAt) {
+			return token
+		}
+		a.removeSessionLocked(token)
+	}
+
+	a.removeSessionLocked(a.recentTokens[a.nextTokenIndex])
+	token := utils.RandomID("was_")
+	a.recentTokens[a.nextTokenIndex] = token
+	a.nextTokenIndex = (a.nextTokenIndex + 1) % maxWalletAuthSessions
 	a.sessions[token] = walletAuthSession{
 		Address:   address,
-		ExpiresAt: now.UTC().Add(defaultWalletAuthSessionTTL),
+		ExpiresAt: now.Add(defaultWalletAuthSessionTTL),
 	}
-	a.cleanupExpiredLocked(now)
-	a.mu.Unlock()
-
-	return token, address, nil
+	a.walletSessions[address] = token
+	return token
 }
 
 func (a *walletAuthenticator) validateSession(token string) (string, bool) {
@@ -97,8 +122,8 @@ func (a *walletAuthenticator) validateSession(token string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if time.Now().UTC().After(session.ExpiresAt) {
-		delete(a.sessions, token)
+	if !time.Now().UTC().Before(session.ExpiresAt) {
+		a.removeSessionLocked(token)
 		return "", false
 	}
 	return session.Address, true
@@ -110,14 +135,15 @@ func (a *walletAuthenticator) deleteSession(token string) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	delete(a.sessions, strings.TrimSpace(token))
+	a.removeSessionLocked(strings.TrimSpace(token))
 }
 
-func (a *walletAuthenticator) cleanupExpiredLocked(now time.Time) {
-	now = now.UTC()
-	for token, session := range a.sessions {
-		if now.After(session.ExpiresAt) {
-			delete(a.sessions, token)
-		}
+// removeSessionLocked keeps both indexes consistent. a.mu must be held.
+func (a *walletAuthenticator) removeSessionLocked(token string) {
+	session, ok := a.sessions[token]
+	if !ok {
+		return
 	}
+	delete(a.sessions, token)
+	delete(a.walletSessions, session.Address)
 }
