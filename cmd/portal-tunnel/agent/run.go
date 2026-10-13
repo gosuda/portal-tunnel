@@ -61,16 +61,19 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	listenAddr := listener.Addr().String()
+	localhostAuthority := fmt.Sprintf("localhost:%d", listener.Addr().(*net.TCPAddr).Port)
 	control := &http.Server{
 		Handler: &controlHandler{
-			manager:  manager,
-			token:    token,
-			auth:     walletAuth,
-			shutdown: cancel,
+			manager:            manager,
+			token:              token,
+			auth:               walletAuth,
+			shutdown:           cancel,
+			authority:          listenAddr,
+			localhostAuthority: localhostAuthority,
 		},
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	listenAddr := listener.Addr().String()
 	manager.controlAddr = listenAddr
 
 	if err := utils.WriteJSONFile(filepath.Join(endpointStateDir, endpointFilename), endpoint{
