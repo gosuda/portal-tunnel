@@ -344,7 +344,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, sourceAd
 // HandleRegisterChallenge issues a registration challenge without publishing
 // the success response, allowing the relay to apply access state first.
 func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) (types.ServiceIdentityKey, types.RegisterChallengeResponse, bool) {
-	req, ok := utils.DecodeJSONRequest[types.RegisterChallengeRequest](w, r, defaultControlBodyLimit)
+	req, ok := utils.DecodeJSONRequest[types.RegisterChallengeRequest](w, r, 64<<10)
 	if !ok {
 		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
 	}
