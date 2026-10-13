@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -73,14 +77,45 @@ func TestAPIClientRejectsTunnelProtocolMismatch(t *testing.T) {
 	}
 }
 
+func signTestReverseGateway(t *testing.T, rawURL string, expiresAt time.Time) types.RelayDescriptor {
+	t.Helper()
+	signer, err := identity.Generate("gateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuedAt := time.Now().UTC().Add(-time.Minute)
+	descriptor, err := discovery.SignRelayDescriptor(types.RelayDescriptor{
+		Address:         signer.Address,
+		IssuedAt:        issuedAt,
+		ExpiresAt:       expiresAt,
+		APIHTTPSAddr:    rawURL,
+		IVNPDestination: strings.Repeat("a", 52) + ".b32.i2p",
+	}, identity.NewLocalAuthority(signer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return descriptor
+}
+
 func TestValidateReverseEndpointTransport(t *testing.T) {
 	t.Parallel()
 	relayURL, err := url.Parse("https://relay.example")
 	if err != nil {
 		t.Fatal(err)
 	}
+	expiry := time.Now().UTC().Add(time.Minute)
+	gateway := signTestReverseGateway(t, "https://gateway.example", expiry.Add(time.Minute))
+	otherGateway := signTestReverseGateway(t, "https://other.example", expiry.Add(time.Minute))
+	localGateway := signTestReverseGateway(t, "https://127.0.0.1", expiry.Add(time.Minute))
+	privateGateway := signTestReverseGateway(t, "https://10.2.3.4", expiry.Add(time.Minute))
+	linkLocalGateway := signTestReverseGateway(t, "https://169.254.169.254", expiry.Add(time.Minute))
+	localhostGateway := signTestReverseGateway(t, "https://service.localhost", expiry.Add(time.Minute))
+	shortGateway := signTestReverseGateway(t, "https://gateway.example", expiry.Add(-time.Second))
+	tamperedGateway := gateway
+	tamperedGateway.APIHTTPSAddr = "https://another.example"
+
 	direct := types.ReverseEndpoint{URL: "https://relay.example/sdk/connect"}
-	overlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect", Overlay: true}
+	overlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect", Overlay: true, ExpiresAt: expiry, Gateway: &gateway}
 	legacyOverlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect"}
 
 	for name, test := range map[string]struct {
@@ -88,11 +123,20 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 		endpoint types.ReverseEndpoint
 		wantErr  bool
 	}{
-		"direct":           {endpoint: direct},
-		"overlay disabled": {endpoint: overlay, wantErr: true},
-		"overlay enabled":  {enabled: true, endpoint: overlay},
-		"fallback direct":  {enabled: true, endpoint: direct},
-		"legacy overlay":   {endpoint: legacyOverlay, wantErr: true},
+		"direct":               {endpoint: direct},
+		"overlay disabled":     {endpoint: overlay, wantErr: true},
+		"overlay enabled":      {enabled: true, endpoint: overlay},
+		"fallback direct":      {enabled: true, endpoint: direct},
+		"legacy overlay":       {endpoint: legacyOverlay, wantErr: true},
+		"unmarked alternate":   {enabled: true, endpoint: legacyOverlay, wantErr: true},
+		"missing gateway":      {enabled: true, endpoint: types.ReverseEndpoint{URL: overlay.URL, Overlay: true, ExpiresAt: expiry}, wantErr: true},
+		"unbound gateway":      {enabled: true, endpoint: types.ReverseEndpoint{URL: overlay.URL, Overlay: true, ExpiresAt: expiry, Gateway: &otherGateway}, wantErr: true},
+		"tampered descriptor":  {enabled: true, endpoint: types.ReverseEndpoint{URL: overlay.URL, Overlay: true, ExpiresAt: expiry, Gateway: &tamperedGateway}, wantErr: true},
+		"short gateway expiry": {enabled: true, endpoint: types.ReverseEndpoint{URL: overlay.URL, Overlay: true, ExpiresAt: expiry, Gateway: &shortGateway}, wantErr: true},
+		"loopback":             {enabled: true, endpoint: types.ReverseEndpoint{URL: "https://127.0.0.1/sdk/connect", Overlay: true, ExpiresAt: expiry, Gateway: &localGateway}, wantErr: true},
+		"private":              {enabled: true, endpoint: types.ReverseEndpoint{URL: "https://10.2.3.4/sdk/connect", Overlay: true, ExpiresAt: expiry, Gateway: &privateGateway}, wantErr: true},
+		"link-local":           {enabled: true, endpoint: types.ReverseEndpoint{URL: "https://169.254.169.254/sdk/connect", Overlay: true, ExpiresAt: expiry, Gateway: &linkLocalGateway}, wantErr: true},
+		"localhost suffix":     {enabled: true, endpoint: types.ReverseEndpoint{URL: "https://service.localhost/sdk/connect", Overlay: true, ExpiresAt: expiry, Gateway: &localhostGateway}, wantErr: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -102,6 +146,76 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 				t.Fatalf("validateReverseEndpointTransport() error = %v, wantErr %v", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestPublicReverseAddresses(t *testing.T) {
+	t.Parallel()
+	for address, want := range map[string]bool{
+		"8.8.8.8":             true,
+		"2606:4700:4700::1111": true,
+		"127.0.0.1":           false,
+		"10.0.0.1":            false,
+		"172.16.2.1":          false,
+		"192.168.1.1":         false,
+		"169.254.169.254":     false,
+		"100.64.1.1":          false,
+		"192.0.2.1":           false,
+		"198.19.1.1":          false,
+		"203.0.113.1":         false,
+		"::1":                 false,
+		"::ffff:127.0.0.1":    false,
+		"::ffff:10.0.0.1":     false,
+		"fc00::1":             false,
+		"fe80::1":             false,
+		"64:ff9b::a00:1":     false,
+		"2001:db8::1":         false,
+		"2002:c0a8:101::1":    false,
+	} {
+		t.Run(address, func(t *testing.T) {
+			t.Parallel()
+			if got := isPublicReverseAddr(netip.MustParseAddr(address)); got != want {
+				t.Fatalf("isPublicReverseAddr(%s) = %t, want %t", address, got, want)
+			}
+		})
+	}
+}
+
+func TestReverseTCPDialerChecksResolvedAddress(t *testing.T) {
+	t.Parallel()
+	socket, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if conn, err := reverseTCPDialer(true).DialContext(ctx, "tcp", socket.Addr().String()); err == nil {
+		_ = conn.Close()
+		t.Fatal("alternate gateway dial reached loopback address")
+	}
+	// Explicitly configured direct relays retain local development support.
+	conn, err := reverseTCPDialer(false).DialContext(ctx, "tcp", socket.Addr().String())
+	if err != nil {
+		t.Fatalf("direct relay dial: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestReverseTLSBootstrapRejectsAlternateLocalHost(t *testing.T) {
+	t.Parallel()
+	relay, err := url.Parse("https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := url.Parse("https://127.0.0.1:443/sdk/connect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &listener{api: &apiClient{relayURL: relay}}
+	if _, err := l.reverseTLSConfig(context.Background(), endpoint); err == nil || !strings.Contains(err.Error(), "local-only") {
+		t.Fatalf("reverseTLSConfig() error = %v, want local host rejection before TLS bootstrap", err)
 	}
 }
 

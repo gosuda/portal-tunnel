@@ -353,6 +353,7 @@ func (r *Runtime) IssueEndpoint(input IssueInput) (types.ReverseEndpoint, bool, 
 		Capability: capability,
 		ExpiresAt:  capabilityExpiry,
 		Overlay:    true,
+		Gateway:    &gateway,
 	}, true, nil
 }
 

@@ -94,8 +94,9 @@ type RegisterChallengeResponse struct {
 type ReverseEndpoint struct {
 	URL        string    `json:"url"`
 	Capability string    `json:"capability"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	Overlay    bool      `json:"overlay,omitempty"`
+	ExpiresAt  time.Time        `json:"expires_at"`
+	Overlay    bool             `json:"overlay,omitempty"`
+	Gateway    *RelayDescriptor `json:"gateway,omitempty"`
 }
 
 type RegisterResponse struct {

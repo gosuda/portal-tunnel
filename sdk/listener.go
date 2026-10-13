@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -717,23 +718,53 @@ func (l *listener) isAlternateReverseEndpoint(rawURL string) bool {
 }
 
 func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoint) error {
-	if !l.overlay {
-		if endpoint.Overlay {
-			return errors.New("relay returned an overlay reverse endpoint but overlay is disabled")
+	alternate := l.isAlternateReverseEndpoint(endpoint.URL)
+	if !l.overlay && endpoint.Overlay {
+		return errors.New("relay returned an overlay reverse endpoint but overlay is disabled")
+	}
+	if !endpoint.Overlay {
+		if alternate {
+			return fmt.Errorf("relay reverse endpoint %s does not match the relay URL", endpoint.URL)
 		}
-		if l.isAlternateReverseEndpoint(endpoint.URL) {
-			return fmt.Errorf("relay reverse endpoint %s does not match the relay URL; align the relay's PORTAL_URL with the address clients dial", endpoint.URL)
+		if endpoint.Gateway != nil {
+			return errors.New("relay returned gateway metadata for a direct reverse endpoint")
+		}
+		if l.overlay {
+			l.warnOverlayDirect.Do(func() {
+				log.Warn().
+					Str("relay_url", l.api.relayURL.String()).
+					Msg("overlay requested but the relay serves a direct reverse endpoint; continuing without overlay forwarding")
+			})
 		}
 		return nil
 	}
-	if !endpoint.Overlay && !l.isAlternateReverseEndpoint(endpoint.URL) {
-		l.warnOverlayDirect.Do(func() {
-			log.Warn().
-				Str("relay_url", l.api.relayURL.String()).
-				Msg("overlay requested but the relay serves a direct reverse endpoint; continuing without overlay forwarding")
-		})
+
+	if endpoint.Gateway == nil {
+		return errors.New("relay returned an overlay reverse endpoint without a signed gateway descriptor")
 	}
-	return nil
+	gateway, err := discovery.VerifyRelayDescriptor(*endpoint.Gateway)
+	if err != nil {
+		return fmt.Errorf("verify overlay gateway descriptor: %w", err)
+	}
+	now := time.Now().UTC()
+	if !gateway.ExpiresAt.After(now) || endpoint.ExpiresAt.After(gateway.ExpiresAt) {
+		return errors.New("overlay gateway descriptor does not cover the reverse endpoint expiry")
+	}
+	if strings.TrimSpace(gateway.IVNPDestination) == "" {
+		return errors.New("overlay gateway descriptor has no destination")
+	}
+	gatewayURL, err := url.Parse(gateway.APIHTTPSAddr)
+	if err != nil {
+		return fmt.Errorf("parse overlay gateway URL: %w", err)
+	}
+	reverseURL, err := url.Parse(endpoint.URL)
+	if err != nil || reverseURL.Host == "" {
+		return errors.New("invalid overlay reverse endpoint URL")
+	}
+	if reverseURL.String() != utils.ResolveAPIURL(gatewayURL, types.PathSDKConnect).String() {
+		return errors.New("overlay reverse endpoint does not match the signed gateway URL")
+	}
+	return validatePublicReverseHostname(reverseURL.Hostname())
 }
 
 func (l *listener) runDatagramLoop(ctx context.Context) error {
@@ -820,6 +851,10 @@ func (l *listener) reverseTarget() (*url.URL, string, error) {
 	if !lease.reverse.ExpiresAt.After(time.Now().UTC()) {
 		return nil, "", errLeaseRefreshRequired
 	}
+	// Recheck on every reconnect, including after a failed gateway is replaced.
+	if err := l.validateReverseEndpointTransport(lease.reverse); err != nil {
+		return nil, "", fmt.Errorf("reverse endpoint is not authorized: %w", err)
+	}
 	if l.api.tlsConfigClone() == nil {
 		return nil, "", errors.New("relay tls config is unavailable")
 	}
@@ -834,6 +869,12 @@ func (l *listener) reverseTarget() (*url.URL, string, error) {
 func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tls.Config, error) {
 	if endpoint == nil || endpoint.Hostname() == "" {
 		return nil, errors.New("reverse endpoint hostname is unavailable")
+	}
+	// Never bootstrap local TLS trust for a relay-supplied gateway.
+	if l.isAlternateReverseEndpoint(endpoint.String()) {
+		if err := validatePublicReverseHostname(endpoint.Hostname()); err != nil {
+			return nil, err
+		}
 	}
 	if strings.EqualFold(endpoint.Host, l.api.relayURL.Host) {
 		return l.api.tlsConfigClone(), nil
