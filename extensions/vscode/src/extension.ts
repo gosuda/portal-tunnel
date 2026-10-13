@@ -4,6 +4,7 @@ import {
   buildCommand,
   defaultRelayRegistryURL,
   validateRelayUrl,
+  validateHost,
 } from "./command";
 
 let tunnelTerminal: vscode.Terminal | undefined;
@@ -27,6 +28,11 @@ export function deactivate(): void {
 }
 
 async function startTunnel(advanced: boolean): Promise<void> {
+  if (!vscode.workspace.isTrusted) {
+    vscode.window.showErrorMessage("Portal tunnels require a trusted workspace.");
+    return;
+  }
+
   const host = await promptHost();
   if (!host) { return; }
 
@@ -53,6 +59,11 @@ function runTunnelCommand(args: {
   relayUrls: string[];
   thumbnail: string;
 }): void {
+  if (!vscode.workspace.isTrusted) {
+    vscode.window.showErrorMessage("Portal tunnels require a trusted workspace.");
+    return;
+  }
+
   let command: string;
   try {
     command = buildCommand({
@@ -92,7 +103,7 @@ async function promptHost(): Promise<string | undefined> {
     title: "Portal: Local Host",
     prompt: "Hostname or IP:Port where your service is running",
     value: defaultHost,
-    validateInput: (v) => (v.trim() ? undefined : "Required"),
+    validateInput: validateHost,
   });
 }
 
