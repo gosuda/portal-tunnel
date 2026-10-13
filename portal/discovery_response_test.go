@@ -2,6 +2,7 @@ package portal
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -64,5 +65,41 @@ func TestWriteDiscoveryResponsePreservesSmallMetadata(t *testing.T) {
 	if len(envelope.Data.Relays) != 1 || len(envelope.Data.IncompatibleRelays) != 1 ||
 		envelope.Data.RelayReleaseVersions["https://peer.example"] != "v2.6.0" {
 		t.Fatalf("expected complete bounded response, got %+v", envelope.Data)
+	}
+}
+
+func TestWriteDiscoveryResponseCapsCollections(t *testing.T) {
+	t.Parallel()
+
+	response := types.DiscoveryResponse{
+		Relays:               make([]types.RelayDescriptor, types.MaxDiscoveryEntries+2),
+		IncompatibleRelays:   make([]types.IncompatibleRelayEntry, types.MaxDiscoveryEntries+1),
+		RelayReleaseVersions: make(map[string]string),
+	}
+	for i := range response.Relays {
+		response.Relays[i] = types.RelayDescriptor{APIHTTPSAddr: fmt.Sprintf("https://relay-%d.example", i)}
+	}
+	for i := range response.IncompatibleRelays {
+		response.IncompatibleRelays[i] = types.IncompatibleRelayEntry{URL: fmt.Sprintf("https://old-%d.example", i)}
+	}
+	for i := range types.MaxDiscoveryEntries + 1 {
+		response.RelayReleaseVersions[fmt.Sprintf("https://observed-%d.example", i)] = "v"
+	}
+
+	rec := httptest.NewRecorder()
+	writeDiscoveryResponse(rec, response)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("writeDiscoveryResponse() status = %d", rec.Code)
+	}
+	var envelope types.APIEnvelope[types.DiscoveryResponse]
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("invalid bounded discovery envelope: %v", err)
+	}
+	if len(envelope.Data.Relays) != types.MaxDiscoveryEntries+1 ||
+		len(envelope.Data.IncompatibleRelays) != types.MaxDiscoveryEntries ||
+		len(envelope.Data.RelayReleaseVersions) != types.MaxDiscoveryEntries {
+		t.Fatalf("collection sizes = (%d, %d, %d), want (%d, %d, %d)",
+			len(envelope.Data.Relays), len(envelope.Data.IncompatibleRelays), len(envelope.Data.RelayReleaseVersions),
+			types.MaxDiscoveryEntries+1, types.MaxDiscoveryEntries, types.MaxDiscoveryEntries)
 	}
 }
