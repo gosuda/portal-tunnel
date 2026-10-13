@@ -154,16 +154,14 @@ When enabled, Portal uses the configured DNS provider to:
 - publish `ENS1 ...` TXT records for the base domain
 - publish `ENS1 ...` TXT records for friendly and identity-bound lease hostnames
 - keep lease-hostname A/AAAA records in sync with the relay public addresses
-  unless `ENS_GASLESS_REDUCE_DNS_RECORDS=true`
 - remove lease hostname records when leases unregister or expire
 
 Lease registration and removal enqueue DNS changes to a single worker. Successful
 TXT changes are not repeated by the periodic maintenance pass; only failed
-changes are retried. Unless record reduction is enabled, lease A/AAAA records
-are checked again when the relay public addresses change. DNSSEC is synchronized
-periodically while `ens.verified` is false. Embedded DNS remains unverified and
-continues synchronization because local signing does not authenticate parent
-delegation.
+changes are retried. Lease A/AAAA records are checked again when the relay
+public addresses change, while DNSSEC is synchronized periodically while
+`ens.verified` is false. Embedded DNS remains unverified and continues
+synchronization because local signing does not authenticate parent delegation.
 
 Portal writes TXT values in this shape:
 
@@ -183,10 +181,6 @@ Requirements for every supported provider:
 
 - public relay domain, not `localhost`
 - `ENS_GASLESS_ENABLED=true` (the default is `false`)
-- optionally set `ENS_GASLESS_REDUCE_DNS_RECORDS=true` to publish only the
-  DNSSEC-signed `ENS1` TXT record for lease hostnames; this is sufficient for
-  ENS gasless resolution and leaves base/wildcard relay records and nameserver
-  glue unchanged
 - a DNSSEC-capable provider and a valid DNSSEC chain through the parent zone for ENS clients to validate the records
 
 For the preferred **embedded** setup, leave `ACME_DNS_PROVIDER` unset or set it to `embedded`, configure NS/glue delegation to the relay, and persist `IDENTITY_PATH/dnssec-csk.json`. Embedded DNS signs the ENS TXT records and exports a DS when its local listeners start and in ENS status; after delegation is reachable, publish that DS at the parent zone. No DNS API credentials are needed. Local signing does not verify parent publication: embedded status remains `pending` and `ens.verified=false` because Portal does not authenticate the parent chain. See [Embedded DNS](/configuration#embedded-dns) for trust-chain and key-persistence requirements.
@@ -210,11 +204,10 @@ PORTAL_URL=https://portal.example.com
 IDENTITY_PATH=/portal-certs
 ACME_DNS_PROVIDER=embedded
 ENS_GASLESS_ENABLED=true
-ENS_GASLESS_REDUCE_DNS_RECORDS=true
 ```
 
-The same provider is used for ACME DNS-01, managed base/wildcard A/AAAA records,
-DNSSEC, and ENS TXT records. Valid manual `fullchain.pem` and `privatekey.pem`
+The same provider is used for ACME DNS-01, managed A/AAAA records, DNSSEC, and
+ENS TXT records. Valid manual `fullchain.pem` and `privatekey.pem`
 under `IDENTITY_PATH` override certificate issuance only when neither
 `acme-account.key` nor `acme-registration.json` exists. Portal still uses the
 selected provider for ENS/DNS automation, so external providers still require

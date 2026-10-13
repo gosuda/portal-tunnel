@@ -124,7 +124,6 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 
 	utils.StringFlagEnv(fs, &cfg.Relay.ACME.DNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01 and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded without API credentials", "ACME_DNS_PROVIDER")
 	utils.BoolFlagEnv(fs, &cfg.Relay.ACME.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
-	utils.BoolFlagEnv(fs, &cfg.Relay.ACME.ENSGaslessReduceDNSRecords, "ens-gasless-reduce-dns-records", false, "skip app-hostname A/AAAA records for ENS gasless hostnames (ENS_GASLESS_ENABLED must also be true)", "ENS_GASLESS_REDUCE_DNS_RECORDS")
 	utils.IntFlagEnv(fs, &cfg.Relay.ACME.EmbeddedDNSPort, "embedded-dns-port", 53, utils.ParsePortNumber, "listen port for the embedded authoritative DNS server (the default DNS provider); requires a one-time NS delegation of the base domain and open 53/tcp+udp", "EMBEDDED_DNS_PORT")
 	utils.StringFlagEnv(fs, &cfg.Relay.ACME.CloudflareToken, "cloudflare-token", "", "Cloudflare DNS API token for DNS automation (required when acme-dns-provider=cloudflare)", "CLOUDFLARE_TOKEN")
 	utils.StringFlagEnv(fs, &cfg.Relay.ACME.GCPProjectID, "gcp-project-id", "", "Google Cloud project id for Cloud DNS automation; auto-detected from ADC or GCE metadata when omitted", "GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCE_PROJECT")

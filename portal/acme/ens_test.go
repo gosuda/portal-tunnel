@@ -159,31 +159,6 @@ func TestENSGaslessAddressChangeLeavesOneRecord(t *testing.T) {
 	}
 }
 
-func TestENSGaslessHostnameDoesNotCreateAddressRecords(t *testing.T) {
-	const host = "app.portal.example.com"
-
-	zone := newFakeZone()
-	manager := newTestENSManager(Config{
-		BaseDomain:                 "portal.example.com",
-		KeyDir:                     t.TempDir(),
-		ENSGaslessEnabled:          true,
-		ENSGaslessReduceDNSRecords: true,
-	}, zone)
-
-	if err := manager.applyENSCommand(context.Background(), ensDNSCommand{
-		hostname: host,
-		address:  "0x1111111111111111111111111111111111111111",
-	}); err != nil {
-		t.Fatalf("applyENSCommand(): %v", err)
-	}
-	if zone.hasARecord(host) {
-		t.Fatalf("ENS gasless hostname %s received an address record", host)
-	}
-	if ens := ensTXTValues(t, zone, host); len(ens) != 1 {
-		t.Fatalf("ENS1 records = %v, want exactly one", ens)
-	}
-}
-
 // A normal lease deletion cannot establish that ENS owns the hostname's A
 // record, so disabling ENS must keep that path from deleting unrelated DNS.
 func TestENSGaslessLeaseRemovalDoesNotRunWhenDisabled(t *testing.T) {

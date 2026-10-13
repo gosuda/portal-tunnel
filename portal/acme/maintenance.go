@@ -46,9 +46,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 	pendingENS := make(map[string]ensDNSCommand)
 	lastPublicIPs := make(map[bool]string)
 	syncChangedAddressRecords := func(ctx context.Context, publicIPs []string) error {
-		if m.cfg.ENSGaslessReduceDNSRecords {
-			return nil
-		}
 		var syncErr error
 		for _, publicIP := range publicIPs {
 			ipv4 := net.ParseIP(publicIP).To4() != nil
@@ -192,7 +189,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			} else {
 				consecutiveDNSFailures = 0
 				rearmRetryTimer()
-				if m.cfg.ENSGaslessEnabled && !m.cfg.ENSGaslessReduceDNSRecords {
+				if m.cfg.ENSGaslessEnabled {
 					publicIPs, err = utils.ResolvePublicIPs(syncCtx)
 				}
 			}

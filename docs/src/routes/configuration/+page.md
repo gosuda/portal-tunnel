@@ -238,18 +238,16 @@ is the proxy when one sits in front. The trusted proxy must overwrite
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01 challenges, base/wildcard A/AAAA sync, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
+| `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01 challenges, A/AAAA sync, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for a public relay domain and lease hostnames through the selected DNS provider. With `embedded`, local records are signed and the operator publishes the DS at the parent zone; Cloudflare, Google Cloud DNS, Route53, and Vultr use their provider APIs. Hetzner and Njalla do not support ENS DNSSEC automation |
-| `ENS_GASLESS_REDUCE_DNS_RECORDS` | `false` | bool | When ENS gasless is enabled, skip per-lease-hostname A/AAAA records and publish only ENS1 TXT records. Base/wildcard relay records and nameserver glue are unaffected |
 
 ### IPv4 and IPv6
 
 Managed DNS discovers public IPv4 and IPv6 independently and publishes A and
 AAAA records for the families it finds. One available family is sufficient for
-address initialization. Apex and wildcard updates affect only the supplied
-family. Tracked ENS hostname updates do the same unless
-`ENS_GASLESS_REDUCE_DNS_RECORDS=true`; a transient discovery failure leaves the
-other family's existing records intact. Permanently retiring a family requires
+address initialization. Apex, wildcard, and tracked ENS hostname updates affect
+only the supplied family; a transient discovery failure leaves the other
+family's existing records intact. Permanently retiring a family requires
 removing its external DNS records and parent glue; a failed probe is not a
 request to withdraw them. Explicit ENS hostname cleanup removes both A
 and AAAA records on external providers. Embedded DNS continues its zone-wide
@@ -609,7 +607,7 @@ Relay policy settings are stored at `IDENTITY_PATH/policy.json`.
 
 ## ACME DNS Provider Configuration
 
-Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed base/wildcard A/AAAA records, and optional ENS gasless DNS records. Set `ENS_GASLESS_REDUCE_DNS_RECORDS=true` to avoid per-lease-hostname A/AAAA records.
+Set `ACME_DNS_PROVIDER` (or `--acme-dns-provider`) to one of the values below to enable DNS-backed automation. Portal uses the same provider for DNS-01 challenges, managed A/AAAA records, and optional ENS gasless DNS records.
 
 An empty value selects `embedded`, the canonical managed backend; see [Embedded DNS](#embedded-dns) for NS/glue delegation, DS setup, and persistent signing-key requirements. The external providers below are supported first-class backends. Valid manually supplied `fullchain.pem` and `privatekey.pem` files in `IDENTITY_PATH` take precedence over managed certificate issuance only when neither `acme-account.key` nor `acme-registration.json` exists, regardless of provider selection. If either ACME state file remains, Portal treats the PEM files as managed certificate material. Manual overrides do not disable embedded A/AAAA serving or opt-in ENS automation through the selected provider.
 

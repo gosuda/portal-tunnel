@@ -177,7 +177,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		})
 	}
 
-	if !m.cfg.ENSGaslessReduceDNSRecords && command.hostname != m.cfg.BaseDomain {
+	if command.hostname != m.cfg.BaseDomain {
 		publicIPs, err := utils.ResolvePublicIPs(ctx)
 		if err != nil {
 			return fmt.Errorf("detect public ip: %w", err)
@@ -193,9 +193,6 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		}
 	}
 
-	// ENSIP-17 resolves the name from the DNSSEC-signed ENS1 TXT record. When
-	// ENS_GASLESS_REDUCE_DNS_RECORDS is enabled, the TXT record is sufficient
-	// and the app hostname does not need an A or AAAA record.
 	value := gaslessENSTXTPrefix + defaultENSGaslessResolver + " " + strings.TrimSpace(command.address)
 	// EnsureTXTRecord appends whenever the value differs, which DNS-01 needs and
 	// ENS does not: a hostname carries exactly one ENS1 record. Drop the previous
