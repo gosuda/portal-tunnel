@@ -140,6 +140,11 @@ func runExposeCommand(args []string) error {
 		}
 		return err
 	}
+	switch flags.output {
+	case "", "text", "jsonl":
+	default:
+		return fmt.Errorf("--output %q: supported values are text and jsonl", flags.output)
+	}
 	var err error
 	flags.targetAddr, err = utils.OptionalSingleArg(fs.Args(), "target")
 	if err != nil {

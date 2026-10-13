@@ -208,7 +208,7 @@ portal expose 3000 --output jsonl
 One ready record:
 
 ```json
-{"event":"relay_status","relay_url":"https://relay.example.com","state":"ready","public_url":"https://myapp-<identity>.relay.example.com","alias_url":"https://myapp.relay.example.com","udp_addr":"","tcp_addr":"","version":"2.6.3","deselected":false}
+{"event":"relay_status","relay_url":"https://relay.example.com","state":"ready","public_url":"https://myapp-<identity>.relay.example.com","alias_url":"https://myapp.relay.example.com","version":"2.6.3","deselected":false}
 ```
 
 Fields:
@@ -218,7 +218,7 @@ Fields:
 | `event` | Always `relay_status` |
 | `relay_url` | Relay API URL this status describes |
 | `state` | `connecting`, `ready`, or `failed` |
-| `failure` | Present when `state` is `failed`: `runtime` (recoverable) or `terminal` |
+| `failure` | Present when `state` is `failed`: `runtime` (recoverable), `terminal`, or `mitm` (TLS termination detected; requires `--ban-mitm`) |
 | `public_url` | Identity-bound canonical URL; routes to this exposure whenever set |
 | `alias_url` | Friendly `<name>.<relay-domain>` URL, emitted **only while `state` is `ready`**; a failed or deselected relay never reports one |
 | `udp_addr`, `tcp_addr` | Raw transport endpoints when enabled |
