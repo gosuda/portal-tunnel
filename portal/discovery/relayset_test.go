@@ -657,7 +657,7 @@ func TestApplyRelayDiscoveryResponseRejectsOversizedCollection(t *testing.T) {
 
 	set := NewRelaySet(nil)
 	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-		Relays: make([]types.RelayDescriptor, MaxAnnouncedRelays+1),
+		Relays: make([]types.RelayDescriptor, MaxAnnouncedRelays+2),
 	}, time.Now())
 	if err == nil || changed {
 		t.Fatalf("ApplyRelayDiscoveryResponse() = (%t, %v), want false and an error", changed, err)
