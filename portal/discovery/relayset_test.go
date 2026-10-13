@@ -666,3 +666,15 @@ func TestApplyRelayDiscoveryResponseRejectsOversizedCollection(t *testing.T) {
 		t.Fatalf("relay count = %d, want 0 after rejected response", len(states))
 	}
 }
+
+func TestApplyRelayDiscoveryResponseAllowsSelfAndCappedPool(t *testing.T) {
+	t.Parallel()
+
+	set := NewRelaySet(nil)
+	changed, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+		Relays: make([]types.RelayDescriptor, MaxAnnouncedRelays+1),
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() = (%t, %v), want no error", changed, err)
+	}
+}
