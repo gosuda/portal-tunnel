@@ -191,9 +191,17 @@ func TestReverseTCPDialerChecksResolvedAddress(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if conn, err := reverseTCPDialer(true).DialContext(ctx, "tcp", socket.Addr().String()); err == nil {
-		_ = conn.Close()
-		t.Fatal("alternate gateway dial reached loopback address")
+	_, port, err := net.SplitHostPort(socket.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The hostname case verifies enforcement after DNS resolution, not just
+	// rejection of literal IP addresses before dialing.
+	for _, address := range []string{socket.Addr().String(), net.JoinHostPort("localhost", port)} {
+		if conn, err := reverseTCPDialer(true).DialContext(ctx, "tcp", address); err == nil {
+			_ = conn.Close()
+			t.Fatalf("alternate gateway dial reached loopback address %q", address)
+		}
 	}
 	// Explicitly configured direct relays retain local development support.
 	conn, err := reverseTCPDialer(false).DialContext(ctx, "tcp", socket.Addr().String())
