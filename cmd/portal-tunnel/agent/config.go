@@ -106,6 +106,14 @@ func loadConfigDocument(path string) (Config, string, os.FileMode, error) {
 }
 
 func readConfigDocument(absPath string) (Config, os.FileMode, error) {
+	if filepath.Clean(absPath) == filepath.Clean(service.DefaultConfigPath()) {
+		if err := utils.EnsurePrivateDir(filepath.Dir(absPath)); err != nil {
+			return Config{}, 0, fmt.Errorf("secure default agent config directory: %w", err)
+		}
+	}
+	if err := utils.EnsurePrivateFile(absPath); err != nil {
+		return Config{}, 0, fmt.Errorf("secure agent config: %w", err)
+	}
 	info, err := os.Stat(absPath)
 	if err != nil {
 		return Config{}, 0, err
@@ -141,6 +149,9 @@ func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
 		return err
 	}
 	mode = cmp.Or(mode, 0o644)
+	if err := utils.EnsurePrivateFile(path); err != nil {
+		return fmt.Errorf("secure agent config before update: %w", err)
+	}
 	return os.WriteFile(path, data, mode)
 }
 
