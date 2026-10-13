@@ -547,6 +547,10 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr) (ty
 	if strings.TrimSpace(reportedIP) != "" {
 		record.ReportedIP = reportedIP
 	}
+	if err := req.Metadata.Validate(); err != nil {
+		r.mu.Unlock()
+		return types.RenewResponse{}, reverseEndpointInput{}, err
+	}
 	record.Metadata = req.Metadata.Copy()
 	r.cache.Renew(record.cacheLease())
 	recordIdentity := record.Identity
