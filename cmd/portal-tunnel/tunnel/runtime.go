@@ -1,17 +1,12 @@
 package tunnel
 
 import (
-	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
@@ -28,11 +23,6 @@ type Spec struct {
 	Metadata  types.LeaseMetadata
 	Transport TransportSpec
 	HTTP      *HTTPConfig
-	// Output selects the lifecycle output format: "" or "text" keeps the
-	// human-readable log path; "jsonl" emits machine-readable relay
-	// lifecycle records. Frontends own parsing; runtime assembly starts
-	// at this boundary.
-	Output string
 }
 
 type IdentitySpec struct {
@@ -83,11 +73,6 @@ type CacheConfig struct {
 }
 
 func (spec Spec) Validate() error {
-	switch spec.Output {
-	case "", "text", "jsonl":
-	default:
-		return fmt.Errorf("output %q: supported values are text and jsonl", spec.Output)
-	}
 	target := strings.TrimSpace(spec.Transport.Target)
 	if spec.HTTP == nil {
 		if target == "" {
@@ -175,7 +160,6 @@ type Runtime struct {
 	handler   http.Handler
 	target    string
 	udpTarget string
-	output    string
 }
 
 func Start(ctx context.Context, spec Spec) (*Runtime, error) {
@@ -235,7 +219,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to start relays: %w", err)
 	}
-	runtime := &Runtime{Identity: listenerIdentity, Exposure: exposure, target: spec.Transport.Target, output: spec.Output}
+	runtime := &Runtime{Identity: listenerIdentity, Exposure: exposure, target: spec.Transport.Target}
 	if spec.Transport.UDP != nil {
 		runtime.udpTarget = utils.StringOrDefault(spec.Transport.UDP.Target, spec.Transport.Target)
 	}
@@ -270,109 +254,4 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 
 func (runtime *Runtime) Close() error {
 	return runtime.Exposure.Close()
-}
-
-// relayLifecycleRecord is one machine-readable relay lifecycle record
-// emitted in --output jsonl mode. It projects the SDK RelayStatus snapshot
-// as-is; the SDK Exposure remains the only owner of relay state.
-type relayLifecycleRecord struct {
-	Event      string `json:"event"`
-	RelayURL   string `json:"relay_url"`
-	State      string `json:"state"`
-	Failure    string `json:"failure,omitempty"`
-	PublicURL  string `json:"public_url,omitempty"`
-	AliasURL   string `json:"alias_url,omitempty"`
-	UDPAddr    string `json:"udp_addr,omitempty"`
-	TCPAddr    string `json:"tcp_addr,omitempty"`
-	Version    string `json:"version,omitempty"`
-	Deselected bool   `json:"deselected"`
-	Error      string `json:"error,omitempty"`
-}
-
-// relayLifecycleRecordFrom projects one SDK RelayStatus snapshot onto the
-// machine-readable record. AliasURL is emitted only while the relay is
-// ready, and Error is bounded to one line so records stay parseable; no
-// secrets are part of RelayStatus.
-func relayLifecycleRecordFrom(status sdk.RelayStatus) relayLifecycleRecord {
-	record := relayLifecycleRecord{
-		Event:      "relay_status",
-		RelayURL:   status.RelayURL,
-		State:      string(cmp.Or(status.State, sdk.RelayConnecting)),
-		Failure:    string(status.Failure),
-		PublicURL:  status.PublicURL,
-		UDPAddr:    status.UDPAddr,
-		TCPAddr:    status.TCPAddr,
-		Version:    status.Version,
-		Deselected: status.Deselected,
-	}
-	if status.State == sdk.RelayReady && !status.Deselected {
-		record.AliasURL = status.AliasURL
-	}
-	if status.Err != nil {
-		record.Error = strings.ReplaceAll(status.Err.Error(), "\n", " ")
-	}
-	return record
-}
-
-// StartRelayLifecycleWriter projects relay lifecycle changes onto w as
-// JSONL when spec.Output is jsonl: one relay_status record per update,
-// sourced from the SDK's authoritative Updates channel with a Relays()
-// startup snapshot. Returned records ordered by the snapshot: a queued
-// update is reconciled against a fresh Relays() before it is emitted, so
-// a stale ready never follows a snapshot-reported failure. The channel is
-// a bounded, coalescing notification, not a lossless event log; consumers
-// reconcile by re-deriving the snapshot on restart. The writer stops on
-// the first write failure or ctx cancellation; the returned channel
-// delivers exactly one send when the writer stops: the write error if
-// any, else nil. A caller waiting on it blocks until the writer has
-// flushed its output. Text mode (default) delivers an immediate nil.
-func (runtime *Runtime) StartRelayLifecycleWriter(ctx context.Context, w io.Writer) <-chan error {
-	done := make(chan error, 1)
-	if runtime == nil || runtime.Exposure == nil || runtime.output != "jsonl" || w == nil {
-		close(done)
-		return done
-	}
-	go func() {
-		var writeErr error
-		defer func() { done <- writeErr }()
-		encoder := json.NewEncoder(w)
-		writeStatus := func(status sdk.RelayStatus) bool {
-			if err := encoder.Encode(relayLifecycleRecordFrom(status)); err != nil {
-				log.Error().Err(err).Msg("relay lifecycle record write failed")
-				writeErr = err
-				return false
-			}
-			return true
-		}
-		for _, status := range runtime.Exposure.Relays() {
-			if !writeStatus(status) {
-				return
-			}
-		}
-		updates := runtime.Exposure.Updates()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case status, ok := <-updates:
-				if !ok {
-					return
-				}
-				// The queue can hold updates published before the
-				// snapshot above was read. A fresh snapshot is
-				// authoritative: reconcile the queued status against it
-				// so an older ready never contradicts a newer failure.
-				for _, current := range runtime.Exposure.Relays() {
-					if current.RelayURL == status.RelayURL {
-						status = current
-						break
-					}
-				}
-				if !writeStatus(status) {
-					return
-				}
-			}
-		}
-	}()
-	return done
 }

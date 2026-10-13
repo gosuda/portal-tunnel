@@ -136,7 +136,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--strip-request-header` | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (`Host`, `X-Forwarded-*`) are always rewritten after stripping; requires `--http-route` or `--auth` |
 | `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
 | `--cache-ttl` | duration | `0` | Requested offline cache lifetime; `0` uses relay policy; requires `--cache` |
-| `--output` | string | `text` | Lifecycle output format; `jsonl` switches the relay lifecycle to machine-readable JSON records on stdout (see [Machine-Readable Relay Lifecycle](#machine-readable-relay-lifecycle)) |
+| `--log-format` | string | `text` | Log output format; `json` switches all CLI logs to one structured JSON record per line on stdout for machine integration (see [Machine-Readable Relay Lifecycle](#machine-readable-relay-lifecycle)) |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
@@ -194,24 +194,23 @@ Integrations that launch `portal expose` as a subprocess can track relay
 readiness without parsing human-facing messages:
 
 ```bash
-portal expose 3000 --output jsonl
+portal expose 3000 --log-format json
 ```
 
 | Guarantee | Behavior |
 |-----------|----------|
-| Records | One `{...}` JSON object per line on **stdout**; each carries `"event":"relay_status"` |
-| Human output | Unchanged; logs, warnings, and update checks stay on **stderr** |
-| Startup snapshot | All relays known when the writer starts are emitted before updates |
-| State ownership | Records project the same SDK status snapshot the CLI logs derive from |
-| Lossless | Not guaranteed: intermediate updates can coalesce; reconcile by restarting with a fresh snapshot or re-reading `Relays()` through the SDK |
+| Records | One structured JSON log record per line on **stdout**; filter by `"event":"relay_status"` |
+| Human output | Unchanged by default; `--log-format text` (default) keeps the human-readable console |
+| State ownership | Records are emitted from the same authoritative SDK status paths the human logs derive from |
+| Coalescing | Not a lossless event log: `service ready at` and `relay no longer active for` frames are the documented contract; a deselected relay never reports an alias |
 
 One ready record:
 
 ```json
-{"event":"relay_status","relay_url":"https://relay.example.com","state":"ready","public_url":"https://myapp-<identity>.relay.example.com","alias_url":"https://myapp.relay.example.com","version":"2.6.3","deselected":false}
+{"level":"info","event":"relay_status","relay_url":"https://relay.example.com","state":"ready","public_url":"https://myapp-<identity>.relay.example.com","alias_url":"https://myapp.relay.example.com","deselected":false,"time":"2026-01-01T00:00:00Z","message":"service ready at https://myapp-<identity>.relay.example.com"}
 ```
 
-Fields:
+Fields on `event=relay_status` records:
 
 | Field | Meaning |
 |-------|---------|
@@ -220,13 +219,13 @@ Fields:
 | `state` | `connecting`, `ready`, or `failed` |
 | `failure` | Present when `state` is `failed`: `runtime` (recoverable), `terminal`, or `mitm` (TLS termination detected; requires `--ban-mitm`) |
 | `public_url` | Identity-bound canonical URL; routes to this exposure whenever set |
-| `alias_url` | Friendly `<name>.<relay-domain>` URL, emitted **only while `state` is `ready`**; a failed or deselected relay never reports one |
-| `udp_addr`, `tcp_addr` | Raw transport endpoints when enabled |
-| `deselected` | `true` on the removal notification for a relay that left the membership set; a previously advertised URL must be retracted |
-| `error` | Bounded, single-line diagnostic when present; records never carry access tokens, private identities, or other secrets |
+| `alias_url` | Friendly `<name>.<relay-domain>` URL, present **only while `state` is `ready` and granted**: a failed, deselected, or address-only relay never reports one |
+| `deselected` | `true` on the removal notification for a relay that left the membership set; a previously advertised relay URL must be retracted |
 
-A `deselected` record with `deselected: true` is best-effort: treat it as a
-trigger to reconcile, not as durable history.
+Records never carry access tokens, private identities, or other secrets;
+other log levels and messages on the same stream are not part of this
+contract. A consumer needing an authoritative complete membership
+snapshot should use the SDK's `Relays()`, not the lossy event stream.
 
 ### Examples
 

@@ -90,7 +90,7 @@ type exposeFlags struct {
 	tcp                  bool
 	maxActiveRelays      int
 	metricsAddr          string
-	output               string
+	logFormat            string
 }
 
 func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
@@ -125,7 +125,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
 	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
-	utils.StringFlag(fs, &flags.output, "output", "text", "Lifecycle output format: text (default human-readable logs) or jsonl (one machine-readable relay_status JSON record per line on stdout; warnings and errors stay on stderr)")
+	utils.StringFlag(fs, &flags.logFormat, "log-format", "text", "Log output format: text (default human-readable console) or json (one structured JSON log record per line on stdout; integrations filter relay lifecycle records by event=relay_status)")
 }
 
 func runExposeCommand(args []string) error {
@@ -140,10 +140,17 @@ func runExposeCommand(args []string) error {
 		}
 		return err
 	}
-	switch flags.output {
-	case "", "text", "jsonl":
+	switch flags.logFormat {
+	case "", "text", "json":
 	default:
-		return fmt.Errorf("--output %q: supported values are text and jsonl", flags.output)
+		return fmt.Errorf("--log-format %q: supported values are text and json", flags.logFormat)
+	}
+	if flags.logFormat == "json" {
+		// Machine mode: one structured JSON log record per line, sourced
+		// from the SDK's authoritative relay status logs (event
+		// relay_status). Integrations filter records by event; no other
+		// state machine exists.
+		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 	}
 	var err error
 	flags.targetAddr, err = utils.OptionalSingleArg(fs.Args(), "target")
@@ -156,19 +163,9 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return err
 	}
-	spec.Output = flags.output
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
-
-	if flags.output == "jsonl" {
-		// Machine mode keeps stdout parseable: one relay_status record per
-		// line only. Human-facing logs, warnings, and update notices move
-		// to stderr for the lifetime of the command.
-		previousLogger := log.Logger
-		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-		defer func() { log.Logger = previousLogger }()
-	}
 
 	if flags.metricsAddr != "" {
 		mux := http.NewServeMux()
@@ -191,15 +188,7 @@ func runExposeCommand(args []string) error {
 		return err
 	}
 	defer runtime.Close()
-	writerDone := runtime.StartRelayLifecycleWriter(ctx, os.Stdout)
-	runErr := runtime.Run(ctx)
-	// Wait for the writer so the startup snapshot and any pending record
-	// land on stdout before the process exits.
-	writerErr := <-writerDone
-	if runErr != nil {
-		return runErr
-	}
-	return writerErr
+	return runtime.Run(ctx)
 }
 
 func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
@@ -535,7 +524,7 @@ func printExposeUsage(w io.Writer) {
 	})
 	utils.WriteHelpSection(w, "Ready", []string{
 		"On success the process logs a line starting with: service ready at",
-		"Integrations: --output jsonl emits one machine-readable relay_status record per lifecycle change on stdout",
+		"Integrations: --log-format json emits structured relay_status log records on stdout",
 	})
 }
 

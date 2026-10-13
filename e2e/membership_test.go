@@ -106,6 +106,7 @@ type membershipRelay struct {
 	sniAddr  string
 	sniPort  int
 	certPath string
+	stateDir string
 }
 
 // startMembershipRelay boots one real relay on an explicit
@@ -138,6 +139,7 @@ func startMembershipRelay(t *testing.T, ctx context.Context) membershipRelay {
 		sniAddr:  sniAddr,
 		sniPort:  sniPort,
 		certPath: filepath.Join(stateDir, "fullchain.pem"),
+		stateDir: stateDir,
 	}
 }
 
