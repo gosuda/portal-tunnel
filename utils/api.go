@@ -17,6 +17,14 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+const (
+	maxDiscoveryResponseBytes int64 = 1 << 20
+	maxAPIResponseBytes       int64 = 4 << 20
+)
+
+// ErrAPIResponseTooLarge reports that an API response exceeded its decoded-byte limit.
+var ErrAPIResponseTooLarge = errors.New("api response too large")
+
 type APIErrorResponse struct {
 	Status  int
 	Code    string
@@ -164,9 +172,19 @@ func HTTPDoAPIPath(ctx context.Context, client *http.Client, baseURL *url.URL, m
 		return DecodeAPIRequestError(resp)
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
+	maxBytes := maxAPIResponseBytes
+	if path == types.PathDiscovery {
+		maxBytes = maxDiscoveryResponseBytes
+	}
+	if resp.ContentLength > maxBytes {
+		return fmt.Errorf("%w: limit %d bytes", ErrAPIResponseTooLarge, maxBytes)
+	}
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
+	}
+	if int64(len(respBody)) > maxBytes {
+		return fmt.Errorf("%w: limit %d bytes", ErrAPIResponseTooLarge, maxBytes)
 	}
 	if err := DecodeAPIData(respBody, out); err != nil {
 		var apiErr *types.APIRequestError
