@@ -136,7 +136,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--strip-request-header` | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (`Host`, `X-Forwarded-*`) are always rewritten after stripping; requires `--http-route` or `--auth` |
 | `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
 | `--cache-ttl` | duration | `0` | Requested offline cache lifetime; `0` uses relay policy; requires `--cache` |
-| `--log-format` | string | `text` | Log output format; `json` switches all CLI logs to one structured JSON record per line on stdout for machine integration (see [Machine-Readable Relay Lifecycle](#machine-readable-relay-lifecycle)) |
+| `--log-format` | string | `text` | Log output format; `json` sends application log records as one structured JSON record per line on stdout for machine integration; top-level command errors stay on stderr (see [Machine-Readable Relay Lifecycle](#machine-readable-relay-lifecycle)) |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
