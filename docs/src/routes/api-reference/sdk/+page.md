@@ -76,7 +76,7 @@ which are configured locally by the tunnel process.
 | `allow_canonical_fallback` | `boolean` | no | allow canonical-only registration when the friendly alias is unavailable; defaults to `false` for protocol-10 compatibility |
 | `metadata` | `LeaseMetadata` | no | public lease metadata |
 | `overlay` | `boolean` | no | prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to `false` |
-| `ttl` | `number` | no | requested TTL in seconds |
+| `ttl` | `number` | no | Requested seconds; non-positive values use 120, maximum 600. Larger values return HTTP 400. |
 | `udp_enabled` | `boolean` | no | request UDP transport |
 | `tcp_enabled` | `boolean` | no | request dedicated TCP port |
 | `cache` | `boolean` | no | Explicitly permit static storage and relay TLS termination; default `false` |
@@ -177,6 +177,9 @@ for the delegated capability and gateway-to-ingress protocol flow.
 | `ttl` | `number` | no |
 | `reported_ip` | `string` | no |
 | `metadata` | `LeaseMetadata` | no |
+
+Renewal uses the same 120-second default and 600-second maximum as registration.
+A rejected TTL leaves the existing lease unchanged.
 
 `RenewResponse`:
 

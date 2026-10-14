@@ -25,6 +25,7 @@ import (
 
 const (
 	defaultLeaseTTL                          = 2 * time.Minute
+	maxLeaseTTL                              = 10 * time.Minute
 	defaultRegisterChallengeTTL              = 2 * time.Minute
 	defaultRegisterChallengeOutstandingPerIP = 32
 	defaultRegisterChallengeOutstanding      = 256
@@ -33,6 +34,17 @@ const (
 	defaultReadyQueueLimit                   = 8
 	defaultLeaseBridgeLimit                  = 128
 )
+
+// requestedLeaseTTL checks seconds before conversion to avoid duration overflow.
+func requestedLeaseTTL(seconds int) (time.Duration, error) {
+	if seconds <= 0 {
+		return defaultLeaseTTL, nil
+	}
+	if seconds > int(maxLeaseTTL/time.Second) {
+		return 0, errLeaseTTLExceeded
+	}
+	return time.Duration(seconds) * time.Second, nil
+}
 
 type leaseRegistry struct {
 	records        []*leaseRecord
@@ -331,9 +343,9 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	leaseIdentity := req.Identity
 
-	ttl := defaultLeaseTTL
-	if req.TTL > 0 {
-		ttl = time.Duration(req.TTL) * time.Second
+	ttl, err := requestedLeaseTTL(req.TTL)
+	if err != nil {
+		return nil, types.RegisterResponse{}, err
 	}
 
 	identityKey := leaseIdentity.ServiceKey()
@@ -589,9 +601,9 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr) (ty
 	if err := req.Metadata.Validate(); err != nil {
 		return types.RenewResponse{}, reverseEndpointInput{}, err
 	}
-	ttl := defaultLeaseTTL
-	if req.TTL > 0 {
-		ttl = time.Duration(req.TTL) * time.Second
+	ttl, err := requestedLeaseTTL(req.TTL)
+	if err != nil {
+		return types.RenewResponse{}, reverseEndpointInput{}, err
 	}
 
 	leaseKey := claims.Identity.ServiceKey()
@@ -740,6 +752,9 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string, sourceAddr netip.Addr) (types.RegisterChallengeResponse, error) {
 	if r == nil {
 		return types.RegisterChallengeResponse{}, errFeatureUnavailable
+	}
+	if _, err := requestedLeaseTTL(req.TTL); err != nil {
+		return types.RegisterChallengeResponse{}, err
 	}
 
 	now := time.Now().UTC()

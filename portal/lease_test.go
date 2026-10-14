@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -148,13 +149,16 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 
 	renewed, endpointInput, err := registry.Renew(types.RenewRequest{
 		AccessToken: resp.AccessToken,
-		TTL:         int((3 * time.Minute) / time.Second),
+		TTL:         600,
 	}, netip.MustParseAddr("203.0.113.11"))
 	if err != nil {
 		t.Fatalf("Renew() error = %v", err)
 	}
 	if !renewed.ExpiresAt.After(resp.ExpiresAt) {
 		t.Fatalf("Renew() expires at = %v, want later than register expiry %v", renewed.ExpiresAt, resp.ExpiresAt)
+	}
+	if renewed.ExpiresAt.After(time.Now().Add(600 * time.Second)) {
+		t.Fatalf("Renew() expiry exceeds the 600-second maximum: %v", renewed.ExpiresAt)
 	}
 	if _, err := registry.admitLeaseByToken(renewed.AccessToken, false); err != nil {
 		t.Fatalf("admitLeaseByToken(renewed access token) error = %v, want admitted", err)
@@ -178,6 +182,38 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 }
 
+func TestLeaseRegistryTTLBounds(t *testing.T) {
+	t.Parallel()
+	for _, seconds := range []int{-1, 0, 600, 601, math.MaxInt} {
+		t.Run(fmt.Sprint(seconds), func(t *testing.T) {
+			registry := newTestRegistry(t, false, false)
+			request := types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "ttl"), TTL: seconds}
+			_, challengeErr := registry.issueRegisterChallenge(request, "example.com", "https://example.com"+types.PathSDKRegister, netip.Addr{})
+			started := time.Now().UTC().Truncate(time.Second)
+			_, response, registerErr := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil)
+			if seconds > 600 {
+				if !errors.Is(challengeErr, errLeaseTTLExceeded) || !errors.Is(registerErr, errLeaseTTLExceeded) {
+					t.Fatalf("oversized TTL: challenge error=%v, registration error=%v", challengeErr, registerErr)
+				}
+				if len(registry.records) != 0 {
+					t.Fatal("rejected TTL retained a challenge or lease")
+				}
+				return
+			}
+			if challengeErr != nil || registerErr != nil {
+				t.Fatalf("accepted TTL: challenge error=%v, registration error=%v", challengeErr, registerErr)
+			}
+			ttl := 120 * time.Second
+			if seconds > 0 {
+				ttl = time.Duration(seconds) * time.Second
+			}
+			if response.ExpiresAt.Before(started.Add(ttl)) || response.ExpiresAt.After(time.Now().Add(ttl)) {
+				t.Fatalf("lease expiry=%v, want TTL %v", response.ExpiresAt, ttl)
+			}
+		})
+	}
+}
+
 func TestLeaseRegistryInvalidRenewPreservesLease(t *testing.T) {
 	t.Parallel()
 
@@ -192,19 +228,22 @@ func TestLeaseRegistryInvalidRenewPreservesLease(t *testing.T) {
 	}
 	before := registry.publicLease(record)
 	beforeSource, beforeReported := record.sourceAddr, record.ReportedIP
-	if _, _, err := registry.Renew(types.RenewRequest{
-		AccessToken: registered.AccessToken,
-		TTL:         600,
-		ReportedIP:  "198.51.100.11",
-		Metadata:    types.LeaseMetadata{Description: strings.Repeat("a", 4097)},
-	}, netip.MustParseAddr("203.0.113.11")); err == nil {
-		t.Fatal("Renew() accepted oversized metadata")
-	}
-	if after := registry.publicLease(record); !reflect.DeepEqual(after, before) {
-		t.Fatalf("rejected Renew() changed lease: before=%+v after=%+v", before, after)
-	}
-	if record.sourceAddr != beforeSource || record.ReportedIP != beforeReported {
-		t.Fatal("rejected Renew() changed source or reported IP")
+	for _, request := range []types.RenewRequest{
+		{TTL: 600, Metadata: types.LeaseMetadata{Description: strings.Repeat("a", 4097)}},
+		{TTL: 601},
+		{TTL: math.MaxInt},
+	} {
+		request.AccessToken = registered.AccessToken
+		request.ReportedIP = "198.51.100.11"
+		if _, _, err := registry.Renew(request, netip.MustParseAddr("203.0.113.11")); err == nil {
+			t.Fatal("Renew() accepted invalid metadata or TTL")
+		}
+		if after := registry.publicLease(record); !reflect.DeepEqual(after, before) {
+			t.Fatalf("rejected Renew() changed lease: before=%+v after=%+v", before, after)
+		}
+		if record.sourceAddr != beforeSource || record.ReportedIP != beforeReported {
+			t.Fatal("rejected Renew() changed source or reported IP")
+		}
 	}
 }
 
