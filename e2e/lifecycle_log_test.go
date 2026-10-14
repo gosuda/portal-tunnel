@@ -66,14 +66,17 @@ func TestPortalExposeJSONRelayLifecycleLogs(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start portal expose: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-	})
-
 	records := make(chan map[string]any, 64)
 	go readLifecycleRecords(t, stdout, records)
 	go drainLifecycleStderr(stderr)
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		// Drain stdout before Wait closes the pipe. This also joins the
+		// reader, so malformed trailing lines cannot escape the test.
+		for range records {
+		}
+		_ = cmd.Wait()
+	})
 
 	ready := waitLifecycleRecord(t, records, func(record map[string]any) bool {
 		return record["event"] == "relay_status" && record["state"] == "ready"
@@ -157,16 +160,20 @@ func restartJSONRelay(t *testing.T, ctx context.Context, stateDir, sniAddr strin
 }
 
 func readLifecycleRecords(t *testing.T, stdout io.Reader, records chan<- map[string]any) {
+	defer close(records)
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
 		var record map[string]any
 		if !strings.HasPrefix(line, "{") ||
 			json.Unmarshal([]byte(line), &record) != nil {
-			records <- map[string]any{"event": "non-json", "line": line}
+			t.Errorf("stdout line is not one JSON object: %q", line)
 			continue
 		}
 		records <- record
+	}
+	if err := scanner.Err(); err != nil {
+		t.Errorf("read lifecycle stdout: %v", err)
 	}
 }
 
@@ -183,7 +190,10 @@ func waitLifecycleRecord(t *testing.T, records <-chan map[string]any, match func
 	deadline := time.After(timeout)
 	for {
 		select {
-		case record := <-records:
+		case record, ok := <-records:
+			if !ok {
+				t.Fatal("lifecycle stdout closed before the expected record")
+			}
 			if match(record) {
 				return record
 			}

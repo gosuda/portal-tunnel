@@ -637,14 +637,14 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 		e.mu.Unlock()
 		return
 	}
-	e.mu.Unlock()
-
 	// Advertise readiness from the authoritative snapshot only: the same
 	// committed PublicURL that later feeds the deselection tombstone, so
 	// every "service ready at" line is guaranteed retractable by a
 	// matching "relay no longer active for" line (issue #463).
 	// Readiness loss and failures carry the same relay_status event, so a
 	// CLI consumer sees retraction without parsing retry prose (issue #596).
+	// Emit before unlocking so another transition or listener detachment
+	// cannot publish a later lifecycle record ahead of this one.
 	if advertised {
 		relayStatusLogEvent(log.Info(), status).
 			Str("address", e.identity.Address).
@@ -658,6 +658,7 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 			Str("address", e.identity.Address).
 			Msg("relay failed")
 	}
+	e.mu.Unlock()
 
 	e.publishRelayStatus(status)
 	if e.discovery != nil {
