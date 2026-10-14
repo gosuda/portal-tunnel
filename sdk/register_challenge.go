@@ -60,7 +60,7 @@ func validateRegisterSIWEChallenge(challenge types.RegisterChallengeResponse, re
 		Domain:    relayURL.Host,
 		Address:   address,
 		URI:       registerURI,
-		Statement: identity.RegisterLeaseSIWEStatement,
+		Statement: types.RegisterLeaseSIWEStatement,
 		Nonce:     nonce,
 		RequestID: challenge.ChallengeID,
 		IssuedAt:  issuedAt,

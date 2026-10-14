@@ -29,7 +29,7 @@ func TestValidateRegisterSIWEChallenge(t *testing.T) {
 	base := identity.SIWEMessage{
 		Domain: relayURL.Host, Address: address,
 		URI:       "https://relay.example:8443" + types.PathSDKRegister,
-		Statement: identity.RegisterLeaseSIWEStatement,
+		Statement: types.RegisterLeaseSIWEStatement,
 		Nonce:     "abcdefgh12345678", RequestID: challengeID,
 		IssuedAt: now, ExpiresAt: now.Add(2 * time.Minute),
 	}

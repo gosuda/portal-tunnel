@@ -10,9 +10,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// RegisterLeaseSIWEStatement is the fixed purpose signed by a tunnel SDK during lease registration.
-const RegisterLeaseSIWEStatement = "Register a portal lease"
-
 var (
 	ErrRegisterChallengeExpired          = errors.New("register challenge expired")
 	ErrRegisterChallengeNotFound         = errors.New("register challenge not found")
@@ -36,7 +33,7 @@ func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string
 	expiresAt := now.UTC().Add(ttl)
 	message, err := FormatSIWEMessage(SIWEMessage{
 		Domain: domain, Address: normalizedIdentity.Address, URI: uri,
-		Statement: RegisterLeaseSIWEStatement, Nonce: rand.Text(), RequestID: challengeID,
+		Statement: types.RegisterLeaseSIWEStatement, Nonce: rand.Text(), RequestID: challengeID,
 		IssuedAt: now, ExpiresAt: expiresAt,
 	})
 	if err != nil {
