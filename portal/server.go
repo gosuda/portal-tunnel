@@ -39,9 +39,64 @@ const (
 	defaultControlBodyLimit      = 4 << 20
 	reverseOfferAdmissionWorkers = 16
 	quicBackhaulPendingLimit     = 64
+	quicBackhaulAuthTimeout      = 3 * time.Second
+	quicBackhaulPerSourceLimit   = 4
 	publicIngressLimit           = 1024
 	publicInspectionLimit        = 128
 )
+
+// backhaulPendingSources bounds concurrent pending-auth connections per
+// source: a /32 for IPv4 and a /64 for IPv6. One unauthenticated source
+// can therefore hold at most quicBackhaulPerSourceLimit of the global
+// quicBackhaulPendingLimit slots. Entries exist only while a connection
+// holds a pending-auth slot, so the map is bounded by the global limit.
+type backhaulPendingSources struct {
+	mu     sync.Mutex
+	counts map[netip.Prefix]int
+}
+
+func newBackhaulPendingSources() *backhaulPendingSources {
+	return &backhaulPendingSources{counts: make(map[netip.Prefix]int)}
+}
+
+func (p *backhaulPendingSources) acquire(remote net.Addr) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	prefix, ok := backhaulSourcePrefix(remote)
+	if !ok {
+		// An unparseable source stays bounded by the global limit alone.
+		return true
+	}
+	if p.counts[prefix] >= quicBackhaulPerSourceLimit {
+		return false
+	}
+	p.counts[prefix]++
+	return true
+}
+
+func (p *backhaulPendingSources) release(remote net.Addr) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	prefix, ok := backhaulSourcePrefix(remote)
+	if !ok {
+		return
+	}
+	if p.counts[prefix]--; p.counts[prefix] <= 0 {
+		delete(p.counts, prefix)
+	}
+}
+
+func backhaulSourcePrefix(remote net.Addr) (netip.Prefix, bool) {
+	addrPort, err := netip.ParseAddrPort(remote.String())
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	addr := addrPort.Addr().Unmap()
+	if addr.Is4() {
+		return netip.PrefixFrom(addr, addr.BitLen()), true
+	}
+	return netip.PrefixFrom(addr, 64), true
+}
 
 type ServerConfig struct {
 	Cache            cache.Config
@@ -1037,6 +1092,7 @@ func (s *Server) runQUICBackhaulListener(ctx context.Context) error {
 		handlers.Wait()
 	}()
 	pending := make(chan struct{}, quicBackhaulPendingLimit)
+	sources := newBackhaulPendingSources()
 	for {
 		conn, err := s.quicBackhaul.Accept(ctx)
 		if err != nil {
@@ -1045,15 +1101,22 @@ func (s *Server) runQUICBackhaulListener(ctx context.Context) error {
 			}
 			return err
 		}
+		if !sources.acquire(conn.RemoteAddr()) {
+			_ = conn.CloseWithError(1, "backhaul authentication busy")
+			continue
+		}
 		select {
 		case pending <- struct{}{}:
-			authCtx, authCancel := context.WithTimeout(ctx, defaultClaimTimeout)
+			remote := conn.RemoteAddr()
+			authCtx, authCancel := context.WithTimeout(ctx, quicBackhaulAuthTimeout)
 			handlers.Go(func() {
 				defer authCancel()
+				defer sources.release(remote)
 				defer func() { <-pending }()
 				s.handleQUICBackhaulConn(authCtx, conn)
 			})
 		default:
+			sources.release(conn.RemoteAddr())
 			_ = conn.CloseWithError(1, "backhaul authentication busy")
 		}
 	}
