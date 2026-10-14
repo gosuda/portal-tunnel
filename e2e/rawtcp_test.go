@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,15 +29,43 @@ func TestRawTCPPortRelay(t *testing.T) {
 
 func testRawTCPPortRelay(t *testing.T, host string) {
 	t.Helper()
-	// One dedicated raw port outside the ephemeral range: the lease binds it
-	// for the whole test, and the system's dynamic port range would collide
-	// with ephemeral client sockets.
 	target, stopEcho := startTCPEcho(t, host)
 	defer stopEcho()
+	publicAddr, _, _ := startRawTCPTestTunnel(t, host, target)
+	for round := range 2 {
+		conn, err := net.DialTimeout("tcp", publicAddr, 5*time.Second)
+		if err != nil {
+			t.Fatalf("round %d: dial relay TCP port: %v", round, err)
+		}
+		for i := range 3 {
+			payload := []byte("rawtcp-" + strconv.Itoa(round) + "-" + strconv.Itoa(i))
+			if _, err := conn.Write(payload); err != nil {
+				_ = conn.Close()
+				t.Fatalf("round %d: write %q: %v", round, payload, err)
+			}
+			echo := make([]byte, len(payload))
+			_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			if _, err := io.ReadFull(conn, echo); err != nil {
+				_ = conn.Close()
+				t.Fatalf("round %d: read echo: %v", round, err)
+			}
+			if string(echo) != string(payload) {
+				_ = conn.Close()
+				t.Fatalf("round %d: echo = %q, want %q", round, echo, payload)
+			}
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatalf("round %d: close conn: %v", round, err)
+		}
+	}
+}
+
+func startRawTCPTestTunnel(t *testing.T, host, target string) (string, *tunnel.Runtime, func()) {
+	t.Helper()
 	rawPort := harnessPort(t, host)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 	stateDir := t.TempDir()
 	port := harnessPort(t, host)
 	sniAddr := net.JoinHostPort(host, strconv.Itoa(port))
@@ -79,21 +108,25 @@ func testRawTCPPortRelay(t *testing.T, host string) {
 	proxyCtx, proxyCancel := context.WithCancel(ctx)
 	proxyDone := make(chan error, 1)
 	go func() { proxyDone <- runtime.Run(proxyCtx) }()
-	t.Cleanup(func() {
-		proxyCancel()
-		_ = runtime.Close()
-		select {
-		case err := <-proxyDone:
-			if err != nil && !errors.Is(err, context.Canceled) {
-				t.Errorf("proxy raw TCP: %v", err)
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			proxyCancel()
+			_ = runtime.Close()
+			select {
+			case err := <-proxyDone:
+				if err != nil && !errors.Is(err, context.Canceled) {
+					t.Errorf("proxy raw TCP: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Error("raw TCP proxy did not stop")
 			}
-		case <-time.After(10 * time.Second):
-			t.Error("raw TCP proxy did not stop")
-		}
-	})
+		})
+	}
+	t.Cleanup(stop)
 
 	wctx, wcancel := context.WithTimeout(ctx, 60*time.Second)
-	defer wcancel()
+	t.Cleanup(wcancel)
 	ready, err := runtime.Exposure.WaitReady(wctx)
 	if err != nil {
 		t.Fatalf("wait for raw TCP lease: %v; relay statuses: %+v", err, runtime.Exposure.Relays())
@@ -113,32 +146,7 @@ func testRawTCPPortRelay(t *testing.T, host string) {
 	if err != nil {
 		t.Fatalf("split TCP address %q: %v", tcpAddr, err)
 	}
-	for round := range 2 {
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, leasePort), 5*time.Second)
-		if err != nil {
-			t.Fatalf("round %d: dial relay TCP port: %v", round, err)
-		}
-		for i := range 3 {
-			payload := []byte("rawtcp-" + strconv.Itoa(round) + "-" + strconv.Itoa(i))
-			if _, err := conn.Write(payload); err != nil {
-				_ = conn.Close()
-				t.Fatalf("round %d: write %q: %v", round, payload, err)
-			}
-			echo := make([]byte, len(payload))
-			_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-			if _, err := io.ReadFull(conn, echo); err != nil {
-				_ = conn.Close()
-				t.Fatalf("round %d: read echo: %v", round, err)
-			}
-			if string(echo) != string(payload) {
-				_ = conn.Close()
-				t.Fatalf("round %d: echo = %q, want %q", round, echo, payload)
-			}
-		}
-		if err := conn.Close(); err != nil {
-			t.Fatalf("round %d: close conn: %v", round, err)
-		}
-	}
+	return net.JoinHostPort(host, leasePort), runtime, stop
 }
 
 // startTCPEcho runs a byte echo listener on loopback and returns its address.

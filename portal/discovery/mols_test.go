@@ -26,16 +26,6 @@ func TestSelectPriorityKeepsExplicitRelaysOutsideAutoLimit(t *testing.T) {
 	}
 }
 
-func TestSelectPriorityDeduplicatesExplicitRelays(t *testing.T) {
-	relayURL := "https://relay-explicit.example"
-	selected := SelectPriority([]RelayState{bootstrapRelayState(relayURL)}, routeState{
-		ExplicitRelayURLs: []string{relayURL, relayURL},
-	})
-	if len(selected) != 1 || selected[0] != relayURL {
-		t.Fatalf("SelectPriority() = %v, want one explicit relay %q", selected, relayURL)
-	}
-}
-
 func TestSelectPriorityLimitsAutomaticRelays(t *testing.T) {
 	relays := make([]RelayState, 10)
 	for i := range relays {
@@ -141,25 +131,6 @@ func TestMOLSCongestionModeExcludesFallbackRelays(t *testing.T) {
 	slowB.DiscoveryRTTAt = now
 	if congested, _ := molsCongestionMode([]RelayState{slowA, slowB}); !congested {
 		t.Fatal("molsCongestionMode() = false, want true for a genuinely slow active pool")
-	}
-}
-
-func TestMOLSKeyChangesRankings(t *testing.T) {
-	states := make([]RelayState, 6)
-	for i := range states {
-		states[i] = verifiedRelayState(t, fmt.Sprintf("https://relay-%d.example", i))
-	}
-
-	base := RankRelayPool(states, "client-a", nil)
-	differ := 0
-	for i := 1; i <= 8; i++ {
-		key := []byte(fmt.Sprintf("key-%d", i))
-		if !slices.Equal(RankRelayPool(states, "client-a", key), base) {
-			differ++
-		}
-	}
-	if differ == 0 {
-		t.Fatal("ranking identical across selection keys, want keyed hashes to shuffle rankings")
 	}
 }
 

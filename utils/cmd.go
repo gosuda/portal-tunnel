@@ -404,6 +404,7 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 
 	flags := make([]string, 0, len(args))
 	positionals := make([]string, 0, len(args))
+	terminated := false
 
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
@@ -413,6 +414,7 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 		}
 		if arg == "--" {
 			positionals = append(positionals, args[i+1:]...)
+			terminated = true
 			break
 		}
 
@@ -455,6 +457,11 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 		flags = append(flags, args[i])
 	}
 
+	// Keep the terminator ahead of every positional after moving flags.
+	// Otherwise, a flag-like target after -- becomes an executable option.
+	if terminated {
+		flags = append(flags, "--")
+	}
 	return append(flags, positionals...)
 }
 

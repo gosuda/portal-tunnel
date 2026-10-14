@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
@@ -58,7 +60,7 @@ func (t *leaseReverseTransport) openRaw(ctx context.Context) (net.Conn, error) {
 		return nil, err
 	}
 	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: defaultDialTimeout},
+		NetDialer: reverseTCPDialer(t.listener.isAlternateReverseEndpoint(reverseURL.String())),
 		Config:    reverseTLS,
 	}
 	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(reverseURL.Host))
@@ -129,4 +131,37 @@ func reverseMuxEnded(mux *transport.ReverseMux) bool {
 	default:
 		return false
 	}
+}
+
+func validatePublicReverseHostname(host string) error {
+	if utils.IsLocalRelayHost(host) {
+		return fmt.Errorf("overlay gateway host %q is local-only", host)
+	}
+	if addr, err := netip.ParseAddr(host); err == nil && !utils.IsPublicIP(addr) {
+		return fmt.Errorf("overlay gateway address %q is non-public", host)
+	}
+	return nil
+}
+
+// ControlContext runs after name resolution and before connect. Checking the
+// actual resolved address on each dial prevents DNS rebinding from reaching
+// private endpoints. Direct connections to the explicitly configured relay
+// retain their existing local-development behavior.
+func reverseTCPDialer(alternate bool) *net.Dialer {
+	dialer := &net.Dialer{Timeout: defaultDialTimeout}
+	if !alternate {
+		return dialer
+	}
+	dialer.ControlContext = func(_ context.Context, _, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return fmt.Errorf("parse overlay gateway dial address: %w", err)
+		}
+		addr, err := netip.ParseAddr(host)
+		if err != nil || !utils.IsPublicIP(addr) {
+			return fmt.Errorf("overlay gateway resolved to non-public address %q", host)
+		}
+		return nil
+	}
+	return dialer
 }

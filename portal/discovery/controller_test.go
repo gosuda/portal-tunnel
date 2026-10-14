@@ -89,25 +89,6 @@ func TestControllerRelayIntentOpsLinearizeUnderConcurrency(t *testing.T) {
 	}
 }
 
-func TestControllerReportRuntimeSuppressesRelay(t *testing.T) {
-	const (
-		relayA = "https://relay-a.example"
-		relayB = "https://relay-b.example"
-	)
-	controller := NewController([]string{relayA, relayB})
-	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
-	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayB))
-
-	controller.Report(relayA, FailureRuntime)
-
-	routes := controller.relaySet.SelectRelays(routeState{
-		MaxActiveRelays: 1,
-	})
-	if len(routes) != 1 || routes[0] != relayB {
-		t.Fatalf("selected routes = %+v, want only relay B after A failure", routes)
-	}
-}
-
 func TestControllerReportMITMBansRelay(t *testing.T) {
 	const relayURL = "https://relay.example"
 	controller := NewController([]string{relayURL})

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -298,3 +299,47 @@ func (b contextIPBody) Read(p []byte) (int, error) {
 }
 
 func (contextIPBody) Close() error { return nil }
+
+func TestPublicIPPolicy(t *testing.T) {
+	tests := []struct {
+		ip     string
+		public bool
+	}{
+		{"8.8.8.8", true},
+		{"1.1.1.1", true},
+		{"2606:4700:4700::1111", true},
+		{"2001:4860:4860::8888", true},
+		{"127.0.0.1", false},
+		{"10.0.0.1", false},
+		{"172.16.0.1", false},
+		{"192.168.1.1", false},
+		{"169.254.169.254", false},
+		{"100.64.0.1", false},
+		{"192.0.2.1", false},
+		{"198.18.0.1", false},
+		{"198.51.100.1", false},
+		{"203.0.113.1", false},
+		{"0.0.0.1", false},
+		{"224.0.0.1", false},
+		{"::1", false},
+		{"::ffff:127.0.0.1", false},
+		{"fc00::1", false},
+		{"fe80::1", false},
+		{"2001:db8::1", false},
+		{"2001::1", false},
+		{"fec0::1", false},
+		{"4000::1", false},
+		{"3ffe::1", false},
+		{"3fff::1", false},
+		{"64:ff9b::a00:1", false},
+		{"2001:4860::1%eth0", false},
+		{"2002:c0a8:101::1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ip, func(t *testing.T) {
+			if got := IsPublicIP(netip.MustParseAddr(tt.ip)); got != tt.public {
+				t.Fatalf("IsPublicIP(%q) = %t, want %t", tt.ip, got, tt.public)
+			}
+		})
+	}
+}

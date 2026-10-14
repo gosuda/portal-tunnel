@@ -192,6 +192,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 			return fmt.Errorf("ensure ens gasless address records for %s: %w", command.hostname, addressErr)
 		}
 	}
+
 	value := gaslessENSTXTPrefix + defaultENSGaslessResolver + " " + strings.TrimSpace(command.address)
 	// EnsureTXTRecord appends whenever the value differs, which DNS-01 needs and
 	// ENS does not: a hostname carries exactly one ENS1 record. Drop the previous

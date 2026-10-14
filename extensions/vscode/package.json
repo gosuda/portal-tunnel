@@ -50,17 +50,20 @@
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "description": "Relay server URLs (https only, e.g. https://my-relay.example.com). Leave empty to use the public registry at https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json."
+          "description": "Relay server URLs (https only, e.g. https://my-relay.example.com). Leave empty to use the public registry at https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json.",
+          "restricted": true
         },
         "portal.defaultHost": {
           "type": "string",
           "default": "localhost:3000",
-          "description": "Default local host:port suggested when starting a tunnel."
+          "description": "Default local host:port suggested when starting a tunnel.",
+          "restricted": true
         },
         "portal.defaultName": {
           "type": "string",
           "default": "",
-          "description": "Default tunnel service name suggestion. Leave empty to omit --name."
+          "description": "Default tunnel service name suggestion. Leave empty to omit --name.",
+          "restricted": true
         }
       }
     }

@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// RegisterLeaseSIWEStatement is the canonical purpose signed for Portal lease registration.
+const RegisterLeaseSIWEStatement = "Register a portal lease"
+
 const (
 	IdentityKeySeparator  = ":"
 	RelayIdentityFilename = "identity.json"
@@ -118,6 +121,24 @@ type LeaseMetadata struct {
 	Thumbnail   string   `json:"thumbnail,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Hide        bool     `json:"hide,omitempty"`
+}
+
+// Validate bounds metadata retained by the relay, including unauthenticated challenges.
+func (m LeaseMetadata) Validate() error {
+	if len(m.Description) > 4096 || len(m.Owner) > 256 || len(m.Thumbnail) > 2048 || len(m.Tags) > 32 {
+		return fmt.Errorf("lease metadata exceeds limits")
+	}
+	total := len(m.Description) + len(m.Owner) + len(m.Thumbnail)
+	for _, tag := range m.Tags {
+		if len(tag) > 128 {
+			return fmt.Errorf("lease metadata tag exceeds limit")
+		}
+		total += len(tag)
+	}
+	if total > 8192 {
+		return fmt.Errorf("lease metadata exceeds aggregate limit")
+	}
+	return nil
 }
 
 func (m LeaseMetadata) Copy() LeaseMetadata {

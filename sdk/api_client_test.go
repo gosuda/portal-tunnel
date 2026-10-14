@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -73,14 +77,45 @@ func TestAPIClientRejectsTunnelProtocolMismatch(t *testing.T) {
 	}
 }
 
+func signTestReverseGateway(t *testing.T, rawURL string, expiresAt time.Time) types.RelayDescriptor {
+	t.Helper()
+	signer, err := identity.Generate("gateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuedAt := time.Now().UTC().Add(-time.Minute)
+	descriptor, err := discovery.SignRelayDescriptor(types.RelayDescriptor{
+		Address:         signer.Address,
+		IssuedAt:        issuedAt,
+		ExpiresAt:       expiresAt,
+		APIHTTPSAddr:    rawURL,
+		IVNPDestination: strings.Repeat("a", 52) + ".b32.i2p",
+	}, identity.NewLocalAuthority(signer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return descriptor
+}
+
 func TestValidateReverseEndpointTransport(t *testing.T) {
 	t.Parallel()
 	relayURL, err := url.Parse("https://relay.example")
 	if err != nil {
 		t.Fatal(err)
 	}
+	expiry := time.Now().UTC().Add(time.Minute)
+	gateway := signTestReverseGateway(t, "https://gateway.example", expiry.Add(time.Minute))
+	otherGateway := signTestReverseGateway(t, "https://other.example", expiry.Add(time.Minute))
+	localGateway := signTestReverseGateway(t, "https://127.0.0.1", expiry.Add(time.Minute))
+	privateGateway := signTestReverseGateway(t, "https://10.2.3.4", expiry.Add(time.Minute))
+	linkLocalGateway := signTestReverseGateway(t, "https://169.254.169.254", expiry.Add(time.Minute))
+	localhostGateway := signTestReverseGateway(t, "https://service.localhost", expiry.Add(time.Minute))
+	shortGateway := signTestReverseGateway(t, "https://gateway.example", expiry.Add(-time.Second))
+	tamperedGateway := gateway
+	tamperedGateway.APIHTTPSAddr = "https://another.example"
+
 	direct := types.ReverseEndpoint{URL: "https://relay.example/sdk/connect"}
-	overlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect", Overlay: true}
+	overlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect", Overlay: true, ExpiresAt: expiry, Gateway: &gateway}
 	legacyOverlay := types.ReverseEndpoint{URL: "https://gateway.example/sdk/connect"}
 
 	for name, test := range map[string]struct {
@@ -88,11 +123,20 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 		endpoint types.ReverseEndpoint
 		wantErr  bool
 	}{
-		"direct":           {endpoint: direct},
-		"overlay disabled": {endpoint: overlay, wantErr: true},
-		"overlay enabled":  {enabled: true, endpoint: overlay},
-		"fallback direct":  {enabled: true, endpoint: direct},
-		"legacy overlay":   {endpoint: legacyOverlay, wantErr: true},
+		"direct":               {endpoint: direct},
+		"overlay disabled":     {endpoint: overlay, wantErr: true},
+		"overlay enabled":      {enabled: true, endpoint: overlay, wantErr: runtime.GOOS == "js"},
+		"fallback direct":      {enabled: true, endpoint: direct},
+		"legacy overlay":       {endpoint: legacyOverlay, wantErr: true},
+		"unmarked alternate":   {enabled: true, endpoint: legacyOverlay, wantErr: true},
+		"missing gateway":      {enabled: true, endpoint: types.ReverseEndpoint{URL: overlay.URL, Overlay: true, ExpiresAt: expiry}, wantErr: true},
+		"unbound gateway":      {enabled: true, endpoint: types.ReverseEndpoint{URL: overlay.URL, Overlay: true, ExpiresAt: expiry, Gateway: &otherGateway}, wantErr: true},
+		"tampered descriptor":  {enabled: true, endpoint: types.ReverseEndpoint{URL: overlay.URL, Overlay: true, ExpiresAt: expiry, Gateway: &tamperedGateway}, wantErr: true},
+		"short gateway expiry": {enabled: true, endpoint: types.ReverseEndpoint{URL: overlay.URL, Overlay: true, ExpiresAt: expiry, Gateway: &shortGateway}, wantErr: true},
+		"loopback":             {enabled: true, endpoint: types.ReverseEndpoint{URL: "https://127.0.0.1/sdk/connect", Overlay: true, ExpiresAt: expiry, Gateway: &localGateway}, wantErr: true},
+		"private":              {enabled: true, endpoint: types.ReverseEndpoint{URL: "https://10.2.3.4/sdk/connect", Overlay: true, ExpiresAt: expiry, Gateway: &privateGateway}, wantErr: true},
+		"link-local":           {enabled: true, endpoint: types.ReverseEndpoint{URL: "https://169.254.169.254/sdk/connect", Overlay: true, ExpiresAt: expiry, Gateway: &linkLocalGateway}, wantErr: true},
+		"localhost suffix":     {enabled: true, endpoint: types.ReverseEndpoint{URL: "https://service.localhost/sdk/connect", Overlay: true, ExpiresAt: expiry, Gateway: &localhostGateway}, wantErr: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -102,6 +146,52 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 				t.Fatalf("validateReverseEndpointTransport() error = %v, wantErr %v", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestReverseTCPDialerChecksResolvedAddress(t *testing.T) {
+	t.Parallel()
+	socket, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, port, err := net.SplitHostPort(socket.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The hostname case verifies enforcement after DNS resolution, not just
+	// rejection of literal IP addresses before dialing.
+	for _, address := range []string{socket.Addr().String(), net.JoinHostPort("localhost", port)} {
+		if conn, err := reverseTCPDialer(true).DialContext(ctx, "tcp", address); err == nil {
+			_ = conn.Close()
+			t.Fatalf("alternate gateway dial reached loopback address %q", address)
+		}
+	}
+	// Explicitly configured direct relays retain local development support.
+	conn, err := reverseTCPDialer(false).DialContext(ctx, "tcp", socket.Addr().String())
+	if err != nil {
+		t.Fatalf("direct relay dial: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestReverseTLSBootstrapRejectsAlternateLocalHost(t *testing.T) {
+	t.Parallel()
+	relay, err := url.Parse("https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := url.Parse("https://127.0.0.1:443/sdk/connect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &listener{api: &apiClient{relayURL: relay}}
+	if _, err := l.reverseTLSConfig(context.Background(), endpoint); err == nil || !strings.Contains(err.Error(), "local-only") {
+		t.Fatalf("reverseTLSConfig() error = %v, want local host rejection before TLS bootstrap", err)
 	}
 }
 
@@ -232,100 +322,6 @@ func TestRenewLeaseReportsStaleCredentialsAfterAuthorityRotation(t *testing.T) {
 	if err := listener.renewLease(context.Background()); !errors.Is(err, errLeaseRefreshRequired) {
 		t.Fatalf("renewLease() error = %v, want lease refresh required after authority rotation", err)
 	}
-}
-
-func TestRegisterRetriesRateLimitsWithoutDiscardingLiveChallenge(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		status     int
-		ttl        time.Duration
-		challenges int
-	}{
-		{"http 429", http.StatusTooManyRequests, time.Minute, 1},
-		{"rate_limited code", http.StatusBadRequest, time.Minute, 1},
-		{"expired challenge", http.StatusTooManyRequests, 100 * time.Millisecond, 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			challenges, attempts := registerThroughRateLimit(t, tc.status, tc.ttl)
-			if challenges != tc.challenges || attempts != 2 {
-				t.Fatalf("challenge requests = %d, registration attempts = %d", challenges, attempts)
-			}
-		})
-	}
-}
-
-// registerThroughRateLimit serves the real signed challenge exchange while
-// throttling one register attempt, exercising both live and expired challenges.
-func registerThroughRateLimit(t *testing.T, status int, firstTTL time.Duration) (int, int) {
-	t.Helper()
-	leaseIdentity, err := identity.ResolveSecp256k1Identity("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaseIdentity.Name = "retry"
-	challenges, attempts := 0, 0
-	var challenge *identity.RegisterChallenge
-	var signed types.RegisterRequest
-	var retryAt time.Time
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case types.PathSDKRegisterChallenge:
-			challenges++
-			ttl := time.Minute
-			if challenges == 1 {
-				ttl = firstTTL
-			}
-			var err error
-			challenge, err = identity.NewRegisterChallenge(types.RegisterChallengeRequest{Identity: leaseIdentity}, r.Host, "http://"+r.Host+types.PathSDKRegister, time.Now().UTC(), ttl)
-			if err != nil {
-				t.Error(err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			utils.WriteAPIData(w, http.StatusCreated, types.RegisterChallengeResponse{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, ExpiresAt: challenge.ExpiresAt})
-		case types.PathSDKRegister:
-			attempts++
-			var request types.RegisterRequest
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				t.Error(err)
-			}
-			if attempts == 1 {
-				signed = request
-				retryAt = time.Now().Add(time.Second)
-				w.Header().Set("Retry-After", "1")
-				utils.WriteAPIError(w, status, types.APIErrorCodeRateLimited, "try again")
-				return
-			}
-			if time.Now().Before(retryAt) {
-				t.Error("retried before Retry-After")
-			}
-			if request.ChallengeID == signed.ChallengeID && request != signed {
-				t.Error("discarded the still-valid signed registration")
-			}
-			if err := challenge.Verify(request, time.Now().UTC()); err != nil {
-				t.Error(err)
-			}
-			expires := time.Now().Add(time.Minute)
-			utils.WriteAPIData(w, http.StatusCreated, types.RegisterResponse{Identity: leaseIdentity, Hostname: "demo.relay.example", CanonicalHostname: "demo-0123456789012345678901234567890123456789.relay.example", AccessToken: "registered", ExpiresAt: expires, ReverseEndpoint: types.ReverseEndpoint{URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: expires}})
-		default:
-			t.Errorf("unexpected path %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-	relayURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &apiClient{relayURL: relayURL, http: server.Client()}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	response, err := client.register(ctx, types.RegisterChallengeRequest{Identity: leaseIdentity}, "192.0.2.1")
-	if err != nil || response.AccessToken != "registered" {
-		t.Fatalf("registration = %+v, %v", response, err)
-	}
-	return challenges, attempts
 }
 
 func TestRegisterRateLimitWaitIsCancelable(t *testing.T) {

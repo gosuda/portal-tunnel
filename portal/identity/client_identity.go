@@ -23,6 +23,9 @@ func LoadExisting(path, rawJSON string) (types.Identity, error) {
 	if path == "" {
 		return types.Identity{}, errors.New("identity path or JSON is required")
 	}
+	if err := utils.EnsurePrivateFile(path); err != nil {
+		return types.Identity{}, fmt.Errorf("secure identity file: %w", err)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
@@ -43,6 +46,9 @@ func LoadOrCreate(name, path, rawJSON string) (types.Identity, error) {
 	}
 
 	if path != "" {
+		if err := utils.EnsurePrivateFile(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return types.Identity{}, fmt.Errorf("secure identity file: %w", err)
+		}
 		data, err := os.ReadFile(path)
 		if err == nil {
 			return Parse(data)
@@ -66,7 +72,7 @@ func LoadOrCreate(name, path, rawJSON string) (types.Identity, error) {
 	if err := utils.EnsureParentDir(path); err != nil {
 		return types.Identity{}, err
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := utils.CreatePrivateFile(path, data); err != nil {
 		return types.Identity{}, fmt.Errorf("write identity file: %w", err)
 	}
 	return generated, nil

@@ -2,96 +2,66 @@ package types
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
 
-func TestDiscoveryResponseRejectsOversizedCollections(t *testing.T) {
+func TestDiscoveryResponseLimits(t *testing.T) {
 	t.Parallel()
-
 	for _, tc := range []struct {
-		name string
-		body string
+		name, body string
+		valid      bool
 	}{
-		{"relays", "{\"relays\":[" + strings.Repeat("{},", MaxDiscoveryEntries*64) + "{}]}"},
-		{"incompatible relays", "{\"incompatible_relays\":[" + strings.Repeat("{},", MaxDiscoveryEntries) + "{}]}"},
-		{"release versions", "{\"relay_release_versions\":{" + strings.Repeat("\"same\":\"v\",", MaxDiscoveryEntries) + "\"last\":\"v\"}}"},
+		{"self and maximum peers", `{"relays":[` + strings.Repeat("{},", MaxDiscoveryEntries) + `{}]}`, true},
+		{"too many peers", `{"relays":[` + strings.Repeat("{},", MaxDiscoveryEntries+1) + `{}]}`, false},
+		{"too many incompatible relays", `{"incompatible_relays":[` + strings.Repeat("{},", MaxDiscoveryEntries) + `{}]}`, false},
+		{"too many map members", `{"relay_release_versions":{` + strings.Repeat(`"same":"v",`, MaxDiscoveryEntries) + `"last":"v"}}`, false},
+		{"duplicate relays", `{"relays":[],"relays":[]}`, false},
+		{"duplicate incompatible relays", `{"incompatible_relays":[],"incompatible_relays":[]}`, false},
+		{"case-folded duplicate versions", `{"relay_release_versions":{},"Relay_Release_Versions":{}}`, false},
+		{"maximum version", `{"release_version":"` + strings.Repeat("v", MaxDiscoveryVersionBytes) + `"}`, true},
+		{"oversized release version", `{"release_version":"` + strings.Repeat("v", MaxDiscoveryVersionBytes+1) + `"}`, false},
+		{"oversized protocol version", `{"protocol_version":"` + strings.Repeat("v", MaxDiscoveryVersionBytes+1) + `"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var resp DiscoveryResponse
-			if err := json.Unmarshal([]byte(tc.body), &resp); err == nil || !strings.Contains(err.Error(), "exceeds") {
-				t.Fatalf("json.Unmarshal() error = %v, want collection limit error", err)
+			var response DiscoveryResponse
+			if err := json.Unmarshal([]byte(tc.body), &response); (err == nil) != tc.valid {
+				t.Fatalf("decode error = %v, want valid=%v", err, tc.valid)
 			}
 		})
 	}
 }
 
-func TestDiscoveryResponseAcceptsMaximumRelays(t *testing.T) {
-	t.Parallel()
-
-	body := "{\"relays\":[" + strings.Repeat("{},", MaxDiscoveryEntries-1) + "{}]}"
-	var resp DiscoveryResponse
-	if err := json.Unmarshal([]byte(body), &resp); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v, want success", err)
+func TestDiscoveryResponseDecodeReplacesOnlyOnSuccess(t *testing.T) {
+	var response DiscoveryResponse
+	for _, prefix := range []string{"first", "second"} {
+		versions := make(map[string]string, MaxDiscoveryEntries)
+		for i := range MaxDiscoveryEntries {
+			versions[fmt.Sprintf("%s-%d", prefix, i)] = "v"
+		}
+		data, err := json.Marshal(DiscoveryResponse{RelayReleaseVersions: versions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(data, &response); err != nil {
+			t.Fatal(err)
+		}
+		if len(response.RelayReleaseVersions) != MaxDiscoveryEntries || response.RelayReleaseVersions[prefix+"-0"] != "v" {
+			t.Fatal("repeated decoding accumulated or lost map entries")
+		}
 	}
-	if len(resp.Relays) != MaxDiscoveryEntries {
-		t.Fatalf("relay count = %d, want %d", len(resp.Relays), MaxDiscoveryEntries)
+	invalid := `{"relay_release_versions":{"bad":"v"},"protocol_version":"` + strings.Repeat("v", MaxDiscoveryVersionBytes+1) + `"}`
+	if err := json.Unmarshal([]byte(invalid), &response); err == nil {
+		t.Fatal("oversized version accepted")
 	}
-}
-
-func TestDiscoveryResponseAllowsSelfAndCappedPool(t *testing.T) {
-	t.Parallel()
-
-	body := "{\"relays\":[" + strings.Repeat("{},", MaxDiscoveryEntries) + "{}]}"
-	var resp DiscoveryResponse
-	if err := json.Unmarshal([]byte(body), &resp); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v, want success", err)
+	if len(response.RelayReleaseVersions) != MaxDiscoveryEntries || response.RelayReleaseVersions["second-0"] != "v" {
+		t.Fatal("rejected decoding changed the previous response")
 	}
-	if len(resp.Relays) != MaxDiscoveryEntries+1 {
-		t.Fatalf("relay count = %d, want %d", len(resp.Relays), MaxDiscoveryEntries+1)
+	if err := json.Unmarshal([]byte(`{}`), &response); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestDiscoveryResponseRejectsMoreThanSelfAndCappedPool(t *testing.T) {
-	t.Parallel()
-
-	body := "{\"relays\":[" + strings.Repeat("{},", MaxDiscoveryEntries+1) + "{}]}"
-	var resp DiscoveryResponse
-	if err := json.Unmarshal([]byte(body), &resp); err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("json.Unmarshal() error = %v, want relay collection limit", err)
-	}
-}
-
-func TestDiscoveryResponseRejectsDuplicateCollections(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		name string
-		body string
-	}{
-		{"duplicate relays", `{"relays":[],"relays":[]}`},
-		{"duplicate release versions", `{"relay_release_versions":{"a":"1"},"relay_release_versions":{"b":"2"}}`},
-		{"case-folded duplicate", `{"relay_release_versions":{},"Relay_Release_Versions":{}}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var resp DiscoveryResponse
-			if err := json.Unmarshal([]byte(tc.body), &resp); err == nil || !strings.Contains(err.Error(), "duplicate") {
-				t.Fatalf("json.Unmarshal() error = %v, want duplicate collection error", err)
-			}
-		})
-	}
-}
-
-func TestDiscoveryResponseRejectsOversizedVersionLabels(t *testing.T) {
-	t.Parallel()
-
-	for _, name := range []string{"release_version", "protocol_version"} {
-		t.Run(name, func(t *testing.T) {
-			body := `{"` + name + `":"` + strings.Repeat("v", MaxDiscoveryVersionBytes+1) + `"}`
-			var resp DiscoveryResponse
-			if err := json.Unmarshal([]byte(body), &resp); err == nil || !strings.Contains(err.Error(), "version label") {
-				t.Fatalf("json.Unmarshal() error = %v, want version length error", err)
-			}
-		})
+	if len(response.RelayReleaseVersions) != 0 {
+		t.Fatal("omitted collection retained previous entries")
 	}
 }

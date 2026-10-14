@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
@@ -211,6 +212,9 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		return nil, errors.New("portal sdk: context is nil")
 	}
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Metadata.Validate(); err != nil {
 		return nil, err
 	}
 	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
@@ -441,6 +445,9 @@ func (e *Exposure) UpdateMetadata(metadata types.LeaseMetadata) error {
 	if e.closed() {
 		return net.ErrClosed
 	}
+	if err := metadata.Validate(); err != nil {
+		return err
+	}
 
 	e.reconcileMu.Lock()
 	defer e.reconcileMu.Unlock()
@@ -642,12 +649,20 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	// committed PublicURL that later feeds the deselection tombstone, so
 	// every "service ready at" line is guaranteed retractable by a
 	// matching "relay no longer active for" line (issue #463).
+	// Readiness loss and failures carry the same relay_status event, so a
+	// CLI consumer sees retraction without parsing retry prose (issue #596).
 	if advertised {
-		log.Info().
+		relayStatusLogEvent(log.Info(), status).
 			Str("address", e.identity.Address).
-			Str("public_url", status.PublicURL).
-			Str("relay_url", status.RelayURL).
 			Msg("service ready at " + status.PublicURL)
+	} else if previous.State == RelayReady && status.State == RelayConnecting {
+		relayStatusLogEvent(log.Info(), status).
+			Str("address", e.identity.Address).
+			Msg("relay reconnecting")
+	} else if status.State == RelayFailed {
+		relayStatusLogEvent(log.Warn(), status).
+			Str("address", e.identity.Address).
+			Msg("relay failed")
 	}
 
 	e.publishRelayStatus(status)
@@ -795,14 +810,33 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
 func (e *Exposure) reportDeselectedRelays(deselected []RelayStatus) {
 	for _, status := range deselected {
 		if status.PublicURL != "" {
-			log.Info().
-				Str("relay_url", status.RelayURL).
-				Str("public_url", status.PublicURL).
-				Str("reason", "deselected").
+			relayStatusLogEvent(log.Info(), status).
 				Msg("relay no longer active for " + status.PublicURL)
 		}
 		e.publishRelayStatus(status)
 	}
+}
+
+// relayStatusLogEvent attaches the relay lifecycle fields a machine
+// consumer filters by: the stable event name, the relay identity and
+// lifecycle state, and the canonical or deselected URL snapshot. It frames
+// the existing "service ready at" and "relay no longer active for" logs as
+// the documented machine-readable contract (issue #596); the SDK status
+// paths above remain the only owner of relay state.
+func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Event {
+	event = event.
+		Str("event", "relay_status").
+		Str("relay_url", status.RelayURL).
+		Str("state", string(status.State)).
+		Str("public_url", status.PublicURL).
+		Bool("deselected", status.Deselected)
+	if status.State == RelayReady && !status.Deselected && status.AliasURL != "" {
+		event = event.Str("alias_url", status.AliasURL)
+	}
+	if status.State == RelayFailed {
+		event = event.Str("failure", string(status.Failure))
+	}
+	return event
 }
 
 func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <-chan struct{}) {
@@ -929,6 +963,13 @@ type exposureConn struct {
 	localAddr  string
 	remoteAddr string
 	closeOnce  sync.Once
+}
+
+func (c *exposureConn) CloseWrite() error {
+	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return half.CloseWrite()
+	}
+	return nil
 }
 
 func (c *exposureConn) Close() error {

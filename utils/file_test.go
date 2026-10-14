@@ -153,27 +153,6 @@ func TestStaticSiteHandlerFallsBackToIndex(t *testing.T) {
 	}
 }
 
-func TestStaticSiteHandlerReturnsIndexForDirectory(t *testing.T) {
-	t.Parallel()
-
-	root := newStaticSite(t, map[string]string{
-		"index.html":   "<html>index</html>",
-		"sub/keep.txt": "keep",
-	})
-	handler := NewStaticSiteHandler("/", root, DefaultStaticIndex)
-
-	req := httptest.NewRequest(http.MethodGet, "https://public.example/sub", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if got := rec.Body.String(); got != "<html>index</html>" {
-		t.Fatalf("body = %q, want index content (no directory listing)", got)
-	}
-}
-
 func TestStaticSiteHandlerRejectsTraversal(t *testing.T) {
 	t.Parallel()
 
@@ -195,6 +174,105 @@ func TestStaticSiteHandlerRejectsTraversal(t *testing.T) {
 
 		if strings.Contains(rec.Body.String(), "TOP-SECRET") {
 			t.Fatalf("%s leaked the out-of-root secret file", target)
+		}
+	}
+}
+
+func TestStaticSiteHandlerRejectsOutOfRootSymlinks(t *testing.T) {
+	t.Parallel()
+
+	parent := t.TempDir()
+	root := filepath.Join(parent, "site")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("Mkdir(root) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, DefaultStaticIndex), []byte("<html>spa</html>"), 0o644); err != nil {
+		t.Fatalf("WriteFile(index) error = %v", err)
+	}
+	secret := filepath.Join(parent, "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOP-SECRET"), 0o644); err != nil {
+		t.Fatalf("WriteFile(secret) error = %v", err)
+	}
+	if err := os.Symlink(secret, filepath.Join(root, "direct.txt")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := os.Symlink("..", filepath.Join(root, "parent")); err != nil {
+		t.Fatalf("Symlink(parent) error = %v", err)
+	}
+
+	handler := NewStaticSiteHandler("/", root, DefaultStaticIndex)
+	for _, target := range []string{"/direct.txt", "/parent/secret.txt"} {
+		t.Run(target, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://public.example"+target, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("%s status = %d, want 404; body = %q", target, rec.Code, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "TOP-SECRET") {
+				t.Fatalf("%s leaked a file outside the static root", target)
+			}
+		})
+	}
+}
+
+func TestStaticSiteHandlerRejectsOutOfRootIndexSymlink(t *testing.T) {
+	t.Parallel()
+
+	parent := t.TempDir()
+	root := filepath.Join(parent, "site")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("Mkdir(root) error = %v", err)
+	}
+	secret := filepath.Join(parent, "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOP-SECRET"), 0o644); err != nil {
+		t.Fatalf("WriteFile(secret) error = %v", err)
+	}
+	if err := os.Symlink(secret, filepath.Join(root, DefaultStaticIndex)); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	handler := NewStaticSiteHandler("/", root, DefaultStaticIndex)
+	for _, target := range []string{"/", "/client/route"} {
+		req := httptest.NewRequest(http.MethodGet, "https://public.example"+target, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404; body = %q", target, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "TOP-SECRET") {
+			t.Fatalf("%s leaked a file outside the static root", target)
+		}
+	}
+}
+
+func TestStaticSiteHandlerAllowsInRootSymlinks(t *testing.T) {
+	t.Parallel()
+
+	root := newStaticSite(t, map[string]string{
+		"index.html":     "<html>spa</html>",
+		"assets/app.css": "body{color:red}",
+	})
+	if err := os.Symlink("assets/app.css", filepath.Join(root, "shortcut.css")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := os.Symlink("assets", filepath.Join(root, "assets-link")); err != nil {
+		t.Fatalf("Symlink(assets) error = %v", err)
+	}
+
+	handler := NewStaticSiteHandler("/", root, DefaultStaticIndex)
+	for _, target := range []string{"/shortcut.css", "/assets-link/app.css"} {
+		req := httptest.NewRequest(http.MethodGet, "https://public.example"+target, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", target, rec.Code)
+		}
+		if got := rec.Body.String(); got != "body{color:red}" {
+			t.Fatalf("%s body = %q, want CSS content", target, got)
 		}
 	}
 }

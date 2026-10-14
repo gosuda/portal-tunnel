@@ -2,7 +2,13 @@ package transport
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"math/big"
 	"net"
 	"testing"
 	"time"
@@ -115,5 +121,54 @@ func TestDatagramSessionRejectsPeerWithoutDatagrams(t *testing.T) {
 	case <-conn.Context().Done():
 	case <-time.After(time.Second):
 		t.Fatal("rejected peer remained open")
+	}
+}
+
+func newAuthTestConnections(t *testing.T, configs ...*quic.Config) (*quic.Conn, *quic.Conn) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := ListenQUICBackhaul("127.0.0.1:0", tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	clientConfig := quicBackhaulConfig()
+	if len(configs) > 0 {
+		clientConfig = configs[0]
+	}
+	client, err := quic.DialAddr(ctx, listener.Addr().String(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{quicBackhaulALPN}}, clientConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.CloseWithError(0, "test finished") })
+	server, err := listener.Accept(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.CloseWithError(0, "test finished") })
+	return server, client
+}
+
+func TestDatagramSessionCloseUnblocksAccept(t *testing.T) {
+	session := NewDatagramSession(1, false)
+	closed := make(chan error, 1)
+	go func() { _, err := session.Accept(nil); closed <- err }()
+	session.Close("test complete")
+	session.Close("already closed")
+	if err := <-closed; !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Accept after Close: %v", err)
+	}
+	if err := session.Send(1, []byte("closed")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Send after Close: %v", err)
 	}
 }

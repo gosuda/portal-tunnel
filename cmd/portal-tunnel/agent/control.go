@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -33,13 +35,19 @@ type endpoint struct {
 }
 
 type controlHandler struct {
-	manager  *manager
-	token    string
-	auth     *walletAuthenticator
-	shutdown func()
+	manager            *manager
+	token              string
+	auth               *walletAuthenticator
+	shutdown           func()
+	authority          string
+	localhostAuthority string
 }
 
 func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !s.trustedLocalRequest(r) {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "untrusted agent request origin")
+		return
+	}
 	if s.serveWalletAuth(w, r) {
 		return
 	}
@@ -147,6 +155,31 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeNotFound, "not found")
 	}
+}
+
+// trustedLocalRequest requires the listener's actual authority (or its
+// localhost alias). Browsers must also send the same Origin when they send
+// one; clients without an Origin header, such as the local CLI, remain valid.
+// Never use X-Forwarded-Host or DNS resolution to authorize an HTTP Host.
+func (s *controlHandler) trustedLocalRequest(r *http.Request) bool {
+	if s.authority == "" || r.Host == "" {
+		return false
+	}
+	if r.Host != s.authority && r.Host != s.localhostAuthority {
+		return false
+	}
+	origins := r.Header.Values("Origin")
+	if len(origins) == 0 {
+		return true
+	}
+	if len(origins) != 1 {
+		return false
+	}
+	scheme := "http://"
+	if r.TLS != nil {
+		scheme = "https://"
+	}
+	return origins[0] == scheme+r.Host
 }
 
 func (s *controlHandler) serveWalletAuth(w http.ResponseWriter, r *http.Request) bool {
@@ -308,6 +341,9 @@ func controlRequest(ctx context.Context, stateDir, method, path string, payload 
 	if err := utils.ReadJSONFile(filepath.Join(stateDir, endpointFilename), &endpoint); err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotRunning
+		}
+		if runtime.GOOS == "windows" && os.IsPermission(err) {
+			return fmt.Errorf("read agent endpoint: %w; run the CLI from an elevated terminal to control a Windows service", err)
 		}
 		return err
 	}

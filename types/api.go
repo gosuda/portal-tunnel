@@ -95,10 +95,11 @@ type RegisterChallengeResponse struct {
 // ReverseEndpoint authorizes one class of operation: opening reverse streams.
 // Capability is opaque to SDK callers and cannot mutate the owning lease.
 type ReverseEndpoint struct {
-	URL        string    `json:"url"`
-	Capability string    `json:"capability"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	Overlay    bool      `json:"overlay,omitempty"`
+	URL        string           `json:"url"`
+	Capability string           `json:"capability"`
+	ExpiresAt  time.Time        `json:"expires_at"`
+	Overlay    bool             `json:"overlay,omitempty"`
+	Gateway    *RelayDescriptor `json:"gateway,omitempty"`
 }
 
 type RegisterResponse struct {
@@ -189,12 +190,14 @@ func (resp *DiscoveryResponse) UnmarshalJSON(data []byte) error {
 	}
 
 	type plain DiscoveryResponse
-	if err := json.Unmarshal(data, (*plain)(resp)); err != nil {
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
-	if len(resp.ProtocolVersion) > MaxDiscoveryVersionBytes || len(resp.ReleaseVersion) > MaxDiscoveryVersionBytes {
+	if len(decoded.ProtocolVersion) > MaxDiscoveryVersionBytes || len(decoded.ReleaseVersion) > MaxDiscoveryVersionBytes {
 		return fmt.Errorf("discovery version label exceeds %d bytes", MaxDiscoveryVersionBytes)
 	}
+	*resp = DiscoveryResponse(decoded)
 	return nil
 }
 

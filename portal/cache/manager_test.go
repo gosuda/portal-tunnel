@@ -2,6 +2,7 @@ package cache
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,14 +10,17 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func testManager(t *testing.T, budget int) *Manager {
@@ -554,5 +558,56 @@ func TestDetachOwnerSuppressesCacheRouting(t *testing.T) {
 	}
 	if c.Serve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "https://"+l.Hostname+"/", nil), l.Hostname) {
 		t.Fatal("detached identity was still served from cache")
+	}
+}
+
+// Syncer rejecting redirects ensures that access tokens and cache upload payloads
+// are never forwarded to an untrusted external endpoint via HTTP redirects.
+func TestStaticCacheDoesNotFollowRedirects(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("site"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var foreignRequests atomic.Int32
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		foreignRequests.Add(1)
+		utils.WriteAPIData(w, http.StatusOK, types.StaticCacheStatus{})
+	}))
+	defer foreign.Close()
+
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, foreign.URL, http.StatusFound)
+	}))
+	defer relay.Close()
+
+	relayURL, err := url.Parse(relay.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source, err := NewSource(SourceConfig{Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncer := &Syncer{
+		source:   source,
+		relayURL: *relayURL,
+		limits:   types.StaticCacheLimits{MaxExposureBytes: 1024, MaxObjectSize: 512},
+		snapshot: &sourceSnapshot{
+			root: root,
+			manifest: types.StaticCacheManifest{
+				Index: "index.html",
+				Files: []types.StaticCacheFile{{Path: "index.html", Size: 4}},
+			},
+		},
+	}
+
+	err = syncer.Sync(context.Background(), relay.Client(), "lease-token")
+	if err == nil {
+		t.Fatal("redirect accepted as a successful cache sync")
+	}
+	if foreignRequests.Load() != 0 {
+		t.Fatalf("foreign server received %d requests, want 0 (redirect was followed)", foreignRequests.Load())
 	}
 }

@@ -19,12 +19,13 @@ func TestWriteDiscoveryResponseRespectsByteBudget(t *testing.T) {
 		ProtocolVersion: "discovery-v1",
 		Relays: []types.RelayDescriptor{
 			{APIHTTPSAddr: selfURL},
-			{APIHTTPSAddr: "https://" + strings.Repeat("a", 650<<10)},
-			{APIHTTPSAddr: "https://" + strings.Repeat("b", 650<<10)},
+			{APIHTTPSAddr: "https://large.example", IVNPDestination: strings.Repeat("a", 650<<10)},
+			{APIHTTPSAddr: "https://exceeds-budget.example", IVNPDestination: strings.Repeat("b", 650<<10)},
+			{APIHTTPSAddr: "https://small.example"},
 		},
+		IncompatibleRelays: []types.IncompatibleRelayEntry{{URL: "https://old.example", ProtocolVersion: "v0"}},
 		RelayReleaseVersions: map[string]string{
-			"https://peer-1.example": strings.Repeat("v", 600<<10),
-			"https://peer-2.example": strings.Repeat("v", 600<<10),
+			"https://small.example": "v2.6.0",
 		},
 	}
 	rec := httptest.NewRecorder()
@@ -39,32 +40,11 @@ func TestWriteDiscoveryResponseRespectsByteBudget(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("invalid discovery envelope: %v", err)
 	}
-	if !envelope.OK || len(envelope.Data.Relays) == 0 || envelope.Data.Relays[0].APIHTTPSAddr != selfURL {
-		t.Fatalf("discovery response omitted the serving relay: %+v", envelope.Data)
+	if !envelope.OK || len(envelope.Data.Relays) != 3 || envelope.Data.Relays[0].APIHTTPSAddr != selfURL || envelope.Data.Relays[2].APIHTTPSAddr != "https://small.example" {
+		t.Fatal("oversized peer hid the self descriptor or a smaller peer")
 	}
-}
-
-func TestWriteDiscoveryResponsePreservesSmallMetadata(t *testing.T) {
-	t.Parallel()
-
-	response := types.DiscoveryResponse{
-		ProtocolVersion:      "discovery-v1",
-		Relays:               []types.RelayDescriptor{{APIHTTPSAddr: "https://self.example"}},
-		IncompatibleRelays:   []types.IncompatibleRelayEntry{{URL: "https://old.example", ProtocolVersion: "v0"}},
-		RelayReleaseVersions: map[string]string{"https://peer.example": "v2.6.0"},
-	}
-	rec := httptest.NewRecorder()
-	writeDiscoveryResponse(rec, response)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("writeDiscoveryResponse() status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	var envelope types.APIEnvelope[types.DiscoveryResponse]
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatal(err)
-	}
-	if len(envelope.Data.Relays) != 1 || len(envelope.Data.IncompatibleRelays) != 1 ||
-		envelope.Data.RelayReleaseVersions["https://peer.example"] != "v2.6.0" {
-		t.Fatalf("expected complete bounded response, got %+v", envelope.Data)
+	if len(envelope.Data.IncompatibleRelays) != 1 || envelope.Data.RelayReleaseVersions["https://small.example"] != "v2.6.0" {
+		t.Fatal("small observation metadata was lost")
 	}
 }
 

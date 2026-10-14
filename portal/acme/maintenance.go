@@ -44,8 +44,6 @@ func nextSyncDelay(consecutiveFailures int) time.Duration {
 func (m *Manager) maintenanceLoop(ctx context.Context) {
 	defer m.wg.Done()
 	pendingENS := make(map[string]ensDNSCommand)
-	// Keep the last successfully synchronized address for each family. A failed
-	// probe for one family must not discard the other family's last success.
 	lastPublicIPs := make(map[bool]string)
 	syncChangedAddressRecords := func(ctx context.Context, publicIPs []string) error {
 		var syncErr error
@@ -165,7 +163,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			} else {
 				delete(pendingENS, command.hostname)
 				if !command.remove {
-					// A new hostname may still need a family that discovery missed.
 					clear(lastPublicIPs)
 				}
 			}

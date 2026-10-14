@@ -2,6 +2,7 @@ package utils
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -141,22 +142,35 @@ func StaticSiteRequestPath(prefix, urlPath string) (string, bool) {
 
 // NewStaticSiteHandler serves files under root with SPA/CSR fallback: a
 // concrete file is served as-is, while the root and any unknown path return
-// index. http.Dir already refuses paths that escape the root directory.
+// index. File access stays within root even when a path contains symlinks.
 func NewStaticSiteHandler(prefix, root, index string) http.Handler {
 	if strings.TrimSpace(index) == "" {
 		index = DefaultStaticIndex
 	}
-	dir := http.Dir(root)
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		rel, ok := StaticSiteRequestPath(prefix, req.URL.Path)
 		if !ok {
 			http.NotFound(w, req)
 			return
 		}
-		if rel != "/" && serveStaticFile(w, req, dir, rel) {
+		dir, err := os.OpenRoot(root)
+		if err != nil {
+			http.NotFound(w, req)
 			return
 		}
-		if !serveStaticFile(w, req, dir, "/"+index) {
+		defer dir.Close()
+
+		if rel != "/" {
+			served, err := serveStaticFile(w, req, dir, rel)
+			if err != nil {
+				http.NotFound(w, req)
+				return
+			}
+			if served {
+				return
+			}
+		}
+		if served, err := serveStaticFile(w, req, dir, "/"+index); err != nil || !served {
 			http.NotFound(w, req)
 		}
 	})
@@ -169,16 +183,22 @@ func containsDotDot(v string) bool {
 	return slices.Contains(strings.FieldsFunc(v, func(r rune) bool { return r == '/' || r == '\\' }), "..")
 }
 
-func serveStaticFile(w http.ResponseWriter, req *http.Request, dir http.FileSystem, rel string) bool {
-	f, err := dir.Open(rel)
+func serveStaticFile(w http.ResponseWriter, req *http.Request, dir *os.Root, rel string) (bool, error) {
+	f, err := dir.Open(strings.TrimPrefix(rel, "/"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || info.IsDir() {
-		return false
+	if err != nil {
+		return false, err
+	}
+	if info.IsDir() {
+		return false, nil
 	}
 	http.ServeContent(w, req, info.Name(), info.ModTime(), f)
-	return true
+	return true, nil
 }

@@ -4,7 +4,9 @@ import (
 	"math"
 	"net/http"
 	"net/netip"
+	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
@@ -29,7 +31,7 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 		// everything else, matching the standalone Serve(ctx, nil) shape.
 		root := http.NewServeMux()
 		root.HandleFunc("/{$}", s.HandleRoot)
-		fallback = root
+		fallback = ControlBodyHandler(root)
 	}
 	// A newer committed snapshot may reach Portal while this request is
 	// paused. Retry a bounded number of times when Portal rejects the older
@@ -139,11 +141,38 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	}))
 	mux.Handle("/", fallback)
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	control := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if utils.HandleAPICORS(w, r) {
 			return
 		}
 		mux.ServeHTTP(w, r)
+	})
+	guarded := ControlBodyHandler(control)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// ServeMux may redirect before invoking the fallback. Protect that
+		// short response here, preserving trailing slashes and escaped paths.
+		escapedPath := r.URL.EscapedPath()
+		cleanPath := path.Clean(escapedPath)
+		if strings.HasSuffix(escapedPath, "/") && cleanPath != "/" {
+			cleanPath += "/"
+		}
+		if r.Method != http.MethodConnect && escapedPath != cleanPath {
+			guarded.ServeHTTP(w, r)
+			return
+		}
+		requestPath := path.Clean(r.URL.Path)
+		for _, prefix := range []string{types.PathSDKPrefix, types.PathDiscovery, types.PathV1Prefix} {
+			if requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/") {
+				guarded.ServeHTTP(w, r)
+				return
+			}
+		}
+		// CORS preflight is answered here, before the fallback is called.
+		if requestPath == types.PathHealthz || r.Method == http.MethodOptions {
+			guarded.ServeHTTP(w, r)
+			return
+		}
+		control.ServeHTTP(w, r)
 	})
 }
 

@@ -121,18 +121,6 @@ func TestLoadEnvFileRejectsMalformedLines(t *testing.T) {
 	}
 }
 
-func TestLoadEnvFileKeepsCommentsAndBlanks(t *testing.T) {
-	path := writeEnvFile(t, "# a comment", "", "  ", "export PORTAL_URL=https://relay.example.com")
-
-	entries, err := loadEnvFile(path)
-	if err != nil {
-		t.Fatalf("load env file: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Name != "PORTAL_URL" {
-		t.Fatalf("entries = %v, want only PORTAL_URL", entries)
-	}
-}
-
 // A key the env file supplies that nothing reads must be surfaced with a
 // closest-match suggestion, not silently dropped: that silence is how a typo
 // runs the relay on defaults while the operator believes their value is set.

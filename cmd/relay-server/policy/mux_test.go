@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -29,5 +30,18 @@ func TestMuxRejectsMethodBeforeAdmission(t *testing.T) {
 				t.Fatal("unsupported method consumed the pre-auth budget")
 			}
 		})
+	}
+}
+
+func TestMuxLeavesFallbackBodyLimitsToOwner(t *testing.T) {
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	handler := Mux(nil, fallback, nil, nil, nil, types.PreAuthConfig{})
+	request := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("upload"))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("fallback status = %d, want 201", response.Code)
 	}
 }
