@@ -31,7 +31,7 @@ type Source struct {
 	root, index string
 	ttl         time.Duration
 	mu          sync.Mutex
-	limits      map[string]types.StaticCacheLimits
+	limits      map[*Syncer]types.StaticCacheLimits
 	snapshot    *sourceSnapshot
 	changed     chan struct{}
 	wake        chan struct{}
@@ -53,7 +53,7 @@ func NewSource(cfg SourceConfig) (*Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relay cache source: %w", err)
 	}
-	return &Source{root: root, index: index, ttl: cfg.TTL, limits: make(map[string]types.StaticCacheLimits), changed: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}, nil
+	return &Source{root: root, index: index, ttl: cfg.TTL, limits: make(map[*Syncer]types.StaticCacheLimits), changed: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}, nil
 }
 
 // ConfigureRegistration applies this source's cache permission and requested TTL.

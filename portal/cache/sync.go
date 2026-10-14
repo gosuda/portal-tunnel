@@ -24,11 +24,14 @@ type Syncer struct {
 }
 
 // Subscribe includes the relay's advertised limits in source discovery. A new
-// subscriber reuses the current generation if one is already available.
+// subscriber reuses the current generation if one is already available. Each
+// subscription owns its limits entry, so a replaced listener's late Close
+// cannot remove a live replacement's registration.
 func (s *Source) Subscribe(relayURL url.URL, limits types.StaticCacheLimits) *Syncer {
 	s.mu.Lock()
-	s.limits[relayURL.String()] = limits
 	wake := s.snapshot == nil || s.snapshot.err != nil
+	syncer := &Syncer{source: s, relayURL: relayURL, limits: limits}
+	s.limits[syncer] = limits
 	s.mu.Unlock()
 	if wake {
 		select {
@@ -36,14 +39,14 @@ func (s *Source) Subscribe(relayURL url.URL, limits types.StaticCacheLimits) *Sy
 		default:
 		}
 	}
-	return &Syncer{source: s, relayURL: relayURL, limits: limits}
+	return syncer
 }
 
 // Close removes the relay from source discovery. Cancel Next/Sync and wait for
 // them to return before closing the subscription.
 func (s *Syncer) Close() {
 	s.source.mu.Lock()
-	delete(s.source.limits, s.relayURL.String())
+	delete(s.source.limits, s)
 	s.source.mu.Unlock()
 }
 
