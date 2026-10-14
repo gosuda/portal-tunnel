@@ -145,7 +145,7 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 		if request.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
 			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge)
 			if err == nil {
-				if err := validateRegisterSIWEChallenge(challenge, c.relayURL, registerReq.Identity.Address, time.Now()); err != nil {
+				if err := identity.ValidateRegisterSIWEChallenge(challenge, c.relayURL, registerReq.Identity.Address, time.Now()); err != nil {
 					return types.RegisterResponse{}, err
 				}
 				signature, err := identity.NewLocalAuthority(registerReq.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
