@@ -24,14 +24,6 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := utils.EnsurePrivateDir(endpointStateDir); err != nil {
 		return fmt.Errorf("secure agent state directory: %w", err)
 	}
-	for _, tunnel := range cfg.Tunnels {
-		if strings.TrimSpace(tunnel.IdentityJSON) != "" || strings.TrimSpace(tunnel.IdentityPath) == "" {
-			continue
-		}
-		if err := utils.EnsurePrivateFile(tunnel.IdentityPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("secure identity for tunnel %q: %w", tunnel.ID, err)
-		}
-	}
 	endpointPath := filepath.Join(endpointStateDir, endpointFilename)
 	if err := utils.EnsurePrivateFile(endpointPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("secure existing agent endpoint: %w", err)

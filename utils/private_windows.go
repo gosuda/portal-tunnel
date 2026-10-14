@@ -140,7 +140,7 @@ func privateWindowsDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, *wi
 }
 
 // verifyWindowsPath fails closed if an unexpected ACE, owner, or inherited
-// permission survives. Compare the actual ACEs rather than SDDL formatting.
+// permission survives. ACE order does not affect this allow-only DACL.
 func verifyWindowsPath(path string, expected *windows.SECURITY_DESCRIPTOR, owner *windows.SID) error {
 	actual, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
@@ -176,26 +176,32 @@ func verifyWindowsPath(path string, expected *windows.SECURITY_DESCRIPTOR, owner
 	if gotACL == nil {
 		return fmt.Errorf("private path %q has no DACL", path)
 	}
-	for i := uint32(0); ; i++ {
-		var wantACE, gotACE *windows.ACCESS_ALLOWED_ACE
-		wantErr := windows.GetAce(wantACL, i, &wantACE)
-		gotErr := windows.GetAce(gotACL, i, &gotACE)
-		if errors.Is(wantErr, windows.ERROR_INVALID_PARAMETER) {
-			if errors.Is(gotErr, windows.ERROR_INVALID_PARAMETER) {
-				return nil
-			}
-			return fmt.Errorf("private path %q has unexpected ACEs", path)
+	if gotACL.AceCount != wantACL.AceCount {
+		return fmt.Errorf("private path %q has unexpected ACEs", path)
+	}
+	allowed := make(map[string]*windows.ACCESS_ALLOWED_ACE, wantACL.AceCount)
+	for i := uint32(0); i < uint32(wantACL.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(wantACL, i, &ace); err != nil {
+			return fmt.Errorf("inspect expected private ACL: %w", err)
 		}
-		if wantErr != nil || gotErr != nil {
-			return fmt.Errorf("inspect private ACL of %q: %w", path, errors.Join(wantErr, gotErr))
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		allowed[sid.String()] = ace
+	}
+	for i := uint32(0); i < uint32(gotACL.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(gotACL, i, &ace); err != nil {
+			return fmt.Errorf("inspect private ACL of %q: %w", path, err)
 		}
-		if gotACE.Header != wantACE.Header || gotACE.Mask != wantACE.Mask {
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return fmt.Errorf("private path %q has unexpected ACE type", path)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+		want := allowed[sid]
+		if want == nil || ace.Header != want.Header || ace.Mask != want.Mask {
 			return fmt.Errorf("private path %q has unexpected permissions", path)
 		}
-		wantSID := (*windows.SID)(unsafe.Pointer(&wantACE.SidStart))
-		gotSID := (*windows.SID)(unsafe.Pointer(&gotACE.SidStart))
-		if !gotSID.Equals(wantSID) {
-			return fmt.Errorf("private path %q grants access to an unexpected SID", path)
-		}
+		delete(allowed, sid)
 	}
+	return nil
 }
