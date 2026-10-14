@@ -50,8 +50,8 @@ func NewRefresher(relaySet *RelaySet) *Refresher {
 	publicTransport.DialContext = dialPublicRelay
 
 	return &Refresher{
-		relaySet:         relaySet,
-		httpClient:       client,
+		relaySet:   relaySet,
+		httpClient: client,
 		publicHTTPClient: &http.Client{
 			Transport:     publicTransport,
 			CheckRedirect: rejectDiscoveryRedirect,
