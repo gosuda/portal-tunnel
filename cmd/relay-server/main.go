@@ -233,12 +233,12 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return err
 	}
+	// The default relay owns the Admin, x402 and frontend control routes.
+	// Embedders' application fallback handlers retain their own body limits.
+	base = policy.ControlBodyHandler(base)
 	handler := policy.Mux(server, base, ingress,
 		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 		access, cfg.PreAuth)
-	// The default relay owns the Admin, x402 and frontend control routes.
-	// Embedders' application fallback handlers retain their own body limits.
-	handler = policy.ControlBodyHandler(handler)
 	if !cfg.PprofEnabled {
 		return server.Serve(ctx, handler)
 	}

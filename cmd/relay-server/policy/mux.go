@@ -149,6 +149,17 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	})
 	guarded := ControlBodyHandler(control)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// ServeMux may redirect before invoking the fallback. Protect that
+		// short response here, preserving trailing slashes and escaped paths.
+		escapedPath := r.URL.EscapedPath()
+		cleanPath := path.Clean(escapedPath)
+		if strings.HasSuffix(escapedPath, "/") && cleanPath != "/" {
+			cleanPath += "/"
+		}
+		if r.Method != http.MethodConnect && escapedPath != cleanPath {
+			guarded.ServeHTTP(w, r)
+			return
+		}
 		requestPath := path.Clean(r.URL.Path)
 		for _, prefix := range []string{types.PathSDKPrefix, types.PathDiscovery, types.PathV1Prefix} {
 			if requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/") {
