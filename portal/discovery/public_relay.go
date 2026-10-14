@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
+	"time"
 )
 
 // The non-public exceptions to Go's IsGlobalUnicast and IsPrivate checks
@@ -87,6 +89,11 @@ func isPublicRelayIP(ip netip.Addr) bool {
 // rebinding to an internal address. net/http retains the original hostname
 // for TLS certificate verification and the HTTP Host header.
 func dialPublicRelay(ctx context.Context, network, address string) (net.Conn, error) {
+	// HTTP transports can keep a dial alive after its request times out.
+	// Bound DNS resolution and all connection attempts independently.
+	ctx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
+	defer cancel()
+
 	if network != "tcp" && network != "tcp4" && network != "tcp6" {
 		return nil, fmt.Errorf("unsupported discovery dial network %q", network)
 	}
@@ -98,12 +105,15 @@ func dialPublicRelay(ctx context.Context, network, address string) (net.Conn, er
 	if err != nil {
 		return nil, fmt.Errorf("resolve discovery relay %q: %w", host, err)
 	}
-	var dialer net.Dialer
+	ips = slices.DeleteFunc(ips, func(ip netip.Addr) bool { return !isPublicRelayIP(ip) })
+	deadline, _ := ctx.Deadline()
 	var dialErr error
-	for _, ip := range ips {
-		if !isPublicRelayIP(ip) {
-			continue
+	for index, ip := range ips {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("dial discovery relay %q: %w", host, err)
 		}
+		// Leave time for later vetted addresses if this one is unreachable.
+		dialer := net.Dialer{Timeout: time.Until(deadline) / time.Duration(len(ips)-index)}
 		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 		if err == nil {
 			return conn, nil

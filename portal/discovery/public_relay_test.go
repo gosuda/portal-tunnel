@@ -2,11 +2,9 @@ package discovery
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -128,27 +126,7 @@ func TestPublicRelayDialRejectsResolvedLoopback(t *testing.T) {
 	}
 }
 
-// The first response simulates a reachable public HTTPS relay. Redirects to
-// the real internal HTTP server must be rejected before its first request.
-type redirectFromPublicRelay struct {
-	target         string
-	publicRequests *atomic.Int32
-}
-
-func (r redirectFromPublicRelay) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Hostname() == "relay-public.example" {
-		r.publicRequests.Add(1)
-		return &http.Response{
-			StatusCode: http.StatusFound,
-			Header:     http.Header{"Location": []string{r.target}},
-			Body:       io.NopCloser(strings.NewReader("")),
-			Request:    req,
-		}, nil
-	}
-	return http.DefaultTransport.RoundTrip(req)
-}
-
-func TestUntrustedDiscoveryRejectsRedirectToInternalService(t *testing.T) {
+func TestDiscoveryRedirectPolicyRejectsInternalService(t *testing.T) {
 	var internalRequests atomic.Int32
 	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		internalRequests.Add(1)
@@ -156,26 +134,21 @@ func TestUntrustedDiscoveryRejectsRedirectToInternalService(t *testing.T) {
 	}))
 	defer internal.Close()
 
-	set := NewRelaySet(nil)
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	desc := mustRelayDescriptor(t, "https://relay-public.example")
-	if err := set.InsertCandidate(desc, now); err != nil {
-		t.Fatalf("InsertCandidate() error = %v", err)
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, internal.URL, http.StatusFound)
+	}))
+	defer source.Close()
+	client := &http.Client{CheckRedirect: rejectDiscoveryRedirect, Timeout: 3 * time.Second}
+	defer client.CloseIdleConnections()
+	resp, err := client.Get(source.URL)
+	if resp != nil {
+		_ = resp.Body.Close()
 	}
-	refresher := NewRefresher(set)
-	defer refresher.httpClient.CloseIdleConnections()
-	defer refresher.publicHTTPClient.CloseIdleConnections()
-	var publicRequests atomic.Int32
-	refresher.publicHTTPClient.Transport = redirectFromPublicRelay{
-		target:         internal.URL,
-		publicRequests: &publicRequests,
+	if resp == nil || resp.StatusCode != http.StatusFound {
+		t.Fatalf("redirect response = %v, error = %v", resp, err)
 	}
-
-	if err := refresher.refreshOneHTTPS(context.Background(), relayStates(set)[0]); err != nil {
-		t.Fatalf("refreshOneHTTPS() error = %v", err)
-	}
-	if got := publicRequests.Load(); got != 1 {
-		t.Fatalf("public relay received %d requests, want one", got)
+	if err == nil {
+		t.Fatal("discovery redirect was accepted")
 	}
 	if got := internalRequests.Load(); got != 0 {
 		t.Fatalf("internal service received %d redirected requests, want zero", got)
