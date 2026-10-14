@@ -48,9 +48,9 @@ func TestWriteDiscoveryResponsePreservesSmallMetadata(t *testing.T) {
 	t.Parallel()
 
 	response := types.DiscoveryResponse{
-		ProtocolVersion: "discovery-v1",
-		Relays: []types.RelayDescriptor{{APIHTTPSAddr: "https://self.example"}},
-		IncompatibleRelays: []types.IncompatibleRelayEntry{{URL: "https://old.example", ProtocolVersion: "v0"}},
+		ProtocolVersion:      "discovery-v1",
+		Relays:               []types.RelayDescriptor{{APIHTTPSAddr: "https://self.example"}},
+		IncompatibleRelays:   []types.IncompatibleRelayEntry{{URL: "https://old.example", ProtocolVersion: "v0"}},
 		RelayReleaseVersions: map[string]string{"https://peer.example": "v2.6.0"},
 	}
 	rec := httptest.NewRecorder()

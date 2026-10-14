@@ -639,12 +639,25 @@ func (s *RelaySet) recordIncompatibleRelayLocked(relayURL, protocolVersion strin
 		var oldestURL string
 		var oldestAt time.Time
 		for url, observation := range s.incompatible {
-			if oldestURL == "" || observation.LastSeenAt.Before(oldestAt) || (observation.LastSeenAt.Equal(oldestAt) && url < oldestURL) {
+			if olderObservation(url, observation.LastSeenAt, oldestURL, oldestAt) {
 				oldestURL, oldestAt = url, observation.LastSeenAt
 			}
 		}
 		delete(s.incompatible, oldestURL)
 	}
+}
+
+// olderObservation reports whether the candidate observation is older than the
+// tracked oldest, breaking equal timestamps on the relay URL so eviction is
+// deterministic.
+func olderObservation(url string, observedAt time.Time, oldestURL string, oldestAt time.Time) bool {
+	if oldestURL == "" {
+		return true
+	}
+	if observedAt.Before(oldestAt) {
+		return true
+	}
+	return observedAt.Equal(oldestAt) && url < oldestURL
 }
 
 // pruneIncompatibleLocked drops incompatible-relay entries whose last direct
@@ -695,7 +708,7 @@ func (s *RelaySet) recordReleaseObservationLocked(relayURL, releaseVersion strin
 		var oldestURL string
 		var oldestAt time.Time
 		for url, observation := range s.releaseVersions {
-			if oldestURL == "" || observation.observedAt.Before(oldestAt) || (observation.observedAt.Equal(oldestAt) && url < oldestURL) {
+			if olderObservation(url, observation.observedAt, oldestURL, oldestAt) {
 				oldestURL, oldestAt = url, observation.observedAt
 			}
 		}

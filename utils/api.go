@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	maxDiscoveryResponseBytes = types.MaxDiscoveryResponseBytes
+	maxDiscoveryResponseBytes       = types.MaxDiscoveryResponseBytes
 	maxAPIResponseBytes       int64 = 4 << 20
 )
 
