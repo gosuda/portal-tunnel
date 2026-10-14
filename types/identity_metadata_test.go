@@ -7,9 +7,9 @@ import (
 
 func TestLeaseMetadataValidate(t *testing.T) {
 	tests := []struct {
-		name string
+		name     string
 		metadata LeaseMetadata
-		valid bool
+		valid    bool
 	}{
 		{"empty", LeaseMetadata{}, true},
 		{"maximum description", LeaseMetadata{Description: strings.Repeat("a", 4096)}, true},
