@@ -160,7 +160,8 @@ finish. Its canceled context prevents application bytes from being copied.
 Allowing an identity again admits fresh activity only; canceled reservations
 cannot activate. Cancellation also interrupts bandwidth waits.
 
-Copy loops preserve request half-close so an origin can respond after EOF.
+Copy loops preserve half-close in both directions: an origin can respond after
+request EOF, or finish its response while continuing to read the request.
 Native replies have no new duration limit. On the WebSocket carrier, yamux's
 send-side close starts its default five-minute stream-close timer: a response
 still streaming five minutes after request EOF can be reset. This is a carrier

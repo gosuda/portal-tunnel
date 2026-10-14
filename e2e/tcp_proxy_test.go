@@ -54,6 +54,56 @@ func TestTCPProxyRequestHalfClose(t *testing.T) {
 	}
 }
 
+func TestTCPProxyResponseHalfClosePreservesRequestUpload(t *testing.T) {
+	origin, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer origin.Close()
+	publicAddr, _, _ := startRawTCPTestTunnel(t, "127.0.0.1", origin.Addr().String())
+	client, err := net.DialTCP("tcp", nil, mustTCPAddr(t, publicAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = origin.SetDeadline(time.Now().Add(10 * time.Second))
+	conn, err := origin.AcceptTCP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := conn.Write([]byte("response-first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	response, err := io.ReadAll(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(response) != "response-first" {
+		t.Fatalf("response = %q", response)
+	}
+	// Receiving response EOF must not end the opposite direction. Only
+	// now send the request, so a premature full close cannot pass by luck.
+	if _, err := client.Write([]byte("request-after-response-eof")); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	request, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(request) != "request-after-response-eof" {
+		t.Fatalf("request = %q, want complete upload after response EOF", request)
+	}
+}
+
 // A public reset may reach the SDK as clean reverse EOF. This test proves
 // origin EOF propagation only; full local socket/worker release on explicit
 // SDK cancellation is protected by the SDK owner shutdown test.

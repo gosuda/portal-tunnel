@@ -240,8 +240,14 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 		bufPtr := bufferPool.Get().(*[]byte)
 		defer bufferPool.Put(bufPtr)
 		_, err := io.CopyBuffer(relayConn, localConn, *bufPtr)
-		_ = relayConn.SetDeadline(time.Now())
-		_ = relayConn.Close()
+		if err != nil {
+			_ = relayConn.SetDeadline(time.Now())
+			_ = relayConn.Close()
+			_ = localConn.Close()
+		} else if half, ok := relayConn.(interface{ CloseWrite() error }); ok {
+			// Response EOF must leave the client's request upload open.
+			_ = half.CloseWrite()
+		}
 		errCh <- err
 	}()
 

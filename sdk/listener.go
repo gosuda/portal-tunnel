@@ -1209,3 +1209,10 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 	}
 	return c.Conn.Read(p)
 }
+
+func (c *bufferedConn) CloseWrite() error {
+	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return half.CloseWrite()
+	}
+	return nil
+}
