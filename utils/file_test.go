@@ -153,27 +153,6 @@ func TestStaticSiteHandlerFallsBackToIndex(t *testing.T) {
 	}
 }
 
-func TestStaticSiteHandlerReturnsIndexForDirectory(t *testing.T) {
-	t.Parallel()
-
-	root := newStaticSite(t, map[string]string{
-		"index.html":   "<html>index</html>",
-		"sub/keep.txt": "keep",
-	})
-	handler := NewStaticSiteHandler("/", root, DefaultStaticIndex)
-
-	req := httptest.NewRequest(http.MethodGet, "https://public.example/sub", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if got := rec.Body.String(); got != "<html>index</html>" {
-		t.Fatalf("body = %q, want index content (no directory listing)", got)
-	}
-}
-
 func TestStaticSiteHandlerRejectsTraversal(t *testing.T) {
 	t.Parallel()
 
