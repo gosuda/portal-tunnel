@@ -23,7 +23,7 @@ func TestRelayClosesUnreadControlBodies(t *testing.T) {
 		status       int
 	}{
 		{http.MethodPost, types.PathHealthz, http.StatusOK},
-		{http.MethodPost, "/api//healthz", http.StatusMovedPermanently},
+		{http.MethodPost, "/api//healthz", http.StatusTemporaryRedirect},
 		{http.MethodPost, types.PathSDKConnect, http.StatusMethodNotAllowed},
 		{http.MethodGet, types.PathSDKRegister, http.StatusMethodNotAllowed},
 		{http.MethodGet, types.PathSDKConnect, http.StatusBadRequest},
