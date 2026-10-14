@@ -25,9 +25,7 @@ func validateRegisterSIWEChallenge(challenge types.RegisterChallengeResponse, re
 	if challenge.ChallengeID == "" || !now.Before(challenge.ExpiresAt) {
 		return errors.New("relay returned an invalid or expired registration challenge")
 	}
-	if relayURL == nil || relayURL.Hostname() == "" || relayURL.User != nil ||
-		(relayURL.Scheme != "https" && relayURL.Scheme != "http") ||
-		len(challenge.SIWEMessage) > maxRegisterSIWEMessageBytes {
+	if invalidRegisterRelayURL(relayURL) || len(challenge.SIWEMessage) > maxRegisterSIWEMessageBytes {
 		return errInvalidRegisterSIWEChallenge
 	}
 
@@ -72,4 +70,17 @@ func validateRegisterSIWEChallenge(challenge types.RegisterChallengeResponse, re
 		return errInvalidRegisterSIWEChallenge
 	}
 	return nil
+}
+
+// invalidRegisterRelayURL reports whether the relay URL is missing or shaped
+// in a way the SDK must not trust for challenge binding: no host, embedded
+// credentials, or a non-HTTP scheme.
+func invalidRegisterRelayURL(relayURL *url.URL) bool {
+	if relayURL == nil || relayURL.Hostname() == "" {
+		return true
+	}
+	if relayURL.User != nil {
+		return true
+	}
+	return relayURL.Scheme != "https" && relayURL.Scheme != "http"
 }
