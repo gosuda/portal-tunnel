@@ -24,11 +24,8 @@ type walletAuthConfig struct {
 type walletAuthenticator struct {
 	siwe *siweauth.Authenticator
 
-	mu             sync.Mutex
-	sessions       map[string]walletAuthSession
-	walletSessions map[string]string
-	recentTokens   [maxWalletAuthSessions]string
-	nextTokenIndex int
+	mu       sync.Mutex
+	sessions map[string]walletAuthSession
 }
 
 type walletAuthSession struct {
@@ -47,9 +44,8 @@ func newWalletAuthenticator(cfg walletAuthConfig) (*walletAuthenticator, error) 
 		return nil, err
 	}
 	return &walletAuthenticator{
-		siwe:           siwe,
-		sessions:       make(map[string]walletAuthSession),
-		walletSessions: make(map[string]string),
+		siwe:     siwe,
+		sessions: make(map[string]walletAuthSession),
 	}, nil
 }
 
@@ -81,29 +77,40 @@ func (a *walletAuthenticator) login(req types.WalletAuthLoginRequest, domain str
 }
 
 // sessionForVerifiedWallet accepts only a SIWE-verified address. Replays reuse
-// its existing session; new wallets evict the oldest issued session in O(1).
-// Both indexes remain bounded without scanning them on every login.
+// its existing session without extending expiration. Scanning at most 128
+// sessions removes expired entries; eviction happens only when capacity is
+// full. Fixed session TTLs make the earliest expiry the oldest.
 func (a *walletAuthenticator) sessionForVerifiedWallet(address string, now time.Time) string {
 	now = now.UTC()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if token := a.walletSessions[address]; token != "" {
-		if session, ok := a.sessions[token]; ok && now.Before(session.ExpiresAt) {
-			return token
+	var existingToken, oldestToken string
+	var oldestExpiry time.Time
+	for token, session := range a.sessions {
+		if !now.Before(session.ExpiresAt) {
+			delete(a.sessions, token)
+			continue
 		}
-		a.removeSessionLocked(token)
+		if session.Address == address {
+			existingToken = token
+		}
+		if oldestToken == "" || session.ExpiresAt.Before(oldestExpiry) {
+			oldestToken, oldestExpiry = token, session.ExpiresAt
+		}
+	}
+	if existingToken != "" {
+		return existingToken
+	}
+	if len(a.sessions) >= maxWalletAuthSessions {
+		delete(a.sessions, oldestToken)
 	}
 
-	a.removeSessionLocked(a.recentTokens[a.nextTokenIndex])
 	token := utils.RandomID("was_")
-	a.recentTokens[a.nextTokenIndex] = token
-	a.nextTokenIndex = (a.nextTokenIndex + 1) % maxWalletAuthSessions
 	a.sessions[token] = walletAuthSession{
 		Address:   address,
 		ExpiresAt: now.Add(defaultWalletAuthSessionTTL),
 	}
-	a.walletSessions[address] = token
 	return token
 }
 
@@ -123,7 +130,7 @@ func (a *walletAuthenticator) validateSession(token string) (string, bool) {
 		return "", false
 	}
 	if !time.Now().UTC().Before(session.ExpiresAt) {
-		a.removeSessionLocked(token)
+		delete(a.sessions, token)
 		return "", false
 	}
 	return session.Address, true
@@ -135,15 +142,5 @@ func (a *walletAuthenticator) deleteSession(token string) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.removeSessionLocked(strings.TrimSpace(token))
-}
-
-// removeSessionLocked keeps both indexes consistent. a.mu must be held.
-func (a *walletAuthenticator) removeSessionLocked(token string) {
-	session, ok := a.sessions[token]
-	if !ok {
-		return
-	}
-	delete(a.sessions, token)
-	delete(a.walletSessions, session.Address)
+	delete(a.sessions, strings.TrimSpace(token))
 }

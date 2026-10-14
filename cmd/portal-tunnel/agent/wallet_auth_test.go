@@ -41,7 +41,7 @@ func TestWalletLoginReplayReusesSession(t *testing.T) {
 	}
 	var first string
 	for i := 0; i < 128; i++ {
-		token, address, err := auth.login(login, domain, now)
+		token, address, err := auth.login(login, domain, now.Add(time.Duration(i)*time.Millisecond))
 		if err != nil {
 			t.Fatalf("login %d: %v", i, err)
 		}
@@ -57,8 +57,8 @@ func TestWalletLoginReplayReusesSession(t *testing.T) {
 	if got := len(auth.sessions); got != 1 {
 		t.Fatalf("sessions after replay = %d, want 1", got)
 	}
-	if got := len(auth.walletSessions); got != 1 {
-		t.Fatalf("wallet indexes after replay = %d, want 1", got)
+	if !auth.sessions[first].ExpiresAt.Equal(now.Add(defaultWalletAuthSessionTTL)) {
+		t.Fatal("replay extended session expiration")
 	}
 }
 
@@ -71,13 +71,13 @@ func TestWalletSessionsStayGloballyBounded(t *testing.T) {
 	var first, last string
 	for i := 0; i < 4*maxWalletAuthSessions; i++ {
 		address := fmt.Sprintf("0x%040x", i+1)
-		token := auth.sessionForVerifiedWallet(address, now)
+		token := auth.sessionForVerifiedWallet(address, now.Add(time.Duration(i)*time.Millisecond))
 		if i == 0 {
 			first = token
 		}
 		last = token
-		if len(auth.sessions) > maxWalletAuthSessions || len(auth.walletSessions) > maxWalletAuthSessions {
-			t.Fatalf("session indexes exceeded %d entries", maxWalletAuthSessions)
+		if len(auth.sessions) > maxWalletAuthSessions {
+			t.Fatalf("sessions exceeded %d entries", maxWalletAuthSessions)
 		}
 	}
 	if _, ok := auth.validateSession(first); ok {
@@ -86,12 +86,12 @@ func TestWalletSessionsStayGloballyBounded(t *testing.T) {
 	if _, ok := auth.validateSession(last); !ok {
 		t.Fatal("newest session should still be valid")
 	}
-	if len(auth.sessions) != maxWalletAuthSessions || len(auth.walletSessions) != maxWalletAuthSessions {
-		t.Fatalf("session indexes = %d/%d, want %d each", len(auth.sessions), len(auth.walletSessions), maxWalletAuthSessions)
+	if len(auth.sessions) != maxWalletAuthSessions {
+		t.Fatalf("sessions = %d, want %d", len(auth.sessions), maxWalletAuthSessions)
 	}
 }
 
-func TestWalletSessionExpiryAndLogoutUpdateBothIndexes(t *testing.T) {
+func TestWalletSessionExpiryAndLogout(t *testing.T) {
 	auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
 	if err != nil {
 		t.Fatal(err)
@@ -113,8 +113,8 @@ func TestWalletSessionExpiryAndLogoutUpdateBothIndexes(t *testing.T) {
 	if _, ok := auth.validateSession(current); ok {
 		t.Fatal("deleted session remained valid")
 	}
-	if len(auth.sessions) != 0 || len(auth.walletSessions) != 0 {
-		t.Fatalf("logout left session indexes populated: %d/%d", len(auth.sessions), len(auth.walletSessions))
+	if len(auth.sessions) != 0 {
+		t.Fatalf("logout left %d sessions", len(auth.sessions))
 	}
 	next := auth.sessionForVerifiedWallet(address, now)
 	if next == current {
@@ -148,7 +148,39 @@ func TestWalletSessionConcurrentReplay(t *testing.T) {
 			t.Fatal("concurrent replay allocated multiple sessions")
 		}
 	}
-	if len(auth.sessions) != 1 || len(auth.walletSessions) != 1 {
-		t.Fatalf("concurrent replay left %d/%d sessions, want 1 each", len(auth.sessions), len(auth.walletSessions))
+	if len(auth.sessions) != 1 {
+		t.Fatalf("concurrent replay left %d sessions, want 1", len(auth.sessions))
+	}
+}
+
+func TestWalletSessionUsesFreeCapacityBeforeEviction(t *testing.T) {
+	for _, reason := range []string{"logout", "expiry"} {
+		t.Run(reason, func(t *testing.T) {
+			auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			first := auth.sessionForVerifiedWallet("0x0000000000000000000000000000000000000001", now)
+			for i := 1; i < maxWalletAuthSessions; i++ {
+				token := auth.sessionForVerifiedWallet(fmt.Sprintf("0x%040x", i+1), now.Add(-time.Minute))
+				if reason == "logout" {
+					auth.deleteSession(token)
+				}
+			}
+			if reason == "expiry" {
+				now = now.Add(defaultWalletAuthSessionTTL - time.Second)
+			}
+			current := auth.sessionForVerifiedWallet(fmt.Sprintf("0x%040x", maxWalletAuthSessions+1), now)
+			if _, ok := auth.validateSession(first); !ok {
+				t.Fatal("live session evicted despite free capacity")
+			}
+			if _, ok := auth.validateSession(current); !ok {
+				t.Fatal("new session is not valid")
+			}
+			if len(auth.sessions) != 2 {
+				t.Fatalf("sessions after %s = %d, want 2", reason, len(auth.sessions))
+			}
+		})
 	}
 }
