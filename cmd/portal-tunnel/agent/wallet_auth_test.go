@@ -35,8 +35,8 @@ func TestWalletLoginReplayReusesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	login := types.WalletAuthLoginRequest{
-		ChallengeID: challenge.ChallengeID,
-		SIWEMessage: challenge.SIWEMessage,
+		ChallengeID:   challenge.ChallengeID,
+		SIWEMessage:   challenge.SIWEMessage,
 		SIWESignature: signature,
 	}
 	var first string
