@@ -1,9 +1,7 @@
 package types
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -139,94 +137,21 @@ type DiscoveryResponse struct {
 	RelayReleaseVersions map[string]string `json:"relay_release_versions,omitempty"`
 }
 
-// UnmarshalJSON bounds and rejects duplicate discovery collections before
-// allocating typed descriptors or the release-version map.
+// UnmarshalJSON validates the decoded response before replacing existing state.
+// HTTP readers bound the response bytes before decoding.
 func (resp *DiscoveryResponse) UnmarshalJSON(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	start, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	if start != json.Delim('{') {
-		return errors.New("discovery response must be an object")
-	}
-
-	var seen [3]bool
-	for decoder.More() {
-		keyToken, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		key, ok := keyToken.(string)
-		if !ok {
-			return errors.New("invalid discovery field name")
-		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return err
-		}
-		var index, limit int
-		var open json.Delim
-		switch {
-		case strings.EqualFold(key, "relays"):
-			index, limit, open = 0, MaxDiscoveryEntries+1, '['
-		case strings.EqualFold(key, "incompatible_relays"):
-			index, limit, open = 1, MaxDiscoveryEntries, '['
-		case strings.EqualFold(key, "relay_release_versions"):
-			index, limit, open = 2, MaxDiscoveryEntries, '{'
-		default:
-			continue
-		}
-		if seen[index] {
-			return fmt.Errorf("duplicate discovery collection %q", key)
-		}
-		seen[index] = true
-		if err := checkDiscoveryCollectionLimit(key, value, open, limit); err != nil {
-			return err
-		}
-	}
-	if _, err := decoder.Token(); err != nil {
-		return err
-	}
-
 	type plain DiscoveryResponse
 	var decoded plain
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
+	if len(decoded.Relays) > MaxDiscoveryEntries+1 || len(decoded.IncompatibleRelays) > MaxDiscoveryEntries || len(decoded.RelayReleaseVersions) > MaxDiscoveryEntries {
+		return fmt.Errorf("discovery response exceeds collection limits (relays: %d, metadata: %d)", MaxDiscoveryEntries+1, MaxDiscoveryEntries)
+	}
 	if len(decoded.ProtocolVersion) > MaxDiscoveryVersionBytes || len(decoded.ReleaseVersion) > MaxDiscoveryVersionBytes {
 		return fmt.Errorf("discovery version label exceeds %d bytes", MaxDiscoveryVersionBytes)
 	}
 	*resp = DiscoveryResponse(decoded)
-	return nil
-}
-
-func checkDiscoveryCollectionLimit(name string, data json.RawMessage, open json.Delim, limit int) error {
-	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
-		return nil
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	token, err := decoder.Token()
-	if err != nil {
-		return fmt.Errorf("decode %s: %w", name, err)
-	}
-	if token != open {
-		return fmt.Errorf("decode %s: expected %q", name, open)
-	}
-	for count := 0; decoder.More(); count++ {
-		if count == limit {
-			return fmt.Errorf("discovery %s exceeds %d entries", name, limit)
-		}
-		if open == '{' {
-			if _, err := decoder.Token(); err != nil {
-				return fmt.Errorf("decode %s key: %w", name, err)
-			}
-		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return fmt.Errorf("decode %s entry: %w", name, err)
-		}
-	}
 	return nil
 }
 

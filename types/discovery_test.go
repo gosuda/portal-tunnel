@@ -9,6 +9,14 @@ import (
 
 func TestDiscoveryResponseLimits(t *testing.T) {
 	t.Parallel()
+	versions := make(map[string]string, MaxDiscoveryEntries+1)
+	for i := range MaxDiscoveryEntries + 1 {
+		versions[fmt.Sprint(i)] = "v"
+	}
+	oversizedMap, err := json.Marshal(DiscoveryResponse{RelayReleaseVersions: versions})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name, body string
 		valid      bool
@@ -16,10 +24,7 @@ func TestDiscoveryResponseLimits(t *testing.T) {
 		{"self and maximum peers", `{"relays":[` + strings.Repeat("{},", MaxDiscoveryEntries) + `{}]}`, true},
 		{"too many peers", `{"relays":[` + strings.Repeat("{},", MaxDiscoveryEntries+1) + `{}]}`, false},
 		{"too many incompatible relays", `{"incompatible_relays":[` + strings.Repeat("{},", MaxDiscoveryEntries) + `{}]}`, false},
-		{"too many map members", `{"relay_release_versions":{` + strings.Repeat(`"same":"v",`, MaxDiscoveryEntries) + `"last":"v"}}`, false},
-		{"duplicate relays", `{"relays":[],"relays":[]}`, false},
-		{"duplicate incompatible relays", `{"incompatible_relays":[],"incompatible_relays":[]}`, false},
-		{"case-folded duplicate versions", `{"relay_release_versions":{},"Relay_Release_Versions":{}}`, false},
+		{"too many map entries", string(oversizedMap), false},
 		{"maximum version", `{"release_version":"` + strings.Repeat("v", MaxDiscoveryVersionBytes) + `"}`, true},
 		{"oversized release version", `{"release_version":"` + strings.Repeat("v", MaxDiscoveryVersionBytes+1) + `"}`, false},
 		{"oversized protocol version", `{"protocol_version":"` + strings.Repeat("v", MaxDiscoveryVersionBytes+1) + `"}`, false},
