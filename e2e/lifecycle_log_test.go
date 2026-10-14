@@ -90,11 +90,19 @@ func TestPortalExposeJSONRelayLifecycleLogs(t *testing.T) {
 		t.Fatalf("ready record = %v, want no alias for an address-only identity", ready)
 	}
 
-	// A relay restart with the same identity re-registers and the CLI
-	// re-emits the ready record through the same authoritative status
-	// path — the recover/reconnect path a subprocess consumer observes.
+	// Closing the relay drops its reverse sessions. The CLI must report
+	// readiness loss before the relay returns with the same identity.
 	relayCancel()
 	stopJSONRelay(t, relayMembership.sniAddr)
+	connecting := waitLifecycleRecord(t, records, func(record map[string]any) bool {
+		return record["event"] == "relay_status" && record["state"] == "connecting"
+	}, 60*time.Second)
+	if connecting["relay_url"] != relayURL {
+		t.Fatalf("connecting record = %v, want relay_url %s", connecting, relayURL)
+	}
+	if _, ok := connecting["alias_url"]; ok {
+		t.Fatalf("connecting record = %v, want no alias while reconnecting", connecting)
+	}
 	restartCtx, restartCancel := context.WithCancel(context.Background())
 	defer restartCancel()
 	restartJSONRelay(t, restartCtx, relayMembership.stateDir, relayMembership.sniAddr, relayMembership.sniPort)

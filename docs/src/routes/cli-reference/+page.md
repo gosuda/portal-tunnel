@@ -202,7 +202,7 @@ portal expose 3000 --log-format json
 | Records | One structured JSON log record per line on **stdout**; filter by `"event":"relay_status"` |
 | Human output | Unchanged by default; `--log-format text` (default) keeps the human-readable console |
 | State ownership | Records are emitted from the same authoritative SDK status paths the human logs derive from |
-| Coalescing | Not a lossless event log: `service ready at` and `relay no longer active for` frames are the documented contract; a deselected relay never reports an alias |
+| Transitions | Records report readiness, readiness loss (`ready` → `connecting`), failures, and deselection; repeated unchanged statuses are omitted |
 
 One ready record:
 
@@ -218,7 +218,7 @@ Fields on `event=relay_status` records:
 | `relay_url` | Relay API URL this status describes |
 | `state` | `connecting`, `ready`, or `failed` |
 | `failure` | Present when `state` is `failed`: `runtime` (recoverable), `terminal`, or `mitm` (TLS termination detected; requires `--ban-mitm`) |
-| `public_url` | Identity-bound canonical URL; routes to this exposure whenever set |
+| `public_url` | Identity-bound canonical URL; usable only while `state` is `ready`, even if a retained lease keeps this field set while reconnecting |
 | `alias_url` | Friendly `<name>.<relay-domain>` URL, present **only while `state` is `ready` and granted**: a failed, deselected, or address-only relay never reports one |
 | `deselected` | `true` on the removal notification for a relay that left the membership set; a previously advertised relay URL must be retracted |
 
@@ -226,6 +226,9 @@ Records never carry access tokens, private identities, or other secrets;
 other log levels and messages on the same stream are not part of this
 contract. A consumer needing an authoritative complete membership
 snapshot should use the SDK's `Relays()`, not the lossy event stream.
+
+A `connecting` record retracts readiness until a subsequent `ready`
+record, and never reports an `alias_url`.
 
 ### Examples
 

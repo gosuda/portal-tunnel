@@ -643,12 +643,16 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	// committed PublicURL that later feeds the deselection tombstone, so
 	// every "service ready at" line is guaranteed retractable by a
 	// matching "relay no longer active for" line (issue #463).
-	// Failed statuses carry the same relay_status event, so a CLI machine
-	// consumer sees retraction without parsing retry prose (issue #596).
+	// Readiness loss and failures carry the same relay_status event, so a
+	// CLI consumer sees retraction without parsing retry prose (issue #596).
 	if advertised {
 		relayStatusLogEvent(log.Info(), status).
 			Str("address", e.identity.Address).
 			Msg("service ready at " + status.PublicURL)
+	} else if previous.State == RelayReady && status.State == RelayConnecting {
+		relayStatusLogEvent(log.Info(), status).
+			Str("address", e.identity.Address).
+			Msg("relay reconnecting")
 	} else if status.State == RelayFailed {
 		relayStatusLogEvent(log.Warn(), status).
 			Str("address", e.identity.Address).

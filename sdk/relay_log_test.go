@@ -3,10 +3,12 @@ package sdk
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // The machine-readable relay lifecycle contract frames the authoritative
@@ -52,6 +54,49 @@ func TestRelayStatusLogEventReady(t *testing.T) {
 	}
 	if record["deselected"] != false {
 		t.Fatalf("record deselected = %v, want false while ready", record["deselected"])
+	}
+}
+
+func TestExposureRelayStatusLogsReadinessLossAndRecovery(t *testing.T) {
+	const relayURL = "https://relay.example.com"
+	const publicURL = "https://myapp-identity.relay.example.com"
+	const aliasURL = "https://myapp.relay.example.com"
+	exposure := newExposureStateTest(t, relayURL)
+	var buf bytes.Buffer
+	previousLogger := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = previousLogger })
+
+	// Opening the first reverse session grants readiness. Closing the last
+	// session reports connecting with the leased URLs still available;
+	// recovery makes the same lease ready again.
+	for _, state := range []RelayState{RelayReady, RelayConnecting, RelayReady} {
+		exposure.setRelayStatus(relayURL, listenerStatus{
+			state: state, publicURL: publicURL, aliasURL: aliasURL,
+		})
+	}
+
+	decoder := json.NewDecoder(&buf)
+	for _, state := range []string{"ready", "connecting", "ready"} {
+		var record map[string]any
+		if err := decoder.Decode(&record); err != nil {
+			t.Fatalf("decode %s lifecycle record: %v", state, err)
+		}
+		if record["event"] != "relay_status" || record["state"] != state ||
+			record["relay_url"] != relayURL || record["public_url"] != publicURL {
+			t.Fatalf("record = %v, want %s for relay %s with retained public URL", record, state, relayURL)
+		}
+		if state == "connecting" {
+			if _, ok := record["alias_url"]; ok {
+				t.Fatalf("connecting record = %v, want no alias", record)
+			}
+		} else if record["alias_url"] != aliasURL {
+			t.Fatalf("ready record = %v, want granted alias %s", record, aliasURL)
+		}
+	}
+	var extra map[string]any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		t.Fatalf("unexpected extra lifecycle record: %v, error: %v", extra, err)
 	}
 }
 
