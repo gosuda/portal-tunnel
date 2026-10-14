@@ -931,6 +931,13 @@ type exposureConn struct {
 	closeOnce  sync.Once
 }
 
+func (c *exposureConn) CloseWrite() error {
+	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return half.CloseWrite()
+	}
+	return nil
+}
+
 func (c *exposureConn) Close() error {
 	var closeErr error
 	c.closeOnce.Do(func() {
