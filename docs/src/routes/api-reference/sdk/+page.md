@@ -140,6 +140,7 @@ owned by another identity.
 | `capability` | `string` | opaque, reverse-only, and bound to this lease instance |
 | `expires_at` | `string` | never later than the owning lease expiry |
 | `overlay` | `boolean` | `true` when the selected endpoint uses the overlay |
+| `gateway` | `RelayDescriptor` | signed descriptor binding the overlay gateway's HTTPS address to its relay identity; required when `overlay` is `true` |
 
 The reverse capability is not accepted by renew, unregister, signer, or
 datagram endpoints. The lease `access_token` is not accepted by the reverse
@@ -153,6 +154,14 @@ Both modes intentionally preserve the same SDK-facing contract: use the returned
 selection, identity, lease policy, and authorization; IVNP owns the network path
 between gateway and ingress. The SDK does not choose IVNP routers or receive
 their topology, and that topology is not part of leases or discovery state.
+For overlay endpoints, the SDK verifies the signed gateway descriptor and
+checks that its address matches the returned URL before opening any connection.
+Relay-selected gateways may only resolve to public IP addresses; local, private,
+and special-purpose addresses are blocked after DNS resolution on every dial.
+An explicitly configured direct relay retains local development support.
+Browser/WASM clients reject relay-selected alternate gateways because the browser
+does not expose resolved addresses for SDK verification. Keep `overlay` disabled
+and use the explicitly configured direct relay in browser applications.
 
 See [IVNP-backed overlay networking](/concepts#ivnp-backed-overlay-networking)
 for the conceptual model and [the architecture](/architecture#ivnp-backed-overlay-networking)

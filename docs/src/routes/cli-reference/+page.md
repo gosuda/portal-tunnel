@@ -136,6 +136,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--strip-request-header` | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (`Host`, `X-Forwarded-*`) are always rewritten after stripping; requires `--http-route` or `--auth` |
 | `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
 | `--cache-ttl` | duration | `0` | Requested offline cache lifetime; `0` uses relay policy; requires `--cache` |
+| `--log-format` | string | `text` | Log output format; `json` sends application log records as one structured JSON record per line on stdout for machine integration; top-level command errors stay on stderr (see [Machine-Readable Relay Lifecycle](#machine-readable-relay-lifecycle)) |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
@@ -186,6 +187,48 @@ rename an existing one. Use a separate `--identity-path` for a new identity.
   `--x402-network casper:...` and `--x402-asset`; it uses the hosted facilitator
   by default or the first `--x402-endpoint` override. The default CSPR.cloud
   facilitator also requires `CSPR_CLOUD_API_KEY`.
+
+### Machine-Readable Relay Lifecycle
+
+Integrations that launch `portal expose` as a subprocess can track relay
+readiness without parsing human-facing messages:
+
+```bash
+portal expose 3000 --log-format json
+```
+
+| Guarantee | Behavior |
+|-----------|----------|
+| Records | One structured JSON log record per line on **stdout**; filter by `"event":"relay_status"` |
+| Human output | Unchanged by default; `--log-format text` (default) keeps the human-readable console |
+| State ownership | Records are emitted from the same authoritative SDK status paths the human logs derive from |
+| Transitions | Records report readiness, readiness loss (`ready` → `connecting`), failures, and deselection; repeated unchanged statuses are omitted |
+
+One ready record:
+
+```json
+{"level":"info","event":"relay_status","relay_url":"https://relay.example.com","state":"ready","public_url":"https://myapp-<identity>.relay.example.com","alias_url":"https://myapp.relay.example.com","deselected":false,"time":"2026-01-01T00:00:00Z","message":"service ready at https://myapp-<identity>.relay.example.com"}
+```
+
+Fields on `event=relay_status` records:
+
+| Field | Meaning |
+|-------|---------|
+| `event` | Always `relay_status` |
+| `relay_url` | Relay API URL this status describes |
+| `state` | `connecting`, `ready`, or `failed` |
+| `failure` | Present when `state` is `failed`: `runtime` (recoverable), `terminal`, or `mitm` (TLS termination detected; requires `--ban-mitm`) |
+| `public_url` | Identity-bound canonical URL; usable only while `state` is `ready`, even if a retained lease keeps this field set while reconnecting |
+| `alias_url` | Friendly `<name>.<relay-domain>` URL, present **only while `state` is `ready` and granted**: a failed, deselected, or address-only relay never reports one |
+| `deselected` | `true` on the removal notification for a relay that left the membership set; a previously advertised relay URL must be retracted |
+
+Records never carry access tokens, private identities, or other secrets;
+other log levels and messages on the same stream are not part of this
+contract. A consumer needing an authoritative complete membership
+snapshot should use the SDK's `Relays()`, not the lossy event stream.
+
+A `connecting` record retracts readiness until a subsequent `ready`
+record, and never reports an `alias_url`.
 
 ### Examples
 

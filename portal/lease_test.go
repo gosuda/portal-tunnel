@@ -634,6 +634,153 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	}
 }
 
+func TestPortPoolRollbackReturnsPortWithoutReservation(t *testing.T) {
+	first := &leaseRecord{Identity: types.Identity{Name: "first", Address: "0x1"}}
+	other := &leaseRecord{Identity: types.Identity{Name: "other", Address: "0x2"}}
+	pool := newPortPool(10000, 10000, time.Minute)
+	port, err := pool.allocate(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.rollback(port, first)
+	if len(pool.reserved) != 0 {
+		t.Fatalf("rollback created %d sticky reservations", len(pool.reserved))
+	}
+	reused, err := pool.allocate(other)
+	if err != nil || reused != port {
+		t.Fatalf("different owner did not immediately reuse rolled-back port: %d, %v", reused, err)
+	}
+	pool.rollback(port, first)
+	if pool.inUse[port].record != other {
+		t.Fatal("stale rollback released another owner's port")
+	}
+}
+
+func TestLeaseHostnameConflictRollsBackRawPorts(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	request := types.RegisterChallengeRequest{
+		Identity:   newTestLeaseIdentity(t, "conflict"),
+		UDPEnabled: true,
+		TCPEnabled: true,
+	}
+	if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		request.Identity = newTestLeaseIdentity(t, "conflict")
+		if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil); !errors.Is(err, errHostnameConflict) {
+			t.Fatalf("rejected registration %d error = %v, want hostname conflict", i, err)
+		}
+		if len(registry.udpPorts.available) != 1 || len(registry.tcpPorts.available) != 1 ||
+			len(registry.udpPorts.reserved) != 0 || len(registry.tcpPorts.reserved) != 0 {
+			t.Fatalf("rejected registration %d retained ports: UDP=%+v TCP=%+v", i, registry.udpPorts, registry.tcpPorts)
+		}
+	}
+	request.Identity = newTestLeaseIdentity(t, "accepted")
+	if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil); err != nil {
+		t.Fatalf("rejected identities exhausted raw ports: %v", err)
+	}
+}
+
+func TestPortPoolRollbackPreservesReconnectReservation(t *testing.T) {
+	first := &leaseRecord{Identity: types.Identity{Name: "first", Address: "0x1"}}
+	other := &leaseRecord{Identity: types.Identity{Name: "other", Address: "0x2"}}
+	pool := newPortPool(10000, 10000, time.Minute)
+	port, err := pool.allocate(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.release(port, first)
+	original := pool.reserved[first.ServiceKey()]
+	if reclaimed, err := pool.allocate(first); err != nil || reclaimed != port {
+		t.Fatalf("reclaim = %d, %v", reclaimed, err)
+	}
+	pool.rollback(port, first)
+	if restored := pool.reserved[first.ServiceKey()]; restored != original {
+		t.Fatalf("reservation changed after rejected reconnect: got %+v, want %+v", restored, original)
+	}
+	if _, err := pool.allocate(other); !errors.Is(err, errPortExhausted) {
+		t.Fatalf("another identity consumed the reconnect reservation: %v", err)
+	}
+	pool.cleanupExpired(original.expiresAt.Add(time.Nanosecond))
+	if reused, err := pool.allocate(other); err != nil || reused != port {
+		t.Fatalf("expired reservation was not returned: %d, %v", reused, err)
+	}
+}
+
+func TestLeaseCapacityRejectionRollsBackRawPorts(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		limitUDP  bool
+		wantError error
+	}{
+		{name: "UDP", limitUDP: true, wantError: errUDPCapacityExceeded},
+		{name: "TCP", wantError: errTCPPortCapacityExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := newTestRegistry(t, true, true)
+			request := types.RegisterChallengeRequest{
+				Identity:   newTestLeaseIdentity(t, "owner"),
+				UDPEnabled: true,
+				TCPEnabled: true,
+			}
+			if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if tc.limitUDP {
+				registry.setUDPPolicy(true, 1)
+			} else {
+				registry.setTCPPortPolicy(true, 1)
+			}
+			for i := range 3 {
+				request.Identity = newTestLeaseIdentity(t, fmt.Sprintf("rejected-%d", i))
+				if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil); !errors.Is(err, tc.wantError) {
+					t.Fatalf("rejected registration %d error = %v, want %v", i, err, tc.wantError)
+				}
+				if len(registry.udpPorts.available) != 1 || len(registry.tcpPorts.available) != 1 ||
+					len(registry.udpPorts.reserved) != 0 || len(registry.tcpPorts.reserved) != 0 {
+					t.Fatalf("rejected registration %d retained ports: UDP=%+v TCP=%+v", i, registry.udpPorts, registry.tcpPorts)
+				}
+			}
+			registry.setUDPPolicy(true, 2)
+			registry.setTCPPortPolicy(true, 2)
+			request.Identity = newTestLeaseIdentity(t, "accepted")
+			if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil); err != nil {
+				t.Fatalf("capacity rejection exhausted raw ports: %v", err)
+			}
+		})
+	}
+}
+
+func TestLeaseTCPPortExhaustionRollsBackAllocatedUDPPort(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	for i := range 2 {
+		request := types.RegisterChallengeRequest{
+			Identity:   newTestLeaseIdentity(t, fmt.Sprintf("tcp-%d", i)),
+			TCPEnabled: true,
+		}
+		if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	both := types.RegisterChallengeRequest{
+		Identity:   newTestLeaseIdentity(t, "both"),
+		UDPEnabled: true,
+		TCPEnabled: true,
+	}
+	if _, _, err := registry.Register(both, netip.Addr{}, "", types.RelayDescriptor{}, nil); !errors.Is(err, errTCPPortExhausted) {
+		t.Fatalf("Register() error = %v, want TCP port exhaustion", err)
+	}
+	if len(registry.udpPorts.available) != 2 || len(registry.udpPorts.reserved) != 0 {
+		t.Fatalf("failed TCP allocation retained a UDP port: %+v", registry.udpPorts)
+	}
+	both.TCPEnabled = false
+	both.Identity = newTestLeaseIdentity(t, "udp")
+	if _, _, err := registry.Register(both, netip.Addr{}, "", types.RelayDescriptor{}, nil); err != nil {
+		t.Fatalf("failed TCP allocation exhausted UDP ports: %v", err)
+	}
+}
+
 func TestPortPoolReservesReleasedPortForOwner(t *testing.T) {
 	first := &leaseRecord{Identity: types.Identity{Name: "demo", Address: "0x1"}}
 	other := &leaseRecord{Identity: types.Identity{Name: "demo", Address: "0x2"}}
@@ -708,24 +855,46 @@ func TestLeasePortsStayWithServiceIdentityAcrossReconnect(t *testing.T) {
 }
 
 func TestLeaseRegistrationFailureReleasesPorts(t *testing.T) {
-	registry := newTestRegistry(t, true, true)
-	request := types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "retry"), UDPEnabled: true, TCPEnabled: true}
-	port := registry.tcpPorts.available[0]
-	occupied, err := net.ListenTCP("tcp", &net.TCPAddr{Port: port})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer occupied.Close()
-	if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil); err == nil {
-		t.Fatal("registration succeeded with an occupied TCP port")
-	}
-	_ = occupied.Close()
-	_, response, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil)
-	if err != nil {
-		t.Fatalf("registration could not reclaim its resources after failure: %v", err)
-	}
-	_, actual, _ := net.SplitHostPort(response.TCPAddr)
-	if actual != fmt.Sprint(port) {
-		t.Fatalf("registration leaked its reserved TCP port: got %s, want %d", actual, port)
+	for _, network := range []string{"tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			registry := newTestRegistry(t, true, true)
+			request := types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "retry"), UDPEnabled: true, TCPEnabled: true}
+			port := registry.tcpPorts.available[0]
+			var occupied io.Closer
+			var err error
+			if network == "tcp" {
+				occupied, err = net.ListenTCP("tcp", &net.TCPAddr{Port: port})
+			} else {
+				occupied, err = net.ListenUDP("udp", &net.UDPAddr{Port: port})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer occupied.Close()
+			if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil); err == nil {
+				t.Fatal("registration succeeded with an occupied port")
+			}
+			if len(registry.udpPorts.reserved) != 0 || len(registry.tcpPorts.reserved) != 0 {
+				t.Fatal("socket start failure created sticky port reservations")
+			}
+			request.Identity = newTestLeaseIdentity(t, "different")
+			if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil); err != nil {
+				t.Fatalf("occupied port prevented another identity using free ports: %v", err)
+			}
+			_ = occupied.Close()
+			request.Identity = newTestLeaseIdentity(t, "recovered")
+			_, response, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil)
+			if err != nil {
+				t.Fatalf("registration could not reuse ports after the socket was closed: %v", err)
+			}
+			_, actual, _ := net.SplitHostPort(response.TCPAddr)
+			if actual != fmt.Sprint(port) {
+				t.Fatalf("registration leaked its TCP port: got %s, want %d", actual, port)
+			}
+			_, actual, _ = net.SplitHostPort(response.UDPAddr)
+			if actual != fmt.Sprint(port) {
+				t.Fatalf("registration leaked its UDP port: got %s, want %d", actual, port)
+			}
+		})
 	}
 }

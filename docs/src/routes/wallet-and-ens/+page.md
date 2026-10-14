@@ -153,15 +153,15 @@ When enabled, Portal uses the configured DNS provider to:
 - enable or inspect DNSSEC for the relay base domain
 - publish `ENS1 ...` TXT records for the base domain
 - publish `ENS1 ...` TXT records for friendly and identity-bound lease hostnames
-- keep A records for both lease hostnames in sync with the relay public IPv4
-- remove both lease hostname records when leases unregister or expire
+- keep lease-hostname A/AAAA records in sync with the relay public addresses
+- remove lease hostname records when leases unregister or expire
 
 Lease registration and removal enqueue DNS changes to a single worker. Successful
 TXT changes are not repeated by the periodic maintenance pass; only failed
-changes are retried. Lease A records are checked again when the relay public IPv4
-changes, while DNSSEC is synchronized periodically while `ens.verified` is
-false. Embedded DNS remains unverified and continues synchronization because
-local signing does not authenticate parent delegation.
+changes are retried. Lease A/AAAA records are checked again when the relay
+public addresses change, while DNSSEC is synchronized periodically while
+`ens.verified` is false. Embedded DNS remains unverified and continues
+synchronization because local signing does not authenticate parent delegation.
 
 Portal writes TXT values in this shape:
 
@@ -206,8 +206,8 @@ ACME_DNS_PROVIDER=embedded
 ENS_GASLESS_ENABLED=true
 ```
 
-The same provider is used for ACME DNS-01, managed A records, DNSSEC,
-and ENS TXT records. Valid manual `fullchain.pem` and `privatekey.pem`
+The same provider is used for ACME DNS-01, managed A/AAAA records, DNSSEC, and
+ENS TXT records. Valid manual `fullchain.pem` and `privatekey.pem`
 under `IDENTITY_PATH` override certificate issuance only when neither
 `acme-account.key` nor `acme-registration.json` exists. Portal still uses the
 selected provider for ENS/DNS automation, so external providers still require

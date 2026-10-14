@@ -196,21 +196,15 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
-	// Self-announce guard: the relay's own URL is established locally, not
-	// gossiped through the announce endpoint. Validate the normalized URL so
-	// scheme-less inputs are checked the same way signature verification will
-	// check them later.
+	// The relay's own URL is established locally, not through announces.
+	// RelaySet.InsertCandidate owns the public destination policy for all
+	// untrusted descriptors, including gossiped ones.
 	announceURL, err := url.Parse(desc.APIHTTPSAddr)
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
 	host := utils.NormalizeHostname(announceURL.Hostname())
-	if utils.IsLocalRelayHost(host) {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
-			fmt.Sprintf("self-announce rejected: host %q is local-only", host))
-		return
-	}
 	cfg := s.config()
 	if selfURL, err := utils.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
@@ -506,7 +500,7 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, sourceAdd
 	if s.overlay != nil && s.overlay.Handles(capability) {
 		client, gateway := s.overlay.HandleConnect(w, r, capability, sourceAddr)
 		if client != nil {
-			s.proxy.bridge(client, gateway, types.ServiceIdentityKey{}, s.registry.bps)
+			s.proxy.bridge(s.ingressCtx, client, gateway, types.ServiceIdentityKey{}, s.registry.bps)
 		}
 		return
 	}

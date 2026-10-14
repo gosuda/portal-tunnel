@@ -140,10 +140,19 @@ func TestIssueEndpointRotatesGatewayWithoutChangingLease(t *testing.T) {
 	if err != nil || !ok || initial.URL != "https://first.example/sdk/connect" {
 		t.Fatalf("initial endpoint = %#v, %v, %v", initial, ok, err)
 	}
+	if initial.Gateway == nil || initial.Gateway.APIHTTPSAddr != first.APIHTTPSAddr {
+		t.Fatalf("initial endpoint gateway = %#v, want signed first descriptor", initial.Gateway)
+	}
+	if _, err := discovery.VerifyRelayDescriptor(*initial.Gateway); err != nil {
+		t.Fatalf("initial gateway descriptor is not signed: %v", err)
+	}
 	input.FailedURL = initial.URL
 	replacement, ok, err := runtime.IssueEndpoint(input)
 	if err != nil || !ok || replacement.URL != "https://second.example/sdk/connect" {
 		t.Fatalf("replacement endpoint = %#v, %v, %v", replacement, ok, err)
+	}
+	if replacement.Gateway == nil || replacement.Gateway.APIHTTPSAddr != second.APIHTTPSAddr {
+		t.Fatalf("replacement endpoint gateway = %#v, want signed second descriptor", replacement.Gateway)
 	}
 	input.FailedURL = replacement.URL
 	if endpoint, ok, err := runtime.IssueEndpoint(input); err != nil || ok || endpoint.URL != "" {

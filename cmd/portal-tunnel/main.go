@@ -51,7 +51,8 @@ func main() {
 			{Name: "update", Usage: printUpdateUsage},
 		}),
 	}); err != nil {
-		log.Error().Err(err).Msg("portal tunnel exited with error")
+		logger := log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+		logger.Error().Err(err).Msg("portal tunnel exited with error")
 		os.Exit(1)
 	}
 }
@@ -89,6 +90,7 @@ type exposeFlags struct {
 	tcp                  bool
 	maxActiveRelays      int
 	metricsAddr          string
+	logFormat            string
 }
 
 func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
@@ -123,6 +125,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
 	utils.IntFlagEnv(fs, &flags.maxActiveRelays, "max-active-relays", 3, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
+	utils.StringFlag(fs, &flags.logFormat, "log-format", "text", "Log output format: text (default human-readable console) or json (one structured JSON log record per line on stdout; integrations filter relay lifecycle records by event=relay_status)")
 }
 
 func runExposeCommand(args []string) error {
@@ -136,6 +139,18 @@ func runExposeCommand(args []string) error {
 			return nil
 		}
 		return err
+	}
+	switch flags.logFormat {
+	case "", "text", "json":
+	default:
+		return fmt.Errorf("--log-format %q: supported values are text and json", flags.logFormat)
+	}
+	if flags.logFormat == "json" {
+		// Machine mode: one structured JSON log record per line, sourced
+		// from the SDK's authoritative relay status logs (event
+		// relay_status). Integrations filter records by event; no other
+		// state machine exists.
+		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 	}
 	var err error
 	flags.targetAddr, err = utils.OptionalSingleArg(fs.Args(), "target")
@@ -509,6 +524,7 @@ func printExposeUsage(w io.Writer) {
 	})
 	utils.WriteHelpSection(w, "Ready", []string{
 		"On success the process logs a line starting with: service ready at",
+		"Integrations: --log-format json emits structured relay_status log records on stdout",
 	})
 }
 

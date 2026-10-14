@@ -15,6 +15,15 @@ export interface TunnelCommandRuntime {
   readonly arch: string;
 }
 
+export function validateHost(value: string): string | undefined {
+  const target = value.trim();
+  if (!target) { return "Required"; }
+  if (target.startsWith("-")) {
+    return "Enter a local target, not a command-line option";
+  }
+  return undefined;
+}
+
 export function validateRelayUrl(value: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -53,6 +62,10 @@ export function buildCommand(
   runtime: TunnelCommandRuntime = process
 ): string {
   const { host, name, relayList, thumbnail } = opts;
+  const hostError = validateHost(host);
+  if (hostError !== undefined) {
+    throw new Error("Invalid tunnel host: " + hostError);
+  }
   const target: ShellTarget = runtime.platform === "win32" ? "windows" : "unix";
   const tunnelInstallerURL = resolveTunnelInstallerURL(runtime.platform, runtime.arch);
   if (!tunnelInstallerURL) {
@@ -73,7 +86,7 @@ export function buildCommand(
     exposeArgs.push(`--thumbnail ${formatToken(thumbnail.trim(), target)}`);
   }
 
-  const exposeCommand = `expose ${[formatToken(host, target), ...exposeArgs].join(" ")}`;
+  const exposeCommand = `expose ${[...exposeArgs, "--", formatToken(host.trim(), target)].join(" ")}`;
 
   if (target === "windows") {
     return [

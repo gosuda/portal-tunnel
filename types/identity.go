@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// RegisterLeaseSIWEStatement is the canonical purpose signed for Portal lease registration.
+const RegisterLeaseSIWEStatement = "Register a portal lease"
+
 const (
 	IdentityKeySeparator  = ":"
 	RelayIdentityFilename = "identity.json"

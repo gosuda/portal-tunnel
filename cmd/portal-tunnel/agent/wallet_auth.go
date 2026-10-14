@@ -10,7 +10,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-const defaultWalletAuthSessionTTL = 24 * time.Hour
+const (
+	defaultWalletAuthSessionTTL = 24 * time.Hour
+	maxWalletAuthSessions       = 128
+)
 
 type walletAuthConfig struct {
 	AllowedAddresses []string
@@ -70,16 +73,45 @@ func (a *walletAuthenticator) login(req types.WalletAuthLoginRequest, domain str
 		return "", "", err
 	}
 
-	token := utils.RandomID("was_")
+	return a.sessionForVerifiedWallet(address, now), address, nil
+}
+
+// sessionForVerifiedWallet accepts only a SIWE-verified address. Replays reuse
+// its existing session without extending expiration. Scanning at most 128
+// sessions removes expired entries; eviction happens only when capacity is
+// full. Fixed session TTLs make the earliest expiry the oldest.
+func (a *walletAuthenticator) sessionForVerifiedWallet(address string, now time.Time) string {
+	now = now.UTC()
 	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	var existingToken, oldestToken string
+	var oldestExpiry time.Time
+	for token, session := range a.sessions {
+		if !now.Before(session.ExpiresAt) {
+			delete(a.sessions, token)
+			continue
+		}
+		if session.Address == address {
+			existingToken = token
+		}
+		if oldestToken == "" || session.ExpiresAt.Before(oldestExpiry) {
+			oldestToken, oldestExpiry = token, session.ExpiresAt
+		}
+	}
+	if existingToken != "" {
+		return existingToken
+	}
+	if len(a.sessions) >= maxWalletAuthSessions {
+		delete(a.sessions, oldestToken)
+	}
+
+	token := utils.RandomID("was_")
 	a.sessions[token] = walletAuthSession{
 		Address:   address,
-		ExpiresAt: now.UTC().Add(defaultWalletAuthSessionTTL),
+		ExpiresAt: now.Add(defaultWalletAuthSessionTTL),
 	}
-	a.cleanupExpiredLocked(now)
-	a.mu.Unlock()
-
-	return token, address, nil
+	return token
 }
 
 func (a *walletAuthenticator) validateSession(token string) (string, bool) {
@@ -97,7 +129,7 @@ func (a *walletAuthenticator) validateSession(token string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if time.Now().UTC().After(session.ExpiresAt) {
+	if !time.Now().UTC().Before(session.ExpiresAt) {
 		delete(a.sessions, token)
 		return "", false
 	}
@@ -111,13 +143,4 @@ func (a *walletAuthenticator) deleteSession(token string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.sessions, strings.TrimSpace(token))
-}
-
-func (a *walletAuthenticator) cleanupExpiredLocked(now time.Time) {
-	now = now.UTC()
-	for token, session := range a.sessions {
-		if now.After(session.ExpiresAt) {
-			delete(a.sessions, token)
-		}
-	}
 }

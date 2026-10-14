@@ -27,22 +27,36 @@ const (
 type Refresher struct {
 	relaySet               *RelaySet
 	httpClient             *http.Client
+	publicHTTPClient       *http.Client
 	directRecoveryFailures int
 	lastAnnounceSuccess    map[string]bool
 	lastAnnounceMu         sync.Mutex
 }
 
 func NewRefresher(relaySet *RelaySet) *Refresher {
+	client := utils.NewHTTPClient(
+		utils.WithHTTPTLSConfig(&tls.Config{
+			MinVersion: tls.VersionTLS12,
+			NextProtos: []string{"http/1.1"},
+		}),
+		utils.WithoutHTTP2(),
+		utils.WithHTTPTimeout(defaultRequestTimeout),
+		utils.WithHTTPCheckRedirect(rejectDiscoveryRedirect),
+	)
+	// Untrusted descriptors must never use a proxy that can resolve or dial
+	// their hostname on our behalf. Resolve and pin only public IPs ourselves.
+	publicTransport := client.Transport.(*http.Transport).Clone()
+	publicTransport.Proxy = nil
+	publicTransport.DialContext = dialPublicRelay
+
 	return &Refresher{
-		relaySet: relaySet,
-		httpClient: utils.NewHTTPClient(
-			utils.WithHTTPTLSConfig(&tls.Config{
-				MinVersion: tls.VersionTLS12,
-				NextProtos: []string{"http/1.1"},
-			}),
-			utils.WithoutHTTP2(),
-			utils.WithHTTPTimeout(defaultRequestTimeout),
-		),
+		relaySet:   relaySet,
+		httpClient: client,
+		publicHTTPClient: &http.Client{
+			Transport:     publicTransport,
+			CheckRedirect: rejectDiscoveryRedirect,
+			Timeout:       defaultRequestTimeout,
+		},
 		directRecoveryFailures: defaultRecoveryFailures,
 		lastAnnounceSuccess:    make(map[string]bool),
 	}
@@ -169,7 +183,16 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 		return nil
 	}
 	client := r.httpClient
-	if utils.IsLocalRelayHost(baseURL.Hostname()) {
+	if !state.Bootstrap {
+		if err := requirePublicRelayURL(relayURL); err != nil {
+			if recoveryFailures > 0 {
+				r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
+			}
+			return nil
+		}
+		client = r.publicHTTPClient
+	} else if utils.IsLocalRelayHost(baseURL.Hostname()) {
+		// Local TLS trust is only permitted for explicitly configured peers.
 		_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)
 		if err != nil {
 			if recoveryFailures > 0 {
@@ -177,6 +200,7 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error
 			}
 			return nil
 		}
+		localClient.CheckRedirect = rejectDiscoveryRedirect
 		client = localClient
 		defer transport.CloseIdleConnections()
 	}

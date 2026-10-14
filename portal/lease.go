@@ -1,12 +1,13 @@
 package portal
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ const (
 	defaultPortReservationGrace              = 5 * time.Minute
 	defaultIdleKeepalive                     = 15 * time.Second
 	defaultReadyQueueLimit                   = 8
+	defaultLeaseBridgeLimit                  = 128
 )
 
 type leaseRegistry struct {
@@ -154,6 +156,11 @@ func (r *leaseRegistry) applyIdentityRoutableLocked(key types.ServiceIdentityKey
 		if record.datagram != nil {
 			record.datagram.SetEnabled(routable)
 		}
+		if !routable {
+			record.mu.Lock()
+			record.revokeBridgesLocked()
+			record.mu.Unlock()
+		}
 	}
 	if !routable {
 		// DetachOwner only changes cache metadata. Keep revocation ordered
@@ -175,6 +182,58 @@ func (r *leaseRegistry) isRoutable(key types.ServiceIdentityKey) bool {
 func (r *leaseRegistry) isRoutableLocked(key types.ServiceIdentityKey) bool {
 	_, blocked := r.blocked[key]
 	return !blocked
+}
+
+// admitBridge counts pending acquisition and active traffic together. Mutable
+// lease facts stay under the registry lock; lock order is registry then record.
+func (r *leaseRegistry) admitBridge(ctx context.Context, record *leaseRecord, inbound net.Conn) (*leaseBridge, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if record == nil || r.recordByLease(record.ServiceKey(), record.id, time.Now()) != record {
+		return nil, errLeaseNotFound
+	}
+	if !r.isRoutableLocked(record.ServiceKey()) {
+		return nil, errLeaseRejected
+	}
+	record.mu.Lock()
+	defer record.mu.Unlock()
+	if record.closed || ctx.Err() != nil {
+		return nil, net.ErrClosed
+	}
+	if len(record.bridges) >= defaultLeaseBridgeLimit {
+		return nil, errLeaseRejected
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	bridge := &leaseBridge{ctx: ctx, cancel: cancel, inbound: inbound}
+	if record.bridges == nil {
+		record.bridges = make(map[*leaseBridge]struct{})
+	}
+	record.bridges[bridge] = struct{}{}
+	return bridge, nil
+}
+
+// activateBridge repeats admission after waiting and takes ownership before
+// any activation bytes are written. Lease closure interrupts framing by closing
+// the endpoints. A routing deny cancels this reservation; the framing helper
+// may still use its own five-second write limit before the worker exits. The
+// canceled context prevents application data from being copied afterward.
+func (r *leaseRegistry) activateBridge(record *leaseRecord, bridge *leaseBridge, reverse net.Conn) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.recordByLease(record.ServiceKey(), record.id, time.Now()) != record {
+		return errLeaseNotFound
+	}
+	if !r.isRoutableLocked(record.ServiceKey()) {
+		return errLeaseRejected
+	}
+	record.mu.Lock()
+	defer record.mu.Unlock()
+	if _, exists := record.bridges[bridge]; !exists || record.closed || bridge.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	// A retrying caller has already closed the previous failed framing stream.
+	bridge.reverse = reverse
+	return nil
 }
 
 func (r *leaseRegistry) CloseAll() []*leaseRecord {
@@ -327,7 +386,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		port, err := r.udpPorts.allocate(record)
 		if err != nil {
 			r.mu.Unlock()
-			r.closeRecord(record)
+			r.rollbackRecord(record)
 			return nil, types.RegisterResponse{}, errUDPPortExhausted
 		}
 		record.datagram = transport.NewRelayDatagram(identityKey, port)
@@ -337,7 +396,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		port, err := r.tcpPorts.allocate(record)
 		if err != nil {
 			r.mu.Unlock()
-			r.closeRecord(record)
+			r.rollbackRecord(record)
 			return nil, types.RegisterResponse{}, errTCPPortExhausted
 		}
 		record.tcpPort = port
@@ -345,7 +404,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	r.mu.Unlock()
 
 	if err := record.Start(); err != nil {
-		r.closeRecord(record)
+		r.rollbackRecord(record)
 		return nil, types.RegisterResponse{}, err
 	}
 	var replaced *leaseRecord
@@ -377,13 +436,13 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		if existing.isPublicEntry() && existingKey != identityKey {
 			if existing.CanonicalHostname == record.CanonicalHostname {
 				r.mu.Unlock()
-				r.closeRecord(record)
+				r.rollbackRecord(record)
 				return nil, types.RegisterResponse{}, errHostnameConflict
 			}
 			if existing.Hostname != "" && existing.Hostname == record.Hostname {
 				if !req.AllowCanonicalFallback {
 					r.mu.Unlock()
-					r.closeRecord(record)
+					r.rollbackRecord(record)
 					return nil, types.RegisterResponse{}, errHostnameConflict
 				}
 				record.Hostname = ""
@@ -393,14 +452,14 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	if record.datagram != nil {
 		if max := r.udpMaxLeases; max > 0 && udpLeases >= max {
 			r.mu.Unlock()
-			r.closeRecord(record)
+			r.rollbackRecord(record)
 			return nil, types.RegisterResponse{}, errUDPCapacityExceeded
 		}
 	}
 	if record.tcpPort > 0 {
 		if max := r.tcpMaxLeases; max > 0 && tcpLeases >= max {
 			r.mu.Unlock()
-			r.closeRecord(record)
+			r.rollbackRecord(record)
 			return nil, types.RegisterResponse{}, errTCPPortCapacityExceeded
 		}
 	}
@@ -448,7 +507,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		if r.overlay != nil {
 			r.overlay.ForgetLease(leaseID)
 		}
-		r.closeRecord(record)
+		r.rollbackRecord(record)
 		return nil, types.RegisterResponse{}, err
 	}
 
@@ -943,6 +1002,23 @@ func (r *leaseRegistry) closeRecord(record *leaseRecord) {
 	}
 }
 
+// rollbackRecord closes a registration that was never accepted, returning fresh
+// ports immediately and restoring any unexpired reservation it reclaimed.
+func (r *leaseRegistry) rollbackRecord(record *leaseRecord) {
+	if record == nil {
+		return
+	}
+	record.Close()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if record.datagram != nil {
+		r.udpPorts.rollback(record.datagram.UDPPort(), record)
+	}
+	if record.tcpPort > 0 {
+		r.tcpPorts.rollback(record.tcpPort, record)
+	}
+}
+
 var errPortExhausted = errors.New("no ports available")
 
 type portReservation struct {
@@ -950,10 +1026,17 @@ type portReservation struct {
 	expiresAt time.Time
 }
 
+type portAllocation struct {
+	record      *leaseRecord
+	reservation portReservation
+}
+
 // portPool is registry-owned reservation metadata; all access holds leaseRegistry.mu.
 type portPool struct {
+	// Free ports are reused in queue order so a failed bind does not keep
+	// selecting the same port while other candidates remain available.
 	available []int
-	inUse     map[int]*leaseRecord
+	inUse     map[int]portAllocation
 	reserved  map[types.ServiceIdentityKey]portReservation
 	grace     time.Duration
 }
@@ -961,7 +1044,7 @@ type portPool struct {
 func newPortPool(min, max int, grace time.Duration) portPool {
 	if min <= 0 || max <= 0 || min > max {
 		return portPool{
-			inUse:    make(map[int]*leaseRecord),
+			inUse:    make(map[int]portAllocation),
 			reserved: make(map[types.ServiceIdentityKey]portReservation),
 			grace:    grace,
 		}
@@ -973,7 +1056,7 @@ func newPortPool(min, max int, grace time.Duration) portPool {
 	}
 	return portPool{
 		available: available,
-		inUse:     make(map[int]*leaseRecord),
+		inUse:     make(map[int]portAllocation),
 		reserved:  make(map[types.ServiceIdentityKey]portReservation),
 		grace:     grace,
 	}
@@ -985,7 +1068,7 @@ func (a *portPool) allocate(record *leaseRecord) (int, error) {
 	key := record.ServiceKey()
 	if res, ok := a.reserved[key]; ok {
 		delete(a.reserved, key)
-		a.inUse[res.port] = record
+		a.inUse[res.port] = portAllocation{record: record, reservation: res}
 		return res.port, nil
 	}
 
@@ -995,20 +1078,40 @@ func (a *portPool) allocate(record *leaseRecord) (int, error) {
 
 	port := a.available[0]
 	a.available = a.available[1:]
-	a.inUse[port] = record
+	a.inUse[port] = portAllocation{record: record}
 	return port, nil
+}
+
+// rollback restores an existing reservation without extending its lifetime.
+// Fresh allocations go to the back of the queue so bind failures do not starve
+// registrations while other ports are available.
+// Match the current owner so late cleanup cannot free a reassigned port.
+func (a *portPool) rollback(port int, record *leaseRecord) {
+	allocation, ok := a.inUse[port]
+	if !ok || allocation.record != record {
+		return
+	}
+	delete(a.inUse, port)
+	key := record.ServiceKey()
+	if res := allocation.reservation; res.port != 0 && time.Now().Before(res.expiresAt) {
+		if _, exists := a.reserved[key]; !exists {
+			a.reserved[key] = res
+			return
+		}
+	}
+	a.available = append(a.available, port)
 }
 
 func (a *portPool) release(port int, record *leaseRecord) {
 	owner, ok := a.inUse[port]
-	if !ok || owner != record {
+	if !ok || owner.record != record {
 		return
 	}
 	delete(a.inUse, port)
 	key := record.ServiceKey()
 
 	if prev, exists := a.reserved[key]; exists {
-		a.sortedInsert(prev.port)
+		a.available = append(a.available, prev.port)
 	}
 
 	a.reserved[key] = portReservation{
@@ -1022,14 +1125,7 @@ func (a *portPool) cleanupExpired(now time.Time) {
 	for key, res := range a.reserved {
 		if now.After(res.expiresAt) {
 			delete(a.reserved, key)
-			a.sortedInsert(res.port)
+			a.available = append(a.available, res.port)
 		}
 	}
-}
-
-func (a *portPool) sortedInsert(port int) {
-	i := sort.SearchInts(a.available, port)
-	a.available = append(a.available, 0)
-	copy(a.available[i+1:], a.available[i:])
-	a.available[i] = port
 }

@@ -145,8 +145,8 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 		if request.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
 			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge)
 			if err == nil {
-				if challenge.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
-					return types.RegisterResponse{}, errors.New("relay returned an invalid or expired registration challenge")
+				if err := identity.ValidateRegisterSIWEChallenge(challenge, c.relayURL, registerReq.Identity.Address, time.Now()); err != nil {
+					return types.RegisterResponse{}, err
 				}
 				signature, err := identity.NewLocalAuthority(registerReq.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
 				if err != nil {
