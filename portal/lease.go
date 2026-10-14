@@ -526,6 +526,9 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr) (ty
 	if err != nil {
 		return types.RenewResponse{}, reverseEndpointInput{}, errUnauthorized
 	}
+	if err := req.Metadata.Validate(); err != nil {
+		return types.RenewResponse{}, reverseEndpointInput{}, err
+	}
 	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
@@ -549,10 +552,6 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr) (ty
 	}
 	if strings.TrimSpace(reportedIP) != "" {
 		record.ReportedIP = reportedIP
-	}
-	if err := req.Metadata.Validate(); err != nil {
-		r.mu.Unlock()
-		return types.RenewResponse{}, reverseEndpointInput{}, err
 	}
 	record.Metadata = req.Metadata.Copy()
 	r.cache.Renew(record.cacheLease())

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/netip"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,6 +172,36 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	}
 	if _, ok := registry.Lookup("demo.example.com"); ok {
 		t.Fatal("Lookup() after Unregister() = true, want false")
+	}
+}
+
+func TestLeaseRegistryInvalidRenewPreservesLease(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t, false, false)
+	record, registered, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "invalid-renew"),
+		TTL:      60,
+		Metadata: types.LeaseMetadata{Description: "original", Tags: []string{"original"}},
+	}, netip.MustParseAddr("203.0.113.10"), "198.51.100.10", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := registry.publicLease(record)
+	beforeSource, beforeReported := record.sourceAddr, record.ReportedIP
+	if _, _, err := registry.Renew(types.RenewRequest{
+		AccessToken: registered.AccessToken,
+		TTL:         600,
+		ReportedIP:  "198.51.100.11",
+		Metadata:    types.LeaseMetadata{Description: strings.Repeat("a", 4097)},
+	}, netip.MustParseAddr("203.0.113.11")); err == nil {
+		t.Fatal("Renew() accepted oversized metadata")
+	}
+	if after := registry.publicLease(record); !reflect.DeepEqual(after, before) {
+		t.Fatalf("rejected Renew() changed lease: before=%+v after=%+v", before, after)
+	}
+	if record.sourceAddr != beforeSource || record.ReportedIP != beforeReported {
+		t.Fatal("rejected Renew() changed source or reported IP")
 	}
 }
 
