@@ -104,9 +104,8 @@ func TestTCPProxyResponseHalfClosePreservesRequestUpload(t *testing.T) {
 	}
 }
 
-// A public reset may reach the SDK as clean reverse EOF. This test proves
-// origin EOF propagation only; full local socket/worker release on explicit
-// SDK cancellation is protected by the SDK owner shutdown test.
+// Shutdown and public reset must propagate EOF to the origin. A public reset
+// may reach the SDK as clean reverse EOF.
 func TestTCPProxyOriginEOFOnShutdownOrPublicReset(t *testing.T) {
 	for _, mode := range []string{"cancel", "exposure-close", "reset"} {
 		t.Run(mode, func(t *testing.T) {

@@ -115,7 +115,7 @@ func startRawTCPTestTunnel(t *testing.T, host, target string) (string, *tunnel.R
 			_ = runtime.Close()
 			select {
 			case err := <-proxyDone:
-				if err != nil && !errors.Is(err, context.Canceled) {
+				if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
 					t.Errorf("proxy raw TCP: %v", err)
 				}
 			case <-time.After(10 * time.Second):
