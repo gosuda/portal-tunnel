@@ -243,19 +243,10 @@ func DecodeJSONRequestAs[T any](w http.ResponseWriter, r *http.Request, maxBytes
 	return dst, true
 }
 
-func decodeJSONRequestBody[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (dst T, err error) {
+func decodeJSONRequestBody[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (T, error) {
+	var dst T
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	defer func() {
-		if err != nil && r.ProtoMajor == 1 {
-			// Close itself can drain unread input. Stop reads before closing
-			// a rejected JSON body, rather than waiting for the outer handler.
-			w.Header().Set("Connection", "close")
-			controller := http.NewResponseController(w)
-			_ = controller.EnableFullDuplex()
-			_ = controller.SetReadDeadline(time.Now())
-		}
-		_ = r.Body.Close()
-	}()
+	// The HTTP server owns body closure; connection deadlines belong to handlers.
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&dst); err != nil {
 		return dst, err
