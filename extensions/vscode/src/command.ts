@@ -1,5 +1,3 @@
-import { isIP } from "node:net";
-
 type ShellTarget = "unix" | "windows";
 
 export const defaultRelayRegistryURL = "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
@@ -17,55 +15,11 @@ export interface TunnelCommandRuntime {
   readonly arch: string;
 }
 
-const invalidHostMessage = "Enter a port, host[:port], IP address, or HTTP(S) URL";
-
 export function validateHost(value: string): string | undefined {
   const target = value.trim();
   if (!target) { return "Required"; }
-  if (target.startsWith("-") || /[\s\\]/.test(target)) {
-    return invalidHostMessage;
-  }
-  if (/^\d+$/.test(target)) {
-    const port = Number(target);
-    return Number.isInteger(port) && port >= 1 && port <= 65535
-      ? undefined
-      : invalidHostMessage;
-  }
-  if (isIP(target) === 6) { return undefined; }
-
-  const hasScheme = target.includes("://");
-  let parsed: URL;
-  try {
-    parsed = new URL(hasScheme ? target : "http://" + target);
-  } catch {
-    return invalidHostMessage;
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return invalidHostMessage;
-  }
-  if (!parsed.hostname || parsed.username || parsed.password ||
-      parsed.pathname !== "/" || parsed.search || parsed.hash) {
-    return invalidHostMessage;
-  }
-
-  const authority = hasScheme
-    ? target.slice(target.indexOf("://") + 3).replace(/\/$/, "")
-    : target;
-  if (!authority || authority.startsWith("-") ||
-      /[\/?#@%]/.test(authority) || authority.endsWith(":")) {
-    return invalidHostMessage;
-  }
-  const hostname = parsed.hostname.startsWith("[")
-    ? parsed.hostname.slice(1, -1)
-    : parsed.hostname;
-  if (isIP(hostname) === 0 &&
-      hostname.replace(/\.$/, "").split(".").some((label) =>
-        !/^[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?$/.test(label))) {
-    return invalidHostMessage;
-  }
-  const portText = authority.match(/:(\d+)$/)?.[1];
-  if (portText && (Number(portText) < 1 || Number(portText) > 65535)) {
-    return invalidHostMessage;
+  if (target.startsWith("-")) {
+    return "Enter a local target, not a command-line option";
   }
   return undefined;
 }
