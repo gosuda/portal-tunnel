@@ -454,6 +454,13 @@ type mitmProbeConn struct {
 	startOnce sync.Once
 }
 
+func (c *mitmProbeConn) CloseWrite() error {
+	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return half.CloseWrite()
+	}
+	return nil
+}
+
 func (c *mitmProbeConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
