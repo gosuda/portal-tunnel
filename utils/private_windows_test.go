@@ -51,7 +51,7 @@ func TestWindowsPrivateACLRepairsBroadDirectoryAndFile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := verifyWindowsPath(tc.path, owner); err != nil {
+		if _, err := verifyWindowsPath(tc.path, owner, tc.dir); err != nil {
 			t.Fatalf("insecure ACL for %q: %v", tc.path, err)
 		}
 	}
@@ -66,7 +66,7 @@ func TestWindowsPrivateFileCreatedWithoutInheritedACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifyWindowsPath(path, owner); err != nil {
+	if _, err := verifyWindowsPath(path, owner, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := CreatePrivateFile(path, []byte("replacement")); err == nil {
@@ -78,6 +78,55 @@ func TestWindowsPrivateFileCreatedWithoutInheritedACL(t *testing.T) {
 	}
 	if string(data) != "secret" {
 		t.Fatalf("private file content changed: %q", data)
+	}
+}
+
+func TestWindowsPrivateDirectoryRepairsMissingInheritance(t *testing.T) {
+	_, user, err := privateWindowsDescriptor(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flags := range []string{"", "OI", "CI"} {
+		t.Run("flags="+flags, func(t *testing.T) {
+			dir := t.TempDir()
+			sd, err := windows.SecurityDescriptorFromString(fmt.Sprintf(
+				"D:P(A;%s;FA;;;%s)(A;%s;FA;;;SY)(A;%s;FA;;;BA)", flags, user.String(), flags, flags))
+			if err != nil {
+				t.Fatal(err)
+			}
+			acl, _, err := sd.DACL()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+				windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+				nil, nil, acl, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := EnsurePrivateDir(dir); err != nil {
+				t.Fatal(err)
+			}
+			actual, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+			if err != nil {
+				t.Fatal(err)
+			}
+			acl, _, err = actual.DACL()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if acl == nil || acl.AceCount == 0 {
+				t.Fatal("directory has no inheritable permissions")
+			}
+			for i := uint32(0); i < uint32(acl.AceCount); i++ {
+				var ace *windows.ACCESS_ALLOWED_ACE
+				if err := windows.GetAce(acl, i, &ace); err != nil {
+					t.Fatal(err)
+				}
+				if ace.Header.AceFlags&(windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE) != windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE {
+					t.Fatal("directory permissions are not inherited by both files and directories")
+				}
+			}
+		})
 	}
 }
 

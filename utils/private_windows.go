@@ -89,7 +89,7 @@ func secureWindowsPath(path string, directory bool) error {
 	if err != nil {
 		return err
 	}
-	trustedOwner, verifyErr := verifyWindowsPath(absPath, owner)
+	trustedOwner, verifyErr := verifyWindowsPath(absPath, owner, directory)
 	if verifyErr == nil {
 		return nil
 	}
@@ -111,7 +111,7 @@ func secureWindowsPath(path string, directory bool) error {
 	if err != nil {
 		return fmt.Errorf("secure private path %q: %w", absPath, err)
 	}
-	_, err = verifyWindowsPath(absPath, owner)
+	_, err = verifyWindowsPath(absPath, owner, directory)
 	return err
 }
 
@@ -149,8 +149,9 @@ func privateWindowsDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, *wi
 
 // verifyWindowsPath returns a trusted owner even when the DACL needs repair.
 // Existing owners and narrower permissions are preserved when only trusted
-// principals have access and inheritance is disabled.
-func verifyWindowsPath(path string, currentUser *windows.SID) (*windows.SID, error) {
+// principals have access and inheritance from the parent is disabled.
+// Directories must pass those permissions on to child files and directories.
+func verifyWindowsPath(path string, currentUser *windows.SID, directory bool) (*windows.SID, error) {
 	actual, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
@@ -185,6 +186,9 @@ func verifyWindowsPath(path string, currentUser *windows.SID) (*windows.SID, err
 	if acl == nil {
 		return owner, fmt.Errorf("private path %q has no DACL", path)
 	}
+	if directory && acl.AceCount == 0 {
+		return owner, fmt.Errorf("private directory %q has no inheritable permissions", path)
+	}
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(acl, i, &ace); err != nil {
@@ -196,6 +200,10 @@ func verifyWindowsPath(path string, currentUser *windows.SID) (*windows.SID, err
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
 		if !allowed[sid] {
 			return owner, fmt.Errorf("private path %q grants access to an untrusted SID", path)
+		}
+		inheritFlags := byte(windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE)
+		if directory && ace.Header.AceFlags&inheritFlags != inheritFlags {
+			return owner, fmt.Errorf("private directory %q does not protect child files and directories", path)
 		}
 	}
 	return owner, nil
