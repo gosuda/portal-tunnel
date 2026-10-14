@@ -178,6 +178,13 @@ type PolicyLease struct {
 	IsDenied    bool   `json:"is_denied"`
 }
 
+// Relay descriptor addresses must stay small enough to share the discovery budget.
+const (
+	MaxRelayDescriptorURLBytes         = 2048
+	MaxRelayDescriptorDestinationBytes = 60 // 52-character hash plus .b32.i2p.
+	MaxRelayDescriptorSignatureBytes   = 88 // Base64-encoded 65-byte compact signature.
+)
+
 type RelayDescriptor struct {
 	Address           string    `json:"address"`
 	Version           string    `json:"version"`

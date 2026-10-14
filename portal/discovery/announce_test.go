@@ -47,6 +47,34 @@ func mustSignedDescriptor(t *testing.T, signing types.Identity, relayURL string,
 	return signed
 }
 
+func TestNormalizeRelayDescriptorFieldLimits(t *testing.T) {
+	const prefix = "https://relay.example/"
+	for _, tc := range []struct {
+		name, url, destination, signature string
+		valid                             bool
+	}{
+		{"maximum URL", prefix + strings.Repeat("a", types.MaxRelayDescriptorURLBytes-len(prefix)), "", "", true},
+		{"oversized URL", prefix + strings.Repeat("a", types.MaxRelayDescriptorURLBytes-len(prefix)+1), "", "", false},
+		{"maximum destination", prefix, strings.Repeat("a", 52) + ".b32.i2p", "", true},
+		{"oversized destination", prefix, strings.Repeat("a", types.MaxRelayDescriptorDestinationBytes+1), "", false},
+		{"maximum signature", prefix, "", strings.Repeat("a", types.MaxRelayDescriptorSignatureBytes), true},
+		{"oversized signature", prefix, "", strings.Repeat("a", types.MaxRelayDescriptorSignatureBytes+1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			desc := types.RelayDescriptor{
+				Address:         "0x" + strings.Repeat("1", 40),
+				APIHTTPSAddr:    tc.url,
+				IVNPDestination: tc.destination,
+				Signature:       tc.signature,
+				ExpiresAt:       time.Unix(1, 0),
+			}
+			if _, err := NormalizeRelayDescriptor(desc); (err == nil) != tc.valid {
+				t.Fatalf("NormalizeRelayDescriptor() error = %v, want valid=%v", err, tc.valid)
+			}
+		})
+	}
+}
+
 func TestInsertCandidateAcceptsValidDescriptor(t *testing.T) {
 	set := NewRelaySet(nil)
 	signing := mustSigningIdentity(t)

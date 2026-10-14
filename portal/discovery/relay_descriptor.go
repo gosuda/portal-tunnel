@@ -65,16 +65,13 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 		return types.RelayDescriptor{}, errors.New("relay descriptor is not signed")
 	}
 
+	normalized, err := NormalizeRelayDescriptor(desc)
+	if err != nil {
+		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: normalize: %w", err)
+	}
 	signature, err := base64.StdEncoding.DecodeString(rawSignature)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: base64 decode: %w", err)
-	}
-
-	unsignedCopy := desc
-	unsignedCopy.Signature = ""
-	normalized, err := NormalizeRelayDescriptor(unsignedCopy)
-	if err != nil {
-		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: normalize: %w", err)
 	}
 	canonical, err := canonicalRelayDescriptorBytes(normalized)
 	if err != nil {
@@ -102,6 +99,15 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 // trims fields, defaults the version, normalizes the API address and the
 // signer address, and rejects inconsistent or incomplete entries.
 func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
+	if len(desc.APIHTTPSAddr) > types.MaxRelayDescriptorURLBytes {
+		return types.RelayDescriptor{}, errors.New("api_https_addr exceeds maximum length")
+	}
+	if len(desc.IVNPDestination) > types.MaxRelayDescriptorDestinationBytes {
+		return types.RelayDescriptor{}, errors.New("ivnp_destination exceeds maximum length")
+	}
+	if len(desc.Signature) > types.MaxRelayDescriptorSignatureBytes {
+		return types.RelayDescriptor{}, errors.New("signature exceeds maximum length")
+	}
 	desc.Address = strings.TrimSpace(desc.Address)
 	desc.Version = strings.TrimSpace(desc.Version)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
@@ -121,6 +127,9 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
 		}
 		desc.APIHTTPSAddr = normalized
+		if len(desc.APIHTTPSAddr) > types.MaxRelayDescriptorURLBytes {
+			return types.RelayDescriptor{}, errors.New("api_https_addr exceeds maximum length")
+		}
 	}
 	if desc.Address != "" {
 		normalized, err := identity.NormalizeEVMAddress(desc.Address)
