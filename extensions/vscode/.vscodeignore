@@ -8,7 +8,6 @@ src/**
 esbuild.js
 pnpm-lock.yaml
 publish.sh
-vsc-extension-quickstart.md
 **/tsconfig.json
 **/eslint.config.mjs
 **/*.map
