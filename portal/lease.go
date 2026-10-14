@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -934,8 +933,8 @@ func (r *leaseRegistry) closeRecord(record *leaseRecord) {
 	}
 }
 
-// rollbackRecord closes a registration that was never accepted and returns its
-// ports immediately. Unlike closeRecord, it must not create sticky reservations.
+// rollbackRecord closes a registration that was never accepted, returning fresh
+// ports immediately and restoring any unexpired reservation it reclaimed.
 func (r *leaseRegistry) rollbackRecord(record *leaseRecord) {
 	if record == nil {
 		return
@@ -958,10 +957,17 @@ type portReservation struct {
 	expiresAt time.Time
 }
 
+type portAllocation struct {
+	record      *leaseRecord
+	reservation portReservation
+}
+
 // portPool is registry-owned reservation metadata; all access holds leaseRegistry.mu.
 type portPool struct {
+	// Free ports are reused in queue order so a failed bind does not keep
+	// selecting the same port while other candidates remain available.
 	available []int
-	inUse     map[int]*leaseRecord
+	inUse     map[int]portAllocation
 	reserved  map[types.ServiceIdentityKey]portReservation
 	grace     time.Duration
 }
@@ -969,7 +975,7 @@ type portPool struct {
 func newPortPool(min, max int, grace time.Duration) portPool {
 	if min <= 0 || max <= 0 || min > max {
 		return portPool{
-			inUse:    make(map[int]*leaseRecord),
+			inUse:    make(map[int]portAllocation),
 			reserved: make(map[types.ServiceIdentityKey]portReservation),
 			grace:    grace,
 		}
@@ -981,7 +987,7 @@ func newPortPool(min, max int, grace time.Duration) portPool {
 	}
 	return portPool{
 		available: available,
-		inUse:     make(map[int]*leaseRecord),
+		inUse:     make(map[int]portAllocation),
 		reserved:  make(map[types.ServiceIdentityKey]portReservation),
 		grace:     grace,
 	}
@@ -993,7 +999,7 @@ func (a *portPool) allocate(record *leaseRecord) (int, error) {
 	key := record.ServiceKey()
 	if res, ok := a.reserved[key]; ok {
 		delete(a.reserved, key)
-		a.inUse[res.port] = record
+		a.inUse[res.port] = portAllocation{record: record, reservation: res}
 		return res.port, nil
 	}
 
@@ -1003,30 +1009,40 @@ func (a *portPool) allocate(record *leaseRecord) (int, error) {
 
 	port := a.available[0]
 	a.available = a.available[1:]
-	a.inUse[port] = record
+	a.inUse[port] = portAllocation{record: record}
 	return port, nil
 }
 
-// rollback frees an unpublished allocation without a reconnect reservation.
+// rollback restores an existing reservation without extending its lifetime.
+// Fresh allocations go to the back of the queue so bind failures do not starve
+// registrations while other ports are available.
 // Match the current owner so late cleanup cannot free a reassigned port.
 func (a *portPool) rollback(port int, record *leaseRecord) {
-	if a.inUse[port] != record {
+	allocation, ok := a.inUse[port]
+	if !ok || allocation.record != record {
 		return
 	}
 	delete(a.inUse, port)
-	a.sortedInsert(port)
+	key := record.ServiceKey()
+	if res := allocation.reservation; res.port != 0 && time.Now().Before(res.expiresAt) {
+		if _, exists := a.reserved[key]; !exists {
+			a.reserved[key] = res
+			return
+		}
+	}
+	a.available = append(a.available, port)
 }
 
 func (a *portPool) release(port int, record *leaseRecord) {
 	owner, ok := a.inUse[port]
-	if !ok || owner != record {
+	if !ok || owner.record != record {
 		return
 	}
 	delete(a.inUse, port)
 	key := record.ServiceKey()
 
 	if prev, exists := a.reserved[key]; exists {
-		a.sortedInsert(prev.port)
+		a.available = append(a.available, prev.port)
 	}
 
 	a.reserved[key] = portReservation{
@@ -1040,14 +1056,7 @@ func (a *portPool) cleanupExpired(now time.Time) {
 	for key, res := range a.reserved {
 		if now.After(res.expiresAt) {
 			delete(a.reserved, key)
-			a.sortedInsert(res.port)
+			a.available = append(a.available, res.port)
 		}
 	}
-}
-
-func (a *portPool) sortedInsert(port int) {
-	i := sort.SearchInts(a.available, port)
-	a.available = append(a.available, 0)
-	copy(a.available[i+1:], a.available[i:])
-	a.available[i] = port
 }
