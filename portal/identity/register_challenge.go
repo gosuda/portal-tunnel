@@ -33,6 +33,14 @@ type RegisterChallenge struct {
 }
 
 func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string, now time.Time, ttl time.Duration) (*RegisterChallenge, error) {
+	// Host-derived fields are retained in the SIWE message and are not covered
+	// by the HTTP JSON body limit.
+	if len(domain) > 1024 || len(uri) > 4096 {
+		return nil, errors.New("register challenge domain or URI exceeds limits")
+	}
+	if err := req.Metadata.Validate(); err != nil {
+		return nil, err
+	}
 	normalizedIdentity, err := NormalizeIdentity(req.Identity)
 	if err != nil {
 		return nil, err

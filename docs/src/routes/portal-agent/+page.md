@@ -294,6 +294,15 @@ It contains the loopback control address and a random bearer token. CLI commands
 read this file and send `Authorization: Bearer <token>` to the local control
 API.
 
+On Windows, the default service runs as LocalSystem and restricts its state,
+config, and control token to SYSTEM and Administrators. Run dashboard and other
+service-control CLI commands from an elevated terminal. A foreground agent uses
+the account that launched it; its secrets also allow that account.
+
+Custom identity paths must use a directory that other users cannot modify.
+Portal protects the identity file's ACL but does not change the permissions of
+an arbitrary parent directory.
+
 The agent refuses non-loopback `control_addr` values. Use `127.0.0.1`,
 `localhost`, or another loopback address.
 

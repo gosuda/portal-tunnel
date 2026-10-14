@@ -80,3 +80,19 @@ jobs:
           push: false
           cache-from: type=gha,scope=portal-tunnel-ci
           cache-to: type=gha,mode=max,scope=portal-tunnel-ci
+
+  windows-acl:
+    name: Windows agent ACL regression
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test protected agent state and identities
+        run: go test -count=1 ./utils ./portal/identity ./cmd/portal-tunnel/agent

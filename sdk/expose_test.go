@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -76,5 +77,11 @@ func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
 	}
 	if got := ln.metadataSnapshot().Tags[0]; got != "updated" {
 		t.Fatalf("listener Metadata.Tags[0] = %q, want updated", got)
+	}
+	if err := exposure.UpdateMetadata(types.LeaseMetadata{Description: strings.Repeat("a", 4097)}); err == nil {
+		t.Fatal("UpdateMetadata() accepted oversized metadata")
+	}
+	if exposure.metadata.Description != "" || exposure.metadata.Tags[0] != "updated" || ln.metadataSnapshot().Tags[0] != "updated" {
+		t.Fatal("rejected metadata update changed exposure or listener metadata")
 	}
 }
