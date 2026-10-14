@@ -213,6 +213,9 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := cfg.Metadata.Validate(); err != nil {
+		return nil, err
+	}
 	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
 	if runtime.GOOS == "js" && requiresSocketTransport {
 		return nil, errors.New("portal sdk: this runtime supports HTTPS exposure only")
@@ -440,6 +443,9 @@ func (e *Exposure) SetMaxActiveRelays(n int) error {
 func (e *Exposure) UpdateMetadata(metadata types.LeaseMetadata) error {
 	if e.closed() {
 		return net.ErrClosed
+	}
+	if err := metadata.Validate(); err != nil {
+		return err
 	}
 
 	e.reconcileMu.Lock()

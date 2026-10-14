@@ -58,3 +58,20 @@ func siweTestAuthority(t *testing.T, keyDigit string) LocalAuthority {
 	}
 	return NewLocalAuthority(resolved)
 }
+
+func TestRegisterChallengeBoundsRetainedDomainAndURI(t *testing.T) {
+	owner := siweTestAuthority(t, "1")
+	for _, fields := range []struct {
+		name, domain, uri string
+	}{
+		{"domain", strings.Repeat("a", 1025), "https://example.com/register"},
+		{"URI", "example.com", "https://example.com/" + strings.Repeat("a", 4096)},
+	} {
+		t.Run(fields.name, func(t *testing.T) {
+			if _, err := NewRegisterChallenge(types.RegisterChallengeRequest{Identity: owner.Identity()},
+				fields.domain, fields.uri, time.Now(), time.Minute); err == nil {
+				t.Fatal("oversized challenge field accepted")
+			}
+		})
+	}
+}

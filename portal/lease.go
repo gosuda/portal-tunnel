@@ -26,6 +26,7 @@ const (
 	defaultLeaseTTL                          = 2 * time.Minute
 	defaultRegisterChallengeTTL              = 2 * time.Minute
 	defaultRegisterChallengeOutstandingPerIP = 32
+	defaultRegisterChallengeOutstanding      = 256
 	defaultPortReservationGrace              = 5 * time.Minute
 	defaultIdleKeepalive                     = 15 * time.Second
 	defaultReadyQueueLimit                   = 8
@@ -709,7 +710,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 		}
 		i++
 	}
-	if pending >= defaultRegisterChallengeOutstandingPerIP || globalPending >= 256 {
+	if pending >= defaultRegisterChallengeOutstandingPerIP || globalPending >= defaultRegisterChallengeOutstanding {
 		return types.RegisterChallengeResponse{}, errRegisterChallengePending
 	}
 	r.records = append(r.records, &leaseRecord{
