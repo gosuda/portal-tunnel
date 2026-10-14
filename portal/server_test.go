@@ -1,9 +1,16 @@
 package portal
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/coder/websocket"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -123,4 +130,54 @@ func TestRawPortsAreAllocatedPerIdentity(t *testing.T) {
 	if first.UDPAddr == second.UDPAddr || first.TCPAddr == second.TCPAddr {
 		t.Fatalf("different identities shared raw endpoints: first=%+v second=%+v", first, second)
 	}
+}
+
+// The WebSocket carrier takes its capability only from the subprotocols, beside the
+// marker; the raw carrier's header does not admit it.
+func TestConnectRejectsWebSocketWithoutCapability(t *testing.T) {
+	t.Parallel()
+
+	_, relayURL, capability := newConnectTestRelay(t)
+	for name, opts := range map[string]*websocket.DialOptions{
+		"no capability": {Subprotocols: []string{types.ReverseSubprotocol}},
+		"no marker":     {Subprotocols: []string{capability}},
+		"header only": {
+			Subprotocols: []string{types.ReverseSubprotocol},
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		socket, _, err := websocket.Dial(ctx, wsURL(relayURL), opts)
+		cancel()
+		if err == nil {
+			_ = socket.CloseNow()
+			t.Errorf("%s: Dial() error = nil, want the session refused", name)
+		}
+	}
+}
+
+func newConnectTestRelay(t *testing.T) (*Server, *url.URL, string) {
+	t.Helper()
+
+	registry := newTestRegistry(t, false, false)
+	_, registered, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "browser"),
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	server := &Server{registry: registry}
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server.HandleConnect(w, r, netip.MustParseAddr("203.0.113.10"))
+	}))
+	t.Cleanup(relay.Close)
+
+	relayURL, err := url.Parse(relay.URL + types.PathSDKConnect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server, relayURL, registered.ReverseEndpoint.Capability
+}
+
+func wsURL(relayURL *url.URL) string {
+	return strings.Replace(relayURL.String(), "http://", "ws://", 1)
 }
