@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -308,6 +310,9 @@ func controlRequest(ctx context.Context, stateDir, method, path string, payload 
 	if err := utils.ReadJSONFile(filepath.Join(stateDir, endpointFilename), &endpoint); err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotRunning
+		}
+		if runtime.GOOS == "windows" && os.IsPermission(err) {
+			return fmt.Errorf("read agent endpoint: %w; run the CLI from an elevated terminal to control a Windows service", err)
 		}
 		return err
 	}

@@ -89,6 +89,10 @@ func secureWindowsPath(path string, directory bool) error {
 	if err != nil {
 		return err
 	}
+	trustedOwner, verifyErr := verifyWindowsPath(absPath, owner)
+	if verifyErr == nil {
+		return nil
+	}
 	dacl, _, err := sd.DACL()
 	if err != nil {
 		return fmt.Errorf("build private DACL: %w", err)
@@ -96,13 +100,19 @@ func secureWindowsPath(path string, directory bool) error {
 	if dacl == nil {
 		return errors.New("build private DACL: missing DACL")
 	}
+	securityInfo := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
+	var replacementOwner *windows.SID
+	if trustedOwner == nil {
+		securityInfo |= windows.OWNER_SECURITY_INFORMATION
+		replacementOwner = owner
+	}
 	err = windows.SetNamedSecurityInfo(absPath, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION,
-		owner, nil, dacl, nil)
+		securityInfo, replacementOwner, nil, dacl, nil)
 	if err != nil {
 		return fmt.Errorf("secure private path %q: %w", absPath, err)
 	}
-	return verifyWindowsPath(absPath, sd, owner)
+	_, err = verifyWindowsPath(absPath, owner)
+	return err
 }
 
 // privateWindowsDescriptor allows only the running service identity, SYSTEM,
@@ -137,69 +147,56 @@ func privateWindowsDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, *wi
 	return sd, owner, nil
 }
 
-// verifyWindowsPath fails closed if an unexpected ACE, owner, or inherited
-// permission survives. ACE order does not affect this allow-only DACL.
-func verifyWindowsPath(path string, expected *windows.SECURITY_DESCRIPTOR, owner *windows.SID) error {
+// verifyWindowsPath returns a trusted owner even when the DACL needs repair.
+// Existing owners and narrower permissions are preserved when only trusted
+// principals have access and inheritance is disabled.
+func verifyWindowsPath(path string, currentUser *windows.SID) (*windows.SID, error) {
 	actual, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
-		return fmt.Errorf("read security descriptor of %q: %w", path, err)
+		return nil, fmt.Errorf("read security descriptor of %q: %w", path, err)
 	}
 	if actual == nil {
-		return fmt.Errorf("private path %q has no security descriptor", path)
+		return nil, fmt.Errorf("private path %q has no security descriptor", path)
+	}
+	allowed := map[string]bool{
+		currentUser.String(): true,
+		"S-1-5-18":           true, // SYSTEM
+		"S-1-5-32-544":       true, // Administrators
+	}
+	owner, _, err := actual.Owner()
+	if err != nil {
+		return nil, fmt.Errorf("read owner of %q: %w", path, err)
+	}
+	if owner == nil || !allowed[owner.String()] {
+		return nil, fmt.Errorf("private path %q has an untrusted owner", path)
 	}
 	control, _, err := actual.Control()
 	if err != nil {
-		return err
+		return owner, err
 	}
 	if control&windows.SE_DACL_PROTECTED == 0 {
-		return fmt.Errorf("private path %q inherits permissions", path)
+		return owner, fmt.Errorf("private path %q inherits permissions", path)
 	}
-	gotOwner, _, err := actual.Owner()
+	acl, _, err := actual.DACL()
 	if err != nil {
-		return fmt.Errorf("read owner of %q: %w", path, err)
+		return owner, fmt.Errorf("read DACL of %q: %w", path, err)
 	}
-	if gotOwner == nil || !gotOwner.Equals(owner) {
-		return fmt.Errorf("private path %q has an unexpected owner", path)
+	if acl == nil {
+		return owner, fmt.Errorf("private path %q has no DACL", path)
 	}
-
-	wantACL, _, err := expected.DACL()
-	if err != nil || wantACL == nil {
-		return errors.New("expected private DACL is missing")
-	}
-	gotACL, _, err := actual.DACL()
-	if err != nil {
-		return fmt.Errorf("read DACL of %q: %w", path, err)
-	}
-	if gotACL == nil {
-		return fmt.Errorf("private path %q has no DACL", path)
-	}
-	if gotACL.AceCount != wantACL.AceCount {
-		return fmt.Errorf("private path %q has unexpected ACEs", path)
-	}
-	allowed := make(map[string]*windows.ACCESS_ALLOWED_ACE, wantACL.AceCount)
-	for i := uint32(0); i < uint32(wantACL.AceCount); i++ {
+	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
-		if err := windows.GetAce(wantACL, i, &ace); err != nil {
-			return fmt.Errorf("inspect expected private ACL: %w", err)
+		if err := windows.GetAce(acl, i, &ace); err != nil {
+			return owner, fmt.Errorf("inspect private ACL of %q: %w", path, err)
 		}
-		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		allowed[sid.String()] = ace
-	}
-	for i := uint32(0); i < uint32(gotACL.AceCount); i++ {
-		var ace *windows.ACCESS_ALLOWED_ACE
-		if err := windows.GetAce(gotACL, i, &ace); err != nil {
-			return fmt.Errorf("inspect private ACL of %q: %w", path, err)
-		}
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
-			return fmt.Errorf("private path %q has unexpected ACE type", path)
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags&windows.INHERITED_ACE != 0 {
+			return owner, fmt.Errorf("private path %q has unexpected ACE type or inheritance", path)
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
-		want := allowed[sid]
-		if want == nil || ace.Header != want.Header || ace.Mask != want.Mask {
-			return fmt.Errorf("private path %q has unexpected permissions", path)
+		if !allowed[sid] {
+			return owner, fmt.Errorf("private path %q grants access to an untrusted SID", path)
 		}
-		delete(allowed, sid)
 	}
-	return nil
+	return owner, nil
 }
