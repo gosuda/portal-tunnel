@@ -1,7 +1,6 @@
 package types
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -135,24 +134,6 @@ type DiscoveryResponse struct {
 	// Optional, unsigned observation metadata; never participates in routing,
 	// trust, signature verification, or compatibility decisions.
 	RelayReleaseVersions map[string]string `json:"relay_release_versions,omitempty"`
-}
-
-// UnmarshalJSON validates the decoded response before replacing existing state.
-// HTTP readers bound the response bytes before decoding.
-func (resp *DiscoveryResponse) UnmarshalJSON(data []byte) error {
-	type plain DiscoveryResponse
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	if len(decoded.Relays) > MaxDiscoveryEntries+1 || len(decoded.IncompatibleRelays) > MaxDiscoveryEntries || len(decoded.RelayReleaseVersions) > MaxDiscoveryEntries {
-		return fmt.Errorf("discovery response exceeds collection limits (relays: %d, metadata: %d)", MaxDiscoveryEntries+1, MaxDiscoveryEntries)
-	}
-	if len(decoded.ProtocolVersion) > MaxDiscoveryVersionBytes || len(decoded.ReleaseVersion) > MaxDiscoveryVersionBytes {
-		return fmt.Errorf("discovery version label exceeds %d bytes", MaxDiscoveryVersionBytes)
-	}
-	*resp = DiscoveryResponse(decoded)
-	return nil
 }
 
 // IncompatibleRelayEntry describes a relay the serving relay contacted

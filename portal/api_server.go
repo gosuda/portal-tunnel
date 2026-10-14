@@ -14,7 +14,6 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -177,95 +176,42 @@ func (s *Server) HandleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// writeDiscoveryResponse enforces the same decoded-byte budget on the relay
-// producer as on its clients. Keep the self descriptor and as many peers as
-// fit before adding optional observation metadata.
+// writeDiscoveryResponse keeps the response within the client byte limit.
+// On overflow, omit unsigned observations and retain the largest relay prefix,
+// preserving the serving relay at index zero.
 func writeDiscoveryResponse(w http.ResponseWriter, response types.DiscoveryResponse) {
-	bounded := response
-	bounded.Relays = nil
-	bounded.IncompatibleRelays = nil
-	bounded.RelayReleaseVersions = nil
-
-	// The base document must fit before we add collections. Reserve space
-	// for array brackets and optional field names when selecting entries.
-	baseline, err := json.Marshal(types.APIEnvelope[types.DiscoveryResponse]{OK: true, Data: bounded})
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-		return
-	}
-	budget := int(types.MaxDiscoveryResponseBytes) - len(baseline) - 128
-	if budget < 0 {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "discovery response exceeds size limit")
-		return
-	}
-
-	for i, descriptor := range response.Relays {
-		if len(bounded.Relays) == types.MaxDiscoveryEntries+1 {
-			break
-		}
-		encoded, err := json.Marshal(descriptor)
-		if err != nil {
-			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-			return
-		}
-		if len(encoded)+1 > budget {
-			if i == 0 {
-				utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "self descriptor exceeds discovery response limit")
-				return
-			}
-			continue
-		}
-		bounded.Relays = append(bounded.Relays, descriptor)
-		budget -= len(encoded) + 1
-	}
-
-	for _, entry := range response.IncompatibleRelays {
-		if len(bounded.IncompatibleRelays) == types.MaxDiscoveryEntries {
-			break
-		}
-		encoded, err := json.Marshal(entry)
-		if err != nil {
-			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-			return
-		}
-		if len(encoded)+1 > budget {
-			continue
-		}
-		bounded.IncompatibleRelays = append(bounded.IncompatibleRelays, entry)
-		budget -= len(encoded) + 1
-	}
-
-	keys := make([]string, 0, len(response.RelayReleaseVersions))
-	for key := range response.RelayReleaseVersions {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if len(bounded.RelayReleaseVersions) == types.MaxDiscoveryEntries {
-			break
-		}
-		// A string-only map cannot fail JSON encoding. Remove its braces
-		// and allow one comma when charging this entry to the wire budget.
-		encoded, _ := json.Marshal(map[string]string{key: response.RelayReleaseVersions[key]})
-		cost := len(encoded) - 1
-		if cost > budget {
-			continue
-		}
-		if bounded.RelayReleaseVersions == nil {
-			bounded.RelayReleaseVersions = make(map[string]string)
-		}
-		bounded.RelayReleaseVersions[key] = response.RelayReleaseVersions[key]
-		budget -= cost
-	}
-
-	encoded, err := json.Marshal(types.APIEnvelope[types.DiscoveryResponse]{OK: true, Data: bounded})
+	response.Relays = response.Relays[:min(len(response.Relays), types.MaxDiscoveryEntries+1)]
+	encoded, err := json.Marshal(types.APIEnvelope[types.DiscoveryResponse]{OK: true, Data: response})
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
 		return
 	}
 	if int64(len(encoded)) > types.MaxDiscoveryResponseBytes {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "discovery response exceeds size limit")
-		return
+		response.IncompatibleRelays = nil
+		response.RelayReleaseVersions = nil
+		encoded = nil
+		// Serialized size grows with the prefix length. Search in at most
+		// eleven encodings for the bounded set of 1,025 descriptors.
+		for low, high := 1, len(response.Relays); low <= high; {
+			count := low + (high-low)/2
+			candidate := response
+			candidate.Relays = response.Relays[:count]
+			body, err := json.Marshal(types.APIEnvelope[types.DiscoveryResponse]{OK: true, Data: candidate})
+			if err != nil {
+				utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+				return
+			}
+			if int64(len(body)) > types.MaxDiscoveryResponseBytes {
+				high = count - 1
+			} else {
+				encoded = body
+				low = count + 1
+			}
+		}
+		if encoded == nil {
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "self descriptor exceeds discovery response limit")
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
