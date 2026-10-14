@@ -95,7 +95,7 @@ func backhaulSourcePrefix(remote net.Addr) (netip.Prefix, bool) {
 	if addr.Is4() {
 		return netip.PrefixFrom(addr, addr.BitLen()), true
 	}
-	return netip.PrefixFrom(addr, 64), true
+	return netip.PrefixFrom(addr, 64).Masked(), true
 }
 
 type ServerConfig struct {

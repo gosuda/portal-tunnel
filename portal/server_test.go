@@ -16,6 +16,35 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+func TestBackhaulPendingSourcesSharesIPv6SubnetBudget(t *testing.T) {
+	sources := newBackhaulPendingSources()
+	var held []*net.UDPAddr
+	for i := 0; i < quicBackhaulPerSourceLimit; i++ {
+		ip := net.ParseIP("2001:db8:1234:5678::1")
+		ip[len(ip)-1] = byte(i + 1)
+		remote := &net.UDPAddr{IP: ip, Port: 12345 + i}
+		if !sources.acquire(remote) {
+			t.Fatalf("address %s rejected within subnet budget", remote)
+		}
+		held = append(held, remote)
+	}
+	extra := &net.UDPAddr{IP: net.ParseIP("2001:db8:1234:5678::ffff"), Port: 23456}
+	if sources.acquire(extra) {
+		t.Fatal("another address in the same /64 bypassed the subnet budget")
+	}
+	other := &net.UDPAddr{IP: net.ParseIP("2001:db8:1234:5679::1"), Port: 23456}
+	if !sources.acquire(other) {
+		t.Fatal("a different /64 did not have an independent budget")
+	}
+	sources.release(held[0])
+	if !sources.acquire(extra) {
+		t.Fatal("released subnet slot could not be acquired by another address")
+	}
+	if sources.acquire(held[0]) {
+		t.Fatal("reacquiring the released subnet slot exceeded the shared budget")
+	}
+}
+
 func TestNewServerRejectsPortalURLCredentialsWithoutEchoingThem(t *testing.T) {
 	_, err := NewServer(ServerConfig{
 		PortalURL: "https://user:secret@localhost",
