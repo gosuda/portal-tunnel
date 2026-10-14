@@ -159,6 +159,9 @@ checks that its address matches the returned URL before opening any connection.
 Relay-selected gateways may only resolve to public IP addresses; local, private,
 and special-purpose addresses are blocked after DNS resolution on every dial.
 An explicitly configured direct relay retains local development support.
+Browser/WASM clients reject relay-selected alternate gateways because the browser
+does not expose resolved addresses for SDK verification. Keep `overlay` disabled
+and use the explicitly configured direct relay in browser applications.
 
 See [IVNP-backed overlay networking](/concepts#ivnp-backed-overlay-networking)
 for the conceptual model and [the architecture](/architecture#ivnp-backed-overlay-networking)

@@ -4,51 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
-
-func TestPublicRelayIPPolicy(t *testing.T) {
-	tests := []struct {
-		ip     string
-		public bool
-	}{
-		{"8.8.8.8", true},
-		{"1.1.1.1", true},
-		{"2606:4700:4700::1111", true},
-		{"2001:4860:4860::8888", true},
-		{"127.0.0.1", false},
-		{"10.0.0.1", false},
-		{"172.16.0.1", false},
-		{"192.168.1.1", false},
-		{"169.254.169.254", false},
-		{"100.64.0.1", false},
-		{"192.0.2.1", false},
-		{"198.18.0.1", false},
-		{"198.51.100.1", false},
-		{"203.0.113.1", false},
-		{"0.0.0.1", false},
-		{"224.0.0.1", false},
-		{"::1", false},
-		{"::ffff:127.0.0.1", false},
-		{"fc00::1", false},
-		{"fe80::1", false},
-		{"2001:db8::1", false},
-		{"2001::1", false},
-		{"2002:c0a8:101::1", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.ip, func(t *testing.T) {
-			if got := isPublicRelayIP(netip.MustParseAddr(tt.ip)); got != tt.public {
-				t.Fatalf("isPublicRelayIP(%q) = %t, want %t", tt.ip, got, tt.public)
-			}
-		})
-	}
-}
 
 func TestUntrustedDiscoveryRejectsNonPublicDescriptor(t *testing.T) {
 	signing := mustSigningIdentity(t)

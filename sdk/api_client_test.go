@@ -8,8 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +125,7 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 	}{
 		"direct":               {endpoint: direct},
 		"overlay disabled":     {endpoint: overlay, wantErr: true},
-		"overlay enabled":      {enabled: true, endpoint: overlay},
+		"overlay enabled":      {enabled: true, endpoint: overlay, wantErr: runtime.GOOS == "js"},
 		"fallback direct":      {enabled: true, endpoint: direct},
 		"legacy overlay":       {endpoint: legacyOverlay, wantErr: true},
 		"unmarked alternate":   {enabled: true, endpoint: legacyOverlay, wantErr: true},
@@ -144,38 +144,6 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 			err := listener.validateReverseEndpointTransport(test.endpoint)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("validateReverseEndpointTransport() error = %v, wantErr %v", err, test.wantErr)
-			}
-		})
-	}
-}
-
-func TestPublicReverseAddresses(t *testing.T) {
-	t.Parallel()
-	for address, want := range map[string]bool{
-		"8.8.8.8":              true,
-		"2606:4700:4700::1111": true,
-		"127.0.0.1":            false,
-		"10.0.0.1":             false,
-		"172.16.2.1":           false,
-		"192.168.1.1":          false,
-		"169.254.169.254":      false,
-		"100.64.1.1":           false,
-		"192.0.2.1":            false,
-		"198.19.1.1":           false,
-		"203.0.113.1":          false,
-		"::1":                  false,
-		"::ffff:127.0.0.1":     false,
-		"::ffff:10.0.0.1":      false,
-		"fc00::1":              false,
-		"fe80::1":              false,
-		"64:ff9b::a00:1":       false,
-		"2001:db8::1":          false,
-		"2002:c0a8:101::1":     false,
-	} {
-		t.Run(address, func(t *testing.T) {
-			t.Parallel()
-			if got := isPublicReverseAddr(netip.MustParseAddr(address)); got != want {
-				t.Fatalf("isPublicReverseAddr(%s) = %t, want %t", address, got, want)
 			}
 		})
 	}

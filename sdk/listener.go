@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -719,6 +720,9 @@ func (l *listener) isAlternateReverseEndpoint(rawURL string) bool {
 
 func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoint) error {
 	alternate := l.isAlternateReverseEndpoint(endpoint.URL)
+	if runtime.GOOS == "js" && alternate {
+		return errors.New("browser SDK cannot verify resolved addresses for relay-selected gateways; use a direct relay with overlay disabled")
+	}
 	if !l.overlay && endpoint.Overlay {
 		return errors.New("relay returned an overlay reverse endpoint but overlay is disabled")
 	}
