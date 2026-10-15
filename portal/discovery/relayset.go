@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"reflect"
@@ -81,6 +82,7 @@ const (
 	upsertRejected upsertResult = iota
 	upsertAccepted
 	upsertIgnored
+	upsertConflicting
 )
 
 func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
@@ -276,22 +278,34 @@ func (s *RelaySet) crossIdentityTakeoverBlockedLocked(relayURL, address string, 
 //     descriptor has not yet expired, and `allowCrossIdentityTakeover` is
 //     false. This blocks third-party gossip/announce from hijacking a URL
 //     binding established by direct authoritative contact.
+//  3. The retained descriptor at the same URL, identity and IssuedAt has
+//     different canonical signed contents (reported as upsertConflicting).
 //
 // `allowCrossIdentityTakeover` MUST be true only when the caller has
 // directly contacted the URL and verified the response is signed by the
 // announced identity (i.e. authoritative refresh). Gossip propagation and
 // the announce endpoint MUST pass false.
 //
-// Equal IssuedAt values (idempotent re-broadcast) are accepted because the
-// only mutation is the merged local telemetry on the existing URL slot,
-// which never contradicts the cryptographic identity of the descriptor.
+// Equal IssuedAt values at the same URL and signing identity must carry the
+// same canonical signed contents. Idempotent re-broadcasts may refresh local
+// telemetry, but conflicting statements cannot replace the retained observation.
 func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allowCrossIdentityTakeover bool) upsertResult {
 	relayURL := record.Descriptor.APIHTTPSAddr
 	if relayURL == "" {
 		return upsertRejected
 	}
-	if existing, ok := s.relays[relayURL]; ok && existing.Banned {
-		return upsertRejected
+	if existing, ok := s.relays[relayURL]; ok {
+		if existing.Banned {
+			return upsertRejected
+		}
+		previous := existing.Descriptor
+		if strings.EqualFold(previous.Address, record.Descriptor.Address) && previous.IssuedAt.Equal(record.Descriptor.IssuedAt) {
+			oldContents, oldErr := canonicalRelayDescriptorBytes(previous)
+			newContents, newErr := canonicalRelayDescriptorBytes(record.Descriptor)
+			if oldErr != nil || newErr != nil || !bytes.Equal(oldContents, newContents) {
+				return upsertConflicting
+			}
+		}
 	}
 	address := strings.ToLower(strings.TrimSpace(record.Descriptor.Address))
 	if address != "" {
@@ -562,15 +576,12 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		discoveredByURL[relayURL] = relayState
 	}
 	missingTarget := authoritative && !targetFound
+	conflictingTarget := false
 
 	if authoritative {
 		s.recordReleaseObservationLocked(targetURL, resp.ReleaseVersion, now)
 		if protocolMismatch {
 			s.recordIncompatibleRelayLocked(targetURL, resp.ProtocolVersion, now)
-		} else if !missingTarget {
-			// The target now speaks our protocol (e.g. after a rolling
-			// upgrade); retire any stale incompatible-visibility entry.
-			delete(s.incompatible, targetURL)
 		}
 	}
 
@@ -585,6 +596,12 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		}
 
 		if upsert := s.upsertDescriptorLocked(record, now, isAuthoritativeTarget); upsert != upsertAccepted {
+			if upsert == upsertConflicting {
+				// A signed contradiction is not a successful recovery probe.
+				// Gossip cannot use it to mutate health or sanction the signer.
+				conflictingTarget = conflictingTarget || isAuthoritativeTarget
+				continue
+			}
 			// The monotonic-IssuedAt check rejected this descriptor as a
 			// rollback, or ignored it because a newer same-identity descriptor
 			// for this URL is already present. The cryptographic identity in
@@ -616,6 +633,13 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	}
 	if missingTarget {
 		return relaySetChanged, errors.New("target relay descriptor missing from relays")
+	}
+	if conflictingTarget {
+		return relaySetChanged, errors.New("target relay descriptor conflicts with retained signed contents at the same issued_at")
+	}
+	if authoritative {
+		// A compatible, non-conflicting target can retire a prior mismatch.
+		delete(s.incompatible, targetURL)
 	}
 	return relaySetChanged, nil
 }
@@ -804,6 +828,7 @@ func (s *RelaySet) RecordDiscoveryRTT(relayURL string, rtt time.Duration, measur
 //     retry state, active suppression state, and telemetry from any
 //     pre-existing entry at the same URL.
 //  4. The shared upsertDescriptorLocked method enforces the
+//     same-URL/same-time signed-content consistency guard, the
 //     monotonic-IssuedAt-per-key rollback guard and the cross-identity
 //     URL-takeover guard, plus the per-identity candidate cap shared by
 //     every untrusted ingestion path.
@@ -851,6 +876,8 @@ func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) er
 		return nil
 	case upsertRejected:
 		return errors.New("announced descriptor rejected by rollback or takeover guard")
+	case upsertConflicting:
+		return errors.New("announced descriptor conflicts with retained signed contents at the same issued_at")
 	}
 	return nil
 }

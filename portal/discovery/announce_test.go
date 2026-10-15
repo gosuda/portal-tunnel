@@ -1,7 +1,10 @@
 package discovery
 
 import (
+	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +20,46 @@ func mustSigningIdentity(t *testing.T) types.Identity {
 		t.Fatalf("identity.ResolveSecp256k1Identity() error = %v", err)
 	}
 	return signingIdentity
+}
+
+// A directly contacted relay can advertise many colluding identities and
+// misleading metadata about a healthy peer. Those claims neither verify the
+// advertised URLs nor revoke or rewrite the healthy peer's local observation.
+func TestColludingGossipCannotReplaceLocalRelayEvidence(t *testing.T) {
+	set := NewRelaySet(nil)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	const healthy, reporter = "https://healthy.example", "https://reporter.example"
+	healthyDescriptor := mustSignedDescriptor(t, mustSigningIdentity(t), healthy, now)
+	mustApplyAuthoritative(t, set, healthyDescriptor)
+	reporterDescriptor := mustSignedDescriptor(t, mustSigningIdentity(t), reporter, now)
+	forged := healthyDescriptor
+	forged.SupportsTCP = !forged.SupportsTCP // No signature authorizes this change.
+	for i := range 4 {
+		colluder := mustSignedDescriptor(t, mustSigningIdentity(t), fmt.Sprintf("https://colluder-%d.example", i), now)
+		_, err := set.ApplyRelayDiscoveryResponse(reporter, types.DiscoveryResponse{
+			ProtocolVersion: types.DiscoveryVersion,
+			Relays:          []types.RelayDescriptor{reporterDescriptor, colluder, forged},
+			IncompatibleRelays: []types.IncompatibleRelayEntry{{
+				URL: healthy, ProtocolVersion: "claimed-incompatible", LastSeenAt: now,
+			}},
+			RelayReleaseVersions: map[string]string{healthy: "claimed-release"},
+		}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected := set.SelectRelays(routeState{})
+	if len(selected) != 2 || !slices.Contains(selected, healthy) || !slices.Contains(selected, reporter) {
+		t.Fatalf("gossip manufactured selectable relays or excluded the healthy peer: %v", selected)
+	}
+	if len(set.KnownIncompatibleRelays()) != 0 || set.KnownRelayReleaseVersions()[healthy] != "" {
+		t.Fatal("reporter's peer metadata replaced a direct observation")
+	}
+	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
+		if desc.APIHTTPSAddr == healthy && desc.Signature != healthyDescriptor.Signature {
+			t.Fatal("forged capabilities replaced the healthy peer's signed descriptor")
+		}
+	}
 }
 
 func mustUnsignedDescriptor(t *testing.T, signing types.Identity, relayURL string) types.RelayDescriptor {
@@ -45,6 +88,99 @@ func mustSignedDescriptor(t *testing.T, signing types.Identity, relayURL string,
 		t.Fatalf("SignRelayDescriptor() error = %v", err)
 	}
 	return signed
+}
+
+func TestSignedDescriptorConflictPreservesLocalObservation(t *testing.T) {
+	for _, ingress := range []string{"announce", "gossip", "direct"} {
+		for _, recovering := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/recovering=%t", ingress, recovering), func(t *testing.T) {
+				set := NewRelaySet(nil)
+				now := time.Now().UTC().Truncate(time.Microsecond)
+				signer := mustSigningIdentity(t)
+				const relayURL = "https://conflicting.example"
+				original := mustSignedDescriptor(t, signer, relayURL, now)
+				mustApplyAuthoritative(t, set, original)
+				if ingress == "direct" {
+					_, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+						ProtocolVersion: "incompatible",
+						Relays:          []types.RelayDescriptor{original},
+					}, now)
+					if !errors.Is(err, ErrProtocolMismatch) {
+						t.Fatalf("protocol mismatch error = %v", err)
+					}
+				}
+				if recovering {
+					set.RecordDiscoveryFailure(relayURL, 1)
+				}
+				before := set.relays[relayURL]
+				conflict := original
+				conflict.SupportsTCP = !original.SupportsTCP
+				conflict, err := SignRelayDescriptor(conflict, identity.NewLocalAuthority(signer))
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch ingress {
+				case "announce":
+					err = set.InsertCandidate(conflict, now)
+				case "gossip":
+					reporter := mustSignedDescriptor(t, mustSigningIdentity(t), "https://reporter.example", now)
+					_, err = set.ApplyRelayDiscoveryResponse(reporter.APIHTTPSAddr, types.DiscoveryResponse{
+						ProtocolVersion: types.DiscoveryVersion,
+						Relays:          []types.RelayDescriptor{reporter, conflict},
+					}, now)
+				case "direct":
+					_, err = set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
+						ProtocolVersion: types.DiscoveryVersion,
+						Relays:          []types.RelayDescriptor{conflict},
+					}, now)
+				}
+				if (err != nil) != (ingress != "gossip") {
+					t.Fatalf("admission error = %v for %s", err, ingress)
+				}
+				if after := set.relays[relayURL]; !reflect.DeepEqual(after, before) {
+					t.Fatalf("conflicting update changed retained observation or recovery state: before=%+v after=%+v", before, after)
+				}
+				if got := routesTo(t, set, relayURL); got != !recovering {
+					t.Fatalf("relay eligible = %t, want %t", got, !recovering)
+				}
+				if ingress == "direct" && len(set.KnownIncompatibleRelays()) != 1 {
+					t.Fatal("conflicting direct response cleared prior incompatibility")
+				}
+			})
+		}
+	}
+}
+
+func TestDescriptorConflictGuardAllowsRetransmissionAndFreshUpdates(t *testing.T) {
+	set := NewRelaySet(nil)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	signer := mustSigningIdentity(t)
+	const relayURL = "https://recovering.example"
+	original := mustSignedDescriptor(t, signer, relayURL, now)
+	mustApplyAuthoritative(t, set, original)
+	set.RecordDiscoveryFailure(relayURL, 1)
+	// An identical cached statement remains a valid recovery observation.
+	mustApplyAuthoritative(t, set, original)
+	if !routesTo(t, set, relayURL) {
+		t.Fatal("identical retransmission did not recover eligibility")
+	}
+	// One operator may legitimately publish different URLs at the same time.
+	other := mustSignedDescriptor(t, signer, "https://other.example", now)
+	if err := set.InsertCandidate(other, now); err != nil {
+		t.Fatalf("same-time descriptor for another URL: %v", err)
+	}
+	updated := original
+	updated.IssuedAt = now.Add(time.Second)
+	updated.ExpiresAt = updated.IssuedAt.Add(DiscoveryDescriptorTTL)
+	updated.SupportsTCP = !original.SupportsTCP
+	updated, err := SignRelayDescriptor(updated, identity.NewLocalAuthority(signer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustApplyAuthoritative(t, set, updated)
+	if set.relays[relayURL].Descriptor.Signature != updated.Signature || !routesTo(t, set, relayURL) {
+		t.Fatal("newly issued capability update did not replace the previous observation")
+	}
 }
 
 func TestNormalizeRelayDescriptorFieldLimits(t *testing.T) {

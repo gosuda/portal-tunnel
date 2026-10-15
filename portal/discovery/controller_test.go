@@ -5,7 +5,10 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 // AddRelay and RemoveRelay each apply the whole user intent as one unit:
@@ -36,6 +39,57 @@ func TestControllerRelayIntentOpsComposeAtomicUnits(t *testing.T) {
 	routes = controller.relaySet.SelectRelays(routeState{})
 	if len(routes) != 2 {
 		t.Fatalf("selection after AddRelay = %+v, want both relays eligible again", routes)
+	}
+}
+
+// A relay may serve discovery correctly while dropping tenant traffic. The
+// same runtime observation can also be an honest outage: neither establishes
+// intent, and a passing discovery response must not bypass local backoff.
+func TestControllerPassingDiscoveryDoesNotClearRuntimeSuppression(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const failed, healthy = "https://selective.example", "https://healthy.example"
+		controller := NewController(nil)
+		descriptor := mustRelayDescriptor(t, failed)
+		mustApplyAuthoritative(t, controller.relaySet, descriptor)
+		mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, healthy))
+		controller.Report(failed, FailureRuntime)
+		mustApplyAuthoritative(t, controller.relaySet, descriptor)
+		selected := controller.relaySet.SelectRelays(routeState{})
+		if !slices.Equal(selected, []string{healthy}) {
+			t.Fatalf("passing discovery bypassed runtime suppression: %v", selected)
+		}
+		// Ordinary outages recover without an operator override or a malice label.
+		synctest.Sleep(defaultDirectRecoveryBackoff + time.Second)
+		selected = controller.relaySet.SelectRelays(routeState{})
+		if len(selected) != 2 || !slices.Contains(selected, healthy) || !slices.Contains(selected, failed) {
+			t.Fatalf("temporary failure did not recover both alternatives: %v", selected)
+		}
+	})
+}
+
+func TestControllerLocalSecurityBanSurvivesDiscoveryUntilOperatorOverride(t *testing.T) {
+	const blocked, healthy = "https://blocked.example", "https://healthy.example"
+	controller := NewController(nil)
+	descriptor := mustRelayDescriptor(t, blocked)
+	mustApplyAuthoritative(t, controller.relaySet, descriptor)
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, healthy))
+	// Report is trusted local input here; this does not test exporter verification.
+	controller.Report(blocked, FailureMITM)
+	_, err := controller.relaySet.ApplyRelayDiscoveryResponse(blocked, types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{descriptor},
+	}, time.Now().UTC())
+	if err == nil {
+		t.Fatal("locally banned relay's advertisement was accepted as a direct target")
+	}
+	selected := controller.relaySet.SelectRelays(routeState{})
+	if !slices.Equal(selected, []string{healthy}) {
+		t.Fatalf("advertisement changed a local security ban or healthy alternative: %v", selected)
+	}
+	controller.AddRelay(blocked)
+	selected = controller.relaySet.SelectRelays(controller.buildRouteState())
+	if len(selected) != 2 || !slices.Contains(selected, healthy) || !slices.Contains(selected, blocked) {
+		t.Fatalf("explicit operator override did not restore the relay: %v", selected)
 	}
 }
 
