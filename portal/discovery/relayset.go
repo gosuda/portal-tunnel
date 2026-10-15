@@ -1024,6 +1024,17 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 	return true, "active", state.activeFailures
 }
 
+// relayState returns a copy of the retained state for relayURL. The second
+// return value reports whether the set holds any state for the URL at all;
+// absent URLs carry no failure history and callers should treat them as
+// clean.
+func (s *RelaySet) relayState(relayURL string) (RelayState, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	state, ok := s.relays[relayURL]
+	return state, ok
+}
+
 // IsSuppressed reports whether relayURL is currently excluded from active
 // selection due to a prior active-listener failure backoff. Callers use this
 // to avoid recording duplicate failures while a suppression is still in

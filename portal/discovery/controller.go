@@ -40,6 +40,7 @@ const (
 type Controller struct {
 	relaySet  *RelaySet
 	refresher *Refresher
+	scorer    ReputationScorer
 	changed   chan struct{}
 	selected  []string
 	published bool
@@ -61,6 +62,7 @@ func NewController(bootstrapRelayURLs []string) *Controller {
 	return &Controller{
 		relaySet:  relaySet,
 		refresher: NewRefresher(relaySet),
+		scorer:    NewReputationScorer(),
 		changed:   make(chan struct{}, 1),
 	}
 }
@@ -83,6 +85,21 @@ func (c *Controller) Report(relayURL string, kind FailureKind) {
 		}
 	}
 	c.signal()
+}
+
+// RelayDemotion reports the current tunnel-allocation demotion factor for
+// relayURL: 1 for relays with no retained state or a clean history, less
+// than 1 as observed failures accumulate. Selection membership is unchanged;
+// the factor only scales how many tunnels the runtime opens.
+func (c *Controller) RelayDemotion(relayURL string) float64 {
+	if c == nil || relayURL == "" {
+		return 1
+	}
+	state, ok := c.relaySet.relayState(relayURL)
+	if !ok {
+		return 1
+	}
+	return c.scorer.Demotion(state, time.Now().UTC())
 }
 
 // SetExplicitRelays replaces the explicit relay URLs for selection. The

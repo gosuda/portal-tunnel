@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
 	"slices"
@@ -1166,6 +1167,12 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	e.reportDeselectedRelays(deselected)
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
+		target := defaultReadyTarget
+		if e.discovery != nil {
+			if demoted := e.discovery.RelayDemotion(relayURL); demoted < 1 {
+				target = max(1, int(math.Round(defaultReadyTarget*demoted)))
+			}
+		}
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
 			Cache:      e.cache,
 			Identity:   e.identity.Copy(),
@@ -1174,6 +1181,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			TCPEnabled: e.options.TCPEnabled,
 			BanMITM:    e.options.BanMITM,
 			Metadata:   e.metadata.Copy(),
+			Sessions:   target,
 		})
 		if err != nil {
 			e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: err})

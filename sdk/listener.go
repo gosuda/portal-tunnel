@@ -46,6 +46,9 @@ type listenerConfig struct {
 	TCPEnabled bool
 	BanMITM    bool
 	Metadata   types.LeaseMetadata
+	// Sessions is the target number of reverse sessions the lease keeps
+	// open toward the relay. Zero or negative uses the default target.
+	Sessions int
 }
 
 type listenerStatus struct {
@@ -128,6 +131,7 @@ type listener struct {
 	udpEnabled        bool
 	tcpEnabled        bool
 	banMITM           bool
+	sessions          int
 	cache             *cache.Source
 
 	accepted      chan net.Conn
@@ -170,6 +174,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		udpEnabled:    cfg.UDPEnabled,
 		tcpEnabled:    cfg.TCPEnabled,
 		banMITM:       cfg.BanMITM,
+		sessions:      cfg.Sessions,
 		cache:         cfg.Cache,
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
@@ -585,7 +590,11 @@ func (l *listener) runLease(ctx context.Context) error {
 	reverseTransport := newLeaseReverseTransport(l)
 	// Both exits cancel and join the workers before this owner closes its mux.
 	defer reverseTransport.Close()
-	for sessionSlot := range defaultReadyTarget {
+	target := l.sessions
+	if target <= 0 {
+		target = defaultReadyTarget
+	}
+	for sessionSlot := range target {
 		sessionSlot++
 		workers.Add(1)
 		go func() {
