@@ -55,26 +55,13 @@ func (c *logCapture) snapshot() string {
 	return c.buf.String()
 }
 
-// TestMITMSelfProbeRunsOnTenantTraffic is the live-loop proof of the
-// restored responder path (#501): an exposure with --ban-mitm semantics
-// registers against the in-process relay instead of failing the
-// registration gate, the first tenant traffic arms the self-probe, the
-// relay routes the probe connection through tenant TLS, the SDK terminates
-// it via the keyless_tls t13server, the responder recognizes the probe
-// nonce and compares exporter values, and the probe reports passthrough.
-// Mismatch and timeout classification stays in the sdk unit tests; this
-// pins the working loop end to end and keeps a clean relay from ever
-// producing a suspicion verdict.
-func TestMITMSelfProbeRunsOnTenantTraffic(t *testing.T) {
+// Reverse readiness must start verification without a visitor request, and
+// an honest relay must remain usable after the background probe completes.
+func TestMITMSelfProbeRunsWithoutTenantTraffic(t *testing.T) {
 	logs := captureSDKLogs(t)
 
-	// With the exporter capability restored, ban-mitm must not fail the
-	// registration gate the way it did before #501.
 	h := newHarness(t, sdk.WithMITMProtection(true))
 	publicURL := h.waitForPublicURL()
-	if got := h.get(publicURL); got != marker {
-		t.Fatalf("tenant response = %q, want %q", got, marker)
-	}
 
 	// The probe is asynchronous: poll the captured SDK log instead of
 	// racing it. A verdict must arrive well inside the probe timeout.

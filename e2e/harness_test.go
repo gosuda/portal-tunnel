@@ -45,14 +45,15 @@ type harness struct {
 	sniPort     int
 	stateDir    string
 	proxyDone   chan error
+	mitm        *mitmIngress
 }
 
 func newHarness(t *testing.T, opts ...sdk.Option) *harness {
 	t.Helper()
-	return newHarnessWithName(t, "e2e", "127.0.0.1", opts...)
+	return newHarnessWithName(t, "e2e", "127.0.0.1", "", opts...)
 }
 
-func newHarnessWithName(t *testing.T, name, host string, opts ...sdk.Option) *harness {
+func newHarnessWithName(t *testing.T, name, host, attack string, opts ...sdk.Option) *harness {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
@@ -79,11 +80,15 @@ func newHarnessWithName(t *testing.T, name, host string, opts ...sdk.Option) *ha
 	sniPort := harnessPort(t, host)
 	stateDir := t.TempDir()
 	sniAddr := net.JoinHostPort(host, strconv.Itoa(sniPort))
+	ingressAddr := sniAddr
+	if attack != "" {
+		ingressAddr = net.JoinHostPort(host, strconv.Itoa(harnessPort(t, host)))
+	}
 	relayURL := "https://" + sniAddr
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     relayURL,
 		StateDir:      stateDir,
-		SNIListenAddr: sniAddr,
+		SNIListenAddr: ingressAddr,
 		SNIPort:       sniPort,
 	})
 	if err != nil {
@@ -95,6 +100,10 @@ func newHarnessWithName(t *testing.T, name, host string, opts ...sdk.Option) *ha
 		cancel()
 		service.Close()
 		t.Fatalf("start relay: %v", err)
+	}
+	var ingress *mitmIngress
+	if attack != "" {
+		ingress = startMITMIngress(t, ctx, sniAddr, ingressAddr, stateDir, attack)
 	}
 
 	clientIdentity, err := identity.Generate(name)
@@ -125,6 +134,7 @@ func newHarnessWithName(t *testing.T, name, host string, opts ...sdk.Option) *ha
 		sniPort:     sniPort,
 		stateDir:    stateDir,
 		proxyDone:   make(chan error, 1),
+		mitm:        ingress,
 	}
 	go func() {
 		h.proxyDone <- sdk.Proxy(ctx, exposure, target.Host)
@@ -192,7 +202,7 @@ func tenantGet(sniAddr, certPath, publicURL string) (string, bool) {
 		return "", false
 	}
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, sniAddr)
 		},

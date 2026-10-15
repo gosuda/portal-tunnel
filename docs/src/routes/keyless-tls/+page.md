@@ -115,8 +115,12 @@ replace the policy code.
 
 ## Compare the two ends of a sampled TLS connection
 
-The native SDK adds an active check. After application traffic starts, it opens
-a separate TLS connection to its own public tenant hostname. The initiating
+The native SDK adds an active check. Once a reverse connection is ready, a
+lease-owned background loop opens a separate TLS connection to its own public
+tenant hostname. It schedules further probes without visitor traffic using
+capped exponential delays, a cumulative attempt budget, and backoff after
+inconclusive results; see the [scheduling policy](/security-model#mitm-self-probe).
+The initiating
 side verifies the hostname against the relay certificate chain that the SDK
 has obtained. Public relay connections use normal CA verification; the
 [local-development bootstrap](/security-model#local-development-trust) has a
@@ -142,7 +146,7 @@ bans end when the exposure is replaced; neither is durable across client
 restarts or network-wide. Timeouts and connection or handshake failures are
 warnings, not mismatch verdicts, and do not trigger the block.
 
-Traffic is already flowing when this asynchronous check runs. A matching
+Serving traffic does not wait for this asynchronous check. A matching
 result therefore establishes passthrough only for the sampled connection; it
 does not certify the relay, prove prior requests were safe, or guarantee what
 will happen to another client's connection. A malicious relay might forward

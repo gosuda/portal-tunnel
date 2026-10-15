@@ -174,7 +174,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
 	}
-	l.mitmManager = newMITMManager(listenerCtx, l, cfg.BanMITM)
+	l.mitmManager = newMITMManager(l, cfg.BanMITM)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
 	if l.udpEnabled {
 		l.datagram = transport.NewDatagramSession(256, false)
@@ -453,7 +453,7 @@ func (l *listener) Accept() (net.Conn, error) {
 		if handled {
 			continue
 		}
-		return &mitmProbeConn{Conn: nextConn, manager: l.mitmManager}, nil
+		return nextConn, nil
 	}
 }
 
@@ -574,6 +574,12 @@ func (l *listener) runLease(ctx context.Context) error {
 
 	errCh := make(chan error, defaultReadyTarget+1)
 	var workers sync.WaitGroup
+	probeReady := make(chan struct{}, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		l.mitmManager.run(leaseCtx, probeReady)
+	}()
 	if l.cache != nil {
 		workers.Add(1)
 		go func() {
@@ -590,7 +596,7 @@ func (l *listener) runLease(ctx context.Context) error {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot, reverseTransport); err != nil {
+			if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot, reverseTransport, probeReady); err != nil {
 				select {
 				case errCh <- err:
 				case <-leaseCtx.Done():
@@ -633,7 +639,7 @@ func (l *listener) runLease(ctx context.Context) error {
 	}
 }
 
-func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int, reverseTransport *leaseReverseTransport) error {
+func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int, reverseTransport *leaseReverseTransport, probeReady chan<- struct{}) error {
 	var retries int
 	for {
 		lease, _ := l.leaseSnapshot()
@@ -665,6 +671,10 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless
 			continue
 		}
 		l.reportStreamReady()
+		select {
+		case probeReady <- struct{}{}:
+		default:
+		}
 		claimed, err := func() (bool, error) {
 			defer l.reportStreamClosed()
 			binding, err := transport.ReadStart(ctx, conn, defaultHandshakeTimeout)
