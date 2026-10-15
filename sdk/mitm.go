@@ -322,6 +322,9 @@ func (m *mitmManager) logResult(report mitmProbeReport, err error) {
 			Str("public_url", report.PublicURL).
 			Str("address", report.Address).
 			Msg("tls self-probe timed out before passthrough could be verified")
+		// An inconclusive probe accumulates suppression evidence without
+		// failing the listener: no state field, no Close.
+		l.report(listenerStatus{failure: RelayFailureProbeInconclusive})
 	case report.Detected:
 		event := log.Warn().
 			Bool("ban_mitm", m.ban).

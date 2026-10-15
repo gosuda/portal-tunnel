@@ -149,6 +149,9 @@ func (s *RelaySet) clearExpiredPoolBansLocked(now time.Time) {
 			continue
 		}
 		if !state.Bootstrap {
+			// The entry is dropped with its pool-ban count: the re-entry
+			// ratchet anchors on retained entries (bootstrap and explicit
+			// relays), so TTL release of a transient entry resets it.
 			delete(s.relays, relayURL)
 			continue
 		}
@@ -164,14 +167,22 @@ func (s *RelaySet) banFromPoolLocked(relayURL string, now time.Time) {
 		return
 	}
 	bootstrap := false
-	state, ok := s.relays[relayURL]
-	if ok {
-		bootstrap = state.Bootstrap
+	poolBans := 0
+	if existing, ok := s.relays[relayURL]; ok {
+		bootstrap = existing.Bootstrap
+		poolBans = existing.poolBans
 	}
-	state = newRelayState(relayURL)
+	state := newRelayState(relayURL)
 	state.Bootstrap = bootstrap
 	state.Banned = true
-	state.suppressActiveUntil = now.Add(relayPoolBanTTL)
+	state.poolBans = poolBans + 1
+	if poolBans == 0 {
+		state.suppressActiveUntil = now.Add(relayPoolBanTTL)
+	}
+	// Re-entry (a prior pool-ban count survived the TTL release) escalates
+	// to the permanent-ban representation: Banned with a zero
+	// suppressActiveUntil, the same shape BanRelayURL writes and
+	// clearExpiredPoolBansLocked skips.
 	s.relays[relayURL] = state
 	// A local ban outranks protocol-mismatch visibility and drops the
 	// observed release: both return only after a fresh direct contact.
@@ -199,6 +210,12 @@ func mergeLocalRelayState(record, existing RelayState) RelayState {
 	if record.activeFailures < existing.activeFailures {
 		record.activeFailures = existing.activeFailures
 	}
+	if record.poolBans < existing.poolBans {
+		record.poolBans = existing.poolBans
+	}
+	if record.activeSuppressions < existing.activeSuppressions {
+		record.activeSuppressions = existing.activeSuppressions
+	}
 	record.unhealthySince = existing.unhealthySince
 	record.nextDiscoveryRefreshAt = existing.nextDiscoveryRefreshAt
 	record.suppressActiveUntil = existing.suppressActiveUntil
@@ -216,6 +233,10 @@ func markDiscoveryVerified(state RelayState) RelayState {
 	state.discoveryFailures = 0
 	state.nextDiscoveryRefreshAt = time.Time{}
 	state.unhealthySince = time.Time{}
+	// A fresh direct verification is the healthy-confirmation reset for the
+	// suppression cycle. The pool-ban ratchet is deliberately untouched:
+	// it clears only via explicit operator trust (AllowRelayURL).
+	state.activeSuppressions = 0
 	return state
 }
 
@@ -473,6 +494,9 @@ func (s *RelaySet) AllowRelayURL(relayURL string) {
 	state.Banned = false
 	state.suppressActiveUntil = time.Time{}
 	state.unhealthySince = time.Time{}
+	// Explicit operator trust resets both reputation ratchets.
+	state.poolBans = 0
+	state.activeSuppressions = 0
 	s.relays[relayURL] = state
 }
 
@@ -1020,6 +1044,15 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 	failuresOverBudget := state.activeFailures - recoveryFailures
 	backoff := min(defaultDirectRecoveryBackoff<<min(failuresOverBudget, 3), maxDirectRecoveryBackoff)
 	state.suppressActiveUntil = now.Add(backoff)
+	state.activeSuppressions++
+	if state.activeSuppressions >= activeSuppressionPoolBanThreshold {
+		// Repeated suppression cycles: the next grant escalates to a pool
+		// ban, replacing this state (banFromPoolLocked re-reads the stored
+		// entry). The failure count is informational.
+		failureCount := state.activeFailures
+		s.banFromPoolLocked(relayURL, now)
+		return true, "pool_ban", failureCount
+	}
 	s.relays[relayURL] = state
 	return true, "active", state.activeFailures
 }

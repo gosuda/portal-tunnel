@@ -43,6 +43,11 @@ const (
 	RelayFailureRuntime  RelayFailure = "runtime"
 	RelayFailureTerminal RelayFailure = "terminal"
 	RelayFailureMITM     RelayFailure = "mitm"
+
+	// RelayFailureProbeInconclusive marks an inconclusive TLS self-probe
+	// (timeout). It is accumulating evidence for discovery policy, not a
+	// listener failure: it must not close the listener.
+	RelayFailureProbeInconclusive RelayFailure = "probe_inconclusive"
 )
 
 // RelayStatus is an immutable snapshot of one relay's externally visible state.
@@ -670,12 +675,15 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 		e.discovery.SetActiveRelays(e.ActiveRelays())
 	}
 
-	// Feed terminal relay failures directly to the discovery collaborator.
-	// This bypasses the Updates channel so slow consumers cannot delay
-	// policy reactions. discoveryFailureKind maps the classification
-	// explicitly so the two string types never form a hidden cross-package
-	// value contract.
-	if status.State == RelayFailed && e.discovery != nil {
+	// Feed terminal relay failures and inconclusive probe evidence directly
+	// to the discovery collaborator. An inconclusive probe is not a
+	// listener failure — the relay state is unchanged — but its evidence
+	// still flows into discovery policy. This bypasses the Updates channel
+	// so slow consumers cannot delay policy reactions.
+	// discoveryFailureKind maps the classification explicitly so the two
+	// string types never form a hidden cross-package value contract.
+	policyReport := status.State == RelayFailed || status.Failure == RelayFailureProbeInconclusive
+	if policyReport && e.discovery != nil {
 		e.discovery.Report(status.RelayURL, discoveryFailureKind(status.Failure))
 	}
 }
@@ -690,6 +698,8 @@ func discoveryFailureKind(failure RelayFailure) discovery.FailureKind {
 		return discovery.FailureMITM
 	case RelayFailureTerminal:
 		return discovery.FailureTerminal
+	case RelayFailureProbeInconclusive:
+		return discovery.FailureProbeInconclusive
 	default:
 		// RelayFailureRuntime, an unclassified failure, and RelayFailureNone
 		// on a Failed status all mean "listener stopped, relay suspect":

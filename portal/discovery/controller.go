@@ -17,14 +17,43 @@ import (
 // their own failure vocabulary onto these kinds explicitly (the sdk does so
 // in one place, next to its RelayFailure type), while the POLICY — which
 // kind means permanent ban versus suppression/backoff — stays inside
-// discovery.
+// discovery. Callers holding richer evidence use the typed entry points
+// (SanctionCritical, SuppressAccumulating) directly; Report is the thin
+// adapter for the raw kind vocabulary.
 type FailureKind string
 
 const (
 	FailureRuntime  FailureKind = "runtime"
 	FailureTerminal FailureKind = "terminal"
 	FailureMITM     FailureKind = "mitm"
+
+	// FailureProbeInconclusive is an inconclusive TLS self-probe (timeout):
+	// accumulating warn evidence that must feed suppression, never the MITM
+	// ban. It is handled by Report's default branch.
+	FailureProbeInconclusive FailureKind = "probe_inconclusive"
 )
+
+// IntegrityViolation names a locally verified integrity violation.
+type IntegrityViolation string
+
+const (
+	IntegrityTLSExporterMismatch IntegrityViolation = "tls_exporter_mismatch"
+)
+
+// CriticalIntegrity is locally verified evidence of an integrity violation:
+// the check ran against this relay's own connection data and produced a
+// definitive verdict, so the sanction is a permanent ban.
+type CriticalIntegrity struct {
+	RelayURL  string
+	Violation IntegrityViolation
+}
+
+// WarnAccumulating is repeated-observation anomaly evidence: one event is noise,
+// accumulation earns reversible suppression and, on repeated cycles, a pool ban.
+type WarnAccumulating struct {
+	RelayURL string
+	Reason   string // observability label, e.g. the FailureKind value
+}
 
 // Controller is a thin discovery selection and refresh layer. It owns no
 // relay runtime state: RelaySet owns failure/backoff/ban/candidate state,
@@ -65,24 +94,47 @@ func NewController(bootstrapRelayURLs []string) *Controller {
 	}
 }
 
-// Report feeds a relay failure into discovery policy. FailureMITM
-// permanently bans the relay; runtime and terminal failures apply
-// backoff suppression. Failures are deduped by
-// RelaySet's own suppression state — once a relay is suppressed, further
-// failures are skipped until suppression expires.
+// SanctionCritical applies a permanent ban for locally verified integrity
+// evidence. Verified violations are not reversible: only an explicit
+// operator re-add (AllowRelayURL) lifts the ban.
+func (c *Controller) SanctionCritical(ev CriticalIntegrity) {
+	if c == nil || ev.RelayURL == "" {
+		return
+	}
+	if ev.Violation == IntegrityTLSExporterMismatch {
+		c.relaySet.BanRelayURL(ev.RelayURL)
+	}
+	c.signal()
+}
+
+// SuppressAccumulating feeds one accumulating anomaly observation into
+// suppression policy. Observations are deduped by RelaySet's own suppression
+// state — once a relay is suppressed, further observations are skipped until
+// suppression expires.
+func (c *Controller) SuppressAccumulating(ev WarnAccumulating) {
+	if c == nil || ev.RelayURL == "" {
+		return
+	}
+	if !c.relaySet.IsSuppressed(ev.RelayURL, time.Now().UTC()) {
+		c.relaySet.RecordActiveFailure(ev.RelayURL, 1)
+	}
+	c.signal()
+}
+
+// Report feeds a relay failure into discovery policy. It is the thin adapter
+// from the raw FailureKind vocabulary onto the typed evidence entry points:
+// FailureMITM delegates to SanctionCritical (permanent ban), every other kind
+// delegates to SuppressAccumulating (reversible suppression, escalating to a
+// pool ban on repeated cycles).
 func (c *Controller) Report(relayURL string, kind FailureKind) {
 	if c == nil || relayURL == "" {
 		return
 	}
-	switch kind {
-	case FailureMITM:
-		c.relaySet.BanRelayURL(relayURL)
-	default:
-		if !c.relaySet.IsSuppressed(relayURL, time.Now().UTC()) {
-			c.relaySet.RecordActiveFailure(relayURL, 1)
-		}
+	if kind == FailureMITM {
+		c.SanctionCritical(CriticalIntegrity{RelayURL: relayURL, Violation: IntegrityTLSExporterMismatch})
+		return
 	}
-	c.signal()
+	c.SuppressAccumulating(WarnAccumulating{RelayURL: relayURL, Reason: string(kind)})
 }
 
 // SetExplicitRelays replaces the explicit relay URLs for selection. The

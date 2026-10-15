@@ -13,6 +13,10 @@ const (
 	maxDirectRecoveryBackoff     = 5 * time.Minute
 	relayPoolBanTTL              = 72 * time.Hour
 
+	// activeSuppressionPoolBanThreshold bounds how many active-failure suppression
+	// cycles a relay may re-enter before the next one escalates to a pool ban.
+	activeSuppressionPoolBanThreshold = 5
+
 	// MaxAnnouncedRelays is the hard ceiling on the number of relay entries
 	// the local set will retain. When exceeded, eviction prefers the oldest
 	// unverified entries by LastSeenAt, then verified entries. Bootstrap and
@@ -120,6 +124,16 @@ type RelayState struct {
 	unhealthySince         time.Time
 	nextDiscoveryRefreshAt time.Time
 	suppressActiveUntil    time.Time
+
+	// poolBans counts pool-ban entries; it is the re-entry ratchet anchor.
+	// It survives TTL release and descriptor merges and resets only on
+	// explicit operator trust (AllowRelayURL).
+	poolBans int
+	// activeSuppressions counts suppression grants from active-failure
+	// accumulation. A fresh direct verification (markDiscoveryVerified)
+	// resets it: the relay proved healthy, so the suppression cycle
+	// starts over.
+	activeSuppressions int
 }
 
 const (
