@@ -3,5 +3,8 @@ global:
 
 scrape_configs:
   - job_name: portal-relay
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
     static_configs:
-      - targets: [portal:9090]
+      - targets: [portal:443]

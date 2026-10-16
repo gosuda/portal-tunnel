@@ -56,9 +56,8 @@ services:
       PPROF_ENABLED: ${PPROF_ENABLED:-false}
       PPROF_ADDR: ${PPROF_ADDR:-127.0.0.1:6060}
 
-      # Optional observability. Expose METRICS_ADDR on the host if Prometheus
-      # runs outside this compose project; Loki forwarding is disabled empty.
-      METRICS_ADDR: ${METRICS_ADDR:-:9090}
+      # Optional observability. Prometheus is served at /metrics on the same
+      # HTTPS API listener; Loki forwarding is disabled when empty.
       LOKI_URL: ${LOKI_URL:-}
 
       # TLS/ACME materials and DNS automation

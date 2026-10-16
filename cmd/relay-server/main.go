@@ -52,7 +52,6 @@ type appConfig struct {
 	AdminToken         string
 	PprofEnabled       bool
 	PprofListenAddr    string
-	MetricsListenAddr  string
 	LokiURL            string
 	// Relay-owned x402 facilitator surface: portal.Server is x402-blind, so
 	// this application resolves the flags and mounts the payment endpoints.
@@ -121,7 +120,6 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.StringFlagEnv(fs, &cfg.AdminToken, "admin-token", "", "admin bearer token for relay admin and policy APIs", "ADMIN_TOKEN")
 	utils.BoolFlagEnv(fs, &cfg.PprofEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.PprofListenAddr, "pprof-addr", DefaultPprofListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
-	utils.StringFlagEnv(fs, &cfg.MetricsListenAddr, "metrics-addr", "", "optional address for the OpenTelemetry Prometheus /metrics endpoint", "METRICS_ADDR")
 	utils.StringFlagEnv(fs, &cfg.LokiURL, "loki-url", "", "optional Loki push endpoint; relay logs are sent when configured", "LOKI_URL")
 	utils.BoolFlagEnv(fs, &cfg.X402Enabled, "x402-enabled", false, "enable relay-owned Sui x402 facilitator endpoints under /api/x402 for future control-plane payments", "X402_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
@@ -214,7 +212,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
-	telemetry, err := observability.Start(ctx, observability.Config{MetricsAddr: cfg.MetricsListenAddr, ServiceName: "portal-relay"})
+	telemetry, err := observability.Start(ctx, observability.Config{ServiceName: "portal-relay"})
 	if err != nil {
 		return fmt.Errorf("start observability: %w", err)
 	}
@@ -255,6 +253,10 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	handler := policy.Mux(server, base, ingress,
 		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 		access, cfg.PreAuth)
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", telemetry.Handler())
+	metricsMux.Handle("/", handler)
+	handler = metricsMux
 	handler = observability.WrapHTTP(telemetry.Meter(), handler)
 	if !cfg.PprofEnabled {
 		return server.Serve(ctx, handler)

@@ -27,7 +27,6 @@ import (
 )
 
 type Config struct {
-	MetricsAddr string
 	ServiceName string
 }
 
@@ -35,7 +34,6 @@ type Runtime struct {
 	provider *sdkmetric.MeterProvider
 	exporter *prometheusExporter
 	meter    metric.Meter
-	server   *http.Server
 	runtime  metric.Registration
 }
 
@@ -50,28 +48,15 @@ func Start(ctx context.Context, cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("register runtime metrics: %w", err)
 	}
 	r.runtime = registration
-	if strings.TrimSpace(cfg.MetricsAddr) == "" {
-		return r, nil
-	}
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", exporter)
-	r.server = &http.Server{Addr: cfg.MetricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() {
-		if err := r.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			// The main server owns fatal error reporting; this endpoint is best effort.
-		}
-	}()
 	return r, nil
 }
 
-func (r *Runtime) Meter() metric.Meter { return r.meter }
+func (r *Runtime) Meter() metric.Meter   { return r.meter }
+func (r *Runtime) Handler() http.Handler { return r.exporter }
 
 func (r *Runtime) Shutdown(ctx context.Context) error {
 	if r == nil {
 		return nil
-	}
-	if r.server != nil {
-		_ = r.server.Shutdown(ctx)
 	}
 	if r.runtime != nil {
 		_ = r.runtime.Unregister()
