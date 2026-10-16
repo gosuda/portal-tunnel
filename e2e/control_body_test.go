@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -116,26 +116,19 @@ func TestRelayClosesUnreadControlBodies(t *testing.T) {
 
 func TestRelayMetricsEndpoint(t *testing.T) {
 	_, base, client := startPolicyRelay(t, t.TempDir(), "--cache-enabled=false")
-	deadline := time.Now().Add(7 * time.Second)
-	for {
-		response, err := client.Get(base.String() + "/metrics")
-		if err != nil {
-			t.Fatal(err)
-		}
-		body, readErr := io.ReadAll(response.Body)
-		response.Body.Close()
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		if response.StatusCode != http.StatusOK {
-			t.Fatalf("metrics status = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
-		}
-		if strings.Contains(string(body), "go_goroutines") {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("metrics response did not contain go_goroutines:\n%s", body)
-		}
-		time.Sleep(100 * time.Millisecond)
+	response, err := client.Get(base.String() + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, readErr := io.ReadAll(response.Body)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("metrics status = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+	}
+	if !bytes.Contains(body, []byte("go_goroutines")) {
+		t.Fatalf("metrics response did not contain go_goroutines:\n%s", body)
 	}
 }

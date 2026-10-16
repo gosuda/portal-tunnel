@@ -56,8 +56,15 @@ func Start(ctx context.Context, cfg Config) (*Runtime, error) {
 	return r, nil
 }
 
-func (r *Runtime) Meter() metric.Meter   { return r.meter }
-func (r *Runtime) Handler() http.Handler { return r.exporter }
+func (r *Runtime) Meter() metric.Meter { return r.meter }
+func (r *Runtime) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if r != nil && r.provider != nil {
+			_ = r.provider.ForceFlush(req.Context())
+		}
+		r.exporter.ServeHTTP(w, req)
+	})
+}
 
 func (r *Runtime) Shutdown(ctx context.Context) error {
 	if r == nil {
