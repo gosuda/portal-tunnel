@@ -218,9 +218,10 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	}
 	defer telemetry.Shutdown(context.Background())
 	relayMetrics, err := observability.RegisterRelayMetrics(telemetry.Meter(), func() observability.RelayMetrics {
+		activeTenants, activeConnections := server.TransportStats()
 		return observability.RelayMetrics{
-			ActiveTenants:     server.ActiveTenantCount(),
-			ActiveConnections: server.ActiveConnectionCount(),
+			ActiveTenantsByTransport:     activeTenants,
+			ActiveConnectionsByTransport: activeConnections,
 		}
 	})
 	if err != nil {

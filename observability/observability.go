@@ -38,8 +38,8 @@ type Runtime struct {
 }
 
 type RelayMetrics struct {
-	ActiveTenants     int64
-	ActiveConnections int64
+	ActiveTenantsByTransport     map[string]int64
+	ActiveConnectionsByTransport map[string]int64
 }
 
 func Start(ctx context.Context, cfg Config) (*Runtime, error) {
@@ -124,8 +124,12 @@ func RegisterRelayMetrics(meter metric.Meter, read func() RelayMetrics) (metric.
 	}
 	return meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
 		metrics := read()
-		observer.ObserveInt64(activeTenants, metrics.ActiveTenants)
-		observer.ObserveInt64(activeConnections, metrics.ActiveConnections)
+		for transport, value := range metrics.ActiveTenantsByTransport {
+			observer.ObserveInt64(activeTenants, value, metric.WithAttributes(attribute.String("transport", transport)))
+		}
+		for transport, value := range metrics.ActiveConnectionsByTransport {
+			observer.ObserveInt64(activeConnections, value, metric.WithAttributes(attribute.String("transport", transport)))
+		}
 		return nil
 	}, activeTenants, activeConnections)
 }

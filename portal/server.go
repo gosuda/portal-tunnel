@@ -751,15 +751,12 @@ func (s *Server) PolicyLeases() []types.PolicyLease {
 	return s.registry.PolicyLeases(time.Now())
 }
 
-func (s *Server) ActiveTenantCount() int64 {
-	return int64(len(s.PolicyLeases()))
-}
-
-func (s *Server) ActiveConnectionCount() int64 {
-	if s == nil {
-		return 0
+func (s *Server) TransportStats() (tenants, connections map[string]int64) {
+	if s == nil || s.registry == nil {
+		return map[string]int64{}, map[string]int64{}
 	}
-	return s.proxy.activeConnectionCount()
+	stats := s.registry.transportStats(time.Now())
+	return stats.activeTenants, stats.activeConnections
 }
 
 // AccessProjectionKeys returns identities whose live lease or retained cache
