@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -111,4 +112,23 @@ func TestRelayClosesUnreadControlBodies(t *testing.T) {
 			t.Fatalf("timed-out response = %d close=%v, want 400 close=true", response.StatusCode, response.Close)
 		}
 	})
+}
+
+func TestRelayMetricsEndpoint(t *testing.T) {
+	_, base, client := startPolicyRelay(t, t.TempDir(), "--cache-enabled=false")
+	response, err := client.Get(base.String() + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, readErr := io.ReadAll(response.Body)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("metrics status = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+	}
+	if !bytes.Contains(body, []byte("go_goroutines")) {
+		t.Fatalf("metrics response did not contain go_goroutines:\n%s", body)
+	}
 }

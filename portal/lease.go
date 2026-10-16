@@ -961,6 +961,47 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 	return leases
 }
 
+type transportStats struct {
+	activeTenants     map[string]int64
+	activeConnections map[string]int64
+}
+
+func (r *leaseRegistry) transportStats(now time.Time) transportStats {
+	stats := transportStats{
+		activeTenants:     map[string]int64{"http": 0, "tcp": 0, "udp": 0, "tcp+udp": 0},
+		activeConnections: map[string]int64{"http": 0, "tcp": 0, "udp": 0, "tcp+udp": 0},
+	}
+	if r == nil {
+		return stats
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, record := range r.records {
+		if record == nil || record.reverse == nil || record.isExpired(now) {
+			continue
+		}
+		transport := "http"
+		switch {
+		case record.datagram != nil && record.tcpPort > 0:
+			transport = "tcp+udp"
+		case record.tcpPort > 0:
+			transport = "tcp"
+		case record.datagram != nil:
+			transport = "udp"
+		}
+		stats.activeTenants[transport]++
+
+		record.mu.Lock()
+		stats.activeConnections[transport] += int64(len(record.bridges))
+		record.mu.Unlock()
+		if record.datagram != nil {
+			stats.activeConnections[transport] += record.datagram.ActiveFlowCount()
+		}
+	}
+	return stats
+}
+
 func (r *leaseRegistry) deleteRecord(i int) {
 	if record := r.records[i]; record != nil {
 		r.cache.Detach(record.cacheLease())

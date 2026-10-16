@@ -175,6 +175,15 @@ func (d *RelayDatagram) UDPPort() int {
 	return d.port
 }
 
+func (d *RelayDatagram) ActiveFlowCount() int64 {
+	if d == nil {
+		return 0
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return int64(len(d.flowTable))
+}
+
 // SetEnabled gates traffic in both directions while keeping the socket bound.
 func (d *RelayDatagram) SetEnabled(enabled bool) {
 	if d == nil {
