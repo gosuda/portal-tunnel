@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -333,7 +334,7 @@ func attrs(set attribute.Set) ([]string, []string) {
 	sort.Slice(kvs, func(i, j int) bool { return kvs[i].Key < kvs[j].Key })
 	keys, vals := make([]string, 0, len(kvs)), make([]string, 0, len(kvs))
 	for _, kv := range kvs {
-		keys = append(keys, sanitize(kv.Key))
+		keys = append(keys, sanitize(string(kv.Key)))
 		vals = append(vals, kv.Value.Emit())
 	}
 	return keys, vals
@@ -358,7 +359,7 @@ func (e *prometheusExporter) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	defer e.mu.RUnlock()
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(e)
-	h := prometheus.HandlerFor(reg, prometheus.HandlerOpts{})
+	h := promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 	h.ServeHTTP(w, nil)
 }
 func (e *prometheusExporter) Describe(chan<- *prometheus.Desc) {}
