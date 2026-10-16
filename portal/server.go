@@ -751,6 +751,17 @@ func (s *Server) PolicyLeases() []types.PolicyLease {
 	return s.registry.PolicyLeases(time.Now())
 }
 
+func (s *Server) ActiveTenantCount() int64 {
+	return int64(len(s.PolicyLeases()))
+}
+
+func (s *Server) ActiveConnectionCount() int64 {
+	if s == nil || s.proxy == nil {
+		return 0
+	}
+	return s.proxy.activeConnectionCount()
+}
+
 // AccessProjectionKeys returns identities whose live lease or retained cache
 // content needs the relay's current access decision.
 func (s *Server) AccessProjectionKeys() []types.ServiceIdentityKey {

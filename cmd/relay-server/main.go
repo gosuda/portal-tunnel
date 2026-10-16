@@ -217,6 +217,16 @@ func runServer(ctx context.Context, cfg appConfig) error {
 		return fmt.Errorf("start observability: %w", err)
 	}
 	defer telemetry.Shutdown(context.Background())
+	relayMetrics, err := observability.RegisterRelayMetrics(telemetry.Meter(), func() observability.RelayMetrics {
+		return observability.RelayMetrics{
+			ActiveTenants:     server.ActiveTenantCount(),
+			ActiveConnections: server.ActiveConnectionCount(),
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("register relay metrics: %w", err)
+	}
+	defer relayMetrics.Unregister()
 	ingress, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)

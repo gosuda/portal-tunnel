@@ -37,6 +37,11 @@ type Runtime struct {
 	runtime  metric.Registration
 }
 
+type RelayMetrics struct {
+	ActiveTenants     int64
+	ActiveConnections int64
+}
+
 func Start(ctx context.Context, cfg Config) (*Runtime, error) {
 	exporter := newPrometheusExporter()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exporter, sdkmetric.WithInterval(5*time.Second))))
@@ -106,6 +111,23 @@ func registerRuntimeMetrics(meter metric.Meter) (metric.Registration, error) {
 		}
 		return nil
 	}, cpu, runtimeMemory, heapMemory, goroutines)
+}
+
+func RegisterRelayMetrics(meter metric.Meter, read func() RelayMetrics) (metric.Registration, error) {
+	activeTenants, err := meter.Int64ObservableGauge("portal.tenants.active", metric.WithUnit("{tenant}"), metric.WithDescription("Active relay tenants"))
+	if err != nil {
+		return nil, err
+	}
+	activeConnections, err := meter.Int64ObservableGauge("portal.connections.active", metric.WithUnit("{connection}"), metric.WithDescription("Active relay connections"))
+	if err != nil {
+		return nil, err
+	}
+	return meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
+		metrics := read()
+		observer.ObserveInt64(activeTenants, metrics.ActiveTenants)
+		observer.ObserveInt64(activeConnections, metrics.ActiveConnections)
+		return nil
+	}, activeTenants, activeConnections)
 }
 
 func WrapHTTP(meter metric.Meter, next http.Handler) http.Handler {
