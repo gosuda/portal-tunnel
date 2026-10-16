@@ -6,8 +6,8 @@
     {"type":"piechart","title":"HTTP response status","gridPos":{"h":9,"w":12,"x":0,"y":9},"options":{"pieType":"donut","displayLabels":["name","percent"],"legend":{"displayMode":"table","placement":"right","values":["value","percent"]}},"targets":[{"expr":"sum by (http_status_code) (rate(portal_http_server_requests_total{job=~\"$job\"}[5m]))","legendFormat":"{{http_status_code}}"}]},
     {"type":"timeseries","title":"CPU, memory and goroutines","gridPos":{"h":9,"w":12,"x":12,"y":9},"targets":[{"expr":"rate(go_cpu_seconds_total{job=~\"$job\"}[5m]) * 100","legendFormat":"CPU %"},{"expr":"go_memory_runtime_bytes{job=~\"$job\"}","legendFormat":"runtime memory"},{"expr":"go_memory_heap_bytes{job=~\"$job\"}","legendFormat":"heap memory"},{"expr":"go_goroutines{job=~\"$job\"}","legendFormat":"goroutines"}]},
     {"type":"timeseries","title":"Active tenants and connections by transport","gridPos":{"h":8,"w":24,"x":0,"y":18},"targets":[{"expr":"portal_tenants_active{job=~\"$job\",transport=~\"$transport\"}","legendFormat":"tenants · {{transport}}"},{"expr":"portal_connections_active{job=~\"$job\",transport=~\"$transport\"}","legendFormat":"connections · {{transport}}"}]},
-    {"type":"logs","title":"Relay logs · errors and warnings","gridPos":{"h":8,"w":12,"x":0,"y":26},"targets":[{"expr":"{service=\"portal-relay\"} |~ \"(?i)(error|warn|failed|panic)\""}]},
-    {"type":"logs","title":"Relay logs · recent","gridPos":{"h":8,"w":12,"x":12,"y":26},"targets":[{"expr":"{service=\"portal-relay\"}"}]}
+    {"type":"logs","title":"Relay logs · errors and warnings","gridPos":{"h":8,"w":12,"x":0,"y":26},"targets":[{"expr":"{service=\"portal-relay\"} | json | level=~\"(?i)(error|warn|warning|debug)\""}]},
+    {"type":"logs","title":"Relay logs · recent","gridPos":{"h":8,"w":12,"x":12,"y":26},"targets":[{"expr":"{service=\"portal-relay\"} | json | level!~\"(?i)(error|warn|warning|debug)\""}]}
   ],
   "schemaVersion": 41,
   "tags": ["portal", "relay"],
