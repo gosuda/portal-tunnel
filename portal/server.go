@@ -756,7 +756,7 @@ func (s *Server) ActiveTenantCount() int64 {
 }
 
 func (s *Server) ActiveConnectionCount() int64 {
-	if s == nil || s.proxy == nil {
+	if s == nil {
 		return 0
 	}
 	return s.proxy.activeConnectionCount()
