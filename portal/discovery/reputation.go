@@ -3,22 +3,19 @@ package discovery
 import "time"
 
 // ReputationScorer converts observed relay behavior into a demotion factor
-// for tunnel allocation. Signal kinds, their weights, and the combining
-// arithmetic are implementation details of the scorer; consumers only see
-// the factor. This keeps every tuning decision in one owner.
+// for tunnel allocation. Signal kinds, weights, and combining arithmetic are
+// scorer internals; consumers only see the factor.
 type ReputationScorer interface {
-	// Demotion returns a factor in (0, 1]: 1 means full allocation, values
-	// below 1 scale the number of tunnels opened toward the relay down.
-	// A clean history scores 1; accumulating failures lower the factor
-	// gradually, so a degrading relay loses capacity before it loses
-	// membership. The factor never reaches 0 here — zero allocation is the
-	// exclusion path's decision, not the scorer's.
+	// Demotion returns a factor in (0, 1] that scales tunnel allocation: 1
+	// is full allocation, and accumulating failures lower it gradually so a
+	// degrading relay loses capacity before membership. It never reaches 0 —
+	// zero allocation is the exclusion path's decision, not the scorer's.
 	Demotion(state RelayState, now time.Time) float64
 }
 
 // reputationSignal enumerates the failure-derived inputs the weighted scorer
-// combines. Signals are strictly reputation-shaped: QoS observations (RTT,
-// pressure) belong to MOLS ranking and are deliberately not inputs here.
+// combines. QoS observations (RTT, pressure) belong to MOLS ranking and are
+// not inputs here.
 type reputationSignal int
 
 const (
@@ -30,17 +27,13 @@ const (
 )
 
 const (
-	// activeFailureScale: three active failures — one full suppression
-	// cycle's worth — saturate the signal.
+	// activeFailureScale: three active failures saturate the signal.
 	activeFailureScale = 3.0
-	// discoveryFailureScale: three unanswered discovery probes saturate the
-	// signal, matching the retry budget before backoff.
+	// discoveryFailureScale: three unanswered discovery probes saturate the signal.
 	discoveryFailureScale = 3.0
-	// suppressionScale: the maximum active-failure backoff (5 minutes) maps
-	// to a fully saturated remaining-suppression signal.
+	// suppressionScale: the maximum active-failure backoff saturates the signal.
 	suppressionScale = 5 * time.Minute
-	// unhealthyScale: half an hour without a successful discovery response
-	// saturates the unhealthiness signal.
+	// unhealthyScale: half an hour without a successful discovery response saturates the signal.
 	unhealthyScale = 30 * time.Minute
 )
 

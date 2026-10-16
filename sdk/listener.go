@@ -46,8 +46,6 @@ type listenerConfig struct {
 	TCPEnabled bool
 	BanMITM    bool
 	Metadata   types.LeaseMetadata
-	// Sessions is the target number of reverse sessions the lease keeps
-	// open toward the relay. Zero or negative uses the default target.
 	Sessions int
 }
 

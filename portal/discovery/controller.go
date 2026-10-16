@@ -87,10 +87,10 @@ func (c *Controller) Report(relayURL string, kind FailureKind) {
 	c.signal()
 }
 
-// RelayDemotion reports the current tunnel-allocation demotion factor for
-// relayURL: 1 for relays with no retained state or a clean history, less
-// than 1 as observed failures accumulate. Selection membership is unchanged;
-// the factor only scales how many tunnels the runtime opens.
+// RelayDemotion reports the tunnel-allocation demotion factor for relayURL:
+// 1 for clean relays, less than 1 as observed failures accumulate. It
+// scales how many tunnels the runtime opens; selection membership is
+// unchanged.
 func (c *Controller) RelayDemotion(relayURL string) float64 {
 	if c == nil || relayURL == "" {
 		return 1
