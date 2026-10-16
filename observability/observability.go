@@ -126,15 +126,20 @@ func WrapHTTP(meter metric.Meter, next http.Handler) http.Handler {
 
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (w *statusRecorder) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
 	w.status = status
+	w.wroteHeader = true
 	w.ResponseWriter.WriteHeader(status)
 }
 func (w *statusRecorder) Write(p []byte) (int, error) {
-	if w.status == http.StatusOK {
+	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
 	return w.ResponseWriter.Write(p)
@@ -339,13 +344,13 @@ func sanitize(s string) string {
 	}
 	return out
 }
-func (e *prometheusExporter) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+func (e *prometheusExporter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(e)
 	h := promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
-	h.ServeHTTP(w, nil)
+	h.ServeHTTP(w, r)
 }
 func (e *prometheusExporter) Describe(chan<- *prometheus.Desc) {}
 func (e *prometheusExporter) Collect(ch chan<- prometheus.Metric) {
