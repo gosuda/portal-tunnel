@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,4 +112,30 @@ func TestRelayClosesUnreadControlBodies(t *testing.T) {
 			t.Fatalf("timed-out response = %d close=%v, want 400 close=true", response.StatusCode, response.Close)
 		}
 	})
+}
+
+func TestRelayMetricsEndpoint(t *testing.T) {
+	_, base, client := startPolicyRelay(t, t.TempDir(), "--cache-enabled=false")
+	deadline := time.Now().Add(7 * time.Second)
+	for {
+		response, err := client.Get(base.String() + "/metrics")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("metrics status = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+		}
+		if strings.Contains(string(body), "go_goroutines") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("metrics response did not contain go_goroutines:\n%s", body)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

@@ -264,10 +264,15 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	handler := policy.Mux(server, base, ingress,
 		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 		access, cfg.PreAuth)
-	metricsMux := http.NewServeMux()
-	metricsMux.Handle("/metrics", telemetry.Handler())
-	metricsMux.Handle("/", handler)
-	handler = metricsMux
+	metricsHandler := telemetry.Handler()
+	nextHandler := handler
+	handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			metricsHandler.ServeHTTP(w, r)
+			return
+		}
+		nextHandler.ServeHTTP(w, r)
+	})
 	handler = observability.WrapHTTP(telemetry.Meter(), handler)
 	if !cfg.PprofEnabled {
 		return server.Serve(ctx, handler)
