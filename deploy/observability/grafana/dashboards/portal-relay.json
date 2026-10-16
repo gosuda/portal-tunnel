@@ -13,6 +13,7 @@
   "tags": ["portal", "relay"],
   "templating": {"list": [{"name":"job","label":"Job","type":"query","datasource":{"type":"prometheus","name":"Prometheus"},"definition":"label_values(up, job)","query":"label_values(up, job)","refresh":1,"includeAll":true,"multi":true,"allValue":".*","current":{"text":"All","value":["$__all"]}}]},
   "time": {"from": "now-6h", "to": "now"},
+  "refresh": "30s",
   "title": "Portal Relay Overview",
   "uid": "portal-relay",
   "version": 1
