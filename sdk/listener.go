@@ -46,7 +46,7 @@ type listenerConfig struct {
 	TCPEnabled bool
 	BanMITM    bool
 	Metadata   types.LeaseMetadata
-	Sessions int
+	Sessions   int
 }
 
 type listenerStatus struct {
