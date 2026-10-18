@@ -6,11 +6,15 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,12 +61,29 @@ func probeExporter(conn net.Conn) (func(label string, context []byte, length int
 const (
 	mitmProbeExporterLabel = "Portal-MITM-Probe-v1"
 	mitmProbePeekTimeout   = 100 * time.Millisecond
+	mitmProbeMaxPeekBytes  = 512
 	mitmProbePaddingMin    = 96
 	mitmProbePaddingMax    = 320
 
-	defaultMITMProbeCooldown = 30 * time.Second
-	defaultMITMProbeTimeout  = 30 * time.Second
+	defaultMITMProbeCooldownMin = 15 * time.Second
+	defaultMITMProbeCooldownMax = 45 * time.Second
+	defaultMITMProbeJitterMax   = 250 * time.Millisecond
+	defaultMITMProbeTimeout     = 30 * time.Second
 )
+
+var mitmProbeHTTPPaths = [...]string{
+	"/",
+	"/index.html",
+	"/favicon.ico",
+	"/assets/app.js",
+	"/api/health",
+}
+
+var mitmProbeUserAgents = [...]string{
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+}
 
 type mitmProbeReport struct {
 	RelayURL  string
@@ -91,7 +112,7 @@ type mitmManager struct {
 	mu       sync.Mutex
 	pending  map[mitmProbeNonce]*mitmProbePending
 	inFlight bool
-	lastAt   time.Time
+	nextAt   time.Time
 }
 
 func newMITMManager(ctx context.Context, listener *listener, ban bool) *mitmManager {
@@ -107,7 +128,7 @@ func (m *mitmManager) reset() {
 	m.mu.Lock()
 	clear(m.pending)
 	m.inFlight = false
-	m.lastAt = time.Time{}
+	m.nextAt = time.Time{}
 	m.mu.Unlock()
 }
 
@@ -120,6 +141,71 @@ func (m *mitmManager) setResponderCapable(capable bool) {
 	m.mu.Lock()
 	m.responderCapable = capable
 	m.mu.Unlock()
+}
+
+func randomDurationBetween(minDur, maxDur time.Duration) time.Duration {
+	if maxDur <= minDur {
+		return minDur
+	}
+	var raw [8]byte
+	if _, err := io.ReadFull(rand.Reader, raw[:]); err != nil {
+		return minDur
+	}
+	span := uint64(maxDur - minDur)
+	return minDur + time.Duration(binary.LittleEndian.Uint64(raw[:])%span)
+}
+
+// buildMITMProbeHTTPRequest constructs an HTTP/1.1 request carrying the hex
+// probe nonce in X-Request-ID and variable-length base64 padding in Cookie so
+// the post-handshake TLS record length and plaintext structure resemble
+// ordinary browser traffic rather than a fixed binary frame (#645).
+func buildMITMProbeHTTPRequest(hostname string, nonce mitmProbeNonce, padding []byte) []byte {
+	path := mitmProbeHTTPPaths[int(nonce[0])%len(mitmProbeHTTPPaths)]
+	ua := mitmProbeUserAgents[int(nonce[1])%len(mitmProbeUserAgents)]
+	nonceHex := hex.EncodeToString(nonce[:])
+	padToken := base64.RawURLEncoding.EncodeToString(padding)
+	req := fmt.Sprintf(
+		"GET %s HTTP/1.1
+Host: %s
+User-Agent: %s
+Accept: */*
+X-Request-ID: %s
+Cookie: _ps=%s
+Connection: close
+
+",
+		path,
+		hostname,
+		ua,
+		nonceHex,
+		padToken,
+	)
+	return []byte(req)
+}
+
+func (m *mitmManager) matchPendingProbe(peeked []byte) (mitmProbeNonce, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.pending) == 0 {
+		return mitmProbeNonce{}, false
+	}
+	if len(peeked) >= len(mitmProbeNonce{}) {
+		var rawNonce mitmProbeNonce
+		copy(rawNonce[:], peeked[:len(mitmProbeNonce{})])
+		if _, ok := m.pending[rawNonce]; ok {
+			return rawNonce, true
+		}
+	}
+	text := string(peeked)
+	if !strings.HasPrefix(text, "GET /") {
+		return mitmProbeNonce{}, false
+	}
+	for candidate := range m.pending {
+		if strings.Contains(text, hex.EncodeToString(candidate[:])) {
+			return candidate, true
+		}
+	}
+	return mitmProbeNonce{}, false
 }
 
 func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport, error) {
@@ -172,6 +258,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		ServerName: lease.hostname,
 		RootCAs:    relayPool,
 		MinVersion: tls.VersionTLS13,
+		NextProtos: []string{"http/1.1"},
 	}
 
 	rawConn, err := (&net.Dialer{Timeout: defaultDialTimeout}).DialContext(probeCtx, "tcp", dialAddr)
@@ -208,11 +295,11 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		paddingLen += int(paddingSeed[0]) % (paddingRange + 1)
 	}
 
-	frame := make([]byte, len(nonce)+paddingLen)
-	if _, err := io.ReadFull(rand.Reader, frame); err != nil {
+	padding := make([]byte, paddingLen)
+	if _, err := io.ReadFull(rand.Reader, padding); err != nil {
 		return report, fmt.Errorf("generate probe frame: %w", err)
 	}
-	copy(frame, nonce[:])
+	frame := buildMITMProbeHTTPRequest(lease.hostname, nonce, padding)
 	if _, err := tlsConn.Write(frame); err != nil {
 		return report, fmt.Errorf("write mitm probe: %w", err)
 	}
@@ -268,8 +355,9 @@ func (m *mitmManager) maybeStart() {
 	default:
 	}
 
+	now := time.Now()
 	m.mu.Lock()
-	if m.inFlight || !m.lastAt.IsZero() && time.Since(m.lastAt) < defaultMITMProbeCooldown {
+	if m.inFlight || (!m.nextAt.IsZero() && now.Before(m.nextAt)) {
 		m.mu.Unlock()
 		return
 	}
@@ -277,12 +365,20 @@ func (m *mitmManager) maybeStart() {
 	m.mu.Unlock()
 
 	go func() {
+		if jitter := randomDurationBetween(0, defaultMITMProbeJitterMax); jitter > 0 {
+			if !utils.SleepOrDone(m.ctx, jitter) {
+				m.mu.Lock()
+				m.inFlight = false
+				m.mu.Unlock()
+				return
+			}
+		}
 		report, err := m.probeTLSPassthrough(m.ctx)
 		success := err == nil && report.Reason != types.MITMProbeReasonProbeTimeout
 		m.mu.Lock()
 		m.inFlight = false
 		if success {
-			m.lastAt = time.Now()
+			m.nextAt = time.Now().Add(randomDurationBetween(defaultMITMProbeCooldownMin, defaultMITMProbeCooldownMax))
 		}
 		m.mu.Unlock()
 		m.logResult(report, err)
@@ -362,30 +458,21 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		return conn, false, nil
 	}
 
-	frameSize := len(mitmProbeNonce{})
-	reader := bufio.NewReaderSize(conn, frameSize)
+	reader := bufio.NewReaderSize(conn, mitmProbeMaxPeekBytes)
 	_ = conn.SetReadDeadline(time.Now().Add(mitmProbePeekTimeout))
-	peeked, _ := reader.Peek(frameSize)
+	_, _ = reader.Peek(len(mitmProbeNonce{}))
+	peeked, _ := reader.Peek(reader.Buffered())
 	defer conn.SetReadDeadline(time.Time{})
-	if len(peeked) != frameSize {
+	if len(peeked) < len(mitmProbeNonce{}) {
 		return wrapBufferedConn(conn, reader), false, nil
 	}
 
-	var nonce mitmProbeNonce
-	copy(nonce[:], peeked[:frameSize])
-	m.mu.Lock()
-	_, ok = m.pending[nonce]
-	m.mu.Unlock()
+	nonce, ok := m.matchPendingProbe(peeked)
 	if !ok {
 		return wrapBufferedConn(conn, reader), false, nil
 	}
 
 	defer conn.Close()
-
-	frame := make([]byte, frameSize)
-	if _, err := io.ReadFull(reader, frame); err != nil {
-		return nil, true, fmt.Errorf("read mitm probe frame: %w", err)
-	}
 
 	actual, err := exportFn(mitmProbeExporterLabel, nil, 32)
 	if err != nil {

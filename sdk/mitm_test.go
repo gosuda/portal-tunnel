@@ -271,3 +271,26 @@ func TestMITMProbeDialAddress(t *testing.T) {
 		})
 	}
 }
+
+func TestMITMProbeHTTPCamouflageAndMatching(t *testing.T) {
+	listener := &listener{}
+	manager := newMITMManager(context.Background(), listener, false)
+
+	nonce := mitmProbeNonce{0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x01}
+	_ = manager.reserveProbe(nonce)
+	defer manager.releaseProbe(nonce)
+
+	frame := buildMITMProbeHTTPRequest("app.relay.example", nonce, []byte("random-padding-bytes"))
+	if !bytes.HasPrefix(frame, []byte("GET /")) || !bytes.Contains(frame, []byte("Host: app.relay.example\r\n")) {
+		t.Fatalf("probe frame is not HTTP-camouflaged: %q", string(frame))
+	}
+	matched, ok := manager.matchPendingProbe(frame)
+	if !ok || matched != nonce {
+		t.Fatalf("matchPendingProbe(HTTP frame) = (%x, %v); want (%x, true)", matched, ok, nonce)
+	}
+
+	normalHTTP := []byte("GET / HTTP/1.1\r\nHost: app.relay.example\r\nUser-Agent: curl/8.0\r\n\r\n")
+	if _, ok := manager.matchPendingProbe(normalHTTP); ok {
+		t.Fatal("ordinary HTTP request falsely matched pending MITM probe")
+	}
+}
