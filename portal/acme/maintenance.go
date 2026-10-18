@@ -209,11 +209,14 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			}
 		case <-renewTicker.C:
 			_, _, manual, err := m.manualCertificateOverride()
-			if err != nil || manual || !m.shouldRenew() {
+			if err != nil || manual {
 				continue
 			}
 			renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err = m.provision(renewCtx)
+			needsRenewal, replacesCertID := m.shouldRenew(renewCtx)
+			if needsRenewal {
+				err = m.provision(renewCtx, replacesCertID)
+			}
 			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")

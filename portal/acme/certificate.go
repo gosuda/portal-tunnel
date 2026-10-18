@@ -18,13 +18,17 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/certcrypto"
+	"github.com/go-acme/lego/v4/certificate"
 	lego "github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-const localDevelopmentCertificateTTL = 3650 * 24 * time.Hour
+const (
+	localDevelopmentCertificateTTL = 3650 * 24 * time.Hour
+	defaultRenewThreshold          = 30 * 24 * time.Hour
+)
 
 type acmeUser struct {
 	Key          crypto.PrivateKey
@@ -32,25 +36,61 @@ type acmeUser struct {
 	Email        string
 }
 
-func (m *Manager) shouldRenew() bool {
+func (m *Manager) shouldRenew(ctx context.Context) (bool, string) {
 	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
-	needsRenewal, err := certNeedsRenewal(certFile, certificateDomains(m.cfg.BaseDomain))
-	return err == nil && needsRenewal
+	cert, err := loadCertificate(certFile)
+	if err != nil {
+		return false, ""
+	}
+	domains := certificateDomains(m.cfg.BaseDomain)
+	if !certificateCoversDomains(cert, domains) {
+		return true, ""
+	}
+	var ari *certificate.RenewalInfoResponse
+	if client, clientErr := m.newClient(ctx); clientErr == nil {
+		ari, _ = client.Certificate.GetRenewalInfo(certificate.RenewalInfoRequest{Cert: cert})
+	}
+	return evaluateRenewal(cert, domains, ari, time.Now().UTC())
 }
 
 func certificateDomains(baseDomain string) []string {
 	return []string{baseDomain, "*." + baseDomain}
 }
 
-func certNeedsRenewal(certFile string, domains []string) (bool, error) {
-	cert, err := loadCertificate(certFile)
-	if err != nil {
-		return false, err
+// evaluateRenewal determines whether cert should be renewed now using ACME
+// Renewal Information (ARI, RFC 9773) when available, falling back to the
+// 30-day remaining lifetime threshold when ARI is unavailable. When an
+// ARI-scheduled renewal is triggered for an unchanged domain set, it also
+// returns the RFC 9773 ReplacesCertID identifier.
+func evaluateRenewal(cert *x509.Certificate, domains []string, ari *certificate.RenewalInfoResponse, now time.Time) (bool, string) {
+	var ariRenewAt *time.Time
+	if ari != nil {
+		ariRenewAt = ari.ShouldRenewAt(now.UTC(), 0)
 	}
-	if time.Until(cert.NotAfter) < 30*24*time.Hour {
-		return true, nil
+	return evaluateRenewalDecision(cert, domains, ari != nil, ariRenewAt, now.UTC())
+}
+
+func evaluateRenewalDecision(cert *x509.Certificate, domains []string, hasARI bool, ariRenewAt *time.Time, now time.Time) (bool, string) {
+	if cert == nil {
+		return false, ""
 	}
-	return !certificateCoversDomains(cert, domains), nil
+	if !certificateCoversDomains(cert, domains) {
+		return true, ""
+	}
+	if hasARI {
+		if ariRenewAt != nil && !ariRenewAt.After(now) {
+			certID, err := certificate.MakeARICertID(cert)
+			if err != nil {
+				return true, ""
+			}
+			return true, certID
+		}
+		return false, ""
+	}
+	if cert.NotAfter.Sub(now) < defaultRenewThreshold {
+		return true, ""
+	}
+	return false, ""
 }
 
 func certCoversDomains(certFile string, domains []string) (bool, error) {
@@ -81,7 +121,11 @@ func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
 	return true
 }
 
-func newClient(ctx context.Context, email, accountKeyFile, registrationFile string, dnsProvider DNSProvider) (*lego.Client, error) {
+func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
+	email := defaultACMEEmailPrefix + m.cfg.BaseDomain
+	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
+	registrationFile := filepath.Join(m.cfg.KeyDir, registrationFileName)
+	dnsProvider := m.dns
 	accountKey, err := loadOrCreateAccountKey(accountKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("load acme account key: %w", err)

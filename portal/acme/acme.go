@@ -160,7 +160,7 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 		}
 	}
 
-	if err := m.provision(ctx); err != nil {
+	if err := m.provision(ctx, ""); err != nil {
 		return "", "", err
 	}
 	return m.TLSFiles()
@@ -261,7 +261,7 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 	return certFile, keyFile, true, nil
 }
 
-func (m *Manager) provision(ctx context.Context) error {
+func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
 	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
@@ -277,14 +277,15 @@ func (m *Manager) provision(ctx context.Context) error {
 		return fmt.Errorf("acme provisioning canceled: %w", err)
 	}
 
-	client, err := newClient(ctx, defaultACMEEmailPrefix+m.cfg.BaseDomain, accountKeyFile, registrationFile, m.dns)
+	client, err := m.newClient(ctx)
 	if err != nil {
 		return err
 	}
 
 	obtained, err := client.Certificate.Obtain(certificate.ObtainRequest{
-		Domains: domains,
-		Bundle:  true,
+		Domains:        domains,
+		Bundle:         true,
+		ReplacesCertID: strings.TrimSpace(replacesCertID),
 	})
 	if err != nil {
 		return fmt.Errorf("obtain certificate: %w", err)
