@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -13,12 +15,14 @@ import (
 	"net"
 	"net/url"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -68,6 +72,16 @@ const (
 	defaultMITMProbeRetryDelay = 30 * time.Second
 	defaultMITMProbeTimeout    = 30 * time.Second
 	mitmProbeBurst             = 3
+
+	tlsChannelBindingExporterLabel = "EXPORTER-Portal-TLS-Channel-Binding-v1"
+	tlsChannelBindingDomainContext = "portal-tls-channel-binding-v1"
+	tlsChannelBindingMagic         = "PTCB\x01"
+	tlsChannelBindingNonceSize     = 32
+	tlsChannelBindingExporterSize  = 32
+	tlsChannelBindingSignatureSize = 65
+	tlsChannelBindingRequestSize   = len(tlsChannelBindingMagic) + tlsChannelBindingNonceSize
+	tlsChannelBindingResponseSize  = tlsChannelBindingExporterSize + tlsChannelBindingSignatureSize
+	defaultChannelBindingTimeout   = 10 * time.Second
 )
 
 type mitmProbeReport struct {
@@ -360,15 +374,194 @@ func (m *mitmManager) logResult(report mitmProbeReport, err error) {
 	}
 }
 
-func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
+func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
+	normalizedHost := utils.NormalizeHostname(hostname)
+	if host, _, err := net.SplitHostPort(normalizedHost); err == nil && host != "" {
+		normalizedHost = host
+	}
+	buf := make([]byte, 0, len(tlsChannelBindingDomainContext)+1+len(normalizedHost)+1+len(nonce)+len(exported))
+	buf = append(buf, tlsChannelBindingDomainContext...)
+	buf = append(buf, 0)
+	buf = append(buf, normalizedHost...)
+	buf = append(buf, 0)
+	buf = append(buf, nonce...)
+	buf = append(buf, exported...)
+	return buf
+}
+
+// VerifyTLSChannelBinding performs the client-side identity-bound TLS channel
+// binding handshake (#653) on an established TLS connection to a canonical
+// Portal hostname. It verifies that the tunnel endpoint terminated the exact
+// same TLS session (Ec == Et) and signed (context || hostname || nonce || Et)
+// with the secp256k1 identity embedded in hostname. On any mismatch, it closes
+// conn immediately so no application bytes are ever sent over a MITMed stream.
+func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string) error {
 	if conn == nil {
-		return conn, false, nil
+		return errors.New("tls connection is required")
+	}
+	expectedAddr, err := utils.ExtractCanonicalHostnameAddress(hostname)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	expectedAddr, err = identity.NormalizeEVMAddress(expectedAddr)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	exportFn, ok := probeExporter(conn)
+	if !ok {
+		_ = conn.Close()
+		return errors.New("tls connection does not support keying material export")
+	}
+	clientExporter, err := exportFn(tlsChannelBindingExporterLabel, nil, tlsChannelBindingExporterSize)
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("export client tls keying material: %w", err)
 	}
 
-	m.mu.Lock()
-	hasPending := len(m.pending) > 0
-	m.mu.Unlock()
-	if !hasPending {
+	var nonce [tlsChannelBindingNonceSize]byte
+	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("generate channel binding nonce: %w", err)
+	}
+
+	deadline := time.Now().Add(defaultChannelBindingTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	_ = conn.SetDeadline(deadline)
+	defer conn.SetDeadline(time.Time{})
+
+	reqFrame := make([]byte, tlsChannelBindingRequestSize)
+	copy(reqFrame, tlsChannelBindingMagic)
+	copy(reqFrame[len(tlsChannelBindingMagic):], nonce[:])
+	if _, err := conn.Write(reqFrame); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("write channel binding request: %w", err)
+	}
+
+	var respFrame [tlsChannelBindingResponseSize]byte
+	if _, err := io.ReadFull(conn, respFrame[:]); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("read channel binding response: %w", err)
+	}
+
+	tunnelExporter := respFrame[:tlsChannelBindingExporterSize]
+	compactSig := respFrame[tlsChannelBindingExporterSize:]
+	if subtle.ConstantTimeCompare(clientExporter, tunnelExporter) != 1 {
+		_ = conn.Close()
+		return errors.New("tls channel binding exporter mismatch: relay terminated client tls")
+	}
+
+	payload := tlsChannelBindingPayload(hostname, nonce[:], clientExporter)
+	pubKey, err := identity.RecoverSHA256Secp256k1Compact(payload, compactSig)
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("recover channel binding signer: %w", err)
+	}
+	recoveredAddr, err := identity.AddressFromCompressedPublicKeyHex(hex.EncodeToString(pubKey.SerializeCompressed()))
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("resolve channel binding signer address: %w", err)
+	}
+	if !strings.EqualFold(recoveredAddr, expectedAddr) {
+		_ = conn.Close()
+		return fmt.Errorf("tls channel binding signer %s does not match canonical hostname identity %s", recoveredAddr, expectedAddr)
+	}
+	return nil
+}
+
+// DialCanonicalTLS dials addr, completes a TLS 1.3 handshake for the canonical
+// Portal hostname, and enforces identity-bound TLS channel binding (#653)
+// before returning the connection for application traffic.
+func DialCanonicalTLS(ctx context.Context, addr, hostname string, baseTLSConfig *tls.Config) (net.Conn, error) {
+	normalizedHost := utils.NormalizeHostname(hostname)
+	if host, _, err := net.SplitHostPort(normalizedHost); err == nil && host != "" {
+		normalizedHost = host
+	}
+	if _, err := utils.ExtractCanonicalHostnameAddress(normalizedHost); err != nil {
+		return nil, err
+	}
+	tlsConf := &tls.Config{}
+	if baseTLSConfig != nil {
+		tlsConf = baseTLSConfig.Clone()
+	}
+	if tlsConf.ServerName == "" {
+		tlsConf.ServerName = normalizedHost
+	}
+	if tlsConf.MinVersion < tls.VersionTLS13 {
+		tlsConf.MinVersion = tls.VersionTLS13
+	}
+
+	rawConn, err := (&net.Dialer{Timeout: defaultDialTimeout}).DialContext(ctx, "tcp", utils.EnsurePort(addr))
+	if err != nil {
+		return nil, err
+	}
+	tlsConn := tls.Client(rawConn, tlsConf)
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		_ = tlsConn.Close()
+		return nil, err
+	}
+	if err := VerifyTLSChannelBinding(ctx, tlsConn, normalizedHost); err != nil {
+		return nil, err
+	}
+	return tlsConn, nil
+}
+
+func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.Reader, exportFn func(string, []byte, int) ([]byte, error)) (net.Conn, error) {
+	l := m.listener
+	if l == nil || strings.TrimSpace(l.identity.PrivateKey) == "" {
+		_ = conn.Close()
+		return nil, errors.New("listener identity signing key is unavailable for channel binding")
+	}
+	hostname := ""
+	if lease, ok := l.leaseSnapshot(); ok {
+		hostname = lease.hostname
+	}
+	if hostname == "" {
+		_ = conn.Close()
+		return nil, errors.New("listener canonical hostname is unavailable for channel binding")
+	}
+
+	var reqFrame [tlsChannelBindingRequestSize]byte
+	if _, err := io.ReadFull(reader, reqFrame[:]); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("read channel binding request: %w", err)
+	}
+	nonce := reqFrame[len(tlsChannelBindingMagic):]
+
+	exported, err := exportFn(tlsChannelBindingExporterLabel, nil, tlsChannelBindingExporterSize)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("export server channel binding keying material: %w", err)
+	}
+
+	payload := tlsChannelBindingPayload(hostname, nonce, exported)
+	authority := identity.NewLocalAuthority(l.identity)
+	sig, err := authority.SignSHA256Secp256k1(payload)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("sign channel binding payload: %w", err)
+	}
+	compactSig, err := sig.Compact()
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("encode channel binding signature: %w", err)
+	}
+
+	var respFrame [tlsChannelBindingResponseSize]byte
+	copy(respFrame[:tlsChannelBindingExporterSize], exported)
+	copy(respFrame[tlsChannelBindingExporterSize:], compactSig)
+	if _, err := conn.Write(respFrame[:]); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("write channel binding response: %w", err)
+	}
+	return wrapBufferedConn(conn, reader), nil
+}
+
+func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
+	if conn == nil {
 		return conn, false, nil
 	}
 
@@ -377,12 +570,43 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		return conn, false, nil
 	}
 
+	m.mu.Lock()
+	hasPending := len(m.pending) > 0
+	capable := m.responderCapable
+	m.mu.Unlock()
+	// Channel binding shares the self-probe's capability boundary and is not
+	// offered for cache exposures, where relay TLS termination is allowed.
+	canChannelBind := capable && m.listener != nil && m.listener.cache == nil && strings.TrimSpace(m.listener.identity.PrivateKey) != ""
+	if !hasPending && !canChannelBind {
+		return conn, false, nil
+	}
+
+	// Peek until the preamble that can identify the stream is complete: the
+	// probe nonce while a probe is pending, else the channel binding magic.
+	// Peek blocks for the full length, so a preamble split across TLS records
+	// is still recognized.
 	frameSize := len(mitmProbeNonce{})
+	peekLen := len(tlsChannelBindingMagic)
+	if hasPending {
+		peekLen = frameSize
+	}
 	reader := bufio.NewReaderSize(conn, frameSize)
 	_ = conn.SetReadDeadline(time.Now().Add(mitmProbePeekTimeout))
-	peeked, _ := reader.Peek(frameSize)
+	peeked, _ := reader.Peek(peekLen)
 	defer conn.SetReadDeadline(time.Time{})
-	if len(peeked) != frameSize {
+
+	if canChannelBind && len(peeked) >= len(tlsChannelBindingMagic) && string(peeked[:len(tlsChannelBindingMagic)]) == tlsChannelBindingMagic {
+		// The sniff window only covered recognition: the rest of the request
+		// gets the binding budget the client also uses.
+		_ = conn.SetReadDeadline(time.Now().Add(defaultChannelBindingTimeout))
+		boundConn, err := m.serveChannelBindingHandshake(conn, reader, exportFn)
+		if err != nil {
+			return nil, true, err
+		}
+		return boundConn, false, nil
+	}
+
+	if len(peeked) != frameSize || !hasPending {
 		return wrapBufferedConn(conn, reader), false, nil
 	}
 
