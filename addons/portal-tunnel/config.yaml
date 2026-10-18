@@ -1,0 +1,41 @@
+name: Portal Tunnel
+version: "2.1.10"
+slug: portal_tunnel
+description: Expose Home Assistant or any LAN web app over end-to-end TLS with tunnel-local authentication (no VPN app required)
+url: https://github.com/gosuda/portal-tunnel
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: services
+boot: auto
+host_network: true
+options:
+  name: "my-home"
+  target: "127.0.0.1:8123"
+  auth: "credential"
+  auth_allowed_principals:
+    - "owner-phone"
+  auth_identity_headers: true
+  auth_oidc_issuer: ""
+  auth_oidc_client_id: ""
+  auth_oidc_client_secret: ""
+  relays: []
+  discovery: true
+  overlay: false
+  ban_mitm: false
+schema:
+  name: str
+  target: str
+  auth: list(credential|oidc|siwe)
+  auth_allowed_principals:
+    - str
+  auth_identity_headers: bool
+  auth_oidc_issuer: str?
+  auth_oidc_client_id: str?
+  auth_oidc_client_secret: password?
+  relays:
+    - url
+  discovery: bool
+  overlay: bool
+  ban_mitm: bool
