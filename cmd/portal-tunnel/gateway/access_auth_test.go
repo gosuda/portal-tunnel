@@ -2,12 +2,21 @@ package gateway
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	jose "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -300,6 +309,166 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 	revokedGate.ServeHTTP(bobHeaderRec, bobHeaderReq)
 	if bobHeaderRec.Code != http.StatusNoContent {
 		t.Fatalf("allowed bob header status = %d; want 204", bobHeaderRec.Code)
+	}
+}
+
+func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwk := jose.JSONWebKey{Key: &privateKey.PublicKey, KeyID: "k1", Algorithm: string(jose.ES256), Use: "sig"}
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: privateKey}, (&jose.SignerOptions{}).WithHeader("kid", "k1").WithType("JWT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		issuerURL         string
+		capturedChallenge string
+		capturedNonce     string
+	)
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(oidcDiscoveryDocument{
+				Issuer:                issuerURL,
+				AuthorizationEndpoint: issuerURL + "/authorize",
+				TokenEndpoint:         issuerURL + "/token",
+				JWKSURI:               issuerURL + "/jwks",
+			})
+		case "/jwks":
+			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{jwk}})
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			verifier := r.FormValue("code_verifier")
+			sum := sha256.Sum256([]byte(verifier))
+			if got := base64.RawURLEncoding.EncodeToString(sum[:]); got != capturedChallenge {
+				http.Error(w, "pkce mismatch", http.StatusBadRequest)
+				return
+			}
+			verified := true
+			now := time.Now().UTC()
+			idToken, err := jwt.Signed(signer).Claims(oidcIDTokenClaims{
+				Claims: jwt.Claims{
+					Issuer:   issuerURL,
+					Subject:  "user-123",
+					Audience: jwt.Audience{"portal-client"},
+					IssuedAt: jwt.NewNumericDate(now),
+					Expiry:   jwt.NewNumericDate(now.Add(time.Hour)),
+				},
+				Nonce:         capturedNonce,
+				Email:         "Alice@Example.com",
+				EmailVerified: &verified,
+			}).Serialize()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "at_123",
+				"token_type":   "Bearer",
+				"expires_in":   3600,
+				"id_token":     idToken,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer idp.Close()
+	issuerURL = idp.URL
+
+	tunnelIdentity := applicationAuthTestIdentity()
+	var upstreamUser, upstreamAuth string
+	gate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamUser = r.Header.Get(types.HeaderPortalUser)
+		upstreamAuth = r.Header.Get(types.HeaderPortalAuth)
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, ApplicationAuthConfig{
+		Provider:         ApplicationAuthProviderOIDC,
+		AllowedWallets:   []string{"alice@example.com"},
+		IdentityHeaders:  true,
+		OIDCIssuerURL:    issuerURL,
+		OIDCClientID:     "portal-client",
+		OIDCClientSecret: "portal-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Login redirects to the OIDC provider with S256 PKCE challenge and sets state cookie.
+	loginReq := httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthLoginPath+"?next=%2Fdashboard", nil)
+	loginRec := httptest.NewRecorder()
+	gate.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d; want 303", loginRec.Code)
+	}
+	authRedirect, err := url.Parse(loginRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := authRedirect.Query().Get("code_challenge_method"); got != "S256" {
+		t.Fatalf("code_challenge_method = %q; want S256", got)
+	}
+	capturedChallenge = authRedirect.Query().Get("code_challenge")
+	capturedNonce = authRedirect.Query().Get("nonce")
+	state := authRedirect.Query().Get("state")
+	stateCookies := loginRec.Result().Cookies()
+	if len(stateCookies) != 1 || stateCookies[0].Name != applicationAuthOIDCStateCookie {
+		t.Fatalf("state cookies = %#v", stateCookies)
+	}
+
+	// 2. Callback exchanges code + PKCE verifier, verifies ID token, and issues session cookie.
+	cbReq := httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthCallbackPath+"?code=authcode&state="+url.QueryEscape(state), nil)
+	cbReq.AddCookie(stateCookies[0])
+	cbRec := httptest.NewRecorder()
+	gate.ServeHTTP(cbRec, cbReq)
+	if cbRec.Code != http.StatusSeeOther || cbRec.Header().Get("Location") != "/dashboard" {
+		t.Fatalf("callback status = %d, location = %q", cbRec.Code, cbRec.Header().Get("Location"))
+	}
+	var sessionCookie *http.Cookie
+	for _, c := range cbRec.Result().Cookies() {
+		if c.Name == applicationAuthCookieName {
+			sessionCookie = c
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("missing session cookie from OIDC callback")
+	}
+
+	// 3. Authenticated request succeeds and injects normalized email principal.
+	protectedReq := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
+	protectedReq.AddCookie(sessionCookie)
+	protectedRec := httptest.NewRecorder()
+	gate.ServeHTTP(protectedRec, protectedReq)
+	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice@example.com" || upstreamAuth != ApplicationAuthProviderOIDC {
+		t.Fatalf("protected status = %d, user = %q, auth = %q", protectedRec.Code, upstreamUser, upstreamAuth)
+	}
+
+	// 4. Removing alice@example.com from AllowedWallets immediately revokes the existing OIDC session.
+	revokedGate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, ApplicationAuthConfig{
+		Provider:         ApplicationAuthProviderOIDC,
+		AllowedWallets:   []string{"bob@example.com"},
+		IdentityHeaders:  true,
+		OIDCIssuerURL:    issuerURL,
+		OIDCClientID:     "portal-client",
+		OIDCClientSecret: "portal-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokedReq := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
+	revokedReq.AddCookie(sessionCookie)
+	revokedRec := httptest.NewRecorder()
+	revokedGate.ServeHTTP(revokedRec, revokedReq)
+	if revokedRec.Code != http.StatusSeeOther {
+		t.Fatalf("revoked OIDC session status = %d; want 303", revokedRec.Code)
 	}
 }
 

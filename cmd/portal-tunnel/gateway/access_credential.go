@@ -16,6 +16,7 @@ import (
 const (
 	ApplicationAuthProviderSIWE       = "siwe"
 	ApplicationAuthProviderCredential = "credential"
+	ApplicationAuthProviderOIDC       = "oidc"
 
 	applicationCredentialPrefix  = "pcred_"
 	applicationCredentialVersion = 1
@@ -37,14 +38,46 @@ func NormalizeApplicationAuthProvider(provider string) (string, error) {
 		return ApplicationAuthProviderSIWE, nil
 	case ApplicationAuthProviderCredential:
 		return ApplicationAuthProviderCredential, nil
+	case ApplicationAuthProviderOIDC:
+		return ApplicationAuthProviderOIDC, nil
 	default:
 		return "", fmt.Errorf("unsupported application auth provider %q", provider)
 	}
 }
 
+// ValidateApplicationAuthConfig validates the complete tunnel-local
+// application authentication configuration, including provider-specific OIDC
+// fields and principal allowlists.
+func ValidateApplicationAuthConfig(cfg ApplicationAuthConfig) error {
+	provider, err := NormalizeApplicationAuthProvider(cfg.Provider)
+	if err != nil {
+		return err
+	}
+	if _, err := NormalizeApplicationAuthAllowed(provider, cfg.AllowedWallets); err != nil {
+		return err
+	}
+	hasOIDCFields := strings.TrimSpace(cfg.OIDCIssuerURL) != "" ||
+		strings.TrimSpace(cfg.OIDCClientID) != "" ||
+		strings.TrimSpace(cfg.OIDCClientSecret) != ""
+	if provider == ApplicationAuthProviderOIDC {
+		if _, err := normalizeOIDCIssuerURL(cfg.OIDCIssuerURL); err != nil {
+			return err
+		}
+		if strings.TrimSpace(cfg.OIDCClientID) == "" {
+			return errors.New("oidc client id is required")
+		}
+		return nil
+	}
+	if hasOIDCFields {
+		return errors.New("oidc settings require the oidc application auth provider")
+	}
+	return nil
+}
+
 // NormalizeApplicationAuthAllowed validates and normalizes the provider-scoped
 // principal allowlist (`--auth-allow` / `auth_allowed_wallets`): Ethereum
-// addresses for `siwe` and credential subjects for `credential`.
+// addresses for `siwe`, credential subjects for `credential`, and emails or
+// subjects for `oidc`.
 func NormalizeApplicationAuthAllowed(provider string, values []string) ([]string, error) {
 	provider, err := NormalizeApplicationAuthProvider(provider)
 	if err != nil {
@@ -55,6 +88,8 @@ func NormalizeApplicationAuthAllowed(provider string, values []string) ([]string
 		return siweauth.NormalizeAddresses(values)
 	case ApplicationAuthProviderCredential:
 		return NormalizeApplicationAuthSubjects(values)
+	case ApplicationAuthProviderOIDC:
+		return NormalizeApplicationAuthOIDCPrincipals(values)
 	default:
 		return nil, fmt.Errorf("unsupported application auth provider %q", provider)
 	}

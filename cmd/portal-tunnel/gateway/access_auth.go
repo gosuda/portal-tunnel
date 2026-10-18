@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,23 +14,48 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
+
+	jose "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
+	"golang.org/x/oauth2"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
-	applicationAuthLoginPath     = "/_portal/auth/login"
-	applicationAuthChallengePath = "/_portal/auth/challenge"
-	applicationAuthVerifyPath    = "/_portal/auth/verify"
-	applicationAuthRedeemPath    = "/_portal/auth/redeem"
-	applicationAuthLogoutPath    = "/_portal/auth/logout"
-	applicationAuthCookieName    = "__Host-portal_access"
-	applicationAuthSessionTTL    = 24 * time.Hour
-	applicationAuthBodyLimit     = 64 << 10
+	applicationAuthLoginPath       = "/_portal/auth/login"
+	applicationAuthChallengePath   = "/_portal/auth/challenge"
+	applicationAuthVerifyPath      = "/_portal/auth/verify"
+	applicationAuthRedeemPath      = "/_portal/auth/redeem"
+	applicationAuthCallbackPath    = "/_portal/auth/callback"
+	applicationAuthLogoutPath      = "/_portal/auth/logout"
+	applicationAuthCookieName      = "__Host-portal_access"
+	applicationAuthOIDCStateCookie = "__Host-portal_oidc_state"
+	applicationAuthSessionTTL      = 24 * time.Hour
+	applicationAuthOIDCStateTTL    = 10 * time.Minute
+	applicationAuthBodyLimit       = 64 << 10
+	oidcDiscoveryCacheTTL          = 15 * time.Minute
+	oidcHTTPTimeout                = 10 * time.Second
+	oidcMetadataBodyLimit          = 256 << 10
 )
+
+var oidcSupportedSignatureAlgorithms = []jose.SignatureAlgorithm{
+	jose.RS256,
+	jose.RS384,
+	jose.RS512,
+	jose.ES256,
+	jose.ES384,
+	jose.ES512,
+	jose.EdDSA,
+	jose.PS256,
+	jose.PS384,
+	jose.PS512,
+}
 
 type verifiedIdentityHeadersContextKey struct{}
 
@@ -63,11 +90,15 @@ button.addEventListener('click',redeem);const fragment=new URLSearchParams(locat
 
 // ApplicationAuthConfig configures the tunnel-local application access gate.
 // AllowedWallets holds the provider-scoped principal allowlist (Ethereum
-// wallet addresses for siwe, or credential subjects for credential).
+// wallet addresses for siwe, credential subjects for credential, or email/sub
+// principals for oidc).
 type ApplicationAuthConfig struct {
-	Provider        string
-	AllowedWallets  []string
-	IdentityHeaders bool
+	Provider         string
+	AllowedWallets   []string
+	IdentityHeaders  bool
+	OIDCIssuerURL    string
+	OIDCClientID     string
+	OIDCClientSecret string
 }
 
 type applicationAuth struct {
@@ -77,6 +108,7 @@ type applicationAuth struct {
 	signingKey      []byte
 	credentialKey   []byte
 	siwe            *siweauth.Authenticator
+	oidc            *oidcAuthenticator
 	allowedSubjects map[string]struct{}
 	allowAnySubject bool
 	identityHeaders bool
@@ -109,11 +141,126 @@ type applicationAuthRedeemRequest struct {
 	Credential string `json:"credential"`
 }
 
+type oidcDiscoveryDocument struct {
+	Issuer                string `json:"issuer"`
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	JWKSURI               string `json:"jwks_uri"`
+}
+
+type oidcStateClaims struct {
+	State        string `json:"state"`
+	Nonce        string `json:"nonce"`
+	CodeVerifier string `json:"cv"`
+	Host         string `json:"host"`
+	Next         string `json:"next"`
+	ExpiresAt    int64  `json:"exp"`
+}
+
+type oidcIDTokenClaims struct {
+	jwt.Claims
+	Nonce         string `json:"nonce,omitempty"`
+	Email         string `json:"email,omitempty"`
+	EmailVerified *bool  `json:"email_verified,omitempty"`
+}
+
+type oidcAuthenticator struct {
+	issuerURL    string
+	clientID     string
+	clientSecret string
+	stateKey     []byte
+	httpClient   *http.Client
+
+	mu          sync.Mutex
+	discovery   oidcDiscoveryDocument
+	jwks        jose.JSONWebKeySet
+	refreshedAt time.Time
+}
+
+func newOIDCAuthenticator(cfg ApplicationAuthConfig, stateKey []byte) (*oidcAuthenticator, error) {
+	issuerURL, err := normalizeOIDCIssuerURL(cfg.OIDCIssuerURL)
+	if err != nil {
+		return nil, err
+	}
+	clientID := strings.TrimSpace(cfg.OIDCClientID)
+	if clientID == "" {
+		return nil, errors.New("oidc client id is required")
+	}
+	return &oidcAuthenticator{
+		issuerURL:    issuerURL,
+		clientID:     clientID,
+		clientSecret: strings.TrimSpace(cfg.OIDCClientSecret),
+		stateKey:     stateKey,
+		httpClient:   utils.NewHTTPClient(utils.WithHTTPTimeout(oidcHTTPTimeout)),
+	}, nil
+}
+
+func normalizeOIDCIssuerURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("oidc issuer url is required")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("oidc issuer url must be a valid URL without query or fragment")
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "https" && !(scheme == "http" && isLoopbackHost(parsed.Hostname())) {
+		return "", errors.New("oidc issuer url must use https (or http on a loopback host)")
+	}
+	return strings.TrimRight(raw, "/"), nil
+}
+
+// NormalizeApplicationAuthOIDCPrincipals canonicalizes OIDC allowed principals
+// (`--auth-allow` / `auth_allowed_wallets`): email addresses (containing '@')
+// are lowercased, while opaque subject identifiers keep their case.
+func NormalizeApplicationAuthOIDCPrincipals(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, raw := range values {
+		principal, err := normalizeOIDCPrincipal(raw)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[principal]; ok {
+			continue
+		}
+		seen[principal] = struct{}{}
+		normalized = append(normalized, principal)
+	}
+	return normalized, nil
+}
+
+func normalizeOIDCPrincipal(raw string) (string, error) {
+	subject, err := normalizeApplicationAuthSubject(raw)
+	if err != nil {
+		return "", err
+	}
+	if strings.Contains(subject, "@") {
+		return strings.ToLower(subject), nil
+	}
+	return subject, nil
+}
+
+func sanitizeApplicationAuthNext(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.Contains(raw, "\\") {
+		return "/"
+	}
+	return raw
+}
+
 // NewApplicationAuth protects the complete HTTP gateway with tunnel-local
 // authentication. Its reserved login endpoints are the only bypass paths.
 func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg ApplicationAuthConfig) (http.Handler, error) {
 	if next == nil {
 		return nil, errors.New("application auth handler is required")
+	}
+	if err := ValidateApplicationAuthConfig(cfg); err != nil {
+		return nil, err
 	}
 	signingKey, err := identity.DeriveToken(tunnelIdentity, "application-access-auth")
 	if err != nil {
@@ -125,6 +272,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	}
 	var (
 		siwe            *siweauth.Authenticator
+		oidc            *oidcAuthenticator
 		allowedSubjects map[string]struct{}
 		allowAnySubject = true
 	)
@@ -151,6 +299,26 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 				allowedSubjects[subject] = struct{}{}
 			}
 		}
+	case ApplicationAuthProviderOIDC:
+		principals, err := NormalizeApplicationAuthOIDCPrincipals(cfg.AllowedWallets)
+		if err != nil {
+			return nil, err
+		}
+		if len(principals) > 0 {
+			allowAnySubject = false
+			allowedSubjects = make(map[string]struct{}, len(principals))
+			for _, principal := range principals {
+				allowedSubjects[principal] = struct{}{}
+			}
+		}
+		oidcStateKey, err := identity.DeriveToken(tunnelIdentity, "application-access-oidc-state")
+		if err != nil {
+			return nil, fmt.Errorf("derive oidc state signing key: %w", err)
+		}
+		oidc, err = newOIDCAuthenticator(cfg, []byte(oidcStateKey))
+		if err != nil {
+			return nil, err
+		}
 	}
 	credentialKey, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
 	if err != nil {
@@ -163,6 +331,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		signingKey:      []byte(signingKey),
 		credentialKey:   []byte(credentialKey),
 		siwe:            siwe,
+		oidc:            oidc,
 		allowedSubjects: allowedSubjects,
 		allowAnySubject: allowAnySubject,
 		identityHeaders: cfg.IdentityHeaders,
@@ -184,6 +353,8 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.serveVerify(w, r)
 	case applicationAuthRedeemPath:
 		a.serveRedeem(w, r)
+	case applicationAuthCallbackPath:
+		a.serveOIDCCallback(w, r)
 	case applicationAuthLogoutPath:
 		a.serveLogout(w, r)
 	default:
@@ -214,13 +385,17 @@ func stripApplicationAuthCookie(r *http.Request) {
 	cookies := r.Cookies()
 	r.Header.Del("Cookie")
 	for _, cookie := range cookies {
-		if cookie.Name != applicationAuthCookieName {
+		if cookie.Name != applicationAuthCookieName && cookie.Name != applicationAuthOIDCStateCookie {
 			r.AddCookie(cookie)
 		}
 	}
 }
 
 func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
+	if a.provider == ApplicationAuthProviderOIDC && a.oidc != nil {
+		a.oidc.serveLogin(w, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -238,6 +413,295 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 		page = applicationAuthCredentialLoginPage
 	}
 	_, _ = io.WriteString(w, page)
+}
+
+func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	doc, _, err := o.metadata(r.Context(), false)
+	if err != nil {
+		http.Error(w, "oidc discovery failed", http.StatusBadGateway)
+		return
+	}
+	host, err := NormalizeApplicationAuthHost(r.Host)
+	if err != nil {
+		http.Error(w, "invalid request host", http.StatusBadRequest)
+		return
+	}
+	state := rand.Text()
+	nonce := rand.Text()
+	codeVerifier := oauth2.GenerateVerifier()
+	now := time.Now().UTC()
+	expiresAt := now.Add(applicationAuthOIDCStateTTL)
+	next := sanitizeApplicationAuthNext(r.URL.Query().Get("next"))
+
+	stateToken, err := encodeSignedApplicationAuthJSON(o.stateKey, oidcStateClaims{
+		State:        state,
+		Nonce:        nonce,
+		CodeVerifier: codeVerifier,
+		Host:         host,
+		Next:         next,
+		ExpiresAt:    expiresAt.Unix(),
+	})
+	if err != nil {
+		http.Error(w, "could not create login state", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     applicationAuthOIDCStateCookie,
+		Value:    stateToken,
+		Path:     "/_portal/auth",
+		MaxAge:   int(applicationAuthOIDCStateTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	oauthCfg := o.oauth2Config(doc, host)
+	authURL := oauthCfg.AuthCodeURL(
+		state,
+		oauth2.S256ChallengeOption(codeVerifier),
+		oauth2.SetAuthURLParam("nonce", nonce),
+	)
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, authURL, http.StatusSeeOther)
+}
+
+func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Request) {
+	if a.provider != ApplicationAuthProviderOIDC || a.oidc == nil {
+		a.writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	stateCookie, err := r.Cookie(applicationAuthOIDCStateCookie)
+	http.SetCookie(w, &http.Cookie{
+		Name:     applicationAuthOIDCStateCookie,
+		Value:    "",
+		Path:     "/_portal/auth",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	if err != nil {
+		a.writeJSONError(w, http.StatusUnauthorized, "missing oidc login state")
+		return
+	}
+
+	now := time.Now().UTC()
+	host, err := NormalizeApplicationAuthHost(r.Host)
+	if err != nil {
+		a.writeJSONError(w, http.StatusBadRequest, "invalid request host")
+		return
+	}
+	var stateClaims oidcStateClaims
+	if err := decodeSignedApplicationAuthJSON(a.oidc.stateKey, stateCookie.Value, &stateClaims); err != nil ||
+		!strings.EqualFold(stateClaims.Host, host) ||
+		now.Unix() >= stateClaims.ExpiresAt {
+		a.writeJSONError(w, http.StatusUnauthorized, "invalid or expired oidc login state")
+		return
+	}
+	if errParam := strings.TrimSpace(r.URL.Query().Get("error")); errParam != "" {
+		a.writeJSONError(w, http.StatusUnauthorized, "oidc login failed")
+		return
+	}
+	queryState := strings.TrimSpace(r.URL.Query().Get("state"))
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if queryState == "" || code == "" || subtle.ConstantTimeCompare([]byte(queryState), []byte(stateClaims.State)) != 1 {
+		a.writeJSONError(w, http.StatusUnauthorized, "invalid oidc callback state")
+		return
+	}
+
+	claims, err := a.oidc.exchangeAndVerify(r.Context(), code, stateClaims, now)
+	if err != nil {
+		a.writeJSONError(w, http.StatusUnauthorized, "oidc token verification failed")
+		return
+	}
+
+	subject, ok := a.resolveAllowedOIDCSubject(claims)
+	if !ok {
+		a.writeJSONError(w, http.StatusUnauthorized, "oidc principal is not allowed")
+		return
+	}
+
+	expiresAt := now.Add(applicationAuthSessionTTL)
+	if claims.Expiry != nil {
+		if tokenExpiry := claims.Expiry.Time(); tokenExpiry.Before(expiresAt) {
+			expiresAt = tokenExpiry
+		}
+	}
+	if err := a.setSession(w, subject, ApplicationAuthProviderOIDC, strings.TrimSpace(r.Host), now, expiresAt); err != nil {
+		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
+		return
+	}
+	http.Redirect(w, r, sanitizeApplicationAuthNext(stateClaims.Next), http.StatusSeeOther)
+}
+
+func (a *applicationAuth) resolveAllowedOIDCSubject(claims oidcIDTokenClaims) (string, bool) {
+	var candidates []string
+	emailVerified := claims.EmailVerified == nil || *claims.EmailVerified
+	if emailVerified && strings.TrimSpace(claims.Email) != "" {
+		if normalizedEmail, err := normalizeOIDCPrincipal(claims.Email); err == nil {
+			candidates = append(candidates, normalizedEmail)
+		}
+	}
+	if strings.TrimSpace(claims.Subject) != "" {
+		if normalizedSub, err := normalizeOIDCPrincipal(claims.Subject); err == nil && (len(candidates) == 0 || candidates[0] != normalizedSub) {
+			candidates = append(candidates, normalizedSub)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", false
+	}
+	if a.allowAnySubject {
+		return candidates[0], true
+	}
+	for _, candidate := range candidates {
+		if a.subjectAllowed(candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func (o *oidcAuthenticator) oauth2Config(doc oidcDiscoveryDocument, host string) oauth2.Config {
+	return oauth2.Config{
+		ClientID:     o.clientID,
+		ClientSecret: o.clientSecret,
+		RedirectURL:  "https://" + host + applicationAuthCallbackPath,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  doc.AuthorizationEndpoint,
+			TokenURL: doc.TokenEndpoint,
+		},
+		Scopes: []string{"openid", "email", "profile"},
+	}
+}
+
+func (o *oidcAuthenticator) exchangeAndVerify(ctx context.Context, code string, state oidcStateClaims, now time.Time) (oidcIDTokenClaims, error) {
+	doc, jwks, err := o.metadata(ctx, false)
+	if err != nil {
+		return oidcIDTokenClaims{}, err
+	}
+	oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, o.httpClient)
+	oauthCfg := o.oauth2Config(doc, state.Host)
+	token, err := oauthCfg.Exchange(oauthCtx, code, oauth2.VerifierOption(state.CodeVerifier))
+	if err != nil {
+		return oidcIDTokenClaims{}, err
+	}
+	rawIDToken, ok := token.Extra("id_token").(string)
+	if !ok || strings.TrimSpace(rawIDToken) == "" {
+		return oidcIDTokenClaims{}, errors.New("missing id_token in token response")
+	}
+
+	claims, err := o.verifyIDToken(rawIDToken, state.Nonce, jwks, now)
+	if err != nil {
+		_, jwks, refreshErr := o.metadata(ctx, true)
+		if refreshErr != nil {
+			return oidcIDTokenClaims{}, err
+		}
+		claims, err = o.verifyIDToken(rawIDToken, state.Nonce, jwks, now)
+		if err != nil {
+			return oidcIDTokenClaims{}, err
+		}
+	}
+	return claims, nil
+}
+
+func (o *oidcAuthenticator) verifyIDToken(rawToken, expectedNonce string, jwks jose.JSONWebKeySet, now time.Time) (oidcIDTokenClaims, error) {
+	parsed, err := jwt.ParseSigned(strings.TrimSpace(rawToken), oidcSupportedSignatureAlgorithms)
+	if err != nil {
+		return oidcIDTokenClaims{}, err
+	}
+	var claims oidcIDTokenClaims
+	if err := parsed.Claims(&jwks, &claims); err != nil {
+		return oidcIDTokenClaims{}, err
+	}
+	if claims.Expiry == nil {
+		return oidcIDTokenClaims{}, errors.New("id_token expiry is required")
+	}
+	if err := claims.ValidateWithLeeway(jwt.Expected{
+		Issuer:      o.discovery.Issuer,
+		AnyAudience: jwt.Audience{o.clientID},
+		Time:        now.UTC(),
+	}, time.Minute); err != nil {
+		return oidcIDTokenClaims{}, err
+	}
+	if subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(expectedNonce)) != 1 {
+		return oidcIDTokenClaims{}, errors.New("id_token nonce mismatch")
+	}
+	if strings.TrimSpace(claims.Subject) == "" {
+		return oidcIDTokenClaims{}, errors.New("id_token subject is required")
+	}
+	return claims, nil
+}
+
+func (o *oidcAuthenticator) metadata(ctx context.Context, forceRefresh bool) (oidcDiscoveryDocument, jose.JSONWebKeySet, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if !forceRefresh && !o.refreshedAt.IsZero() && time.Since(o.refreshedAt) < oidcDiscoveryCacheTTL {
+		return o.discovery, o.jwks, nil
+	}
+
+	discoveryURL := o.issuerURL + "/.well-known/openid-configuration"
+	var doc oidcDiscoveryDocument
+	if err := fetchOIDCJSON(ctx, o.httpClient, discoveryURL, &doc); err != nil {
+		return oidcDiscoveryDocument{}, jose.JSONWebKeySet{}, fmt.Errorf("fetch oidc discovery: %w", err)
+	}
+	doc.Issuer = strings.TrimSpace(doc.Issuer)
+	doc.AuthorizationEndpoint = strings.TrimSpace(doc.AuthorizationEndpoint)
+	doc.TokenEndpoint = strings.TrimSpace(doc.TokenEndpoint)
+	doc.JWKSURI = strings.TrimSpace(doc.JWKSURI)
+	if doc.Issuer == "" || doc.AuthorizationEndpoint == "" || doc.TokenEndpoint == "" || doc.JWKSURI == "" {
+		return oidcDiscoveryDocument{}, jose.JSONWebKeySet{}, errors.New("incomplete oidc discovery document")
+	}
+	if strings.TrimRight(doc.Issuer, "/") != o.issuerURL {
+		return oidcDiscoveryDocument{}, jose.JSONWebKeySet{}, errors.New("oidc discovery issuer mismatch")
+	}
+	for _, endpoint := range []string{doc.AuthorizationEndpoint, doc.TokenEndpoint, doc.JWKSURI} {
+		if _, err := normalizeOIDCIssuerURL(endpoint); err != nil {
+			return oidcDiscoveryDocument{}, jose.JSONWebKeySet{}, fmt.Errorf("invalid oidc discovery endpoint %q: %w", endpoint, err)
+		}
+	}
+
+	var jwks jose.JSONWebKeySet
+	if err := fetchOIDCJSON(ctx, o.httpClient, doc.JWKSURI, &jwks); err != nil {
+		return oidcDiscoveryDocument{}, jose.JSONWebKeySet{}, fmt.Errorf("fetch oidc jwks: %w", err)
+	}
+	if len(jwks.Keys) == 0 {
+		return oidcDiscoveryDocument{}, jose.JSONWebKeySet{}, errors.New("oidc jwks contains no keys")
+	}
+
+	o.discovery = doc
+	o.jwks = jwks
+	o.refreshedAt = time.Now().UTC()
+	return o.discovery, o.jwks, nil
+}
+
+func fetchOIDCJSON(ctx context.Context, client *http.Client, targetURL string, dst any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+	body := io.LimitReader(resp.Body, oidcMetadataBodyLimit)
+	return json.NewDecoder(body).Decode(dst)
 }
 
 func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request) {
@@ -382,7 +846,12 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, 
 		}
 		return address, provider, true
 	}
-	subject, err := normalizeApplicationAuthSubject(claims.Subject)
+	var subject string
+	if provider == ApplicationAuthProviderOIDC {
+		subject, err = normalizeOIDCPrincipal(claims.Subject)
+	} else {
+		subject, err = normalizeApplicationAuthSubject(claims.Subject)
+	}
 	if err != nil || !a.subjectAllowed(subject) {
 		return "", "", false
 	}

@@ -51,6 +51,33 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 		{name: "siwe invalid allowlist", edit: func(spec *Spec) {
 			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe", AllowedWallets: []string{"not-a-wallet"}}
 		}},
+		{name: "oidc valid", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+				Provider:       "oidc",
+				OIDCIssuerURL:  "https://accounts.google.com",
+				OIDCClientID:   "client-123",
+				AllowedWallets: []string{"alice@example.com"},
+			}
+		}, valid: true},
+		{name: "oidc missing client id", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+				Provider:      "oidc",
+				OIDCIssuerURL: "https://accounts.google.com",
+			}
+		}},
+		{name: "oidc non-https issuer", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+				Provider:      "oidc",
+				OIDCIssuerURL: "http://idp.example.com",
+				OIDCClientID:  "client-123",
+			}
+		}},
+		{name: "oidc settings with siwe provider", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+				Provider:      "siwe",
+				OIDCIssuerURL: "https://accounts.google.com",
+			}
+		}},
 		{name: "paid route", edit: func(spec *Spec) {
 			spec.Transport.Target = ""
 			spec.HTTP.Payment.PayTo = "recipient"
