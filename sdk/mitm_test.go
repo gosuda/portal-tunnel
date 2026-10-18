@@ -3,6 +3,7 @@ package sdk
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -13,7 +14,10 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // TestMITMProbeCompletionClassifiesExporter covers the probe completion
@@ -317,6 +321,298 @@ func TestMITMProbeDialAddress(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("probeDialAddress() = %q, want %q", got, tc.want)
 			}
+		})
+	}
+}
+
+type testExporterConn struct {
+	net.Conn
+	exported []byte
+}
+
+func (c *testExporterConn) ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error) {
+	out := make([]byte, length)
+	copy(out, c.exported)
+	return out, nil
+}
+
+// fragmentingConn delivers each Write in two parts with a pause between them.
+type fragmentingConn struct {
+	*testExporterConn
+	splitAt int
+	pause   time.Duration
+}
+
+func (c *fragmentingConn) Write(p []byte) (int, error) {
+	if c.splitAt <= 0 || c.splitAt >= len(p) {
+		return c.testExporterConn.Write(p)
+	}
+	n, err := c.testExporterConn.Write(p[:c.splitAt])
+	if err != nil {
+		return n, err
+	}
+	synctest.Sleep(c.pause)
+	m, err := c.testExporterConn.Write(p[c.splitAt:])
+	return n + m, err
+}
+
+// newChannelBindingListener returns a listener able to answer channel binding
+// requests for the canonical hostname of the identity derived from seed.
+func newChannelBindingListener(t *testing.T, seed, hostname string) *listener {
+	t.Helper()
+	tunnelIdentity, err := identity.ResolveSecp256k1Identity(strings.Repeat(seed, 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostname = cmp.Or(hostname, canonicalTestHostname(t, tunnelIdentity.Address))
+	l := &listener{
+		identity: tunnelIdentity,
+		lease:    utils.NewSnapshot(listenerSnapshot{hostname: hostname, accessToken: "test-access-token"}, listenerSnapshot.snapshot),
+	}
+	l.mitmManager = newMITMManager(l, true)
+	l.mitmManager.setResponderCapable(true)
+	return l
+}
+
+func canonicalTestHostname(t *testing.T, address string) string {
+	t.Helper()
+	hostname, err := utils.CanonicalLeaseHostname("myapp", address, "relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hostname
+}
+
+func TestTLSChannelBindingPassesOnHonestRelayAndPreservesAppTraffic(t *testing.T) {
+	l := newChannelBindingListener(t, "1", "")
+	canonicalHost := canonicalTestHostname(t, l.identity.Address)
+
+	sharedExporter := bytes.Repeat([]byte{0x42}, 32)
+	clientRaw, serverRaw := net.Pipe()
+	clientConn := &testExporterConn{Conn: clientRaw, exported: sharedExporter}
+	serverConn := &testExporterConn{Conn: serverRaw, exported: sharedExporter}
+
+	serverDone := make(chan error, 1)
+	go func() {
+		nextConn, handled, err := l.mitmManager.maybeHandleConn(serverConn)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if handled {
+			serverDone <- errors.New("channel binding conn was consumed instead of passed to application")
+			return
+		}
+		defer nextConn.Close()
+		var buf [4]byte
+		if _, err := io.ReadFull(nextConn, buf[:]); err != nil {
+			serverDone <- err
+			return
+		}
+		if string(buf[:]) != "ping" {
+			serverDone <- errors.New("unexpected application payload")
+			return
+		}
+		_, err = nextConn.Write([]byte("pong"))
+		serverDone <- err
+	}()
+
+	if err := VerifyTLSChannelBinding(context.Background(), clientConn, canonicalHost); err != nil {
+		t.Fatalf("VerifyTLSChannelBinding() error = %v", err)
+	}
+	if _, err := clientConn.Write([]byte("ping")); err != nil {
+		t.Fatalf("client application write failed: %v", err)
+	}
+	var reply [4]byte
+	if _, err := io.ReadFull(clientConn, reply[:]); err != nil {
+		t.Fatalf("client application read failed: %v", err)
+	}
+	if string(reply[:]) != "pong" {
+		t.Fatalf("application reply = %q; want pong", string(reply[:]))
+	}
+	_ = clientConn.Close()
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server error = %v", err)
+	}
+}
+
+func TestTLSChannelBindingAbortsOnSelectiveRelayMITM(t *testing.T) {
+	l := newChannelBindingListener(t, "2", "")
+	canonicalHost := canonicalTestHostname(t, l.identity.Address)
+
+	// Selective MITM: client-to-relay session has exporter Ec (0xAA), while
+	// relay-to-tunnel session has a different exporter Et (0xBB).
+	clientRaw, serverRaw := net.Pipe()
+	clientConn := &testExporterConn{Conn: clientRaw, exported: bytes.Repeat([]byte{0xAA}, 32)}
+	serverConn := &testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0xBB}, 32)}
+
+	go func() {
+		nextConn, _, _ := l.mitmManager.maybeHandleConn(serverConn)
+		if nextConn != nil {
+			_ = nextConn.Close()
+		}
+	}()
+
+	err := VerifyTLSChannelBinding(context.Background(), clientConn, canonicalHost)
+	if err == nil || !strings.Contains(err.Error(), "exporter mismatch") {
+		t.Fatalf("VerifyTLSChannelBinding() = %v; want exporter mismatch error", err)
+	}
+	// The client connection was aborted before any application data.
+	if _, writeErr := clientConn.Write([]byte("secret")); writeErr == nil {
+		t.Fatal("client connection remained writable after MITM abort")
+	}
+}
+
+// A request may arrive split across TLS records, and the part after the
+// recognized magic may arrive after the short sniff window. Both must still bind.
+func TestTLSChannelBindingToleratesSplitRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		splitAt int
+		pause   time.Duration
+	}{
+		{"magic split across records", 2, mitmProbePeekTimeout / 2},
+		{"request body after the sniff window", len(tlsChannelBindingMagic), 3 * mitmProbePeekTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				l := newChannelBindingListener(t, "3", "")
+				canonicalHost := canonicalTestHostname(t, l.identity.Address)
+				exporter := bytes.Repeat([]byte{0x42}, 32)
+				clientRaw, serverRaw := net.Pipe()
+				client := &fragmentingConn{
+					testExporterConn: &testExporterConn{Conn: clientRaw, exported: exporter},
+					splitAt:          tc.splitAt,
+					pause:            tc.pause,
+				}
+				server := &testExporterConn{Conn: serverRaw, exported: exporter}
+
+				serverDone := make(chan error, 1)
+				go func() {
+					nextConn, handled, err := l.mitmManager.maybeHandleConn(server)
+					if err == nil && handled {
+						err = errors.New("channel binding conn was consumed instead of passed to application")
+					}
+					if err == nil {
+						_ = nextConn.Close()
+					}
+					serverDone <- err
+				}()
+
+				if err := VerifyTLSChannelBinding(t.Context(), client, canonicalHost); err != nil {
+					t.Fatalf("VerifyTLSChannelBinding() error = %v", err)
+				}
+				_ = client.Close()
+				if err := <-serverDone; err != nil {
+					t.Fatalf("server error = %v", err)
+				}
+			})
+		})
+	}
+}
+
+// A suppressed, garbled, or wrongly signed answer must abort the client with an
+// error that says why, before any application data is sent.
+func TestTLSChannelBindingFailsClosed(t *testing.T) {
+	exporter := bytes.Repeat([]byte{0x42}, 32)
+	for _, tc := range []struct {
+		name    string
+		respond func(t *testing.T, server net.Conn)
+		wantErr string
+	}{
+		{
+			name:    "suppressed answer",
+			respond: func(t *testing.T, server net.Conn) { _ = server.Close() },
+			wantErr: "read channel binding response",
+		},
+		{
+			name: "garbled signature",
+			respond: func(t *testing.T, server net.Conn) {
+				_, _ = server.Write(append(bytes.Clone(exporter), make([]byte, tlsChannelBindingSignatureSize)...))
+			},
+			wantErr: "recover channel binding signer",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				l := newChannelBindingListener(t, "4", "")
+				canonicalHost := canonicalTestHostname(t, l.identity.Address)
+				clientRaw, serverRaw := net.Pipe()
+				client := &testExporterConn{Conn: clientRaw, exported: exporter}
+				go func() {
+					var request [tlsChannelBindingRequestSize]byte
+					_, _ = io.ReadFull(serverRaw, request[:])
+					tc.respond(t, serverRaw)
+				}()
+
+				err := VerifyTLSChannelBinding(t.Context(), client, canonicalHost)
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("VerifyTLSChannelBinding() = %v; want error containing %q", err, tc.wantErr)
+				}
+				if _, writeErr := client.Write([]byte("secret")); writeErr == nil {
+					t.Fatal("client connection remained writable after the aborted exchange")
+				}
+			})
+		})
+	}
+
+	t.Run("signed by another identity", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			owner := newChannelBindingListener(t, "5", "")
+			canonicalHost := canonicalTestHostname(t, owner.identity.Address)
+			// A relay-side responder holds its own key, not the tunnel's, but
+			// answers for the tunnel's canonical hostname.
+			impostor := newChannelBindingListener(t, "6", canonicalHost)
+			clientRaw, serverRaw := net.Pipe()
+			client := &testExporterConn{Conn: clientRaw, exported: exporter}
+			server := &testExporterConn{Conn: serverRaw, exported: exporter}
+			go func() {
+				nextConn, _, _ := impostor.mitmManager.maybeHandleConn(server)
+				if nextConn != nil {
+					_ = nextConn.Close()
+				}
+			}()
+
+			err := VerifyTLSChannelBinding(t.Context(), client, canonicalHost)
+			if err == nil || !strings.Contains(err.Error(), "does not match canonical hostname identity") {
+				t.Fatalf("VerifyTLSChannelBinding() = %v; want signer identity mismatch", err)
+			}
+		})
+	})
+}
+
+// Channel binding shares the self-probe's capability boundary: a listener whose
+// tenant TLS cannot export keying material, or a cache exposure where relay TLS
+// termination is allowed, treats the request as ordinary application bytes.
+func TestTLSChannelBindingIsNotServedOutsideResponderBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(l *listener)
+	}{
+		{"tenant tls cannot export keying material", func(l *listener) { l.mitmManager.setResponderCapable(false) }},
+		{"cache exposure", func(l *listener) { l.cache = &cache.Source{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				l := newChannelBindingListener(t, "7", "")
+				tc.setup(l)
+				request := append([]byte(tlsChannelBindingMagic), bytes.Repeat([]byte{7}, tlsChannelBindingNonceSize)...)
+				clientRaw, serverRaw := net.Pipe()
+				go func() { _, _ = clientRaw.Write(request) }()
+
+				nextConn, handled, err := l.mitmManager.maybeHandleConn(&testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)})
+				if err != nil || handled {
+					t.Fatalf("maybeHandleConn() = (handled %v, err %v); want the connection passed to the application", handled, err)
+				}
+				got := make([]byte, len(request))
+				if _, err := io.ReadFull(nextConn, got); err != nil {
+					t.Fatalf("read application bytes: %v", err)
+				}
+				if !bytes.Equal(got, request) {
+					t.Fatalf("application received %x; want the untouched request %x", got, request)
+				}
+				_ = nextConn.Close()
+			})
 		})
 	}
 }
