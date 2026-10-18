@@ -15,7 +15,6 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -293,11 +292,13 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		if t.ID == "" {
 			t.ID = fmt.Sprintf("tunnel-%d", i+1)
 		}
-		normalizedWallets, err := siweauth.NormalizeAddresses(t.AuthAllowedWallets)
-		if err != nil {
-			return fmt.Errorf("tunnel %q auth_allowed_wallets: %w", t.ID, err)
+		if len(t.AuthAllowedWallets) > 0 && t.Auth != "" {
+			normalizedAllowed, err := gateway.NormalizeApplicationAuthAllowed(t.Auth, t.AuthAllowedWallets)
+			if err != nil {
+				return fmt.Errorf("tunnel %q auth_allowed_wallets: %w", t.ID, err)
+			}
+			t.AuthAllowedWallets = normalizedAllowed
 		}
-		t.AuthAllowedWallets = normalizedWallets
 		if t.IdentityPath == "" {
 			if len(cfg.Tunnels) <= 1 {
 				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, defaultIdentityFilename)

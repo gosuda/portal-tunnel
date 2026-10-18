@@ -79,7 +79,7 @@ restart the tunnel or agent to change the site path.
 
 Set `auth = "credential"` on a target, routed HTTP, or static tunnel for
 Portal-native credentials, or use `auth = "siwe"`. With SIWE,
-`auth_allowed_wallets` optionally restricts login to listed Ethereum addresses.
+`auth_allowed_wallets` optionally restricts login to listed principals (Ethereum addresses for `siwe` or credential subjects for `credential`).
 `auth_identity_headers = true` injects the verified wallet address and `siwe`
 for SIWE, or the credential subject and `credential` for credential auth, as
 `X-Portal-User` and `X-Portal-Auth`; Portal always strips client-supplied copies
@@ -245,7 +245,7 @@ Common fields:
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
 | `auth` | Application login provider: `siwe` or `credential` |
-| `auth_allowed_wallets` | Optional allowed Ethereum wallet array; empty allows any valid wallet |
+| `auth_allowed_wallets` | Optional allowed principal array (Ethereum wallets for `siwe` or subjects for `credential`); empty allows any valid principal |
 | `auth_identity_headers` | Inject verified Portal identity headers into upstream requests |
 | `x402_pay_to` | Payment recipient for paid HTTP routes |
 | `x402_testnet` | Use Sui testnet when `x402_network` is omitted |

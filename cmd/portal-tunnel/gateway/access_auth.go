@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -28,6 +29,8 @@ const (
 	applicationAuthSessionTTL    = 24 * time.Hour
 	applicationAuthBodyLimit     = 64 << 10
 )
+
+type verifiedIdentityHeadersContextKey struct{}
 
 const applicationAuthSIWELoginPage = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -59,6 +62,8 @@ button.addEventListener('click',redeem);const fragment=new URLSearchParams(locat
 </script></body></html>`
 
 // ApplicationAuthConfig configures the tunnel-local application access gate.
+// AllowedWallets holds the provider-scoped principal allowlist (Ethereum
+// wallet addresses for siwe, or credential subjects for credential).
 type ApplicationAuthConfig struct {
 	Provider        string
 	AllowedWallets  []string
@@ -72,6 +77,8 @@ type applicationAuth struct {
 	signingKey      []byte
 	credentialKey   []byte
 	siwe            *siweauth.Authenticator
+	allowedSubjects map[string]struct{}
+	allowAnySubject bool
 	identityHeaders bool
 }
 
@@ -116,14 +123,34 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	if err != nil {
 		return nil, err
 	}
-	var siwe *siweauth.Authenticator
-	if provider == ApplicationAuthProviderSIWE {
-		siwe, err = siweauth.New(siweauth.Config{AllowedAddresses: cfg.AllowedWallets, AllowAnyAddress: len(cfg.AllowedWallets) == 0, Statement: "Sign in to this Portal application", ChallengePrefix: "pac_"})
+	var (
+		siwe            *siweauth.Authenticator
+		allowedSubjects map[string]struct{}
+		allowAnySubject = true
+	)
+	switch provider {
+	case ApplicationAuthProviderSIWE:
+		siwe, err = siweauth.New(siweauth.Config{
+			AllowedAddresses: cfg.AllowedWallets,
+			AllowAnyAddress:  len(cfg.AllowedWallets) == 0,
+			Statement:        "Sign in to this Portal application",
+			ChallengePrefix:  "pac_",
+		})
 		if err != nil {
 			return nil, err
 		}
-	} else if len(cfg.AllowedWallets) != 0 {
-		return nil, errors.New("allowed wallets require the siwe application auth provider")
+	case ApplicationAuthProviderCredential:
+		subjects, err := NormalizeApplicationAuthSubjects(cfg.AllowedWallets)
+		if err != nil {
+			return nil, err
+		}
+		if len(subjects) > 0 {
+			allowAnySubject = false
+			allowedSubjects = make(map[string]struct{}, len(subjects))
+			for _, subject := range subjects {
+				allowedSubjects[subject] = struct{}{}
+			}
+		}
 	}
 	credentialKey, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
 	if err != nil {
@@ -136,6 +163,8 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		signingKey:      []byte(signingKey),
 		credentialKey:   []byte(credentialKey),
 		siwe:            siwe,
+		allowedSubjects: allowedSubjects,
+		allowAnySubject: allowAnySubject,
 		identityHeaders: cfg.IdentityHeaders,
 	}, nil
 }
@@ -143,8 +172,8 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	credential := strings.TrimSpace(r.Header.Get(types.HeaderAccessCredential))
 	r.Header.Del(types.HeaderAccessCredential)
-	r.Header.Del("X-Portal-User")
-	r.Header.Del("X-Portal-Auth")
+	r.Header.Del(types.HeaderPortalUser)
+	r.Header.Del(types.HeaderPortalAuth)
 
 	switch r.URL.Path {
 	case applicationAuthLoginPath:
@@ -165,11 +194,20 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		stripApplicationAuthCookie(r)
 		if a.identityHeaders {
-			r.Header.Set("X-Portal-User", subject)
-			r.Header.Set("X-Portal-Auth", provider)
+			r.Header.Set(types.HeaderPortalUser, subject)
+			r.Header.Set(types.HeaderPortalAuth, provider)
+			r = r.WithContext(context.WithValue(r.Context(), verifiedIdentityHeadersContextKey{}, true))
 		}
 		a.next.ServeHTTP(w, r)
 	}
+}
+
+func hasVerifiedIdentityHeaders(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	verified, _ := r.Context().Value(verifiedIdentityHeadersContextKey{}).(bool)
+	return verified
 }
 
 func stripApplicationAuthCookie(r *http.Request) {
@@ -286,7 +324,7 @@ func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, req.Credential, now)
-	if err != nil {
+	if err != nil || !a.subjectAllowed(claims.Subject) {
 		a.writeJSONError(w, http.StatusUnauthorized, "application credential is invalid or expired")
 		return
 	}
@@ -316,7 +354,7 @@ func (a *applicationAuth) authenticate(r *http.Request, credential string) (stri
 			return "", "", false
 		}
 		claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
-		if err == nil {
+		if err == nil && a.subjectAllowed(claims.Subject) {
 			return claims.Subject, ApplicationAuthProviderCredential, true
 		}
 		return "", "", false
@@ -345,10 +383,21 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, 
 		return address, provider, true
 	}
 	subject, err := normalizeApplicationAuthSubject(claims.Subject)
-	if err != nil {
+	if err != nil || !a.subjectAllowed(subject) {
 		return "", "", false
 	}
 	return subject, provider, true
+}
+
+func (a *applicationAuth) subjectAllowed(subject string) bool {
+	if a == nil {
+		return false
+	}
+	if a.allowAnySubject {
+		return true
+	}
+	_, ok := a.allowedSubjects[subject]
+	return ok
 }
 
 func (a *applicationAuth) issueSession(subject, provider, host string, expiresAt time.Time) (string, error) {

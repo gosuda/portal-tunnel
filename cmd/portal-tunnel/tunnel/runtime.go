@@ -142,12 +142,8 @@ func (spec Spec) Validate() error {
 		return errors.New("casper payments require an asset")
 	}
 	if auth := httpConfig.Auth; auth != nil {
-		provider, err := gateway.NormalizeApplicationAuthProvider(auth.Provider)
-		if err != nil {
+		if _, err := gateway.NormalizeApplicationAuthAllowed(auth.Provider, auth.AllowedWallets); err != nil {
 			return err
-		}
-		if provider == gateway.ApplicationAuthProviderCredential && len(auth.AllowedWallets) > 0 {
-			return errors.New("application auth wallet allowlist requires the siwe provider")
 		}
 	}
 	return nil

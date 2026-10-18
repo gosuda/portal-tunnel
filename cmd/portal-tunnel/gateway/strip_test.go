@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestStripRequestHeaders(t *testing.T) {
@@ -59,5 +61,34 @@ func TestStripRequestHeadersRejectsInvalidNames(t *testing.T) {
 		if _, err := NewStripRequestHeaders(next, []string{name}); err == nil {
 			t.Fatalf("NewStripRequestHeaders(%q) error = nil, want invalid name error", name)
 		}
+	}
+}
+
+func TestHTTPGatewayAlwaysStripsInboundPortalIdentityHeaders(t *testing.T) {
+	t.Parallel()
+	var gotUser, gotAuth, gotCredential string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser = r.Header.Get(types.HeaderPortalUser)
+		gotAuth = r.Header.Get(types.HeaderPortalAuth)
+		gotCredential = r.Header.Get(types.HeaderAccessCredential)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	gw, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: upstream.URL}}, X402Payment{})
+	if err != nil {
+		t.Fatalf("ComposeHTTPRoutes() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://app.example/", nil)
+	req.Header.Set(types.HeaderPortalUser, "spoofed-user")
+	req.Header.Set(types.HeaderPortalAuth, "spoofed-auth")
+	req.Header.Set(types.HeaderAccessCredential, "pcred_spoofed")
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d; want 204", rec.Code)
+	}
+	if gotUser != "" || gotAuth != "" || gotCredential != "" {
+		t.Fatalf("spoofed portal headers reached upstream: user=%q auth=%q credential=%q", gotUser, gotAuth, gotCredential)
 	}
 }

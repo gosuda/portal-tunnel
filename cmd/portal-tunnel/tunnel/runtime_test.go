@@ -43,7 +43,13 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 		{name: "unknown auth", edit: func(spec *Spec) { spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "unknown"} }},
 		{name: "missing auth provider", edit: func(spec *Spec) { spec.HTTP.Auth = &gateway.ApplicationAuthConfig{IdentityHeaders: true} }},
 		{name: "credential allowlist", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "credential", AllowedWallets: []string{"wallet"}}
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "credential", AllowedWallets: []string{"alice"}}
+		}, valid: true},
+		{name: "credential invalid allowlist", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "credential", AllowedWallets: []string{""}}
+		}},
+		{name: "siwe invalid allowlist", edit: func(spec *Spec) {
+			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe", AllowedWallets: []string{"not-a-wallet"}}
 		}},
 		{name: "paid route", edit: func(spec *Spec) {
 			spec.Transport.Target = ""

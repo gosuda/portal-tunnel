@@ -483,6 +483,15 @@ type httpGateway struct {
 }
 
 func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Always remove Portal-owned credential and identity headers unless the
+	// local application auth gate explicitly verified and attached them for
+	// this request.
+	r.Header.Del(types.HeaderAccessCredential)
+	if !hasVerifiedIdentityHeaders(r) {
+		r.Header.Del(types.HeaderPortalUser)
+		r.Header.Del(types.HeaderPortalAuth)
+	}
+
 	path := "/"
 	if r.URL != nil {
 		path = r.URL.Path
