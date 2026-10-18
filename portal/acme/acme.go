@@ -27,6 +27,7 @@ const (
 type Config struct {
 	BaseDomain         string
 	KeyDir             string
+	CADirURL           string
 	DNSProvider        string
 	ENSGaslessEnabled  bool
 	ENSGaslessAddress  string
@@ -66,6 +67,11 @@ type Manager struct {
 func NewManager(cfg Config) (*Manager, error) {
 	cfg.BaseDomain = utils.NormalizeBaseDomain(cfg.BaseDomain)
 	cfg.KeyDir = strings.TrimSpace(cfg.KeyDir)
+	caDirURL, err := NormalizeCADirURL(cfg.CADirURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.CADirURL = caDirURL
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
 	if cfg.DNSProvider == "" {
 		cfg.DNSProvider = TypeEmbedded

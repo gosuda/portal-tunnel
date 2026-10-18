@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-acme/lego/v4/certcrypto"
@@ -146,7 +148,32 @@ func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
 	return true
 }
 
+// NormalizeCADirURL validates an optional ACME CA directory URL and defaults
+// an empty value to Let's Encrypt production. HTTPS is required except for
+// loopback hosts used in local testing.
+func NormalizeCADirURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return lego.LEDirectoryProduction, nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("acme ca directory url must be a valid URL without credentials, query, or fragment")
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	host := parsed.Hostname()
+	isLoopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	if scheme != "https" && !(scheme == "http" && isLoopback) {
+		return "", errors.New("acme ca directory url must use https (or http on a loopback host)")
+	}
+	return raw, nil
+}
+
 func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
+	resolvedCADirURL, err := NormalizeCADirURL(m.cfg.CADirURL)
+	if err != nil {
+		return nil, err
+	}
 	email := defaultACMEEmailPrefix + m.cfg.BaseDomain
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
 	registrationFile := filepath.Join(m.cfg.KeyDir, registrationFileName)
@@ -173,7 +200,7 @@ func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
 	}
 
 	clientConfig := lego.NewConfig(user)
-	clientConfig.CADirURL = lego.LEDirectoryProduction
+	clientConfig.CADirURL = resolvedCADirURL
 	clientConfig.Certificate.KeyType = certcrypto.RSA2048
 
 	client, err := lego.NewClient(clientConfig)

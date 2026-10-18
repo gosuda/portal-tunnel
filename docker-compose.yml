@@ -57,6 +57,7 @@ services:
       PPROF_ADDR: ${PPROF_ADDR:-127.0.0.1:6060}
 
       # TLS/ACME materials and DNS automation
+      ACME_CA_DIR_URL: ${ACME_CA_DIR_URL:-}
       ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-}
       EMBEDDED_DNS_PORT: ${EMBEDDED_DNS_PORT:-53}
       ENS_GASLESS_ENABLED: ${ENS_GASLESS_ENABLED:-false}

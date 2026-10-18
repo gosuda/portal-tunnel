@@ -172,6 +172,11 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
 		cfg.ACME.KeyDir = cfg.StateDir
 	}
+	caDirURL, err := acme.NormalizeCADirURL(cfg.ACME.CADirURL)
+	if err != nil {
+		return ServerConfig{}, err
+	}
+	cfg.ACME.CADirURL = caDirURL
 	if err := cfg.Cache.Validate(); err != nil {
 		return ServerConfig{}, err
 	}

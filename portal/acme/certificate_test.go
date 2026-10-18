@@ -102,3 +102,27 @@ func TestEvaluateRenewal(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeCADirURL(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		input string
+		valid bool
+	}{
+		{name: "empty defaults to Let's Encrypt production", input: "", valid: true},
+		{name: "custom https CA directory", input: "https://acme.zerossl.com/v2/DV90", valid: true},
+		{name: "loopback http test CA", input: "http://127.0.0.1:14000/dir", valid: true},
+		{name: "non-loopback http rejected", input: "http://acme.example.com/directory", valid: false},
+		{name: "query string rejected", input: "https://acme.example.com/directory?foo=1", valid: false},
+		{name: "userinfo rejected", input: "https://user:pass@acme.example.com/directory", valid: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeCADirURL(tc.input)
+			if (err == nil) != tc.valid {
+				t.Fatalf("NormalizeCADirURL(%q) = (%q, %v), want valid=%v", tc.input, got, err, tc.valid)
+			}
+		})
+	}
+}
