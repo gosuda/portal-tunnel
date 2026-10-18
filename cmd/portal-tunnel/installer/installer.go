@@ -54,6 +54,8 @@ func relayShellScript(portalURL, script string) string {
 		"BASE_URL=" + quoteShellValue(portalURL),
 		"RELAY_URL=" + quoteShellValue(portalURL),
 		"BIN_PATH_PREFIX=" + quoteShellValue(strings.Trim(types.PathInstallBinPrefix, "/")),
+		"RELEASE_VERSION=" + quoteShellValue(types.ReleaseVersion),
+		"TRUSTED_RELEASE_BASE_URL=" + quoteShellValue(types.OfficialReleaseBaseURL),
 		"",
 	}, "\n")
 	return insertAfterShebang(script, overrides)
@@ -64,6 +66,8 @@ func relayPowerShellScript(portalURL, script string) string {
 		"$env:BASE_URL = " + quotePowerShellValue(portalURL),
 		"$env:RELAY_URL = " + quotePowerShellValue(portalURL),
 		"$env:BIN_PATH_PREFIX = " + quotePowerShellValue(strings.Trim(types.PathInstallBinPrefix, "/")),
+		"$env:RELEASE_VERSION = " + quotePowerShellValue(types.ReleaseVersion),
+		"$env:TRUSTED_RELEASE_BASE_URL = " + quotePowerShellValue(types.OfficialReleaseBaseURL),
 		"",
 	}, "\n")
 	return overrides + script

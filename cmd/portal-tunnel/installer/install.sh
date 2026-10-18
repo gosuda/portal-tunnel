@@ -22,15 +22,39 @@ case "$ARCH" in
 esac
 
 BASE_URL="${BASE_URL:-https://github.com/gosuda/portal-tunnel/releases/latest/download}"
+TRUSTED_RELEASE_BASE_URL="${TRUSTED_RELEASE_BASE_URL:-https://github.com/gosuda/portal-tunnel/releases}"
+RELEASE_VERSION="${RELEASE_VERSION:-}"
 BIN_PATH_PREFIX="${BIN_PATH_PREFIX:-}"
 BIN_SUFFIX="portal-$PORTAL_OS-$PORTAL_ARCH"
 if [ -n "$BIN_PATH_PREFIX" ]; then
   BIN_URL="${BIN_URL:-$BASE_URL/$BIN_PATH_PREFIX/$PORTAL_OS-$PORTAL_ARCH}"
+  if [ -n "$RELEASE_VERSION" ]; then
+    DEFAULT_CHECKSUM_URL="${TRUSTED_RELEASE_BASE_URL%/}/download/$RELEASE_VERSION/${BIN_SUFFIX}.sha256"
+  else
+    DEFAULT_CHECKSUM_URL="${TRUSTED_RELEASE_BASE_URL%/}/latest/download/${BIN_SUFFIX}.sha256"
+  fi
 else
   BIN_URL="${BIN_URL:-$BASE_URL/$BIN_SUFFIX}"
+  DEFAULT_CHECKSUM_URL="${BIN_URL}.sha256"
 fi
-CHECKSUM_URL="${CHECKSUM_URL:-${BIN_URL}.sha256}"
+CHECKSUM_URL="${CHECKSUM_URL:-$DEFAULT_CHECKSUM_URL}"
 RELAY_URL="${RELAY_URL:-https://your-relay.example.com}"
+
+url_origin() {
+  case "$1" in
+    https://*)
+      REST="${1#https://}"
+      printf 'https://%s\n' "${REST%%/*}"
+      ;;
+    http://*)
+      REST="${1#http://}"
+      printf 'http://%s\n' "${REST%%/*}"
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
 
 is_local_https_url() {
   case "$1" in
@@ -74,6 +98,17 @@ is_local_https_url() {
   return 1
 }
 
+# Relay-hosted downloads (/api/install/bin/*) must verify against an
+# independent trusted release origin rather than the relay itself.
+if [ -n "$BIN_PATH_PREFIX" ] && ! is_local_https_url "$BASE_URL"; then
+  BIN_ORIGIN="$(url_origin "$BIN_URL")"
+  CHECKSUM_ORIGIN="$(url_origin "$CHECKSUM_URL")"
+  if [ "$BIN_ORIGIN" = "$CHECKSUM_ORIGIN" ]; then
+    echo "Refusing to verify relay-hosted binary against same-origin relay checksum ($CHECKSUM_URL). Aborting (fail-closed)." >&2
+    exit 1
+  fi
+fi
+
 download_url() {
   if is_local_https_url "$1"; then
     curl -k -fsSL "$1" -o "$2"
@@ -104,7 +139,7 @@ trap cleanup EXIT INT TERM
 echo "Downloading portal ($PORTAL_OS/$PORTAL_ARCH)..." >&2
 download_url "$BIN_URL" "$BIN_PATH"
 
-echo "Verifying SHA256 checksum..." >&2
+echo "Verifying SHA256 checksum against $CHECKSUM_URL..." >&2
 CHECKSUM_PAYLOAD="$(fetch_url "$CHECKSUM_URL")" || {
   echo "Failed to download checksum from $CHECKSUM_URL. Aborting (fail-closed)." >&2
   exit 1

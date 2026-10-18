@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
 $BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { "https://github.com/gosuda/portal-tunnel/releases/latest/download" }
+$TrustedReleaseBaseUrl = if ($env:TRUSTED_RELEASE_BASE_URL) { $env:TRUSTED_RELEASE_BASE_URL.TrimEnd('/') } else { "https://github.com/gosuda/portal-tunnel/releases" }
+$ReleaseVersion = if ($env:RELEASE_VERSION) { $env:RELEASE_VERSION.Trim() } else { "" }
 $RelayUrl = if ($env:RELAY_URL) { $env:RELAY_URL } else { "https://your-relay.example.com" }
 $OriginalSecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
@@ -14,15 +16,35 @@ try {
         throw "Unsupported architecture: $Arch"
     }
 
+    $BinSuffix = "portal-windows-$PortalArch.exe"
     $BinPathPrefix = if ($env:BIN_PATH_PREFIX) { $env:BIN_PATH_PREFIX.Trim() } else { "" }
     if ($env:BIN_URL) {
         $BinUrl = $env:BIN_URL
     } elseif ([string]::IsNullOrWhiteSpace($BinPathPrefix)) {
-        $BinUrl = "$BaseUrl/portal-windows-$PortalArch.exe"
+        $BinUrl = "$BaseUrl/$BinSuffix"
     } else {
         $BinUrl = "$BaseUrl/$BinPathPrefix/windows-$PortalArch"
     }
-    $ChecksumUrl = if ($env:CHECKSUM_URL) { $env:CHECKSUM_URL } else { "$BinUrl.sha256" }
+
+    if ($env:CHECKSUM_URL) {
+        $ChecksumUrl = $env:CHECKSUM_URL
+    } elseif ([string]::IsNullOrWhiteSpace($BinPathPrefix)) {
+        $ChecksumUrl = "$BinUrl.sha256"
+    } elseif (-not [string]::IsNullOrWhiteSpace($ReleaseVersion)) {
+        $ChecksumUrl = "$TrustedReleaseBaseUrl/download/$ReleaseVersion/$BinSuffix.sha256"
+    } else {
+        $ChecksumUrl = "$TrustedReleaseBaseUrl/latest/download/$BinSuffix.sha256"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($BinPathPrefix)) {
+        $BinUri = [Uri]$BinUrl
+        $ChecksumUri = [Uri]$ChecksumUrl
+        $IsLocalHost = $BinUri.Host -eq "localhost" -or $BinUri.Host -eq "127.0.0.1" -or $BinUri.Host -eq "::1" -or $BinUri.Host.EndsWith(".localhost")
+        if (-not $IsLocalHost -and ($BinUri.Scheme -eq $ChecksumUri.Scheme) -and ($BinUri.Authority -eq $ChecksumUri.Authority)) {
+            throw "Refusing to verify relay-hosted binary against same-origin relay checksum ($ChecksumUrl)."
+        }
+    }
+
     $WorkDir = Join-Path $env:TEMP ("portal-install-" + [Guid]::NewGuid().ToString())
     New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
     $BinPath = Join-Path $WorkDir "portal.exe"
@@ -30,7 +52,7 @@ try {
     Write-Host "Downloading portal (windows/$PortalArch)..."
     Invoke-WebRequest -UseBasicParsing -Uri $BinUrl -OutFile $BinPath
 
-    Write-Host "Verifying SHA256 checksum..."
+    Write-Host "Verifying SHA256 checksum against $ChecksumUrl..."
     $ChecksumResponse = Invoke-WebRequest -UseBasicParsing -Uri $ChecksumUrl
     if ($ChecksumResponse.Content -is [byte[]]) {
         $ChecksumPayload = [System.Text.Encoding]::UTF8.GetString($ChecksumResponse.Content)
