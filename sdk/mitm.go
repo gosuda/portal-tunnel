@@ -165,15 +165,7 @@ func buildMITMProbeHTTPRequest(hostname string, nonce mitmProbeNonce, padding []
 	nonceHex := hex.EncodeToString(nonce[:])
 	padToken := base64.RawURLEncoding.EncodeToString(padding)
 	req := fmt.Sprintf(
-		"GET %s HTTP/1.1
-Host: %s
-User-Agent: %s
-Accept: */*
-X-Request-ID: %s
-Cookie: _ps=%s
-Connection: close
-
-",
+		"GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\nX-Request-ID: %s\r\nCookie: _ps=%s\r\nConnection: close\r\n\r\n",
 		path,
 		hostname,
 		ua,
