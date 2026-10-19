@@ -87,7 +87,9 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		return err
 	}
 
-	renewTicker := time.NewTicker(defaultRenewInterval)
+	// A timer instead of a ticker lets the CA's ARI Retry-After and the expiry
+	// floor set the next renewal check.
+	renewTimer := time.NewTimer(defaultRenewInterval)
 	dnsTicker := time.NewTicker(defaultManagedDNSSyncInterval)
 	// A timer instead of a ticker lets the pending embedded DNS address follow
 	// the fast early retry schedule instead of waiting out the full interval.
@@ -101,7 +103,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 	}
 	m.commandMu.RUnlock()
 	retryTimer := time.NewTimer(nextSyncDelay(consecutiveDNSFailures))
-	defer renewTicker.Stop()
+	defer renewTimer.Stop()
 	defer dnsTicker.Stop()
 	defer retryTimer.Stop()
 
@@ -207,20 +209,21 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
 			}
-		case <-renewTicker.C:
-			_, _, manual, err := m.manualCertificateOverride()
-			if err != nil || manual {
-				continue
+		case <-renewTimer.C:
+			next := defaultRenewInterval
+			if _, _, manual, err := m.manualCertificateOverride(); err == nil && !manual {
+				renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+				needsRenewal, replacesCertID, recheck := m.shouldRenew(renewCtx)
+				if needsRenewal {
+					if err := m.provision(renewCtx, replacesCertID); err != nil {
+						log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
+					}
+				} else {
+					next = recheck
+				}
+				cancel()
 			}
-			renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			needsRenewal, replacesCertID := m.shouldRenew(renewCtx)
-			if needsRenewal {
-				err = m.provision(renewCtx, replacesCertID)
-			}
-			cancel()
-			if err != nil {
-				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
-			}
+			renewTimer.Reset(next)
 		}
 	}
 }
