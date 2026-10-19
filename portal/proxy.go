@@ -24,7 +24,7 @@ type proxy struct {
 	tcpLoadBytes int64
 }
 
-func (p *proxy) bridge(ctx context.Context, left, right net.Conn, identityKey types.ServiceIdentityKey, bpsManager *BPSManager) {
+func (p *proxy) bridge(ctx context.Context, left, right net.Conn, identityKey types.ServiceIdentityKey, bpsManager *BPSManager, inBytes, outBytes *atomic.Int64) {
 	p.activeConns.Add(1)
 	defer p.activeConns.Add(-1)
 
@@ -48,7 +48,7 @@ func (p *proxy) bridge(ctx context.Context, left, right net.Conn, identityKey ty
 	}()
 	var group errgroup.Group
 	group.Go(func() error {
-		err := p.copy(ctx, right, left, identityKey, bpsManager)
+		err := p.copy(ctx, right, left, identityKey, bpsManager, inBytes)
 		if err != nil {
 			cancel()
 		}
@@ -56,7 +56,7 @@ func (p *proxy) bridge(ctx context.Context, left, right net.Conn, identityKey ty
 		return err
 	})
 	group.Go(func() error {
-		err := p.copy(ctx, left, right, identityKey, bpsManager)
+		err := p.copy(ctx, left, right, identityKey, bpsManager, outBytes)
 		if err != nil {
 			cancel()
 		}
@@ -97,7 +97,7 @@ func (p *proxy) currentTCPBPS(now time.Time) float64 {
 // set mid-stream starts pacing from the next chunk, and removing it releases
 // the connection at full speed. ThrottleIdentityBPS returns the full length
 // without sleeping when no limit is set, so one loop serves both modes.
-func (p *proxy) copy(ctx context.Context, dst, src net.Conn, identityKey types.ServiceIdentityKey, bpsManager *BPSManager) error {
+func (p *proxy) copy(ctx context.Context, dst, src net.Conn, identityKey types.ServiceIdentityKey, bpsManager *BPSManager, bytes *atomic.Int64) error {
 	buf := make([]byte, 32*1024)
 	for {
 		nr, readErr := src.Read(buf)
@@ -112,6 +112,9 @@ func (p *proxy) copy(ctx context.Context, dst, src net.Conn, identityKey types.S
 				n, err := dst.Write(data[:chunkSize])
 				if n > 0 {
 					p.tcpBytes.Add(int64(n))
+					if bytes != nil {
+						bytes.Add(int64(n))
+					}
 					data = data[n:]
 				}
 				if err != nil {

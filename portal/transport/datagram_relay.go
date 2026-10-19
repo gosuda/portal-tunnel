@@ -36,6 +36,10 @@ type RelayDatagram struct {
 	enabled     atomic.Bool
 	newFlows    *rate.Limiter
 	dropLogs    *rate.Limiter
+	inBytes     atomic.Int64
+	outBytes    atomic.Int64
+	inPackets   atomic.Int64
+	outPackets  atomic.Int64
 
 	conn *net.UDPConn
 
@@ -222,13 +226,16 @@ func (d *RelayDatagram) dispatch(frame types.DatagramFrame) {
 	if !d.enabled.Load() {
 		return
 	}
-	if _, err := conn.WriteToUDPAddrPort(frame.Payload, addr); err != nil {
+	if n, err := conn.WriteToUDPAddrPort(frame.Payload, addr); err != nil {
 		if d.dropLogs.Allow() {
 			log.Warn().Err(err).Str("component", "udp-relay").
 				Str("identity_key", d.identityKey.String()).
 				Msg("flow writeback failed; further packet drops may be suppressed")
 		}
 		d.forgetFlow(frame.FlowID)
+	} else {
+		d.outBytes.Add(int64(n))
+		d.outPackets.Add(1)
 	}
 }
 
@@ -320,5 +327,13 @@ func (d *RelayDatagram) forwardDatagram(addr netip.AddrPort, payload []byte) {
 				Str("identity_key", d.identityKey.String()).
 				Msg("send to quic backhaul failed; further packet drops may be suppressed")
 		}
+	} else {
+		d.inBytes.Add(int64(len(payload)))
+		d.inPackets.Add(1)
 	}
+}
+
+// TrafficStats counts successfully forwarded payload, excluding network framing.
+func (d *RelayDatagram) TrafficStats() (inBytes, outBytes, inPackets, outPackets int64) {
+	return d.inBytes.Load(), d.outBytes.Load(), d.inPackets.Load(), d.outPackets.Load()
 }

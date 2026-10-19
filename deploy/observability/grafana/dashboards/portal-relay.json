@@ -507,7 +507,7 @@
                       "spec": {
                         "editorMode": "code",
                         "expr": "portal_tenants_active{job=~\"$job\",transport=~\"$transport\"}",
-                        "legendFormat": "tenants · {{transport}}",
+                        "legendFormat": "Applications · {{transport}}",
                         "range": true
                       },
                       "version": "v0"
@@ -539,10 +539,10 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "Applications are active registrations grouped by enabled transports. Connections include admitted stream bridges and UDP flows, grouped by the Application's enabled transports.",
           "id": 4,
           "links": [],
-          "title": "Active tenants and connections by transport",
+          "title": "Active Applications and Connections by Transport",
           "vizConfig": {
             "group": "timeseries",
             "kind": "VizConfig",
@@ -684,6 +684,132 @@
           }
         }
       },
+      "panel-7": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [{
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {"name": "dg1avyzdsfg8wb"},
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (transport, direction) (rate(portal_application_network_bytes_total{job=~\"$job\",application=~\"$application\"}[5m]))",
+                      "legendFormat": "{{transport}} · {{direction}}",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Application payload bytes per second. In is client to Application; out is Application to client. SNI counts encrypted TLS stream bytes, not HTTP requests or IP packets. Overlay and protocol framing are excluded. Counters reset when an Application lease is replaced.",
+          "id": 7,
+          "links": [],
+          "title": "Network I/O by transport and direction",
+          "vizConfig": {
+            "group": "timeseries", "kind": "VizConfig", "version": "13.2.4",
+            "spec": {
+              "fieldConfig": {"defaults": {"unit": "Bps", "color": {"mode": "palette-classic"}}, "overrides": []},
+              "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+            }
+          }
+        }
+      },
+      "panel-8": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [{
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {"name": "dg1avyzdsfg8wb"},
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "topk(10, sum by (application, transport, direction) (rate(portal_application_network_bytes_total{job=~\"$job\",application=~\"$application\"}[5m])))",
+                      "legendFormat": "{{application}} · {{transport}} · {{direction}}",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Top 10 Application/transport/direction series by forwarded payload bytes per second. Select an Application to focus on it; names include the stable service identity key.",
+          "id": 8,
+          "links": [],
+          "title": "Application network I/O · top 10",
+          "vizConfig": {
+            "group": "timeseries", "kind": "VizConfig", "version": "13.2.4",
+            "spec": {
+              "fieldConfig": {"defaults": {"unit": "Bps", "color": {"mode": "palette-classic"}}, "overrides": []},
+              "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+            }
+          }
+        }
+      },
+      "panel-9": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [{
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {"name": "dg1avyzdsfg8wb"},
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (direction) (rate(portal_application_network_datagrams_total{job=~\"$job\",application=~\"$application\"}[5m]))",
+                      "legendFormat": "UDP · {{direction}}",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Successfully forwarded UDP datagrams per second, by direction. TCP and SNI have byte counters only; reads and writes do not correspond to network packets.",
+          "id": 9,
+          "links": [],
+          "title": "UDP datagram I/O",
+          "vizConfig": {
+            "group": "timeseries", "kind": "VizConfig", "version": "13.2.4",
+            "spec": {
+              "fieldConfig": {"defaults": {"unit": "pps", "color": {"mode": "palette-classic"}}, "overrides": []},
+              "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+            }
+          }
+        }
+      },
       "panel-6": {
         "kind": "Panel",
         "spec": {
@@ -810,7 +936,7 @@
             "spec": {
               "element": {
                 "kind": "ElementReference",
-                "name": "panel-5"
+                "name": "panel-7"
               },
               "height": 8,
               "width": 12,
@@ -823,12 +949,33 @@
             "spec": {
               "element": {
                 "kind": "ElementReference",
-                "name": "panel-6"
+                "name": "panel-8"
               },
               "height": 8,
               "width": 12,
               "x": 12,
               "y": 26
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "element": {"kind": "ElementReference", "name": "panel-9"},
+              "height": 8, "width": 24, "x": 0, "y": 34
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "element": {"kind": "ElementReference", "name": "panel-5"},
+              "height": 8, "width": 12, "x": 0, "y": 42
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "element": {"kind": "ElementReference", "name": "panel-6"},
+              "height": 8, "width": 12, "x": 12, "y": 42
             }
           }
         ]
@@ -896,6 +1043,30 @@
           "regexApplyTo": "value",
           "skipUrlSync": false,
           "sort": "disabled"
+        }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "allValue": ".*",
+          "allowCustomValue": true,
+          "current": {"text": "All", "value": ["$__all"]},
+          "definition": "label_values(portal_application_network_bytes_total{job=~\"$job\"}, application)",
+          "hide": "dontHide",
+          "includeAll": true,
+          "label": "Application",
+          "multi": true,
+          "name": "application",
+          "options": [],
+          "query": {
+            "group": "prometheus", "kind": "DataQuery", "version": "v0",
+            "spec": {"__legacyStringValue": "label_values(portal_application_network_bytes_total{job=~\"$job\"}, application)"}
+          },
+          "refresh": "onDashboardLoad",
+          "regex": "",
+          "regexApplyTo": "value",
+          "skipUrlSync": false,
+          "sort": "alphabeticalAsc"
         }
       },
       {

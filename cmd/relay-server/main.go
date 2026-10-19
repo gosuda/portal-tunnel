@@ -219,9 +219,19 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	defer telemetry.Shutdown(context.Background())
 	relayMetrics, err := observability.RegisterRelayMetrics(telemetry.Meter(), func() observability.RelayMetrics {
 		activeTenants, activeConnections := server.TransportStats()
+		traffic := server.NetworkTraffic()
+		networkTraffic := make([]observability.NetworkTraffic, 0, len(traffic))
+		for _, item := range traffic {
+			networkTraffic = append(networkTraffic, observability.NetworkTraffic{
+				Application: item.Application, Transport: item.Transport,
+				InBytes: item.InBytes, OutBytes: item.OutBytes,
+				InPackets: item.InPackets, OutPackets: item.OutPackets,
+			})
+		}
 		return observability.RelayMetrics{
 			ActiveTenantsByTransport:     activeTenants,
 			ActiveConnectionsByTransport: activeConnections,
+			NetworkTraffic:               networkTraffic,
 		}
 	})
 	if err != nil {

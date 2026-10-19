@@ -681,7 +681,7 @@ func (s *Server) bridgeTCPConn(record *leaseRecord, bridge *leaseBridge, inbound
 			_ = reverse.Close()
 			continue
 		}
-		s.proxy.bridge(bridge.ctx, inbound, reverse, record.ServiceKey(), s.registry.bps)
+		s.proxy.bridge(bridge.ctx, inbound, reverse, record.ServiceKey(), s.registry.bps, &record.tcpInBytes, &record.tcpOutBytes)
 		return
 	}
 }
@@ -757,6 +757,13 @@ func (s *Server) TransportStats() (tenants, connections map[string]int64) {
 	}
 	stats := s.registry.transportStats(time.Now())
 	return stats.activeTenants, stats.activeConnections
+}
+
+func (s *Server) NetworkTraffic() []NetworkTraffic {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	return s.registry.networkTraffic(time.Now())
 }
 
 // AccessProjectionKeys returns identities whose live lease or retained cache
@@ -1054,7 +1061,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 			_ = session.Close()
 			continue
 		}
-		s.proxy.bridge(bridge.ctx, conn, session, record.ServiceKey(), s.registry.bps)
+		s.proxy.bridge(bridge.ctx, conn, session, record.ServiceKey(), s.registry.bps, &record.sniInBytes, &record.sniOutBytes)
 		return nil
 	}
 }

@@ -40,6 +40,16 @@ type Runtime struct {
 type RelayMetrics struct {
 	ActiveTenantsByTransport     map[string]int64
 	ActiveConnectionsByTransport map[string]int64
+	NetworkTraffic               []NetworkTraffic
+}
+
+type NetworkTraffic struct {
+	Application string
+	Transport   string
+	InBytes     int64
+	OutBytes    int64
+	InPackets   int64
+	OutPackets  int64
 }
 
 func Start(ctx context.Context, cfg Config) (*Runtime, error) {
@@ -121,11 +131,19 @@ func registerRuntimeMetrics(meter metric.Meter) (metric.Registration, error) {
 }
 
 func RegisterRelayMetrics(meter metric.Meter, read func() RelayMetrics) (metric.Registration, error) {
-	activeTenants, err := meter.Int64ObservableGauge("portal.tenants.active", metric.WithUnit("{tenant}"), metric.WithDescription("Active relay tenants"))
+	activeTenants, err := meter.Int64ObservableGauge("portal.tenants.active", metric.WithUnit("{application}"), metric.WithDescription("Active relay applications"))
 	if err != nil {
 		return nil, err
 	}
 	activeConnections, err := meter.Int64ObservableGauge("portal.connections.active", metric.WithUnit("{connection}"), metric.WithDescription("Active relay connections"))
+	if err != nil {
+		return nil, err
+	}
+	bytes, err := meter.Int64ObservableCounter("portal.application.network.bytes", metric.WithUnit("By"), metric.WithDescription("Cumulative application payload bytes forwarded by the relay"))
+	if err != nil {
+		return nil, err
+	}
+	packets, err := meter.Int64ObservableCounter("portal.application.network.datagrams", metric.WithUnit("{datagram}"), metric.WithDescription("Cumulative UDP datagrams forwarded by the relay"))
 	if err != nil {
 		return nil, err
 	}
@@ -137,8 +155,24 @@ func RegisterRelayMetrics(meter metric.Meter, read func() RelayMetrics) (metric.
 		for transport, value := range metrics.ActiveConnectionsByTransport {
 			observer.ObserveInt64(activeConnections, value, metric.WithAttributes(attribute.String("transport", transport)))
 		}
+		for _, traffic := range metrics.NetworkTraffic {
+			for _, direction := range []struct {
+				name    string
+				bytes   int64
+				packets int64
+			}{
+				{name: "in", bytes: traffic.InBytes, packets: traffic.InPackets},
+				{name: "out", bytes: traffic.OutBytes, packets: traffic.OutPackets},
+			} {
+				attrs := metric.WithAttributes(attribute.String("application", traffic.Application), attribute.String("transport", traffic.Transport), attribute.String("direction", direction.name))
+				observer.ObserveInt64(bytes, direction.bytes, attrs)
+				if traffic.Transport == "udp" {
+					observer.ObserveInt64(packets, direction.packets, attrs)
+				}
+			}
+		}
 		return nil
-	}, activeTenants, activeConnections)
+	}, activeTenants, activeConnections, bytes, packets)
 }
 
 func WrapHTTP(meter metric.Meter, next http.Handler) http.Handler {
