@@ -421,6 +421,10 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 	if len(stateCookies) != 1 || stateCookies[0].Name != applicationAuthOIDCStateCookie {
 		t.Fatalf("state cookies = %#v", stateCookies)
 	}
+	// Browsers drop __Host- cookies unless they are Secure, Path=/ and Domain-less.
+	if c := stateCookies[0]; c.Path != "/" || !c.Secure || c.Domain != "" {
+		t.Fatalf("state cookie attributes = path %q, secure %v, domain %q; want Path=/, Secure, no Domain", c.Path, c.Secure, c.Domain)
+	}
 
 	// 2. Callback exchanges code + PKCE verifier, verifies ID token, and issues session cookie.
 	cbReq := httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthCallbackPath+"?code=authcode&state="+url.QueryEscape(state), nil)
@@ -432,8 +436,13 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 	}
 	var sessionCookie *http.Cookie
 	for _, c := range cbRec.Result().Cookies() {
-		if c.Name == applicationAuthCookieName {
+		switch c.Name {
+		case applicationAuthCookieName:
 			sessionCookie = c
+		case applicationAuthOIDCStateCookie:
+			if c.Path != "/" || c.MaxAge >= 0 {
+				t.Fatalf("state cookie expiry = path %q, max-age %d; want Path=/ and deletion", c.Path, c.MaxAge)
+			}
 		}
 	}
 	if sessionCookie == nil {
@@ -470,6 +479,82 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 	if revokedRec.Code != http.StatusSeeOther {
 		t.Fatalf("revoked OIDC session status = %d; want 303", revokedRec.Code)
 	}
+}
+
+func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
+	t.Parallel()
+
+	newGate := func(t *testing.T, provider string, allow ...string) *applicationAuth {
+		t.Helper()
+		cfg := ApplicationAuthConfig{Provider: provider, AllowedWallets: allow}
+		if provider == ApplicationAuthProviderOIDC {
+			cfg.OIDCIssuerURL = "https://idp.example"
+			cfg.OIDCClientID = "portal-client"
+		}
+		handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handler.(*applicationAuth)
+	}
+	verified, unverified := true, false
+
+	tests := []struct {
+		name   string
+		allow  []string
+		sub    string
+		email  string
+		status *bool
+		want   string
+	}{
+		{"verified email exact", []string{"alice@example.com"}, "s1", "Alice@Example.com", &verified, "alice@example.com"},
+		{"absent email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", nil, ""},
+		{"false email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", &unverified, ""},
+		{"sub allowlist ignores email_verified", []string{"s1"}, "s1", "alice@example.com", nil, "s1"},
+		{"verified email matches domain", []string{"@Example.com"}, "s1", "bob@example.com", &verified, "bob@example.com"},
+		{"absent email_verified does not match domain", []string{"@example.com"}, "s1", "bob@example.com", nil, ""},
+		{"domain excludes subdomains", []string{"@example.com"}, "s1", "bob@sub.example.com", &verified, ""},
+		{"domain excludes other domains", []string{"@example.com"}, "s1", "bob@example.org", &verified, ""},
+		{"email-shaped sub never matches a domain", []string{"@example.com"}, "mallory@example.com", "", nil, ""},
+		{"sub cannot impersonate a domain entry", []string{"@example.com"}, "@example.com", "", nil, ""},
+		{"empty allowlist prefers verified email", nil, "s1", "alice@example.com", &verified, "alice@example.com"},
+		{"empty allowlist falls back to sub", nil, "s1", "alice@example.com", nil, "s1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gate := newGate(t, ApplicationAuthProviderOIDC, tt.allow...)
+			got, ok := gate.resolveAllowedOIDCSubject(oidcIDTokenClaims{
+				Claims:        jwt.Claims{Subject: tt.sub},
+				Email:         tt.email,
+				EmailVerified: tt.status,
+			})
+			if got != tt.want || ok != (tt.want != "") {
+				t.Fatalf("resolveAllowedOIDCSubject = (%q, %v); want %q", got, ok, tt.want)
+			}
+		})
+	}
+
+	t.Run("domain session remains valid", func(t *testing.T) {
+		t.Parallel()
+		if !newGate(t, ApplicationAuthProviderOIDC, "@example.com").subjectAllowed("bob@example.com") {
+			t.Fatal("domain-authorized subject rejected on session validation")
+		}
+	})
+	t.Run("credential subjects ignore domain entries", func(t *testing.T) {
+		t.Parallel()
+		if newGate(t, ApplicationAuthProviderCredential, "@example.com").subjectAllowed("bob@example.com") {
+			t.Fatal("credential provider honored an @domain entry")
+		}
+	})
+	t.Run("malformed domain entries are rejected", func(t *testing.T) {
+		t.Parallel()
+		for _, entry := range []string{"@", "@a@b", "@ex ample.com"} {
+			if _, err := NormalizeApplicationAuthOIDCPrincipals([]string{entry}); err == nil {
+				t.Fatalf("NormalizeApplicationAuthOIDCPrincipals(%q) = nil error", entry)
+			}
+		}
+	})
 }
 
 func TestApplicationCredentialRejectsOtherHostAndExpiry(t *testing.T) {

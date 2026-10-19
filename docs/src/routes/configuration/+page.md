@@ -381,7 +381,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
 | `--auth` | | string | | Protect the complete HTTP application with `siwe`, `credential`, or `oidc`; excludes cache, TCP, and UDP |
-| `--auth-allow` | | string | | Allowed principal (Ethereum wallet for `siwe`, subject for `credential`, or email/subject for `oidc`); repeatable; empty allows any valid principal and requires `--auth` |
+| `--auth-allow` | | string | | Allowed principal (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or subject for `oidc`); repeatable; empty allows any valid principal and requires `--auth` |
 | `--auth-oidc-issuer` | `AUTH_OIDC_ISSUER` | string | | OIDC issuer URL for `--auth oidc` |
 | `--auth-oidc-client-id` | `AUTH_OIDC_CLIENT_ID` | string | | OIDC client ID for `--auth oidc` |
 | `--auth-oidc-client-secret` | `AUTH_OIDC_CLIENT_SECRET` | string | | Optional OIDC client secret for `--auth oidc` |
@@ -532,7 +532,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
 | `auth` | string | Application login provider: `siwe`, `credential`, or `oidc`; cannot be combined with TCP or UDP |
-| `auth_allowed_wallets` | string array | Principals allowed to sign in (Ethereum wallets for `siwe`, subjects for `credential`, or emails/subjects for `oidc`); empty allows any valid principal and requires `auth` when set |
+| `auth_allowed_wallets` | string array | Principals allowed to sign in (Ethereum wallets for `siwe`, subjects for `credential`, or verified emails, `@example.com` domains, or subjects for `oidc`); empty allows any valid principal and requires `auth` when set |
 | `auth_oidc_issuer` | string | OIDC issuer URL; required when `auth = "oidc"` |
 | `auth_oidc_client_id` | string | OIDC client ID; required when `auth = "oidc"` |
 | `auth_oidc_client_secret` | string | Optional OIDC client secret for `auth = "oidc"` |

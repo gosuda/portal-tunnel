@@ -225,6 +225,9 @@ func NormalizeApplicationAuthOIDCPrincipals(values []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		if domain, isDomain := strings.CutPrefix(principal, "@"); isDomain && (domain == "" || strings.ContainsAny(domain, "@ ")) {
+			return nil, fmt.Errorf("oidc domain principal %q must look like @example.com", raw)
+		}
 		if _, ok := seen[principal]; ok {
 			continue
 		}
@@ -243,6 +246,17 @@ func normalizeOIDCPrincipal(raw string) (string, error) {
 		return strings.ToLower(subject), nil
 	}
 	return subject, nil
+}
+
+// oidcClaimPrincipal normalizes an ID token claim value, or returns "" when it
+// is unusable. A leading '@' is reserved for @domain allowlist entries, so a
+// claim can never impersonate one.
+func oidcClaimPrincipal(raw string) string {
+	principal, err := normalizeOIDCPrincipal(raw)
+	if err != nil || strings.HasPrefix(principal, "@") {
+		return ""
+	}
+	return principal
 }
 
 func sanitizeApplicationAuthNext(raw string) string {
@@ -454,7 +468,7 @@ func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     applicationAuthOIDCStateCookie,
 		Value:    stateToken,
-		Path:     "/_portal/auth",
+		Path:     "/",
 		MaxAge:   int(applicationAuthOIDCStateTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   true,
@@ -485,7 +499,7 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 	http.SetCookie(w, &http.Cookie{
 		Name:     applicationAuthOIDCStateCookie,
 		Value:    "",
-		Path:     "/_portal/auth",
+		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   true,
@@ -545,29 +559,26 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 	http.Redirect(w, r, sanitizeApplicationAuthNext(stateClaims.Next), http.StatusSeeOther)
 }
 
+// resolveAllowedOIDCSubject maps ID token claims to the session subject. Only an
+// explicitly verified email can match an email or @domain allowlist entry; the
+// provider-assigned sub claim only matches an allowlist entry exactly.
 func (a *applicationAuth) resolveAllowedOIDCSubject(claims oidcIDTokenClaims) (string, bool) {
-	var candidates []string
-	emailVerified := claims.EmailVerified == nil || *claims.EmailVerified
-	if emailVerified && strings.TrimSpace(claims.Email) != "" {
-		if normalizedEmail, err := normalizeOIDCPrincipal(claims.Email); err == nil {
-			candidates = append(candidates, normalizedEmail)
-		}
+	var email string
+	if claims.EmailVerified != nil && *claims.EmailVerified {
+		email = oidcClaimPrincipal(claims.Email)
 	}
-	if strings.TrimSpace(claims.Subject) != "" {
-		if normalizedSub, err := normalizeOIDCPrincipal(claims.Subject); err == nil && (len(candidates) == 0 || candidates[0] != normalizedSub) {
-			candidates = append(candidates, normalizedSub)
-		}
-	}
-	if len(candidates) == 0 {
-		return "", false
-	}
+	sub := oidcClaimPrincipal(claims.Subject)
 	if a.allowAnySubject {
-		return candidates[0], true
-	}
-	for _, candidate := range candidates {
-		if a.subjectAllowed(candidate) {
-			return candidate, true
+		if email != "" {
+			return email, true
 		}
+		return sub, sub != ""
+	}
+	if email != "" && a.subjectAllowed(email) {
+		return email, true
+	}
+	if _, ok := a.allowedSubjects[sub]; ok {
+		return sub, true
 	}
 	return "", false
 }
@@ -601,13 +612,13 @@ func (o *oidcAuthenticator) exchangeAndVerify(ctx context.Context, code string, 
 		return oidcIDTokenClaims{}, errors.New("missing id_token in token response")
 	}
 
-	claims, err := o.verifyIDToken(rawIDToken, state.Nonce, jwks, now)
+	claims, err := o.verifyIDToken(rawIDToken, state.Nonce, doc.Issuer, jwks, now)
 	if err != nil {
-		_, jwks, refreshErr := o.metadata(ctx, true)
+		doc, jwks, refreshErr := o.metadata(ctx, true)
 		if refreshErr != nil {
 			return oidcIDTokenClaims{}, err
 		}
-		claims, err = o.verifyIDToken(rawIDToken, state.Nonce, jwks, now)
+		claims, err = o.verifyIDToken(rawIDToken, state.Nonce, doc.Issuer, jwks, now)
 		if err != nil {
 			return oidcIDTokenClaims{}, err
 		}
@@ -615,7 +626,7 @@ func (o *oidcAuthenticator) exchangeAndVerify(ctx context.Context, code string, 
 	return claims, nil
 }
 
-func (o *oidcAuthenticator) verifyIDToken(rawToken, expectedNonce string, jwks jose.JSONWebKeySet, now time.Time) (oidcIDTokenClaims, error) {
+func (o *oidcAuthenticator) verifyIDToken(rawToken, expectedNonce, issuer string, jwks jose.JSONWebKeySet, now time.Time) (oidcIDTokenClaims, error) {
 	parsed, err := jwt.ParseSigned(strings.TrimSpace(rawToken), oidcSupportedSignatureAlgorithms)
 	if err != nil {
 		return oidcIDTokenClaims{}, err
@@ -628,7 +639,7 @@ func (o *oidcAuthenticator) verifyIDToken(rawToken, expectedNonce string, jwks j
 		return oidcIDTokenClaims{}, errors.New("id_token expiry is required")
 	}
 	if err := claims.ValidateWithLeeway(jwt.Expected{
-		Issuer:      o.discovery.Issuer,
+		Issuer:      issuer,
 		AnyAudience: jwt.Audience{o.clientID},
 		Time:        now.UTC(),
 	}, time.Minute); err != nil {
@@ -865,8 +876,20 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 	if a.allowAnySubject {
 		return true
 	}
-	_, ok := a.allowedSubjects[subject]
-	return ok
+	if _, ok := a.allowedSubjects[subject]; ok {
+		return true
+	}
+	if a.provider != ApplicationAuthProviderOIDC {
+		return false
+	}
+	// An "@example.com" entry authorizes exactly that email domain, never its
+	// subdomains. Login only passes a verified email here, and sessions only
+	// carry subjects issued after that check.
+	if _, domain, ok := strings.Cut(subject, "@"); ok && !strings.Contains(domain, "@") {
+		_, ok = a.allowedSubjects["@"+domain]
+		return ok
+	}
+	return false
 }
 
 func (a *applicationAuth) issueSession(subject, provider, host string, expiresAt time.Time) (string, error) {
