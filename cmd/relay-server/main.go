@@ -306,7 +306,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	case err := <-pprofErrs:
 		serveErr = fmt.Errorf("serve pprof: %w", err)
 		cancel()
-		<-serveDone
+		serveErr = errors.Join(serveErr, <-serveDone)
 	}
 	cancel()
 

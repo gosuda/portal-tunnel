@@ -47,8 +47,9 @@
                       "group": "prometheus",
                       "kind": "DataQuery",
                       "spec": {
-                        "editorMode": "builder",
+                        "editorMode": "code",
                         "expr": "histogram_quantile(0.95, sum by (le) (rate(portal_http_server_duration_bucket{job=~\"$job\"}[5m]))) / 1000",
+                        "legendFormat": "P95",
                         "range": true
                       },
                       "version": "v0"
@@ -67,35 +68,14 @@
                       "group": "prometheus",
                       "kind": "DataQuery",
                       "spec": {
-                        "editorMode": "builder",
+                        "editorMode": "code",
                         "expr": "histogram_quantile(0.99, sum by (le) (rate(portal_http_server_duration_bucket{job=~\"$job\"}[5m]))) / 1000",
+                        "legendFormat": "P99",
                         "range": true
                       },
                       "version": "v0"
                     },
                     "refId": "C"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "hidden": false,
-                    "query": {
-                      "datasource": {
-                        "name": "dg1avyzdsfg8wb"
-                      },
-                      "group": "prometheus",
-                      "kind": "DataQuery",
-                      "spec": {
-                        "editorMode": "builder",
-                        "expr": "sum(rate(portal_http_server_requests_total{job=~\"$job\"}[5m]))",
-                        "instant": false,
-                        "legendFormat": "__auto",
-                        "range": true
-                      },
-                      "version": "v0"
-                    },
-                    "refId": "A"
                   }
                 }
               ],
@@ -103,10 +83,10 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "Relay HTTP API request latency (5-minute P95/P99), not latency inside forwarded Applications. Values are seconds.",
           "id": 1,
           "links": [],
-          "title": "HTTP throughput and latency",
+          "title": "Relay API latency · P95 / P99",
           "vizConfig": {
             "group": "timeseries",
             "kind": "VizConfig",
@@ -117,6 +97,7 @@
                     "mode": "palette-classic",
                     "seriesBy": "max"
                   },
+                  "unit": "s",
                   "custom": {
                     "axisBorderShow": false,
                     "axisCenteredZero": false,
@@ -126,7 +107,7 @@
                     "barAlignment": 0,
                     "barWidthFactor": 0.9,
                     "drawStyle": "line",
-                    "fillOpacity": 50,
+                    "fillOpacity": 12,
                     "gradientMode": "none",
                     "hideFrom": {
                       "legend": false,
@@ -143,12 +124,12 @@
                     "scaleDistribution": {
                       "type": "linear"
                     },
-                    "showPoints": "always",
+                    "showPoints": "never",
                     "showValues": false,
                     "spanNulls": false,
                     "stacking": {
                       "group": "A",
-                      "mode": "normal"
+                      "mode": "none"
                     },
                     "thresholdsStyle": {
                       "mode": "off"
@@ -168,58 +149,18 @@
                     ]
                   }
                 },
-                "overrides": [
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "sum(rate(portal_http_server_requests_total{job=~\"portal\"}[5m]))",
-                      "scope": "series"
-                    },
-                    "properties": [
-                      {
-                        "id": "displayName",
-                        "value": "requests/sec"
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "histogram_quantile(0.95, sum by (le) (rate(portal_http_server_duration_bucket{job=~\"portal\"}[5m]))) / 1000",
-                      "scope": "series"
-                    },
-                    "properties": [
-                      {
-                        "id": "displayName",
-                        "value": "p95 latency(sec)"
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "histogram_quantile(0.99, sum by (le) (rate(portal_http_server_duration_bucket{job=~\"portal\"}[5m]))) / 1000",
-                      "scope": "series"
-                    },
-                    "properties": [
-                      {
-                        "id": "displayName",
-                        "value": "p99 latency(sec)"
-                      }
-                    ]
-                  }
-                ]
+                "overrides": []
               },
               "options": {
                 "legend": {
-                  "calcs": [],
-                  "displayMode": "list",
+                  "calcs": ["lastNotNull"],
+                  "displayMode": "table",
                   "placement": "bottom",
                   "showLegend": true
                 },
                 "tooltip": {
                   "hideZeros": false,
-                  "mode": "single",
+                  "mode": "multi",
                   "sort": "none"
                 }
               }
@@ -256,10 +197,10 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "Relay HTTP API request rate over 5 minutes, split by response status. Donut slices show the current rate mix.",
           "id": 2,
           "links": [],
-          "title": "HTTP response status",
+          "title": "Relay API requests · status mix",
           "vizConfig": {
             "group": "piechart",
             "kind": "VizConfig",
@@ -287,7 +228,7 @@
                 ],
                 "legend": {
                   "displayMode": "table",
-                  "placement": "right",
+                  "placement": "bottom",
                   "showLegend": true,
                   "values": [
                     "value",
@@ -332,73 +273,14 @@
                       "group": "prometheus",
                       "kind": "DataQuery",
                       "spec": {
+                        "editorMode": "code",
                         "expr": "rate(go_cpu_seconds_total{job=~\"$job\"}[5m]) * 100",
-                        "legendFormat": "CPU %"
+                        "legendFormat": "CPU · {{instance}}",
+                        "range": true
                       },
                       "version": "v0"
                     },
                     "refId": "A"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "hidden": false,
-                    "query": {
-                      "datasource": {
-                        "name": "dg1avyzdsfg8wb"
-                      },
-                      "group": "prometheus",
-                      "kind": "DataQuery",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "go_memory_runtime_bytes{job=~\"$job\"} / 100000",
-                        "legendFormat": "runtime memory",
-                        "range": true
-                      },
-                      "version": "v0"
-                    },
-                    "refId": "B"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "hidden": false,
-                    "query": {
-                      "datasource": {
-                        "name": "dg1avyzdsfg8wb"
-                      },
-                      "group": "prometheus",
-                      "kind": "DataQuery",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "go_memory_heap_bytes{job=~\"$job\"} / 100000",
-                        "legendFormat": "heap memory",
-                        "range": true
-                      },
-                      "version": "v0"
-                    },
-                    "refId": "C"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "hidden": false,
-                    "query": {
-                      "datasource": {
-                        "name": "dg1avyzdsfg8wb"
-                      },
-                      "group": "prometheus",
-                      "kind": "DataQuery",
-                      "spec": {
-                        "expr": "go_goroutines{job=~\"$job\"}",
-                        "legendFormat": "goroutines"
-                      },
-                      "version": "v0"
-                    },
-                    "refId": "D"
                   }
                 }
               ],
@@ -406,10 +288,10 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "Estimated Go runtime CPU busy time over 5 minutes. 100% equals one fully occupied core; multicore usage can exceed 100%. This is not host CPU utilization.",
           "id": 3,
           "links": [],
-          "title": "CPU, memory and goroutines",
+          "title": "Go CPU · % of one core",
           "vizConfig": {
             "group": "timeseries",
             "kind": "VizConfig",
@@ -419,6 +301,7 @@
                   "color": {
                     "mode": "palette-classic"
                   },
+                  "unit": "percent",
                   "custom": {
                     "axisBorderShow": false,
                     "axisCenteredZero": false,
@@ -471,19 +354,97 @@
               },
               "options": {
                 "legend": {
-                  "calcs": [],
-                  "displayMode": "list",
+                  "calcs": ["lastNotNull"],
+                  "displayMode": "table",
                   "placement": "bottom",
                   "showLegend": true
                 },
                 "tooltip": {
                   "hideZeros": false,
-                  "mode": "single",
-                  "sort": "none"
+                  "mode": "multi",
+                  "sort": "desc"
                 }
               }
             },
             "version": "13.2.4"
+          }
+        }
+      },
+      "panel-10": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {"name": "dg1avyzdsfg8wb"},
+                      "group": "prometheus", "kind": "DataQuery", "version": "v0",
+                      "spec": {"editorMode": "code", "expr": "go_memory_runtime_bytes{job=~\"$job\"}", "legendFormat": "Runtime · {{instance}}", "range": true}
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {"name": "dg1avyzdsfg8wb"},
+                      "group": "prometheus", "kind": "DataQuery", "version": "v0",
+                      "spec": {"editorMode": "code", "expr": "go_memory_heap_bytes{job=~\"$job\"}", "legendFormat": "Heap objects · {{instance}}", "range": true}
+                    },
+                    "refId": "B"
+                  }
+                }
+              ],
+              "queryOptions": {}, "transformations": []
+            }
+          },
+          "description": "Go runtime-managed memory and heap object memory in bytes. These are Go runtime metrics, not process RSS or host memory usage.",
+          "id": 10, "links": [], "title": "Go memory · bytes",
+          "vizConfig": {
+            "group": "timeseries", "kind": "VizConfig", "version": "13.2.4",
+            "spec": {
+              "fieldConfig": {"defaults": {"unit": "bytes", "color": {"mode": "palette-classic"}}, "overrides": []},
+              "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+            }
+          }
+        }
+      },
+      "panel-11": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [{
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {"name": "dg1avyzdsfg8wb"},
+                    "group": "prometheus", "kind": "DataQuery", "version": "v0",
+                    "spec": {"editorMode": "code", "expr": "go_goroutines{job=~\"$job\"}", "legendFormat": "{{instance}}", "range": true}
+                  },
+                  "refId": "A"
+                }
+              }],
+              "queryOptions": {}, "transformations": []
+            }
+          },
+          "description": "Current number of Go goroutines per relay instance.",
+          "id": 11, "links": [], "title": "Goroutines · count",
+          "vizConfig": {
+            "group": "timeseries", "kind": "VizConfig", "version": "13.2.4",
+            "spec": {
+              "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "color": {"mode": "palette-classic"}}, "overrides": []},
+              "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+            }
           }
         }
       },
@@ -721,7 +682,7 @@
             "group": "timeseries", "kind": "VizConfig", "version": "13.2.4",
             "spec": {
               "fieldConfig": {"defaults": {"unit": "Bps", "color": {"mode": "palette-classic"}}, "overrides": []},
-              "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+              "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
             }
           }
         }
@@ -887,9 +848,35 @@
                 "name": "panel-1"
               },
               "height": 9,
-              "width": 24,
+              "width": 12,
               "x": 0,
               "y": 0
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-7"
+              },
+              "height": 9,
+              "width": 12,
+              "x": 12,
+              "y": 0
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-8"
+              },
+              "height": 9,
+              "width": 16,
+              "x": 0,
+              "y": 9
             }
           },
           {
@@ -900,21 +887,8 @@
                 "name": "panel-2"
               },
               "height": 9,
-              "width": 12,
-              "x": 0,
-              "y": 9
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-3"
-              },
-              "height": 9,
-              "width": 12,
-              "x": 12,
+              "width": 8,
+              "x": 16,
               "y": 9
             }
           },
@@ -926,7 +900,7 @@
                 "name": "panel-4"
               },
               "height": 8,
-              "width": 24,
+              "width": 16,
               "x": 0,
               "y": 18
             }
@@ -936,46 +910,47 @@
             "spec": {
               "element": {
                 "kind": "ElementReference",
-                "name": "panel-7"
+                "name": "panel-9"
               },
               "height": 8,
-              "width": 12,
-              "x": 0,
-              "y": 26
+              "width": 8,
+              "x": 16,
+              "y": 18
             }
           },
           {
             "kind": "GridLayoutItem",
             "spec": {
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-8"
-              },
-              "height": 8,
-              "width": 12,
-              "x": 12,
-              "y": 26
+              "element": {"kind": "ElementReference", "name": "panel-3"},
+              "height": 8, "width": 8, "x": 0, "y": 26
             }
           },
           {
             "kind": "GridLayoutItem",
             "spec": {
-              "element": {"kind": "ElementReference", "name": "panel-9"},
-              "height": 8, "width": 24, "x": 0, "y": 34
+              "element": {"kind": "ElementReference", "name": "panel-10"},
+              "height": 8, "width": 10, "x": 8, "y": 26
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "element": {"kind": "ElementReference", "name": "panel-11"},
+              "height": 8, "width": 6, "x": 18, "y": 26
             }
           },
           {
             "kind": "GridLayoutItem",
             "spec": {
               "element": {"kind": "ElementReference", "name": "panel-5"},
-              "height": 8, "width": 12, "x": 0, "y": 42
+              "height": 8, "width": 12, "x": 0, "y": 34
             }
           },
           {
             "kind": "GridLayoutItem",
             "spec": {
               "element": {"kind": "ElementReference", "name": "panel-6"},
-              "height": 8, "width": 12, "x": 12, "y": 42
+              "height": 8, "width": 12, "x": 12, "y": 34
             }
           }
         ]

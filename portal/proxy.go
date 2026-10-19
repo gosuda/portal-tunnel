@@ -101,28 +101,26 @@ func (p *proxy) copy(ctx context.Context, dst, src net.Conn, identityKey types.S
 	buf := make([]byte, 32*1024)
 	for {
 		nr, readErr := src.Read(buf)
-		if nr > 0 {
-			data := buf[:nr]
-			for len(data) > 0 {
-				chunkSize, err := bpsManager.ThrottleIdentityBPS(ctx, identityKey, len(data))
-				if err != nil {
-					return err
-				}
+		data := buf[:nr]
+		for len(data) > 0 {
+			chunkSize, err := bpsManager.ThrottleIdentityBPS(ctx, identityKey, len(data))
+			if err != nil {
+				return err
+			}
 
-				n, err := dst.Write(data[:chunkSize])
-				if n > 0 {
-					p.tcpBytes.Add(int64(n))
-					if bytes != nil {
-						bytes.Add(int64(n))
-					}
-					data = data[n:]
-				}
-				if err != nil {
-					return err
-				}
-				if n == 0 {
-					return io.ErrShortWrite
-				}
+			n, err := dst.Write(data[:chunkSize])
+			if n > 0 {
+				p.tcpBytes.Add(int64(n))
+				data = data[n:]
+			}
+			if n > 0 && bytes != nil {
+				bytes.Add(int64(n))
+			}
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return io.ErrShortWrite
 			}
 		}
 		if readErr != nil {

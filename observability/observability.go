@@ -87,7 +87,7 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 }
 
 func registerRuntimeMetrics(meter metric.Meter) (metric.Registration, error) {
-	cpu, err := meter.Float64ObservableCounter("go.cpu.seconds", metric.WithUnit("s"), metric.WithDescription("Total CPU time used by the Go process"))
+	cpu, err := meter.Float64ObservableCounter("go.cpu.seconds", metric.WithUnit("s"), metric.WithDescription("Estimated Go CPU busy time (available runtime CPU time excluding idle)"))
 	if err != nil {
 		return nil, err
 	}
@@ -104,27 +104,26 @@ func registerRuntimeMetrics(meter metric.Meter) (metric.Registration, error) {
 		return nil, err
 	}
 
-	samples := []runtimemetrics.Sample{
-		{Name: "/cpu/classes/total:cpu-seconds"},
-		{Name: "/memory/classes/total:bytes"},
-		{Name: "/memory/classes/heap/objects:bytes"},
-		{Name: "/sched/goroutines:goroutines"},
-	}
 	return meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
-		// runtime/metrics.Read updates the sample values in place and is safe for
-		// concurrent readers, so no application-level state is required here.
-		runtimemetrics.Read(samples)
-		if samples[0].Value.Kind() == runtimemetrics.KindFloat64 {
-			observer.ObserveFloat64(cpu, samples[0].Value.Float64())
+		samples := []runtimemetrics.Sample{
+			{Name: "/cpu/classes/total:cpu-seconds"},
+			{Name: "/cpu/classes/idle:cpu-seconds"},
+			{Name: "/memory/classes/total:bytes"},
+			{Name: "/memory/classes/heap/objects:bytes"},
+			{Name: "/sched/goroutines:goroutines"},
 		}
-		if samples[1].Value.Kind() == runtimemetrics.KindUint64 {
-			observer.ObserveInt64(runtimeMemory, int64(samples[1].Value.Uint64()))
+		runtimemetrics.Read(samples)
+		if samples[0].Value.Kind() == runtimemetrics.KindFloat64 && samples[1].Value.Kind() == runtimemetrics.KindFloat64 {
+			observer.ObserveFloat64(cpu, max(0, samples[0].Value.Float64()-samples[1].Value.Float64()))
 		}
 		if samples[2].Value.Kind() == runtimemetrics.KindUint64 {
-			observer.ObserveInt64(heapMemory, int64(samples[2].Value.Uint64()))
+			observer.ObserveInt64(runtimeMemory, int64(samples[2].Value.Uint64()))
 		}
 		if samples[3].Value.Kind() == runtimemetrics.KindUint64 {
-			observer.ObserveInt64(goroutines, int64(samples[3].Value.Uint64()))
+			observer.ObserveInt64(heapMemory, int64(samples[3].Value.Uint64()))
+		}
+		if samples[4].Value.Kind() == runtimemetrics.KindUint64 {
+			observer.ObserveInt64(goroutines, int64(samples[4].Value.Uint64()))
 		}
 		return nil
 	}, cpu, runtimeMemory, heapMemory, goroutines)
