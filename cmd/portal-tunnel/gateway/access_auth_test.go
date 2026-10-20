@@ -602,3 +602,34 @@ func applicationAuthTestWallet(t *testing.T, digit string) identity.LocalAuthori
 func applicationAuthTestTime() time.Time {
 	return time.Now().UTC()
 }
+
+// The post-login target comes from a query parameter and a signed cookie, so it
+// must never send the browser to another origin.
+func TestSanitizeApplicationAuthNext(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		next string
+		want string
+	}{
+		{"plain path", "/dashboard", "/dashboard"},
+		{"path with query", "/private?q=1", "/private?q=1"},
+		{"root", "/", "/"},
+		{"surrounding space is trimmed", "  /dashboard ", "/dashboard"},
+		{"empty", "", "/"},
+		{"relative path", "dashboard", "/"},
+		{"absolute URL", "https://evil.example/", "/"},
+		{"scheme-relative URL", "//evil.example/", "/"},
+		{"slash then backslash", "/\\evil.example/", "/"},
+		{"backslash later in the path", "/a\\b", "/"},
+		{"backslash only", "\\evil.example", "/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := sanitizeApplicationAuthNext(tc.next); got != tc.want {
+				t.Fatalf("sanitizeApplicationAuthNext(%q) = %q; want %q", tc.next, got, tc.want)
+			}
+		})
+	}
+}

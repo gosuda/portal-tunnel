@@ -259,9 +259,13 @@ func oidcClaimPrincipal(raw string) string {
 	return principal
 }
 
+// sanitizeApplicationAuthNext keeps a post-login target on this origin. A
+// leading "//" or "/\" is read by browsers as a URL for another host, so the
+// second character must be neither; backslashes are refused everywhere to keep
+// the target a plain path.
 func sanitizeApplicationAuthNext(raw string) string {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.Contains(raw, "\\") {
+	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/\\") || strings.Contains(raw, "\\") {
 		return "/"
 	}
 	return raw
