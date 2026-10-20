@@ -145,6 +145,57 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		return publicIPs, err
 	}
 
+	// syncRetryTick runs one retry-cycle sync: it fast-retries a pending
+	// embedded DNS address, refreshes public-ip address records, and keeps
+	// ENS DNSSEC and queued commands moving.
+	syncRetryTick := func(syncCtx context.Context) error {
+		m.commandMu.RLock()
+		pendingDNSAddress := m.pendingDNSAddress
+		m.commandMu.RUnlock()
+		var publicIPs []string
+		var err error
+		if pendingDNSAddress {
+			publicIPs, err = syncDNSAttempt(syncCtx)
+			m.commandMu.RLock()
+			pendingDNSAddress = m.pendingDNSAddress
+			m.commandMu.RUnlock()
+		} else {
+			consecutiveDNSFailures = 0
+			rearmRetryTimer()
+			if m.cfg.ENSGaslessEnabled {
+				publicIPs, err = utils.ResolvePublicIPs(syncCtx)
+			}
+		}
+		if !pendingDNSAddress && err != nil {
+			err = fmt.Errorf("detect public ip: %w", err)
+		}
+		err = errors.Join(err, syncChangedAddressRecords(syncCtx, publicIPs))
+		// Embedded signing remains pending: it does not authenticate the
+		// parent chain and must not suppress DNSSEC synchronization.
+		if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
+			err = errors.Join(err, m.syncENSDNSSEC(syncCtx))
+		}
+		return errors.Join(err, flushCommands(syncCtx))
+	}
+	// renewTick runs one certificate renewal check and returns the delay to
+	// arm on renewTimer: the CA's ARI Retry-After or expiry floor when renewal
+	// is deferred, and the regular interval otherwise.
+	renewTick := func(ctx context.Context) time.Duration {
+		if _, _, manual, err := m.manualCertificateOverride(); err != nil || manual {
+			return defaultRenewInterval
+		}
+		renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+		defer cancel()
+		needsRenewal, replacesCertID, recheck := m.shouldRenew(renewCtx)
+		if !needsRenewal {
+			return recheck
+		}
+		if err := m.provision(renewCtx, replacesCertID); err != nil {
+			log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
+		}
+		return defaultRenewInterval
+	}
+
 	for {
 		select {
 		case <-m.stopCh:
@@ -178,52 +229,13 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			}
 		case <-retryTimer.C:
 			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			m.commandMu.RLock()
-			pendingDNSAddress := m.pendingDNSAddress
-			m.commandMu.RUnlock()
-			var publicIPs []string
-			var err error
-			if pendingDNSAddress {
-				publicIPs, err = syncDNSAttempt(syncCtx)
-				m.commandMu.RLock()
-				pendingDNSAddress = m.pendingDNSAddress
-				m.commandMu.RUnlock()
-			} else {
-				consecutiveDNSFailures = 0
-				rearmRetryTimer()
-				if m.cfg.ENSGaslessEnabled {
-					publicIPs, err = utils.ResolvePublicIPs(syncCtx)
-				}
-			}
-			if !pendingDNSAddress && err != nil {
-				err = fmt.Errorf("detect public ip: %w", err)
-			}
-			err = errors.Join(err, syncChangedAddressRecords(syncCtx, publicIPs))
-			// Embedded signing remains pending: it does not authenticate the
-			// parent chain and must not suppress DNSSEC synchronization.
-			if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
-				err = errors.Join(err, m.syncENSDNSSEC(syncCtx))
-			}
-			err = errors.Join(err, flushCommands(syncCtx))
+			err := syncRetryTick(syncCtx)
 			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
 			}
 		case <-renewTimer.C:
-			next := defaultRenewInterval
-			if _, _, manual, err := m.manualCertificateOverride(); err == nil && !manual {
-				renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-				needsRenewal, replacesCertID, recheck := m.shouldRenew(renewCtx)
-				if needsRenewal {
-					if err := m.provision(renewCtx, replacesCertID); err != nil {
-						log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
-					}
-				} else {
-					next = recheck
-				}
-				cancel()
-			}
-			renewTimer.Reset(next)
+			renewTimer.Reset(renewTick(ctx))
 		}
 	}
 }
