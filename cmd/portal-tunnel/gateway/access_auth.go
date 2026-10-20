@@ -205,7 +205,7 @@ func normalizeOIDCIssuerURL(raw string) (string, error) {
 		return "", errors.New("oidc issuer url must be a valid URL without query or fragment")
 	}
 	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "https" && !(scheme == "http" && isLoopbackHost(parsed.Hostname())) {
+	if scheme != "https" && (scheme != "http" || !isLoopbackHost(parsed.Hostname())) {
 		return "", errors.New("oidc issuer url must use https (or http on a loopback host)")
 	}
 	return strings.TrimRight(raw, "/"), nil
