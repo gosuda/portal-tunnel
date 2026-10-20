@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -163,10 +164,23 @@ func NormalizeCADirURL(raw string) (string, error) {
 	scheme := strings.ToLower(parsed.Scheme)
 	host := parsed.Hostname()
 	isLoopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
-	if scheme != "https" && !(scheme == "http" && isLoopback) {
+	if scheme != "https" && (scheme != "http" || !isLoopback) {
 		return "", errors.New("acme ca directory url must use https (or http on a loopback host)")
 	}
 	return raw, nil
+}
+
+// registrationFilePath returns where the account registration for the CA
+// directory is persisted. An account exists only at the CA that created it,
+// and lego signs requests with the stored account URL, so each directory keeps
+// its own file. Let's Encrypt production keeps the legacy name so existing
+// installations keep their registration.
+func registrationFilePath(keyDir, caDirURL string) string {
+	if caDirURL == lego.LEDirectoryProduction {
+		return filepath.Join(keyDir, registrationFileName)
+	}
+	sum := sha256.Sum256([]byte(caDirURL))
+	return filepath.Join(keyDir, fmt.Sprintf("acme-registration-%x.json", sum[:8]))
 }
 
 func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
@@ -176,7 +190,7 @@ func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
 	}
 	email := defaultACMEEmailPrefix + m.cfg.BaseDomain
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
-	registrationFile := filepath.Join(m.cfg.KeyDir, registrationFileName)
+	registrationFile := registrationFilePath(m.cfg.KeyDir, resolvedCADirURL)
 	dnsProvider := m.dns
 	accountKey, err := loadOrCreateAccountKey(accountKeyFile)
 	if err != nil {

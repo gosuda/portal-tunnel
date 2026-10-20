@@ -3,11 +3,13 @@ package acme
 import (
 	"crypto/x509"
 	"math/big"
+	"path/filepath"
 	"testing"
 	"time"
 
 	legoacme "github.com/go-acme/lego/v4/acme"
 	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/lego"
 )
 
 func TestCertificateCoversDomains(t *testing.T) {
@@ -124,5 +126,36 @@ func TestNormalizeCADirURL(t *testing.T) {
 				t.Fatalf("NormalizeCADirURL(%q) = (%q, %v), want valid=%v", tc.input, got, err, tc.valid)
 			}
 		})
+	}
+}
+
+// An account registration is only valid at the CA that created it, so switching
+// the directory production -> staging -> production must neither reuse another
+// CA's registration nor lose the original one.
+func TestRegistrationFilePathIsScopedToCADirectory(t *testing.T) {
+	t.Parallel()
+
+	const keyDir = "/state"
+	legacy := filepath.Join(keyDir, registrationFileName)
+
+	production := registrationFilePath(keyDir, lego.LEDirectoryProduction)
+	if production != legacy {
+		t.Fatalf("production registration = %q; want the legacy %q so existing installations keep it", production, legacy)
+	}
+	staging := registrationFilePath(keyDir, lego.LEDirectoryStaging)
+	other := registrationFilePath(keyDir, "https://acme.zerossl.com/v2/DV90")
+	if staging == production || other == production || staging == other {
+		t.Fatalf("registrations must differ per directory: production %q, staging %q, other %q", production, staging, other)
+	}
+	for _, path := range []string{staging, other} {
+		if filepath.Dir(path) != keyDir {
+			t.Fatalf("registration %q left the key directory %q", path, keyDir)
+		}
+	}
+	if got := registrationFilePath(keyDir, lego.LEDirectoryStaging); got != staging {
+		t.Fatalf("staging registration = %q; want the stable %q", got, staging)
+	}
+	if got := registrationFilePath(keyDir, lego.LEDirectoryProduction); got != production {
+		t.Fatalf("production registration after switching back = %q; want %q", got, production)
 	}
 }

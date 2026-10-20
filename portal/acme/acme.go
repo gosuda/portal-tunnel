@@ -271,10 +271,9 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
 	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
-	registrationFile := filepath.Join(m.cfg.KeyDir, registrationFileName)
 	domains := certificateDomains(m.cfg.BaseDomain)
 
-	for _, path := range []string{keyFile, certFile, accountKeyFile, registrationFile} {
+	for _, path := range []string{keyFile, certFile, accountKeyFile} {
 		if err := utils.EnsureParentDir(path); err != nil {
 			return err
 		}
