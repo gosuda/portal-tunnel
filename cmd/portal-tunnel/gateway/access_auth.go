@@ -60,35 +60,6 @@ var oidcSupportedSignatureAlgorithms = []jose.SignatureAlgorithm{
 
 type verifiedIdentityHeadersContextKey struct{}
 
-const applicationAuthSIWELoginPage = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in to Portal</title><style>
-:root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#eef2ff;font:16px/1.5 system-ui,sans-serif}.card{width:min(30rem,calc(100% - 3rem));padding:2rem;border:1px solid #334155;border-radius:1rem;background:#111827;box-shadow:0 1.5rem 4rem #0008}h1{margin:0 0 .5rem;font-size:1.6rem}p{color:#cbd5e1}button{width:100%;padding:.8rem 1rem;border:0;border-radius:.6rem;background:#6366f1;color:white;font:inherit;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}#status{min-height:1.5rem;color:#fca5a5;font-size:.9rem}
-</style></head><body><main class="card"><h1>Sign in to continue</h1><p>This application is protected by Portal. Connect an Ethereum wallet and sign the one-time message.</p><button id="signin">Connect wallet</button><p id="status" role="alert"></p></main>
-<script>
-const button=document.querySelector('#signin'),status=document.querySelector('#status');
-const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')&&!/[\u0000-\u001f\u007f]/.test(value)?value:'/'};
-button.addEventListener('click',async()=>{button.disabled=true;status.textContent='';try{
-if(!window.ethereum)throw new Error('No Ethereum wallet was found in this browser.');
-const accounts=await window.ethereum.request({method:'eth_requestAccounts'});const address=accounts&&accounts[0];if(!address)throw new Error('The wallet did not provide an account.');
-const challengeResponse=await fetch('/_portal/auth/challenge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address})});const challenge=await challengeResponse.json();if(!challengeResponse.ok)throw new Error(challenge.error||'Could not create a sign-in challenge.');
-const signature=await window.ethereum.request({method:'personal_sign',params:[challenge.message,address]});
-const verifyResponse=await fetch('/_portal/auth/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challenge_id:challenge.challenge_id,message:challenge.message,signature})});const result=await verifyResponse.json();if(!verifyResponse.ok)throw new Error(result.error||'The signature could not be verified.');location.assign(next());
-}catch(error){status.textContent=error&&error.message?error.message:String(error);button.disabled=false;}});
-</script></body></html>`
-
-const applicationAuthCredentialLoginPage = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in to Portal</title><style>
-:root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#eef2ff;font:16px/1.5 system-ui,sans-serif}.card{width:min(30rem,calc(100% - 3rem));padding:2rem;border:1px solid #334155;border-radius:1rem;background:#111827;box-shadow:0 1.5rem 4rem #0008}h1{margin:0 0 .5rem;font-size:1.6rem}p{color:#cbd5e1}textarea,button{box-sizing:border-box;width:100%;padding:.8rem 1rem;border-radius:.6rem;font:inherit}textarea{min-height:7rem;background:#0b1020;color:#eef2ff;border:1px solid #475569;resize:vertical}button{margin-top:.75rem;border:0;background:#6366f1;color:white;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}#status{min-height:1.5rem;color:#fca5a5;font-size:.9rem}
-</style></head><body><main class="card"><h1>Sign in to continue</h1><p>This application is protected by Portal. Paste the access credential provided by its owner.</p><textarea id="credential" aria-label="Access credential" placeholder="pcred_..."></textarea><button id="signin">Sign in</button><p id="status" role="alert"></p></main>
-<script>
-const button=document.querySelector('#signin'),input=document.querySelector('#credential'),status=document.querySelector('#status');
-const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')&&!/[\u0000-\u001f\u007f]/.test(value)?value:'/'};
-const redeem=async()=>{button.disabled=true;status.textContent='';try{const credential=input.value.trim();if(!credential)throw new Error('An access credential is required.');const response=await fetch('/_portal/auth/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential})});const result=await response.json();if(!response.ok)throw new Error(result.error||'The credential could not be verified.');location.assign(next());}catch(error){status.textContent=error&&error.message?error.message:String(error);button.disabled=false;}};
-button.addEventListener('click',redeem);const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('credential')){input.value=fragment.get('credential');history.replaceState(null,'',location.pathname+location.search);redeem();}
-</script></body></html>`
-
 // ApplicationAuthConfig configures the tunnel-local application access gate.
 // AllowedWallets holds the provider-scoped principal allowlist (Ethereum
 // wallet addresses for siwe, credential subjects for credential, or verified
@@ -472,17 +443,17 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+	w.Header().Set("Content-Security-Policy", signinContentSecurityPolicy)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.Method == http.MethodHead {
 		return
 	}
-	page := applicationAuthSIWELoginPage
+	page := signinWalletPage
 	if a.provider == ApplicationAuthProviderCredential {
-		page = applicationAuthCredentialLoginPage
+		page = signinCredentialPage
 	}
-	_, _ = io.WriteString(w, page)
+	writeSigninPage(w, page, r.Host)
 }
 
 func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
