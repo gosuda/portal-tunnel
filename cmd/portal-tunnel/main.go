@@ -110,7 +110,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
 	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe, credential, or oidc authentication")
-	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, subject for credential, or verified email, @domain, or subject for oidc); repeat to allow multiple principals (empty allows any valid principal)")
+	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, subject for credential, or verified email, @domain, or sub:<subject> for oidc); repeat to allow multiple principals (empty allows any valid principal)")
 	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlagEnv(fs, &flags.authOIDCIssuer, "auth-oidc-issuer", "", "OIDC issuer URL for --auth oidc", "AUTH_OIDC_ISSUER")
 	utils.StringFlagEnv(fs, &flags.authOIDCClientID, "auth-oidc-client-id", "", "OIDC client ID for --auth oidc", "AUTH_OIDC_CLIENT_ID")

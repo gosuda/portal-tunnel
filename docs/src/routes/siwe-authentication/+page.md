@@ -104,7 +104,7 @@ portal expose 3000 \
 
 Configure the identity provider's redirect URI as `https://<tunnel-host>/_portal/auth/callback`. Portal verifies the ID token against the provider's `.well-known/openid-configuration` and `jwks_uri` and enforces `--auth-allow` on login and on every subsequent session request.
 
-`--auth-allow` accepts an email address, an `@example.com` domain (that exact domain only, not its subdomains), or the provider's opaque `sub` claim. Email and domain entries match only when the ID token carries `email_verified: true`; a provider that omits the claim can be allowed by `sub` only.
+`--auth-allow` accepts an email address, an `@example.com` domain (that exact domain only, not its subdomains), or a `sub:<subject>` entry for the provider's opaque `sub` claim. Email and domain entries match only when the ID token carries `email_verified: true`; a provider that omits the claim, or one whose `sub` is not an email, can be allowed by `sub:` only. A `sub` claim value can never satisfy an email or domain entry, so an email-shaped `sub` cannot impersonate a verified-email allowlist entry.
 
 ## Agent Wallet Status Access
 

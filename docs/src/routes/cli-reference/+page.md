@@ -111,7 +111,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--auth` | string | | Protect HTTP application access with `siwe` or `credential`; cannot be combined with `--cache` |
-| `--auth-allow` | string | | Principal allowed to sign in (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or subject for `oidc`); repeat for multiple principals (empty allows any valid principal); requires `--auth` |
+| `--auth-allow` | string | | Principal allowed to sign in (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or `sub:<subject>` for `oidc`); repeat for multiple principals (empty allows any valid principal); requires `--auth` |
 | `--auth-oidc-issuer` | string | | OIDC issuer URL for `--auth oidc` (env: `AUTH_OIDC_ISSUER`) |
 | `--auth-oidc-client-id` | string | | OIDC client ID for `--auth oidc` (env: `AUTH_OIDC_CLIENT_ID`) |
 | `--auth-oidc-client-secret` | string | | Optional OIDC client secret for `--auth oidc` (env: `AUTH_OIDC_CLIENT_SECRET`) |

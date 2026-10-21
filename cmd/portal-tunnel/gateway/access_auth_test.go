@@ -510,7 +510,11 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 		{"verified email exact", []string{"alice@example.com"}, "s1", "Alice@Example.com", &verified, "alice@example.com"},
 		{"absent email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", nil, ""},
 		{"false email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", &unverified, ""},
-		{"sub allowlist ignores email_verified", []string{"s1"}, "s1", "alice@example.com", nil, "s1"},
+		{"sub allowlist ignores email_verified", []string{"sub:s1"}, "s1", "alice@example.com", nil, "sub:s1"},
+		{"email-shaped sub cannot satisfy an email entry", []string{"alice@example.com"}, "alice@example.com", "", &unverified, ""},
+		{"email-shaped sub cannot satisfy an email entry without email_verified", []string{"alice@example.com"}, "alice@example.com", "", nil, ""},
+		{"email-shaped sub matches a sub: entry", []string{"sub:alice@example.com"}, "alice@example.com", "", &unverified, "sub:alice@example.com"},
+		{"email-shaped sub matches a sub: entry case-insensitively", []string{"sub:Alice@Example.com"}, "alice@example.com", "", nil, "sub:alice@example.com"},
 		{"verified email matches domain", []string{"@Example.com"}, "s1", "bob@example.com", &verified, "bob@example.com"},
 		{"absent email_verified does not match domain", []string{"@example.com"}, "s1", "bob@example.com", nil, ""},
 		{"domain excludes subdomains", []string{"@example.com"}, "s1", "bob@sub.example.com", &verified, ""},
@@ -518,7 +522,7 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 		{"email-shaped sub never matches a domain", []string{"@example.com"}, "mallory@example.com", "", nil, ""},
 		{"sub cannot impersonate a domain entry", []string{"@example.com"}, "@example.com", "", nil, ""},
 		{"empty allowlist prefers verified email", nil, "s1", "alice@example.com", &verified, "alice@example.com"},
-		{"empty allowlist falls back to sub", nil, "s1", "alice@example.com", nil, "s1"},
+		{"empty allowlist falls back to sub", nil, "s1", "alice@example.com", nil, "sub:s1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -541,6 +545,22 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 			t.Fatal("domain-authorized subject rejected on session validation")
 		}
 	})
+	t.Run("sub session remains valid", func(t *testing.T) {
+		t.Parallel()
+		gate := newGate(t, ApplicationAuthProviderOIDC, "sub:alice@example.com")
+		if !gate.subjectAllowed("sub:alice@example.com") {
+			t.Fatal("sub:-authorized subject rejected on session validation")
+		}
+		if gate.subjectAllowed("sub:mallory@example.com") {
+			t.Fatal("unlisted sub: subject accepted on session validation")
+		}
+	})
+	t.Run("sub session cannot widen to a domain entry", func(t *testing.T) {
+		t.Parallel()
+		if newGate(t, ApplicationAuthProviderOIDC, "@example.com").subjectAllowed("sub:mallory@example.com") {
+			t.Fatal("sub: session subject honored an @domain entry")
+		}
+	})
 	t.Run("credential subjects ignore domain entries", func(t *testing.T) {
 		t.Parallel()
 		if newGate(t, ApplicationAuthProviderCredential, "@example.com").subjectAllowed("bob@example.com") {
@@ -550,6 +570,14 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 	t.Run("malformed domain entries are rejected", func(t *testing.T) {
 		t.Parallel()
 		for _, entry := range []string{"@", "@a@b", "@ex ample.com"} {
+			if _, err := NormalizeApplicationAuthOIDCPrincipals([]string{entry}); err == nil {
+				t.Fatalf("NormalizeApplicationAuthOIDCPrincipals(%q) = nil error", entry)
+			}
+		}
+	})
+	t.Run("untyped entries are rejected", func(t *testing.T) {
+		t.Parallel()
+		for _, entry := range []string{"alice", "sub:", "sub: "} {
 			if _, err := NormalizeApplicationAuthOIDCPrincipals([]string{entry}); err == nil {
 				t.Fatalf("NormalizeApplicationAuthOIDCPrincipals(%q) = nil error", entry)
 			}

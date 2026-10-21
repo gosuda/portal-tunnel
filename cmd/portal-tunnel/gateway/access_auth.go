@@ -90,8 +90,8 @@ button.addEventListener('click',redeem);const fragment=new URLSearchParams(locat
 
 // ApplicationAuthConfig configures the tunnel-local application access gate.
 // AllowedWallets holds the provider-scoped principal allowlist (Ethereum
-// wallet addresses for siwe, credential subjects for credential, or email/sub
-// principals for oidc).
+// wallet addresses for siwe, credential subjects for credential, or verified
+// emails, @domain entries, or sub: subjects for oidc).
 type ApplicationAuthConfig struct {
 	Provider         string
 	AllowedWallets   []string
@@ -212,8 +212,12 @@ func normalizeOIDCIssuerURL(raw string) (string, error) {
 }
 
 // NormalizeApplicationAuthOIDCPrincipals canonicalizes OIDC allowed principals
-// (`--auth-allow` / `auth_allowed_wallets`): email addresses (containing '@')
-// are lowercased, while opaque subject identifiers keep their case.
+// (`--auth-allow` / `auth_allowed_wallets`). Email addresses (containing '@')
+// are lowercased and match a verified email claim only, '@example.com' domain
+// entries match that exact verified-email domain, and `sub:<subject>` entries
+// match the opaque provider subject claim exactly. Subject entries must carry
+// the sub: prefix so an email-shaped sub claim cannot impersonate an email
+// entry.
 func NormalizeApplicationAuthOIDCPrincipals(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -221,7 +225,7 @@ func NormalizeApplicationAuthOIDCPrincipals(values []string) ([]string, error) {
 	normalized := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, raw := range values {
-		principal, err := normalizeOIDCPrincipal(raw)
+		principal, err := normalizeOIDCAllowlistEntry(raw)
 		if err != nil {
 			return nil, err
 		}
@@ -235,6 +239,29 @@ func NormalizeApplicationAuthOIDCPrincipals(values []string) ([]string, error) {
 		normalized = append(normalized, principal)
 	}
 	return normalized, nil
+}
+
+// normalizeOIDCAllowlistEntry canonicalizes one `--auth-allow` entry into its
+// typed form: `sub:<subject>` for an opaque provider subject, a lowercased
+// email for a verified-email entry, or a leading-'@' domain entry. A bare
+// token cannot be told apart from an email-shaped subject claim, so subject
+// entries must carry the sub: prefix.
+func normalizeOIDCAllowlistEntry(raw string) (string, error) {
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(raw), "sub:"); ok {
+		subject, err := normalizeOIDCPrincipal(rest)
+		if err != nil || subject == "" {
+			return "", fmt.Errorf("oidc subject principal %q must name a subject after the sub: prefix", raw)
+		}
+		return "sub:" + subject, nil
+	}
+	principal, err := normalizeOIDCPrincipal(raw)
+	if err != nil {
+		return "", err
+	}
+	if !strings.Contains(principal, "@") {
+		return "", fmt.Errorf("oidc principal %q must be an email, an @example.com domain, or a sub:<subject> entry", raw)
+	}
+	return principal, nil
 }
 
 func normalizeOIDCPrincipal(raw string) (string, error) {
@@ -563,9 +590,12 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 	http.Redirect(w, r, sanitizeApplicationAuthNext(stateClaims.Next), http.StatusSeeOther)
 }
 
-// resolveAllowedOIDCSubject maps ID token claims to the session subject. Only an
-// explicitly verified email can match an email or @domain allowlist entry; the
-// provider-assigned sub claim only matches an allowlist entry exactly.
+// resolveAllowedOIDCSubject maps ID token claims to the session subject. Only
+// an explicitly verified email can match an email or @domain allowlist entry;
+// the provider-assigned sub claim matches only an explicit `sub:` allowlist
+// entry, so an email-shaped sub never satisfies a verified-email entry. A
+// sub-matched session subject keeps the sub: prefix so the two principal
+// types stay unambiguous on session revalidation and identity headers.
 func (a *applicationAuth) resolveAllowedOIDCSubject(claims oidcIDTokenClaims) (string, bool) {
 	var email string
 	if claims.EmailVerified != nil && *claims.EmailVerified {
@@ -576,13 +606,13 @@ func (a *applicationAuth) resolveAllowedOIDCSubject(claims oidcIDTokenClaims) (s
 		if email != "" {
 			return email, true
 		}
-		return sub, sub != ""
+		return "sub:" + sub, sub != ""
 	}
 	if email != "" && a.subjectAllowed(email) {
 		return email, true
 	}
-	if _, ok := a.allowedSubjects[sub]; ok {
-		return sub, true
+	if _, ok := a.allowedSubjects["sub:"+sub]; ok && sub != "" {
+		return "sub:" + sub, true
 	}
 	return "", false
 }
@@ -884,6 +914,12 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 		return true
 	}
 	if a.provider != ApplicationAuthProviderOIDC {
+		return false
+	}
+	// A `sub:` session subject is an opaque subject principal: it matches only
+	// an explicit `sub:` allowlist entry (the exact lookup above), never an
+	// email or @domain entry.
+	if strings.HasPrefix(subject, "sub:") {
 		return false
 	}
 	// An "@example.com" entry authorizes exactly that email domain, never its
