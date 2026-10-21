@@ -66,7 +66,7 @@ const applicationAuthSIWELoginPage = `<!doctype html>
 </style></head><body><main class="card"><h1>Sign in to continue</h1><p>This application is protected by Portal. Connect an Ethereum wallet and sign the one-time message.</p><button id="signin">Connect wallet</button><p id="status" role="alert"></p></main>
 <script>
 const button=document.querySelector('#signin'),status=document.querySelector('#status');
-const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')?value:'/'};
+const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')&&!/[\u0000-\u001f\u007f]/.test(value)?value:'/'};
 button.addEventListener('click',async()=>{button.disabled=true;status.textContent='';try{
 if(!window.ethereum)throw new Error('No Ethereum wallet was found in this browser.');
 const accounts=await window.ethereum.request({method:'eth_requestAccounts'});const address=accounts&&accounts[0];if(!address)throw new Error('The wallet did not provide an account.');
@@ -83,7 +83,7 @@ const applicationAuthCredentialLoginPage = `<!doctype html>
 </style></head><body><main class="card"><h1>Sign in to continue</h1><p>This application is protected by Portal. Paste the access credential provided by its owner.</p><textarea id="credential" aria-label="Access credential" placeholder="pcred_..."></textarea><button id="signin">Sign in</button><p id="status" role="alert"></p></main>
 <script>
 const button=document.querySelector('#signin'),input=document.querySelector('#credential'),status=document.querySelector('#status');
-const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')?value:'/'};
+const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')&&!/[\u0000-\u001f\u007f]/.test(value)?value:'/'};
 const redeem=async()=>{button.disabled=true;status.textContent='';try{const credential=input.value.trim();if(!credential)throw new Error('An access credential is required.');const response=await fetch('/_portal/auth/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential})});const result=await response.json();if(!response.ok)throw new Error(result.error||'The credential could not be verified.');location.assign(next());}catch(error){status.textContent=error&&error.message?error.message:String(error);button.disabled=false;}};
 button.addEventListener('click',redeem);const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('credential')){input.value=fragment.get('credential');history.replaceState(null,'',location.pathname+location.search);redeem();}
 </script></body></html>`
@@ -244,16 +244,12 @@ func NormalizeApplicationAuthOIDCPrincipals(values []string) ([]string, error) {
 // token cannot be told apart from an email-shaped subject claim, so subject
 // entries must carry the sub: prefix.
 func normalizeOIDCAllowlistEntry(raw string) (string, error) {
-	if rest, ok := strings.CutPrefix(strings.TrimSpace(raw), "sub:"); ok {
-		subject, err := normalizeOIDCPrincipal(rest)
-		if err != nil || subject == "" {
-			return "", fmt.Errorf("oidc subject principal %q must name a subject after the sub: prefix", raw)
-		}
-		return "sub:" + subject, nil
-	}
 	principal, err := normalizeOIDCPrincipal(raw)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("oidc principal %q: %w", raw, err)
+	}
+	if strings.HasPrefix(principal, oidcSubjectPrefix) {
+		return principal, nil
 	}
 	_, domain, ok := strings.Cut(principal, "@")
 	if !ok || domain == "" || strings.ContainsAny(domain, "@ ") {
@@ -262,15 +258,25 @@ func normalizeOIDCAllowlistEntry(raw string) (string, error) {
 	return principal, nil
 }
 
+// oidcSubjectPrefix marks a principal as the provider's opaque sub claim.
+const oidcSubjectPrefix = "sub:"
+
+// normalizeOIDCPrincipal canonicalizes an OIDC principal or session subject.
+// The length limit applies to the subject itself, not to the "sub:" prefix, so
+// a maximum-length sub claim (255 characters) still survives revalidation.
 func normalizeOIDCPrincipal(raw string) (string, error) {
+	prefix := ""
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(raw), oidcSubjectPrefix); ok {
+		prefix, raw = oidcSubjectPrefix, rest
+	}
 	subject, err := normalizeApplicationAuthSubject(raw)
 	if err != nil {
 		return "", err
 	}
 	if strings.Contains(subject, "@") {
-		return strings.ToLower(subject), nil
+		subject = strings.ToLower(subject)
 	}
-	return subject, nil
+	return prefix + subject, nil
 }
 
 // oidcClaimPrincipal normalizes an ID token claim value, or returns "" when it
@@ -286,14 +292,21 @@ func oidcClaimPrincipal(raw string) string {
 
 // sanitizeApplicationAuthNext keeps a post-login target on this origin. A
 // leading "//" or "/\" is read by browsers as a URL for another host, so the
-// second character must be neither; backslashes are refused everywhere to keep
-// the target a plain path.
+// second character must be neither. Browsers also drop tabs and newlines from
+// URLs, so "/<TAB>/host" would become "//host"; control characters and
+// backslashes are therefore refused everywhere, keeping the target a plain path.
 func sanitizeApplicationAuthNext(raw string) string {
 	raw = strings.TrimSpace(raw)
-	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/\\") || strings.Contains(raw, "\\") {
+	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/\\") || strings.ContainsFunc(raw, isUnsafeRedirectRune) {
 		return "/"
 	}
 	return raw
+}
+
+// isUnsafeRedirectRune reports control characters and backslashes, which
+// browsers drop or reinterpret in URLs.
+func isUnsafeRedirectRune(r rune) bool {
+	return r < 0x20 || r == 0x7f || r == '\\'
 }
 
 // NewApplicationAuth protects the complete HTTP gateway with tunnel-local
@@ -347,12 +360,12 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		if err != nil {
 			return nil, err
 		}
-		if len(principals) > 0 {
-			allowAnySubject = false
-			allowedSubjects = make(map[string]struct{}, len(principals))
-			for _, principal := range principals {
-				allowedSubjects[principal] = struct{}{}
-			}
+		// OIDC never runs open: ValidateApplicationAuthConfig rejects an empty
+		// allowlist, because any account at the identity provider would pass.
+		allowAnySubject = false
+		allowedSubjects = make(map[string]struct{}, len(principals))
+		for _, principal := range principals {
+			allowedSubjects[principal] = struct{}{}
 		}
 		oidcStateKey, err := identity.DeriveToken(tunnelIdentity, "application-access-oidc-state")
 		if err != nil {
@@ -595,27 +608,18 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 // sub-matched session subject keeps the sub: prefix so the two principal
 // types stay unambiguous on session revalidation and identity headers.
 func (a *applicationAuth) resolveAllowedOIDCSubject(claims oidcIDTokenClaims) (string, bool) {
-	var email string
 	if claims.EmailVerified != nil && *claims.EmailVerified {
-		email = oidcClaimPrincipal(claims.Email)
 		// An email claim shaped like a sub: entry would satisfy that entry
-		// through the exact lookup below; it is not an email address.
-		if strings.HasPrefix(email, "sub:") {
-			email = ""
-		}
-	}
-	sub := oidcClaimPrincipal(claims.Subject)
-	if a.allowAnySubject {
-		if email != "" {
+		// through the exact lookup; it is not an email address.
+		email := oidcClaimPrincipal(claims.Email)
+		if email != "" && !strings.HasPrefix(email, oidcSubjectPrefix) && a.subjectAllowed(email) {
 			return email, true
 		}
-		return "sub:" + sub, sub != ""
 	}
-	if email != "" && a.subjectAllowed(email) {
-		return email, true
-	}
-	if _, ok := a.allowedSubjects["sub:"+sub]; ok && sub != "" {
-		return "sub:" + sub, true
+	// Prefixing the raw claim keeps it in the sub: namespace whatever it holds.
+	sub, err := normalizeOIDCPrincipal(oidcSubjectPrefix + claims.Subject)
+	if err == nil && a.subjectAllowed(sub) {
+		return sub, true
 	}
 	return "", false
 }

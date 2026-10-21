@@ -53,13 +53,19 @@ func ValidateApplicationAuthConfig(cfg ApplicationAuthConfig) error {
 	if err != nil {
 		return err
 	}
-	if _, err := NormalizeApplicationAuthAllowed(provider, cfg.AllowedWallets); err != nil {
+	allowed, err := NormalizeApplicationAuthAllowed(provider, cfg.AllowedWallets)
+	if err != nil {
 		return err
 	}
 	hasOIDCFields := strings.TrimSpace(cfg.OIDCIssuerURL) != "" ||
 		strings.TrimSpace(cfg.OIDCClientID) != "" ||
 		strings.TrimSpace(cfg.OIDCClientSecret) != ""
 	if provider == ApplicationAuthProviderOIDC {
+		// An identity provider authenticates accounts it does not restrict to
+		// this application, so without an allowlist every one of them would pass.
+		if len(allowed) == 0 {
+			return errors.New("oidc requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
+		}
 		if _, err := normalizeOIDCIssuerURL(cfg.OIDCIssuerURL); err != nil {
 			return err
 		}

@@ -523,8 +523,6 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 		{"sub cannot impersonate a domain entry", []string{"@example.com"}, "@example.com", "", nil, ""},
 		{"verified email claim cannot impersonate a sub: entry", []string{"sub:alice@example.com"}, "s9", "sub:alice@example.com", &verified, ""},
 		{"verified email claim cannot impersonate a sub: entry in another case", []string{"sub:alice@example.com"}, "s9", "SUB:Alice@Example.com", &verified, ""},
-		{"empty allowlist prefers verified email", nil, "s1", "alice@example.com", &verified, "alice@example.com"},
-		{"empty allowlist falls back to sub", nil, "s1", "alice@example.com", nil, "sub:s1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -654,6 +652,12 @@ func TestSanitizeApplicationAuthNext(t *testing.T) {
 		{"slash then backslash", "/\\evil.example/", "/"},
 		{"backslash later in the path", "/a\\b", "/"},
 		{"backslash only", "\\evil.example", "/"},
+		// Browsers drop tabs and newlines from URLs, so these would become "//evil.example".
+		{"tab after the slash", "/\t/evil.example", "/"},
+		{"newline after the slash", "/\n/evil.example", "/"},
+		{"carriage return after the slash", "/\r/evil.example", "/"},
+		{"tab later in the path", "/a\tb", "/"},
+		{"delete character", "/a\x7fb", "/"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -661,5 +665,61 @@ func TestSanitizeApplicationAuthNext(t *testing.T) {
 				t.Fatalf("sanitizeApplicationAuthNext(%q) = %q; want %q", tc.next, got, tc.want)
 			}
 		})
+	}
+}
+
+// An identity provider authenticates accounts it does not restrict to this
+// application, so OIDC must not start without an allowlist.
+func TestApplicationAuthOIDCRequiresAllowlist(t *testing.T) {
+	t.Parallel()
+
+	cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}
+	if err := ValidateApplicationAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "--auth-allow") {
+		t.Fatalf("ValidateApplicationAuthConfig without an allowlist = %v; want an error naming --auth-allow", err)
+	}
+	if _, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg); err == nil {
+		t.Fatal("NewApplicationAuth started OIDC without an allowlist")
+	}
+	cfg.AllowedWallets = []string{"alice@example.com"}
+	if err := ValidateApplicationAuthConfig(cfg); err != nil {
+		t.Fatalf("ValidateApplicationAuthConfig with an allowlist: %v", err)
+	}
+	// siwe and credential keep their open mode: an empty list there still needs a wallet or issued credential.
+	if err := ValidateApplicationAuthConfig(ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential}); err != nil {
+		t.Fatalf("credential without an allowlist: %v", err)
+	}
+}
+
+// OIDC allows a sub of up to 255 characters. The session subject gains the
+// sub: prefix, so revalidation on later requests must not reject it for length.
+func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
+	t.Parallel()
+
+	sub := strings.Repeat("a", 255)
+	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
+		Provider:       ApplicationAuthProviderOIDC,
+		AllowedWallets: []string{"sub:" + sub},
+		OIDCIssuerURL:  "https://idp.example",
+		OIDCClientID:   oidcTestClientID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := handler.(*applicationAuth)
+	subject, ok := gate.resolveAllowedOIDCSubject(oidcIDTokenClaims{Claims: jwt.Claims{Subject: sub}})
+	if !ok {
+		t.Fatal("maximum-length sub was not authorized at login")
+	}
+
+	rec := httptest.NewRecorder()
+	if err := gate.setSession(rec, subject, ApplicationAuthProviderOIDC, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
+	for _, c := range rec.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	if got, _, ok := gate.authenticateSession(req); !ok || got != subject {
+		t.Fatalf("authenticateSession = (%q, %v); want the session to stay valid for %q", got, ok, subject)
 	}
 }
