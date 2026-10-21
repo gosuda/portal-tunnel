@@ -173,6 +173,73 @@ See the [Portal CLI Docker Compose instructions](https://github.com/gosuda/porta
 for the single maintained setup, including persistent agent state and host
 directory permissions.
 
+## Remote Access to a Home Service
+
+This example exposes one HTTP service on your home network, here Home Assistant at `192.168.1.20:8123`, to a browser outside the home. Visitors pass a credential login first, so no VPN app is needed on the phone. Prepare the `./identity` directory as described in the [Docker Compose steps](https://github.com/gosuda/portal-tunnel/blob/main/cmd/portal-tunnel/README.md#docker-compose).
+
+Save this as `./identity/config.toml`:
+
+```toml
+[agent]
+state_dir = "/identity"
+control_addr = "127.0.0.1:4018"
+
+[[tunnels]]
+id = "homeassistant"
+name = "home-ha"
+target = "192.168.1.20:8123"
+relays = ["https://relay.example.com"]
+discovery = false
+ban_mitm = true
+hide = true
+auth = "credential"
+auth_allowed_wallets = ["alice-phone"]
+```
+
+- `target` must be an address the agent container can reach. Inside a bridge-network container `127.0.0.1` is the container itself, not your server.
+- Choose the relay yourself: the relay holds its domain's certificate key (see the [security model](https://gosuda.github.io/portal-tunnel/security-model#relay-trust-reduction)). Pinning one relay also keeps the public URL from moving between relays.
+
+Run the agent:
+
+```yaml
+services:
+  portal-agent:
+    image: ghcr.io/gosuda/portal-tunnel:latest
+    command: ["agent", "run", "--config", "/identity/config.toml", "--foreground"]
+    volumes:
+      - ./identity:/identity
+    restart: unless-stopped
+```
+
+The hostname is derived from the identity in `./identity/identity.json`, so it stays the same across restarts while that file persists. Copy the published hostname from the agent log. Credentials are bound to the hostname they are issued for, so use the one you will open:
+
+```bash
+docker compose logs portal-agent | grep "service ready at"
+docker compose exec portal-agent /usr/bin/portal auth issue <published-hostname> \
+  --identity-path /identity/identity.json \
+  --subject alice-phone \
+  --expires 720h
+```
+
+With a single tunnel the identity is `/identity/identity.json`; with several tunnels each one uses `/identity/<tunnel-id>/identity.json`.
+
+Open the printed `https://.../_portal/auth/login#credential=pcred_...` URL on the phone. The credential stays in the URL fragment and is exchanged for an `HttpOnly`, `Secure` session cookie. Requests without a valid session are redirected to the login page and never reach Home Assistant, which still shows its own login afterwards.
+
+### Home Assistant proxy settings
+
+Home Assistant answers `400 Bad Request` to proxied requests until it trusts the proxy.
+
+- Home Assistant 2026.8 and later: in **Settings > System > Network > HTTP server**, enable **Trust X-Forwarded-For** and add the proxy address under **Trusted proxies**. Saving restarts Home Assistant; confirm the change within five minutes or it reverts.
+- Earlier versions: set `use_x_forwarded_for: true` and `trusted_proxies` under `http:` in `configuration.yaml`.
+
+Use the address Home Assistant sees the agent connect from. If Home Assistant itself runs in Docker behind a published port, that is the Docker network gateway (for example `172.22.0.1`), and the log line `Received X-Forwarded-For header from an untrusted proxy <address>` names it. Add that single address, not a whole subnet. Behind a gateway address every device on the LAN looks like the proxy, so do not combine this with IP-based login such as `trusted_networks`.
+
+### Revoking access
+
+Remove a subject from `auth_allowed_wallets` and restart the agent: its credentials and active sessions stop working. Re-adding the same subject revives its unexpired credentials, so issue a new subject name (for example `alice-phone-2`) instead.
+
+An empty `auth_allowed_wallets` list means any validly signed credential or session is accepted, so removing the last subject does **not** revoke anything. To revoke the last user, stop and remove the tunnel (or delete its identity file, which invalidates every credential issued for it).
+
 ## Dashboard
 
 The dashboard is a local terminal UI. It polls agent status every two seconds
