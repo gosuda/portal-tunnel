@@ -521,6 +521,8 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 		{"domain excludes other domains", []string{"@example.com"}, "s1", "bob@example.org", &verified, ""},
 		{"email-shaped sub never matches a domain", []string{"@example.com"}, "mallory@example.com", "", nil, ""},
 		{"sub cannot impersonate a domain entry", []string{"@example.com"}, "@example.com", "", nil, ""},
+		{"verified email claim cannot impersonate a sub: entry", []string{"sub:alice@example.com"}, "s9", "sub:alice@example.com", &verified, ""},
+		{"verified email claim cannot impersonate a sub: entry in another case", []string{"sub:alice@example.com"}, "s9", "SUB:Alice@Example.com", &verified, ""},
 		{"empty allowlist prefers verified email", nil, "s1", "alice@example.com", &verified, "alice@example.com"},
 		{"empty allowlist falls back to sub", nil, "s1", "alice@example.com", nil, "sub:s1"},
 	}
@@ -575,9 +577,9 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 			}
 		}
 	})
-	t.Run("untyped entries are rejected", func(t *testing.T) {
+	t.Run("untyped or malformed entries are rejected", func(t *testing.T) {
 		t.Parallel()
-		for _, entry := range []string{"alice", "sub:", "sub: "} {
+		for _, entry := range []string{"alice", "sub:", "sub: ", "alice@", "alice@a@b"} {
 			if _, err := NormalizeApplicationAuthOIDCPrincipals([]string{entry}); err == nil {
 				t.Fatalf("NormalizeApplicationAuthOIDCPrincipals(%q) = nil error", entry)
 			}

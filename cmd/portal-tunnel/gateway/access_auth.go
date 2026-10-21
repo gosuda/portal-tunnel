@@ -229,9 +229,6 @@ func NormalizeApplicationAuthOIDCPrincipals(values []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if domain, isDomain := strings.CutPrefix(principal, "@"); isDomain && (domain == "" || strings.ContainsAny(domain, "@ ")) {
-			return nil, fmt.Errorf("oidc domain principal %q must look like @example.com", raw)
-		}
 		if _, ok := seen[principal]; ok {
 			continue
 		}
@@ -258,7 +255,8 @@ func normalizeOIDCAllowlistEntry(raw string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !strings.Contains(principal, "@") {
+	_, domain, ok := strings.Cut(principal, "@")
+	if !ok || domain == "" || strings.ContainsAny(domain, "@ ") {
 		return "", fmt.Errorf("oidc principal %q must be an email, an @example.com domain, or a sub:<subject> entry", raw)
 	}
 	return principal, nil
@@ -600,6 +598,11 @@ func (a *applicationAuth) resolveAllowedOIDCSubject(claims oidcIDTokenClaims) (s
 	var email string
 	if claims.EmailVerified != nil && *claims.EmailVerified {
 		email = oidcClaimPrincipal(claims.Email)
+		// An email claim shaped like a sub: entry would satisfy that entry
+		// through the exact lookup below; it is not an email address.
+		if strings.HasPrefix(email, "sub:") {
+			email = ""
+		}
 	}
 	sub := oidcClaimPrincipal(claims.Subject)
 	if a.allowAnySubject {
