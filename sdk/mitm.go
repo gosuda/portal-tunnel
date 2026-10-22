@@ -375,10 +375,7 @@ func (m *mitmManager) logResult(report mitmProbeReport, err error) {
 }
 
 func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
-	normalizedHost := utils.NormalizeHostname(hostname)
-	if host, _, err := net.SplitHostPort(normalizedHost); err == nil && host != "" {
-		normalizedHost = host
-	}
+	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
 	buf := make([]byte, 0, len(tlsChannelBindingDomainContext)+1+len(normalizedHost)+1+len(nonce)+len(exported))
 	buf = append(buf, tlsChannelBindingDomainContext...)
 	buf = append(buf, 0)
@@ -395,6 +392,12 @@ func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
 // same TLS session (Ec == Et) and signed (context || hostname || nonce || Et)
 // with the secp256k1 identity embedded in hostname. On any mismatch, it closes
 // conn immediately so no application bytes are ever sent over a MITMed stream.
+//
+// hostname must be the lease's canonical hostname exactly as the relay
+// publishes it: the tunnel signs that name, so another canonical form that
+// embeds the same address fails with a signer mismatch. The exchange sets a
+// deadline on conn and clears it when it returns, so a deadline set earlier
+// does not survive; set it again afterwards.
 func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string) error {
 	if conn == nil {
 		return errors.New("tls connection is required")
@@ -476,10 +479,7 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 // Portal hostname, and enforces identity-bound TLS channel binding (#653)
 // before returning the connection for application traffic.
 func DialCanonicalTLS(ctx context.Context, addr, hostname string, baseTLSConfig *tls.Config) (net.Conn, error) {
-	normalizedHost := utils.NormalizeHostname(hostname)
-	if host, _, err := net.SplitHostPort(normalizedHost); err == nil && host != "" {
-		normalizedHost = host
-	}
+	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
 	if _, err := utils.ExtractCanonicalHostnameAddress(normalizedHost); err != nil {
 		return nil, err
 	}

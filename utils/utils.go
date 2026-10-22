@@ -179,6 +179,15 @@ func NormalizeHostname(host string) string {
 	return host
 }
 
+// NormalizeHostWithoutPort normalizes a hostname and drops its port, if any.
+func NormalizeHostWithoutPort(hostname string) string {
+	hostname = strings.TrimSpace(hostname)
+	if host, _, err := net.SplitHostPort(hostname); err == nil && host != "" {
+		hostname = host
+	}
+	return NormalizeHostname(hostname)
+}
+
 func NormalizeBaseDomain(domain string) string {
 	return strings.TrimPrefix(NormalizeHostname(domain), "*.")
 }
@@ -333,11 +342,7 @@ func NormalizeServiceName(raw string) (string, error) {
 // (<address>.<root>, <name>-<address>.<root>, or <hash>--<address>.<root>) and
 // returns it with a lowercase 0x prefix.
 func ExtractCanonicalHostnameAddress(hostname string) (string, error) {
-	hostname = NormalizeHostname(hostname)
-	if host, _, err := net.SplitHostPort(hostname); err == nil && host != "" {
-		hostname = host
-	}
-	label, rest, ok := strings.Cut(hostname, ".")
+	label, rest, ok := strings.Cut(NormalizeHostWithoutPort(hostname), ".")
 	if !ok || label == "" || rest == "" || !hasCanonicalShape(label) {
 		return "", errors.New("hostname does not contain a canonical lease address")
 	}
