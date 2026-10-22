@@ -239,9 +239,10 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	runtime.handler = handler
 	if spec.HTTP.Auth != nil {
 		// Only a warning: the provider may come back, and every login retries it.
+		// A tunnel stopped during the check cancels it, which is not an outage.
 		go func() {
-			if err := gateway.CheckApplicationAuthProvider(ctx, *spec.HTTP.Auth); err != nil {
-				log.Warn().Err(err).Msg("application auth provider is not usable; visitors cannot sign in until it is")
+			if err := gateway.CheckApplicationAuthProvider(ctx, *spec.HTTP.Auth); err != nil && ctx.Err() == nil {
+				log.Warn().Err(err).Str("address", runtime.Identity.Address).Msg("application auth provider is not usable; visitors cannot sign in until it is")
 			}
 		}()
 	}
