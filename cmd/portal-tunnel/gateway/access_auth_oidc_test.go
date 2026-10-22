@@ -370,3 +370,59 @@ func expireOIDCState(t *testing.T, gate *applicationAuth, value string) string {
 	}
 	return expired
 }
+
+// A login keeps its state in one cookie. A HEAD request never completes a
+// login, so it must not start one and overwrite the state of a login in progress.
+func TestApplicationAuthOIDCLoginStartsOnlyOnGet(t *testing.T) {
+	t.Parallel()
+	gate := newOIDCTestGate(t, newOIDCTestIdP(t, nil))
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "https://app.example"+applicationAuthLoginPath, nil))
+	if rec.Code != http.StatusMethodNotAllowed || len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("HEAD login = %d with cookies %v; want 405 and no state cookie", rec.Code, rec.Result().Cookies())
+	}
+}
+
+// The deep link travels in the state cookie, which a browser drops silently
+// once it nears 4 KB, failing the login at the callback. A link that does not
+// fit is replaced by / so the login still completes.
+func TestApplicationAuthOIDCStateCookieStaysWithinBrowserLimit(t *testing.T) {
+	t.Parallel()
+
+	long := "/" + strings.Repeat("a", 1500)
+	tests := []struct {
+		name string
+		next string
+		want string
+	}{
+		{"short link is kept", "/dashboard?tab=1", "/dashboard?tab=1"},
+		{"long link that fits is kept", long, long},
+		{"link too long for the cookie", "/" + strings.Repeat("a", 5000), "/"},
+		{"link that grows when it is escaped", "/" + strings.Repeat("<", 1000), "/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			idp := newOIDCTestIdP(t, nil)
+			gate := newOIDCTestGate(t, idp)
+			rec := httptest.NewRecorder()
+			gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthLoginPath+"?next="+url.QueryEscape(tt.next), nil))
+			authURL, err := url.Parse(rec.Header().Get("Location"))
+			cookies := rec.Result().Cookies()
+			if err != nil || rec.Code != http.StatusSeeOther || len(cookies) != 1 {
+				t.Fatalf("login = %d, %q, %v, %d cookies", rec.Code, rec.Header().Get("Location"), err, len(cookies))
+			}
+			if size := len(cookies[0].String()); size > 4096 {
+				t.Fatalf("state cookie is %d bytes; a browser drops one of about 4096", size)
+			}
+			idp.expect(authURL.Query().Get("code_challenge"), authURL.Query().Get("nonce"))
+			login := oidcLogin{state: authURL.Query().Get("state"), cookie: cookies[0]}
+			callback := httptest.NewRecorder()
+			gate.ServeHTTP(callback, login.callbackRequest(t, gate, nil))
+			assertOIDCCallback(t, callback, http.StatusSeeOther)
+			if got := callback.Header().Get("Location"); got != tt.want {
+				t.Fatalf("login returned to %q; want %q", got, tt.want)
+			}
+		})
+	}
+}
