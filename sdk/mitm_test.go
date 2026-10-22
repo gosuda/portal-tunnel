@@ -663,6 +663,38 @@ func TestAdmissionOfAWithheldBindingNonceEndsQuickly(t *testing.T) {
 	})
 }
 
+// A client that sends a whole binding request and never reads the answer must
+// not hold its admitting slot either.
+func TestAdmissionOfAClientThatNeverReadsTheAnswerEndsQuickly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := newChannelBindingListener(t, "b", "")
+		l.accepted = make(chan net.Conn, 1)
+		l.admitting = make(chan struct{}, 1)
+		l.api = &apiClient{relayURL: &url.URL{Scheme: "https", Host: "relay.example"}}
+
+		clientRaw, serverRaw := net.Pipe()
+		request := append([]byte(tlsChannelBindingMagic), bytes.Repeat([]byte{7}, tlsChannelBindingNonceSize)...)
+		go func() { _, _ = clientRaw.Write(request) }()
+		l.admitting <- struct{}{}
+		go l.admit(t.Context(), &testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)})
+
+		const slotCeiling = 2 * time.Second
+		synctest.Sleep(channelBindingRequestTimeout / 2)
+		select {
+		case l.admitting <- struct{}{}:
+			t.Fatal("the slot was free while the answer was still being written")
+		default:
+		}
+		synctest.Sleep(slotCeiling - channelBindingRequestTimeout/2)
+		select {
+		case l.admitting <- struct{}{}:
+		default:
+			t.Fatalf("a client that never reads the answer still holds its admitting slot after %v", slotCeiling)
+		}
+		_ = clientRaw.Close()
+	})
+}
+
 // Accept is serial, so a client that is slow to speak must delay only itself.
 // One that sends the start of a channel binding request and stops, and one that
 // stays silent, are admitted off the accept path while an ordinary client is
