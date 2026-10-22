@@ -164,7 +164,7 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return err
 	}
-	spec, err := tunnelSpecFromExposeFlags(flags)
+	spec, err := tunnelSpecFromExposeFlags(fs, flags)
 	if err != nil {
 		printExposeUsage(os.Stderr)
 		return err
@@ -197,7 +197,7 @@ func runExposeCommand(args []string) error {
 	return runtime.Run(ctx)
 }
 
-func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
+func tunnelSpecFromExposeFlags(fs *flag.FlagSet, flags exposeFlags) (tunnel.Spec, error) {
 	if !flags.cache && flags.cacheTTL != 0 {
 		return tunnel.Spec{}, errors.New("--cache-ttl requires --cache")
 	}
@@ -250,6 +250,13 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 		spec.Transport.UDP = &tunnel.UDPConfig{Target: flags.udpAddr}
 	}
 	serve := strings.TrimSpace(flags.serve)
+	// AUTH_OIDC_* may be exported for one service, so without --auth oidc only
+	// an --auth-oidc-* flag given on the command line counts.
+	oidcFlagGiven := false
+	fs.Visit(func(f *flag.Flag) { oidcFlagGiven = oidcFlagGiven || strings.HasPrefix(f.Name, "auth-oidc-") })
+	if provider, _ := gateway.NormalizeApplicationAuthProvider(flags.authProvider); provider != gateway.ApplicationAuthProviderOIDC && !oidcFlagGiven {
+		flags.authOIDCIssuer, flags.authOIDCClientID, flags.authOIDCClientSecret = "", "", ""
+	}
 	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders ||
 		flags.authOIDCIssuer != "" || flags.authOIDCClientID != "" || flags.authOIDCClientSecret != ""
 	hasStripPolicy := len(flags.stripRequestHeaders) > 0
