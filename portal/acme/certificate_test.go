@@ -159,3 +159,113 @@ func TestRegistrationFilePathIsScopedToCADirectory(t *testing.T) {
 		t.Fatalf("production registration after switching back = %q; want %q", got, production)
 	}
 }
+
+func TestCertificateFilePathsAreScopedToCADirectory(t *testing.T) {
+	t.Parallel()
+
+	const keyDir = "/state"
+	productionCert, productionKey := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
+	if productionCert != filepath.Join(keyDir, fullChainFileName) || productionKey != filepath.Join(keyDir, keyFileName) {
+		t.Fatalf("production certificate files = %q, %q; want the legacy names so existing installations and manual files keep working", productionCert, productionKey)
+	}
+	stagingCert, stagingKey := certificateFilePaths(keyDir, lego.LEDirectoryStaging)
+	otherCert, otherKey := certificateFilePaths(keyDir, "https://acme.zerossl.com/v2/DV90")
+
+	seen := make(map[string]bool)
+	for _, path := range []string{productionCert, productionKey, stagingCert, stagingKey, otherCert, otherKey} {
+		if seen[path] {
+			t.Fatalf("certificate files collide at %q", path)
+		}
+		seen[path] = true
+		if filepath.Dir(path) != keyDir {
+			t.Fatalf("certificate file %q left the key directory %q", path, keyDir)
+		}
+	}
+	if cert, key := certificateFilePaths(keyDir, lego.LEDirectoryStaging); cert != stagingCert || key != stagingKey {
+		t.Fatalf("staging certificate files = %q, %q; want the stable %q, %q", cert, key, stagingCert, stagingKey)
+	}
+}
+
+// The certificate in use is the one the configured CA issued. One issued under
+// another CA stays on disk, unused, and is picked up again when that CA is
+// configured again.
+func TestTLSFilesSelectOnlyTheConfiguredCAsCertificate(t *testing.T) {
+	t.Parallel()
+
+	const baseDomain = "portal.example.com"
+	keyDir := t.TempDir()
+	if err := writeManualRelayCertificate(t, keyDir, baseDomain); err != nil {
+		t.Fatalf("writeManualRelayCertificate() error = %v", err)
+	}
+	newManager := func(caDirURL string) *Manager {
+		t.Helper()
+		manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53, CADirURL: caDirURL})
+		if err != nil {
+			t.Fatalf("NewManager(%q) error = %v", caDirURL, err)
+		}
+		return manager
+	}
+	production, staging := newManager(""), newManager(lego.LEDirectoryStaging)
+
+	productionCert, _ := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
+	if cert, _, err := production.TLSFiles(); err != nil || cert != productionCert {
+		t.Fatalf("production TLSFiles() = %q, %v; want %q", cert, err, productionCert)
+	}
+	if cert, _, err := staging.TLSFiles(); err == nil {
+		t.Fatalf("staging TLSFiles() = %q; want no certificate, since only Let's Encrypt production issued one", cert)
+	}
+
+	stagingCert, stagingKey := certificateFilePaths(keyDir, lego.LEDirectoryStaging)
+	if err := writeRelayCertificate(t, stagingCert, stagingKey, baseDomain, time.Now().Add(90*24*time.Hour)); err != nil {
+		t.Fatalf("writeRelayCertificate() error = %v", err)
+	}
+	if cert, key, err := staging.TLSFiles(); err != nil || cert != stagingCert || key != stagingKey {
+		t.Fatalf("staging TLSFiles() = %q, %q, %v; want %q, %q", cert, key, err, stagingCert, stagingKey)
+	}
+	if cert, _, err := production.TLSFiles(); err != nil || cert != productionCert {
+		t.Fatalf("production TLSFiles() after staging issued = %q, %v; want %q", cert, err, productionCert)
+	}
+}
+
+// Renewal follows the configured CA's certificate too: an expired staging
+// certificate is replaced even while a valid production one sits beside it.
+func TestShouldRenewReadsTheConfiguredCAsCertificate(t *testing.T) {
+	t.Parallel()
+
+	const baseDomain = "portal.example.com"
+	keyDir := t.TempDir()
+	if err := writeManualRelayCertificate(t, keyDir, baseDomain); err != nil {
+		t.Fatalf("writeManualRelayCertificate() error = %v", err)
+	}
+	stagingCert, stagingKey := certificateFilePaths(keyDir, lego.LEDirectoryStaging)
+	if err := writeRelayCertificate(t, stagingCert, stagingKey, baseDomain, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatalf("writeRelayCertificate() error = %v", err)
+	}
+	manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53, CADirURL: lego.LEDirectoryStaging})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	if renew, _, _ := manager.shouldRenew(t.Context()); !renew {
+		t.Fatal("shouldRenew() = false; want the expired staging certificate renewed")
+	}
+}
+
+// A local development certificate involves no CA, so a configured directory
+// must not change where it is written or read.
+func TestLocalDevelopmentCertificateIgnoresTheConfiguredCA(t *testing.T) {
+	t.Parallel()
+
+	keyDir := t.TempDir()
+	manager, err := NewManager(Config{BaseDomain: "localhost", KeyDir: keyDir, CADirURL: lego.LEDirectoryStaging})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	certFile, keyFile, err := manager.EnsureCertificate(t.Context())
+	if err != nil {
+		t.Fatalf("EnsureCertificate() error = %v", err)
+	}
+	wantCert, wantKey := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
+	if certFile != wantCert || keyFile != wantKey {
+		t.Fatalf("EnsureCertificate() = %q, %q; want the legacy %q, %q", certFile, keyFile, wantCert, wantKey)
+	}
+}

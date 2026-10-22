@@ -238,7 +238,7 @@ is the proxy when one sits in front. The trusted proxy must overwrite
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `ACME_CA_DIR_URL` | `""` | string | Optional ACME CA directory URL for managed certificate issuance; empty defaults to Let's Encrypt production; the account registration is stored per directory, so switching CAs registers a new account while the Let's Encrypt production one is kept |
+| `ACME_CA_DIR_URL` | `""` | string | Optional ACME CA directory URL for managed certificate issuance; empty defaults to Let's Encrypt production; the account registration and the certificate are stored per directory, so switching CAs issues a new certificate and registers a new account while the others stay on disk, unused (Let's Encrypt production keeps `fullchain.pem` and `privatekey.pem`, any other CA uses `fullchain-<id>.pem` and `privatekey-<id>.pem`) |
 | `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01 challenges, A/AAAA sync, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for a public relay domain and lease hostnames through the selected DNS provider. With `embedded`, local records are signed and the operator publishes the DS at the parent zone; Cloudflare, Google Cloud DNS, Route53, and Vultr use their provider APIs. Hetzner and Njalla do not support ENS DNSSEC automation |
 

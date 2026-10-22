@@ -233,8 +233,7 @@ func (m *Manager) TLSFiles() (string, string, error) {
 	if m == nil {
 		return "", "", errors.New("acme manager is nil")
 	}
-	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
-	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
+	certFile, keyFile := m.certificateFiles()
 	if !utils.FileExists(certFile) || !utils.FileExists(keyFile) {
 		return "", "", errors.New("relay certificate files do not exist")
 	}
@@ -268,8 +267,7 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 }
 
 func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
-	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
-	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
+	certFile, keyFile := m.certificateFiles()
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
 	domains := certificateDomains(m.cfg.BaseDomain)
 

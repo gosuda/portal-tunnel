@@ -50,7 +50,7 @@ type acmeUser struct {
 // the RFC 9773 ReplacesCertID to renew it with, and how long the maintenance
 // loop should wait before checking again.
 func (m *Manager) shouldRenew(ctx context.Context) (bool, string, time.Duration) {
-	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
+	certFile, _ := m.certificateFiles()
 	cert, err := loadCertificate(certFile)
 	if err != nil {
 		return false, "", defaultRenewInterval
@@ -179,8 +179,35 @@ func registrationFilePath(keyDir, caDirURL string) string {
 	if caDirURL == lego.LEDirectoryProduction {
 		return filepath.Join(keyDir, registrationFileName)
 	}
+	return filepath.Join(keyDir, "acme-registration-"+caDirectoryDigest(caDirURL)+".json")
+}
+
+// certificateFilePaths returns where the certificate chain and private key
+// issued by the CA directory are stored. Only a certificate that the configured
+// CA issued may be served or renewed, so each directory keeps its own pair and
+// changing the CA leaves the others on disk, unused. Let's Encrypt production
+// keeps the legacy names, which also hold operator-supplied certificates.
+func certificateFilePaths(keyDir, caDirURL string) (certFile, keyFile string) {
+	if caDirURL == lego.LEDirectoryProduction {
+		return filepath.Join(keyDir, fullChainFileName), filepath.Join(keyDir, keyFileName)
+	}
+	digest := caDirectoryDigest(caDirURL)
+	return filepath.Join(keyDir, "fullchain-"+digest+".pem"), filepath.Join(keyDir, "privatekey-"+digest+".pem")
+}
+
+// caDirectoryDigest names a CA directory inside file names.
+func caDirectoryDigest(caDirURL string) string {
 	sum := sha256.Sum256([]byte(caDirURL))
-	return filepath.Join(keyDir, fmt.Sprintf("acme-registration-%x.json", sum[:8]))
+	return fmt.Sprintf("%x", sum[:8])
+}
+
+// certificateFiles returns the certificate files of the configured CA. A local
+// development certificate involves no CA and always uses the legacy names.
+func (m *Manager) certificateFiles() (certFile, keyFile string) {
+	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+		return certificateFilePaths(m.cfg.KeyDir, lego.LEDirectoryProduction)
+	}
+	return certificateFilePaths(m.cfg.KeyDir, m.cfg.CADirURL)
 }
 
 func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {

@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-acme/lego/v4/lego"
 	"github.com/miekg/dns"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -467,6 +468,15 @@ func newEmbeddedDNSManager(t *testing.T, cfg Config) (*Manager, Config) {
 func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) error {
 	t.Helper()
 
+	certFile, keyFile := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
+	return writeRelayCertificate(t, certFile, keyFile, baseDomain, time.Now().UTC().Add(90*24*time.Hour))
+}
+
+// writeRelayCertificate writes a self-signed certificate for baseDomain and its
+// wildcard, valid until notAfter, and its private key.
+func writeRelayCertificate(t *testing.T, certFile, keyFile, baseDomain string, notAfter time.Time) error {
+	t.Helper()
+
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
@@ -478,8 +488,8 @@ func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) error 
 		Subject: pkix.Name{
 			CommonName: baseDomain,
 		},
-		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(90 * 24 * time.Hour),
+		NotBefore:             notAfter.Add(-91 * 24 * time.Hour),
+		NotAfter:              notAfter,
 		DNSNames:              []string{baseDomain, "*." + baseDomain},
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
@@ -498,8 +508,8 @@ func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) error 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
-	if err := os.WriteFile(filepath.Join(keyDir, fullChainFileName), certPEM, 0o644); err != nil {
+	if err := os.WriteFile(certFile, certPEM, 0o644); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(keyDir, keyFileName), keyPEM, 0o600)
+	return os.WriteFile(keyFile, keyPEM, 0o600)
 }
