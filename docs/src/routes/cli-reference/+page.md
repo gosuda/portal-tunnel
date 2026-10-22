@@ -110,7 +110,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--serve` | string | | Serve a local directory or HTML file; unknown paths fall back to the entry HTML |
 | `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
-| `--auth` | string | | Protect HTTP application access with `siwe` or `credential`; cannot be combined with `--cache` |
+| `--auth` | string | | Protect HTTP application access with `siwe`, `credential`, or `oidc`; cannot be combined with `--cache` |
 | `--auth-allow` | string | | Principal allowed to sign in (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or `sub:<subject>` for `oidc`); repeat for multiple principals (empty allows any valid principal, except for `oidc`, which requires at least one entry); requires `--auth` |
 | `--auth-oidc-issuer` | string | | OIDC issuer URL for `--auth oidc` (env: `AUTH_OIDC_ISSUER`) |
 | `--auth-oidc-client-id` | string | | OIDC client ID for `--auth oidc` (env: `AUTH_OIDC_CLIENT_ID`) |
@@ -256,6 +256,21 @@ credential from the tunnel identity:
 portal expose 3000 --auth credential
 portal auth issue myapp.example.com --subject alice --expires 720h
 ```
+
+Protect it with a standard OpenID Connect provider (see
+[OpenID Connect](/siwe-authentication#openid-connect-oidc)):
+
+```bash
+portal expose 3000 --auth oidc \
+  --auth-oidc-issuer https://accounts.google.com \
+  --auth-oidc-client-id <client-id> \
+  --auth-allow alice@example.com
+```
+
+`--auth-allow` is required with `--auth oidc`. The `AUTH_OIDC_*` variables are
+read only with `--auth oidc`, so exporting them for one service does not affect
+another `portal expose`. An `--auth-oidc-*` flag given on the command line
+without `--auth oidc` is rejected.
 
 Portal protects the complete HTTP gateway, including routed, static, and x402
 paths. It always strips inbound Portal identity headers. The auth gate cannot be

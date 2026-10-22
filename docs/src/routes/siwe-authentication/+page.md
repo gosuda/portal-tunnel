@@ -81,8 +81,8 @@ request, while preserving application-owned cookies; relay-issued lease tokens
 are not used for application access.
 
 Inbound `X-Portal-User` and `X-Portal-Auth` headers are always removed. Add
-`--auth-identity-headers` to inject the verified subject and provider (`siwe`
-or `credential`) after login. Upstreams must only trust these headers when they cannot be
+`--auth-identity-headers` to inject the verified subject and provider (`siwe`,
+`credential`, or `oidc`) after login. Upstreams must only trust these headers when they cannot be
 reached except through this local Portal proxy.
 
 Application auth covers proxied HTTP routes, static sites, and x402 endpoints.

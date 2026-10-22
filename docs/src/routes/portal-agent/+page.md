@@ -78,12 +78,27 @@ The entry file must exist when the tunnel starts. Edit `serve` in TOML and
 restart the tunnel or agent to change the site path.
 
 Set `auth = "credential"` on a target, routed HTTP, or static tunnel for
-Portal-native credentials, or use `auth = "siwe"`. With SIWE,
-`auth_allowed_wallets` optionally restricts login to listed principals (Ethereum addresses for `siwe` or credential subjects for `credential`).
+Portal-native credentials, or use `auth = "siwe"` or `auth = "oidc"`.
+`auth_allowed_wallets` restricts login to listed principals (Ethereum addresses for `siwe`, credential subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc`). It is optional, except that `oidc` requires at least one entry.
 `auth_identity_headers = true` injects the verified wallet address and `siwe`
-for SIWE, or the credential subject and `credential` for credential auth, as
+for SIWE, the credential subject and `credential` for credential auth, or the
+verified email (or `sub:` subject) and `oidc` for OIDC, as
 `X-Portal-User` and `X-Portal-Auth`; Portal always strips client-supplied copies
 first.
+
+`oidc` also needs `auth_oidc_issuer` and `auth_oidc_client_id`, and accepts an optional `auth_oidc_client_secret`. The agent takes them from the tunnel config, not from the CLI's `AUTH_OIDC_*` variables:
+
+```toml
+[[tunnels]]
+id = "web"
+target = "127.0.0.1:3000"
+auth = "oidc"
+auth_oidc_issuer = "https://accounts.google.com"
+auth_oidc_client_id = "<client-id>"
+auth_allowed_wallets = ["alice@example.com"]
+```
+
+See [OpenID Connect](/siwe-authentication#openid-connect-oidc) for the redirect URI and allowlist rules.
 
 Routed HTTP config:
 
@@ -311,8 +326,11 @@ Common fields:
 | `tcp` | Dedicated raw TCP port setting |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
-| `auth` | Application login provider: `siwe` or `credential` |
-| `auth_allowed_wallets` | Optional allowed principal array (Ethereum wallets for `siwe` or subjects for `credential`); empty allows any valid principal |
+| `auth` | Application login provider: `siwe`, `credential`, or `oidc` |
+| `auth_allowed_wallets` | Principals allowed to sign in (Ethereum wallets for `siwe`, subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc`); empty allows any valid principal, except for `oidc`, which requires at least one entry; requires `auth` when set |
+| `auth_oidc_issuer` | OIDC issuer URL; required when `auth = "oidc"` |
+| `auth_oidc_client_id` | OIDC client ID; required when `auth = "oidc"` |
+| `auth_oidc_client_secret` | Optional OIDC client secret for `auth = "oidc"` |
 | `auth_identity_headers` | Inject verified Portal identity headers into upstream requests |
 | `x402_pay_to` | Payment recipient for paid HTTP routes |
 | `x402_testnet` | Use Sui testnet when `x402_network` is omitted |
@@ -331,7 +349,7 @@ Constraints:
 - `target` cannot be combined with `http_routes`.
 - `serve` cannot be combined with `target`, `http_routes`, `tcp`, or `udp`.
 - `http_routes` cannot be combined with `tcp` or `udp`.
-- Application auth cannot be combined with `tcp` or `udp`; wallet allowlists require the SIWE provider and identity headers require application auth.
+- Application auth cannot be combined with `tcp` or `udp`; `auth_allowed_wallets`, `auth_identity_headers`, and the `auth_oidc_*` fields require `auth`, and the `auth_oidc_*` fields require `auth = "oidc"`.
 - `http_routes[].amount` requires `x402_pay_to`.
 - `http_routes[].methods` requires `http_routes[].amount`.
 
