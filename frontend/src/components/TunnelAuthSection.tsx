@@ -107,7 +107,7 @@ const ALLOW_COPY: Record<
     label: "Link names",
     requirement: "optional",
     placeholder: "alice, then Enter",
-    help: "The names you will give links to. With names listed, you can cut someone off by removing their name.",
+    help: "The names you will give links to; separate several with commas. With names listed, you can cut someone off by removing their name.",
   },
   siwe: {
     label: "Allowed wallets",
@@ -254,6 +254,7 @@ export function TunnelAuthSection({
           )}
           {auth.method === "credential" && (
             <InviteBlock
+              allow={auth.allow}
               currentOrigin={currentOrigin}
               name={name}
               os={os}
@@ -608,6 +609,10 @@ function OIDCSetup({
           Run this in the shell you will start the tunnel from. It asks for the
           client secret without showing it, so the secret stays out of the
           process list, your shell history and the command you copy.
+          {os === "unix" && (
+            <> If you press Ctrl-C at the prompt, run <code>stty echo</code> to
+            see what you type again.</>
+          )}
         </p>
         <CopyLine
           value={buildOIDCSecretCommand(os)}
@@ -620,11 +625,13 @@ function OIDCSetup({
 }
 
 function InviteBlock({
+  allow,
   currentOrigin,
   name,
   os,
   theme,
 }: {
+  allow: string[];
   currentOrigin: string;
   name: string;
   os: TunnelCommandOS;
@@ -635,13 +642,25 @@ function InviteBlock({
   const s = TUNNEL_FORM_STYLES[theme];
   const [subject, setSubject] = useState("");
   const [expires, setExpires] = useState("720h");
-  const command = buildAuthIssueCommand({
-    origin: currentOrigin,
-    name,
-    subject,
-    expires,
-    os,
-  });
+  const trimmed = subject.trim();
+  const check = trimmed === "" ? null : classifyAuthAllow("credential", trimmed);
+  // With names listed, the tunnel lets in only those subjects.
+  const notListed = check?.ok && allow.length > 0 && !allow.includes(trimmed);
+  const command = check?.ok
+    ? buildAuthIssueCommand({
+        origin: currentOrigin,
+        name,
+        subject: trimmed,
+        expires,
+        os,
+      })
+    : "";
+  const hint =
+    name === ""
+      ? "Add a Name above, then a name for the person, to see the command."
+      : check === null
+        ? "Type the person's name to see the command."
+        : "";
   const fieldClass = cn(s.input, "h-9 text-[13px]");
 
   return (
@@ -681,14 +700,21 @@ function InviteBlock({
           </Select>
         </div>
       </div>
-      {command === "" ? (
-        <p className={s.help}>
-          {name === ""
-            ? "Add a Name above, then a name for the person, to see the command."
-            : "Type the person's name to see the command."}
-        </p>
-      ) : (
+      {check && !check.ok && (
+        <Notice tone="error" theme={theme}>
+          {check.error}
+        </Notice>
+      )}
+      {notListed && (
+        <Notice tone="warn" theme={theme}>
+          {trimmed} is not in Link names, so the tunnel will not let that link
+          in.
+        </Notice>
+      )}
+      {command !== "" ? (
         <CopyLine value={command} label="Copy invite command" theme={theme} />
+      ) : (
+        hint !== "" && <p className={s.help}>{hint}</p>
       )}
       <p className={s.help}>
         Run it from the folder where you ran <code>portal expose</code>: both

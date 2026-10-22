@@ -256,7 +256,7 @@ export function classifyAuthAllow(
       error: `${entry} must be 1 to 256 printable characters.`,
     };
   }
-  if ([...entry].some((char) => (char.codePointAt(0) ?? 0) > 127)) {
+  if (!isASCII(entry)) {
     return {
       ok: false,
       error: `${entry} must be ASCII; write an internationalized domain in punycode.`,
@@ -271,6 +271,10 @@ export function classifyAuthAllow(
     };
   }
   return { ok: true, kind: at === 0 ? "domain" : "person" };
+}
+
+function isASCII(value: string): boolean {
+  return ![...value].some((char) => (char.codePointAt(0) ?? 0) > 127);
 }
 
 // The tunnel limits a subject to 256 bytes, not characters.
@@ -369,7 +373,9 @@ export function addAuthAllow(
   const keyOf = (entry: string) => (method === "siwe" ? entry.toLowerCase() : entry);
   const next = [...current];
   const seen = new Set(next.map(keyOf));
-  for (const typed of draft.split(/[,\s]+/)) {
+  // A link name may contain spaces; the other entries never do.
+  const separator = method === "credential" ? /,/ : /[,\s]+/;
+  for (const typed of draft.split(separator).map((part) => part.trim())) {
     if (typed === "") {
       continue;
     }
@@ -389,7 +395,10 @@ function canonicalAuthAllow(method: TunnelAuthMethod, entry: string): string {
   if (/^sub:/i.test(entry)) {
     return `sub:${entry.slice("sub:".length)}`;
   }
-  return entry.includes("@") ? entry.toLowerCase() : entry;
+  // Lowercasing maps some non-ASCII letters onto ASCII ones (the Kelvin sign
+  // onto "k"), which would turn a typed lookalike into a different, valid
+  // address; the tunnel refuses such input, so it is kept as typed and flagged.
+  return entry.includes("@") && isASCII(entry) ? entry.toLowerCase() : entry;
 }
 
 /** The address to register at an OIDC provider; empty until the name is known. */

@@ -318,12 +318,30 @@ describe("tunnelCommand sign-in", () => {
     ]);
     const wallet = "0xAbCdEf1234567890abcdef1234567890ABCDEF12";
     expect(addAuthAllow("siwe", [wallet], wallet.toLowerCase())).toEqual([wallet]);
-    expect(addAuthAllow("credential", ["alice"], "Alice alice, bob")).toEqual([
+    expect(addAuthAllow("credential", ["alice"], "Alice, alice, bob")).toEqual([
       "alice",
       "Alice",
       "bob",
     ]);
+    // A link name may contain spaces, as the tunnel allows; the other methods split on them.
+    expect(addAuthAllow("credential", [], "alice smith, bob")).toEqual([
+      "alice smith",
+      "bob",
+    ]);
+    expect(addAuthAllow("oidc", [], "a@example.com b@example.com")).toEqual([
+      "a@example.com",
+      "b@example.com",
+    ]);
     expect(addAuthAllow("credential", ["alice"], " , ")).toEqual(["alice"]);
+  });
+
+  it("does not let lowercasing turn a lookalike address into a valid one", () => {
+    // U+212A KELVIN SIGN lowercases to "k"; the tunnel refuses the original.
+    const typed = "\u212Aelvin@example.com";
+    const [entry] = addAuthAllow("oidc", [], typed);
+
+    expect(entry).toBe(typed);
+    expect(classifyAuthAllow("oidc", entry ?? "").ok).toBe(false);
   });
 
   it("lists what keeps an OIDC command from running as shown", () => {
