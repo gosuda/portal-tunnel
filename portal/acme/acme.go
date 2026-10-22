@@ -253,6 +253,8 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 	if err != nil {
 		return "", "", false, fmt.Errorf("validate relay certificate: %w", err)
 	}
+	// The account key is created before any registration, so it marks ACME state
+	// for every CA directory, whatever name that directory's registration has.
 	hasACMEState := utils.FileExists(filepath.Join(m.cfg.KeyDir, accountKeyFileName)) || utils.FileExists(filepath.Join(m.cfg.KeyDir, registrationFileName))
 	if !covered {
 		if !hasACMEState {

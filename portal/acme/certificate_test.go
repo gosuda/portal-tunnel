@@ -2,8 +2,14 @@ package acme
 
 import (
 	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,9 +120,12 @@ func TestNormalizeCADirURL(t *testing.T) {
 		valid bool
 	}{
 		{name: "empty defaults to Let's Encrypt production", input: "", valid: true},
-		{name: "custom https CA directory", input: "https://acme.zerossl.com/v2/DV90", valid: true},
-		{name: "loopback http test CA", input: "http://127.0.0.1:14000/dir", valid: true},
-		{name: "non-loopback http rejected", input: "http://acme.example.com/directory", valid: false},
+		{name: "custom https CA directory", input: "https://ca.example/directory", valid: true},
+		{name: "local test CA over https", input: "https://localhost:14000/dir", valid: true},
+		{name: "loopback http rejected, lego only speaks https", input: "http://127.0.0.1:14000/dir", valid: false},
+		{name: "http rejected", input: "http://acme.example.com/directory", valid: false},
+		{name: "scheme-less address rejected", input: "acme.example.com/directory", valid: false},
+		{name: "https without a host rejected", input: "https://:14000/dir", valid: false},
 		{name: "query string rejected", input: "https://acme.example.com/directory?foo=1", valid: false},
 		{name: "userinfo rejected", input: "https://user:pass@acme.example.com/directory", valid: false},
 	} {
@@ -143,7 +152,7 @@ func TestRegistrationFilePathIsScopedToCADirectory(t *testing.T) {
 		t.Fatalf("production registration = %q; want the legacy %q so existing installations keep it", production, legacy)
 	}
 	staging := registrationFilePath(keyDir, lego.LEDirectoryStaging)
-	other := registrationFilePath(keyDir, "https://acme.zerossl.com/v2/DV90")
+	other := registrationFilePath(keyDir, "https://ca.example/directory")
 	if staging == production || other == production || staging == other {
 		t.Fatalf("registrations must differ per directory: production %q, staging %q, other %q", production, staging, other)
 	}
@@ -169,7 +178,7 @@ func TestCertificateFilePathsAreScopedToCADirectory(t *testing.T) {
 		t.Fatalf("production certificate files = %q, %q; want the legacy names so existing installations and manual files keep working", productionCert, productionKey)
 	}
 	stagingCert, stagingKey := certificateFilePaths(keyDir, lego.LEDirectoryStaging)
-	otherCert, otherKey := certificateFilePaths(keyDir, "https://acme.zerossl.com/v2/DV90")
+	otherCert, otherKey := certificateFilePaths(keyDir, "https://ca.example/directory")
 
 	seen := make(map[string]bool)
 	for _, path := range []string{productionCert, productionKey, stagingCert, stagingKey, otherCert, otherKey} {
@@ -267,5 +276,38 @@ func TestLocalDevelopmentCertificateIgnoresTheConfiguredCA(t *testing.T) {
 	wantCert, wantKey := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
 	if certFile != wantCert || keyFile != wantKey {
 		t.Fatalf("EnsureCertificate() = %q, %q; want the legacy %q, %q", certFile, keyFile, wantCert, wantKey)
+	}
+}
+
+// Accounts are registered without External Account Binding, which some CAs
+// require, so a directory that demands it is refused up front with a clear
+// error instead of failing inside the registration exchange.
+func TestNewClientRefusesDirectoriesRequiringExternalAccountBinding(t *testing.T) {
+	directory := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		base := "https://" + r.Host
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"newNonce":   base + "/nonce",
+			"newAccount": base + "/account",
+			"newOrder":   base + "/order",
+			"revokeCert": base + "/revoke",
+			"keyChange":  base + "/key",
+			"meta":       map[string]any{"externalAccountRequired": true},
+		})
+	}))
+	t.Cleanup(directory.Close)
+	// lego trusts the CAs named by LEGO_CA_CERTIFICATES, which is how a private
+	// CA is trusted in production too.
+	trusted := filepath.Join(t.TempDir(), "directory.pem")
+	if err := os.WriteFile(trusted, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: directory.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LEGO_CA_CERTIFICATES", trusted)
+
+	manager, err := NewManager(Config{BaseDomain: "portal.example.com", KeyDir: t.TempDir(), DNSProvider: TypeRoute53, CADirURL: directory.URL})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	if _, err := manager.newClient(t.Context()); err == nil || !strings.Contains(err.Error(), "external account binding") {
+		t.Fatalf("newClient() error = %v; want one saying the directory requires external account binding", err)
 	}
 }

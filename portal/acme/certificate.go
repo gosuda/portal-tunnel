@@ -150,22 +150,19 @@ func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
 }
 
 // NormalizeCADirURL validates an optional ACME CA directory URL and defaults
-// an empty value to Let's Encrypt production. HTTPS is required except for
-// loopback hosts used in local testing.
+// an empty value to Let's Encrypt production. ACME requires HTTPS (RFC 8555)
+// and lego refuses any other scheme, so no other URL can work, loopback or not.
 func NormalizeCADirURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return lego.LEDirectoryProduction, nil
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errors.New("acme ca directory url must be a valid URL without credentials, query, or fragment")
 	}
-	scheme := strings.ToLower(parsed.Scheme)
-	host := parsed.Hostname()
-	isLoopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
-	if scheme != "https" && (scheme != "http" || !isLoopback) {
-		return "", errors.New("acme ca directory url must use https (or http on a loopback host)")
+	if parsed.Scheme != "https" {
+		return "", errors.New("acme ca directory url must use https")
 	}
 	return raw, nil
 }
@@ -211,13 +208,9 @@ func (m *Manager) certificateFiles() (certFile, keyFile string) {
 }
 
 func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
-	resolvedCADirURL, err := NormalizeCADirURL(m.cfg.CADirURL)
-	if err != nil {
-		return nil, err
-	}
 	email := defaultACMEEmailPrefix + m.cfg.BaseDomain
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
-	registrationFile := registrationFilePath(m.cfg.KeyDir, resolvedCADirURL)
+	registrationFile := registrationFilePath(m.cfg.KeyDir, m.cfg.CADirURL)
 	dnsProvider := m.dns
 	accountKey, err := loadOrCreateAccountKey(accountKeyFile)
 	if err != nil {
@@ -241,12 +234,18 @@ func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
 	}
 
 	clientConfig := lego.NewConfig(user)
-	clientConfig.CADirURL = resolvedCADirURL
+	clientConfig.CADirURL = m.cfg.CADirURL
 	clientConfig.Certificate.KeyType = certcrypto.RSA2048
 
 	client, err := lego.NewClient(clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create acme client: %w", err)
+	}
+	// An account is registered without External Account Binding, which some
+	// CAs (ZeroSSL and Google Trust Services among them) demand, so say so here
+	// instead of failing inside the registration exchange.
+	if user.Registration == nil && client.GetExternalAccountRequired() {
+		return nil, fmt.Errorf("acme directory %s requires external account binding, which is not supported", m.cfg.CADirURL)
 	}
 
 	challengeProvider, err := dnsProvider.ChallengeProvider(ctx)
