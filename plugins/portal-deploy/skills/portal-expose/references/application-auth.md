@@ -1,8 +1,8 @@
 # Protect an app with visitor sign-in
 
-Use this when only chosen people should open the public URL ("only me", "my team", "private", "add a login", "restrict access"). The check runs inside the `portal` process on the user's machine, not at the relay, and covers the whole HTTP gateway: the proxied target, `--serve` files, every `--http-route`, and paid routes. Without it, anyone who learns the hostname can open the app.
+Use this when only chosen people should open the public URL ("only me", "my team", "private", "add a login", "restrict access"). The check runs inside the `portal` process on the user's machine, not at the relay, and covers the whole HTTP gateway: the proxied target, `--serve` files, every `--http-route`, and paid routes. Without it, anyone who learns the hostname can open the app. Add sign-in only when the user asks for it. When the app looks sensitive, offer it instead of exposing the app open; do not enable it on your own.
 
-Add sign-in only when the user asks for it. When the app looks sensitive, offer it instead of exposing the app open; do not enable it on your own.
+> **Sync notice**: the method table, allowlist forms, session lifetime, secret handling, and verification steps in this file mirror `docs/src/routes/siwe-authentication/+page.md`. When sign-in behavior changes, update both files together. The docs page is the human-facing source; this reference is the agent-facing copy.
 
 ## Choose a method
 
@@ -16,19 +16,19 @@ When the user does not say which, use `credential`: it needs no external setup. 
 
 ## credential
 
-```bash
-portal expose 3000 --name my-app --identity-path /abs/path/identity.json --auth credential
-portal auth issue my-app.<relay-host> --subject alice --expires 720h --identity-path /abs/path/identity.json
+```sh
+portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json --auth credential
+portal auth issue my-app.<relay-host> --subject alice --expires 720h --identity-path /absolute/path/to/identity.json
 ```
 
 - `portal auth issue` prints `Credential: ...` and `Redeem URL: ...`. Give the person the redeem URL; opening it signs them in. The credential travels in the URL fragment, which a browser never sends in a request, so the relay does not see it.
 - Use the same identity file for `expose` and `auth issue`: the tunnel's identity signs the credential, and the credential is valid only for that tunnel and that exact public hostname. The default lifetime is 30 days.
 - A script or API client sends the credential in the `X-Portal-Access-Credential` header.
-- With no `--auth-allow`, every unexpired credential signs in. To make a credential revocable before it expires, list its subject with `--auth-allow alice` (repeatable); the tunnel then rejects any subject that is not listed.
+- With no `--auth-allow`, every unexpired credential signs in and only expiry ends it. To make a credential revocable before it expires, list its subject with `--auth-allow alice` (repeatable); the tunnel then rejects any subject that is not listed, and taking a subject out of the list and restarting the tunnel ends its access.
 
 ## siwe
 
-```bash
+```sh
 portal expose 3000 --name my-app --auth siwe --auth-allow 0xAbc...
 ```
 
@@ -47,11 +47,11 @@ Do these in order. Stop and ask the user for the missing value instead of guessi
    - `@example.com`: any verified email on exactly that domain, not its subdomains.
    - `sub:<id>`: the provider's own subject identifier, for providers that do not verify email. Compared exactly, including case.
    - Email and domain matching ignores case but needs ASCII; write an internationalized domain in punycode.
-5. Pass the client secret through the environment, never on the command line, where `ps` and shell history would show it:
+5. Pass the client secret through the environment, never on the command line, where `ps` would show it. The user sets `AUTH_OIDC_CLIENT_SECRET` in their own shell; do not type it into a shell for them, print it, or write it to a file in the repository. A secret typed into an interactive shell lands in shell history, so tell the user to read it at a prompt instead (the prompt lines are in the OpenID Connect section of the Application Authentication docs page, `docs/src/routes/siwe-authentication/+page.md`), then start the tunnel from that shell:
 
-```bash
-export AUTH_OIDC_CLIENT_SECRET=...   # set by the user; never print it
-portal expose 3000 --name my-app --identity-path /abs/path/identity.json \
+```sh
+# AUTH_OIDC_CLIENT_SECRET is already set in this shell by the user
+portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json \
   --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id <client-id> \
   --auth-allow alice@example.com --auth-allow @example.com
 ```
@@ -106,7 +106,3 @@ Without signing in as the user:
 | `application auth cannot be combined with relay cache` | Remove `--cache`, or drop sign-in. |
 | The provider reports a redirect URI mismatch | The registered redirect URI differs from `https://<host>/_portal/auth/callback`; the host must match the tunnel's public hostname exactly. |
 | `application auth provider is not usable` in the log | The issuer is wrong or unreachable from this machine. |
-
-## Hand off
-
-Report the method, who may sign in (the allowlist, or "any holder of an unexpired credential"), where the secret lives and that it was not printed, how to remove someone (take the entry out and restart; for a credential without an allowlist, only expiry ends it), and the exact restart command.

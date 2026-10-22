@@ -49,7 +49,7 @@ portal expose --serve ./dist --name my-site --relays %s --discovery=false
 - [Relay hosting](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/self-hosting/+page.md): Configure and operate a relay.
 - [API reference](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/api-reference/+page.md): Relay HTTP endpoints and shared types.
 - [Security model](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/security-model/+page.md): Encryption and trust boundaries.
-- [Application sign-in](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/siwe-authentication/+page.md): Let only chosen people open a tunnel, with credential links, Ethereum wallet login, or OpenID Connect (`--auth`, `--auth-allow`).
+- [Application Authentication](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/siwe-authentication/+page.md): Limit who can open a tunnel with credential, wallet, or OpenID Connect sign-in.
 - [Public relay state](%s/api/state): Current public leases and landing-page state for this relay.
 - [GitHub repository](https://github.com/gosuda/portal-tunnel): Source, releases, and issue tracking.
 

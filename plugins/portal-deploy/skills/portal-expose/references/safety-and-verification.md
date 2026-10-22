@@ -10,7 +10,7 @@ Before creating a tunnel, identify the exact target and confirm that it belongs 
 - Services without authentication that can read files, execute code, change configuration, or mutate production data.
 - Local development servers that expose source trees, environment-derived data, directory listings, or unrestricted filesystem paths.
 
-End-to-end transport encryption does not make an unauthenticated service private. The public hostname can still be reached by anyone who learns it. When the app is sensitive and the user wants only chosen people to reach it, offer Portal's own visitor sign-in (`references/application-auth.md`) instead of exposing it open; do not enable it unasked. Unless `--hide` / `hide = true` is set, every participating relay lists the lease in `GET /api/state`, so anyone can enumerate it. The relay's landing-page directory shows that same list only when the operator opts in (`LANDING_PAGE_ENABLED`, default `false`, changeable later from the admin dashboard). Listed services can also receive public up/down reputation votes (`POST /api/reputation/vote`) on relays running the current release.
+End-to-end transport encryption does not make an unauthenticated service private. The public hostname can still be reached by anyone who learns it. To limit who can reach the app, see `references/application-auth.md`. Unless `--hide` / `hide = true` is set, every participating relay lists the lease in `GET /api/state`, so anyone can enumerate it. The relay's landing-page directory shows that same list only when the operator opts in (`LANDING_PAGE_ENABLED`, default `false`, changeable later from the admin dashboard). Listed services can also receive public up/down reputation votes (`POST /api/reputation/vote`) on relays running the current release.
 
 ## Secret handling
 
@@ -28,7 +28,7 @@ For HTTP services:
 1. Request a local readiness path with a short timeout.
 2. Start Portal and wait for `service ready at <https-url>`.
 3. Request the public URL with a short timeout and normal certificate verification.
-4. Accept `2xx` or expected redirects as healthy. Treat an intentional `401` or `403` as reachable-but-protected and say so. With `--auth`, an unauthenticated `GET` answers `303` to `/_portal/auth/login` and any other method `401`; a `200` there means the gate is not on. Investigate unexpected `4xx`, any `5xx`, TLS errors, or Portal error pages.
+4. Accept `2xx` or expected redirects as healthy. Treat an intentional `401` or `403` as reachable-but-protected and say so. With `--auth`, check the gate the way `references/application-auth.md` describes and never sign in as the user. Investigate unexpected `4xx`, any `5xx`, TLS errors, or Portal error pages.
 5. If public validation fails, repeat the local request to separate app failure from tunnel or relay failure.
 
 For UI apps, use a browser-capable tool when available to check the primary page for a blank screen, obvious runtime error, failed asset loading, or redirect loop. Avoid login and state-changing interactions unless requested.
