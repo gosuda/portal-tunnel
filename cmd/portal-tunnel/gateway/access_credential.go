@@ -45,39 +45,62 @@ func NormalizeApplicationAuthProvider(provider string) (string, error) {
 	}
 }
 
+// applicationAuthSettings is an ApplicationAuthConfig after validation and
+// normalization. ValidateApplicationAuthConfig and NewApplicationAuth both get
+// it from resolveApplicationAuthConfig, so what validation accepts is exactly
+// what the gate is built from. It holds the OIDC client secret, so it must not
+// be formatted or logged.
+type applicationAuthSettings struct {
+	provider string
+	// allowed holds the normalized principals; empty means any valid principal.
+	allowed []string
+	// The OIDC fields are set only for the oidc provider.
+	issuerURL    string
+	clientID     string
+	clientSecret string
+}
+
 // ValidateApplicationAuthConfig validates the complete tunnel-local
 // application authentication configuration, including provider-specific OIDC
 // fields and principal allowlists.
 func ValidateApplicationAuthConfig(cfg ApplicationAuthConfig) error {
+	_, err := resolveApplicationAuthConfig(cfg)
+	return err
+}
+
+// resolveApplicationAuthConfig is the one place that validates and normalizes
+// the provider, the allowlist and the OIDC settings.
+func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSettings, error) {
 	provider, err := NormalizeApplicationAuthProvider(cfg.Provider)
 	if err != nil {
-		return err
+		return applicationAuthSettings{}, err
 	}
 	allowed, err := NormalizeApplicationAuthAllowed(provider, cfg.AllowedWallets)
 	if err != nil {
-		return err
+		return applicationAuthSettings{}, err
 	}
-	hasOIDCFields := strings.TrimSpace(cfg.OIDCIssuerURL) != "" ||
-		strings.TrimSpace(cfg.OIDCClientID) != "" ||
-		strings.TrimSpace(cfg.OIDCClientSecret) != ""
-	if provider == ApplicationAuthProviderOIDC {
-		// An identity provider authenticates accounts it does not restrict to
-		// this application, so without an allowlist every one of them would pass.
-		if len(allowed) == 0 {
-			return errors.New("oidc requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
+	issuer := strings.TrimSpace(cfg.OIDCIssuerURL)
+	clientID := strings.TrimSpace(cfg.OIDCClientID)
+	clientSecret := strings.TrimSpace(cfg.OIDCClientSecret)
+	if provider != ApplicationAuthProviderOIDC {
+		if issuer != "" || clientID != "" || clientSecret != "" {
+			return applicationAuthSettings{}, errors.New("oidc settings require the oidc application auth provider")
 		}
-		if _, err := normalizeOIDCIssuerURL(cfg.OIDCIssuerURL); err != nil {
-			return err
-		}
-		if strings.TrimSpace(cfg.OIDCClientID) == "" {
-			return errors.New("oidc client id is required")
-		}
-		return nil
+		return applicationAuthSettings{provider: provider, allowed: allowed}, nil
 	}
-	if hasOIDCFields {
-		return errors.New("oidc settings require the oidc application auth provider")
+	// An identity provider authenticates accounts it does not restrict to
+	// this application, so without an allowlist every one of them would pass.
+	if len(allowed) == 0 {
+		return applicationAuthSettings{}, errors.New("oidc requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
 	}
-	return nil
+	issuerURL, err := normalizeOIDCIssuerURL(issuer)
+	if err != nil {
+		return applicationAuthSettings{}, err
+	}
+	if clientID == "" {
+		return applicationAuthSettings{}, errors.New("oidc client id is required")
+	}
+	return applicationAuthSettings{provider: provider, allowed: allowed, issuerURL: issuerURL, clientID: clientID, clientSecret: clientSecret}, nil
 }
 
 // NormalizeApplicationAuthAllowed validates and normalizes the provider-scoped

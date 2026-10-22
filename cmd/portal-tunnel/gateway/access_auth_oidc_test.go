@@ -1051,6 +1051,13 @@ func TestCheckApplicationAuthProvider(t *testing.T) {
 			t.Fatal("CheckApplicationAuthProvider() = nil for a provider that is down")
 		}
 	})
+	t.Run("configuration the resolver rejects", func(t *testing.T) {
+		t.Parallel()
+		cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}
+		if err := CheckApplicationAuthProvider(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--auth-allow") {
+			t.Fatalf("CheckApplicationAuthProvider() = %v; want the resolver's error about the missing allowlist", err)
+		}
+	})
 	t.Run("providers with nothing outside the tunnel", func(t *testing.T) {
 		t.Parallel()
 		for _, provider := range []string{ApplicationAuthProviderSIWE, ApplicationAuthProviderCredential} {

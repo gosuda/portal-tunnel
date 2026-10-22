@@ -188,25 +188,17 @@ type oidcCache[T any] struct {
 	fetchedAt time.Time
 }
 
-func newOIDCAuthenticator(cfg ApplicationAuthConfig, stateKey []byte) (*oidcAuthenticator, error) {
-	issuerURL, err := normalizeOIDCIssuerURL(cfg.OIDCIssuerURL)
-	if err != nil {
-		return nil, err
-	}
-	clientID := strings.TrimSpace(cfg.OIDCClientID)
-	if clientID == "" {
-		return nil, errors.New("oidc client id is required")
-	}
+func newOIDCAuthenticator(settings applicationAuthSettings, stateKey []byte) *oidcAuthenticator {
 	// A parsed issuer URL cannot hold a NUL, so the separator keeps the pair unambiguous.
-	binding := sha256.Sum256([]byte(issuerURL + "\x00" + clientID))
+	binding := sha256.Sum256([]byte(settings.issuerURL + "\x00" + settings.clientID))
 	return &oidcAuthenticator{
-		issuerURL:    issuerURL,
-		clientID:     clientID,
-		clientSecret: strings.TrimSpace(cfg.OIDCClientSecret),
+		issuerURL:    settings.issuerURL,
+		clientID:     settings.clientID,
+		clientSecret: settings.clientSecret,
 		binding:      base64.RawURLEncoding.EncodeToString(binding[:]),
 		stateKey:     stateKey,
 		httpClient:   utils.NewHTTPClient(utils.WithHTTPTimeout(oidcHTTPTimeout), utils.WithHTTPCheckRedirect(checkOIDCRedirect)),
-	}, nil
+	}
 }
 
 func normalizeOIDCIssuerURL(raw string) (string, error) {
@@ -382,16 +374,13 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	if next == nil {
 		return nil, errors.New("application auth handler is required")
 	}
-	if err := ValidateApplicationAuthConfig(cfg); err != nil {
+	settings, err := resolveApplicationAuthConfig(cfg)
+	if err != nil {
 		return nil, err
 	}
 	signingKey, err := identity.DeriveToken(tunnelIdentity, "application-access-auth")
 	if err != nil {
 		return nil, fmt.Errorf("derive application auth signing key: %w", err)
-	}
-	provider, err := NormalizeApplicationAuthProvider(cfg.Provider)
-	if err != nil {
-		return nil, err
 	}
 	var (
 		siwe            *siweauth.Authenticator
@@ -399,11 +388,11 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		allowedSubjects map[string]struct{}
 		allowAnySubject = true
 	)
-	switch provider {
+	switch settings.provider {
 	case ApplicationAuthProviderSIWE:
 		siwe, err = siweauth.New(siweauth.Config{
-			AllowedAddresses: cfg.AllowedWallets,
-			AllowAnyAddress:  len(cfg.AllowedWallets) == 0,
+			AllowedAddresses: settings.allowed,
+			AllowAnyAddress:  len(settings.allowed) == 0,
 			Statement:        "Sign in to this Portal application",
 			ChallengePrefix:  "pac_",
 		})
@@ -411,37 +400,26 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 			return nil, err
 		}
 	case ApplicationAuthProviderCredential:
-		subjects, err := NormalizeApplicationAuthSubjects(cfg.AllowedWallets)
-		if err != nil {
-			return nil, err
-		}
-		if len(subjects) > 0 {
+		if len(settings.allowed) > 0 {
 			allowAnySubject = false
-			allowedSubjects = make(map[string]struct{}, len(subjects))
-			for _, subject := range subjects {
+			allowedSubjects = make(map[string]struct{}, len(settings.allowed))
+			for _, subject := range settings.allowed {
 				allowedSubjects[subject] = struct{}{}
 			}
 		}
 	case ApplicationAuthProviderOIDC:
-		principals, err := NormalizeApplicationAuthOIDCPrincipals(cfg.AllowedWallets)
-		if err != nil {
-			return nil, err
-		}
-		// OIDC never runs open: ValidateApplicationAuthConfig rejects an empty
+		// OIDC never runs open: resolveApplicationAuthConfig rejects an empty
 		// allowlist, because any account at the identity provider would pass.
 		allowAnySubject = false
-		allowedSubjects = make(map[string]struct{}, len(principals))
-		for _, principal := range principals {
+		allowedSubjects = make(map[string]struct{}, len(settings.allowed))
+		for _, principal := range settings.allowed {
 			allowedSubjects[principal] = struct{}{}
 		}
 		oidcStateKey, err := identity.DeriveToken(tunnelIdentity, "application-access-oidc-state")
 		if err != nil {
 			return nil, fmt.Errorf("derive oidc state signing key: %w", err)
 		}
-		oidc, err = newOIDCAuthenticator(cfg, []byte(oidcStateKey))
-		if err != nil {
-			return nil, err
-		}
+		oidc = newOIDCAuthenticator(settings, []byte(oidcStateKey))
 	}
 	credentialKey, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
 	if err != nil {
@@ -449,7 +427,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	}
 	return &applicationAuth{
 		next:            next,
-		provider:        provider,
+		provider:        settings.provider,
 		tunnelIdentity:  tunnelIdentity,
 		signingKey:      []byte(signingKey),
 		credentialKey:   []byte(credentialKey),
@@ -467,13 +445,11 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 // visitor who tries to sign in. Other providers depend on nothing outside the
 // tunnel.
 func CheckApplicationAuthProvider(ctx context.Context, cfg ApplicationAuthConfig) error {
-	if provider, _ := NormalizeApplicationAuthProvider(cfg.Provider); provider != ApplicationAuthProviderOIDC {
-		return nil
-	}
-	o, err := newOIDCAuthenticator(cfg, nil)
-	if err != nil {
+	settings, err := resolveApplicationAuthConfig(cfg)
+	if err != nil || settings.provider != ApplicationAuthProviderOIDC {
 		return err
 	}
+	o := newOIDCAuthenticator(settings, nil)
 	// The keys are fetched through the discovery document.
 	_, err = o.jwks.get(ctx, oidcDiscoveryCacheTTL, o.fetchJWKS)
 	return err

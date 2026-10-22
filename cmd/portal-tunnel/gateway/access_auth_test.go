@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -718,6 +719,100 @@ func TestApplicationAuthOIDCRequiresAllowlist(t *testing.T) {
 	// siwe and credential keep their open mode: an empty list there still needs a wallet or issued credential.
 	if err := ValidateApplicationAuthConfig(ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential}); err != nil {
 		t.Fatalf("credential without an allowlist: %v", err)
+	}
+}
+
+// Validation and the gate are built from one resolved form of the configuration,
+// so what validation accepts is what the gate runs with, normalized once.
+func TestResolveApplicationAuthConfig(t *testing.T) {
+	t.Parallel()
+
+	const mixedCaseWallet = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+	wallet, err := identity.NormalizeEVMAddress(mixedCaseWallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		cfg     ApplicationAuthConfig
+		want    applicationAuthSettings
+		wantErr string
+	}{
+		{
+			name: "oidc values are trimmed and normalized",
+			cfg: ApplicationAuthConfig{
+				Provider:         " OIDC ",
+				AllowedWallets:   []string{"Alice@Example.com", "alice@example.com"},
+				OIDCIssuerURL:    " https://idp.example/ ",
+				OIDCClientID:     " portal-client ",
+				OIDCClientSecret: " secret ",
+			},
+			want: applicationAuthSettings{
+				provider:     ApplicationAuthProviderOIDC,
+				allowed:      []string{"alice@example.com"},
+				issuerURL:    "https://idp.example",
+				clientID:     "portal-client",
+				clientSecret: "secret",
+			},
+		},
+		{
+			name: "credential subjects are de-duplicated and carry no oidc settings",
+			cfg:  ApplicationAuthConfig{Provider: "Credential", AllowedWallets: []string{"alice", "alice"}},
+			want: applicationAuthSettings{provider: ApplicationAuthProviderCredential, allowed: []string{"alice"}},
+		},
+		{
+			name: "wallet addresses are normalized and de-duplicated",
+			cfg:  ApplicationAuthConfig{Provider: "SIWE", AllowedWallets: []string{mixedCaseWallet, strings.ToLower(mixedCaseWallet)}},
+			want: applicationAuthSettings{provider: ApplicationAuthProviderSIWE, allowed: []string{wallet}},
+		},
+		{
+			name:    "unknown provider",
+			cfg:     ApplicationAuthConfig{Provider: "saml"},
+			wantErr: "unsupported application auth provider",
+		},
+		{
+			name:    "oidc settings with another provider",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, OIDCClientID: oidcTestClientID},
+			wantErr: "oidc settings require the oidc application auth provider",
+		},
+		{
+			name:    "oidc without an allowlist",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID},
+			wantErr: "--auth-allow",
+		},
+		{
+			name:    "oidc without an issuer",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCClientID: oidcTestClientID},
+			wantErr: "issuer url is required",
+		},
+		{
+			name:    "oidc with a cleartext issuer",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCIssuerURL: "http://idp.example", OIDCClientID: oidcTestClientID},
+			wantErr: "must use https",
+		},
+		{
+			name:    "oidc without a client id",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCIssuerURL: "https://idp.example", OIDCClientID: "  "},
+			wantErr: "client id is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveApplicationAuthConfig(tt.cfg)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("resolveApplicationAuthConfig() error = %v; want one containing %q", err, tt.wantErr)
+				}
+				if validateErr := ValidateApplicationAuthConfig(tt.cfg); validateErr == nil || validateErr.Error() != err.Error() {
+					t.Fatalf("ValidateApplicationAuthConfig() = %v; want the resolver's error %v", validateErr, err)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("resolveApplicationAuthConfig() = %+v, %v; want %+v", got, err, tt.want)
+			}
+		})
 	}
 }
 
