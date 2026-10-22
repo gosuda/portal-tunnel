@@ -598,6 +598,121 @@ func TestApplicationAuthOIDCTokenRequestAuthentication(t *testing.T) {
 	}
 }
 
+// TestApplicationAuthOIDCRefusesCleartextProviderURLs protects the
+// authorization code, PKCE verifier and client secret: an https issuer must not
+// send the gateway to a cleartext endpoint, whether discovery names one or the
+// provider redirects to one. Loopback http is accepted only under a loopback
+// http issuer, which every other test in this file relies on.
+func TestApplicationAuthOIDCRefusesCleartextProviderURLs(t *testing.T) {
+	t.Parallel()
+
+	secure := func(issuer, _ string) oidcDiscoveryDocument {
+		return oidcDiscoveryDocument{
+			Issuer:                issuer,
+			AuthorizationEndpoint: issuer + "/authorize",
+			TokenEndpoint:         issuer + "/token",
+			JWKSURI:               issuer + "/jwks",
+		}
+	}
+	tests := []struct {
+		name string
+		// document is what discovery publishes, given the https issuer and a
+		// loopback http URL.
+		document func(issuer, cleartext string) oidcDiscoveryDocument
+		redirect bool // the https discovery URL redirects to the cleartext server
+		want     int
+	}{
+		{"control: https endpoints", secure, false, http.StatusSeeOther},
+		{"cleartext authorization endpoint", func(issuer, cleartext string) oidcDiscoveryDocument {
+			doc := secure(issuer, cleartext)
+			doc.AuthorizationEndpoint = cleartext + "/authorize"
+			return doc
+		}, false, http.StatusBadGateway},
+		{"cleartext token endpoint", func(issuer, cleartext string) oidcDiscoveryDocument {
+			doc := secure(issuer, cleartext)
+			doc.TokenEndpoint = cleartext + "/token"
+			return doc
+		}, false, http.StatusBadGateway},
+		{"cleartext jwks uri", func(issuer, cleartext string) oidcDiscoveryDocument {
+			doc := secure(issuer, cleartext)
+			doc.JWKSURI = cleartext + "/jwks"
+			return doc
+		}, false, http.StatusBadGateway},
+		{"redirect from https to cleartext", secure, true, http.StatusBadGateway},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var cleartextHits atomic.Int32
+			var cleartext *httptest.Server
+			var gate *applicationAuth
+			cleartext = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				cleartextHits.Add(1)
+				_ = json.NewEncoder(w).Encode(tt.document(gate.oidc.issuerURL, cleartext.URL))
+			}))
+			t.Cleanup(cleartext.Close)
+			gate = newOIDCTLSGate(t, func(w http.ResponseWriter, r *http.Request, issuer string) {
+				if tt.redirect {
+					http.Redirect(w, r, cleartext.URL+r.URL.Path, http.StatusFound)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(tt.document(issuer, cleartext.URL))
+			})
+
+			rec := httptest.NewRecorder()
+			gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthLoginPath, nil))
+			if rec.Code != tt.want {
+				t.Fatalf("login status = %d, body %q; want %d", rec.Code, strings.TrimSpace(rec.Body.String()), tt.want)
+			}
+			if got := cleartextHits.Load(); got != 0 {
+				t.Fatalf("cleartext server received %d requests; want none", got)
+			}
+		})
+	}
+}
+
+// TestApplicationAuthOIDCStopsRedirectLoops keeps a misbehaving provider from
+// holding a login on an endless redirect chain.
+func TestApplicationAuthOIDCStopsRedirectLoops(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	gate := newOIDCTLSGate(t, func(w http.ResponseWriter, r *http.Request, _ string) {
+		hits.Add(1)
+		http.Redirect(w, r, r.URL.Path, http.StatusFound)
+	})
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthLoginPath, nil))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("login status = %d; want 502", rec.Code)
+	}
+	if got := hits.Load(); got > oidcMaxRedirects {
+		t.Fatalf("provider received %d requests; want at most %d", got, oidcMaxRedirects)
+	}
+}
+
+// newOIDCTLSGate gates an application behind an https provider that answers
+// every request with serve. It keeps the gateway's own HTTP client, with its
+// timeout and redirect policy, and only makes it trust the test certificate.
+func newOIDCTLSGate(t *testing.T, serve func(w http.ResponseWriter, r *http.Request, issuer string)) *applicationAuth {
+	t.Helper()
+	provider := httptest.NewUnstartedServer(nil)
+	provider.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serve(w, r, provider.URL) })
+	provider.StartTLS()
+	t.Cleanup(provider.Close)
+	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
+		Provider:       ApplicationAuthProviderOIDC,
+		AllowedWallets: []string{"alice@example.com"},
+		OIDCIssuerURL:  provider.URL,
+		OIDCClientID:   oidcTestClientID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := handler.(*applicationAuth)
+	gate.oidc.httpClient.Transport = provider.Client().Transport
+	return gate
+}
+
 // oidcRawEmailVerifiedClaims signs an arbitrary JSON value as email_verified:
 // the outer field shadows the embedded claim of the same JSON name, and omitting
 // it leaves the claim absent.

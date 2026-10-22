@@ -45,6 +45,7 @@ const (
 	oidcDiscoveryCacheTTL          = 15 * time.Minute
 	oidcJWKSRefreshInterval        = time.Minute
 	oidcHTTPTimeout                = 10 * time.Second
+	oidcMaxRedirects               = 3
 	oidcMetadataBodyLimit          = 256 << 10
 )
 
@@ -216,7 +217,7 @@ func newOIDCAuthenticator(cfg ApplicationAuthConfig, stateKey []byte) (*oidcAuth
 		clientID:     clientID,
 		clientSecret: strings.TrimSpace(cfg.OIDCClientSecret),
 		stateKey:     stateKey,
-		httpClient:   utils.NewHTTPClient(utils.WithHTTPTimeout(oidcHTTPTimeout)),
+		httpClient:   utils.NewHTTPClient(utils.WithHTTPTimeout(oidcHTTPTimeout), utils.WithHTTPCheckRedirect(checkOIDCRedirect)),
 	}, nil
 }
 
@@ -229,11 +230,51 @@ func normalizeOIDCIssuerURL(raw string) (string, error) {
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errors.New("oidc issuer url must be a valid URL without query or fragment")
 	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "https" && (scheme != "http" || !isLoopbackHost(parsed.Hostname())) {
+	if parsed.Scheme != "https" && !isLoopbackHTTP(parsed) {
 		return "", errors.New("oidc issuer url must use https (or http on a loopback host)")
 	}
 	return strings.TrimRight(raw, "/"), nil
+}
+
+// isLoopbackHTTP reports whether u is plain http on a loopback host, the one
+// cleartext form OIDC accepts (local development and tests).
+func isLoopbackHTTP(u *url.URL) bool {
+	return u.Scheme == "http" && isLoopbackHost(u.Hostname())
+}
+
+// validateOIDCEndpoint checks an endpoint from the discovery document of
+// issuerURL. Unlike an issuer identifier it may carry a query (RFC 6749
+// sections 3.1/3.2). The token endpoint receives the authorization code, PKCE
+// verifier and client secret, so an endpoint must be https unless the issuer
+// itself is loopback http.
+func validateOIDCEndpoint(issuerURL, endpoint string) error {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return fmt.Errorf("invalid oidc discovery endpoint %q", endpoint)
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+	if issuer, err := url.Parse(issuerURL); err == nil && isLoopbackHTTP(issuer) && isLoopbackHTTP(parsed) {
+		return nil
+	}
+	return fmt.Errorf("oidc discovery endpoint must use https (http on a loopback host only under a loopback http issuer): %q", endpoint)
+}
+
+// checkOIDCRedirect keeps a provider from redirecting the gateway's requests
+// to cleartext or through a long chain. Like an endpoint, a redirect target
+// must be https, or loopback http when the chain is already plain http.
+func checkOIDCRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= oidcMaxRedirects {
+		return errors.New("oidc provider redirected too many times")
+	}
+	if req.URL.Scheme == "https" {
+		return nil
+	}
+	if previous := via[len(via)-1].URL; previous.Scheme == "http" && isLoopbackHTTP(req.URL) {
+		return nil
+	}
+	return fmt.Errorf("oidc provider redirected to a non-https url: %s", req.URL.Redacted())
 }
 
 // NormalizeApplicationAuthOIDCPrincipals canonicalizes OIDC allowed principals
@@ -834,15 +875,8 @@ func (o *oidcAuthenticator) fetchDiscovery(ctx context.Context) (oidcDiscoveryDo
 		return oidcDiscoveryDocument{}, errors.New("oidc discovery issuer mismatch")
 	}
 	for _, endpoint := range []string{doc.AuthorizationEndpoint, doc.TokenEndpoint, doc.JWKSURI} {
-		// OAuth endpoints may contain queries (RFC 6749 sections 3.1/3.2),
-		// unlike issuer identifiers. Keep them intact for the actual requests.
-		parsed, err := url.Parse(endpoint)
-		if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
-			return oidcDiscoveryDocument{}, fmt.Errorf("invalid oidc discovery endpoint %q", endpoint)
-		}
-		scheme := strings.ToLower(parsed.Scheme)
-		if scheme != "https" && (scheme != "http" || !isLoopbackHost(parsed.Hostname())) {
-			return oidcDiscoveryDocument{}, fmt.Errorf("oidc discovery endpoint must use https (or http on a loopback host): %q", endpoint)
+		if err := validateOIDCEndpoint(o.issuerURL, endpoint); err != nil {
+			return oidcDiscoveryDocument{}, err
 		}
 	}
 	return doc, nil
