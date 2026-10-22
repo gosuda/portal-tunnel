@@ -36,6 +36,9 @@ const (
 	defaultRenewBefore      = 30 * time.Second
 	defaultReadyTarget      = 2
 	defaultRetryWait        = 3 * time.Second
+	// maxAdmitting bounds the connections that finished their tenant TLS
+	// handshake and are still being admitted or waiting to be queued for Accept.
+	maxAdmitting = 64
 )
 
 type listenerConfig struct {
@@ -131,6 +134,7 @@ type listener struct {
 	cache             *cache.Source
 
 	accepted      chan net.Conn
+	admitting     chan struct{}
 	datagram      *transport.DatagramSession
 	mitmManager   *mitmManager
 	statusUpdates chan listenerStatus
@@ -176,6 +180,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 	}
 	l.mitmManager = newMITMManager(l, cfg.BanMITM)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
+	l.admitting = make(chan struct{}, maxAdmitting)
 	if l.udpEnabled {
 		l.datagram = transport.NewDatagramSession(256, false)
 	}
@@ -431,29 +436,40 @@ func (l *listener) Accept() (net.Conn, error) {
 	if l.accepted == nil {
 		return nil, net.ErrClosed
 	}
-	for {
-		var conn net.Conn
-		select {
-		case <-l.doneCh:
+	select {
+	case <-l.doneCh:
+		return nil, net.ErrClosed
+	case conn := <-l.accepted:
+		if conn == nil {
 			return nil, net.ErrClosed
-		case conn = <-l.accepted:
-			if conn == nil {
-				return nil, net.ErrClosed
-			}
 		}
+		return conn, nil
+	}
+}
 
-		nextConn, handled, handleErr := l.mitmManager.maybeHandleConn(conn)
-		if handleErr != nil {
-			log.Debug().
-				Err(handleErr).
-				Str("relay_url", l.api.relayURL.String()).
-				Str("address", l.identity.Address).
-				Msg("mitm self-probe handling failed")
-		}
-		if handled {
-			continue
-		}
-		return nextConn, nil
+// admit lets a connection whose tenant TLS handshake finished say what it is,
+// a self-probe, a channel binding request or ordinary traffic, and then queues
+// it for Accept. It runs in its own goroutine and releases its admitting slot
+// when done, so a client that is slow to speak delays only itself: Accept is
+// serial, and waiting there would hold up every connection behind it.
+func (l *listener) admit(ctx context.Context, conn net.Conn) {
+	defer func() { <-l.admitting }()
+
+	nextConn, handled, err := l.mitmManager.maybeHandleConn(conn)
+	if err != nil {
+		log.Debug().
+			Err(err).
+			Str("relay_url", l.api.relayURL.String()).
+			Str("address", l.identity.Address).
+			Msg("mitm self-probe handling failed")
+	}
+	if handled {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		_ = nextConn.Close()
+	case l.accepted <- nextConn:
 	}
 }
 
@@ -692,13 +708,17 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless
 				}
 			}
 
+			// Taking a slot before admitting keeps the backpressure of a full
+			// accept queue: with maxAdmitting connections in flight, no further
+			// reverse connection is claimed.
 			select {
 			case <-ctx.Done():
 				_ = acceptedConn.Close()
 				return true, ctx.Err()
-			case l.accepted <- acceptedConn:
-				return true, nil
+			case l.admitting <- struct{}{}:
 			}
+			go l.admit(ctx, acceptedConn)
+			return true, nil
 		}()
 		switch {
 		case err == nil:
