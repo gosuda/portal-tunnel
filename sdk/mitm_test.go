@@ -579,6 +579,52 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 			}
 		})
 	})
+
+	// Both sessions share one exporter, so only the client's fresh nonce can
+	// tell the recorded answer from the one the client is waiting for.
+	t.Run("replayed answer from an earlier exchange", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			l := newChannelBindingListener(t, "8", "")
+			canonicalHost := canonicalTestHostname(t, l.identity.Address)
+			recorded := recordChannelBindingAnswer(t, l, exporter)
+
+			clientRaw, serverRaw := net.Pipe()
+			client := &testExporterConn{Conn: clientRaw, exported: exporter}
+			go func() {
+				var request [tlsChannelBindingRequestSize]byte
+				_, _ = io.ReadFull(serverRaw, request[:])
+				_, _ = serverRaw.Write(recorded)
+			}()
+
+			err := VerifyTLSChannelBinding(t.Context(), client, canonicalHost)
+			if err == nil || !strings.Contains(err.Error(), "does not match canonical hostname identity") {
+				t.Fatalf("VerifyTLSChannelBinding() = %v; want signer identity mismatch", err)
+			}
+		})
+	})
+}
+
+// recordChannelBindingAnswer plays the honest tunnel for one earlier client
+// request and returns the answer frame a relay could have recorded from it.
+func recordChannelBindingAnswer(t *testing.T, l *listener, exporter []byte) []byte {
+	t.Helper()
+	clientRaw, serverRaw := net.Pipe()
+	go func() {
+		nextConn, _, _ := l.mitmManager.maybeHandleConn(&testExporterConn{Conn: serverRaw, exported: exporter})
+		if nextConn != nil {
+			_ = nextConn.Close()
+		}
+	}()
+	request := append([]byte(tlsChannelBindingMagic), bytes.Repeat([]byte{9}, tlsChannelBindingNonceSize)...)
+	if _, err := clientRaw.Write(request); err != nil {
+		t.Fatalf("write earlier request: %v", err)
+	}
+	answer := make([]byte, tlsChannelBindingResponseSize)
+	if _, err := io.ReadFull(clientRaw, answer); err != nil {
+		t.Fatalf("read earlier answer: %v", err)
+	}
+	_ = clientRaw.Close()
+	return answer
 }
 
 // Channel binding shares the self-probe's capability boundary: a listener whose
