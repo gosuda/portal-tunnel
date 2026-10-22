@@ -220,19 +220,22 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 	x402.Asset = strings.TrimSpace(x402.Asset)
 	x402.Endpoints = compactStrings(x402.Endpoints)
 	tunnelCfg := TunnelConfig{
-		ID:                  id,
-		Name:                name,
-		TargetAddr:          target,
-		HTTPRoutes:          httpRoutes,
-		StripRequestHeaders: append([]string(nil), req.StripRequestHeaders...),
-		RelayURLs:           relayURLs,
-		Discovery:           &discovery,
-		Overlay:             req.Overlay,
-		MaxActiveRelays:     req.MaxActiveRelays,
-		Auth:                strings.ToLower(strings.TrimSpace(req.Auth)),
-		AuthAllowedWallets:  append([]string(nil), req.AuthAllowedWallets...),
-		AuthIdentityHeaders: req.AuthIdentityHeaders,
-		X402Config:          x402,
+		ID:                   id,
+		Name:                 name,
+		TargetAddr:           target,
+		HTTPRoutes:           httpRoutes,
+		StripRequestHeaders:  append([]string(nil), req.StripRequestHeaders...),
+		RelayURLs:            relayURLs,
+		Discovery:            &discovery,
+		Overlay:              req.Overlay,
+		MaxActiveRelays:      req.MaxActiveRelays,
+		Auth:                 strings.ToLower(strings.TrimSpace(req.Auth)),
+		AuthAllowedWallets:   append([]string(nil), req.AuthAllowedWallets...),
+		AuthIdentityHeaders:  req.AuthIdentityHeaders,
+		AuthOIDCIssuer:       strings.TrimSpace(req.AuthOIDCIssuer),
+		AuthOIDCClientID:     strings.TrimSpace(req.AuthOIDCClientID),
+		AuthOIDCClientSecret: strings.TrimSpace(req.AuthOIDCClientSecret),
+		X402Config:           x402,
 	}
 	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
 		return fmt.Errorf("tunnel %q already exists", tunnelCfg.ID)
@@ -596,6 +599,8 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		Metadata:            metadataFromTunnelConfig(cfg),
 		Auth:                cfg.Auth,
 		AuthIdentityHeaders: cfg.AuthIdentityHeaders,
+		AuthOIDCIssuer:      cfg.AuthOIDCIssuer,
+		AuthOIDCClientID:    cfg.AuthOIDCClientID,
 		X402Config:          x402,
 	}
 	if len(cfg.HTTPRoutes) > 0 {

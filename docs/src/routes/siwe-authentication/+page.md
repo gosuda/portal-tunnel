@@ -5,8 +5,8 @@ description: Protect a tunnel with Portal credentials or SIWE wallet login.
 
 # Application Access Authentication
 
-Portal supports two application access providers: Portal-native credentials and
-Sign-In with Ethereum (SIWE). SIWE is also used separately for:
+Portal supports three application access providers: Portal-native credentials,
+Sign-In with Ethereum (SIWE), and OpenID Connect (OIDC). SIWE is also used separately for:
 
 - tunnel registration, signed automatically by the local tunnel identity
 - optional tunnel-side access control for exposed HTTP applications
@@ -87,6 +87,26 @@ reached except through this local Portal proxy.
 
 Application auth covers proxied HTTP routes, static sites, and x402 endpoints.
 It cannot be combined with raw TCP/UDP or relay static caching.
+
+## OpenID Connect (OIDC)
+
+Use `--auth oidc` to authenticate visitors against any standard OpenID Connect provider (Google, Microsoft, GitLab, Authentik, Keycloak, Pocket ID) using the Authorization Code flow with PKCE (`S256`):
+
+```bash
+export AUTH_OIDC_CLIENT_SECRET=...   # read from the environment so it stays out of the process list
+portal expose 3000 \
+  --name myapp \
+  --auth oidc \
+  --auth-oidc-issuer https://accounts.google.com \
+  --auth-oidc-client-id "$OIDC_CLIENT_ID" \
+  --auth-allow alice@example.com
+```
+
+Configure the identity provider's redirect URI as `https://<tunnel-host>/_portal/auth/callback`. Portal verifies the ID token against the provider's `.well-known/openid-configuration` and `jwks_uri` and enforces `--auth-allow` on login and on every subsequent session request.
+
+`--auth-allow` is required with `--auth oidc`: an identity provider authenticates accounts it does not restrict to your application, so without an allowlist every one of them would pass, and Portal refuses to start. It accepts an email address, an `@example.com` domain (that exact domain only, not its subdomains), or a `sub:<subject>` entry for the provider's opaque `sub` claim. Email and domain entries match only when the ID token carries `email_verified: true`; a provider that omits the claim, or one whose `sub` is not an email, can be allowed by `sub:` only. A `sub` claim value can never satisfy an email or domain entry, so an email-shaped `sub` cannot impersonate a verified-email allowlist entry.
+
+Email and domain entries are compared in lowercase and must be ASCII, so write an internationalized domain in punycode. A `sub:` entry is compared exactly, including case, because the provider's `sub` is a case-sensitive identifier: `sub:Alice` does not allow the subject `alice`.
 
 ## Agent Wallet Status Access
 

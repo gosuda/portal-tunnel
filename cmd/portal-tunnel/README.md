@@ -77,7 +77,7 @@ portal expose localhost:25565 --tcp
 - `--name`: Optional hostname prefix (normalized DNS label, maximum 63 ASCII characters). A new identity without a name uses an address-only canonical hostname.
 - `--relays`, `--discovery`, `--overlay`: Select relays and prefer an available overlay path.
 - `--http-route`, `--serve`, `--tcp`, `--udp`: Choose routed HTTP, a static site, raw TCP, or UDP exposure.
-- `--auth siwe` or `--auth credential`: Protect HTTP application access. `--auth-allow` restricts access to the supplied principals (Ethereum wallets for `siwe`, or credential subjects for `credential`; repeatable).
+- `--auth siwe`, `--auth credential`, or `--auth oidc`: Protect HTTP application access. `--auth-allow` restricts access to the supplied principals (Ethereum wallets for `siwe`, credential subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc`, which requires at least one entry; repeatable).
 - `--x402-pay-to`: Payment recipient for paid HTTP routes.
 - `--ban-mitm`: Ban relays when the MITM self-probe detects relay-side TLS termination.
 - `--identity-path`: Identity file path; defaults to `identity.json` in the working directory and is created when missing.

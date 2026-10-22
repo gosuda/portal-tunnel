@@ -2,12 +2,21 @@ package gateway
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	jose "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -303,6 +312,312 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 	}
 }
 
+func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwk := jose.JSONWebKey{Key: &privateKey.PublicKey, KeyID: "k1", Algorithm: string(jose.ES256), Use: "sig"}
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: privateKey}, (&jose.SignerOptions{}).WithHeader("kid", "k1").WithType("JWT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		issuerURL         string
+		capturedChallenge string
+		capturedNonce     string
+	)
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(oidcDiscoveryDocument{
+				Issuer:                issuerURL,
+				AuthorizationEndpoint: issuerURL + "/authorize",
+				TokenEndpoint:         issuerURL + "/token",
+				JWKSURI:               issuerURL + "/jwks",
+			})
+		case "/jwks":
+			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{jwk}})
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			verifier := r.FormValue("code_verifier")
+			sum := sha256.Sum256([]byte(verifier))
+			if got := base64.RawURLEncoding.EncodeToString(sum[:]); got != capturedChallenge {
+				http.Error(w, "pkce mismatch", http.StatusBadRequest)
+				return
+			}
+			verified := true
+			now := time.Now().UTC()
+			idToken, err := jwt.Signed(signer).Claims(oidcIDTokenClaims{
+				Claims: jwt.Claims{
+					Issuer:   issuerURL,
+					Subject:  "user-123",
+					Audience: jwt.Audience{"portal-client"},
+					IssuedAt: jwt.NewNumericDate(now),
+					Expiry:   jwt.NewNumericDate(now.Add(time.Hour)),
+				},
+				Nonce:         capturedNonce,
+				Email:         "Alice@Example.com",
+				EmailVerified: &verified,
+			}).Serialize()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "at_123",
+				"token_type":   "Bearer",
+				"expires_in":   3600,
+				"id_token":     idToken,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer idp.Close()
+	issuerURL = idp.URL
+
+	tunnelIdentity := applicationAuthTestIdentity()
+	var upstreamUser, upstreamAuth string
+	gate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamUser = r.Header.Get(types.HeaderPortalUser)
+		upstreamAuth = r.Header.Get(types.HeaderPortalAuth)
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, ApplicationAuthConfig{
+		Provider:         ApplicationAuthProviderOIDC,
+		AllowedWallets:   []string{"alice@example.com"},
+		IdentityHeaders:  true,
+		OIDCIssuerURL:    issuerURL,
+		OIDCClientID:     "portal-client",
+		OIDCClientSecret: "portal-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Login redirects to the OIDC provider with S256 PKCE challenge and sets state cookie.
+	loginReq := httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthLoginPath+"?next=%2Fdashboard", nil)
+	loginRec := httptest.NewRecorder()
+	gate.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d; want 303", loginRec.Code)
+	}
+	authRedirect, err := url.Parse(loginRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := authRedirect.Query().Get("code_challenge_method"); got != "S256" {
+		t.Fatalf("code_challenge_method = %q; want S256", got)
+	}
+	capturedChallenge = authRedirect.Query().Get("code_challenge")
+	capturedNonce = authRedirect.Query().Get("nonce")
+	state := authRedirect.Query().Get("state")
+	stateCookies := loginRec.Result().Cookies()
+	if len(stateCookies) != 1 || stateCookies[0].Name != applicationAuthOIDCStateCookie {
+		t.Fatalf("state cookies = %#v", stateCookies)
+	}
+	// Browsers drop __Host- cookies unless they are Secure, Path=/ and Domain-less.
+	if c := stateCookies[0]; c.Path != "/" || !c.Secure || c.Domain != "" {
+		t.Fatalf("state cookie attributes = path %q, secure %v, domain %q; want Path=/, Secure, no Domain", c.Path, c.Secure, c.Domain)
+	}
+
+	// 2. Callback exchanges code + PKCE verifier, verifies ID token, and issues session cookie.
+	cbReq := httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthCallbackPath+"?code=authcode&state="+url.QueryEscape(state), nil)
+	cbReq.AddCookie(stateCookies[0])
+	cbRec := httptest.NewRecorder()
+	gate.ServeHTTP(cbRec, cbReq)
+	if cbRec.Code != http.StatusSeeOther || cbRec.Header().Get("Location") != "/dashboard" {
+		t.Fatalf("callback status = %d, location = %q", cbRec.Code, cbRec.Header().Get("Location"))
+	}
+	var sessionCookie *http.Cookie
+	for _, c := range cbRec.Result().Cookies() {
+		switch c.Name {
+		case applicationAuthCookieName:
+			sessionCookie = c
+		case applicationAuthOIDCStateCookie:
+			if c.Path != "/" || c.MaxAge >= 0 {
+				t.Fatalf("state cookie expiry = path %q, max-age %d; want Path=/ and deletion", c.Path, c.MaxAge)
+			}
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("missing session cookie from OIDC callback")
+	}
+
+	// 3. Authenticated request succeeds and injects normalized email principal.
+	protectedReq := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
+	protectedReq.AddCookie(sessionCookie)
+	protectedRec := httptest.NewRecorder()
+	gate.ServeHTTP(protectedRec, protectedReq)
+	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice@example.com" || upstreamAuth != ApplicationAuthProviderOIDC {
+		t.Fatalf("protected status = %d, user = %q, auth = %q", protectedRec.Code, upstreamUser, upstreamAuth)
+	}
+
+	// 4. Removing alice@example.com from AllowedWallets immediately revokes the existing OIDC session.
+	revokedGate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, ApplicationAuthConfig{
+		Provider:         ApplicationAuthProviderOIDC,
+		AllowedWallets:   []string{"bob@example.com"},
+		IdentityHeaders:  true,
+		OIDCIssuerURL:    issuerURL,
+		OIDCClientID:     "portal-client",
+		OIDCClientSecret: "portal-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokedReq := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
+	revokedReq.AddCookie(sessionCookie)
+	revokedRec := httptest.NewRecorder()
+	revokedGate.ServeHTTP(revokedRec, revokedReq)
+	if revokedRec.Code != http.StatusSeeOther {
+		t.Fatalf("revoked OIDC session status = %d; want 303", revokedRec.Code)
+	}
+}
+
+func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
+	t.Parallel()
+
+	newGate := func(t *testing.T, provider string, allow ...string) *applicationAuth {
+		t.Helper()
+		cfg := ApplicationAuthConfig{Provider: provider, AllowedWallets: allow}
+		if provider == ApplicationAuthProviderOIDC {
+			cfg.OIDCIssuerURL = "https://idp.example"
+			cfg.OIDCClientID = "portal-client"
+		}
+		handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handler.(*applicationAuth)
+	}
+	verified, unverified := true, false
+
+	tests := []struct {
+		name   string
+		allow  []string
+		sub    string
+		email  string
+		status *bool
+		want   string
+	}{
+		{"verified email exact", []string{"alice@example.com"}, "s1", "Alice@Example.com", &verified, "alice@example.com"},
+		{"absent email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", nil, ""},
+		{"false email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", &unverified, ""},
+		{"sub allowlist ignores email_verified", []string{"sub:s1"}, "s1", "alice@example.com", nil, "sub:s1"},
+		{"subject with leading space cannot impersonate an allowed subject", []string{"sub:s1"}, " s1", "", nil, ""},
+		{"subject with trailing space cannot impersonate an allowed subject", []string{"sub:s1"}, "s1 ", "", nil, ""},
+		{"subject with surrounding Unicode space cannot impersonate an allowed subject", []string{"sub:s1"}, "\u00a0s1\u00a0", "", nil, ""},
+		{"email-shaped sub cannot satisfy an email entry", []string{"alice@example.com"}, "alice@example.com", "", &unverified, ""},
+		{"email-shaped sub cannot satisfy an email entry without email_verified", []string{"alice@example.com"}, "alice@example.com", "", nil, ""},
+		{"email-shaped sub matches a sub: entry", []string{"sub:alice@example.com"}, "alice@example.com", "", &unverified, "sub:alice@example.com"},
+		{"sub: entry matches the subject in exactly its case", []string{"sub:Alice@Example.com"}, "Alice@Example.com", "", nil, "sub:Alice@Example.com"},
+		{"sub: entry rejects a subject that differs only in case", []string{"sub:Alice@Example.com"}, "alice@example.com", "", nil, ""},
+		{"lowercase sub: entry rejects an uppercase subject", []string{"sub:alice@example.com"}, "Alice@Example.com", "", nil, ""},
+		{"sub: prefix case does not change the subject case", []string{"SUB:Alice@Example.com"}, "Alice@Example.com", "", nil, "sub:Alice@Example.com"},
+		{"non-ASCII sub matches only itself", []string{"sub:Kevin"}, "Kevin", "", nil, "sub:Kevin"},
+		{"ASCII sub: entry rejects a Kelvin-sign lookalike subject", []string{"sub:kevin"}, "Kevin", "", nil, ""},
+		{"Kelvin-sign email cannot stand in for an ASCII email", []string{"kevin@example.com"}, "s1", "Kevin@example.com", &verified, ""},
+		{"dotted capital I domain cannot stand in for an ASCII domain", []string{"@github.com"}, "s1", "bob@gİthub.com", &verified, ""},
+		{"verified email matches domain", []string{"@Example.com"}, "s1", "bob@example.com", &verified, "bob@example.com"},
+		{"absent email_verified does not match domain", []string{"@example.com"}, "s1", "bob@example.com", nil, ""},
+		{"domain excludes subdomains", []string{"@example.com"}, "s1", "bob@sub.example.com", &verified, ""},
+		{"domain excludes other domains", []string{"@example.com"}, "s1", "bob@example.org", &verified, ""},
+		{"email-shaped sub never matches a domain", []string{"@example.com"}, "mallory@example.com", "", nil, ""},
+		{"sub cannot impersonate a domain entry", []string{"@example.com"}, "@example.com", "", nil, ""},
+		{"verified email claim cannot impersonate a sub: entry", []string{"sub:alice@example.com"}, "s9", "sub:alice@example.com", &verified, ""},
+		{"verified email claim cannot impersonate a sub: entry in another case", []string{"sub:alice@example.com"}, "s9", "SUB:Alice@Example.com", &verified, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gate := newGate(t, ApplicationAuthProviderOIDC, tt.allow...)
+			got, ok := gate.resolveAllowedOIDCSubject(oidcIDTokenClaims{
+				Claims:        jwt.Claims{Subject: tt.sub},
+				Email:         tt.email,
+				EmailVerified: tt.status,
+			})
+			if got != tt.want || ok != (tt.want != "") {
+				t.Fatalf("resolveAllowedOIDCSubject = (%q, %v); want %q", got, ok, tt.want)
+			}
+		})
+	}
+
+	t.Run("domain session remains valid", func(t *testing.T) {
+		t.Parallel()
+		if !newGate(t, ApplicationAuthProviderOIDC, "@example.com").subjectAllowed("bob@example.com") {
+			t.Fatal("domain-authorized subject rejected on session validation")
+		}
+	})
+	t.Run("sub session remains valid", func(t *testing.T) {
+		t.Parallel()
+		gate := newGate(t, ApplicationAuthProviderOIDC, "sub:alice@example.com")
+		if !gate.subjectAllowed("sub:alice@example.com") {
+			t.Fatal("sub:-authorized subject rejected on session validation")
+		}
+		if gate.subjectAllowed("sub:mallory@example.com") {
+			t.Fatal("unlisted sub: subject accepted on session validation")
+		}
+	})
+	t.Run("sub session cannot widen to a domain entry", func(t *testing.T) {
+		t.Parallel()
+		if newGate(t, ApplicationAuthProviderOIDC, "@example.com").subjectAllowed("sub:mallory@example.com") {
+			t.Fatal("sub: session subject honored an @domain entry")
+		}
+	})
+	t.Run("credential subjects ignore domain entries", func(t *testing.T) {
+		t.Parallel()
+		if newGate(t, ApplicationAuthProviderCredential, "@example.com").subjectAllowed("bob@example.com") {
+			t.Fatal("credential provider honored an @domain entry")
+		}
+	})
+	t.Run("malformed domain entries are rejected", func(t *testing.T) {
+		t.Parallel()
+		for _, entry := range []string{"@", "@a@b", "@ex ample.com"} {
+			if _, err := NormalizeApplicationAuthOIDCPrincipals([]string{entry}); err == nil {
+				t.Fatalf("NormalizeApplicationAuthOIDCPrincipals(%q) = nil error", entry)
+			}
+		}
+	})
+	t.Run("untyped or malformed entries are rejected", func(t *testing.T) {
+		t.Parallel()
+		for _, entry := range []string{"alice", "sub:", "sub: ", "alice@", "alice@a@b", "Kevin@example.com", "@gİthub.com"} {
+			if _, err := NormalizeApplicationAuthOIDCPrincipals([]string{entry}); err == nil {
+				t.Fatalf("NormalizeApplicationAuthOIDCPrincipals(%q) = nil error", entry)
+			}
+		}
+	})
+}
+
+// A session subject is re-normalized on every request, so this rule decides
+// whether two provider subjects that differ only in case stay distinct there.
+func TestNormalizeOIDCPrincipalKeepsSubjectCase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{"sub:Alice@Example.com", "sub:Alice@Example.com"},
+		{"  sub:Alice@Example.com ", "sub:Alice@Example.com"},
+		{"SUB:Alice@Example.com", "sub:Alice@Example.com"},
+		{"sub:AbC123", "sub:AbC123"},
+		{"Alice@Example.com", "alice@example.com"},
+	}
+	for _, tt := range tests {
+		got, err := normalizeOIDCPrincipal(tt.raw)
+		if err != nil || got != tt.want {
+			t.Errorf("normalizeOIDCPrincipal(%q) = (%q, %v); want %q", tt.raw, got, err, tt.want)
+		}
+	}
+}
+
 func TestApplicationCredentialRejectsOtherHostAndExpiry(t *testing.T) {
 	tunnelIdentity := applicationAuthTestIdentity()
 	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
@@ -347,4 +662,97 @@ func applicationAuthTestWallet(t *testing.T, digit string) identity.LocalAuthori
 
 func applicationAuthTestTime() time.Time {
 	return time.Now().UTC()
+}
+
+// The post-login target comes from a query parameter and a signed cookie, so it
+// must never send the browser to another origin.
+func TestSanitizeApplicationAuthNext(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		next string
+		want string
+	}{
+		{"plain path", "/dashboard", "/dashboard"},
+		{"path with query", "/private?q=1", "/private?q=1"},
+		{"root", "/", "/"},
+		{"surrounding space is trimmed", "  /dashboard ", "/dashboard"},
+		{"empty", "", "/"},
+		{"relative path", "dashboard", "/"},
+		{"absolute URL", "https://evil.example/", "/"},
+		{"scheme-relative URL", "//evil.example/", "/"},
+		{"slash then backslash", "/\\evil.example/", "/"},
+		{"backslash later in the path", "/a\\b", "/"},
+		{"backslash only", "\\evil.example", "/"},
+		// Browsers drop tabs and newlines from URLs, so these would become "//evil.example".
+		{"tab after the slash", "/\t/evil.example", "/"},
+		{"newline after the slash", "/\n/evil.example", "/"},
+		{"carriage return after the slash", "/\r/evil.example", "/"},
+		{"tab later in the path", "/a\tb", "/"},
+		{"delete character", "/a\x7fb", "/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := sanitizeApplicationAuthNext(tc.next); got != tc.want {
+				t.Fatalf("sanitizeApplicationAuthNext(%q) = %q; want %q", tc.next, got, tc.want)
+			}
+		})
+	}
+}
+
+// An identity provider authenticates accounts it does not restrict to this
+// application, so OIDC must not start without an allowlist.
+func TestApplicationAuthOIDCRequiresAllowlist(t *testing.T) {
+	t.Parallel()
+
+	cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}
+	if err := ValidateApplicationAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "--auth-allow") {
+		t.Fatalf("ValidateApplicationAuthConfig without an allowlist = %v; want an error naming --auth-allow", err)
+	}
+	if _, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg); err == nil {
+		t.Fatal("NewApplicationAuth started OIDC without an allowlist")
+	}
+	cfg.AllowedWallets = []string{"alice@example.com"}
+	if err := ValidateApplicationAuthConfig(cfg); err != nil {
+		t.Fatalf("ValidateApplicationAuthConfig with an allowlist: %v", err)
+	}
+	// siwe and credential keep their open mode: an empty list there still needs a wallet or issued credential.
+	if err := ValidateApplicationAuthConfig(ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential}); err != nil {
+		t.Fatalf("credential without an allowlist: %v", err)
+	}
+}
+
+// OIDC allows a sub of up to 255 characters. The session subject gains the
+// sub: prefix, so revalidation on later requests must not reject it for length.
+func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
+	t.Parallel()
+
+	sub := strings.Repeat("a", 255)
+	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
+		Provider:       ApplicationAuthProviderOIDC,
+		AllowedWallets: []string{"sub:" + sub},
+		OIDCIssuerURL:  "https://idp.example",
+		OIDCClientID:   oidcTestClientID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := handler.(*applicationAuth)
+	subject, ok := gate.resolveAllowedOIDCSubject(oidcIDTokenClaims{Claims: jwt.Claims{Subject: sub}})
+	if !ok {
+		t.Fatal("maximum-length sub was not authorized at login")
+	}
+
+	rec := httptest.NewRecorder()
+	if err := gate.setSession(rec, subject, ApplicationAuthProviderOIDC, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
+	for _, c := range rec.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	if got, _, ok := gate.authenticateSession(req); !ok || got != subject {
+		t.Fatalf("authenticateSession = (%q, %v); want the session to stay valid for %q", got, ok, subject)
+	}
 }

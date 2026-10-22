@@ -32,6 +32,8 @@ type AgentTunnelStatus struct {
 	Metadata            types.LeaseMetadata `json:"metadata"`
 	Auth                string              `json:"auth,omitempty"`
 	AuthIdentityHeaders bool                `json:"auth_identity_headers,omitempty"`
+	AuthOIDCIssuer      string              `json:"auth_oidc_issuer,omitempty"`
+	AuthOIDCClientID    string              `json:"auth_oidc_client_id,omitempty"`
 	gateway.X402Config
 	HTTPRoutes []tunnel.HTTPRoute `json:"http_routes,omitempty"`
 	Relays     []AgentRelayStatus `json:"relays,omitempty"`
@@ -51,18 +53,21 @@ type AgentRelayStatus struct {
 }
 
 type AgentTunnelRequest struct {
-	ID                  string             `json:"id"`
-	Name                string             `json:"name,omitempty"`
-	TargetAddr          string             `json:"target_addr,omitempty"`
-	HTTPRoutes          []tunnel.HTTPRoute `json:"http_routes,omitempty"`
-	StripRequestHeaders []string           `json:"strip_request_headers,omitempty"`
-	RelayURLs           []string           `json:"relays,omitempty"`
-	Discovery           *bool              `json:"discovery,omitempty"`
-	Overlay             bool               `json:"overlay,omitempty"`
-	MaxActiveRelays     int                `json:"max_active_relays,omitempty"`
-	Auth                string             `json:"auth,omitempty"`
-	AuthAllowedWallets  []string           `json:"auth_allowed_wallets,omitempty"`
-	AuthIdentityHeaders bool               `json:"auth_identity_headers,omitempty"`
+	ID                   string             `json:"id"`
+	Name                 string             `json:"name,omitempty"`
+	TargetAddr           string             `json:"target_addr,omitempty"`
+	HTTPRoutes           []tunnel.HTTPRoute `json:"http_routes,omitempty"`
+	StripRequestHeaders  []string           `json:"strip_request_headers,omitempty"`
+	RelayURLs            []string           `json:"relays,omitempty"`
+	Discovery            *bool              `json:"discovery,omitempty"`
+	Overlay              bool               `json:"overlay,omitempty"`
+	MaxActiveRelays      int                `json:"max_active_relays,omitempty"`
+	Auth                 string             `json:"auth,omitempty"`
+	AuthAllowedWallets   []string           `json:"auth_allowed_wallets,omitempty"`
+	AuthIdentityHeaders  bool               `json:"auth_identity_headers,omitempty"`
+	AuthOIDCIssuer       string             `json:"auth_oidc_issuer,omitempty"`
+	AuthOIDCClientID     string             `json:"auth_oidc_client_id,omitempty"`
+	AuthOIDCClientSecret string             `json:"auth_oidc_client_secret,omitempty"`
 	gateway.X402Config
 }
 

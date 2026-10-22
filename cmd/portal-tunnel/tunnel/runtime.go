@@ -142,7 +142,7 @@ func (spec Spec) Validate() error {
 		return errors.New("casper payments require an asset")
 	}
 	if auth := httpConfig.Auth; auth != nil {
-		if _, err := gateway.NormalizeApplicationAuthAllowed(auth.Provider, auth.AllowedWallets); err != nil {
+		if err := gateway.ValidateApplicationAuthConfig(*auth); err != nil {
 			return err
 		}
 	}

@@ -73,6 +73,9 @@ type exposeFlags struct {
 	authProvider         string
 	authAllowedWallets   []string
 	authIdentityHeaders  bool
+	authOIDCIssuer       string
+	authOIDCClientID     string
+	authOIDCClientSecret string
 	x402PayTo            string
 	x402Testnet          bool
 	x402Network          string
@@ -106,9 +109,12 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
-	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe or credential authentication")
-	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, or subject for credential); repeat to allow multiple principals (empty allows any valid principal)")
+	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe, credential, or oidc authentication")
+	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, subject for credential, or verified email, @domain, or sub:<subject> for oidc); repeat to allow multiple principals (empty allows any valid principal, except oidc, which requires at least one entry)")
 	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
+	utils.StringFlagEnv(fs, &flags.authOIDCIssuer, "auth-oidc-issuer", "", "OIDC issuer URL for --auth oidc", "AUTH_OIDC_ISSUER")
+	utils.StringFlagEnv(fs, &flags.authOIDCClientID, "auth-oidc-client-id", "", "OIDC client ID for --auth oidc", "AUTH_OIDC_CLIENT_ID")
+	utils.StringFlagEnv(fs, &flags.authOIDCClientSecret, "auth-oidc-client-secret", "", "Optional OIDC client secret for --auth oidc", "AUTH_OIDC_CLIENT_SECRET")
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
 	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
 	utils.StringFlag(fs, &flags.x402Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, and casper:casper-test")
@@ -244,7 +250,8 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 		spec.Transport.UDP = &tunnel.UDPConfig{Target: flags.udpAddr}
 	}
 	serve := strings.TrimSpace(flags.serve)
-	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders
+	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders ||
+		flags.authOIDCIssuer != "" || flags.authOIDCClientID != "" || flags.authOIDCClientSecret != ""
 	hasStripPolicy := len(flags.stripRequestHeaders) > 0
 	hasHTTPUpstream := len(routes) > 0 || strings.TrimSpace(flags.targetAddr) != ""
 	if hasStripPolicy && serve == "" && !hasHTTPUpstream && !authEnabled && !flags.cache {
@@ -270,9 +277,12 @@ func tunnelSpecFromExposeFlags(flags exposeFlags) (tunnel.Spec, error) {
 	}
 	if authEnabled {
 		spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
-			Provider:        flags.authProvider,
-			AllowedWallets:  append([]string(nil), flags.authAllowedWallets...),
-			IdentityHeaders: flags.authIdentityHeaders,
+			Provider:         flags.authProvider,
+			AllowedWallets:   append([]string(nil), flags.authAllowedWallets...),
+			IdentityHeaders:  flags.authIdentityHeaders,
+			OIDCIssuerURL:    flags.authOIDCIssuer,
+			OIDCClientID:     flags.authOIDCClientID,
+			OIDCClientSecret: flags.authOIDCClientSecret,
 		}
 	}
 	return spec, spec.Validate()
@@ -460,6 +470,7 @@ func printRootUsage(w io.Writer) {
 			"portal expose 3000",
 			"portal expose 3000 --auth siwe",
 			"portal expose 3000 --auth credential",
+			"portal expose 3000 --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id <id> --auth-allow alice@example.com",
 			"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
