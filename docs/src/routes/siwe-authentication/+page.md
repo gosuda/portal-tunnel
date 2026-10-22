@@ -142,7 +142,7 @@ It cannot be combined with raw TCP/UDP or relay static caching.
 Use `--auth oidc` to authenticate visitors against any standard OpenID Connect provider (Google, Microsoft, GitLab, Authentik, Keycloak, Pocket ID) using the Authorization Code flow with PKCE (`S256`):
 
 ```bash
-export AUTH_OIDC_CLIENT_SECRET=...   # read from the environment so it stays out of the process list
+# AUTH_OIDC_CLIENT_SECRET is set in this shell first; see the prompt below
 portal expose 3000 \
   --name myapp \
   --auth oidc \
@@ -159,7 +159,7 @@ Email and domain entries are compared in lowercase and must be ASCII, so write a
 
 An OIDC session lasts as long as the ID token, but never less than 15 minutes, so a short-lived token does not send the visitor through the provider again at once, and never more than 24 hours. Revoking a principal takes effect on the next request whatever the session lifetime, because `--auth-allow` is checked every time.
 
-Pass the client secret as `AUTH_OIDC_CLIENT_SECRET`, as above, so it stays out of the process list. Typing the secret after `export` saves it in the shell history; reading it at a prompt avoids that. Run these lines in the same shell session that then starts `portal expose`.
+Pass the client secret as `AUTH_OIDC_CLIENT_SECRET`, as above, so it stays out of the process list. Typing the secret after `export` saves it in the shell history; reading it at a prompt avoids that. Run these lines in the same shell session that then starts `portal expose`. If you press Ctrl-C at the Linux and macOS prompt, run `stty echo` to see what you type again.
 
 Linux and macOS (bash, zsh):
 
