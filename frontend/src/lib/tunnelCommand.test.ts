@@ -9,6 +9,7 @@ import {
   buildTunnelCommand,
   buildTunnelPreviewURL,
   classifyAuthAllow,
+  isListedSubject,
   validateTunnelAuth,
   type TunnelAuthOptions,
 } from "@/lib/tunnelCommand";
@@ -407,6 +408,13 @@ describe("tunnelCommand sign-in", () => {
       validateTunnelAuth({ ...none, method: "siwe", allow: ["0x12"] }, "")
     ).toEqual([{ field: "entries", message: "Fix the highlighted entries" }]);
     expect(validateTunnelAuth(none, "")).toEqual([]);
+  });
+
+  it("lets an invite through only for a listed name once names are listed", () => {
+    expect(isListedSubject([], "anyone")).toBe(true);
+    expect(isListedSubject(["alice", "bob"], " bob ")).toBe(true);
+    expect(isListedSubject(["alice"], "Alice")).toBe(false);
+    expect(isListedSubject(["alice"], "carol")).toBe(false);
   });
 
   it("derives the redirect address and the invite command from the name", () => {

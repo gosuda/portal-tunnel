@@ -34,6 +34,7 @@ import {
   buildOIDCSecretCommand,
   buildServiceStatusHostname,
   classifyAuthAllow,
+  isListedSubject,
   type TunnelAuthField,
   type TunnelAuthIssue,
   type TunnelAuthMethod,
@@ -107,7 +108,7 @@ const ALLOW_COPY: Record<
     label: "Link names",
     requirement: "optional",
     placeholder: "alice, then Enter",
-    help: "The names you will give links to; separate several with commas. With names listed, you can cut someone off by removing their name.",
+    help: "The names you will give links to; separate several with commas (a name cannot contain one). With names listed, you can cut someone off by removing their name.",
   },
   siwe: {
     label: "Allowed wallets",
@@ -644,8 +645,7 @@ function InviteBlock({
   const [expires, setExpires] = useState("720h");
   const trimmed = subject.trim();
   const check = trimmed === "" ? null : classifyAuthAllow("credential", trimmed);
-  // With names listed, the tunnel lets in only those subjects.
-  const notListed = check?.ok && allow.length > 0 && !allow.includes(trimmed);
+  const notListed = check?.ok && !isListedSubject(allow, trimmed);
   const command = check?.ok
     ? buildAuthIssueCommand({
         origin: currentOrigin,

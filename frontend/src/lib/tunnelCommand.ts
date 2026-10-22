@@ -401,6 +401,11 @@ function canonicalAuthAllow(method: TunnelAuthMethod, entry: string): string {
   return entry.includes("@") && isASCII(entry) ? entry.toLowerCase() : entry;
 }
 
+/** With names listed, the tunnel lets in only those subjects; with none, any valid one. */
+export function isListedSubject(allow: string[], subject: string): boolean {
+  return allow.length === 0 || allow.includes(subject.trim());
+}
+
 /** The address to register at an OIDC provider; empty until the name is known. */
 export function buildAuthRedirectURL(origin: string, name: string): string {
   const publicURL = buildTunnelPreviewURL(origin, name);
