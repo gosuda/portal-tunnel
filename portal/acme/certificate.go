@@ -164,7 +164,10 @@ func NormalizeCADirURL(raw string) (string, error) {
 	if parsed.Scheme != "https" {
 		return "", errors.New("acme ca directory url must use https")
 	}
-	return raw, nil
+	// The scheme and host are case-insensitive, and the files of a CA are named
+	// after this string, so two spellings of one directory must not look like two CAs.
+	parsed.Host = strings.ToLower(parsed.Host)
+	return parsed.String(), nil
 }
 
 // registrationFilePath returns where the account registration for the CA

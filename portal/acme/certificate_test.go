@@ -138,6 +138,32 @@ func TestNormalizeCADirURL(t *testing.T) {
 	}
 }
 
+// The files of a CA are named after the normalized URL, so two spellings of one
+// directory must normalize alike, or changing only the spelling would register
+// a new account and issue a new certificate. The path is case-sensitive and a
+// trailing slash is a different resource, so both stay.
+func TestNormalizeCADirURLIsCanonical(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ input, want string }{
+		{"  https://CA.Example/Directory  ", "https://ca.example/Directory"},
+		{"HTTPS://ca.example:8443/dir", "https://ca.example:8443/dir"},
+		{"https://ca.example/dir/", "https://ca.example/dir/"},
+		{"HTTPS://ACME-V02.API.LETSENCRYPT.ORG/directory", lego.LEDirectoryProduction},
+		{lego.LEDirectoryStaging, lego.LEDirectoryStaging},
+		{"", lego.LEDirectoryProduction},
+	} {
+		if got, err := NormalizeCADirURL(tc.input); err != nil || got != tc.want {
+			t.Errorf("NormalizeCADirURL(%q) = %q, %v; want %q", tc.input, got, err, tc.want)
+		}
+	}
+	upper, _ := NormalizeCADirURL("https://CA.Example/dir")
+	lower, _ := NormalizeCADirURL("https://ca.example/dir")
+	if registrationFilePath("/state", upper) != registrationFilePath("/state", lower) {
+		t.Error("two spellings of one directory got different registration files")
+	}
+}
+
 // An account registration is only valid at the CA that created it, so switching
 // the directory production -> staging -> production must neither reuse another
 // CA's registration nor lose the original one.
