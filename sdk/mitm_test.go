@@ -627,6 +627,42 @@ func recordChannelBindingAnswer(t *testing.T, l *listener, exporter []byte) []by
 	return answer
 }
 
+// A client that sends the start of a binding request and withholds the nonce
+// holds an admitting slot without any credential, so the tunnel gives up on it
+// after a short budget of its own, not the client's round-trip budget, while a
+// request fragmented within that budget still binds (see
+// TestTLSChannelBindingToleratesSplitRequest).
+func TestAdmissionOfAWithheldBindingNonceEndsQuickly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := newChannelBindingListener(t, "a", "")
+		l.accepted = make(chan net.Conn, 1)
+		l.admitting = make(chan struct{}, 1)
+		l.api = &apiClient{relayURL: &url.URL{Scheme: "https", Host: "relay.example"}}
+
+		clientRaw, serverRaw := net.Pipe()
+		go func() { _, _ = clientRaw.Write([]byte(tlsChannelBindingMagic)) }()
+		l.admitting <- struct{}{}
+		go l.admit(t.Context(), &testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)})
+
+		// The slot is held while the nonce is still due, and free well before the
+		// client's own ten second budget would have run out.
+		const slotCeiling = 2 * time.Second
+		synctest.Sleep(channelBindingRequestTimeout / 2)
+		select {
+		case l.admitting <- struct{}{}:
+			t.Fatal("the slot was free before the nonce was due")
+		default:
+		}
+		synctest.Sleep(slotCeiling - channelBindingRequestTimeout/2)
+		select {
+		case l.admitting <- struct{}{}:
+		default:
+			t.Fatalf("a client withholding the nonce still holds its admitting slot after %v", slotCeiling)
+		}
+		_ = clientRaw.Close()
+	})
+}
+
 // Accept is serial, so a client that is slow to speak must delay only itself.
 // One that sends the start of a channel binding request and stops, and one that
 // stays silent, are admitted off the accept path while an ordinary client is

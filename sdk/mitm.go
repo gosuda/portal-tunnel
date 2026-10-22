@@ -84,6 +84,12 @@ const (
 	defaultChannelBindingTimeout   = 10 * time.Second
 )
 
+// channelBindingRequestTimeout is how long the tunnel waits for the rest of a
+// binding request once its magic is recognized. A client sends the 37 bytes at
+// once, so this is far shorter than the client's round-trip budget: a client
+// that withholds the nonce holds an admitting slot for it without any credential.
+const channelBindingRequestTimeout = time.Second
+
 type mitmProbeReport struct {
 	RelayURL  string
 	PublicURL string
@@ -597,8 +603,8 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 
 	if canChannelBind && len(peeked) >= len(tlsChannelBindingMagic) && string(peeked[:len(tlsChannelBindingMagic)]) == tlsChannelBindingMagic {
 		// The sniff window only covered recognition: the rest of the request
-		// gets the binding budget the client also uses.
-		_ = conn.SetReadDeadline(time.Now().Add(defaultChannelBindingTimeout))
+		// gets its own, longer but still short, budget.
+		_ = conn.SetReadDeadline(time.Now().Add(channelBindingRequestTimeout))
 		boundConn, err := m.serveChannelBindingHandshake(conn, reader, exportFn)
 		if err != nil {
 			return nil, true, err

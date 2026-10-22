@@ -466,6 +466,12 @@ func (l *listener) admit(ctx context.Context, conn net.Conn) {
 	if handled {
 		return
 	}
+	// A select with both cases ready picks one at random, so check first: a
+	// connection admitted after the lease context ended must not be queued.
+	if ctx.Err() != nil {
+		_ = nextConn.Close()
+		return
+	}
 	select {
 	case <-ctx.Done():
 		_ = nextConn.Close()
