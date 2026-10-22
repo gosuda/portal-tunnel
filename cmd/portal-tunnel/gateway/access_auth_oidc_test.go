@@ -1013,3 +1013,50 @@ func oidcSessionExpiry(t *testing.T, gate *applicationAuth, rec *httptest.Respon
 	t.Fatal("no session cookie")
 	return time.Time{}
 }
+
+// CheckApplicationAuthProvider lets the tunnel report at startup a provider
+// that visitors could not sign in with, instead of leaving the first login to
+// find out.
+func TestCheckApplicationAuthProvider(t *testing.T) {
+	t.Parallel()
+
+	oidcConfig := func(issuer string) ApplicationAuthConfig {
+		return ApplicationAuthConfig{
+			Provider:       ApplicationAuthProviderOIDC,
+			AllowedWallets: []string{"alice@example.com"},
+			OIDCIssuerURL:  issuer,
+			OIDCClientID:   oidcTestClientID,
+		}
+	}
+
+	t.Run("reachable provider", func(t *testing.T) {
+		t.Parallel()
+		idp := newOIDCTestIdP(t, nil)
+		if err := CheckApplicationAuthProvider(t.Context(), oidcConfig(idp.issuerURL)); err != nil {
+			t.Fatalf("CheckApplicationAuthProvider() = %v; want nil", err)
+		}
+	})
+	t.Run("issuer that publishes no discovery document", func(t *testing.T) {
+		t.Parallel()
+		idp := newOIDCTestIdP(t, nil)
+		if err := CheckApplicationAuthProvider(t.Context(), oidcConfig(idp.issuerURL+"/missing")); err == nil {
+			t.Fatal("CheckApplicationAuthProvider() = nil for an issuer without a discovery document")
+		}
+	})
+	t.Run("provider that is down", func(t *testing.T) {
+		t.Parallel()
+		idp := newOIDCTestIdP(t, nil)
+		idp.server.Close()
+		if err := CheckApplicationAuthProvider(t.Context(), oidcConfig(idp.issuerURL)); err == nil {
+			t.Fatal("CheckApplicationAuthProvider() = nil for a provider that is down")
+		}
+	})
+	t.Run("providers with nothing outside the tunnel", func(t *testing.T) {
+		t.Parallel()
+		for _, provider := range []string{ApplicationAuthProviderSIWE, ApplicationAuthProviderCredential} {
+			if err := CheckApplicationAuthProvider(t.Context(), ApplicationAuthConfig{Provider: provider}); err != nil {
+				t.Errorf("CheckApplicationAuthProvider(%s) = %v; want nil", provider, err)
+			}
+		}
+	})
+}

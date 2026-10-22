@@ -490,6 +490,24 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	}, nil
 }
 
+// CheckApplicationAuthProvider fetches what the first OIDC login needs, the
+// discovery document and the signing keys, so that a wrong issuer or an
+// unreachable provider shows when the tunnel starts instead of to the first
+// visitor who tries to sign in. Other providers depend on nothing outside the
+// tunnel.
+func CheckApplicationAuthProvider(ctx context.Context, cfg ApplicationAuthConfig) error {
+	if provider, _ := NormalizeApplicationAuthProvider(cfg.Provider); provider != ApplicationAuthProviderOIDC {
+		return nil
+	}
+	o, err := newOIDCAuthenticator(cfg, nil)
+	if err != nil {
+		return err
+	}
+	// The keys are fetched through the discovery document.
+	_, err = o.jwks.get(ctx, oidcDiscoveryCacheTTL, o.fetchJWKS)
+	return err
+}
+
 func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	credential := strings.TrimSpace(r.Header.Get(types.HeaderAccessCredential))
 	r.Header.Del(types.HeaderAccessCredential)

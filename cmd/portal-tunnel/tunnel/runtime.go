@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
@@ -235,6 +237,14 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 		return nil, err
 	}
 	runtime.handler = handler
+	if spec.HTTP.Auth != nil {
+		// Only a warning: the provider may come back, and every login retries it.
+		go func() {
+			if err := gateway.CheckApplicationAuthProvider(ctx, *spec.HTTP.Auth); err != nil {
+				log.Warn().Err(err).Msg("application auth provider is not usable; visitors cannot sign in until it is")
+			}
+		}()
+	}
 	return runtime, nil
 }
 
