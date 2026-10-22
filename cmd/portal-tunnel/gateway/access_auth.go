@@ -162,9 +162,20 @@ type oidcStateClaims struct {
 
 type oidcIDTokenClaims struct {
 	jwt.Claims
-	Nonce         string `json:"nonce,omitempty"`
-	Email         string `json:"email,omitempty"`
-	EmailVerified *bool  `json:"email_verified,omitempty"`
+	Nonce         string            `json:"nonce,omitempty"`
+	Email         string            `json:"email,omitempty"`
+	EmailVerified oidcEmailVerified `json:"email_verified"`
+}
+
+// oidcEmailVerified decodes the email_verified claim. OIDC defines a JSON
+// boolean, but some providers send the string "true". Only true and "true"
+// count as verified; any other value, or none, decodes as not verified instead
+// of failing the whole claims decode, which would also lock out sub: allowlists.
+type oidcEmailVerified bool
+
+func (v *oidcEmailVerified) UnmarshalJSON(data []byte) error {
+	*v = string(data) == "true" || string(data) == `"true"`
+	return nil
 }
 
 type oidcAuthenticator struct {
@@ -633,7 +644,7 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 // sub-matched session subject keeps the sub: prefix so the two principal
 // types stay unambiguous on session revalidation and identity headers.
 func (a *applicationAuth) resolveAllowedOIDCSubject(claims oidcIDTokenClaims) (string, bool) {
-	if claims.EmailVerified != nil && *claims.EmailVerified {
+	if claims.EmailVerified {
 		// An email claim shaped like a sub: entry would satisfy that entry
 		// through the exact lookup; it is not an email address.
 		email := oidcClaimPrincipal(claims.Email)

@@ -351,7 +351,6 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 				http.Error(w, "pkce mismatch", http.StatusBadRequest)
 				return
 			}
-			verified := true
 			now := time.Now().UTC()
 			idToken, err := jwt.Signed(signer).Claims(oidcIDTokenClaims{
 				Claims: jwt.Claims{
@@ -363,7 +362,7 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 				},
 				Nonce:         capturedNonce,
 				Email:         "Alice@Example.com",
-				EmailVerified: &verified,
+				EmailVerified: true,
 			}).Serialize()
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -497,42 +496,41 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 		}
 		return handler.(*applicationAuth)
 	}
-	verified, unverified := true, false
 
 	tests := []struct {
 		name   string
 		allow  []string
 		sub    string
 		email  string
-		status *bool
+		status oidcEmailVerified
 		want   string
 	}{
-		{"verified email exact", []string{"alice@example.com"}, "s1", "Alice@Example.com", &verified, "alice@example.com"},
-		{"absent email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", nil, ""},
-		{"false email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", &unverified, ""},
-		{"sub allowlist ignores email_verified", []string{"sub:s1"}, "s1", "alice@example.com", nil, "sub:s1"},
-		{"subject with leading space cannot impersonate an allowed subject", []string{"sub:s1"}, " s1", "", nil, ""},
-		{"subject with trailing space cannot impersonate an allowed subject", []string{"sub:s1"}, "s1 ", "", nil, ""},
-		{"subject with surrounding Unicode space cannot impersonate an allowed subject", []string{"sub:s1"}, "\u00a0s1\u00a0", "", nil, ""},
-		{"email-shaped sub cannot satisfy an email entry", []string{"alice@example.com"}, "alice@example.com", "", &unverified, ""},
-		{"email-shaped sub cannot satisfy an email entry without email_verified", []string{"alice@example.com"}, "alice@example.com", "", nil, ""},
-		{"email-shaped sub matches a sub: entry", []string{"sub:alice@example.com"}, "alice@example.com", "", &unverified, "sub:alice@example.com"},
-		{"sub: entry matches the subject in exactly its case", []string{"sub:Alice@Example.com"}, "Alice@Example.com", "", nil, "sub:Alice@Example.com"},
-		{"sub: entry rejects a subject that differs only in case", []string{"sub:Alice@Example.com"}, "alice@example.com", "", nil, ""},
-		{"lowercase sub: entry rejects an uppercase subject", []string{"sub:alice@example.com"}, "Alice@Example.com", "", nil, ""},
-		{"sub: prefix case does not change the subject case", []string{"SUB:Alice@Example.com"}, "Alice@Example.com", "", nil, "sub:Alice@Example.com"},
-		{"non-ASCII sub matches only itself", []string{"sub:Kevin"}, "Kevin", "", nil, "sub:Kevin"},
-		{"ASCII sub: entry rejects a Kelvin-sign lookalike subject", []string{"sub:kevin"}, "Kevin", "", nil, ""},
-		{"Kelvin-sign email cannot stand in for an ASCII email", []string{"kevin@example.com"}, "s1", "Kevin@example.com", &verified, ""},
-		{"dotted capital I domain cannot stand in for an ASCII domain", []string{"@github.com"}, "s1", "bob@gİthub.com", &verified, ""},
-		{"verified email matches domain", []string{"@Example.com"}, "s1", "bob@example.com", &verified, "bob@example.com"},
-		{"absent email_verified does not match domain", []string{"@example.com"}, "s1", "bob@example.com", nil, ""},
-		{"domain excludes subdomains", []string{"@example.com"}, "s1", "bob@sub.example.com", &verified, ""},
-		{"domain excludes other domains", []string{"@example.com"}, "s1", "bob@example.org", &verified, ""},
-		{"email-shaped sub never matches a domain", []string{"@example.com"}, "mallory@example.com", "", nil, ""},
-		{"sub cannot impersonate a domain entry", []string{"@example.com"}, "@example.com", "", nil, ""},
-		{"verified email claim cannot impersonate a sub: entry", []string{"sub:alice@example.com"}, "s9", "sub:alice@example.com", &verified, ""},
-		{"verified email claim cannot impersonate a sub: entry in another case", []string{"sub:alice@example.com"}, "s9", "SUB:Alice@Example.com", &verified, ""},
+		{"verified email exact", []string{"alice@example.com"}, "s1", "Alice@Example.com", true, "alice@example.com"},
+		{"absent email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", false, ""},
+		{"false email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", false, ""},
+		{"sub allowlist ignores email_verified", []string{"sub:s1"}, "s1", "alice@example.com", false, "sub:s1"},
+		{"subject with leading space cannot impersonate an allowed subject", []string{"sub:s1"}, " s1", "", false, ""},
+		{"subject with trailing space cannot impersonate an allowed subject", []string{"sub:s1"}, "s1 ", "", false, ""},
+		{"subject with surrounding Unicode space cannot impersonate an allowed subject", []string{"sub:s1"}, "\u00a0s1\u00a0", "", false, ""},
+		{"email-shaped sub cannot satisfy an email entry", []string{"alice@example.com"}, "alice@example.com", "", false, ""},
+		{"email-shaped sub cannot satisfy an email entry without email_verified", []string{"alice@example.com"}, "alice@example.com", "", false, ""},
+		{"email-shaped sub matches a sub: entry", []string{"sub:alice@example.com"}, "alice@example.com", "", false, "sub:alice@example.com"},
+		{"sub: entry matches the subject in exactly its case", []string{"sub:Alice@Example.com"}, "Alice@Example.com", "", false, "sub:Alice@Example.com"},
+		{"sub: entry rejects a subject that differs only in case", []string{"sub:Alice@Example.com"}, "alice@example.com", "", false, ""},
+		{"lowercase sub: entry rejects an uppercase subject", []string{"sub:alice@example.com"}, "Alice@Example.com", "", false, ""},
+		{"sub: prefix case does not change the subject case", []string{"SUB:Alice@Example.com"}, "Alice@Example.com", "", false, "sub:Alice@Example.com"},
+		{"non-ASCII sub matches only itself", []string{"sub:Kevin"}, "Kevin", "", false, "sub:Kevin"},
+		{"ASCII sub: entry rejects a Kelvin-sign lookalike subject", []string{"sub:kevin"}, "Kevin", "", false, ""},
+		{"Kelvin-sign email cannot stand in for an ASCII email", []string{"kevin@example.com"}, "s1", "Kevin@example.com", true, ""},
+		{"dotted capital I domain cannot stand in for an ASCII domain", []string{"@github.com"}, "s1", "bob@gİthub.com", true, ""},
+		{"verified email matches domain", []string{"@Example.com"}, "s1", "bob@example.com", true, "bob@example.com"},
+		{"absent email_verified does not match domain", []string{"@example.com"}, "s1", "bob@example.com", false, ""},
+		{"domain excludes subdomains", []string{"@example.com"}, "s1", "bob@sub.example.com", true, ""},
+		{"domain excludes other domains", []string{"@example.com"}, "s1", "bob@example.org", true, ""},
+		{"email-shaped sub never matches a domain", []string{"@example.com"}, "mallory@example.com", "", false, ""},
+		{"sub cannot impersonate a domain entry", []string{"@example.com"}, "@example.com", "", false, ""},
+		{"verified email claim cannot impersonate a sub: entry", []string{"sub:alice@example.com"}, "s9", "sub:alice@example.com", true, ""},
+		{"verified email claim cannot impersonate a sub: entry in another case", []string{"sub:alice@example.com"}, "s9", "SUB:Alice@Example.com", true, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

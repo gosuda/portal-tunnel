@@ -43,16 +43,18 @@ type oidcTestIdP struct {
 	discoveryEntered chan struct{}
 	discoveryRelease chan struct{}
 
-	mu          sync.Mutex
-	jwk         jose.JSONWebKey
-	extraJWKs   []jose.JSONWebKey
-	challenge   string
-	nonce       string
-	mutate      func(*oidcIDTokenClaims)
-	signWith    jose.Signer
-	rawToken    func(valid string) string
-	omitToken   bool
-	tokenStatus int
+	mu        sync.Mutex
+	jwk       jose.JSONWebKey
+	extraJWKs []jose.JSONWebKey
+	challenge string
+	nonce     string
+	mutate    func(*oidcIDTokenClaims)
+	signWith  jose.Signer
+	rawToken  func(valid string) string
+	// emailVerified, when set, is sent verbatim as the email_verified claim.
+	emailVerified json.RawMessage
+	omitToken     bool
+	tokenStatus   int
 }
 
 func newOIDCTestSigner(t *testing.T, alg jose.SignatureAlgorithm, key any, kid string) jose.Signer {
@@ -171,7 +173,6 @@ func (p *oidcTestIdP) serveToken(w http.ResponseWriter, r *http.Request) {
 	}
 	response := map[string]any{"access_token": "at_123", "token_type": "Bearer", "expires_in": 3600}
 	if !p.omitToken {
-		verified := true
 		now := time.Now().UTC()
 		claims := oidcIDTokenClaims{
 			Claims: jwt.Claims{
@@ -183,16 +184,20 @@ func (p *oidcTestIdP) serveToken(w http.ResponseWriter, r *http.Request) {
 			},
 			Nonce:         p.nonce,
 			Email:         "alice@example.com",
-			EmailVerified: &verified,
+			EmailVerified: true,
 		}
 		if p.mutate != nil {
 			p.mutate(&claims)
+		}
+		var payload any = claims
+		if p.emailVerified != nil {
+			payload = oidcRawEmailVerifiedClaims{oidcIDTokenClaims: claims, EmailVerified: p.emailVerified}
 		}
 		signer := p.signer
 		if p.signWith != nil {
 			signer = p.signWith
 		}
-		token, err := jwt.Signed(signer).Claims(claims).Serialize()
+		token, err := jwt.Signed(signer).Claims(payload).Serialize()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -218,7 +223,6 @@ func (p *oidcTestIdP) expect(challenge, nonce string) {
 func TestApplicationAuthOIDCCallbackRefusals(t *testing.T) {
 	t.Parallel()
 
-	unverified := false
 	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +285,7 @@ func TestApplicationAuthOIDCCallbackRefusals(t *testing.T) {
 			p.mutate = func(c *oidcIDTokenClaims) { c.Subject, c.Email = "user-999", "mallory@example.com" }
 		}, want: http.StatusUnauthorized},
 		{name: "allowed email is not verified", configure: func(p *oidcTestIdP) {
-			p.mutate = func(c *oidcIDTokenClaims) { c.EmailVerified = &unverified }
+			p.mutate = func(c *oidcIDTokenClaims) { c.EmailVerified = false }
 		}, want: http.StatusUnauthorized},
 	}
 
@@ -520,6 +524,52 @@ func TestApplicationAuthOIDCTokenWithoutKeyID(t *testing.T) {
 	}
 }
 
+// oidcRawEmailVerifiedClaims signs an arbitrary JSON value as email_verified:
+// the outer field shadows the embedded claim of the same JSON name, and omitting
+// it leaves the claim absent.
+type oidcRawEmailVerifiedClaims struct {
+	oidcIDTokenClaims
+	EmailVerified json.RawMessage `json:"email_verified,omitempty"`
+}
+
+// TestApplicationAuthOIDCEmailVerifiedDecoding protects logins at providers
+// that send email_verified as a string, and fails closed on anything else: an
+// unrecognized value never verifies the email, yet it must not break the claims
+// decode, or even sub: allowlists would lock out.
+func TestApplicationAuthOIDCEmailVerifiedDecoding(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		claim    json.RawMessage
+		verified bool
+	}{
+		{"boolean true", json.RawMessage(`true`), true},
+		{"string true", json.RawMessage(`"true"`), true},
+		{"boolean false", json.RawMessage(`false`), false},
+		{"string false", json.RawMessage(`"false"`), false},
+		{"absent", json.RawMessage{}, false},
+		{"null", json.RawMessage(`null`), false},
+		{"other string", json.RawMessage(`"yes"`), false},
+		{"string in another case", json.RawMessage(`"TRUE"`), false},
+		{"number", json.RawMessage(`1`), false},
+		{"array", json.RawMessage(`[true]`), false},
+		{"object", json.RawMessage(`{"verified":true}`), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			idp := newOIDCTestIdP(t, func(p *oidcTestIdP) { p.emailVerified = tt.claim })
+			wantEmailLogin := http.StatusUnauthorized
+			if tt.verified {
+				wantEmailLogin = http.StatusSeeOther
+			}
+			assertOIDCCallback(t, completeOIDCLogin(t, newOIDCTestGate(t, idp), idp), wantEmailLogin)
+			assertOIDCCallback(t, completeOIDCLogin(t, newOIDCTestGate(t, idp, "sub:user-123"), idp), http.StatusSeeOther)
+		})
+	}
+}
+
 // completeOIDCLogin runs the login and the callback at app.example.
 func completeOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP) *httptest.ResponseRecorder {
 	t.Helper()
@@ -550,11 +600,16 @@ func awaitOIDC[T any](t *testing.T, ch <-chan T, what string) T {
 	return zero
 }
 
-func newOIDCTestGate(t *testing.T, idp *oidcTestIdP) *applicationAuth {
+// newOIDCTestGate gates a stub application behind idp. It admits only the
+// verified email alice@example.com unless allowed lists other principals.
+func newOIDCTestGate(t *testing.T, idp *oidcTestIdP, allowed ...string) *applicationAuth {
 	t.Helper()
+	if len(allowed) == 0 {
+		allowed = []string{"alice@example.com"}
+	}
 	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
 		Provider:       ApplicationAuthProviderOIDC,
-		AllowedWallets: []string{"alice@example.com"},
+		AllowedWallets: allowed,
 		OIDCIssuerURL:  idp.issuerURL,
 		OIDCClientID:   oidcTestClientID,
 	})
