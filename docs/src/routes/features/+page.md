@@ -30,7 +30,7 @@ Each capability lists its supported interfaces (**CLI**, **Agent**, **SDK**, **R
 | **TLS** | Keyless certificate signing | CLI, Agent, SDK, Relay | Relay signs transcripts via `/v1/sign`; no private keys shared | [Security Model: Keyless Signing](/security-model#keyless-signing) |
 | **Security** | MITM self-probe | CLI, Agent, SDK | Compares exported TLS keying material; detects termination | [Security Model: MITM Probe](/security-model#mitm-self-probe) |
 | **Identity** | Local secp256k1 identity | CLI, Agent, SDK | Persisted in `identity.json`; cryptographic lease proof without accounts | [Wallet & ENS: Identities](/wallet-and-ens#identity-surfaces) |
-| **Auth** | SIWE application authentication | CLI, Agent | EIP-4361 wallet challenge; injects verified identity headers | [SIWE Authentication](/siwe-authentication#siwe-application-access) |
+| **Auth** | Application authentication | CLI, Agent | Credential links, SIWE wallet login, or OpenID Connect; allowlist and optional verified identity headers | [Application Authentication](/siwe-authentication) |
 | **Payments** | x402 Sui payments | CLI, Agent | Gasless Sui USDC per-route pricing; in-browser wallet settlement | [Concepts: Payments](/concepts#in-flow-x402-payments) |
 | **Payments** | x402 Casper payments | CLI, Agent | wCSPR CEP-18 token payments settled through Casper facilitators | [Configuration: x402 Networks](/configuration#x402-payment-networks) |
 | **Payments** | x402 Nano payments | CLI, Agent | XNO send blocks confirmed on independent Nano RPC nodes; one use per block hash | [Configuration: x402 Networks](/configuration#x402-payment-networks) |

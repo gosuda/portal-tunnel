@@ -5,6 +5,8 @@ description: Let only chosen people open a tunnel, with Portal credential links,
 
 # Application Access Authentication
 
+> **Maintainer note**: the method table, allowlist forms, session lifetime, secret handling, and verification steps on this page are mirrored in the agent skill reference at `plugins/portal-deploy/skills/portal-expose/references/application-auth.md`. When sign-in behavior changes, update both files. This page is the human-facing source; the reference is the agent-facing copy.
+
 Without `--auth`, anyone who learns a tunnel's hostname can open the app. Portal
 can ask visitors to sign in first. The check runs inside the `portal` process on
 your machine, not at the relay, so it also protects static sites and every
@@ -124,9 +126,23 @@ Email and domain entries are compared in lowercase and must be ASCII, so write a
 
 An OIDC session lasts as long as the ID token, but never less than 15 minutes, so a short-lived token does not send the visitor through the provider again at once, and never more than 24 hours. Revoking a principal takes effect on the next request whatever the session lifetime, because `--auth-allow` is checked every time.
 
-Pass the client secret as `AUTH_OIDC_CLIENT_SECRET`, as above, so it stays out of the process list and the shell history. `AUTH_OIDC_ISSUER` and `AUTH_OIDC_CLIENT_ID` can replace the two flags, and all three are used only with `--auth oidc`. At start Portal fetches the provider's discovery document and keys once and logs `application auth provider is not usable` if that fails; the tunnel keeps running and visitors can sign in once the provider is reachable.
+Pass the client secret as `AUTH_OIDC_CLIENT_SECRET`, as above, so it stays out of the process list. Typing the secret after `export` saves it in the shell history; reading it at a prompt avoids that. Run these lines in the same shell session that then starts `portal expose`.
 
-## Check that sign-in is on
+Linux and macOS (bash, zsh):
+
+```bash
+printf 'OIDC client secret: '; stty -echo; read -r AUTH_OIDC_CLIENT_SECRET; stty echo; echo; export AUTH_OIDC_CLIENT_SECRET
+```
+
+Windows PowerShell:
+
+```powershell
+$secret = Read-Host 'OIDC client secret' -AsSecureString; $env:AUTH_OIDC_CLIENT_SECRET = [System.Net.NetworkCredential]::new('', $secret).Password
+```
+
+At start Portal fetches the provider's discovery document and keys once and logs `application auth provider is not usable` if that fails; the tunnel keeps running and visitors can sign in once the provider is reachable.
+
+## Check That Sign-In Is On
 
 An unauthenticated `GET` or `HEAD` request is sent to the login page, and any
 other method is refused:
