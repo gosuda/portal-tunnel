@@ -29,6 +29,7 @@ type oidcTestIdP struct {
 	issuerURL string
 	signer    jose.Signer
 	jwk       jose.JSONWebKey
+	query     string
 
 	mu          sync.Mutex
 	challenge   string
@@ -70,13 +71,17 @@ func newOIDCTestIdP(t *testing.T, configure func(*oidcTestIdP)) *oidcTestIdP {
 
 func (p *oidcTestIdP) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if (r.URL.Path == "/jwks" || r.URL.Path == "/token") && r.URL.RawQuery != strings.TrimPrefix(p.query, "?") {
+		http.Error(w, "missing endpoint query", http.StatusBadRequest)
+		return
+	}
 	switch r.URL.Path {
 	case "/.well-known/openid-configuration":
 		_ = json.NewEncoder(w).Encode(oidcDiscoveryDocument{
 			Issuer:                p.issuerURL,
-			AuthorizationEndpoint: p.issuerURL + "/authorize",
-			TokenEndpoint:         p.issuerURL + "/token",
-			JWKSURI:               p.issuerURL + "/jwks",
+			AuthorizationEndpoint: p.issuerURL + "/authorize" + p.query,
+			TokenEndpoint:         p.issuerURL + "/token" + p.query,
+			JWKSURI:               p.issuerURL + "/jwks" + p.query,
 		})
 	case "/jwks":
 		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{p.jwk}})
@@ -177,7 +182,10 @@ func TestApplicationAuthOIDCCallbackRefusals(t *testing.T) {
 		{
 			name: "state cookie was tampered with",
 			tamper: withStateCookie(func(_ *testing.T, _ *applicationAuth, value string) string {
-				return value[:len(value)-1] + "A"
+				if value[0] == 'A' {
+					return "B" + value[1:]
+				}
+				return "A" + value[1:]
 			}),
 			want: http.StatusUnauthorized,
 		},
@@ -228,6 +236,29 @@ func TestApplicationAuthOIDCCallbackRefusals(t *testing.T) {
 			assertOIDCCallback(t, rec, tt.want)
 		})
 	}
+}
+
+func TestApplicationAuthOIDCEndpointQueries(t *testing.T) {
+	t.Parallel()
+	idp := newOIDCTestIdP(t, func(p *oidcTestIdP) { p.query = "?tenant=team" })
+	gate := newOIDCTestGate(t, idp)
+	login := httptest.NewRecorder()
+	gate.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthLoginPath, nil))
+	if login.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d, body %q; want 303", login.Code, login.Body.String())
+	}
+	authURL, err := url.Parse(login.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := authURL.Query().Get("tenant"); got != "team" {
+		t.Fatalf("authorization endpoint tenant = %q; want team", got)
+	}
+	idp.expect(authURL.Query().Get("code_challenge"), authURL.Query().Get("nonce"))
+	state := oidcLogin{state: authURL.Query().Get("state"), cookie: login.Result().Cookies()[0]}
+	callback := httptest.NewRecorder()
+	gate.ServeHTTP(callback, state.callbackRequest(t, gate, nil))
+	assertOIDCCallback(t, callback, http.StatusSeeOther)
 }
 
 func newOIDCTestGate(t *testing.T, idp *oidcTestIdP) *applicationAuth {

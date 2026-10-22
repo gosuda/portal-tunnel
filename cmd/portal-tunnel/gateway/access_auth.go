@@ -630,6 +630,11 @@ func (a *applicationAuth) resolveAllowedOIDCSubject(claims oidcIDTokenClaims) (s
 			return email, true
 		}
 	}
+	// Reject noncanonical subjects instead of trimming an opaque identifier
+	// into a different account's allowlisted subject.
+	if claims.Subject != strings.TrimSpace(claims.Subject) {
+		return "", false
+	}
 	// Prefixing the raw claim keeps it in the sub: namespace whatever it holds.
 	sub, err := normalizeOIDCPrincipal(oidcSubjectPrefix + claims.Subject)
 	if err == nil && a.subjectAllowed(sub) {
@@ -733,8 +738,15 @@ func (o *oidcAuthenticator) metadata(ctx context.Context, forceRefresh bool) (oi
 		return oidcDiscoveryDocument{}, jose.JSONWebKeySet{}, errors.New("oidc discovery issuer mismatch")
 	}
 	for _, endpoint := range []string{doc.AuthorizationEndpoint, doc.TokenEndpoint, doc.JWKSURI} {
-		if _, err := normalizeOIDCIssuerURL(endpoint); err != nil {
-			return oidcDiscoveryDocument{}, jose.JSONWebKeySet{}, fmt.Errorf("invalid oidc discovery endpoint %q: %w", endpoint, err)
+		// OAuth endpoints may contain queries (RFC 6749 sections 3.1/3.2),
+		// unlike issuer identifiers. Keep them intact for the actual requests.
+		parsed, err := url.Parse(endpoint)
+		if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+			return oidcDiscoveryDocument{}, jose.JSONWebKeySet{}, fmt.Errorf("invalid oidc discovery endpoint %q", endpoint)
+		}
+		scheme := strings.ToLower(parsed.Scheme)
+		if scheme != "https" && (scheme != "http" || !isLoopbackHost(parsed.Hostname())) {
+			return oidcDiscoveryDocument{}, jose.JSONWebKeySet{}, fmt.Errorf("oidc discovery endpoint must use https (or http on a loopback host): %q", endpoint)
 		}
 	}
 
