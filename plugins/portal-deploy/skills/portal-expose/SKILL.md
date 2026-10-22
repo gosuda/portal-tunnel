@@ -46,7 +46,7 @@ For x402, do not guess the protected path, payment methods, amount, network, rec
 - Wait for the app's real readiness signal, not only for the process to exist.
 - Make a bounded local request to the selected target. For HTTP, record the URL and status. For TCP/UDP, use a protocol-appropriate check that does not mutate application data.
 - Stop before opening a tunnel if the local health check fails.
-- Warn and require explicit direction before exposing databases, container daemons, debug consoles, unauthenticated admin panels, or services containing sensitive data. When the app is sensitive and only chosen people should reach it, offer Portal's visitor sign-in (`references/application-auth.md`) instead of exposing the app open; do not enable it unasked.
+- Warn and require explicit direction before exposing databases, container daemons, debug consoles, unauthenticated admin panels, or services containing sensitive data. When the app is sensitive, offer Portal's visitor sign-in (`references/application-auth.md`) so that only chosen people can reach it, instead of exposing the app open; do not enable it unasked.
 - Before opening the tunnel, say that the public hostname is enumerable through each participating relay's `GET /api/state` unless the user asked for `--hide`, and that relays which enable their directory page show it there too.
 
 ### 3. Check Portal
