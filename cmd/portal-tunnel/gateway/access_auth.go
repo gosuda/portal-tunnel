@@ -49,6 +49,9 @@ const (
 	// oidcStateTokenLimit keeps the signed state cookie well under the roughly
 	// 4 KB a browser accepts, since it silently drops a larger one.
 	oidcStateTokenLimit = 3500
+	// oidcMinSessionTTL is the shortest OIDC session, so a short-lived ID token
+	// cannot produce a session that has already expired.
+	oidcMinSessionTTL = 15 * time.Minute
 )
 
 var oidcSupportedSignatureAlgorithms = []jose.SignatureAlgorithm{
@@ -617,13 +620,13 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	expiresAt := now.Add(applicationAuthSessionTTL)
-	if claims.Expiry != nil {
-		if tokenExpiry := claims.Expiry.Time(); tokenExpiry.Before(expiresAt) {
-			expiresAt = tokenExpiry
-		}
-	}
-	if err := a.setSession(w, subject, ApplicationAuthProviderOIDC, strings.TrimSpace(r.Host), now, expiresAt); err != nil {
+	// The session follows the ID token's lifetime, within oidcMinSessionTTL and
+	// applicationAuthSessionTTL: a token already inside the verification leeway
+	// would otherwise give a session that is invalid on arrival, and the visitor
+	// would loop through the provider. The allowlist is checked on every request,
+	// so revoking a principal does not wait for the session to end.
+	lifetime := min(max(claims.Expiry.Time().Sub(now), oidcMinSessionTTL), applicationAuthSessionTTL)
+	if err := a.setSession(w, subject, ApplicationAuthProviderOIDC, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}

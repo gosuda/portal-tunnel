@@ -426,3 +426,56 @@ func TestApplicationAuthOIDCStateCookieStaysWithinBrowserLimit(t *testing.T) {
 		})
 	}
 }
+
+// The session follows the ID token's lifetime, but lasts at least
+// oidcMinSessionTTL, so a token about to expire cannot produce a session that
+// is invalid on arrival and sends the visitor through the provider again, and
+// at most applicationAuthSessionTTL.
+func TestApplicationAuthOIDCSessionLifetime(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		tokenLifetime time.Duration
+		want          time.Duration
+	}{
+		{"token already inside the verification leeway", -30 * time.Second, oidcMinSessionTTL},
+		{"token shorter than the minimum", 5 * time.Minute, oidcMinSessionTTL},
+		{"token between the bounds", time.Hour, time.Hour},
+		{"token longer than the maximum", 72 * time.Hour, applicationAuthSessionTTL},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			idp := newOIDCTestIdP(t, func(p *oidcTestIdP) {
+				p.mutate = func(c *oidcIDTokenClaims) { c.Expiry = jwt.NewNumericDate(time.Now().Add(tt.tokenLifetime)) }
+			})
+			gate := newOIDCTestGate(t, idp)
+			start := time.Now()
+			login := startOIDCLogin(t, gate, idp, "app.example")
+			callback := httptest.NewRecorder()
+			gate.ServeHTTP(callback, login.callbackRequest(t, gate, nil))
+			assertOIDCCallback(t, callback, http.StatusSeeOther)
+			if got := oidcSessionExpiry(t, gate, callback).Sub(start); got < tt.want-5*time.Second || got > tt.want+5*time.Second {
+				t.Fatalf("session lasts %v; want about %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// oidcSessionExpiry returns when the session cookie in rec expires.
+func oidcSessionExpiry(t *testing.T, gate *applicationAuth, rec *httptest.ResponseRecorder) time.Time {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		if c.Name != applicationAuthCookieName {
+			continue
+		}
+		var claims applicationAuthClaims
+		if err := decodeSignedApplicationAuthJSON(gate.signingKey, c.Value, &claims); err != nil {
+			t.Fatal(err)
+		}
+		return time.Unix(claims.ExpiresAt, 0)
+	}
+	t.Fatal("no session cookie")
+	return time.Time{}
+}

@@ -108,6 +108,8 @@ Configure the identity provider's redirect URI as `https://<tunnel-host>/_portal
 
 Email and domain entries are compared in lowercase and must be ASCII, so write an internationalized domain in punycode. A `sub:` entry is compared exactly, including case, because the provider's `sub` is a case-sensitive identifier: `sub:Alice` does not allow the subject `alice`.
 
+An OIDC session lasts as long as the ID token, but never less than 15 minutes, so a short-lived token does not send the visitor through the provider again at once, and never more than 24 hours. Revoking a principal takes effect on the next request whatever the session lifetime, because `--auth-allow` is checked every time.
+
 ## Agent Wallet Status Access
 
 Relay admin access uses `ADMIN_TOKEN`, not SIWE.
