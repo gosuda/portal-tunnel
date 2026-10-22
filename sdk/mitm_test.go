@@ -627,6 +627,64 @@ func recordChannelBindingAnswer(t *testing.T, l *listener, exporter []byte) []by
 	return answer
 }
 
+// Accept is serial, so a client that is slow to speak must delay only itself.
+// One that sends the start of a channel binding request and stops, and one that
+// stays silent, are admitted off the accept path while an ordinary client is
+// accepted at once.
+func TestAcceptIsNotHeldUpByClientsThatStallDuringAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		prefix []byte
+	}{
+		{"stalled channel binding request", []byte(tlsChannelBindingMagic)},
+		{"silent client", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				l := newChannelBindingListener(t, "9", "")
+				l.accepted = make(chan net.Conn, 4)
+				l.admitting = make(chan struct{}, 4)
+				l.doneCh = make(chan struct{})
+				l.api = &apiClient{relayURL: &url.URL{Scheme: "https", Host: "relay.example"}}
+				exporter := bytes.Repeat([]byte{0x42}, 32)
+
+				// admit starts one client the way a reverse session does: it takes
+				// an admitting slot and hands the connection to l.admit.
+				admit := func(first []byte) net.Conn {
+					clientRaw, serverRaw := net.Pipe()
+					if len(first) > 0 {
+						go func() { _, _ = clientRaw.Write(first) }()
+					}
+					l.admitting <- struct{}{}
+					go l.admit(t.Context(), &testExporterConn{Conn: serverRaw, exported: exporter})
+					return clientRaw
+				}
+				stalled := admit(tc.prefix)
+				// The stalled client is now queued, or still being admitted, ahead
+				// of the ordinary one.
+				synctest.Wait()
+				ordinary := admit([]byte("GET / HTTP/1.1\r\n\r\n"))
+
+				start := time.Now()
+				conn, err := l.Accept()
+				if err != nil {
+					t.Fatalf("Accept() error = %v", err)
+				}
+				if elapsed := time.Since(start); elapsed >= mitmProbePeekTimeout {
+					t.Fatalf("Accept() took %v behind a client that stalled; want it unaffected", elapsed)
+				}
+				first := make([]byte, len("GET /"))
+				if _, err := io.ReadFull(conn, first); err != nil || string(first) != "GET /" {
+					t.Fatalf("Accept() returned a connection that read %q, %v; want the ordinary client's request", first, err)
+				}
+				_ = conn.Close()
+				_ = ordinary.Close()
+				_ = stalled.Close()
+			})
+		})
+	}
+}
+
 // Channel binding shares the self-probe's capability boundary: a listener whose
 // tenant TLS cannot export keying material, or a cache exposure where relay TLS
 // termination is allowed, treats the request as ordinary application bytes.
