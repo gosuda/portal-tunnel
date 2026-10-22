@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -145,10 +146,11 @@ type applicationAuthRedeemRequest struct {
 }
 
 type oidcDiscoveryDocument struct {
-	Issuer                string `json:"issuer"`
-	AuthorizationEndpoint string `json:"authorization_endpoint"`
-	TokenEndpoint         string `json:"token_endpoint"`
-	JWKSURI               string `json:"jwks_uri"`
+	Issuer                   string   `json:"issuer"`
+	AuthorizationEndpoint    string   `json:"authorization_endpoint"`
+	TokenEndpoint            string   `json:"token_endpoint"`
+	JWKSURI                  string   `json:"jwks_uri"`
+	TokenEndpointAuthMethods []string `json:"token_endpoint_auth_methods_supported"`
 }
 
 type oidcStateClaims struct {
@@ -666,13 +668,25 @@ func (a *applicationAuth) resolveAllowedOIDCSubject(claims oidcIDTokenClaims) (s
 }
 
 func (o *oidcAuthenticator) oauth2Config(doc oidcDiscoveryDocument, host string) oauth2.Config {
+	// The auth style is named because the oauth2 default probes: it sends the
+	// one-time authorization code with the credentials in the Authorization
+	// header and, on any error, sends the same code again with them in the body.
+	authStyle := oauth2.AuthStyleInHeader // client_secret_basic, the OIDC default
+	methods := doc.TokenEndpointAuthMethods
+	switch {
+	case o.clientSecret == "":
+		authStyle = oauth2.AuthStyleInParams
+	case slices.Contains(methods, "client_secret_post") && !slices.Contains(methods, "client_secret_basic"):
+		authStyle = oauth2.AuthStyleInParams
+	}
 	return oauth2.Config{
 		ClientID:     o.clientID,
 		ClientSecret: o.clientSecret,
 		RedirectURL:  "https://" + host + applicationAuthCallbackPath,
 		Endpoint: oauth2.Endpoint{
-			AuthURL:  doc.AuthorizationEndpoint,
-			TokenURL: doc.TokenEndpoint,
+			AuthURL:   doc.AuthorizationEndpoint,
+			TokenURL:  doc.TokenEndpoint,
+			AuthStyle: authStyle,
 		},
 		Scopes: []string{"openid", "email", "profile"},
 	}

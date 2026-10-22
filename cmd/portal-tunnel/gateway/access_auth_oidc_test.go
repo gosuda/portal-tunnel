@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,11 @@ type oidcTestIdP struct {
 	key       *ecdsa.PrivateKey
 	query     string
 
+	// clientSecret is what the gateway is configured with, authMethods what
+	// discovery advertises for client authentication at the token endpoint.
+	clientSecret string
+	authMethods  []string
+
 	// Request counters for the endpoints the gateway must not hit needlessly.
 	discoveryHits atomic.Int32
 	jwksHits      atomic.Int32
@@ -43,18 +49,32 @@ type oidcTestIdP struct {
 	discoveryEntered chan struct{}
 	discoveryRelease chan struct{}
 
-	mu        sync.Mutex
-	jwk       jose.JSONWebKey
-	extraJWKs []jose.JSONWebKey
-	challenge string
-	nonce     string
-	mutate    func(*oidcIDTokenClaims)
-	signWith  jose.Signer
-	rawToken  func(valid string) string
-	// emailVerified, when set, is sent verbatim as the email_verified claim.
-	emailVerified json.RawMessage
+	mu            sync.Mutex
+	jwk           jose.JSONWebKey
+	extraJWKs     []jose.JSONWebKey
+	challenge     string
+	nonce         string
+	mutate        func(*oidcIDTokenClaims)
+	signWith      jose.Signer
+	rawToken      func(valid string) string
+	emailVerified json.RawMessage // sent verbatim as the email_verified claim when non-nil
 	omitToken     bool
 	tokenStatus   int
+	tokenRequests []oidcTokenCredentials
+}
+
+// oidcTokenCredentials is how one token request authenticated the client.
+type oidcTokenCredentials struct {
+	inHeader     bool
+	clientID     string
+	clientSecret string
+}
+
+// tokenCredentials lists the client credentials of every token request so far.
+func (p *oidcTestIdP) tokenCredentials() []oidcTokenCredentials {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.tokenRequests)
 }
 
 func newOIDCTestSigner(t *testing.T, alg jose.SignatureAlgorithm, key any, kid string) jose.Signer {
@@ -101,10 +121,11 @@ func (p *oidcTestIdP) serve(w http.ResponseWriter, r *http.Request) {
 		p.discoveryHits.Add(1)
 		p.holdDiscovery(r)
 		_ = json.NewEncoder(w).Encode(oidcDiscoveryDocument{
-			Issuer:                p.issuerURL,
-			AuthorizationEndpoint: p.issuerURL + "/authorize" + p.query,
-			TokenEndpoint:         p.issuerURL + "/token" + p.query,
-			JWKSURI:               p.issuerURL + "/jwks" + p.query,
+			Issuer:                   p.issuerURL,
+			AuthorizationEndpoint:    p.issuerURL + "/authorize" + p.query,
+			TokenEndpoint:            p.issuerURL + "/token" + p.query,
+			JWKSURI:                  p.issuerURL + "/jwks" + p.query,
+			TokenEndpointAuthMethods: p.authMethods,
 		})
 	case "/jwks":
 		p.jwksHits.Add(1)
@@ -157,6 +178,11 @@ func (p *oidcTestIdP) rotate(t *testing.T, kid string) {
 func (p *oidcTestIdP) serveToken(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	credentials := oidcTokenCredentials{clientID: r.PostFormValue("client_id"), clientSecret: r.PostFormValue("client_secret")}
+	if id, secret, ok := r.BasicAuth(); ok {
+		credentials = oidcTokenCredentials{inHeader: true, clientID: id, clientSecret: secret}
+	}
+	p.tokenRequests = append(p.tokenRequests, credentials)
 	if p.tokenStatus != 0 {
 		w.WriteHeader(p.tokenStatus)
 		_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
@@ -524,6 +550,54 @@ func TestApplicationAuthOIDCTokenWithoutKeyID(t *testing.T) {
 	}
 }
 
+// TestApplicationAuthOIDCTokenRequestAuthentication protects the one-time
+// authorization code: the token request names how the client authenticates, as
+// the provider advertises, and is never sent a second time to probe another style.
+func TestApplicationAuthOIDCTokenRequestAuthentication(t *testing.T) {
+	t.Parallel()
+
+	const secret = "portal-secret"
+	inHeader := oidcTokenCredentials{inHeader: true, clientID: oidcTestClientID, clientSecret: secret}
+	inBody := oidcTokenCredentials{clientID: oidcTestClientID, clientSecret: secret}
+	tests := []struct {
+		name    string
+		secret  string
+		methods []string
+		want    oidcTokenCredentials
+	}{
+		{"public client sends only its id in the body", "", nil, oidcTokenCredentials{clientID: oidcTestClientID}},
+		{"public client ignores the advertised methods", "", []string{"client_secret_basic"}, oidcTokenCredentials{clientID: oidcTestClientID}},
+		{"no advertised methods means client_secret_basic", secret, nil, inHeader},
+		{"client_secret_basic only", secret, []string{"client_secret_basic"}, inHeader},
+		{"client_secret_post only", secret, []string{"client_secret_post"}, inBody},
+		{"both prefer client_secret_basic", secret, []string{"client_secret_post", "client_secret_basic"}, inHeader},
+		{"unrelated methods keep the default", secret, []string{"private_key_jwt"}, inHeader},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			idp := newOIDCTestIdP(t, func(p *oidcTestIdP) { p.clientSecret, p.authMethods = tt.secret, tt.methods })
+			assertOIDCCallback(t, completeOIDCLogin(t, newOIDCTestGate(t, idp), idp), http.StatusSeeOther)
+			if got := idp.tokenCredentials(); !slices.Equal(got, []oidcTokenCredentials{tt.want}) {
+				t.Fatalf("token request credentials = %+v; want exactly one: %+v", got, tt.want)
+			}
+		})
+	}
+
+	for _, methods := range [][]string{nil, {"client_secret_post"}} {
+		t.Run("rejected code is sent once with methods "+strings.Join(methods, ","), func(t *testing.T) {
+			t.Parallel()
+			idp := newOIDCTestIdP(t, func(p *oidcTestIdP) {
+				p.clientSecret, p.authMethods, p.tokenStatus = secret, methods, http.StatusUnauthorized
+			})
+			assertOIDCCallback(t, completeOIDCLogin(t, newOIDCTestGate(t, idp), idp), http.StatusUnauthorized)
+			if got := idp.tokenCredentials(); len(got) != 1 {
+				t.Fatalf("token requests = %+v; want the authorization code sent exactly once", got)
+			}
+		})
+	}
+}
+
 // oidcRawEmailVerifiedClaims signs an arbitrary JSON value as email_verified:
 // the outer field shadows the embedded claim of the same JSON name, and omitting
 // it leaves the claim absent.
@@ -608,10 +682,11 @@ func newOIDCTestGate(t *testing.T, idp *oidcTestIdP, allowed ...string) *applica
 		allowed = []string{"alice@example.com"}
 	}
 	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
-		Provider:       ApplicationAuthProviderOIDC,
-		AllowedWallets: allowed,
-		OIDCIssuerURL:  idp.issuerURL,
-		OIDCClientID:   oidcTestClientID,
+		Provider:         ApplicationAuthProviderOIDC,
+		AllowedWallets:   allowed,
+		OIDCIssuerURL:    idp.issuerURL,
+		OIDCClientID:     oidcTestClientID,
+		OIDCClientSecret: idp.clientSecret,
 	})
 	if err != nil {
 		t.Fatal(err)
