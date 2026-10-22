@@ -381,7 +381,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
 | `--auth` | | string | | Protect the complete HTTP application with `siwe` or `credential`; excludes cache, TCP, and UDP |
-| `--auth-allow` | | string | | Allowed Ethereum wallet; repeatable; empty allows any valid wallet and requires `--auth siwe` |
+| `--auth-allow` | | string | | Allowed principal (Ethereum wallet for `siwe` or subject for `credential`); repeatable; empty allows any valid principal and requires `--auth` |
 | `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
 | `--strip-request-header` | | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; `Host` and `X-Forwarded-Proto` cannot be stripped (always regenerated before this middleware runs); `X-Forwarded-Prefix` and `X-Portal-User`/`Auth` are allowed; requires `--http-route`, `--target`, or `--auth` |
 | `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
@@ -482,8 +482,9 @@ prefix = "/"
 upstream = "http://127.0.0.1:5173"
 ```
 
-Portal-native credential authentication is an alternative to SIWE and does not
-use `auth_allowed_wallets`:
+Portal-native credential authentication is an alternative to SIWE and can
+optionally restrict allowed credential subjects with `auth_allowed_wallets` for
+immediate per-subject revocation:
 
 ```toml
 [[tunnels]]
@@ -491,6 +492,7 @@ id = "credential-web"
 name = "credential-app"
 target = "127.0.0.1:3000"
 auth = "credential"
+auth_allowed_wallets = ["alice"]
 auth_identity_headers = true
 ```
 
@@ -527,7 +529,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
 | `auth` | string | Application login provider: `siwe` or `credential`; cannot be combined with TCP or UDP |
-| `auth_allowed_wallets` | string array | Wallets allowed to sign in; empty allows any valid wallet and requires the `siwe` provider when set |
+| `auth_allowed_wallets` | string array | Principals allowed to sign in (Ethereum wallets for `siwe` or subjects for `credential`); empty allows any valid principal and requires `auth` when set |
 | `auth_identity_headers` | bool | Inject verified Portal identity headers upstream; requires `auth` |
 | `strip_request_headers` | string array | Client request headers removed before routed HTTP forwards them upstream; case-insensitive; `Host` and `X-Forwarded-Proto` cannot be listed (always regenerated); `X-Portal-User`/`Auth` conflict with `auth_identity_headers`; requires `http_routes` or a `target` |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |
@@ -702,9 +704,9 @@ almost unchanged. It always regenerates `X-Forwarded-For`, `X-Forwarded-Host`,
 and `X-Forwarded-Proto` from the observed request, so client-supplied copies
 are replaced. `X-Forwarded-Prefix` is deleted on every request and only
 re-added for non-root routes; root-route upstreams never see a
-client-supplied value. `X-Portal-User` and `X-Portal-Auth` are only rewritten
-when application auth with identity headers is enabled (`--auth-identity-headers`);
-otherwise they pass through like any other header.
+client-supplied value. Client-supplied `X-Portal-User`, `X-Portal-Auth`, and `X-Portal-Access-Credential`
+headers are always stripped by the HTTP gateway; `X-Portal-User` and `X-Portal-Auth`
+are only injected after verified login when `--auth-identity-headers` is enabled.
 
 Any other header an Internet client sends arrives at the upstream verbatim.
 

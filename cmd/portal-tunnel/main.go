@@ -107,7 +107,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
 	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe or credential authentication")
-	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Ethereum wallet allowed to sign in; repeat to allow multiple wallets (empty allows any wallet)")
+	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, or subject for credential); repeat to allow multiple principals (empty allows any valid principal)")
 	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
 	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")

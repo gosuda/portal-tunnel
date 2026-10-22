@@ -39,8 +39,8 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 	wallet := applicationAuthTestWallet(t, "1")
 	var upstreamUser, upstreamAuth string
 	handler := newApplicationAuthTestHandler(t, []string{wallet.Identity().Address}, true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamUser = r.Header.Get("X-Portal-User")
-		upstreamAuth = r.Header.Get("X-Portal-Auth")
+		upstreamUser = r.Header.Get(types.HeaderPortalUser)
+		upstreamAuth = r.Header.Get(types.HeaderPortalAuth)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
@@ -76,8 +76,8 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 
 	protectedReq := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
 	protectedReq.AddCookie(cookies[0])
-	protectedReq.Header.Set("X-Portal-User", "attacker")
-	protectedReq.Header.Set("X-Portal-Auth", "attacker")
+	protectedReq.Header.Set(types.HeaderPortalUser, "attacker")
+	protectedReq.Header.Set(types.HeaderPortalAuth, "attacker")
 	protectedRec := httptest.NewRecorder()
 	handler.ServeHTTP(protectedRec, protectedReq)
 	if protectedRec.Code != http.StatusNoContent {
@@ -107,7 +107,7 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	requests := 0
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		user, auth = r.Header.Get("X-Portal-User"), r.Header.Get("X-Portal-Auth")
+		user, auth = r.Header.Get(types.HeaderPortalUser), r.Header.Get(types.HeaderPortalAuth)
 		cookies = r.Header.Get("Cookie")
 	})
 	handler := newApplicationAuthTestHandler(t, nil, false, next)
@@ -123,8 +123,8 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://app.example/", nil)
 	req.AddCookie(&http.Cookie{Name: "app_session", Value: "abc"})
 	req.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: token})
-	req.Header.Set("X-Portal-User", "attacker")
-	req.Header.Set("X-Portal-Auth", "attacker")
+	req.Header.Set(types.HeaderPortalUser, "attacker")
+	req.Header.Set(types.HeaderPortalAuth, "attacker")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if user != "" || auth != "" {
@@ -163,7 +163,7 @@ func TestApplicationAuthCredential(t *testing.T) {
 	upstreamRequests := 0
 	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamRequests++
-		upstreamUser, upstreamAuth = r.Header.Get("X-Portal-User"), r.Header.Get("X-Portal-Auth")
+		upstreamUser, upstreamAuth = r.Header.Get(types.HeaderPortalUser), r.Header.Get(types.HeaderPortalAuth)
 		upstreamCredential = r.Header.Get(types.HeaderAccessCredential)
 		w.WriteHeader(http.StatusNoContent)
 	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true})
@@ -219,6 +219,87 @@ func TestApplicationAuthCredential(t *testing.T) {
 	handler.ServeHTTP(invalidCredentialRec, invalidCredential)
 	if invalidCredentialRec.Code == http.StatusNoContent || upstreamRequests != 3 {
 		t.Fatalf("invalid credential with cookie status = %d, upstream requests = %d; want rejection", invalidCredentialRec.Code, upstreamRequests)
+	}
+}
+
+func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
+	tunnelIdentity := applicationAuthTestIdentity()
+	aliceCredential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobCredential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "bob", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Step 1: Both alice and bob are allowed; alice redeems a browser session cookie.
+	initialGate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, ApplicationAuthConfig{
+		Provider:        ApplicationAuthProviderCredential,
+		AllowedWallets:  []string{"alice", "bob"},
+		IdentityHeaders: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemBody, _ := json.Marshal(applicationAuthRedeemRequest{Credential: aliceCredential})
+	redeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthRedeemPath, bytes.NewReader(redeemBody))
+	redeemReq.Header.Set("Origin", "https://app.example")
+	redeemRec := httptest.NewRecorder()
+	initialGate.ServeHTTP(redeemRec, redeemReq)
+	if redeemRec.Code != http.StatusOK {
+		t.Fatalf("alice redeem status = %d", redeemRec.Code)
+	}
+	aliceCookie := redeemRec.Result().Cookies()[0]
+
+	// Step 2: Revoke alice by restricting AllowedWallets to bob only.
+	revokedGate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, ApplicationAuthConfig{
+		Provider:        ApplicationAuthProviderCredential,
+		AllowedWallets:  []string{"bob"},
+		IdentityHeaders: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Revoked subject cannot redeem a credential.
+	revokedRedeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthRedeemPath, bytes.NewReader(redeemBody))
+	revokedRedeemReq.Header.Set("Origin", "https://app.example")
+	revokedRedeemRec := httptest.NewRecorder()
+	revokedGate.ServeHTTP(revokedRedeemRec, revokedRedeemReq)
+	if revokedRedeemRec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked redeem status = %d; want 401", revokedRedeemRec.Code)
+	}
+
+	// Revoked subject's existing session cookie is rejected on the next request.
+	revokedCookieReq := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
+	revokedCookieReq.AddCookie(aliceCookie)
+	revokedCookieRec := httptest.NewRecorder()
+	revokedGate.ServeHTTP(revokedCookieRec, revokedCookieReq)
+	if revokedCookieRec.Code != http.StatusSeeOther {
+		t.Fatalf("revoked session status = %d; want 303", revokedCookieRec.Code)
+	}
+
+	// Revoked subject's direct credential header is also rejected.
+	revokedHeaderReq := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	revokedHeaderReq.Header.Set(types.HeaderAccessCredential, aliceCredential)
+	revokedHeaderRec := httptest.NewRecorder()
+	revokedGate.ServeHTTP(revokedHeaderRec, revokedHeaderReq)
+	if revokedHeaderRec.Code != http.StatusSeeOther {
+		t.Fatalf("revoked header status = %d; want 303", revokedHeaderRec.Code)
+	}
+
+	// Allowed subject (bob) continues to succeed.
+	bobHeaderReq := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	bobHeaderReq.Header.Set(types.HeaderAccessCredential, bobCredential)
+	bobHeaderRec := httptest.NewRecorder()
+	revokedGate.ServeHTTP(bobHeaderRec, bobHeaderReq)
+	if bobHeaderRec.Code != http.StatusNoContent {
+		t.Fatalf("allowed bob header status = %d; want 204", bobHeaderRec.Code)
 	}
 }
 

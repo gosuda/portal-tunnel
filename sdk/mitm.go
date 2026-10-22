@@ -9,12 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	mathrand "math/rand/v2"
 	"net"
 	"net/url"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/time/rate"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -60,8 +63,11 @@ const (
 	mitmProbePaddingMin    = 96
 	mitmProbePaddingMax    = 320
 
-	defaultMITMProbeCooldown = 30 * time.Second
-	defaultMITMProbeTimeout  = 30 * time.Second
+	defaultMITMProbeInterval   = 45 * time.Second
+	defaultMITMProbeMaxDelay   = 120 * time.Second
+	defaultMITMProbeRetryDelay = 30 * time.Second
+	defaultMITMProbeTimeout    = 30 * time.Second
+	mitmProbeBurst             = 3
 )
 
 type mitmProbeReport struct {
@@ -80,7 +86,6 @@ type mitmProbePending struct {
 type mitmProbeNonce [16]byte
 
 type mitmManager struct {
-	ctx context.Context
 	// responderCapable reports whether terminated tenant connections can
 	// export keying material. Only then can the listener answer initiator
 	// probes; the manager stays dormant otherwise.
@@ -88,15 +93,12 @@ type mitmManager struct {
 	listener         *listener
 	ban              bool
 
-	mu       sync.Mutex
-	pending  map[mitmProbeNonce]*mitmProbePending
-	inFlight bool
-	lastAt   time.Time
+	mu      sync.Mutex
+	pending map[mitmProbeNonce]*mitmProbePending
 }
 
-func newMITMManager(ctx context.Context, listener *listener, ban bool) *mitmManager {
+func newMITMManager(listener *listener, ban bool) *mitmManager {
 	return &mitmManager{
-		ctx:      ctx,
 		ban:      ban,
 		listener: listener,
 		pending:  make(map[mitmProbeNonce]*mitmProbePending),
@@ -106,8 +108,6 @@ func newMITMManager(ctx context.Context, listener *listener, ban bool) *mitmMana
 func (m *mitmManager) reset() {
 	m.mu.Lock()
 	clear(m.pending)
-	m.inFlight = false
-	m.lastAt = time.Time{}
 	m.mu.Unlock()
 }
 
@@ -180,6 +180,12 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	}
 	tlsConn := tls.Client(rawConn, probeTLSConf)
 	defer tlsConn.Close()
+	deadline, _ := probeCtx.Deadline()
+	if err := rawConn.SetDeadline(deadline); err != nil {
+		return report, fmt.Errorf("set mitm probe deadline: %w", err)
+	}
+	stopClose := context.AfterFunc(probeCtx, func() { _ = rawConn.Close() })
+	defer stopClose()
 
 	// Reserve the nonce once the TCP connection exists but before the TLS
 	// handshake: the reverse side can hand the connection to Accept as soon
@@ -251,42 +257,51 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	return utils.EnsurePort(dialHost), nil
 }
 
-func (m *mitmManager) maybeStart() {
+// run is one worker of runLease. That owner cancels and joins it before
+// replacing the lease, so attempts and results cannot overlap lease lifetimes.
+func (m *mitmManager) run(ctx context.Context, ready <-chan struct{}) {
 	m.mu.Lock()
 	capable := m.responderCapable
 	m.mu.Unlock()
-	if !capable {
+	if !capable || m.listener.cache != nil || runtime.GOOS == "js" {
 		return
-	}
-	l := m.listener
-	if l.cache != nil {
-		return // This exposure explicitly permits relay TLS termination.
 	}
 	select {
-	case <-l.doneCh:
+	case <-ctx.Done():
 		return
-	default:
+	case <-ready:
 	}
-
-	m.mu.Lock()
-	if m.inFlight || !m.lastAt.IsZero() && time.Since(m.lastAt) < defaultMITMProbeCooldown {
-		m.mu.Unlock()
-		return
-	}
-	m.inFlight = true
-	m.mu.Unlock()
-
-	go func() {
-		report, err := m.probeTLSPassthrough(m.ctx)
-		success := err == nil && report.Reason != types.MITMProbeReasonProbeTimeout
-		m.mu.Lock()
-		m.inFlight = false
-		if success {
-			m.lastAt = time.Now()
+	budget := rate.NewLimiter(rate.Every(defaultMITMProbeInterval), mitmProbeBurst)
+	var backoff time.Duration
+	for ctx.Err() == nil {
+		if m.listener.readySessions.Load() > 0 {
+			if err := budget.Wait(ctx); err != nil {
+				return
+			}
+			report, err := m.probeTLSPassthrough(ctx)
+			if ctx.Err() != nil {
+				return
+			}
+			m.logResult(report, err)
+			if err != nil || report.Reason == types.MITMProbeReasonProbeTimeout {
+				if backoff == 0 {
+					backoff = defaultMITMProbeRetryDelay
+				} else {
+					backoff = min(2*backoff, defaultMITMProbeMaxDelay)
+				}
+			} else {
+				backoff = 0
+			}
 		}
-		m.mu.Unlock()
-		m.logResult(report, err)
-	}()
+		// Successful comparisons have no fixed quiet interval. Capping the
+		// exponential sample, the token budget, and failure backoff make this
+		// a bounded renewal schedule rather than a pure Poisson process.
+		delay := min(time.Duration(mathrand.ExpFloat64()*float64(defaultMITMProbeInterval)), defaultMITMProbeMaxDelay)
+		delay = max(delay, backoff)
+		if !utils.SleepOrDone(ctx, delay) {
+			return
+		}
+	}
 }
 
 func (m *mitmManager) logResult(report mitmProbeReport, err error) {
@@ -396,7 +411,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	return nil, true, nil
 }
 
-// reserveProbe registers the probe nonce before the TLS dial so the reverse
+// reserveProbe registers the probe nonce before the TLS handshake so the reverse
 // side recognizes the connection even if Accept runs the moment the reverse
 // handshake completes. attachExpected arms the reservation afterwards; until
 // then the entry holds no exporter value and a completion attempt reports a
@@ -446,37 +461,4 @@ func (m *mitmManager) completeProbe(nonce mitmProbeNonce, actual []byte) {
 	case resultCh <- reason:
 	default:
 	}
-}
-
-type mitmProbeConn struct {
-	net.Conn
-	manager   *mitmManager
-	startOnce sync.Once
-}
-
-func (c *mitmProbeConn) CloseWrite() error {
-	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
-		return half.CloseWrite()
-	}
-	return nil
-}
-
-func (c *mitmProbeConn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
-	if n > 0 {
-		c.startOnce.Do(func() {
-			c.manager.maybeStart()
-		})
-	}
-	return n, err
-}
-
-func (c *mitmProbeConn) Write(p []byte) (int, error) {
-	n, err := c.Conn.Write(p)
-	if n > 0 {
-		c.startOnce.Do(func() {
-			c.manager.maybeStart()
-		})
-	}
-	return n, err
 }

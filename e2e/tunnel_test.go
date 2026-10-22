@@ -9,7 +9,7 @@ import (
 func TestCanonicalTunnel(t *testing.T) {
 	for _, host := range []string{"127.0.0.1", "::1"} {
 		t.Run(host, func(t *testing.T) {
-			h := newHarnessWithName(t, "e2e", host)
+			h := newHarnessWithName(t, "e2e", host, "")
 			publicURL := h.waitForPublicURL()
 			publicOrigin, err := url.Parse(publicURL)
 			if err != nil {
@@ -47,7 +47,7 @@ func TestCanonicalTunnel(t *testing.T) {
 func TestUnnamedCanonicalTunnel(t *testing.T) {
 	for _, host := range []string{"127.0.0.1", "::1"} {
 		t.Run(host, func(t *testing.T) {
-			h := newHarnessWithName(t, "", host)
+			h := newHarnessWithName(t, "", host, "")
 			publicURL := h.waitForPublicURL()
 			publicOrigin, err := url.Parse(publicURL)
 			if err != nil {

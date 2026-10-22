@@ -166,8 +166,9 @@ those changes.
 
 ## MITM Self-Probe
 
-After real application traffic starts, the native SDK asynchronously opens a
-separate TLS connection to its public tenant hostname. A random nonce identifies
+Once a reverse connection is ready, the native SDK asynchronously opens a
+separate TLS connection to its public tenant hostname, without waiting for
+visitor traffic. A random nonce identifies
 the returning probe after SDK-side TLS termination. Both TLS endpoints export
 keying material with the same label and context, and the SDK compares the values.
 
@@ -179,15 +180,33 @@ keying material with the same label and context, and the SDK compares the values
   URL in its in-memory state. That ban has no automatic expiry and survives
   refresh and rediscovery until `AddRelay()` clears it. Both bans end when the
   exposure is replaced; neither is durable across client restarts or network-wide.
+  Closing the tunnel does not revoke the relay's certificate or withdraw its
+  hostname; a malicious operator can still serve forged pages at the public URL.
 - Timeouts, connection failures, and other probe errors are warnings, not
   exporter-mismatch verdicts; they do not trigger that block.
 
-Serving traffic does not wait for the probe to pass. The probe is triggered by
-traffic, limited to one in flight, and rate-limited after a completed result.
+Serving traffic does not wait for the probe to pass. One background loop belongs
+to each active native lease. It checks once after reverse readiness, then samples
+an exponential delay with a 45-second mean parameter, capped at 120 seconds.
+Successful comparisons impose no fixed minimum delay. A token bucket allows a
+burst of three attempts and replenishes one token every 45 seconds; attempts
+wait for that budget when exhausted. Inconclusive attempts are logged and impose
+a separate retry minimum of 30 seconds, doubling to 120 seconds on consecutive
+failures and clearing after a completed comparison.
+Checks continue without visitor traffic and are skipped while no reverse
+connection is ready. Attempts run serially. Lease termination cancels and joins
+the loop before a replacement lease starts. Socket I/O shares the overall probe
+timeout and is closed on cancellation.
 It cannot establish that other clients or connections were forwarded honestly.
 In particular, selective MITM and probe distinguishability remain limitations;
 random padding does not establish that probes are indistinguishable from normal
 application traffic.
+
+The cap, budget, backoff, and probe runtime make this a bounded renewal schedule,
+not a pure Poisson process or an exact 45-second mean between actual attempts.
+Resource limits can introduce quiet intervals. Random timing does not hide the
+tunnel's source IP or Go TLS fingerprint; a malicious relay can still selectively
+forward or suppress recognizable probes.
 
 Both sides must support TLS keying material export. An explicit `--ban-mitm`
 request fails at startup when the selected tenant TLS stack lacks that
@@ -198,6 +217,12 @@ disables probing, and cannot be combined with `--ban-mitm`.
 The [probe implementation](https://github.com/gosuda/portal-tunnel/blob/main/sdk/mitm.go)
 defines these verdicts and their lifecycle. A successful probe is evidence about
 one connection, not an authorization to trust every future connection.
+
+Protection despite probe evasion requires independently authenticated endpoints.
+Both the trusted server identity and the verification code must come from a path
+outside the relay's control. A tunnel-owned certificate key alone is insufficient
+if the relay can retain or obtain another certificate covering the hostname; see
+[#541](https://github.com/gosuda/portal-tunnel/issues/541).
 
 ## Relay Visibility
 

@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -39,6 +40,46 @@ func NormalizeApplicationAuthProvider(provider string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported application auth provider %q", provider)
 	}
+}
+
+// NormalizeApplicationAuthAllowed validates and normalizes the provider-scoped
+// principal allowlist (`--auth-allow` / `auth_allowed_wallets`): Ethereum
+// addresses for `siwe` and credential subjects for `credential`.
+func NormalizeApplicationAuthAllowed(provider string, values []string) ([]string, error) {
+	provider, err := NormalizeApplicationAuthProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	switch provider {
+	case ApplicationAuthProviderSIWE:
+		return siweauth.NormalizeAddresses(values)
+	case ApplicationAuthProviderCredential:
+		return NormalizeApplicationAuthSubjects(values)
+	default:
+		return nil, fmt.Errorf("unsupported application auth provider %q", provider)
+	}
+}
+
+// NormalizeApplicationAuthSubjects canonicalizes configured credential subjects
+// and de-duplicates them while preserving declaration order.
+func NormalizeApplicationAuthSubjects(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, raw := range values {
+		subject, err := normalizeApplicationAuthSubject(raw)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[subject]; ok {
+			continue
+		}
+		seen[subject] = struct{}{}
+		normalized = append(normalized, subject)
+	}
+	return normalized, nil
 }
 
 // IssueApplicationCredential creates a host- and tunnel-scoped credential that

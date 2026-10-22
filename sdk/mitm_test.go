@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -22,7 +23,7 @@ import (
 // nonce is dropped without touching live reservations.
 func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 	listener := &listener{}
-	listener.mitmManager = newMITMManager(context.Background(), listener, false)
+	listener.mitmManager = newMITMManager(listener, false)
 
 	// Matching exporter value: the probe passes with an empty reason.
 	expected := bytes.Repeat([]byte{0xAB}, 32)
@@ -147,7 +148,7 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 		},
 		doneCh: doneCh,
 	}
-	listener.mitmManager = newMITMManager(context.Background(), listener, true)
+	listener.mitmManager = newMITMManager(listener, true)
 
 	listener.mitmManager.logResult(mitmProbeReport{
 		RelayURL: entryURL.String(),
@@ -173,7 +174,7 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 		api:    &apiClient{relayURL: relayURL},
 		doneCh: doneCh,
 	}
-	listener.mitmManager = newMITMManager(context.Background(), listener, false)
+	listener.mitmManager = newMITMManager(listener, false)
 
 	listener.mitmManager.logResult(mitmProbeReport{
 		RelayURL: relayURL.String(),
@@ -214,7 +215,7 @@ func TestListenerBanMITMRequiresKeyingMaterialExporter(t *testing.T) {
 				banMITM:  test.banMITM,
 				identity: types.Identity{Name: "probe-guard"},
 			}
-			listener.mitmManager = newMITMManager(context.Background(), listener, test.banMITM)
+			listener.mitmManager = newMITMManager(listener, test.banMITM)
 
 			err := listener.ensureMITMProbeSupport(test.exporterCapable)
 			if (err != nil) != test.wantErr {
@@ -234,6 +235,54 @@ func TestListenerBanMITMRequiresKeyingMaterialExporter(t *testing.T) {
 					t.Fatalf("error %q missing fragment %q", err, fragment)
 				}
 			}
+		})
+	}
+}
+
+// Lease cancellation must join the loop both before reverse readiness and
+// while waiting between failed attempts. Virtual time avoids network fixtures,
+// production injection seams, and wall-clock waits for the retry interval.
+func TestMITMProbeLoopLeaseCancellation(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		name := "before-reverse-ready"
+		if ready {
+			name = "after-failed-attempts"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				l := &listener{}
+				l.readySessions.Store(1)
+				manager := newMITMManager(l, false)
+				manager.setResponderCapable(true)
+				reverseReady := make(chan struct{}, 1)
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					manager.run(ctx, reverseReady)
+				}()
+				if ready {
+					// No API is configured, so each attempted probe fails
+					// locally. The background worker must remain scheduled.
+					reverseReady <- struct{}{}
+				}
+				synctest.Wait()
+				synctest.Sleep(3 * defaultMITMProbeInterval)
+				synctest.Wait()
+				select {
+				case <-done:
+					t.Fatal("probe loop exited before lease cancellation")
+				default:
+				}
+				cancel()
+				synctest.Wait()
+				select {
+				case <-done:
+				default:
+					t.Fatal("canceled lease retained its probe loop")
+				}
+			})
 		})
 	}
 }
@@ -259,7 +308,7 @@ func TestMITMProbeDialAddress(t *testing.T) {
 			listener := &listener{
 				api: &apiClient{relayURL: relayURL},
 			}
-			listener.mitmManager = newMITMManager(context.Background(), listener, false)
+			listener.mitmManager = newMITMManager(listener, false)
 
 			got, err := listener.mitmManager.probeDialAddress(tc.input)
 			if err != nil {

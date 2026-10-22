@@ -51,9 +51,9 @@ session cookie.
 
 Credentials contain a subject, tunnel identity, host, and expiry and are signed
 with a key derived locally from the tunnel identity. A session never outlives
-the credential it redeemed. The credential remains redeemable until expiry, so
-operators should use a suitably short lifetime and deliver it as a bearer
-secret.
+the credential it redeemed. The credential remains redeemable until expiry; operators can pass `--auth-allow <subject>`
+(or `auth_allowed_wallets` in `config.toml`) to restrict allowed credential subjects
+and revoke individual subjects immediately on both active sessions and bearer requests.
 
 API clients can present the same credential on each request:
 

@@ -185,6 +185,9 @@ const (
 	MaxRelayDescriptorSignatureBytes   = 88 // Base64-encoded 65-byte compact signature.
 )
 
+// RelayDescriptor is a signed statement. For the same Address and APIHTTPSAddr,
+// changing signed contents requires a newer IssuedAt; identical retransmissions
+// remain valid until ExpiresAt.
 type RelayDescriptor struct {
 	Address           string    `json:"address"`
 	Version           string    `json:"version"`

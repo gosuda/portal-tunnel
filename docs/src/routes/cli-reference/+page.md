@@ -111,7 +111,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--auth` | string | | Protect HTTP application access with `siwe` or `credential`; cannot be combined with `--cache` |
-| `--auth-allow` | string | | Ethereum wallet allowed to sign in; repeat for multiple wallets (empty allows any wallet); requires `--auth siwe` |
+| `--auth-allow` | string | | Principal allowed to sign in (Ethereum wallet for `siwe` or subject for `credential`); repeat for multiple principals (empty allows any valid principal); requires `--auth` |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |

@@ -12,7 +12,7 @@ import (
 // A second identity registering a taken name falls back to its canonical
 // hostname and must not report the other identity's friendly alias.
 func TestAliasURLOnlyForAliasOwner(t *testing.T) {
-	h := newHarnessWithName(t, "e2e", "127.0.0.1")
+	h := newHarnessWithName(t, "e2e", "127.0.0.1", "")
 	h.waitForPublicURL()
 	owner := h.exposure.Relays()
 	if len(owner) != 1 || owner[0].AliasURL == "" {

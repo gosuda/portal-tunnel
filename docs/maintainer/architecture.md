@@ -27,6 +27,8 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   Relay selection returns public relay priorities; Portal does not construct an
   ordered list of intermediate relays. Explicit relay URLs, transport eligibility,
   admission, expiry, health, and load remain Portal responsibilities.
+  [Relay behavior evidence](relay-behavior.md) records current signal provenance,
+  local response boundaries, owner regressions and unobserved attack classes.
 
 - `portal/overlay`: bridges reverse streams over an independent IVNP overlay network.
   Portal selects and authorizes the ingress and gateway and owns identity, leases,

@@ -16,6 +16,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -45,8 +46,11 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 		relaySrv = &http.Server{
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// The tunnel ended TLS, and every public Portal URL is https, so a
-				// client-sent X-Forwarded-Proto cannot say otherwise.
+				// client-sent X-Forwarded-Proto cannot say otherwise. Inbound
+				// Portal identity headers are also removed before reaching handler.
 				r.Header.Set("X-Forwarded-Proto", "https")
+				r.Header.Del(types.HeaderPortalUser)
+				r.Header.Del(types.HeaderPortalAuth)
 				handler.ServeHTTP(w, r)
 			}),
 			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
