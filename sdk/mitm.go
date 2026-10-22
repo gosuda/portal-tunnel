@@ -559,6 +559,9 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 	var respFrame [tlsChannelBindingResponseSize]byte
 	copy(respFrame[:tlsChannelBindingExporterSize], exported)
 	copy(respFrame[tlsChannelBindingExporterSize:], compactSig)
+	// The answer is small, but a client that never reads it must not hold the
+	// slot either. maybeHandleConn clears the deadline when it returns.
+	_ = conn.SetWriteDeadline(time.Now().Add(channelBindingRequestTimeout))
 	if _, err := conn.Write(respFrame[:]); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("write channel binding response: %w", err)
@@ -599,11 +602,12 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	reader := bufio.NewReaderSize(conn, frameSize)
 	_ = conn.SetReadDeadline(time.Now().Add(mitmProbePeekTimeout))
 	peeked, _ := reader.Peek(peekLen)
-	defer conn.SetReadDeadline(time.Time{})
+	defer conn.SetDeadline(time.Time{})
 
 	if canChannelBind && len(peeked) >= len(tlsChannelBindingMagic) && string(peeked[:len(tlsChannelBindingMagic)]) == tlsChannelBindingMagic {
 		// The sniff window only covered recognition: the rest of the request
-		// gets its own, longer but still short, budget.
+		// gets channelBindingRequestTimeout, far shorter than the client's
+		// round-trip budget.
 		_ = conn.SetReadDeadline(time.Now().Add(channelBindingRequestTimeout))
 		boundConn, err := m.serveChannelBindingHandshake(conn, reader, exportFn)
 		if err != nil {
