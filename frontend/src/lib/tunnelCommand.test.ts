@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addAuthAllow,
+  authBlocksUDP,
   buildAuthIssueCommand,
   buildAuthRedirectURL,
+  buildOIDCSecretCommand,
   buildTunnelCommand,
   buildTunnelPreviewURL,
   classifyAuthAllow,
@@ -204,7 +207,7 @@ describe("tunnelCommand sign-in", () => {
     );
   });
 
-  it("keeps the OIDC client secret out of the command and on its own line", () => {
+  it("prints the OIDC flags without the client secret, which is never in the copied command", () => {
     const auth: TunnelAuthOptions = {
       ...none,
       method: "oidc",
@@ -217,15 +220,24 @@ describe("tunnelCommand sign-in", () => {
       "\n"
     );
 
-    expect(unix[1]).toBe("export AUTH_OIDC_CLIENT_SECRET='<paste secret here>'");
-    expect(unix[2]).toBe(
+    expect(unix).toHaveLength(2);
+    expect(unix[1]).toBe(
       "portal expose 3000 --name my-app --relays https://relay.example.com --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id abc.apps.googleusercontent.com --auth-allow 'alice@example.com' --auth-allow '@example.com'"
     );
-    expect(windows[2]).toBe(
-      "$env:AUTH_OIDC_CLIENT_SECRET = '<paste secret here>'"
+    expect(windows).toHaveLength(3);
+    expect(windows[2]).toContain("--auth-allow 'alice@example.com'");
+    expect(unix.join("\n")).not.toMatch(/SECRET|secret/);
+    expect(windows.join("\n")).not.toMatch(/SECRET|secret/);
+  });
+
+  it("reads the OIDC client secret at a prompt instead of through a placeholder", () => {
+    expect(buildOIDCSecretCommand("unix")).toBe(
+      "printf 'OIDC client secret: '; stty -echo; read -r AUTH_OIDC_CLIENT_SECRET; stty echo; echo; export AUTH_OIDC_CLIENT_SECRET"
     );
-    expect(windows[3]).toContain("--auth-allow 'alice@example.com'");
-    expect(unix.join("\n")).not.toContain("--auth-oidc-client-secret");
+    expect(buildOIDCSecretCommand("windows")).toBe(
+      "$secret = Read-Host 'OIDC client secret' -AsSecureString; $env:AUTH_OIDC_CLIENT_SECRET = [System.Net.NetworkCredential]::new('', $secret).Password"
+    );
+    expect(buildOIDCSecretCommand("unix")).not.toContain("<");
   });
 
   it("serves a static folder behind a private link", () => {
@@ -254,6 +266,8 @@ describe("tunnelCommand sign-in", () => {
     });
 
     expect(command).not.toContain("--udp");
+    expect(authBlocksUDP({ ...none, method: "credential" })).toBe(true);
+    expect(authBlocksUDP(none)).toBe(false);
     expect(
       buildTunnelCommand({ ...base, enableUDP: true, udpPort: "9000" })
     ).toContain("--udp --udp-addr 9000");
@@ -279,40 +293,93 @@ describe("tunnelCommand sign-in", () => {
     expect(kind("oidc", "alice@exämple.com")).toBe("invalid");
   });
 
+  it("counts the 256-character subject limit in bytes, as the tunnel does", () => {
+    const kind = (method: Parameters<typeof classifyAuthAllow>[0], entry: string) =>
+      classifyAuthAllow(method, entry).ok;
+
+    expect(kind("credential", "a".repeat(256))).toBe(true);
+    expect(kind("credential", "a".repeat(257))).toBe(false);
+    // 100 Korean characters are 300 bytes.
+    expect(kind("credential", "가".repeat(100))).toBe(false);
+    expect(kind("credential", "가".repeat(85))).toBe(true);
+    expect(kind("oidc", `${"a".repeat(250)}@example.com`)).toBe(false);
+    expect(kind("oidc", `sub:${"a".repeat(256)}`)).toBe(true);
+    expect(kind("oidc", `sub:${"a".repeat(257)}`)).toBe(false);
+  });
+
+  it("adds entries the way the tunnel reads them", () => {
+    expect(addAuthAllow("oidc", [], "Alice@Example.com, alice@example.com  @Example.COM")).toEqual([
+      "alice@example.com",
+      "@example.com",
+    ]);
+    expect(addAuthAllow("oidc", ["sub:AbC"], "SUB:AbC SUB:abc")).toEqual([
+      "sub:AbC",
+      "sub:abc",
+    ]);
+    const wallet = "0xAbCdEf1234567890abcdef1234567890ABCDEF12";
+    expect(addAuthAllow("siwe", [wallet], wallet.toLowerCase())).toEqual([wallet]);
+    expect(addAuthAllow("credential", ["alice"], "Alice alice, bob")).toEqual([
+      "alice",
+      "Alice",
+      "bob",
+    ]);
+    expect(addAuthAllow("credential", ["alice"], " , ")).toEqual(["alice"]);
+  });
+
   it("lists what keeps an OIDC command from running as shown", () => {
     const oidc: TunnelAuthOptions = { ...none, method: "oidc" };
+    const ready: TunnelAuthOptions = {
+      ...oidc,
+      allow: ["alice@example.com"],
+      oidcIssuer: "https://accounts.google.com",
+      oidcClientId: "abc",
+    };
+    const issues = (auth: TunnelAuthOptions, name: string) =>
+      validateTunnelAuth(auth, name).map((issue) => [issue.field, issue.message]);
 
-    expect(validateTunnelAuth(oidc, "")).toEqual([
-      "Add who may sign in",
-      "The issuer must be an https:// address",
-      "Add the client ID",
-      "Add a Name: the provider needs the exact redirect address",
+    expect(issues(oidc, "")).toEqual([
+      ["allow", "Add who may sign in"],
+      ["issuer", "Add the issuer address"],
+      ["clientId", "Add the client ID"],
+      ["name", "Add a Name: the provider needs the exact redirect address"],
     ]);
+    expect(issues(ready, "my-app")).toEqual([]);
     expect(
-      validateTunnelAuth(
+      issues(
         {
-          ...oidc,
-          allow: ["alice@example.com"],
-          oidcIssuer: "https://accounts.google.com",
-          oidcClientId: "abc",
-        },
-        "my-app"
-      )
-    ).toEqual([]);
-    expect(
-      validateTunnelAuth(
-        {
-          ...oidc,
+          ...ready,
           allow: ["alice"],
           oidcIssuer: "http://login.example.com",
-          oidcClientId: "abc",
         },
         "my-app"
       )
     ).toEqual([
-      "The issuer must be an https:// address",
-      "Fix the highlighted entries",
+      [
+        "issuer",
+        "The issuer must be an https:// address without a query or fragment",
+      ],
+      ["entries", "Fix the highlighted entries"],
     ]);
+  });
+
+  it("refuses the issuers the tunnel refuses", () => {
+    const ready: TunnelAuthOptions = {
+      ...none,
+      method: "oidc",
+      allow: ["alice@example.com"],
+      oidcClientId: "abc",
+    };
+    const accepts = (issuer: string) =>
+      validateTunnelAuth({ ...ready, oidcIssuer: issuer }, "my-app").length === 0;
+
+    expect(accepts("https://accounts.google.com")).toBe(true);
+    expect(accepts("https://login.example.com/realms/team")).toBe(true);
+    expect(accepts("https://accounts.google.com?x=1")).toBe(false);
+    expect(accepts("https://accounts.google.com/#frag")).toBe(false);
+    expect(accepts("https://user@accounts.google.com")).toBe(false);
+    expect(accepts("https://user:pass@accounts.google.com")).toBe(false);
+    expect(accepts("http://accounts.google.com")).toBe(false);
+    expect(accepts("accounts.google.com")).toBe(false);
   });
 
   it("accepts open private-link and wallet lists but flags malformed entries", () => {
@@ -320,7 +387,7 @@ describe("tunnelCommand sign-in", () => {
     expect(validateTunnelAuth({ ...none, method: "siwe" }, "")).toEqual([]);
     expect(
       validateTunnelAuth({ ...none, method: "siwe", allow: ["0x12"] }, "")
-    ).toEqual(["Fix the highlighted entries"]);
+    ).toEqual([{ field: "entries", message: "Fix the highlighted entries" }]);
     expect(validateTunnelAuth(none, "")).toEqual([]);
   });
 

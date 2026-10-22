@@ -1,47 +1,55 @@
-import {
-  useEffect,
-  useId,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
+import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   Check,
   Copy,
   Globe,
   Link2,
-  Lock,
   Mail,
   ShieldCheck,
-  TriangleAlert,
   Wallet,
-  X,
   type LucideIcon,
 } from "lucide-react";
-import type { TunnelAuthState } from "@/hooks/useTunnelCommand";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Chip,
+  ChipField,
+  Notice,
+  TUNNEL_FORM_STYLES,
+  type TunnelFormTheme,
+} from "@/components/TunnelFormParts";
+import { useCopy } from "@/hooks/useCopy";
 import { cn } from "@/lib/utils";
 import {
   GOOGLE_OIDC_ISSUER,
+  addAuthAllow,
   buildAuthIssueCommand,
   buildAuthRedirectURL,
+  buildOIDCSecretCommand,
   buildServiceStatusHostname,
   classifyAuthAllow,
-  isHTTPSIssuer,
+  type TunnelAuthField,
+  type TunnelAuthIssue,
   type TunnelAuthMethod,
+  type TunnelAuthOptions,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 
-type Theme = "light" | "terminal";
-
-interface MethodChoice {
-  id: TunnelAuthMethod | "email";
+interface MethodChoice<Id extends string> {
+  id: Id;
   label: string;
   short: string;
   description: string;
   icon: LucideIcon;
 }
 
-const METHODS: MethodChoice[] = [
+const METHODS: MethodChoice<TunnelAuthMethod>[] = [
   {
     id: "none",
     label: "Anyone with the link",
@@ -71,14 +79,16 @@ const METHODS: MethodChoice[] = [
       "Visitors use an account they already have. You register an OAuth client first.",
     icon: ShieldCheck,
   },
-  {
-    id: "email",
-    label: "Email link",
-    short: "Email link",
-    description: "A one-time link sent to the visitor's mailbox.",
-    icon: Mail,
-  },
 ];
+
+// Shown disabled until the tunnel accepts `--auth email` (#666).
+const EMAIL_METHOD: MethodChoice<"email"> = {
+  id: "email",
+  label: "Email link",
+  short: "Email link",
+  description: "A one-time link sent to the visitor's mailbox.",
+  icon: Mail,
+};
 
 const EXPIRY_CHOICES = [
   { value: "24h", label: "1 day" },
@@ -86,6 +96,8 @@ const EXPIRY_CHOICES = [
   { value: "720h", label: "30 days" },
   { value: "2160h", label: "90 days" },
 ];
+
+const SELECTED = "border-primary bg-primary/10 ring-1 ring-primary";
 
 const ALLOW_COPY: Record<
   Exclude<TunnelAuthMethod, "none">,
@@ -107,73 +119,33 @@ const ALLOW_COPY: Record<
     label: "Who may sign in",
     requirement: "required",
     placeholder: "email, @domain or sub:id",
-    help: "An email is one person. @example.com is everyone at exactly that domain, not its subdomains. sub:<id> is the provider's own account id.",
+    help: "An email is one person. @example.com is everyone at exactly that domain, not its subdomains. sub:<id> is the provider's own account id. Portal refuses to start without a list, because the provider signs in people who have nothing to do with your app.",
   },
 };
 
-const STYLES = {
-  light: {
-    label: "text-xs font-medium text-foreground dark:text-zinc-200",
-    help: "text-xs leading-5 text-muted-foreground dark:text-zinc-500",
-    card: "border-border bg-background hover:border-primary/50 dark:border-white/10 dark:bg-transparent",
-    box: "border-border bg-background focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/25 dark:border-white/10 dark:bg-transparent",
-    input:
-      "border-border bg-background text-foreground placeholder:text-muted-foreground dark:border-white/10 dark:bg-background dark:text-zinc-100 dark:placeholder:text-zinc-500",
-    chip: "bg-secondary text-secondary-foreground dark:bg-primary/14 dark:text-primary",
-    chipRemove: "hover:bg-background/80 dark:hover:bg-black/20",
-    panel:
-      "border-border bg-muted/45 dark:border-white/8 dark:bg-background/70",
-    note: "bg-muted text-muted-foreground dark:bg-white/5 dark:text-zinc-400",
-    code: "bg-secondary/55 text-foreground ring-1 ring-border/70 dark:bg-secondary/60 dark:text-zinc-100 dark:ring-transparent",
-    copy: "text-text-muted hover:bg-background/70 dark:text-zinc-500 dark:hover:bg-black/20",
-    error: "text-destructive",
-    warn: "text-amber-700 dark:text-amber-400",
-    preview: "border-border bg-card dark:border-white/10",
-    previewButton: "bg-primary text-primary-foreground",
-    strong: "text-foreground dark:text-zinc-100",
-  },
-  terminal: {
-    label: "text-xs font-medium text-slate-200",
-    help: "text-xs leading-5 text-slate-400",
-    card: "border-white/10 bg-white/[0.03] hover:border-primary/60",
-    box: "border-white/10 bg-white/5 focus-within:border-primary/70",
-    input:
-      "border-white/10 bg-white/5 text-white placeholder:text-slate-500",
-    chip: "bg-white/10 text-slate-100",
-    chipRemove: "hover:bg-white/10",
-    panel: "border-white/10 bg-white/[0.03]",
-    note: "bg-white/5 text-slate-400",
-    code: "bg-black/40 text-white ring-1 ring-white/10",
-    copy: "text-slate-400 hover:bg-white/10",
-    error: "text-red-300",
-    warn: "text-amber-300",
-    preview: "border-white/10 bg-white/[0.04]",
-    previewButton: "bg-primary text-primary-foreground",
-    strong: "text-slate-100",
-  },
-} as const;
-
-/** One line for the collapsed hero row, e.g. "Private link · 2 names". */
-export function describeAuth(auth: TunnelAuthState): string {
+/** One line for the collapsed hero row, e.g. "Private link · 2 entries". */
+export function describeAuth(auth: TunnelAuthOptions): string {
   const label = METHODS.find((method) => method.id === auth.method)?.label ?? "";
-  const count = auth.allow[auth.method].length;
+  const count = auth.allow.length;
   if (auth.method === "none") {
     return label;
   }
   if (count === 0) {
-    return auth.method === "oidc" ? `${label} · no list yet` : `${label} · open list`;
+    return `${label} · ${auth.method === "oidc" ? "no list yet" : "open list"}`;
   }
   return `${label} · ${count} ${count === 1 ? "entry" : "entries"}`;
 }
 
 interface TunnelAuthSectionProps {
-  auth: TunnelAuthState;
-  onChange: (next: TunnelAuthState) => void;
+  auth: TunnelAuthOptions;
+  onChange: (next: TunnelAuthOptions) => void;
+  /** From validateTunnelAuth; the same list that gates copying the command. */
+  issues: TunnelAuthIssue[];
   currentOrigin: string;
   /** The normalized public name; empty while the user has not chosen one. */
   name: string;
   os: TunnelCommandOS;
-  theme: Theme;
+  theme: TunnelFormTheme;
   /** Pills instead of cards and no visitor preview, for the narrow hero card. */
   compact?: boolean;
 }
@@ -181,6 +153,7 @@ interface TunnelAuthSectionProps {
 export function TunnelAuthSection({
   auth,
   onChange,
+  issues,
   currentOrigin,
   name,
   os,
@@ -188,11 +161,16 @@ export function TunnelAuthSection({
   compact = false,
 }: TunnelAuthSectionProps) {
   const groupId = useId();
-  const s = STYLES[theme];
-  const patch = (next: Partial<TunnelAuthState>) =>
+  const s = TUNNEL_FORM_STYLES[theme];
+  const patch = (next: Partial<TunnelAuthOptions>) =>
     onChange({ ...auth, ...next });
+  // Each method reads its own kind of entry, so a list does not carry over.
+  const selectMethod = (method: TunnelAuthMethod) => {
+    if (method !== auth.method) {
+      patch({ method, allow: [] });
+    }
+  };
 
-  const selectable = METHODS.filter((method) => method.id !== "email");
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const step =
       event.key === "ArrowRight" || event.key === "ArrowDown"
@@ -204,14 +182,12 @@ export function TunnelAuthSection({
       return;
     }
     event.preventDefault();
-    const index = selectable.findIndex((method) => method.id === auth.method);
-    const next =
-      selectable[(index + step + selectable.length) % selectable.length];
-    if (!next) {
-      return;
+    const index = METHODS.findIndex((method) => method.id === auth.method);
+    const next = METHODS[(index + step + METHODS.length) % METHODS.length];
+    if (next) {
+      selectMethod(next.id);
+      document.getElementById(`${groupId}-${next.id}`)?.focus();
     }
-    patch({ method: next.id as TunnelAuthMethod });
-    document.getElementById(`${groupId}-${next.id}`)?.focus();
   };
 
   return (
@@ -224,77 +200,31 @@ export function TunnelAuthSection({
           compact ? "flex flex-wrap gap-1.5" : "grid gap-2 sm:grid-cols-2"
         )}
       >
-        {METHODS.map((method) => {
-          const soon = method.id === "email";
-          const selected = method.id === auth.method;
-          const Icon = method.icon;
-          return (
-            <button
-              key={method.id}
-              id={`${groupId}-${method.id}`}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              aria-disabled={soon || undefined}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => {
-                if (!soon) {
-                  patch({ method: method.id as TunnelAuthMethod });
-                }
-              }}
-              className={cn(
-                "border text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                compact
-                  ? "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
-                  : "grid grid-cols-[auto_1fr] content-start gap-x-2.5 gap-y-0.5 rounded-lg px-3 py-2.5",
-                s.card,
-                selected && "border-primary bg-primary/10 ring-1 ring-primary",
-                soon && "cursor-not-allowed border-dashed opacity-60"
-              )}
-            >
-              <Icon
-                aria-hidden="true"
-                className={cn(
-                  compact ? "h-3.5 w-3.5" : "row-span-2 mt-0.5 h-4 w-4",
-                  selected && "text-primary"
-                )}
-              />
-              <span
-                className={cn(
-                  "flex flex-wrap items-center gap-1.5",
-                  !compact && "text-[13px] font-semibold"
-                )}
-              >
-                {compact ? method.short : method.label}
-                {method.id === "oidc" && !compact && (
-                  <span
-                    className={cn(
-                      "rounded px-1.5 py-px text-[10px] font-semibold uppercase",
-                      s.chip
-                    )}
-                  >
-                    OpenID Connect
-                  </span>
-                )}
-                {soon && (
-                  <span
-                    className={cn(
-                      "rounded px-1.5 py-px text-[10px] font-semibold uppercase",
-                      s.chip
-                    )}
-                  >
-                    Coming soon
-                  </span>
-                )}
-              </span>
-              {!compact && (
-                <span className={cn("col-start-2", s.help)}>
-                  {method.description}
-                </span>
-              )}
-            </button>
-          );
-        })}
+        {METHODS.map((method) => (
+          <MethodCard
+            key={method.id}
+            method={method}
+            domId={`${groupId}-${method.id}`}
+            selected={method.id === auth.method}
+            compact={compact}
+            theme={theme}
+            onSelect={() => selectMethod(method.id)}
+            badge={
+              method.id === "oidc" && !compact ? (
+                <Badge theme={theme}>OpenID Connect</Badge>
+              ) : null
+            }
+          />
+        ))}
+        <MethodCard
+          method={EMAIL_METHOD}
+          domId={`${groupId}-email`}
+          selected={false}
+          disabled
+          compact={compact}
+          theme={theme}
+          badge={<Badge theme={theme}>Coming soon</Badge>}
+        />
       </div>
 
       {auth.method === "none" ? (
@@ -304,13 +234,21 @@ export function TunnelAuthSection({
         </p>
       ) : (
         <div className={cn("space-y-4 rounded-lg border p-3", s.panel)}>
-          <AllowList key={auth.method} auth={auth} patch={patch} theme={theme} />
+          <AllowList
+            key={auth.method}
+            auth={auth}
+            patch={patch}
+            issues={issues}
+            theme={theme}
+          />
           {auth.method === "oidc" && (
             <OIDCSetup
               auth={auth}
               patch={patch}
+              issues={issues}
               currentOrigin={currentOrigin}
               name={name}
+              os={os}
               theme={theme}
             />
           )}
@@ -359,47 +297,136 @@ export function TunnelAuthSection({
   );
 }
 
+function MethodCard<Id extends string>({
+  method,
+  domId,
+  selected,
+  disabled = false,
+  compact,
+  theme,
+  badge,
+  onSelect,
+}: {
+  method: MethodChoice<Id>;
+  domId: string;
+  selected: boolean;
+  disabled?: boolean;
+  compact: boolean;
+  theme: TunnelFormTheme;
+  badge?: ReactNode;
+  onSelect?: () => void;
+}) {
+  const s = TUNNEL_FORM_STYLES[theme];
+  const Icon = method.icon;
+  return (
+    <button
+      id={domId}
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      aria-disabled={disabled || undefined}
+      tabIndex={selected ? 0 : -1}
+      onClick={disabled ? undefined : onSelect}
+      className={cn(
+        "border text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        compact
+          ? "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
+          : "grid grid-cols-[auto_1fr] content-start gap-x-2.5 gap-y-0.5 rounded-lg px-3 py-2.5",
+        s.card,
+        selected && SELECTED,
+        disabled && "cursor-not-allowed border-dashed opacity-60"
+      )}
+    >
+      <Icon
+        aria-hidden="true"
+        className={cn(
+          compact ? "h-3.5 w-3.5" : "row-span-2 mt-0.5 h-4 w-4",
+          selected && "text-primary"
+        )}
+      />
+      <span
+        className={cn(
+          "flex flex-wrap items-center gap-1.5",
+          !compact && "text-[13px] font-semibold"
+        )}
+      >
+        {compact ? method.short : method.label}
+        {badge}
+      </span>
+      {!compact && (
+        <span className={cn("col-start-2", s.help)}>{method.description}</span>
+      )}
+    </button>
+  );
+}
+
+function Badge({
+  theme,
+  children,
+}: {
+  theme: TunnelFormTheme;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      className={cn(
+        "rounded px-1.5 py-px text-[10px] font-semibold uppercase",
+        theme === "terminal"
+          ? "bg-white/10 text-slate-300"
+          : "bg-secondary text-secondary-foreground dark:bg-primary/14 dark:text-primary"
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function FieldIssues({
+  issues,
+  field,
+  tone = "error",
+  theme,
+}: {
+  issues: TunnelAuthIssue[];
+  field: TunnelAuthField;
+  tone?: "error" | "warn";
+  theme: TunnelFormTheme;
+}) {
+  return issues
+    .filter((issue) => issue.field === field)
+    .map((issue) => (
+      <Notice key={issue.message} tone={tone} theme={theme}>
+        {issue.message}
+      </Notice>
+    ));
+}
+
 function AllowList({
   auth,
   patch,
+  issues,
   theme,
 }: {
-  auth: TunnelAuthState;
-  patch: (next: Partial<TunnelAuthState>) => void;
-  theme: Theme;
+  auth: TunnelAuthOptions;
+  patch: (next: Partial<TunnelAuthOptions>) => void;
+  issues: TunnelAuthIssue[];
+  theme: TunnelFormTheme;
 }) {
   const inputId = useId();
   const [draft, setDraft] = useState("");
-  const s = STYLES[theme];
+  const s = TUNNEL_FORM_STYLES[theme];
   const method = auth.method;
   if (method === "none") {
     return null;
   }
   const copy = ALLOW_COPY[method];
-  const entries = auth.allow[method];
-  const checks = entries.map((entry) => classifyAuthAllow(method, entry));
 
-  const setEntries = (next: string[]) =>
-    patch({ allow: { ...auth.allow, [method]: next } });
   const commitDraft = () => {
-    const parts = draft.split(/[,\s]+/).filter((part) => part !== "");
-    if (parts.length === 0) {
-      return;
-    }
-    setEntries([
-      ...entries,
-      ...new Set(parts.filter((part) => !entries.includes(part))),
-    ]);
+    patch({ allow: addAuthAllow(method, auth.allow, draft) });
     setDraft("");
   };
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" || event.key === ",") {
-      event.preventDefault();
-      commitDraft();
-    } else if (event.key === "Backspace" && draft === "" && entries.length > 0) {
-      setEntries(entries.slice(0, -1));
-    }
-  };
+  const removeEntry = (entry: string) =>
+    patch({ allow: auth.allow.filter((candidate) => candidate !== entry) });
 
   return (
     <div className="space-y-1.5">
@@ -407,81 +434,50 @@ function AllowList({
         {copy.label}{" "}
         <span className="font-normal opacity-70">({copy.requirement})</span>
       </label>
-      <div
-        className={cn(
-          "flex min-h-9 flex-wrap items-center gap-1.5 rounded-md border px-1.5 py-1.5",
-          s.box
-        )}
-      >
-        {entries.map((entry, index) => {
-          const check = checks[index];
-          const bad = check !== undefined && !check.ok;
+      <ChipField
+        id={inputId}
+        theme={theme}
+        draft={draft}
+        placeholder={copy.placeholder}
+        commitKeys={["Enter", ","]}
+        commitOnBlur
+        onDraftChange={setDraft}
+        onCommit={commitDraft}
+        onRemoveLast={() => patch({ allow: auth.allow.slice(0, -1) })}
+        chips={auth.allow.map((entry) => {
+          const check = classifyAuthAllow(method, entry);
           return (
-            <span
+            <Chip
               key={entry}
-              className={cn(
-                "inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 pl-2 pr-0.5 text-xs",
-                s.chip,
-                bad && "ring-1 ring-destructive"
-              )}
-            >
-              <span
-                className={cn(
-                  "text-[10px] font-semibold uppercase",
-                  bad ? s.error : "text-primary"
-                )}
-              >
-                {check?.ok ? check.kind : "invalid"}
-              </span>
-              <code className="break-all">{entry}</code>
-              <button
-                type="button"
-                aria-label={`Remove ${entry}`}
-                onClick={() =>
-                  setEntries(entries.filter((candidate) => candidate !== entry))
-                }
-                className={cn("rounded p-0.5", s.chipRemove)}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
+              theme={theme}
+              text={entry}
+              kind={check.ok ? check.kind : "invalid"}
+              invalid={!check.ok}
+              removeLabel={`Remove ${entry}`}
+              onRemove={() => removeEntry(entry)}
+            />
           );
         })}
-        <input
-          id={inputId}
-          type="text"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={handleKeyDown}
-          onBlur={commitDraft}
-          placeholder={copy.placeholder}
-          autoComplete="off"
-          spellCheck={false}
-          className="min-w-[140px] flex-1 bg-transparent px-1 text-sm outline-none placeholder:opacity-60"
-        />
-      </div>
+      />
       <p className={s.help}>{copy.help}</p>
-      {checks.map(
-        (check, index) =>
+      {auth.allow.map((entry) => {
+        const check = classifyAuthAllow(method, entry);
+        return (
           !check.ok && (
-            <Notice key={entries[index]} tone="error" theme={theme}>
+            <Notice key={entry} tone="error" theme={theme}>
               {check.error}
             </Notice>
           )
-      )}
-      {entries.length === 0 && method === "oidc" && (
-        <Notice tone="error" theme={theme}>
-          Add at least one. Without a list Portal refuses to start, because the
-          provider signs in people who have nothing to do with your app.
-        </Notice>
-      )}
-      {entries.length === 0 && method === "siwe" && (
+        );
+      })}
+      <FieldIssues issues={issues} field="allow" theme={theme} />
+      {auth.allow.length === 0 && method === "siwe" && (
         <Notice tone="warn" theme={theme}>
           No list: any wallet that signs in gets through. That proves a wallet
           exists, not who owns it.
         </Notice>
       )}
-      {entries.length === 0 && method === "credential" && (
+      {auth.allow.length === 0 && method === "credential" && (
         <Notice tone="warn" theme={theme}>
           No names: every unexpired link works, and a link can't be revoked
           before it expires.
@@ -494,27 +490,26 @@ function AllowList({
 function OIDCSetup({
   auth,
   patch,
+  issues,
   currentOrigin,
   name,
+  os,
   theme,
 }: {
-  auth: TunnelAuthState;
-  patch: (next: Partial<TunnelAuthState>) => void;
+  auth: TunnelAuthOptions;
+  patch: (next: Partial<TunnelAuthOptions>) => void;
+  issues: TunnelAuthIssue[];
   currentOrigin: string;
   name: string;
-  theme: Theme;
+  os: TunnelCommandOS;
+  theme: TunnelFormTheme;
 }) {
   const issuerId = useId();
   const clientId = useId();
-  const s = STYLES[theme];
+  const s = TUNNEL_FORM_STYLES[theme];
   const isGoogle = auth.oidcIssuer === GOOGLE_OIDC_ISSUER;
-  const issuerInvalid =
-    auth.oidcIssuer.trim() !== "" && !isHTTPSIssuer(auth.oidcIssuer);
   const redirectURL = buildAuthRedirectURL(currentOrigin, name);
-  const inputClass = cn(
-    "h-9 w-full rounded-md border px-3 font-mono text-[13px] outline-none focus-visible:ring-1 focus-visible:ring-ring read-only:opacity-70",
-    s.input
-  );
+  const inputClass = cn(s.input, "h-9 font-mono text-[13px] read-only:opacity-70");
 
   return (
     <div className="space-y-4">
@@ -538,7 +533,7 @@ function OIDCSetup({
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
                 s.card,
-                choice.active && "border-primary bg-primary/10 ring-1 ring-primary"
+                choice.active && SELECTED
               )}
             >
               {choice.label}
@@ -552,7 +547,7 @@ function OIDCSetup({
           <label htmlFor={issuerId} className={s.label}>
             Issuer
           </label>
-          <input
+          <Input
             id={issuerId}
             type="text"
             value={auth.oidcIssuer}
@@ -563,11 +558,7 @@ function OIDCSetup({
             spellCheck={false}
             className={inputClass}
           />
-          {issuerInvalid && (
-            <Notice tone="error" theme={theme}>
-              The issuer must be an https:// address.
-            </Notice>
-          )}
+          <FieldIssues issues={issues} field="issuer" theme={theme} />
           {!isGoogle && (
             <p className={s.help}>
               Any provider that publishes{" "}
@@ -580,7 +571,7 @@ function OIDCSetup({
           <label htmlFor={clientId} className={s.label}>
             Client ID
           </label>
-          <input
+          <Input
             id={clientId}
             type="text"
             value={auth.oidcClientId}
@@ -590,35 +581,39 @@ function OIDCSetup({
             spellCheck={false}
             className={inputClass}
           />
+          <FieldIssues issues={issues} field="clientId" theme={theme} />
         </div>
       </div>
 
-      <p className={cn("flex gap-2 rounded-md p-2.5 text-xs", s.note)}>
-        <Lock aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        <span>
-          <strong className={s.strong}>
-            The client secret is not entered here.
-          </strong>{" "}
-          The command sets it from <code>AUTH_OIDC_CLIENT_SECRET</code> on its
-          own line, which keeps it out of the process list and your shell
-          history.
-        </span>
-      </p>
-
       <div className="space-y-1.5">
-        <p className={s.label}>At your provider, before you run the command</p>
+        <p className={s.label}>1. At your provider</p>
         <p className={s.help}>
           Create an OAuth client for a web application and add this redirect
           address:
         </p>
         {redirectURL === "" ? (
-          <Notice tone="warn" theme={theme}>
-            Add a Name first. The provider needs the exact address, and it is
-            built from the Name.
-          </Notice>
+          <FieldIssues issues={issues} field="name" tone="warn" theme={theme} />
         ) : (
-          <CopyLine value={redirectURL} label="Copy redirect address" theme={theme} />
+          <CopyLine
+            value={redirectURL}
+            label="Copy redirect address"
+            theme={theme}
+          />
         )}
+      </div>
+
+      <div className="space-y-1.5">
+        <p className={s.label}>2. In your terminal, before the command below</p>
+        <p className={s.help}>
+          Run this in the shell you will start the tunnel from. It asks for the
+          client secret without showing it, so the secret stays out of the
+          process list, your shell history and the command you copy.
+        </p>
+        <CopyLine
+          value={buildOIDCSecretCommand(os)}
+          label="Copy secret prompt"
+          theme={theme}
+        />
       </div>
     </div>
   );
@@ -633,11 +628,11 @@ function InviteBlock({
   currentOrigin: string;
   name: string;
   os: TunnelCommandOS;
-  theme: Theme;
+  theme: TunnelFormTheme;
 }) {
   const subjectId = useId();
   const expiresId = useId();
-  const s = STYLES[theme];
+  const s = TUNNEL_FORM_STYLES[theme];
   const [subject, setSubject] = useState("");
   const [expires, setExpires] = useState("720h");
   const command = buildAuthIssueCommand({
@@ -647,10 +642,7 @@ function InviteBlock({
     expires,
     os,
   });
-  const fieldClass = cn(
-    "h-9 w-full rounded-md border px-3 text-[13px] outline-none focus-visible:ring-1 focus-visible:ring-ring",
-    s.input
-  );
+  const fieldClass = cn(s.input, "h-9 text-[13px]");
 
   return (
     <div className="space-y-2">
@@ -660,7 +652,7 @@ function InviteBlock({
           <label htmlFor={subjectId} className={s.label}>
             Name
           </label>
-          <input
+          <Input
             id={subjectId}
             type="text"
             value={subject}
@@ -675,18 +667,18 @@ function InviteBlock({
           <label htmlFor={expiresId} className={s.label}>
             Valid for
           </label>
-          <select
-            id={expiresId}
-            value={expires}
-            onChange={(event) => setExpires(event.target.value)}
-            className={fieldClass}
-          >
-            {EXPIRY_CHOICES.map((choice) => (
-              <option key={choice.value} value={choice.value}>
-                {choice.label}
-              </option>
-            ))}
-          </select>
+          <Select value={expires} onValueChange={setExpires}>
+            <SelectTrigger id={expiresId} className={fieldClass}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {EXPIRY_CHOICES.map((choice) => (
+                <SelectItem key={choice.value} value={choice.value}>
+                  {choice.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
       {command === "" ? (
@@ -699,8 +691,10 @@ function InviteBlock({
         <CopyLine value={command} label="Copy invite command" theme={theme} />
       )}
       <p className={s.help}>
-        It prints a link to send to that person. Anyone who holds the link gets
-        in until it expires, so send it privately.
+        Run it from the folder where you ran <code>portal expose</code>: both
+        read <code>identity.json</code> from the current folder. It prints a
+        link to send to that person. Anyone who holds the link gets in until
+        it expires, so send it privately.
       </p>
     </div>
   );
@@ -712,12 +706,12 @@ function VisitorPreview({
   name,
   theme,
 }: {
-  auth: TunnelAuthState;
+  auth: TunnelAuthOptions;
   currentOrigin: string;
   name: string;
-  theme: Theme;
+  theme: TunnelFormTheme;
 }) {
-  const s = STYLES[theme];
+  const s = TUNNEL_FORM_STYLES[theme];
   const hostname =
     buildServiceStatusHostname(currentOrigin, name) || "your-name.relay";
   let issuerHost = "your provider";
@@ -751,25 +745,13 @@ function VisitorPreview({
         aria-hidden="true"
         className={cn("rounded-lg border px-4 py-5 text-center", s.preview)}
       >
-        <span
-          className={cn(
-            "inline-block rounded-full px-2.5 py-0.5 font-mono text-[11px]",
-            s.chip
-          )}
-        >
-          {hostname}
-        </span>
+        <Badge theme={theme}>{hostname}</Badge>
         <p className={cn("mt-2 text-sm font-semibold", s.strong)}>
           {page.title}
         </p>
         <p className={cn("mx-auto mt-1 max-w-[36ch]", s.help)}>{page.body}</p>
         {page.action !== "" && (
-          <span
-            className={cn(
-              "mt-3 inline-block rounded-md px-4 py-1.5 text-xs font-bold",
-              s.previewButton
-            )}
-          >
+          <span className="mt-3 inline-block rounded-md bg-primary px-4 py-1.5 text-xs font-bold text-primary-foreground">
             {page.action}
           </span>
         )}
@@ -788,27 +770,11 @@ function CopyLine({
 }: {
   value: string;
   label: string;
-  theme: Theme;
+  theme: TunnelFormTheme;
 }) {
-  const [copied, setCopied] = useState(false);
-  const s = STYLES[theme];
-
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-    const timer = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-    } catch (error) {
-      console.error("Failed to copy", error);
-    }
-  };
+  const { copiedKey, copy } = useCopy();
+  const s = TUNNEL_FORM_STYLES[theme];
+  const copied = copiedKey !== null;
 
   return (
     <div
@@ -822,7 +788,7 @@ function CopyLine({
       </code>
       <button
         type="button"
-        onClick={handleCopy}
+        onClick={() => copy(value)}
         aria-label={label}
         title={copied ? "Copied" : "Copy"}
         className={cn("shrink-0 rounded-md p-2 transition-colors", s.copy)}
@@ -834,28 +800,5 @@ function CopyLine({
         )}
       </button>
     </div>
-  );
-}
-
-function Notice({
-  tone,
-  theme,
-  children,
-}: {
-  tone: "error" | "warn";
-  theme: Theme;
-  children: ReactNode;
-}) {
-  const s = STYLES[theme];
-  return (
-    <p
-      className={cn(
-        "flex items-start gap-1.5 text-xs leading-5",
-        tone === "error" ? s.error : s.warn
-      )}
-    >
-      <TriangleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <span>{children}</span>
-    </p>
   );
 }

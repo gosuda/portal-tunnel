@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useMemo, useState, type ChangeEvent } from "react";
+import { useCopy } from "@/hooks/useCopy";
 import { normalizeExposeName } from "@/lib/exposeName";
 import { classifyShareInput } from "@/lib/shareLink";
 import {
-  GOOGLE_OIDC_ISSUER,
+  DEFAULT_TUNNEL_AUTH,
   buildTunnelCommand,
   validateTunnelAuth,
-  type TunnelAuthMethod,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 
@@ -20,23 +20,6 @@ export function readCurrentOrigin(): string {
 
   return FALLBACK_ORIGIN;
 }
-
-export interface TunnelAuthState {
-  method: TunnelAuthMethod;
-  /** Each method keeps its own list, so switching back loses nothing. */
-  allow: Record<TunnelAuthMethod, string[]>;
-  identityHeaders: boolean;
-  oidcIssuer: string;
-  oidcClientId: string;
-}
-
-const INITIAL_AUTH: TunnelAuthState = {
-  method: "none",
-  allow: { none: [], credential: [], siwe: [], oidc: [] },
-  identityHeaders: false,
-  oidcIssuer: GOOGLE_OIDC_ISSUER,
-  oidcClientId: "",
-};
 
 interface TunnelCommandExtras {
   relayUrls?: string[];
@@ -54,25 +37,15 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
   // pre-committing the user to a local port.
   const [target, setTarget] = useState("");
   const [name, setName] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [auth, setAuth] = useState(INITIAL_AUTH);
+  const { copiedKey, copy } = useCopy();
+  const [auth, setAuth] = useState(DEFAULT_TUNNEL_AUTH);
   const os = extras.os ?? "unix";
 
   const share = useMemo(() => classifyShareInput(target), [target]);
   const effectiveName = normalizeExposeName(name);
-  const authOptions = useMemo(
-    () => ({
-      method: auth.method,
-      allow: auth.allow[auth.method],
-      identityHeaders: auth.identityHeaders,
-      oidcIssuer: auth.oidcIssuer,
-      oidcClientId: auth.oidcClientId,
-    }),
-    [auth]
-  );
   const authIssues = useMemo(
-    () => validateTunnelAuth(authOptions, effectiveName),
-    [authOptions, effectiveName]
+    () => validateTunnelAuth(auth, effectiveName),
+    [auth, effectiveName]
   );
   const commandOptions = useMemo(
     () => ({
@@ -87,10 +60,10 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
       os,
       shareKind: share.kind,
       servePath: share.path,
-      auth: authOptions,
+      auth,
     }),
     [
-      authOptions,
+      auth,
       currentOrigin,
       effectiveName,
       extras.discovery,
@@ -121,30 +94,11 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
     [command, os]
   );
 
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      setCopied(false);
-    }, 2000);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [copied]);
-
-  const handleCopy = async () => {
+  const handleCopy = () => {
     if (authIssues.length > 0) {
       return;
     }
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-    } catch (error) {
-      console.error("Failed to copy tunnel command", error);
-    }
+    return copy(command);
   };
 
   const handleNameChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -156,7 +110,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
     target,
     setTarget,
     name,
-    copied,
+    copied: copiedKey !== null,
     os,
     effectiveName,
     auth,

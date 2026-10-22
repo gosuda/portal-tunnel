@@ -17,13 +17,18 @@ export interface TunnelAuthOptions {
   oidcClientId: string;
 }
 
-const NO_TUNNEL_AUTH: TunnelAuthOptions = {
+export const DEFAULT_TUNNEL_AUTH: TunnelAuthOptions = {
   method: "none",
   allow: [],
   identityHeaders: false,
-  oidcIssuer: "",
+  oidcIssuer: GOOGLE_OIDC_ISSUER,
   oidcClientId: "",
 };
+
+/** Sign-in covers HTTP only, so the tunnel refuses to combine it with UDP. */
+export function authBlocksUDP(auth: TunnelAuthOptions): boolean {
+  return auth.method !== "none";
+}
 
 export interface TunnelCommandOptions {
   currentOrigin: string;
@@ -44,10 +49,10 @@ export interface TunnelCommandOptions {
 }
 
 export function buildTunnelCommand(options: TunnelCommandOptions): string {
-  const { installLine, secretLine, exposeHead, exposeOptions } =
+  const { installLine, exposeHead, exposeOptions } =
     buildTunnelCommandParts(options);
 
-  return joinTunnelCommand(installLine, secretLine, exposeHead, exposeOptions);
+  return joinTunnelCommand(installLine, exposeHead, exposeOptions);
 }
 
 function buildTunnelCommandParts({
@@ -62,11 +67,9 @@ function buildTunnelCommandParts({
   udpPort = "",
   shareKind = "port",
   servePath = "",
-  auth = NO_TUNNEL_AUTH,
+  auth = DEFAULT_TUNNEL_AUTH,
 }: TunnelCommandOptions): {
   installLine: string;
-  /** Sets the OIDC client secret for the shell; empty for other methods. */
-  secretLine: string;
   exposeHead: string;
   exposeOptions: string[];
 } {
@@ -103,9 +106,7 @@ function buildTunnelCommandParts({
   if (normalizedThumbnailURL !== "") {
     exposeArgs.push(`--thumbnail ${formatToken(normalizedThumbnailURL, os)}`);
   }
-  // Sign-in covers HTTP only, so the tunnel refuses to combine it with UDP.
-  const authenticated = auth.method !== "none";
-  if (enableUDP && !authenticated) {
+  if (enableUDP && !authBlocksUDP(auth)) {
     exposeArgs.push("--udp");
     const normalizedUDPPort = udpPort.trim();
     if (normalizedUDPPort !== "") {
@@ -113,10 +114,9 @@ function buildTunnelCommandParts({
     }
   }
 
-  if (authenticated) {
+  if (auth.method !== "none") {
     exposeArgs.push(...buildAuthArgs(auth, os));
   }
-  const secretLine = auth.method === "oidc" ? buildOIDCSecretLine(os) : "";
 
   if (os === "windows") {
     return {
@@ -124,7 +124,6 @@ function buildTunnelCommandParts({
         `$ProgressPreference = 'SilentlyContinue'`,
         `irm ${formatToken(installPowerShellURL, os)} | iex`,
       ].join("\n"),
-      secretLine,
       exposeHead: "portal expose",
       exposeOptions: [...leadingArgs, ...exposeArgs],
     };
@@ -134,7 +133,6 @@ function buildTunnelCommandParts({
   return {
     // bash runs the installer in a subshell, so add its install dirs to this shell's PATH.
     installLine: `curl ${curlFlags} ${formatToken(installScriptURL, os)} | bash && export PATH="$HOME/.local/bin:$HOME/bin:$PATH"`,
-    secretLine,
     exposeHead: "portal expose",
     exposeOptions: [...leadingArgs, ...exposeArgs],
   };
@@ -190,12 +188,16 @@ function buildAuthArgs(auth: TunnelAuthOptions, os: TunnelCommandOS): string[] {
   return args;
 }
 
-// The OIDC client secret travels in the environment, never in the command
-// line where `ps` and shell history would show it.
-function buildOIDCSecretLine(os: TunnelCommandOS): string {
+/**
+ * Reads the OIDC client secret at a prompt and exports it for the next
+ * `portal expose` in the same shell. The secret never appears in the command
+ * line (`ps`), in shell history (typed at a prompt, not after `export`) or in
+ * the text that gets copied, so there is no placeholder to forget.
+ */
+export function buildOIDCSecretCommand(os: TunnelCommandOS): string {
   return os === "windows"
-    ? "$env:AUTH_OIDC_CLIENT_SECRET = '<paste secret here>'"
-    : "export AUTH_OIDC_CLIENT_SECRET='<paste secret here>'";
+    ? "$secret = Read-Host 'OIDC client secret' -AsSecureString; $env:AUTH_OIDC_CLIENT_SECRET = [System.Net.NetworkCredential]::new('', $secret).Password"
+    : "printf 'OIDC client secret: '; stty -echo; read -r AUTH_OIDC_CLIENT_SECRET; stty echo; echo; export AUTH_OIDC_CLIENT_SECRET";
 }
 
 function valueOrPlaceholder(
@@ -207,18 +209,24 @@ function valueOrPlaceholder(
   return trimmed === "" ? placeholder : formatToken(trimmed, os);
 }
 
-export type AuthAllowKind =
+type AuthAllowKind =
   | "link name"
   | "wallet"
   | "person"
   | "domain"
   | "account id";
 
-export type AuthAllowCheck =
+type AuthAllowCheck =
   | { ok: true; kind: AuthAllowKind }
   | { ok: false; error: string };
 
-/** Mirrors what `portal expose --auth-allow` accepts for each method. */
+/**
+ * Mirrors what `portal expose --auth-allow` accepts for each method. The Go
+ * owners are normalizeApplicationAuthSubject (access_credential.go),
+ * normalizeOIDCPrincipal (access_auth.go) and identity.NormalizeEVMAddress.
+ * The browser has no Keccak, so a mixed-case wallet address is not checked
+ * against its EIP-55 checksum here; the tunnel rejects a bad one at start.
+ */
 export function classifyAuthAllow(
   method: TunnelAuthMethod,
   entry: string
@@ -240,7 +248,13 @@ export function classifyAuthAllow(
   if (/^sub:/i.test(entry)) {
     return isPrintableSubject(entry.slice("sub:".length))
       ? { ok: true, kind: "account id" }
-      : { ok: false, error: `${entry} needs an id after sub:.` };
+      : { ok: false, error: `${entry} needs an id of 1 to 256 printable characters after sub:.` };
+  }
+  if (!isPrintableSubject(entry)) {
+    return {
+      ok: false,
+      error: `${entry} must be 1 to 256 printable characters.`,
+    };
   }
   if ([...entry].some((char) => (char.codePointAt(0) ?? 0) > 127)) {
     return {
@@ -259,9 +273,10 @@ export function classifyAuthAllow(
   return { ok: true, kind: at === 0 ? "domain" : "person" };
 }
 
+// The tunnel limits a subject to 256 bytes, not characters.
 function isPrintableSubject(value: string): boolean {
   const subject = value.trim();
-  if (subject === "" || subject.length > 256) {
+  if (subject === "" || new TextEncoder().encode(subject).length > 256) {
     return false;
   }
   return ![...subject].some((char) => {
@@ -270,48 +285,118 @@ function isPrintableSubject(value: string): boolean {
   });
 }
 
-export function isHTTPSIssuer(raw: string): boolean {
+// normalizeOIDCIssuerURL also accepts http on a loopback host, which the
+// builder does not offer.
+function isOIDCIssuer(raw: string): boolean {
   try {
     const parsed = new URL(raw.trim());
-    return parsed.protocol === "https:" && parsed.hostname !== "";
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname !== "" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.search === "" &&
+      parsed.hash === ""
+    );
   } catch {
     return false;
   }
 }
 
-/** What stops the generated command from being run as shown; empty when ready. */
+export type TunnelAuthField =
+  | "allow"
+  | "entries"
+  | "issuer"
+  | "clientId"
+  | "name";
+
+export interface TunnelAuthIssue {
+  field: TunnelAuthField;
+  message: string;
+}
+
+/**
+ * What stops the generated command from being run as shown; empty when ready.
+ * The one owner of these rules: the copy gate and the notices next to each
+ * field both render from it.
+ */
 export function validateTunnelAuth(
   auth: TunnelAuthOptions,
   name: string
-): string[] {
+): TunnelAuthIssue[] {
   if (auth.method === "none") {
     return [];
   }
-  const issues: string[] = [];
+  const issues: TunnelAuthIssue[] = [];
   if (auth.method === "oidc") {
     if (auth.allow.length === 0) {
-      issues.push("Add who may sign in");
+      issues.push({ field: "allow", message: "Add who may sign in" });
     }
-    if (!isHTTPSIssuer(auth.oidcIssuer)) {
-      issues.push("The issuer must be an https:// address");
+    if (auth.oidcIssuer.trim() === "") {
+      issues.push({ field: "issuer", message: "Add the issuer address" });
+    } else if (!isOIDCIssuer(auth.oidcIssuer)) {
+      issues.push({
+        field: "issuer",
+        message: "The issuer must be an https:// address without a query or fragment",
+      });
     }
     if (auth.oidcClientId.trim() === "") {
-      issues.push("Add the client ID");
+      issues.push({ field: "clientId", message: "Add the client ID" });
     }
     if (normalizeExposeName(name) === "") {
-      issues.push("Add a Name: the provider needs the exact redirect address");
+      issues.push({
+        field: "name",
+        message: "Add a Name: the provider needs the exact redirect address",
+      });
     }
   }
   if (auth.allow.some((entry) => !classifyAuthAllow(auth.method, entry).ok)) {
-    issues.push("Fix the highlighted entries");
+    issues.push({ field: "entries", message: "Fix the highlighted entries" });
   }
   return issues;
 }
 
+/**
+ * Adds typed entries to an allowlist the way the tunnel reads it: emails are
+ * lowercased, the `sub:` prefix is normalized, and entries that name the same
+ * principal are kept once (wallet addresses compare without regard to case).
+ */
+export function addAuthAllow(
+  method: TunnelAuthMethod,
+  current: string[],
+  draft: string
+): string[] {
+  const keyOf = (entry: string) => (method === "siwe" ? entry.toLowerCase() : entry);
+  const next = [...current];
+  const seen = new Set(next.map(keyOf));
+  for (const typed of draft.split(/[,\s]+/)) {
+    if (typed === "") {
+      continue;
+    }
+    const entry = canonicalAuthAllow(method, typed);
+    if (!seen.has(keyOf(entry))) {
+      seen.add(keyOf(entry));
+      next.push(entry);
+    }
+  }
+  return next;
+}
+
+function canonicalAuthAllow(method: TunnelAuthMethod, entry: string): string {
+  if (method !== "oidc") {
+    return entry;
+  }
+  if (/^sub:/i.test(entry)) {
+    return `sub:${entry.slice("sub:".length)}`;
+  }
+  return entry.includes("@") ? entry.toLowerCase() : entry;
+}
+
 /** The address to register at an OIDC provider; empty until the name is known. */
 export function buildAuthRedirectURL(origin: string, name: string): string {
-  const hostname = buildServiceStatusHostname(origin, name);
-  return hostname === "" ? "" : `https://${hostname}/_portal/auth/callback`;
+  const publicURL = buildTunnelPreviewURL(origin, name);
+  // applicationAuthCallbackPath in cmd/portal-tunnel/gateway/access_auth.go
+  return publicURL === "" ? "" : `${publicURL}/_portal/auth/callback`;
 }
 
 /** The command that mints one private link; empty until it has a host and a subject. */
@@ -397,11 +482,8 @@ function formatToken(value: string, os: TunnelCommandOS): string {
 
 function joinTunnelCommand(
   installLine: string,
-  secretLine: string,
   exposeHead: string,
   exposeOptions: string[]
 ): string {
-  return [installLine, secretLine, [exposeHead, ...exposeOptions].join(" ")]
-    .filter((line) => line !== "")
-    .join("\n");
+  return [installLine, [exposeHead, ...exposeOptions].join(" ")].join("\n");
 }

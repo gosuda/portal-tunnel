@@ -1,21 +1,25 @@
-import {
-  useId,
-  useMemo,
-  useState,
-  type KeyboardEvent,
-} from "react";
-import { Check, ChevronRight, Copy, Lock, X } from "lucide-react";
+import { useId, useMemo, useState } from "react";
+import { Check, ChevronRight, Copy, Lock } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   TunnelAuthSection,
   describeAuth,
 } from "@/components/TunnelAuthSection";
+import {
+  Chip,
+  ChipField,
+  Notice,
+  TUNNEL_FORM_STYLES,
+  type TunnelFormTheme,
+} from "@/components/TunnelFormParts";
 import type { Lease } from "@/types/api";
 import { cn } from "@/lib/utils";
 import {
+  authBlocksUDP,
   buildTunnelPreviewURL,
   buildServiceStatusHostname,
   normalizeAbsoluteHTTPURL,
+  type TunnelAuthIssue,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 import {
@@ -35,7 +39,7 @@ const SHARE_PLACEHOLDER = "file:///Users/me/site/index.html or 3000";
 
 type TunnelCommandFormProps = {
   className?: string;
-  theme?: "light" | "terminal";
+  theme?: TunnelFormTheme;
 } & (
   | { mode: "hero"; leases: Lease[] | null }
   | { mode?: "full"; leases?: never }
@@ -280,6 +284,7 @@ function HeroTunnelCommandForm({
               <TunnelAuthSection
                 auth={auth}
                 onChange={setAuth}
+                issues={authIssues}
                 currentOrigin={currentOrigin}
                 name={effectiveName}
                 os={os}
@@ -321,7 +326,7 @@ function HeroTunnelCommandForm({
             <span className="mt-2 block">{runBlock}</span>
           </pre>
         </div>
-        <NotReady issues={authIssues} isTerminal={isTerminal} />
+        <NotReady issues={authIssues} theme={theme} />
       </div>
 
       <div className="space-y-2 pt-1">
@@ -449,7 +454,7 @@ function FullTunnelCommandForm({
     udpPort,
     os: tunnelTarget,
   });
-  const signInRequired = auth.method !== "none";
+  const udpBlocked = authBlocksUDP(auth);
 
   const addRelayURL = (url: string) => {
     const trimmed = url.trim();
@@ -473,23 +478,11 @@ function FullTunnelCommandForm({
     setRelayUrls((prev) => prev.filter((candidate) => candidate !== url));
   };
 
-  const handleURLKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      addRelayURL(urlInput);
-      return;
-    }
-
-    if (event.key === "Backspace" && urlInput === "" && relayUrls.length > 0) {
-      setRelayUrls((prev) => prev.slice(0, -1));
-    }
-  };
   const sectionLabelClass = isTerminal
     ? "text-sm font-medium text-slate-200"
     : "text-sm font-medium text-foreground dark:text-zinc-100";
-  const helpTextClass = isTerminal
-    ? "text-xs text-slate-400"
-    : "text-xs leading-5 text-muted-foreground dark:text-zinc-500";
+  const formStyles = TUNNEL_FORM_STYLES[theme];
+  const helpTextClass = formStyles.help;
   const inlineFieldClass = isTerminal
     ? "flex items-center overflow-hidden rounded-lg border border-white/10 bg-white/5"
     : "flex items-center overflow-hidden rounded-md border border-border/80 bg-secondary/55 focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30 dark:border-white/10 dark:bg-secondary/60";
@@ -499,18 +492,7 @@ function FullTunnelCommandForm({
   const inlineInputClass = isTerminal
     ? "h-10 border-0 bg-transparent px-3 text-sm text-white placeholder:text-slate-500 shadow-none focus-visible:ring-0"
     : "h-9 border-0 bg-transparent px-3 text-sm font-semibold text-foreground placeholder:text-text-muted shadow-none focus-visible:ring-0 dark:text-zinc-100 dark:placeholder:text-zinc-500";
-  const relayFieldClass = isTerminal
-    ? "flex min-h-12 flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2.5 py-2"
-    : "flex min-h-10 flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-2 shadow-sm focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/25 dark:border-white/10 dark:bg-transparent";
-  const relayChipClass = isTerminal
-    ? "inline-flex items-center gap-1 rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium text-slate-100"
-    : "inline-flex items-center gap-1 rounded-md bg-secondary px-2.5 py-1 text-xs font-semibold text-secondary-foreground dark:bg-primary/14 dark:text-primary";
-  const relayChipRemoveClass = isTerminal
-    ? "hover:bg-white/10"
-    : "text-text-muted hover:bg-background/80 dark:text-primary dark:hover:bg-black/20";
-  const advancedInputClass = isTerminal
-    ? "h-10 rounded-lg border-white/10 bg-white/5 text-white placeholder:text-slate-500"
-    : "h-10 rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground shadow-sm dark:border-white/10 dark:bg-background dark:text-zinc-100 dark:placeholder:text-zinc-500";
+  const advancedInputClass = formStyles.input;
   const osGroupClass = isTerminal
     ? "flex rounded-lg bg-white/8 p-1"
     : "flex rounded-md bg-border p-1 dark:bg-secondary/60";
@@ -618,44 +600,28 @@ function FullTunnelCommandForm({
         <label className={sectionLabelClass}>
           Relay URLs
         </label>
-        <div className={relayFieldClass}>
-          {relayUrls.map((url) => (
-            <span
+        <ChipField
+          theme={theme}
+          draft={urlInput}
+          placeholder="Add relay URL..."
+          onDraftChange={setUrlInput}
+          onCommit={() => addRelayURL(urlInput)}
+          onRemoveLast={() => {
+            if (relayUrls.length > 0) {
+              setRelayUrls((prev) => prev.slice(0, -1));
+            }
+          }}
+          chips={relayUrls.map((url) => (
+            <Chip
               key={url}
-              className={relayChipClass}
-            >
-              {url}
-              <button
-                type="button"
-                onClick={() => removeRelayURL(url)}
-                className={cn(
-                  "ml-1 rounded-sm p-0.5",
-                  !discoveryEnabled && relayUrls.length <= 1
-                    ? "cursor-not-allowed opacity-40"
-                    : relayChipRemoveClass
-                )}
-                aria-label={`Remove ${url}`}
-                disabled={!discoveryEnabled && relayUrls.length <= 1}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
+              theme={theme}
+              text={url}
+              removeLabel={`Remove ${url}`}
+              removeDisabled={!discoveryEnabled && relayUrls.length <= 1}
+              onRemove={() => removeRelayURL(url)}
+            />
           ))}
-
-          <input
-            type="text"
-            value={urlInput}
-            onChange={(event) => setUrlInput(event.target.value)}
-            onKeyDown={handleURLKeyDown}
-            placeholder="Add relay URL..."
-            className={cn(
-              "min-w-[140px] flex-1 bg-transparent text-sm outline-none",
-              isTerminal
-                ? "text-white placeholder:text-slate-500"
-                : "text-foreground placeholder:text-muted-foreground dark:text-zinc-100 dark:placeholder:text-zinc-500"
-            )}
-          />
-        </div>
+        />
         <p className={helpTextClass}>
           Press Enter to add. Multiple relay servers for redundancy.
         </p>
@@ -669,6 +635,7 @@ function FullTunnelCommandForm({
         <TunnelAuthSection
           auth={auth}
           onChange={setAuth}
+          issues={authIssues}
           currentOrigin={currentOrigin}
           name={effectiveName}
           os={os}
@@ -702,7 +669,7 @@ function FullTunnelCommandForm({
             )}
           </button>
         </div>
-        <NotReady issues={authIssues} isTerminal={isTerminal} />
+        <NotReady issues={authIssues} theme={theme} />
       </div>
 
       {!isTerminal && (
@@ -736,8 +703,8 @@ function FullTunnelCommandForm({
                 <label className="flex items-center gap-2 text-sm text-foreground dark:text-zinc-300">
                   <input
                     type="checkbox"
-                    checked={enableUDP && !signInRequired}
-                    disabled={signInRequired}
+                    checked={enableUDP && !udpBlocked}
+                    disabled={udpBlocked}
                     onChange={(event) => {
                       const nextEnabled = event.target.checked;
                       setEnableUDP(nextEnabled);
@@ -749,7 +716,7 @@ function FullTunnelCommandForm({
                   />
                   <span>
                     Enable UDP transport
-                    {signInRequired && (
+                    {udpBlocked && (
                       <span className={cn("block", helpTextClass)}>
                         Not available with sign-in: Portal can only check
                         visitors on web traffic.
@@ -757,7 +724,7 @@ function FullTunnelCommandForm({
                     )}
                   </span>
                 </label>
-                {enableUDP && !signInRequired && (
+                {enableUDP && !udpBlocked && (
                   <div className="space-y-1.5">
                     <Input
                       id={`${inputId}-udp-port`}
@@ -812,23 +779,17 @@ function FullTunnelCommandForm({
 
 function NotReady({
   issues,
-  isTerminal,
+  theme,
 }: {
-  issues: string[];
-  isTerminal: boolean;
+  issues: TunnelAuthIssue[];
+  theme: TunnelFormTheme;
 }) {
   if (issues.length === 0) {
     return null;
   }
   return (
-    <p
-      role="status"
-      className={cn(
-        "text-xs leading-5",
-        isTerminal ? "text-amber-300" : "text-amber-700 dark:text-amber-400"
-      )}
-    >
-      Not ready to copy: {issues.join(" · ")}
-    </p>
+    <Notice tone="warn" theme={theme} role="status">
+      Not ready to copy: {issues.map((issue) => issue.message).join(" · ")}
+    </Notice>
   );
 }
