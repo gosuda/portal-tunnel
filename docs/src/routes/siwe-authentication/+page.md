@@ -128,8 +128,8 @@ Pass the client secret as `AUTH_OIDC_CLIENT_SECRET`, as above, so it stays out o
 
 ## Check that sign-in is on
 
-An unauthenticated browser request is sent to the login page, and any other
-request is refused:
+An unauthenticated `GET` or `HEAD` request is sent to the login page, and any
+other method is refused:
 
 ```bash
 curl -sI https://myapp.example.com/            # 303, Location: /_portal/auth/login?next=%2F

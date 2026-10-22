@@ -100,8 +100,8 @@ Without signing in as the user:
 | `oidc requires at least one --auth-allow entry` | Add an allowlist entry. |
 | `oidc issuer url is required` / `must use https` | Pass an `https` issuer. |
 | `oidc client id is required` | Pass `--auth-oidc-client-id`. |
-| `oidc settings require the oidc application auth provider` | An `--auth-oidc-*` flag was given without `--auth oidc`. |
-| `unsupported application auth provider ""` | `--auth-allow` or `--auth-identity-headers` was given without `--auth`. |
+| `oidc settings require the oidc application auth provider` | An `--auth-oidc-*` flag was given together with `--auth siwe` or `--auth credential`. |
+| `unsupported application auth provider ""` | `--auth-allow`, `--auth-identity-headers` or an `--auth-oidc-*` flag was given without `--auth`. |
 | `HTTP tunnel cannot be combined with TCP or UDP` | Remove `--tcp` / `--udp`, or drop sign-in. |
 | `application auth cannot be combined with relay cache` | Remove `--cache`, or drop sign-in. |
 | The provider reports a redirect URI mismatch | The registered redirect URI differs from `https://<host>/_portal/auth/callback`; the host must match the tunnel's public hostname exactly. |
