@@ -709,7 +709,7 @@ func (o *oidcAuthenticator) verifyIDToken(rawToken, expectedNonce, issuer string
 		return oidcIDTokenClaims{}, err
 	}
 	var claims oidcIDTokenClaims
-	if err := parsed.Claims(&jwks, &claims); err != nil {
+	if err := parsed.Claims(oidcVerificationKey(parsed.Headers, &jwks), &claims); err != nil {
 		return oidcIDTokenClaims{}, err
 	}
 	if claims.Expiry == nil {
@@ -729,6 +729,20 @@ func (o *oidcAuthenticator) verifyIDToken(rawToken, expectedNonce, issuer string
 		return oidcIDTokenClaims{}, errors.New("id_token subject is required")
 	}
 	return claims, nil
+}
+
+// oidcVerificationKey selects what a token is verified against. go-jose finds
+// a key in a set by the token's kid and refuses a token without one, even when
+// the set holds a single key. A provider that signs with one key may omit the
+// kid, so that key, when it is a signing key, is used directly.
+func oidcVerificationKey(headers []jose.Header, jwks *jose.JSONWebKeySet) any {
+	if len(headers) != 1 || headers[0].KeyID != "" || len(jwks.Keys) != 1 {
+		return jwks
+	}
+	if use := jwks.Keys[0].Use; use != "" && use != "sig" {
+		return jwks
+	}
+	return jwks.Keys[0]
 }
 
 // get returns the cached value while it is younger than maxAge and otherwise

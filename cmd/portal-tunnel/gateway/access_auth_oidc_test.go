@@ -45,6 +45,7 @@ type oidcTestIdP struct {
 
 	mu          sync.Mutex
 	jwk         jose.JSONWebKey
+	extraJWKs   []jose.JSONWebKey
 	challenge   string
 	nonce       string
 	mutate      func(*oidcIDTokenClaims)
@@ -106,7 +107,7 @@ func (p *oidcTestIdP) serve(w http.ResponseWriter, r *http.Request) {
 	case "/jwks":
 		p.jwksHits.Add(1)
 		p.mu.Lock()
-		keys := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{p.jwk}}
+		keys := jose.JSONWebKeySet{Keys: append([]jose.JSONWebKey{p.jwk}, p.extraJWKs...)}
 		p.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(keys)
 	case "/token":
@@ -473,6 +474,50 @@ func TestApplicationAuthOIDCRefreshesKeysOnlyForKeyErrors(t *testing.T) {
 		assertOIDCCallback(t, completeOIDCLogin(t, gate, idp), http.StatusSeeOther)
 		assertHits(t, idp, 1, 2)
 	})
+}
+
+// TestApplicationAuthOIDCTokenWithoutKeyID protects logins at providers that
+// omit the kid while signing with a single key, without letting a token pick
+// among several keys or weakening the algorithm allowlist.
+func TestApplicationAuthOIDCTokenWithoutKeyID(t *testing.T) {
+	t.Parallel()
+
+	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutKID := func(t *testing.T, p *oidcTestIdP) {
+		p.signer = newOIDCTestSigner(t, jose.ES256, p.key, "")
+	}
+	tests := []struct {
+		name      string
+		configure func(t *testing.T, p *oidcTestIdP)
+		want      int
+	}{
+		{"one key listed with its kid", withoutKID, http.StatusSeeOther},
+		{"one key listed without a kid", func(t *testing.T, p *oidcTestIdP) {
+			withoutKID(t, p)
+			p.jwk.KeyID = ""
+		}, http.StatusSeeOther},
+		{"one key reserved for encryption", func(t *testing.T, p *oidcTestIdP) {
+			withoutKID(t, p)
+			p.jwk.Use = "enc"
+		}, http.StatusUnauthorized},
+		{"two keys listed", func(t *testing.T, p *oidcTestIdP) {
+			withoutKID(t, p)
+			p.extraJWKs = []jose.JSONWebKey{{Key: &otherKey.PublicKey, KeyID: "k2", Algorithm: string(jose.ES256), Use: "sig"}}
+		}, http.StatusUnauthorized},
+		{"symmetric algorithm", func(t *testing.T, p *oidcTestIdP) {
+			p.signWith = newOIDCTestSigner(t, jose.HS256, []byte("shared-secret-of-sufficient-length"), "")
+		}, http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			idp := newOIDCTestIdP(t, func(p *oidcTestIdP) { tt.configure(t, p) })
+			assertOIDCCallback(t, completeOIDCLogin(t, newOIDCTestGate(t, idp), idp), tt.want)
+		})
+	}
 }
 
 // completeOIDCLogin runs the login and the callback at app.example.
