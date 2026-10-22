@@ -4,8 +4,12 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
-import { Check, Copy, X } from "lucide-react";
+import { Check, ChevronRight, Copy, Lock, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import {
+  TunnelAuthSection,
+  describeAuth,
+} from "@/components/TunnelAuthSection";
 import type { Lease } from "@/types/api";
 import { cn } from "@/lib/utils";
 import {
@@ -72,7 +76,9 @@ function HeroTunnelCommandForm({
     leases: Lease[] | null;
   }) {
   const isTerminal = theme === "terminal";
+  const authPanelId = useId();
   const [tunnelTarget, setTunnelTarget] = useState<TunnelCommandOS>("unix");
+  const [authOpen, setAuthOpen] = useState(false);
   const {
     currentOrigin,
     target,
@@ -81,6 +87,9 @@ function HeroTunnelCommandForm({
     copied,
     os,
     effectiveName,
+    auth,
+    setAuth,
+    authIssues,
     shareKind,
     installBlock,
     runBlock,
@@ -241,6 +250,44 @@ function HeroTunnelCommandForm({
           <p className={cn("text-xs", isTerminal ? "text-slate-400" : "text-text-muted")}>
             Choose a name for a short public URL without an Ethereum address.
           </p>
+          <button
+            type="button"
+            onClick={() => setAuthOpen((open) => !open)}
+            aria-expanded={authOpen}
+            aria-controls={authPanelId}
+            className={cn(
+              "flex w-full min-w-0 items-center gap-2 rounded-md border border-dashed px-3 py-2 text-left text-[13px] transition-colors",
+              isTerminal
+                ? "border-white/15 text-slate-300 hover:border-primary/60"
+                : "border-border text-foreground hover:border-primary/50"
+            )}
+          >
+            <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className={heroControlLabelClass}>Who can open it?</span>
+            <span className="ml-auto min-w-0 truncate font-semibold">
+              {describeAuth(auth)}
+            </span>
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                "h-4 w-4 shrink-0 transition-transform",
+                authOpen && "rotate-90"
+              )}
+            />
+          </button>
+          {authOpen && (
+            <div id={authPanelId} className="pt-1">
+              <TunnelAuthSection
+                auth={auth}
+                onChange={setAuth}
+                currentOrigin={currentOrigin}
+                name={effectiveName}
+                os={os}
+                theme={theme}
+                compact
+              />
+            </div>
+          )}
         </div>
         <div
           className={cn(
@@ -253,8 +300,9 @@ function HeroTunnelCommandForm({
           <button
             type="button"
             onClick={handleCopy}
+            disabled={authIssues.length > 0}
             className={cn(
-              "absolute top-4 right-4 inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+              "absolute top-4 right-4 inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40",
               isTerminal
                 ? "text-emerald-300/75 hover:bg-emerald-400/10 hover:text-emerald-200"
                 : "text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700"
@@ -273,6 +321,7 @@ function HeroTunnelCommandForm({
             <span className="mt-2 block">{runBlock}</span>
           </pre>
         </div>
+        <NotReady issues={authIssues} isTerminal={isTerminal} />
       </div>
 
       <div className="space-y-2 pt-1">
@@ -383,6 +432,10 @@ function FullTunnelCommandForm({
     name,
     copied,
     os,
+    effectiveName,
+    auth,
+    setAuth,
+    authIssues,
     shareKind,
     installBlock,
     runBlock,
@@ -396,6 +449,7 @@ function FullTunnelCommandForm({
     udpPort,
     os: tunnelTarget,
   });
+  const signInRequired = auth.method !== "none";
 
   const addRelayURL = (url: string) => {
     const trimmed = url.trim();
@@ -608,6 +662,21 @@ function FullTunnelCommandForm({
       </div>
 
       <div className="space-y-2">
+        <div className="flex items-baseline justify-between gap-2">
+          <p className={sectionLabelClass}>Who can open it?</p>
+          <span className={helpTextClass}>Default: anyone with the link</span>
+        </div>
+        <TunnelAuthSection
+          auth={auth}
+          onChange={setAuth}
+          currentOrigin={currentOrigin}
+          name={effectiveName}
+          os={os}
+          theme={theme}
+        />
+      </div>
+
+      <div className="space-y-2">
         <label className={sectionLabelClass}>
           Generated Command
         </label>
@@ -619,8 +688,9 @@ function FullTunnelCommandForm({
           <button
             type="button"
             onClick={handleCopy}
+            disabled={authIssues.length > 0}
             className={cn(
-              "absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-2 transition-colors",
+              "absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
               isTerminal ? "hover:bg-white/10" : "hover:bg-background/70 dark:hover:bg-black/20"
             )}
             aria-label="Copy command"
@@ -632,6 +702,7 @@ function FullTunnelCommandForm({
             )}
           </button>
         </div>
+        <NotReady issues={authIssues} isTerminal={isTerminal} />
       </div>
 
       {!isTerminal && (
@@ -665,7 +736,8 @@ function FullTunnelCommandForm({
                 <label className="flex items-center gap-2 text-sm text-foreground dark:text-zinc-300">
                   <input
                     type="checkbox"
-                    checked={enableUDP}
+                    checked={enableUDP && !signInRequired}
+                    disabled={signInRequired}
                     onChange={(event) => {
                       const nextEnabled = event.target.checked;
                       setEnableUDP(nextEnabled);
@@ -675,9 +747,17 @@ function FullTunnelCommandForm({
                     }}
                     className="h-4 w-4"
                   />
-                  <span>Enable UDP transport</span>
+                  <span>
+                    Enable UDP transport
+                    {signInRequired && (
+                      <span className={cn("block", helpTextClass)}>
+                        Not available with sign-in: Portal can only check
+                        visitors on web traffic.
+                      </span>
+                    )}
+                  </span>
                 </label>
-                {enableUDP && (
+                {enableUDP && !signInRequired && (
                   <div className="space-y-1.5">
                     <Input
                       id={`${inputId}-udp-port`}
@@ -727,5 +807,28 @@ function FullTunnelCommandForm({
         </div>
       )}
     </div>
+  );
+}
+
+function NotReady({
+  issues,
+  isTerminal,
+}: {
+  issues: string[];
+  isTerminal: boolean;
+}) {
+  if (issues.length === 0) {
+    return null;
+  }
+  return (
+    <p
+      role="status"
+      className={cn(
+        "text-xs leading-5",
+        isTerminal ? "text-amber-300" : "text-amber-700 dark:text-amber-400"
+      )}
+    >
+      Not ready to copy: {issues.join(" · ")}
+    </p>
   );
 }
