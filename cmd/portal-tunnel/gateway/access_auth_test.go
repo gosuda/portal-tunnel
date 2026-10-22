@@ -727,6 +727,11 @@ func TestApplicationAuthOIDCRequiresAllowlist(t *testing.T) {
 func TestResolveApplicationAuthConfig(t *testing.T) {
 	t.Parallel()
 
+	const mixedCaseWallet = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+	wallet, err := identity.NormalizeEVMAddress(mixedCaseWallet)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name    string
 		cfg     ApplicationAuthConfig
@@ -754,6 +759,11 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 			name: "credential subjects are de-duplicated and carry no oidc settings",
 			cfg:  ApplicationAuthConfig{Provider: "Credential", AllowedWallets: []string{"alice", "alice"}},
 			want: applicationAuthSettings{provider: ApplicationAuthProviderCredential, allowed: []string{"alice"}},
+		},
+		{
+			name: "wallet addresses are normalized and de-duplicated",
+			cfg:  ApplicationAuthConfig{Provider: "SIWE", AllowedWallets: []string{mixedCaseWallet, strings.ToLower(mixedCaseWallet)}},
+			want: applicationAuthSettings{provider: ApplicationAuthProviderSIWE, allowed: []string{wallet}},
 		},
 		{
 			name:    "unknown provider",

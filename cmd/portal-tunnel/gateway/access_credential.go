@@ -48,7 +48,8 @@ func NormalizeApplicationAuthProvider(provider string) (string, error) {
 // applicationAuthSettings is an ApplicationAuthConfig after validation and
 // normalization. ValidateApplicationAuthConfig and NewApplicationAuth both get
 // it from resolveApplicationAuthConfig, so what validation accepts is exactly
-// what the gate is built from.
+// what the gate is built from. It holds the OIDC client secret, so it must not
+// be formatted or logged.
 type applicationAuthSettings struct {
 	provider string
 	// allowed holds the normalized principals; empty means any valid principal.
