@@ -116,6 +116,12 @@ The flag is `--description`, not `--desc`. Environment variables in the third co
 | `--max-active-relays` | `3` | `MAX_ACTIVE_RELAYS` | Cap on auto-selected relays kept connected |
 | `--metrics-addr` | | | Serve Prometheus `/metrics` on `host:port` |
 | `--x402-pay-to`, `--x402-network`, `--x402-asset`, `--x402-endpoint`, `--x402-testnet`, `--x402-facilitator-token` | | `CSPR_CLOUD_API_KEY` for the token | Paid routes; see `x402.md` |
+| `--auth` | | | Visitor sign-in: `credential`, `siwe`, or `oidc`; see `application-auth.md` |
+| `--auth-allow` | | | Who may sign in (wallet addresses, credential subjects, or emails / `@domain` / `sub:<id>` for `oidc`); repeatable; required for `oidc`; needs `--auth` |
+| `--auth-identity-headers` | `false` | | Pass the verified identity to the app as `X-Portal-User` and `X-Portal-Auth`; needs `--auth` |
+| `--auth-oidc-issuer`, `--auth-oidc-client-id`, `--auth-oidc-client-secret` | | `AUTH_OIDC_ISSUER`, `AUTH_OIDC_CLIENT_ID`, `AUTH_OIDC_CLIENT_SECRET` | OpenID Connect client for `--auth oidc`; the environment values are used only with `--auth oidc`; pass the secret by environment, not by flag |
+
+`portal auth issue <host> --subject <name> [--expires 720h] [--identity-path <file>]` mints a credential link for `--auth credential`; see `application-auth.md`.
 
 `portal list` accepts `--relays` and `--default-relays` (default `true`) and prints one `RELAY  VERSION` row per resolved relay. It never lists services.
 
@@ -201,7 +207,7 @@ Default config locations:
 
 `[agent]`: `state_dir` (defaults to the platform data directory), `control_addr` (default `127.0.0.1:4018`), `service_name` (default `portal-agent`), `allowed_wallets` (wallet addresses allowed to sign in to the dashboard).
 
-`[[tunnels]]`: `id`, `name`, `target`, `serve` (static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`; the relay cache options have no TOML equivalent), `http_routes` (entries with `prefix`, `upstream`, `methods`, `amount`), `relays`, `discovery`, `overlay`, `identity_path`, `identity_json`, `udp`, `udp_addr`, `tcp`, `ban_mitm`, `max_active_relays` (default `3`), `description`, `tags`, `owner`, `thumbnail`, `hide`, `x402_pay_to`, `x402_testnet`, `x402_network`, `x402_asset`, `x402_endpoints`, `x402_facilitator_token`. The keys mirror the `portal expose` flags one to one.
+`[[tunnels]]`: `id`, `name`, `target`, `serve` (static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`; the relay cache options have no TOML equivalent), `http_routes` (entries with `prefix`, `upstream`, `methods`, `amount`), `relays`, `discovery`, `overlay`, `identity_path`, `identity_json`, `udp`, `udp_addr`, `tcp`, `ban_mitm`, `max_active_relays` (default `3`), `description`, `tags`, `owner`, `thumbnail`, `hide`, `x402_pay_to`, `x402_testnet`, `x402_network`, `x402_asset`, `x402_endpoints`, `x402_facilitator_token`, `auth`, `auth_allowed_wallets` (the allowlist for every method, not only wallets), `auth_identity_headers`, `auth_oidc_issuer`, `auth_oidc_client_id`, `auth_oidc_client_secret`. The keys mirror the `portal expose` flags one to one; the agent does not read the `AUTH_OIDC_*` environment variables.
 
 ## Output and readiness
 

@@ -1,12 +1,26 @@
 ---
 title: Application Access Authentication
-description: Protect a tunnel with Portal credentials or SIWE wallet login.
+description: Let only chosen people open a tunnel, with Portal credential links, an Ethereum wallet, or OpenID Connect sign-in.
 ---
 
 # Application Access Authentication
 
-Portal supports three application access providers: Portal-native credentials,
-Sign-In with Ethereum (SIWE), and OpenID Connect (OIDC). SIWE is also used separately for:
+Without `--auth`, anyone who learns a tunnel's hostname can open the app. Portal
+can ask visitors to sign in first. The check runs inside the `portal` process on
+your machine, not at the relay, so it also protects static sites and every
+routed path. Pick one method:
+
+| You want | Use | Visitors need | You need |
+|---|---|---|---|
+| A few named people, nothing to set up | [`--auth credential`](#portal-credentials) | A link you create with `portal auth issue` | Nothing |
+| People who own an Ethereum wallet | [`--auth siwe`](#siwe-application-access) | A browser wallet | Nothing |
+| People who sign in with Google, Microsoft, Keycloak, GitLab or another OpenID Connect provider | [`--auth oidc`](#openid-connect-oidc) | An account at that provider | An OAuth client registered at the provider |
+
+[Check that sign-in is on](#check-that-sign-in-is-on) once the tunnel runs. An AI
+coding agent that follows the `portal-expose` skill reads the same steps in
+[`application-auth.md`](https://github.com/gosuda/portal-tunnel/blob/main/plugins/portal-deploy/skills/portal-expose/references/application-auth.md).
+
+SIWE is also used separately for:
 
 - tunnel registration, signed automatically by the local tunnel identity
 - optional tunnel-side access control for exposed HTTP applications
@@ -109,6 +123,22 @@ Configure the identity provider's redirect URI as `https://<tunnel-host>/_portal
 Email and domain entries are compared in lowercase and must be ASCII, so write an internationalized domain in punycode. A `sub:` entry is compared exactly, including case, because the provider's `sub` is a case-sensitive identifier: `sub:Alice` does not allow the subject `alice`.
 
 An OIDC session lasts as long as the ID token, but never less than 15 minutes, so a short-lived token does not send the visitor through the provider again at once, and never more than 24 hours. Revoking a principal takes effect on the next request whatever the session lifetime, because `--auth-allow` is checked every time.
+
+Pass the client secret as `AUTH_OIDC_CLIENT_SECRET`, as above, so it stays out of the process list and the shell history. `AUTH_OIDC_ISSUER` and `AUTH_OIDC_CLIENT_ID` can replace the two flags, and all three are used only with `--auth oidc`. At start Portal fetches the provider's discovery document and keys once and logs `application auth provider is not usable` if that fails; the tunnel keeps running and visitors can sign in once the provider is reachable.
+
+## Check that sign-in is on
+
+An unauthenticated browser request is sent to the login page, and any other
+request is refused:
+
+```bash
+curl -sI https://myapp.example.com/            # 303, Location: /_portal/auth/login?next=%2F
+curl -s -X POST https://myapp.example.com/     # 401 {"error":"authentication required"}
+```
+
+A `200` means the gate is not on: check that `--auth` is on the command you ran.
+With OIDC, use `GET` for `/_portal/auth/login`, which answers `303` to the
+provider; a `HEAD` request is refused with `405`.
 
 ## Agent Wallet Status Access
 
