@@ -106,6 +106,8 @@ Configure the identity provider's redirect URI as `https://<tunnel-host>/_portal
 
 `--auth-allow` is required with `--auth oidc`: an identity provider authenticates accounts it does not restrict to your application, so without an allowlist every one of them would pass, and Portal refuses to start. It accepts an email address, an `@example.com` domain (that exact domain only, not its subdomains), or a `sub:<subject>` entry for the provider's opaque `sub` claim. Email and domain entries match only when the ID token carries `email_verified: true`; a provider that omits the claim, or one whose `sub` is not an email, can be allowed by `sub:` only. A `sub` claim value can never satisfy an email or domain entry, so an email-shaped `sub` cannot impersonate a verified-email allowlist entry.
 
+Email and domain entries are compared in lowercase and must be ASCII, so write an internationalized domain in punycode. A `sub:` entry is compared exactly, including case, because the provider's `sub` is a case-sensitive identifier: `sub:Alice` does not allow the subject `alice`.
+
 ## Agent Wallet Status Access
 
 Relay admin access uses `ADMIN_TOKEN`, not SIWE.
