@@ -2,17 +2,20 @@ package gateway
 
 import (
 	"cmp"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,10 +31,20 @@ type oidcTestIdP struct {
 	server    *httptest.Server
 	issuerURL string
 	signer    jose.Signer
-	jwk       jose.JSONWebKey
+	key       *ecdsa.PrivateKey
 	query     string
 
+	// Request counters for the endpoints the gateway must not hit needlessly.
+	discoveryHits atomic.Int32
+	jwksHits      atomic.Int32
+
+	// When discoveryRelease is set, discovery requests answer only after it is
+	// closed; discoveryEntered learns that a request has arrived.
+	discoveryEntered chan struct{}
+	discoveryRelease chan struct{}
+
 	mu          sync.Mutex
+	jwk         jose.JSONWebKey
 	challenge   string
 	nonce       string
 	mutate      func(*oidcIDTokenClaims)
@@ -41,9 +54,13 @@ type oidcTestIdP struct {
 	tokenStatus int
 }
 
-func newOIDCTestSigner(t *testing.T, alg jose.SignatureAlgorithm, key any) jose.Signer {
+func newOIDCTestSigner(t *testing.T, alg jose.SignatureAlgorithm, key any, kid string) jose.Signer {
 	t.Helper()
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: alg, Key: key}, (&jose.SignerOptions{}).WithHeader("kid", "k1").WithType("JWT"))
+	opts := (&jose.SignerOptions{}).WithType("JWT")
+	if kid != "" {
+		opts = opts.WithHeader("kid", kid)
+	}
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: alg, Key: key}, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +74,8 @@ func newOIDCTestIdP(t *testing.T, configure func(*oidcTestIdP)) *oidcTestIdP {
 		t.Fatal(err)
 	}
 	idp := &oidcTestIdP{
-		signer: newOIDCTestSigner(t, jose.ES256, privateKey),
+		signer: newOIDCTestSigner(t, jose.ES256, privateKey, "k1"),
+		key:    privateKey,
 		jwk:    jose.JSONWebKey{Key: &privateKey.PublicKey, KeyID: "k1", Algorithm: string(jose.ES256), Use: "sig"},
 	}
 	if configure != nil {
@@ -77,6 +95,8 @@ func (p *oidcTestIdP) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/.well-known/openid-configuration":
+		p.discoveryHits.Add(1)
+		p.holdDiscovery(r)
 		_ = json.NewEncoder(w).Encode(oidcDiscoveryDocument{
 			Issuer:                p.issuerURL,
 			AuthorizationEndpoint: p.issuerURL + "/authorize" + p.query,
@@ -84,12 +104,51 @@ func (p *oidcTestIdP) serve(w http.ResponseWriter, r *http.Request) {
 			JWKSURI:               p.issuerURL + "/jwks" + p.query,
 		})
 	case "/jwks":
-		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{p.jwk}})
+		p.jwksHits.Add(1)
+		p.mu.Lock()
+		keys := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{p.jwk}}
+		p.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(keys)
 	case "/token":
 		p.serveToken(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (p *oidcTestIdP) holdDiscovery(r *http.Request) {
+	if p.discoveryRelease == nil {
+		return
+	}
+	select {
+	case p.discoveryEntered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-p.discoveryRelease:
+	case <-r.Context().Done():
+	}
+}
+
+// update changes the provider's behavior between logins.
+func (p *oidcTestIdP) update(change func(*oidcTestIdP)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	change(p)
+}
+
+// rotate replaces the signing key, as a provider does on key rotation.
+func (p *oidcTestIdP) rotate(t *testing.T, kid string) {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.update(func(p *oidcTestIdP) {
+		p.key = privateKey
+		p.signer = newOIDCTestSigner(t, jose.ES256, privateKey, kid)
+		p.jwk = jose.JSONWebKey{Key: &privateKey.PublicKey, KeyID: kid, Algorithm: string(jose.ES256), Use: "sig"}
+	})
 }
 
 func (p *oidcTestIdP) serveToken(w http.ResponseWriter, r *http.Request) {
@@ -208,10 +267,10 @@ func TestApplicationAuthOIDCCallbackRefusals(t *testing.T) {
 			p.mutate = func(c *oidcIDTokenClaims) { c.Expiry = nil }
 		}, want: http.StatusUnauthorized},
 		{name: "id token is signed with an unknown key", configure: func(p *oidcTestIdP) {
-			p.signWith = newOIDCTestSigner(t, jose.ES256, otherKey)
+			p.signWith = newOIDCTestSigner(t, jose.ES256, otherKey, "k1")
 		}, want: http.StatusUnauthorized},
 		{name: "id token uses a symmetric algorithm", configure: func(p *oidcTestIdP) {
-			p.signWith = newOIDCTestSigner(t, jose.HS256, []byte("shared-secret-of-sufficient-length"))
+			p.signWith = newOIDCTestSigner(t, jose.HS256, []byte("shared-secret-of-sufficient-length"), "k1")
 		}, want: http.StatusUnauthorized},
 		{name: "id token is unsigned", configure: func(p *oidcTestIdP) { p.rawToken = unsigned }, want: http.StatusUnauthorized},
 		{name: "id token has no subject", configure: func(p *oidcTestIdP) {
@@ -259,6 +318,191 @@ func TestApplicationAuthOIDCEndpointQueries(t *testing.T) {
 	callback := httptest.NewRecorder()
 	gate.ServeHTTP(callback, state.callbackRequest(t, gate, nil))
 	assertOIDCCallback(t, callback, http.StatusSeeOther)
+}
+
+// TestApplicationAuthOIDCDiscoveryIsShared protects login availability while the
+// provider is slow: concurrent logins share one discovery fetch, a caller that
+// gives up stops waiting at once without cancelling the fetch for the others.
+func TestApplicationAuthOIDCDiscoveryIsShared(t *testing.T) {
+	t.Parallel()
+
+	entered, release := make(chan struct{}, 8), make(chan struct{})
+	idp := newOIDCTestIdP(t, func(p *oidcTestIdP) { p.discoveryEntered, p.discoveryRelease = entered, release })
+	var releaseOnce sync.Once
+	releaseDiscovery := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseDiscovery)
+	oidc := newOIDCTestGate(t, idp).oidc
+
+	// One caller starts the fetch and another joins it; both then give up.
+	abandoned, abandon := context.WithCancel(t.Context())
+	defer abandon()
+	abandonedDone := make(chan error, 2)
+	discover := func(ctx context.Context, done chan<- error) {
+		_, err := oidc.discoveryDocument(ctx)
+		done <- err
+	}
+	go discover(abandoned, abandonedDone)
+	awaitOIDC(t, entered, "the discovery request")
+	go discover(abandoned, abandonedDone)
+
+	const waiters = 3
+	waitersDone := make(chan error, waiters)
+	for range waiters {
+		go discover(t.Context(), waitersDone)
+	}
+
+	abandon()
+	for range 2 {
+		if err := awaitOIDC(t, abandonedDone, "a cancelled caller to return"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled caller error = %v; want context.Canceled", err)
+		}
+	}
+	select {
+	case err := <-waitersDone:
+		t.Fatalf("a caller returned before the provider answered: %v", err)
+	default:
+	}
+
+	releaseDiscovery()
+	for range waiters {
+		if err := awaitOIDC(t, waitersDone, "a waiting caller to return"); err != nil {
+			t.Fatalf("waiting caller error = %v; want success", err)
+		}
+	}
+	if got := idp.discoveryHits.Load(); got != 1 {
+		t.Fatalf("discovery requests = %d; want 1 shared fetch", got)
+	}
+}
+
+// TestApplicationAuthOIDCKeysAreFetchedForVerificationOnly protects login
+// availability: starting a login needs only the discovery document, so it must
+// not depend on the provider's key endpoint.
+func TestApplicationAuthOIDCKeysAreFetchedForVerificationOnly(t *testing.T) {
+	t.Parallel()
+	idp := newOIDCTestIdP(t, nil)
+	gate := newOIDCTestGate(t, idp)
+	login := startOIDCLogin(t, gate, idp, "app.example")
+	if got := idp.jwksHits.Load(); got != 0 {
+		t.Fatalf("starting a login requested the signing keys %d times; want 0", got)
+	}
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, login.callbackRequest(t, gate, nil))
+	assertOIDCCallback(t, rec, http.StatusSeeOther)
+	if got := idp.jwksHits.Load(); got != 1 {
+		t.Fatalf("signing key requests after the callback = %d; want 1", got)
+	}
+}
+
+// TestApplicationAuthOIDCRefreshesKeysOnlyForKeyErrors protects the provider
+// from refetch storms: only a failure that new keys can fix refetches the key
+// set, and at most once per refresh interval. Discovery is never refetched.
+func TestApplicationAuthOIDCRefreshesKeysOnlyForKeyErrors(t *testing.T) {
+	t.Parallel()
+
+	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// warmedIdP completes one login so the key set is cached, then makes the
+	// cache old enough that only the failure's cause can hold back a refetch.
+	warmedIdP := func(t *testing.T) (*oidcTestIdP, *applicationAuth) {
+		t.Helper()
+		idp := newOIDCTestIdP(t, nil)
+		gate := newOIDCTestGate(t, idp)
+		assertOIDCCallback(t, completeOIDCLogin(t, gate, idp), http.StatusSeeOther)
+		ageOIDCKeys(gate)
+		return idp, gate
+	}
+	assertHits := func(t *testing.T, idp *oidcTestIdP, discovery, jwks int32) {
+		t.Helper()
+		if gotDiscovery, gotJWKS := idp.discoveryHits.Load(), idp.jwksHits.Load(); gotDiscovery != discovery || gotJWKS != jwks {
+			t.Fatalf("requests = %d discovery, %d jwks; want %d, %d", gotDiscovery, gotJWKS, discovery, jwks)
+		}
+	}
+
+	nonKeyFailures := []struct {
+		name   string
+		mutate func(*oidcIDTokenClaims)
+	}{
+		{"nonce mismatch", func(c *oidcIDTokenClaims) { c.Nonce = "replayed" }},
+		{"audience mismatch", func(c *oidcIDTokenClaims) { c.Audience = jwt.Audience{"someone-else"} }},
+		{"issuer mismatch", func(c *oidcIDTokenClaims) { c.Issuer = "https://evil.example" }},
+		{"expired token", func(c *oidcIDTokenClaims) { c.Expiry = jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)) }},
+		{"missing subject", func(c *oidcIDTokenClaims) { c.Subject = "" }},
+	}
+	for _, tt := range nonKeyFailures {
+		t.Run(tt.name+" makes no request", func(t *testing.T) {
+			t.Parallel()
+			idp, gate := warmedIdP(t)
+			idp.update(func(p *oidcTestIdP) { p.mutate = tt.mutate })
+			assertOIDCCallback(t, completeOIDCLogin(t, gate, idp), http.StatusUnauthorized)
+			assertHits(t, idp, 1, 1)
+		})
+	}
+
+	keyFailures := []struct {
+		name string
+		sign func(t *testing.T, p *oidcTestIdP) jose.Signer
+	}{
+		{"unknown key id", func(t *testing.T, p *oidcTestIdP) jose.Signer {
+			return newOIDCTestSigner(t, jose.ES256, p.key, "unlisted")
+		}},
+		{"signature from another key", func(t *testing.T, _ *oidcTestIdP) jose.Signer {
+			return newOIDCTestSigner(t, jose.ES256, otherKey, "k1")
+		}},
+	}
+	for _, tt := range keyFailures {
+		t.Run(tt.name+" refetches the keys once per interval", func(t *testing.T) {
+			t.Parallel()
+			idp, gate := warmedIdP(t)
+			idp.update(func(p *oidcTestIdP) { p.signWith = tt.sign(t, p) })
+			assertOIDCCallback(t, completeOIDCLogin(t, gate, idp), http.StatusUnauthorized)
+			assertHits(t, idp, 1, 2)
+			assertOIDCCallback(t, completeOIDCLogin(t, gate, idp), http.StatusUnauthorized)
+			assertHits(t, idp, 1, 2)
+			ageOIDCKeys(gate)
+			assertOIDCCallback(t, completeOIDCLogin(t, gate, idp), http.StatusUnauthorized)
+			assertHits(t, idp, 1, 3)
+		})
+	}
+
+	t.Run("a rotated provider key is picked up", func(t *testing.T) {
+		t.Parallel()
+		idp, gate := warmedIdP(t)
+		idp.rotate(t, "k2")
+		assertOIDCCallback(t, completeOIDCLogin(t, gate, idp), http.StatusSeeOther)
+		assertHits(t, idp, 1, 2)
+	})
+}
+
+// completeOIDCLogin runs the login and the callback at app.example.
+func completeOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP) *httptest.ResponseRecorder {
+	t.Helper()
+	login := startOIDCLogin(t, gate, idp, "app.example")
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, login.callbackRequest(t, gate, nil))
+	return rec
+}
+
+// ageOIDCKeys makes the cached key set look two refresh intervals old.
+func ageOIDCKeys(gate *applicationAuth) {
+	gate.oidc.jwks.mu.Lock()
+	defer gate.oidc.jwks.mu.Unlock()
+	gate.oidc.jwks.fetchedAt = gate.oidc.jwks.fetchedAt.Add(-2 * oidcJWKSRefreshInterval)
+}
+
+// awaitOIDC receives from ch, failing the test instead of hanging when the
+// awaited event never happens.
+func awaitOIDC[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+	var zero T
+	return zero
 }
 
 func newOIDCTestGate(t *testing.T, idp *oidcTestIdP) *applicationAuth {
