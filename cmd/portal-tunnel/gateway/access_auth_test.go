@@ -518,6 +518,10 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 		{"sub: entry rejects a subject that differs only in case", []string{"sub:Alice@Example.com"}, "alice@example.com", "", nil, ""},
 		{"lowercase sub: entry rejects an uppercase subject", []string{"sub:alice@example.com"}, "Alice@Example.com", "", nil, ""},
 		{"sub: prefix case does not change the subject case", []string{"SUB:Alice@Example.com"}, "Alice@Example.com", "", nil, "sub:Alice@Example.com"},
+		{"non-ASCII sub matches only itself", []string{"sub:Kevin"}, "Kevin", "", nil, "sub:Kevin"},
+		{"ASCII sub: entry rejects a Kelvin-sign lookalike subject", []string{"sub:kevin"}, "Kevin", "", nil, ""},
+		{"Kelvin-sign email cannot stand in for an ASCII email", []string{"kevin@example.com"}, "s1", "Kevin@example.com", &verified, ""},
+		{"dotted capital I domain cannot stand in for an ASCII domain", []string{"@github.com"}, "s1", "bob@gİthub.com", &verified, ""},
 		{"verified email matches domain", []string{"@Example.com"}, "s1", "bob@example.com", &verified, "bob@example.com"},
 		{"absent email_verified does not match domain", []string{"@example.com"}, "s1", "bob@example.com", nil, ""},
 		{"domain excludes subdomains", []string{"@example.com"}, "s1", "bob@sub.example.com", &verified, ""},
@@ -580,7 +584,7 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 	})
 	t.Run("untyped or malformed entries are rejected", func(t *testing.T) {
 		t.Parallel()
-		for _, entry := range []string{"alice", "sub:", "sub: ", "alice@", "alice@a@b"} {
+		for _, entry := range []string{"alice", "sub:", "sub: ", "alice@", "alice@a@b", "Kevin@example.com", "@gİthub.com"} {
 			if _, err := NormalizeApplicationAuthOIDCPrincipals([]string{entry}); err == nil {
 				t.Fatalf("NormalizeApplicationAuthOIDCPrincipals(%q) = nil error", entry)
 			}

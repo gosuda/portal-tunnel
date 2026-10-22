@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -264,9 +265,12 @@ const oidcSubjectPrefix = "sub:"
 // normalizeOIDCPrincipal canonicalizes an OIDC principal or session subject.
 // The provider's sub claim is an opaque, case-sensitive identifier, so a "sub:"
 // principal keeps its subject byte for byte (only the prefix is matched without
-// regard to case); only verified-email principals are lowercased. The length
-// limit applies to the subject itself, not to the "sub:" prefix, so a
-// maximum-length sub claim (255 characters) still survives revalidation.
+// regard to case); only verified-email principals are lowercased. Email
+// principals must be ASCII: Unicode lowercasing maps distinct characters onto
+// ASCII ones (the Kelvin sign U+212A to "k", U+0130 to "i"), which would let a
+// lookalike address match an allowlist entry. The length limit applies to the
+// subject itself, not to the "sub:" prefix, so a maximum-length sub claim (255
+// characters) still survives revalidation.
 func normalizeOIDCPrincipal(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	isSubject := len(raw) >= len(oidcSubjectPrefix) && strings.EqualFold(raw[:len(oidcSubjectPrefix)], oidcSubjectPrefix)
@@ -279,6 +283,9 @@ func normalizeOIDCPrincipal(raw string) (string, error) {
 	}
 	if isSubject {
 		return oidcSubjectPrefix + subject, nil
+	}
+	if strings.ContainsFunc(subject, func(r rune) bool { return r > unicode.MaxASCII }) {
+		return "", errors.New("oidc email principals must be ASCII; write internationalized domains in punycode")
 	}
 	if strings.Contains(subject, "@") {
 		subject = strings.ToLower(subject)
