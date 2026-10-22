@@ -514,7 +514,10 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 		{"email-shaped sub cannot satisfy an email entry", []string{"alice@example.com"}, "alice@example.com", "", &unverified, ""},
 		{"email-shaped sub cannot satisfy an email entry without email_verified", []string{"alice@example.com"}, "alice@example.com", "", nil, ""},
 		{"email-shaped sub matches a sub: entry", []string{"sub:alice@example.com"}, "alice@example.com", "", &unverified, "sub:alice@example.com"},
-		{"email-shaped sub matches a sub: entry case-insensitively", []string{"sub:Alice@Example.com"}, "alice@example.com", "", nil, "sub:alice@example.com"},
+		{"sub: entry matches the subject in exactly its case", []string{"sub:Alice@Example.com"}, "Alice@Example.com", "", nil, "sub:Alice@Example.com"},
+		{"sub: entry rejects a subject that differs only in case", []string{"sub:Alice@Example.com"}, "alice@example.com", "", nil, ""},
+		{"lowercase sub: entry rejects an uppercase subject", []string{"sub:alice@example.com"}, "Alice@Example.com", "", nil, ""},
+		{"sub: prefix case does not change the subject case", []string{"SUB:Alice@Example.com"}, "Alice@Example.com", "", nil, "sub:Alice@Example.com"},
 		{"verified email matches domain", []string{"@Example.com"}, "s1", "bob@example.com", &verified, "bob@example.com"},
 		{"absent email_verified does not match domain", []string{"@example.com"}, "s1", "bob@example.com", nil, ""},
 		{"domain excludes subdomains", []string{"@example.com"}, "s1", "bob@sub.example.com", &verified, ""},
@@ -583,6 +586,29 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A session subject is re-normalized on every request, so this rule decides
+// whether two provider subjects that differ only in case stay distinct there.
+func TestNormalizeOIDCPrincipalKeepsSubjectCase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{"sub:Alice@Example.com", "sub:Alice@Example.com"},
+		{"  sub:Alice@Example.com ", "sub:Alice@Example.com"},
+		{"SUB:Alice@Example.com", "sub:Alice@Example.com"},
+		{"sub:AbC123", "sub:AbC123"},
+		{"Alice@Example.com", "alice@example.com"},
+	}
+	for _, tt := range tests {
+		got, err := normalizeOIDCPrincipal(tt.raw)
+		if err != nil || got != tt.want {
+			t.Errorf("normalizeOIDCPrincipal(%q) = (%q, %v); want %q", tt.raw, got, err, tt.want)
+		}
+	}
 }
 
 func TestApplicationCredentialRejectsOtherHostAndExpiry(t *testing.T) {

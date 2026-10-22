@@ -215,7 +215,7 @@ func normalizeOIDCIssuerURL(raw string) (string, error) {
 // (`--auth-allow` / `auth_allowed_wallets`). Email addresses (containing '@')
 // are lowercased and match a verified email claim only, '@example.com' domain
 // entries match that exact verified-email domain, and `sub:<subject>` entries
-// match the opaque provider subject claim exactly. Subject entries must carry
+// match the opaque provider subject claim exactly, including case. Subject entries must carry
 // the sub: prefix so an email-shaped sub claim cannot impersonate an email
 // entry.
 func NormalizeApplicationAuthOIDCPrincipals(values []string) ([]string, error) {
@@ -262,21 +262,28 @@ func normalizeOIDCAllowlistEntry(raw string) (string, error) {
 const oidcSubjectPrefix = "sub:"
 
 // normalizeOIDCPrincipal canonicalizes an OIDC principal or session subject.
-// The length limit applies to the subject itself, not to the "sub:" prefix, so
-// a maximum-length sub claim (255 characters) still survives revalidation.
+// The provider's sub claim is an opaque, case-sensitive identifier, so a "sub:"
+// principal keeps its subject byte for byte (only the prefix is matched without
+// regard to case); only verified-email principals are lowercased. The length
+// limit applies to the subject itself, not to the "sub:" prefix, so a
+// maximum-length sub claim (255 characters) still survives revalidation.
 func normalizeOIDCPrincipal(raw string) (string, error) {
-	prefix := ""
-	if rest, ok := strings.CutPrefix(strings.TrimSpace(raw), oidcSubjectPrefix); ok {
-		prefix, raw = oidcSubjectPrefix, rest
+	raw = strings.TrimSpace(raw)
+	isSubject := len(raw) >= len(oidcSubjectPrefix) && strings.EqualFold(raw[:len(oidcSubjectPrefix)], oidcSubjectPrefix)
+	if isSubject {
+		raw = raw[len(oidcSubjectPrefix):]
 	}
 	subject, err := normalizeApplicationAuthSubject(raw)
 	if err != nil {
 		return "", err
 	}
+	if isSubject {
+		return oidcSubjectPrefix + subject, nil
+	}
 	if strings.Contains(subject, "@") {
 		subject = strings.ToLower(subject)
 	}
-	return prefix + subject, nil
+	return subject, nil
 }
 
 // oidcClaimPrincipal normalizes an ID token claim value, or returns "" when it
