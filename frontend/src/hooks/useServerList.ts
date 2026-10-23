@@ -62,7 +62,7 @@ function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
       owner: metadata.owner || "",
       online: (row.ready || 0) > 0,
       dns: hostname || routeHostname,
-      link: !tcpAddr && !udpAddr && routeHostname ? `https://${routeHostname}/` : "",
+      link: !tcpAddr && !udpAddr && (hostname || routeHostname) ? `https://${hostname || routeHostname}/` : "",
       tcpAddr: tcpAddr || undefined,
       udpAddr: udpAddr || undefined,
       lastUpdated: row.last_seen_at || undefined,
