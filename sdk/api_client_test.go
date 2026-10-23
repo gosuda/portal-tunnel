@@ -2,20 +2,28 @@ package sdk
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -321,6 +329,98 @@ func TestRenewLeaseReportsStaleCredentialsAfterAuthorityRotation(t *testing.T) {
 
 	if err := listener.renewLease(context.Background()); !errors.Is(err, errLeaseRefreshRequired) {
 		t.Fatalf("renewLease() error = %v, want lease refresh required after authority rotation", err)
+	}
+}
+
+// A renewal gives the relay a new certificate, and the relay signs for the
+// replaced one only until it expires: a tenant that never reconnects has to
+// move to the new chain at its next lease renewal.
+func TestRenewLeaseMovesTheTenantToTheRenewedRelayCertificate(t *testing.T) {
+	const tenantHostname = "tenant.test.example"
+	selfSigned := func(serial int64) (tls.Certificate, *x509.CertPool) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		template := &x509.Certificate{
+			SerialNumber: big.NewInt(serial),
+			DNSNames:     []string{tenantHostname},
+			IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(time.Hour),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool := x509.NewCertPool()
+		pool.AddCert(leaf)
+		return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, pool
+	}
+	first, firstPool := selfSigned(1)
+	renewed, renewedPool := selfSigned(2)
+
+	var serving atomic.Pointer[tls.Certificate]
+	serving.Store(&first)
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	var relayURL string
+	relay := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
+			AccessToken:     "renewed-token",
+			ExpiresAt:       expiresAt,
+			ReverseEndpoint: types.ReverseEndpoint{URL: relayURL + types.PathSDKConnect, Capability: "capability", ExpiresAt: expiresAt},
+		})
+	}))
+	// httptest's StartTLS installs its own certificate next to GetCertificate,
+	// and a client that sends no server name (an IP literal) would get that one.
+	relay.Listener = tls.NewListener(relay.Listener, &tls.Config{
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return serving.Load(), nil },
+		NextProtos:     []string{"http/1.1"},
+	})
+	relay.Start()
+	defer relay.Close()
+	relayURL = "https://" + relay.Listener.Addr().String()
+	parsedRelayURL, err := url.Parse(relayURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{RelayURL: relayURL, Hostname: tenantHostname, AccessToken: "access-token"})
+	if err != nil {
+		t.Fatalf("keyless.NewClient() error = %v", err)
+	}
+	defer tenantTLS.Close()
+	if !tenantTLS.RelayCertPool().Equal(firstPool) {
+		t.Fatal("the tenant did not pin the certificate the relay served")
+	}
+	listener := &listener{
+		api: &apiClient{relayURL: parsedRelayURL, http: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}},
+		lease: utils.NewSnapshot(listenerSnapshot{
+			accessToken: "access-token",
+			expiresAt:   expiresAt,
+			tenantTLS:   tenantTLS,
+		}, listenerSnapshot.snapshot),
+	}
+
+	if err := listener.renewLease(context.Background()); err != nil {
+		t.Fatalf("renewLease() error = %v", err)
+	}
+	if !tenantTLS.RelayCertPool().Equal(firstPool) {
+		t.Fatal("a renewal with nothing renewed on the relay changed the pinned certificate")
+	}
+
+	serving.Store(&renewed)
+	if err := listener.renewLease(context.Background()); err != nil {
+		t.Fatalf("renewLease() error = %v", err)
+	}
+	if !tenantTLS.RelayCertPool().Equal(renewedPool) {
+		t.Fatal("renewLease() left the tenant on the replaced relay certificate")
 	}
 }
 

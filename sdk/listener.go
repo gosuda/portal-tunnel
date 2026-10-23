@@ -1100,8 +1100,33 @@ func (l *listener) renewLease(ctx context.Context) error {
 	}
 	if lease.tenantTLS != nil {
 		lease.tenantTLS.SetAccessToken(resp.AccessToken)
+		l.refreshRelayChain(ctx, lease.tenantTLS)
 	}
 	return nil
+}
+
+// refreshRelayChain moves the tenant to the certificate chain the relay serves
+// now. Lease renewal is the cadence at which a tenant that never reconnects
+// learns of a renewed relay certificate, and the relay signs for the replaced
+// one only until it expires. A failure keeps the pinned chain and is retried at
+// the next renewal.
+func (l *listener) refreshRelayChain(ctx context.Context, tenantTLS *keyless.Client) {
+	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	changed, err := tenantTLS.RefreshChain(checkCtx)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		log.Warn().
+			Err(err).
+			Str("relay_url", l.api.relayURL.String()).
+			Str("address", l.identity.Address).
+			Msg("relay certificate check failed; keeping the pinned chain")
+	case changed:
+		log.Info().
+			Str("relay_url", l.api.relayURL.String()).
+			Str("address", l.identity.Address).
+			Msg("relay certificate renewed; presenting the new chain")
+	}
 }
 
 // ensureMITMProbeSupport rejects a registration whose tenant TLS stack
