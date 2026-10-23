@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,5 +32,20 @@ func TestAgentDashboardRefusesUnknownTheme(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The agent starts before the dashboard opens, so `agent run --foreground` has to refuse an
+// unknown theme first. The config is missing, so reaching it would fail with another error.
+func TestAgentRunForegroundRefusesUnknownThemeBeforeStarting(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "config.toml")
+	err := runAgentRunCommand([]string{"--config", missing, "--foreground", "--theme", "purple"})
+	if err == nil {
+		t.Fatal("expected an error for an unknown theme")
+	}
+	for _, want := range []string{"--theme", "purple", "amber", "green"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q should mention %q", err, want)
+		}
 	}
 }
