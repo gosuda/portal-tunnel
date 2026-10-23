@@ -55,7 +55,7 @@ const METHODS: MethodChoice<TunnelAuthMethod>[] = [
     id: "none",
     label: "Anyone with the link",
     short: "Anyone",
-    description: "No sign-in. The address is the only secret.",
+    description: "No sign-in. Anyone who discovers the public address can open the app.",
     icon: Globe,
   },
   {
@@ -108,13 +108,13 @@ const ALLOW_COPY: Record<
     label: "Link names",
     requirement: "optional",
     placeholder: "alice, then Enter",
-    help: "The names you will give links to; separate several with commas (a name cannot contain one). With names listed, you can cut someone off by removing their name.",
+    help: "The names you will give links to; separate several with commas (a name cannot contain one). With names listed, only those names get in. Removing the last name leaves the list empty, which lets every unexpired link in: to end access for the last person, stop the tunnel instead.",
   },
   siwe: {
     label: "Allowed wallets",
     requirement: "optional",
     placeholder: "0x…, then Enter",
-    help: "Ethereum addresses allowed to sign in.",
+    help: "Ethereum addresses allowed to sign in. Removing the last address leaves the list empty, which lets any wallet in: to end access for the last person, stop the tunnel instead.",
   },
   oidc: {
     label: "Who may sign in",
@@ -230,8 +230,8 @@ export function TunnelAuthSection({
 
       {auth.method === "none" ? (
         <p className={s.help}>
-          Anyone who learns the address can open the app. Choose a sign-in
-          method to limit it.
+          Anyone who discovers the public address can open the app. Choose a
+          sign-in method to limit it.
         </p>
       ) : (
         <div className={cn("space-y-4 rounded-lg border p-3", s.panel)}>
@@ -474,15 +474,19 @@ function AllowList({
       })}
       <FieldIssues issues={issues} field="allow" theme={theme} />
       {auth.allow.length === 0 && method === "siwe" && (
-        <Notice tone="warn" theme={theme}>
-          No list: any wallet that signs in gets through. That proves a wallet
-          exists, not who owns it.
+        <Notice tone="warn" theme={theme} role="status">
+          The list is empty, so any wallet that signs in gets through, which
+          proves a wallet exists, not who owns it. Removing the last address
+          does not end its access: stop the tunnel instead (or list a
+          placeholder address nobody will use).
         </Notice>
       )}
       {auth.allow.length === 0 && method === "credential" && (
-        <Notice tone="warn" theme={theme}>
-          No names: every unexpired link works, and a link can't be revoked
-          before it expires.
+        <Notice tone="warn" theme={theme} role="status">
+          The list is empty, so every unexpired link works and none can be
+          revoked before it expires. Removing the last name does not end its
+          access: stop the tunnel instead (or list a name no link was issued
+          for).
         </Notice>
       )}
     </div>
