@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-acme/lego/v4/certificate"
 
@@ -158,12 +159,8 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 		return certFile, keyFile, nil
 	}
 
-	certFile, keyFile, err = m.TLSFiles()
-	if err == nil {
-		covered, err := certCoversDomains(certFile, certificateDomains(m.cfg.BaseDomain))
-		if err == nil && covered {
-			return certFile, keyFile, nil
-		}
+	if certFile, keyFile, ok := m.reusableCertificate(time.Now()); ok {
+		return certFile, keyFile, nil
 	}
 
 	if err := m.provision(ctx, ""); err != nil {

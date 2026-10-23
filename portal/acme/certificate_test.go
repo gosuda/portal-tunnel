@@ -42,6 +42,83 @@ func TestCertificateCoversDomains(t *testing.T) {
 	}
 }
 
+func TestCertificateUsable(t *testing.T) {
+	t.Parallel()
+
+	const day = 24 * time.Hour
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	domains := []string{"relay.example", "*.relay.example"}
+	for _, tc := range []struct {
+		name      string
+		sans      []string
+		notBefore time.Time
+		notAfter  time.Time
+		want      bool
+	}{
+		{"valid and covering", domains, now.Add(-day), now.Add(day), true},
+		{"valid from this instant", domains, now, now.Add(day), true},
+		{"expired a second ago", domains, now.Add(-90 * day), now.Add(-time.Second), false},
+		{"expires this instant", domains, now.Add(-90 * day), now, false},
+		{"not valid yet", domains, now.Add(time.Minute), now.Add(90 * day), false},
+		{"valid but another domain", []string{"other.example", "*.other.example"}, now.Add(-day), now.Add(day), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cert := &x509.Certificate{DNSNames: tc.sans, NotBefore: tc.notBefore, NotAfter: tc.notAfter}
+			if got := certificateUsable(cert, domains, now); got != tc.want {
+				t.Fatalf("certificateUsable() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if certificateUsable(nil, domains, now) {
+		t.Fatal("certificateUsable(nil) = true, want false")
+	}
+}
+
+// Switching from CA A to CA B and back to A must not serve the certificate A
+// issued earlier once it has expired: each directory keeps its own file, and
+// the stored one is reused only while it is valid and covers the relay domains.
+func TestReusableCertificateIsPerCAAndMustBeValid(t *testing.T) {
+	t.Parallel()
+
+	const (
+		baseDomain = "portal.example.com"
+		day        = 24 * time.Hour
+	)
+	keyDir := t.TempDir()
+	now := time.Now()
+	productionCert, productionKey := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
+	if err := writeRelayCertificate(t, productionCert, productionKey, baseDomain, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("writeRelayCertificate(production) error = %v", err)
+	}
+	stagingCert, stagingKey := certificateFilePaths(keyDir, lego.LEDirectoryStaging)
+	if err := writeRelayCertificate(t, stagingCert, stagingKey, baseDomain, now.Add(30*day)); err != nil {
+		t.Fatalf("writeRelayCertificate(staging) error = %v", err)
+	}
+	managerFor := func(caDirURL string) *Manager {
+		t.Helper()
+		manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53, CADirURL: caDirURL})
+		if err != nil {
+			t.Fatalf("NewManager() error = %v", err)
+		}
+		return manager
+	}
+
+	if _, _, ok := managerFor(lego.LEDirectoryProduction).reusableCertificate(now); ok {
+		t.Fatal("reusableCertificate() = true for the expired production certificate, want false")
+	}
+	certFile, keyFile, ok := managerFor(lego.LEDirectoryStaging).reusableCertificate(now)
+	if !ok || certFile != stagingCert || keyFile != stagingKey {
+		t.Fatalf("reusableCertificate() = %q, %q, %v; want the valid staging certificate", certFile, keyFile, ok)
+	}
+	if _, _, ok := managerFor(lego.LEDirectoryStaging).reusableCertificate(now.Add(31 * day)); ok {
+		t.Fatal("reusableCertificate() = true after the staging certificate expired, want false")
+	}
+	other := managerFor("https://acme.example.test/directory")
+	if _, _, ok := other.reusableCertificate(now); ok {
+		t.Fatal("reusableCertificate() = true for a CA with no stored certificate, want false")
+	}
+}
+
 func TestEvaluateRenewal(t *testing.T) {
 	t.Parallel()
 
