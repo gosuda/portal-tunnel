@@ -1,6 +1,8 @@
 package sdk
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -8,7 +10,59 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+// Requests from the relay listener are public, so Portal identity headers they
+// carry are forged and must not reach the handler.
+func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	got := make(chan http.Header, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- RunHTTP(ctx, listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got <- r.Header.Clone()
+			w.WriteHeader(http.StatusNoContent)
+		}), "")
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("RunHTTP() error = %v", err)
+		}
+	})
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+listener.Addr().String()+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(types.HeaderPortalUser, "forged-user")
+	req.Header.Set(types.HeaderPortalAuth, "forged-auth")
+	req.Header.Set(types.HeaderPortalProof, "forged-proof")
+	req.Header.Set("X-Keep", "kept")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	header := <-got
+	if header.Get("X-Keep") != "kept" {
+		t.Fatalf("handler header X-Keep = %q; the request was altered beyond the Portal headers", header.Get("X-Keep"))
+	}
+	for _, name := range []string{types.HeaderPortalUser, types.HeaderPortalAuth, types.HeaderPortalProof} {
+		if values := header.Values(name); len(values) != 0 {
+			t.Errorf("handler received forged %s = %q", name, values)
+		}
+	}
+}
 
 func TestHTTPRoutesUseLongestPrefix(t *testing.T) {
 	t.Parallel()

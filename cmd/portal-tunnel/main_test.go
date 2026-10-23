@@ -81,3 +81,46 @@ func TestExposeRefusesExplicitOIDCFlagWithoutAuthOIDC(t *testing.T) {
 		}
 	}
 }
+
+const identityProofEnv = "test-proof-0123456789"
+
+// AUTH_IDENTITY_PROOF may be exported for one service, so without
+// --auth-identity-headers it must neither turn application auth on for every
+// other portal expose nor make a protected one fail validation.
+func TestExposeIgnoresIdentityProofEnvWithoutIdentityHeaders(t *testing.T) {
+	t.Setenv("AUTH_IDENTITY_PROOF", identityProofEnv)
+
+	spec, err := exposeSpec(t, "3000")
+	if err != nil || spec.HTTP != nil {
+		t.Fatalf("portal expose 3000 with AUTH_IDENTITY_PROOF = %+v, %v; want a plain tunnel", spec.HTTP, err)
+	}
+	spec, err = exposeSpec(t, "--auth", "siwe", "3000")
+	if err != nil || spec.HTTP.Auth.IdentityProof != "" {
+		t.Fatalf("portal expose --auth siwe with AUTH_IDENTITY_PROOF = %+v, %v; want the proof dropped", spec.HTTP.Auth, err)
+	}
+}
+
+func TestExposeIdentityProofReadsEnvWithIdentityHeaders(t *testing.T) {
+	t.Setenv("AUTH_IDENTITY_PROOF", identityProofEnv)
+
+	spec, err := exposeSpec(t, "--auth", "siwe", "--auth-identity-headers", "3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := spec.HTTP.Auth.IdentityProof; got != identityProofEnv {
+		t.Fatalf("identity proof = %q, want the AUTH_IDENTITY_PROOF value", got)
+	}
+}
+
+// A flag typed on the command line is deliberate: without --auth-identity-headers
+// it must be refused instead of starting a tunnel that sends no proof.
+func TestExposeRefusesExplicitIdentityProofWithoutIdentityHeaders(t *testing.T) {
+	for _, args := range [][]string{
+		{"--auth", "siwe", "--auth-identity-proof", identityProofEnv, "3000"},
+		{"--auth-identity-proof", identityProofEnv, "3000"},
+	} {
+		if _, err := exposeSpec(t, args...); err == nil {
+			t.Errorf("portal expose %v started without --auth-identity-headers", args)
+		}
+	}
+}

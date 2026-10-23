@@ -73,6 +73,7 @@ type exposeFlags struct {
 	authProvider         string
 	authAllowedWallets   []string
 	authIdentityHeaders  bool
+	authIdentityProof    string
 	authOIDCIssuer       string
 	authOIDCClientID     string
 	authOIDCClientSecret string
@@ -112,6 +113,7 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe, credential, or oidc authentication")
 	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, subject for credential, or verified email, @domain, or sub:<subject> for oidc); repeat to allow multiple principals (empty allows any valid principal, except oidc, which requires at least one entry)")
 	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
+	utils.StringFlagEnv(fs, &flags.authIdentityProof, "auth-identity-proof", "", "Secret sent as X-Portal-Proof with the identity headers so the upstream can verify they came from Portal (at least 16 visible ASCII characters; requires --auth-identity-headers). Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_IDENTITY_PROOF")
 	utils.StringFlagEnv(fs, &flags.authOIDCIssuer, "auth-oidc-issuer", "", "OIDC issuer URL for --auth oidc", "AUTH_OIDC_ISSUER")
 	utils.StringFlagEnv(fs, &flags.authOIDCClientID, "auth-oidc-client-id", "", "OIDC client ID for --auth oidc", "AUTH_OIDC_CLIENT_ID")
 	utils.StringFlagEnv(fs, &flags.authOIDCClientSecret, "auth-oidc-client-secret", "", "Optional OIDC client secret for --auth oidc", "AUTH_OIDC_CLIENT_SECRET")
@@ -251,13 +253,20 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, flags exposeFlags) (tunnel.Spec
 	}
 	serve := strings.TrimSpace(flags.serve)
 	// AUTH_OIDC_* may be exported for one service, so without --auth oidc only
-	// an --auth-oidc-* flag given on the command line counts.
-	oidcFlagGiven := false
-	fs.Visit(func(f *flag.Flag) { oidcFlagGiven = oidcFlagGiven || strings.HasPrefix(f.Name, "auth-oidc-") })
+	// an --auth-oidc-* flag given on the command line counts. The same holds for
+	// AUTH_IDENTITY_PROOF without --auth-identity-headers.
+	oidcFlagGiven, proofFlagGiven := false, false
+	fs.Visit(func(f *flag.Flag) {
+		oidcFlagGiven = oidcFlagGiven || strings.HasPrefix(f.Name, "auth-oidc-")
+		proofFlagGiven = proofFlagGiven || f.Name == "auth-identity-proof"
+	})
 	if provider, _ := gateway.NormalizeApplicationAuthProvider(flags.authProvider); provider != gateway.ApplicationAuthProviderOIDC && !oidcFlagGiven {
 		flags.authOIDCIssuer, flags.authOIDCClientID, flags.authOIDCClientSecret = "", "", ""
 	}
-	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders ||
+	if !flags.authIdentityHeaders && !proofFlagGiven {
+		flags.authIdentityProof = ""
+	}
+	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders || flags.authIdentityProof != "" ||
 		flags.authOIDCIssuer != "" || flags.authOIDCClientID != "" || flags.authOIDCClientSecret != ""
 	hasStripPolicy := len(flags.stripRequestHeaders) > 0
 	hasHTTPUpstream := len(routes) > 0 || strings.TrimSpace(flags.targetAddr) != ""
@@ -287,6 +296,7 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, flags exposeFlags) (tunnel.Spec
 			Provider:         flags.authProvider,
 			AllowedWallets:   append([]string(nil), flags.authAllowedWallets...),
 			IdentityHeaders:  flags.authIdentityHeaders,
+			IdentityProof:    flags.authIdentityProof,
 			OIDCIssuerURL:    flags.authOIDCIssuer,
 			OIDCClientID:     flags.authOIDCClientID,
 			OIDCClientSecret: flags.authOIDCClientSecret,

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -229,6 +230,106 @@ func TestApplicationAuthCredential(t *testing.T) {
 	handler.ServeHTTP(invalidCredentialRec, invalidCredential)
 	if invalidCredentialRec.Code == http.StatusNoContent || upstreamRequests != 3 {
 		t.Fatalf("invalid credential with cookie status = %d, upstream requests = %d; want rejection", invalidCredentialRec.Code, upstreamRequests)
+	}
+}
+
+// identityProofTestValue is a fake proof that satisfies the length and
+// character rules.
+const identityProofTestValue = "test-proof-0123456789"
+
+// The proof lets an upstream tell Portal from another local process that
+// connects to it directly and forges the identity headers: the gate sends it
+// only with the headers it verified, and never lets a visitor's copy through.
+func TestApplicationAuthIdentityProof(t *testing.T) {
+	t.Parallel()
+
+	tunnelIdentity := applicationAuthTestIdentity()
+	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name      string
+		cfg       ApplicationAuthConfig
+		wantProof []string
+	}{
+		{"configured", ApplicationAuthConfig{IdentityHeaders: true, IdentityProof: identityProofTestValue}, []string{identityProofTestValue}},
+		{"not configured", ApplicationAuthConfig{IdentityHeaders: true}, nil},
+		{"identity headers off", ApplicationAuthConfig{}, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reached := false
+			var gotProof []string
+			tt.cfg.Provider = ApplicationAuthProviderCredential
+			handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached = true
+				gotProof = r.Header.Values(types.HeaderPortalProof)
+				w.WriteHeader(http.StatusNoContent)
+			}), tunnelIdentity, tt.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// An authenticated visitor who also sends a proof of their own.
+			req := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+			req.Header.Set(types.HeaderAccessCredential, credential)
+			req.Header.Set(types.HeaderPortalProof, "forged-proof-value")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNoContent || !slices.Equal(gotProof, tt.wantProof) {
+				t.Fatalf("authenticated request: status = %d, upstream %s = %q; want %q", rec.Code, types.HeaderPortalProof, gotProof, tt.wantProof)
+			}
+
+			// Without authentication nothing reaches the upstream, whatever proof it carries.
+			reached = false
+			req = httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+			req.Header.Set(types.HeaderPortalProof, identityProofTestValue)
+			rec = httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if reached || rec.Code != http.StatusSeeOther {
+				t.Fatalf("unauthenticated request: reached upstream = %v, status = %d; want a login redirect", reached, rec.Code)
+			}
+		})
+	}
+}
+
+// The router in front of the upstream removes Portal identity headers the gate
+// did not verify, so the proof set by the gate must survive it.
+func TestApplicationAuthIdentityProofReachesRoutedUpstream(t *testing.T) {
+	t.Parallel()
+
+	gotProof := make(chan []string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotProof <- r.Header.Values(types.HeaderPortalProof)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	routes, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: upstream.URL}}, X402Payment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnelIdentity := applicationAuthTestIdentity()
+	handler, err := NewApplicationAuth(routes, tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: identityProofTestValue})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	req.Header.Set(types.HeaderAccessCredential, credential)
+	req.Header.Set(types.HeaderPortalProof, "forged-proof-value")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d; want %d", rec.Code, http.StatusNoContent)
+	}
+	if got := <-gotProof; !slices.Equal(got, []string{identityProofTestValue}) {
+		t.Fatalf("upstream %s = %q; want the configured proof only", types.HeaderPortalProof, got)
 	}
 }
 
@@ -766,6 +867,65 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 			want: applicationAuthSettings{provider: ApplicationAuthProviderSIWE, allowed: []string{wallet}},
 		},
 		{
+			// Exactly the minimum length, with the first and last visible ASCII characters.
+			name: "identity proof is kept as given",
+			cfg:  ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: "!~" + strings.Repeat("a", 14)},
+			want: applicationAuthSettings{provider: ApplicationAuthProviderCredential, identityProof: "!~" + strings.Repeat("a", 14)},
+		},
+		{
+			name: "identity proof with oidc",
+			cfg: ApplicationAuthConfig{
+				Provider:        ApplicationAuthProviderOIDC,
+				AllowedWallets:  []string{"alice@example.com"},
+				IdentityHeaders: true,
+				IdentityProof:   identityProofTestValue,
+				OIDCIssuerURL:   "https://idp.example",
+				OIDCClientID:    oidcTestClientID,
+			},
+			want: applicationAuthSettings{
+				provider:      ApplicationAuthProviderOIDC,
+				allowed:       []string{"alice@example.com"},
+				identityProof: identityProofTestValue,
+				issuerURL:     "https://idp.example",
+				clientID:      oidcTestClientID,
+			},
+		},
+		{
+			name:    "identity proof without identity headers",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, IdentityProof: identityProofTestValue},
+			wantErr: "--auth-identity-headers",
+		},
+		{
+			name:    "identity proof too short",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: "abcdefghijklmno"},
+			wantErr: "at least 16 characters",
+		},
+		{
+			name:    "identity proof with a space",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: "test proof 0123456789"},
+			wantErr: "visible ASCII",
+		},
+		{
+			name:    "identity proof is not trimmed",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: " " + identityProofTestValue},
+			wantErr: "visible ASCII",
+		},
+		{
+			name:    "identity proof with a line break",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: identityProofTestValue + "\r\nX-Injected: 1"},
+			wantErr: "visible ASCII",
+		},
+		{
+			name:    "identity proof with the delete character",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: identityProofTestValue + "\x7f"},
+			wantErr: "visible ASCII",
+		},
+		{
+			name:    "identity proof with a non-ASCII character",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: "test-proof-01234567é"},
+			wantErr: "visible ASCII",
+		},
+		{
 			name:    "unknown provider",
 			cfg:     ApplicationAuthConfig{Provider: "saml"},
 			wantErr: "unsupported application auth provider",
@@ -803,6 +963,9 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("resolveApplicationAuthConfig() error = %v; want one containing %q", err, tt.wantErr)
+				}
+				if tt.cfg.IdentityProof != "" && strings.Contains(err.Error(), tt.cfg.IdentityProof) {
+					t.Fatalf("resolveApplicationAuthConfig() error %q contains the identity proof", err)
 				}
 				if validateErr := ValidateApplicationAuthConfig(tt.cfg); validateErr == nil || validateErr.Error() != err.Error() {
 					t.Fatalf("ValidateApplicationAuthConfig() = %v; want the resolver's error %v", validateErr, err)

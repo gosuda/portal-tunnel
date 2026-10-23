@@ -21,6 +21,9 @@ const (
 	applicationCredentialPrefix  = "pcred_"
 	applicationCredentialVersion = 1
 	applicationCredentialKeyUse  = "application-access-credential"
+
+	// minIdentityProofLength keeps the proof from being guessed by a local process.
+	minIdentityProofLength = 16
 )
 
 type applicationCredentialClaims struct {
@@ -48,12 +51,14 @@ func NormalizeApplicationAuthProvider(provider string) (string, error) {
 // applicationAuthSettings is an ApplicationAuthConfig after validation and
 // normalization. ValidateApplicationAuthConfig and NewApplicationAuth both get
 // it from resolveApplicationAuthConfig, so what validation accepts is exactly
-// what the gate is built from. It holds the OIDC client secret, so it must not
-// be formatted or logged.
+// what the gate is built from. It holds the identity proof and the OIDC client
+// secret, so it must not be formatted or logged.
 type applicationAuthSettings struct {
 	provider string
 	// allowed holds the normalized principals; empty means any valid principal.
 	allowed []string
+	// identityProof is set only together with the identity headers.
+	identityProof string
 	// The OIDC fields are set only for the oidc provider.
 	issuerURL    string
 	clientID     string
@@ -69,7 +74,7 @@ func ValidateApplicationAuthConfig(cfg ApplicationAuthConfig) error {
 }
 
 // resolveApplicationAuthConfig is the one place that validates and normalizes
-// the provider, the allowlist and the OIDC settings.
+// the provider, the allowlist, the identity proof and the OIDC settings.
 func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSettings, error) {
 	provider, err := NormalizeApplicationAuthProvider(cfg.Provider)
 	if err != nil {
@@ -79,6 +84,18 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	if err != nil {
 		return applicationAuthSettings{}, err
 	}
+	// The proof is sent as a header value and is compared byte for byte by the
+	// upstream, so it is neither trimmed nor accepted with anything but visible
+	// ASCII. The errors never include it.
+	proof := cfg.IdentityProof
+	if proof != "" {
+		if !cfg.IdentityHeaders {
+			return applicationAuthSettings{}, errors.New("--auth-identity-proof requires --auth-identity-headers")
+		}
+		if len(proof) < minIdentityProofLength || strings.ContainsFunc(proof, func(r rune) bool { return r < 0x21 || r > 0x7e }) {
+			return applicationAuthSettings{}, fmt.Errorf("--auth-identity-proof must be at least %d characters of visible ASCII without spaces", minIdentityProofLength)
+		}
+	}
 	issuer := strings.TrimSpace(cfg.OIDCIssuerURL)
 	clientID := strings.TrimSpace(cfg.OIDCClientID)
 	clientSecret := strings.TrimSpace(cfg.OIDCClientSecret)
@@ -86,7 +103,7 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 		if issuer != "" || clientID != "" || clientSecret != "" {
 			return applicationAuthSettings{}, errors.New("oidc settings require the oidc application auth provider")
 		}
-		return applicationAuthSettings{provider: provider, allowed: allowed}, nil
+		return applicationAuthSettings{provider: provider, allowed: allowed, identityProof: proof}, nil
 	}
 	// An identity provider authenticates accounts it does not restrict to
 	// this application, so without an allowlist every one of them would pass.
@@ -100,7 +117,7 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	if clientID == "" {
 		return applicationAuthSettings{}, errors.New("oidc client id is required")
 	}
-	return applicationAuthSettings{provider: provider, allowed: allowed, issuerURL: issuerURL, clientID: clientID, clientSecret: clientSecret}, nil
+	return applicationAuthSettings{provider: provider, allowed: allowed, identityProof: proof, issuerURL: issuerURL, clientID: clientID, clientSecret: clientSecret}, nil
 }
 
 // NormalizeApplicationAuthAllowed validates and normalizes the provider-scoped

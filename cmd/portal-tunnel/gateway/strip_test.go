@@ -66,10 +66,11 @@ func TestStripRequestHeadersRejectsInvalidNames(t *testing.T) {
 
 func TestHTTPGatewayAlwaysStripsInboundPortalIdentityHeaders(t *testing.T) {
 	t.Parallel()
-	var gotUser, gotAuth, gotCredential string
+	var gotUser, gotAuth, gotProof, gotCredential string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotUser = r.Header.Get(types.HeaderPortalUser)
 		gotAuth = r.Header.Get(types.HeaderPortalAuth)
+		gotProof = r.Header.Get(types.HeaderPortalProof)
 		gotCredential = r.Header.Get(types.HeaderAccessCredential)
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -82,13 +83,14 @@ func TestHTTPGatewayAlwaysStripsInboundPortalIdentityHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://app.example/", nil)
 	req.Header.Set(types.HeaderPortalUser, "spoofed-user")
 	req.Header.Set(types.HeaderPortalAuth, "spoofed-auth")
+	req.Header.Set(types.HeaderPortalProof, "spoofed-proof")
 	req.Header.Set(types.HeaderAccessCredential, "pcred_spoofed")
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d; want 204", rec.Code)
 	}
-	if gotUser != "" || gotAuth != "" || gotCredential != "" {
-		t.Fatalf("spoofed portal headers reached upstream: user=%q auth=%q credential=%q", gotUser, gotAuth, gotCredential)
+	if gotUser != "" || gotAuth != "" || gotProof != "" || gotCredential != "" {
+		t.Fatalf("spoofed portal headers reached upstream: user=%q auth=%q proof=%q credential=%q", gotUser, gotAuth, gotProof, gotCredential)
 	}
 }
