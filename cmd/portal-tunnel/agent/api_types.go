@@ -31,9 +31,17 @@ type AgentTunnelStatus struct {
 	MaxActiveRelays     int                 `json:"max_active_relays,omitempty"`
 	Metadata            types.LeaseMetadata `json:"metadata"`
 	Auth                string              `json:"auth,omitempty"`
+	AuthAllowedWallets  []string            `json:"auth_allowed_wallets,omitempty"`
 	AuthIdentityHeaders bool                `json:"auth_identity_headers,omitempty"`
 	AuthOIDCIssuer      string              `json:"auth_oidc_issuer,omitempty"`
 	AuthOIDCClientID    string              `json:"auth_oidc_client_id,omitempty"`
+	// The client secret is write-only: status says whether one is configured.
+	AuthOIDCClientSecretSet bool `json:"auth_oidc_client_secret_set,omitempty"`
+	// The provider fields report the startup check of the OIDC provider of a
+	// running tunnel: both are empty until the check finishes, and the error
+	// stays empty while the provider is usable.
+	AuthOIDCProviderChecked bool   `json:"auth_oidc_provider_checked,omitempty"`
+	AuthOIDCProviderError   string `json:"auth_oidc_provider_error,omitempty"`
 	gateway.X402Config
 	HTTPRoutes []tunnel.HTTPRoute `json:"http_routes,omitempty"`
 	Relays     []AgentRelayStatus `json:"relays,omitempty"`

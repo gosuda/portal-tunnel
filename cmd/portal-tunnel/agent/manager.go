@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -449,7 +450,7 @@ type managedTunnel struct {
 
 	cancel    context.CancelFunc
 	done      chan struct{}
-	exposure  *sdk.Exposure
+	runtime   *tunnel.Runtime
 	lastError string
 	address   string
 	relays    []AgentRelayStatus
@@ -504,12 +505,12 @@ func (t *managedTunnel) ConnectRelay(relayURL string) error {
 	if !slices.Contains(t.cfg.RelayURLs, relayURL) {
 		t.cfg.RelayURLs = append(t.cfg.RelayURLs, relayURL)
 	}
-	exposure := t.exposure
+	runtime := t.runtime
 	t.mu.Unlock()
-	if exposure == nil {
+	if runtime == nil {
 		return nil
 	}
-	return exposure.AddRelay(relayURL)
+	return runtime.Exposure.AddRelay(relayURL)
 }
 
 func (t *managedTunnel) DisconnectRelay(relayURL string) error {
@@ -525,28 +526,28 @@ func (t *managedTunnel) DisconnectRelay(relayURL string) error {
 		}
 	}
 	t.cfg.RelayURLs = next
-	exposure := t.exposure
+	runtime := t.runtime
 	t.mu.Unlock()
-	if exposure == nil {
+	if runtime == nil {
 		return nil
 	}
-	return exposure.RemoveRelay(relayURL)
+	return runtime.Exposure.RemoveRelay(relayURL)
 }
 
 func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays bool) error {
 	t.mu.RLock()
-	exposure := t.exposure
+	runtime := t.runtime
 	cfg := t.cfg
 	t.mu.RUnlock()
-	if exposure == nil {
+	if runtime == nil {
 		return nil
 	}
 	var err error
 	if updateMetadata {
-		err = errors.Join(err, exposure.UpdateMetadata(metadataFromTunnelConfig(cfg)))
+		err = errors.Join(err, runtime.Exposure.UpdateMetadata(metadataFromTunnelConfig(cfg)))
 	}
 	if updateMaxActiveRelays {
-		err = errors.Join(err, exposure.SetMaxActiveRelays(cfg.MaxActiveRelays))
+		err = errors.Join(err, runtime.Exposure.SetMaxActiveRelays(cfg.MaxActiveRelays))
 	}
 	return err
 }
@@ -555,7 +556,7 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	t.mu.RLock()
 	cfg := t.cfg
 	lastError := t.lastError
-	exposure := t.exposure
+	runtime := t.runtime
 	done := t.done
 	address := t.address
 	relays := append([]AgentRelayStatus(nil), t.relays...)
@@ -574,7 +575,7 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	switch {
 	case lastError != "":
 		state = "error"
-	case exposure != nil:
+	case runtime != nil:
 		state = "running"
 	case running:
 		state = "starting"
@@ -598,10 +599,20 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		MaxActiveRelays:     cfg.MaxActiveRelays,
 		Metadata:            metadataFromTunnelConfig(cfg),
 		Auth:                cfg.Auth,
+		AuthAllowedWallets:  append([]string(nil), cfg.AuthAllowedWallets...),
 		AuthIdentityHeaders: cfg.AuthIdentityHeaders,
 		AuthOIDCIssuer:      cfg.AuthOIDCIssuer,
 		AuthOIDCClientID:    cfg.AuthOIDCClientID,
 		X402Config:          x402,
+
+		AuthOIDCClientSecretSet: cfg.AuthOIDCClientSecret != "",
+	}
+	if runtime != nil && cfg.Auth == gateway.ApplicationAuthProviderOIDC {
+		checked, err := runtime.AuthProviderCheck()
+		status.AuthOIDCProviderChecked = checked
+		if err != nil {
+			status.AuthOIDCProviderError = err.Error()
+		}
 	}
 	if len(cfg.HTTPRoutes) > 0 {
 		status.HTTPRoutes = make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
@@ -614,14 +625,14 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 			})
 		}
 	}
-	if exposure == nil {
+	if runtime == nil {
 		status.Address = address
 		status.Relays = relays
 		return status
 	}
-	relays = agentRelayStatuses(exposure.Relays())
+	relays = agentRelayStatuses(runtime.Exposure.Relays())
 	t.mu.Lock()
-	if t.exposure == exposure {
+	if t.runtime == runtime {
 		t.relays = append([]AgentRelayStatus(nil), relays...)
 	}
 	address = t.address
@@ -650,7 +661,7 @@ func (t *managedTunnel) runLoop(ctx context.Context) {
 	for {
 		err := t.runOnce(ctx)
 		t.mu.Lock()
-		t.exposure = nil
+		t.runtime = nil
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) || err == nil {
 			t.lastError = ""
 		} else {
@@ -679,11 +690,10 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	exposure := runtime.Exposure
 	t.mu.Lock()
-	t.exposure = exposure
+	t.runtime = runtime
 	t.address = runtime.Identity.Address
-	t.relays = agentRelayStatuses(exposure.Relays())
+	t.relays = agentRelayStatuses(runtime.Exposure.Relays())
 	t.lastError = ""
 	t.mu.Unlock()
 
