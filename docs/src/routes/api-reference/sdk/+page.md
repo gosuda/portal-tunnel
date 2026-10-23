@@ -308,6 +308,13 @@ A relay exposes the maintained connector and matching Go runtime glue at
 `release_version` returned by `/sdk/domain` as their `version` query parameter
 so the relay rejects an incompatible cached artifact.
 
+The maintained connector's `portalTunnel.start(options)` resolves to an object
+with `publicURL` (the identity-bound canonical URL, preserving the existing
+contract) and `aliasURL` (the granted short URL, or an empty string when no alias
+was granted). Consumers can explicitly choose `aliasURL || publicURL` for sharing.
+Consumers of older connector artifacts should treat a missing `aliasURL` the
+same as an empty value.
+
 Browser runtime limits:
 
 - HTTPS handler exposure only
