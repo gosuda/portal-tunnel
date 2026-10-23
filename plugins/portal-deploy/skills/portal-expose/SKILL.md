@@ -96,7 +96,7 @@ Report:
 - Public URL or allocated raw endpoint, and the verified status. For a ready HTTP relay, prefer the granted `alias_url` (short URL without an Ethereum address) and verify that exact URL. Fall back to `public_url` when no alias is granted. Keep the identity-bound `public_url` as an alternative for identity-pinned origins or opt-in relay caching. Never construct an alias by removing the address suffix, and do not reuse an alias after readiness is lost or the relay is deselected.
 - Whether the tunnel is listed on public relays or hidden with `--hide`.
 - Whether MITM handling is detect-only or `--ban-mitm`.
-- For sign-in, the method, who may sign in, where the OIDC client secret lives (and that it was not printed), how to remove someone, and the exact restart command that applies a changed list.
+- For sign-in, the method, who may sign in, where the OIDC client secret lives (and that it was not printed), how to remove someone (never by emptying the allowlist, which lets everyone in), and the exact restart command that applies a changed list.
 - For x402, the protected paths and methods, human amount, network, public recipient, facilitator mode, and whether the unpaid `402` challenge was verified. State explicitly when settlement was not tested.
 - The identity path and that it must stay out of version control.
 - The app and Portal process/session or OS-service ownership.
