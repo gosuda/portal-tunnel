@@ -295,16 +295,20 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 		return errors.New("acme obtain response missing certificate or private key")
 	}
 
+	// Every issuance carries a new private key, so what the relay serves must
+	// change together with the files. A pair that does not parse is refused
+	// before anything is written, so the files and what is served cannot
+	// disagree.
+	material, err := newTLSMaterial(obtained.Certificate, obtained.PrivateKey)
+	if err != nil {
+		return err
+	}
 	if err := utils.WriteFileAtomic(certFile, obtained.Certificate, 0o644); err != nil {
 		return fmt.Errorf("write certificate chain: %w", err)
 	}
 	if err := utils.WriteFileAtomic(keyFile, obtained.PrivateKey, 0o600); err != nil {
 		return fmt.Errorf("write private key: %w", err)
 	}
-	// Every issuance carries a new private key, so what the relay serves
-	// follows the files as one unit.
-	if _, err := m.loadTLSMaterial(certFile, keyFile); err != nil {
-		return fmt.Errorf("load renewed certificate: %w", err)
-	}
+	m.material.current.Store(material)
 	return nil
 }
