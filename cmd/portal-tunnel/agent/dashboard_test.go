@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,8 +17,17 @@ import (
 )
 
 var (
-	keyRight = tea.KeyMsg{Type: tea.KeyRight}
-	keyDown  = tea.KeyMsg{Type: tea.KeyDown}
+	keyRight  = tea.KeyMsg{Type: tea.KeyRight}
+	keyLeft   = tea.KeyMsg{Type: tea.KeyLeft}
+	keyDown   = tea.KeyMsg{Type: tea.KeyDown}
+	keyTab    = tea.KeyMsg{Type: tea.KeyTab}
+	keyBackTb = tea.KeyMsg{Type: tea.KeyShiftTab}
+	keyEsc    = tea.KeyMsg{Type: tea.KeyEsc}
+	keyF2     = tea.KeyMsg{Type: tea.KeyF2}
+	keyF8     = tea.KeyMsg{Type: tea.KeyF8}
+	keyF10    = tea.KeyMsg{Type: tea.KeyF10}
+	keyCtrlC  = tea.KeyMsg{Type: tea.KeyCtrlC}
+	keyDelete = tea.KeyMsg{Type: tea.KeyDelete}
 )
 
 func keyRunes(text string) tea.KeyMsg {
@@ -64,8 +74,6 @@ type dashboardScenario struct {
 func testDashboardScenarios() []dashboardScenario {
 	load := agentDashboardStatusMsg{status: testDashboardStatus()}
 	long := keyRunes(strings.Repeat("long value ", 20))
-	// The Add Tunnel button is the first row inside the Tunnels frame, at any size.
-	addTunnel := tea.MouseMsg{X: 3, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
 
 	longDescription := testDashboardStatus()
 	longDescription.Tunnels[0].Metadata.Description = strings.Repeat("a long description ", 10)
@@ -77,8 +85,9 @@ func testDashboardScenarios() []dashboardScenario {
 		{"settings resized from a wider terminal", []tea.Msg{tea.WindowSizeMsg{Width: 200, Height: 50}, agentDashboardStatusMsg{status: longDescription}, keyRight}},
 		{"settings resized with the cursor at the start", []tea.Msg{tea.WindowSizeMsg{Width: 200, Height: 50}, agentDashboardStatusMsg{status: longDescription}, keyRight, keyDown, tea.KeyMsg{Type: tea.KeyHome}}},
 		{"relays", []tea.Msg{load, keyRight, keyRight}},
-		{"add tunnel form", []tea.Msg{load, addTunnel, long}},
+		{"add tunnel form", []tea.Msg{load, keyRunes("a"), long}},
 		{"tunnel with an error", []tea.Msg{load, keyDown, keyDown}},
+		{"delete confirmation", []tea.Msg{load, keyF8}},
 		{"error banner", []tea.Msg{load, agentDashboardActionMsg{err: errors.New("tunnel name is required")}}},
 		{"agent unavailable", []tea.Msg{agentDashboardStatusMsg{err: errors.New("agent is not running")}}},
 		{"no tunnels", []tea.Msg{agentDashboardStatusMsg{status: AgentStatusResponse{ControlAddr: "127.0.0.1:41873"}}}},
@@ -102,6 +111,27 @@ func newTestDashboard(t *testing.T, theme agentDashboardTheme, width, height int
 		model, _ = model.Update(step)
 	}
 	return model.(agentDashboardModel)
+}
+
+func press(model agentDashboardModel, keys ...tea.KeyMsg) (agentDashboardModel, tea.Cmd) {
+	var next tea.Model = model
+	var cmd tea.Cmd
+	for _, key := range keys {
+		next, cmd = next.Update(key)
+	}
+	return next.(agentDashboardModel), cmd
+}
+
+func click(t *testing.T, model agentDashboardModel, match func(agentDashboardRegion) bool) (agentDashboardModel, tea.Cmd) {
+	t.Helper()
+	for _, region := range model.layout().regions {
+		if match(region) {
+			next, cmd := model.Update(tea.MouseMsg{X: region.x0, Y: region.y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+			return next.(agentDashboardModel), cmd
+		}
+	}
+	t.Fatal("no clickable region matches")
+	return model, nil
 }
 
 // clickText presses the left mouse button on the first and on the last cell of text as it is
@@ -140,6 +170,20 @@ func viewHas(substrings ...string) func(agentDashboardModel) bool {
 	}
 }
 
+func clickAction(t *testing.T, model agentDashboardModel, action agentDashboardAction) (agentDashboardModel, tea.Cmd) {
+	t.Helper()
+	return click(t, model, func(r agentDashboardRegion) bool { return r.action == action })
+}
+
+func isQuit(cmd tea.Cmd) bool {
+	return cmd != nil && cmd() == tea.QuitMsg{}
+}
+
+func lastLine(view string) string {
+	lines := strings.Split(view, "\n")
+	return lines[len(lines)-1]
+}
+
 // forceColor makes lipgloss emit escape sequences even though the test output is not a terminal.
 func forceColor(t *testing.T) {
 	t.Helper()
@@ -175,6 +219,9 @@ func TestDashboardViewFitsTheTerminal(t *testing.T) {
 						if got := lipgloss.Width(line); got > width {
 							t.Fatalf("line %d is %d cells wide, terminal is %d: %q", i, got, width, line)
 						}
+					}
+					if !strings.Contains(lines[height-1], "Quit") && scenario.name != "agent unavailable" {
+						t.Fatalf("the key bar lost Quit: %q", lines[height-1])
 					}
 				})
 			}
@@ -221,8 +268,149 @@ func TestDashboardActivePaneIsMarkedWithoutColor(t *testing.T) {
 				t.Fatalf("active pane %s: title %s marked = %v", active, title, marked)
 			}
 		}
-		next, _ := model.Update(keyRight)
-		model = next.(agentDashboardModel)
+		model, _ = press(model, keyRight)
+	}
+}
+
+func TestDashboardKeyBarListsTheBindingsInUse(t *testing.T) {
+	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	load := agentDashboardStatusMsg{status: testDashboardStatus()}
+	tests := []struct {
+		name  string
+		steps []tea.Msg
+		want  []string
+		not   []string
+	}{
+		{"tunnels", []tea.Msg{load}, []string{"F2/a Add", "F8/Del Delete", "↑/↓ Select", "Tab/→ Pane", "F10/q Quit"}, []string{"Create", "Apply", "Esc"}},
+		{"add tunnel form", []tea.Msg{load, keyF2}, []string{"F2/Enter Create", "Esc Cancel", "Tab/S-Tab Field", "F10/^C Quit"}, []string{"F2/a Add", "Delete"}},
+		{"settings", []tea.Msg{load, keyRight}, []string{"Enter Apply", "Tab/S-Tab Field", "F2 Add", "Esc Back", "F10/^C Quit"}, []string{"F2/a Add", "Delete"}},
+		{"relays", []tea.Msg{load, keyRight, keyRight}, []string{"Enter/c Connect", "d/Del Disconnect", "o Open", "Esc Back", "F10/q Quit"}, []string{"Delete tunnel"}},
+		{"delete confirmation", []tea.Msg{load, keyF8}, []string{"y Yes", "n/Esc No", "F10/^C Quit"}, []string{"Add", "Pane"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bar := lastLine(newTestDashboard(t, theme, 140, 40, tt.steps...).View())
+			for _, want := range tt.want {
+				if !strings.Contains(bar, want) {
+					t.Errorf("key bar %q lacks %q", bar, want)
+				}
+			}
+			for _, not := range tt.not {
+				if strings.Contains(bar, not) {
+					t.Errorf("key bar %q must not list %q here", bar, not)
+				}
+			}
+		})
+	}
+}
+
+func TestDashboardKeyBarAndHandlerShareTheBindingTable(t *testing.T) {
+	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	load := agentDashboardStatusMsg{status: testDashboardStatus()}
+
+	model := newTestDashboard(t, theme, 100, 40, load)
+	if !strings.Contains(lastLine(model.View()), "Add") {
+		t.Fatalf("the key bar should list Add: %q", lastLine(model.View()))
+	}
+	if opened, _ := press(model, keyRunes("a")); !strings.Contains(opened.View(), "Name:") {
+		t.Fatal("a should open the add form while its binding is in the table")
+	}
+
+	original := agentDashboardBindings
+	agentDashboardBindings = slices.DeleteFunc(slices.Clone(original), func(b agentDashboardBinding) bool { return b.label == "Add" })
+	t.Cleanup(func() { agentDashboardBindings = original })
+
+	if strings.Contains(lastLine(model.View()), "Add") {
+		t.Fatalf("the key bar still lists Add after its binding left the table: %q", lastLine(model.View()))
+	}
+	for _, key := range []tea.KeyMsg{keyRunes("a"), keyF2} {
+		if pressed, _ := press(model, key); strings.Contains(pressed.View(), "Name:") {
+			t.Fatalf("%s still opens the add form after its binding left the table", key)
+		}
+	}
+}
+
+func TestDashboardAddTunnelByKey(t *testing.T) {
+	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
+	for _, key := range []tea.KeyMsg{keyRunes("a"), keyF2} {
+		opened, _ := press(model, key)
+		if !strings.Contains(opened.View(), "Name:") {
+			t.Fatalf("%s should open the add form", key)
+		}
+		if closed, _ := press(opened, keyEsc); strings.Contains(closed.View(), "Name:") {
+			t.Fatal("esc should cancel the add form")
+		}
+	}
+}
+
+func TestDashboardQuitKeys(t *testing.T) {
+	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	load := agentDashboardStatusMsg{status: testDashboardStatus()}
+	contexts := []struct {
+		name      string
+		steps     []tea.Msg
+		qIsText   bool
+		textEntry func(agentDashboardModel) string
+	}{
+		{"tunnels", []tea.Msg{load}, false, nil},
+		{"relays", []tea.Msg{load, keyRight, keyRight}, false, nil},
+		{"settings", []tea.Msg{load, keyRight}, true, func(m agentDashboardModel) string { return m.settingsMaxRelays.Value() }},
+		{"add tunnel form", []tea.Msg{load, keyRunes("a")}, true, func(m agentDashboardModel) string { return m.addName.Value() }},
+	}
+	for _, ctx := range contexts {
+		t.Run(ctx.name, func(t *testing.T) {
+			model := newTestDashboard(t, theme, 100, 40, ctx.steps...)
+			for _, key := range []tea.KeyMsg{keyF10, keyCtrlC} {
+				if _, cmd := press(model, key); !isQuit(cmd) {
+					t.Errorf("%s should quit", key)
+				}
+			}
+			typed, cmd := press(model, keyRunes("q"))
+			if ctx.qIsText {
+				if isQuit(cmd) || !strings.HasSuffix(ctx.textEntry(typed), "q") {
+					t.Errorf("q belongs to the focused input here, quit = %v, input = %q", isQuit(cmd), ctx.textEntry(typed))
+				}
+			} else if !isQuit(cmd) {
+				t.Error("q should quit")
+			}
+		})
+	}
+}
+
+func TestDashboardPaneKeys(t *testing.T) {
+	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
+	active := func(m agentDashboardModel) string {
+		for _, title := range []string{"TUNNELS", "SETTINGS", "RELAYS"} {
+			if strings.Contains(m.View(), "[ "+title+" ]") {
+				return title
+			}
+		}
+		return ""
+	}
+	tests := []struct {
+		keys []tea.KeyMsg
+		want string
+	}{
+		{[]tea.KeyMsg{keyTab}, "SETTINGS"},
+		{[]tea.KeyMsg{keyBackTb}, "RELAYS"},
+		{[]tea.KeyMsg{keyRight}, "SETTINGS"},
+		{[]tea.KeyMsg{keyLeft}, "RELAYS"},
+		{[]tea.KeyMsg{keyRight, keyRight}, "RELAYS"},
+		{[]tea.KeyMsg{keyRight, keyRight, keyTab}, "TUNNELS"},
+		{[]tea.KeyMsg{keyRight, keyRight, keyBackTb}, "SETTINGS"},
+		{[]tea.KeyMsg{keyRight, keyEsc}, "TUNNELS"},
+		// Settings is a form: tab and shift+tab move between its fields, and only left and right leave it.
+		{[]tea.KeyMsg{keyTab, keyTab}, "SETTINGS"},
+		{[]tea.KeyMsg{keyTab, keyBackTb}, "SETTINGS"},
+		{[]tea.KeyMsg{keyTab, keyRight}, "RELAYS"},
+		{[]tea.KeyMsg{keyTab, keyLeft}, "TUNNELS"},
+	}
+	for _, tt := range tests {
+		if pressed, _ := press(model, tt.keys...); active(pressed) != tt.want {
+			t.Errorf("after %v the active pane is %q, want %q", tt.keys, active(pressed), tt.want)
+		}
 	}
 }
 
@@ -236,6 +424,56 @@ func TestDashboardTunnelRowsShowWhatEachTunnelServes(t *testing.T) {
 	}
 }
 
+func TestDashboardEscClearsTheError(t *testing.T) {
+	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()},
+		agentDashboardActionMsg{err: errors.New("tunnel name is required")})
+	if !strings.Contains(model.View(), "Error: tunnel name is required") {
+		t.Fatal("the error should be shown")
+	}
+	if cleared, _ := press(model, keyEsc); strings.Contains(cleared.View(), "Error:") {
+		t.Fatal("esc should clear the error")
+	}
+}
+
+func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
+	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
+	const prompt = `Delete tunnel "web"?`
+
+	for _, key := range []tea.KeyMsg{keyF8, keyDelete} {
+		asked, cmd := press(model, key)
+		if cmd != nil || !strings.Contains(asked.View(), prompt) {
+			t.Fatalf("%s should only ask: cmd = %v, view asks = %v", key, cmd != nil, strings.Contains(asked.View(), prompt))
+		}
+		for _, answer := range []tea.KeyMsg{keyRunes("n"), keyEsc, keyRunes("q")} {
+			declined, cmd := press(asked, answer)
+			if cmd != nil || strings.Contains(declined.View(), prompt) {
+				t.Fatalf("%s should decline without deleting or quitting", answer)
+			}
+		}
+		confirmed, cmd := press(asked, keyRunes("y"))
+		if cmd == nil || strings.Contains(confirmed.View(), prompt) {
+			t.Fatalf("y should delete the tunnel: cmd = %v", cmd != nil)
+		}
+		if _, cmd := press(asked, keyRunes("x"), keyTab, keyF2); cmd != nil {
+			t.Fatal("other keys must not answer the question")
+		}
+	}
+
+	// The Delete button asks too, and its answers are buttons as well.
+	asked, cmd := clickAction(t, model, agentDashboardActionDeleteTunnel)
+	if cmd != nil || !strings.Contains(asked.View(), prompt) {
+		t.Fatal("the Delete button should only ask")
+	}
+	if declined, cmd := clickAction(t, asked, agentDashboardActionCancelDelete); cmd != nil || strings.Contains(declined.View(), prompt) {
+		t.Fatal("the No button should decline without deleting")
+	}
+	if confirmed, cmd := clickAction(t, asked, agentDashboardActionConfirmDelete); cmd == nil || strings.Contains(confirmed.View(), prompt) {
+		t.Fatal("the Yes button should delete the tunnel")
+	}
+}
+
 func TestDashboardMouseStillWorks(t *testing.T) {
 	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
@@ -243,6 +481,7 @@ func TestDashboardMouseStillWorks(t *testing.T) {
 	clickText(t, model, "[ Add Tunnel ]", viewHas("Name:"))
 	clickText(t, model, "RELAYS", viewHas("[ RELAYS ]"))
 	clickText(t, model, "[~]", viewHas(">[~]"))
+	clickText(t, model, "[ Delete ]", viewHas(`Delete tunnel "web"?`))
 
 	settings := clickText(t, model, "SETTINGS", viewHas("[ SETTINGS ]"))
 	focused := regexp.MustCompile(`Owner:\s+> me`)

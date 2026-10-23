@@ -35,7 +35,7 @@ var agentDashboardPalettes = map[string]agentDashboardPalette{
 
 // agentDashboardTerminal is what the terminal environment allows.
 type agentDashboardTerminal struct {
-	unicode bool // box-drawing characters are safe to print
+	unicode bool // box-drawing and arrow characters are safe to print
 	color   bool // NO_COLOR is not set
 }
 
@@ -66,11 +66,12 @@ type agentDashboardGlyphs struct {
 
 	ledLive, ledIdle, ledFailed, ledConnecting string
 
-	selected, unselected          string // row markers
-	buttonOpen, buttonClose       string
-	buttonOffOpen, buttonOffClose string
-	promptFocused, promptBlurred  string
-	activeOpen, activeClose       string // around the title of the active frame
+	selected, unselected                      string // row markers
+	buttonOpen, buttonClose                   string
+	buttonOffOpen, buttonOffClose             string
+	promptFocused, promptBlurred              string
+	activeOpen, activeClose                   string // around the title of the active frame
+	arrowUp, arrowDown, arrowLeft, arrowRight string // key names in the key bar
 }
 
 // agentDashboardTheme holds every color and glyph the dashboard draws with.
@@ -113,10 +114,12 @@ func agentDashboardGlyphSet(unicode bool) agentDashboardGlyphs {
 		buttonOpen: "[ ", buttonClose: " ]", buttonOffOpen: "( ", buttonOffClose: " )",
 		promptFocused: "> ", promptBlurred: "  ",
 		activeOpen: "[ ", activeClose: " ]",
+		arrowUp: "^", arrowDown: "v", arrowLeft: "<", arrowRight: ">",
 	}
 	if unicode {
 		glyphs.topLeft, glyphs.topRight, glyphs.bottomLeft, glyphs.bottomRight = "╔", "╗", "╚", "╝"
 		glyphs.horizontal, glyphs.vertical, glyphs.divider = "═", "║", "─"
+		glyphs.arrowUp, glyphs.arrowDown, glyphs.arrowLeft, glyphs.arrowRight = "↑", "↓", "←", "→"
 	}
 	return glyphs
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,6 +26,8 @@ const (
 	agentDashboardActionFocusSettingsField
 	agentDashboardActionFocusAddTunnelField
 	agentDashboardActionOpenTunnelURL
+	agentDashboardActionConfirmDelete
+	agentDashboardActionCancelDelete
 )
 
 type agentDashboardPane int
@@ -55,6 +58,7 @@ type agentDashboardModel struct {
 	selectedRelayURL string
 	activePane       agentDashboardPane
 	relayAttempts    map[relayAttemptKey]bool
+	confirmDelete    string // ID of the tunnel waiting for a delete answer
 
 	addingTunnel     bool
 	addFocus         int
@@ -170,113 +174,6 @@ func (m agentDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m agentDashboardModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
-		return m, tea.Quit
-	case "esc":
-		m.err = nil
-		if m.activePane == agentDashboardPaneTunnels {
-			if m.addingTunnel {
-				m.cancelTunnelInput()
-			}
-		} else {
-			m.setActivePane(agentDashboardPaneTunnels)
-		}
-		return m, nil
-	case "left":
-		m.setActivePane(m.activePane - 1)
-		return m, nil
-	case "right":
-		m.setActivePane(m.activePane + 1)
-		return m, nil
-	}
-
-	switch m.activePane {
-	case agentDashboardPaneTunnels:
-		return m.updateTunnelKeys(msg)
-	case agentDashboardPaneRelays:
-		return m.updateRelayKeys(msg)
-	case agentDashboardPaneSettings:
-		return m.updateSettingsKeys(msg)
-	default:
-		m.setActivePane(agentDashboardPaneTunnels)
-		return m, nil
-	}
-}
-
-func (m agentDashboardModel) updateTunnelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.addingTunnel {
-		switch msg.String() {
-		case "tab", "down":
-			m.focusAddTunnelField(m.addFocus + 1)
-			return m, nil
-		case "shift+tab", "up":
-			m.focusAddTunnelField(m.addFocus - 1)
-			return m, nil
-		case "enter":
-			return m.addTunnelFromInput()
-		}
-
-		input := m.focusedAddTunnelInput()
-		if input == nil {
-			return m, nil
-		}
-		var cmd tea.Cmd
-		*input, cmd = input.Update(msg)
-		return m, cmd
-	}
-
-	switch msg.String() {
-	case "up":
-		m.selectTunnelOffset(-1)
-		return m, nil
-	case "down":
-		m.selectTunnelOffset(1)
-		return m, nil
-	case "delete":
-		return m.deleteTunnel("")
-	}
-	return m, nil
-}
-
-func (m agentDashboardModel) updateRelayKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "up":
-		m.selectRelayOffset(-1)
-	case "down":
-		m.selectRelayOffset(1)
-	case "enter", "c":
-		return m.connectSelectedRelay()
-	case "d", "delete":
-		return m.disconnectSelectedRelay()
-	case "o":
-		return m.openRelayTunnelURL("", "")
-	}
-	return m, nil
-}
-
-func (m agentDashboardModel) updateSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "tab", "down":
-		m.focusSettingsField(m.settingsFocus + 1)
-		return m, nil
-	case "shift+tab", "up":
-		m.focusSettingsField(m.settingsFocus - 1)
-		return m, nil
-	case "enter":
-		return m.applySettingsEdit()
-	}
-
-	input := m.focusedSettingsInput()
-	if input == nil {
-		return m, nil
-	}
-	var cmd tea.Cmd
-	*input, cmd = input.Update(msg)
-	return m, cmd
-}
-
 func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	event := tea.MouseEvent(msg)
 	switch event.Button {
@@ -342,7 +239,13 @@ func (m agentDashboardModel) runAction(action agentDashboardAction, tunnelID, re
 	case agentDashboardActionCancelAddTunnel:
 		m.cancelTunnelInput()
 	case agentDashboardActionDeleteTunnel:
+		return m.askDeleteTunnel(tunnelID)
+	case agentDashboardActionConfirmDelete:
+		tunnelID = m.confirmDelete
+		m.confirmDelete = ""
 		return m.deleteTunnel(tunnelID)
+	case agentDashboardActionCancelDelete:
+		m.confirmDelete = ""
 	case agentDashboardActionConnectRelay:
 		return m.connectSelectedRelay()
 	case agentDashboardActionDisconnectRelay:
@@ -454,6 +357,9 @@ func (m agentDashboardModel) scrollActivePane(delta int) (tea.Model, tea.Cmd) {
 }
 
 func (m *agentDashboardModel) clampSelection() {
+	if !slices.ContainsFunc(m.status.Tunnels, func(tunnel AgentTunnelStatus) bool { return tunnel.ID == m.confirmDelete }) {
+		m.confirmDelete = ""
+	}
 	if len(m.status.Tunnels) == 0 {
 		m.selectedTunnelID = ""
 		m.selectedRelayURL = ""

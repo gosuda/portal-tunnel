@@ -74,8 +74,8 @@ func (m agentDashboardModel) sidebarContentWidth() int {
 	return contentWidth
 }
 
-// layout draws the title bar, the panes and the sidebar side by side, and an
-// error line when there is one.
+// layout draws the title bar, the panes and the sidebar side by side, an error
+// line when there is one, and the key bar.
 func (m agentDashboardModel) layout() agentDashboardView {
 	width := m.width
 	if width <= 0 {
@@ -89,7 +89,7 @@ func (m agentDashboardModel) layout() agentDashboardView {
 	}
 	bodyHeight := 0
 	if m.height > 0 {
-		bodyHeight = max(1, m.height-1)
+		bodyHeight = max(1, m.height-2)
 		if status != "" {
 			bodyHeight = max(1, bodyHeight-1)
 		}
@@ -101,6 +101,7 @@ func (m agentDashboardModel) layout() agentDashboardView {
 	if status != "" {
 		out.addLine(status)
 	}
+	out.addLine(m.renderKeyBar(width))
 	return out
 }
 
