@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -86,13 +87,38 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 	utils.InvalidRequestError(err).Write(w)
 }
 
+// apiSigner is the transcript signer built from one private key.
+type apiSigner struct {
+	keyPEM []byte
+	signer *keyless.Signer
+}
+
+// apiSigner returns the /v1/sign signer for the private key the relay serves
+// now, building a new one when a renewal has replaced the key. It returns nil
+// until the relay certificate is loaded.
+func (s *Server) apiSigner() (*keyless.Signer, error) {
+	material := s.acmeManager.TLSMaterial()
+	if material == nil {
+		return nil, nil
+	}
+	return s.signerFor(material.KeyPEM)
+}
+
+func (s *Server) signerFor(keyPEM []byte) (*keyless.Signer, error) {
+	if cached := s.signer.Load(); cached != nil && bytes.Equal(cached.keyPEM, keyPEM) {
+		return cached.signer, nil
+	}
+	signer, err := keyless.NewSigner(keyPEM, s.registry.bindings)
+	if err != nil {
+		return nil, err
+	}
+	s.signer.Store(&apiSigner{keyPEM: keyPEM, signer: signer})
+	return signer, nil
+}
+
 func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.Server, io.Closer, error) {
-	if len(s.apiKeyPEM) > 0 {
-		signer, err := keyless.NewSigner(s.apiKeyPEM, s.registry.bindings)
-		if err != nil {
-			return nil, nil, fmt.Errorf("configure api signer: %w", err)
-		}
-		s.signer = signer
+	if _, err := s.apiSigner(); err != nil {
+		return nil, nil, fmt.Errorf("configure api signer: %w", err)
 	}
 
 	apiServer := &http.Server{
@@ -309,12 +335,13 @@ func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) 
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
-	if len(s.apiCertPEM) == 0 {
+	material := s.acmeManager.TLSMaterial()
+	if material == nil {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
-	_, _ = w.Write(s.apiCertPEM)
+	_, _ = w.Write(material.CertPEM)
 }
 
 // HandleRegister completes a verified registration without publishing the
@@ -618,7 +645,13 @@ func (s *Server) HandleStaticCache(w http.ResponseWriter, req *http.Request) {
 // HandleSign authenticates a transcript-signing request and binds the
 // signature to the live lease the access token belongs to.
 func (s *Server) HandleSign(w http.ResponseWriter, r *http.Request) {
-	if s.signer == nil {
+	signer, err := s.apiSigner()
+	if err != nil {
+		log.Error().Err(err).Msg("relay signing key is unusable")
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "signing key unavailable")
+		return
+	}
+	if signer == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -627,7 +660,7 @@ func (s *Server) HandleSign(w http.ResponseWriter, r *http.Request) {
 		writeAPIErrorResponse(w, errUnauthorized)
 		return
 	}
-	s.signer.ServeHTTP(w, r, leaseID)
+	signer.ServeHTTP(w, r, leaseID)
 }
 
 // Tenant hosts never reach the relay control plane, including on a connection
