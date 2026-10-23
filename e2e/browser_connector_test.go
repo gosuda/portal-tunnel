@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -70,11 +71,7 @@ type browserSmokeResult struct {
 // in a real browser, exposes a handler, and reaches it through tenant TLS.
 func TestPackagedBrowserWASM(t *testing.T) {
 	for _, name := range []string{"", "browser-preview"} {
-		label := name
-		if label == "" {
-			label = "unnamed"
-		}
-		t.Run(label, func(t *testing.T) {
+		t.Run(cmp.Or(name, "unnamed"), func(t *testing.T) {
 			testPackagedBrowserWASM(t, name)
 		})
 	}
