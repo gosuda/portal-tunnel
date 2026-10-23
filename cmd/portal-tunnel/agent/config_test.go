@@ -244,6 +244,10 @@ func TestApplicationAuthConfigRoundTrip(t *testing.T) {
 		Auth: "oidc", AuthAllowedWallets: []string{"alice@example.com", "sub:42"}, AuthIdentityHeaders: true,
 		AuthOIDCIssuer: "https://accounts.example.com", AuthOIDCClientID: "client-123", AuthOIDCClientSecret: "client-secret",
 	}
+	// writeConfigDocument secures an existing file first; Windows cannot secure one that is not there.
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeConfigDocument(path, 0o600, Config{Tunnels: []TunnelConfig{want}}); err != nil {
 		t.Fatal(err)
 	}
