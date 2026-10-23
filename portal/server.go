@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
@@ -27,6 +26,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -261,7 +261,7 @@ type Server struct {
 	authority   identity.Authority
 	acmeManager *acme.Manager
 	proxy       proxy
-	signer      atomic.Pointer[apiSigner]
+	signer      *keyless.Signer
 
 	apiHandoff       *handoffListener
 	sniListener      net.Listener

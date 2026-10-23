@@ -58,7 +58,7 @@ type Manager struct {
 	stopOnce     sync.Once
 	ensStatus    *utils.Snapshot[types.ENSStatus]
 	ensCommands  chan ensDNSCommand
-	material     tlsMaterialStore
+	material     utils.Snapshot[servedMaterial]
 
 	// pendingDNSAddress is guarded by commandMu and cleared only after address-record synchronization.
 	pendingDNSAddress bool
@@ -309,6 +309,6 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 	if err := utils.WriteFileAtomic(keyFile, obtained.PrivateKey, 0o600); err != nil {
 		return fmt.Errorf("write private key: %w", err)
 	}
-	m.material.current.Store(material)
+	m.serve(material)
 	return nil
 }

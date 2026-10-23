@@ -66,6 +66,9 @@ func TestNewSignerRequiresBindingRegistry(t *testing.T) {
 	} else if err.Error() != "portal binding registry is required" {
 		t.Fatalf("NewSigner(nil bindings) error = %q, want binding registry requirement", err)
 	}
+	if _, err := NewSigner(NewBindingRegistry(time.Minute), nil); err == nil {
+		t.Fatal("NewSigner(nil key lookup) = nil error, want a signer that cannot sign refused")
+	}
 }
 
 func TestVerifyCertificateHostname(t *testing.T) {

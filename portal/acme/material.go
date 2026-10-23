@@ -1,11 +1,14 @@
 package acme
 
 import (
+	"bytes"
+	"crypto"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"os"
-	"sync/atomic"
+	"slices"
+	"time"
 )
 
 // TLSMaterial is the relay certificate chain with its private key, as served.
@@ -17,8 +20,13 @@ type TLSMaterial struct {
 	Certificate tls.Certificate
 }
 
-type tlsMaterialStore struct {
-	current atomic.Pointer[TLSMaterial]
+// servedMaterial is the certificate the relay serves now, and the earlier ones
+// that tenants may still present: a tenant pins the chain the relay served when
+// its lease client was created and keeps presenting it to visitors after a
+// renewal replaced it.
+type servedMaterial struct {
+	current *TLSMaterial
+	retired []*TLSMaterial
 }
 
 // TLSMaterial returns the certificate material the relay is serving, or nil
@@ -27,7 +35,7 @@ func (m *Manager) TLSMaterial() *TLSMaterial {
 	if m == nil {
 		return nil
 	}
-	return m.material.current.Load()
+	return m.material.Load().current
 }
 
 // GetCertificate serves the current material to a TLS listener, so a renewed
@@ -38,6 +46,49 @@ func (m *Manager) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error)
 		return nil, errors.New("relay certificate is not loaded")
 	}
 	return &material.Certificate, nil
+}
+
+// SigningKey returns the private key of the certificate whose leaf is leafDER:
+// the one being served, or one served before a renewal for as long as it has
+// not expired. A visitor's browser trusts a certificate until it expires, so a
+// tenant still presenting it is signed for exactly that long and no longer.
+// Any other certificate gets nil.
+func (m *Manager) SigningKey(leafDER []byte) crypto.Signer {
+	if m == nil {
+		return nil
+	}
+	served := m.material.Load()
+	if served.current.holds(leafDER) {
+		signer, _ := served.current.Certificate.PrivateKey.(crypto.Signer)
+		return signer
+	}
+	now := time.Now()
+	for _, previous := range served.retired {
+		if previous.holds(leafDER) && now.Before(previous.Certificate.Leaf.NotAfter) {
+			signer, _ := previous.Certificate.PrivateKey.(crypto.Signer)
+			return signer
+		}
+	}
+	return nil
+}
+
+func (t *TLSMaterial) holds(leafDER []byte) bool {
+	return t != nil && bytes.Equal(t.Certificate.Certificate[0], leafDER)
+}
+
+// serve makes material the served certificate. The one it replaces stays
+// available to SigningKey; certificates that have expired are dropped.
+func (m *Manager) serve(material *TLSMaterial) {
+	now := time.Now()
+	m.material.Update(func(served servedMaterial) servedMaterial {
+		next := servedMaterial{current: material}
+		for _, previous := range slices.Concat(served.retired, []*TLSMaterial{served.current}) {
+			if previous != nil && now.Before(previous.Certificate.Leaf.NotAfter) {
+				next.retired = append(next.retired, previous)
+			}
+		}
+		return next
+	})
 }
 
 func newTLSMaterial(certPEM, keyPEM []byte) (*TLSMaterial, error) {
@@ -63,6 +114,6 @@ func (m *Manager) loadTLSMaterial(certFile, keyFile string) (*TLSMaterial, error
 	if err != nil {
 		return nil, err
 	}
-	m.material.current.Store(material)
+	m.serve(material)
 	return material, nil
 }
