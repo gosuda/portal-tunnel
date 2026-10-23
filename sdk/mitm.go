@@ -75,6 +75,10 @@ const (
 
 	tlsChannelBindingExporterLabel = "EXPORTER-Portal-TLS-Channel-Binding-v1"
 	tlsChannelBindingDomainContext = "portal-tls-channel-binding-v1"
+	// A stream whose first five bytes are the magic is taken for a binding
+	// request, so an application that opens with exactly these bytes would be
+	// answered as one. TLS and HTTP never start that way, and the magic is not
+	// a secret.
 	tlsChannelBindingMagic         = "PTCB\x01"
 	tlsChannelBindingNonceSize     = 32
 	tlsChannelBindingExporterSize  = 32
