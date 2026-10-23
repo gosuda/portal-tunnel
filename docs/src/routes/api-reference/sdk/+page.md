@@ -127,7 +127,10 @@ architecture page). The current SDK allows canonical fallback.
 reports the returned `hostname` when the relay granted the friendly alias, and
 is empty after canonical fallback or for an unnamed service. Both stay set while
 the lease is held, including while reverse sessions reconnect; a failed relay
-clears `AliasURL`. Show it to users only while the relay is ready.
+clears `AliasURL`. While the relay is ready, prefer `AliasURL` for user-facing
+links and sharing, falling back to `PublicURL` when it is empty. Keep `PublicURL`
+for identity-bound origins, diagnostics, and opt-in relay caching. Do not derive
+the short URL by removing the address suffix: another identity may own that name.
 A protocol-10 client that omits the capability receives `hostname_conflict`
 instead of a canonical-only registration when its friendly hostname is already
 owned by another identity.

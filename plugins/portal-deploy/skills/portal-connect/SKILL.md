@@ -34,7 +34,7 @@ Ask one concise question only when the target cannot be determined safely, for e
 
 ### 2. Confirm the Lease
 
-- `GET <relay>/api/state` returns `data.leases[]`. Match on `name`, `hostname`, or `canonical_hostname`, and prefer the canonical hostname for links and probes.
+- `GET <relay>/api/state` returns `data.leases[]`. Match on `name`, `hostname`, or `canonical_hostname`. For directory links, prefer the returned `hostname` (short URL without an Ethereum address), falling back to `canonical_hostname` when empty. Probe the exact URL being handed off. Keep an exact user-supplied URL, and use `canonical_hostname` when the task requires an identity-bound origin or opt-in relay caching. Never derive a short hostname by stripping an address suffix.
 - `ready` is the number of live reverse connections the publisher currently holds open. `ready > 0` means the tunnel can serve right now. A lease with `ready` at zero is registered but cannot serve at this moment; the relay keeps listing it while the publisher renews and drops it once it has been out of contact for three minutes.
 - `tcp_addr` and `udp_addr` are the raw endpoints, present only when the publisher requested them and the relay allows them.
 - `metadata` (description, owner, tags, thumbnail) is typed in by the publisher and is not verified by anyone. Present it as the publisher's claim.

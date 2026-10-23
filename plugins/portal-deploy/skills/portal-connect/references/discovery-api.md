@@ -81,7 +81,7 @@ curl -sS --connect-timeout 5 --max-time 15 https://portal.example.com/api/state
 
 Field meaning:
 
-- `hostname`: the friendly HTTPS host when available. `canonical_hostname` is the identity-bound host to prefer for URLs and probes; `address` is its authenticated owner.
+- `hostname`: the short HTTPS host without an Ethereum address when available; prefer it for directory links and sharing, falling back to `canonical_hostname` when empty. `canonical_hostname` is the identity-bound host for identity-pinned origins, diagnostics, and opt-in relay caching; `address` is its authenticated owner. Probe the exact URL being handed off, and preserve an exact URL supplied by the user.
 - `ready`: number of reverse connections the publisher holds open right now. Above zero means the tunnel can serve immediately.
 - `tcp_addr`, `udp_addr`: raw endpoints as `host:port`, present only when allocated. `tcp_enabled` and `udp_enabled` are omitted when false.
 - `expires_at`: the default lease TTL is two minutes, so `expires_at` normally sits about 120 seconds after `last_seen_at` and the publisher renews well inside that window. An `expires_at` in the past means the publisher stopped renewing and the relay is about to drop the lease. Because the listing is a snapshot with a two-minute horizon, record the time you fetched it.
@@ -99,7 +99,7 @@ So "not listed" means hidden, gone, elsewhere, or dormant. It never proves the h
 
 ## Hostname rule
 
-The publisher's `--name` is normalized to a DNS label whose ASCII form is at most 63 characters. A lease reports both the friendly `<label>.<relay-host>` hostname (when available) and the canonical hostname: `<label>-<40-lowercase-address-hex>.<relay-host>` for labels of at most 22 characters, or `<21-character-label-hash>--<40-lowercase-address-hex>.<relay-host>` for longer ones. Prefer `canonical_hostname` for links and probes because it is permanently scoped to the SIWE-authenticated identity. The address suffix also makes services from the same identity publicly correlatable across relay domains.
+The publisher's `--name` is normalized to a DNS label whose ASCII form is at most 63 characters. A lease reports both the friendly `<label>.<relay-host>` hostname (when available) and the canonical hostname: `<label>-<40-lowercase-address-hex>.<relay-host>` for labels of at most 22 characters, or `<21-character-label-hash>--<40-lowercase-address-hex>.<relay-host>` for longer ones. Prefer the returned friendly hostname for directory links and sharing; fall back to `canonical_hostname` when it is empty. Never construct a short hostname by stripping the address suffix: another identity may own that name. Keep the canonical hostname for identity-pinned origins and opt-in relay caching. The address suffix also makes services from the same identity publicly correlatable across relay domains.
 
 Raw endpoints use the canonical hostname with the allocated port. The port is stable while the same `(name, identity)` keeps the lease.
 
@@ -117,15 +117,15 @@ Find a name across the bootstrap relays:
 ```sh
 for relay in $(portal list 2>/dev/null | awk 'NR>1 && $1 ~ /^https/ {print $1}'); do
   curl -sS --connect-timeout 5 --max-time 15 "$relay/api/state" \
-    | jq -r --arg n "my-app" --arg r "$relay" '.data.leases[]? | select(.name==$n) | "\($r) \(.canonical_hostname) ready=\(.ready)"'
+    | jq -r --arg n "my-app" --arg r "$relay" '.data.leases[]? | select(.name==$n) | "\($r) short=\(.hostname) canonical=\(.canonical_hostname) ready=\(.ready)"'
 done
 ```
 
-Probe the resulting hostname:
+Probe the returned short hostname when present, otherwise the canonical hostname:
 
 ```sh
 curl -sS --connect-timeout 5 --max-time 15 -o /dev/null \
-  -w '%{http_code} %{content_type} exit=%{exitcode} %{errormsg}\n' https://my-app-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.portal.example.com/
+  -w '%{http_code} %{content_type} exit=%{exitcode} %{errormsg}\n' https://my-app.portal.example.com/
 ```
 
 `000` means no HTTP response arrived; the curl exit code then carries the diagnosis.

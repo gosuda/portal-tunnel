@@ -1249,7 +1249,7 @@ func (m agentDashboardModel) openRelayTunnelURL(tunnelID, relayURL string) (tea.
 		m.selectRelay(relayURL)
 	}
 	_, relay, ok := m.selectedTunnelRelay()
-	publicURL := relayDashboardPublicURL(relay.PublicURL)
+	publicURL := relayDashboardPublicURL(cmp.Or(relay.AliasURL, relay.PublicURL))
 	if !ok || publicURL == "" {
 		return m, nil
 	}
@@ -1974,7 +1974,7 @@ func relayDashboardVersion(relay AgentRelayStatus) string {
 }
 
 func relayDashboardURL(relay AgentRelayStatus) string {
-	if publicURL := relayDashboardPublicURL(relay.PublicURL); publicURL != "" {
+	if publicURL := relayDashboardPublicURL(cmp.Or(relay.AliasURL, relay.PublicURL)); publicURL != "" {
 		return publicURL
 	}
 	return relayDashboardRelayLabel(relay.RelayURL)

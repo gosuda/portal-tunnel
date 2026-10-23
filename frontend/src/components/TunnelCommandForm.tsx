@@ -238,6 +238,9 @@ function HeroTunnelCommandForm({
               className={cn(heroControlInputClass, "min-w-0 flex-1")}
             />
           </div>
+          <p className={cn("text-xs", isTerminal ? "text-slate-400" : "text-text-muted")}>
+            Choose a name for a short public URL without an Ethereum address.
+          </p>
         </div>
         <div
           className={cn(
@@ -324,7 +327,7 @@ function HeroTunnelCommandForm({
                   isTerminal ? "text-slate-200" : "text-foreground"
                 )}
               >
-                Use the canonical URL printed by the CLI
+                Open the URL printed by Portal
               </p>
               <p
                 className={cn(
@@ -332,7 +335,7 @@ function HeroTunnelCommandForm({
                   isTerminal ? "text-slate-400" : "text-muted-foreground"
                 )}
               >
-                Portal derives an address-based canonical URL and prints it in your terminal when the tunnel connects.
+                Set a name above to request a short URL. Portal prints it when available, alongside the identity-bound URL that includes your Ethereum address.
               </p>
             </div>
           )}

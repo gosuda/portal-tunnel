@@ -74,6 +74,15 @@ myapp.portal.example
 myapp-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.portal.example
 ```
 
+Share the short `https://myapp.portal.example/` URL when the relay grants it;
+it does not contain the Ethereum address. The CLI labels it `short URL` in
+readiness messages (`alias_url` in JSON logs), and the directory and Agent
+dashboard prefer it for opening services. The short name belongs to the lease
+and can be assigned to another identity after release. Use the identity-bound
+URL when the browser origin must stay tied to your identity or for opt-in relay
+caching. If another identity owns the short name, the CLI continues with only
+the identity-bound URL; it does not publish the other identity's short URL.
+
 The relay derives the canonical hostname from the address proven by SIWE. Portal
 defines the relay-independent service identity as `(normalized name, address)`
 (or `("", address)` when unnamed); each relay domain supplies a distinct browser

@@ -616,6 +616,9 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	}
 	if exposure == nil {
 		status.Address = address
+		for i := range relays {
+			relays[i].AliasURL = ""
+		}
 		status.Relays = relays
 		return status
 	}
@@ -635,9 +638,14 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
 	statuses := make([]AgentRelayStatus, 0, len(relays))
 	for _, relay := range relays {
+		aliasURL := ""
+		if relay.State == sdk.RelayReady && !relay.Deselected {
+			aliasURL = relay.AliasURL
+		}
 		statuses = append(statuses, AgentRelayStatus{
 			RelayURL:   relay.RelayURL,
 			PublicURL:  relay.PublicURL,
+			AliasURL:   aliasURL,
 			TCPAddr:    relay.TCPAddr,
 			Version:    relay.Version,
 			Connecting: relay.State == sdk.RelayConnecting,

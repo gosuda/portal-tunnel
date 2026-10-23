@@ -10,6 +10,7 @@ Last checked against `gosuda/portal-tunnel` main commit `d38001ad` on 2026-09-22
 package main
 
 import (
+	"cmp"
 	"log"
 	"net/http"
 	"os"
@@ -41,7 +42,7 @@ func main() {
 
 	go func() {
 		if relays, err := exposure.WaitReady(ctx); err == nil {
-			log.Printf("public url: %s", relays[0].PublicURL)
+			log.Printf("open: %s", cmp.Or(relays[0].AliasURL, relays[0].PublicURL))
 		}
 	}()
 
@@ -82,7 +83,7 @@ published.
 - `sdk.WithOverlay()` is the `--overlay` equivalent.
 - Read the public URL from `exposure.WaitReady(ctx)`, from `exposure.Relays()` (sorted snapshot), or from `exposure.Updates()` (buffered channel of size one; slow readers miss intermediate states and should re-read `Relays()`). The SDK also logs `service ready at <url>` with field `public_url`, exactly like the CLI.
 - `RelayStatus` carries `RelayURL`, `PublicURL`, `AliasURL`, `TCPAddr`, `UDPAddr`, `Version`, `State` (`connecting`, `ready`, `failed`), and `Failure` (`runtime`, `terminal`, `mitm`). One failed relay does not stop an exposure that has healthy ones.
-- `PublicURL` is the identity-bound canonical URL; it always routes to this exposure. `AliasURL` is `<name>.<root host>` when the relay granted that alias to the lease, and empty when another identity owns the name or the exposure is unnamed. Both URLs stay set while the lease is held, including `connecting` while reverse sessions reconnect; a failed relay clears `AliasURL`. Show it to users only while `State` is `ready`. The friendly alias always reaches the live origin; the opt-in relay cache serves only the canonical hostname.
+- `PublicURL` is the identity-bound canonical URL; it always routes to this exposure. `AliasURL` is `<name>.<root host>` when the relay granted that alias to the lease, and empty when another identity owns the name or the exposure is unnamed. Both URLs stay set while the lease is held, including `connecting` while reverse sessions reconnect; a failed relay clears `AliasURL`. While `State` is `ready`, prefer `AliasURL` for user-facing links and sharing, falling back to `PublicURL` when empty. Never derive an alias by stripping the address suffix. The friendly alias always reaches the live origin; the opt-in relay cache serves only the canonical hostname.
 - Lease renewal, re-registration after a relay restart, and reverse-session pooling are handled inside the SDK. The app does nothing for them.
 
 ## What the handler sees
@@ -116,7 +117,7 @@ The SDK is payment-agnostic. The x402 gateway lives in `cmd/portal-tunnel/agent`
 
 ## Verify like the CLI
 
-Whatever the app logs, verify from outside exactly as `SKILL.md` step 6 says: one bounded request to the `public_url`, `401` or `403` counted as reachable, and the lease visible in `GET <relay>/api/state` with `ready > 0`.
+Whatever the app logs, verify from outside exactly as `SKILL.md` step 6 says: one bounded request to the URL being handed off (`AliasURL` when granted, otherwise `PublicURL`), `401` or `403` counted as reachable, and the lease visible in `GET <relay>/api/state` with `ready > 0`.
 
 ### SDK UDP reply compatibility (unreleased)
 

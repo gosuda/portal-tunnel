@@ -375,7 +375,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
-| `--name` | | string | | Public hostname prefix (normalized single DNS label, maximum 63 ASCII characters); when omitted, an address-only canonical hostname (<address>.<relay-domain>) is used |
+| `--name` | | string | | Request a short URL without the Ethereum address (single DNS label, maximum 63 ASCII characters); applies to new identities. When omitted for a new identity, an address-only canonical hostname (<address>.<relay-domain>) is used |
 | `--description` | | string | | Service description metadata |
 | `--tags` | | string | | Service tags metadata (comma-separated) |
 | `--owner` | | string | | Service owner metadata |
@@ -595,8 +595,12 @@ Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors
 
 When `--name` is omitted, the service does not claim a friendly public name and
 publishes an address-only canonical hostname (`<address>.<relay-domain>`).
-When `--name` is provided, Portal publishes both the named canonical hostname
-(`<name>-<address>.<relay-domain>`) and the friendly alias (`<name>.<relay-domain>`).
+When `--name` is provided and available, share the short URL
+`https://<name>.<relay-domain>/`, which has no Ethereum address. Portal also
+publishes the identity-bound canonical hostname (`<name>-<address>.<relay-domain>`).
+If another identity owns the short name, the CLI continues with only the
+identity-bound URL. The short URL reaches the live origin; opt-in relay caching
+uses the canonical hostname.
 An existing identity file or `--identity-json` supplies the saved name as well
 as the key. `--name` applies only when creating a new identity; it does not
 rename an existing one. Use a separate `--identity-path` for a new identity.

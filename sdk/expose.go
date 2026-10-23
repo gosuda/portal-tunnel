@@ -652,9 +652,13 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	// Readiness loss and failures carry the same relay_status event, so a
 	// CLI consumer sees retraction without parsing retry prose (issue #596).
 	if advertised {
+		message := "service ready at " + status.PublicURL
+		if status.AliasURL != "" {
+			message += " (short URL: " + status.AliasURL + ")"
+		}
 		relayStatusLogEvent(log.Info(), status).
 			Str("address", e.identity.Address).
-			Msg("service ready at " + status.PublicURL)
+			Msg(message)
 	} else if previous.State == RelayReady && status.State == RelayConnecting {
 		relayStatusLogEvent(log.Info(), status).
 			Str("address", e.identity.Address).

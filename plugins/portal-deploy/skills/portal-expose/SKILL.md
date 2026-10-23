@@ -91,7 +91,7 @@ Before executing, show the exact public target and any important exposure conseq
 Report:
 
 - Deployment mode and exact local target.
-- Public URL or allocated raw endpoint, and the verified status.
+- Public URL or allocated raw endpoint, and the verified status. For a ready HTTP relay, prefer the granted `alias_url` (short URL without an Ethereum address) and verify that exact URL. Fall back to `public_url` when no alias is granted. Keep the identity-bound `public_url` as an alternative for identity-pinned origins or opt-in relay caching. Never construct an alias by removing the address suffix, and do not reuse an alias after readiness is lost or the relay is deselected.
 - Whether the tunnel is listed on public relays or hidden with `--hide`.
 - Whether MITM handling is detect-only or `--ban-mitm`.
 - For x402, the protected paths and methods, human amount, network, public recipient, facilitator mode, and whether the unpaid `402` challenge was verified. State explicitly when settlement was not tested.
@@ -111,7 +111,7 @@ Use this variant only when the user asks to expose through a relay running on th
 - Run the client and the relay from the same Portal checkout or release. This pairing is for local development and test harnesses only; production users expose through their relay's public deployment. A mixed pair (for example an installed release against a worktree relay) can register hostnames the relay's SNI router never matches, and the tunnel can stall while the client retries.
 - Point the client at the relay's canonical SNI origin: `portal expose <loopback-target> --name <name> --identity-path <absolute-path-outside-repo> --relays https://127.0.0.1:<sni-port> --discovery=false`. When port 443 is unavailable, start the same-tree relay with `relay-server --portal-url https://127.0.0.1:<port>`; `SNI_PORT` follows the `PORTAL_URL` port, so pass `--sni-port` only when the bind port differs from the public one. The SNI router is the relay's single ingress: it serves the root host's Admin/API handler in-process.
 - Treat the tunnel as ready only when the log prints the line starting `service ready at` carrying `public_url`. Listener or added-relay `https://` URLs in the same output describe relay listeners, not tenant readiness.
-- Verify the emitted `public_url` itself with one bounded request. `*.localhost` often resolves to `::1` first, so use `curl -sk --ipv4 --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' <public-url>` and accept the app's real status (401 or 403 means reachable and protected).
+- Verify the URL being handed off (`alias_url` when granted, otherwise `public_url`) with one bounded request. `*.localhost` often resolves to `::1` first, so use `curl -sk --ipv4 --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' <public-url>` and accept the app's real status (401 or 403 means reachable and protected).
 - Stop and report instead of improvising when a required fact is missing: no relay admin URL or port, no identity path outside the repository, or no `service ready at` line within a bounded wait. Do not substitute registry relays or start extra relays to unblock the run.
 
 ## Failure Rules
