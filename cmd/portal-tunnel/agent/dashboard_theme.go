@@ -82,6 +82,13 @@ type agentDashboardTheme struct {
 	text, muted, rule, bright, strong, selected, pending, failed lipgloss.Style
 }
 
+// ValidateDashboardTheme reports whether name selects a palette, so a caller
+// can refuse a bad name before it starts anything.
+func ValidateDashboardTheme(name string) error {
+	_, err := newAgentDashboardTheme(name, agentDashboardTerminal{})
+	return err
+}
+
 func newAgentDashboardTheme(name string, term agentDashboardTerminal) (agentDashboardTheme, error) {
 	name = cmp.Or(strings.ToLower(strings.TrimSpace(name)), DefaultDashboardTheme)
 	palette, ok := agentDashboardPalettes[name]
