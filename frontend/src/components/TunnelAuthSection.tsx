@@ -596,11 +596,18 @@ function OIDCSetup({
         {redirectURL === "" ? (
           <FieldIssues issues={issues} field="name" tone="warn" theme={theme} />
         ) : (
-          <CopyLine
-            value={redirectURL}
-            label="Copy redirect address"
-            theme={theme}
-          />
+          <>
+            <CopyLine
+              value={redirectURL}
+              label="Copy redirect address"
+              theme={theme}
+            />
+            <p className={s.help}>
+              The provider checks the exact address a visitor arrives on, and
+              every relay that publishes the app has its own. Add one for each
+              relay you use; relay discovery, on by default, can add more.
+            </p>
+          </>
         )}
       </div>
 
