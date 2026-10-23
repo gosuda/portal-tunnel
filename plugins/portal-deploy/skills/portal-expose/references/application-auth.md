@@ -24,7 +24,7 @@ portal auth issue my-app.<relay-host> --subject alice --expires 720h --identity-
 - `portal auth issue` prints `Credential: ...` and `Redeem URL: ...`. Give the person the redeem URL; opening it signs them in. The credential travels in the URL fragment, which a browser never sends in a request, so the relay does not see it.
 - Use the same identity file for `expose` and `auth issue`: the tunnel's identity signs the credential, and the credential is valid only for that tunnel and that exact public hostname. The default lifetime is 30 days.
 - A script or API client sends the credential in the `X-Portal-Access-Credential` header.
-- With no `--auth-allow`, every unexpired credential signs in and only expiry ends it. To make a credential revocable before it expires, list its subject with `--auth-allow alice` (repeatable); the tunnel then rejects any subject that is not listed, and taking a subject out of the list and restarting the tunnel ends its access.
+- With no `--auth-allow`, every unexpired credential signs in and only expiry ends it. To make a credential revocable before it expires, list its subject with `--auth-allow alice` (repeatable); the tunnel then rejects any subject that is not listed, and taking a subject out of the list and restarting the tunnel ends its access. Keep the list non-empty: removing the last subject leaves it empty, and an empty list lets every unexpired credential in again. To end access for the last person, stop the tunnel (or list a name no credential was issued for).
 
 ## siwe
 
@@ -32,7 +32,7 @@ portal auth issue my-app.<relay-host> --subject alice --expires 720h --identity-
 portal expose 3000 --name my-app --auth siwe --auth-allow 0xAbc...
 ```
 
-- `--auth-allow` takes Ethereum addresses and is repeatable. Without it, any wallet can sign in, which proves only that the visitor controls some address. Confirm with the user before leaving it empty.
+- `--auth-allow` takes Ethereum addresses and is repeatable. Without it, any wallet can sign in, which proves only that the visitor controls some address. Confirm with the user before leaving it empty. Removing the last address later leaves the list empty and lets any wallet in; stop the tunnel instead.
 - The visitor signs a one-time message in their browser wallet. No transaction and no gas.
 
 ## oidc
@@ -68,7 +68,7 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
 
 ## Persistent agent
 
-The same settings are fields of a `[[tunnels]]` entry. The agent does not read the `AUTH_OIDC_*` variables, so the client secret goes into the TOML file: keep that file outside the repository and readable only by the user, and leave `auth_oidc_client_secret` empty only when the provider registered the client without a secret.
+The same settings are fields of a `[[tunnels]]` entry. The agent does not read the `AUTH_OIDC_*` variables, so the client secret goes into the TOML file: keep that file outside the repository and readable only by the user, and leave `auth_oidc_client_secret` empty only when the provider registered the client without a secret. A tunnel without `identity_path` keeps its identity in `<state_dir>/identity.json`, or `<state_dir>/<id>/identity.json` when the config has more than one tunnel: pass that file as `--identity-path` to `portal auth issue`.
 
 ```toml
 [[tunnels]]

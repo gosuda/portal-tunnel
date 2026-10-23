@@ -69,7 +69,7 @@ Credentials contain a subject, tunnel identity, host, and expiry and are signed
 with a key derived locally from the tunnel identity. A session never outlives
 the credential it redeemed. The credential remains redeemable until expiry; operators can pass `--auth-allow <subject>`
 (or `auth_allowed_wallets` in `config.toml`) to restrict allowed credential subjects
-and revoke individual subjects immediately on both active sessions and bearer requests.
+and revoke individual subjects immediately on both active sessions and bearer requests. Keep that list non-empty: with no `--auth-allow`, every unexpired credential is accepted, so removing the last subject reopens access instead of ending it.
 
 API clients can present the same credential on each request:
 
@@ -89,7 +89,7 @@ portal expose 3000 --auth siwe --auth-allow 0x1234...
 ```
 
 With no `--auth-allow`, any wallet that proves control of its address can sign
-in. Repeat `--auth-allow` to restrict access to specific Ethereum addresses.
+in. Repeat `--auth-allow` to restrict access to specific Ethereum addresses; removing the last one empties the list and lets any wallet in again.
 Portal keeps the two-minute, single-use challenge and the 24-hour signed
 session local to the tunnel endpoint. The cookie is `Secure`, `HttpOnly`, and
 `SameSite=Lax`. Portal removes that session cookie before forwarding the
