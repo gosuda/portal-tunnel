@@ -12,6 +12,21 @@ import (
 // agentDashboardTunnelLead is the width of the row marker, the LED and the space after them.
 const agentDashboardTunnelLead = 5
 
+// askDeleteTunnel asks for confirmation before deleting the tunnel; an empty
+// tunnelID means the selected one.
+func (m agentDashboardModel) askDeleteTunnel(tunnelID string) (tea.Model, tea.Cmd) {
+	tunnelID = strings.TrimSpace(tunnelID)
+	if tunnelID == "" {
+		tunnel, ok := m.selectedTunnelStatus()
+		if !ok {
+			return m, nil
+		}
+		tunnelID = tunnel.ID
+	}
+	m.confirmDelete = tunnelID
+	return m, nil
+}
+
 func (m agentDashboardModel) deleteTunnel(tunnelID string) (tea.Model, tea.Cmd) {
 	tunnelID = strings.TrimSpace(tunnelID)
 	if tunnelID == "" {
@@ -29,22 +44,36 @@ func (m agentDashboardModel) deleteTunnel(tunnelID string) (tea.Model, tea.Cmd) 
 func (m agentDashboardModel) renderTunnelsSection(width, rows int) agentDashboardView {
 	th := &m.theme
 	var pane agentDashboardView
-	addLabel := "Add Tunnel"
-	addDisabled := false
-	if m.addingTunnel {
-		addLabel = "Create"
-		addDisabled = strings.TrimSpace(m.addName.Value()) == ""
+	if m.confirming() {
+		name := m.confirmDelete
+		for _, tunnel := range m.status.Tunnels {
+			if tunnel.ID == m.confirmDelete {
+				name = tunnelDashboardName(tunnel)
+			}
+		}
+		pane.addStyled(width, th.pending, fmt.Sprintf("Delete tunnel %q?", name))
+		pane.addButtons(th, width,
+			agentDashboardButton{label: "Yes", action: agentDashboardActionConfirmDelete},
+			agentDashboardButton{label: "No", action: agentDashboardActionCancelDelete},
+		)
+	} else {
+		addLabel := "Add Tunnel"
+		addDisabled := false
+		if m.addingTunnel {
+			addLabel = "Create"
+			addDisabled = strings.TrimSpace(m.addName.Value()) == ""
+		}
+		buttons := []agentDashboardButton{
+			{label: addLabel, action: agentDashboardActionAddTunnel, disabled: addDisabled},
+		}
+		if m.addingTunnel {
+			buttons = append(buttons, agentDashboardButton{label: "Cancel", action: agentDashboardActionCancelAddTunnel})
+		}
+		buttons = append(buttons,
+			agentDashboardButton{label: "Delete", action: agentDashboardActionDeleteTunnel, disabled: len(m.status.Tunnels) == 0},
+		)
+		pane.addButtons(th, width, buttons...)
 	}
-	buttons := []agentDashboardButton{
-		{label: addLabel, action: agentDashboardActionAddTunnel, disabled: addDisabled},
-	}
-	if m.addingTunnel {
-		buttons = append(buttons, agentDashboardButton{label: "Cancel", action: agentDashboardActionCancelAddTunnel})
-	}
-	buttons = append(buttons,
-		agentDashboardButton{label: "Delete", action: agentDashboardActionDeleteTunnel, disabled: len(m.status.Tunnels) == 0},
-	)
-	pane.addButtons(th, width, buttons...)
 
 	var tail []string
 	if tunnel, ok := m.selectedTunnelStatus(); ok && strings.TrimSpace(tunnel.LastError) != "" {
@@ -55,7 +84,7 @@ func (m agentDashboardModel) renderTunnelsSection(width, rows int) agentDashboar
 	// the add form, if open, and to the table, which keeps at least one row.
 	room := rows - len(pane.lines) - 1 - len(tail)
 	var form agentDashboardView
-	if m.addingTunnel {
+	if m.addingTunnel && !m.confirming() {
 		m.renderAddTunnelForm(&form, width)
 		formRows := len(form.lines)
 		if rows > 0 {
