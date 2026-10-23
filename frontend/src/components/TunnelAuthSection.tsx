@@ -473,22 +473,25 @@ function AllowList({
         );
       })}
       <FieldIssues issues={issues} field="allow" theme={theme} />
-      {auth.allow.length === 0 && method === "siwe" && (
-        <Notice tone="warn" theme={theme} role="status">
-          The list is empty, so any wallet that signs in gets through, which
-          proves a wallet exists, not who owns it. Removing the last address
-          does not end its access: stop the tunnel instead (or list a
-          placeholder address nobody will use).
-        </Notice>
-      )}
-      {auth.allow.length === 0 && method === "credential" && (
-        <Notice tone="warn" theme={theme} role="status">
-          The list is empty, so every unexpired link works and none can be
-          revoked before it expires. Removing the last name does not end its
-          access: stop the tunnel instead (or list a name no link was issued
-          for).
-        </Notice>
-      )}
+      {/* Always mounted: a live region announces text that appears inside it. */}
+      <div role="status">
+        {auth.allow.length === 0 && method === "siwe" && (
+          <Notice tone="warn" theme={theme}>
+            The list is empty, so any wallet that signs in gets through, which
+            proves a wallet exists, not who owns it. Removing the last address
+            does not end its access: stop the tunnel instead (or list a
+            placeholder address nobody will use).
+          </Notice>
+        )}
+        {auth.allow.length === 0 && method === "credential" && (
+          <Notice tone="warn" theme={theme}>
+            The list is empty, so every unexpired link works and none can be
+            revoked before it expires. Removing the last name does not end its
+            access: stop the tunnel instead (or list a name no link was issued
+            for).
+          </Notice>
+        )}
+      </div>
     </div>
   );
 }
