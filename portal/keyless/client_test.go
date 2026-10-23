@@ -43,7 +43,7 @@ func TestClientAccessTokenUpdateChangesSignerHeaders(t *testing.T) {
 func TestClientClosePreservesFirstError(t *testing.T) {
 	t.Parallel()
 	closer := &failingCloseResource{}
-	client := &Client{signer: closer}
+	client := &Client{pin: &pinnedChain{signer: closer}}
 
 	first := client.Close()
 	second := client.Close()

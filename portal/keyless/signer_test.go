@@ -67,9 +67,14 @@ func newTestIssuer(t *testing.T) *testIssuer {
 	return &testIssuer{cert: cert, key: key, pool: pool}
 }
 
-// issue returns a new certificate with a new private key, as every ACME
-// issuance does.
+// issue returns a new certificate for the tenant hostname with a new private
+// key, as every ACME issuance does.
 func (i *testIssuer) issue(t *testing.T, serial int64) relayCertificate {
+	t.Helper()
+	return i.issueFor(t, serial, tenantHostname)
+}
+
+func (i *testIssuer) issueFor(t *testing.T, serial int64, dnsName string) relayCertificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -77,8 +82,8 @@ func (i *testIssuer) issue(t *testing.T, serial int64) relayCertificate {
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(serial),
-		Subject:      pkix.Name{CommonName: tenantHostname},
-		DNSNames:     []string{tenantHostname},
+		Subject:      pkix.Name{CommonName: dnsName},
+		DNSNames:     []string{dnsName},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
@@ -197,8 +202,9 @@ func (r *relayStandIn) visit(t *testing.T, client *Client, roots *x509.CertPool)
 }
 
 // A renewal gives the relay a new certificate and key. A tenant that registered
-// before it still presents the old chain, and visitors must be served with it,
-// while a tenant that registers after it presents the new chain from the start.
+// before it still presents the old chain, and visitors must be served with it
+// until the tenant moves to the new one, while a tenant that registers after it
+// presents the new chain from the start.
 func TestTenantsAcrossARelayCertificateRenewal(t *testing.T) {
 	t.Parallel()
 
@@ -216,12 +222,30 @@ func TestTenantsAcrossARelayCertificateRenewal(t *testing.T) {
 	if leaf, err := relay.visit(t, registeredAfter, issuer.pool); err != nil || !leaf.Equal(renewed.leaf) {
 		t.Fatalf("tenant registered after the renewal: leaf %v, error %v; want the new certificate and no error", leaf, err)
 	}
+
+	changed, err := registeredBefore.RefreshChain(context.Background())
+	if err != nil || !changed {
+		t.Fatalf("RefreshChain() = %v, %v; want the new chain pinned", changed, err)
+	}
+	if leaf, err := relay.visit(t, registeredBefore, issuer.pool); err != nil || !leaf.Equal(renewed.leaf) {
+		t.Fatalf("tenant after RefreshChain: leaf %v, error %v; want the new certificate and no error", leaf, err)
+	}
+	// The MITM self-probe verifies what the tenant presents against this pool.
+	pinned := x509.NewCertPool()
+	pinned.AddCert(renewed.leaf)
+	pinned.AddCert(issuer.cert)
+	if !registeredBefore.RelayCertPool().Equal(pinned) {
+		t.Fatal("RelayCertPool() after RefreshChain is not the chain the tenant presents")
+	}
+	if changed, err := registeredBefore.RefreshChain(context.Background()); err != nil || changed {
+		t.Fatalf("RefreshChain() with nothing renewed = %v, %v; want no change", changed, err)
+	}
 }
 
 // Once the relay no longer holds the key of the chain a tenant presents, it
 // must refuse to sign for it, even though it holds the key of the certificate it
-// serves now.
-func TestSignerRefusesACertificateItHoldsNoKeyFor(t *testing.T) {
+// serves now, and the tenant must pin the served chain on that answer.
+func TestClientRepinsWhenTheRelayHoldsNoKeyForItsChain(t *testing.T) {
 	t.Parallel()
 
 	issuer := newTestIssuer(t)
@@ -233,6 +257,9 @@ func TestSignerRefusesACertificateItHoldsNoKeyFor(t *testing.T) {
 
 	if leaf, err := relay.visit(t, client, issuer.pool); err == nil || !strings.Contains(err.Error(), unknownCertificateMessage) {
 		t.Fatalf("handshake with an unknown certificate: leaf %v, error %v; want the relay's refusal", leaf, err)
+	}
+	if leaf, err := relay.visit(t, client, issuer.pool); err != nil || !leaf.Equal(renewed.leaf) {
+		t.Fatalf("handshake after the refusal: leaf %v, error %v; want the new certificate and no error", leaf, err)
 	}
 }
 
@@ -311,6 +338,87 @@ func TestSignerAnswers(t *testing.T) {
 				t.Fatalf("sign answer = %d %q, want %d containing %q", recorder.Code, recorder.Body.String(), test.status, test.message)
 			}
 		})
+	}
+}
+
+// A renewal can come from another issuer than the pinned chain. The relay still
+// holds the key of the pinned certificate, but its API certificate no longer
+// verifies against the chain the signer trusts, so the handshake that finds out
+// is lost. A client that checks the relay chain on that failure recovers: the
+// next handshake presents the new chain. A client that never refreshes is not
+// expected to recover from this until it is created again, and nothing here
+// asserts that it fails.
+func TestClientRepinsWhenARenewalComesFromAnotherIssuer(t *testing.T) {
+	t.Parallel()
+
+	pinnedIssuer, otherIssuer := newTestIssuer(t), newTestIssuer(t)
+	before, renewed := pinnedIssuer.issue(t, 2), otherIssuer.issue(t, 3)
+	relay := newRelayStandIn(t, before)
+	client := relay.newClient(t)
+	visitors := x509.NewCertPool()
+	visitors.AddCert(pinnedIssuer.cert)
+	visitors.AddCert(otherIssuer.cert)
+
+	relay.renew(renewed, false)
+
+	_, _ = relay.visit(t, client, visitors) // lost whether or not the signer connection verifies
+	if leaf, err := relay.visit(t, client, visitors); err != nil || !leaf.Equal(renewed.leaf) {
+		t.Fatalf("handshake after the relay chain was checked: leaf %v, error %v; want the new certificate and no error", leaf, err)
+	}
+}
+
+// The handshakes of one burst that fail on the same stale pin must share one
+// check of the relay chain, so that a relay in trouble is not asked once per
+// handshake. A check made on a schedule is not shared.
+func TestStaleChainChecksOfOneBurstShareOneFetch(t *testing.T) {
+	t.Parallel()
+
+	issuer := newTestIssuer(t)
+	first, second, third := issuer.issue(t, 2), issuer.issue(t, 3), issuer.issue(t, 4)
+	relay := newRelayStandIn(t, first)
+	client := relay.newClient(t)
+	seenByTheBurst := client.checks.Load()
+	pinnedChain := func(leaf *x509.Certificate) *x509.CertPool {
+		pool := x509.NewCertPool()
+		pool.AddCert(leaf)
+		pool.AddCert(issuer.cert)
+		return pool
+	}
+	ctx := context.Background()
+
+	relay.renew(second, false)
+	if changed, err := client.refreshChain(ctx, &seenByTheBurst); err != nil || !changed {
+		t.Fatalf("first check of the burst = %v, %v; want the new chain pinned", changed, err)
+	}
+	relay.renew(third, false)
+	if changed, err := client.refreshChain(ctx, &seenByTheBurst); err != nil || changed {
+		t.Fatalf("later check of the same burst = %v, %v; want it to share the first check", changed, err)
+	}
+	if !client.RelayCertPool().Equal(pinnedChain(second.leaf)) {
+		t.Fatal("a check of the same burst fetched the relay chain again")
+	}
+	if changed, err := client.RefreshChain(ctx); err != nil || !changed {
+		t.Fatalf("scheduled check = %v, %v; want the newest chain pinned", changed, err)
+	}
+}
+
+// The chain a tenant pins is the one it presents under its own hostname, so a
+// chain that does not cover it is never pinned, whatever the relay serves.
+func TestRefreshChainKeepsThePinOfAChainThatDoesNotCoverTheHostname(t *testing.T) {
+	t.Parallel()
+
+	issuer := newTestIssuer(t)
+	before, other := issuer.issue(t, 2), issuer.issueFor(t, 3, "other.test.example")
+	relay := newRelayStandIn(t, before)
+	client := relay.newClient(t)
+
+	relay.renew(other, false)
+
+	if changed, err := client.RefreshChain(context.Background()); err == nil || changed || !strings.Contains(err.Error(), "does not cover") {
+		t.Fatalf("RefreshChain() = %v, %v; want the chain refused", changed, err)
+	}
+	if leaf, err := relay.visit(t, client, issuer.pool); err != nil || !leaf.Equal(before.leaf) {
+		t.Fatalf("tenant after a refused refresh: leaf %v, error %v; want the pinned certificate and no error", leaf, err)
 	}
 }
 
