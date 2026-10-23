@@ -39,6 +39,7 @@ const (
 type agentDashboardModel struct {
 	configPath string
 	stateDir   string
+	theme      agentDashboardTheme
 
 	status AgentStatusResponse
 	err    error
@@ -90,52 +91,44 @@ type agentDashboardActionMsg struct {
 
 type agentDashboardTickMsg struct{}
 
-func RunDashboard(configPath, stateDir string) error {
-	model := newAgentDashboardModel(configPath, stateDir)
-	_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+// RunDashboard runs the terminal dashboard until the user quits. themeName
+// selects the palette: "amber" (the default when empty) or "green".
+func RunDashboard(configPath, stateDir, themeName string) error {
+	theme, err := newAgentDashboardTheme(themeName, detectAgentDashboardTerminal())
+	if err != nil {
+		return err
+	}
+	model := newAgentDashboardModel(configPath, stateDir, theme)
+	_, err = tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
-func newAgentDashboardModel(configPath, stateDir string) agentDashboardModel {
+func newAgentDashboardModel(configPath, stateDir string, theme agentDashboardTheme) agentDashboardModel {
 	model := agentDashboardModel{
 		configPath:          configPath,
 		stateDir:            stateDir,
-		addName:             newAgentDashboardInlineInput("myapp"),
-		addTarget:           newAgentDashboardInlineInput("3000"),
-		addHTTPRoutes:       newAgentDashboardInlineInput("/paid=3001 GET:0.01; /=5173"),
-		addX402PayTo:        newAgentDashboardInlineInput("0x..."),
-		addX402Testnet:      newAgentDashboardInlineInput("false"),
-		addX402Network:      newAgentDashboardInlineInput("casper:casper-test"),
-		addX402Asset:        newAgentDashboardInlineInput("hash-..."),
-		addX402Endpoints:    newAgentDashboardInlineInput("https://x402-facilitator.cspr.cloud"),
-		addRelays:           newAgentDashboardInlineInput("https://portal.example.com"),
-		addDiscovery:        newAgentDashboardInlineInput("true"),
-		addMaxRelays:        newAgentDashboardInlineInput("3"),
-		settingsMaxRelays:   newAgentDashboardInlineInput("3"),
-		metadataDescription: newAgentDashboardInlineInput("description"),
-		metadataTags:        newAgentDashboardInlineInput("api,staging"),
-		metadataOwner:       newAgentDashboardInlineInput("owner"),
-		metadataThumbnail:   newAgentDashboardInlineInput("https://..."),
-		metadataHide:        newAgentDashboardInlineInput("true or false"),
+		theme:               theme,
+		addName:             theme.newInput("myapp"),
+		addTarget:           theme.newInput("3000"),
+		addHTTPRoutes:       theme.newInput("/paid=3001 GET:0.01; /=5173"),
+		addX402PayTo:        theme.newInput("0x..."),
+		addX402Testnet:      theme.newInput("false"),
+		addX402Network:      theme.newInput("casper:casper-test"),
+		addX402Asset:        theme.newInput("hash-..."),
+		addX402Endpoints:    theme.newInput("https://x402-facilitator.cspr.cloud"),
+		addRelays:           theme.newInput("https://portal.example.com"),
+		addDiscovery:        theme.newInput("true"),
+		addMaxRelays:        theme.newInput("3"),
+		settingsMaxRelays:   theme.newInput("3"),
+		metadataDescription: theme.newInput("description"),
+		metadataTags:        theme.newInput("api,staging"),
+		metadataOwner:       theme.newInput("owner"),
+		metadataThumbnail:   theme.newInput("https://..."),
+		metadataHide:        theme.newInput("true or false"),
 	}
 	model.resetAddTunnelForm()
 	model.resizeInputs(0)
 	return model
-}
-
-func newAgentDashboardTextInput() textinput.Model {
-	input := textinput.New()
-	input.CharLimit = 512
-	input.PromptStyle = agentDashboardSectionStyle
-	input.TextStyle = agentDashboardInputStyle
-	input.PlaceholderStyle = agentDashboardMutedStyle
-	return input
-}
-
-func newAgentDashboardInlineInput(placeholder string) textinput.Model {
-	input := newAgentDashboardTextInput()
-	input.Placeholder = placeholder
-	return input
 }
 
 func (m agentDashboardModel) Init() tea.Cmd {

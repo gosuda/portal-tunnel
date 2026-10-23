@@ -41,10 +41,12 @@ func runAgentRunCommand(args []string) error {
 	var configPath string
 	var serviceMode bool
 	var foreground bool
+	var theme string
 	fs := utils.NewFlagSet("agent run", printAgentRunUsage)
 	utils.StringFlag(fs, &configPath, "config", service.DefaultConfigPath(), "Portal agent TOML config path")
 	utils.BoolFlag(fs, &serviceMode, "service", false, "Run the foreground service process")
 	utils.BoolFlag(fs, &foreground, "foreground", false, "Run in the current process without installing the OS service")
+	utils.StringFlagEnv(fs, &theme, "theme", agent.DefaultDashboardTheme, "Dashboard color theme with --foreground: amber or green", "PORTAL_TUI_THEME")
 	if err := utils.ParseFlagSet(fs, args, printAgentRunUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -68,7 +70,7 @@ func runAgentRunCommand(args []string) error {
 		})
 	}
 	if foreground {
-		return runAgentForeground(configPath, cfg)
+		return runAgentForeground(configPath, cfg, theme)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -157,7 +159,7 @@ func startAgentService(ctx context.Context, configPath string, cfg agent.Config)
 	return waitAgentStatus(ctx, cfg.Agent.StateDir)
 }
 
-func runAgentForeground(configPath string, cfg agent.Config) error {
+func runAgentForeground(configPath string, cfg agent.Config, theme string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
@@ -186,7 +188,7 @@ func runAgentForeground(configPath string, cfg agent.Config) error {
 		return err
 	}
 
-	dashboardErr := agent.RunDashboard(resolvedConfigPath, cfg.Agent.StateDir)
+	dashboardErr := agent.RunDashboard(resolvedConfigPath, cfg.Agent.StateDir, theme)
 	stop()
 	runErr := <-errCh
 	if errors.Is(runErr, context.Canceled) {
@@ -270,9 +272,11 @@ func runAgentStopCommand(args []string) error {
 func runAgentDashboardCommand(args []string) error {
 	var configPath string
 	var stateDir string
+	var theme string
 	fs := utils.NewFlagSet("agent dashboard", printAgentDashboardUsage)
 	utils.StringFlag(fs, &configPath, "config", "", "Portal agent TOML config path")
 	utils.StringFlag(fs, &stateDir, "state-dir", "", "Portal agent state directory")
+	utils.StringFlagEnv(fs, &theme, "theme", agent.DefaultDashboardTheme, "Dashboard color theme: amber or green", "PORTAL_TUI_THEME")
 	if err := utils.ParseFlagSet(fs, args, printAgentDashboardUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -300,7 +304,7 @@ func runAgentDashboardCommand(args []string) error {
 			return err
 		}
 	}
-	return agent.RunDashboard(configPath, stateDir)
+	return agent.RunDashboard(configPath, stateDir, theme)
 }
 
 func waitAgentStatus(ctx context.Context, stateDir string) (agent.AgentStatusResponse, error) {
@@ -405,6 +409,7 @@ func printAgentRunUsage(w io.Writer) {
 		[]string{
 			"portal agent run",
 			"portal agent run --config config.toml --foreground",
+			"portal agent run --foreground --theme green",
 		},
 	)
 }
@@ -415,6 +420,7 @@ func printAgentDashboardUsage(w io.Writer) {
 		[]string{
 			"portal agent dashboard",
 			"portal agent dashboard --config config.toml",
+			"portal agent dashboard --theme green",
 		},
 	)
 }
