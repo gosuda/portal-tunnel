@@ -375,6 +375,8 @@ func TestUpdateTunnelAuthRejectionChangesNothing(t *testing.T) {
 		{name: "invalid wallet", id: "signedin", want: "address must start with 0x", body: `{"auth_allowed_wallets":["alice"]}`},
 		{name: "unknown provider", id: "plain", want: "unsupported application auth provider", body: `{"auth":"magic"}`},
 		{name: "allowlist without provider", id: "plain", want: "unsupported application auth provider", body: `{"auth_allowed_wallets":["` + wallet + `"]}`},
+		{name: "settings together with sign-in turned off", id: "signedin", want: "leave out the other auth fields",
+			body: `{"auth":"","auth_oidc_issuer":"https://accounts.example.com"}`},
 		{name: "tcp", id: "tcp", want: "cannot be combined with TCP or UDP", body: `{"auth":"siwe"}`},
 		{name: "udp", id: "udp", want: "cannot be combined with TCP or UDP", body: `{"auth":"credential"}`},
 	} {
