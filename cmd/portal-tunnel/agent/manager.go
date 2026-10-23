@@ -259,12 +259,12 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		Discovery:            &discovery,
 		Overlay:              req.Overlay,
 		MaxActiveRelays:      req.MaxActiveRelays,
-		Auth:                 strings.ToLower(strings.TrimSpace(req.Auth)),
+		Auth:                 req.Auth,
 		AuthAllowedWallets:   append([]string(nil), req.AuthAllowedWallets...),
 		AuthIdentityHeaders:  req.AuthIdentityHeaders,
-		AuthOIDCIssuer:       strings.TrimSpace(req.AuthOIDCIssuer),
-		AuthOIDCClientID:     strings.TrimSpace(req.AuthOIDCClientID),
-		AuthOIDCClientSecret: strings.TrimSpace(req.AuthOIDCClientSecret),
+		AuthOIDCIssuer:       req.AuthOIDCIssuer,
+		AuthOIDCClientID:     req.AuthOIDCClientID,
+		AuthOIDCClientSecret: req.AuthOIDCClientSecret,
 		X402Config:           x402,
 	}
 	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
