@@ -88,7 +88,7 @@ func evaluateRenewal(cert *x509.Certificate, domains []string, ari *certificate.
 		return false, "", recheck
 	}
 	remaining := cert.NotAfter.Sub(now)
-	if !certificateCoversDomains(cert, domains) || remaining <= 0 {
+	if !certificateUsable(cert, domains, now) {
 		return true, "", recheck
 	}
 	if ari == nil || ari.SuggestedWindow.Start.IsZero() || !ari.SuggestedWindow.End.After(ari.SuggestedWindow.Start) {
@@ -153,10 +153,13 @@ func (m *Manager) reusableCertificate(now time.Time) (certFile, keyFile string, 
 }
 
 // certificateUsable reports whether cert can be served at now: it covers
-// domains and is inside its validity period. A stored certificate that is not
-// usable is replaced instead of reused.
+// domains and has not expired. A stored certificate that is not usable is
+// replaced instead of reused. NotBefore is deliberately not checked: a
+// certificate that is not valid yet on this clock was issued moments ago, and
+// ordering another would not help but would count against the CA's
+// duplicate-certificate rate limit on every start.
 func certificateUsable(cert *x509.Certificate, domains []string, now time.Time) bool {
-	return certificateCoversDomains(cert, domains) && !now.Before(cert.NotBefore) && now.Before(cert.NotAfter)
+	return certificateCoversDomains(cert, domains) && now.Before(cert.NotAfter)
 }
 
 func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {

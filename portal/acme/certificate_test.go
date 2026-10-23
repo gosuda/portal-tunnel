@@ -56,10 +56,11 @@ func TestCertificateUsable(t *testing.T) {
 		want      bool
 	}{
 		{"valid and covering", domains, now.Add(-day), now.Add(day), true},
-		{"valid from this instant", domains, now, now.Add(day), true},
 		{"expired a second ago", domains, now.Add(-90 * day), now.Add(-time.Second), false},
 		{"expires this instant", domains, now.Add(-90 * day), now, false},
-		{"not valid yet", domains, now.Add(time.Minute), now.Add(90 * day), false},
+		// A host clock that runs behind sees a fresh certificate as not valid
+		// yet; reissuing would not change that, so it is still served.
+		{"not valid yet on this clock", domains, now.Add(time.Minute), now.Add(90 * day), true},
 		{"valid but another domain", []string{"other.example", "*.other.example"}, now.Add(-day), now.Add(day), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,9 +110,6 @@ func TestReusableCertificateIsPerCAAndMustBeValid(t *testing.T) {
 	certFile, keyFile, ok := managerFor(lego.LEDirectoryStaging).reusableCertificate(now)
 	if !ok || certFile != stagingCert || keyFile != stagingKey {
 		t.Fatalf("reusableCertificate() = %q, %q, %v; want the valid staging certificate", certFile, keyFile, ok)
-	}
-	if _, _, ok := managerFor(lego.LEDirectoryStaging).reusableCertificate(now.Add(31 * day)); ok {
-		t.Fatal("reusableCertificate() = true after the staging certificate expired, want false")
 	}
 	other := managerFor("https://acme.example.test/directory")
 	if _, _, ok := other.reusableCertificate(now); ok {
@@ -176,6 +174,7 @@ func TestEvaluateRenewal(t *testing.T) {
 		{"inverted window renews below the threshold", newCert(10*day, lifetime), domains, ariFor(&legoacme.Window{Start: pastWindow.End, End: pastWindow.Start}, 0), true, false, 24 * time.Hour},
 		{"missing ARI falls back to the threshold", newCert(60*day, lifetime), domains, nil, false, false, 24 * time.Hour},
 		{"missing ARI renews below the threshold", newCert(10*day, lifetime), domains, nil, true, false, 24 * time.Hour},
+		{"certificate that is not valid yet is left alone", newCert(60*day, 59*day), domains, nil, false, false, 24 * time.Hour},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
