@@ -155,8 +155,7 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 				tunnel.Hide = *req.Metadata.Hide
 			}
 		}
-		req.applyAuth(tunnel)
-		return nil
+		return req.applyAuth(tunnel)
 	}); err != nil {
 		return err
 	}
@@ -171,10 +170,13 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 	return tunnel.UpdateSettings(updateMetadata, updateMaxActiveRelays)
 }
 
-func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) {
+func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) error {
 	if r.Auth != nil {
 		tunnel.Auth = *r.Auth
 		if strings.TrimSpace(tunnel.Auth) == "" {
+			if r.AuthAllowedWallets != nil || r.AuthIdentityHeaders != nil || r.AuthOIDCIssuer != nil || r.AuthOIDCClientID != nil || r.AuthOIDCClientSecret != nil {
+				return errors.New("auth is empty, which turns sign-in off: leave out the other auth fields")
+			}
 			tunnel.AuthAllowedWallets = nil
 			tunnel.AuthIdentityHeaders = false
 			tunnel.AuthOIDCIssuer = ""
@@ -197,6 +199,7 @@ func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) {
 	if r.AuthOIDCClientSecret != nil {
 		tunnel.AuthOIDCClientSecret = *r.AuthOIDCClientSecret
 	}
+	return nil
 }
 
 func (m *manager) AddTunnel(req AgentTunnelRequest) error {
