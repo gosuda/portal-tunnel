@@ -39,6 +39,11 @@ func testManager(t *testing.T, tunnels ...TunnelConfig) (*manager, string) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	cfg := Config{Agent: AgentConfig{StateDir: dir}, Tunnels: tunnels}
+	// writeConfigDocument secures an existing file before it rewrites it, and
+	// on Windows a file that is not there yet cannot be secured.
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeConfigDocument(path, 0o600, cfg); err != nil {
 		t.Fatal(err)
 	}
