@@ -135,7 +135,9 @@ func newAuthTestConnections(t *testing.T, configs ...*quic.Config) (*quic.Conn, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener, err := ListenQUICBackhaul("127.0.0.1:0", tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key})
+	listener, err := ListenQUICBackhaul("127.0.0.1:0", func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

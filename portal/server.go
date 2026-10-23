@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
@@ -26,7 +27,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -261,9 +261,7 @@ type Server struct {
 	authority   identity.Authority
 	acmeManager *acme.Manager
 	proxy       proxy
-	apiKeyPEM   []byte
-	apiCertPEM  []byte
-	signer      *keyless.Signer
+	signer      atomic.Pointer[apiSigner]
 
 	apiHandoff       *handoffListener
 	sniListener      net.Listener
@@ -513,7 +511,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	s.apiTLSClose = apiCloser
 	s.redirectListener = redirectListener
 	s.redirectServer = redirectServer
-	s.acmeManager = acmeManager
 	s.ingressCtx = serverCtx
 	s.cancel = cancel
 	s.group = group
@@ -866,25 +863,19 @@ func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, *acme.Manager,
 		return nil, nil, fmt.Errorf("create acme manager: %w", err)
 	}
 
-	certPEM, keyPEM, err := manager.EnsureTLSMaterial(ctx)
-	if err != nil {
+	if _, _, err := manager.EnsureTLSMaterial(ctx); err != nil {
 		_ = manager.Stop(ctx)
 		return nil, nil, fmt.Errorf("ensure relay certificate: %w", err)
 	}
-	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		_ = manager.Stop(ctx)
-		return nil, nil, fmt.Errorf("parse relay api keypair: %w", err)
-	}
-	// The /v1/sign transcript signer shares the API listener key; newAPIServer
-	// reads the PEM to build its handler.
-	s.apiKeyPEM = keyPEM
-	s.apiCertPEM = certPEM
+	// The manager owns the certificate and replaces it on renewal; the
+	// listeners, the /v1/sign signer and the chain endpoint ask it for the
+	// current one, so a renewal needs no restart.
+	s.acmeManager = manager
 
 	apiTLS := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-		NextProtos:   []string{"http/1.1"},
+		GetCertificate: manager.GetCertificate,
+		MinVersion:     tls.VersionTLS12,
+		NextProtos:     []string{"http/1.1"},
 	}
 	return apiTLS, manager, nil
 }
@@ -1080,10 +1071,10 @@ func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration)
 }
 
 func (s *Server) newQUICBackhaulListener(apiTLS *tls.Config) (*quic.Listener, error) {
-	if len(apiTLS.Certificates) == 0 {
+	if apiTLS.GetCertificate == nil {
 		return nil, fmt.Errorf("quic backhaul requires api tls certificate")
 	}
-	return transport.ListenQUICBackhaul(s.config().SNIListenAddr, apiTLS.Certificates[0])
+	return transport.ListenQUICBackhaul(s.config().SNIListenAddr, apiTLS.GetCertificate)
 }
 
 func (s *Server) runQUICBackhaulListener(ctx context.Context) error {

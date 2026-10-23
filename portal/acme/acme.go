@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -59,6 +58,7 @@ type Manager struct {
 	stopOnce     sync.Once
 	ensStatus    *utils.Snapshot[types.ENSStatus]
 	ensCommands  chan ensDNSCommand
+	material     tlsMaterialStore
 
 	// pendingDNSAddress is guarded by commandMu and cleared only after address-record synchronization.
 	pendingDNSAddress bool
@@ -178,15 +178,11 @@ func (m *Manager) EnsureTLSMaterial(ctx context.Context) ([]byte, []byte, error)
 		return nil, nil, err
 	}
 
-	certPEM, err := os.ReadFile(certFile)
+	material, err := m.loadTLSMaterial(certFile, keyFile)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read api tls certificate: %w", err)
+		return nil, nil, err
 	}
-	keyPEM, err := os.ReadFile(keyFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read api tls private key: %w", err)
-	}
-	return certPEM, keyPEM, nil
+	return material.CertPEM, material.KeyPEM, nil
 }
 
 func (m *Manager) Start(ctx context.Context) {
@@ -304,6 +300,11 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 	}
 	if err := utils.WriteFileAtomic(keyFile, obtained.PrivateKey, 0o600); err != nil {
 		return fmt.Errorf("write private key: %w", err)
+	}
+	// Every issuance carries a new private key, so what the relay serves
+	// follows the files as one unit.
+	if _, err := m.loadTLSMaterial(certFile, keyFile); err != nil {
+		return fmt.Errorf("load renewed certificate: %w", err)
 	}
 	return nil
 }
