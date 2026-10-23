@@ -234,10 +234,10 @@ func TestTunnelStatusOIDCProviderHealth(t *testing.T) {
 // tunnel's provider check fails at once, and nothing leaves the machine.
 const unreachableIssuer = "http://127.0.0.1:1"
 
-func patchTunnel(t *testing.T, m *manager, id, body string) (int, string) {
+func callControl(t *testing.T, m *manager, method, path, body string) (int, string) {
 	t.Helper()
 	handler := &controlHandler{manager: m, token: "test-token", authority: "127.0.0.1:4018", localhostAuthority: "localhost:4018"}
-	req := httptest.NewRequest(http.MethodPatch, types.PathAgentTunnelsPrefix+id, strings.NewReader(body))
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Host = "127.0.0.1:4018"
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
@@ -314,7 +314,7 @@ func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
 		},
 	} {
 		t.Run(step.name, func(t *testing.T) {
-			code, body := patchTunnel(t, m, "app", step.body)
+			code, body := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"app", step.body)
 			if code != http.StatusAccepted {
 				t.Fatalf("status = %d, body = %s", code, body)
 			}
@@ -332,7 +332,7 @@ func TestUpdateTunnelEmptyAuthTurnsSignInOff(t *testing.T) {
 	m, path := testManager(t, cfg)
 	startManager(t, m)
 
-	if code, body := patchTunnel(t, m, "app", `{"auth":""}`); code != http.StatusAccepted {
+	if code, body := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"app", `{"auth":""}`); code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", code, body)
 	}
 	saved := savedTunnel(t, path, "app")
@@ -380,7 +380,7 @@ func TestUpdateTunnelAuthRejectionChangesNothing(t *testing.T) {
 			}
 			statusBefore := tunnelStatus(t, m, tc.id)
 
-			code, body := patchTunnel(t, m, tc.id, tc.body)
+			code, body := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+tc.id, tc.body)
 			if code != http.StatusBadRequest || !strings.Contains(body, tc.want) {
 				t.Fatalf("status = %d, body = %s; want 400 mentioning %q", code, body, tc.want)
 			}
@@ -414,7 +414,7 @@ func TestUpdateTunnelAuthRebuildsRunningTunnel(t *testing.T) {
 
 	// The gate is built when the tunnel starts: the new issuer only counts once
 	// the running tunnel has been rebuilt.
-	if code, body := patchTunnel(t, m, "app", `{"auth_oidc_issuer":"`+usable+`"}`); code != http.StatusAccepted {
+	if code, body := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"app", `{"auth_oidc_issuer":"`+usable+`"}`); code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", code, body)
 	}
 	eventually(t, "the rebuilt tunnel to find its provider usable", func() bool {
@@ -425,10 +425,68 @@ func TestUpdateTunnelAuthRebuildsRunningTunnel(t *testing.T) {
 	// Metadata, even sent next to unchanged sign-in settings, updates the
 	// running tunnel in place.
 	body := `{"metadata":{"description":"in place"},"auth":"oidc","auth_oidc_issuer":"` + usable + `"}`
-	if code, resp := patchTunnel(t, m, "app", body); code != http.StatusAccepted {
+	if code, resp := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"app", body); code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", code, resp)
 	}
 	if status := tunnelStatus(t, m, "app"); status.State != "running" || !status.AuthOIDCProviderChecked || status.Metadata.Description != "in place" {
 		t.Fatalf("tunnel was rebuilt for a metadata change: %+v", status)
 	}
+}
+
+func TestAddTunnelWithAuth(t *testing.T) {
+	const secret = "created-client-secret"
+	wallet := "0x0000000000000000000000000000000000000001"
+	common := `"discovery":false,"relays":["` + unreachableRelay + `"]`
+
+	t.Run("accepted", func(t *testing.T) {
+		m, path := testManager(t)
+		startManager(t, m)
+		for _, body := range []string{
+			`{"id":"siwe","target_addr":"127.0.0.1:3000","auth":" SIWE ","auth_allowed_wallets":["` + wallet + `"],"auth_identity_headers":true,` + common + `}`,
+			`{"id":"oidc","target_addr":"127.0.0.1:3000","auth":"oidc","auth_allowed_wallets":["alice@example.com"],"auth_oidc_issuer":"` + unreachableIssuer + `","auth_oidc_client_id":"client-123","auth_oidc_client_secret":"` + secret + `",` + common + `}`,
+		} {
+			code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, body)
+			if code != http.StatusAccepted || strings.Contains(resp, secret) {
+				t.Fatalf("status = %d, body = %s", code, resp)
+			}
+		}
+
+		siwe := savedTunnel(t, path, "siwe")
+		if siwe.Auth != "siwe" || !slices.Equal(siwe.AuthAllowedWallets, []string{wallet}) || !siwe.AuthIdentityHeaders {
+			t.Fatalf("saved siwe tunnel = %+v", siwe)
+		}
+		if oidc := savedTunnel(t, path, "oidc"); oidc.Auth != "oidc" || oidc.AuthOIDCClientID != "client-123" || oidc.AuthOIDCClientSecret != secret {
+			t.Fatalf("saved oidc tunnel = %+v", oidc)
+		}
+		if got := tunnelStatus(t, m, "oidc"); !got.AuthOIDCClientSecretSet || got.AuthOIDCClientID != "client-123" {
+			t.Fatalf("oidc tunnel status = %+v", got)
+		}
+	})
+
+	t.Run("rejected", func(t *testing.T) {
+		m, path := testManager(t, testTunnel("existing"))
+		for _, tc := range []struct{ name, body, want string }{
+			{name: "oidc without allowlist", want: "oidc requires at least one",
+				body: `{"id":"app","auth":"oidc","auth_oidc_issuer":"` + unreachableIssuer + `","auth_oidc_client_id":"client-123","auth_oidc_client_secret":"` + secret + `",` + common + `}`},
+			{name: "invalid wallet", want: "address must start with 0x",
+				body: `{"id":"app","auth":"siwe","auth_allowed_wallets":["alice"],` + common + `}`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				fileBefore, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, tc.body)
+				if code != http.StatusBadRequest || !strings.Contains(resp, tc.want) || strings.Contains(resp, secret) {
+					t.Fatalf("status = %d, body = %s; want 400 mentioning %q", code, resp, tc.want)
+				}
+				if fileAfter, err := os.ReadFile(path); err != nil || !bytes.Equal(fileBefore, fileAfter) {
+					t.Fatalf("rejected tunnel changed the config file (err %v):\n%s", err, fileAfter)
+				}
+				if got := len(m.Snapshot().Tunnels); got != 1 {
+					t.Fatalf("tunnels = %d, want only the existing one", got)
+				}
+			})
+		}
+	})
 }
