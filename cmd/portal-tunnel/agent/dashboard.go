@@ -534,7 +534,8 @@ func (m *agentDashboardModel) resizeInputs(width int) {
 		width = 88
 	}
 	contentWidth, _, _ := agentDashboardColumnWidths(width)
-	settingsWidth := max(1, min(agentDashboardTunnelInputMaxWidth, contentWidth-13))
+	// An input row is the 12-cell label, a space, the 2-cell prompt, the text area and the cursor cell.
+	settingsWidth := max(1, min(agentDashboardTunnelInputMaxWidth, contentWidth-16))
 	for _, input := range []*textinput.Model{
 		&m.addName,
 		&m.addTarget,
@@ -555,6 +556,7 @@ func (m *agentDashboardModel) resizeInputs(width int) {
 		&m.metadataHide,
 	} {
 		input.Width = settingsWidth
+		input.SetCursor(input.Position()) // recompute the visible window for the new width
 	}
 }
 
