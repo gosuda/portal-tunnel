@@ -261,8 +261,10 @@ An empty `auth_allowed_wallets` list means any validly signed credential or sess
 
 ## Dashboard
 
-The dashboard is a local terminal UI. It polls agent status every two seconds
-and edits the same TOML config file that the service uses.
+The dashboard is a local terminal UI drawn like a text-mode terminal, in amber
+by default. It polls agent status every two seconds and edits the same TOML
+config file that the service uses. It is laid out for a terminal of at least
+80 columns by 24 rows and uses the extra room of a larger one.
 
 For a ready named tunnel, the Relays pane displays and opens the short URL
 without an Ethereum address when the relay granted that name. Otherwise it uses
@@ -277,22 +279,42 @@ Dashboard panes:
 | Settings | Edit max active relays and public metadata |
 | Relays | Connect or disconnect relays for the selected tunnel |
 
-Keyboard controls:
+The active pane has its title in brackets and gets the most rows; the other
+panes shrink to a few rows until you switch to them. Each tunnel row starts
+with a status LED, explained in the legend beside the panes:
+
+| LED | State |
+|-----|-------|
+| `[*]` | running |
+| `[~]` | starting |
+| `[ ]` | stopped |
+| `[!]` | error |
+
+The bar at the bottom lists the keys that work in the active pane and state.
+Terminals such as macOS Terminal often keep function keys for themselves, so
+every function key has a letter or key alias:
 
 | Key | Action |
 |-----|--------|
-| `left` / `right` | Switch panes |
-| `up` / `down` | Move within the active pane |
-| `enter` | Apply the active action |
-| `delete` | Delete the selected tunnel or disconnect the selected relay |
+| `F2` / `a` | Open the Add Tunnel form; in the form, `F2` or `enter` creates the tunnel |
+| `tab` / `shift+tab`, `left` / `right` | Switch panes |
+| `up` / `down` | Move within the active pane or between form fields |
+| `enter` | Apply the Settings, create the tunnel in the form, or connect the selected relay in the Relays pane |
+| `F8` / `delete` | In the Tunnels pane, delete the selected tunnel after you confirm with `y`; `n` or `esc` keeps it |
 | `c` | Connect the selected relay in the Relays pane |
-| `d` | Disconnect the selected relay in the Relays pane |
+| `d` / `delete` | Disconnect the selected relay in the Relays pane |
 | `o` | Open the selected public tunnel URL |
-| `esc` | Cancel input or return to the Tunnels pane |
-| `ctrl+c` | Exit the dashboard |
+| `esc` | Cancel the form or a question, or return to the Tunnels pane |
+| `F10` / `q` / `ctrl+c` | Exit the dashboard |
 
-The Add Tunnel action opens a form. Fill either `Target` for a simple loopback
-tunnel or `Routes` for routed HTTP. Routes use this syntax:
+In the Settings pane and in the Add Tunnel form, `tab` and `shift+tab` move
+between fields, so only `left` and `right` switch panes there, and `q` and `a`
+are typed into the field. The mouse still works: click a pane title, a row, a
+field, or a button.
+
+The Add Tunnel action (`F2`, `a`, or the button) opens a form. Fill either
+`Target` for a simple loopback tunnel or `Routes` for routed HTTP. Routes use
+this syntax:
 
 ```text
 /paid=3001 GET:0.01; /=5173
@@ -313,6 +335,23 @@ and `discovery` in `config.toml`, then restart
 the agent or tunnel. Other advanced options such as UDP, TCP, or custom
 identity JSON are also configured in
 `config.toml`.
+
+### Theme and terminal support
+
+Choose the palette with `--theme amber` (the default) or `--theme green` on
+`portal agent dashboard`, or with the `PORTAL_TUI_THEME` environment variable;
+the flag wins. `portal agent run --foreground` opens the same dashboard and
+accepts the same flag. Both palettes are made for a dark terminal background.
+
+Colors are ANSI-256 values that fall back to the 16 ANSI colors on simpler
+terminals. With `NO_COLOR` set the dashboard uses no color at all and every
+state is still told apart by its glyph and text.
+
+The frames use box-drawing characters. When `TERM` is `dumb` or `linux`, or
+when `LC_ALL`, `LC_CTYPE`, and `LANG` do not name a UTF-8 locale, the dashboard
+draws ASCII frames with `+`, `-`, `|`, and `=` instead. A minimal container
+often has no locale set; export `LANG=C.UTF-8` there to get the box-drawing
+frames.
 
 ## Tunnel Config Fields
 
