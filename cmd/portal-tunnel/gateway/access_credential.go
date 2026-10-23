@@ -21,9 +21,6 @@ const (
 	applicationCredentialPrefix  = "pcred_"
 	applicationCredentialVersion = 1
 	applicationCredentialKeyUse  = "application-access-credential"
-
-	// minIdentityProofLength keeps the proof from being guessed by a local process.
-	minIdentityProofLength = 16
 )
 
 type applicationCredentialClaims struct {
@@ -73,6 +70,9 @@ func ValidateApplicationAuthConfig(cfg ApplicationAuthConfig) error {
 	return err
 }
 
+// minIdentityProofLength keeps the proof from being guessed by a local process.
+const minIdentityProofLength = 16
+
 // resolveApplicationAuthConfig is the one place that validates and normalizes
 // the provider, the allowlist, the identity proof and the OIDC settings.
 func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSettings, error) {
@@ -85,8 +85,9 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 		return applicationAuthSettings{}, err
 	}
 	// The proof is sent as a header value and is compared byte for byte by the
-	// upstream, so it is neither trimmed nor accepted with anything but visible
-	// ASCII. The errors never include it.
+	// upstream, so it is not trimmed here (the environment reader already trims
+	// the whitespace around AUTH_IDENTITY_PROOF) and only visible ASCII is
+	// accepted. The errors never include it.
 	proof := cfg.IdentityProof
 	if proof != "" {
 		if !cfg.IdentityHeaders {
