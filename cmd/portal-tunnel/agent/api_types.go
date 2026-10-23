@@ -83,14 +83,29 @@ type AgentRelayRequest struct {
 	RelayURL string `json:"relay_url"`
 }
 
+// AgentTunnelUpdateRequest changes the fields it names; an omitted field stays
+// as it is. An empty Auth turns application sign-in off and clears the other
+// auth fields. The client secret is write-only: an empty value clears it.
 type AgentTunnelUpdateRequest struct {
-	MaxActiveRelays *int                  `json:"max_active_relays,omitempty"`
-	Metadata        *AgentMetadataRequest `json:"metadata,omitempty"`
+	MaxActiveRelays      *int                  `json:"max_active_relays,omitempty"`
+	Metadata             *AgentMetadataRequest `json:"metadata,omitempty"`
+	Auth                 *string               `json:"auth,omitempty"`
+	AuthAllowedWallets   *[]string             `json:"auth_allowed_wallets,omitempty"`
+	AuthIdentityHeaders  *bool                 `json:"auth_identity_headers,omitempty"`
+	AuthOIDCIssuer       *string               `json:"auth_oidc_issuer,omitempty"`
+	AuthOIDCClientID     *string               `json:"auth_oidc_client_id,omitempty"`
+	AuthOIDCClientSecret *string               `json:"auth_oidc_client_secret,omitempty"`
 }
 
 func (r AgentTunnelUpdateRequest) Empty() bool {
 	return r.MaxActiveRelays == nil &&
-		(r.Metadata == nil || r.Metadata.Empty())
+		(r.Metadata == nil || r.Metadata.Empty()) &&
+		r.Auth == nil &&
+		r.AuthAllowedWallets == nil &&
+		r.AuthIdentityHeaders == nil &&
+		r.AuthOIDCIssuer == nil &&
+		r.AuthOIDCClientID == nil &&
+		r.AuthOIDCClientSecret == nil
 }
 
 type AgentMetadataRequest struct {

@@ -155,6 +155,7 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 				tunnel.Hide = *req.Metadata.Hide
 			}
 		}
+		req.applyAuth(tunnel)
 		return nil
 	}); err != nil {
 		return err
@@ -168,6 +169,34 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 		return fmt.Errorf("tunnel %q not found", id)
 	}
 	return tunnel.UpdateSettings(updateMetadata, updateMaxActiveRelays)
+}
+
+func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) {
+	if r.Auth != nil {
+		tunnel.Auth = *r.Auth
+		if strings.TrimSpace(tunnel.Auth) == "" {
+			tunnel.AuthAllowedWallets = nil
+			tunnel.AuthIdentityHeaders = false
+			tunnel.AuthOIDCIssuer = ""
+			tunnel.AuthOIDCClientID = ""
+			tunnel.AuthOIDCClientSecret = ""
+		}
+	}
+	if r.AuthAllowedWallets != nil {
+		tunnel.AuthAllowedWallets = append([]string(nil), *r.AuthAllowedWallets...)
+	}
+	if r.AuthIdentityHeaders != nil {
+		tunnel.AuthIdentityHeaders = *r.AuthIdentityHeaders
+	}
+	if r.AuthOIDCIssuer != nil {
+		tunnel.AuthOIDCIssuer = *r.AuthOIDCIssuer
+	}
+	if r.AuthOIDCClientID != nil {
+		tunnel.AuthOIDCClientID = *r.AuthOIDCClientID
+	}
+	if r.AuthOIDCClientSecret != nil {
+		tunnel.AuthOIDCClientSecret = *r.AuthOIDCClientSecret
+	}
 }
 
 func (m *manager) AddTunnel(req AgentTunnelRequest) error {
@@ -310,6 +339,11 @@ func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error
 	}
 
 	nextTunnelCfg := cfg.Tunnels[index]
+	// The sign-in gate is built when the runtime starts, so a changed gate
+	// takes effect by restarting the tunnel the way ApplyConfig does.
+	if !reflect.DeepEqual(before.applicationAuth(), nextTunnelCfg.applicationAuth()) {
+		return m.ApplyConfig(cfg)
+	}
 	m.mu.Lock()
 	m.cfg = cfg
 	if tunnel := m.tunnels[id]; tunnel != nil {
