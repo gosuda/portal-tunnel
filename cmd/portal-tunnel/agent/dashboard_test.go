@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -41,8 +42,18 @@ func testDashboardStatus() AgentStatusResponse {
 	}
 }
 
-func newTestDashboard(width, height int) agentDashboardModel {
-	var model tea.Model = newAgentDashboardModel("/etc/portal/config.toml", "/var/lib/portal")
+func newTestTheme(t *testing.T, name string, color bool) agentDashboardTheme {
+	t.Helper()
+	theme, err := newAgentDashboardTheme(name, agentDashboardTerminal{color: color})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return theme
+}
+
+func newTestDashboard(t *testing.T, theme agentDashboardTheme, width, height int) agentDashboardModel {
+	t.Helper()
+	var model tea.Model = newAgentDashboardModel("/etc/portal/config.toml", "/var/lib/portal", theme)
 	model, _ = model.Update(agentDashboardStatusMsg{status: testDashboardStatus()})
 	model, _ = model.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return model.(agentDashboardModel)
@@ -81,7 +92,7 @@ func TestDashboardViewFitsTheTerminal(t *testing.T) {
 	// Settings, sends keys, and then shrinks the terminal to m's size.
 	resizedSettings := func(keys ...tea.Msg) func(*testing.T, agentDashboardModel) agentDashboardModel {
 		return func(_ *testing.T, m agentDashboardModel) agentDashboardModel {
-			var wide tea.Model = newAgentDashboardModel("/etc/portal/config.toml", "/var/lib/portal")
+			var wide tea.Model = newAgentDashboardModel("/etc/portal/config.toml", "/var/lib/portal", m.theme)
 			steps := append([]tea.Msg{tea.WindowSizeMsg{Width: 200, Height: 50}, agentDashboardStatusMsg{status: longDescription}, right}, keys...)
 			for _, msg := range append(steps, tea.WindowSizeMsg{Width: m.width, Height: m.height}) {
 				wide, _ = wide.Update(msg)
@@ -108,7 +119,7 @@ func TestDashboardViewFitsTheTerminal(t *testing.T) {
 		for _, size := range [][2]int{{80, 24}, {80, 40}, {100, 24}, {100, 40}, {132, 24}, {132, 40}} {
 			width, height := size[0], size[1]
 			t.Run(fmt.Sprintf("%s %dx%d", pane.name, width, height), func(t *testing.T) {
-				view := pane.setup(t, newTestDashboard(width, height)).View()
+				view := pane.setup(t, newTestDashboard(t, newTestTheme(t, DefaultDashboardTheme, true), width, height)).View()
 				lines := strings.Split(view, "\n")
 				if len(lines) != height {
 					t.Fatalf("view has %d lines, want %d", len(lines), height)
@@ -119,6 +130,74 @@ func TestDashboardViewFitsTheTerminal(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// forceColor makes lipgloss emit escape sequences even though the test output is not a terminal.
+func forceColor(t *testing.T) {
+	t.Helper()
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+}
+
+func TestDashboardWithoutColorEmitsNoEscapeSequences(t *testing.T) {
+	forceColor(t)
+	panes := []struct {
+		name  string
+		setup func(*testing.T, agentDashboardModel) agentDashboardModel
+	}{
+		{"tunnels", func(_ *testing.T, m agentDashboardModel) agentDashboardModel { return m }},
+		{"settings", func(_ *testing.T, m agentDashboardModel) agentDashboardModel {
+			return sendKeys(m, tea.KeyMsg{Type: tea.KeyRight})
+		}},
+		{"relays", func(_ *testing.T, m agentDashboardModel) agentDashboardModel {
+			return sendKeys(m, tea.KeyMsg{Type: tea.KeyRight}, tea.KeyMsg{Type: tea.KeyRight})
+		}},
+		{"add tunnel form", func(t *testing.T, m agentDashboardModel) agentDashboardModel {
+			return clickAction(t, m, agentDashboardActionAddTunnel)
+		}},
+	}
+	for _, pane := range panes {
+		colored := pane.setup(t, newTestDashboard(t, newTestTheme(t, "amber", true), 100, 40)).View()
+		if !strings.Contains(colored, "\x1b[") {
+			t.Fatalf("%s: the colored theme emitted no escape sequence, so this test would prove nothing", pane.name)
+		}
+		if plain := pane.setup(t, newTestDashboard(t, newTestTheme(t, "amber", false), 100, 40)).View(); strings.Contains(plain, "\x1b") {
+			t.Fatalf("%s: a colorless theme emitted an escape sequence", pane.name)
+		}
+	}
+}
+
+func TestNewAgentDashboardTheme(t *testing.T) {
+	for _, name := range []string{"", "amber", "AMBER", " green "} {
+		if _, err := newAgentDashboardTheme(name, agentDashboardTerminal{}); err != nil {
+			t.Errorf("theme %q: %v", name, err)
+		}
+	}
+	_, err := newAgentDashboardTheme("purple", agentDashboardTerminal{})
+	if err == nil {
+		t.Fatal("an unknown theme must be rejected")
+	}
+	for _, want := range []string{"purple", "amber", "green"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err, want)
+		}
+	}
+
+	amber := newTestTheme(t, "amber", true)
+	green := newTestTheme(t, "green", true)
+	if amber.text.GetForeground() == green.text.GetForeground() {
+		t.Error("the palettes must differ")
+	}
+}
+
+func TestDetectAgentDashboardTerminal(t *testing.T) {
+	for value, want := range map[string]bool{"": true, "1": false, "anything": false} {
+		t.Setenv("NO_COLOR", value)
+		if got := detectAgentDashboardTerminal(); got.color != want {
+			t.Errorf("NO_COLOR=%q: color = %v, want %v", value, got.color, want)
 		}
 	}
 }

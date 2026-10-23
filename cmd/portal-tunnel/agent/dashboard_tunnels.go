@@ -39,7 +39,8 @@ func (m agentDashboardModel) tunnelsSectionHeight(bodyHeight int) int {
 
 func (m agentDashboardModel) renderTunnelsSection(width, height int) agentDashboardView {
 	var pane agentDashboardView
-	pane.addSectionTitle(width, agentDashboardPaneTunnels, "Tunnels", m.activePane == agentDashboardPaneTunnels)
+	th := &m.theme
+	pane.addSectionTitle(th, width, agentDashboardPaneTunnels, "Tunnels", m.activePane == agentDashboardPaneTunnels)
 	addLabel := "Add Tunnel"
 	addDisabled := false
 	if m.addingTunnel {
@@ -55,15 +56,15 @@ func (m agentDashboardModel) renderTunnelsSection(width, height int) agentDashbo
 	buttons = append(buttons,
 		agentDashboardButton{label: "Delete", action: agentDashboardActionDeleteTunnel, disabled: len(m.status.Tunnels) == 0},
 	)
-	pane.addButtons(width, buttons...)
+	pane.addButtons(th, width, buttons...)
 	if m.addingTunnel {
 		m.renderAddTunnelForm(&pane, width)
 	}
 	tunnelRowWidth := agentDashboardTunnelTableWidth(width, m.status.Tunnels)
-	pane.addLine(agentDashboardHeaderStyle.Render(agentDashboardTunnelRow(tunnelRowWidth, "STATUS", "TARGET", "TUNNEL")))
+	pane.addLine(th.strong.Render(agentDashboardTunnelRow(tunnelRowWidth, "STATUS", "TARGET", "TUNNEL")))
 
 	if len(m.status.Tunnels) == 0 {
-		pane.addStyled(width, agentDashboardMutedStyle, "no tunnels")
+		pane.addStyled(width, th.muted, "no tunnels")
 		return pane
 	}
 
@@ -80,22 +81,22 @@ func (m agentDashboardModel) renderTunnelsSection(width, height int) agentDashbo
 	rowWidth := tunnelRowWidth
 	for i := start; i < end; i++ {
 		tunnel := m.status.Tunnels[i]
-		pane.addTunnelRow(width, rowWidth, tunnel, tunnel.ID == selectedTunnelID)
+		pane.addTunnelRow(th, width, rowWidth, tunnel, tunnel.ID == selectedTunnelID)
 	}
 
 	if tunnel, ok := m.selectedTunnelStatus(); ok && strings.TrimSpace(tunnel.LastError) != "" {
-		pane.addStyled(width, agentDashboardErrorStyle, "Error: "+tunnel.LastError)
+		pane.addStyled(width, th.failed, "Error: "+tunnel.LastError)
 	}
 	return pane
 }
 
-func (v *agentDashboardView) addTunnelRow(width, rowWidth int, tunnel AgentTunnelStatus, selected bool) {
+func (v *agentDashboardView) addTunnelRow(th *agentDashboardTheme, width, rowWidth int, tunnel AgentTunnelStatus, selected bool) {
 	if width <= 0 {
 		width = 1
 	}
 	rowWidth = min(rowWidth, max(1, width))
 	line := agentDashboardTunnelRow(rowWidth, tunnel.State, tunnel.TargetAddr, tunnelDashboardName(tunnel))
-	style := agentDashboardTunnelStyle(selected, tunnel.State)
+	style := agentDashboardTunnelStyle(th, selected, tunnel.State)
 	y := len(v.lines)
 	v.lines = append(v.lines, style.Width(rowWidth).Render(agentDashboardFit(line, rowWidth)))
 	v.regions = append(v.regions, agentDashboardRegion{
@@ -107,19 +108,19 @@ func (v *agentDashboardView) addTunnelRow(width, rowWidth int, tunnel AgentTunne
 	})
 }
 
-func agentDashboardTunnelStyle(selected bool, state string) lipgloss.Style {
+func agentDashboardTunnelStyle(th *agentDashboardTheme, selected bool, state string) lipgloss.Style {
 	if selected {
-		return agentDashboardSelectedStyle
+		return th.selected
 	}
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "running":
-		return agentDashboardOKStyle
+		return th.bright
 	case "starting":
-		return agentDashboardPendingStyle
+		return th.pending
 	case "error":
-		return agentDashboardErrorStyle
+		return th.failed
 	default:
-		return agentDashboardMutedStyle
+		return th.muted
 	}
 }
 

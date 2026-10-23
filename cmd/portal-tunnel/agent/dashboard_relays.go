@@ -159,15 +159,16 @@ func (m agentDashboardModel) renderRelaysSection(pane *agentDashboardView, width
 	connectDisabled := !hasRelay || relay.Banned || relayDashboardActive(tunnel, relay) || m.relayDashboardConnecting(tunnel, relay)
 	disconnectDisabled := !hasRelay || relay.Banned || !relayDashboardActive(tunnel, relay)
 
-	pane.addSectionTitle(width, agentDashboardPaneRelays, "Relays", m.activePane == agentDashboardPaneRelays)
-	pane.addButtons(width,
+	th := &m.theme
+	pane.addSectionTitle(th, width, agentDashboardPaneRelays, "Relays", m.activePane == agentDashboardPaneRelays)
+	pane.addButtons(th, width,
 		agentDashboardButton{label: "Connect", action: agentDashboardActionConnectRelay, disabled: connectDisabled},
 		agentDashboardButton{label: "Disconnect", action: agentDashboardActionDisconnectRelay, disabled: disconnectDisabled},
 	)
-	pane.addLine(agentDashboardHeaderStyle.Render(agentDashboardRelayRow(width, "STATUS", "VERSION", "FEATURES", "TUNNEL URL")))
+	pane.addLine(th.strong.Render(agentDashboardRelayRow(width, "STATUS", "VERSION", "FEATURES", "TUNNEL URL")))
 
 	if len(tunnel.Relays) == 0 {
-		pane.addStyled(width, agentDashboardMutedStyle, "no relays")
+		pane.addStyled(width, th.muted, "no relays")
 		return
 	}
 	selectedRelayURL := m.selectedRelayURL
@@ -185,27 +186,27 @@ func (m agentDashboardModel) renderRelaysSection(pane *agentDashboardView, width
 			relayDashboardFeatures(relay),
 			relayDashboardURL(relay),
 		)
-		pane.addClickRow(line, width, agentDashboardRelayStyle(relay.RelayURL == selectedRelayURL, tunnel, relay, m.relayDashboardFailed(tunnel, relay), m.relayDashboardConnecting(tunnel, relay)), agentDashboardActionOpenTunnelURL, tunnel.ID, relay.RelayURL)
+		pane.addClickRow(line, width, agentDashboardRelayStyle(th, relay.RelayURL == selectedRelayURL, tunnel, relay, m.relayDashboardFailed(tunnel, relay), m.relayDashboardConnecting(tunnel, relay)), agentDashboardActionOpenTunnelURL, tunnel.ID, relay.RelayURL)
 	}
 }
 
-func agentDashboardRelayStyle(selected bool, tunnel AgentTunnelStatus, relay AgentRelayStatus, failed, connecting bool) lipgloss.Style {
+func agentDashboardRelayStyle(th *agentDashboardTheme, selected bool, tunnel AgentTunnelStatus, relay AgentRelayStatus, failed, connecting bool) lipgloss.Style {
 	if selected {
-		return agentDashboardSelectedStyle
+		return th.selected
 	}
 	if relay.Banned {
-		return agentDashboardErrorStyle
+		return th.failed
 	}
 	if failed {
-		return agentDashboardErrorStyle
+		return th.failed
 	}
 	if relayDashboardConnected(tunnel, relay) {
-		return agentDashboardOKStyle
+		return th.bright
 	}
 	if connecting {
-		return agentDashboardPendingStyle
+		return th.pending
 	}
-	return agentDashboardMutedStyle
+	return th.muted
 }
 
 func relayDashboardActive(tunnel AgentTunnelStatus, relay AgentRelayStatus) bool {
