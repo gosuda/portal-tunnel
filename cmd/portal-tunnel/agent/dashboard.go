@@ -91,6 +91,12 @@ type agentDashboardActionMsg struct {
 type agentDashboardTickMsg struct{}
 
 func RunDashboard(configPath, stateDir string) error {
+	model := newAgentDashboardModel(configPath, stateDir)
+	_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	return err
+}
+
+func newAgentDashboardModel(configPath, stateDir string) agentDashboardModel {
 	model := agentDashboardModel{
 		configPath:          configPath,
 		stateDir:            stateDir,
@@ -114,9 +120,7 @@ func RunDashboard(configPath, stateDir string) error {
 	}
 	model.resetAddTunnelForm()
 	model.resizeInputs(0)
-
-	_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
-	return err
+	return model
 }
 
 func newAgentDashboardTextInput() textinput.Model {
