@@ -20,7 +20,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
@@ -87,38 +86,15 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 	utils.InvalidRequestError(err).Write(w)
 }
 
-// apiSigner is the transcript signer built from one served certificate.
-type apiSigner struct {
-	material *acme.TLSMaterial
-	signer   *keyless.Signer
-}
-
-// apiSigner returns the /v1/sign signer for the certificate the relay serves
-// now, building a new one when a renewal has replaced it (and with it the
-// private key). It returns nil until the relay certificate is loaded.
-func (s *Server) apiSigner() (*keyless.Signer, error) {
-	material := s.acmeManager.TLSMaterial()
-	if material == nil {
-		return nil, nil
-	}
-	return s.signerFor(material)
-}
-
-func (s *Server) signerFor(material *acme.TLSMaterial) (*keyless.Signer, error) {
-	if cached := s.signer.Load(); cached != nil && cached.material == material {
-		return cached.signer, nil
-	}
-	signer, err := keyless.NewSigner(material.KeyPEM, s.registry.bindings)
-	if err != nil {
-		return nil, err
-	}
-	s.signer.Store(&apiSigner{material: material, signer: signer})
-	return signer, nil
-}
-
 func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.Server, io.Closer, error) {
-	if _, err := s.apiSigner(); err != nil {
-		return nil, nil, fmt.Errorf("configure api signer: %w", err)
+	if s.acmeManager.TLSMaterial() != nil {
+		// The manager picks the key of the certificate a tenant presents, so a
+		// renewal needs no new signer.
+		signer, err := keyless.NewSigner(s.registry.bindings, s.acmeManager.SigningKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("configure api signer: %w", err)
+		}
+		s.signer = signer
 	}
 
 	apiServer := &http.Server{
@@ -645,13 +621,7 @@ func (s *Server) HandleStaticCache(w http.ResponseWriter, req *http.Request) {
 // HandleSign authenticates a transcript-signing request and binds the
 // signature to the live lease the access token belongs to.
 func (s *Server) HandleSign(w http.ResponseWriter, r *http.Request) {
-	signer, err := s.apiSigner()
-	if err != nil {
-		log.Error().Err(err).Msg("relay signing key is unusable")
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "signing key unavailable")
-		return
-	}
-	if signer == nil {
+	if s.signer == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -660,7 +630,7 @@ func (s *Server) HandleSign(w http.ResponseWriter, r *http.Request) {
 		writeAPIErrorResponse(w, errUnauthorized)
 		return
 	}
-	signer.ServeHTTP(w, r, leaseID)
+	s.signer.ServeHTTP(w, r, leaseID)
 }
 
 // Tenant hosts never reach the relay control plane, including on a connection
