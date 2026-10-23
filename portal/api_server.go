@@ -1,7 +1,6 @@
 package portal
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
@@ -87,32 +87,32 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 	utils.InvalidRequestError(err).Write(w)
 }
 
-// apiSigner is the transcript signer built from one private key.
+// apiSigner is the transcript signer built from one served certificate.
 type apiSigner struct {
-	keyPEM []byte
-	signer *keyless.Signer
+	material *acme.TLSMaterial
+	signer   *keyless.Signer
 }
 
-// apiSigner returns the /v1/sign signer for the private key the relay serves
-// now, building a new one when a renewal has replaced the key. It returns nil
-// until the relay certificate is loaded.
+// apiSigner returns the /v1/sign signer for the certificate the relay serves
+// now, building a new one when a renewal has replaced it (and with it the
+// private key). It returns nil until the relay certificate is loaded.
 func (s *Server) apiSigner() (*keyless.Signer, error) {
 	material := s.acmeManager.TLSMaterial()
 	if material == nil {
 		return nil, nil
 	}
-	return s.signerFor(material.KeyPEM)
+	return s.signerFor(material)
 }
 
-func (s *Server) signerFor(keyPEM []byte) (*keyless.Signer, error) {
-	if cached := s.signer.Load(); cached != nil && bytes.Equal(cached.keyPEM, keyPEM) {
+func (s *Server) signerFor(material *acme.TLSMaterial) (*keyless.Signer, error) {
+	if cached := s.signer.Load(); cached != nil && cached.material == material {
 		return cached.signer, nil
 	}
-	signer, err := keyless.NewSigner(keyPEM, s.registry.bindings)
+	signer, err := keyless.NewSigner(material.KeyPEM, s.registry.bindings)
 	if err != nil {
 		return nil, err
 	}
-	s.signer.Store(&apiSigner{keyPEM: keyPEM, signer: signer})
+	s.signer.Store(&apiSigner{material: material, signer: signer})
 	return signer, nil
 }
 
@@ -704,15 +704,18 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 				}
 				_ = upstream.Close()
 			}
-			roots := x509.NewCertPool()
-			for _, cert := range s.apiServer.TLSConfig.Certificates {
-				leaf, err := x509.ParseCertificate(cert.Certificate[0])
-				if err != nil {
-					_ = upstream.Close()
-					return nil, err
-				}
-				roots.AddCert(leaf)
+			material := s.acmeManager.TLSMaterial()
+			if material == nil {
+				_ = upstream.Close()
+				return nil, errors.New("relay certificate is not loaded")
 			}
+			leaf, err := x509.ParseCertificate(material.Certificate.Certificate[0])
+			if err != nil {
+				_ = upstream.Close()
+				return nil, err
+			}
+			roots := x509.NewCertPool()
+			roots.AddCert(leaf)
 			conn := tls.Client(s.registry.bindings.FixHelloOnWrite(upstream, binding), &tls.Config{ServerName: host, RootCAs: roots, MinVersion: tls.VersionTLS12})
 			if err := conn.HandshakeContext(ctx); err != nil {
 				_ = conn.Close()

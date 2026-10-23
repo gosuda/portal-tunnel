@@ -40,6 +40,14 @@ func (m *Manager) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error)
 	return &material.Certificate, nil
 }
 
+func newTLSMaterial(certPEM, keyPEM []byte) (*TLSMaterial, error) {
+	certificate, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("parse relay api keypair: %w", err)
+	}
+	return &TLSMaterial{CertPEM: certPEM, KeyPEM: keyPEM, Certificate: certificate}, nil
+}
+
 // loadTLSMaterial reads the certificate pair and makes it the served material.
 // A pair that cannot be read or parsed leaves the previous material in place.
 func (m *Manager) loadTLSMaterial(certFile, keyFile string) (*TLSMaterial, error) {
@@ -51,11 +59,10 @@ func (m *Manager) loadTLSMaterial(certFile, keyFile string) (*TLSMaterial, error
 	if err != nil {
 		return nil, fmt.Errorf("read api tls private key: %w", err)
 	}
-	certificate, err := tls.X509KeyPair(certPEM, keyPEM)
+	material, err := newTLSMaterial(certPEM, keyPEM)
 	if err != nil {
-		return nil, fmt.Errorf("parse relay api keypair: %w", err)
+		return nil, err
 	}
-	material := &TLSMaterial{CertPEM: certPEM, KeyPEM: keyPEM, Certificate: certificate}
 	m.material.current.Store(material)
 	return material, nil
 }
