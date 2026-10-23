@@ -127,6 +127,9 @@ func TestApplicationAuthConfig(t *testing.T) {
 // default, so a key the writer drops shows up as a difference after a save. The
 // keys are spread over several tunnels because loading validates each one and
 // some keys exclude each other (HTTP routes and TCP, a static site and a target).
+// The check below finds a key as a line that starts with it and has one space
+// before `=`, so keep the keys unindented in that form. A key inside a nested
+// struct such as an HTTP route is not walked and has to be set here by hand.
 const tunnelsDocument = `
 [[tunnels]]
 id = "web"
