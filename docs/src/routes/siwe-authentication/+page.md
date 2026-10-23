@@ -85,6 +85,28 @@ Inbound `X-Portal-User` and `X-Portal-Auth` headers are always removed. Add
 `credential`, or `oidc`) after login. Upstreams must only trust these headers when they cannot be
 reached except through this local Portal proxy.
 
+### Verifying the identity headers
+
+An upstream on loopback can be reached by any other process on the machine, and
+such a process can connect to it directly and send `X-Portal-User` itself. To let
+the application tell Portal from that process, give Portal a secret of at least 16
+visible ASCII characters (no spaces) together with `--auth-identity-headers`:
+
+```bash
+export AUTH_IDENTITY_PROOF=...   # read from the environment so it stays out of the process list
+portal expose 3000 --auth siwe --auth-identity-headers
+```
+
+Portal then sends `X-Portal-Proof: <secret>` with the identity headers on every
+authenticated request, and removes any `X-Portal-Proof` a visitor sends. The
+application compares the header with the same secret in constant time (for
+example `subtle.ConstantTimeCompare` in Go, `hmac.compare_digest` in Python or
+`crypto.timingSafeEqual` in Node.js) and ignores `X-Portal-User` and
+`X-Portal-Auth` when it differs or is missing. The proof is optional and off by
+default. It is sent to every upstream of the tunnel and in cleartext over a
+plain `http` upstream, so use one secret per tunnel and keep it to upstreams you
+trust with it.
+
 Application auth covers proxied HTTP routes, static sites, and x402 endpoints.
 It cannot be combined with raw TCP/UDP or relay static caching.
 
