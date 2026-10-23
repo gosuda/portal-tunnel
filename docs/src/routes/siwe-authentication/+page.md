@@ -105,7 +105,8 @@ example `subtle.ConstantTimeCompare` in Go, `hmac.compare_digest` in Python or
 `X-Portal-Auth` when it differs or is missing. The proof is optional and off by
 default. It is sent to every upstream of the tunnel and in cleartext over a
 plain `http` upstream, so use one secret per tunnel and keep it to upstreams you
-trust with it.
+trust with it. Anyone who sees one request can reuse the value, so do not log
+`X-Portal-Proof` in the application (access logs, header-dumping middleware).
 
 Application auth covers proxied HTTP routes, static sites, and x402 endpoints.
 It cannot be combined with raw TCP/UDP or relay static caching.
