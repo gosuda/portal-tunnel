@@ -6,8 +6,11 @@ import (
 	"crypto/x509"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -182,5 +185,67 @@ func TestMITMProbeFailureBudget(t *testing.T) {
 	}
 	if statuses := h.exposure.Relays(); len(statuses) != 1 || statuses[0].State != sdk.RelayReady || statuses[0].Failure != "" {
 		t.Fatalf("probe handshake failure must preserve service without a MITM verdict: %+v", statuses)
+	}
+}
+
+// A native client binds its own TLS connection to the tunnel identity in the
+// hostname. Through an honest relay the binding succeeds and application
+// traffic continues on the verified connection; through a relay that
+// terminates TLS, even for this client alone, the client aborts before it
+// sends any application data.
+func TestTLSChannelBindingThroughRelays(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		label  string
+		attack string
+	}{
+		{"honest relay", "bind-ok", ""},
+		{"relay terminating TLS", "bind-split", "terminate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessWithName(t, tc.label, "127.0.0.1", tc.attack)
+			publicURL := h.waitForPublicURL()
+			parsed, err := url.Parse(publicURL)
+			if err != nil {
+				t.Fatalf("parse public URL %q: %v", publicURL, err)
+			}
+			certPEM, err := os.ReadFile(h.certificate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM(certPEM) {
+				t.Fatal("parse relay certificate")
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			conn, err := sdk.DialCanonicalTLS(ctx, h.sniAddr, parsed.Hostname(), &tls.Config{RootCAs: roots})
+			if tc.attack != "" {
+				if err == nil || !strings.Contains(err.Error(), "exporter mismatch") {
+					if conn != nil {
+						_ = conn.Close()
+					}
+					t.Fatalf("DialCanonicalTLS through a terminating relay = %v; want an exporter mismatch error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DialCanonicalTLS through an honest relay: %v", err)
+			}
+			transport := &http.Transport{
+				DialTLSContext: func(context.Context, string, string) (net.Conn, error) { return conn, nil },
+			}
+			defer transport.CloseIdleConnections()
+			resp, err := (&http.Client{Transport: transport, Timeout: 10 * time.Second}).Get(publicURL + "/marker")
+			if err != nil {
+				t.Fatalf("request over the bound connection: %v", err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil || string(body) != marker {
+				t.Fatalf("response over the bound connection = %q, %v; want %q", body, err, marker)
+			}
+		})
 	}
 }
