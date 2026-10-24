@@ -3,9 +3,6 @@ package agent
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,11 +11,8 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
-
-	"github.com/go-jose/go-jose/v4"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -27,6 +21,10 @@ import (
 // unreachableRelay keeps started tunnels off the network: they come up with
 // one relay that never connects.
 const unreachableRelay = "https://127.0.0.1:1"
+
+// unreachableIssuer is a loopback OIDC issuer nothing listens on: a started
+// tunnel's provider check fails at once, and nothing leaves the machine.
+const unreachableIssuer = "http://127.0.0.1:1"
 
 func testTunnel(id string) TunnelConfig {
 	discovery := false
@@ -90,44 +88,6 @@ func tunnelStatus(t *testing.T, m *manager, id string) AgentTunnelStatus {
 	}
 	t.Fatalf("tunnel %q not in status", id)
 	return AgentTunnelStatus{}
-}
-
-// newTestOIDCIssuer serves a minimal OIDC provider. Requests wait for release
-// to be closed, so a test decides when the provider answers, and the returned
-// channel is closed when the first request arrives.
-func newTestOIDCIssuer(t *testing.T, release <-chan struct{}) (*httptest.Server, <-chan struct{}) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	jwks := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k", Algorithm: "ES256", Use: "sig"}}}
-	requested := make(chan struct{})
-	var once sync.Once
-	var issuer *httptest.Server
-	issuer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		once.Do(func() { close(requested) })
-		select {
-		case <-release:
-		case <-r.Context().Done():
-			return
-		}
-		switch r.URL.Path {
-		case "/.well-known/openid-configuration":
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"issuer":                 issuer.URL,
-				"authorization_endpoint": issuer.URL + "/authorize",
-				"token_endpoint":         issuer.URL + "/token",
-				"jwks_uri":               issuer.URL + "/jwks",
-			})
-		case "/jwks":
-			_ = json.NewEncoder(w).Encode(jwks)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(issuer.Close)
-	return issuer, requested
 }
 
 func oidcTunnel(id, issuer, secret string) TunnelConfig {
@@ -195,50 +155,24 @@ func toStrings(value any) []string {
 	return out
 }
 
-func TestTunnelStatusOIDCProviderHealth(t *testing.T) {
-	release := make(chan struct{})
-	slow, requested := newTestOIDCIssuer(t, release)
-	m, _ := testManager(t,
-		oidcTunnel("pending", slow.URL, ""),
-		oidcTunnel("down", "http://127.0.0.1:1", ""),
-		func() TunnelConfig { cfg := testTunnel("siwe"); cfg.Auth = "siwe"; return cfg }(),
-	)
+// TestRuntimeAuthProviderCheck covers the provider states; the status reports
+// the check for a running OIDC tunnel and for no other tunnel.
+func TestTunnelStatusOIDCProviderCheck(t *testing.T) {
+	siwe := testTunnel("siwe")
+	siwe.Auth = "siwe"
+	m, _ := testManager(t, oidcTunnel("oidc", unreachableIssuer, ""), siwe)
 	startManager(t, m)
 
-	eventually(t, "the unreachable provider to be checked", func() bool {
-		return tunnelStatus(t, m, "down").AuthOIDCProviderChecked
+	eventually(t, "the oidc provider to be checked and the siwe tunnel to run", func() bool {
+		return tunnelStatus(t, m, "oidc").AuthOIDCProviderChecked && tunnelStatus(t, m, "siwe").State == "running"
 	})
-	if got := tunnelStatus(t, m, "down"); got.AuthOIDCProviderError == "" {
+	if got := tunnelStatus(t, m, "oidc"); got.AuthOIDCProviderError == "" {
 		t.Fatal("unreachable provider reports no error")
-	}
-
-	eventually(t, "the tunnels to run and the slow provider to be asked", func() bool {
-		select {
-		case <-requested:
-		default:
-			return false
-		}
-		return tunnelStatus(t, m, "pending").State == "running" && tunnelStatus(t, m, "siwe").State == "running"
-	})
-	if got := tunnelStatus(t, m, "pending"); got.AuthOIDCProviderChecked || got.AuthOIDCProviderError != "" {
-		t.Fatalf("provider that has not answered reports %+v", got)
 	}
 	if got := tunnelStatus(t, m, "siwe"); got.AuthOIDCProviderChecked || got.AuthOIDCProviderError != "" {
 		t.Fatalf("siwe tunnel reports an oidc provider check: %+v", got)
 	}
-
-	close(release)
-	eventually(t, "the usable provider to be checked", func() bool {
-		return tunnelStatus(t, m, "pending").AuthOIDCProviderChecked
-	})
-	if got := tunnelStatus(t, m, "pending"); got.AuthOIDCProviderError != "" {
-		t.Fatalf("usable provider reports error %q", got.AuthOIDCProviderError)
-	}
 }
-
-// unreachableIssuer is a loopback OIDC issuer nothing listens on: a started
-// tunnel's provider check fails at once, and nothing leaves the machine.
-const unreachableIssuer = "http://127.0.0.1:1"
 
 func callControl(t *testing.T, m *manager, method, path, body string) (int, string) {
 	t.Helper()
