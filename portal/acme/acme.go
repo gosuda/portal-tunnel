@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -59,6 +58,7 @@ type Manager struct {
 	stopOnce     sync.Once
 	ensStatus    *utils.Snapshot[types.ENSStatus]
 	ensCommands  chan ensDNSCommand
+	material     *utils.Snapshot[servedMaterial]
 
 	// pendingDNSAddress is guarded by commandMu and cleared only after address-record synchronization.
 	pendingDNSAddress bool
@@ -111,6 +111,7 @@ func NewManager(cfg Config) (*Manager, error) {
 			cfg:       cfg,
 			stopCh:    make(chan struct{}),
 			ensStatus: utils.NewSnapshot(newENSStatus(cfg, nil)),
+			material:  utils.NewSnapshot(servedMaterial{}),
 		}, nil
 	}
 
@@ -119,6 +120,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		stopCh:      make(chan struct{}),
 		ensCommands: make(chan ensDNSCommand, 256),
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
+		material:    utils.NewSnapshot(servedMaterial{}),
 	}
 
 	acmeDNS, err := newDNSProvider(cfg.DNSProvider, cfg)
@@ -172,21 +174,14 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	return m.TLSFiles()
 }
 
-func (m *Manager) EnsureTLSMaterial(ctx context.Context) ([]byte, []byte, error) {
+// EnsureTLSMaterial makes sure the relay certificate exists and serves it;
+// TLSMaterial, GetCertificate and SigningKey read what it loaded.
+func (m *Manager) EnsureTLSMaterial(ctx context.Context) error {
 	certFile, keyFile, err := m.EnsureCertificate(ctx)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-
-	certPEM, err := os.ReadFile(certFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read api tls certificate: %w", err)
-	}
-	keyPEM, err := os.ReadFile(keyFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read api tls private key: %w", err)
-	}
-	return certPEM, keyPEM, nil
+	return m.loadTLSMaterial(certFile, keyFile)
 }
 
 func (m *Manager) Start(ctx context.Context) {
@@ -299,11 +294,20 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 		return errors.New("acme obtain response missing certificate or private key")
 	}
 
+	// Every issuance carries a new private key, so what the relay serves must
+	// change together with the files. A pair that does not parse is refused
+	// before anything is written, so the files and what is served cannot
+	// disagree.
+	material, err := newTLSMaterial(obtained.Certificate, obtained.PrivateKey)
+	if err != nil {
+		return err
+	}
 	if err := utils.WriteFileAtomic(certFile, obtained.Certificate, 0o644); err != nil {
 		return fmt.Errorf("write certificate chain: %w", err)
 	}
 	if err := utils.WriteFileAtomic(keyFile, obtained.PrivateKey, 0o600); err != nil {
 		return fmt.Errorf("write private key: %w", err)
 	}
+	m.serve(material)
 	return nil
 }

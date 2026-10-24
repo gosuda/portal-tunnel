@@ -66,7 +66,15 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   are pinned from the relay, each handshake signs transcript-bound through the
   relay's `/v1/sign` endpoint, and the relay validates every signing request against
   a live per-connection binding while keeping lease lifecycle and DNS publication
-  orchestration to itself.
+  orchestration to itself. A relay certificate renewal needs neither a restart nor
+  a reconnect: the relay signs with the key of the certificate the transcript
+  presents and keeps a replaced certificate's key until that certificate expires,
+  and a tenant re-pins the chain the relay serves at every lease renewal. A
+  handshake that finds the pin stale first, because `/v1/sign` reports that the
+  relay holds no key for the chain it presents or because the relay's API
+  certificate no longer verifies against the pinned chain, is lost and re-pins
+  for the handshakes after it. The signer connection is always verified against
+  the pinned chain only.
 
 ## Identity Challenges
 

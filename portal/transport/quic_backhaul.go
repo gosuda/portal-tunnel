@@ -38,8 +38,8 @@ type QUICBackhaulControl struct {
 	stream      *quic.Stream
 }
 
-func ListenQUICBackhaul(addr string, cert tls.Certificate) (*quic.Listener, error) {
-	listener, err := quic.ListenAddr(addr, quicBackhaulServerTLSConfig(cert), quicBackhaulConfig())
+func ListenQUICBackhaul(addr string, getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) (*quic.Listener, error) {
+	listener, err := quic.ListenAddr(addr, quicBackhaulServerTLSConfig(getCertificate), quicBackhaulConfig())
 	if err != nil {
 		return nil, fmt.Errorf("listen quic backhaul: %w", err)
 	}
@@ -273,11 +273,11 @@ func (c *QUICBackhaulControl) Reject(code, reason string) error {
 	return errors.Join(err, c.conn.CloseWithError(1, reason))
 }
 
-func quicBackhaulServerTLSConfig(cert tls.Certificate) *tls.Config {
+func quicBackhaulServerTLSConfig(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) *tls.Config {
 	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		NextProtos:   []string{quicBackhaulALPN},
-		MinVersion:   tls.VersionTLS13,
+		GetCertificate: getCertificate,
+		NextProtos:     []string{quicBackhaulALPN},
+		MinVersion:     tls.VersionTLS13,
 	}
 }
 

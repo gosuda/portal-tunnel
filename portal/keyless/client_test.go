@@ -43,7 +43,7 @@ func TestClientAccessTokenUpdateChangesSignerHeaders(t *testing.T) {
 func TestClientClosePreservesFirstError(t *testing.T) {
 	t.Parallel()
 	closer := &failingCloseResource{}
-	client := &Client{signer: closer}
+	client := &Client{pin: &pinnedChain{signer: closer}}
 
 	first := client.Close()
 	second := client.Close()
@@ -65,6 +65,9 @@ func TestNewSignerRequiresBindingRegistry(t *testing.T) {
 		t.Fatal("NewSigner(nil bindings) = nil error, want policy guard")
 	} else if err.Error() != "portal binding registry is required" {
 		t.Fatalf("NewSigner(nil bindings) error = %q, want binding registry requirement", err)
+	}
+	if _, err := NewSigner(NewBindingRegistry(time.Minute), nil); err == nil {
+		t.Fatal("NewSigner(nil key lookup) = nil error, want a signer that cannot sign refused")
 	}
 }
 

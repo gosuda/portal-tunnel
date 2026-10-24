@@ -261,8 +261,6 @@ type Server struct {
 	authority   identity.Authority
 	acmeManager *acme.Manager
 	proxy       proxy
-	apiKeyPEM   []byte
-	apiCertPEM  []byte
 	signer      *keyless.Signer
 
 	apiHandoff       *handoffListener
@@ -421,7 +419,7 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		log.Warn().Err(cacheErr).Msg("relay cache unavailable; using origin tunnels")
 	}
 	s.registry.cache = cacheManager
-	apiTLS, acmeManager, err := s.prepareAPITLS(ctx)
+	apiTLS, err := s.prepareAPITLS(ctx)
 	if err != nil {
 		return err
 	}
@@ -442,7 +440,7 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		if s.overlay != nil {
 			s.overlay.Close()
 		}
-		_ = acmeManager.Stop(ctx)
+		_ = s.acmeManager.Stop(ctx)
 		if apiServer != nil {
 			_ = apiServer.Close()
 		}
@@ -513,7 +511,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	s.apiTLSClose = apiCloser
 	s.redirectListener = redirectListener
 	s.redirectServer = redirectServer
-	s.acmeManager = acmeManager
 	s.ingressCtx = serverCtx
 	s.cancel = cancel
 	s.group = group
@@ -850,11 +847,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return shutdownErr
 }
 
-func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, *acme.Manager, error) {
+// prepareAPITLS loads the relay certificate and makes its acme manager the
+// relay's, which the listeners, the /v1/sign signer and the chain endpoint ask
+// for the current certificate, so a renewal needs no restart.
+func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, error) {
 	cfg := s.config()
 	acmeCfg := cfg.ACME
 	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
-		return nil, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
+		return nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name
 	if strings.TrimSpace(acmeCfg.ENSGaslessAddress) == "" {
@@ -863,30 +863,21 @@ func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, *acme.Manager,
 
 	manager, err := acme.NewManager(acmeCfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create acme manager: %w", err)
+		return nil, fmt.Errorf("create acme manager: %w", err)
 	}
 
-	certPEM, keyPEM, err := manager.EnsureTLSMaterial(ctx)
-	if err != nil {
+	if err := manager.EnsureTLSMaterial(ctx); err != nil {
 		_ = manager.Stop(ctx)
-		return nil, nil, fmt.Errorf("ensure relay certificate: %w", err)
+		return nil, fmt.Errorf("ensure relay certificate: %w", err)
 	}
-	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		_ = manager.Stop(ctx)
-		return nil, nil, fmt.Errorf("parse relay api keypair: %w", err)
-	}
-	// The /v1/sign transcript signer shares the API listener key; newAPIServer
-	// reads the PEM to build its handler.
-	s.apiKeyPEM = keyPEM
-	s.apiCertPEM = certPEM
+	s.acmeManager = manager
 
 	apiTLS := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-		NextProtos:   []string{"http/1.1"},
+		GetCertificate: manager.GetCertificate,
+		MinVersion:     tls.VersionTLS12,
+		NextProtos:     []string{"http/1.1"},
 	}
-	return apiTLS, manager, nil
+	return apiTLS, nil
 }
 
 // admitIngress reserves capacity before starting a public socket worker.
@@ -1080,10 +1071,10 @@ func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration)
 }
 
 func (s *Server) newQUICBackhaulListener(apiTLS *tls.Config) (*quic.Listener, error) {
-	if len(apiTLS.Certificates) == 0 {
+	if apiTLS.GetCertificate == nil {
 		return nil, fmt.Errorf("quic backhaul requires api tls certificate")
 	}
-	return transport.ListenQUICBackhaul(s.config().SNIListenAddr, apiTLS.Certificates[0])
+	return transport.ListenQUICBackhaul(s.config().SNIListenAddr, apiTLS.GetCertificate)
 }
 
 func (s *Server) runQUICBackhaulListener(ctx context.Context) error {
