@@ -172,17 +172,14 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	return m.TLSFiles()
 }
 
-func (m *Manager) EnsureTLSMaterial(ctx context.Context) ([]byte, []byte, error) {
+// EnsureTLSMaterial makes sure the relay certificate exists and serves it;
+// TLSMaterial, GetCertificate and SigningKey read what it loaded.
+func (m *Manager) EnsureTLSMaterial(ctx context.Context) error {
 	certFile, keyFile, err := m.EnsureCertificate(ctx)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-
-	material, err := m.loadTLSMaterial(certFile, keyFile)
-	if err != nil {
-		return nil, nil, err
-	}
-	return material.CertPEM, material.KeyPEM, nil
+	return m.loadTLSMaterial(certFile, keyFile)
 }
 
 func (m *Manager) Start(ctx context.Context) {

@@ -39,10 +39,10 @@ func TestTLSMaterialFollowsTheStoredCertificate(t *testing.T) {
 	if err := writeRelayCertificate(t, certFile, keyFile, baseDomain, notAfter); err != nil {
 		t.Fatalf("writeRelayCertificate(first) error = %v", err)
 	}
-	first, err := manager.loadTLSMaterial(certFile, keyFile)
-	if err != nil {
+	if err := manager.loadTLSMaterial(certFile, keyFile); err != nil {
 		t.Fatalf("loadTLSMaterial(first) error = %v", err)
 	}
+	first := manager.TLSMaterial()
 	served, err := manager.GetCertificate(nil)
 	if err != nil || served != &first.Certificate {
 		t.Fatalf("GetCertificate() = %p, %v; want the first certificate", served, err)
@@ -51,11 +51,11 @@ func TestTLSMaterialFollowsTheStoredCertificate(t *testing.T) {
 	if err := writeRelayCertificate(t, certFile, keyFile, baseDomain, notAfter.Add(60*24*time.Hour)); err != nil {
 		t.Fatalf("writeRelayCertificate(renewed) error = %v", err)
 	}
-	renewed, err := manager.loadTLSMaterial(certFile, keyFile)
-	if err != nil {
+	if err := manager.loadTLSMaterial(certFile, keyFile); err != nil {
 		t.Fatalf("loadTLSMaterial(renewed) error = %v", err)
 	}
-	if bytes.Equal(renewed.KeyPEM, first.KeyPEM) || bytes.Equal(renewed.CertPEM, first.CertPEM) {
+	renewed := manager.TLSMaterial()
+	if bytes.Equal(renewed.CertPEM, first.CertPEM) || renewed.Certificate.Leaf.PublicKey.(interface{ Equal(crypto.PublicKey) bool }).Equal(first.Certificate.Leaf.PublicKey) {
 		t.Fatal("the renewed material repeats the first chain or key")
 	}
 	served, err = manager.GetCertificate(nil)
@@ -71,13 +71,13 @@ func TestTLSMaterialFollowsTheStoredCertificate(t *testing.T) {
 	if err := writeRelayCertificate(t, otherCert, otherKey, baseDomain, notAfter); err != nil {
 		t.Fatalf("writeRelayCertificate(other) error = %v", err)
 	}
-	if _, err := manager.loadTLSMaterial(certFile, otherKey); err == nil {
+	if err := manager.loadTLSMaterial(certFile, otherKey); err == nil {
 		t.Fatal("loadTLSMaterial(mismatched pair) error = nil, want one")
 	}
 	if err := os.WriteFile(otherCert, []byte("not a certificate"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.loadTLSMaterial(otherCert, otherKey); err == nil {
+	if err := manager.loadTLSMaterial(otherCert, otherKey); err == nil {
 		t.Fatal("loadTLSMaterial(garbage) error = nil, want one")
 	}
 	if manager.TLSMaterial() != renewed {

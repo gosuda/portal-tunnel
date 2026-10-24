@@ -13,11 +13,10 @@ import (
 )
 
 // TLSMaterial is the relay certificate chain with its private key, as served.
-// A renewal replaces the whole value, so the chain, the key and the parsed
-// certificate always belong together.
+// A renewal replaces the whole value, so the chain PEM and the parsed
+// certificate with its key always belong together.
 type TLSMaterial struct {
 	CertPEM     []byte
-	KeyPEM      []byte
 	Certificate tls.Certificate
 }
 
@@ -128,24 +127,24 @@ func newTLSMaterial(certPEM, keyPEM []byte) (*TLSMaterial, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse relay api keypair: %w", err)
 	}
-	return &TLSMaterial{CertPEM: certPEM, KeyPEM: keyPEM, Certificate: certificate}, nil
+	return &TLSMaterial{CertPEM: certPEM, Certificate: certificate}, nil
 }
 
 // loadTLSMaterial reads the certificate pair and makes it the served material.
 // A pair that cannot be read or parsed leaves the previous material in place.
-func (m *Manager) loadTLSMaterial(certFile, keyFile string) (*TLSMaterial, error) {
+func (m *Manager) loadTLSMaterial(certFile, keyFile string) error {
 	certPEM, err := os.ReadFile(certFile)
 	if err != nil {
-		return nil, fmt.Errorf("read api tls certificate: %w", err)
+		return fmt.Errorf("read api tls certificate: %w", err)
 	}
 	keyPEM, err := os.ReadFile(keyFile)
 	if err != nil {
-		return nil, fmt.Errorf("read api tls private key: %w", err)
+		return fmt.Errorf("read api tls private key: %w", err)
 	}
 	material, err := newTLSMaterial(certPEM, keyPEM)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	m.serve(material)
-	return material, nil
+	return nil
 }
