@@ -160,6 +160,31 @@ func TestSigningKeyFollowsTheServedAndTheUnexpiredCertificates(t *testing.T) {
 	}
 }
 
+// A startup provision serves the issued pair and EnsureTLSMaterial then loads
+// the same pair from disk; the copy it replaces is not a replaced certificate.
+func TestServingTheSameCertificateAgainRetiresNothing(t *testing.T) {
+	t.Parallel()
+
+	const baseDomain = "portal.example.com"
+	keyDir := t.TempDir()
+	certFile, keyFile := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
+	manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	if err := writeRelayCertificate(t, certFile, keyFile, baseDomain, time.Now().Add(30*24*time.Hour)); err != nil {
+		t.Fatalf("writeRelayCertificate() error = %v", err)
+	}
+	for range 2 {
+		if err := manager.loadTLSMaterial(certFile, keyFile); err != nil {
+			t.Fatalf("loadTLSMaterial() error = %v", err)
+		}
+	}
+	if retired := manager.material.Load().retired; len(retired) != 0 {
+		t.Fatalf("serving the same certificate twice retired %d copies of it, want none", len(retired))
+	}
+}
+
 // The cache fallback reaches a tenant over TLS, and the tenant presents the
 // relay chain it pinned, which can be one a renewal replaced. The fallback must
 // trust exactly what SigningKey signs for: the served certificate and the
