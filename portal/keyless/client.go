@@ -293,9 +293,10 @@ func (c *Client) RelayCertPool() *x509.CertPool {
 	return pin.pool
 }
 
-// Close releases the remote signer backing the TLS server, and no chain is
-// pinned after it. It is safe to call more than once: the signer is closed
-// exactly once and every call returns the result of that first close attempt.
+// Close releases the remote signer of the pinned chain. The pinned chain stays
+// readable, but RefreshChain pins nothing new after Close, so no signer is left
+// unreleased. It is safe to call more than once: the signer is closed exactly
+// once and every call returns the result of that first close attempt.
 func (c *Client) Close() error {
 	if c == nil {
 		return nil
