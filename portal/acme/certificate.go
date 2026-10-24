@@ -58,9 +58,8 @@ func (m *Manager) shouldRenew(ctx context.Context) (bool, string, time.Duration)
 	domains := certificateDomains(m.cfg.BaseDomain)
 	now := time.Now().UTC()
 	var ari *certificate.RenewalInfoResponse
-	// A certificate that no longer covers the domains or has already expired
-	// is replaced without consulting ARI.
-	if certificateCoversDomains(cert, domains) && now.Before(cert.NotAfter) {
+	// A certificate that is no longer usable is replaced without consulting ARI.
+	if certificateUsable(cert, domains, now) {
 		client, clientErr := m.newClient(ctx)
 		if clientErr == nil {
 			ari, clientErr = client.Certificate.GetRenewalInfo(certificate.RenewalInfoRequest{Cert: cert})
@@ -88,10 +87,10 @@ func evaluateRenewal(cert *x509.Certificate, domains []string, ari *certificate.
 	if cert == nil {
 		return false, "", recheck
 	}
-	remaining := cert.NotAfter.Sub(now)
-	if !certificateCoversDomains(cert, domains) || remaining <= 0 {
+	if !certificateUsable(cert, domains, now) {
 		return true, "", recheck
 	}
+	remaining := cert.NotAfter.Sub(now)
 	if ari == nil || ari.SuggestedWindow.Start.IsZero() || !ari.SuggestedWindow.End.After(ari.SuggestedWindow.Start) {
 		return remaining < defaultRenewThreshold, "", recheck
 	}
@@ -135,6 +134,32 @@ func loadCertificate(certFile string) (*x509.Certificate, error) {
 		return nil, err
 	}
 	return utils.ParseCertificatePEM(certPEM)
+}
+
+// reusableCertificate returns the stored certificate of the configured CA
+// directory when it can be served at now. Each directory keeps its own
+// certificate, so the file of a CA used before may have expired while another
+// directory was configured.
+func (m *Manager) reusableCertificate(now time.Time) (certFile, keyFile string, ok bool) {
+	certFile, keyFile, err := m.TLSFiles()
+	if err != nil {
+		return "", "", false
+	}
+	cert, err := loadCertificate(certFile)
+	if err != nil {
+		return "", "", false
+	}
+	return certFile, keyFile, certificateUsable(cert, certificateDomains(m.cfg.BaseDomain), now)
+}
+
+// certificateUsable reports whether cert can be served at now: it covers
+// domains and has not expired. A stored certificate that is not usable is
+// replaced instead of reused. NotBefore is deliberately not checked: a
+// certificate that is not valid yet on this clock was issued moments ago, and
+// ordering another would not help but would count against the CA's
+// duplicate-certificate rate limit on every start.
+func certificateUsable(cert *x509.Certificate, domains []string, now time.Time) bool {
+	return certificateCoversDomains(cert, domains) && now.Before(cert.NotAfter)
 }
 
 func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
