@@ -90,13 +90,18 @@ const identityProofEnv = "test-proof-0123456789"
 func TestExposeIgnoresIdentityProofEnvWithoutIdentityHeaders(t *testing.T) {
 	t.Setenv("AUTH_IDENTITY_PROOF", identityProofEnv)
 
-	spec, err := exposeSpec(t, "3000")
-	if err != nil || spec.HTTP != nil {
-		t.Fatalf("portal expose 3000 with AUTH_IDENTITY_PROOF = %+v, %v; want a plain tunnel", spec.HTTP, err)
+	for _, args := range [][]string{{"3000"}, {"--tcp", "3000"}, {"--auth", "siwe", "3000"}} {
+		spec, err := exposeSpec(t, args...)
+		if err != nil {
+			t.Errorf("portal expose %v: %v", args, err)
+			continue
+		}
+		if spec.HTTP != nil && spec.HTTP.Auth != nil && spec.HTTP.Auth.IdentityProof != "" {
+			t.Errorf("portal expose %v carried AUTH_IDENTITY_PROOF into %+v", args, spec.HTTP.Auth)
+		}
 	}
-	spec, err = exposeSpec(t, "--auth", "siwe", "3000")
-	if err != nil || spec.HTTP.Auth.IdentityProof != "" {
-		t.Fatalf("portal expose --auth siwe with AUTH_IDENTITY_PROOF = %+v, %v; want the proof dropped", spec.HTTP.Auth, err)
+	if spec, _ := exposeSpec(t, "3000"); spec.HTTP != nil {
+		t.Errorf("AUTH_IDENTITY_PROOF alone enabled HTTP handling: %+v", spec.HTTP)
 	}
 }
 
