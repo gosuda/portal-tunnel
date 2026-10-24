@@ -398,10 +398,16 @@ Control endpoints:
 | `GET` | `/agent/status` | Bearer token or wallet session | Read agent and tunnel status |
 | `POST` | `/agent/shutdown` | Bearer token | Ask the agent to stop |
 | `POST` | `/agent/tunnels` | Bearer token | Add a tunnel |
-| `PATCH` | `/agent/tunnels/{id}` | Bearer token | Update metadata or max active relays |
+| `PATCH` | `/agent/tunnels/{id}` | Bearer token | Update metadata, max active relays, or application sign-in |
 | `DELETE` | `/agent/tunnels/{id}` | Bearer token | Delete a tunnel |
 | `POST` | `/agent/tunnels/{id}/relays` | Bearer token | Connect a relay |
 | `DELETE` | `/agent/tunnels/{id}/relays` | Bearer token | Disconnect a relay |
+
+`POST /agent/tunnels` accepts the `auth`, `auth_allowed_wallets`, `auth_identity_headers`, and `auth_oidc_*` fields, with the meaning they have in `config.toml`.
+
+`PATCH /agent/tunnels/{id}` changes the fields it names (`max_active_relays`, `metadata`, `auth`, `auth_allowed_wallets`, `auth_identity_headers`, `auth_oidc_issuer`, `auth_oidc_client_id`, `auth_oidc_client_secret`) and leaves the others as they are. `"auth": ""` turns sign-in off and clears the other `auth_*` settings, so it is refused when the same request sets one of them. To change the provider, send the new `auth` with the fields that fit it and clear the ones that do not (for example empty `auth_oidc_issuer`, `auth_oidc_client_id` and `auth_oidc_client_secret` when leaving OIDC); a combination the validators refuse changes nothing. `auth_oidc_client_secret` is write-only, and an empty value clears it. The resulting tunnel must pass the same validation as `config.toml`; if it does not, the request fails and neither the file nor the running tunnel changes. Changed sign-in settings restart that tunnel and no other, because the sign-in gate is built when the tunnel starts. It starts again from its saved settings: relays connected to it with `POST /agent/tunnels/{id}/relays` are not saved in `config.toml`, so it comes back without them. Metadata and `max_active_relays` update the running tunnel in place.
+
+`GET /agent/status` reports each tunnel's `auth`, `auth_allowed_wallets`, `auth_identity_headers`, `auth_oidc_issuer`, and `auth_oidc_client_id`, plus `auth_oidc_client_secret_set`, which says whether a client secret is configured; the secret itself is never returned. A wallet session, which can only read the status, gets it without `auth_allowed_wallets`; the field is also left out when the list is empty, so a wallet-session client cannot tell a hidden allowlist from an empty one. A running OIDC tunnel also reports the provider check it runs once when it starts: `auth_oidc_provider_checked` is true once the check has finished, and `auth_oidc_provider_error` says why the provider was not usable. The check is not repeated: once the provider recovers, visitors can sign in again, but the error stays in the status until the tunnel restarts.
 
 Wallet auth endpoints also exist under `/agent/auth/*`. Wallet-authenticated
 requests are read-only and can only call `/agent/status`; mutating operations

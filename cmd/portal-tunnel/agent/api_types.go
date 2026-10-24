@@ -31,9 +31,17 @@ type AgentTunnelStatus struct {
 	MaxActiveRelays     int                 `json:"max_active_relays,omitempty"`
 	Metadata            types.LeaseMetadata `json:"metadata"`
 	Auth                string              `json:"auth,omitempty"`
+	AuthAllowedWallets  []string            `json:"auth_allowed_wallets,omitempty"`
 	AuthIdentityHeaders bool                `json:"auth_identity_headers,omitempty"`
 	AuthOIDCIssuer      string              `json:"auth_oidc_issuer,omitempty"`
 	AuthOIDCClientID    string              `json:"auth_oidc_client_id,omitempty"`
+	// The client secret is write-only: status says whether one is configured.
+	AuthOIDCClientSecretSet bool `json:"auth_oidc_client_secret_set,omitempty"`
+	// The provider fields report the startup check of the OIDC provider of a
+	// running tunnel: both are empty until the check finishes, and the error
+	// stays empty while the provider is usable.
+	AuthOIDCProviderChecked bool   `json:"auth_oidc_provider_checked,omitempty"`
+	AuthOIDCProviderError   string `json:"auth_oidc_provider_error,omitempty"`
 	gateway.X402Config
 	HTTPRoutes []tunnel.HTTPRoute `json:"http_routes,omitempty"`
 	Relays     []AgentRelayStatus `json:"relays,omitempty"`
@@ -75,14 +83,29 @@ type AgentRelayRequest struct {
 	RelayURL string `json:"relay_url"`
 }
 
+// AgentTunnelUpdateRequest changes the fields it names; an omitted field stays
+// as it is. An empty Auth turns application sign-in off and clears the other
+// auth fields. The client secret is write-only: an empty value clears it.
 type AgentTunnelUpdateRequest struct {
-	MaxActiveRelays *int                  `json:"max_active_relays,omitempty"`
-	Metadata        *AgentMetadataRequest `json:"metadata,omitempty"`
+	MaxActiveRelays      *int                  `json:"max_active_relays,omitempty"`
+	Metadata             *AgentMetadataRequest `json:"metadata,omitempty"`
+	Auth                 *string               `json:"auth,omitempty"`
+	AuthAllowedWallets   *[]string             `json:"auth_allowed_wallets,omitempty"`
+	AuthIdentityHeaders  *bool                 `json:"auth_identity_headers,omitempty"`
+	AuthOIDCIssuer       *string               `json:"auth_oidc_issuer,omitempty"`
+	AuthOIDCClientID     *string               `json:"auth_oidc_client_id,omitempty"`
+	AuthOIDCClientSecret *string               `json:"auth_oidc_client_secret,omitempty"`
 }
 
 func (r AgentTunnelUpdateRequest) Empty() bool {
 	return r.MaxActiveRelays == nil &&
-		(r.Metadata == nil || r.Metadata.Empty())
+		(r.Metadata == nil || r.Metadata.Empty()) &&
+		r.Auth == nil &&
+		r.AuthAllowedWallets == nil &&
+		r.AuthIdentityHeaders == nil &&
+		r.AuthOIDCIssuer == nil &&
+		r.AuthOIDCClientID == nil &&
+		r.AuthOIDCClientSecret == nil
 }
 
 type AgentMetadataRequest struct {

@@ -1,10 +1,15 @@
 package agent
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -75,5 +80,76 @@ func TestControlHandlerRejectsUntrustedHostBeforeAuthorization(t *testing.T) {
 				t.Fatalf("status = %d, want forbidden", rec.Code)
 			}
 		})
+	}
+}
+
+// A wallet session is read-only, and any wallet may sign in while the dashboard
+// has no wallet allowlist, so it must not learn who may sign in to a tunnel.
+// The control token still sees the list.
+func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
+	tunnelCfg := testTunnel("web")
+	tunnelCfg.Auth = "credential"
+	tunnelCfg.AuthAllowedWallets = []string{"alice", "bob"}
+	m, _ := testManager(t, tunnelCfg)
+
+	auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := identity.ResolveSecp256k1Identity(strings.Repeat("0", 63) + "3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wallet := identity.NewLocalAuthority(resolved)
+	const domain = "127.0.0.1:4018"
+	now := time.Now().UTC()
+	challenge, err := auth.issueChallenge(
+		types.WalletAuthChallengeRequest{Address: wallet.Identity().Address},
+		domain, "http://"+domain+types.PathAgentAuthLogin, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := wallet.SignEthereumPersonalMessage(challenge.SIWEMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err := auth.login(types.WalletAuthLoginRequest{
+		ChallengeID:   challenge.ChallengeID,
+		SIWEMessage:   challenge.SIWEMessage,
+		SIWESignature: signature,
+	}, domain, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := &controlHandler{manager: m, token: "control-token", auth: auth, authority: domain, localhostAuthority: "localhost:4018"}
+	allowlist := func(authorize func(*http.Request)) []string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, types.PathAgentStatus, nil)
+		req.Host = domain
+		authorize(req)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Data AgentStatusResponse `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Data.Tunnels) != 1 {
+			t.Fatalf("status lists %d tunnels, want 1", len(body.Data.Tunnels))
+		}
+		return body.Data.Tunnels[0].AuthAllowedWallets
+	}
+
+	if got := allowlist(func(r *http.Request) { r.Header.Set("Authorization", "Bearer control-token") }); !slices.Equal(got, []string{"alice", "bob"}) {
+		t.Fatalf("control token sees allowlist %v, want [alice bob]", got)
+	}
+	if got := allowlist(func(r *http.Request) { r.AddCookie(&http.Cookie{Name: agentCookieName, Value: session}) }); len(got) != 0 {
+		t.Fatalf("wallet session sees allowlist %v, want none", got)
 	}
 }
