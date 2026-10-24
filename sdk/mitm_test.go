@@ -523,12 +523,13 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 		{
 			name:    "suppressed answer",
 			respond: func(t *testing.T, server net.Conn) { _ = server.Close() },
-			wantErr: "read channel binding response",
+			wantErr: "read channel binding answer",
 		},
 		{
 			name: "garbled signature",
 			respond: func(t *testing.T, server net.Conn) {
-				_, _ = server.Write(append(bytes.Clone(exporter), make([]byte, types.TLSChannelBindingSignatureSize)...))
+				answer := append([]byte(types.TLSChannelBindingAnswerTag), exporter...)
+				_, _ = server.Write(append(answer, make([]byte, types.TLSChannelBindingSignatureSize)...))
 			},
 			wantErr: "recover channel binding signer",
 		},
@@ -602,6 +603,46 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 			}
 		})
 	})
+}
+
+// A tunnel that does not offer binding, such as an older SDK or a cache
+// exposure, hands the request to its application. The application's reply is
+// no claim about the connection, so the client fails closed with an error that
+// says the tunnel did not answer, never with an exporter mismatch that would
+// accuse the relay.
+func TestTLSChannelBindingReportsATunnelThatDoesNotAnswer(t *testing.T) {
+	// What net/http writes for a request line it cannot parse.
+	const httpBadRequest = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n400 Bad Request"
+	for _, tc := range []struct {
+		name  string
+		reply func(request []byte) []byte
+	}{
+		{"HTTP server rejecting the request", func([]byte) []byte { return []byte(httpBadRequest) }},
+		{"application echoing the request", func(request []byte) []byte { return request }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				hostname := canonicalTestHostname(t, "0x1234567890abcdef1234567890abcdef12345678")
+				clientRaw, serverRaw := net.Pipe()
+				client := &testExporterConn{Conn: clientRaw, exported: bytes.Repeat([]byte{0x42}, 32)}
+				go func() {
+					request := make([]byte, types.TLSChannelBindingRequestSize)
+					if _, err := io.ReadFull(serverRaw, request); err == nil {
+						_, _ = serverRaw.Write(tc.reply(request))
+					}
+				}()
+
+				err := VerifyTLSChannelBinding(t.Context(), client, hostname)
+				if err == nil || !strings.Contains(err.Error(), "tunnel did not answer channel binding") || strings.Contains(err.Error(), "mismatch") {
+					t.Fatalf("VerifyTLSChannelBinding() = %v; want a tunnel that did not answer, not a mismatch", err)
+				}
+				if _, writeErr := client.Write([]byte("secret")); writeErr == nil {
+					t.Fatal("client connection remained writable after the unanswered exchange")
+				}
+				_ = serverRaw.Close()
+			})
+		})
+	}
 }
 
 // recordChannelBindingAnswer plays the honest tunnel for one earlier client

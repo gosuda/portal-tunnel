@@ -390,6 +390,9 @@ func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
 // same TLS session (Ec == Et) and signed (context || hostname || nonce || Et)
 // with the secp256k1 identity embedded in hostname. On any mismatch, it closes
 // conn immediately so no application bytes are ever sent over a MITMed stream.
+// A reply without the answer tag, such as one from a tunnel that does not
+// offer binding, also closes conn, with an error that says the tunnel did not
+// answer rather than an exporter mismatch.
 //
 // hostname must be the lease's canonical hostname exactly as the relay
 // publishes it: the tunnel signs that name, so another canonical form that
@@ -437,14 +440,27 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 		return fmt.Errorf("write channel binding request: %w", err)
 	}
 
-	var respFrame [types.TLSChannelBindingAnswerSize]byte
-	if _, err := io.ReadFull(conn, respFrame[:]); err != nil {
+	// Read the tag first: a tunnel that does not answer binding hands the
+	// request to its application, whose reply may be short and is no claim
+	// about this connection, so it must not be compared as an exporter.
+	var answer [types.TLSChannelBindingAnswerSize]byte
+	tag := answer[:len(types.TLSChannelBindingAnswerTag)]
+	if _, err := io.ReadFull(conn, tag); err != nil {
 		_ = conn.Close()
-		return fmt.Errorf("read channel binding response: %w", err)
+		return fmt.Errorf("read channel binding answer: %w", err)
+	}
+	if string(tag) != types.TLSChannelBindingAnswerTag {
+		_ = conn.Close()
+		return errors.New("tunnel did not answer channel binding")
+	}
+	signed := answer[len(tag):]
+	if _, err := io.ReadFull(conn, signed); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("read channel binding answer: %w", err)
 	}
 
-	tunnelExporter := respFrame[:types.TLSChannelBindingExporterSize]
-	compactSig := respFrame[types.TLSChannelBindingExporterSize:]
+	tunnelExporter := signed[:types.TLSChannelBindingExporterSize]
+	compactSig := signed[types.TLSChannelBindingExporterSize:]
 	if subtle.ConstantTimeCompare(clientExporter, tunnelExporter) != 1 {
 		_ = conn.Close()
 		return errors.New("tls channel binding exporter mismatch: relay terminated client tls")
@@ -539,15 +555,16 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 		return nil, fmt.Errorf("encode channel binding signature: %w", err)
 	}
 
-	var respFrame [types.TLSChannelBindingAnswerSize]byte
-	copy(respFrame[:types.TLSChannelBindingExporterSize], exported)
-	copy(respFrame[types.TLSChannelBindingExporterSize:], compactSig)
+	var answer [types.TLSChannelBindingAnswerSize]byte
+	n := copy(answer[:], types.TLSChannelBindingAnswerTag)
+	n += copy(answer[n:], exported)
+	copy(answer[n:], compactSig)
 	// The answer is small, but a client that never reads it must not hold the
 	// slot either. maybeHandleConn clears the deadline when it returns.
 	_ = conn.SetWriteDeadline(time.Now().Add(channelBindingRequestTimeout))
-	if _, err := conn.Write(respFrame[:]); err != nil {
+	if _, err := conn.Write(answer[:]); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("write channel binding response: %w", err)
+		return nil, fmt.Errorf("write channel binding answer: %w", err)
 	}
 	return wrapBufferedConn(conn, reader), nil
 }
