@@ -402,6 +402,30 @@ func TestStaleChainChecksOfOneBurstShareOneFetch(t *testing.T) {
 	}
 }
 
+// A check of the relay chain that is still running when the client is closed
+// must not pin a chain, because the signer built for it would never be released.
+func TestRefreshChainPinsNothingAfterClose(t *testing.T) {
+	t.Parallel()
+
+	issuer := newTestIssuer(t)
+	before, renewed := issuer.issue(t, 2), issuer.issue(t, 3)
+	relay := newRelayStandIn(t, before)
+	client := relay.newClient(t)
+	pinnedBefore := client.RelayCertPool()
+
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	relay.renew(renewed, false)
+
+	if changed, err := client.RefreshChain(context.Background()); err != nil || changed {
+		t.Fatalf("RefreshChain() after Close = %v, %v; want nothing pinned", changed, err)
+	}
+	if client.RelayCertPool() != pinnedBefore {
+		t.Fatal("RefreshChain() after Close replaced the pinned chain")
+	}
+}
+
 // The chain a tenant pins is the one it presents under its own hostname, so a
 // chain that does not cover it is never pinned, whatever the relay serves.
 func TestRefreshChainKeepsThePinOfAChainThatDoesNotCoverTheHostname(t *testing.T) {
