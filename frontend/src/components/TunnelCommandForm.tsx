@@ -630,7 +630,7 @@ function FullTunnelCommandForm({
       <div className="space-y-2">
         <div className="flex items-baseline justify-between gap-2">
           <p className={sectionLabelClass}>Who can open it?</p>
-          <span className={helpTextClass}>Default: anyone with the link</span>
+          <span className={helpTextClass}>Default: no sign-in</span>
         </div>
         <TunnelAuthSection
           auth={auth}

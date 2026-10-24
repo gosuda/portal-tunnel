@@ -52,9 +52,9 @@ interface MethodChoice {
 const METHODS: MethodChoice[] = [
   {
     id: "none",
-    label: "Anyone with the link",
-    short: "Anyone",
-    description: "No sign-in. Anyone who discovers the public address can open the app.",
+    label: "No sign-in",
+    short: "No sign-in",
+    description: "Anyone who discovers the public address can open the app.",
     icon: Globe,
   },
   {

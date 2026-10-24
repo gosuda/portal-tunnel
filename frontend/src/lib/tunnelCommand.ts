@@ -44,7 +44,7 @@ export interface TunnelCommandOptions {
   shareKind?: ShareKind;
   /** Local path passed to `--serve` when shareKind is "file". */
   servePath?: string;
-  /** Who may open the public URL; defaults to anyone. */
+  /** Who may open the public URL; defaults to no sign-in. */
   auth?: TunnelAuthOptions;
 }
 
