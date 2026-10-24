@@ -1,12 +1,28 @@
 ---
 title: Application Access Authentication
-description: Protect a tunnel with Portal credentials or SIWE wallet login.
+description: Let only chosen people open a tunnel, with Portal credential links, an Ethereum wallet, or OpenID Connect sign-in.
 ---
 
 # Application Access Authentication
 
-Portal supports three application access providers: Portal-native credentials,
-Sign-In with Ethereum (SIWE), and OpenID Connect (OIDC). SIWE is also used separately for:
+> **Maintainer note**: the method table, allowlist forms, session lifetime, secret handling, and verification steps on this page are mirrored in the agent skill reference at `plugins/portal-deploy/skills/portal-expose/references/application-auth.md`. When sign-in behavior changes, update both files. This page is the human-facing source; the reference is the agent-facing copy.
+
+Without `--auth`, anyone who learns a tunnel's hostname can open the app. Portal
+can ask visitors to sign in first. The check runs inside the `portal` process on
+your machine, not at the relay, so it also protects static sites and every
+routed path. Pick one method:
+
+| You want | Use | Visitors need | You need |
+|---|---|---|---|
+| A few named people, nothing to set up | [`--auth credential`](#portal-credentials) | A link you create with `portal auth issue` | Nothing |
+| People who own an Ethereum wallet | [`--auth siwe`](#siwe-application-access) | A browser wallet | Nothing |
+| People who sign in with Google, Microsoft, Keycloak, GitLab or another OpenID Connect provider | [`--auth oidc`](#openid-connect-oidc) | An account at that provider | An OAuth client registered at the provider |
+
+[Check that sign-in is on](#check-that-sign-in-is-on) once the tunnel runs. An AI
+coding agent that follows the `portal-expose` skill reads the same steps in
+[`application-auth.md`](https://github.com/gosuda/portal-tunnel/blob/main/plugins/portal-deploy/skills/portal-expose/references/application-auth.md).
+
+SIWE is also used separately for:
 
 - tunnel registration, signed automatically by the local tunnel identity
 - optional tunnel-side access control for exposed HTTP applications
@@ -43,8 +59,10 @@ portal auth issue myapp.example.com --subject alice --expires 720h
 
 The issue command loads the same existing `identity.json` used by the tunnel;
 it never creates a new identity. It prints both the signed credential and an
-HTTPS redeem URL. Send the URL to the intended user. The credential is carried
-in the URL fragment, so it is not sent to the relay or web server as part of
+HTTPS redeem URL. Send the URL to the intended user. A credential works only on
+the host it was issued for, so issue it for the host of the URL you share: the
+short URL when the relay granted it, otherwise the identity-bound one. The
+credential is carried in the URL fragment, so it is not sent to the relay or web server as part of
 the request URL. The tunnel-local login page submits it to the same-origin
 redeem endpoint and stores the resulting `Secure`, `HttpOnly`, `SameSite=Lax`
 session cookie.
@@ -53,7 +71,7 @@ Credentials contain a subject, tunnel identity, host, and expiry and are signed
 with a key derived locally from the tunnel identity. A session never outlives
 the credential it redeemed. The credential remains redeemable until expiry; operators can pass `--auth-allow <subject>`
 (or `auth_allowed_wallets` in `config.toml`) to restrict allowed credential subjects
-and revoke individual subjects immediately on both active sessions and bearer requests.
+and revoke individual subjects immediately on both active sessions and bearer requests. Keep that list non-empty: with no `--auth-allow`, every unexpired credential is accepted, so removing the last subject reopens access instead of ending it.
 
 API clients can present the same credential on each request:
 
@@ -73,7 +91,7 @@ portal expose 3000 --auth siwe --auth-allow 0x1234...
 ```
 
 With no `--auth-allow`, any wallet that proves control of its address can sign
-in. Repeat `--auth-allow` to restrict access to specific Ethereum addresses.
+in. Repeat `--auth-allow` to restrict access to specific Ethereum addresses; removing the last one empties the list and lets any wallet in again.
 Portal keeps the two-minute, single-use challenge and the 24-hour signed
 session local to the tunnel endpoint. The cookie is `Secure`, `HttpOnly`, and
 `SameSite=Lax`. Portal removes that session cookie before forwarding the
@@ -93,7 +111,7 @@ It cannot be combined with raw TCP/UDP or relay static caching.
 Use `--auth oidc` to authenticate visitors against any standard OpenID Connect provider (Google, Microsoft, GitLab, Authentik, Keycloak, Pocket ID) using the Authorization Code flow with PKCE (`S256`):
 
 ```bash
-export AUTH_OIDC_CLIENT_SECRET=...   # read from the environment so it stays out of the process list
+# AUTH_OIDC_CLIENT_SECRET is set in this shell first; see the prompt below
 portal expose 3000 \
   --name myapp \
   --auth oidc \
@@ -102,13 +120,43 @@ portal expose 3000 \
   --auth-allow alice@example.com
 ```
 
-Configure the identity provider's redirect URI as `https://<tunnel-host>/_portal/auth/callback`. Portal verifies the ID token against the provider's `.well-known/openid-configuration` and `jwks_uri` and enforces `--auth-allow` on login and on every subsequent session request. A session is bound to the issuer and client ID that created it, so changing `--auth-oidc-issuer` or `--auth-oidc-client-id` signs every visitor out; rotating the client secret does not.
+Configure the identity provider's redirect URI as `https://<tunnel-host>/_portal/auth/callback`. Portal builds it from the host the visitor opened, so register it for every host visitors use: the short `<name>.<relay-domain>` URL and the identity-bound one, on every relay the tunnel is published on. Pinning one relay with `--relays <url> --discovery=false` keeps that list short. Portal verifies the ID token against the provider's `.well-known/openid-configuration` and `jwks_uri` and enforces `--auth-allow` on login and on every subsequent session request. A session is bound to the issuer and client ID that created it, so changing `--auth-oidc-issuer` or `--auth-oidc-client-id` signs every visitor out; rotating the client secret does not.
 
 `--auth-allow` is required with `--auth oidc`: an identity provider authenticates accounts it does not restrict to your application, so without an allowlist every one of them would pass, and Portal refuses to start. It accepts an email address, an `@example.com` domain (that exact domain only, not its subdomains), or a `sub:<subject>` entry for the provider's opaque `sub` claim. Email and domain entries match only when the ID token carries `email_verified: true`; a provider that omits the claim, or one whose `sub` is not an email, can be allowed by `sub:` only. A `sub` claim value can never satisfy an email or domain entry, so an email-shaped `sub` cannot impersonate a verified-email allowlist entry.
 
 Email and domain entries are compared in lowercase and must be ASCII, so write an internationalized domain in punycode. A `sub:` entry is compared exactly, including case, because the provider's `sub` is a case-sensitive identifier: `sub:Alice` does not allow the subject `alice`.
 
 An OIDC session lasts as long as the ID token, but never less than 15 minutes, so a short-lived token does not send the visitor through the provider again at once, and never more than 24 hours. Revoking a principal takes effect on the next request whatever the session lifetime, because `--auth-allow` is checked every time.
+
+Pass the client secret as `AUTH_OIDC_CLIENT_SECRET`, as above, so it stays out of the process list. Typing the secret after `export` saves it in the shell history; reading it at a prompt avoids that. Run these lines in the same shell session that then starts `portal expose`. If you press Ctrl-C at the Linux and macOS prompt, run `stty echo` to see what you type again.
+
+Linux and macOS (bash, zsh):
+
+```bash
+printf 'OIDC client secret: '; stty -echo; read -r AUTH_OIDC_CLIENT_SECRET; stty echo; echo; export AUTH_OIDC_CLIENT_SECRET
+```
+
+Windows PowerShell:
+
+```powershell
+$secret = Read-Host 'OIDC client secret' -AsSecureString; $env:AUTH_OIDC_CLIENT_SECRET = [System.Net.NetworkCredential]::new('', $secret).Password
+```
+
+At start Portal fetches the provider's discovery document and keys once and logs `application auth provider is not usable` if that fails; the tunnel keeps running and visitors can sign in once the provider is reachable.
+
+## Check That Sign-In Is On
+
+An unauthenticated `GET` or `HEAD` request is sent to the login page, and any
+other method is refused:
+
+```bash
+curl -sI https://myapp.example.com/            # 303, Location: /_portal/auth/login?next=%2F
+curl -s -X POST https://myapp.example.com/     # 401 {"error":"authentication required"}
+```
+
+A `200` means the gate is not on: check that `--auth` is on the command you ran.
+With OIDC, use `GET` for `/_portal/auth/login`, which answers `303` to the
+provider; a `HEAD` request is refused with `405`.
 
 ## Agent Wallet Status Access
 
