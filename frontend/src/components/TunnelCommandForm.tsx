@@ -483,11 +483,9 @@ function FullTunnelCommandForm({
     setRelayUrls((prev) => prev.filter((candidate) => candidate !== url));
   };
 
-  const sectionLabelClass = isTerminal
-    ? "text-sm font-medium text-slate-200"
-    : "text-sm font-medium text-foreground dark:text-zinc-100";
+  // Shared text and input styles come from the table; the classes below are
+  // this form's own layout.
   const formStyles = TUNNEL_FORM_STYLES[theme];
-  const helpTextClass = formStyles.help;
   const inlineFieldClass = isTerminal
     ? "flex items-center overflow-hidden rounded-lg border border-white/10 bg-white/5"
     : "flex items-center overflow-hidden rounded-md border border-border/80 bg-secondary/55 focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30 dark:border-white/10 dark:bg-secondary/60";
@@ -497,7 +495,6 @@ function FullTunnelCommandForm({
   const inlineInputClass = isTerminal
     ? "h-10 border-0 bg-transparent px-3 text-sm text-white placeholder:text-slate-500 shadow-none focus-visible:ring-0"
     : "h-9 border-0 bg-transparent px-3 text-sm font-semibold text-foreground placeholder:text-text-muted shadow-none focus-visible:ring-0 dark:text-zinc-100 dark:placeholder:text-zinc-500";
-  const advancedInputClass = formStyles.input;
   const osGroupClass = isTerminal
     ? "flex rounded-lg bg-white/8 p-1"
     : "flex rounded-md bg-border p-1 dark:bg-secondary/60";
@@ -522,7 +519,7 @@ function FullTunnelCommandForm({
   return (
     <div className={cn("space-y-4 py-1", className)}>
       <div className="space-y-2">
-        <label className={sectionLabelClass}>Platform</label>
+        <label className={formStyles.section}>Platform</label>
         <div className={osGroupClass}>
           <button
             type="button"
@@ -543,7 +540,7 @@ function FullTunnelCommandForm({
 
       <div className="space-y-2">
         <div className="flex items-center gap-2">
-          <label htmlFor={`${inputId}-host`} className={sectionLabelClass}>
+          <label htmlFor={`${inputId}-host`} className={formStyles.section}>
             Share
           </label>
           {target.trim() !== "" && (
@@ -572,7 +569,7 @@ function FullTunnelCommandForm({
             className={inlineInputClass}
           />
         </div>
-        <p className={helpTextClass}>
+        <p className={formStyles.help}>
           Paste what you want to share: a local port (3000), a running URL
           (http://localhost:3000), or a file path
           (file:///Users/me/site/index.html). File paths are served as a static
@@ -583,7 +580,7 @@ function FullTunnelCommandForm({
       <div className="space-y-2">
         <label
           htmlFor={`${inputId}-name`}
-          className={sectionLabelClass}
+          className={formStyles.section}
         >
           Service Name
         </label>
@@ -598,11 +595,11 @@ function FullTunnelCommandForm({
             className={inlineInputClass}
           />
         </div>
-        <p className={helpTextClass}>A unique identifier for your tunnel (optional)</p>
+        <p className={formStyles.help}>A unique identifier for your tunnel (optional)</p>
       </div>
 
       <div className="space-y-2">
-        <label className={sectionLabelClass}>
+        <label className={formStyles.section}>
           Relay URLs
         </label>
         <ChipField
@@ -627,15 +624,15 @@ function FullTunnelCommandForm({
             />
           ))}
         />
-        <p className={helpTextClass}>
+        <p className={formStyles.help}>
           Press Enter to add. Multiple relay servers for redundancy.
         </p>
       </div>
 
       <div className="space-y-2">
         <div className="flex items-baseline justify-between gap-2">
-          <p className={sectionLabelClass}>Who can open it?</p>
-          <span className={helpTextClass}>Default: no sign-in</span>
+          <p className={formStyles.section}>Who can open it?</p>
+          <span className={formStyles.help}>Default: no sign-in</span>
         </div>
         <TunnelAuthSection
           auth={auth}
@@ -650,7 +647,7 @@ function FullTunnelCommandForm({
       </div>
 
       <div className="space-y-2">
-        <label className={sectionLabelClass}>
+        <label className={formStyles.section}>
           Generated Command
         </label>
         <div>
@@ -725,7 +722,7 @@ function FullTunnelCommandForm({
                   <span>
                     Enable UDP transport
                     {udpBlocked && (
-                      <span className={cn("block", helpTextClass)}>
+                      <span className={cn("block", formStyles.help)}>
                         Not available with sign-in: Portal can only check
                         visitors on web traffic.
                       </span>
@@ -740,9 +737,9 @@ function FullTunnelCommandForm({
                       value={udpPort}
                       onChange={(event) => setUDPPort(event.target.value)}
                       placeholder={target.trim() || DEFAULT_HOST}
-                      className={advancedInputClass}
+                      className={formStyles.input}
                     />
-                    <p className={helpTextClass}>
+                    <p className={formStyles.help}>
                       Local UDP port to forward. Defaults to the same as Host.
                     </p>
                   </div>
@@ -762,7 +759,7 @@ function FullTunnelCommandForm({
                   value={thumbnailURL}
                   onChange={(event) => setThumbnailURL(event.target.value)}
                   placeholder="https://cdn.example.com/thumb.png"
-                  className={advancedInputClass}
+                  className={formStyles.input}
                 />
                 {normalizedThumbnailURL && (
                   <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border border-border bg-background dark:border-white/10 dark:bg-background">

@@ -4,10 +4,14 @@ import { cn } from "@/lib/utils";
 
 export type TunnelFormTheme = "light" | "terminal";
 
-/** The classes the tunnel command forms share, per theme. */
+/**
+ * The classes the tunnel command forms share, per theme. `section` heads a
+ * part of the dialog; `label` names a field inside one.
+ */
 export const TUNNEL_FORM_STYLES = {
   light: {
     help: "text-xs leading-5 text-muted-foreground dark:text-zinc-500",
+    section: "text-sm font-medium text-foreground dark:text-zinc-100",
     label: "text-xs font-medium text-foreground dark:text-zinc-200",
     strong: "text-foreground dark:text-zinc-100",
     input:
@@ -30,6 +34,7 @@ export const TUNNEL_FORM_STYLES = {
   },
   terminal: {
     help: "text-xs text-slate-400",
+    section: "text-sm font-medium text-slate-200",
     label: "text-xs font-medium text-slate-200",
     strong: "text-slate-100",
     input:
