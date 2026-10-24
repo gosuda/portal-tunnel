@@ -175,13 +175,15 @@ func (m agentDashboardModel) applySettingsEdit() (tea.Model, tea.Cmd) {
 	})
 }
 
-func (m agentDashboardModel) renderSettingsSection(pane *agentDashboardView, width, height int, tunnel AgentTunnelStatus) {
-	if height <= 0 {
-		return
-	}
-	startLine := len(pane.lines)
+func (m agentDashboardModel) renderSettingsSection(width, rows int) agentDashboardView {
 	th := &m.theme
-	pane.addSectionTitle(th, width, agentDashboardPaneSettings, "Settings", m.activePane == agentDashboardPaneSettings)
+	var pane agentDashboardView
+	tunnel, ok := m.selectedTunnelStatus()
+	if !ok {
+		pane.addStyled(width, th.muted, "select a tunnel")
+		return pane
+	}
+
 	applyLabel := "Apply"
 	settingsChanged := m.settingsChanged(tunnel)
 	if m.settingsEditTunnelID == tunnel.ID && !settingsChanged {
@@ -190,14 +192,23 @@ func (m agentDashboardModel) renderSettingsSection(pane *agentDashboardView, wid
 	pane.addButtons(th, width,
 		agentDashboardButton{label: applyLabel, action: agentDashboardActionApplySettings, disabled: !settingsChanged},
 	)
-	if len(pane.lines)-startLine >= height {
-		return
-	}
 
-	m.renderSettingsInputRows(pane, width, height, startLine, tunnel)
+	var body agentDashboardView
+	m.renderSettingsInputRows(&body, width, tunnel)
+	focus, bodyRows := 0, 0
+	if m.activePane == agentDashboardPaneSettings {
+		focus = m.settingsFocus
+	}
+	if rows > 0 {
+		bodyRows = max(1, rows-len(pane.lines))
+	}
+	pane.addView(body.window(focus, bodyRows))
+	return pane
 }
 
-func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, width, height, startLine int, tunnel AgentTunnelStatus) {
+// renderSettingsInputRows draws one line per input, in field order, followed by
+// the read-only details.
+func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, width int, tunnel AgentTunnelStatus) {
 	th := &m.theme
 	rows := []struct {
 		label string
@@ -212,16 +223,10 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 		{label: "Hidden", input: m.metadataHide, field: agentDashboardSettingsFieldHide},
 	}
 	for _, row := range rows {
-		if len(pane.lines)-startLine >= height {
-			return
-		}
-		pane.addInputRow(th, width, row.label, row.input, agentDashboardActionFocusSettingsField, row.field, m.settingsFocus == row.field)
+		focused := m.activePane == agentDashboardPaneSettings && m.settingsFocus == row.field
+		pane.addInputRow(th, width, row.label, row.input, agentDashboardActionFocusSettingsField, row.field, focused)
 	}
-
-	if len(pane.lines)-startLine >= height {
-		return
-	}
-	pane.addMeta(th, width, 0, "Discovery", strconv.FormatBool(tunnel.Discovery))
+	pane.addMeta(th, width, agentDashboardDetailLabelWidth, 0, "Discovery", strconv.FormatBool(tunnel.Discovery))
 
 	paidRouteCount := 0
 	for _, route := range tunnel.HTTPRoutes {
@@ -233,33 +238,18 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 	if payTo == "" && len(tunnel.HTTPRoutes) == 0 {
 		return
 	}
-	if len(pane.lines)-startLine >= height {
-		return
-	}
 	pane.addLine("")
-	if len(pane.lines)-startLine >= height {
-		return
-	}
 	pane.addStyled(width, th.muted, "Payments")
 	if payTo != "" {
-		if len(pane.lines)-startLine >= height {
-			return
-		}
-		pane.addMeta(th, width, 0, "Pay To", payTo)
+		pane.addMeta(th, width, agentDashboardDetailLabelWidth, 0, "Pay To", payTo)
 	}
 	if payTo != "" || paidRouteCount > 0 {
-		if len(pane.lines)-startLine >= height {
-			return
-		}
-		pane.addMeta(th, width, 0, "Network", agentDashboardX402Network(tunnel.Network, tunnel.Testnet))
+		pane.addMeta(th, width, agentDashboardDetailLabelWidth, 0, "Network", agentDashboardX402Network(tunnel.Network, tunnel.Testnet))
 	}
-	if strings.TrimSpace(tunnel.Asset) != "" && len(pane.lines)-startLine < height {
-		pane.addMeta(th, width, 0, "Asset", tunnel.Asset)
+	if strings.TrimSpace(tunnel.Asset) != "" {
+		pane.addMeta(th, width, agentDashboardDetailLabelWidth, 0, "Asset", tunnel.Asset)
 	}
 	if len(tunnel.HTTPRoutes) == 0 {
-		if len(pane.lines)-startLine >= height {
-			return
-		}
 		pane.addStyled(width, th.muted, "no routed HTTP paths")
 		return
 	}
@@ -269,16 +259,13 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 		if shown >= 4 {
 			break
 		}
-		if len(pane.lines)-startLine >= height {
-			return
-		}
 		pane.addStyled(width, th.text, agentDashboardHTTPRouteSummary(route))
 		shown++
 	}
-	if len(tunnel.HTTPRoutes) > shown && len(pane.lines)-startLine < height {
+	if len(tunnel.HTTPRoutes) > shown {
 		pane.addStyled(width, th.muted, fmt.Sprintf("+%d more routes", len(tunnel.HTTPRoutes)-shown))
 	}
-	if paidRouteCount == 0 && len(pane.lines)-startLine < height {
+	if paidRouteCount == 0 {
 		pane.addStyled(width, th.muted, "no paid routes")
 	}
 }

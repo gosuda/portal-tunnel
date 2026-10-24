@@ -35,18 +35,47 @@ var agentDashboardPalettes = map[string]agentDashboardPalette{
 
 // agentDashboardTerminal is what the terminal environment allows.
 type agentDashboardTerminal struct {
-	color bool // NO_COLOR is not set
+	unicode bool // box-drawing characters are safe to print
+	color   bool // NO_COLOR is not set
 }
 
-// detectAgentDashboardTerminal is the only place that reads the environment
-// for terminal capabilities.
+// detectAgentDashboardTerminal is the only place that reads TERM, the locale
+// variables and NO_COLOR.
 func detectAgentDashboardTerminal() agentDashboardTerminal {
-	return agentDashboardTerminal{color: os.Getenv("NO_COLOR") == ""}
+	term := os.Getenv("TERM")
+	return agentDashboardTerminal{
+		unicode: term != "dumb" && term != "linux" && localeIsUTF8(),
+		color:   os.Getenv("NO_COLOR") == "",
+	}
 }
 
-// agentDashboardTheme holds every color the dashboard draws with. Without
-// color every style is empty, so nothing but the text itself reaches the terminal.
+// localeIsUTF8 follows the POSIX precedence: the first of LC_ALL, LC_CTYPE and
+// LANG that is set decides, and an unset locale does not say UTF-8.
+func localeIsUTF8() bool {
+	for _, name := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		if value := strings.ToLower(os.Getenv(name)); value != "" {
+			return strings.Contains(value, "utf-8") || strings.Contains(value, "utf8")
+		}
+	}
+	return false
+}
+
+type agentDashboardGlyphs struct {
+	topLeft, topRight, bottomLeft, bottomRight string
+	horizontal, vertical, divider              string
+
+	ledLive, ledIdle, ledFailed, ledConnecting string
+
+	selected, unselected          string // row markers
+	buttonOpen, buttonClose       string
+	buttonOffOpen, buttonOffClose string
+	promptFocused, promptBlurred  string
+	activeOpen, activeClose       string // around the title of the active frame
+}
+
+// agentDashboardTheme holds every color and glyph the dashboard draws with.
 type agentDashboardTheme struct {
+	glyph agentDashboardGlyphs
 	color bool
 
 	text, muted, rule, bright, strong, selected, pending, failed lipgloss.Style
@@ -59,7 +88,7 @@ func newAgentDashboardTheme(name string, term agentDashboardTerminal) (agentDash
 		return agentDashboardTheme{}, fmt.Errorf("--theme %q: supported values are amber and green", name)
 	}
 
-	theme := agentDashboardTheme{color: term.color}
+	theme := agentDashboardTheme{glyph: agentDashboardGlyphSet(term.unicode), color: term.color}
 	if !term.color {
 		return theme, nil
 	}
@@ -73,6 +102,23 @@ func newAgentDashboardTheme(name string, term agentDashboardTerminal) (agentDash
 	theme.pending = fg(palette.pending)
 	theme.failed = fg(palette.failed)
 	return theme, nil
+}
+
+func agentDashboardGlyphSet(unicode bool) agentDashboardGlyphs {
+	glyphs := agentDashboardGlyphs{
+		topLeft: "+", topRight: "+", bottomLeft: "+", bottomRight: "+",
+		horizontal: "=", vertical: "|", divider: "-",
+		ledLive: "[*]", ledIdle: "[ ]", ledFailed: "[!]", ledConnecting: "[~]",
+		selected: ">", unselected: " ",
+		buttonOpen: "[ ", buttonClose: " ]", buttonOffOpen: "( ", buttonOffClose: " )",
+		promptFocused: "> ", promptBlurred: "  ",
+		activeOpen: "[ ", activeClose: " ]",
+	}
+	if unicode {
+		glyphs.topLeft, glyphs.topRight, glyphs.bottomLeft, glyphs.bottomRight = "╔", "╗", "╚", "╝"
+		glyphs.horizontal, glyphs.vertical, glyphs.divider = "═", "║", "─"
+	}
+	return glyphs
 }
 
 // newInput returns a text input drawn with the theme.

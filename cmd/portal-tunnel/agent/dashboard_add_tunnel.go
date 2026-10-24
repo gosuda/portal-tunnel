@@ -355,6 +355,7 @@ func (m agentDashboardModel) renderAddTunnelForm(pane *agentDashboardView, width
 		{label: "Max Relays", input: m.addMaxRelays, field: agentDashboardAddFieldMaxRelays},
 	}
 	for _, row := range rows {
-		pane.addInputRow(&m.theme, width, row.label, row.input, agentDashboardActionFocusAddTunnelField, row.field, m.addFocus == row.field)
+		focused := m.activePane == agentDashboardPaneTunnels && m.addFocus == row.field
+		pane.addInputRow(&m.theme, width, row.label, row.input, agentDashboardActionFocusAddTunnelField, row.field, focused)
 	}
 }

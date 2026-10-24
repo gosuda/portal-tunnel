@@ -14,10 +14,19 @@ import (
 )
 
 const (
-	agentDashboardMinRelayRows        = 5
-	agentDashboardSidebarGutter       = 2
+	agentDashboardSidebarGutter       = 1
 	agentDashboardSidebarWidth        = 32
 	agentDashboardTunnelInputMaxWidth = 80
+	agentDashboardFrameWidth          = 4  // columns the borders and one cell of padding on each side take
+	agentDashboardFrameHeight         = 2  // rows the top and bottom border take
+	agentDashboardMinPaneRows         = 3  // content rows every pane keeps, even when it is not the active one
+	agentDashboardLabelWidth          = 15 // input row label, colon included
+	agentDashboardMetaLabelWidth      = 10
+	// agentDashboardDetailLabelWidth lines read-only details up with the text of the input rows above them.
+	agentDashboardDetailLabelWidth = agentDashboardLabelWidth + 2
+	// agentDashboardInputChrome is what an input row spends besides its text
+	// area: the label, a space, the 2-cell prompt and the cursor cell.
+	agentDashboardInputChrome = agentDashboardLabelWidth + 4
 )
 
 type agentDashboardRegion struct {
@@ -49,14 +58,14 @@ func (m agentDashboardModel) mouseInSidebar(event tea.MouseEvent) bool {
 
 func (m *agentDashboardModel) clampSidebarScroll() {
 	_, _, sidebarWidth := agentDashboardColumnWidths(m.width)
-	m.sidebarScrollX = max(0, min(m.sidebarScrollX, max(0, m.sidebarContentWidth()-sidebarWidth)))
+	visible := sidebarWidth - agentDashboardFrameWidth
+	m.sidebarScrollX = max(0, min(m.sidebarScrollX, max(0, m.sidebarContentWidth()-visible)))
 }
 
 func (m agentDashboardModel) sidebarContentWidth() int {
 	configPath := strings.TrimSpace(m.status.ConfigPath)
 	configPath = cmp.Or(configPath, strings.TrimSpace(m.configPath))
-	contentWidth := lipgloss.Width("PORTAL")
-	contentWidth = max(contentWidth, agentDashboardMetaWidth(configPath))
+	contentWidth := agentDashboardMetaWidth(configPath)
 	contentWidth = max(contentWidth, agentDashboardMetaWidth(strings.TrimSpace(m.status.ControlAddr)))
 	contentWidth = max(contentWidth, agentDashboardMetaWidth(strconv.Itoa(len(m.status.Tunnels))))
 	if wallet := strings.TrimSpace(m.status.WalletAddress); wallet != "" {
@@ -65,87 +74,154 @@ func (m agentDashboardModel) sidebarContentWidth() int {
 	return contentWidth
 }
 
+// layout draws the title bar, the panes and the sidebar side by side, and an
+// error line when there is one.
 func (m agentDashboardModel) layout() agentDashboardView {
 	width := m.width
 	if width <= 0 {
 		width = 88
 	}
 	mainWidth, gutter, sidebarWidth := agentDashboardColumnWidths(width)
-	main := m.renderMainLayout(mainWidth)
-	sidebar := m.renderSidebar(sidebarWidth, m.height)
-	return agentDashboardJoinHorizontal(main, sidebar, mainWidth, gutter, width, m.height)
+
+	var status string
+	if m.err != nil && m.status.ControlAddr != "" {
+		status = m.theme.failed.Render(agentDashboardFit(fmt.Sprintf("%s Error: %v", m.theme.glyph.ledFailed, m.err), width))
+	}
+	bodyHeight := 0
+	if m.height > 0 {
+		bodyHeight = max(1, m.height-1)
+		if status != "" {
+			bodyHeight = max(1, bodyHeight-1)
+		}
+	}
+
+	var out agentDashboardView
+	out.addLine(m.renderTitleBar(width))
+	out.addView(agentDashboardJoinHorizontal(m.renderMain(mainWidth, bodyHeight), m.renderSidebar(sidebarWidth, bodyHeight), mainWidth, gutter, width, bodyHeight))
+	if status != "" {
+		out.addLine(status)
+	}
+	return out
 }
 
-func (m agentDashboardModel) renderMainLayout(width int) agentDashboardView {
-	bodyHeight := defaultDashboardBodyHeight(m.height)
+func (m agentDashboardModel) renderTitleBar(width int) string {
+	th := &m.theme
+	rule := th.glyph.horizontal
+	name := agentDashboardFit("PORTAL TUNNEL TERMINAL", max(1, width-4))
+	left := th.rule.Render(rule) + " " + th.strong.Render(name) + " "
+	right := " " + th.muted.Render("Agent "+types.ReleaseVersion) + " " + th.rule.Render(rule)
+	fill := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if fill < 1 {
+		right = ""
+		fill = width - lipgloss.Width(left)
+	}
+	return left + th.rule.Render(strings.Repeat(rule, max(0, fill))) + right
+}
 
-	var layout agentDashboardView
+// renderMain stacks the Tunnels, Settings and Relays panes in frames that
+// together fill height rows; height 0 gives every pane its natural size.
+func (m agentDashboardModel) renderMain(width, height int) agentDashboardView {
 	if m.err != nil && m.status.ControlAddr == "" {
-		layout.addStyled(width, m.theme.failed, fmt.Sprintf("Agent unavailable: %v", m.err))
-		layout.addLine("")
-		layout.addStyled(width, m.theme.text, "Start managed service: portal agent run --config "+m.configPath)
-		layout.addStyled(width, m.theme.text, "No service manager:   portal agent run --foreground --config "+m.configPath)
-		return layout
+		return m.renderUnavailable(width, height)
 	}
 
-	if m.err != nil {
-		layout.addStyled(width, m.theme.failed, fmt.Sprintf("Error: %v", m.err))
+	inner := width - agentDashboardFrameWidth
+	var want [agentDashboardPaneCount]int
+	for pane := range agentDashboardPaneCount {
+		want[pane] = len(m.renderPane(pane, inner, 0).lines)
 	}
-	layout.addLine("")
-	if m.height > 0 {
-		bodyHeight = max(1, m.height-len(layout.lines))
-	}
+	rows := agentDashboardPaneRows(height, want, m.activePane)
 
-	tunnels := m.renderTunnelsSection(width, m.tunnelsSectionHeight(bodyHeight))
-	layout.addView(tunnels)
-	layout.addLine("")
-	if m.height > 0 {
-		bodyHeight = max(1, m.height-len(layout.lines))
+	titles := [agentDashboardPaneCount]string{"TUNNELS", "SETTINGS", "RELAYS"}
+	var main agentDashboardView
+	for pane := range agentDashboardPaneCount {
+		y := len(main.lines)
+		x0, x1 := main.addFrame(&m.theme, titles[pane], pane == m.activePane, width, rows[pane], m.renderPane(pane, inner, rows[pane]))
+		main.regions = append(main.regions, agentDashboardRegion{x0: x0, x1: x1, y: y, action: agentDashboardActionSelectPane, pane: pane})
 	}
-	body := m.renderTunnelPane(width, bodyHeight)
-	layout.addView(body)
-	return layout
+	return main
+}
+
+// renderPane draws the content of a pane in at most rows lines; rows 0 means all of it.
+func (m agentDashboardModel) renderPane(pane agentDashboardPane, width, rows int) agentDashboardView {
+	switch pane {
+	case agentDashboardPaneSettings:
+		return m.renderSettingsSection(width, rows)
+	case agentDashboardPaneRelays:
+		return m.renderRelaysSection(width, rows)
+	default:
+		return m.renderTunnelsSection(width, rows)
+	}
+}
+
+// agentDashboardPaneRows divides height terminal rows between the panes. Every
+// pane keeps a few rows, the active pane then grows to the rows it wants, the
+// other panes share what is left a row at a time, and any excess goes to the
+// last pane so the column fills the body.
+func agentDashboardPaneRows(height int, want [agentDashboardPaneCount]int, active agentDashboardPane) [agentDashboardPaneCount]int {
+	if height <= 0 {
+		return want
+	}
+	var rows [agentDashboardPaneCount]int
+	free := height - agentDashboardFrameHeight*int(agentDashboardPaneCount)
+	for pane := range agentDashboardPaneCount {
+		rows[pane] = min(want[pane], agentDashboardMinPaneRows)
+		free -= rows[pane]
+	}
+	grow := max(0, min(want[active]-rows[active], free))
+	rows[active] += grow
+	free -= grow
+	for grown := true; grown && free > 0; {
+		grown = false
+		for pane := range agentDashboardPaneCount {
+			if rows[pane] < want[pane] && free > 0 {
+				rows[pane]++
+				free--
+				grown = true
+			}
+		}
+	}
+	rows[agentDashboardPaneCount-1] += max(0, free)
+	return rows
+}
+
+func (m agentDashboardModel) renderUnavailable(width, height int) agentDashboardView {
+	th := &m.theme
+	inner := width - agentDashboardFrameWidth
+	var content agentDashboardView
+	content.addStyled(inner, th.failed, fmt.Sprintf("%s Agent unavailable: %v", th.glyph.ledFailed, m.err))
+	content.addLine("")
+	content.addStyled(inner, th.text, "Start managed service: portal agent run --config "+m.configPath)
+	content.addStyled(inner, th.text, "No service manager:   portal agent run --foreground --config "+m.configPath)
+
+	var out agentDashboardView
+	out.addFrame(th, "AGENT", true, width, max(0, height-agentDashboardFrameHeight), content)
+	return out
 }
 
 func (m agentDashboardModel) renderSidebar(width, height int) agentDashboardView {
 	th := &m.theme
-	var pane agentDashboardView
-	pane.addStyled(width, th.rule, strings.Repeat("/", width))
-	pane.addStyled(width, th.strong, "PORTAL")
-	pane.addStyled(width, th.muted, "Agent "+types.ReleaseVersion)
-	pane.addStyled(width, th.rule, strings.Repeat("-", width))
+	inner := width - agentDashboardFrameWidth
+	var content agentDashboardView
 
 	configPath := strings.TrimSpace(m.status.ConfigPath)
 	configPath = cmp.Or(configPath, strings.TrimSpace(m.configPath))
-	pane.addSidebarTitle(th, width, "Runtime")
-	pane.addMeta(th, width, m.sidebarScrollX, "Config", configPath)
-	pane.addMeta(th, width, m.sidebarScrollX, "Control", strings.TrimSpace(m.status.ControlAddr))
-	pane.addMeta(th, width, m.sidebarScrollX, "Tunnels", strconv.Itoa(len(m.status.Tunnels)))
+	content.addMeta(th, inner, agentDashboardMetaLabelWidth, m.sidebarScrollX, "Config", configPath)
+	content.addMeta(th, inner, agentDashboardMetaLabelWidth, m.sidebarScrollX, "Control", strings.TrimSpace(m.status.ControlAddr))
+	content.addMeta(th, inner, agentDashboardMetaLabelWidth, m.sidebarScrollX, "Tunnels", strconv.Itoa(len(m.status.Tunnels)))
 	if wallet := strings.TrimSpace(m.status.WalletAddress); wallet != "" {
-		pane.addMeta(th, width, m.sidebarScrollX, "Wallet", wallet)
+		content.addMeta(th, inner, agentDashboardMetaLabelWidth, m.sidebarScrollX, "Wallet", wallet)
+	}
+	content.addLine("")
+	content.addSidebarTitle(th, inner, "Legend")
+	for _, state := range []string{"running", "starting", "stopped", "error"} {
+		led, style := agentDashboardTunnelLook(th, state)
+		content.addStyled(inner, style, led+" "+state)
 	}
 
-	pane.clip(height)
-	return pane
-}
-
-func (m agentDashboardModel) renderTunnelPane(width, height int) agentDashboardView {
-	var pane agentDashboardView
-	tunnel, ok := m.selectedTunnelStatus()
-	if !ok {
-		pane.addSectionTitle(&m.theme, width, agentDashboardPaneSettings, "Settings", m.activePane == agentDashboardPaneSettings)
-		pane.addStyled(width, m.theme.muted, "select a tunnel")
-		pane.clip(height)
-		return pane
-	}
-
-	m.renderSettingsSection(&pane, width, height, tunnel)
-	pane.addLine("")
-	relayLimit := m.relayRowsForHeight(tunnel, max(1, height-len(pane.lines)))
-	m.renderRelaysSection(&pane, width, relayLimit, tunnel)
-	pane.addLine("")
-	pane.clip(height)
-	return pane
+	var out agentDashboardView
+	out.addFrame(th, "RUNTIME", false, width, max(0, height-agentDashboardFrameHeight), content)
+	return out
 }
 
 func (v *agentDashboardView) addLine(line string) {
@@ -160,42 +236,17 @@ func (v *agentDashboardView) addSidebarTitle(th *agentDashboardTheme, width int,
 	label := agentDashboardFit(strings.TrimSpace(title), width)
 	line := th.strong.Render(label)
 	if ruleWidth := width - lipgloss.Width(label); ruleWidth > 0 {
-		line += th.rule.Render(strings.Repeat("-", ruleWidth))
+		line += th.rule.Render(strings.Repeat(th.glyph.divider, ruleWidth))
 	}
 	v.addLine(line)
 }
 
-func (v *agentDashboardView) addMeta(th *agentDashboardTheme, width, offset int, label, value string) {
+func (v *agentDashboardView) addMeta(th *agentDashboardTheme, width, labelWidth, offset int, label, value string) {
 	value = strings.TrimSpace(value)
 	value = cmp.Or(value, "-")
-	labelText := th.muted.Render(agentDashboardCell(label+":", 9))
-	valueText := th.text.Render(agentDashboardWindow(value, offset, max(1, width-10)))
+	labelText := th.muted.Render(agentDashboardCell(label+":", labelWidth))
+	valueText := th.text.Render(agentDashboardWindow(value, offset, max(1, width-labelWidth-1)))
 	v.addLine(labelText + " " + valueText)
-}
-
-func (v *agentDashboardView) addSectionTitle(th *agentDashboardTheme, width int, pane agentDashboardPane, title string, active bool) {
-	if width <= 0 {
-		width = 1
-	}
-	style := th.strong
-	if active {
-		style = th.selected
-	}
-	label := agentDashboardFit(" "+title+" ", width)
-	labelWidth := lipgloss.Width(label)
-	line := style.Render(label)
-	if ruleWidth := width - labelWidth; ruleWidth > 0 {
-		line += th.rule.Render(strings.Repeat("-", ruleWidth))
-	}
-	y := len(v.lines)
-	v.lines = append(v.lines, line)
-	v.regions = append(v.regions, agentDashboardRegion{
-		x0:     0,
-		x1:     min(labelWidth, width),
-		y:      y,
-		action: agentDashboardActionSelectPane,
-		pane:   pane,
-	})
 }
 
 func (v *agentDashboardView) addButtons(th *agentDashboardTheme, width int, buttons ...agentDashboardButton) {
@@ -211,6 +262,62 @@ func (v *agentDashboardView) addView(child agentDashboardView) {
 		region.y += startY
 		v.regions = append(v.regions, region)
 	}
+}
+
+// addFrame draws content in a double-line box of the given outer width with the
+// title in the top border, and returns the columns the title spans. The box is
+// rows content lines tall, or as tall as the content when rows is 0.
+func (v *agentDashboardView) addFrame(th *agentDashboardTheme, title string, active bool, width, rows int, content agentDashboardView) (int, int) {
+	g := th.glyph
+	inner := max(0, width-agentDashboardFrameWidth)
+	edge := max(0, width-2) // between the corners
+	border, labelStyle, open, closing := th.rule, th.muted, " ", " "
+	if active {
+		border, labelStyle, open, closing = th.strong, th.selected, g.activeOpen, g.activeClose
+	}
+	label := open + agentDashboardFit(title, max(1, edge-1-lipgloss.Width(g.activeOpen+g.activeClose))) + closing
+	labelWidth := lipgloss.Width(label)
+	v.addLine(border.Render(g.topLeft+g.horizontal) + labelStyle.Render(label) +
+		border.Render(strings.Repeat(g.horizontal, max(0, edge-1-labelWidth))+g.topRight))
+
+	if rows <= 0 {
+		rows = len(content.lines)
+	}
+	content = content.window(0, rows)
+	startY := len(v.lines)
+	side := border.Render(g.vertical)
+	for i := range rows {
+		line := ""
+		if i < len(content.lines) {
+			line = content.lines[i]
+		}
+		v.addLine(side + " " + agentDashboardPadLine(line, inner) + " " + side)
+	}
+	for _, region := range content.regions {
+		region.x0 += agentDashboardFrameWidth / 2
+		region.x1 += agentDashboardFrameWidth / 2
+		region.y += startY
+		v.regions = append(v.regions, region)
+	}
+	v.addLine(border.Render(g.bottomLeft + strings.Repeat(g.horizontal, edge) + g.bottomRight))
+	return 2, 2 + labelWidth
+}
+
+// window returns at most rows lines of the view, scrolled so that the focus
+// line is visible.
+func (v agentDashboardView) window(focus, rows int) agentDashboardView {
+	if rows <= 0 || rows >= len(v.lines) {
+		return v
+	}
+	start, end := agentDashboardRowWindow(focus, len(v.lines), rows)
+	out := agentDashboardView{lines: v.lines[start:end]}
+	for _, region := range v.regions {
+		if region.y >= start && region.y < end {
+			region.y -= start
+			out.regions = append(out.regions, region)
+		}
+	}
+	return out
 }
 
 func agentDashboardJoinHorizontal(left, right agentDashboardView, leftWidth, gutter, totalWidth, height int) agentDashboardView {
@@ -250,10 +357,14 @@ func agentDashboardJoinHorizontal(left, right agentDashboardView, leftWidth, gut
 	return out
 }
 
+// addClickRow adds a row that fills the width and acts on click. A line that is
+// too wide is truncated; the caller keeps any leading space of a line that fits.
 func (v *agentDashboardView) addClickRow(line string, width int, style lipgloss.Style, action agentDashboardAction, tunnel, relay string) {
-	plain := agentDashboardFit(line, width)
+	if lipgloss.Width(line) > width {
+		line = agentDashboardFit(line, width)
+	}
 	y := len(v.lines)
-	v.lines = append(v.lines, style.Width(width).Render(plain))
+	v.lines = append(v.lines, style.Width(width).Render(line))
 	v.regions = append(v.regions, agentDashboardRegion{
 		x0:     0,
 		x1:     width,
@@ -269,10 +380,14 @@ func (v *agentDashboardView) addInputRow(th *agentDashboardTheme, width int, lab
 		width = 1
 	}
 	labelStyle := th.muted
+	// The input would shorten a placeholder that is too long with a non-ASCII ellipsis.
+	input.Placeholder = agentDashboardFit(input.Placeholder, input.Width-lipgloss.Width(input.Prompt))
+	input.Prompt = th.glyph.promptBlurred
 	if focused {
 		labelStyle = th.bright
+		input.Prompt = th.glyph.promptFocused
 	}
-	labelText := agentDashboardCell(label+":", 12)
+	labelText := agentDashboardCell(label+":", agentDashboardLabelWidth)
 	y := len(v.lines)
 	v.lines = append(v.lines, labelStyle.Render(labelText)+" "+input.View())
 	v.regions = append(v.regions, agentDashboardRegion{
@@ -282,20 +397,6 @@ func (v *agentDashboardView) addInputRow(th *agentDashboardTheme, width int, lab
 		action: action,
 		field:  field,
 	})
-}
-
-func (v *agentDashboardView) clip(height int) {
-	if height <= 0 || len(v.lines) <= height {
-		return
-	}
-	v.lines = v.lines[:height]
-	regions := v.regions[:0]
-	for _, region := range v.regions {
-		if region.y < height {
-			regions = append(regions, region)
-		}
-	}
-	v.regions = regions
 }
 
 func agentDashboardRenderButtons(th *agentDashboardTheme, width, y, x int, buttons ...agentDashboardButton) ([]string, []agentDashboardRegion) {
@@ -308,7 +409,11 @@ func agentDashboardRenderButtons(th *agentDashboardTheme, width, y, x int, butto
 	lineY := y
 	lineX := x
 	for i, button := range buttons {
-		plain := "[ " + button.label + " ]"
+		open, closing, style := th.glyph.buttonOpen, th.glyph.buttonClose, th.strong
+		if button.disabled {
+			open, closing, style = th.glyph.buttonOffOpen, th.glyph.buttonOffClose, th.muted
+		}
+		plain := open + button.label + closing
 		if lipgloss.Width(plain) > width {
 			plain = agentDashboardFit(plain, width)
 		}
@@ -328,10 +433,7 @@ func agentDashboardRenderButtons(th *agentDashboardTheme, width, y, x int, butto
 			line.WriteString(" ")
 			lineX++
 		}
-		style := th.strong
-		if button.disabled {
-			style = th.muted
-		} else {
+		if !button.disabled {
 			regions = append(regions, agentDashboardRegion{
 				x0:     lineX,
 				x1:     min(lineX+plainWidth, width),
@@ -364,18 +466,12 @@ func agentDashboardColumnWidths(width int) (int, int, int) {
 func agentDashboardMetaWidth(value string) int {
 	value = strings.TrimSpace(value)
 	value = cmp.Or(value, "-")
-	return 10 + lipgloss.Width(value)
+	return agentDashboardMetaLabelWidth + 1 + lipgloss.Width(value)
 }
 
-func defaultDashboardBodyHeight(height int) int {
-	bodyHeight := height - 8
-	if height <= 0 {
-		bodyHeight = 22
-	}
-	return max(bodyHeight, 1)
-}
-
-func agentDashboardRelayWindow(selected, total, rows int) (int, int) {
+// agentDashboardRowWindow picks the rows of a list of total rows that fit in
+// rows lines and keep the selected row visible, centered when it can be.
+func agentDashboardRowWindow(selected, total, rows int) (int, int) {
 	if total <= 0 || rows <= 0 {
 		return 0, 0
 	}
