@@ -51,8 +51,9 @@ func (m *Manager) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error)
 // SigningKey returns the private key of the certificate whose leaf is leafDER:
 // the one being served, or one served before a renewal for as long as it has
 // not expired. A visitor's browser trusts a certificate until it expires, so a
-// tenant still presenting it is signed for exactly that long and no longer.
-// Any other certificate gets nil.
+// tenant still presenting it is signed for exactly that long and no longer
+// (see serve for what that means after a revocation). Any other certificate
+// gets nil.
 func (m *Manager) SigningKey(leafDER []byte) crypto.Signer {
 	if m == nil {
 		return nil
@@ -78,6 +79,13 @@ func (t *TLSMaterial) holds(leafDER []byte) bool {
 
 // serve makes material the served certificate. The one it replaces stays
 // available to SigningKey; certificates that have expired are dropped.
+//
+// This is built for scheduled renewal, where the replaced certificate is still
+// valid and tenants still present it. It keeps the replaced key signing until
+// that certificate expires even when the renewal was meant to retire it, as
+// after a revocation or a key compromise. For a compromise, restart the relay:
+// the retired material lives in memory only, and the restart also drops every
+// lease, so tenants re-pin the chain on disk.
 func (m *Manager) serve(material *TLSMaterial) {
 	now := time.Now()
 	m.material.Update(func(served servedMaterial) servedMaterial {
