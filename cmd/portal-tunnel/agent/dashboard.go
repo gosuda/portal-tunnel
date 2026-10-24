@@ -95,15 +95,12 @@ type agentDashboardActionMsg struct {
 
 type agentDashboardTickMsg struct{}
 
-// RunDashboard runs the terminal dashboard until the user quits. themeName
-// selects the palette, amber or green; see ValidateDashboardTheme.
+// RunDashboard runs the terminal dashboard until the user quits. themeName is a
+// palette name the caller has already checked with ValidateDashboardTheme.
 func RunDashboard(configPath, stateDir, themeName string) error {
-	theme, err := newAgentDashboardTheme(themeName, detectAgentDashboardTerminal())
-	if err != nil {
-		return err
-	}
+	theme := newAgentDashboardTheme(themeName, detectAgentDashboardTerminal())
 	model := newAgentDashboardModel(configPath, stateDir, theme)
-	_, err = tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 

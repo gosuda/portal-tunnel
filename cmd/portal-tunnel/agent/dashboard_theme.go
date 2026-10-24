@@ -85,12 +85,9 @@ func ValidateDashboardTheme(name string) error {
 	return nil
 }
 
-func newAgentDashboardTheme(name string, term agentDashboardTerminal) (agentDashboardTheme, error) {
-	if err := ValidateDashboardTheme(name); err != nil {
-		return agentDashboardTheme{}, err
-	}
+// newAgentDashboardTheme builds the theme for a name ValidateDashboardTheme accepted.
+func newAgentDashboardTheme(name string, term agentDashboardTerminal) agentDashboardTheme {
 	palette := agentDashboardPalettes[name]
-
 	theme := agentDashboardTheme{glyph: agentDashboardGlyphSet(term.unicode)}
 	fg := func(color string) lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color(color)) }
 	theme.text = fg(palette.text)
@@ -101,7 +98,7 @@ func newAgentDashboardTheme(name string, term agentDashboardTerminal) (agentDash
 	theme.selected = fg(palette.onText).Background(lipgloss.Color(palette.text)).Bold(true)
 	theme.pending = fg(palette.pending)
 	theme.failed = fg(palette.failed)
-	return theme, nil
+	return theme
 }
 
 func agentDashboardGlyphSet(unicode bool) agentDashboardGlyphs {
