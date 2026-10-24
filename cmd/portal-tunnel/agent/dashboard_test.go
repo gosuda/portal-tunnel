@@ -447,6 +447,33 @@ func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
 	}
 }
 
+func TestDashboardDeleteQuestionIgnoresOtherClicks(t *testing.T) {
+	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	// The idle tunnel's first relay is not connected, so its Connect button can be clicked.
+	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()}, keyDown, keyDown, keyDown, keyDown)
+	asked, _ := press(model, keyF8)
+	if !strings.Contains(asked.View(), `Delete tunnel "idle"?`) {
+		t.Fatal("F8 should ask before deleting the idle tunnel")
+	}
+
+	clicked := make(map[agentDashboardAction]bool)
+	for _, region := range asked.layout().regions {
+		if region.action == agentDashboardActionConfirmDelete || region.action == agentDashboardActionCancelDelete {
+			continue
+		}
+		next, cmd := asked.Update(tea.MouseMsg{X: region.x0, Y: region.y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		if cmd != nil || next.View() != asked.View() {
+			t.Errorf("clicking %+v while the question is open changed the dashboard", region)
+		}
+		clicked[region.action] = true
+	}
+	for _, action := range []agentDashboardAction{agentDashboardActionSelectPane, agentDashboardActionConnectRelay} {
+		if !clicked[action] {
+			t.Fatalf("action %d has no clickable region, so this test would not cover it", action)
+		}
+	}
+}
+
 func TestDashboardMouseStillWorks(t *testing.T) {
 	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
