@@ -79,8 +79,8 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
 
 ## Common options
 
-- `--auth-identity-headers` passes the verified identity to the app as `X-Portal-User` (wallet address, credential subject, or `alice@example.com` / `sub:<id>` for OIDC) and `X-Portal-Auth` (`siwe`, `credential`, `oidc`). Portal strips any client-supplied copies. Tell the user the app may trust these headers only if it is reachable solely through Portal: bind it to loopback.
-- Sign-in cannot be combined with `--tcp`, `--udp` or `--cache`; the tunnel refuses to start. Portal serves its own pages under `/_portal/auth/`, so the app must not use that prefix.
+- `--auth-identity-headers` passes the verified identity to the app as `X-Portal-User` (wallet address, credential subject, or `alice@example.com` / `sub:<id>` for OIDC) and `X-Portal-Auth` (`siwe`, `credential`, `oidc`). Portal strips any client-supplied copies. Tell the user the app may trust these headers only when nothing but Portal can reach the app's port: binding the app to loopback keeps other machines out, but any other process on the same machine can still connect to that port and send forged headers.
+- Sign-in cannot be combined with `--tcp`, `--udp` or `--cache`; the tunnel refuses to start. Portal answers six exact paths itself and never forwards them to the app: `/_portal/auth/login`, `/_portal/auth/challenge`, `/_portal/auth/verify`, `/_portal/auth/redeem`, `/_portal/auth/callback` and `/_portal/auth/logout`. The app must not need those paths; other paths under `/_portal/auth/` reach it behind the sign-in check.
 - Sessions use a `Secure`, `HttpOnly` cookie that Portal removes before forwarding the request to the app.
 
 ## Persistent agent
