@@ -92,6 +92,11 @@ const EXPIRY_CHOICES = [
 
 const SELECTED = "border-primary bg-primary/10 ring-1 ring-primary";
 
+const PROVIDERS = [
+  { id: "google", label: "Google" },
+  { id: "other", label: "Another provider" },
+] as const;
+
 const ALLOW_COPY: Record<
   Exclude<TunnelAuthMethod, "none">,
   { label: string; requirement: string; placeholder: string; help: string }
@@ -157,42 +162,22 @@ export function TunnelAuthSection({
   theme,
   compact = false,
 }: TunnelAuthSectionProps) {
-  const groupId = useId();
   const s = TUNNEL_FORM_STYLES[theme];
   const patch = (next: Partial<TunnelAuthOptions>) =>
     onChange({ ...auth, ...next });
   // Each method reads its own kind of entry, so a list does not carry over.
-  const selectMethod = (method: TunnelAuthMethod) => {
-    if (method !== auth.method) {
-      patch({ method, allow: [] });
-    }
-  };
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (step === 0) {
-      return;
-    }
-    event.preventDefault();
-    const index = METHODS.findIndex((method) => method.id === auth.method);
-    const next = METHODS[(index + step + METHODS.length) % METHODS.length];
-    if (next) {
-      selectMethod(next.id);
-      document.getElementById(`${groupId}-${next.id}`)?.focus();
-    }
-  };
+  const methods = useRadioGroup(
+    METHODS.map((method) => method.id),
+    auth.method,
+    (method) => patch({ method, allow: [] })
+  );
 
   return (
     <div className="space-y-3">
       <div
         role="radiogroup"
         aria-label="Who can open it"
-        onKeyDown={handleKeyDown}
+        onKeyDown={methods.onKeyDown}
         className={cn(
           compact ? "flex flex-wrap gap-1.5" : "grid gap-2 sm:grid-cols-2"
         )}
@@ -201,11 +186,9 @@ export function TunnelAuthSection({
           <MethodCard
             key={method.id}
             method={method}
-            domId={`${groupId}-${method.id}`}
-            selected={method.id === auth.method}
+            radio={methods.option(method.id)}
             compact={compact}
             theme={theme}
-            onSelect={() => selectMethod(method.id)}
             badge={
               method.id === "oidc" && !compact ? (
                 <Badge theme={theme}>OpenID Connect</Badge>
@@ -286,33 +269,77 @@ export function TunnelAuthSection({
   );
 }
 
+interface RadioOptionProps {
+  id: string;
+  role: "radio";
+  "aria-checked": boolean;
+  tabIndex: number;
+  onClick: () => void;
+}
+
+/**
+ * A radio group made of buttons: only the checked option is in the tab
+ * order, and the arrow keys move to the next option and check it.
+ */
+function useRadioGroup<Id extends string>(
+  ids: readonly Id[],
+  value: Id,
+  onChange: (id: Id) => void
+) {
+  const groupId = useId();
+  const optionId = (id: Id) => `${groupId}-${id}`;
+  const select = (id: Id) => {
+    if (id !== value) {
+      onChange(id);
+    }
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (step === 0) {
+      return;
+    }
+    event.preventDefault();
+    const next = ids[(ids.indexOf(value) + step + ids.length) % ids.length];
+    if (next !== undefined) {
+      select(next);
+      document.getElementById(optionId(next))?.focus();
+    }
+  };
+  const option = (id: Id): RadioOptionProps => ({
+    id: optionId(id),
+    role: "radio",
+    "aria-checked": id === value,
+    tabIndex: id === value ? 0 : -1,
+    onClick: () => select(id),
+  });
+  return { onKeyDown, option };
+}
+
 function MethodCard({
   method,
-  domId,
-  selected,
+  radio,
   compact,
   theme,
   badge,
-  onSelect,
 }: {
   method: MethodChoice;
-  domId: string;
-  selected: boolean;
+  radio: RadioOptionProps;
   compact: boolean;
   theme: TunnelFormTheme;
   badge?: ReactNode;
-  onSelect: () => void;
 }) {
   const s = TUNNEL_FORM_STYLES[theme];
   const Icon = method.icon;
+  const selected = radio["aria-checked"];
   return (
     <button
-      id={domId}
       type="button"
-      role="radio"
-      aria-checked={selected}
-      tabIndex={selected ? 0 : -1}
-      onClick={onSelect}
+      {...radio}
       className={cn(
         "border text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         compact
@@ -502,6 +529,12 @@ function OIDCSetup({
   const clientId = useId();
   const s = TUNNEL_FORM_STYLES[theme];
   const isGoogle = auth.oidcIssuer === GOOGLE_OIDC_ISSUER;
+  const providers = useRadioGroup(
+    PROVIDERS.map((provider) => provider.id),
+    isGoogle ? "google" : "other",
+    (provider) =>
+      patch({ oidcIssuer: provider === "google" ? GOOGLE_OIDC_ISSUER : "" })
+  );
   const redirectURLs = buildAuthRedirectURLs(relayUrls, name);
   const inputClass = cn(s.input, "h-9 font-mono text-[13px] read-only:opacity-70");
 
@@ -509,30 +542,29 @@ function OIDCSetup({
     <div className="space-y-4">
       <div className="space-y-1.5">
         <span className={s.label}>Provider</span>
-        <div className="flex gap-1.5" role="radiogroup" aria-label="Provider">
-          {[
-            { id: "google", label: "Google", active: isGoogle },
-            { id: "other", label: "Another provider", active: !isGoogle },
-          ].map((choice) => (
-            <button
-              key={choice.id}
-              type="button"
-              role="radio"
-              aria-checked={choice.active}
-              onClick={() =>
-                patch({
-                  oidcIssuer: choice.id === "google" ? GOOGLE_OIDC_ISSUER : "",
-                })
-              }
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
-                s.card,
-                choice.active && SELECTED
-              )}
-            >
-              {choice.label}
-            </button>
-          ))}
+        <div
+          className="flex gap-1.5"
+          role="radiogroup"
+          aria-label="Provider"
+          onKeyDown={providers.onKeyDown}
+        >
+          {PROVIDERS.map((provider) => {
+            const radio = providers.option(provider.id);
+            return (
+              <button
+                key={provider.id}
+                type="button"
+                {...radio}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  s.card,
+                  radio["aria-checked"] && SELECTED
+                )}
+              >
+                {provider.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
