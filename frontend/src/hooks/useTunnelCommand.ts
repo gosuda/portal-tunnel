@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useMemo, useState, type ChangeEvent } from "react";
+import { useCopy } from "@/hooks/useCopy";
 import { normalizeExposeName } from "@/lib/exposeName";
 import { classifyShareInput } from "@/lib/shareLink";
 import {
+  DEFAULT_TUNNEL_AUTH,
   buildTunnelCommand,
+  validateTunnelAuth,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 
@@ -34,11 +37,13 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
   // pre-committing the user to a local port.
   const [target, setTarget] = useState("");
   const [name, setName] = useState("");
-  const [copied, setCopied] = useState(false);
+  const { copiedKey, copy } = useCopy();
+  const [auth, setAuth] = useState(DEFAULT_TUNNEL_AUTH);
   const os = extras.os ?? "unix";
 
   const share = useMemo(() => classifyShareInput(target), [target]);
   const effectiveName = normalizeExposeName(name);
+  const authIssues = useMemo(() => validateTunnelAuth(auth), [auth]);
   const commandOptions = useMemo(
     () => ({
       currentOrigin,
@@ -52,8 +57,10 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
       os,
       shareKind: share.kind,
       servePath: share.path,
+      auth,
     }),
     [
+      auth,
       currentOrigin,
       effectiveName,
       extras.discovery,
@@ -84,27 +91,11 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
     [command, os]
   );
 
-  useEffect(() => {
-    if (!copied) {
+  const handleCopy = () => {
+    if (authIssues.length > 0) {
       return;
     }
-
-    const timer = window.setTimeout(() => {
-      setCopied(false);
-    }, 2000);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [copied]);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-    } catch (error) {
-      console.error("Failed to copy tunnel command", error);
-    }
+    return copy(command);
   };
 
   const handleNameChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -113,12 +104,17 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
 
   return {
     currentOrigin,
+    relayUrls: commandOptions.relayUrls,
+    discovery: commandOptions.discovery,
     target,
     setTarget,
     name,
-    copied,
+    copied: copiedKey !== null,
     os,
     effectiveName,
+    auth,
+    setAuth,
+    authIssues,
     shareKind: share.kind,
     installBlock,
     runBlock,

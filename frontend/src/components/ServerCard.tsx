@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
 import { BadgeDollarSign, ThumbsDown, ThumbsUp } from "lucide-react";
 import type { ReputationVote } from "@/types/api";
 import type { BaseServer } from "@/hooks/useList";
+import { useCopy } from "@/hooks/useCopy";
 
 interface ServerCardProps {
   server: BaseServer;
@@ -30,10 +31,9 @@ export function ServerCard({
   } = server;
   const reputation = onVote ? server.reputation : undefined;
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
-  const [copiedProtocol, setCopiedProtocol] = useState<string | null>(null);
+  const { copiedKey: copiedProtocol, copy } = useCopy(1500);
   const [isVoting, setIsVoting] = useState(false);
   const [voteError, setVoteError] = useState("");
-  const copyTimeoutRef = useRef<number | undefined>(undefined);
   const effectiveThumbnail = thumbnailFailed ? "" : thumbnail;
   const normalizedPaymentLabel = paymentLabel.trim();
   const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
@@ -52,7 +52,6 @@ export function ServerCard({
     setThumbnailFailed(false);
   }, [thumbnail]);
 
-  useEffect(() => () => window.clearTimeout(copyTimeoutRef.current), []);
 
   const handleFavoriteClick = (event: React.MouseEvent) => {
     event.preventDefault();
@@ -79,18 +78,8 @@ export function ServerCard({
     }
   };
 
-  const copyEndpoint = async (protocol: string, address: string) => {
-    if (!navigator.clipboard) return;
-
-    try {
-      await navigator.clipboard.writeText(address);
-      setCopiedProtocol(protocol);
-      window.clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = window.setTimeout(() => setCopiedProtocol(null), 1500);
-    } catch {
-      // Clipboard access can be denied outside a secure, user-initiated context.
-    }
-  };
+  const copyEndpoint = (protocol: string, address: string) =>
+    copy(address, protocol);
 
   const formattedDuration = useMemo(() => {
     if (!firstSeen) return "";

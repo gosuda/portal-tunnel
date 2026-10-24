@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addAuthAllow,
+  authBlocksUDP,
+  buildAuthIssueCommand,
+  buildAuthRedirectURLs,
+  buildOIDCSecretCommand,
   buildTunnelCommand,
   buildTunnelPreviewURL,
+  classifyAuthAllow,
+  isListedSubject,
+  validateTunnelAuth,
+  type TunnelAuthOptions,
 } from "@/lib/tunnelCommand";
 
 describe("tunnelCommand", () => {
@@ -136,5 +145,341 @@ describe("tunnelCommand", () => {
 
     expect(buildTunnelPreviewURL("https://localhost", "")).toBe("");
     expect(buildTunnelPreviewURL("https://portal.example.com", "   ")).toBe("");
+  });
+});
+
+describe("tunnelCommand sign-in", () => {
+  const base = {
+    currentOrigin: "https://relay.example.com",
+    target: "3000",
+    name: "my-app",
+    relayUrls: ["https://relay.example.com"],
+    discovery: true,
+    thumbnailURL: "",
+    os: "unix" as const,
+  };
+  const none: TunnelAuthOptions = {
+    method: "none",
+    allow: [],
+    identityHeaders: false,
+    oidcIssuer: "",
+    oidcClientId: "",
+  };
+  const runLine = (command: string) => command.split("\n").slice(1).join("\n");
+
+  it("adds no auth flags unless a method is chosen", () => {
+    const command = buildTunnelCommand({
+      ...base,
+      auth: { ...none, allow: ["alice"], identityHeaders: true },
+    });
+
+    expect(runLine(command)).toBe(
+      "portal expose 3000 --name my-app --relays https://relay.example.com"
+    );
+  });
+
+  it("prints the private link, wallet and identity header flags", () => {
+    expect(
+      runLine(
+        buildTunnelCommand({
+          ...base,
+          auth: { ...none, method: "credential", allow: ["alice", "bob"] },
+        })
+      )
+    ).toBe(
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth credential --auth-allow alice --auth-allow bob"
+    );
+
+    const wallet = "0x1234567890abcdef1234567890abcdef12345678";
+    expect(
+      runLine(
+        buildTunnelCommand({
+          ...base,
+          auth: {
+            ...none,
+            method: "siwe",
+            allow: [wallet],
+            identityHeaders: true,
+          },
+        })
+      )
+    ).toBe(
+      `portal expose 3000 --name my-app --relays https://relay.example.com --auth siwe --auth-allow ${wallet} --auth-identity-headers`
+    );
+  });
+
+  it("prints the OIDC flags without the client secret, which is never in the copied command", () => {
+    const auth: TunnelAuthOptions = {
+      ...none,
+      method: "oidc",
+      allow: ["alice@example.com", "@example.com"],
+      oidcIssuer: "https://accounts.google.com",
+      oidcClientId: "abc.apps.googleusercontent.com",
+    };
+    const unix = buildTunnelCommand({ ...base, auth }).split("\n");
+    const windows = buildTunnelCommand({ ...base, os: "windows", auth }).split(
+      "\n"
+    );
+
+    expect(unix).toHaveLength(2);
+    expect(unix[1]).toBe(
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id abc.apps.googleusercontent.com --auth-allow 'alice@example.com' --auth-allow '@example.com'"
+    );
+    expect(windows).toHaveLength(3);
+    expect(windows[2]).toContain("--auth-allow 'alice@example.com'");
+    expect(unix.join("\n")).not.toMatch(/SECRET|secret/);
+    expect(windows.join("\n")).not.toMatch(/SECRET|secret/);
+  });
+
+  it("reads the OIDC client secret at a prompt instead of through a placeholder", () => {
+    expect(buildOIDCSecretCommand("unix")).toBe(
+      "printf 'OIDC client secret: '; stty -echo; read -r AUTH_OIDC_CLIENT_SECRET; stty echo; echo; export AUTH_OIDC_CLIENT_SECRET"
+    );
+    expect(buildOIDCSecretCommand("windows")).toBe(
+      "$secret = Read-Host 'OIDC client secret' -AsSecureString; $env:AUTH_OIDC_CLIENT_SECRET = [System.Net.NetworkCredential]::new('', $secret).Password"
+    );
+    expect(buildOIDCSecretCommand("unix")).not.toContain("<");
+  });
+
+  it("quotes free-text entries so PowerShell reads every quote literally", () => {
+    const auth: TunnelAuthOptions = {
+      ...none,
+      method: "credential",
+      allow: ["O'Brien", "O’Brien", "‘a‚ b‛"],
+    };
+
+    expect(runLine(buildTunnelCommand({ ...base, os: "windows", auth }))).toContain(
+      "--auth credential --auth-allow 'O''Brien' --auth-allow 'O’’Brien' --auth-allow '‘‘a‚‚ b‛‛'"
+    );
+    // A POSIX shell gives the typographic quotes no meaning.
+    expect(runLine(buildTunnelCommand({ ...base, auth }))).toContain(
+      `--auth credential --auth-allow 'O'"'"'Brien' --auth-allow 'O’Brien' --auth-allow '‘a‚ b‛'`
+    );
+  });
+
+  it("serves a static folder behind a private link", () => {
+    expect(
+      runLine(
+        buildTunnelCommand({
+          ...base,
+          target: "",
+          name: "my-site",
+          shareKind: "file",
+          servePath: "/Users/me/site",
+          auth: { ...none, method: "credential" },
+        })
+      )
+    ).toBe(
+      "portal expose --serve /Users/me/site --name my-site --relays https://relay.example.com --auth credential"
+    );
+  });
+
+  it("drops UDP when sign-in is on, because the tunnel refuses the pair", () => {
+    const command = buildTunnelCommand({
+      ...base,
+      enableUDP: true,
+      udpPort: "9000",
+      auth: { ...none, method: "credential" },
+    });
+
+    expect(command).not.toContain("--udp");
+    expect(authBlocksUDP({ ...none, method: "credential" })).toBe(true);
+    expect(authBlocksUDP(none)).toBe(false);
+    expect(
+      buildTunnelCommand({ ...base, enableUDP: true, udpPort: "9000" })
+    ).toContain("--udp --udp-addr 9000");
+  });
+
+  it("classifies allowlist entries the way the tunnel accepts them", () => {
+    const kind = (method: Parameters<typeof classifyAuthAllow>[0], entry: string) => {
+      const check = classifyAuthAllow(method, entry);
+      return check.ok ? check.kind : "invalid";
+    };
+
+    expect(kind("credential", "alice")).toBe("link name");
+    expect(kind("siwe", "0x1234567890abcdef1234567890abcdef12345678")).toBe("wallet");
+    expect(kind("siwe", "0x1234")).toBe("invalid");
+    expect(kind("siwe", "1234567890abcdef1234567890abcdef12345678")).toBe("invalid");
+    expect(kind("oidc", "alice@example.com")).toBe("person");
+    expect(kind("oidc", "@example.com")).toBe("domain");
+    expect(kind("oidc", "sub:AbC123")).toBe("account id");
+    expect(kind("oidc", "SUB:AbC123")).toBe("account id");
+    expect(kind("oidc", "sub:")).toBe("invalid");
+    expect(kind("oidc", "alice")).toBe("invalid");
+    expect(kind("oidc", "alice@")).toBe("invalid");
+    expect(kind("oidc", "alice@exämple.com")).toBe("invalid");
+  });
+
+  it("counts the 256-character subject limit in bytes, as the tunnel does", () => {
+    const kind = (method: Parameters<typeof classifyAuthAllow>[0], entry: string) =>
+      classifyAuthAllow(method, entry).ok;
+
+    expect(kind("credential", "a".repeat(256))).toBe(true);
+    expect(kind("credential", "a".repeat(257))).toBe(false);
+    // 100 Korean characters are 300 bytes.
+    expect(kind("credential", "가".repeat(100))).toBe(false);
+    expect(kind("credential", "가".repeat(85))).toBe(true);
+    expect(kind("oidc", `${"a".repeat(250)}@example.com`)).toBe(false);
+    expect(kind("oidc", `sub:${"a".repeat(256)}`)).toBe(true);
+    expect(kind("oidc", `sub:${"a".repeat(257)}`)).toBe(false);
+  });
+
+  it("adds entries the way the tunnel reads them", () => {
+    expect(addAuthAllow("oidc", [], "Alice@Example.com, alice@example.com,  @Example.COM")).toEqual([
+      "alice@example.com",
+      "@example.com",
+    ]);
+    expect(addAuthAllow("oidc", ["sub:AbC"], "SUB:AbC, SUB:abc")).toEqual([
+      "sub:AbC",
+      "sub:abc",
+    ]);
+    const wallet = "0xAbCdEf1234567890abcdef1234567890ABCDEF12";
+    expect(addAuthAllow("siwe", [wallet], wallet.toLowerCase())).toEqual([wallet]);
+    expect(addAuthAllow("credential", ["alice"], "Alice, alice, bob")).toEqual([
+      "alice",
+      "Alice",
+      "bob",
+    ]);
+    // Link names and sub: ids may contain spaces, as the tunnel allows; only wallets split on them.
+    expect(addAuthAllow("credential", [], "alice smith, bob")).toEqual([
+      "alice smith",
+      "bob",
+    ]);
+    expect(addAuthAllow("oidc", [], "sub:team lead 7, a@example.com")).toEqual([
+      "sub:team lead 7",
+      "a@example.com",
+    ]);
+    expect(classifyAuthAllow("oidc", "sub:team lead 7").ok).toBe(true);
+    expect(addAuthAllow("siwe", [], `${wallet} ${wallet.slice(0, -1)}0`)).toEqual([
+      wallet,
+      `${wallet.slice(0, -1)}0`,
+    ]);
+    expect(addAuthAllow("credential", ["alice"], " , ")).toEqual(["alice"]);
+  });
+
+  it("does not let lowercasing turn a lookalike address into a valid one", () => {
+    // U+212A KELVIN SIGN lowercases to "k"; the tunnel refuses the original.
+    const typed = "\u212Aelvin@example.com";
+    const [entry] = addAuthAllow("oidc", [], typed);
+
+    expect(entry).toBe(typed);
+    expect(classifyAuthAllow("oidc", entry ?? "").ok).toBe(false);
+  });
+
+  it("lists what keeps an OIDC command from running as shown", () => {
+    const oidc: TunnelAuthOptions = { ...none, method: "oidc" };
+    const ready: TunnelAuthOptions = {
+      ...oidc,
+      allow: ["alice@example.com"],
+      oidcIssuer: "https://accounts.google.com",
+      oidcClientId: "abc",
+    };
+    const blocking = (auth: TunnelAuthOptions) =>
+      validateTunnelAuth(auth).map((issue) => issue.field);
+
+    expect(blocking(oidc)).toEqual(["allow", "issuer", "clientId"]);
+    // No Name is needed: the address-bound URL Portal prints works too.
+    expect(blocking(ready)).toEqual([]);
+    expect(
+      blocking({ ...ready, allow: ["alice"], oidcIssuer: "http://login.example.com" })
+    ).toEqual(["issuer", "entries"]);
+  });
+
+  it("refuses the issuers the tunnel refuses", () => {
+    const ready: TunnelAuthOptions = {
+      ...none,
+      method: "oidc",
+      allow: ["alice@example.com"],
+      oidcClientId: "abc",
+    };
+    const accepts = (issuer: string) =>
+      validateTunnelAuth({ ...ready, oidcIssuer: issuer }).length === 0;
+
+    expect(accepts("https://accounts.google.com")).toBe(true);
+    expect(accepts("https://login.example.com/realms/team")).toBe(true);
+    expect(accepts("https://accounts.google.com?x=1")).toBe(false);
+    expect(accepts("https://accounts.google.com/#frag")).toBe(false);
+    expect(accepts("https://user@accounts.google.com")).toBe(false);
+    expect(accepts("https://user:pass@accounts.google.com")).toBe(false);
+    expect(accepts("http://accounts.google.com")).toBe(false);
+    expect(accepts("accounts.google.com")).toBe(false);
+  });
+
+  it("accepts open private-link and wallet lists but flags malformed entries", () => {
+    expect(validateTunnelAuth({ ...none, method: "credential" })).toEqual([]);
+    expect(validateTunnelAuth({ ...none, method: "siwe" })).toEqual([]);
+    expect(
+      validateTunnelAuth({ ...none, method: "siwe", allow: ["0x12"] }).map(
+        (issue) => issue.field
+      )
+    ).toEqual(["entries"]);
+    expect(validateTunnelAuth(none)).toEqual([]);
+  });
+
+  it("lets an invite through only for a listed name once names are listed", () => {
+    expect(isListedSubject([], "anyone")).toBe(true);
+    expect(isListedSubject(["alice", "bob"], " bob ")).toBe(true);
+    expect(isListedSubject(["alice"], "Alice")).toBe(false);
+    expect(isListedSubject(["alice"], "carol")).toBe(false);
+  });
+
+  it("gives a redirect address for the short URL on every relay in the command", () => {
+    expect(
+      buildAuthRedirectURLs(
+        [
+          "https://portal.example.com",
+          "https://relay.example.org/",
+          "https://portal.example.com/",
+        ],
+        "my-app"
+      )
+    ).toEqual([
+      "https://my-app.portal.example.com/_portal/auth/callback",
+      "https://my-app.relay.example.org/_portal/auth/callback",
+    ]);
+    // The browser's Host keeps a non-default port, so the redirect must too.
+    expect(
+      buildAuthRedirectURLs(
+        ["https://relay.example.net:8443", "http://other.example.net:443"],
+        "my-app"
+      )
+    ).toEqual([
+      "https://my-app.relay.example.net:8443/_portal/auth/callback",
+      "https://my-app.other.example.net/_portal/auth/callback",
+    ]);
+    expect(buildAuthRedirectURLs(["https://portal.example.com"], "")).toEqual([]);
+    expect(buildAuthRedirectURLs([], "my-app")).toEqual([]);
+  });
+
+  it("binds an invite to the host of the URL the visitor is sent", () => {
+    const invite = {
+      address: "https://my-app.portal.example.com:443",
+      subject: "alice",
+      expires: "720h",
+      os: "unix" as const,
+    };
+    // The browser sends no :443 in the Host, so the link must not carry it.
+    expect(buildAuthIssueCommand(invite)).toBe(
+      "portal auth issue my-app.portal.example.com --subject alice --expires 720h"
+    );
+    expect(
+      buildAuthIssueCommand({ ...invite, address: "https://other.relay.example.org/" })
+    ).toBe("portal auth issue other.relay.example.org --subject alice --expires 720h");
+    expect(buildAuthIssueCommand({ ...invite, address: "My-App.localhost:4017" })).toBe(
+      "portal auth issue my-app.localhost:4017 --subject alice --expires 720h"
+    );
+    expect(buildAuthIssueCommand({ ...invite, subject: "Alice Smith" })).toBe(
+      "portal auth issue my-app.portal.example.com --subject 'Alice Smith' --expires 720h"
+    );
+    expect(buildAuthIssueCommand({ ...invite, subject: " " })).toBe("");
+    for (const address of [
+      "",
+      "http://my-app.portal.example.com",
+      "https://my-app.portal.example.com/app",
+      "https://my-app.portal.example.com/?x=1",
+      "https://user@my-app.portal.example.com",
+    ]) {
+      expect(buildAuthIssueCommand({ ...invite, address })).toBe("");
+    }
   });
 });

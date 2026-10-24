@@ -1,17 +1,25 @@
-import {
-  useId,
-  useMemo,
-  useState,
-  type KeyboardEvent,
-} from "react";
-import { Check, Copy, X } from "lucide-react";
+import { useId, useMemo, useState } from "react";
+import { Check, ChevronRight, Copy, Lock } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import {
+  TunnelAuthSection,
+  describeAuth,
+} from "@/components/TunnelAuthSection";
+import {
+  Chip,
+  ChipField,
+  Notice,
+  TUNNEL_FORM_STYLES,
+  type TunnelFormTheme,
+} from "@/components/TunnelFormParts";
 import type { Lease } from "@/types/api";
 import { cn } from "@/lib/utils";
 import {
+  authBlocksUDP,
   buildTunnelPreviewURL,
   buildServiceStatusHostname,
   normalizeAbsoluteHTTPURL,
+  type TunnelAuthIssue,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 import {
@@ -31,7 +39,7 @@ const SHARE_PLACEHOLDER = "file:///Users/me/site/index.html or 3000";
 
 type TunnelCommandFormProps = {
   className?: string;
-  theme?: "light" | "terminal";
+  theme?: TunnelFormTheme;
 } & (
   | { mode: "hero"; leases: Lease[] | null }
   | { mode?: "full"; leases?: never }
@@ -72,15 +80,22 @@ function HeroTunnelCommandForm({
     leases: Lease[] | null;
   }) {
   const isTerminal = theme === "terminal";
+  const authPanelId = useId();
   const [tunnelTarget, setTunnelTarget] = useState<TunnelCommandOS>("unix");
+  const [authOpen, setAuthOpen] = useState(false);
   const {
     currentOrigin,
+    relayUrls,
+    discovery,
     target,
     setTarget,
     name,
     copied,
     os,
     effectiveName,
+    auth,
+    setAuth,
+    authIssues,
     shareKind,
     installBlock,
     runBlock,
@@ -241,37 +256,81 @@ function HeroTunnelCommandForm({
           <p className={cn("text-xs", isTerminal ? "text-slate-400" : "text-text-muted")}>
             Choose a name for a short public URL without an Ethereum address.
           </p>
-        </div>
-        <div
-          className={cn(
-            "relative min-h-37 rounded-lg border px-4 py-4 pr-14 font-mono text-sm leading-7",
-            isTerminal
-              ? "border-white/10 bg-black/55 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-              : "border-border/80 bg-border/90 text-foreground"
-          )}
-        >
           <button
             type="button"
-            onClick={handleCopy}
+            onClick={() => setAuthOpen((open) => !open)}
+            aria-expanded={authOpen}
+            aria-controls={authPanelId}
             className={cn(
-              "absolute top-4 right-4 inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+              "flex w-full min-w-0 items-center gap-2 rounded-md border border-dashed px-3 py-2 text-left text-[13px] transition-colors",
               isTerminal
-                ? "text-emerald-300/75 hover:bg-emerald-400/10 hover:text-emerald-200"
-                : "text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700"
+                ? "border-white/15 text-slate-300 hover:border-primary/60"
+                : "border-border text-foreground hover:border-primary/50"
             )}
-            aria-label="Copy command"
-            title={copied ? "Copied" : "Copy"}
           >
-            {copied ? (
-              <Check className="h-4 w-4" />
-            ) : (
-              <Copy className="h-4 w-4" />
-            )}
+            <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className={heroControlLabelClass}>Who can open it?</span>
+            <span className="ml-auto min-w-0 truncate font-semibold">
+              {describeAuth(auth)}
+            </span>
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                "h-4 w-4 shrink-0 transition-transform",
+                authOpen && "rotate-90"
+              )}
+            />
           </button>
-          <pre className="overflow-x-auto whitespace-pre-wrap break-all">
-            <span className="block">{installBlock}</span>
-            <span className="mt-2 block">{runBlock}</span>
-          </pre>
+          {authOpen && (
+            <div id={authPanelId} className="pt-1">
+              <TunnelAuthSection
+                auth={auth}
+                onChange={setAuth}
+                issues={authIssues}
+                relayUrls={relayUrls}
+                discovery={discovery}
+                name={effectiveName}
+                os={os}
+                theme={theme}
+                compact
+              />
+            </div>
+          )}
+        </div>
+        <div>
+          <div
+            className={cn(
+              "relative min-h-37 rounded-lg border px-4 py-4 pr-14 font-mono text-sm leading-7",
+              isTerminal
+                ? "border-white/10 bg-black/55 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+                : "border-border/80 bg-border/90 text-foreground"
+            )}
+          >
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={authIssues.length > 0}
+              className={cn(
+                "absolute top-4 right-4 inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                isTerminal
+                  ? "text-emerald-300/75 hover:bg-emerald-400/10 hover:text-emerald-200"
+                  : "text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700"
+              )}
+              aria-label="Copy command"
+              title={copied ? "Copied" : "Copy"}
+            >
+              {copied ? (
+                <Check className="h-4 w-4" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+            </button>
+            <pre className="overflow-x-auto whitespace-pre-wrap break-all">
+              <span className="block">{installBlock}</span>
+              <span className="mt-2 block">{runBlock}</span>
+            </pre>
+          </div>
+          <NotReady issues={authIssues} theme={theme} />
         </div>
       </div>
 
@@ -383,6 +442,10 @@ function FullTunnelCommandForm({
     name,
     copied,
     os,
+    effectiveName,
+    auth,
+    setAuth,
+    authIssues,
     shareKind,
     installBlock,
     runBlock,
@@ -396,6 +459,7 @@ function FullTunnelCommandForm({
     udpPort,
     os: tunnelTarget,
   });
+  const udpBlocked = authBlocksUDP(auth);
 
   const addRelayURL = (url: string) => {
     const trimmed = url.trim();
@@ -419,23 +483,9 @@ function FullTunnelCommandForm({
     setRelayUrls((prev) => prev.filter((candidate) => candidate !== url));
   };
 
-  const handleURLKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      addRelayURL(urlInput);
-      return;
-    }
-
-    if (event.key === "Backspace" && urlInput === "" && relayUrls.length > 0) {
-      setRelayUrls((prev) => prev.slice(0, -1));
-    }
-  };
-  const sectionLabelClass = isTerminal
-    ? "text-sm font-medium text-slate-200"
-    : "text-sm font-medium text-foreground dark:text-zinc-100";
-  const helpTextClass = isTerminal
-    ? "text-xs text-slate-400"
-    : "text-xs leading-5 text-muted-foreground dark:text-zinc-500";
+  // Shared text and input styles come from the table; the classes below are
+  // this form's own layout.
+  const formStyles = TUNNEL_FORM_STYLES[theme];
   const inlineFieldClass = isTerminal
     ? "flex items-center overflow-hidden rounded-lg border border-white/10 bg-white/5"
     : "flex items-center overflow-hidden rounded-md border border-border/80 bg-secondary/55 focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30 dark:border-white/10 dark:bg-secondary/60";
@@ -445,18 +495,6 @@ function FullTunnelCommandForm({
   const inlineInputClass = isTerminal
     ? "h-10 border-0 bg-transparent px-3 text-sm text-white placeholder:text-slate-500 shadow-none focus-visible:ring-0"
     : "h-9 border-0 bg-transparent px-3 text-sm font-semibold text-foreground placeholder:text-text-muted shadow-none focus-visible:ring-0 dark:text-zinc-100 dark:placeholder:text-zinc-500";
-  const relayFieldClass = isTerminal
-    ? "flex min-h-12 flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2.5 py-2"
-    : "flex min-h-10 flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-2 shadow-sm focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/25 dark:border-white/10 dark:bg-transparent";
-  const relayChipClass = isTerminal
-    ? "inline-flex items-center gap-1 rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium text-slate-100"
-    : "inline-flex items-center gap-1 rounded-md bg-secondary px-2.5 py-1 text-xs font-semibold text-secondary-foreground dark:bg-primary/14 dark:text-primary";
-  const relayChipRemoveClass = isTerminal
-    ? "hover:bg-white/10"
-    : "text-text-muted hover:bg-background/80 dark:text-primary dark:hover:bg-black/20";
-  const advancedInputClass = isTerminal
-    ? "h-10 rounded-lg border-white/10 bg-white/5 text-white placeholder:text-slate-500"
-    : "h-10 rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground shadow-sm dark:border-white/10 dark:bg-background dark:text-zinc-100 dark:placeholder:text-zinc-500";
   const osGroupClass = isTerminal
     ? "flex rounded-lg bg-white/8 p-1"
     : "flex rounded-md bg-border p-1 dark:bg-secondary/60";
@@ -481,7 +519,7 @@ function FullTunnelCommandForm({
   return (
     <div className={cn("space-y-4 py-1", className)}>
       <div className="space-y-2">
-        <label className={sectionLabelClass}>Platform</label>
+        <label className={formStyles.section}>Platform</label>
         <div className={osGroupClass}>
           <button
             type="button"
@@ -502,7 +540,7 @@ function FullTunnelCommandForm({
 
       <div className="space-y-2">
         <div className="flex items-center gap-2">
-          <label htmlFor={`${inputId}-host`} className={sectionLabelClass}>
+          <label htmlFor={`${inputId}-host`} className={formStyles.section}>
             Share
           </label>
           {target.trim() !== "" && (
@@ -531,7 +569,7 @@ function FullTunnelCommandForm({
             className={inlineInputClass}
           />
         </div>
-        <p className={helpTextClass}>
+        <p className={formStyles.help}>
           Paste what you want to share: a local port (3000), a running URL
           (http://localhost:3000), or a file path
           (file:///Users/me/site/index.html). File paths are served as a static
@@ -542,7 +580,7 @@ function FullTunnelCommandForm({
       <div className="space-y-2">
         <label
           htmlFor={`${inputId}-name`}
-          className={sectionLabelClass}
+          className={formStyles.section}
         >
           Service Name
         </label>
@@ -557,80 +595,85 @@ function FullTunnelCommandForm({
             className={inlineInputClass}
           />
         </div>
-        <p className={helpTextClass}>A unique identifier for your tunnel (optional)</p>
+        <p className={formStyles.help}>A unique identifier for your tunnel (optional)</p>
       </div>
 
       <div className="space-y-2">
-        <label className={sectionLabelClass}>
+        <label className={formStyles.section}>
           Relay URLs
         </label>
-        <div className={relayFieldClass}>
-          {relayUrls.map((url) => (
-            <span
+        <ChipField
+          theme={theme}
+          draft={urlInput}
+          placeholder="Add relay URL..."
+          onDraftChange={setUrlInput}
+          onCommit={() => addRelayURL(urlInput)}
+          onRemoveLast={() => {
+            if (relayUrls.length > 0) {
+              setRelayUrls((prev) => prev.slice(0, -1));
+            }
+          }}
+          chips={relayUrls.map((url) => (
+            <Chip
               key={url}
-              className={relayChipClass}
-            >
-              {url}
-              <button
-                type="button"
-                onClick={() => removeRelayURL(url)}
-                className={cn(
-                  "ml-1 rounded-sm p-0.5",
-                  !discoveryEnabled && relayUrls.length <= 1
-                    ? "cursor-not-allowed opacity-40"
-                    : relayChipRemoveClass
-                )}
-                aria-label={`Remove ${url}`}
-                disabled={!discoveryEnabled && relayUrls.length <= 1}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
+              theme={theme}
+              text={url}
+              removeLabel={`Remove ${url}`}
+              removeDisabled={!discoveryEnabled && relayUrls.length <= 1}
+              onRemove={() => removeRelayURL(url)}
+            />
           ))}
-
-          <input
-            type="text"
-            value={urlInput}
-            onChange={(event) => setUrlInput(event.target.value)}
-            onKeyDown={handleURLKeyDown}
-            placeholder="Add relay URL..."
-            className={cn(
-              "min-w-[140px] flex-1 bg-transparent text-sm outline-none",
-              isTerminal
-                ? "text-white placeholder:text-slate-500"
-                : "text-foreground placeholder:text-muted-foreground dark:text-zinc-100 dark:placeholder:text-zinc-500"
-            )}
-          />
-        </div>
-        <p className={helpTextClass}>
+        />
+        <p className={formStyles.help}>
           Press Enter to add. Multiple relay servers for redundancy.
         </p>
       </div>
 
       <div className="space-y-2">
-        <label className={sectionLabelClass}>
+        <div className="flex items-baseline justify-between gap-2">
+          <p className={formStyles.section}>Who can open it?</p>
+          <span className={formStyles.help}>Default: no sign-in</span>
+        </div>
+        <TunnelAuthSection
+          auth={auth}
+          onChange={setAuth}
+          issues={authIssues}
+          relayUrls={relayUrls}
+          discovery={discoveryEnabled}
+          name={effectiveName}
+          os={os}
+          theme={theme}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <label className={formStyles.section}>
           Generated Command
         </label>
-        <div className={commandPanelClass}>
-          <pre className={commandPreClass}>
-            <span className="block">{installBlock}</span>
-            <span className="mt-2 block">{runBlock}</span>
-          </pre>
-          <button
-            type="button"
-            onClick={handleCopy}
-            className={cn(
-              "absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-2 transition-colors",
-              isTerminal ? "hover:bg-white/10" : "hover:bg-background/70 dark:hover:bg-black/20"
-            )}
-            aria-label="Copy command"
-          >
-            {copied ? (
-              <Check className={cn("h-4 w-4", isTerminal ? "text-green-400" : "text-emerald-400")} />
-            ) : (
-              <Copy className={cn("h-4 w-4", isTerminal ? "text-slate-400" : "text-text-muted dark:text-zinc-500")} />
-            )}
-          </button>
+        <div>
+          <div className={commandPanelClass}>
+            <pre className={commandPreClass}>
+              <span className="block">{installBlock}</span>
+              <span className="mt-2 block">{runBlock}</span>
+            </pre>
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={authIssues.length > 0}
+              className={cn(
+                "absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                isTerminal ? "hover:bg-white/10" : "hover:bg-background/70 dark:hover:bg-black/20"
+              )}
+              aria-label="Copy command"
+            >
+              {copied ? (
+                <Check className={cn("h-4 w-4", isTerminal ? "text-green-400" : "text-emerald-400")} />
+              ) : (
+                <Copy className={cn("h-4 w-4", isTerminal ? "text-slate-400" : "text-text-muted dark:text-zinc-500")} />
+              )}
+            </button>
+          </div>
+          <NotReady issues={authIssues} theme={theme} />
         </div>
       </div>
 
@@ -665,7 +708,8 @@ function FullTunnelCommandForm({
                 <label className="flex items-center gap-2 text-sm text-foreground dark:text-zinc-300">
                   <input
                     type="checkbox"
-                    checked={enableUDP}
+                    checked={enableUDP && !udpBlocked}
+                    disabled={udpBlocked}
                     onChange={(event) => {
                       const nextEnabled = event.target.checked;
                       setEnableUDP(nextEnabled);
@@ -675,9 +719,17 @@ function FullTunnelCommandForm({
                     }}
                     className="h-4 w-4"
                   />
-                  <span>Enable UDP transport</span>
+                  <span>
+                    Enable UDP transport
+                    {udpBlocked && (
+                      <span className={cn("block", formStyles.help)}>
+                        Not available with sign-in: Portal can only check
+                        visitors on web traffic.
+                      </span>
+                    )}
+                  </span>
                 </label>
-                {enableUDP && (
+                {enableUDP && !udpBlocked && (
                   <div className="space-y-1.5">
                     <Input
                       id={`${inputId}-udp-port`}
@@ -685,9 +737,9 @@ function FullTunnelCommandForm({
                       value={udpPort}
                       onChange={(event) => setUDPPort(event.target.value)}
                       placeholder={target.trim() || DEFAULT_HOST}
-                      className={advancedInputClass}
+                      className={formStyles.input}
                     />
-                    <p className={helpTextClass}>
+                    <p className={formStyles.help}>
                       Local UDP port to forward. Defaults to the same as Host.
                     </p>
                   </div>
@@ -707,7 +759,7 @@ function FullTunnelCommandForm({
                   value={thumbnailURL}
                   onChange={(event) => setThumbnailURL(event.target.value)}
                   placeholder="https://cdn.example.com/thumb.png"
-                  className={advancedInputClass}
+                  className={formStyles.input}
                 />
                 {normalizedThumbnailURL && (
                   <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border border-border bg-background dark:border-white/10 dark:bg-background">
@@ -725,6 +777,26 @@ function FullTunnelCommandForm({
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Owns its top spacing, so the empty region adds no gap under the command. */
+function NotReady({
+  issues,
+  theme,
+}: {
+  issues: TunnelAuthIssue[];
+  theme: TunnelFormTheme;
+}) {
+  // Always mounted: a live region announces text that appears inside it.
+  return (
+    <div role="status" className={cn(issues.length > 0 && "pt-2")}>
+      {issues.length > 0 && (
+        <Notice tone="warn" theme={theme}>
+          Not ready to copy: {issues.map((issue) => issue.message).join(" · ")}
+        </Notice>
       )}
     </div>
   );
