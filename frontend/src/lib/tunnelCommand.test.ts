@@ -374,32 +374,15 @@ describe("tunnelCommand sign-in", () => {
       oidcIssuer: "https://accounts.google.com",
       oidcClientId: "abc",
     };
-    const issues = (auth: TunnelAuthOptions, name: string) =>
-      validateTunnelAuth(auth, name).map((issue) => [issue.field, issue.message]);
+    const blocking = (auth: TunnelAuthOptions) =>
+      validateTunnelAuth(auth).map((issue) => issue.field);
 
-    expect(issues(oidc, "")).toEqual([
-      ["allow", "Add who may sign in"],
-      ["issuer", "Add the issuer address"],
-      ["clientId", "Add the client ID"],
-      ["name", "Add a Name: the provider needs the exact redirect address"],
-    ]);
-    expect(issues(ready, "my-app")).toEqual([]);
+    expect(blocking(oidc)).toEqual(["allow", "issuer", "clientId"]);
+    // No Name is needed: the address-bound URL Portal prints works too.
+    expect(blocking(ready)).toEqual([]);
     expect(
-      issues(
-        {
-          ...ready,
-          allow: ["alice"],
-          oidcIssuer: "http://login.example.com",
-        },
-        "my-app"
-      )
-    ).toEqual([
-      [
-        "issuer",
-        "The issuer must be an https:// address without a query or fragment",
-      ],
-      ["entries", "Fix the highlighted entries"],
-    ]);
+      blocking({ ...ready, allow: ["alice"], oidcIssuer: "http://login.example.com" })
+    ).toEqual(["issuer", "entries"]);
   });
 
   it("refuses the issuers the tunnel refuses", () => {
@@ -410,7 +393,7 @@ describe("tunnelCommand sign-in", () => {
       oidcClientId: "abc",
     };
     const accepts = (issuer: string) =>
-      validateTunnelAuth({ ...ready, oidcIssuer: issuer }, "my-app").length === 0;
+      validateTunnelAuth({ ...ready, oidcIssuer: issuer }).length === 0;
 
     expect(accepts("https://accounts.google.com")).toBe(true);
     expect(accepts("https://login.example.com/realms/team")).toBe(true);
@@ -423,12 +406,14 @@ describe("tunnelCommand sign-in", () => {
   });
 
   it("accepts open private-link and wallet lists but flags malformed entries", () => {
-    expect(validateTunnelAuth({ ...none, method: "credential" }, "")).toEqual([]);
-    expect(validateTunnelAuth({ ...none, method: "siwe" }, "")).toEqual([]);
+    expect(validateTunnelAuth({ ...none, method: "credential" })).toEqual([]);
+    expect(validateTunnelAuth({ ...none, method: "siwe" })).toEqual([]);
     expect(
-      validateTunnelAuth({ ...none, method: "siwe", allow: ["0x12"] }, "")
-    ).toEqual([{ field: "entries", message: "Fix the highlighted entries" }]);
-    expect(validateTunnelAuth(none, "")).toEqual([]);
+      validateTunnelAuth({ ...none, method: "siwe", allow: ["0x12"] }).map(
+        (issue) => issue.field
+      )
+    ).toEqual(["entries"]);
+    expect(validateTunnelAuth(none)).toEqual([]);
   });
 
   it("lets an invite through only for a listed name once names are listed", () => {

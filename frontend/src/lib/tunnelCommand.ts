@@ -311,12 +311,7 @@ function isOIDCIssuer(raw: string): boolean {
   }
 }
 
-export type TunnelAuthField =
-  | "allow"
-  | "entries"
-  | "issuer"
-  | "clientId"
-  | "name";
+export type TunnelAuthField = "allow" | "entries" | "issuer" | "clientId";
 
 export interface TunnelAuthIssue {
   field: TunnelAuthField;
@@ -328,10 +323,7 @@ export interface TunnelAuthIssue {
  * The one owner of these rules: the copy gate and the notices next to each
  * field both render from it.
  */
-export function validateTunnelAuth(
-  auth: TunnelAuthOptions,
-  name: string
-): TunnelAuthIssue[] {
+export function validateTunnelAuth(auth: TunnelAuthOptions): TunnelAuthIssue[] {
   if (auth.method === "none") {
     return [];
   }
@@ -350,12 +342,6 @@ export function validateTunnelAuth(
     }
     if (auth.oidcClientId.trim() === "") {
       issues.push({ field: "clientId", message: "Add the client ID" });
-    }
-    if (normalizeExposeName(name) === "") {
-      issues.push({
-        field: "name",
-        message: "Add a Name: the provider needs the exact redirect address",
-      });
     }
   }
   if (auth.allow.some((entry) => !classifyAuthAllow(auth.method, entry).ok)) {

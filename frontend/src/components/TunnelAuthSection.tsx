@@ -396,18 +396,16 @@ function Badge({
 function FieldIssues({
   issues,
   field,
-  tone = "error",
   theme,
 }: {
   issues: TunnelAuthIssue[];
   field: TunnelAuthField;
-  tone?: "error" | "warn";
   theme: TunnelFormTheme;
 }) {
   return issues
     .filter((issue) => issue.field === field)
     .map((issue) => (
-      <Notice key={issue.message} tone={tone} theme={theme}>
+      <Notice key={issue.message} tone="error" theme={theme}>
         {issue.message}
       </Notice>
     ));
@@ -618,37 +616,33 @@ function OIDCSetup({
           visitors back only to the redirect addresses you register, so every
           address a visitor opens the app on needs its own.
         </p>
-        {name === "" ? (
-          <FieldIssues issues={issues} field="name" tone="warn" theme={theme} />
-        ) : (
-          <>
-            {redirectURLs.map((url) => (
-              <CopyLine
-                key={url}
-                value={url}
-                label={`Copy redirect address ${url}`}
-                theme={theme}
-              />
-            ))}
-            <p className={s.help}>
-              {redirectURLs.length > 0 &&
-                "These are for the short URL on each relay in the command. "}
-              When the tunnel is ready, Portal prints each relay's
-              address-bound URL after <code>service ready at</code>, and its
-              short URL only if that relay granted the name. Register the
-              address-bound URL as well, and any short URL not listed here: the
-              address followed by <code>/_portal/auth/callback</code>, without{" "}
-              <code>:443</code>.
-              {discovery && (
-                <>
-                  {" "}Relay discovery, on by default, can publish on more
-                  relays, each with its own addresses; to keep to the relays in
-                  the command, add <code>--discovery=false</code>.
-                </>
-              )}
-            </p>
-          </>
-        )}
+        {redirectURLs.map((url) => (
+          <CopyLine
+            key={url}
+            value={url}
+            label={`Copy redirect address ${url}`}
+            theme={theme}
+          />
+        ))}
+        <p className={s.help}>
+          {redirectURLs.length > 0
+            ? "These are for the short URL on each relay in the command. "
+            : name === "" &&
+              "A Name gives each relay a short URL you can register now. "}
+          When the tunnel is ready, Portal prints each relay's address-bound
+          URL after <code>service ready at</code>, and its short URL only if
+          that relay granted the name. Register every address it prints that is
+          not listed here, including the address-bound one: the address
+          followed by <code>/_portal/auth/callback</code>, without{" "}
+          <code>:443</code>.
+          {discovery && (
+            <>
+              {" "}Relay discovery, on by default, can publish on more relays,
+              each with its own addresses; to keep to the relays in the command,
+              add <code>--discovery=false</code>.
+            </>
+          )}
+        </p>
       </div>
 
       <div className="space-y-1.5">

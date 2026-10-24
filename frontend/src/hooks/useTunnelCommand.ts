@@ -43,10 +43,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
 
   const share = useMemo(() => classifyShareInput(target), [target]);
   const effectiveName = normalizeExposeName(name);
-  const authIssues = useMemo(
-    () => validateTunnelAuth(auth, effectiveName),
-    [auth, effectiveName]
-  );
+  const authIssues = useMemo(() => validateTunnelAuth(auth), [auth]);
   const commandOptions = useMemo(
     () => ({
       currentOrigin,
