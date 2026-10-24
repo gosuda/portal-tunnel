@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -16,10 +18,13 @@ import (
 	facilitatorclient "github.com/gosuda/x402-facilitator/api/client"
 	x402http "github.com/gosuda/x402-facilitator/resource/http"
 	casperscheme "github.com/gosuda/x402-facilitator/scheme/casper"
+	nanoscheme "github.com/gosuda/x402-facilitator/scheme/nano"
+	nanofacilitator "github.com/gosuda/x402-facilitator/scheme/nano/facilitator"
 	suischeme "github.com/gosuda/x402-facilitator/scheme/sui"
 	suifacilitator "github.com/gosuda/x402-facilitator/scheme/sui/facilitator"
 	suihttp "github.com/gosuda/x402-facilitator/scheme/sui/http"
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
+	"golang.org/x/crypto/blake2b"
 
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -91,8 +96,8 @@ type ExposedHTTPRoute struct {
 	// Empty means every method is paid.
 	Methods []string
 	// Amount enables x402 payment for this route. It is a human amount in
-	// the contract's settlement asset (USDC on Sui, wCSPR on Casper), such
-	// as "0.01"; empty means the route is unpaid.
+	// the contract's settlement asset (USDC on Sui, wCSPR on Casper, XNO
+	// on Nano), such as "0.01"; empty means the route is unpaid.
 	Amount string
 }
 
@@ -165,6 +170,9 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Ha
 	sdkConfigs := make([]sdk.HTTPRouteConfig, 0, len(routes))
 	policies := make([]routePolicy, 0, len(routes))
 	servesX402 := false
+	// Nano block hashes are single-use only within one facilitator's claim
+	// set, so every Nano route of this gateway shares one facilitator.
+	var nano *nanofacilitator.NanoFacilitator
 	for _, route := range routes {
 		prefix := strings.TrimSpace(route.Prefix)
 		if prefix != "" && strings.HasPrefix(prefix, "/") {
@@ -193,7 +201,7 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Ha
 		if err != nil {
 			return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
 		}
-		paid, err := composePaidRoute(prefix, amount, contract)
+		paid, err := composePaidRoute(prefix, amount, contract, &nano)
 		if err != nil {
 			return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
 		}
@@ -228,13 +236,15 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Ha
 // facilitators live as long as the gateway — the gateway owns the composition
 // for its whole process lifetime, so no per-route Close is wired (the same
 // lifetime the previous portal/x402 composition had).
-func composePaidRoute(prefix, amount string, contract X402Payment) (*routePolicy, error) {
+func composePaidRoute(prefix, amount string, contract X402Payment, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
 	network := strings.ToLower(strings.TrimSpace(contract.Network))
 	switch {
 	case network == "" || network == suiMainnetNetwork || network == suiTestnetNetwork:
 		return composeSuiRoute(prefix, amount, contract)
 	case casperscheme.IsCasperNetwork(network):
 		return composeCasperRoute(prefix, amount, contract)
+	case nanoscheme.IsNanoNetwork(network):
+		return composeNanoRoute(prefix, amount, network, contract, nano)
 	default:
 		return nil, fmt.Errorf("unsupported x402 network %q", network)
 	}
@@ -367,6 +377,143 @@ func composeCasperRoute(prefix, amount string, contract X402Payment) (*routePoli
 		return nil, err
 	}
 	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate}, nil
+}
+
+// composeNanoRoute settles XNO payments in process. The payer broadcasts its
+// own send block and pays with its block hash; the Nano facilitator confirms
+// the block on independent RPC nodes (the --x402-endpoint values, or the
+// facilitator's public defaults) and claims each block hash once. The first
+// Nano route creates the gateway's shared facilitator in *nano.
+func composeNanoRoute(prefix, amount, network string, contract X402Payment, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
+	payTo := normalizeNanoAddress(contract.PayTo)
+	if payTo == "" {
+		return nil, errors.New("x402 XNO payment requires a checksummed Nano pay-to address")
+	}
+	raw, err := xnoToRaw(amount)
+	if err != nil {
+		return nil, err
+	}
+	if *nano == nil {
+		endpoints := make([]string, 0, len(contract.Endpoints))
+		for _, endpoint := range contract.Endpoints {
+			if endpoint = strings.TrimSpace(endpoint); endpoint != "" && !slices.Contains(endpoints, endpoint) {
+				endpoints = append(endpoints, endpoint)
+			}
+		}
+		// The facilitator refuses every payment with fewer independent
+		// nodes, so a short override would publish an unpayable route.
+		if len(endpoints) > 0 && len(endpoints) < nanoscheme.MinIndependentEndpoints {
+			return nil, fmt.Errorf("x402 XNO payment requires at least %d independent Nano RPC endpoints", nanoscheme.MinIndependentEndpoints)
+		}
+		facilitator, err := nanofacilitator.NewNanoFacilitatorWithOptions(network, "", "", nanofacilitator.NanoFacilitatorOptions{
+			Endpoints: endpoints,
+		})
+		if err != nil {
+			return nil, err
+		}
+		*nano = facilitator
+	}
+	requirements := facilitatortypes.PaymentRequirements{
+		Scheme:            string(facilitatortypes.Exact),
+		Network:           network,
+		Asset:             nanoscheme.AssetXNO,
+		Amount:            raw,
+		PayTo:             payTo,
+		MaxTimeoutSeconds: orDefaultMaxTimeout(contract),
+		Extra: map[string]any{
+			"asset":               nanoscheme.AssetXNO,
+			"assetTransferMethod": "nano-native-send",
+			"decimals":            nanoscheme.XNORawDecimals,
+		},
+	}
+	gate, err := x402http.New(x402http.Config{
+		Requirements:   requirements,
+		Facilitator:    *nano,
+		Resource:       &facilitatortypes.ResourceInfo{URL: prefix, MimeType: "text/html"},
+		RequestTimeout: contract.RequestTimeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate}, nil
+}
+
+const nanoAddressAlphabet = "13456789abcdefghijkmnopqrstuwxyz"
+
+// normalizeNanoAddress returns the canonical lowercase nano_ form of a Nano
+// account address, or "" when the address is malformed or its blake2b
+// checksum does not match the public key. Ledger RPC nodes report block
+// destinations in this form.
+func normalizeNanoAddress(address string) string {
+	address = strings.ToLower(strings.TrimSpace(address))
+	encoded, ok := strings.CutPrefix(address, "nano_")
+	if !ok {
+		if encoded, ok = strings.CutPrefix(address, "xrb_"); !ok {
+			return ""
+		}
+	}
+	// 60 base32 characters: 4 zero padding bits, the 256-bit public key,
+	// and a 40-bit checksum.
+	if len(encoded) != 60 {
+		return ""
+	}
+	bits := new(big.Int)
+	for i := range len(encoded) {
+		value := strings.IndexByte(nanoAddressAlphabet, encoded[i])
+		if value < 0 {
+			return ""
+		}
+		bits.Lsh(bits, 5).Or(bits, big.NewInt(int64(value)))
+	}
+	decoded := bits.FillBytes(make([]byte, 38))
+	if decoded[0] != 0 {
+		return ""
+	}
+	hash, err := blake2b.New(5, nil)
+	if err != nil {
+		return ""
+	}
+	_, _ = hash.Write(decoded[1:33])
+	checksum := hash.Sum(nil)
+	slices.Reverse(checksum)
+	if string(checksum) != string(decoded[33:]) {
+		return ""
+	}
+	return "nano_" + encoded
+}
+
+// xnoToRaw converts a human XNO amount to the raw atomic unit (1 XNO =
+// 10^30 raw) without floating point. Amounts must be positive and must not
+// carry more than 30 fractional digits.
+func xnoToRaw(amount string) (string, error) {
+	amount = strings.TrimSpace(amount)
+	whole, frac, _ := strings.Cut(amount, ".")
+	if whole == "" {
+		whole = "0"
+	}
+	if !isDecimalDigits(whole) || (frac != "" && !isDecimalDigits(frac)) || strings.HasSuffix(amount, ".") {
+		return "", fmt.Errorf("invalid XNO amount %q", amount)
+	}
+	if len(frac) > nanoscheme.XNORawDecimals {
+		return "", fmt.Errorf("XNO amount %q has more than %d decimals", amount, nanoscheme.XNORawDecimals)
+	}
+	raw, ok := new(big.Int).SetString(whole+frac+strings.Repeat("0", nanoscheme.XNORawDecimals-len(frac)), 10)
+	if !ok || raw.Sign() <= 0 {
+		return "", fmt.Errorf("invalid XNO amount %q", amount)
+	}
+	return raw.String(), nil
+}
+
+func isDecimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := range len(value) {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // newCasperFacilitatorClient delegates Casper verify/settle to the hosted
@@ -551,9 +698,9 @@ func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 		policy.preparer.WritePrepare(w, r, req.Sender)
 		return
 	}
-	// Casper wallets sign the published requirements directly, so there is
-	// no server-built transaction to prepare: the prepare endpoint answers
-	// with the route's challenge instead.
+	// Casper and Nano wallets pay the published requirements directly, so
+	// there is no server-built transaction to prepare: the prepare endpoint
+	// answers with the route's challenge instead.
 	g.writeRouteChallenge(w, r, policy)
 }
 
@@ -568,8 +715,8 @@ func (g *httpGateway) matchPolicy(path string) *routePolicy {
 	return nil
 }
 
-// writeRouteChallenge answers a Casper prepare request with the payment
-// challenge. Casper has no server-built prepare transaction, so the shared
+// writeRouteChallenge answers a Casper or Nano prepare request with the
+// payment challenge. Neither has a server-built prepare transaction, so the shared
 // prepare endpoint re-publishes the route contract in Portal's long-standing
 // wire shape: the JSON body is echoed base64-encoded in both challenge
 // headers. The paid route itself carries the upstream x402http canonical

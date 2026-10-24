@@ -25,7 +25,7 @@ Portal is an open-source tunnel runtime and relay network for publishing service
 - **IVNP-backed Overlay Networking** - Bridge reverse backhauls over an independent IVNP overlay network when enhanced routing privacy is desired.
 - **Built-in MITM Detection** - The native self-probe compares TLS keying material on a sampled connection; `--ban-mitm` blocks a relay for that exposure when exporter values differ.
 - **No Accounts, No API Keys** - Authentication uses local secp256k1 cryptographic identities (`identity.json`) with SIWE challenge signing.
-- **Native x402 Payments** - Route-level micropayments using gasless Sui USDC or Casper wCSPR without traditional payment processors.
+- **Native x402 Payments** - Route-level micropayments using gasless Sui USDC, Casper wCSPR, or Nano XNO without traditional payment processors.
 
 > 📖 **Explore the Complete Product Capabilities**:
 > For the complete matrix of all 20+ supported capabilities across CLI, Agent, SDK, and Relay—including interface support and trust boundaries—see the **[Canonical Feature Inventory](https://gosuda.github.io/portal-tunnel/features)**.

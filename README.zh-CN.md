@@ -25,7 +25,7 @@ Portal 是一个本地隧道运行时和中继网络，用于将服务发布到 
 - **基于 IVNP 的覆盖网络** - 需要增强路由隐私时，反向回程流可通过独立的 IVNP 覆盖网络进行传输。
 - **内置 MITM 检测** - 主动自探测机制对比两端导出的 TLS 密钥材料，及时发现中继侧 TLS 拦截；`--ban-mitm` 会自动封禁异常中继。
 - **无需账户，无需 API Key** - 身份认证采用本地 secp256k1 密钥对（`identity.json`）与 SIWE 挑战签名。
-- **原生 x402 支付** - 支持免 gas 的 Sui USDC 或 Casper wCSPR 路由级小额支付，无需传统支付处理机构。
+- **原生 x402 支付** - 支持免 gas 的 Sui USDC、Casper wCSPR 或 Nano XNO 路由级小额支付，无需传统支付处理机构。
 
 > 📖 **查看完整功能清单**：
 > 如需查看 Portal 在 CLI、Agent、SDK 和 Relay 各端支持的全部 20+ 项功能、接口支持情况及信任边界，请参阅**[权威功能清单 (Feature Inventory)](https://gosuda.github.io/portal-tunnel/features)**。

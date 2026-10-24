@@ -33,6 +33,7 @@ Each capability lists its supported interfaces (**CLI**, **Agent**, **SDK**, **R
 | **Auth** | SIWE application authentication | CLI, Agent | EIP-4361 wallet challenge; injects verified identity headers | [SIWE Authentication](/siwe-authentication#siwe-application-access) |
 | **Payments** | x402 Sui payments | CLI, Agent | Gasless Sui USDC per-route pricing; in-browser wallet settlement | [Concepts: Payments](/concepts#in-flow-x402-payments) |
 | **Payments** | x402 Casper payments | CLI, Agent | wCSPR CEP-18 token payments settled through Casper facilitators | [Configuration: x402 Networks](/configuration#x402-payment-networks) |
+| **Payments** | x402 Nano payments | CLI, Agent | XNO send blocks confirmed on independent Nano RPC nodes; one use per block hash | [Configuration: x402 Networks](/configuration#x402-payment-networks) |
 | **Operations** | Portal Agent | CLI, Agent | Multi-tunnel daemon from `config.toml`; service runner & TUI dashboard | [Portal Agent Guide](/portal-agent) |
 | **Automation** | AI coding assistant plugins | Plugins | `portal-expose` and `portal-connect` skills for Codex, Claude, Cursor | [Agent Plugin Guide](https://github.com/gosuda/portal-tunnel/blob/main/plugins/portal-deploy/README.md) |
 | **Naming** | Custom hostnames and ENS | CLI, Agent, Relay | Custom DNS prefixes, canonical identity names, and verified ENS records | [Wallet & ENS: ENS Import](/wallet-and-ens#ens-gasless-dns-import) |

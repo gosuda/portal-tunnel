@@ -147,8 +147,8 @@ github.com/googleapis/gax-go/v2 v2.21.0 h1:h45NjjzEO3faG9Lg/cFrBh2PgegVVgzqKzuZl
 github.com/googleapis/gax-go/v2 v2.21.0/go.mod h1:But/NJU6TnZsrLai/xBAQLLz+Hc7fHZJt/hsCz3Fih4=
 github.com/gosuda/keyless_tls v0.0.4 h1:+R1evqT8t5Ggz4km68Ij8zEWRdbKmURrcqUtbcB2oN0=
 github.com/gosuda/keyless_tls v0.0.4/go.mod h1:Kymj8rE/o2D0LVW3dMiXd14P9aVr0wx3oAWO4jBThYo=
-github.com/gosuda/x402-facilitator v0.0.5-0.20260918144508-4423ff00e0f5 h1:GCOTLWjAlY3Cnzn1NmhH5+YMUD1wyNiMn5Xq3tpfnkk=
-github.com/gosuda/x402-facilitator v0.0.5-0.20260918144508-4423ff00e0f5/go.mod h1:TW7ZCwpeo6gUcPoJKXEMSv+29HAzXmPHqvG21NIl0/g=
+github.com/gosuda/x402-facilitator v0.0.6-0.20260927130422-df0de5fd1d71 h1:KUzZHybYsJc4zBVxBv6NKsMWGRQyqT4x2GkbocC5GLc=
+github.com/gosuda/x402-facilitator v0.0.6-0.20260927130422-df0de5fd1d71/go.mod h1:TW7ZCwpeo6gUcPoJKXEMSv+29HAzXmPHqvG21NIl0/g=
 github.com/hashicorp/go-cleanhttp v0.5.2 h1:035FKYIWjmULyFRBKPs8TBQoi0x6d9G4xc9neXJWAZQ=
 github.com/hashicorp/go-cleanhttp v0.5.2/go.mod h1:kO/YDlP8L1346E6Sodw+PrpBSV4/SoxCXGY6BqNFT48=
 github.com/hashicorp/go-hclog v1.6.3 h1:Qr2kF+eVWjTiYmU7Y31tYlP1h0q/X3Nl3tPGdaB11/k=

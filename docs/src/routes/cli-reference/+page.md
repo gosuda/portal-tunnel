@@ -132,9 +132,9 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--hide` | bool | `false` | Hide service from relay listing screens |
 | `--auth-identity-headers` | bool | `false` | Send authenticated `X-Portal-User` and `X-Portal-Auth` headers to HTTP upstreams; requires `--auth` |
 | `--x402-testnet` | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
-| `--x402-network` | string | | Optional Sui or Casper CAIP-2 network |
+| `--x402-network` | string | | Optional Sui, Casper, or Nano CAIP-2 network |
 | `--x402-asset` | string | | wCSPR CEP-18 contract hash required by Casper |
-| `--x402-endpoint` | string | | Optional Sui RPC or Casper facilitator endpoint; repeatable |
+| `--x402-endpoint` | string | | Optional Sui RPC, Casper facilitator, or Nano RPC endpoint; repeatable |
 | `--x402-facilitator-token` | string | `CSPR_CLOUD_API_KEY` | Casper facilitator authorization token; prefer the environment variable so the secret is not exposed in the process arguments |
 | `--strip-request-header` | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (`Host`, `X-Forwarded-*`) are always rewritten after stripping; requires `--http-route` or `--auth` |
 | `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
@@ -189,7 +189,10 @@ rename an existing one. Use a separate `--identity-path` for a new identity.
 - Tunnel paid routes use Sui mainnet by default. Casper requires an explicit
   `--x402-network casper:...` and `--x402-asset`; it uses the hosted facilitator
   by default or the first `--x402-endpoint` override. The default CSPR.cloud
-  facilitator also requires `CSPR_CLOUD_API_KEY`.
+  facilitator also requires `CSPR_CLOUD_API_KEY`. Nano requires
+  `--x402-network nano:mainnet` and a `nano_` pay-to address; repeat
+  `--x402-endpoint` for at least two RPC nodes or omit it for the public
+  defaults.
 
 ### Machine-Readable Relay Lifecycle
 

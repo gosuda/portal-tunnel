@@ -390,9 +390,9 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--strip-request-header` | | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; `Host` and `X-Forwarded-Proto` cannot be stripped (always regenerated before this middleware runs); `X-Forwarded-Prefix` and `X-Portal-User`/`Auth` are allowed; requires `--http-route`, `--target`, or `--auth` |
 | `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
-| `--x402-network` | | string | | Optional Sui or Casper CAIP-2 network |
+| `--x402-network` | | string | | Optional Sui, Casper, or Nano CAIP-2 network |
 | `--x402-asset` | | string | | wCSPR CEP-18 contract hash required by Casper |
-| `--x402-endpoint` | | string | | Optional Sui RPC or Casper facilitator endpoint; repeatable |
+| `--x402-endpoint` | | string | | Optional Sui RPC, Casper facilitator, or Nano RPC endpoint; repeatable |
 | `--x402-facilitator-token` | `CSPR_CLOUD_API_KEY` | string | | Casper facilitator authorization token |
 
 ### Routing
@@ -541,9 +541,9 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `strip_request_headers` | string array | Client request headers removed before routed HTTP forwards them upstream; case-insensitive; `Host` and `X-Forwarded-Proto` cannot be listed (always regenerated); `X-Portal-User`/`Auth` conflict with `auth_identity_headers`; requires `http_routes` or a `target` |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |
 | `x402_testnet` | bool | Use Sui testnet when `x402_network` is omitted; omitted or `false` uses Sui mainnet |
-| `x402_network` | string | Optional CAIP-2 network: `sui:mainnet`, `sui:testnet`, `casper:casper`, or `casper:casper-test` |
+| `x402_network` | string | Optional CAIP-2 network: `sui:mainnet`, `sui:testnet`, `casper:casper`, `casper:casper-test`, or `nano:mainnet` |
 | `x402_asset` | string | wCSPR CEP-18 contract hash; required for Casper payments |
-| `x402_endpoints` | string array | Optional Sui RPC endpoints or Casper facilitator URL; Casper uses the first endpoint |
+| `x402_endpoints` | string array | Optional Sui RPC endpoints, Casper facilitator URL, or Nano RPC nodes; Casper uses the first endpoint, Nano requires at least two |
 | `x402_facilitator_token` | string | Casper facilitator authorization token; when omitted, the agent uses `CSPR_CLOUD_API_KEY` |
 | `http_routes[].amount` | string | Optional human payment amount, such as `0.01`, for one HTTP route prefix; requires `x402_pay_to` |
 | `http_routes[].methods` | string array | Optional HTTP methods that require payment on that route; empty means every method |
@@ -563,6 +563,7 @@ request reaches the upstream.
 |---|---|---|---|
 | `sui:mainnet`, `sui:testnet` | USDC gasless stablecoin | 6 | Built-in Sui facilitator |
 | `casper:casper`, `casper:casper-test` | wCSPR CEP-18 token | 9 | `https://x402-facilitator.cspr.cloud`, overridable per payment |
+| `nano:mainnet` | XNO native coin | 30 | Built-in Nano facilitator reading public RPC nodes |
 
 Casper has no Go chain SDK, so `casper:*` payments delegate `/verify` and
 `/settle` to a remote x402 facilitator over HTTP. The wCSPR CEP-18 contract
@@ -576,6 +577,20 @@ x402_network = "casper:casper-test"
 x402_asset = "hash-..."
 x402_pay_to = "account-hash-..."
 x402_endpoints = ["https://x402-facilitator.cspr.cloud"]
+```
+
+Nano payers broadcast their own send block and pay with its block hash
+(`payload.blockHash`). The tunnel confirms the block on every configured RPC
+node (at least two; the facilitator's public nodes when `x402_endpoints` is
+omitted), requires a confirmed send of exactly the route amount to
+`x402_pay_to`, and accepts each block hash once per tunnel process. The route
+amount is in XNO and is published in raw units (1 XNO = 10^30 raw). Nano has no
+memo field, so use a dedicated pay-to account for each paid tunnel.
+
+```toml
+x402_network = "nano:mainnet"
+x402_pay_to = "nano_..."
+x402_endpoints = ["https://rpc.nano.to", "https://rainstorm.city/api"]
 ```
 
 For a task-oriented walkthrough, see [Portal Agent](/portal-agent).
