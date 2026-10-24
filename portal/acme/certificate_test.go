@@ -77,8 +77,9 @@ func TestCertificateUsable(t *testing.T) {
 
 // Switching from CA A to CA B and back to A must not serve the certificate A
 // issued earlier once it has expired: each directory keeps its own file, and
-// the stored one is reused only while it is valid and covers the relay domains.
-func TestReusableCertificateIsPerCAAndMustBeValid(t *testing.T) {
+// the stored one is reused only while it has not expired and covers the relay
+// domains.
+func TestReusableCertificateIsPerCAAndUnexpired(t *testing.T) {
 	t.Parallel()
 
 	const (
