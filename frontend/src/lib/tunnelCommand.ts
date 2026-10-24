@@ -150,7 +150,11 @@ export function buildTunnelPreviewURL(
   if (baseHost === "") {
     return "";
   }
-  return `https://${normalized}.${baseHost}`;
+  // The short URL keeps the relay's port (relayAuthority in sdk/listener.go);
+  // a browser leaves out the default 443.
+  const port = new URL(origin).port;
+  const portSuffix = port === "" || port === "443" ? "" : `:${port}`;
+  return `https://${normalized}.${baseHost}${portSuffix}`;
 }
 
 export function buildServiceStatusHostname(

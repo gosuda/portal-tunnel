@@ -452,6 +452,16 @@ describe("tunnelCommand sign-in", () => {
       "https://my-app.portal.example.com/_portal/auth/callback",
       "https://my-app.relay.example.org/_portal/auth/callback",
     ]);
+    // The browser's Host keeps a non-default port, so the redirect must too.
+    expect(
+      buildAuthRedirectURLs(
+        ["https://relay.example.net:8443", "http://other.example.net:443"],
+        "my-app"
+      )
+    ).toEqual([
+      "https://my-app.relay.example.net:8443/_portal/auth/callback",
+      "https://my-app.other.example.net/_portal/auth/callback",
+    ]);
     expect(buildAuthRedirectURLs(["https://portal.example.com"], "")).toEqual([]);
     expect(buildAuthRedirectURLs([], "my-app")).toEqual([]);
   });
