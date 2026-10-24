@@ -49,6 +49,7 @@ type Client struct {
 	mu          sync.RWMutex
 	accessToken string
 	pin         *pinnedChain
+	closed      bool // guarded by mu, so that no pin is installed after Close
 	closeOnce   sync.Once
 	closeErr    error
 
@@ -217,6 +218,12 @@ func (c *Client) refreshChain(ctx context.Context, checkedBefore *uint64) (bool,
 		return false, err
 	}
 	c.mu.Lock()
+	if c.closed {
+		// Close already released the pin it saw; a new one would never be.
+		c.mu.Unlock()
+		_ = next.signer.Close()
+		return false, nil
+	}
 	c.pin = next
 	c.mu.Unlock()
 	// Handshakes still using the replaced signer finish on their connections.
@@ -286,15 +293,19 @@ func (c *Client) RelayCertPool() *x509.CertPool {
 	return pin.pool
 }
 
-// Close releases the remote signer backing the TLS server. It is safe
-// to call more than once: the signer is closed exactly once and every call
-// returns the result of that first close attempt.
+// Close releases the remote signer backing the TLS server, and no chain is
+// pinned after it. It is safe to call more than once: the signer is closed
+// exactly once and every call returns the result of that first close attempt.
 func (c *Client) Close() error {
 	if c == nil {
 		return nil
 	}
 	c.closeOnce.Do(func() {
-		if pin := c.pinned(); pin != nil && pin.signer != nil {
+		c.mu.Lock()
+		c.closed = true
+		pin := c.pin
+		c.mu.Unlock()
+		if pin != nil && pin.signer != nil {
 			c.closeErr = pin.signer.Close()
 		}
 	})
