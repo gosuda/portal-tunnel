@@ -461,7 +461,7 @@ func (l *listener) admit(ctx context.Context, conn net.Conn) {
 			Err(err).
 			Str("relay_url", l.api.relayURL.String()).
 			Str("address", l.identity.Address).
-			Msg("mitm self-probe handling failed")
+			Msg("admitting a self-probe or channel binding connection failed")
 	}
 	if handled {
 		return
@@ -714,9 +714,10 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless
 				}
 			}
 
-			// Taking a slot before admitting keeps the backpressure of a full
-			// accept queue: with maxAdmitting connections in flight, no further
-			// reverse connection is claimed.
+			// Taking a slot bounds the connections in admission at
+			// maxAdmitting, counting those whose admit goroutine waits on a
+			// full l.accepted. A full accept queue alone does not stop this
+			// loop: it claims reverse connections until every slot is taken.
 			select {
 			case <-ctx.Done():
 				_ = acceptedConn.Close()
