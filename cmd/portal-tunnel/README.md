@@ -74,7 +74,7 @@ portal expose localhost:25565 --tcp
 
 ### Common Flags
 
-- `--name`: Optional hostname prefix (normalized DNS label, maximum 63 ASCII characters). A new identity without a name uses an address-only canonical hostname.
+- `--name`: Request a short URL such as `https://myapp.<relay-domain>/`, without the Ethereum address (normalized DNS label, maximum 63 ASCII characters). When granted, it appears as `short URL` in readiness messages and `alias_url` in JSON logs. A new identity without a name, or a name already owned by another identity, uses the identity-bound canonical URL. Existing identities retain their saved name; use a new `--identity-path` to choose another.
 - `--relays`, `--discovery`, `--overlay`: Select relays and prefer an available overlay path.
 - `--http-route`, `--serve`, `--tcp`, `--udp`: Choose routed HTTP, a static site, raw TCP, or UDP exposure.
 - `--auth siwe`, `--auth credential`, or `--auth oidc`: Protect HTTP application access. `--auth-allow` restricts access to the supplied principals (Ethereum wallets for `siwe`, credential subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc`, which requires at least one entry; repeatable).

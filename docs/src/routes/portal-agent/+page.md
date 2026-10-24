@@ -260,6 +260,11 @@ An empty `auth_allowed_wallets` list means any validly signed credential or sess
 The dashboard is a local terminal UI. It polls agent status every two seconds
 and edits the same TOML config file that the service uses.
 
+For a ready named tunnel, the Relays pane displays and opens the short URL
+without an Ethereum address when the relay granted that name. Otherwise it uses
+the identity-bound URL. `/agent/status` keeps `public_url` as the identity-bound
+URL and includes `alias_url` only for a ready relay with an assigned short name.
+
 Dashboard panes:
 
 | Pane | Purpose |

@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,7 @@ async function main() {
   }
   if (!window.portalTunnel) throw new Error("portalTunnel was not installed by the WASM artifact");
   const ready = await window.portalTunnel.start({
+    name: new URLSearchParams(window.location.search).get("name") || "",
     relayURL: window.location.origin,
     body: "portal-browser-smoke-ok",
   });
@@ -61,12 +63,22 @@ func readBrowserLog(path string) string {
 
 type browserSmokeResult struct {
 	publicURL string
+	aliasURL  string
 	err       error
 }
 
 // TestPackagedBrowserWASM loads the artifacts produced by make build-tunnel
 // in a real browser, exposes a handler, and reaches it through tenant TLS.
 func TestPackagedBrowserWASM(t *testing.T) {
+	for _, name := range []string{"", "browser-preview"} {
+		t.Run(cmp.Or(name, "unnamed"), func(t *testing.T) {
+			testPackagedBrowserWASM(t, name)
+		})
+	}
+}
+
+func testPackagedBrowserWASM(t *testing.T, name string) {
+	t.Helper()
 	wasmPath := filepath.Join("..", "cmd", "relay-server", "dist", "tunnel", "portal-js-wasm.wasm")
 	wasmExecPath := filepath.Join("..", "cmd", "relay-server", "dist", "tunnel", "wasm_exec.js")
 	if _, err := os.Stat(wasmPath); err != nil {
@@ -111,12 +123,13 @@ func TestPackagedBrowserWASM(t *testing.T) {
 	mux.HandleFunc("POST /browser-ready", func(w http.ResponseWriter, r *http.Request) {
 		var ready struct {
 			PublicURL string `json:"publicURL"`
+			AliasURL  string `json:"aliasURL"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&ready); err != nil {
 			result <- browserSmokeResult{err: fmt.Errorf("decode browser ready state: %w", err)}
 			return
 		}
-		result <- browserSmokeResult{publicURL: ready.PublicURL}
+		result <- browserSmokeResult{publicURL: ready.PublicURL, aliasURL: ready.AliasURL}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /browser-error", func(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +174,7 @@ func TestPackagedBrowserWASM(t *testing.T) {
 		"--ignore-certificate-errors",
 		"--no-sandbox",
 		"--user-data-dir="+filepath.Join(t.TempDir(), "chrome"),
-		relayURL+"/browser-smoke",
+		relayURL+"/browser-smoke?name="+name,
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -209,8 +222,11 @@ waitReady:
 	if len(leases) != 1 {
 		t.Fatalf("relay public leases = %d, want 1", len(leases))
 	}
-	if leases[0].Hostname != "" {
+	if name == "" && leases[0].Hostname != "" {
 		t.Fatalf("lease hostname = %q, want empty for unnamed browser lease", leases[0].Hostname)
+	}
+	if name != "" && leases[0].Hostname == "" {
+		t.Fatal("named browser lease did not receive an alias")
 	}
 	if !strings.Contains(ready.publicURL, leases[0].CanonicalHostname) {
 		t.Fatalf("browser connector public URL = %q, want canonical hostname %q", ready.publicURL, leases[0].CanonicalHostname)
@@ -220,5 +236,19 @@ waitReady:
 	body, ok := tenantGet("127.0.0.1:"+strconv.Itoa(port), certificate, ready.publicURL)
 	if !ok || body != "portal-browser-smoke-ok" {
 		t.Fatalf("browser tunnel response = %q, ok=%v, want packaged handler response", body, ok)
+	}
+	if name == "" {
+		if ready.aliasURL != "" {
+			t.Fatalf("unnamed connector alias URL = %q, want empty", ready.aliasURL)
+		}
+		return
+	}
+	wantAlias := strings.Replace(ready.publicURL, leases[0].CanonicalHostname, leases[0].Hostname, 1)
+	if ready.aliasURL != wantAlias {
+		t.Fatalf("connector alias URL = %q, want %q", ready.aliasURL, wantAlias)
+	}
+	body, ok = tenantGet("127.0.0.1:"+strconv.Itoa(port), certificate, ready.aliasURL)
+	if !ok || body != "portal-browser-smoke-ok" {
+		t.Fatalf("browser alias response = %q, ok=%v, want packaged handler response", body, ok)
 	}
 }

@@ -102,7 +102,7 @@ accepted in the same command; advanced flags do not require a configuration file
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--name` | string | | Public hostname prefix, normalized to one DNS label of at most 63 ASCII characters; when omitted for a new identity, an address-only canonical hostname (<address>.<relay-domain>) is used |
+| `--name` | string | | Request a short URL without the Ethereum address (one DNS label, at most 63 ASCII characters); applies to new identities. When omitted for a new identity, an address-only canonical hostname (<address>.<relay-domain>) is used |
 | `--relays` | string | registry | Additional relay API URLs, comma-separated |
 | `--discovery` | bool | `true` | Include registry relays and relay discovery expansion |
 | `--overlay` | bool | `false` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; retains direct fallback |
@@ -162,8 +162,12 @@ When `--name` is omitted for a new identity, the service does not claim a
 friendly public name and publishes an address-only canonical hostname
 (`<address>.<relay-domain>`). An existing identity keeps using its saved name
 instead.
-When `--name` is provided, Portal publishes both the named canonical hostname
-(`<name>-<address>.<relay-domain>`) and the friendly alias (`<name>.<relay-domain>`).
+When `--name` is provided and available, share the short URL
+`https://<name>.<relay-domain>/`, which has no Ethereum address. Portal also
+publishes the identity-bound canonical hostname (`<name>-<address>.<relay-domain>`).
+If another identity owns the short name, the CLI continues with only the
+identity-bound URL. The short URL reaches the live origin; opt-in relay caching
+uses the canonical hostname.
 A name longer than 22 characters does not fit beside the address in one DNS
 label, so its canonical hostname uses a 21-character hash of the name instead:
 `<name-hash>--<address>.<relay-domain>`. Names shaped like a canonical label
@@ -213,7 +217,7 @@ portal expose 3000 --log-format json
 One ready record:
 
 ```json
-{"level":"info","event":"relay_status","relay_url":"https://relay.example.com","state":"ready","public_url":"https://myapp-<identity>.relay.example.com","alias_url":"https://myapp.relay.example.com","deselected":false,"time":"2026-01-01T00:00:00Z","message":"service ready at https://myapp-<identity>.relay.example.com"}
+{"level":"info","event":"relay_status","relay_url":"https://relay.example.com","state":"ready","public_url":"https://myapp-<identity>.relay.example.com","alias_url":"https://myapp.relay.example.com","deselected":false,"time":"2026-01-01T00:00:00Z","message":"service ready at https://myapp-<identity>.relay.example.com (short URL: https://myapp.relay.example.com)"}
 ```
 
 Fields on `event=relay_status` records:
@@ -225,7 +229,7 @@ Fields on `event=relay_status` records:
 | `state` | `connecting`, `ready`, or `failed` |
 | `failure` | Present when `state` is `failed`: `runtime` (recoverable), `terminal`, or `mitm` (TLS termination detected; requires `--ban-mitm`) |
 | `public_url` | Identity-bound canonical URL; usable only while `state` is `ready`, even if a retained lease keeps this field set while reconnecting |
-| `alias_url` | Friendly `<name>.<relay-domain>` URL, present **only while `state` is `ready` and granted**: a failed, deselected, or address-only relay never reports one |
+| `alias_url` | Short `<name>.<relay-domain>` URL without an Ethereum address; prefer this for sharing when present. Present **only while `state` is `ready` and granted**: a failed, deselected, or address-only relay never reports one |
 | `deselected` | `true` on the removal notification for a relay that left the membership set; a previously advertised relay URL must be retracted |
 
 Records never carry access tokens, private identities, or other secrets;

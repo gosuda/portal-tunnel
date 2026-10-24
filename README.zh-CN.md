@@ -61,7 +61,7 @@ irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1
 portal expose 3000
 ```
 
-Portal 会立即打印公共 HTTPS 网址。更多常用示例：
+隧道就绪后，Portal 会打印公共 HTTPS 网址。创建身份时使用 `--name myapp`，即可申请不含以太坊地址的短网址 `https://myapp.<relay-domain>/`。名称可用时，就绪消息会显示 `short URL`（JSON 日志中的 `alias_url`）；分享时优先使用这个网址。包含以太坊地址的身份绑定网址仍然可用，并支持可选的中继缓存。名称被占用时，仅提供身份绑定网址。已有身份会保留原名称；选择新名称时请使用新的 `--identity-path`。更多常用示例：
 
 ```bash
 # 自定义名称与显式指定中继

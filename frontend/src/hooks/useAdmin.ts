@@ -103,7 +103,7 @@ function toAdminServer(
     owner: metadata.owner,
     online: (row.ready || 0) > 0,
     dns: hostname || routeHostname,
-    link: routeHostname ? `https://${routeHostname}/` : "",
+    link: hostname || routeHostname ? `https://${hostname || routeHostname}/` : "",
     lastUpdated: row.last_seen_at || undefined,
     firstSeen: row.first_seen_at || undefined,
     paymentEnabled: payment.enabled,

@@ -76,7 +76,7 @@ use `docker compose up -d --build` to build the image from the current checkout.
 Start your local app, then run:
 
 ```bash
-portal expose 3000
+portal expose 3000 --name myapp
 ```
 
 Portal accepts:
@@ -87,14 +87,21 @@ Portal accepts:
 | Host and port | `localhost:8080` | that exact local address |
 | URL host | `http://127.0.0.1:3000` | parsed as `127.0.0.1:3000` |
 
-Portal prints a public HTTPS URL:
+When the name is available, Portal prints a short public HTTPS URL without an
+Ethereum address, labelled `short URL` in the readiness message:
 
 ```text
-https://your-name.relay.example.com
+https://myapp.relay.example.com/
 ```
 
 Open the URL in a browser. The relay routes the connection, but tenant TLS
 terminates in the tunnel process running on your machine.
+
+The same message also includes an identity-bound URL containing your Ethereum
+address. Use the short URL for sharing; use the identity-bound URL when you need
+an origin tied to your identity or opt-in relay caching. If the name is already
+taken, Portal provides only the identity-bound URL. An existing identity keeps
+its saved name; use a new `--identity-path` to choose a different name.
 
 ## Share A Static Site
 
@@ -172,8 +179,10 @@ portal expose 3000 \
 
 When `--name` is omitted, the service does not claim a friendly public name and
 publishes an address-only canonical hostname (`<address>.<relay-domain>`).
-When `--name` is provided, Portal publishes both the named canonical hostname
-(`<name>-<address>.<relay-domain>`) and the friendly alias (`<name>.<relay-domain>`).
+When `--name` is provided and available, share the short URL
+`https://<name>.<relay-domain>/`. Portal also publishes the identity-bound
+canonical hostname (`<name>-<address>.<relay-domain>`). If the short name is
+unavailable, the tunnel continues with only its identity-bound URL.
 An existing identity file or `--identity-json` supplies the saved name as well
 as the key. `--name` applies only when creating a new identity; it does not
 rename an existing one. Use a separate `--identity-path` for a new identity.

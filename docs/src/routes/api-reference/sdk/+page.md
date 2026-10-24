@@ -127,7 +127,10 @@ architecture page). The current SDK allows canonical fallback.
 reports the returned `hostname` when the relay granted the friendly alias, and
 is empty after canonical fallback or for an unnamed service. Both stay set while
 the lease is held, including while reverse sessions reconnect; a failed relay
-clears `AliasURL`. Show it to users only while the relay is ready.
+clears `AliasURL`. While the relay is ready, prefer `AliasURL` for user-facing
+links and sharing, falling back to `PublicURL` when it is empty. Keep `PublicURL`
+for identity-bound origins, diagnostics, and opt-in relay caching. Do not derive
+the short URL by removing the address suffix: another identity may own that name.
 A protocol-10 client that omits the capability receives `hostname_conflict`
 instead of a canonical-only registration when its friendly hostname is already
 owned by another identity.
@@ -304,6 +307,13 @@ A relay exposes the maintained connector and matching Go runtime glue at
 `/api/install/bin/js-wasm` and `/api/install/bin/wasm-exec`. Use the
 `release_version` returned by `/sdk/domain` as their `version` query parameter
 so the relay rejects an incompatible cached artifact.
+
+The maintained connector's `portalTunnel.start(options)` resolves to an object
+with `publicURL` (the identity-bound canonical URL, preserving the existing
+contract) and `aliasURL` (the granted short URL, or an empty string when no alias
+was granted). Consumers can explicitly choose `aliasURL || publicURL` for sharing.
+Consumers of older connector artifacts should treat a missing `aliasURL` the
+same as an empty value.
 
 Browser runtime limits:
 

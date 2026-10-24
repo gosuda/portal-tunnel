@@ -87,7 +87,10 @@ func (c *browserConnector) start(_ js.Value, args []js.Value) any {
 			c.clear(exposure)
 			return nil, errors.New("relay did not return a public URL")
 		}
-		return map[string]any{"publicURL": ready[0].PublicURL}, nil
+		return map[string]any{
+			"publicURL": ready[0].PublicURL,
+			"aliasURL":  ready[0].AliasURL,
+		}, nil
 	})
 }
 
