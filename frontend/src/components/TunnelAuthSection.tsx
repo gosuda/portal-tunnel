@@ -120,7 +120,7 @@ const ALLOW_COPY: Record<
     label: "Who may sign in",
     requirement: "required",
     placeholder: "email, @domain or sub:id",
-    help: "An email is one person. @example.com is everyone at exactly that domain, not its subdomains. sub:<id> is the provider's own account id. Portal refuses to start without a list, because the provider signs in people who have nothing to do with your app.",
+    help: "Separate several with commas. An email is one person. @example.com is everyone at exactly that domain, not its subdomains. sub:<id> is the provider's own account id. Portal refuses to start without a list, because the provider signs in people who have nothing to do with your app.",
   },
 };
 

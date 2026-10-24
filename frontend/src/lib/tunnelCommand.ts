@@ -373,8 +373,9 @@ export function addAuthAllow(
   const keyOf = (entry: string) => (method === "siwe" ? entry.toLowerCase() : entry);
   const next = [...current];
   const seen = new Set(next.map(keyOf));
-  // A link name may contain spaces; the other entries never do.
-  const separator = method === "credential" ? /,/ : /[,\s]+/;
+  // The tunnel takes each --auth-allow value whole, and a link name, a sub: id
+  // or the local part of an email may contain spaces; a wallet address never does.
+  const separator = method === "siwe" ? /[,\s]+/ : /,/;
   for (const typed of draft.split(separator).map((part) => part.trim())) {
     if (typed === "") {
       continue;

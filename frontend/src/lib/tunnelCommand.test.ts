@@ -325,11 +325,11 @@ describe("tunnelCommand sign-in", () => {
   });
 
   it("adds entries the way the tunnel reads them", () => {
-    expect(addAuthAllow("oidc", [], "Alice@Example.com, alice@example.com  @Example.COM")).toEqual([
+    expect(addAuthAllow("oidc", [], "Alice@Example.com, alice@example.com,  @Example.COM")).toEqual([
       "alice@example.com",
       "@example.com",
     ]);
-    expect(addAuthAllow("oidc", ["sub:AbC"], "SUB:AbC SUB:abc")).toEqual([
+    expect(addAuthAllow("oidc", ["sub:AbC"], "SUB:AbC, SUB:abc")).toEqual([
       "sub:AbC",
       "sub:abc",
     ]);
@@ -340,14 +340,19 @@ describe("tunnelCommand sign-in", () => {
       "Alice",
       "bob",
     ]);
-    // A link name may contain spaces, as the tunnel allows; the other methods split on them.
+    // Link names and sub: ids may contain spaces, as the tunnel allows; only wallets split on them.
     expect(addAuthAllow("credential", [], "alice smith, bob")).toEqual([
       "alice smith",
       "bob",
     ]);
-    expect(addAuthAllow("oidc", [], "a@example.com b@example.com")).toEqual([
+    expect(addAuthAllow("oidc", [], "sub:team lead 7, a@example.com")).toEqual([
+      "sub:team lead 7",
       "a@example.com",
-      "b@example.com",
+    ]);
+    expect(classifyAuthAllow("oidc", "sub:team lead 7").ok).toBe(true);
+    expect(addAuthAllow("siwe", [], `${wallet} ${wallet.slice(0, -1)}0`)).toEqual([
+      wallet,
+      `${wallet.slice(0, -1)}0`,
     ]);
     expect(addAuthAllow("credential", ["alice"], " , ")).toEqual(["alice"]);
   });
