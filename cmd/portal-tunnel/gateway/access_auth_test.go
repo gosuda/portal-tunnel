@@ -893,12 +893,12 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		{
 			name:    "identity proof without identity headers",
 			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, IdentityProof: identityProofTestValue},
-			wantErr: "--auth-identity-headers",
+			wantErr: "(--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers",
 		},
 		{
 			name:    "identity proof too short",
 			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: "abcdefghijklmno"},
-			wantErr: "at least 16 characters",
+			wantErr: "(--auth-identity-proof / AUTH_IDENTITY_PROOF) must be at least 16 characters",
 		},
 		{
 			name:    "identity proof with a space",

@@ -87,14 +87,15 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	// The proof is sent as a header value and is compared byte for byte by the
 	// upstream, so it is not trimmed here (the environment reader already trims
 	// the whitespace around AUTH_IDENTITY_PROOF) and only visible ASCII is
-	// accepted. The errors never include it.
+	// accepted. The errors name both sources of the value, the flag and the
+	// environment variable, and never include the value itself.
 	proof := cfg.IdentityProof
 	if proof != "" {
 		if !cfg.IdentityHeaders {
-			return applicationAuthSettings{}, errors.New("--auth-identity-proof requires --auth-identity-headers")
+			return applicationAuthSettings{}, errors.New("identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers")
 		}
 		if len(proof) < minIdentityProofLength || strings.ContainsFunc(proof, func(r rune) bool { return r < 0x21 || r > 0x7e }) {
-			return applicationAuthSettings{}, fmt.Errorf("--auth-identity-proof must be at least %d characters of visible ASCII without spaces", minIdentityProofLength)
+			return applicationAuthSettings{}, fmt.Errorf("identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) must be at least %d characters of visible ASCII without spaces", minIdentityProofLength)
 		}
 	}
 	issuer := strings.TrimSpace(cfg.OIDCIssuerURL)
