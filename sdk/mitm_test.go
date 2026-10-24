@@ -645,6 +645,33 @@ func TestTLSChannelBindingReportsATunnelThatDoesNotAnswer(t *testing.T) {
 	}
 }
 
+// Canceling the caller's context ends a pending exchange at once, not at the
+// binding deadline, and leaves the connection closed.
+func TestTLSChannelBindingReturnsWhenContextIsCanceled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		hostname := canonicalTestHostname(t, "0x1234567890abcdef1234567890abcdef12345678")
+		clientRaw, serverRaw := net.Pipe()
+		client := &testExporterConn{Conn: clientRaw, exported: bytes.Repeat([]byte{0x42}, 32)}
+		// The tunnel takes the request and never answers.
+		go func() { _, _ = io.Copy(io.Discard, serverRaw) }()
+		const cancelAfter = 50 * time.Millisecond
+		ctx, cancel := context.WithCancel(t.Context())
+		time.AfterFunc(cancelAfter, cancel)
+
+		start := time.Now()
+		err := VerifyTLSChannelBinding(ctx, client, hostname)
+		if elapsed := time.Since(start); elapsed > cancelAfter {
+			t.Fatalf("VerifyTLSChannelBinding() returned %v after the context was canceled", elapsed-cancelAfter)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("VerifyTLSChannelBinding() = %v; want context.Canceled", err)
+		}
+		if _, writeErr := client.Write([]byte("secret")); writeErr == nil {
+			t.Fatal("client connection remained writable after the canceled exchange")
+		}
+	})
+}
+
 // recordChannelBindingAnswer plays the honest tunnel for one earlier client
 // request and returns the answer frame a relay could have recorded from it.
 func recordChannelBindingAnswer(t *testing.T, l *listener, exporter []byte) []byte {
