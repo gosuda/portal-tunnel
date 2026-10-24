@@ -454,3 +454,56 @@ func TestAddTunnelWithAuth(t *testing.T) {
 		}
 	})
 }
+
+func TestAddTunnelStaticSite(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte("<h1>hi</h1>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A Windows path has backslashes, so the site path is JSON-encoded.
+	siteJSON, err := json.Marshal(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	common := `"discovery":false,"relays":["` + unreachableRelay + `"]`
+
+	t.Run("accepted", func(t *testing.T) {
+		m, path := testManager(t)
+		startManager(t, m)
+		if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, `{"id":"site","serve":`+string(siteJSON)+`,`+common+`}`); code != http.StatusAccepted {
+			t.Fatalf("status = %d, body = %s", code, resp)
+		}
+		// A static site gets no default target.
+		if saved := savedTunnel(t, path, "site"); saved.Serve != site || saved.TargetAddr != "" {
+			t.Fatalf("saved static tunnel = %+v", saved)
+		}
+		if status := tunnelStatus(t, m, "site"); status.Serve != site || status.TargetAddr != "" {
+			t.Fatalf("static tunnel status = %+v", status)
+		}
+	})
+
+	t.Run("rejected", func(t *testing.T) {
+		m, path := testManager(t, testTunnel("existing"))
+		for _, tc := range []struct{ name, body string }{
+			{name: "with target", body: `{"id":"site","serve":` + string(siteJSON) + `,"target_addr":"127.0.0.1:3000",` + common + `}`},
+			{name: "with routes", body: `{"id":"site","serve":` + string(siteJSON) + `,"http_routes":[{"prefix":"/","upstream":"http://127.0.0.1:3000"}],` + common + `}`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				fileBefore, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, tc.body)
+				if code != http.StatusBadRequest || !strings.Contains(resp, "static serving cannot be combined") {
+					t.Fatalf("status = %d, body = %s; want 400 refusing the combination", code, resp)
+				}
+				if fileAfter, err := os.ReadFile(path); err != nil || !bytes.Equal(fileBefore, fileAfter) {
+					t.Fatalf("rejected tunnel changed the config file (err %v):\n%s", err, fileAfter)
+				}
+				if got := len(m.Snapshot().Tunnels); got != 1 {
+					t.Fatalf("tunnels = %d, want only the existing one", got)
+				}
+			})
+		}
+	})
+}
