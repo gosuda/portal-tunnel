@@ -85,6 +85,8 @@ function HeroTunnelCommandForm({
   const [authOpen, setAuthOpen] = useState(false);
   const {
     currentOrigin,
+    relayUrls,
+    discovery,
     target,
     setTarget,
     name,
@@ -285,7 +287,8 @@ function HeroTunnelCommandForm({
                 auth={auth}
                 onChange={setAuth}
                 issues={authIssues}
-                currentOrigin={currentOrigin}
+                relayUrls={relayUrls}
+                discovery={discovery}
                 name={effectiveName}
                 os={os}
                 theme={theme}
@@ -636,7 +639,8 @@ function FullTunnelCommandForm({
           auth={auth}
           onChange={setAuth}
           issues={authIssues}
-          currentOrigin={currentOrigin}
+          relayUrls={relayUrls}
+          discovery={discoveryEnabled}
           name={effectiveName}
           os={os}
           theme={theme}

@@ -4,7 +4,7 @@ import {
   addAuthAllow,
   authBlocksUDP,
   buildAuthIssueCommand,
-  buildAuthRedirectURL,
+  buildAuthRedirectURLs,
   buildOIDCSecretCommand,
   buildTunnelCommand,
   buildTunnelPreviewURL,
@@ -438,26 +438,53 @@ describe("tunnelCommand sign-in", () => {
     expect(isListedSubject(["alice"], "carol")).toBe(false);
   });
 
-  it("derives the redirect address and the invite command from the name", () => {
-    expect(buildAuthRedirectURL("https://portal.example.com", "my-app")).toBe(
-      "https://my-app.portal.example.com/_portal/auth/callback"
-    );
-    expect(buildAuthRedirectURL("https://portal.example.com", "")).toBe("");
+  it("gives a redirect address for the short URL on every relay in the command", () => {
+    expect(
+      buildAuthRedirectURLs(
+        [
+          "https://portal.example.com",
+          "https://relay.example.org/",
+          "https://portal.example.com/",
+        ],
+        "my-app"
+      )
+    ).toEqual([
+      "https://my-app.portal.example.com/_portal/auth/callback",
+      "https://my-app.relay.example.org/_portal/auth/callback",
+    ]);
+    expect(buildAuthRedirectURLs(["https://portal.example.com"], "")).toEqual([]);
+    expect(buildAuthRedirectURLs([], "my-app")).toEqual([]);
+  });
 
+  it("binds an invite to the host of the URL the visitor is sent", () => {
     const invite = {
-      origin: "https://portal.example.com",
-      name: "my-app",
+      address: "https://my-app.portal.example.com:443",
       subject: "alice",
       expires: "720h",
       os: "unix" as const,
     };
+    // The browser sends no :443 in the Host, so the link must not carry it.
     expect(buildAuthIssueCommand(invite)).toBe(
       "portal auth issue my-app.portal.example.com --subject alice --expires 720h"
+    );
+    expect(
+      buildAuthIssueCommand({ ...invite, address: "https://other.relay.example.org/" })
+    ).toBe("portal auth issue other.relay.example.org --subject alice --expires 720h");
+    expect(buildAuthIssueCommand({ ...invite, address: "My-App.localhost:4017" })).toBe(
+      "portal auth issue my-app.localhost:4017 --subject alice --expires 720h"
     );
     expect(buildAuthIssueCommand({ ...invite, subject: "Alice Smith" })).toBe(
       "portal auth issue my-app.portal.example.com --subject 'Alice Smith' --expires 720h"
     );
-    expect(buildAuthIssueCommand({ ...invite, name: "" })).toBe("");
     expect(buildAuthIssueCommand({ ...invite, subject: " " })).toBe("");
+    for (const address of [
+      "",
+      "http://my-app.portal.example.com",
+      "https://my-app.portal.example.com/app",
+      "https://my-app.portal.example.com/?x=1",
+      "https://user@my-app.portal.example.com",
+    ]) {
+      expect(buildAuthIssueCommand({ ...invite, address })).toBe("");
+    }
   });
 });

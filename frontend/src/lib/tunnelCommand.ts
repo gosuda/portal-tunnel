@@ -407,33 +407,74 @@ export function isListedSubject(allow: string[], subject: string): boolean {
   return allow.length === 0 || allow.includes(subject.trim());
 }
 
-/** The address to register at an OIDC provider; empty until the name is known. */
-export function buildAuthRedirectURL(origin: string, name: string): string {
-  const publicURL = buildTunnelPreviewURL(origin, name);
+/**
+ * The redirect address to register at an OIDC provider for the short URL on
+ * each relay in the command; none until the name is known. The gateway builds
+ * the redirect from the host the visitor arrived on, so the address-bound URL
+ * Portal prints, and every relay discovery adds, need their own; those hosts
+ * are known only once Portal prints them.
+ */
+export function buildAuthRedirectURLs(
+  relayUrls: string[],
+  name: string
+): string[] {
+  const shortURLs = relayUrls
+    .map((relayURL) => buildTunnelPreviewURL(relayURL, name))
+    .filter((url) => url !== "");
   // applicationAuthCallbackPath in cmd/portal-tunnel/gateway/access_auth.go
-  return publicURL === "" ? "" : `${publicURL}/_portal/auth/callback`;
+  return [...new Set(shortURLs)].map((url) => `${url}/_portal/auth/callback`);
 }
 
-/** The command that mints one private link; empty until it has a host and a subject. */
+/**
+ * The host a private link is bound to, read from the URL handed to the
+ * visitor the way NormalizeApplicationAuthHost (access_credential.go) reads
+ * it: an https URL or a bare host, without a path, query or fragment. The URL
+ * parser also drops the `:443` Portal prints, as a browser leaves it out of
+ * the Host it sends. Empty when the address is unusable.
+ */
+export function applicationAuthHost(address: string): string {
+  const raw = address.trim();
+  if (raw === "") {
+    return "";
+  }
+  try {
+    const parsed = new URL(raw.includes("://") ? raw : `https://${raw}`);
+    const usable =
+      parsed.protocol === "https:" &&
+      parsed.hostname !== "" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.pathname === "/" &&
+      parsed.search === "" &&
+      parsed.hash === "";
+    return usable ? parsed.host.replace(/\.$/, "") : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The command that mints one private link. A link works only on the host it
+ * was issued for, so the host comes from the URL the visitor is sent; empty
+ * until that URL and a subject are usable.
+ */
 export function buildAuthIssueCommand({
-  origin,
-  name,
+  address,
   subject,
   expires,
   os,
 }: {
-  origin: string;
-  name: string;
+  address: string;
   subject: string;
   expires: string;
   os: TunnelCommandOS;
 }): string {
-  const hostname = buildServiceStatusHostname(origin, name);
+  const host = applicationAuthHost(address);
   const trimmed = subject.trim();
-  if (hostname === "" || trimmed === "") {
+  if (host === "" || trimmed === "") {
     return "";
   }
-  return `portal auth issue ${hostname} --subject ${formatToken(trimmed, os)} --expires ${expires}`;
+  return `portal auth issue ${formatToken(host, os)} --subject ${formatToken(trimmed, os)} --expires ${expires}`;
 }
 
 export function normalizeAbsoluteHTTPURL(raw: string): string {

@@ -107,6 +107,8 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
 
   return {
     currentOrigin,
+    relayUrls: commandOptions.relayUrls,
+    discovery: commandOptions.discovery,
     target,
     setTarget,
     name,

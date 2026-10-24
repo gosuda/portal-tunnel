@@ -28,10 +28,12 @@ import { cn } from "@/lib/utils";
 import {
   GOOGLE_OIDC_ISSUER,
   addAuthAllow,
+  applicationAuthHost,
   buildAuthIssueCommand,
-  buildAuthRedirectURL,
+  buildAuthRedirectURLs,
   buildOIDCSecretCommand,
   buildServiceStatusHostname,
+  buildTunnelPreviewURL,
   classifyAuthAllow,
   isListedSubject,
   type TunnelAuthField,
@@ -132,7 +134,10 @@ interface TunnelAuthSectionProps {
   onChange: (next: TunnelAuthOptions) => void;
   /** From validateTunnelAuth; the same list that gates copying the command. */
   issues: TunnelAuthIssue[];
-  currentOrigin: string;
+  /** The relays in the command; each gives the app its own host. */
+  relayUrls: string[];
+  /** Whether relay discovery may publish the app on more relays. */
+  discovery: boolean;
   /** The normalized public name; empty while the user has not chosen one. */
   name: string;
   os: TunnelCommandOS;
@@ -145,7 +150,8 @@ export function TunnelAuthSection({
   auth,
   onChange,
   issues,
-  currentOrigin,
+  relayUrls,
+  discovery,
   name,
   os,
   theme,
@@ -228,7 +234,8 @@ export function TunnelAuthSection({
               auth={auth}
               patch={patch}
               issues={issues}
-              currentOrigin={currentOrigin}
+              relayUrls={relayUrls}
+              discovery={discovery}
               name={name}
               os={os}
               theme={theme}
@@ -237,8 +244,7 @@ export function TunnelAuthSection({
           {auth.method === "credential" && (
             <InviteBlock
               allow={auth.allow}
-              currentOrigin={currentOrigin}
-              name={name}
+              exampleURL={buildTunnelPreviewURL(relayUrls[0] ?? "", name)}
               os={os}
               theme={theme}
             />
@@ -271,7 +277,7 @@ export function TunnelAuthSection({
       {!compact && auth.method !== "none" && (
         <VisitorPreview
           auth={auth}
-          currentOrigin={currentOrigin}
+          relayURL={relayUrls[0] ?? ""}
           name={name}
           theme={theme}
         />
@@ -477,7 +483,8 @@ function OIDCSetup({
   auth,
   patch,
   issues,
-  currentOrigin,
+  relayUrls,
+  discovery,
   name,
   os,
   theme,
@@ -485,7 +492,8 @@ function OIDCSetup({
   auth: TunnelAuthOptions;
   patch: (next: Partial<TunnelAuthOptions>) => void;
   issues: TunnelAuthIssue[];
-  currentOrigin: string;
+  relayUrls: string[];
+  discovery: boolean;
   name: string;
   os: TunnelCommandOS;
   theme: TunnelFormTheme;
@@ -494,7 +502,7 @@ function OIDCSetup({
   const clientId = useId();
   const s = TUNNEL_FORM_STYLES[theme];
   const isGoogle = auth.oidcIssuer === GOOGLE_OIDC_ISSUER;
-  const redirectURL = buildAuthRedirectURL(currentOrigin, name);
+  const redirectURLs = buildAuthRedirectURLs(relayUrls, name);
   const inputClass = cn(s.input, "h-9 font-mono text-[13px] read-only:opacity-70");
 
   return (
@@ -574,22 +582,38 @@ function OIDCSetup({
       <div className="space-y-1.5">
         <p className={s.label}>1. At your provider</p>
         <p className={s.help}>
-          Create an OAuth client for a web application and add this redirect
-          address:
+          Create an OAuth client for a web application. The provider sends
+          visitors back only to the redirect addresses you register, so every
+          address a visitor opens the app on needs its own.
         </p>
-        {redirectURL === "" ? (
+        {name === "" ? (
           <FieldIssues issues={issues} field="name" tone="warn" theme={theme} />
         ) : (
           <>
-            <CopyLine
-              value={redirectURL}
-              label="Copy redirect address"
-              theme={theme}
-            />
+            {redirectURLs.map((url) => (
+              <CopyLine
+                key={url}
+                value={url}
+                label={`Copy redirect address ${url}`}
+                theme={theme}
+              />
+            ))}
             <p className={s.help}>
-              The provider checks the exact address a visitor arrives on, and
-              every relay that publishes the app has its own. Add one for each
-              relay you use; relay discovery, on by default, can add more.
+              {redirectURLs.length > 0 &&
+                "These are for the short URL on each relay in the command. "}
+              When the tunnel is ready, Portal prints each relay's
+              address-bound URL after <code>service ready at</code>, and its
+              short URL only if that relay granted the name. Register the
+              address-bound URL as well, and any short URL not listed here: the
+              address followed by <code>/_portal/auth/callback</code>, without{" "}
+              <code>:443</code>.
+              {discovery && (
+                <>
+                  {" "}Relay discovery, on by default, can publish on more
+                  relays, each with its own addresses; to keep to the relays in
+                  the command, add <code>--discovery=false</code>.
+                </>
+              )}
             </p>
           </>
         )}
@@ -618,45 +642,62 @@ function OIDCSetup({
 
 function InviteBlock({
   allow,
-  currentOrigin,
-  name,
+  exampleURL,
   os,
   theme,
 }: {
   allow: string[];
-  currentOrigin: string;
-  name: string;
+  /** The short URL on the first relay, shown as the placeholder; may be empty. */
+  exampleURL: string;
   os: TunnelCommandOS;
   theme: TunnelFormTheme;
 }) {
+  const addressId = useId();
   const subjectId = useId();
   const expiresId = useId();
   const s = TUNNEL_FORM_STYLES[theme];
+  const [address, setAddress] = useState("");
   const [subject, setSubject] = useState("");
   const [expires, setExpires] = useState("720h");
   const trimmed = subject.trim();
   const check = trimmed === "" ? null : classifyAuthAllow("credential", trimmed);
   const notListed = check?.ok && !isListedSubject(allow, trimmed);
+  const badAddress = address.trim() !== "" && applicationAuthHost(address) === "";
   const command = check?.ok
-    ? buildAuthIssueCommand({
-        origin: currentOrigin,
-        name,
-        subject: trimmed,
-        expires,
-        os,
-      })
+    ? buildAuthIssueCommand({ address, subject: trimmed, expires, os })
     : "";
-  const hint =
-    name === ""
-      ? "Add a Name above, then a name for the person, to see the command."
-      : check === null
-        ? "Type the person's name to see the command."
-        : "";
+  const missing = address.trim() === "" || check === null;
   const fieldClass = cn(s.input, "h-9 text-[13px]");
 
   return (
     <div className="space-y-2">
       <p className={s.label}>After it runs: invite someone</p>
+      <div className="space-y-1.5">
+        <label htmlFor={addressId} className={s.label}>
+          URL you send
+        </label>
+        <Input
+          id={addressId}
+          type="text"
+          inputMode="url"
+          value={address}
+          onChange={(event) => setAddress(event.target.value)}
+          placeholder={exampleURL || "https://"}
+          autoComplete="off"
+          spellCheck={false}
+          className={cn(fieldClass, "font-mono")}
+        />
+        {badAddress && (
+          <Notice tone="error" theme={theme}>
+            Paste an https:// address without a path, as Portal prints it.
+          </Notice>
+        )}
+        <p className={s.help}>
+          A link works only on the address it was made for. Paste the URL
+          Portal printed for the relay you share: the short URL if it printed
+          one, otherwise the address after <code>service ready at</code>.
+        </p>
+      </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <label htmlFor={subjectId} className={s.label}>
@@ -705,7 +746,11 @@ function InviteBlock({
       {command !== "" ? (
         <CopyLine value={command} label="Copy invite command" theme={theme} />
       ) : (
-        hint !== "" && <p className={s.help}>{hint}</p>
+        missing && (
+          <p className={s.help}>
+            Fill in the URL you send and the person's name to see the command.
+          </p>
+        )
       )}
       <p className={s.help}>
         Run it from the folder where you ran <code>portal expose</code>: both
@@ -719,18 +764,18 @@ function InviteBlock({
 
 function VisitorPreview({
   auth,
-  currentOrigin,
+  relayURL,
   name,
   theme,
 }: {
   auth: TunnelAuthOptions;
-  currentOrigin: string;
+  relayURL: string;
   name: string;
   theme: TunnelFormTheme;
 }) {
   const s = TUNNEL_FORM_STYLES[theme];
   const hostname =
-    buildServiceStatusHostname(currentOrigin, name) || "your-name.relay";
+    buildServiceStatusHostname(relayURL, name) || "your-name.relay";
   let issuerHost = "your provider";
   try {
     issuerHost = new URL(auth.oidcIssuer.trim()).hostname || issuerHost;
