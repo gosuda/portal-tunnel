@@ -87,10 +87,10 @@ func evaluateRenewal(cert *x509.Certificate, domains []string, ari *certificate.
 	if cert == nil {
 		return false, "", recheck
 	}
-	remaining := cert.NotAfter.Sub(now)
 	if !certificateUsable(cert, domains, now) {
 		return true, "", recheck
 	}
+	remaining := cert.NotAfter.Sub(now)
 	if ari == nil || ari.SuggestedWindow.Start.IsZero() || !ari.SuggestedWindow.End.After(ari.SuggestedWindow.Start) {
 		return remaining < defaultRenewThreshold, "", recheck
 	}
