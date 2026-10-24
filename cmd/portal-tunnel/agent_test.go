@@ -35,17 +35,15 @@ func TestAgentDashboardRefusesUnknownTheme(t *testing.T) {
 	}
 }
 
-// The agent starts before the dashboard opens, so `agent run --foreground` has to refuse an
-// unknown theme first. The config is missing, so reaching it would fail with another error.
-func TestAgentRunForegroundRefusesUnknownThemeBeforeStarting(t *testing.T) {
+// Without a terminal `agent run --foreground` runs the agent headless and opens no dashboard,
+// so an unknown theme must not stop it. The config is missing, so the run stops there instead.
+func TestAgentRunForegroundWithoutTerminalIgnoresTheTheme(t *testing.T) {
+	if agentCLIInteractive() {
+		t.Skip("stdin and stdout are a terminal, so the run would open the dashboard")
+	}
 	missing := filepath.Join(t.TempDir(), "config.toml")
 	err := runAgentRunCommand([]string{"--config", missing, "--foreground", "--theme", "purple"})
-	if err == nil {
-		t.Fatal("expected an error for an unknown theme")
-	}
-	for _, want := range []string{"--theme", "purple", "amber", "green"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error %q should mention %q", err, want)
-		}
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("error = %v, want the missing config, not the theme", err)
 	}
 }

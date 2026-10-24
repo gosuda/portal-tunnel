@@ -57,9 +57,10 @@ func runAgentRunCommand(args []string) error {
 		printAgentRunUsage(os.Stderr)
 		return err
 	}
-	// The dashboard opens after the agent has started, so a bad theme is
-	// refused before anything starts.
-	if foreground {
+	// Only an interactive --foreground run opens the dashboard, and it opens
+	// after the agent has started, so a bad theme is refused before anything
+	// starts and never stops a headless run.
+	if foreground && !serviceMode && agentCLIInteractive() {
 		if err := agent.ValidateDashboardTheme(theme); err != nil {
 			return err
 		}
