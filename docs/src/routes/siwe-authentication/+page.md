@@ -80,7 +80,7 @@ session local to the tunnel endpoint. The cookie is `Secure`, `HttpOnly`, and
 request, while preserving application-owned cookies; relay-issued lease tokens
 are not used for application access.
 
-Inbound `X-Portal-User` and `X-Portal-Auth` headers are always removed. Add
+Inbound `X-Portal-User`, `X-Portal-Auth`, and `X-Portal-Proof` headers are always removed. Add
 `--auth-identity-headers` to inject the verified subject and provider (`siwe`,
 `credential`, or `oidc`) after login. Upstreams must only trust these headers when they cannot be
 reached except through this local Portal proxy.
