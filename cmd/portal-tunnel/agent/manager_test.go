@@ -21,6 +21,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // unreachableRelay keeps started tunnels off the network: they come up with
@@ -408,34 +409,52 @@ func TestUpdateTunnelAuthRejectionChangesNothing(t *testing.T) {
 	}
 }
 
-func TestUpdateTunnelAuthRebuildsRunningTunnel(t *testing.T) {
-	release := make(chan struct{})
-	close(release)
-	issuer, _ := newTestOIDCIssuer(t, release)
-	usable := issuer.URL
-	m, _ := testManager(t, oidcTunnel("app", unreachableIssuer, ""))
-	startManager(t, m)
-	eventually(t, "the unreachable provider to be checked", func() bool {
-		return tunnelStatus(t, m, "app").AuthOIDCProviderChecked
-	})
-
-	// The gate is built when the tunnel starts: the new issuer only counts once
-	// the running tunnel has been rebuilt.
-	if code, body := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"app", `{"auth_oidc_issuer":"`+usable+`"}`); code != http.StatusAccepted {
-		t.Fatalf("status = %d, body = %s", code, body)
+// The sign-in gate is built when a tunnel starts, so a changed gate restarts
+// the edited tunnel. The other tunnels keep running untouched, with the relays
+// connected to them at runtime, and metadata updates the running tunnel in
+// place.
+func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
+	addedRelay, err := utils.NormalizeRelayURL("https://127.0.0.1:2")
+	if err != nil {
+		t.Fatal(err)
 	}
-	eventually(t, "the rebuilt tunnel to find its provider usable", func() bool {
-		status := tunnelStatus(t, m, "app")
-		return status.AuthOIDCProviderChecked && status.AuthOIDCProviderError == ""
+	edited := testTunnel("a")
+	edited.Auth = "credential"
+	m, _ := testManager(t, edited, testTunnel("b"))
+	startManager(t, m)
+	eventually(t, "both tunnels to run", func() bool {
+		return tunnelStatus(t, m, "a").State == "running" && tunnelStatus(t, m, "b").State == "running"
+	})
+	if code, body := callControl(t, m, http.MethodPost, types.PathAgentTunnelsPrefix+"b/relays", `{"relay_url":"`+addedRelay+`"}`); code != http.StatusAccepted {
+		t.Fatalf("connect relay: status = %d, body = %s", code, body)
+	}
+	hasAddedRelay := func(status AgentTunnelStatus) bool {
+		return slices.ContainsFunc(status.Relays, func(relay AgentRelayStatus) bool { return relay.RelayURL == addedRelay })
+	}
+	if b := tunnelStatus(t, m, "b"); !hasAddedRelay(b) {
+		t.Fatalf("relay was not connected to b: %+v", b.Relays)
+	}
+
+	// The credential provider check passes at once, so only a runtime rebuilt
+	// with the new gate reports that the OIDC provider is unreachable.
+	body := `{"auth":"oidc","auth_allowed_wallets":["alice@example.com"],"auth_oidc_issuer":"` + unreachableIssuer + `","auth_oidc_client_id":"client-123"}`
+	if code, resp := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"a", body); code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", code, resp)
+	}
+	if b := tunnelStatus(t, m, "b"); b.State != "running" || !hasAddedRelay(b) {
+		t.Fatalf("sign-in change on a restarted b: %+v", b)
+	}
+	eventually(t, "a to run with the oidc gate", func() bool {
+		return tunnelStatus(t, m, "a").AuthOIDCProviderError != ""
 	})
 
 	// Metadata, even sent next to unchanged sign-in settings, updates the
 	// running tunnel in place.
-	body := `{"metadata":{"description":"in place"},"auth":"oidc","auth_oidc_issuer":"` + usable + `"}`
-	if code, resp := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"app", body); code != http.StatusAccepted {
+	body = `{"metadata":{"description":"in place"},"auth":"oidc","auth_oidc_issuer":"` + unreachableIssuer + `"}`
+	if code, resp := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"a", body); code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", code, resp)
 	}
-	if status := tunnelStatus(t, m, "app"); status.State != "running" || !status.AuthOIDCProviderChecked || status.Metadata.Description != "in place" {
+	if status := tunnelStatus(t, m, "a"); status.State != "running" || !status.AuthOIDCProviderChecked || status.Metadata.Description != "in place" {
 		t.Fatalf("tunnel was rebuilt for a metadata change: %+v", status)
 	}
 }

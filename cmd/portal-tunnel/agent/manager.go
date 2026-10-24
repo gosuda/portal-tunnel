@@ -30,6 +30,8 @@ type manager struct {
 	mu      sync.RWMutex
 	cfg     Config
 	tunnels map[string]*managedTunnel
+	// rootCtx is the context tunnels run under; Start replaces it with the
+	// agent's context.
 	rootCtx context.Context
 }
 
@@ -38,6 +40,7 @@ func newManager(cfg Config, controlAddr string) *manager {
 		controlAddr: controlAddr,
 		cfg:         cfg,
 		tunnels:     make(map[string]*managedTunnel, len(cfg.Tunnels)),
+		rootCtx:     context.Background(),
 	}
 	for _, tunnelCfg := range cfg.Tunnels {
 		manager.tunnels[tunnelCfg.ID] = &managedTunnel{cfg: tunnelCfg}
@@ -342,19 +345,26 @@ func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error
 	}
 
 	nextTunnelCfg := cfg.Tunnels[index]
-	// The sign-in gate is built when the runtime starts, so a changed gate
-	// takes effect by restarting the tunnel the way ApplyConfig does.
-	if !reflect.DeepEqual(before.applicationAuth(), nextTunnelCfg.applicationAuth()) {
-		return m.ApplyConfig(cfg)
-	}
 	m.mu.Lock()
 	m.cfg = cfg
-	if tunnel := m.tunnels[id]; tunnel != nil {
+	rootCtx := m.rootCtx
+	tunnel := m.tunnels[id]
+	if tunnel != nil {
 		tunnel.mu.Lock()
 		tunnel.cfg = nextTunnelCfg
 		tunnel.mu.Unlock()
 	}
 	m.mu.Unlock()
+
+	// The sign-in gate is built when the runtime starts, so a changed gate
+	// takes effect by restarting this tunnel the way ApplyConfig restarts a
+	// changed one; the other tunnels are left alone. The tunnel starts again
+	// from its saved config, which drops relays connected to it at runtime.
+	if tunnel == nil || reflect.DeepEqual(before.applicationAuth(), nextTunnelCfg.applicationAuth()) {
+		return nil
+	}
+	_ = tunnel.Stop(context.Background())
+	tunnel.Start(rootCtx)
 	return nil
 }
 
@@ -447,9 +457,6 @@ func (m *manager) ApplyConfig(cfg Config) error {
 
 	for _, tunnel := range append(toStop, toUpdate...) {
 		_ = tunnel.Stop(context.Background())
-	}
-	if rootCtx == nil {
-		rootCtx = context.Background()
 	}
 	for _, tunnel := range append(toStart, toUpdate...) {
 		tunnel.Start(rootCtx)
