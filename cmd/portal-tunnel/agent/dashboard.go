@@ -556,7 +556,11 @@ func (m *agentDashboardModel) resizeInputs(width int) {
 		&m.metadataHide,
 	} {
 		input.Width = settingsWidth
-		input.SetCursor(input.Position()) // recompute the visible window for the new width
+		// The input keeps its visible window while the cursor stays inside it, so move the
+		// cursor to the end, which always rebuilds the window for the new width, and back.
+		pos := input.Position()
+		input.CursorEnd()
+		input.SetCursor(pos)
 	}
 }
 

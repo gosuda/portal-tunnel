@@ -77,6 +77,18 @@ func TestDashboardViewFitsTheTerminal(t *testing.T) {
 	)
 	longDescription := testDashboardStatus()
 	longDescription.Tunnels[0].Metadata.Description = strings.Repeat("a long description ", 10)
+	// resizedSettings loads the long description while the terminal is 200 columns wide, opens
+	// Settings, sends keys, and then shrinks the terminal to m's size.
+	resizedSettings := func(keys ...tea.Msg) func(*testing.T, agentDashboardModel) agentDashboardModel {
+		return func(_ *testing.T, m agentDashboardModel) agentDashboardModel {
+			var wide tea.Model = newAgentDashboardModel("/etc/portal/config.toml", "/var/lib/portal")
+			steps := append([]tea.Msg{tea.WindowSizeMsg{Width: 200, Height: 50}, agentDashboardStatusMsg{status: longDescription}, right}, keys...)
+			for _, msg := range append(steps, tea.WindowSizeMsg{Width: m.width, Height: m.height}) {
+				wide, _ = wide.Update(msg)
+			}
+			return wide.(agentDashboardModel)
+		}
+	}
 
 	panes := []struct {
 		name  string
@@ -85,14 +97,8 @@ func TestDashboardViewFitsTheTerminal(t *testing.T) {
 		{"tunnels", func(_ *testing.T, m agentDashboardModel) agentDashboardModel { return m }},
 		{"settings", func(_ *testing.T, m agentDashboardModel) agentDashboardModel { return sendKeys(m, right) }},
 		{"settings with a long value", func(_ *testing.T, m agentDashboardModel) agentDashboardModel { return sendKeys(m, right, down, long) }},
-		{"settings resized from a wider terminal", func(_ *testing.T, m agentDashboardModel) agentDashboardModel {
-			// The long value is loaded while the terminal is 200 columns wide, then it shrinks to m's size.
-			var wide tea.Model = newAgentDashboardModel("/etc/portal/config.toml", "/var/lib/portal")
-			for _, msg := range []tea.Msg{tea.WindowSizeMsg{Width: 200, Height: 50}, agentDashboardStatusMsg{status: longDescription}, right, tea.WindowSizeMsg{Width: m.width, Height: m.height}} {
-				wide, _ = wide.Update(msg)
-			}
-			return wide.(agentDashboardModel)
-		}},
+		{"settings resized from a wider terminal", resizedSettings()},
+		{"settings resized with the cursor at the start", resizedSettings(down, tea.KeyMsg{Type: tea.KeyHome})},
 		{"relays", func(_ *testing.T, m agentDashboardModel) agentDashboardModel { return sendKeys(m, right, right) }},
 		{"add tunnel form", func(t *testing.T, m agentDashboardModel) agentDashboardModel {
 			return sendKeys(clickAction(t, m, agentDashboardActionAddTunnel), long)
