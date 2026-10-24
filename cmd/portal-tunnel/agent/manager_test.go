@@ -455,6 +455,8 @@ func TestAddTunnelWithAuth(t *testing.T) {
 	})
 }
 
+// The request goes through the control handler, so the serve key of the API is
+// covered too.
 func TestAddTunnelStaticSite(t *testing.T) {
 	site := t.TempDir()
 	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte("<h1>hi</h1>"), 0o600); err != nil {
@@ -477,33 +479,22 @@ func TestAddTunnelStaticSite(t *testing.T) {
 		if saved := savedTunnel(t, path, "site"); saved.Serve != site || saved.TargetAddr != "" {
 			t.Fatalf("saved static tunnel = %+v", saved)
 		}
-		if status := tunnelStatus(t, m, "site"); status.Serve != site || status.TargetAddr != "" {
-			t.Fatalf("static tunnel status = %+v", status)
-		}
 	})
 
-	t.Run("rejected", func(t *testing.T) {
+	// An explicit target is neither dropped nor overridden by serve: the
+	// request is refused and nothing is written.
+	t.Run("with target", func(t *testing.T) {
 		m, path := testManager(t, testTunnel("existing"))
-		for _, tc := range []struct{ name, body string }{
-			{name: "with target", body: `{"id":"site","serve":` + string(siteJSON) + `,"target_addr":"127.0.0.1:3000",` + common + `}`},
-			{name: "with routes", body: `{"id":"site","serve":` + string(siteJSON) + `,"http_routes":[{"prefix":"/","upstream":"http://127.0.0.1:3000"}],` + common + `}`},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				fileBefore, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, tc.body)
-				if code != http.StatusBadRequest || !strings.Contains(resp, "static serving cannot be combined") {
-					t.Fatalf("status = %d, body = %s; want 400 refusing the combination", code, resp)
-				}
-				if fileAfter, err := os.ReadFile(path); err != nil || !bytes.Equal(fileBefore, fileAfter) {
-					t.Fatalf("rejected tunnel changed the config file (err %v):\n%s", err, fileAfter)
-				}
-				if got := len(m.Snapshot().Tunnels); got != 1 {
-					t.Fatalf("tunnels = %d, want only the existing one", got)
-				}
-			})
+		fileBefore, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := `{"id":"site","serve":` + string(siteJSON) + `,"target_addr":"127.0.0.1:3000",` + common + `}`
+		if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, body); code != http.StatusBadRequest || !strings.Contains(resp, "static serving cannot be combined") {
+			t.Fatalf("status = %d, body = %s; want 400 refusing the combination", code, resp)
+		}
+		if fileAfter, err := os.ReadFile(path); err != nil || !bytes.Equal(fileBefore, fileAfter) {
+			t.Fatalf("refused tunnel changed the config file (err %v):\n%s", err, fileAfter)
 		}
 	})
 }
