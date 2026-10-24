@@ -408,6 +408,8 @@ Control endpoints:
 | `POST` | `/agent/tunnels/{id}/relays` | Bearer token | Connect a relay |
 | `DELETE` | `/agent/tunnels/{id}/relays` | Bearer token | Disconnect a relay |
 
+`POST /agent/tunnels` accepts `serve`, a static site directory or HTML file with the meaning it has in `config.toml`. A tunnel with `serve` gets no default target, and `serve` cannot be combined with `target_addr` or `http_routes`. A relative `serve` path is resolved from the directory of `config.toml`, not from the caller's working directory, and saved as the resulting absolute path.
+
 Wallet auth endpoints also exist under `/agent/auth/*`. Wallet-authenticated
 requests are read-only and can only call `/agent/status`; mutating operations
 use the local bearer token from the state directory.
