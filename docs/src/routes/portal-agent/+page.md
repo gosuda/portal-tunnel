@@ -341,7 +341,9 @@ identity JSON are also configured in
 Choose the palette with `--theme amber` (the default) or `--theme green` on
 `portal agent dashboard`, or with the `PORTAL_TUI_THEME` environment variable;
 the flag wins. `portal agent run --foreground` opens the same dashboard and
-accepts the same flag. Both palettes are made for a dark terminal background.
+accepts the same flag; without a terminal it runs the agent without the
+dashboard and does not check the theme. Both palettes are made for a dark
+terminal background.
 
 Colors are ANSI-256 values that fall back to the 16 ANSI colors on simpler
 terminals. With `NO_COLOR` set the dashboard uses no color at all and every
