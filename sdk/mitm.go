@@ -73,19 +73,7 @@ const (
 	defaultMITMProbeTimeout    = 30 * time.Second
 	mitmProbeBurst             = 3
 
-	tlsChannelBindingExporterLabel = "EXPORTER-Portal-TLS-Channel-Binding-v1"
-	tlsChannelBindingDomainContext = "portal-tls-channel-binding-v1"
-	// A stream whose first five bytes are the magic is taken for a binding
-	// request, so an application that opens with exactly these bytes would be
-	// answered as one. TLS and HTTP never start that way, and the magic is not
-	// a secret.
-	tlsChannelBindingMagic         = "PTCB\x01"
-	tlsChannelBindingNonceSize     = 32
-	tlsChannelBindingExporterSize  = 32
-	tlsChannelBindingSignatureSize = 65
-	tlsChannelBindingRequestSize   = len(tlsChannelBindingMagic) + tlsChannelBindingNonceSize
-	tlsChannelBindingResponseSize  = tlsChannelBindingExporterSize + tlsChannelBindingSignatureSize
-	defaultChannelBindingTimeout   = 10 * time.Second
+	defaultChannelBindingTimeout = 10 * time.Second
 )
 
 // channelBindingRequestTimeout is how long the tunnel waits for the rest of a
@@ -386,8 +374,8 @@ func (m *mitmManager) logResult(report mitmProbeReport, err error) {
 
 func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
 	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
-	buf := make([]byte, 0, len(tlsChannelBindingDomainContext)+1+len(normalizedHost)+1+len(nonce)+len(exported))
-	buf = append(buf, tlsChannelBindingDomainContext...)
+	buf := make([]byte, 0, len(types.TLSChannelBindingDomain)+1+len(normalizedHost)+1+len(nonce)+len(exported))
+	buf = append(buf, types.TLSChannelBindingDomain...)
 	buf = append(buf, 0)
 	buf = append(buf, normalizedHost...)
 	buf = append(buf, 0)
@@ -427,13 +415,13 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 		_ = conn.Close()
 		return errors.New("tls connection does not support keying material export")
 	}
-	clientExporter, err := exportFn(tlsChannelBindingExporterLabel, nil, tlsChannelBindingExporterSize)
+	clientExporter, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
 	if err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("export client tls keying material: %w", err)
 	}
 
-	var nonce [tlsChannelBindingNonceSize]byte
+	var nonce [types.TLSChannelBindingNonceSize]byte
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("generate channel binding nonce: %w", err)
@@ -446,22 +434,22 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 	_ = conn.SetDeadline(deadline)
 	defer conn.SetDeadline(time.Time{})
 
-	reqFrame := make([]byte, tlsChannelBindingRequestSize)
-	copy(reqFrame, tlsChannelBindingMagic)
-	copy(reqFrame[len(tlsChannelBindingMagic):], nonce[:])
+	reqFrame := make([]byte, types.TLSChannelBindingRequestSize)
+	copy(reqFrame, types.TLSChannelBindingRequestMagic)
+	copy(reqFrame[len(types.TLSChannelBindingRequestMagic):], nonce[:])
 	if _, err := conn.Write(reqFrame); err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("write channel binding request: %w", err)
 	}
 
-	var respFrame [tlsChannelBindingResponseSize]byte
+	var respFrame [types.TLSChannelBindingAnswerSize]byte
 	if _, err := io.ReadFull(conn, respFrame[:]); err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("read channel binding response: %w", err)
 	}
 
-	tunnelExporter := respFrame[:tlsChannelBindingExporterSize]
-	compactSig := respFrame[tlsChannelBindingExporterSize:]
+	tunnelExporter := respFrame[:types.TLSChannelBindingExporterSize]
+	compactSig := respFrame[types.TLSChannelBindingExporterSize:]
 	if subtle.ConstantTimeCompare(clientExporter, tunnelExporter) != 1 {
 		_ = conn.Close()
 		return errors.New("tls channel binding exporter mismatch: relay terminated client tls")
@@ -534,14 +522,14 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 		return nil, errors.New("listener canonical hostname is unavailable for channel binding")
 	}
 
-	var reqFrame [tlsChannelBindingRequestSize]byte
+	var reqFrame [types.TLSChannelBindingRequestSize]byte
 	if _, err := io.ReadFull(reader, reqFrame[:]); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("read channel binding request: %w", err)
 	}
-	nonce := reqFrame[len(tlsChannelBindingMagic):]
+	nonce := reqFrame[len(types.TLSChannelBindingRequestMagic):]
 
-	exported, err := exportFn(tlsChannelBindingExporterLabel, nil, tlsChannelBindingExporterSize)
+	exported, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
 	if err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("export server channel binding keying material: %w", err)
@@ -560,9 +548,9 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 		return nil, fmt.Errorf("encode channel binding signature: %w", err)
 	}
 
-	var respFrame [tlsChannelBindingResponseSize]byte
-	copy(respFrame[:tlsChannelBindingExporterSize], exported)
-	copy(respFrame[tlsChannelBindingExporterSize:], compactSig)
+	var respFrame [types.TLSChannelBindingAnswerSize]byte
+	copy(respFrame[:types.TLSChannelBindingExporterSize], exported)
+	copy(respFrame[types.TLSChannelBindingExporterSize:], compactSig)
 	// The answer is small, but a client that never reads it must not hold the
 	// slot either. maybeHandleConn clears the deadline when it returns.
 	_ = conn.SetWriteDeadline(time.Now().Add(channelBindingRequestTimeout))
@@ -599,7 +587,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	// Peek blocks for the full length, so a preamble split across TLS records
 	// is still recognized.
 	frameSize := len(mitmProbeNonce{})
-	peekLen := len(tlsChannelBindingMagic)
+	peekLen := len(types.TLSChannelBindingRequestMagic)
 	if hasPending {
 		peekLen = frameSize
 	}
@@ -608,7 +596,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	peeked, _ := reader.Peek(peekLen)
 	defer conn.SetDeadline(time.Time{})
 
-	if canChannelBind && len(peeked) >= len(tlsChannelBindingMagic) && string(peeked[:len(tlsChannelBindingMagic)]) == tlsChannelBindingMagic {
+	if canChannelBind && bytes.HasPrefix(peeked, []byte(types.TLSChannelBindingRequestMagic)) {
 		// The sniff window only covered recognition: the rest of the request
 		// gets channelBindingRequestTimeout, far shorter than the client's
 		// round-trip budget.

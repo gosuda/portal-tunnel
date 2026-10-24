@@ -472,7 +472,7 @@ func TestTLSChannelBindingToleratesSplitRequest(t *testing.T) {
 		pause   time.Duration
 	}{
 		{"magic split across records", 2, mitmProbePeekTimeout / 2},
-		{"request body after the sniff window", len(tlsChannelBindingMagic), 3 * mitmProbePeekTimeout},
+		{"request body after the sniff window", len(types.TLSChannelBindingRequestMagic), 3 * mitmProbePeekTimeout},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -528,7 +528,7 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 		{
 			name: "garbled signature",
 			respond: func(t *testing.T, server net.Conn) {
-				_, _ = server.Write(append(bytes.Clone(exporter), make([]byte, tlsChannelBindingSignatureSize)...))
+				_, _ = server.Write(append(bytes.Clone(exporter), make([]byte, types.TLSChannelBindingSignatureSize)...))
 			},
 			wantErr: "recover channel binding signer",
 		},
@@ -540,7 +540,7 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 				clientRaw, serverRaw := net.Pipe()
 				client := &testExporterConn{Conn: clientRaw, exported: exporter}
 				go func() {
-					var request [tlsChannelBindingRequestSize]byte
+					var request [types.TLSChannelBindingRequestSize]byte
 					_, _ = io.ReadFull(serverRaw, request[:])
 					tc.respond(t, serverRaw)
 				}()
@@ -591,7 +591,7 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 			clientRaw, serverRaw := net.Pipe()
 			client := &testExporterConn{Conn: clientRaw, exported: exporter}
 			go func() {
-				var request [tlsChannelBindingRequestSize]byte
+				var request [types.TLSChannelBindingRequestSize]byte
 				_, _ = io.ReadFull(serverRaw, request[:])
 				_, _ = serverRaw.Write(recorded)
 			}()
@@ -615,11 +615,11 @@ func recordChannelBindingAnswer(t *testing.T, l *listener, exporter []byte) []by
 			_ = nextConn.Close()
 		}
 	}()
-	request := append([]byte(tlsChannelBindingMagic), bytes.Repeat([]byte{9}, tlsChannelBindingNonceSize)...)
+	request := append([]byte(types.TLSChannelBindingRequestMagic), bytes.Repeat([]byte{9}, types.TLSChannelBindingNonceSize)...)
 	if _, err := clientRaw.Write(request); err != nil {
 		t.Fatalf("write earlier request: %v", err)
 	}
-	answer := make([]byte, tlsChannelBindingResponseSize)
+	answer := make([]byte, types.TLSChannelBindingAnswerSize)
 	if _, err := io.ReadFull(clientRaw, answer); err != nil {
 		t.Fatalf("read earlier answer: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestAdmissionOfAWithheldBindingNonceEndsQuickly(t *testing.T) {
 		l.api = &apiClient{relayURL: &url.URL{Scheme: "https", Host: "relay.example"}}
 
 		clientRaw, serverRaw := net.Pipe()
-		go func() { _, _ = clientRaw.Write([]byte(tlsChannelBindingMagic)) }()
+		go func() { _, _ = clientRaw.Write([]byte(types.TLSChannelBindingRequestMagic)) }()
 		l.admitting <- struct{}{}
 		go l.admit(t.Context(), &testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)})
 
@@ -673,7 +673,7 @@ func TestAdmissionOfAClientThatNeverReadsTheAnswerEndsQuickly(t *testing.T) {
 		l.api = &apiClient{relayURL: &url.URL{Scheme: "https", Host: "relay.example"}}
 
 		clientRaw, serverRaw := net.Pipe()
-		request := append([]byte(tlsChannelBindingMagic), bytes.Repeat([]byte{7}, tlsChannelBindingNonceSize)...)
+		request := append([]byte(types.TLSChannelBindingRequestMagic), bytes.Repeat([]byte{7}, types.TLSChannelBindingNonceSize)...)
 		go func() { _, _ = clientRaw.Write(request) }()
 		l.admitting <- struct{}{}
 		go l.admit(t.Context(), &testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)})
@@ -704,7 +704,7 @@ func TestAcceptIsNotHeldUpByClientsThatStallDuringAdmission(t *testing.T) {
 		name   string
 		prefix []byte
 	}{
-		{"stalled channel binding request", []byte(tlsChannelBindingMagic)},
+		{"stalled channel binding request", []byte(types.TLSChannelBindingRequestMagic)},
 		{"silent client", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -768,7 +768,7 @@ func TestTLSChannelBindingIsNotServedOutsideResponderBoundary(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				l := newChannelBindingListener(t, "7", "")
 				tc.setup(l)
-				request := append([]byte(tlsChannelBindingMagic), bytes.Repeat([]byte{7}, tlsChannelBindingNonceSize)...)
+				request := append([]byte(types.TLSChannelBindingRequestMagic), bytes.Repeat([]byte{7}, types.TLSChannelBindingNonceSize)...)
 				clientRaw, serverRaw := net.Pipe()
 				go func() { _, _ = clientRaw.Write(request) }()
 
