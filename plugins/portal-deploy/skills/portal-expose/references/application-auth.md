@@ -51,10 +51,23 @@ Do these in order. Stop and ask the user for the missing value instead of guessi
    - `@example.com`: any verified email on exactly that domain, not its subdomains.
    - `sub:<id>`: the provider's own subject identifier, for providers that do not verify email. Compared exactly, including case.
    - Email and domain matching ignores case but needs ASCII; write an internationalized domain in punycode.
-5. Pass the client secret through the environment, never on the command line, where `ps` would show it. The user sets `AUTH_OIDC_CLIENT_SECRET` in their own shell; do not type it into a shell for them, print it, or write it to a file in the repository. A secret typed into an interactive shell lands in shell history, so tell the user to read it at a prompt instead (the prompt lines are in the OpenID Connect section of the Application Authentication docs page, `docs/src/routes/siwe-authentication/+page.md`), then start the tunnel from that shell:
+5. The client secret reaches Portal only as `AUTH_OIDC_CLIENT_SECRET` in the environment of the shell that runs `portal expose`, never on the command line, where `ps` would show it. Your shell cannot see a variable the user sets at their own prompt, and you must not learn the secret, so when there is a client secret the user starts the tunnel, not you: give them the full commands below to run in their own terminal, then only verify (see Verify), asking them to paste the `service ready at` line, which holds no secret. Do not ask for the secret, type it, print it, or write it to a file. The prompt does not echo the secret or save it in shell history; if the user presses Ctrl-C at the Linux and macOS prompt, `stty echo` makes typing visible again. When the provider issued no secret, run the command yourself.
+
+The user first reads the secret at a prompt. Linux and macOS (bash, zsh):
 
 ```sh
-# AUTH_OIDC_CLIENT_SECRET is already set in this shell by the user
+printf 'OIDC client secret: '; stty -echo; read -r AUTH_OIDC_CLIENT_SECRET; stty echo; echo; export AUTH_OIDC_CLIENT_SECRET
+```
+
+Windows PowerShell:
+
+```powershell
+$secret = Read-Host 'OIDC client secret' -AsSecureString; $env:AUTH_OIDC_CLIENT_SECRET = [System.Net.NetworkCredential]::new('', $secret).Password
+```
+
+Then, in that same shell, the user starts the tunnel (on PowerShell, on one line):
+
+```sh
 portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json \
   --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id <client-id> \
   --auth-allow alice@example.com --auth-allow @example.com
@@ -72,7 +85,7 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
 
 ## Persistent agent
 
-The same settings are fields of a `[[tunnels]]` entry. The agent does not read the `AUTH_OIDC_*` variables and has no way to refer to a secret, so a client secret can only be stored in the TOML file as plain text. Do not put it there on your own: tell the user so, and write it only after they explicitly accept that risk (the rule is in `references/safety-and-verification.md`). If they do not, run the tunnel with `portal expose` and `AUTH_OIDC_CLIENT_SECRET` in the environment instead. When they accept, keep the file outside the repository (or in an ignored path), owned by the user with mode `0600` in a directory only they can read, never print the secret or paste it into logs or the final answer, and say in the handoff that the file holds a secret. Leave `auth_oidc_client_secret` empty only when the provider registered the client without a secret. A tunnel with neither `identity_path` nor `identity_json` keeps its identity in `<state_dir>/identity.json`, or `<state_dir>/<id>/identity.json` when the config has more than one tunnel: pass that file as `--identity-path` to `portal auth issue`; a relative `identity_path` is resolved against the config file's folder, not the shell's.
+The same settings are fields of a `[[tunnels]]` entry. The agent does not read the `AUTH_OIDC_*` variables and has no way to refer to a secret, so a client secret can only be stored in the TOML file as plain text. Do not put it there on your own: tell the user so, and write it only after they explicitly accept that risk (the rule is in `references/safety-and-verification.md`). If they do not, the user runs the tunnel with `portal expose` from their own terminal, as step 5 of the oidc section describes. When they accept, keep the file outside the repository (or in an ignored path), owned by the user with mode `0600` in a directory only they can read, never print the secret or paste it into logs or the final answer, and say in the handoff that the file holds a secret. Leave `auth_oidc_client_secret` empty only when the provider registered the client without a secret. A tunnel with neither `identity_path` nor `identity_json` keeps its identity in `<state_dir>/identity.json`, or `<state_dir>/<id>/identity.json` when the config has more than one tunnel: pass that file as `--identity-path` to `portal auth issue`; a relative `identity_path` is resolved against the config file's folder, not the shell's.
 
 ```toml
 [[tunnels]]
