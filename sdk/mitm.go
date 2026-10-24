@@ -3,6 +3,7 @@ package sdk
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -396,9 +397,10 @@ func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
 //
 // hostname must be the lease's canonical hostname exactly as the relay
 // publishes it: the tunnel signs that name, so another canonical form that
-// embeds the same address fails with a signer mismatch. The exchange sets a
-// deadline on conn and clears it when it returns, so a deadline set earlier
-// does not survive; set it again afterwards.
+// embeds the same address fails with a signer mismatch. The exchange ends,
+// closing conn, as soon as ctx is done. It sets a deadline on conn and clears
+// it when it returns, so a deadline set earlier does not survive; set it again
+// afterwards.
 func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string) error {
 	if conn == nil {
 		return errors.New("tls connection is required")
@@ -425,19 +427,18 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 		return fmt.Errorf("generate channel binding nonce: %w", err)
 	}
 
-	deadline := time.Now().Add(defaultChannelBindingTimeout)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
-		deadline = ctxDeadline
-	}
-	_ = conn.SetDeadline(deadline)
+	_ = conn.SetDeadline(time.Now().Add(defaultChannelBindingTimeout))
 	defer conn.SetDeadline(time.Time{})
+	// When ctx ends, a deadline in the past ends a blocked read or write at once.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+	defer stop()
 
 	reqFrame := make([]byte, types.TLSChannelBindingRequestSize)
 	copy(reqFrame, types.TLSChannelBindingRequestMagic)
 	copy(reqFrame[len(types.TLSChannelBindingRequestMagic):], nonce[:])
 	if _, err := conn.Write(reqFrame); err != nil {
 		_ = conn.Close()
-		return fmt.Errorf("write channel binding request: %w", err)
+		return fmt.Errorf("write channel binding request: %w", cmp.Or(ctx.Err(), err))
 	}
 
 	// Read the tag first: a tunnel that does not answer binding hands the
@@ -447,7 +448,7 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 	tag := answer[:len(types.TLSChannelBindingAnswerTag)]
 	if _, err := io.ReadFull(conn, tag); err != nil {
 		_ = conn.Close()
-		return fmt.Errorf("read channel binding answer: %w", err)
+		return fmt.Errorf("read channel binding answer: %w", cmp.Or(ctx.Err(), err))
 	}
 	if string(tag) != types.TLSChannelBindingAnswerTag {
 		_ = conn.Close()
@@ -456,7 +457,7 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 	signed := answer[len(tag):]
 	if _, err := io.ReadFull(conn, signed); err != nil {
 		_ = conn.Close()
-		return fmt.Errorf("read channel binding answer: %w", err)
+		return fmt.Errorf("read channel binding answer: %w", cmp.Or(ctx.Err(), err))
 	}
 
 	tunnelExporter := signed[:types.TLSChannelBindingExporterSize]
@@ -480,6 +481,12 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 	if !strings.EqualFold(recoveredAddr, expectedAddr) {
 		_ = conn.Close()
 		return fmt.Errorf("tls channel binding signer %s does not match canonical hostname identity %s", recoveredAddr, expectedAddr)
+	}
+	// If ctx ended anyway, its callback may set the past deadline after the
+	// deferred reset, so the connection cannot be handed back.
+	if !stop() {
+		_ = conn.Close()
+		return ctx.Err()
 	}
 	return nil
 }
