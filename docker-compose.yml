@@ -56,6 +56,10 @@ services:
       PPROF_ENABLED: ${PPROF_ENABLED:-false}
       PPROF_ADDR: ${PPROF_ADDR:-127.0.0.1:6060}
 
+      # Optional observability. Prometheus is served at /metrics on the same
+      # HTTPS API listener; Loki forwarding is disabled when empty.
+      LOKI_URL: ${LOKI_URL:-}
+
       # TLS/ACME materials and DNS automation
       ACME_CA_DIR_URL: ${ACME_CA_DIR_URL:-}
       LEGO_CA_CERTIFICATES: ${LEGO_CA_CERTIFICATES:-}
@@ -84,3 +88,27 @@ services:
       # Uncomment when using a Google Cloud service account file for gcloud automation.
       # - ./gcp-dns.json:/run/secrets/gcp-dns.json:ro
     restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: [observability]
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  loki:
+    image: grafana/loki:3.5.0
+    profiles: [observability]
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    profiles: [observability]
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro

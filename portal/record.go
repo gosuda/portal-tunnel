@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -28,6 +29,10 @@ type leaseRecord struct {
 	CanonicalHostname string
 	Metadata          types.LeaseMetadata
 	Overlay           bool
+	sniInBytes        atomic.Int64
+	sniOutBytes       atomic.Int64
+	tcpInBytes        atomic.Int64
+	tcpOutBytes       atomic.Int64
 
 	registerChallenge *identity.RegisterChallenge
 

@@ -961,6 +961,81 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 	return leases
 }
 
+type transportStats struct {
+	activeTenants     map[string]int64
+	activeConnections map[string]int64
+}
+
+// NetworkTraffic is the cumulative application payload forwarded by one live lease.
+type NetworkTraffic struct {
+	Application string
+	Transport   string
+	InBytes     int64
+	OutBytes    int64
+	InPackets   int64
+	OutPackets  int64
+}
+
+func (r *leaseRegistry) networkTraffic(now time.Time) []NetworkTraffic {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var traffic []NetworkTraffic
+	for _, record := range r.records {
+		if record == nil || record.reverse == nil || record.isExpired(now) {
+			continue
+		}
+		application := record.ServiceKey().String()
+		traffic = append(traffic, NetworkTraffic{Application: application, Transport: "sni", InBytes: record.sniInBytes.Load(), OutBytes: record.sniOutBytes.Load()})
+		if record.tcpPort > 0 {
+			traffic = append(traffic, NetworkTraffic{Application: application, Transport: "tcp", InBytes: record.tcpInBytes.Load(), OutBytes: record.tcpOutBytes.Load()})
+		}
+		if record.datagram != nil {
+			inBytes, outBytes, inPackets, outPackets := record.datagram.TrafficStats()
+			traffic = append(traffic, NetworkTraffic{Application: application, Transport: "udp", InBytes: inBytes, OutBytes: outBytes, InPackets: inPackets, OutPackets: outPackets})
+		}
+	}
+	return traffic
+}
+
+func (r *leaseRegistry) transportStats(now time.Time) transportStats {
+	stats := transportStats{
+		activeTenants:     map[string]int64{"http": 0, "tcp": 0, "udp": 0, "tcp+udp": 0},
+		activeConnections: map[string]int64{"http": 0, "tcp": 0, "udp": 0, "tcp+udp": 0},
+	}
+	if r == nil {
+		return stats
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, record := range r.records {
+		if record == nil || record.reverse == nil || record.isExpired(now) {
+			continue
+		}
+		transport := "http"
+		switch {
+		case record.datagram != nil && record.tcpPort > 0:
+			transport = "tcp+udp"
+		case record.tcpPort > 0:
+			transport = "tcp"
+		case record.datagram != nil:
+			transport = "udp"
+		}
+		stats.activeTenants[transport]++
+
+		record.mu.Lock()
+		stats.activeConnections[transport] += int64(len(record.bridges))
+		record.mu.Unlock()
+		if record.datagram != nil {
+			stats.activeConnections[transport] += record.datagram.ActiveFlowCount()
+		}
+	}
+	return stats
+}
+
 func (r *leaseRegistry) deleteRecord(i int) {
 	if record := r.records[i]; record != nil {
 		r.cache.Detach(record.cacheLease())
