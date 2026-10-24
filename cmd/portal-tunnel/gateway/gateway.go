@@ -637,6 +637,7 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !hasVerifiedIdentityHeaders(r) {
 		r.Header.Del(types.HeaderPortalUser)
 		r.Header.Del(types.HeaderPortalAuth)
+		r.Header.Del(types.HeaderPortalProof)
 	}
 
 	path := "/"

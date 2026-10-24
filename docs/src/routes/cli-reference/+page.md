@@ -131,6 +131,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--owner` | string | | Service owner metadata |
 | `--hide` | bool | `false` | Hide service from relay listing screens |
 | `--auth-identity-headers` | bool | `false` | Send authenticated `X-Portal-User` and `X-Portal-Auth` headers to HTTP upstreams; requires `--auth` |
+| `--auth-identity-proof` | string | | Secret sent as `X-Portal-Proof` with the identity headers so the upstream can verify they came from Portal; at least 16 visible ASCII characters; requires `--auth-identity-headers`; pass it by environment variable, not on the command line, because process lists show arguments (env: `AUTH_IDENTITY_PROOF`) |
 | `--x402-testnet` | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
 | `--x402-network` | string | | Optional Sui, Casper, or Nano CAIP-2 network |
 | `--x402-asset` | string | | wCSPR CEP-18 contract hash required by Casper |

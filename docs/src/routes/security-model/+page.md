@@ -53,12 +53,15 @@ SIWE challenges expire after two minutes; signed sessions expire after at most
 24 hours.
 
 The auth gate wraps the complete HTTP router, including static files and x402
-routes. Portal removes client-supplied `X-Portal-User` and `X-Portal-Auth`
-headers before routing and only restores verified values when
-`--auth-identity-headers` is enabled. It also consumes the Portal session cookie
-at the gate, so upstream applications receive their own cookies but never the
-`__Host-portal_access` credential. Application auth cannot be combined with
-relay caching or raw TCP/UDP exposure.
+routes. Portal removes client-supplied `X-Portal-User`, `X-Portal-Auth`, and
+`X-Portal-Proof` headers before routing, whether or not the proof is
+configured, and only restores verified values when
+`--auth-identity-headers` is enabled. With `--auth-identity-proof` it also sends
+an `X-Portal-Proof` secret that the upstream can verify to tell Portal from
+another local process ([details](/siwe-authentication#verifying-the-identity-headers)).
+The gate also consumes the Portal session cookie, so upstream applications
+receive their own cookies but never the `__Host-portal_access` credential.
+Application auth cannot be combined with relay caching or raw TCP/UDP exposure.
 
 API clients may submit the signed credential in
 `X-Portal-Access-Credential`. The tunnel validates it on every request and
