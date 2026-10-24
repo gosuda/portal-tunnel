@@ -3,6 +3,7 @@ package gateway
 import (
 	"html"
 	"io"
+	"net/http"
 	"strings"
 )
 
@@ -14,7 +15,7 @@ const signinContentSecurityPolicy = "default-src 'none'; script-src 'unsafe-inli
 	"font-src https://fonts.bunny.net; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 // signinShell holds the placeholders @@HOST@@ and @@FULLHOST@@ (the protected host,
-// filled per request and HTML-escaped), @@BODY@@ and @@SCRIPT@@ (the per-method
+// filled per request and HTML-escaped), @@BODY@@ and @@SCRIPT@@ (the per-screen
 // parts, filled once at start).
 const signinShell = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -63,6 +64,7 @@ textarea::placeholder{color:var(--muted);opacity:1}
 .err svg{width:16px;height:16px;margin-top:3px;flex:none;stroke:var(--danger);stroke-width:1.9}
 .btn{width:100%;min-height:44px;padding:10px 14px;border:1px solid var(--action);border-radius:.5rem;background:var(--action);color:var(--action-fg);font:700 .95rem "Open Sans","Helvetica Neue",Arial,sans-serif;cursor:pointer}
 .btn:disabled{opacity:.6;cursor:wait}
+a.btn{display:flex;align-items:center;justify-content:center;text-decoration:none}
 :focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .foot{position:relative;text-align:center;font-size:.78rem;color:var(--muted)}
 .spin svg{animation:spin 1s linear infinite;transform-origin:center}
@@ -76,6 +78,7 @@ textarea::placeholder{color:var(--muted);opacity:1}
 <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8.5v4.5M12 16.5v.01"/><path d="M10.3 4.2 2.8 17.5a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z"/></symbol>
 <symbol id="i-wallet" viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v3"/><rect x="3.5" y="8" width="17" height="11" rx="2"/><circle cx="16" cy="13.5" r="1"/></symbol>
 <symbol id="i-spin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" opacity=".22"/><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
 </svg>
 <div class="page">
 <svg class="grid" aria-hidden="true"><defs><pattern id="dots" width="18" height="18" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.1" style="fill:var(--dot)"/></pattern></defs><rect width="100%" height="100%" fill="url(#dots)"/></svg>
@@ -137,23 +140,55 @@ const v=await post('/_portal/auth/verify',{challenge_id:c.data.challenge_id,mess
 }catch(e){if(e&&e.code===4001){show('form');return}fail(e&&e.message)}};
 document.addEventListener('click',(e)=>{const b=e.target.closest('[data-connect]');if(b)connect(b.dataset.connect==='fresh')});`
 
+// An OIDC login leaves for the provider at once, so its only screens are the
+// ways it can come back without a session. They are rendered by the server and
+// need no script. @@ISSUER@@ is the provider's host, @@RETRY@@ the login link
+// that keeps the visitor's target, and @@ACCOUNT@@ the account the provider
+// signed in, in the form an allowlist entry takes.
+const (
+	signinOIDCExpiredBody = `<section><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-clock"/></svg></div><h1>Sign-in took too long</h1><p class="body">This sign-in expired, or a newer one was started in another tab. Start it again from here.</p><a class="btn" href="@@RETRY@@">Sign in again</a></section>`
+
+	signinOIDCCanceledBody = `<section><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1>Sign-in was canceled</h1><p class="body"><span class="mono">@@ISSUER@@</span> did not finish signing you in. If you did not cancel, your account may not have access to this app; ask its owner.</p><a class="btn" href="@@RETRY@@">Sign in again</a></section>`
+
+	signinOIDCDeniedBody = `<section><div class="ico danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1>This account is not allowed</h1><p class="body">Ask the owner of this app to add it, or sign in with a different account. You may need to sign out of <span class="mono">@@ISSUER@@</span> first.</p><div class="who"><small>Signed in as</small><b>@@ACCOUNT@@</b></div><a class="btn" href="@@RETRY@@">Sign in again</a></section>`
+
+	signinOIDCFailedBody = `<section><div class="ico danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1>Sign-in could not be completed</h1><p class="body"><span class="mono">@@ISSUER@@</span> did not respond or could not finish the sign-in. Try again in a moment. If this keeps happening, tell the owner of this app.</p><a class="btn" href="@@RETRY@@">Try again</a></section>`
+)
+
 var (
-	signinCredentialPage = newSigninPage(signinCredentialBody, signinCredentialScript)
-	signinWalletPage     = newSigninPage(signinWalletBody, signinWalletScript)
+	signinCredentialPage = newSigninPage(signinCredentialBody, signinScriptPrelude+signinCredentialScript)
+	signinWalletPage     = newSigninPage(signinWalletBody, signinScriptPrelude+signinWalletScript)
+
+	signinOIDCExpiredPage  = newSigninPage(signinOIDCExpiredBody, "")
+	signinOIDCCanceledPage = newSigninPage(signinOIDCCanceledBody, "")
+	signinOIDCDeniedPage   = newSigninPage(signinOIDCDeniedBody, "")
+	signinOIDCFailedPage   = newSigninPage(signinOIDCFailedBody, "")
 )
 
 func newSigninPage(body, script string) string {
-	return strings.NewReplacer("@@BODY@@", body, "@@SCRIPT@@", signinScriptPrelude+script).Replace(signinShell)
+	return strings.NewReplacer("@@BODY@@", body, "@@SCRIPT@@", script).Replace(signinShell)
 }
 
-// writeSigninPage renders a sign-in page for the host the visitor reached. The
-// host comes from the request, so it is escaped before it enters the page.
-func writeSigninPage(w io.Writer, page, host string) {
+// setSigninHeaders marks a response as a sign-in page: never cached or sniffed,
+// and held to the sign-in content policy.
+func setSigninHeaders(h http.Header) {
+	h.Set("Cache-Control", "no-store")
+	h.Set("Content-Security-Policy", signinContentSecurityPolicy)
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+}
+
+// writeSigninPage renders a sign-in page for the host the visitor reached, with
+// fields holding further placeholder and value pairs. The host and the values
+// come from the request or the provider, so they are escaped, and all of them
+// are filled in one pass so a value is never read as a placeholder.
+func writeSigninPage(w io.Writer, page, host string, fields ...string) {
 	host = strings.TrimSpace(host)
-	_, _ = io.WriteString(w, strings.NewReplacer(
-		"@@HOST@@", html.EscapeString(displayHost(host)),
-		"@@FULLHOST@@", html.EscapeString(host),
-	).Replace(page))
+	pairs := append([]string{"@@HOST@@", displayHost(host), "@@FULLHOST@@", host}, fields...)
+	for i := 1; i < len(pairs); i += 2 {
+		pairs[i] = html.EscapeString(pairs[i])
+	}
+	_, _ = io.WriteString(w, strings.NewReplacer(pairs...).Replace(page))
 }
 
 // displayHost shortens the identity-bound first label of a canonical host, such
