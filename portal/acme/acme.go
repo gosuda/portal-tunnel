@@ -58,7 +58,7 @@ type Manager struct {
 	stopOnce     sync.Once
 	ensStatus    *utils.Snapshot[types.ENSStatus]
 	ensCommands  chan ensDNSCommand
-	material     utils.Snapshot[servedMaterial]
+	material     *utils.Snapshot[servedMaterial]
 
 	// pendingDNSAddress is guarded by commandMu and cleared only after address-record synchronization.
 	pendingDNSAddress bool
@@ -111,6 +111,7 @@ func NewManager(cfg Config) (*Manager, error) {
 			cfg:       cfg,
 			stopCh:    make(chan struct{}),
 			ensStatus: utils.NewSnapshot(newENSStatus(cfg, nil)),
+			material:  utils.NewSnapshot(servedMaterial{}),
 		}, nil
 	}
 
@@ -119,6 +120,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		stopCh:      make(chan struct{}),
 		ensCommands: make(chan ensDNSCommand, 256),
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
+		material:    utils.NewSnapshot(servedMaterial{}),
 	}
 
 	acmeDNS, err := newDNSProvider(cfg.DNSProvider, cfg)
