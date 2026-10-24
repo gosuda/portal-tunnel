@@ -187,6 +187,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		return err
 	}
 	target := strings.TrimSpace(req.TargetAddr)
+	serve := strings.TrimSpace(req.Serve)
 	httpRoutes := make([]tunnel.HTTPRoute, 0, len(req.HTTPRoutes))
 	for _, route := range req.HTTPRoutes {
 		httpRoutes = append(httpRoutes, tunnel.HTTPRoute{
@@ -199,7 +200,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 	if target != "" && len(httpRoutes) > 0 {
 		return errors.New("target cannot be combined with http_routes")
 	}
-	if target == "" && len(httpRoutes) == 0 {
+	if target == "" && serve == "" && len(httpRoutes) == 0 {
 		target = defaultTargetAddr
 	}
 	name = cmp.Or(name, id)
@@ -223,6 +224,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		ID:                   id,
 		Name:                 name,
 		TargetAddr:           target,
+		Serve:                serve,
 		HTTPRoutes:           httpRoutes,
 		StripRequestHeaders:  append([]string(nil), req.StripRequestHeaders...),
 		RelayURLs:            relayURLs,
