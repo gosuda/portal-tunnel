@@ -504,18 +504,21 @@ func checkPaneRows(t *testing.T, height int, want [agentDashboardPaneCount]int, 
 }
 
 func TestNewAgentDashboardTheme(t *testing.T) {
-	for _, name := range []string{"", "amber", "AMBER", " green "} {
+	for _, name := range []string{DefaultDashboardTheme, "amber", "green"} {
 		if _, err := newAgentDashboardTheme(name, agentDashboardTerminal{}); err != nil {
 			t.Errorf("theme %q: %v", name, err)
 		}
 	}
-	_, err := newAgentDashboardTheme("purple", agentDashboardTerminal{})
-	if err == nil {
-		t.Fatal("an unknown theme must be rejected")
-	}
-	for _, want := range []string{"purple", "amber", "green"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q should mention %q", err, want)
+	// The default belongs to the --theme flags, so an empty name is not a theme either.
+	for _, name := range []string{"purple", ""} {
+		_, err := newAgentDashboardTheme(name, agentDashboardTerminal{})
+		if err == nil {
+			t.Fatalf("theme %q must be rejected", name)
+		}
+		for _, want := range []string{fmt.Sprintf("%q", name), "amber", "green"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q should mention %s", err, want)
+			}
 		}
 	}
 

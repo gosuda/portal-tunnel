@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"cmp"
 	"fmt"
 	"os"
 	"strings"
@@ -10,7 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// DefaultDashboardTheme is the palette used when none is chosen.
+// DefaultDashboardTheme is the default of the --theme flags.
 const DefaultDashboardTheme = "amber"
 
 // agentDashboardPalette lists ANSI-256 color indices. lipgloss downgrades them
@@ -77,19 +76,20 @@ type agentDashboardTheme struct {
 	text, muted, rule, bright, strong, selected, pending, failed lipgloss.Style
 }
 
-// ValidateDashboardTheme reports whether name selects a palette, so a caller
-// can refuse a bad name before it starts anything.
+// ValidateDashboardTheme reports whether name selects a palette, so a command
+// can refuse a bad name right after parsing it, before it starts anything.
 func ValidateDashboardTheme(name string) error {
-	_, err := newAgentDashboardTheme(name, agentDashboardTerminal{})
-	return err
+	if _, ok := agentDashboardPalettes[name]; !ok {
+		return fmt.Errorf("%q: supported values are amber and green", name)
+	}
+	return nil
 }
 
 func newAgentDashboardTheme(name string, term agentDashboardTerminal) (agentDashboardTheme, error) {
-	name = cmp.Or(strings.ToLower(strings.TrimSpace(name)), DefaultDashboardTheme)
-	palette, ok := agentDashboardPalettes[name]
-	if !ok {
-		return agentDashboardTheme{}, fmt.Errorf("--theme %q: supported values are amber and green", name)
+	if err := ValidateDashboardTheme(name); err != nil {
+		return agentDashboardTheme{}, err
 	}
+	palette := agentDashboardPalettes[name]
 
 	theme := agentDashboardTheme{glyph: agentDashboardGlyphSet(term.unicode)}
 	fg := func(color string) lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color(color)) }

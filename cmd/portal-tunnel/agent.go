@@ -61,7 +61,7 @@ func runAgentRunCommand(args []string) error {
 	// after the agent has started, so a bad theme is refused before anything
 	// starts and never stops a headless run.
 	if foreground && !serviceMode && agentCLIInteractive() {
-		if err := agent.ValidateDashboardTheme(theme); err != nil {
+		if err := validateDashboardTheme(fs, theme); err != nil {
 			return err
 		}
 	}
@@ -295,6 +295,9 @@ func runAgentDashboardCommand(args []string) error {
 		printAgentDashboardUsage(os.Stderr)
 		return err
 	}
+	if err := validateDashboardTheme(fs, theme); err != nil {
+		return err
+	}
 
 	configPath = strings.TrimSpace(configPath)
 	stateDir = strings.TrimSpace(stateDir)
@@ -313,6 +316,23 @@ func runAgentDashboardCommand(args []string) error {
 		}
 	}
 	return agent.RunDashboard(configPath, stateDir, theme)
+}
+
+// validateDashboardTheme refuses an unknown --theme value and names where it
+// came from: the flag when it was given, otherwise PORTAL_TUI_THEME, because
+// the flag's own default is a valid theme.
+func validateDashboardTheme(fs *flag.FlagSet, theme string) error {
+	err := agent.ValidateDashboardTheme(theme)
+	if err == nil {
+		return nil
+	}
+	source := "PORTAL_TUI_THEME"
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "theme" {
+			source = "--theme"
+		}
+	})
+	return fmt.Errorf("%s %w", source, err)
 }
 
 func waitAgentStatus(ctx context.Context, stateDir string) (agent.AgentStatusResponse, error) {

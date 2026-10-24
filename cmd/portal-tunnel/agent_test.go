@@ -6,18 +6,20 @@ import (
 	"testing"
 )
 
-// An unknown dashboard theme is refused before the dashboard takes over the terminal,
-// whether it came from --theme or from PORTAL_TUI_THEME.
+// An unknown dashboard theme is refused before the dashboard takes over the terminal, and the
+// error names where it came from: --theme or PORTAL_TUI_THEME.
 func TestAgentDashboardRefusesUnknownTheme(t *testing.T) {
 	stateDir := t.TempDir()
 	tests := []struct {
-		name string
-		env  string
-		args []string
+		name   string
+		env    string
+		args   []string
+		source string
 	}{
-		{"flag", "", []string{"--state-dir", stateDir, "--theme", "purple"}},
-		{"environment", "purple", []string{"--state-dir", stateDir}},
-		{"flag wins over a valid environment", "green", []string{"--state-dir", stateDir, "--theme", "purple"}},
+		{"flag", "", []string{"--state-dir", stateDir, "--theme", "purple"}, "--theme"},
+		{"environment", "purple", []string{"--state-dir", stateDir}, "PORTAL_TUI_THEME"},
+		{"flag wins over a valid environment", "green", []string{"--state-dir", stateDir, "--theme", "purple"}, "--theme"},
+		{"flag wins over an unknown environment", "purple", []string{"--state-dir", stateDir, "--theme", "purple"}, "--theme"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -26,7 +28,10 @@ func TestAgentDashboardRefusesUnknownTheme(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected an error for an unknown theme")
 			}
-			for _, want := range []string{"--theme", "purple", "amber", "green"} {
+			if !strings.HasPrefix(err.Error(), tt.source+" ") {
+				t.Fatalf("error %q should name %s", err, tt.source)
+			}
+			for _, want := range []string{"purple", "amber", "green"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("error %q should mention %q", err, want)
 				}
