@@ -31,6 +31,9 @@ const (
 // unknownCertificateMessage is the /v1/sign answer when the relay holds no key
 // for the certificate the tenant presents. The tenant's pinned chain is stale
 // then, and the Client reads this text to pin the chain the relay serves now.
+// pinIsStale matches the text on purpose, because the remote signer reports
+// only the message of a refusal and not its status: do not reword it without
+// updating pinIsStale and the tests that pin both.
 const unknownCertificateMessage = "relay does not hold the key of the presented certificate"
 
 type Signer struct {
