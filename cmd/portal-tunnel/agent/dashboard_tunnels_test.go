@@ -46,26 +46,22 @@ func TestTunnelDashboardTarget(t *testing.T) {
 	}
 }
 
-func TestAgentDashboardTunnelRowFitsAndKeepsStateAndName(t *testing.T) {
-	for _, width := range []int{1, 10, 27, 28, 40, 55, 56, 80, 120} {
+func TestAgentDashboardTunnelRowFitsAndKeepsName(t *testing.T) {
+	for width := 3; width <= 140; width++ {
 		row := agentDashboardTunnelRow(width, "running", "127.0.0.1:3000", "web")
 		if got := lipgloss.Width(row); got > width {
 			t.Fatalf("width %d: row %q is %d cells wide", width, row, got)
 		}
-		if width < len("running web") {
-			continue
-		}
-		fields := strings.Fields(row)
-		if fields[0] != "running" || fields[len(fields)-1] != "web" {
-			t.Fatalf("width %d: row %q must start with the state and end with the name", width, row)
+		if fields := strings.Fields(row); fields[len(fields)-1] != "web" {
+			t.Fatalf("width %d: row %q must end with the name", width, row)
 		}
 	}
 }
 
 func TestAgentDashboardTunnelRowTruncatesLongNames(t *testing.T) {
 	name := "a-tunnel-name-that-is-much-longer-than-the-name-column-can-hold"
-	row := agentDashboardTunnelRow(56, "running", "127.0.0.1:3000", name)
-	if lipgloss.Width(row) > 56 {
+	row := agentDashboardTunnelRow(60, "running", "127.0.0.1:3000", name)
+	if lipgloss.Width(row) > 60 {
 		t.Fatalf("row %q is %d cells wide", row, lipgloss.Width(row))
 	}
 	if !strings.HasSuffix(row, "~") {
@@ -73,17 +69,17 @@ func TestAgentDashboardTunnelRowTruncatesLongNames(t *testing.T) {
 	}
 }
 
-func TestAgentDashboardTunnelTableIsNeverWiderThanThePane(t *testing.T) {
-	tables := [][]AgentTunnelStatus{
-		nil,
-		{{Name: strings.Repeat("n", 60), TargetAddr: "127.0.0.1:3000"}},
-		{{Name: strings.Repeat("日", 40)}},
-	}
-	for _, tunnels := range tables {
-		for width := 1; width <= 140; width++ {
-			if got := agentDashboardTunnelTableWidth(width, tunnels); got > width {
-				t.Fatalf("width %d: table is %d cells wide for %+v", width, got, tunnels)
-			}
+func TestAgentDashboardTunnelLookTellsStatesApartWithoutColor(t *testing.T) {
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{})
+	leds := make(map[string]string)
+	for _, state := range []string{"running", "starting", "error", "stopped"} {
+		led, _ := agentDashboardTunnelLook(&theme, state)
+		if other, ok := leds[led]; ok {
+			t.Fatalf("states %q and %q share the LED %q", other, state, led)
 		}
+		leds[led] = state
+	}
+	if led, _ := agentDashboardTunnelLook(&theme, "unknown"); leds[led] != "stopped" {
+		t.Fatalf("an unknown state must look idle, got LED %q", led)
 	}
 }

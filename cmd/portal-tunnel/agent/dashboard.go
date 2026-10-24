@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,6 +26,8 @@ const (
 	agentDashboardActionFocusSettingsField
 	agentDashboardActionFocusAddTunnelField
 	agentDashboardActionOpenTunnelURL
+	agentDashboardActionConfirmDelete
+	agentDashboardActionCancelDelete
 )
 
 type agentDashboardPane int
@@ -39,6 +42,7 @@ const (
 type agentDashboardModel struct {
 	configPath string
 	stateDir   string
+	theme      agentDashboardTheme
 
 	status AgentStatusResponse
 	err    error
@@ -54,6 +58,7 @@ type agentDashboardModel struct {
 	selectedRelayURL string
 	activePane       agentDashboardPane
 	relayAttempts    map[relayAttemptKey]bool
+	confirmDelete    string // ID of the tunnel waiting for a delete answer
 
 	addingTunnel     bool
 	addFocus         int
@@ -90,52 +95,41 @@ type agentDashboardActionMsg struct {
 
 type agentDashboardTickMsg struct{}
 
-func RunDashboard(configPath, stateDir string) error {
-	model := newAgentDashboardModel(configPath, stateDir)
+// RunDashboard runs the terminal dashboard until the user quits. themeName is a
+// palette name the caller has already checked with ValidateDashboardTheme.
+func RunDashboard(configPath, stateDir, themeName string) error {
+	theme := newAgentDashboardTheme(themeName, detectAgentDashboardTerminal())
+	model := newAgentDashboardModel(configPath, stateDir, theme)
 	_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
-func newAgentDashboardModel(configPath, stateDir string) agentDashboardModel {
+func newAgentDashboardModel(configPath, stateDir string, theme agentDashboardTheme) agentDashboardModel {
 	model := agentDashboardModel{
 		configPath:          configPath,
 		stateDir:            stateDir,
-		addName:             newAgentDashboardInlineInput("myapp"),
-		addTarget:           newAgentDashboardInlineInput("3000"),
-		addHTTPRoutes:       newAgentDashboardInlineInput("/paid=3001 GET:0.01; /=5173"),
-		addX402PayTo:        newAgentDashboardInlineInput("0x..."),
-		addX402Testnet:      newAgentDashboardInlineInput("false"),
-		addX402Network:      newAgentDashboardInlineInput("casper:casper-test"),
-		addX402Asset:        newAgentDashboardInlineInput("hash-..."),
-		addX402Endpoints:    newAgentDashboardInlineInput("https://x402-facilitator.cspr.cloud"),
-		addRelays:           newAgentDashboardInlineInput("https://portal.example.com"),
-		addDiscovery:        newAgentDashboardInlineInput("true"),
-		addMaxRelays:        newAgentDashboardInlineInput("3"),
-		settingsMaxRelays:   newAgentDashboardInlineInput("3"),
-		metadataDescription: newAgentDashboardInlineInput("description"),
-		metadataTags:        newAgentDashboardInlineInput("api,staging"),
-		metadataOwner:       newAgentDashboardInlineInput("owner"),
-		metadataThumbnail:   newAgentDashboardInlineInput("https://..."),
-		metadataHide:        newAgentDashboardInlineInput("true or false"),
+		theme:               theme,
+		addName:             theme.newInput("myapp"),
+		addTarget:           theme.newInput("3000"),
+		addHTTPRoutes:       theme.newInput("/paid=3001 GET:0.01; /=5173"),
+		addX402PayTo:        theme.newInput("0x..."),
+		addX402Testnet:      theme.newInput("false"),
+		addX402Network:      theme.newInput("casper:casper-test"),
+		addX402Asset:        theme.newInput("hash-..."),
+		addX402Endpoints:    theme.newInput("https://x402-facilitator.cspr.cloud"),
+		addRelays:           theme.newInput("https://portal.example.com"),
+		addDiscovery:        theme.newInput("true"),
+		addMaxRelays:        theme.newInput("3"),
+		settingsMaxRelays:   theme.newInput("3"),
+		metadataDescription: theme.newInput("description"),
+		metadataTags:        theme.newInput("api,staging"),
+		metadataOwner:       theme.newInput("owner"),
+		metadataThumbnail:   theme.newInput("https://..."),
+		metadataHide:        theme.newInput("true or false"),
 	}
 	model.resetAddTunnelForm()
 	model.resizeInputs(0)
 	return model
-}
-
-func newAgentDashboardTextInput() textinput.Model {
-	input := textinput.New()
-	input.CharLimit = 512
-	input.PromptStyle = agentDashboardSectionStyle
-	input.TextStyle = agentDashboardInputStyle
-	input.PlaceholderStyle = agentDashboardMutedStyle
-	return input
-}
-
-func newAgentDashboardInlineInput(placeholder string) textinput.Model {
-	input := newAgentDashboardTextInput()
-	input.Placeholder = placeholder
-	return input
 }
 
 func (m agentDashboardModel) Init() tea.Cmd {
@@ -177,113 +171,6 @@ func (m agentDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m agentDashboardModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
-		return m, tea.Quit
-	case "esc":
-		m.err = nil
-		if m.activePane == agentDashboardPaneTunnels {
-			if m.addingTunnel {
-				m.cancelTunnelInput()
-			}
-		} else {
-			m.setActivePane(agentDashboardPaneTunnels)
-		}
-		return m, nil
-	case "left":
-		m.setActivePane(m.activePane - 1)
-		return m, nil
-	case "right":
-		m.setActivePane(m.activePane + 1)
-		return m, nil
-	}
-
-	switch m.activePane {
-	case agentDashboardPaneTunnels:
-		return m.updateTunnelKeys(msg)
-	case agentDashboardPaneRelays:
-		return m.updateRelayKeys(msg)
-	case agentDashboardPaneSettings:
-		return m.updateSettingsKeys(msg)
-	default:
-		m.setActivePane(agentDashboardPaneTunnels)
-		return m, nil
-	}
-}
-
-func (m agentDashboardModel) updateTunnelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.addingTunnel {
-		switch msg.String() {
-		case "tab", "down":
-			m.focusAddTunnelField(m.addFocus + 1)
-			return m, nil
-		case "shift+tab", "up":
-			m.focusAddTunnelField(m.addFocus - 1)
-			return m, nil
-		case "enter":
-			return m.addTunnelFromInput()
-		}
-
-		input := m.focusedAddTunnelInput()
-		if input == nil {
-			return m, nil
-		}
-		var cmd tea.Cmd
-		*input, cmd = input.Update(msg)
-		return m, cmd
-	}
-
-	switch msg.String() {
-	case "up":
-		m.selectTunnelOffset(-1)
-		return m, nil
-	case "down":
-		m.selectTunnelOffset(1)
-		return m, nil
-	case "delete":
-		return m.deleteTunnel("")
-	}
-	return m, nil
-}
-
-func (m agentDashboardModel) updateRelayKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "up":
-		m.selectRelayOffset(-1)
-	case "down":
-		m.selectRelayOffset(1)
-	case "enter", "c":
-		return m.connectSelectedRelay()
-	case "d", "delete":
-		return m.disconnectSelectedRelay()
-	case "o":
-		return m.openRelayTunnelURL("", "")
-	}
-	return m, nil
-}
-
-func (m agentDashboardModel) updateSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "tab", "down":
-		m.focusSettingsField(m.settingsFocus + 1)
-		return m, nil
-	case "shift+tab", "up":
-		m.focusSettingsField(m.settingsFocus - 1)
-		return m, nil
-	case "enter":
-		return m.applySettingsEdit()
-	}
-
-	input := m.focusedSettingsInput()
-	if input == nil {
-		return m, nil
-	}
-	var cmd tea.Cmd
-	*input, cmd = input.Update(msg)
-	return m, cmd
-}
-
 func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	event := tea.MouseEvent(msg)
 	switch event.Button {
@@ -314,6 +201,12 @@ func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 	}
 	for _, region := range m.layout().regions {
 		if event.Y == region.y && event.X >= region.x0 && event.X < region.x1 {
+			// While a delete waits for an answer, only its Yes and No buttons act on a click, as only
+			// the answers act on a key. The wheel and the sidebar drag above still scroll; neither
+			// touches the tunnel in question.
+			if m.confirming() && region.action != agentDashboardActionConfirmDelete && region.action != agentDashboardActionCancelDelete {
+				return m, nil
+			}
 			if region.action == agentDashboardActionSelectPane {
 				m.setActivePane(region.pane)
 				return m, nil
@@ -349,7 +242,13 @@ func (m agentDashboardModel) runAction(action agentDashboardAction, tunnelID, re
 	case agentDashboardActionCancelAddTunnel:
 		m.cancelTunnelInput()
 	case agentDashboardActionDeleteTunnel:
+		return m.askDeleteTunnel(tunnelID)
+	case agentDashboardActionConfirmDelete:
+		tunnelID = m.confirmDelete
+		m.confirmDelete = ""
 		return m.deleteTunnel(tunnelID)
+	case agentDashboardActionCancelDelete:
+		m.confirmDelete = ""
 	case agentDashboardActionConnectRelay:
 		return m.connectSelectedRelay()
 	case agentDashboardActionDisconnectRelay:
@@ -461,6 +360,9 @@ func (m agentDashboardModel) scrollActivePane(delta int) (tea.Model, tea.Cmd) {
 }
 
 func (m *agentDashboardModel) clampSelection() {
+	if !slices.ContainsFunc(m.status.Tunnels, func(tunnel AgentTunnelStatus) bool { return tunnel.ID == m.confirmDelete }) {
+		m.confirmDelete = ""
+	}
 	if len(m.status.Tunnels) == 0 {
 		m.selectedTunnelID = ""
 		m.selectedRelayURL = ""
@@ -533,9 +435,8 @@ func (m *agentDashboardModel) resizeInputs(width int) {
 	if width <= 0 {
 		width = 88
 	}
-	contentWidth, _, _ := agentDashboardColumnWidths(width)
-	// An input row is the 12-cell label, a space, the 2-cell prompt, the text area and the cursor cell.
-	settingsWidth := max(1, min(agentDashboardTunnelInputMaxWidth, contentWidth-16))
+	mainWidth, _, _ := agentDashboardColumnWidths(width)
+	settingsWidth := max(1, min(agentDashboardTunnelInputMaxWidth, mainWidth-agentDashboardFrameWidth-agentDashboardInputChrome))
 	for _, input := range []*textinput.Model{
 		&m.addName,
 		&m.addTarget,
