@@ -581,13 +581,14 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 		})
 	})
 
-	// Both sessions share one exporter, so only the client's fresh nonce can
-	// tell the recorded answer from the one the client is waiting for.
-	t.Run("replayed answer from an earlier exchange", func(t *testing.T) {
+	// A recorded answer carries the exporter of the TLS session it was made
+	// for, so replayed into the client's own session it fails the exporter
+	// check, with an error distinct from a signature mismatch.
+	t.Run("replayed answer from an earlier session", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			l := newChannelBindingListener(t, "8", "")
 			canonicalHost := canonicalTestHostname(t, l.identity.Address)
-			recorded := recordChannelBindingAnswer(t, l, exporter)
+			recorded := recordChannelBindingAnswer(t, l, bytes.Repeat([]byte{0x11}, 32))
 
 			clientRaw, serverRaw := net.Pipe()
 			client := &testExporterConn{Conn: clientRaw, exported: exporter}
@@ -598,8 +599,8 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 			}()
 
 			err := VerifyTLSChannelBinding(t.Context(), client, canonicalHost)
-			if err == nil || !strings.Contains(err.Error(), "does not match canonical hostname identity") {
-				t.Fatalf("VerifyTLSChannelBinding() = %v; want signer identity mismatch", err)
+			if err == nil || !strings.Contains(err.Error(), "exporter mismatch") || strings.Contains(err.Error(), "signer") {
+				t.Fatalf("VerifyTLSChannelBinding() = %v; want an exporter mismatch, not a signature error", err)
 			}
 		})
 	})
@@ -696,70 +697,48 @@ func recordChannelBindingAnswer(t *testing.T, l *listener, exporter []byte) []by
 }
 
 // A client that sends the start of a binding request and withholds the nonce
-// holds an admitting slot without any credential, so the tunnel gives up on it
-// after a short budget of its own, not the client's round-trip budget, while a
-// request fragmented within that budget still binds (see
+// holds an admitting slot without any credential, so the tunnel closes the
+// connection after a short budget of its own, not the client's round-trip
+// budget, while a request fragmented within that budget still binds (see
 // TestTLSChannelBindingToleratesSplitRequest).
 func TestAdmissionOfAWithheldBindingNonceEndsQuickly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := newChannelBindingListener(t, "a", "")
-		l.accepted = make(chan net.Conn, 1)
-		l.admitting = make(chan struct{}, 1)
-		l.api = &apiClient{relayURL: &url.URL{Scheme: "https", Host: "relay.example"}}
-
 		clientRaw, serverRaw := net.Pipe()
+		defer clientRaw.Close()
+		go func() {
+			_, _, _ = l.mitmManager.maybeHandleConn(&testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)})
+		}()
 		go func() { _, _ = clientRaw.Write([]byte(types.TLSChannelBindingRequestMagic)) }()
-		l.admitting <- struct{}{}
-		go l.admit(t.Context(), &testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)})
 
-		// The slot is held while the nonce is still due, and free well before the
-		// client's own ten second budget would have run out.
-		const slotCeiling = 2 * time.Second
-		synctest.Sleep(channelBindingRequestTimeout / 2)
-		select {
-		case l.admitting <- struct{}{}:
-			t.Fatal("the slot was free before the nonce was due")
-		default:
+		// Well before the client's own ten second budget would run out.
+		const budget = 2 * time.Second
+		_ = clientRaw.SetReadDeadline(time.Now().Add(budget))
+		if _, err := clientRaw.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Fatalf("client read = %v; want the tunnel to close a withheld request within %v", err, budget)
 		}
-		synctest.Sleep(slotCeiling - channelBindingRequestTimeout/2)
-		select {
-		case l.admitting <- struct{}{}:
-		default:
-			t.Fatalf("a client withholding the nonce still holds its admitting slot after %v", slotCeiling)
-		}
-		_ = clientRaw.Close()
 	})
 }
 
 // A client that sends a whole binding request and never reads the answer must
-// not hold its admitting slot either.
+// not hold its admitting slot either: the tunnel gives up writing the answer
+// and closes the connection within the same short budget.
 func TestAdmissionOfAClientThatNeverReadsTheAnswerEndsQuickly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := newChannelBindingListener(t, "b", "")
-		l.accepted = make(chan net.Conn, 1)
-		l.admitting = make(chan struct{}, 1)
-		l.api = &apiClient{relayURL: &url.URL{Scheme: "https", Host: "relay.example"}}
-
 		clientRaw, serverRaw := net.Pipe()
+		defer clientRaw.Close()
+		go func() {
+			_, _, _ = l.mitmManager.maybeHandleConn(&testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)})
+		}()
 		request := append([]byte(types.TLSChannelBindingRequestMagic), bytes.Repeat([]byte{7}, types.TLSChannelBindingNonceSize)...)
 		go func() { _, _ = clientRaw.Write(request) }()
-		l.admitting <- struct{}{}
-		go l.admit(t.Context(), &testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)})
 
-		const slotCeiling = 2 * time.Second
-		synctest.Sleep(channelBindingRequestTimeout / 2)
-		select {
-		case l.admitting <- struct{}{}:
-			t.Fatal("the slot was free while the answer was still being written")
-		default:
+		const budget = 2 * time.Second
+		synctest.Sleep(budget)
+		if n, err := clientRaw.Read(make([]byte, types.TLSChannelBindingAnswerSize)); !errors.Is(err, io.EOF) {
+			t.Fatalf("client read after %v = %d bytes, %v; want the tunnel to have closed the connection", budget, n, err)
 		}
-		synctest.Sleep(slotCeiling - channelBindingRequestTimeout/2)
-		select {
-		case l.admitting <- struct{}{}:
-		default:
-			t.Fatalf("a client that never reads the answer still holds its admitting slot after %v", slotCeiling)
-		}
-		_ = clientRaw.Close()
 	})
 }
 
