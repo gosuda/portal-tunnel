@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"os"
@@ -58,19 +59,42 @@ func (m *Manager) SigningKey(leafDER []byte) crypto.Signer {
 	if m == nil {
 		return nil
 	}
-	served := m.material.Load()
-	if served.current.holds(leafDER) {
-		signer, _ := served.current.Certificate.PrivateKey.(crypto.Signer)
-		return signer
-	}
-	now := time.Now()
-	for _, previous := range served.retired {
-		if previous.holds(leafDER) && now.Before(previous.Certificate.Leaf.NotAfter) {
-			signer, _ := previous.Certificate.PrivateKey.(crypto.Signer)
+	for _, material := range m.material.Load().signable(time.Now()) {
+		if material.holds(leafDER) {
+			signer, _ := material.Certificate.PrivateKey.(crypto.Signer)
 			return signer
 		}
 	}
 	return nil
+}
+
+// signable is the material SigningKey signs for at now: the served
+// certificate, then the replaced ones that have not expired.
+func (s servedMaterial) signable(now time.Time) []*TLSMaterial {
+	var signable []*TLSMaterial
+	if s.current != nil {
+		signable = append(signable, s.current)
+	}
+	for _, previous := range s.retired {
+		if now.Before(previous.Certificate.Leaf.NotAfter) {
+			signable = append(signable, previous)
+		}
+	}
+	return signable
+}
+
+// TenantTLSConfig is the configuration of a TLS client that reaches a tenant
+// presenting a relay certificate under serverName, as the cache fallback does.
+// It trusts exactly the certificates SigningKey signs for, each leaf as its own
+// root: a tenant may still present a chain that a renewal replaced.
+func (m *Manager) TenantTLSConfig(serverName string) *tls.Config {
+	roots := x509.NewCertPool()
+	if m != nil {
+		for _, material := range m.material.Load().signable(time.Now()) {
+			roots.AddCert(material.Certificate.Leaf)
+		}
+	}
+	return &tls.Config{ServerName: serverName, RootCAs: roots, MinVersion: tls.VersionTLS12}
 }
 
 func (t *TLSMaterial) holds(leafDER []byte) bool {
