@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -674,19 +673,9 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 				}
 				_ = upstream.Close()
 			}
-			material := s.acmeManager.TLSMaterial()
-			if material == nil {
-				_ = upstream.Close()
-				return nil, errors.New("relay certificate is not loaded")
-			}
-			leaf, err := x509.ParseCertificate(material.Certificate.Certificate[0])
-			if err != nil {
-				_ = upstream.Close()
-				return nil, err
-			}
-			roots := x509.NewCertPool()
-			roots.AddCert(leaf)
-			conn := tls.Client(s.registry.bindings.FixHelloOnWrite(upstream, binding), &tls.Config{ServerName: host, RootCAs: roots, MinVersion: tls.VersionTLS12})
+			// The tenant presents the relay chain it pinned, which can be one a
+			// renewal replaced; trust what the relay still signs for.
+			conn := tls.Client(s.registry.bindings.FixHelloOnWrite(upstream, binding), s.acmeManager.TenantTLSConfig(host))
 			if err := conn.HandshakeContext(ctx); err != nil {
 				_ = conn.Close()
 				return nil, fmt.Errorf("cache fallback TLS: %w", err)

@@ -3,6 +3,8 @@ package acme
 import (
 	"bytes"
 	"crypto"
+	"crypto/tls"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -155,5 +157,87 @@ func TestSigningKeyFollowsTheServedAndTheUnexpiredCertificates(t *testing.T) {
 	manager.material.Store(served)
 	if manager.SigningKey(leaf(expired)) != nil {
 		t.Fatal("SigningKey(a retired certificate that has expired) != nil, want none")
+	}
+}
+
+// The cache fallback reaches a tenant over TLS, and the tenant presents the
+// relay chain it pinned, which can be one a renewal replaced. The fallback must
+// trust exactly what SigningKey signs for: the served certificate and the
+// replaced ones that have not expired, under the requested name.
+func TestTenantTLSConfigTrustsWhatTheRelaySignsFor(t *testing.T) {
+	t.Parallel()
+
+	const baseDomain = "portal.example.com"
+	keyDir := t.TempDir()
+	certFile, keyFile := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
+	manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	issue := func(notAfter time.Time) *TLSMaterial {
+		t.Helper()
+		if err := writeRelayCertificate(t, certFile, keyFile, baseDomain, notAfter); err != nil {
+			t.Fatalf("writeRelayCertificate() error = %v", err)
+		}
+		certPEM, err := os.ReadFile(certFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyPEM, err := os.ReadFile(keyFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		material, err := newTLSMaterial(certPEM, keyPEM)
+		if err != nil {
+			t.Fatalf("newTLSMaterial() error = %v", err)
+		}
+		return material
+	}
+	// reach runs a handshake with a tenant that presents material. Loopback TCP
+	// rather than net.Pipe: a refusing client must be able to send its alert
+	// while the tenant is still writing its flight.
+	reach := func(material *TLSMaterial, serverName string) error {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
+		defer listener.Close()
+		go func() {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			_ = tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{material.Certificate}}).Handshake()
+		}()
+		conn, err := net.DialTimeout("tcp", listener.Addr().String(), 10*time.Second)
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return err
+		}
+		return tls.Client(conn, manager.TenantTLSConfig(serverName)).Handshake()
+	}
+
+	valid := time.Now().Add(30 * 24 * time.Hour)
+	expired, replaced, served := issue(time.Now().Add(-time.Hour)), issue(valid), issue(valid.Add(24*time.Hour))
+	for _, material := range []*TLSMaterial{expired, replaced, served} {
+		manager.serve(material)
+	}
+	const tenantHost = "tenant." + baseDomain
+	for name, material := range map[string]*TLSMaterial{"served": served, "replaced": replaced} {
+		if err := reach(material, tenantHost); err != nil {
+			t.Errorf("tenant presenting the %s certificate: %v, want it reached", name, err)
+		}
+	}
+	for name, material := range map[string]*TLSMaterial{"expired replaced": expired, "never served": issue(valid)} {
+		if err := reach(material, tenantHost); err == nil {
+			t.Errorf("tenant presenting the %s certificate was reached, want it refused", name)
+		}
+	}
+	if err := reach(served, "tenant.other.example"); err == nil {
+		t.Error("tenant presenting the served certificate under another name was reached, want it refused")
 	}
 }
