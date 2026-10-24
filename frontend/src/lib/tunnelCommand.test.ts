@@ -241,6 +241,22 @@ describe("tunnelCommand sign-in", () => {
     expect(buildOIDCSecretCommand("unix")).not.toContain("<");
   });
 
+  it("quotes free-text entries so PowerShell reads every quote literally", () => {
+    const auth: TunnelAuthOptions = {
+      ...none,
+      method: "credential",
+      allow: ["O'Brien", "O’Brien", "‘a‚ b‛"],
+    };
+
+    expect(runLine(buildTunnelCommand({ ...base, os: "windows", auth }))).toContain(
+      "--auth credential --auth-allow 'O''Brien' --auth-allow 'O’’Brien' --auth-allow '‘‘a‚‚ b‛‛'"
+    );
+    // A POSIX shell gives the typographic quotes no meaning.
+    expect(runLine(buildTunnelCommand({ ...base, auth }))).toContain(
+      `--auth credential --auth-allow 'O'"'"'Brien' --auth-allow 'O’Brien' --auth-allow '‘a‚ b‛'`
+    );
+  });
+
   it("serves a static folder behind a private link", () => {
     expect(
       runLine(

@@ -483,8 +483,10 @@ function quoteShellValue(value: string): string {
   return "'" + value.replace(/'/g, `'"'"'`) + "'";
 }
 
+// PowerShell also reads the typographic quotes U+2018 to U+201B as a single
+// quote, so each of them is doubled like the ASCII one.
 function quotePowerShellValue(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
+  return `'${value.replace(/['‘-‛]/g, "$&$&")}'`;
 }
 
 function formatToken(value: string, os: TunnelCommandOS): string {
