@@ -405,11 +405,6 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 		_ = conn.Close()
 		return err
 	}
-	expectedAddr, err = identity.NormalizeEVMAddress(expectedAddr)
-	if err != nil {
-		_ = conn.Close()
-		return err
-	}
 	exportFn, ok := probeExporter(conn)
 	if !ok {
 		_ = conn.Close()
@@ -509,10 +504,6 @@ func DialCanonicalTLS(ctx context.Context, addr, hostname string, baseTLSConfig 
 
 func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.Reader, exportFn func(string, []byte, int) ([]byte, error)) (net.Conn, error) {
 	l := m.listener
-	if l == nil || strings.TrimSpace(l.identity.PrivateKey) == "" {
-		_ = conn.Close()
-		return nil, errors.New("listener identity signing key is unavailable for channel binding")
-	}
 	hostname := ""
 	if lease, ok := l.leaseSnapshot(); ok {
 		hostname = lease.hostname
@@ -577,7 +568,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	m.mu.Unlock()
 	// Channel binding shares the self-probe's capability boundary and is not
 	// offered for cache exposures, where relay TLS termination is allowed.
-	canChannelBind := capable && m.listener != nil && m.listener.cache == nil && strings.TrimSpace(m.listener.identity.PrivateKey) != ""
+	canChannelBind := capable && m.listener != nil && m.listener.cache == nil
 	if !hasPending && !canChannelBind {
 		return conn, false, nil
 	}
