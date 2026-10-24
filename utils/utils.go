@@ -182,7 +182,7 @@ func NormalizeHostname(host string) string {
 // NormalizeHostWithoutPort normalizes a hostname and drops its port, if any.
 func NormalizeHostWithoutPort(hostname string) string {
 	hostname = strings.TrimSpace(hostname)
-	if host, _, err := net.SplitHostPort(hostname); err == nil && host != "" {
+	if host, _, err := net.SplitHostPort(hostname); err == nil {
 		hostname = host
 	}
 	return NormalizeHostname(hostname)

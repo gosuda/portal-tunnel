@@ -122,10 +122,7 @@ func (s *Server) apiHandler(base http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := utils.NormalizeHostname(r.Host)
-		if hostname, _, err := net.SplitHostPort(r.Host); err == nil {
-			host = utils.NormalizeHostname(hostname)
-		}
+		host := utils.NormalizeHostWithoutPort(r.Host)
 		// Bind a tenant TLS connection to its Host even if the next request
 		// tries to address a control-plane path or the canonical root host.
 		if r.TLS != nil && r.TLS.ServerName != "" && utils.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
