@@ -863,7 +863,7 @@ func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, *acme.Manager,
 		return nil, nil, fmt.Errorf("create acme manager: %w", err)
 	}
 
-	if _, _, err := manager.EnsureTLSMaterial(ctx); err != nil {
+	if err := manager.EnsureTLSMaterial(ctx); err != nil {
 		_ = manager.Stop(ctx)
 		return nil, nil, fmt.Errorf("ensure relay certificate: %w", err)
 	}

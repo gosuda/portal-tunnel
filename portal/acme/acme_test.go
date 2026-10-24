@@ -44,12 +44,11 @@ func TestEnsureCertificateGeneratesLocalDevelopmentMaterial(t *testing.T) {
 		t.Fatalf("NewManager() error = %v", err)
 	}
 
-	certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
-	if err != nil {
+	if err := manager.EnsureTLSMaterial(context.Background()); err != nil {
 		t.Fatalf("EnsureTLSMaterial() error = %v", err)
 	}
-	if len(certPEM) == 0 || len(keyPEM) == 0 {
-		t.Fatalf("EnsureTLSMaterial() returned empty PEM material")
+	if manager.TLSMaterial() == nil {
+		t.Fatal("EnsureTLSMaterial() loaded no certificate")
 	}
 
 	certFile, _, err := manager.TLSFiles()
@@ -103,12 +102,11 @@ func TestEnsureTLSMaterialUsesManualCertificateWithDNSProvider(t *testing.T) {
 		t.Fatalf("NewManager() error = %v", err)
 	}
 
-	certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
-	if err != nil {
+	if err := manager.EnsureTLSMaterial(context.Background()); err != nil {
 		t.Fatalf("EnsureTLSMaterial() error = %v", err)
 	}
-	if len(certPEM) == 0 || len(keyPEM) == 0 {
-		t.Fatalf("EnsureTLSMaterial() returned empty PEM material")
+	if manager.TLSMaterial() == nil {
+		t.Fatal("EnsureTLSMaterial() loaded no certificate")
 	}
 }
 
@@ -186,12 +184,11 @@ func TestManualEmbeddedCertificateServesDNSAndKeepsENSPending(t *testing.T) {
 						ENSGaslessEnabled: ensEnabled,
 						ENSGaslessAddress: "0x1234567890123456789012345678901234567890",
 					})
-					certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
-					if err != nil {
+					if err := manager.EnsureTLSMaterial(context.Background()); err != nil {
 						t.Fatalf("EnsureTLSMaterial(): %v", err)
 					}
-					if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
-						t.Fatalf("EnsureTLSMaterial() returned unusable certificate: %v", err)
+					if manager.TLSMaterial() == nil {
+						t.Fatal("EnsureTLSMaterial() loaded no certificate")
 					}
 
 					publicIP := familyIP
@@ -201,12 +198,8 @@ func TestManualEmbeddedCertificateServesDNSAndKeepsENSPending(t *testing.T) {
 					assertManualEmbeddedDNS(t, manager, cfg, publicIP)
 
 					utils.DefaultHTTPClient = &http.Client{Transport: publicIPTransport{ip: familyIP}}
-					certPEM, keyPEM, err = manager.EnsureTLSMaterial(context.Background())
-					if err != nil {
+					if err := manager.EnsureTLSMaterial(context.Background()); err != nil {
 						t.Fatalf("reload manual certificate after discovery recovers: %v", err)
-					}
-					if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
-						t.Fatalf("recovered EnsureTLSMaterial() returned unusable certificate: %v", err)
 					}
 					assertManualEmbeddedDNS(t, manager, cfg, familyIP)
 					if _, err := os.Stat(filepath.Join(keyDir, types.DNSSECKeyFileName)); err != nil {
@@ -333,9 +326,8 @@ func TestManagedCertificateRequiresPublicAddress(t *testing.T) {
 						t.Errorf("Stop(): %v", err)
 					}
 				})
-				certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
-				if !errors.Is(err, outage) || len(certPEM) != 0 || len(keyPEM) != 0 {
-					t.Fatalf("EnsureTLSMaterial() = %d certificate bytes, %d key bytes, %v, want discovery failure for managed issuance", len(certPEM), len(keyPEM), err)
+				if err := manager.EnsureTLSMaterial(context.Background()); !errors.Is(err, outage) || manager.TLSMaterial() != nil {
+					t.Fatalf("EnsureTLSMaterial() = %v with certificate loaded %v, want discovery failure for managed issuance", err, manager.TLSMaterial() != nil)
 				}
 			})
 		}
@@ -361,7 +353,7 @@ func TestManualEmbeddedCertificateDoesNotIgnoreCancellation(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := manager.EnsureTLSMaterial(ctx); !errors.Is(err, context.Canceled) {
+	if err := manager.EnsureTLSMaterial(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("EnsureTLSMaterial() error = %v, want caller cancellation preserved", err)
 	}
 }
@@ -416,12 +408,12 @@ func TestEnsureTLSMaterialRejectsDNSRecordUpdateFailure(t *testing.T) {
 			t.Errorf("Stop(): %v", err)
 		}
 	})
-	certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
+	err = manager.EnsureTLSMaterial(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "ensure dns records: ensure A record") || !strings.Contains(err.Error(), "DNS record update rejected") {
 		t.Fatalf("EnsureTLSMaterial() error = %v, want fatal DNS record update failure", err)
 	}
-	if len(certPEM) != 0 || len(keyPEM) != 0 {
-		t.Fatalf("EnsureTLSMaterial() = %d certificate bytes, %d key bytes, want no certificate after failed update", len(certPEM), len(keyPEM))
+	if manager.TLSMaterial() != nil {
+		t.Fatal("EnsureTLSMaterial() loaded a certificate after a failed update")
 	}
 }
 
