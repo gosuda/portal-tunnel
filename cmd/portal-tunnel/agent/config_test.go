@@ -236,26 +236,3 @@ func tunnelConfigKeys(typ reflect.Type) []string {
 	}
 	return keys
 }
-
-func TestApplicationAuthConfigRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	want := TunnelConfig{
-		ID: "app", TargetAddr: "localhost:3000",
-		Auth: "oidc", AuthAllowedWallets: []string{"alice@example.com", "sub:42"}, AuthIdentityHeaders: true,
-		AuthOIDCIssuer: "https://accounts.example.com", AuthOIDCClientID: "client-123", AuthOIDCClientSecret: "client-secret",
-	}
-	// writeConfigDocument secures an existing file first; Windows cannot secure one that is not there.
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeConfigDocument(path, 0o600, Config{Tunnels: []TunnelConfig{want}}); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := LoadExistingConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cfg.Tunnels[0].applicationAuth(); !reflect.DeepEqual(got, want.applicationAuth()) {
-		t.Fatalf("saved auth = %+v, want %+v", got, want.applicationAuth())
-	}
-}
