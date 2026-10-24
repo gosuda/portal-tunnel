@@ -383,12 +383,16 @@ func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
 	})
 
 	// Metadata, even sent next to unchanged sign-in settings, updates the
-	// running tunnel in place.
+	// running tunnel in place: a relay connected at runtime would not survive
+	// a restart.
+	if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnelsPrefix+"a/relays", `{"relay_url":"`+addedRelay+`"}`); code != http.StatusAccepted {
+		t.Fatalf("connect relay: status = %d, body = %s", code, resp)
+	}
 	body = `{"metadata":{"description":"in place"},"auth":"oidc","auth_oidc_issuer":"` + unreachableIssuer + `"}`
 	if code, resp := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"a", body); code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", code, resp)
 	}
-	if status := tunnelStatus(t, m, "a"); status.State != "running" || !status.AuthOIDCProviderChecked || status.Metadata.Description != "in place" {
+	if status := tunnelStatus(t, m, "a"); status.State != "running" || !hasAddedRelay(status) || status.Metadata.Description != "in place" {
 		t.Fatalf("tunnel was rebuilt for a metadata change: %+v", status)
 	}
 }
