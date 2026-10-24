@@ -9,7 +9,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -183,22 +182,14 @@ func lastLine(view string) string {
 	return lines[len(lines)-1]
 }
 
-// forceColor makes lipgloss emit escape sequences even though the test output is not a terminal.
-func forceColor(t *testing.T) {
-	t.Helper()
-	previous := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
-}
-
 func TestDashboardViewFitsTheTerminal(t *testing.T) {
 	themes := []struct {
 		name  string
 		theme agentDashboardTheme
 	}{
-		{"amber", newTestTheme(t, "amber", agentDashboardTerminal{unicode: true, color: true})},
-		{"green", newTestTheme(t, "green", agentDashboardTerminal{unicode: true, color: true})},
-		{"ascii", newTestTheme(t, "amber", agentDashboardTerminal{color: true})},
+		{"amber", newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})},
+		{"green", newTestTheme(t, "green", agentDashboardTerminal{unicode: true})},
+		{"ascii", newTestTheme(t, "amber", agentDashboardTerminal{})},
 	}
 	wide := testDashboardStatus()
 	wide.Tunnels = append(wide.Tunnels, AgentTunnelStatus{ID: "wide", Name: "데모터널日本語", State: "stopped", Relays: wide.Tunnels[0].Relays})
@@ -229,8 +220,7 @@ func TestDashboardViewFitsTheTerminal(t *testing.T) {
 }
 
 func TestDashboardASCIIFallbackDrawsOnlyASCII(t *testing.T) {
-	forceColor(t)
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{color: true})
+	theme := newTestTheme(t, "amber", agentDashboardTerminal{})
 	for _, scenario := range testDashboardScenarios() {
 		for _, size := range [][2]int{{80, 24}, {132, 40}} {
 			view := newTestDashboard(t, theme, size[0], size[1], scenario.steps...).View()
@@ -239,20 +229,6 @@ func TestDashboardASCIIFallbackDrawsOnlyASCII(t *testing.T) {
 					t.Fatalf("%s at %dx%d: view contains %q (U+%04X); it must stay ASCII", scenario.name, size[0], size[1], r, r)
 				}
 			}
-		}
-	}
-}
-
-func TestDashboardWithoutColorEmitsNoEscapeSequences(t *testing.T) {
-	forceColor(t)
-	colored := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true, color: true})
-	plain := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
-	for _, scenario := range testDashboardScenarios() {
-		if !strings.Contains(newTestDashboard(t, colored, 100, 40, scenario.steps...).View(), "\x1b[") {
-			t.Fatalf("%s: the colored theme emitted no escape sequence, so this test would prove nothing", scenario.name)
-		}
-		if view := newTestDashboard(t, plain, 100, 40, scenario.steps...).View(); strings.Contains(view, "\x1b") {
-			t.Fatalf("%s: a colorless theme emitted an escape sequence", scenario.name)
 		}
 	}
 }
@@ -543,8 +519,8 @@ func TestNewAgentDashboardTheme(t *testing.T) {
 		}
 	}
 
-	amber := newTestTheme(t, "amber", agentDashboardTerminal{color: true})
-	green := newTestTheme(t, "green", agentDashboardTerminal{color: true})
+	amber := newTestTheme(t, "amber", agentDashboardTerminal{})
+	green := newTestTheme(t, "green", agentDashboardTerminal{})
 	if amber.text.GetForeground() == green.text.GetForeground() {
 		t.Error("the palettes must differ")
 	}
@@ -556,21 +532,19 @@ func TestDetectAgentDashboardTerminal(t *testing.T) {
 		env  map[string]string
 		want agentDashboardTerminal
 	}{
-		{"UTF-8 xterm", map[string]string{"TERM": "xterm-256color", "LANG": "en_US.UTF-8"}, agentDashboardTerminal{unicode: true, color: true}},
-		{"no TERM is not a reason to fall back", map[string]string{"LANG": "C.UTF-8"}, agentDashboardTerminal{unicode: true, color: true}},
-		{"dumb terminal", map[string]string{"TERM": "dumb", "LANG": "en_US.UTF-8"}, agentDashboardTerminal{color: true}},
-		{"Linux console", map[string]string{"TERM": "linux", "LANG": "en_US.UTF-8"}, agentDashboardTerminal{color: true}},
-		{"C locale", map[string]string{"TERM": "xterm", "LANG": "C"}, agentDashboardTerminal{color: true}},
-		{"locale not set", map[string]string{"TERM": "xterm"}, agentDashboardTerminal{color: true}},
-		{"LC_ALL beats LANG", map[string]string{"TERM": "xterm", "LC_ALL": "C", "LANG": "en_US.UTF-8"}, agentDashboardTerminal{color: true}},
-		{"LC_ALL says UTF-8", map[string]string{"TERM": "xterm", "LC_ALL": "en_US.utf8", "LANG": "C"}, agentDashboardTerminal{unicode: true, color: true}},
-		{"LC_CTYPE beats LANG", map[string]string{"TERM": "xterm", "LC_CTYPE": "C.UTF-8", "LANG": "C"}, agentDashboardTerminal{unicode: true, color: true}},
-		{"NO_COLOR", map[string]string{"TERM": "xterm", "LANG": "en_US.UTF-8", "NO_COLOR": "1"}, agentDashboardTerminal{unicode: true}},
-		{"empty NO_COLOR is ignored", map[string]string{"TERM": "xterm", "LANG": "en_US.UTF-8", "NO_COLOR": ""}, agentDashboardTerminal{unicode: true, color: true}},
+		{"UTF-8 xterm", map[string]string{"TERM": "xterm-256color", "LANG": "en_US.UTF-8"}, agentDashboardTerminal{unicode: true}},
+		{"no TERM is not a reason to fall back", map[string]string{"LANG": "C.UTF-8"}, agentDashboardTerminal{unicode: true}},
+		{"dumb terminal", map[string]string{"TERM": "dumb", "LANG": "en_US.UTF-8"}, agentDashboardTerminal{}},
+		{"Linux console", map[string]string{"TERM": "linux", "LANG": "en_US.UTF-8"}, agentDashboardTerminal{}},
+		{"C locale", map[string]string{"TERM": "xterm", "LANG": "C"}, agentDashboardTerminal{}},
+		{"locale not set", map[string]string{"TERM": "xterm"}, agentDashboardTerminal{}},
+		{"LC_ALL beats LANG", map[string]string{"TERM": "xterm", "LC_ALL": "C", "LANG": "en_US.UTF-8"}, agentDashboardTerminal{}},
+		{"LC_ALL says UTF-8", map[string]string{"TERM": "xterm", "LC_ALL": "en_US.utf8", "LANG": "C"}, agentDashboardTerminal{unicode: true}},
+		{"LC_CTYPE beats LANG", map[string]string{"TERM": "xterm", "LC_CTYPE": "C.UTF-8", "LANG": "C"}, agentDashboardTerminal{unicode: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, name := range []string{"TERM", "LC_ALL", "LC_CTYPE", "LANG", "NO_COLOR"} {
+			for _, name := range []string{"TERM", "LC_ALL", "LC_CTYPE", "LANG"} {
 				t.Setenv(name, tt.env[name])
 			}
 			if got := detectAgentDashboardTerminal(); got != tt.want {
