@@ -297,39 +297,41 @@ function HeroTunnelCommandForm({
             </div>
           )}
         </div>
-        <div
-          className={cn(
-            "relative min-h-37 rounded-lg border px-4 py-4 pr-14 font-mono text-sm leading-7",
-            isTerminal
-              ? "border-white/10 bg-black/55 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-              : "border-border/80 bg-border/90 text-foreground"
-          )}
-        >
-          <button
-            type="button"
-            onClick={handleCopy}
-            disabled={authIssues.length > 0}
+        <div>
+          <div
             className={cn(
-              "absolute top-4 right-4 inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+              "relative min-h-37 rounded-lg border px-4 py-4 pr-14 font-mono text-sm leading-7",
               isTerminal
-                ? "text-emerald-300/75 hover:bg-emerald-400/10 hover:text-emerald-200"
-                : "text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700"
+                ? "border-white/10 bg-black/55 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+                : "border-border/80 bg-border/90 text-foreground"
             )}
-            aria-label="Copy command"
-            title={copied ? "Copied" : "Copy"}
           >
-            {copied ? (
-              <Check className="h-4 w-4" />
-            ) : (
-              <Copy className="h-4 w-4" />
-            )}
-          </button>
-          <pre className="overflow-x-auto whitespace-pre-wrap break-all">
-            <span className="block">{installBlock}</span>
-            <span className="mt-2 block">{runBlock}</span>
-          </pre>
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={authIssues.length > 0}
+              className={cn(
+                "absolute top-4 right-4 inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                isTerminal
+                  ? "text-emerald-300/75 hover:bg-emerald-400/10 hover:text-emerald-200"
+                  : "text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700"
+              )}
+              aria-label="Copy command"
+              title={copied ? "Copied" : "Copy"}
+            >
+              {copied ? (
+                <Check className="h-4 w-4" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+            </button>
+            <pre className="overflow-x-auto whitespace-pre-wrap break-all">
+              <span className="block">{installBlock}</span>
+              <span className="mt-2 block">{runBlock}</span>
+            </pre>
+          </div>
+          <NotReady issues={authIssues} theme={theme} />
         </div>
-        <NotReady issues={authIssues} theme={theme} />
       </div>
 
       <div className="space-y-2 pt-1">
@@ -651,29 +653,31 @@ function FullTunnelCommandForm({
         <label className={sectionLabelClass}>
           Generated Command
         </label>
-        <div className={commandPanelClass}>
-          <pre className={commandPreClass}>
-            <span className="block">{installBlock}</span>
-            <span className="mt-2 block">{runBlock}</span>
-          </pre>
-          <button
-            type="button"
-            onClick={handleCopy}
-            disabled={authIssues.length > 0}
-            className={cn(
-              "absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-              isTerminal ? "hover:bg-white/10" : "hover:bg-background/70 dark:hover:bg-black/20"
-            )}
-            aria-label="Copy command"
-          >
-            {copied ? (
-              <Check className={cn("h-4 w-4", isTerminal ? "text-green-400" : "text-emerald-400")} />
-            ) : (
-              <Copy className={cn("h-4 w-4", isTerminal ? "text-slate-400" : "text-text-muted dark:text-zinc-500")} />
-            )}
-          </button>
+        <div>
+          <div className={commandPanelClass}>
+            <pre className={commandPreClass}>
+              <span className="block">{installBlock}</span>
+              <span className="mt-2 block">{runBlock}</span>
+            </pre>
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={authIssues.length > 0}
+              className={cn(
+                "absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                isTerminal ? "hover:bg-white/10" : "hover:bg-background/70 dark:hover:bg-black/20"
+              )}
+              aria-label="Copy command"
+            >
+              {copied ? (
+                <Check className={cn("h-4 w-4", isTerminal ? "text-green-400" : "text-emerald-400")} />
+              ) : (
+                <Copy className={cn("h-4 w-4", isTerminal ? "text-slate-400" : "text-text-muted dark:text-zinc-500")} />
+              )}
+            </button>
+          </div>
+          <NotReady issues={authIssues} theme={theme} />
         </div>
-        <NotReady issues={authIssues} theme={theme} />
       </div>
 
       {!isTerminal && (
@@ -781,6 +785,7 @@ function FullTunnelCommandForm({
   );
 }
 
+/** Owns its top spacing, so the empty region adds no gap under the command. */
 function NotReady({
   issues,
   theme,
@@ -788,12 +793,14 @@ function NotReady({
   issues: TunnelAuthIssue[];
   theme: TunnelFormTheme;
 }) {
-  if (issues.length === 0) {
-    return null;
-  }
+  // Always mounted: a live region announces text that appears inside it.
   return (
-    <Notice tone="warn" theme={theme} role="status">
-      Not ready to copy: {issues.map((issue) => issue.message).join(" · ")}
-    </Notice>
+    <div role="status" className={cn(issues.length > 0 && "pt-2")}>
+      {issues.length > 0 && (
+        <Notice tone="warn" theme={theme}>
+          Not ready to copy: {issues.map((issue) => issue.message).join(" · ")}
+        </Notice>
+      )}
+    </div>
   );
 }

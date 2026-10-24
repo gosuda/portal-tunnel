@@ -53,18 +53,15 @@ export const TUNNEL_FORM_STYLES = {
 export function Notice({
   tone,
   theme,
-  role,
   children,
 }: {
   tone: "error" | "warn";
   theme: TunnelFormTheme;
-  role?: "status";
   children: ReactNode;
 }) {
   const styles = TUNNEL_FORM_STYLES[theme];
   return (
     <p
-      role={role}
       className={cn(
         "flex items-start gap-1.5 text-xs leading-5",
         tone === "error" ? styles.error : styles.warn
