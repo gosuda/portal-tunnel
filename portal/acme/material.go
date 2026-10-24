@@ -101,7 +101,9 @@ func (t *TLSMaterial) holds(leafDER []byte) bool {
 }
 
 // serve makes material the served certificate. The one it replaces stays
-// available to SigningKey; certificates that have expired are dropped.
+// available to SigningKey; certificates that have expired are dropped, and so
+// is a copy of the new certificate itself (a startup provision serves the
+// issued pair, then EnsureTLSMaterial loads the same pair from disk).
 //
 // This is built for scheduled renewal, where the replaced certificate is still
 // valid and tenants still present it. It keeps the replaced key signing until
@@ -114,7 +116,7 @@ func (m *Manager) serve(material *TLSMaterial) {
 	m.material.Update(func(served servedMaterial) servedMaterial {
 		next := servedMaterial{current: material}
 		for _, previous := range slices.Concat(served.retired, []*TLSMaterial{served.current}) {
-			if previous != nil && now.Before(previous.Certificate.Leaf.NotAfter) {
+			if previous != nil && now.Before(previous.Certificate.Leaf.NotAfter) && !previous.holds(material.Certificate.Certificate[0]) {
 				next.retired = append(next.retired, previous)
 			}
 		}
