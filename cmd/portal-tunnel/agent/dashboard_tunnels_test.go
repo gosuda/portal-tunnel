@@ -70,10 +70,7 @@ func TestAgentDashboardTunnelRowTruncatesLongNames(t *testing.T) {
 }
 
 func TestAgentDashboardTunnelLookTellsStatesApartWithoutColor(t *testing.T) {
-	theme, err := newAgentDashboardTheme("amber", agentDashboardTerminal{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{})
 	leds := make(map[string]string)
 	for _, state := range []string{"running", "starting", "error", "stopped"} {
 		led, _ := agentDashboardTunnelLook(&theme, state)

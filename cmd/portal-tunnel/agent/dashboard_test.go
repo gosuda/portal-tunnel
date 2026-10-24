@@ -92,15 +92,6 @@ func testDashboardScenarios() []dashboardScenario {
 	}
 }
 
-func newTestTheme(t *testing.T, name string, term agentDashboardTerminal) agentDashboardTheme {
-	t.Helper()
-	theme, err := newAgentDashboardTheme(name, term)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return theme
-}
-
 // newTestDashboard replays steps on a new model and then sizes the terminal.
 func newTestDashboard(t *testing.T, theme agentDashboardTheme, width, height int, steps ...tea.Msg) agentDashboardModel {
 	t.Helper()
@@ -187,9 +178,9 @@ func TestDashboardViewFitsTheTerminal(t *testing.T) {
 		name  string
 		theme agentDashboardTheme
 	}{
-		{"amber", newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})},
-		{"green", newTestTheme(t, "green", agentDashboardTerminal{unicode: true})},
-		{"ascii", newTestTheme(t, "amber", agentDashboardTerminal{})},
+		{"amber", newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})},
+		{"green", newAgentDashboardTheme("green", agentDashboardTerminal{unicode: true})},
+		{"ascii", newAgentDashboardTheme("amber", agentDashboardTerminal{})},
 	}
 	wide := testDashboardStatus()
 	wide.Tunnels = append(wide.Tunnels, AgentTunnelStatus{ID: "wide", Name: "데모터널日本語", State: "stopped", Relays: wide.Tunnels[0].Relays})
@@ -220,7 +211,7 @@ func TestDashboardViewFitsTheTerminal(t *testing.T) {
 }
 
 func TestDashboardASCIIFallbackDrawsOnlyASCII(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{})
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{})
 	for _, scenario := range testDashboardScenarios() {
 		for _, size := range [][2]int{{80, 24}, {132, 40}} {
 			view := newTestDashboard(t, theme, size[0], size[1], scenario.steps...).View()
@@ -234,7 +225,7 @@ func TestDashboardASCIIFallbackDrawsOnlyASCII(t *testing.T) {
 }
 
 func TestDashboardActivePaneIsMarkedWithoutColor(t *testing.T) {
-	plain := newTestTheme(t, "amber", agentDashboardTerminal{})
+	plain := newAgentDashboardTheme("amber", agentDashboardTerminal{})
 	model := newTestDashboard(t, plain, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
 	for _, active := range []string{"TUNNELS", "SETTINGS", "RELAYS", "TUNNELS"} {
 		view := model.View()
@@ -248,7 +239,7 @@ func TestDashboardActivePaneIsMarkedWithoutColor(t *testing.T) {
 }
 
 func TestDashboardKeyBarListsTheBindingsInUse(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	load := agentDashboardStatusMsg{status: testDashboardStatus()}
 	tests := []struct {
 		name  string
@@ -280,7 +271,7 @@ func TestDashboardKeyBarListsTheBindingsInUse(t *testing.T) {
 }
 
 func TestDashboardAddTunnelByKey(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
 	for _, key := range []tea.KeyMsg{keyRunes("a"), keyF2} {
 		opened, _ := press(model, key)
@@ -294,7 +285,7 @@ func TestDashboardAddTunnelByKey(t *testing.T) {
 }
 
 func TestDashboardQuitKeys(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	load := agentDashboardStatusMsg{status: testDashboardStatus()}
 	contexts := []struct {
 		name      string
@@ -328,7 +319,7 @@ func TestDashboardQuitKeys(t *testing.T) {
 }
 
 func TestDashboardPaneKeys(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
 	active := func(m agentDashboardModel) string {
 		for _, title := range []string{"TUNNELS", "SETTINGS", "RELAYS"} {
@@ -364,7 +355,7 @@ func TestDashboardPaneKeys(t *testing.T) {
 }
 
 func TestDashboardTunnelRowsShowWhatEachTunnelServes(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	view := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()}).View()
 	for _, want := range []string{"[*] 127.0.0.1:3000", "[~] 127.0.0.1:8080", "[!] 2 routes, 1 paid", "[*] ./public-site"} {
 		if !strings.Contains(view, want) {
@@ -374,7 +365,7 @@ func TestDashboardTunnelRowsShowWhatEachTunnelServes(t *testing.T) {
 }
 
 func TestDashboardEscClearsTheError(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()},
 		agentDashboardActionMsg{err: errors.New("tunnel name is required")})
 	if !strings.Contains(model.View(), "Error: tunnel name is required") {
@@ -386,7 +377,7 @@ func TestDashboardEscClearsTheError(t *testing.T) {
 }
 
 func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
 	const prompt = `Delete tunnel "web"?`
 
@@ -424,7 +415,7 @@ func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
 }
 
 func TestDashboardDeleteQuestionIgnoresOtherClicks(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	// The idle tunnel's first relay is not connected, so its Connect button can be clicked.
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()}, keyDown, keyDown, keyDown, keyDown)
 	asked, _ := press(model, keyF8)
@@ -451,7 +442,7 @@ func TestDashboardDeleteQuestionIgnoresOtherClicks(t *testing.T) {
 }
 
 func TestDashboardMouseStillWorks(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
 
 	clickText(t, model, "[ Add Tunnel ]", viewHas("Name:"))
@@ -503,15 +494,15 @@ func checkPaneRows(t *testing.T, height int, want [agentDashboardPaneCount]int, 
 	}
 }
 
-func TestNewAgentDashboardTheme(t *testing.T) {
+func TestDashboardThemes(t *testing.T) {
 	for _, name := range []string{DefaultDashboardTheme, "amber", "green"} {
-		if _, err := newAgentDashboardTheme(name, agentDashboardTerminal{}); err != nil {
+		if err := ValidateDashboardTheme(name); err != nil {
 			t.Errorf("theme %q: %v", name, err)
 		}
 	}
 	// The default belongs to the --theme flags, so an empty name is not a theme either.
 	for _, name := range []string{"purple", ""} {
-		_, err := newAgentDashboardTheme(name, agentDashboardTerminal{})
+		err := ValidateDashboardTheme(name)
 		if err == nil {
 			t.Fatalf("theme %q must be rejected", name)
 		}
@@ -522,8 +513,8 @@ func TestNewAgentDashboardTheme(t *testing.T) {
 		}
 	}
 
-	amber := newTestTheme(t, "amber", agentDashboardTerminal{})
-	green := newTestTheme(t, "green", agentDashboardTerminal{})
+	amber := newAgentDashboardTheme("amber", agentDashboardTerminal{})
+	green := newAgentDashboardTheme("green", agentDashboardTerminal{})
 	if amber.text.GetForeground() == green.text.GetForeground() {
 		t.Error("the palettes must differ")
 	}
