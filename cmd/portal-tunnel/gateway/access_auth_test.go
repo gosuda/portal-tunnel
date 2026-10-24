@@ -114,11 +114,12 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 }
 
 func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
-	var user, auth, cookies string
+	var user, auth, proof, cookies string
 	requests := 0
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		user, auth = r.Header.Get(types.HeaderPortalUser), r.Header.Get(types.HeaderPortalAuth)
+		proof = r.Header.Get(types.HeaderPortalProof)
 		cookies = r.Header.Get("Cookie")
 	})
 	handler := newApplicationAuthTestHandler(t, nil, false, next)
@@ -136,10 +137,11 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: token})
 	req.Header.Set(types.HeaderPortalUser, "attacker")
 	req.Header.Set(types.HeaderPortalAuth, "attacker")
+	req.Header.Set(types.HeaderPortalProof, "attacker")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if user != "" || auth != "" {
-		t.Fatalf("untrusted identity headers reached upstream: %q, %q", user, auth)
+	if user != "" || auth != "" || proof != "" {
+		t.Fatalf("untrusted identity headers reached upstream: %q, %q, %q", user, auth, proof)
 	}
 	if cookies != "app_session=abc" {
 		t.Fatalf("upstream Cookie = %q; want only application cookie", cookies)
@@ -239,7 +241,9 @@ const identityProofTestValue = "test-proof-0123456789"
 
 // The proof lets an upstream tell Portal from another local process that
 // connects to it directly and forges the identity headers: the gate sends it
-// only with the headers it verified, and never lets a visitor's copy through.
+// only with the headers it verified, and never lets a visitor's copy through
+// (TestApplicationAuthStripsPortalCredentials covers the gate without identity
+// headers).
 func TestApplicationAuthIdentityProof(t *testing.T) {
 	t.Parallel()
 
@@ -255,7 +259,6 @@ func TestApplicationAuthIdentityProof(t *testing.T) {
 	}{
 		{"configured", ApplicationAuthConfig{IdentityHeaders: true, IdentityProof: identityProofTestValue}, []string{identityProofTestValue}},
 		{"not configured", ApplicationAuthConfig{IdentityHeaders: true}, nil},
-		{"identity headers off", ApplicationAuthConfig{}, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
