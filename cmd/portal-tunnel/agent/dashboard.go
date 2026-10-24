@@ -204,6 +204,10 @@ func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 	}
 	for _, region := range m.layout().regions {
 		if event.Y == region.y && event.X >= region.x0 && event.X < region.x1 {
+			// While a delete waits for an answer, only Yes and No take a click, as only the answers take a key.
+			if m.confirming() && region.action != agentDashboardActionConfirmDelete && region.action != agentDashboardActionCancelDelete {
+				return m, nil
+			}
 			if region.action == agentDashboardActionSelectPane {
 				m.setActivePane(region.pane)
 				return m, nil
