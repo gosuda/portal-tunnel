@@ -201,7 +201,9 @@ func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 	}
 	for _, region := range m.layout().regions {
 		if event.Y == region.y && event.X >= region.x0 && event.X < region.x1 {
-			// While a delete waits for an answer, only Yes and No take a click, as only the answers take a key.
+			// While a delete waits for an answer, only its Yes and No buttons act on a click, as only
+			// the answers act on a key. The wheel and the sidebar drag above still scroll; neither
+			// touches the tunnel in question.
 			if m.confirming() && region.action != agentDashboardActionConfirmDelete && region.action != agentDashboardActionCancelDelete {
 				return m, nil
 			}
