@@ -526,9 +526,8 @@ func (m *agentDashboardModel) resizeInputs(width int) {
 	if width <= 0 {
 		width = 88
 	}
-	contentWidth, _, _ := agentDashboardColumnWidths(width)
-	// An input row is the 12-cell label, a space, the 2-cell prompt, the text area and the cursor cell.
-	settingsWidth := max(1, min(agentDashboardTunnelInputMaxWidth, contentWidth-16))
+	mainWidth, _, _ := agentDashboardColumnWidths(width)
+	settingsWidth := max(1, min(agentDashboardTunnelInputMaxWidth, mainWidth-agentDashboardFrameWidth-agentDashboardInputChrome))
 	for _, input := range []*textinput.Model{
 		&m.addName,
 		&m.addTarget,

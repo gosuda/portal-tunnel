@@ -106,7 +106,7 @@ func TestAgentDashboardWindow(t *testing.T) {
 	}
 }
 
-func TestAgentDashboardRelayWindowKeepsSelectionVisible(t *testing.T) {
+func TestAgentDashboardRowWindowKeepsSelectionVisible(t *testing.T) {
 	tests := []struct {
 		name                 string
 		selected, total, row int
@@ -123,9 +123,9 @@ func TestAgentDashboardRelayWindowKeepsSelectionVisible(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			start, end := agentDashboardRelayWindow(tt.selected, tt.total, tt.row)
+			start, end := agentDashboardRowWindow(tt.selected, tt.total, tt.row)
 			if start != tt.wantStart || end != tt.wantEnd {
-				t.Fatalf("agentDashboardRelayWindow(%d, %d, %d) = (%d, %d), want (%d, %d)",
+				t.Fatalf("agentDashboardRowWindow(%d, %d, %d) = (%d, %d), want (%d, %d)",
 					tt.selected, tt.total, tt.row, start, end, tt.wantStart, tt.wantEnd)
 			}
 		})
