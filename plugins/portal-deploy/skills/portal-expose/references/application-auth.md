@@ -97,6 +97,7 @@ discovery = false
 auth = "oidc"
 auth_oidc_issuer = "https://accounts.google.com"
 auth_oidc_client_id = "<client-id>"
+# auth_oidc_client_secret = "<client-secret>"  # only with the user's consent; Google web clients need one
 auth_allowed_wallets = ["alice@example.com"]
 auth_identity_headers = true
 ```
