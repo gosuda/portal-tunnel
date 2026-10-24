@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -36,17 +35,14 @@ var agentDashboardPalettes = map[string]agentDashboardPalette{
 // agentDashboardTerminal is what the terminal environment allows.
 type agentDashboardTerminal struct {
 	unicode bool // box-drawing and arrow characters are safe to print
-	color   bool // NO_COLOR is not set
 }
 
-// detectAgentDashboardTerminal is the only place that reads TERM, the locale
-// variables and NO_COLOR.
+// detectAgentDashboardTerminal decides from TERM and the locale whether the
+// frames can use box-drawing characters. Color is left to lipgloss, whose
+// renderer drops every style when NO_COLOR is set or CLICOLOR is 0.
 func detectAgentDashboardTerminal() agentDashboardTerminal {
 	term := os.Getenv("TERM")
-	return agentDashboardTerminal{
-		unicode: term != "dumb" && term != "linux" && localeIsUTF8(),
-		color:   os.Getenv("NO_COLOR") == "",
-	}
+	return agentDashboardTerminal{unicode: term != "dumb" && term != "linux" && localeIsUTF8()}
 }
 
 // localeIsUTF8 follows the POSIX precedence: the first of LC_ALL, LC_CTYPE and
@@ -77,7 +73,6 @@ type agentDashboardGlyphs struct {
 // agentDashboardTheme holds every color and glyph the dashboard draws with.
 type agentDashboardTheme struct {
 	glyph agentDashboardGlyphs
-	color bool
 
 	text, muted, rule, bright, strong, selected, pending, failed lipgloss.Style
 }
@@ -96,10 +91,7 @@ func newAgentDashboardTheme(name string, term agentDashboardTerminal) (agentDash
 		return agentDashboardTheme{}, fmt.Errorf("--theme %q: supported values are amber and green", name)
 	}
 
-	theme := agentDashboardTheme{glyph: agentDashboardGlyphSet(term.unicode), color: term.color}
-	if !term.color {
-		return theme, nil
-	}
+	theme := agentDashboardTheme{glyph: agentDashboardGlyphSet(term.unicode)}
 	fg := func(color string) lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color(color)) }
 	theme.text = fg(palette.text)
 	theme.muted = fg(palette.dim)
@@ -141,9 +133,5 @@ func (th *agentDashboardTheme) newInput(placeholder string) textinput.Model {
 	input.PlaceholderStyle = th.muted
 	input.Cursor.Style = th.text
 	input.Cursor.TextStyle = th.bright
-	if !th.color {
-		// The cursor is drawn in reverse video, which a colorless theme must not emit.
-		input.Cursor.SetMode(cursor.CursorHide)
-	}
 	return input
 }
