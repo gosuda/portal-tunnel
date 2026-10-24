@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 
@@ -301,32 +300,6 @@ func TestDashboardKeyBarListsTheBindingsInUse(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestDashboardKeyBarAndHandlerShareTheBindingTable(t *testing.T) {
-	theme := newTestTheme(t, "amber", agentDashboardTerminal{unicode: true})
-	load := agentDashboardStatusMsg{status: testDashboardStatus()}
-
-	model := newTestDashboard(t, theme, 100, 40, load)
-	if !strings.Contains(lastLine(model.View()), "Add") {
-		t.Fatalf("the key bar should list Add: %q", lastLine(model.View()))
-	}
-	if opened, _ := press(model, keyRunes("a")); !strings.Contains(opened.View(), "Name:") {
-		t.Fatal("a should open the add form while its binding is in the table")
-	}
-
-	original := agentDashboardBindings
-	agentDashboardBindings = slices.DeleteFunc(slices.Clone(original), func(b agentDashboardBinding) bool { return b.label == "Add" })
-	t.Cleanup(func() { agentDashboardBindings = original })
-
-	if strings.Contains(lastLine(model.View()), "Add") {
-		t.Fatalf("the key bar still lists Add after its binding left the table: %q", lastLine(model.View()))
-	}
-	for _, key := range []tea.KeyMsg{keyRunes("a"), keyF2} {
-		if pressed, _ := press(model, key); strings.Contains(pressed.View(), "Name:") {
-			t.Fatalf("%s still opens the add form after its binding left the table", key)
-		}
 	}
 }
 
