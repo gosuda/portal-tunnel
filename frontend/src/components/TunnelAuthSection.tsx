@@ -4,7 +4,6 @@ import {
   Copy,
   Globe,
   Link2,
-  Mail,
   ShieldCheck,
   Wallet,
   type LucideIcon,
@@ -42,15 +41,15 @@ import {
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 
-interface MethodChoice<Id extends string> {
-  id: Id;
+interface MethodChoice {
+  id: TunnelAuthMethod;
   label: string;
   short: string;
   description: string;
   icon: LucideIcon;
 }
 
-const METHODS: MethodChoice<TunnelAuthMethod>[] = [
+const METHODS: MethodChoice[] = [
   {
     id: "none",
     label: "Anyone with the link",
@@ -81,15 +80,6 @@ const METHODS: MethodChoice<TunnelAuthMethod>[] = [
     icon: ShieldCheck,
   },
 ];
-
-// Shown disabled until the tunnel accepts `--auth email` (#666).
-const EMAIL_METHOD: MethodChoice<"email"> = {
-  id: "email",
-  label: "Email link",
-  short: "Email link",
-  description: "A one-time link sent to the visitor's mailbox.",
-  icon: Mail,
-};
 
 const EXPIRY_CHOICES = [
   { value: "24h", label: "1 day" },
@@ -217,15 +207,6 @@ export function TunnelAuthSection({
             }
           />
         ))}
-        <MethodCard
-          method={EMAIL_METHOD}
-          domId={`${groupId}-email`}
-          selected={false}
-          disabled
-          compact={compact}
-          theme={theme}
-          badge={<Badge theme={theme}>Coming soon</Badge>}
-        />
       </div>
 
       {auth.method === "none" ? (
@@ -299,24 +280,22 @@ export function TunnelAuthSection({
   );
 }
 
-function MethodCard<Id extends string>({
+function MethodCard({
   method,
   domId,
   selected,
-  disabled = false,
   compact,
   theme,
   badge,
   onSelect,
 }: {
-  method: MethodChoice<Id>;
+  method: MethodChoice;
   domId: string;
   selected: boolean;
-  disabled?: boolean;
   compact: boolean;
   theme: TunnelFormTheme;
   badge?: ReactNode;
-  onSelect?: () => void;
+  onSelect: () => void;
 }) {
   const s = TUNNEL_FORM_STYLES[theme];
   const Icon = method.icon;
@@ -326,17 +305,15 @@ function MethodCard<Id extends string>({
       type="button"
       role="radio"
       aria-checked={selected}
-      aria-disabled={disabled || undefined}
       tabIndex={selected ? 0 : -1}
-      onClick={disabled ? undefined : onSelect}
+      onClick={onSelect}
       className={cn(
         "border text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         compact
           ? "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
           : "grid grid-cols-[auto_1fr] content-start gap-x-2.5 gap-y-0.5 rounded-lg px-3 py-2.5",
         s.card,
-        selected && SELECTED,
-        disabled && "cursor-not-allowed border-dashed opacity-60"
+        selected && SELECTED
       )}
     >
       <Icon
