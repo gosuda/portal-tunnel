@@ -488,10 +488,9 @@ func normalizeNanoAddress(address string) string {
 func xnoToRaw(amount string) (string, error) {
 	amount = strings.TrimSpace(amount)
 	whole, frac, _ := strings.Cut(amount, ".")
-	if whole == "" {
-		whole = "0"
-	}
-	if !isDecimalDigits(whole) || (frac != "" && !isDecimalDigits(frac)) || strings.HasSuffix(amount, ".") {
+	whole = cmp.Or(whole, "0")
+	fracValid := frac == "" || isDecimalDigits(frac)
+	if !isDecimalDigits(whole) || !fracValid || strings.HasSuffix(amount, ".") {
 		return "", fmt.Errorf("invalid XNO amount %q", amount)
 	}
 	if len(frac) > nanoscheme.XNORawDecimals {
