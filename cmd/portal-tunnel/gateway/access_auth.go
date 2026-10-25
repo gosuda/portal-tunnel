@@ -518,10 +518,7 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", signinContentSecurityPolicy)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
+	setSigninHeaders(w.Header())
 	if r.Method == http.MethodHead {
 		return
 	}
@@ -542,6 +539,10 @@ func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	doc, err := o.discoveryDocument(r.Context())
 	if err != nil {
+		if acceptsHTML(r) {
+			o.writeFailurePage(w, r, http.StatusBadGateway, signinOIDCFailedPage, r.URL.Query().Get("next"))
+			return
+		}
 		http.Error(w, "oidc discovery failed", http.StatusBadGateway)
 		return
 	}
@@ -602,6 +603,15 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
+	// A login that ends without a session shows a browser what happened and
+	// keeps the JSON error and status for every other caller.
+	fail := func(message, page, next string, fields ...string) {
+		if acceptsHTML(r) {
+			a.oidc.writeFailurePage(w, r, http.StatusUnauthorized, page, next, fields...)
+			return
+		}
+		a.writeJSONError(w, http.StatusUnauthorized, message)
+	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -618,7 +628,7 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 		SameSite: http.SameSiteLaxMode,
 	})
 	if err != nil {
-		a.writeJSONError(w, http.StatusUnauthorized, "missing oidc login state")
+		fail("missing oidc login state", signinOIDCExpiredPage, "/")
 		return
 	}
 
@@ -632,29 +642,40 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 	if err := decodeSignedApplicationAuthJSON(a.oidc.stateKey, stateCookie.Value, &stateClaims); err != nil ||
 		!strings.EqualFold(stateClaims.Host, host) ||
 		now.Unix() >= stateClaims.ExpiresAt {
-		a.writeJSONError(w, http.StatusUnauthorized, "invalid or expired oidc login state")
+		// Only a state that verified carries a target worth keeping.
+		next := "/"
+		if err == nil {
+			next = stateClaims.Next
+		}
+		fail("invalid or expired oidc login state", signinOIDCExpiredPage, next)
 		return
 	}
 	if errParam := strings.TrimSpace(r.URL.Query().Get("error")); errParam != "" {
-		a.writeJSONError(w, http.StatusUnauthorized, "oidc login failed")
+		// access_denied is how a provider reports that the visitor declined,
+		// and also how some report an account without access to the client.
+		page := signinOIDCFailedPage
+		if errParam == "access_denied" {
+			page = signinOIDCCanceledPage
+		}
+		fail("oidc login failed", page, stateClaims.Next)
 		return
 	}
 	queryState := strings.TrimSpace(r.URL.Query().Get("state"))
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	if queryState == "" || code == "" || subtle.ConstantTimeCompare([]byte(queryState), []byte(stateClaims.State)) != 1 {
-		a.writeJSONError(w, http.StatusUnauthorized, "invalid oidc callback state")
+		fail("invalid oidc callback state", signinOIDCExpiredPage, stateClaims.Next)
 		return
 	}
 
 	claims, err := a.oidc.exchangeAndVerify(r.Context(), code, stateClaims, now)
 	if err != nil {
-		a.writeJSONError(w, http.StatusUnauthorized, "oidc token verification failed")
+		fail("oidc token verification failed", signinOIDCFailedPage, stateClaims.Next)
 		return
 	}
 
 	subject, ok := a.resolveAllowedOIDCSubject(claims)
 	if !ok {
-		a.writeJSONError(w, http.StatusUnauthorized, "oidc principal is not allowed")
+		fail("oidc principal is not allowed", signinOIDCDeniedPage, stateClaims.Next, "@@ACCOUNT@@", oidcAccount(claims))
 		return
 	}
 
@@ -669,6 +690,38 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	http.Redirect(w, r, sanitizeApplicationAuthNext(stateClaims.Next), http.StatusSeeOther)
+}
+
+// writeFailurePage shows a browser why its OIDC login ended without a session.
+// The retry link starts a new login that returns the visitor to next.
+func (o *oidcAuthenticator) writeFailurePage(w http.ResponseWriter, r *http.Request, status int, page, next string, fields ...string) {
+	retry := applicationAuthLoginPath
+	if next = sanitizeApplicationAuthNext(next); next != "/" {
+		retry += "?next=" + url.QueryEscape(next)
+	}
+	issuer := o.issuerURL
+	if parsed, err := url.Parse(o.issuerURL); err == nil && parsed.Host != "" {
+		issuer = parsed.Host
+	}
+	setSigninHeaders(w.Header())
+	w.WriteHeader(status)
+	writeSigninPage(w, page, r.Host, append([]string{"@@ISSUER@@", issuer, "@@RETRY@@", retry}, fields...)...)
+}
+
+// acceptsHTML reports whether the request is a browser navigation, the only
+// kind of request that asks for HTML.
+func acceptsHTML(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+// oidcAccount names the account the provider signed in, in the form an
+// allowlist entry for it takes: the email when the provider verified it, and
+// the sub: entry otherwise. It never reveals what the allowlist holds.
+func oidcAccount(claims oidcIDTokenClaims) string {
+	if email := oidcClaimPrincipal(claims.Email); claims.EmailVerified && email != "" {
+		return email
+	}
+	return oidcSubjectPrefix + claims.Subject
 }
 
 // resolveAllowedOIDCSubject maps ID token claims to the session subject. Only

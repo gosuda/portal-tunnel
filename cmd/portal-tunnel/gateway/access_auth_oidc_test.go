@@ -328,6 +328,142 @@ func TestApplicationAuthOIDCCallbackRefusals(t *testing.T) {
 	}
 }
 
+// A browser that returns from the provider without a session sees a page that
+// says why, while any other caller keeps the JSON error. The status is the same
+// for both, and neither gets a session.
+func TestApplicationAuthOIDCFailureScreens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		configure func(p *oidcTestIdP)
+		tamper    oidcTamper
+		title     string
+	}{
+		{name: "visitor canceled at the provider", tamper: withQuery("error=access_denied"), title: "Sign-in was canceled"},
+		{name: "provider reported another error", tamper: withQuery("error=server_error"), title: "Sign-in could not be completed"},
+		{name: "state cookie is missing", tamper: withStateCookie(nil), title: "Sign-in took too long"},
+		{name: "state cookie has expired", tamper: withStateCookie(expireOIDCState), title: "Sign-in took too long"},
+		{name: "state belongs to another login", tamper: withQuery("code=authcode&state=other"), title: "Sign-in took too long"},
+		{name: "token endpoint rejects the code", configure: func(p *oidcTestIdP) { p.tokenStatus = http.StatusBadRequest }, title: "Sign-in could not be completed"},
+		{name: "account is not on the allowlist", configure: func(p *oidcTestIdP) {
+			p.mutate = func(c *oidcIDTokenClaims) { c.Subject, c.Email = "user-999", "mallory@example.com" }
+		}, title: "This account is not allowed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for _, browser := range []bool{true, false} {
+				idp := newOIDCTestIdP(t, tt.configure)
+				gate := newOIDCTestGate(t, idp)
+				login := startOIDCLogin(t, gate, idp, "app.example")
+				req := login.callbackRequest(t, gate, tt.tamper)
+				if browser {
+					req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+				}
+				rec := httptest.NewRecorder()
+				gate.ServeHTTP(rec, req)
+				assertOIDCCallback(t, rec, http.StatusUnauthorized)
+
+				body := rec.Body.String()
+				if !browser {
+					var answer map[string]string
+					if rec.Header().Get("Content-Type") != "application/json" || json.Unmarshal(rec.Body.Bytes(), &answer) != nil || answer["error"] == "" {
+						t.Fatalf("scripted caller got %q: %q", rec.Header().Get("Content-Type"), body)
+					}
+					continue
+				}
+				if rec.Header().Get("Content-Type") != "text/html; charset=utf-8" || rec.Header().Get("Content-Security-Policy") != signinContentSecurityPolicy {
+					t.Fatalf("browser got %q under CSP %q", rec.Header().Get("Content-Type"), rec.Header().Get("Content-Security-Policy"))
+				}
+				for _, want := range []string{"<h1>" + tt.title + "</h1>", "app.example", `href="` + applicationAuthLoginPath + `"`} {
+					if !strings.Contains(body, want) {
+						t.Fatalf("page is missing %q", want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// The not-allowed screen tells the visitor which account to have added, in the
+// form an allowlist entry takes, and never what the allowlist holds.
+func TestApplicationAuthOIDCDeniedScreenShowsOnlyTheVisitorsAccount(t *testing.T) {
+	t.Parallel()
+
+	allowed := []string{"alice@example.com", "@corp.example", "sub:admin-1"}
+	tests := []struct {
+		name    string
+		mutate  func(c *oidcIDTokenClaims)
+		account string
+	}{
+		{name: "verified email", mutate: func(c *oidcIDTokenClaims) { c.Email = "mallory@example.com" }, account: "mallory@example.com"},
+		{name: "unverified email", mutate: func(c *oidcIDTokenClaims) {
+			c.Subject, c.Email, c.EmailVerified = "user-999", "mallory@example.com", false
+		}, account: "sub:user-999"},
+		{name: "subject with markup", mutate: func(c *oidcIDTokenClaims) {
+			c.Subject, c.EmailVerified = `<img src=x onerror=alert(1)>`, false
+		}, account: "sub:&lt;img src=x onerror=alert(1)&gt;"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			idp := newOIDCTestIdP(t, func(p *oidcTestIdP) { p.mutate = tt.mutate })
+			gate := newOIDCTestGate(t, idp, allowed...)
+			req := startOIDCLogin(t, gate, idp, "app.example").callbackRequest(t, gate, nil)
+			req.Header.Set("Accept", "text/html")
+			rec := httptest.NewRecorder()
+			gate.ServeHTTP(rec, req)
+			assertOIDCCallback(t, rec, http.StatusUnauthorized)
+
+			body := rec.Body.String()
+			if !strings.Contains(body, "<b>"+tt.account+"</b>") {
+				t.Fatalf("page does not show the account %q", tt.account)
+			}
+			if strings.Contains(body, "<img") {
+				t.Fatal("account reached the page unescaped")
+			}
+			for _, entry := range allowed {
+				if strings.Contains(body, entry) {
+					t.Fatalf("page reveals the allowlist entry %q", entry)
+				}
+			}
+		})
+	}
+}
+
+// A provider that cannot be reached when the login starts gives a browser a
+// page that offers to try again and keeps its target, and any other caller the
+// plain-text error. Neither starts a login.
+func TestApplicationAuthOIDCUnreachableProviderScreen(t *testing.T) {
+	t.Parallel()
+
+	idp := newOIDCTestIdP(t, nil)
+	gate := newOIDCTestGate(t, idp)
+	idp.server.Close()
+
+	for accept, contentType := range map[string]string{"text/html": "text/html; charset=utf-8", "": "text/plain; charset=utf-8"} {
+		req := httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthLoginPath+"?next="+url.QueryEscape("/docs?page=2"), nil)
+		req.Header.Set("Accept", accept)
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadGateway || rec.Header().Get("Content-Type") != contentType || len(rec.Result().Cookies()) != 0 {
+			t.Fatalf("Accept %q: %d %q with cookies %v", accept, rec.Code, rec.Header().Get("Content-Type"), rec.Result().Cookies())
+		}
+		if accept == "" {
+			continue
+		}
+		body := rec.Body.String()
+		for _, want := range []string{"<h1>Sign-in could not be completed</h1>", `href="` + applicationAuthLoginPath + `?next=%2Fdocs%3Fpage%3D2"`} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("page is missing %q", want)
+			}
+		}
+	}
+}
+
 func TestApplicationAuthOIDCEndpointQueries(t *testing.T) {
 	t.Parallel()
 	idp := newOIDCTestIdP(t, func(p *oidcTestIdP) { p.query = "?tenant=team" })
