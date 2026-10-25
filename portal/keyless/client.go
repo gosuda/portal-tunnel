@@ -23,7 +23,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
 	"github.com/gosuda/keyless_tls/keyless/t13server"
@@ -59,10 +58,8 @@ type Client struct {
 	serverName string
 	hostname   string
 
-	// refreshMu serializes the checks of the relay chain, and checks counts the
-	// ones that completed.
+	// refreshMu serializes the checks of the relay chain.
 	refreshMu sync.Mutex
-	checks    atomic.Uint64
 }
 
 // pinnedChain is one relay certificate chain with what is derived from it. The
@@ -190,10 +187,13 @@ func (c *Client) RefreshChain(ctx context.Context) (bool, error) {
 	return c.refreshChain(ctx, nil)
 }
 
-// refreshChain is RefreshChain, except that it does nothing when checkedBefore
-// is set and a check has completed since the checks counter had that value: the
-// handshakes of a burst that fail on the same stale pin share the one check.
-func (c *Client) refreshChain(ctx context.Context, checkedBefore *uint64) (bool, error) {
+// refreshChain is RefreshChain, except that it does nothing when stale is set
+// and is no longer the pinned chain: the handshakes that fail on the same stale
+// pin share the check of the first one, once that check pinned a new chain. A
+// check that finds the relay still serving the pinned chain changes nothing, so
+// the next failure checks again; with at most a few handshakes in flight per
+// lease that costs at most a few fetches per burst.
+func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, error) {
 	if c.pinned() == nil {
 		return false, errors.New("keyless client is unavailable")
 	}
@@ -201,10 +201,9 @@ func (c *Client) refreshChain(ctx context.Context, checkedBefore *uint64) (bool,
 	// replaced.
 	c.refreshMu.Lock()
 	defer c.refreshMu.Unlock()
-	if checkedBefore != nil && c.checks.Load() != *checkedBefore {
+	if stale != nil && c.pinned() != stale {
 		return false, nil
 	}
-	defer c.checks.Add(1)
 	chainPEM, err := relayChain(ctx, c.relayURL, c.serverName)
 	if err != nil {
 		return false, err
@@ -250,10 +249,6 @@ func pinIsStale(err error) bool {
 // forwarded with every /v1/sign request for the handshake. The returned
 // net.Conn is ready for application traffic.
 func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte) (net.Conn, error) {
-	// Read before the pin: a check that completes after this point also
-	// completes after the pin was read, so it is never mistaken for one that
-	// already looked at a newer pin.
-	checks := c.checks.Load()
 	pin := c.pinned()
 	if pin == nil {
 		return nil, errors.New("keyless client is unavailable")
@@ -264,7 +259,7 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte
 		// This handshake is lost; the ones after it present the chain the relay
 		// serves now.
 		if pinIsStale(err) {
-			if _, refreshErr := c.refreshChain(ctx, &checks); refreshErr != nil {
+			if _, refreshErr := c.refreshChain(ctx, pin); refreshErr != nil {
 				err = errors.Join(err, fmt.Errorf("refresh relay certificate chain: %w", refreshErr))
 			}
 		}

@@ -361,15 +361,17 @@ func TestClientRepinsWhenARenewalComesFromAnotherIssuer(t *testing.T) {
 
 	relay.renew(renewed, false)
 
-	_, _ = relay.visit(t, client, visitors) // lost whether or not the signer connection verifies
+	if _, err := relay.visit(t, client, visitors); err == nil {
+		t.Fatal("the handshake that found the pin stale succeeded; want it lost, as the one handshake this recovery costs")
+	}
 	if leaf, err := relay.visit(t, client, visitors); err != nil || !leaf.Equal(renewed.leaf) {
 		t.Fatalf("handshake after the relay chain was checked: leaf %v, error %v; want the new certificate and no error", leaf, err)
 	}
 }
 
-// The handshakes of one burst that fail on the same stale pin must share one
-// check of the relay chain, so that a relay in trouble is not asked once per
-// handshake. A check made on a schedule is not shared.
+// The handshakes of one burst that fail on the same stale pin must share the
+// check that pinned the new chain, so that a renewal costs the relay one fetch
+// per tenant and not one per failed handshake. A scheduled check is not shared.
 func TestStaleChainChecksOfOneBurstShareOneFetch(t *testing.T) {
 	t.Parallel()
 
@@ -377,7 +379,7 @@ func TestStaleChainChecksOfOneBurstShareOneFetch(t *testing.T) {
 	first, second, third := issuer.issue(t, 2), issuer.issue(t, 3), issuer.issue(t, 4)
 	relay := newRelayStandIn(t, first)
 	client := relay.newClient(t)
-	seenByTheBurst := client.checks.Load()
+	staleOfTheBurst := client.pinned()
 	pinnedChain := func(leaf *x509.Certificate) *x509.CertPool {
 		pool := x509.NewCertPool()
 		pool.AddCert(leaf)
@@ -387,11 +389,11 @@ func TestStaleChainChecksOfOneBurstShareOneFetch(t *testing.T) {
 	ctx := context.Background()
 
 	relay.renew(second, false)
-	if changed, err := client.refreshChain(ctx, &seenByTheBurst); err != nil || !changed {
+	if changed, err := client.refreshChain(ctx, staleOfTheBurst); err != nil || !changed {
 		t.Fatalf("first check of the burst = %v, %v; want the new chain pinned", changed, err)
 	}
 	relay.renew(third, false)
-	if changed, err := client.refreshChain(ctx, &seenByTheBurst); err != nil || changed {
+	if changed, err := client.refreshChain(ctx, staleOfTheBurst); err != nil || changed {
 		t.Fatalf("later check of the same burst = %v, %v; want it to share the first check", changed, err)
 	}
 	if !client.RelayCertPool().Equal(pinnedChain(second.leaf)) {
