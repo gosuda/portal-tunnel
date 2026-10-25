@@ -69,12 +69,13 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   orchestration to itself. A relay certificate renewal needs neither a restart nor
   a reconnect: the relay signs with the key of the certificate the transcript
   presents and keeps a replaced certificate's key until that certificate expires,
-  and a tenant re-pins the chain the relay serves at every lease renewal. A
-  handshake that finds the pin stale first, because `/v1/sign` reports that the
-  relay holds no key for the chain it presents or because the relay's API
-  certificate no longer verifies against the pinned chain, is lost and re-pins
-  for the handshakes after it. The signer connection is always verified against
-  the pinned chain only.
+  and a tenant checks the chain the relay serves at most once an hour, from its
+  lease renewal, and re-pins it when it changed. A handshake that finds the pin
+  stale first, because `/v1/sign` reports that the relay holds no key for the
+  chain it presents or because the relay's API certificate no longer verifies
+  against the pinned chain, is lost and re-pins at once for the handshakes after
+  it; the handshakes that fail on the same stale pin share that check. The
+  signer connection is always verified against the pinned chain only.
 
 ## Identity Challenges
 
