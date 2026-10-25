@@ -334,8 +334,8 @@ func TestRenewLeaseReportsStaleCredentialsAfterAuthorityRotation(t *testing.T) {
 
 // A renewal gives the relay a new certificate, and the relay signs for the
 // replaced one only until it expires: a tenant that never reconnects has to
-// move to the new chain at its next lease renewal.
-func TestRenewLeaseMovesTheTenantToTheRenewedRelayCertificate(t *testing.T) {
+// move to the new chain, which lease renewal checks at most once an hour.
+func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
 	const tenantHostname = "tenant.test.example"
 	selfSigned := func(serial int64) (tls.Certificate, *x509.CertPool) {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -365,6 +365,7 @@ func TestRenewLeaseMovesTheTenantToTheRenewedRelayCertificate(t *testing.T) {
 	}
 	first, firstPool := selfSigned(1)
 	renewed, renewedPool := selfSigned(2)
+	later, _ := selfSigned(3)
 
 	var serving atomic.Pointer[tls.Certificate]
 	serving.Store(&first)
@@ -402,25 +403,39 @@ func TestRenewLeaseMovesTheTenantToTheRenewedRelayCertificate(t *testing.T) {
 	listener := &listener{
 		api: &apiClient{relayURL: parsedRelayURL, http: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}},
 		lease: utils.NewSnapshot(listenerSnapshot{
-			accessToken: "access-token",
-			expiresAt:   expiresAt,
-			tenantTLS:   tenantTLS,
+			accessToken:    "access-token",
+			expiresAt:      expiresAt,
+			tenantTLS:      tenantTLS,
+			chainCheckedAt: time.Now(),
 		}, listenerSnapshot.snapshot),
 	}
-
-	if err := listener.renewLease(context.Background()); err != nil {
-		t.Fatalf("renewLease() error = %v", err)
-	}
-	if !tenantTLS.RelayCertPool().Equal(firstPool) {
-		t.Fatal("a renewal with nothing renewed on the relay changed the pinned certificate")
+	renew := func() {
+		t.Helper()
+		if err := listener.renewLease(context.Background()); err != nil {
+			t.Fatalf("renewLease() error = %v", err)
+		}
 	}
 
 	serving.Store(&renewed)
-	if err := listener.renewLease(context.Background()); err != nil {
-		t.Fatalf("renewLease() error = %v", err)
+	renew()
+	if !tenantTLS.RelayCertPool().Equal(firstPool) {
+		t.Fatal("renewLease() checked the relay chain again within the hour after it was found current")
 	}
+
+	listener.lease.Update(func(lease listenerSnapshot) listenerSnapshot {
+		lease.chainCheckedAt = time.Now().Add(-defaultChainCheckInterval)
+		return lease
+	})
+	renew()
 	if !tenantTLS.RelayCertPool().Equal(renewedPool) {
-		t.Fatal("renewLease() left the tenant on the replaced relay certificate")
+		t.Fatal("renewLease() an hour after the last check left the tenant on the replaced relay certificate")
+	}
+
+	// That check starts the next hour.
+	serving.Store(&later)
+	renew()
+	if !tenantTLS.RelayCertPool().Equal(renewedPool) {
+		t.Fatal("renewLease() checked the relay chain again right after a scheduled check")
 	}
 }
 
