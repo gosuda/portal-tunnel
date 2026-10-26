@@ -213,6 +213,12 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	if cfg.TCPEnabled {
 		out["tcp"] = cfg.TCPEnabled
 	}
+	if cfg.BanMITM != nil {
+		out["ban_mitm"] = *cfg.BanMITM
+	}
+	if cfg.MaxActiveRelays != 0 {
+		out["max_active_relays"] = cfg.MaxActiveRelays
+	}
 	addStringDocumentField(out, "description", cfg.Description)
 	addStringSliceDocumentField(out, "tags", cfg.Tags)
 	addStringDocumentField(out, "owner", cfg.Owner)

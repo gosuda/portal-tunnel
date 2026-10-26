@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
@@ -119,4 +121,118 @@ func TestApplicationAuthConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// tunnelsDocument sets every tunnel key, each to a value that differs from its
+// default, so a key the writer drops shows up as a difference after a save. The
+// keys are spread over several tunnels because loading validates each one and
+// some keys exclude each other (HTTP routes and TCP, a static site and a target).
+// The check below finds a key as a line that starts with it and has one space
+// before `=`, so keep the keys unindented in that form. A key inside a nested
+// struct such as an HTTP route is not walked and has to be set here by hand.
+const tunnelsDocument = `
+[[tunnels]]
+id = "web"
+name = "web-name"
+target = "127.0.0.1:3000"
+strip_request_headers = ["X-Strip"]
+relays = ["https://relay.example.com"]
+discovery = false
+overlay = true
+identity_path = "/absolute/identity.json"
+ban_mitm = true
+max_active_relays = 5
+description = "described"
+tags = ["tag"]
+owner = "owner"
+thumbnail = "https://example.com/thumb.png"
+hide = true
+auth = "oidc"
+auth_allowed_wallets = ["alice@example.com"]
+auth_identity_headers = true
+auth_oidc_issuer = "https://accounts.google.com"
+auth_oidc_client_id = "client-id"
+auth_oidc_client_secret = "client-secret"
+
+[[tunnels]]
+id = "site"
+serve = "./site"
+identity_json = "{}"
+
+[[tunnels]]
+id = "paid"
+x402_pay_to = "0x1234567890abcdef1234567890abcdef12345678"
+x402_testnet = true
+x402_network = "base"
+x402_asset = "usdc"
+x402_endpoints = ["/paid"]
+x402_facilitator_token = "facilitator-token"
+
+[[tunnels.http_routes]]
+prefix = "/api"
+upstream = "127.0.0.1:3001"
+methods = ["GET"]
+amount = "0.01"
+
+[[tunnels]]
+id = "tcp"
+target = "127.0.0.1:25565"
+tcp = true
+
+[[tunnels]]
+id = "udp"
+target = "127.0.0.1:19132"
+udp = true
+udp_addr = "127.0.0.1:19133"
+`
+
+// Saving the config after any dashboard action rewrites the whole file, so
+// every key the loader reads must come back out of the writer.
+func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(tunnelsDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A key added to TunnelConfig must be added to the document above too, or
+	// this test would not notice the writer forgetting it.
+	for _, key := range tunnelConfigKeys(reflect.TypeOf(TunnelConfig{})) {
+		if !strings.Contains(tunnelsDocument, "\n"+key+" =") && !strings.Contains(tunnelsDocument, "\n[[tunnels."+key+"]]") {
+			t.Errorf("tunnelsDocument does not set %q", key)
+		}
+	}
+
+	if err := writeConfigDocument(path, 0o600, loaded); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Tunnels) != len(loaded.Tunnels) {
+		t.Fatalf("saved %d tunnels, reloaded %d", len(loaded.Tunnels), len(reloaded.Tunnels))
+	}
+	for i := range loaded.Tunnels {
+		if !reflect.DeepEqual(loaded.Tunnels[i], reloaded.Tunnels[i]) {
+			t.Errorf("tunnel %q changed by a save:\n before: %+v\n after:  %+v", loaded.Tunnels[i].ID, loaded.Tunnels[i], reloaded.Tunnels[i])
+		}
+	}
+}
+
+func tunnelConfigKeys(typ reflect.Type) []string {
+	var keys []string
+	for field := range typ.Fields() {
+		tag := field.Tag.Get("koanf")
+		switch {
+		case strings.HasSuffix(tag, ",squash"):
+			keys = append(keys, tunnelConfigKeys(field.Type)...)
+		case tag != "":
+			keys = append(keys, tag)
+		}
+	}
+	return keys
 }
