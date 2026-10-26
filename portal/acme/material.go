@@ -10,6 +10,8 @@ import (
 	"os"
 	"slices"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // TLSMaterial is the relay certificate chain with its private key, as served.
@@ -112,6 +114,7 @@ func (t *TLSMaterial) holds(leafDER []byte) bool {
 // the retired material lives in memory only, and the restart also drops every
 // lease, so tenants re-pin the chain on disk.
 func (m *Manager) serve(material *TLSMaterial) {
+	replaced := m.TLSMaterial()
 	now := time.Now()
 	m.material.Update(func(served servedMaterial) servedMaterial {
 		next := servedMaterial{current: material}
@@ -122,6 +125,32 @@ func (m *Manager) serve(material *TLSMaterial) {
 		}
 		return next
 	})
+	if replaced != nil && !replaced.holds(material.Certificate.Certificate[0]) && !material.TrustedBy(replaced, m.cfg.BaseDomain) {
+		log.Warn().
+			Str("base_domain", m.cfg.BaseDomain).
+			Msg("renewed relay certificate does not chain to the replaced one's issuer: tenants on older SDKs pinned to the previous chain must re-register, which their next lease renewal asks them to; restart the relay to re-pin them all at once")
+	}
+}
+
+// TrustedBy reports whether a client that pinned the chain of pinned accepts t
+// as the certificate of serverName, trusting the pinned certificates as roots
+// the way the /v1/sign connection of an SDK that cannot re-pin does. A renewal
+// by the same intermediate passes; one by another intermediate does not.
+func (t *TLSMaterial) TrustedBy(pinned *TLSMaterial, serverName string) bool {
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pinned.CertPEM) {
+		return false
+	}
+	intermediates := x509.NewCertPool()
+	for _, der := range t.Certificate.Certificate[1:] {
+		certificate, err := x509.ParseCertificate(der)
+		if err != nil {
+			return false
+		}
+		intermediates.AddCert(certificate)
+	}
+	_, err := t.Certificate.Leaf.Verify(x509.VerifyOptions{DNSName: serverName, Roots: roots, Intermediates: intermediates})
+	return err == nil
 }
 
 func newTLSMaterial(certPEM, keyPEM []byte) (*TLSMaterial, error) {
