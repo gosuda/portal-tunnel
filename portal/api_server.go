@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,8 +86,10 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.Server, io.Closer, error) {
-	if len(s.apiKeyPEM) > 0 {
-		signer, err := keyless.NewSigner(s.apiKeyPEM, s.registry.bindings)
+	if s.acmeManager.TLSMaterial() != nil {
+		// The manager picks the key of the certificate a tenant presents, so a
+		// renewal needs no new signer.
+		signer, err := keyless.NewSigner(s.registry.bindings, s.acmeManager.SigningKey)
 		if err != nil {
 			return nil, nil, fmt.Errorf("configure api signer: %w", err)
 		}
@@ -309,12 +310,13 @@ func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) 
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
-	if len(s.apiCertPEM) == 0 {
+	material := s.acmeManager.TLSMaterial()
+	if material == nil {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
-	_, _ = w.Write(s.apiCertPEM)
+	_, _ = w.Write(material.CertPEM)
 }
 
 // HandleRegister completes a verified registration without publishing the
@@ -671,16 +673,9 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 				}
 				_ = upstream.Close()
 			}
-			roots := x509.NewCertPool()
-			for _, cert := range s.apiServer.TLSConfig.Certificates {
-				leaf, err := x509.ParseCertificate(cert.Certificate[0])
-				if err != nil {
-					_ = upstream.Close()
-					return nil, err
-				}
-				roots.AddCert(leaf)
-			}
-			conn := tls.Client(s.registry.bindings.FixHelloOnWrite(upstream, binding), &tls.Config{ServerName: host, RootCAs: roots, MinVersion: tls.VersionTLS12})
+			// The tenant presents the relay chain it pinned, which can be one a
+			// renewal replaced; trust what the relay still signs for.
+			conn := tls.Client(s.registry.bindings.FixHelloOnWrite(upstream, binding), s.acmeManager.TenantTLSConfig(host))
 			if err := conn.HandshakeContext(ctx); err != nil {
 				_ = conn.Close()
 				return nil, fmt.Errorf("cache fallback TLS: %w", err)

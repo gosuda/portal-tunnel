@@ -47,9 +47,20 @@ func localTLSMaterial(t *testing.T, keyDir string) ([]byte, []byte) {
 	if err != nil {
 		t.Fatalf("create local certificate manager: %v", err)
 	}
-	certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
-	if err != nil {
+	if err := manager.EnsureTLSMaterial(context.Background()); err != nil {
 		t.Fatalf("create local certificate: %v", err)
+	}
+	certFile, keyFile, err := manager.TLSFiles()
+	if err != nil {
+		t.Fatalf("locate local certificate: %v", err)
+	}
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		t.Fatalf("read local certificate: %v", err)
+	}
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatalf("read local private key: %v", err)
 	}
 	return certPEM, keyPEM
 }

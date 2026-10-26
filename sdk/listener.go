@@ -36,6 +36,16 @@ const (
 	defaultRenewBefore      = 30 * time.Second
 	defaultReadyTarget      = 2
 	defaultRetryWait        = 3 * time.Second
+	// defaultChainCheckInterval bounds how often a lease asks the relay whether
+	// its pinned certificate chain is still the one served. A replaced relay
+	// certificate stays signable until its NotAfter, and the relay renews at
+	// least min(7 days, a tenth of the lifetime) before expiry, so an hourly
+	// check moves a tenant long before the old certificate expires. It costs the
+	// relay a fortieth of the TLS handshakes a check at every lease renewal
+	// (about every 90 s) would: for 10k tenants about 3 per second instead of
+	// 111. A handshake that finds the pin stale re-pins at once, without waiting
+	// for this.
+	defaultChainCheckInterval = time.Hour
 )
 
 type listenerConfig struct {
@@ -392,6 +402,9 @@ type listenerSnapshot struct {
 	reverse       types.ReverseEndpoint
 	expiresAt     time.Time
 	tenantTLS     *keyless.Client
+	// chainCheckedAt is when the relay chain tenantTLS pins was last found
+	// current: at registration, and at each scheduled check that completed.
+	chainCheckedAt time.Time
 }
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
@@ -1100,8 +1113,47 @@ func (l *listener) renewLease(ctx context.Context) error {
 	}
 	if lease.tenantTLS != nil {
 		lease.tenantTLS.SetAccessToken(resp.AccessToken)
+		if !time.Now().Before(lease.chainCheckedAt.Add(defaultChainCheckInterval)) && l.refreshRelayChain(ctx, lease.tenantTLS) {
+			checkedAt := time.Now()
+			_, _ = l.lease.UpdateIf(func(current listenerSnapshot) (listenerSnapshot, bool) {
+				if current.tenantTLS != lease.tenantTLS {
+					return current, false
+				}
+				current.chainCheckedAt = checkedAt
+				return current, true
+			})
+		}
 	}
 	return nil
+}
+
+// refreshRelayChain moves the tenant to the certificate chain the relay serves
+// now and reports whether the check completed. Lease renewal is the cadence at
+// which a tenant that never reconnects learns of a renewed relay certificate,
+// at most once per defaultChainCheckInterval, and the relay signs for the
+// replaced one only until it expires. A failure keeps the pinned chain and is
+// retried at the next renewal.
+func (l *listener) refreshRelayChain(ctx context.Context, tenantTLS *keyless.Client) bool {
+	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	changed, err := tenantTLS.RefreshChain(checkCtx)
+	switch {
+	case err != nil:
+		if ctx.Err() == nil {
+			log.Warn().
+				Err(err).
+				Str("relay_url", l.api.relayURL.String()).
+				Str("address", l.identity.Address).
+				Msg("relay certificate check failed; keeping the pinned chain")
+		}
+		return false
+	case changed:
+		log.Info().
+			Str("relay_url", l.api.relayURL.String()).
+			Str("address", l.identity.Address).
+			Msg("relay certificate renewed; presenting the new chain")
+	}
+	return true
 }
 
 // ensureMITMProbeSupport rejects a registration whose tenant TLS stack
@@ -1165,14 +1217,15 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return ctx.Err()
 	}
 	next := listenerSnapshot{
-		hostname:      canonicalHostname,
-		aliasHostname: resp.Hostname,
-		udpAddr:       resp.UDPAddr,
-		tcpAddr:       resp.TCPAddr,
-		accessToken:   resp.AccessToken,
-		reverse:       resp.ReverseEndpoint,
-		expiresAt:     resp.ExpiresAt,
-		tenantTLS:     tenantTLS,
+		hostname:       canonicalHostname,
+		aliasHostname:  resp.Hostname,
+		udpAddr:        resp.UDPAddr,
+		tcpAddr:        resp.TCPAddr,
+		accessToken:    resp.AccessToken,
+		reverse:        resp.ReverseEndpoint,
+		expiresAt:      resp.ExpiresAt,
+		tenantTLS:      tenantTLS,
+		chainCheckedAt: time.Now(),
 	}
 	oldLease := l.lease.Swap(next)
 	if oldLease.tenantTLS != nil {
