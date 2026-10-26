@@ -439,6 +439,63 @@ func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
 	}
 }
 
+// A relay asks a lease to register again when its SDK cannot re-pin the relay
+// chain and a renewal left that chain behind; this SDK re-pins by itself and
+// says so on every renewal.
+func TestRenewLeaseSaysItRepinsTheRelayChain(t *testing.T) {
+	requests := make(chan types.RenewRequest, 1)
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req types.RenewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode renew request: %v", err)
+		}
+		requests <- req
+		utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
+			AccessToken:     "renewed-token",
+			ExpiresAt:       expiresAt,
+			ReverseEndpoint: types.ReverseEndpoint{URL: "http://" + r.Host + types.PathSDKConnect, Capability: "capability", ExpiresAt: expiresAt},
+		})
+	}))
+	defer server.Close()
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := &listener{
+		api:   &apiClient{relayURL: relayURL, http: server.Client()},
+		lease: utils.NewSnapshot(listenerSnapshot{accessToken: "access-token", expiresAt: expiresAt}, listenerSnapshot.snapshot),
+	}
+
+	_ = listener.renewLease(context.Background()) // only the request matters here
+	if req := <-requests; !req.RepinsChain {
+		t.Fatal("renew request does not say the SDK re-pins the relay chain")
+	}
+}
+
+// That request is answered with lease_not_found, which every SDK, also the
+// ones that predate RepinsChain, takes as a reason to register again.
+func TestRenewLeaseRegistersAgainWhenTheRelayAnswersLeaseNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, "lease not found")
+	}))
+	defer server.Close()
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := &listener{
+		api: &apiClient{relayURL: relayURL, http: server.Client()},
+		lease: utils.NewSnapshot(listenerSnapshot{
+			accessToken: "pinned-once-access-token",
+			expiresAt:   time.Now().UTC().Add(time.Minute),
+		}, listenerSnapshot.snapshot),
+	}
+	if err := listener.renewLease(context.Background()); !errors.Is(err, errLeaseRefreshRequired) {
+		t.Fatalf("renewLease() error = %v, want lease refresh required", err)
+	}
+}
+
 func TestRegisterRateLimitWaitIsCancelable(t *testing.T) {
 	t.Parallel()
 	limited := make(chan struct{})

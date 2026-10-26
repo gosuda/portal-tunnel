@@ -161,6 +161,11 @@ type RenewRequest struct {
 	TTL         int           `json:"ttl,omitempty"` // Non-positive values default to 120 seconds; maximum 600.
 	ReportedIP  string        `json:"reported_ip,omitempty"`
 	Metadata    LeaseMetadata `json:"metadata"`
+	// RepinsChain says the tenant re-pins the relay certificate chain by itself.
+	// A relay asks a lease without it to register again when it serves a
+	// certificate the chain pinned at registration no longer verifies. Relays
+	// that predate it ignore the field.
+	RepinsChain bool `json:"repins_chain,omitempty"`
 }
 
 type RenewResponse struct {
