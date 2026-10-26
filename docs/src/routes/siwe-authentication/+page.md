@@ -80,10 +80,43 @@ session local to the tunnel endpoint. The cookie is `Secure`, `HttpOnly`, and
 request, while preserving application-owned cookies; relay-issued lease tokens
 are not used for application access.
 
-Inbound `X-Portal-User` and `X-Portal-Auth` headers are always removed. Add
+Inbound `X-Portal-User`, `X-Portal-Auth`, and `X-Portal-Proof` headers are always removed. Add
 `--auth-identity-headers` to inject the verified subject and provider (`siwe`,
 `credential`, or `oidc`) after login. Upstreams must only trust these headers when they cannot be
 reached except through this local Portal proxy.
+
+### Verifying the identity headers
+
+An upstream on loopback can be reached by any other process on the machine, and
+such a process can connect to it directly and send `X-Portal-User` itself. To let
+the application tell Portal from that process, give Portal a secret of at least 16
+visible ASCII characters (no spaces) together with `--auth-identity-headers`.
+Generate a random one once, into a file outside the repository that only you can
+read, and pass it as `AUTH_IDENTITY_PROOF` to the one command that starts this
+tunnel:
+
+```bash
+(umask 077 && mkdir -p ~/.config/portal && openssl rand -hex 32 > ~/.config/portal/myapp.proof)
+AUTH_IDENTITY_PROOF="$(cat ~/.config/portal/myapp.proof)" portal expose 3000 --auth siwe --auth-identity-headers
+```
+
+`openssl rand -hex 32` writes 64 random hexadecimal characters, and `umask 077`
+makes the file readable by you alone. The secret is never typed, so it stays out
+of the shell history, and the variable is set for that `portal expose` only, not
+for later tunnels started from the same shell. It is passed through the
+environment rather than as `--auth-identity-proof` because process lists show
+command-line arguments. The application reads the same file.
+
+Portal then sends `X-Portal-Proof: <secret>` with the identity headers on every
+authenticated request, and removes any `X-Portal-Proof` a visitor sends. The
+application compares the header with the same secret in constant time (for
+example `subtle.ConstantTimeCompare` in Go, `hmac.compare_digest` in Python or
+`crypto.timingSafeEqual` in Node.js) and ignores `X-Portal-User` and
+`X-Portal-Auth` when it differs or is missing. The proof is optional and off by
+default. It is sent to every upstream of the tunnel and in cleartext over a
+plain `http` upstream, so use one secret per tunnel and keep it to upstreams you
+trust with it. Anyone who sees one request can reuse the value, so do not log
+`X-Portal-Proof` in the application (access logs, header-dumping middleware).
 
 Application auth covers proxied HTTP routes, static sites, and x402 endpoints.
 It cannot be combined with raw TCP/UDP or relay static caching.

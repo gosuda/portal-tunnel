@@ -84,7 +84,11 @@ Portal-native credentials, or use `auth = "siwe"` or `auth = "oidc"`.
 for SIWE, the credential subject and `credential` for credential auth, or the
 verified email (or `sub:` subject) and `oidc` for OIDC, as
 `X-Portal-User` and `X-Portal-Auth`; Portal always strips client-supplied copies
-first.
+first. An agent tunnel cannot send the `X-Portal-Proof` identity proof yet: the
+tunnel config has no key for it, and the agent does not read the CLI's
+`AUTH_IDENTITY_PROOF` variable. When the application needs to verify the
+identity headers, run the tunnel with `portal expose` and `AUTH_IDENTITY_PROOF`
+instead ([details](/siwe-authentication#verifying-the-identity-headers)).
 
 `oidc` also needs `auth_oidc_issuer` and `auth_oidc_client_id`, and accepts an optional `auth_oidc_client_secret`. The agent takes them from the tunnel config, not from the CLI's `AUTH_OIDC_*` variables:
 

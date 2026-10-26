@@ -84,7 +84,7 @@ portal expose localhost:25565 --tcp
 
 ### Advanced Flags
 
-The advanced section retains metadata (`--description`, `--tags`, `--owner`, `--thumbnail`, `--hide`), inline identity (`--identity-json`), upstream headers (`--auth-identity-headers`, `--strip-request-header`), x402 provider settings, static caching, `--udp-addr`, `--max-active-relays`, and `--metrics-addr`.
+The advanced section retains metadata (`--description`, `--tags`, `--owner`, `--thumbnail`, `--hide`), inline identity (`--identity-json`), upstream headers (`--auth-identity-headers`, `--auth-identity-proof`, `--strip-request-header`), x402 provider settings, static caching, `--udp-addr`, `--max-active-relays`, and `--metrics-addr`.
 
 These flags remain available directly on `portal expose`; no configuration file is required. See the [CLI Reference](https://gosuda.github.io/portal-tunnel/cli-reference#flags) for the full flag reference, defaults, and detailed examples.
 

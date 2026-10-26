@@ -51,6 +51,7 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 				r.Header.Set("X-Forwarded-Proto", "https")
 				r.Header.Del(types.HeaderPortalUser)
 				r.Header.Del(types.HeaderPortalAuth)
+				r.Header.Del(types.HeaderPortalProof)
 				handler.ServeHTTP(w, r)
 			}),
 			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,

@@ -76,11 +76,14 @@ type verifiedIdentityHeadersContextKey struct{}
 // ApplicationAuthConfig configures the tunnel-local application access gate.
 // AllowedWallets holds the provider-scoped principal allowlist (Ethereum
 // wallet addresses for siwe, credential subjects for credential, or verified
-// emails, @domain entries, or sub: subjects for oidc).
+// emails, @domain entries, or sub: subjects for oidc). IdentityProof is a
+// secret, like OIDCClientSecret: it is sent upstream with the identity headers
+// and must not be logged.
 type ApplicationAuthConfig struct {
 	Provider         string
 	AllowedWallets   []string
 	IdentityHeaders  bool
+	IdentityProof    string
 	OIDCIssuerURL    string
 	OIDCClientID     string
 	OIDCClientSecret string
@@ -97,6 +100,7 @@ type applicationAuth struct {
 	allowedSubjects map[string]struct{}
 	allowAnySubject bool
 	identityHeaders bool
+	identityProof   string
 }
 
 type applicationAuthClaims struct {
@@ -436,6 +440,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		allowedSubjects: allowedSubjects,
 		allowAnySubject: allowAnySubject,
 		identityHeaders: cfg.IdentityHeaders,
+		identityProof:   settings.identityProof,
 	}, nil
 }
 
@@ -460,6 +465,7 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Del(types.HeaderAccessCredential)
 	r.Header.Del(types.HeaderPortalUser)
 	r.Header.Del(types.HeaderPortalAuth)
+	r.Header.Del(types.HeaderPortalProof)
 
 	switch r.URL.Path {
 	case applicationAuthLoginPath:
@@ -484,6 +490,9 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if a.identityHeaders {
 			r.Header.Set(types.HeaderPortalUser, subject)
 			r.Header.Set(types.HeaderPortalAuth, provider)
+			if a.identityProof != "" {
+				r.Header.Set(types.HeaderPortalProof, a.identityProof)
+			}
 			r = r.WithContext(context.WithValue(r.Context(), verifiedIdentityHeadersContextKey{}, true))
 		}
 		a.next.ServeHTTP(w, r)
