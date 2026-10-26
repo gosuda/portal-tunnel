@@ -454,3 +454,47 @@ func TestAddTunnelWithAuth(t *testing.T) {
 		}
 	})
 }
+
+// The request goes through the control handler, so the serve key of the API is
+// covered too.
+func TestAddTunnelStaticSite(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte("<h1>hi</h1>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A Windows path has backslashes, so the site path is JSON-encoded.
+	siteJSON, err := json.Marshal(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	common := `"discovery":false,"relays":["` + unreachableRelay + `"]`
+
+	t.Run("accepted", func(t *testing.T) {
+		m, path := testManager(t)
+		startManager(t, m)
+		if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, `{"id":"site","serve":`+string(siteJSON)+`,`+common+`}`); code != http.StatusAccepted {
+			t.Fatalf("status = %d, body = %s", code, resp)
+		}
+		// A static site gets no default target.
+		if saved := savedTunnel(t, path, "site"); saved.Serve != site || saved.TargetAddr != "" {
+			t.Fatalf("saved static tunnel = %+v", saved)
+		}
+	})
+
+	// An explicit target is neither dropped nor overridden by serve: the
+	// request is refused and nothing is written.
+	t.Run("with target", func(t *testing.T) {
+		m, path := testManager(t, testTunnel("existing"))
+		fileBefore, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := `{"id":"site","serve":` + string(siteJSON) + `,"target_addr":"127.0.0.1:3000",` + common + `}`
+		if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, body); code != http.StatusBadRequest || !strings.Contains(resp, "static serving cannot be combined") {
+			t.Fatalf("status = %d, body = %s; want 400 refusing the combination", code, resp)
+		}
+		if fileAfter, err := os.ReadFile(path); err != nil || !bytes.Equal(fileBefore, fileAfter) {
+			t.Fatalf("refused tunnel changed the config file (err %v):\n%s", err, fileAfter)
+		}
+	})
+}
