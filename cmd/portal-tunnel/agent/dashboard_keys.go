@@ -58,11 +58,11 @@ var agentDashboardBindings = []agentDashboardBinding{
 		},
 	},
 	{
-		keys: []string{"f2", "enter"}, label: "Apply", when: agentDashboardModel.accessing,
+		keys: []string{"f2", "enter"}, label: "Apply", when: agentDashboardModel.inAccess,
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.applyAccess() },
 	},
 	{
-		keys: []string{"esc"}, label: "Cancel", when: agentDashboardModel.accessing,
+		keys: []string{"esc"}, label: "Cancel", when: agentDashboardModel.inAccess,
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
 			m.err = nil
 			m.closeAccess()
@@ -242,7 +242,7 @@ func (m agentDashboardModel) canOpenAccess() bool {
 }
 
 func (m agentDashboardModel) onAccessRow(row agentDashboardAccessRow) bool {
-	return m.accessing() && m.access.current().row == row
+	return m.inAccess() && m.access.current().row == row
 }
 
 func (m agentDashboardModel) onAccessAdd() bool {
@@ -270,9 +270,13 @@ func (m agentDashboardModel) canClearAccessSecret() bool {
 	return ok && m.onAccessSecret() && tunnel.AuthOIDCClientSecretSet
 }
 
+// inAccess reports whether the Access screen takes keys: it is open and no
+// question waits for an answer on top of it.
+func (m agentDashboardModel) inAccess() bool { return m.accessing() && !m.confirming() }
+
 // editing reports whether plain characters belong to a focused input. The
 // Access screen counts as editing throughout, so that no letter on it quits.
-func (m agentDashboardModel) editing() bool { return m.inForm() || m.inSettings() || m.accessing() }
+func (m agentDashboardModel) editing() bool { return m.inForm() || m.inSettings() || m.inAccess() }
 
 // liveBindings returns the bindings that act in the current context with the
 // keys that reach them. A key goes to the first binding that claims it, and
@@ -318,7 +322,7 @@ func (m agentDashboardModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		input = m.focusedAddTunnelInput()
 	case m.inSettings():
 		input = m.focusedSettingsInput()
-	case m.accessing():
+	case m.inAccess():
 		input = m.access.focusedInput()
 	}
 	if input == nil {

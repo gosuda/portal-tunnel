@@ -760,3 +760,33 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 		})
 	}
 }
+
+// Under agent run --foreground F10 asks before stopping the agent on the
+// Access screen too, the question stands in for the screen's own buttons, and
+// its letters answer it instead of going into the focused input.
+func TestDashboardAccessAsksBeforeStoppingTheAgent(t *testing.T) {
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
+	model := accessScreen(t, theme, testAccessStatus(), 0, keyUp, keyRunes(fakeSecret))
+	model.stopsAgent = true
+	typed := accessBody(t, model)
+
+	asked, cmd := press(model, keyF10)
+	if view := asked.View(); cmd != nil || !strings.Contains(view, agentDashboardStopQuestion) || strings.Contains(view, "[ Cancel ]") {
+		t.Fatalf("F10 should only ask, in place of Apply and Cancel: cmd = %v\n%s", cmd != nil, view)
+	}
+	for _, answer := range []tea.KeyMsg{keyRunes("n"), keyEsc, keyRunes("q"), keyF10} {
+		declined, cmd := press(asked, answer)
+		if cmd != nil || strings.Contains(declined.View(), agentDashboardStopQuestion) || !declined.accessing() {
+			t.Fatalf("%s should keep the agent running and the Access screen open", answer)
+		}
+		if got := accessBody(t, declined); got != typed {
+			t.Fatalf("answering %s changed what the screen would apply: %s, want %s", answer, got, typed)
+		}
+	}
+	if _, cmd := press(asked, keyRunes("y")); !isQuit(cmd) {
+		t.Fatal("y should stop the agent")
+	}
+	if _, cmd := press(model, keyCtrlC); !isQuit(cmd) {
+		t.Fatal("ctrl+c should stop the agent at once")
+	}
+}

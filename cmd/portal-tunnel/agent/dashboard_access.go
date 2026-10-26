@@ -489,10 +489,19 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 		applyLabel = "Applied"
 	}
 	var content agentDashboardView
-	content.addButtons(th, inner,
-		agentDashboardButton{label: applyLabel, action: agentDashboardActionApplyAccess, disabled: !changed},
-		agentDashboardButton{label: "Cancel", action: agentDashboardActionCancelAccess},
-	)
+	if m.confirmStop {
+		// The screen stands in for the Tunnels pane, where the question is drawn otherwise.
+		content.addStyled(inner, th.pending, agentDashboardStopQuestion)
+		content.addButtons(th, inner,
+			agentDashboardButton{label: "Yes", action: agentDashboardActionAnswerYes},
+			agentDashboardButton{label: "No", action: agentDashboardActionAnswerNo},
+		)
+	} else {
+		content.addButtons(th, inner,
+			agentDashboardButton{label: applyLabel, action: agentDashboardActionApplyAccess, disabled: !changed},
+			agentDashboardButton{label: "Cancel", action: agentDashboardActionCancelAccess},
+		)
+	}
 	if a.err != nil {
 		for _, line := range agentDashboardWrap(th.glyph.ledFailed+" Error: "+a.err.Error(), inner, agentDashboardAccessMessageLines) {
 			content.addLine(th.failed.Render(line))
