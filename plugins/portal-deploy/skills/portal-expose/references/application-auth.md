@@ -2,7 +2,7 @@
 
 Use this when only chosen people should open the public URL ("only me", "my team", "private", "add a login", "restrict access"). The check runs inside the `portal` process on the user's machine, not at the relay, and covers the whole HTTP gateway: the proxied target, `--serve` files, every `--http-route`, and paid routes. Without it, anyone who learns the hostname can open the app. Add sign-in only when the user asks for it; do not enable it on your own (the workflow in `SKILL.md` says when to offer it).
 
-> **Sync notice**: the method table, allowlist forms, session lifetime, secret handling, and verification steps in this file mirror `docs/src/routes/siwe-authentication/+page.md`. When sign-in behavior changes, update both files together. The docs page is the human-facing source; this reference is the agent-facing copy.
+> **Sync notice**: the method table, allowlist forms, session lifetime, secret handling, identity proof, and verification steps in this file mirror `docs/src/routes/siwe-authentication/+page.md`. When sign-in behavior changes, update both files together. The docs page is the human-facing source; this reference is the agent-facing copy.
 
 ## Choose a method
 
@@ -79,13 +79,20 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
 
 ## Common options
 
-- `--auth-identity-headers` passes the verified identity to the app as `X-Portal-User` (wallet address, credential subject, or `alice@example.com` / `sub:<id>` for OIDC) and `X-Portal-Auth` (`siwe`, `credential`, `oidc`). Portal strips any client-supplied copies. Tell the user the app may trust these headers only when nothing but Portal can reach the app's port: binding the app to loopback keeps other machines out, but any other process on the same machine can still connect to that port and send forged headers.
+- `--auth-identity-headers` passes the verified identity to the app as `X-Portal-User` (wallet address, credential subject, or `alice@example.com` / `sub:<id>` for OIDC) and `X-Portal-Auth` (`siwe`, `credential`, `oidc`). Portal strips any client-supplied copies. Tell the user the app may trust these headers only when nothing but Portal can reach the app's port: binding the app to loopback keeps other machines out, but any other process on the same machine can still connect to that port and send forged headers. When other local processes can reach it, add `--auth-identity-proof` (only with `--auth-identity-headers`, and only when the user's app will check it): Portal then also sends `X-Portal-Proof: <secret>`, always strips a visitor's copy, and the app compares the header with the same secret in constant time and ignores the identity headers when it differs or is missing. Pass the secret as `AUTH_IDENTITY_PROOF`, never as a flag value, where `ps` would show it. Generate it once into a file only the user can read, outside the repository, and set the variable for the one command, so it is never typed or printed:
+
+  ```sh
+  (umask 077 && mkdir -p ~/.config/portal && openssl rand -hex 32 > ~/.config/portal/my-app.proof)
+  AUTH_IDENTITY_PROOF="$(cat ~/.config/portal/my-app.proof)" portal expose 3000 --name my-app --auth credential --auth-identity-headers
+  ```
+
+  The app reads the same file. Never print the file or the header value, and tell the user that the app must not log `X-Portal-Proof`. Use one secret per tunnel: it reaches every upstream of the tunnel, in cleartext over a plain `http` upstream. A persistent agent tunnel cannot send the proof.
 - Sign-in cannot be combined with `--tcp`, `--udp` or `--cache`; the tunnel refuses to start. Portal answers six exact paths itself and never forwards them to the app: `/_portal/auth/login`, `/_portal/auth/challenge`, `/_portal/auth/verify`, `/_portal/auth/redeem`, `/_portal/auth/callback` and `/_portal/auth/logout`. The app must not need those paths; other paths under `/_portal/auth/` reach it behind the sign-in check.
 - Sessions use a `Secure`, `HttpOnly` cookie that Portal removes before forwarding the request to the app.
 
 ## Persistent agent
 
-The same settings are fields of a `[[tunnels]]` entry. The agent does not read the `AUTH_OIDC_*` variables and has no way to refer to a secret, so a client secret can only be stored in the TOML file as plain text. Do not put it there on your own: tell the user so, and write it only after they explicitly accept that risk (the rule is in `references/safety-and-verification.md`). If they do not, the user runs the tunnel with `portal expose` from their own terminal, as step 5 of the oidc section describes. When they accept, keep the file outside the repository (or in an ignored path), owned by the user with mode `0600` in a directory only they can read, never print the secret or paste it into logs or the final answer, and say in the handoff that the file holds a secret. Leave `auth_oidc_client_secret` empty only when the provider registered the client without a secret. A tunnel with neither `identity_path` nor `identity_json` keeps its identity in `<state_dir>/identity.json`, or `<state_dir>/<id>/identity.json` when the config has more than one tunnel: pass that file as `--identity-path` to `portal auth issue`; a relative `identity_path` is resolved against the config file's folder, not the shell's.
+The same settings are fields of a `[[tunnels]]` entry, except `--auth-identity-proof`, which has no key: an agent tunnel cannot send the identity proof, and the agent does not read `AUTH_IDENTITY_PROOF`. The agent does not read the `AUTH_OIDC_*` variables and has no way to refer to a secret, so a client secret can only be stored in the TOML file as plain text. Do not put it there on your own: tell the user so, and write it only after they explicitly accept that risk (the rule is in `references/safety-and-verification.md`). If they do not, the user runs the tunnel with `portal expose` from their own terminal, as step 5 of the oidc section describes. When they accept, keep the file outside the repository (or in an ignored path), owned by the user with mode `0600` in a directory only they can read, never print the secret or paste it into logs or the final answer, and say in the handoff that the file holds a secret. Leave `auth_oidc_client_secret` empty only when the provider registered the client without a secret. A tunnel with neither `identity_path` nor `identity_json` keeps its identity in `<state_dir>/identity.json`, or `<state_dir>/<id>/identity.json` when the config has more than one tunnel: pass that file as `--identity-path` to `portal auth issue`; a relative `identity_path` is resolved against the config file's folder, not the shell's.
 
 ```toml
 [[tunnels]]
@@ -121,7 +128,9 @@ Without signing in as the user:
 | `oidc issuer url is required` / `must use https` | Pass an `https` issuer. |
 | `oidc client id is required` | Pass `--auth-oidc-client-id`. |
 | `oidc settings require the oidc application auth provider` | An `--auth-oidc-*` flag was given together with `--auth siwe` or `--auth credential`. |
-| `unsupported application auth provider ""` | `--auth-allow`, `--auth-identity-headers` or an `--auth-oidc-*` flag was given without `--auth`. |
+| `unsupported application auth provider ""` | `--auth-allow`, `--auth-identity-headers`, `--auth-identity-proof` or an `--auth-oidc-*` flag was given without `--auth`. |
+| `identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers` | Add `--auth-identity-headers`, or drop the proof. |
+| `identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) must be at least 16 characters of visible ASCII without spaces` | Generate the value with `openssl rand -hex 32` as above. |
 | `HTTP tunnel cannot be combined with TCP or UDP` | Remove `--tcp` / `--udp`, or drop sign-in. |
 | `application auth cannot be combined with relay cache` | Remove `--cache`, or drop sign-in. |
 | The provider reports a redirect URI mismatch | No callback is registered for the host the visitor opened. Register `https://<host>/_portal/auth/callback` for that exact host too: the short and the address-bound host differ, and so does each relay's. |
