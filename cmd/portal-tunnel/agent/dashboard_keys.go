@@ -51,12 +51,63 @@ var agentDashboardBindings = []agentDashboardBinding{
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.applySettingsEdit() },
 	},
 	{
+		keys: []string{"enter"}, label: "Add entry", when: agentDashboardModel.onAccessAdd,
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
+			m.addAccessEntry()
+			return m, nil
+		},
+	},
+	{
+		keys: []string{"f2", "enter"}, label: "Apply", when: agentDashboardModel.accessing,
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.applyAccess() },
+	},
+	{
+		keys: []string{"esc"}, label: "Cancel", when: agentDashboardModel.accessing,
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
+			m.err = nil
+			m.closeAccess()
+			return m, nil
+		},
+	},
+	{
+		keys: []string{"left", "right"}, label: "Change", when: agentDashboardModel.onAccessChoice,
+		run: func(m agentDashboardModel, key string) (tea.Model, tea.Cmd) {
+			m.changeAccessChoice(agentDashboardKeyStep(key))
+			return m, nil
+		},
+	},
+	{
+		keys: []string{"delete", "backspace"}, label: "Remove", when: agentDashboardModel.onAccessEntry,
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
+			m.access.removeEntry()
+			return m, nil
+		},
+	},
+	{
+		keys: []string{"f3", "ctrl+r"}, label: "Show", when: agentDashboardModel.onAccessSecret,
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
+			m.access.toggleReveal()
+			return m, nil
+		},
+	},
+	{
+		keys: []string{"f6", "ctrl+x"}, label: "Clear", when: agentDashboardModel.canClearAccessSecret,
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
+			m.access.clearSecret = !m.access.clearSecret
+			return m, nil
+		},
+	},
+	{
 		keys: []string{"tab", "shift+tab", "down", "up"}, label: "Field", when: agentDashboardModel.editing,
 		run: func(m agentDashboardModel, key string) (tea.Model, tea.Cmd) {
-			if m.inForm() {
-				m.focusAddTunnelField(m.addFocus + agentDashboardKeyStep(key))
-			} else {
-				m.focusSettingsField(m.settingsFocus + agentDashboardKeyStep(key))
+			step := agentDashboardKeyStep(key)
+			switch {
+			case m.inForm():
+				m.focusAddTunnelField(m.addFocus + step)
+			case m.accessing():
+				m.access.moveFocus(m.access.focusIndex() + step)
+			default:
+				m.focusSettingsField(m.settingsFocus + step)
 			}
 			return m, nil
 		},
@@ -103,6 +154,10 @@ var agentDashboardBindings = []agentDashboardBinding{
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.startOrAddTunnel() },
 	},
 	{
+		keys: []string{"f4", "s"}, label: "Access", when: agentDashboardModel.canOpenAccess,
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.openAccess() },
+	},
+	{
 		keys: []string{"esc"}, label: "Back", when: agentDashboardModel.awayFromTunnels,
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
 			m.err = nil
@@ -139,7 +194,8 @@ var agentDashboardBindings = []agentDashboardBinding{
 
 // agentDashboardKeyNames are the key bar names that differ from the key string.
 var agentDashboardKeyNames = map[string]string{
-	"enter": "Enter", "esc": "Esc", "tab": "Tab", "shift+tab": "S-Tab", "delete": "Del", "ctrl+c": "^C",
+	"enter": "Enter", "esc": "Esc", "tab": "Tab", "shift+tab": "S-Tab", "delete": "Del", "backspace": "Bksp",
+	"ctrl+c": "^C", "ctrl+r": "^R", "ctrl+x": "^X",
 }
 
 // agentDashboardLiveBinding is a binding together with the keys that reach it
@@ -155,7 +211,9 @@ func (m agentDashboardModel) confirming() bool { return m.confirmDelete != "" ||
 // stops the agent, except while a question already waits for an answer.
 func (m agentDashboardModel) asksBeforeStopping() bool { return m.stopsAgent && !m.confirming() }
 
-func (m agentDashboardModel) browsing() bool { return !m.confirming() }
+// browsing reports whether the panes take keys: no question is open and the
+// Access screen does not stand in their place.
+func (m agentDashboardModel) browsing() bool { return !m.confirming() && !m.accessing() }
 
 func (m agentDashboardModel) inList() bool {
 	return m.browsing() && m.activePane == agentDashboardPaneTunnels && !m.addingTunnel
@@ -179,8 +237,42 @@ func (m agentDashboardModel) awayFromTunnels() bool {
 
 func (m agentDashboardModel) canAdd() bool { return m.browsing() && !m.addingTunnel }
 
-// editing reports whether plain characters belong to a focused input.
-func (m agentDashboardModel) editing() bool { return m.inForm() || m.inSettings() }
+func (m agentDashboardModel) canOpenAccess() bool {
+	return m.browsing() && !m.inForm() && len(m.status.Tunnels) > 0
+}
+
+func (m agentDashboardModel) onAccessRow(row agentDashboardAccessRow) bool {
+	return m.accessing() && m.access.current().row == row
+}
+
+func (m agentDashboardModel) onAccessAdd() bool {
+	return m.onAccessRow(agentDashboardAccessRowAdd)
+}
+
+func (m agentDashboardModel) onAccessEntry() bool {
+	return m.onAccessRow(agentDashboardAccessRowEntry)
+}
+
+func (m agentDashboardModel) onAccessSecret() bool {
+	return m.onAccessRow(agentDashboardAccessRowSecret)
+}
+
+// onAccessChoice reports whether the focused row of the Access screen is a
+// choice that left and right change, not a text input.
+func (m agentDashboardModel) onAccessChoice() bool {
+	return m.onAccessRow(agentDashboardAccessRowMode) || m.onAccessRow(agentDashboardAccessRowHeaders)
+}
+
+// canClearAccessSecret reports whether the focused row is the secret of a
+// tunnel that has one stored.
+func (m agentDashboardModel) canClearAccessSecret() bool {
+	tunnel, ok := m.accessTunnel()
+	return ok && m.onAccessSecret() && tunnel.AuthOIDCClientSecretSet
+}
+
+// editing reports whether plain characters belong to a focused input. The
+// Access screen counts as editing throughout, so that no letter on it quits.
+func (m agentDashboardModel) editing() bool { return m.inForm() || m.inSettings() || m.accessing() }
 
 // liveBindings returns the bindings that act in the current context with the
 // keys that reach them. A key goes to the first binding that claims it, and
@@ -226,6 +318,8 @@ func (m agentDashboardModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		input = m.focusedAddTunnelInput()
 	case m.inSettings():
 		input = m.focusedSettingsInput()
+	case m.accessing():
+		input = m.access.focusedInput()
 	}
 	if input == nil {
 		return m, nil

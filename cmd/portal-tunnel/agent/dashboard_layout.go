@@ -120,10 +120,14 @@ func (m agentDashboardModel) renderTitleBar(width int) string {
 }
 
 // renderMain stacks the Tunnels, Settings and Relays panes in frames that
-// together fill height rows; height 0 gives every pane its natural size.
+// together fill height rows, or draws the Access screen in their place; height
+// 0 gives every pane its natural size.
 func (m agentDashboardModel) renderMain(width, height int) agentDashboardView {
 	if m.err != nil && m.status.ControlAddr == "" {
 		return m.renderUnavailable(width, height)
+	}
+	if m.accessing() {
+		return m.renderAccess(width, height)
 	}
 
 	inner := width - agentDashboardFrameWidth

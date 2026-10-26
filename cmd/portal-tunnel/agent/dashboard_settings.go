@@ -191,6 +191,7 @@ func (m agentDashboardModel) renderSettingsSection(width, rows int) agentDashboa
 	}
 	pane.addButtons(th, width,
 		agentDashboardButton{label: applyLabel, action: agentDashboardActionApplySettings, disabled: !settingsChanged},
+		agentDashboardButton{label: "Access", action: agentDashboardActionOpenAccess},
 	)
 
 	var body agentDashboardView
