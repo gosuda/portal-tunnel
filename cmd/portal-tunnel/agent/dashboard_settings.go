@@ -227,6 +227,7 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 		pane.addInputRow(th, width, row.label, row.input, agentDashboardActionFocusSettingsField, row.field, focused)
 	}
 	pane.addMeta(th, width, agentDashboardDetailLabelWidth, 0, "Discovery", strconv.FormatBool(tunnel.Discovery))
+	pane.addAccessSummary(th, width, tunnel)
 
 	paidRouteCount := 0
 	for _, route := range tunnel.HTTPRoutes {

@@ -76,9 +76,13 @@ func testDashboardScenarios() []dashboardScenario {
 	longDescription := testDashboardStatus()
 	longDescription.Tunnels[0].Metadata.Description = strings.Repeat("a long description ", 10)
 
+	signIn := agentDashboardStatusMsg{status: testAccessStatus()}
+
 	return []dashboardScenario{
 		{"tunnels", []tea.Msg{load}},
 		{"settings", []tea.Msg{load, keyRight}},
+		{"settings with OIDC sign-in", []tea.Msg{signIn, keyRight}},
+		{"settings with wallet sign-in", []tea.Msg{signIn, keyDown, keyRight}},
 		{"settings with a long value", []tea.Msg{load, keyRight, keyDown, long}},
 		{"settings resized from a wider terminal", []tea.Msg{tea.WindowSizeMsg{Width: 200, Height: 50}, agentDashboardStatusMsg{status: longDescription}, keyRight}},
 		{"settings resized with the cursor at the start", []tea.Msg{tea.WindowSizeMsg{Width: 200, Height: 50}, agentDashboardStatusMsg{status: longDescription}, keyRight, keyDown, tea.KeyMsg{Type: tea.KeyHome}}},
