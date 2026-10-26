@@ -29,7 +29,9 @@ var agentDashboardBindings = []agentDashboardBinding{
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.answerYes() },
 	},
 	{
-		keys: []string{"n", "esc", "q"}, label: "No", when: agentDashboardModel.confirming,
+		// F10 answers No as well: while a question is open it must not fall through
+		// to Quit, which would stop a foreground agent without asking.
+		keys: []string{"n", "esc", "q", "f10"}, label: "No", when: agentDashboardModel.confirming,
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.answerNo() },
 	},
 	{

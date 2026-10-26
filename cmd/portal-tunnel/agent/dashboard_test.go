@@ -251,7 +251,7 @@ func TestDashboardKeyBarListsTheBindingsInUse(t *testing.T) {
 		{"add tunnel form", []tea.Msg{load, keyF2}, []string{"F2/Enter Create", "Esc Cancel", "Tab/S-Tab Field", "F10/^C Quit"}, []string{"F2/a Add", "Delete"}},
 		{"settings", []tea.Msg{load, keyRight}, []string{"Enter Apply", "Tab/S-Tab Field", "F2 Add", "Esc Back", "F10/^C Quit"}, []string{"F2/a Add", "Delete"}},
 		{"relays", []tea.Msg{load, keyRight, keyRight}, []string{"Enter/c Connect", "d/Del Disconnect", "o Open", "Esc Back", "F10/q Quit"}, []string{"Delete tunnel"}},
-		{"delete confirmation", []tea.Msg{load, keyF8}, []string{"y Yes", "n/Esc No", "F10/^C Quit"}, []string{"Add", "Pane"}},
+		{"delete confirmation", []tea.Msg{load, keyF8}, []string{"y Yes", "n/Esc No", "^C Quit"}, []string{"Add", "Pane", "F10"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -347,7 +347,7 @@ func TestDashboardAsksBeforeStoppingTheAgent(t *testing.T) {
 				if cmd != nil || !strings.Contains(asked.View(), prompt) {
 					t.Fatalf("%s should only ask: cmd = %v, view asks = %v", key, cmd != nil, strings.Contains(asked.View(), prompt))
 				}
-				for _, answer := range []tea.KeyMsg{keyRunes("n"), keyEsc, keyRunes("q")} {
+				for _, answer := range []tea.KeyMsg{keyRunes("n"), keyEsc, keyRunes("q"), keyF10} {
 					if declined, cmd := press(asked, answer); cmd != nil || strings.Contains(declined.View(), prompt) {
 						t.Fatalf("%s should keep the agent running", answer)
 					}
@@ -360,6 +360,12 @@ func TestDashboardAsksBeforeStoppingTheAgent(t *testing.T) {
 				t.Error("ctrl+c should stop the agent at once")
 			}
 		})
+	}
+
+	// A delete question open in a foreground dashboard keeps F10 from stopping the agent.
+	deleting, _ := press(foreground(load), keyF8)
+	if declined, cmd := press(deleting, keyF10); cmd != nil || strings.Contains(declined.View(), `Delete tunnel "web"?`) {
+		t.Fatalf("F10 during a delete question should decline it, not stop the agent: cmd = %v", cmd != nil)
 	}
 
 	asked, _ := press(foreground(load), keyF10)
@@ -447,7 +453,7 @@ func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
 		if cmd != nil || !strings.Contains(asked.View(), prompt) {
 			t.Fatalf("%s should only ask: cmd = %v, view asks = %v", key, cmd != nil, strings.Contains(asked.View(), prompt))
 		}
-		for _, answer := range []tea.KeyMsg{keyRunes("n"), keyEsc, keyRunes("q")} {
+		for _, answer := range []tea.KeyMsg{keyRunes("n"), keyEsc, keyRunes("q"), keyF10} {
 			declined, cmd := press(asked, answer)
 			if cmd != nil || strings.Contains(declined.View(), prompt) {
 				t.Fatalf("%s should decline without deleting or quitting", answer)
