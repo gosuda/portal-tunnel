@@ -318,6 +318,67 @@ func TestDashboardQuitKeys(t *testing.T) {
 	}
 }
 
+// Under agent run --foreground closing the dashboard stops the agent and every
+// tunnel, so F10 and q ask first while ctrl+c still stops it at once.
+func TestDashboardAsksBeforeStoppingTheAgent(t *testing.T) {
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
+	load := agentDashboardStatusMsg{status: testDashboardStatus()}
+	const prompt = "Stop the agent?"
+	foreground := func(steps ...tea.Msg) agentDashboardModel {
+		model := newTestDashboard(t, theme, 100, 40, steps...)
+		model.stopsAgent = true
+		return model
+	}
+
+	contexts := []struct {
+		name  string
+		steps []tea.Msg
+		keys  []tea.KeyMsg
+	}{
+		{"tunnels", []tea.Msg{load}, []tea.KeyMsg{keyF10, keyRunes("q")}},
+		{"relays", []tea.Msg{load, keyRight, keyRight}, []tea.KeyMsg{keyF10, keyRunes("q")}},
+		{"settings", []tea.Msg{load, keyRight}, []tea.KeyMsg{keyF10}}, // q is typed into the field there
+	}
+	for _, ctx := range contexts {
+		t.Run(ctx.name, func(t *testing.T) {
+			model := foreground(ctx.steps...)
+			for _, key := range ctx.keys {
+				asked, cmd := press(model, key)
+				if cmd != nil || !strings.Contains(asked.View(), prompt) {
+					t.Fatalf("%s should only ask: cmd = %v, view asks = %v", key, cmd != nil, strings.Contains(asked.View(), prompt))
+				}
+				for _, answer := range []tea.KeyMsg{keyRunes("n"), keyEsc, keyRunes("q")} {
+					if declined, cmd := press(asked, answer); cmd != nil || strings.Contains(declined.View(), prompt) {
+						t.Fatalf("%s should keep the agent running", answer)
+					}
+				}
+				if _, cmd := press(asked, keyRunes("y")); !isQuit(cmd) {
+					t.Fatal("y should stop the agent")
+				}
+			}
+			if _, cmd := press(model, keyCtrlC); !isQuit(cmd) {
+				t.Error("ctrl+c should stop the agent at once")
+			}
+		})
+	}
+
+	asked, _ := press(foreground(load), keyF10)
+	if declined, cmd := clickAction(t, asked, agentDashboardActionAnswerNo); cmd != nil || strings.Contains(declined.View(), prompt) {
+		t.Fatal("the No button should keep the agent running")
+	}
+	if _, cmd := clickAction(t, asked, agentDashboardActionAnswerYes); !isQuit(cmd) {
+		t.Fatal("the Yes button should stop the agent")
+	}
+	// The way out stays on the bar even where the bar is too narrow for the rest.
+	for _, steps := range [][]tea.Msg{{load}, {load, keyRight, keyRight}} {
+		model := newTestDashboard(t, theme, 80, 24, steps...)
+		model.stopsAgent = true
+		if bar := lastLine(model.View()); !strings.HasSuffix(strings.TrimRight(bar, " "), "F10/q Stop agent") || strings.Contains(bar, "Quit") {
+			t.Errorf("key bar %q should end with F10/q Stop agent and offer no plain Quit", bar)
+		}
+	}
+}
+
 func TestDashboardPaneKeys(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})
@@ -406,10 +467,10 @@ func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
 	if cmd != nil || !strings.Contains(asked.View(), prompt) {
 		t.Fatal("the Delete button should only ask")
 	}
-	if declined, cmd := clickAction(t, asked, agentDashboardActionCancelDelete); cmd != nil || strings.Contains(declined.View(), prompt) {
+	if declined, cmd := clickAction(t, asked, agentDashboardActionAnswerNo); cmd != nil || strings.Contains(declined.View(), prompt) {
 		t.Fatal("the No button should decline without deleting")
 	}
-	if confirmed, cmd := clickAction(t, asked, agentDashboardActionConfirmDelete); cmd == nil || strings.Contains(confirmed.View(), prompt) {
+	if confirmed, cmd := clickAction(t, asked, agentDashboardActionAnswerYes); cmd == nil || strings.Contains(confirmed.View(), prompt) {
 		t.Fatal("the Yes button should delete the tunnel")
 	}
 }
@@ -425,7 +486,7 @@ func TestDashboardDeleteQuestionIgnoresOtherClicks(t *testing.T) {
 
 	clicked := make(map[agentDashboardAction]bool)
 	for _, region := range asked.layout().regions {
-		if region.action == agentDashboardActionConfirmDelete || region.action == agentDashboardActionCancelDelete {
+		if region.action == agentDashboardActionAnswerYes || region.action == agentDashboardActionAnswerNo {
 			continue
 		}
 		next, cmd := asked.Update(tea.MouseMsg{X: region.x0, Y: region.y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})

@@ -26,18 +26,11 @@ type agentDashboardBinding struct {
 var agentDashboardBindings = []agentDashboardBinding{
 	{
 		keys: []string{"y"}, label: "Yes", when: agentDashboardModel.confirming,
-		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
-			tunnelID := m.confirmDelete
-			m.confirmDelete = ""
-			return m.deleteTunnel(tunnelID)
-		},
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.answerYes() },
 	},
 	{
 		keys: []string{"n", "esc", "q"}, label: "No", when: agentDashboardModel.confirming,
-		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
-			m.confirmDelete = ""
-			return m, nil
-		},
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.answerNo() },
 	},
 	{
 		keys: []string{"f2", "enter"}, label: "Create", when: agentDashboardModel.inForm,
@@ -123,6 +116,20 @@ var agentDashboardBindings = []agentDashboardBinding{
 		},
 	},
 	{
+		// Under agent run --foreground closing the dashboard stops the agent and
+		// every tunnel, so the easy keys ask first; ctrl+c still stops at once.
+		keys: []string{"f10", "q"}, label: "Stop agent", when: agentDashboardModel.asksBeforeStopping,
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
+			m.confirmStop = true
+			return m, nil
+		},
+	},
+	{
+		// Off the bar, so that Stop agent is its last entry and stays there.
+		keys: []string{"ctrl+c"}, when: agentDashboardModel.asksBeforeStopping,
+		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m, tea.Quit },
+	},
+	{
 		keys: []string{"f10", "q", "ctrl+c"}, label: "Quit",
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m, tea.Quit },
 	},
@@ -140,7 +147,9 @@ type agentDashboardLiveBinding struct {
 	keys    []string
 }
 
-func (m agentDashboardModel) confirming() bool { return m.confirmDelete != "" }
+func (m agentDashboardModel) confirming() bool { return m.confirmDelete != "" || m.confirmStop }
+
+func (m agentDashboardModel) asksBeforeStopping() bool { return m.stopsAgent && m.browsing() }
 
 func (m agentDashboardModel) browsing() bool { return !m.confirming() }
 
@@ -242,7 +251,8 @@ func (m agentDashboardModel) renderKeyBar(width int) string {
 		}
 	}
 
-	// The last entry, Quit, always stays; earlier ones are dropped from the end when they do not fit.
+	// The last entry, the way out (Quit or Stop agent), always stays; earlier ones are dropped from
+	// the end when they do not fit.
 	entryWidth := func(e entry) int { return lipgloss.Width(e.hint) + 1 + lipgloss.Width(e.label) }
 	gap := lipgloss.Width(agentDashboardKeyBarGap)
 	used := 1

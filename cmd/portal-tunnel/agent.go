@@ -196,7 +196,7 @@ func runAgentForeground(configPath string, cfg agent.Config, theme string) error
 		return err
 	}
 
-	dashboardErr := agent.RunDashboard(resolvedConfigPath, cfg.Agent.StateDir, theme)
+	dashboardErr := agent.RunDashboard(resolvedConfigPath, cfg.Agent.StateDir, theme, true)
 	stop()
 	runErr := <-errCh
 	if errors.Is(runErr, context.Canceled) {
@@ -315,7 +315,7 @@ func runAgentDashboardCommand(args []string) error {
 			return err
 		}
 	}
-	return agent.RunDashboard(configPath, stateDir, theme)
+	return agent.RunDashboard(configPath, stateDir, theme, false)
 }
 
 // validateDashboardTheme refuses an unknown --theme value and names where it

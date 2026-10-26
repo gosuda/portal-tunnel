@@ -45,16 +45,20 @@ func (m agentDashboardModel) renderTunnelsSection(width, rows int) agentDashboar
 	th := &m.theme
 	var pane agentDashboardView
 	if m.confirming() {
-		name := m.confirmDelete
-		for _, tunnel := range m.status.Tunnels {
-			if tunnel.ID == m.confirmDelete {
-				name = tunnelDashboardName(tunnel)
+		question := "Stop the agent? Every tunnel goes down."
+		if m.confirmDelete != "" {
+			name := m.confirmDelete
+			for _, tunnel := range m.status.Tunnels {
+				if tunnel.ID == m.confirmDelete {
+					name = tunnelDashboardName(tunnel)
+				}
 			}
+			question = fmt.Sprintf("Delete tunnel %q?", name)
 		}
-		pane.addStyled(width, th.pending, fmt.Sprintf("Delete tunnel %q?", name))
+		pane.addStyled(width, th.pending, question)
 		pane.addButtons(th, width,
-			agentDashboardButton{label: "Yes", action: agentDashboardActionConfirmDelete},
-			agentDashboardButton{label: "No", action: agentDashboardActionCancelDelete},
+			agentDashboardButton{label: "Yes", action: agentDashboardActionAnswerYes},
+			agentDashboardButton{label: "No", action: agentDashboardActionAnswerNo},
 		)
 	} else {
 		addLabel := "Add Tunnel"

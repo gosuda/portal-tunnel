@@ -305,7 +305,7 @@ every function key has a letter or key alias:
 | `d` / `delete` | Disconnect the selected relay in the Relays pane |
 | `o` | Open the selected public tunnel URL |
 | `esc` | Cancel the form or a question, or return to the Tunnels pane |
-| `F10` / `q` / `ctrl+c` | Exit the dashboard |
+| `F10` / `q` / `ctrl+c` | Exit the dashboard. Under `portal agent run --foreground` this also stops the agent and every tunnel, so `F10` and `q` ask first (`y` stops it, `n`, `esc` or `q` keeps it running) and `ctrl+c` stops it at once |
 
 In the Settings pane and in the Add Tunnel form, `tab` and `shift+tab` move
 between fields, so only `left` and `right` switch panes there, and `q` and `a`

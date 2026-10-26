@@ -26,8 +26,8 @@ const (
 	agentDashboardActionFocusSettingsField
 	agentDashboardActionFocusAddTunnelField
 	agentDashboardActionOpenTunnelURL
-	agentDashboardActionConfirmDelete
-	agentDashboardActionCancelDelete
+	agentDashboardActionAnswerYes
+	agentDashboardActionAnswerNo
 )
 
 type agentDashboardPane int
@@ -59,6 +59,10 @@ type agentDashboardModel struct {
 	activePane       agentDashboardPane
 	relayAttempts    map[relayAttemptKey]bool
 	confirmDelete    string // ID of the tunnel waiting for a delete answer
+	confirmStop      bool   // a stop-the-agent question waits for an answer
+	// stopsAgent says that closing the dashboard also stops the agent, as under
+	// agent run --foreground, so F10 and q ask first.
+	stopsAgent bool
 
 	addingTunnel     bool
 	addFocus         int
@@ -97,9 +101,12 @@ type agentDashboardTickMsg struct{}
 
 // RunDashboard runs the terminal dashboard until the user quits. themeName is a
 // palette name the caller has already checked with ValidateDashboardTheme.
-func RunDashboard(configPath, stateDir, themeName string) error {
+// stopsAgent says the caller stops the agent when the dashboard closes; F10 and
+// q then ask before closing it.
+func RunDashboard(configPath, stateDir, themeName string, stopsAgent bool) error {
 	theme := newAgentDashboardTheme(themeName, detectAgentDashboardTerminal())
 	model := newAgentDashboardModel(configPath, stateDir, theme)
+	model.stopsAgent = stopsAgent
 	_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
@@ -201,10 +208,10 @@ func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 	}
 	for _, region := range m.layout().regions {
 		if event.Y == region.y && event.X >= region.x0 && event.X < region.x1 {
-			// While a delete waits for an answer, only its Yes and No buttons act on a click, as only
+			// While a question waits for an answer, only its Yes and No buttons act on a click, as only
 			// the answers act on a key. The wheel and the sidebar drag above still scroll; neither
-			// touches the tunnel in question.
-			if m.confirming() && region.action != agentDashboardActionConfirmDelete && region.action != agentDashboardActionCancelDelete {
+			// touches what the question is about.
+			if m.confirming() && region.action != agentDashboardActionAnswerYes && region.action != agentDashboardActionAnswerNo {
 				return m, nil
 			}
 			if region.action == agentDashboardActionSelectPane {
@@ -243,12 +250,10 @@ func (m agentDashboardModel) runAction(action agentDashboardAction, tunnelID, re
 		m.cancelTunnelInput()
 	case agentDashboardActionDeleteTunnel:
 		return m.askDeleteTunnel(tunnelID)
-	case agentDashboardActionConfirmDelete:
-		tunnelID = m.confirmDelete
-		m.confirmDelete = ""
-		return m.deleteTunnel(tunnelID)
-	case agentDashboardActionCancelDelete:
-		m.confirmDelete = ""
+	case agentDashboardActionAnswerYes:
+		return m.answerYes()
+	case agentDashboardActionAnswerNo:
+		return m.answerNo()
 	case agentDashboardActionConnectRelay:
 		return m.connectSelectedRelay()
 	case agentDashboardActionDisconnectRelay:
@@ -258,6 +263,23 @@ func (m agentDashboardModel) runAction(action agentDashboardAction, tunnelID, re
 	case agentDashboardActionOpenTunnelURL:
 		return m.openRelayTunnelURL(tunnelID, relayURL)
 	}
+	return m, nil
+}
+
+// answerYes carries out the pending question: stop the agent or delete the tunnel.
+func (m agentDashboardModel) answerYes() (tea.Model, tea.Cmd) {
+	if m.confirmStop {
+		return m, tea.Quit
+	}
+	tunnelID := m.confirmDelete
+	m.confirmDelete = ""
+	return m.deleteTunnel(tunnelID)
+}
+
+// answerNo drops the pending question.
+func (m agentDashboardModel) answerNo() (tea.Model, tea.Cmd) {
+	m.confirmDelete = ""
+	m.confirmStop = false
 	return m, nil
 }
 
