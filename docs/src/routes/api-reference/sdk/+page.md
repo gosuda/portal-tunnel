@@ -180,9 +180,16 @@ for the delegated capability and gateway-to-ingress protocol flow.
 | `ttl` | `number` | no |
 | `reported_ip` | `string` | no |
 | `metadata` | `LeaseMetadata` | no |
+| `repins_chain` | `boolean` | no |
 
 Renewal uses the same 120-second default and 600-second maximum as registration.
 A rejected TTL leaves the existing lease unchanged.
+
+`repins_chain` says the SDK re-pins the relay certificate chain by itself. A
+renewal without it is answered with `lease_not_found` and the lease is not
+extended when the relay now serves a certificate that the chain pinned at
+registration does not verify (a renewal by another intermediate); the SDK then
+registers again and pins the current chain.
 
 `RenewResponse`:
 

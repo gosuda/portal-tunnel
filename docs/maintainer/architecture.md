@@ -75,7 +75,10 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   chain it presents or because the relay's API certificate no longer verifies
   against the pinned chain, is lost and re-pins at once for the handshakes after
   it; the handshakes that fail on the same stale pin share that check. The
-  signer connection is always verified against the pinned chain only.
+  signer connection is always verified against the pinned chain only. An SDK
+  that cannot re-pin (it does not send `repins_chain` on renewal) is asked to
+  register again, through `lease_not_found` at its next renewal, when the relay
+  serves a certificate the chain it registered under does not verify.
 
 ## Identity Challenges
 
