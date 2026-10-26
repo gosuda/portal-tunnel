@@ -424,3 +424,105 @@ func TestClientTerminateConnExportsKeyingMaterial(t *testing.T) {
 		t.Fatal("exporter values of the same probe session differ between the stock client and the t13server terminator")
 	}
 }
+
+// captureWrites passes writes through until capture is set and keeps them
+// afterwards, so a test can hand a visitor's record to the tenant in parts.
+type captureWrites struct {
+	net.Conn
+	capture  bool
+	captured []byte
+}
+
+func (c *captureWrites) Write(p []byte) (int, error) {
+	if c.capture {
+		c.captured = append(c.captured, p...)
+		return len(p), nil
+	}
+	return c.Conn.Write(p)
+}
+
+// The SDK reads the first bytes of every terminated connection under a short
+// deadline, to look for a channel binding request, before the application
+// reads it. A deadline that fires while the visitor's record is only partly
+// received must leave the stream intact (gosuda/keyless_tls#34).
+func TestTerminatedConnKeepsARecordAcrossAReadDeadline(t *testing.T) {
+	t.Parallel()
+
+	issuer := newTestIssuer(t)
+	relay := newRelayStandIn(t, issuer.issue(t, 2))
+	client := relay.newClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	binding := relay.bindings.Issue("lease", nil)
+	relayEnd, tenantEnd := net.Pipe()
+	defer relayEnd.Close()
+	wire := &captureWrites{Conn: relay.bindings.FixHelloOnWrite(relayEnd, binding)}
+	visitor := tls.Client(wire, &tls.Config{ServerName: tenantHostname, RootCAs: issuer.pool, MinVersion: tls.VersionTLS13})
+	defer visitor.Close()
+	visitorDone := make(chan error, 1)
+	go func() { visitorDone <- visitor.HandshakeContext(ctx) }()
+	terminated, err := client.TerminateConn(ctx, tenantEnd, binding[:])
+	if err != nil {
+		t.Fatalf("TerminateConn() error = %v", err)
+	}
+	defer terminated.Close()
+	if err := <-visitorDone; err != nil {
+		t.Fatalf("visitor handshake: %v", err)
+	}
+
+	const request = "GET / HTTP/1.1\r\nHost: " + tenantHostname + "\r\n\r\n"
+	wire.capture = true
+	if _, err := visitor.Write([]byte(request)); err != nil {
+		t.Fatalf("visitor write: %v", err)
+	}
+	record := wire.captured
+	const split = 10 // inside the record's payload
+
+	type readResult struct {
+		data string
+		err  error
+	}
+	read := func() <-chan readResult {
+		done := make(chan readResult, 1)
+		go func() {
+			buf := make([]byte, len(request))
+			n, err := io.ReadFull(terminated, buf)
+			done <- readResult{data: string(buf[:n]), err: err}
+		}()
+		return done
+	}
+	await := func(done <-chan readResult) readResult {
+		t.Helper()
+		select {
+		case res := <-done:
+			return res
+		case <-ctx.Done():
+			t.Fatal("tenant read did not return")
+			return readResult{}
+		}
+	}
+
+	// net.Pipe returns from Write only once the reader has taken every byte,
+	// so this part is with the tenant before its deadline fires.
+	first := read()
+	if _, err := relayEnd.Write(record[:split]); err != nil {
+		t.Fatalf("deliver the first part: %v", err)
+	}
+	if err := terminated.SetReadDeadline(time.Now()); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	var netErr net.Error
+	if res := await(first); !errors.As(res.err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("read past the deadline = (%q, %v), want a timeout", res.data, res.err)
+	}
+
+	if err := terminated.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+	second := read()
+	go func() { _, _ = relayEnd.Write(record[split:]) }()
+	if res := await(second); res.err != nil || res.data != request {
+		t.Fatalf("read after the deadline = (%q, %v), want %q", res.data, res.err, request)
+	}
+}
